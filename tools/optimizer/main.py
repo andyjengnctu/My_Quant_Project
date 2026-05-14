@@ -40,6 +40,7 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+    is_optimizer_nonrolling_train_result_table_enabled,
 )
 
 warnings.simplefilter("default")
@@ -536,6 +537,72 @@ def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, fin
     return member
 
 
+
+def _format_nonrolling_result_number(value) -> str:
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dict, colors: dict) -> None:
+    if not bool(is_optimizer_nonrolling_train_result_table_enabled()):
+        return
+    gray = colors.get("gray", "")
+    green = colors.get("green", "")
+    red = colors.get("red", "")
+    yellow = colors.get("yellow", "")
+    reset = colors.get("reset", "")
+    member_count = len(members)
+    min_agree = int(policy.get("min_agree", member_count or 1))
+    title = "NON-ROLLING RANDOM SEED ENSEMBLE RESULTS"
+    header = (
+        f"{'member':<8} | {'seed':>10} | {'trial':>8} | "
+        f"{'base':>10} | {'local_min':>10} | {'retention':>10} | {'gate':>8} | {'result':>10}"
+    )
+    separator_width = max(len(title), len(header))
+    print(f"{gray}{'-' * separator_width}{reset}")
+    print(title)
+    print(f"{gray}{'-' * separator_width}{reset}")
+    print(header)
+    print(f"{gray}{'-' * separator_width}{reset}")
+    pass_count = 0
+    for idx, item in enumerate(members, start=1):
+        gate_pass = bool(item.get("local_gate", False))
+        if gate_pass:
+            pass_count += 1
+        gate_text = "PASS" if gate_pass else "FAIL"
+        gate_color = green if gate_pass else red
+        result_text = "member"
+        result_color = green if gate_pass else red
+        print(
+            f"#{int(item.get('member_index', idx)):<7} | "
+            f"{int(item.get('seed', 0)):>10} | "
+            f"#{int(item.get('selected_trial', 0)):>7} | "
+            f"{_format_nonrolling_result_number(item.get('base_score')):>10} | "
+            f"{_format_nonrolling_result_number(item.get('local_min_score')):>10} | "
+            f"{_format_nonrolling_result_number(item.get('retention')):>10} | "
+            f"{gate_color}{gate_text:>8}{reset} | "
+            f"{result_color}{result_text:>10}{reset}"
+        )
+    base_scores = [float(item.get("base_score", 0.0)) for item in members]
+    local_scores = [float(item.get("local_min_score", 0.0)) for item in members]
+    retentions = [float(item.get("retention", 0.0)) for item in members]
+    ensemble_pass = bool(member_count > 0 and pass_count >= min_agree)
+    ensemble_color = green if ensemble_pass else red
+    ensemble_result = "PASS" if ensemble_pass else "FAIL"
+    print(f"{gray}{'=' * separator_width}{reset}")
+    print(
+        f"ENSEMBLE | N={member_count} | min_agree={min_agree} | "
+        f"gate_pass={pass_count}/{member_count} | "
+        f"base_min={_format_nonrolling_result_number(min(base_scores) if base_scores else None)} | "
+        f"local_min_min={_format_nonrolling_result_number(min(local_scores) if local_scores else None)} | "
+        f"retention_min={_format_nonrolling_result_number(min(retentions) if retentions else None)} | "
+        f"result={ensemble_color}{ensemble_result}{reset}"
+    )
+    print(f"{yellow}正式輸出：candidate_best / run_best 使用同一個 static ensemble JSON。{reset}")
+
+
 def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict:
     local_scores = [float(item.get("local_min_score", 0.0)) for item in members]
     base_scores = [float(item.get("base_score", 0.0)) for item in members]
@@ -575,6 +642,7 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
             for idx, item in enumerate(members)
         ],
         "random_seed_ensemble": _resolve_nonrolling_seed_ensemble_policy(),
+        "nonrolling_train_result_table_enabled": bool(is_optimizer_nonrolling_train_result_table_enabled()),
         "created_at": get_taipei_now().isoformat(),
     }
 
@@ -676,6 +744,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 objective_mode=objective_mode,
                 colors=COLORS,
                 winner_trial=None,
+                emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
             )
             if best_trial is None or not is_qualified_trial_value(best_trial.value):
                 print(f"{C_YELLOW}ℹ️ seed={int(seed)} 目前尚無通過 local_min_score gate 的 winner；本次不建立完整 N-seed ensemble member。{C_RESET}")
@@ -716,6 +785,11 @@ def _run_nonrolling_random_seed_ensemble_training(
         dataset_label=dataset_label,
         selected_model_mode=selected_model_mode,
         trials_per_seed=int(requested_trials),
+    )
+    _print_static_seed_ensemble_result_table(
+        members=members,
+        policy=policy,
+        colors=COLORS,
     )
     promote_status = _promote_candidate_to_run_best()
     if promote_status != 0:
@@ -994,6 +1068,7 @@ def main(argv=None, environ=None):
                 objective_mode=objective_mode,
                 colors=COLORS,
                 winner_trial=None,
+                emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
             )
             if best_trial is None or not is_qualified_trial_value(best_trial.value):
                 print(f"{C_YELLOW}ℹ️ 匯出模式完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
@@ -1218,6 +1293,7 @@ def main(argv=None, environ=None):
                 objective_mode=objective_mode,
                 colors=COLORS,
                 winner_trial=None,
+                emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
             )
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
                 print_local_min_score_winner_summary(

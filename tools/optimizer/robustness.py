@@ -1842,7 +1842,7 @@ def list_local_min_score_finalists(
     return enriched_finalists
 
 
-def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k=None):
+def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k=None, emit_table: bool = True):
     finalists = list_local_min_score_finalists(
         study,
         session=session,
@@ -1854,14 +1854,16 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     )
     if not finalists:
         return [], winner_trial
-    if not bool(is_optimizer_local_min_review_enabled()):
-        _print_progress_line(session, "ℹ️ local_min review disabled：local_min_score 使用 base_score 等價值，retention=1.0")
     if winner_trial is None:
         best_finalist = _select_best_finalist_by_local_min_score(
             finalists,
             use_inner_validate=is_inner_validate_anti_overfit_enabled(objective_mode),
         )
         winner_trial = None if best_finalist is None else best_finalist["trial"]
+    if not bool(emit_table):
+        return finalists, winner_trial
+    if not bool(is_optimizer_local_min_review_enabled()):
+        _print_progress_line(session, "ℹ️ local_min review disabled：local_min_score 使用 base_score 等價值，retention=1.0")
 
     gray = colors.get("gray", "")
     green = colors.get("green", "")
