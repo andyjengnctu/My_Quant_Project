@@ -13,12 +13,15 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_YELLOW, C_RESET
 from core.log_utils import format_exception_summary, write_issue_log
-from core.params_io import build_params_from_mapping, params_to_json_dict
+from core.params_io import build_params_from_mapping
+from core.portfolio_param_runtime import (
+    build_active_param_objects_from_payload,
+    build_active_param_ensemble_objects_from_payload,
+    build_portfolio_params_signature,
+)
 from core.walk_forward_policy import load_walk_forward_policy
 from core.portfolio_stats import find_sim_start_idx
-from core.rolling_oos_params import build_active_param_schedule
 from core.active_param_ensemble import (
-    build_active_param_ensemble_schedule,
     get_active_param_ensemble_date_range,
     get_active_param_ensemble_policy,
     resolve_active_param_ensemble_mode,
@@ -56,44 +59,6 @@ def _resolve_active_schedule_record(schedule_records, trade_date):
         first_date = schedule_records[0]["effective_date_text"] if schedule_records else "N/A"
         raise ValueError(f"{current_date.isoformat()} 早於第一個 active param 生效日 {first_date}")
     return selected
-
-
-def _build_active_param_objects_from_payload(payload, *, fixed_risk=None):
-    schedule = build_active_param_schedule(payload)
-    resolved = []
-    for record in schedule:
-        params = build_params_from_mapping(record["params"])
-        if fixed_risk is not None:
-            params.fixed_risk = float(fixed_risk)
-        item = dict(record)
-        item["params_obj"] = params
-        item["params_signature"] = _build_portfolio_params_signature(params)
-        resolved.append(item)
-    return resolved
-
-
-def _build_active_param_ensemble_objects_from_payload(payload, *, fixed_risk=None):
-    schedule = build_active_param_ensemble_schedule(payload)
-    resolved = []
-    for record in schedule:
-        item = dict(record)
-        members = []
-        for member in record.get("members") or []:
-            params = build_params_from_mapping(member["params"])
-            if fixed_risk is not None:
-                params.fixed_risk = float(fixed_risk)
-            member_item = dict(member)
-            member_item["params_obj"] = params
-            member_item["params_signature"] = _build_portfolio_params_signature(params)
-            member_item["member_key"] = str(member_item.get("member_index") or member_item.get("seed") or len(members) + 1)
-            members.append(member_item)
-        if not members:
-            raise ValueError(f"active-param ensemble 生效日 {record.get('effective_date_text') or '-'} 沒有可用 members")
-        item["members"] = members
-        item["params_obj"] = members[0]["params_obj"]
-        item["params_signature"] = members[0]["params_signature"]
-        resolved.append(item)
-    return resolved
 
 
 def _load_contexts_for_active_schedule(data_dir, schedule_records, *, verbose=True):
@@ -248,16 +213,10 @@ def _build_portfolio_data_signature(csv_inputs):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _build_portfolio_params_signature(params):
-    payload = params_to_json_dict(params)
-    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params):
     profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
     data_sig = _build_portfolio_data_signature(csv_inputs)
-    params_sig = _build_portfolio_params_signature(params)
+    params_sig = build_portfolio_params_signature(params)
     combined_payload = {
         "schema_version": PORTFOLIO_PREP_CACHE_SCHEMA_VERSION,
         "profile_key": str(profile_key),
@@ -610,7 +569,7 @@ def run_portfolio_simulation_with_param_schedule(
     start_date=None,
     end_date=None,
 ):
-    schedule_records = _build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
+    schedule_records = build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
     if not schedule_records:
         raise ValueError("rolling OOS active-param schedule 為空")
 
@@ -726,7 +685,7 @@ def run_portfolio_simulation_with_param_ensemble(
     start_date=None,
     end_date=None,
 ):
-    schedule_records = _build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
+    schedule_records = build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
     if not schedule_records:
         raise ValueError("active-param ensemble schedule 為空")
 

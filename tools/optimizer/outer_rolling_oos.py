@@ -2780,17 +2780,13 @@ def _build_active_replay_schedule_records(payload: dict) -> list[dict]:
     if not _active_replay_payload_has_params(payload):
         return []
     if is_active_param_ensemble_payload(payload):
-        from tools.portfolio_sim.simulation_runner import _build_active_param_ensemble_objects_from_payload
-
         policy = get_active_param_ensemble_policy(payload)
-        records = list(_build_active_param_ensemble_objects_from_payload(payload, fixed_risk=None))
+        records = list(build_active_param_ensemble_objects_from_payload(payload, fixed_risk=None))
         for record in records:
             record["ensemble_min_agree"] = int(policy.get("min_agree", 1) or 1)
             record["ensemble_seed_count"] = int(policy.get("seed_count", len(record.get("members") or []) or 1) or 1)
         return records
-    from tools.portfolio_sim.simulation_runner import _build_active_param_objects_from_payload
-
-    return list(_build_active_param_objects_from_payload(payload, fixed_risk=None))
+    return list(build_active_param_objects_from_payload(payload, fixed_risk=None))
 
 
 def _row_oos_start_date(row: dict) -> str:
