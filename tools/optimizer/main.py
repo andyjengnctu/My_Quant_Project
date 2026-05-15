@@ -860,6 +860,13 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 finalist_entry=finalist_entry,
                 params_payload=params_payload,
             )
+            from tools.optimizer.outer_rolling_oos import build_optimizer_policy_members_from_finalists
+            policy_members = build_optimizer_policy_members_from_finalists(
+                finalists,
+                objective_mode=str(task.get("objective_mode") or "split_train_romd"),
+                member_index=int(member_index),
+                seed=int(seed),
+            )
             _emit_nonrolling_seed_process_progress_event(
                 task,
                 stage="DONE",
@@ -868,7 +875,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 best_local_min_score=member_payload.get("local_min_score"),
                 elapsed_sec=max(0.0, time.perf_counter() - started_at),
             )
-            return {"member": member_payload}
+            return {"member": member_payload, "policy_members": policy_members}
         finally:
             member_session.close_trial_prep_executor()
             if study is not None:
@@ -990,22 +997,96 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
     }
 
 
-def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> None:
+def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, source: str, policy_name: str = "") -> dict:
+    meta = {
+        "source": str(source),
+        "dataset_label": str(dataset_label),
+        "selected_model_mode": str(selected_model_mode),
+        "objective_mode": str(objective_mode),
+        "trials_per_seed": int(trials_per_seed),
+        "seeds": [int(seed) for seed in seeds],
+        "walk_forward_policy": dict(walk_forward_policy),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+    }
+    if policy_name:
+        meta["policy"] = str(policy_name)
+    return meta
+
+
+def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict[str, str]:
+    from tools.optimizer.outer_rolling_oos import (
+        get_optimizer_paramset_policy_names,
+        get_optimizer_policy_paramset_filename,
+    )
+
+    paths: dict[str, str] = {}
+    requested_policy = _resolve_nonrolling_seed_ensemble_policy()
+    for policy_name in get_optimizer_paramset_policy_names():
+        members = sorted(
+            list((policy_members_by_policy or {}).get(str(policy_name)) or []),
+            key=lambda item: int(dict(item).get("member_index", 0) or 0),
+        )
+        if not members:
+            continue
+        payload = build_static_active_param_ensemble_payload(
+            members=members,
+            random_seed_ensemble=requested_policy,
+            selector=str(policy_name),
+            created_at=get_taipei_now().isoformat(),
+            meta=_build_static_seed_ensemble_meta(
+                seeds=seeds,
+                objective_mode=objective_mode,
+                walk_forward_policy=walk_forward_policy,
+                dataset_label=dataset_label,
+                selected_model_mode=selected_model_mode,
+                trials_per_seed=trials_per_seed,
+                source="nonrolling_random_seed_ensemble_policy_paramset",
+                policy_name=str(policy_name),
+            ),
+        )
+        payload["summary"] = {
+            "folds": 1,
+            "mode": "static",
+            "selector": str(policy_name),
+            "selection_period": f"{int(walk_forward_policy.get('train_start_year', 0) or 0):04d}~{int(walk_forward_policy.get('search_train_end_year', 0) or 0):04d}",
+            "oos_period": f"{int(walk_forward_policy.get('oos_start_year', 0) or 0):04d}~latest" if int(walk_forward_policy.get('oos_start_year', 0) or 0) > 0 else "",
+            "member_count": int(len(members)),
+            "requested_seed_count": int(len(seeds)),
+            "trials_per_seed": int(trials_per_seed),
+            "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+        }
+        filename = get_optimizer_policy_paramset_filename(str(policy_name))
+        path = os.path.join(MODELS_DIR, filename)
+        _write_json_file(path, payload)
+        paths[str(policy_name)] = path
+    return paths
+
+
+def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None) -> None:
     policy = _resolve_nonrolling_seed_ensemble_policy()
     payload = build_static_active_param_ensemble_payload(
         members=members,
         random_seed_ensemble=policy,
         selector="candidate_best",
         created_at=get_taipei_now().isoformat(),
-        meta={
-            "source": "nonrolling_random_seed_ensemble",
-            "dataset_label": str(dataset_label),
-            "selected_model_mode": str(selected_model_mode),
-            "trials_per_seed": int(trials_per_seed),
-            "seeds": [int(seed) for seed in seeds],
-            "walk_forward_policy": dict(walk_forward_policy),
-            "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
-        },
+        meta=_build_static_seed_ensemble_meta(
+            seeds=seeds,
+            objective_mode=objective_mode,
+            walk_forward_policy=walk_forward_policy,
+            dataset_label=dataset_label,
+            selected_model_mode=selected_model_mode,
+            trials_per_seed=trials_per_seed,
+            source="nonrolling_random_seed_ensemble",
+        ),
+    )
+    policy_paramset_paths = _write_static_seed_ensemble_policy_paramsets(
+        policy_members_by_policy=dict(policy_members_by_policy or {}),
+        seeds=seeds,
+        objective_mode=objective_mode,
+        walk_forward_policy=walk_forward_policy,
+        dataset_label=dataset_label,
+        selected_model_mode=selected_model_mode,
+        trials_per_seed=trials_per_seed,
     )
     summary = _build_static_seed_ensemble_summary(
         members=members,
@@ -1016,9 +1097,13 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         selected_model_mode=selected_model_mode,
         trials_per_seed=trials_per_seed,
     )
+    summary["policy_paramsets"] = dict(policy_paramset_paths)
     _write_json_file(CANDIDATE_BEST_PARAMS_PATH, payload)
     _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, summary)
     print(f"{C_GREEN}💾 candidate_best seed ensemble 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
+    if policy_paramset_paths:
+        joined = " | ".join(f"{name}={path}" for name, path in policy_paramset_paths.items())
+        print(f"{C_GREEN}💾 nonrolling policy paramsets 已寫入：{joined}{C_RESET}")
     return payload, summary
 
 
@@ -1069,6 +1154,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     compact_display = not bool(is_optimizer_nonrolling_train_result_table_enabled())
 
     members: list[dict] = []
+    policy_members_by_policy: dict[str, list[dict]] = {}
     dashboard_session = None
     ensemble_started_at = time.perf_counter()
     parallel_workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(len(seeds))
@@ -1078,6 +1164,12 @@ def _run_nonrolling_random_seed_ensemble_training(
     process_log_paths: dict[int, str] = {}
     progress_lock = threading.Lock()
     progress_board = None
+    def _collect_policy_members(policy_members: dict | None) -> None:
+        for policy_name, member in dict(policy_members or {}).items():
+            if not isinstance(member, dict):
+                continue
+            policy_members_by_policy.setdefault(str(policy_name), []).append(dict(member))
+
     if compact_display:
         from tools.optimizer.outer_rolling_oos import OptimizerSeedEnsembleProgressBoard
 
@@ -1221,6 +1313,13 @@ def _run_nonrolling_random_seed_ensemble_training(
                 finalist_entry=finalist_entry,
                 params_payload=params_payload,
             )
+            from tools.optimizer.outer_rolling_oos import build_optimizer_policy_members_from_finalists
+            policy_members = build_optimizer_policy_members_from_finalists(
+                finalists,
+                objective_mode=objective_mode,
+                member_index=int(member_index),
+                seed=int(seed),
+            )
             if compact_display:
                 _emit_seed_progress_for_member(member_index, int(seed),
                     stage="DONE",
@@ -1229,7 +1328,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                     best_local_min_score=member_payload.get("local_min_score"),
                     elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
                 )
-            return {"member": member_payload, "session": member_session}
+            return {"member": member_payload, "session": member_session, "policy_members": policy_members}
         finally:
             member_session.close_trial_prep_executor()
             if study is not None:
@@ -1252,6 +1351,7 @@ def _run_nonrolling_random_seed_ensemble_training(
             result = _run_one_seed_member(member_index, int(seed))
             if result and result.get("member"):
                 members.append(dict(result["member"]))
+                _collect_policy_members(result.get("policy_members"))
                 dashboard_session = result.get("session") or dashboard_session
     elif process_parallel_enabled:
         os.makedirs(process_log_dir, exist_ok=True)
@@ -1302,6 +1402,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                         raise RuntimeError(f"nonrolling seed process failed: member={member_index}/{len(seeds)} error={type(exc).__name__}: {exc}{detail}") from exc
                     if result and result.get("member"):
                         members.append(dict(result["member"]))
+                        _collect_policy_members(result.get("policy_members"))
                     elif compact_display:
                         _emit_seed_progress_for_member(member_index, int(seeds[member_index - 1]),
                             stage="DONE",
@@ -1324,6 +1425,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                     result = future.result()
                     if result and result.get("member"):
                         members.append(dict(result["member"]))
+                        _collect_policy_members(result.get("policy_members"))
                         dashboard_session = result.get("session") or dashboard_session
                     elif compact_display:
                         _emit_seed_progress_for_member(member_index, int(seed),
@@ -1350,6 +1452,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         dataset_label=dataset_label,
         selected_model_mode=selected_model_mode,
         trials_per_seed=int(requested_trials),
+        policy_members_by_policy=policy_members_by_policy,
     )
     from tools.optimizer.callbacks import (
         print_optimizer_static_ensemble_console_dashboard,

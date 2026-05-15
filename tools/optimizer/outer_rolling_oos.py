@@ -2219,6 +2219,62 @@ def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[s
     return items
 
 
+def get_optimizer_paramset_policy_names() -> tuple[str, ...]:
+    """Return the policy set that writes first-class optimizer param JSON files."""
+    return tuple(REPORT_POLICY_NAMES)
+
+
+def get_optimizer_policy_paramset_filename(policy_name: str) -> str:
+    """Return the canonical JSON filename for an optimizer policy paramset."""
+    return str(PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"roos_{policy_name}.json"))
+
+
+def build_optimizer_policy_members_from_finalists(
+    finalists: list[dict],
+    *,
+    objective_mode: str,
+    member_index: int,
+    seed: int | None = None,
+) -> dict[str, dict]:
+    """Build static active-param ensemble members with the same policy selectors as rolling OOS.
+
+    Non-rolling training is a single-fold case, so it must reuse rolling's policy
+    selection rules instead of re-implementing base/local/retention choices.
+    """
+    policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
+    local_rank_map = _build_local_rank_map(finalists)
+    retention_rank_map = _build_retention_rank_map(finalists)
+    members: dict[str, dict] = {}
+    for policy_name in get_optimizer_paramset_policy_names():
+        item = policy_items.get(policy_name)
+        if item is None or item.get("trial") is None:
+            continue
+        trial = item["trial"]
+        trial_number = int(trial.number)
+        params_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
+        members[str(policy_name)] = {
+            "member_index": int(member_index),
+            "seed": None if seed is None else int(seed),
+            "policy": str(policy_name),
+            "selected_trial": trial_number + 1,
+            "optimizer_seed": None if seed is None else int(seed),
+            "score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
+            "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
+            "base_rank": int(item.get("base_rank", 0) or 0),
+            "local_min_score": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
+            "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
+            "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
+            "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
+            "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
+            "local_rank": int(local_rank_map.get(trial_number, 0)),
+            "retention": float(item.get("local_retention", 0.0)),
+            "retention_rank": int(retention_rank_map.get(trial_number, 0)),
+            "local_gate": bool(item.get("gate_pass", False)),
+            "params": dict(params_payload),
+        }
+    return members
+
+
 def _policy_description(policy_name: str) -> str:
     if policy_name == "base":
         return "Use base_rank #1 params for each OOS year."
