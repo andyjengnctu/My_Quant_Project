@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import time
 import sys
@@ -109,6 +110,33 @@ def _load_json_payload(path: Path) -> Dict[str, Any]:
         return {}
     return payload if isinstance(payload, dict) else {}
 
+
+
+
+def _parse_seed_ensemble_progress_from_stdout(stdout: str) -> Dict[str, Any]:
+    text = stdout or ""
+    header_match = re.search(r"seed ensemble \|[^\n]*seeds=(\d+)", text)
+    trial_matches = re.findall(r"trial\s+(\d+)\s*/\s*(\d+)", text)
+    seed_count = 0
+    if header_match:
+        try:
+            seed_count = int(header_match.group(1))
+        except (TypeError, ValueError):
+            seed_count = 0
+    max_trial_total = 0
+    max_trial_index = -1
+    for current_text, total_text in trial_matches:
+        try:
+            max_trial_index = max(max_trial_index, int(current_text))
+            max_trial_total = max(max_trial_total, int(total_text))
+        except (TypeError, ValueError):
+            continue
+    return {
+        "detected": bool(header_match or trial_matches),
+        "seed_count": int(seed_count),
+        "max_trial_index": int(max_trial_index),
+        "trial_total_per_seed": int(max_trial_total),
+    }
 
 def _derive_trial_count_from_ensemble_summary(summary_payload: Dict[str, Any], member_count: int) -> int:
     if not isinstance(summary_payload, dict):
@@ -316,6 +344,7 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         if candidate_summary_exists and not candidate_params_path.exists():
             failures.append("missing_candidate_best_params")
 
+        seed_ensemble_progress = _parse_seed_ensemble_progress_from_stdout(outcome.get("stdout", ""))
         if missing_optimizer_db:
             derived_trial_count = _derive_trial_count_from_ensemble_summary(
                 candidate_summary_payload,
@@ -326,6 +355,18 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
                 db_metrics["qualified_trial_count"] = int(candidate_params_info.get("ensemble_member_count", 0) or 0)
                 db_metrics["best_trial_value"] = None
                 db_metrics["trial_count_source"] = "active_param_ensemble_summary"
+            elif bool(seed_ensemble_progress.get("detected", False)) and outcome["returncode"] == 0:
+                seed_count = int(seed_ensemble_progress.get("seed_count", 0) or 0)
+                trial_total_per_seed = int(seed_ensemble_progress.get("trial_total_per_seed", 0) or 0)
+                if seed_count <= 0:
+                    seed_count = 1
+                if trial_total_per_seed <= 0:
+                    trial_total_per_seed = int(manifest.get("ml_smoke_trials", 0) or 0)
+                db_metrics["trial_count"] = int(max(0, seed_count) * max(0, trial_total_per_seed))
+                db_metrics["qualified_trial_count"] = 0
+                db_metrics["best_trial_value"] = None
+                db_metrics["trial_count_source"] = "seed_ensemble_in_memory_progress"
+                db_metrics["db_count"] = 0
             else:
                 failures.append("missing_optimizer_db")
 
@@ -371,6 +412,9 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
             "run_best_params_digest": payload_digest,
             "db_read_error": db_metrics["db_read_error"],
             "db_trial_count_source": str(db_metrics.get("trial_count_source", "optimizer_db" if db_paths else "")),
+            "random_seed_ensemble_progress_detected": bool(seed_ensemble_progress.get("detected", False)),
+            "random_seed_ensemble_progress_seed_count": int(seed_ensemble_progress.get("seed_count", 0) or 0),
+            "random_seed_ensemble_progress_trial_total_per_seed": int(seed_ensemble_progress.get("trial_total_per_seed", 0) or 0),
             "run_best_params_read_error": params_info["params_read_error"],
             "optimizer_profile_summary_path": profile_metrics["optimizer_profile_summary_path"],
             "optimizer_profile_trial_count": profile_metrics["optimizer_profile_trial_count"],
@@ -399,6 +443,8 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
     random_seed_ensemble_mode = (
         bool(first_run.get("candidate_best_is_active_param_ensemble", False))
         or bool(second_run.get("candidate_best_is_active_param_ensemble", False))
+        or bool(first_run.get("random_seed_ensemble_progress_detected", False))
+        or bool(second_run.get("random_seed_ensemble_progress_detected", False))
         or int(first_run.get("db_count", 0) or 0) > 1
         or int(second_run.get("db_count", 0) or 0) > 1
     )
@@ -505,6 +551,9 @@ def main(argv=None) -> int:
             "db_trial_count": first_run["db_trial_count"],
             "db_read_error": first_run["db_read_error"],
             "db_trial_count_source": first_run.get("db_trial_count_source", ""),
+            "random_seed_ensemble_progress_detected": first_run.get("random_seed_ensemble_progress_detected", False),
+            "random_seed_ensemble_progress_seed_count": first_run.get("random_seed_ensemble_progress_seed_count", 0),
+            "random_seed_ensemble_progress_trial_total_per_seed": first_run.get("random_seed_ensemble_progress_trial_total_per_seed", 0),
             "run_best_params_path": first_run["run_best_params_path"],
             "run_best_params_required": first_run["run_best_params_required"],
             "candidate_best_available": first_run.get("candidate_best_available", False),

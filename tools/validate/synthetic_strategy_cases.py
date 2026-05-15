@@ -542,7 +542,7 @@ def validate_strategy_repeatability_case(base_params):
         trial = _FakeOptunaTrial(
             number=2,
             preset_values={
-                "use_bb": True,
+                "use_bb": False,
                 "use_kc": True,
                 "use_vol": False,
                 "atr_len": 11,
@@ -635,7 +635,7 @@ def validate_strategy_minimum_viability_case(base_params):
     trial = _FakeOptunaTrial(
         number=3,
         preset_values={
-            "use_bb": True,
+            "use_bb": False,
             "use_kc": True,
             "use_vol": False,
             "atr_len": 11,
@@ -938,7 +938,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     filter_fail_trial = _FakeOptunaTrial(
         number=0,
         preset_values={
-            "use_bb": True,
+            "use_bb": False,
             "use_kc": True,
             "use_vol": False,
             "atr_len": 10,
@@ -975,7 +975,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     success_trial = _FakeOptunaTrial(
         number=1,
         preset_values={
-            "use_bb": True,
+            "use_bb": False,
             "use_kc": True,
             "use_vol": False,
             "atr_len": 11,
