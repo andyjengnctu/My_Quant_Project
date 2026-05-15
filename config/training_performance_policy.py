@@ -1,4 +1,5 @@
 import os
+from core.seed_ensemble_policy import resolve_seed_ensemble_parallel_workers
 
 # Optimizer 訓練效能參數區
 #
@@ -60,6 +61,14 @@ OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 4
 # - 保留給 local_min process-level 併發；目前正式流程仍以 thread ordered prefetch 為主。
 # - 預設 0，避免 process 巢狀併發造成記憶體放大。
 OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS = 0
+
+# OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS:
+# - 控制 random seed ensemble 內同時運行幾個 seed member。
+# - 1 = 維持循序，最省記憶體。
+# - >1 = 同時跑多個 seeds；實際值會 clamp 到 1~OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE。
+# - "auto" = 自動使用最大併發，也就是目前 random seed ensemble 的 N。
+# - 這是效能設定，只改執行併發，不改 seed ensemble 的選參、交易或統計口徑。
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = "auto"
 
 
 def _coerce_int(value, *, default: int, min_value: int = 0, max_value: int | None = None) -> int:
@@ -217,6 +226,13 @@ def resolve_optimizer_single_fold_local_min_process_workers_default():
     )
 
 
+def resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_count):
+    return resolve_seed_ensemble_parallel_workers(
+        seed_count,
+        OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS,
+    )
+
+
 def is_optimizer_local_min_dependency_stats_enabled():
     raw_value = os.environ.get(
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED",
@@ -224,7 +240,7 @@ def is_optimizer_local_min_dependency_stats_enabled():
     )
     return _coerce_bool(raw_value, default=True)
 
-def build_training_performance_policy_snapshot(fold_count=None):
+def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_size=None):
     return {
         "OPTIMIZER_ROLLING_FOLD_WORKERS": OPTIMIZER_ROLLING_FOLD_WORKERS,
         "OPTIMIZER_ROLLING_FOLD_WORKERS_RESOLVED": (
@@ -238,6 +254,12 @@ def build_training_performance_policy_snapshot(fold_count=None):
         "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
         "OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS": resolve_optimizer_single_fold_local_min_parallel_workers_default(),
         "OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS": resolve_optimizer_single_fold_local_min_process_workers_default(),
+        "OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS": OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS,
+        "OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS_RESOLVED": (
+            None
+            if seed_ensemble_size is None
+            else resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_ensemble_size)
+        ),
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
         "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER": resolve_optimizer_local_min_portfolio_dependency_order(),
         "OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER": ",".join(resolve_optimizer_local_min_signal_dependency_field_order()),

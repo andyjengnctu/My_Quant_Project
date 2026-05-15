@@ -28,6 +28,20 @@ def resolve_seed_ensemble_min_agree(seed_count: Any, min_agree: Any = SEED_ENSEM
     return min(n, max(1, int(requested)))
 
 
+
+def resolve_seed_ensemble_parallel_workers(seed_count: Any, parallel_workers: Any = 1) -> int:
+    n = coerce_seed_ensemble_size(seed_count, default=1)
+    text = str(parallel_workers).strip().lower() if parallel_workers is not None else ""
+    if text in {"auto", "max", "all", "n", "seed_count", "seeds", "seed"}:
+        requested = n
+    else:
+        try:
+            requested = int(parallel_workers)
+        except (TypeError, ValueError):
+            requested = 1
+    return min(n, max(1, int(requested)))
+
+
 def generate_random_seed_ensemble(seed_count: Any) -> list[int]:
     n = coerce_seed_ensemble_size(seed_count, default=1)
     seeds: set[int] = set()
