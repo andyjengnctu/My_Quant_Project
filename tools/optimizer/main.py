@@ -789,7 +789,10 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 status=f"seed {member_index}/{member_count} seed={seed}",
                 elapsed_sec=0.0,
             )
-            study = create_optimizer_study(str(task["db_name"]), seed=int(seed), sampler_kind="tpe")
+            task_db_name = task.get("db_name")
+            if isinstance(task_db_name, str) and task_db_name.strip().lower() in {"", "none", "null"}:
+                task_db_name = None
+            study = create_optimizer_study(task_db_name, seed=int(seed), sampler_kind="tpe")
             _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
             _emit_nonrolling_seed_process_progress_event(
                 task,
@@ -1063,8 +1066,6 @@ def _run_nonrolling_random_seed_ensemble_training(
         return None
 
     seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
-    ensemble_db_dir = os.path.join(MODELS_DIR, "seed_ensemble")
-    os.makedirs(ensemble_db_dir, exist_ok=True)
     compact_display = not bool(is_optimizer_nonrolling_train_result_table_enabled())
 
     members: list[dict] = []
@@ -1123,9 +1124,6 @@ def _run_nonrolling_random_seed_ensemble_training(
         member_session.run_action = "train"
         member_session.disable_milestone_dashboard = compact_display
         member_session.disable_optimizer_status_line = compact_display
-        member_session_ts = _resolve_optimizer_session_ts(member_session, fallback_label=f"seed{int(seed)}")
-        db_file = os.path.join(ensemble_db_dir, f"nonrolling_{dataset_profile_key}_seed{int(seed)}_{member_session_ts}.db")
-        db_name = f"sqlite:///{db_file}"
         study = None
         try:
             if compact_display:
@@ -1136,7 +1134,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 )
             else:
                 print(f"{C_CYAN}[seed {member_index}/{len(seeds)}] seed={int(seed)} | trials={int(requested_trials)}{C_RESET}")
-            study = create_optimizer_study(db_name, seed=int(seed), sampler_kind="tpe")
+            study = create_optimizer_study(None, seed=int(seed), sampler_kind="tpe")
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
             if compact_display:
                 _emit_seed_progress_for_member(member_index, int(seed),
@@ -1261,10 +1259,6 @@ def _run_nonrolling_random_seed_ensemble_training(
         process_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
         for member_index, seed in enumerate(seeds, start=1):
             log_path = os.path.join(process_log_dir, f"seed_{int(member_index):02d}_{int(seed)}.log")
-            db_file = os.path.join(
-                ensemble_db_dir,
-                f"nonrolling_{dataset_profile_key}_seed{int(seed)}_{os.path.basename(process_log_dir)}_m{int(member_index):02d}.db",
-            )
             process_log_paths[int(member_index)] = log_path
             process_tasks[int(member_index)] = {
                 "member_index": int(member_index),
@@ -1275,7 +1269,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 "optimizer_required_min_rows": int(optimizer_required_min_rows),
                 "objective_mode": str(objective_mode),
                 "requested_trials": int(requested_trials),
-                "db_name": f"sqlite:///{db_file}",
+                "db_name": None,
                 "environ": dict(environ or {}),
                 "log_path": log_path,
                 "progress_context": {
