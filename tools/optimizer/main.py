@@ -761,6 +761,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
     log_path = str((task or {}).get("log_path") or "")
 
     def _execute() -> dict | None:
+        from tools.optimizer.prep import load_all_raw_data as load_all_raw_data_func
         from tools.optimizer.runtime import create_optimizer_study, resolve_optimizer_single_fold_search_parallel_trials
         from tools.optimizer.robustness import print_local_min_score_finalist_review, print_local_min_score_winner_summary
         from tools.optimizer.session import close_study_storage
@@ -769,7 +770,6 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
         configure_optuna_logging()
         walk_forward_policy = dict(task["walk_forward_policy"])
         selected_data_dir = str(task["selected_data_dir"])
-        load_all_raw_data_flag = bool(task.get("load_all_raw_data", False))
         optimizer_required_min_rows = int(task["optimizer_required_min_rows"])
         requested_trials = int(task["requested_trials"])
         seed = int(task["seed"])
@@ -799,7 +799,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
             )
             member_session.load_raw_data(
                 selected_data_dir,
-                load_all_raw_data=load_all_raw_data_flag,
+                load_all_raw_data=load_all_raw_data_func,
                 required_min_rows=optimizer_required_min_rows,
                 verbose=False,
             )
@@ -1272,7 +1272,6 @@ def _run_nonrolling_random_seed_ensemble_training(
                 "seed": int(seed),
                 "walk_forward_policy": dict(walk_forward_policy),
                 "selected_data_dir": str(selected_data_dir),
-                "load_all_raw_data": bool(load_all_raw_data),
                 "optimizer_required_min_rows": int(optimizer_required_min_rows),
                 "objective_mode": str(objective_mode),
                 "requested_trials": int(requested_trials),

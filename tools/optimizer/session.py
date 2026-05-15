@@ -515,6 +515,11 @@ class OptimizerSession:
         self.sorted_master_dates = list(sorted_master_dates) if sorted_master_dates is not None else sorted(resolved_master_dates)
 
     def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows, verbose=True):
+        if not callable(load_all_raw_data):
+            raise TypeError(
+                "load_raw_data 需要接收 tools.optimizer.prep.load_all_raw_data 函式；"
+                f"目前收到 {type(load_all_raw_data).__name__}"
+            )
         raw_data_cache = load_all_raw_data(
             data_dir=data_dir,
             required_min_rows=required_min_rows,

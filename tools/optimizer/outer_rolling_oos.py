@@ -4387,7 +4387,7 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
         return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage == "DONE":
-        status = str(progress.get("status") or "done")
+        status = _strip_redundant_seed_status(str(progress.get("status") or "done")) or "done"
         base_best = progress.get("best_base_score")
         local_best = progress.get("best_local_min_score")
         base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
@@ -4425,6 +4425,25 @@ def _format_seed_ensemble_progress_line(context: dict, progress: dict, *, log_st
     if progress.get("elapsed_sec") is not None:
         elapsed_text = f" | elapsed={_fmt_duration_compact(progress.get('elapsed_sec'))}"
     prefix = f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | {seed_text}"
+
+    def _strip_redundant_seed_status(raw_status: str) -> str:
+        status_text = str(raw_status or "").strip()
+        if not status_text:
+            return ""
+        candidates = [seed_text]
+        if seed_index and seed_count:
+            candidates.append(f"seed {seed_index}/{seed_count}")
+        for candidate in candidates:
+            candidate = str(candidate or "").strip()
+            if not candidate:
+                continue
+            if status_text == candidate:
+                return ""
+            prefix_text = f"{candidate} "
+            if status_text.startswith(prefix_text):
+                return status_text[len(prefix_text):].strip()
+        return status_text
+
     if stage == "OPTIMIZER_SEARCH":
         completed = int(progress.get("completed", 0) or 0)
         total = int(progress.get("total", 0) or 0)
@@ -4455,14 +4474,18 @@ def _format_seed_ensemble_progress_line(context: dict, progress: dict, *, log_st
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
         return f"{prefix} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage == "DONE":
-        status = str(progress.get("status") or "done")
+        status = _strip_redundant_seed_status(str(progress.get("status") or "done")) or "done"
         base_best = progress.get("best_base_score")
         local_best = progress.get("best_local_min_score")
         base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
         return f"{prefix} | DONE {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage in {"QUEUED", "START", "RAW_DATA", "STUDY_CREATE"}:
-        status = str(progress.get("status") or stage).replace("_", " ")
+        status = _strip_redundant_seed_status(str(progress.get("status") or ""))
+        if not status:
+            status = stage.replace("_", " ").lower()
+        else:
+            status = status.replace("_", " ")
         return f"{prefix} | {status}{elapsed_text}"
     fallback = str(log_status or progress.get("status") or "queued").strip()
     return f"{prefix} | {fallback}{elapsed_text}"
