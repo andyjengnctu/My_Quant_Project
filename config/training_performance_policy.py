@@ -1,5 +1,5 @@
 import os
-from core.seed_ensemble_policy import resolve_seed_ensemble_parallel_workers
+from core.seed_ensemble_policy import resolve_seed_ensemble_parallel_backend, resolve_seed_ensemble_parallel_workers
 
 # Optimizer 訓練效能參數區
 #
@@ -69,6 +69,12 @@ OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS = 0
 # - "auto" = 自動使用最大併發，也就是目前 random seed ensemble 的 N。
 # - 這是效能設定，只改執行併發，不改 seed ensemble 的選參、交易或統計口徑。
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = "auto"
+
+# OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND:
+# - "process" = 每個 seed member 使用獨立 Python process，CPU 利用率較高，但記憶體用量較大。
+# - "thread" = 同一 Python process 內用 threads，較省記憶體，但 CPU-bound 訓練較難吃滿核心。
+# - 這是效能設定，只改 seed member 執行 backend，不改選參、交易或統計口徑。
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND = "process"
 
 
 def _coerce_int(value, *, default: int, min_value: int = 0, max_value: int | None = None) -> int:
@@ -233,6 +239,10 @@ def resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_count):
     )
 
 
+def resolve_optimizer_random_seed_ensemble_parallel_backend_default():
+    return resolve_seed_ensemble_parallel_backend(OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND)
+
+
 def is_optimizer_local_min_dependency_stats_enabled():
     raw_value = os.environ.get(
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED",
@@ -260,6 +270,8 @@ def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_si
             if seed_ensemble_size is None
             else resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_ensemble_size)
         ),
+        "OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND": OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND,
+        "OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND_RESOLVED": resolve_optimizer_random_seed_ensemble_parallel_backend_default(),
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
         "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER": resolve_optimizer_local_min_portfolio_dependency_order(),
         "OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER": ",".join(resolve_optimizer_local_min_signal_dependency_field_order()),

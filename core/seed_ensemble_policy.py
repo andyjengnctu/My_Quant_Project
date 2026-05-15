@@ -29,6 +29,15 @@ def resolve_seed_ensemble_min_agree(seed_count: Any, min_agree: Any = SEED_ENSEM
 
 
 
+def resolve_seed_ensemble_parallel_backend(parallel_backend: Any = "process") -> str:
+    text = str(parallel_backend or "process").strip().lower()
+    if text in {"process", "processes", "proc", "multiprocess", "multiprocessing"}:
+        return "process"
+    if text in {"thread", "threads", "threading"}:
+        return "thread"
+    return "process"
+
+
 def resolve_seed_ensemble_parallel_workers(seed_count: Any, parallel_workers: Any = 1) -> int:
     n = coerce_seed_ensemble_size(seed_count, default=1)
     text = str(parallel_workers).strip().lower() if parallel_workers is not None else ""

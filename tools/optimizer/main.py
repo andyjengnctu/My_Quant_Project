@@ -4,8 +4,10 @@ import os
 import sys
 import threading
 import time
+import traceback
 import warnings
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from contextlib import redirect_stderr, redirect_stdout
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
@@ -21,7 +23,7 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_models_dir, resolve_run_best_params_path
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_process_pool_executor_kwargs, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.output_paths import build_output_dir
 from core.walk_forward_policy import (
     build_optimizer_effective_policy_fingerprint,
@@ -45,7 +47,7 @@ from config.training_policy import (
     is_optimizer_nonrolling_train_result_table_enabled,
 )
 
-from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_workers_default
+from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=FutureWarning, module=r"optuna(\..*)?$")
@@ -693,6 +695,196 @@ def _make_nonrolling_seed_trial_progress_callback(
     return _callback
 
 
+
+
+def _emit_nonrolling_seed_process_progress_event(task: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None) -> None:
+    from tools.optimizer.outer_rolling_oos import write_optimizer_seed_progress_event
+
+    context = dict((task or {}).get("progress_context") or {})
+    member_index = int((task or {}).get("member_index", 0) or 0)
+    member_count = int((task or {}).get("member_count", 0) or 0)
+    seed = int((task or {}).get("seed", 0) or 0)
+    payload = {
+        "seed_ensemble_member_index": int(member_index),
+        "seed_ensemble_member_count": int(member_count),
+        "seed": int(seed),
+        "status": str(status or ""),
+        "elapsed_sec": elapsed_sec,
+    }
+    if completed is not None:
+        payload["completed"] = int(completed or 0)
+    if total is not None:
+        payload["total"] = int(total or 0)
+    if best_score is not None:
+        payload["best_score"] = float(best_score)
+    if best_base_score is not None:
+        payload["best_base_score"] = float(best_base_score)
+    if best_local_min_score is not None:
+        payload["best_local_min_score"] = float(best_local_min_score)
+    write_optimizer_seed_progress_event(
+        stage=str(stage),
+        fold_idx=int(context.get("fold_idx", 1) or 1),
+        fold_count=int(context.get("fold_count", 1) or 1),
+        oos_year=int(context.get("oos_year", 0) or 0),
+        selection_start=str(context.get("selection_start") or ""),
+        selection_end=str(context.get("selection_end") or ""),
+        **payload,
+    )
+
+
+def _make_nonrolling_seed_process_trial_progress_callback(*, task: dict, member_session, requested_trials: int, started_at: float):
+    state = {"last_completed": 0}
+
+    def _callback(study, trial):
+        completed = int(getattr(trial, "number", -1)) + 1
+        if completed <= 0 or completed == int(state.get("last_completed", 0) or 0):
+            return
+        best_trial = member_session.get_best_completed_trial_or_none(study)
+        best_score = None if best_trial is None else best_trial.value
+        member_index = int((task or {}).get("member_index", 0) or 0)
+        member_count = int((task or {}).get("member_count", 0) or 0)
+        _emit_nonrolling_seed_process_progress_event(
+            task,
+            stage="OPTIMIZER_SEARCH",
+            status=f"seed {member_index}/{member_count}",
+            completed=int(completed),
+            total=int(requested_trials),
+            best_score=best_score,
+            elapsed_sec=max(0.0, time.perf_counter() - float(started_at)),
+        )
+        state["last_completed"] = int(completed)
+
+    return _callback
+
+
+def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None:
+    log_path = str((task or {}).get("log_path") or "")
+
+    def _execute() -> dict | None:
+        from tools.optimizer.runtime import create_optimizer_study, resolve_optimizer_single_fold_search_parallel_trials
+        from tools.optimizer.robustness import print_local_min_score_finalist_review, print_local_min_score_winner_summary
+        from tools.optimizer.session import close_study_storage
+        from tools.optimizer.study_utils import build_best_params_payload_from_trial, is_qualified_trial_value
+
+        configure_optuna_logging()
+        walk_forward_policy = dict(task["walk_forward_policy"])
+        selected_data_dir = str(task["selected_data_dir"])
+        load_all_raw_data_flag = bool(task.get("load_all_raw_data", False))
+        optimizer_required_min_rows = int(task["optimizer_required_min_rows"])
+        requested_trials = int(task["requested_trials"])
+        seed = int(task["seed"])
+        member_index = int(task["member_index"])
+        member_count = int(task["member_count"])
+        started_at = time.perf_counter()
+        study = None
+        member_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+        member_session.n_trials = int(requested_trials)
+        member_session.run_action = "train"
+        member_session.disable_milestone_dashboard = True
+        member_session.disable_optimizer_status_line = True
+        try:
+            _emit_nonrolling_seed_process_progress_event(
+                task,
+                stage="START",
+                status=f"seed {member_index}/{member_count} seed={seed}",
+                elapsed_sec=0.0,
+            )
+            study = create_optimizer_study(str(task["db_name"]), seed=int(seed), sampler_kind="tpe")
+            _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
+            _emit_nonrolling_seed_process_progress_event(
+                task,
+                stage="RAW_DATA",
+                status=f"seed {member_index}/{member_count} raw data",
+                elapsed_sec=max(0.0, time.perf_counter() - started_at),
+            )
+            member_session.load_raw_data(
+                selected_data_dir,
+                load_all_raw_data=load_all_raw_data_flag,
+                required_min_rows=optimizer_required_min_rows,
+                verbose=False,
+            )
+            member_session.profile_recorder.init_output_files()
+            member_session.profile_recorder.mark_run_started()
+            _emit_nonrolling_seed_process_progress_event(
+                task,
+                stage="OPTIMIZER_SEARCH",
+                status=f"seed {member_index}/{member_count}",
+                completed=0,
+                total=int(requested_trials),
+                elapsed_sec=max(0.0, time.perf_counter() - started_at),
+            )
+            search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(task.get("environ") or os.environ, sampler_kind="tpe")
+            study.optimize(
+                member_session.objective,
+                n_trials=int(requested_trials),
+                n_jobs=int(search_parallel_trials),
+                callbacks=[
+                    member_session.monitoring_callback,
+                    _make_nonrolling_seed_process_trial_progress_callback(
+                        task=task,
+                        member_session=member_session,
+                        requested_trials=int(requested_trials),
+                        started_at=started_at,
+                    ),
+                ],
+            )
+            finalists, best_trial = print_local_min_score_finalist_review(
+                study,
+                session=member_session,
+                objective_mode=str(task.get("objective_mode") or "split_train_romd"),
+                colors=COLORS,
+                winner_trial=None,
+                emit_table=False,
+                show_progress=False,
+            )
+            if best_trial is None or not is_qualified_trial_value(best_trial.value):
+                _emit_nonrolling_seed_process_progress_event(
+                    task,
+                    stage="DONE",
+                    status=f"seed {member_index}/{member_count} skipped",
+                    elapsed_sec=max(0.0, time.perf_counter() - started_at),
+                )
+                return None
+            print_local_min_score_winner_summary(winner_trial=best_trial, session=member_session, colors=COLORS)
+            finalist_entry = _find_finalist_entry(finalists, best_trial)
+            if finalist_entry is None:
+                raise ValueError(f"seed={seed} 找不到 finalist entry，無法建立 ensemble member")
+            params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
+            member_payload = _build_seed_ensemble_member(
+                member_index=member_index,
+                seed=seed,
+                best_trial=best_trial,
+                finalist_entry=finalist_entry,
+                params_payload=params_payload,
+            )
+            _emit_nonrolling_seed_process_progress_event(
+                task,
+                stage="DONE",
+                status=f"seed {member_index}/{member_count} done",
+                best_base_score=member_payload.get("base_score"),
+                best_local_min_score=member_payload.get("local_min_score"),
+                elapsed_sec=max(0.0, time.perf_counter() - started_at),
+            )
+            return {"member": member_payload}
+        finally:
+            member_session.close_trial_prep_executor()
+            if study is not None:
+                close_study_storage(study)
+
+    try:
+        if log_path:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            with open(log_path, "w", encoding="utf-8") as log_handle:
+                with redirect_stdout(log_handle), redirect_stderr(log_handle):
+                    return _execute()
+        return _execute()
+    except Exception as exc:
+        if log_path:
+            with open(log_path, "a", encoding="utf-8", errors="replace") as log_handle:
+                traceback.print_exc(file=log_handle)
+        raise RuntimeError(f"nonrolling seed member failed: seed={int((task or {}).get('seed', 0) or 0)} error={type(exc).__name__}: {exc}") from exc
+
+
 def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dict, colors: dict) -> None:
     if not bool(is_optimizer_nonrolling_train_result_table_enabled()):
         return
@@ -827,6 +1019,18 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
     return payload, summary
 
 
+
+
+def _tail_nonrolling_seed_log(path: str, *, max_lines: int = 24) -> str:
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return "".join(handle.readlines()[-int(max_lines):]).strip()
+    except OSError:
+        return ""
+
+
 def _run_nonrolling_random_seed_ensemble_training(
     *,
     environ,
@@ -867,6 +1071,10 @@ def _run_nonrolling_random_seed_ensemble_training(
     dashboard_session = None
     ensemble_started_at = time.perf_counter()
     parallel_workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(len(seeds))
+    parallel_backend = resolve_optimizer_random_seed_ensemble_parallel_backend_default()
+    process_parallel_enabled = bool(int(parallel_workers) > 1 and parallel_backend == "process")
+    process_log_dir = os.path.join(OUTPUT_DIR, "seed_ensemble_logs", get_taipei_now().strftime("%Y%m%d_%H%M%S_%f"))
+    process_log_paths: dict[int, str] = {}
     progress_lock = threading.Lock()
     progress_board = None
     if compact_display:
@@ -880,6 +1088,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 "seed_index": int(member_index),
                 "seed_count": int(len(seeds)),
                 "seed": int(seed),
+                "log_path": os.path.join(process_log_dir, f"seed_{int(member_index):02d}_{int(seed)}.log"),
                 "selection_start": str(period_context.get("selection_start") or ""),
                 "selection_end": str(period_context.get("selection_end") or ""),
                 "oos_period": str(period_context.get("oos_period") or ""),
@@ -889,12 +1098,12 @@ def _run_nonrolling_random_seed_ensemble_training(
             contexts,
             header=(
                 f"seed ensemble | folds=1 | seeds={len(seeds)} | min_agree={policy['min_agree']} | "
-                f"parallel_workers={int(parallel_workers)}"
+                f"parallel_workers={int(parallel_workers)} | backend={parallel_backend}"
             ),
         )
         progress_board.render(force=True)
     else:
-        print(f"{C_GRAY}🎲 Random seed ensemble｜N={len(seeds)}｜min_agree={policy['min_agree']}｜seeds={','.join(str(seed) for seed in seeds)}{C_RESET}")
+        print(f"{C_GRAY}🎲 Random seed ensemble｜N={len(seeds)}｜min_agree={policy['min_agree']}｜backend={parallel_backend}｜seeds={','.join(str(seed) for seed in seeds)}{C_RESET}")
     configure_optuna_logging()
 
     def _emit_seed_progress_for_member(member_index: int, seed: int, **kwargs) -> None:
@@ -1028,12 +1237,86 @@ def _run_nonrolling_random_seed_ensemble_training(
             if study is not None:
                 close_study_storage(study)
 
+    def _refresh_process_progress_board(*, force: bool = False) -> None:
+        if not compact_display or progress_board is None or not process_log_paths:
+            return
+        from tools.optimizer.outer_rolling_oos import read_optimizer_seed_progresses_from_log_paths
+
+        latest = read_optimizer_seed_progresses_from_log_paths(process_log_paths.values())
+        if not latest:
+            return
+        progress_map = {(1, int(member_index)): dict(progress) for member_index, progress in latest.items()}
+        with progress_lock:
+            progress_board.update_many(progress_map, force=force)
+
     if int(parallel_workers) <= 1:
         for member_index, seed in enumerate(seeds, start=1):
             result = _run_one_seed_member(member_index, int(seed))
             if result and result.get("member"):
                 members.append(dict(result["member"]))
                 dashboard_session = result.get("session") or dashboard_session
+    elif process_parallel_enabled:
+        os.makedirs(process_log_dir, exist_ok=True)
+        process_tasks = {}
+        process_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
+        for member_index, seed in enumerate(seeds, start=1):
+            log_path = os.path.join(process_log_dir, f"seed_{int(member_index):02d}_{int(seed)}.log")
+            db_file = os.path.join(
+                ensemble_db_dir,
+                f"nonrolling_{dataset_profile_key}_seed{int(seed)}_{os.path.basename(process_log_dir)}_m{int(member_index):02d}.db",
+            )
+            process_log_paths[int(member_index)] = log_path
+            process_tasks[int(member_index)] = {
+                "member_index": int(member_index),
+                "member_count": int(len(seeds)),
+                "seed": int(seed),
+                "walk_forward_policy": dict(walk_forward_policy),
+                "selected_data_dir": str(selected_data_dir),
+                "load_all_raw_data": bool(load_all_raw_data),
+                "optimizer_required_min_rows": int(optimizer_required_min_rows),
+                "objective_mode": str(objective_mode),
+                "requested_trials": int(requested_trials),
+                "db_name": f"sqlite:///{db_file}",
+                "environ": dict(environ or {}),
+                "log_path": log_path,
+                "progress_context": {
+                    "fold_idx": 1,
+                    "fold_count": 1,
+                    "oos_year": int(process_context.get("oos_year", 0) or 0),
+                    "oos_period": str(process_context.get("oos_period") or ""),
+                    "selection_start": str(process_context.get("selection_start") or ""),
+                    "selection_end": str(process_context.get("selection_end") or ""),
+                    "selection_period": str(process_context.get("selection_period") or ""),
+                },
+            }
+        executor_kwargs, _start_method = get_process_pool_executor_kwargs()
+        with ProcessPoolExecutor(max_workers=int(parallel_workers), **executor_kwargs) as executor:
+            future_map = {
+                executor.submit(_run_nonrolling_seed_ensemble_member_process_task, task): int(member_index)
+                for member_index, task in process_tasks.items()
+            }
+            pending = set(future_map)
+            while pending:
+                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                _refresh_process_progress_board(force=bool(done))
+                for future in done:
+                    member_index = int(future_map[future])
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        tail = _tail_nonrolling_seed_log(process_log_paths.get(member_index, ""), max_lines=30)
+                        detail = f"\n最後 seed log：\n{tail}" if tail else ""
+                        raise RuntimeError(f"nonrolling seed process failed: member={member_index}/{len(seeds)} error={type(exc).__name__}: {exc}{detail}") from exc
+                    if result and result.get("member"):
+                        members.append(dict(result["member"]))
+                    elif compact_display:
+                        _emit_seed_progress_for_member(member_index, int(seeds[member_index - 1]),
+                            stage="DONE",
+                            status=f"seed {member_index}/{len(seeds)} seed={int(seeds[member_index - 1])} skipped",
+                            elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
+                        )
+            _refresh_process_progress_board(force=True)
+        members.sort(key=lambda item: int(item.get("member_index", 0) or 0))
     else:
         with ThreadPoolExecutor(max_workers=int(parallel_workers)) as executor:
             future_map = {
@@ -1041,12 +1324,8 @@ def _run_nonrolling_random_seed_ensemble_training(
                 for member_index, seed in enumerate(seeds, start=1)
             }
             pending = set(future_map)
-            last_heartbeat_at = time.perf_counter()
             while pending:
-                done, pending = wait(pending, timeout=10.0, return_when=FIRST_COMPLETED)
-                if not done:
-                    last_heartbeat_at = time.perf_counter()
-                    continue
+                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
                 for future in done:
                     member_index, seed = future_map[future]
                     result = future.result()
@@ -1059,8 +1338,6 @@ def _run_nonrolling_random_seed_ensemble_training(
                             status=f"seed {member_index}/{len(seeds)} seed={int(seed)} skipped",
                             elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
                         )
-                if compact_display and pending and time.perf_counter() - float(last_heartbeat_at) >= 10.0:
-                    last_heartbeat_at = time.perf_counter()
         members.sort(key=lambda item: int(item.get("member_index", 0) or 0))
 
     if len(members) != len(seeds):
