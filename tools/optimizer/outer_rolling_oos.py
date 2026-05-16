@@ -2245,7 +2245,7 @@ def build_optimizer_policy_members_from_finalists(
     local_rank_map = _build_local_rank_map(finalists)
     retention_rank_map = _build_retention_rank_map(finalists)
     members: dict[str, dict] = {}
-    for policy_name in get_optimizer_paramset_policy_names():
+    for policy_name in CHAIN_POLICY_NAMES:
         item = policy_items.get(policy_name)
         if item is None or item.get("trial") is None:
             continue

@@ -19,7 +19,7 @@ from core.walk_forward_policy import filter_search_train_dates
 from core.model_paths import resolve_run_best_params_path
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
-from core.active_param_ensemble import get_active_param_ensemble_policy
+from core.active_param_ensemble import get_active_param_ensemble_policy, load_json_file
 from core.portfolio_engine import run_portfolio_timeline
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
@@ -873,7 +873,69 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
 
 
 
-def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_payload: dict, elapsed_sec: float | None = None) -> dict:
+def _build_static_policy_oos_row_from_metrics(candidate_metrics: dict, benchmark_metrics: dict) -> dict:
+    candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
+    benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
+    return {
+        "available": True,
+        "rank_1_trial": None,
+        "rank_1_oos": float(candidate_score),
+        "rank_1_return_pct": _safe_float(candidate_metrics.get("pf_return", 0.0)),
+        "rank_1_mdd_pct": _safe_float(candidate_metrics.get("pf_mdd", 0.0)),
+        "rank_1_trades": _safe_int(candidate_metrics.get("pf_trades", 0)),
+        "benchmark_0050_gap": float(candidate_score) - float(benchmark_score),
+    }
+
+
+def _load_static_policy_paramset_payloads(policy_paramsets: dict | None) -> dict[str, dict]:
+    payloads: dict[str, dict] = {}
+    for policy_name, source in dict(policy_paramsets or {}).items():
+        if isinstance(source, dict):
+            payloads[str(policy_name)] = dict(source)
+            continue
+        path = str(source or "").strip()
+        if not path:
+            continue
+        try:
+            payload = load_json_file(path)
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(payload, dict):
+            payloads[str(policy_name)] = payload
+    return payloads
+
+
+def _build_static_policy_rows_from_paramsets(
+    session,
+    *,
+    policy_paramsets: dict | None,
+    start_date,
+    end_date,
+    initial_capital: float,
+) -> dict[str, dict]:
+    rows: dict[str, dict] = {}
+    payloads = _load_static_policy_paramset_payloads(policy_paramsets)
+    for policy_name, payload in payloads.items():
+        try:
+            candidate_metrics, benchmark_metrics, _range_text = _run_static_ensemble_dashboard_replay(
+                session,
+                payload,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=initial_capital,
+            )
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            rows[str(policy_name)] = {
+                "available": False,
+                "rank_1_oos": 0.0,
+                "unavailable_reason": "policy_paramset_replay_failed",
+            }
+            continue
+        rows[str(policy_name)] = _build_static_policy_oos_row_from_metrics(candidate_metrics, benchmark_metrics)
+    return rows
+
+
+def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None) -> dict:
     """Build the single-fold row used by the shared rolling-OOS table renderer."""
     policy = get_active_param_ensemble_policy(ensemble_payload)
     schedule = ensemble_payload.get("params_ensemble") or []
@@ -903,19 +965,18 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     )
     candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
     benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
-    policy_row = {
-        "available": True,
-        "rank_1_trial": None,
-        "rank_1_oos": float(candidate_score),
-        "rank_1_return_pct": _safe_float(candidate_metrics.get("pf_return", 0.0)),
-        "rank_1_mdd_pct": _safe_float(candidate_metrics.get("pf_mdd", 0.0)),
-        "rank_1_trades": _safe_int(candidate_metrics.get("pf_trades", 0)),
-        "benchmark_0050_gap": float(candidate_score) - float(benchmark_score),
-    }
+    candidate_policy_row = _build_static_policy_oos_row_from_metrics(candidate_metrics, benchmark_metrics)
+    policy_rows = _build_static_policy_rows_from_paramsets(
+        session,
+        policy_paramsets=policy_paramsets or ensemble_payload.get("policy_paramsets"),
+        start_date=oos_start_date,
+        end_date=oos_end_date,
+        initial_capital=initial_capital,
+    )
     unavailable_policy = {
         "available": False,
         "rank_1_oos": 0.0,
-        "unavailable_reason": "nonrolling_static_ensemble_has_single_consensus_policy",
+        "unavailable_reason": "nonrolling_policy_paramset_not_available",
     }
     selection_period = ""
     if selection_start is not None and selection_end is not None:
@@ -931,15 +992,19 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
         "benchmark_mdd_pct": _safe_float(benchmark_metrics.get("pf_mdd", 0.0)),
         "elapsed_sec": elapsed_sec,
         "random_seed_ensemble": dict(policy),
-        "base": dict(unavailable_policy),
-        "base_retention_gt_min": dict(unavailable_policy),
-        "local": dict(policy_row),
-        "retention": dict(unavailable_policy),
     }
+    from tools.optimizer.outer_rolling_oos import BASE_RETENTION_COMPARISON_POLICY_NAMES, REPORT_POLICY_NAMES
+
+    for policy_name in tuple(REPORT_POLICY_NAMES) + tuple(BASE_RETENTION_COMPARISON_POLICY_NAMES):
+        if policy_name in policy_rows:
+            row[str(policy_name)] = dict(policy_rows[policy_name])
+        elif policy_name == "local":
+            row[str(policy_name)] = dict(candidate_policy_row)
+        else:
+            row[str(policy_name)] = dict(unavailable_policy)
     return row
 
-
-def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None) -> None:
+def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None) -> None:
     """Print non-rolling ensemble summary through the exact rolling-OOS table renderer."""
     from tools.optimizer.outer_rolling_oos import render_optimizer_results_tables
 
@@ -947,6 +1012,7 @@ def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_paylo
         session,
         ensemble_payload=ensemble_payload,
         elapsed_sec=elapsed_sec,
+        policy_paramsets=policy_paramsets,
     )
     table_text = render_optimizer_results_tables([row], color=True, include_chain=False, include_oos_avg=False)
     if table_text:

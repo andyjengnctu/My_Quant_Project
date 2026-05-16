@@ -5,7 +5,7 @@ from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
 BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_bb": {"kind": "categorical", "choices": [False]},  # (AI註: 布林通道濾網開關搜尋)
-    "use_kc": {"kind": "categorical", "choices": [True],},  # (AI註: 肯特納通道濾網開關搜尋)
+    "use_kc": {"kind": "categorical", "choices": [False],},  # (AI註: 肯特納通道濾網開關搜尋)
     "use_vol": {"kind": "categorical", "choices": [False]},  # (AI註: 量能濾網開關搜尋)
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 40~250、步長 5)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
@@ -18,9 +18,9 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "kc_mult": {"kind": "float", "low": 1.0, "high": 3.0, "step": 0.1, "enabled_by": "use_kc"},  # (AI註: 肯特納通道倍數搜尋，僅 use_kc=True 啟用)
     "vol_short_len": {"kind": "int", "low": 1, "high": 10, "enabled_by": "use_vol"},  # (AI註: 短期量能窗長搜尋，僅 use_vol=True 啟用)
     "vol_long_len": {"kind": "int", "high": 30, "depends_on": "vol_short_len", "enabled_by": "use_vol"},  # (AI註: 長期量能窗長搜尋，僅 use_vol=True 啟用且下限跟隨 vol_short_len)
-    "min_history_trades": {"kind": "int", "low": 5, "high": 5},  # (AI註: 歷史績效最少交易次數搜尋，預設區間 0~5)
+    "min_history_trades": {"kind": "int", "low": 3, "high": 3},  # (AI註: 歷史績效最少交易次數搜尋，預設區間 0~5)
     "min_history_ev": {"kind": "float", "low": 0.0, "high": 0.0, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設區間 -1.0~0.5)
-    "min_history_win_rate": {"kind": "float", "low": 0.5, "high": 0.5, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設區間 0.0~0.6)
+    "min_history_win_rate": {"kind": "float", "low": 0.45, "high": 0.45, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設區間 0.0~0.6)
 }
 
 

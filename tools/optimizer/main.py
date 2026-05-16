@@ -1119,13 +1119,19 @@ def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, w
 
 def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict[str, str]:
     from tools.optimizer.outer_rolling_oos import (
+        BASE_RETENTION_COMPARISON_POLICY_NAMES,
         get_optimizer_paramset_policy_names,
         get_optimizer_policy_paramset_filename,
     )
 
+    policy_names = tuple(get_optimizer_paramset_policy_names()) + tuple(
+        name
+        for name in BASE_RETENTION_COMPARISON_POLICY_NAMES
+        if name not in set(get_optimizer_paramset_policy_names())
+    )
     paths: dict[str, str] = {}
     requested_policy = _resolve_nonrolling_seed_ensemble_policy()
-    for policy_name in get_optimizer_paramset_policy_names():
+    for policy_name in policy_names:
         members = sorted(
             list((policy_members_by_policy or {}).get(str(policy_name)) or []),
             key=lambda item: int(dict(item).get("member_index", 0) or 0),
@@ -1598,6 +1604,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     print_optimizer_static_ensemble_rolling_oos_table(
         dashboard_session,
         ensemble_payload=ensemble_payload,
+        policy_paramsets=dict((_ensemble_summary or {}).get("policy_paramsets") or {}),
     )
     print_optimizer_static_ensemble_console_dashboard(
         dashboard_session,
