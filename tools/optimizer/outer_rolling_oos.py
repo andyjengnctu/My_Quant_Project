@@ -3605,19 +3605,81 @@ def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = 
 
 
 
+def _coerce_period_date(value, *, endpoint: str = "start") -> pd.Timestamp | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if "~" in text:
+        left, right = text.split("~", 1)
+        text = left.strip() if endpoint == "start" else right.strip()
+    if not text or text.lower() == "latest" or text == "-":
+        return None
+    try:
+        return pd.Timestamp(text).normalize()
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_row_year_key(row: dict) -> int:
+    for key in ("oos_start_date", "oos_period", "oos_year"):
+        ts = _coerce_period_date(row.get(key), endpoint="start")
+        if ts is not None:
+            return int(ts.year)
+    try:
+        return int(row.get("oos_year", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _rows_period_bounds(rows: list[dict]) -> dict:
     source_rows = [dict(row) for row in list(rows or []) if str(row.get("fold", "")).upper() not in {"OOS_CHAIN", "OOS_AVG"}]
     if not source_rows:
         return {}
-    first_oos_start = min(pd.Timestamp(row.get("oos_start_date") or f"{str(row.get('oos_year'))[:4]}-01-01").normalize() for row in source_rows)
-    last_oos_end = max(pd.Timestamp(row.get("oos_end_date") or f"{str(row.get('oos_year'))[:4]}-12-31").normalize() for row in source_rows)
-    selection_start = min(pd.Timestamp(row.get("selection_start_date") or f"{int(row.get('selection_start_year', first_oos_start.year))}-01-01").normalize() for row in source_rows)
-    selection_end = max(pd.Timestamp(row.get("selection_end_date") or f"{int(row.get('selection_end_year', last_oos_end.year))}-12-31").normalize() for row in source_rows)
+    first_oos_candidates = [
+        _coerce_period_date(row.get("oos_start_date"), endpoint="start")
+        or _coerce_period_date(row.get("oos_period"), endpoint="start")
+        or _coerce_period_date(row.get("oos_year"), endpoint="start")
+        for row in source_rows
+    ]
+    last_oos_candidates = [
+        _coerce_period_date(row.get("oos_end_date"), endpoint="end")
+        or _coerce_period_date(row.get("oos_period"), endpoint="end")
+        or _coerce_period_date(row.get("oos_year"), endpoint="end")
+        for row in source_rows
+    ]
+    first_oos_dates = [ts for ts in first_oos_candidates if ts is not None]
+    last_oos_dates = [ts for ts in last_oos_candidates if ts is not None]
+    if not first_oos_dates:
+        first_oos_dates = [pd.Timestamp("1970-01-01").normalize()]
+    if not last_oos_dates:
+        last_oos_dates = list(first_oos_dates)
+    first_oos_start = min(first_oos_dates)
+    last_oos_end = max(last_oos_dates)
+    selection_start_dates = [
+        _coerce_period_date(row.get("selection_start_date"), endpoint="start")
+        or _coerce_period_date(row.get("selection_period"), endpoint="start")
+        for row in source_rows
+    ]
+    selection_end_dates = [
+        _coerce_period_date(row.get("selection_end_date"), endpoint="end")
+        or _coerce_period_date(row.get("selection_period"), endpoint="end")
+        for row in source_rows
+    ]
+    selection_start_values = [ts for ts in selection_start_dates if ts is not None]
+    selection_end_values = [ts for ts in selection_end_dates if ts is not None]
+    if not selection_start_values:
+        selection_start_values = [pd.Timestamp(f"{first_oos_start.year}-01-01").normalize()]
+    if not selection_end_values:
+        selection_end_values = [pd.Timestamp(f"{last_oos_end.year}-12-31").normalize()]
+    selection_start = min(selection_start_values)
+    selection_end = max(selection_end_values)
+    oos_keys = [_coerce_row_year_key(row) for row in source_rows]
+    oos_keys = [key for key in oos_keys if key > 0]
     return {
         "selection_period": _period_label(selection_start, selection_end),
         "oos_period": _period_label(first_oos_start, last_oos_end),
-        "first_oos_key": min(int(row.get("oos_year", 0) or 0) for row in source_rows),
-        "last_oos_key": max(int(row.get("oos_year", 0) or 0) for row in source_rows),
+        "first_oos_key": min(oos_keys) if oos_keys else int(first_oos_start.year),
+        "last_oos_key": max(oos_keys) if oos_keys else int(last_oos_end.year),
     }
 
 

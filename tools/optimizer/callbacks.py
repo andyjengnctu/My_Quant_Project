@@ -1114,13 +1114,35 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
         "unavailable_reason": "nonrolling_policy_paramset_not_available",
     }
     selection_period = ""
-    if selection_start is not None and selection_end is not None:
-        selection_period = f"{str(selection_start)[:10]}~{str(selection_end)[:10]}"
+    selection_start_text = str(selection_start)[:10] if selection_start is not None else ""
+    selection_end_text = str(selection_end)[:10] if selection_end is not None else ""
+    if selection_start_text and selection_end_text:
+        selection_period = f"{selection_start_text}~{selection_end_text}"
+    oos_period_text = str(oos_range_text).replace(" ~ ", "~")
+    oos_start_text = ""
+    oos_end_text = ""
+    if "~" in oos_period_text:
+        oos_start_text, oos_end_text = [part.strip() for part in oos_period_text.split("~", 1)]
+    elif oos_period_text and oos_period_text != "-":
+        oos_start_text = oos_period_text.strip()
+        oos_end_text = oos_period_text.strip()
+    if not oos_start_text and oos_start_date:
+        oos_start_text = str(oos_start_date)[:10]
+    if not oos_end_text and oos_end_date:
+        oos_end_text = str(oos_end_date)[:10]
+    try:
+        oos_year_value = int(pd.Timestamp(oos_start_text).year) if oos_start_text else 0
+    except (TypeError, ValueError):
+        oos_year_value = 0
     row = {
         "fold": "1/1",
         "selection_period": selection_period,
-        "oos_period": str(oos_range_text).replace(" ~ ", "~"),
-        "oos_year": str(oos_range_text).replace(" ~ ", "~"),
+        "selection_start_date": selection_start_text,
+        "selection_end_date": selection_end_text,
+        "oos_period": oos_period_text,
+        "oos_year": int(oos_year_value),
+        "oos_start_date": oos_start_text,
+        "oos_end_date": oos_end_text,
         "best_finalist_oos_score": float(candidate_score),
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": _safe_float(benchmark_metrics.get("pf_return", 0.0)),
