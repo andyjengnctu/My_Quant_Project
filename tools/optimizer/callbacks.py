@@ -35,7 +35,7 @@ from core.strategy_dashboard import (
     _format_value_with_delta,
     print_optimizer_trial_console_dashboard,
 )
-from config.display_policy import is_optimizer_nonrolling_train_result_table_enabled
+from config.training_display_policy import is_optimizer_nonrolling_train_result_table_enabled
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,

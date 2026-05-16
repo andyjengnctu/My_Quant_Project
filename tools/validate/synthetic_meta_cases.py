@@ -1871,7 +1871,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "build_training_threshold_snapshot",
             "build_training_score_policy_snapshot",
         },
-        "config.display_policy": {
+        "config.training_display_policy": {
             "SYSTEM_SCORE_DISPLAY_MULTIPLIER",
             "build_display_policy_snapshot",
             "is_optimizer_nonrolling_train_result_table_enabled",

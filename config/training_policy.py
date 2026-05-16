@@ -47,7 +47,7 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0
 OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
 
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 2  # local_min_score finalist review 的最小候選數
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
 # inner validation anti-overfitting 開關。
 # True  = 從 selection 區間切出最後一年做 inner validation；objective/local_min 只使用前段 training years。
@@ -109,9 +109,9 @@ PREDEPLOY_SELECTION_START_YEAR = _derive_fixed_window_selection_start_year(
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數。
 # rolling / 非 rolling 都必須輸出 active-param ensemble；交易時不得把 ensemble JSON 靜默降級成單一 params。
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 2
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8
 # "auto" = 過半數；整數 = 至少幾個 seed 同意。解析後會 clamp 到 1~N，因此最大值永遠是 N。
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 2
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = "auto"
 
 # Rolling OOS optimizer search 預設 trial 數。
 # CLI --trials 仍可覆寫；此值只控制互動提示與未指定 trials 時的預設。

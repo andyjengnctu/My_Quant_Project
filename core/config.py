@@ -48,7 +48,7 @@ from config.training_policy import (  # noqa: F401
     build_training_score_policy_snapshot,
     build_training_threshold_snapshot,
 )
-from config.display_policy import (  # noqa: F401
+from config.training_display_policy import (  # noqa: F401
     SYSTEM_SCORE_DISPLAY_MULTIPLIER,
     build_display_policy_snapshot,
 )

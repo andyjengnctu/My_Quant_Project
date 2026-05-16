@@ -46,7 +46,7 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
 )
 
-from config.display_policy import is_optimizer_nonrolling_train_result_table_enabled
+from config.training_display_policy import is_optimizer_nonrolling_train_result_table_enabled
 
 from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
 
@@ -366,7 +366,7 @@ def _load_candidate_params_payload_for_promote():
     return load_params_from_json(CANDIDATE_BEST_PARAMS_PATH)
 
 
-def _promote_candidate_to_run_best():
+def _promote_candidate_to_run_best(*, emit_output: bool = True):
     candidate_params = _load_candidate_params_payload_for_promote()
     if candidate_params is None:
         return 1
@@ -389,7 +389,8 @@ def _promote_candidate_to_run_best():
             os.remove(RUN_BEST_SUMMARY_PATH)
     except OSError as exc:
         print(f"{C_YELLOW}⚠️ 無法移除舊 run_best summary sidecar：{_project_relative_path(RUN_BEST_SUMMARY_PATH)}｜{type(exc).__name__}: {exc}{C_RESET}")
-    _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
+    if bool(emit_output):
+        _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
     return 0
 
 
@@ -1259,7 +1260,7 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
     return payload
 
 
-def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> tuple[dict[str, str], dict[str, dict]]:
+def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, write_files: bool = True) -> tuple[dict[str, str], dict[str, dict]]:
     from tools.optimizer.outer_rolling_oos import (
         BASE_RETENTION_COMPARISON_POLICY_NAMES,
         get_optimizer_paramset_policy_names,
@@ -1302,12 +1303,13 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             except OSError as exc:
                 print(f"{C_YELLOW}⚠️ 無法移除舊 threshold policy 檔：{_project_relative_path(path)}｜{type(exc).__name__}: {exc}{C_RESET}")
             continue
-        _write_json_file(path, payload)
-        paths[str(policy_name)] = path
+        if bool(write_files):
+            _write_json_file(path, payload)
+            paths[str(policy_name)] = path
     return paths, payloads
 
 
-def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None) -> tuple[dict, dict, dict[str, dict]]:
+def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None, write_candidate_best: bool = True, write_policy_files: bool = True) -> tuple[dict, dict, dict[str, dict]]:
     policy = _resolve_nonrolling_seed_ensemble_policy()
     payload = build_static_active_param_ensemble_payload(
         members=members,
@@ -1332,6 +1334,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         dataset_label=dataset_label,
         selected_model_mode=selected_model_mode,
         trials_per_seed=trials_per_seed,
+        write_files=bool(write_policy_files),
     )
     summary = _build_static_seed_ensemble_summary(
         members=members,
@@ -1344,12 +1347,13 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
     )
     summary["policy_paramsets"] = dict(policy_paramset_paths)
     payload["summary"] = dict(summary)
-    _write_json_file(CANDIDATE_BEST_PARAMS_PATH, payload)
-    try:
-        if os.path.exists(CANDIDATE_BEST_SUMMARY_PATH):
-            os.remove(CANDIDATE_BEST_SUMMARY_PATH)
-    except OSError as exc:
-        print(f"{C_YELLOW}⚠️ 無法移除舊 candidate_best summary sidecar：{_project_relative_path(CANDIDATE_BEST_SUMMARY_PATH)}｜{type(exc).__name__}: {exc}{C_RESET}")
+    if bool(write_candidate_best):
+        _write_json_file(CANDIDATE_BEST_PARAMS_PATH, payload)
+        try:
+            if os.path.exists(CANDIDATE_BEST_SUMMARY_PATH):
+                os.remove(CANDIDATE_BEST_SUMMARY_PATH)
+        except OSError as exc:
+            print(f"{C_YELLOW}⚠️ 無法移除舊 candidate_best summary sidecar：{_project_relative_path(CANDIDATE_BEST_SUMMARY_PATH)}｜{type(exc).__name__}: {exc}{C_RESET}")
     return payload, summary, policy_paramset_payloads
 
 
@@ -1748,6 +1752,8 @@ def _run_nonrolling_random_seed_ensemble_training(
         selected_model_mode=selected_model_mode,
         trials_per_seed=int(requested_trials),
         policy_members_by_policy=policy_members_by_policy,
+        write_candidate_best=(str(selected_model_mode).strip().lower() == "full"),
+        write_policy_files=(str(selected_model_mode).strip().lower() != "full"),
     )
     from tools.optimizer.callbacks import (
         build_optimizer_static_ensemble_single_fold_oos_row,
@@ -1800,12 +1806,14 @@ def _run_nonrolling_random_seed_ensemble_training(
             title="ENSEMBLE 績效與風險對比表",
             force=True,
         )
-    promote_status = _promote_candidate_to_run_best()
-    if promote_status != 0:
-        return int(promote_status)
+    if str(selected_model_mode).strip().lower() == "full":
+        promote_status = _promote_candidate_to_run_best(emit_output=False)
+        if promote_status != 0:
+            return int(promote_status)
+        _print_optimizer_output_files("💾 輸出檔案", [("candidate_best", CANDIDATE_BEST_PARAMS_PATH), ("run_best", RUN_BEST_PARAMS_PATH)])
+        return 0
     visible_policy_paths = _visible_policy_paramset_paths(dict((_ensemble_summary or {}).get("policy_paramsets") or {}))
-    output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)] + list(visible_policy_paths.items())
-    _print_optimizer_output_files("💾 輸出檔案", output_entries)
+    _print_optimizer_output_files("💾 輸出檔案", list(visible_policy_paths.items()))
     return 0
 
 
@@ -2379,7 +2387,6 @@ def main(argv=None, environ=None):
                     compare_only=False,
                 )
                 _embed_summary_in_params_file(CANDIDATE_BEST_PARAMS_PATH, candidate_summary, remove_summary_sidecar=CANDIDATE_BEST_SUMMARY_PATH)
-                _print_optimizer_output_files("💾 candidate_best 已寫入", [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)])
                 retention_best_finalist = select_best_finalist_by_local_retention(finalists)
                 retention_best_trial = None if retention_best_finalist is None else retention_best_finalist["trial"]
                 _export_selected_candidate_artifacts(
@@ -2419,7 +2426,9 @@ def main(argv=None, environ=None):
                         export_best_params_if_requested=export_best_params_if_requested,
                         is_qualified_trial_value=is_qualified_trial_value,
                     )
-                _promote_candidate_to_run_best()
+                if selected_model_mode == 'full':
+                    _promote_candidate_to_run_best(emit_output=False)
+                    _print_optimizer_output_files("💾 輸出檔案", [("candidate_best", CANDIDATE_BEST_PARAMS_PATH), ("run_best", RUN_BEST_PARAMS_PATH)])
                 if selected_model_mode == 'split':
                     finalize_best_trial_outputs(
                         session=session,
