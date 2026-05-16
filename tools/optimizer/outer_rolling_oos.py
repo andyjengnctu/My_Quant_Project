@@ -4141,7 +4141,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
 def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     paths = {}
-    for policy_name in REPORT_POLICY_NAMES:
+    for policy_name in CHAIN_POLICY_NAMES:
         payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
         path = os.path.join(models_dir, str(PARAMSET_FILENAME_BY_POLICY.get(policy_name, f"roos_{policy_name}.json")))
         with open(path, "w", encoding="utf-8") as f:
@@ -4171,7 +4171,7 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
         "note": chained.get("note"),
         "chained_oos": chained,
     }
-    for policy_name in REPORT_POLICY_NAMES:
+    for policy_name in CHAIN_POLICY_NAMES:
         available_rows = [row for row in rows if _policy_is_available(dict(row.get(policy_name) or {}))]
         scores = [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in available_rows]
         returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in available_rows]

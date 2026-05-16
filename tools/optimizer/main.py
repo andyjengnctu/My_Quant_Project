@@ -1154,12 +1154,18 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
                 policy_name=str(policy_name),
             ),
         )
+        selection_start = str(walk_forward_policy.get("train_start_date") or f"{int(walk_forward_policy.get('train_start_year', 0) or 0):04d}-01-01")
+        selection_end = str(walk_forward_policy.get("search_train_end_date") or f"{int(walk_forward_policy.get('search_train_end_year', 0) or 0):04d}-12-31")
+        oos_start_raw = walk_forward_policy.get("oos_start_date")
+        if not oos_start_raw and int(walk_forward_policy.get("oos_start_year", 0) or 0) > 0:
+            oos_start_raw = f"{int(walk_forward_policy.get('oos_start_year', 0) or 0):04d}-01-01"
+        oos_end_raw = walk_forward_policy.get("oos_end_date") or "latest"
         payload["summary"] = {
             "folds": 1,
             "mode": "static",
             "selector": str(policy_name),
-            "selection_period": f"{int(walk_forward_policy.get('train_start_year', 0) or 0):04d}~{int(walk_forward_policy.get('search_train_end_year', 0) or 0):04d}",
-            "oos_period": f"{int(walk_forward_policy.get('oos_start_year', 0) or 0):04d}~latest" if int(walk_forward_policy.get('oos_start_year', 0) or 0) > 0 else "",
+            "selection_period": f"{selection_start}~{selection_end}",
+            "oos_period": f"{oos_start_raw}~{oos_end_raw}" if oos_start_raw else "",
             "member_count": int(len(members)),
             "requested_seed_count": int(len(seeds)),
             "trials_per_seed": int(trials_per_seed),

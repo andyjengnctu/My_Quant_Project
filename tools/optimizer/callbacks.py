@@ -21,6 +21,7 @@ from core.params_io import build_params_from_mapping, load_params_from_json, par
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.active_param_ensemble import get_active_param_ensemble_policy, load_json_file
 from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_stats import calc_portfolio_score
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
@@ -456,12 +457,26 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
     annual_return_pct = _safe_float(result[23])
     bm_annual_return_pct = _safe_float(result[24])
     profile = dict(result[25] or {})
+    candidate_score = calc_portfolio_score(
+        total_return,
+        max_drawdown,
+        monthly_win_rate,
+        r_squared,
+        annual_return_pct=annual_return_pct,
+    )
+    benchmark_score = calc_portfolio_score(
+        benchmark_return,
+        benchmark_mdd,
+        bm_monthly_win_rate,
+        bm_r_squared,
+        annual_return_pct=bm_annual_return_pct,
+    )
     candidate_metrics = {
         "pf_return": total_return,
         "annual_return_pct": annual_return_pct,
         "min_full_year_return_pct": _safe_float(profile.get("min_full_year_return_pct", 0.0)),
         "pf_mdd": max_drawdown,
-        "pf_romd": _calc_romd(total_return, max_drawdown),
+        "pf_romd": float(candidate_score),
         "r_squared": r_squared,
         "m_win_rate": monthly_win_rate,
         "win_rate": win_rate,
@@ -483,7 +498,7 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         "annual_return_pct": bm_annual_return_pct,
         "min_full_year_return_pct": _safe_float(profile.get("bm_min_full_year_return_pct", 0.0)),
         "pf_mdd": benchmark_mdd,
-        "pf_romd": _calc_romd(benchmark_return, benchmark_mdd),
+        "pf_romd": float(benchmark_score),
         "r_squared": bm_r_squared,
         "m_win_rate": bm_monthly_win_rate,
         "final_equity": _benchmark_final_equity(float(initial_capital), benchmark_return),
@@ -1042,8 +1057,6 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     for policy_name in tuple(REPORT_POLICY_NAMES) + tuple(BASE_RETENTION_COMPARISON_POLICY_NAMES):
         if policy_name in policy_rows:
             row[str(policy_name)] = dict(policy_rows[policy_name])
-        elif policy_name == "local":
-            row[str(policy_name)] = dict(candidate_policy_row)
         else:
             row[str(policy_name)] = dict(unavailable_policy)
     return row
