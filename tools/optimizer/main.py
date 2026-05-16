@@ -900,7 +900,9 @@ def _install_nonrolling_local_min_seed_board_progress(
             "search_last_done_ts": search_last_done_ts,
             "local_min_started_ts": data.get("local_min_started_ts") or local_started_ts,
             "local_min_completed": int(data.get("local_min_completed", 0) or 0),
+            "local_min_neighbor_completed": int(data.get("local_min_neighbor_completed", 0) or 0),
             "local_min_last_done_ts": data.get("local_min_last_done_ts"),
+            "local_min_last_neighbor_done_ts": data.get("local_min_last_neighbor_done_ts") or data.get("local_min_last_done_ts"),
         }
         with progress_lock:
             progress_board.update(fold_idx=1, seed_index=int(member_index), progress=progress)
@@ -1024,7 +1026,9 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                     search_last_done_ts=search_done_ts,
                     local_min_started_ts=data.get("local_min_started_ts") or local_started_ts,
                     local_min_completed=int(data.get("local_min_completed", 0) or 0),
+                    local_min_neighbor_completed=int(data.get("local_min_neighbor_completed", 0) or 0),
                     local_min_last_done_ts=data.get("local_min_last_done_ts"),
+                    local_min_last_neighbor_done_ts=data.get("local_min_last_neighbor_done_ts") or data.get("local_min_last_done_ts"),
                 )
 
             member_session.outer_rolling_parallel_progress_sink = _process_local_min_progress_sink

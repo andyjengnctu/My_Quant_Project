@@ -774,6 +774,7 @@ class _FinalistProgressBoard:
         self.best_local_score = float("-inf")
         self.best_local_trial = None
         self.completed_status: dict[int, tuple[float, bool, bool]] = {}
+        self.completed_neighbor_counts: dict[int, int] = {}
         self.progress_min_interval_sec = _resolve_local_min_progress_min_interval_sec()
         self._last_progress_render_at = 0.0
 
@@ -797,6 +798,10 @@ class _FinalistProgressBoard:
         safe_idx = min(max(0, int(idx)), len(self.finalists) - 1)
         trial = self.finalists[safe_idx]["trial"]
         best_score = None if self.best_local_score == float("-inf") else float(self.best_local_score)
+        completed_neighbors = sum(int(value or 0) for value in self.completed_neighbor_counts.values())
+        if safe_idx not in self.completed_neighbor_counts:
+            completed_neighbors += max(0, int(current_neighbor or 0))
+        last_neighbor_done_ts = time.time() if int(completed_neighbors) > 0 else None
         _emit_local_min_progress_event(
             self.session,
             {
@@ -810,7 +815,9 @@ class _FinalistProgressBoard:
                 "status": str(status_text or "RUN"),
                 "local_min_started_ts": float(self.stage_start_ts),
                 "local_min_completed": int(len(self.completed_status)),
-                "local_min_last_done_ts": time.time() if int(len(self.completed_status)) > 0 else None,
+                "local_min_neighbor_completed": int(completed_neighbors),
+                "local_min_last_done_ts": last_neighbor_done_ts,
+                "local_min_last_neighbor_done_ts": last_neighbor_done_ts,
             },
         )
 
@@ -893,7 +900,7 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_cache(self, idx: int, *, total_neighbors: int, local_min_score: float):
-        self._record_done(idx, local_min_score=float(local_min_score), early_stopped=False)
+        self._record_done(idx, local_min_score=float(local_min_score), early_stopped=False, evaluated_neighbors=int(total_neighbors or 0))
         self._emit_progress_event(idx, current_neighbor=total_neighbors, total_neighbors=total_neighbors, current_local_min=local_min_score, status_text="cache")
         if self.event_only:
             self._close_single_line_if_finished()
@@ -921,7 +928,7 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_done(self, idx: int, *, evaluated_neighbors: int, total_neighbors: int, local_min_score: float, early_stopped: bool = False):
-        self._record_done(idx, local_min_score=float(local_min_score), early_stopped=bool(early_stopped))
+        self._record_done(idx, local_min_score=float(local_min_score), early_stopped=bool(early_stopped), evaluated_neighbors=int(evaluated_neighbors or 0))
         self._emit_progress_event(idx, current_neighbor=evaluated_neighbors, total_neighbors=total_neighbors, current_local_min=local_min_score, status_text="early_stop" if bool(early_stopped) else "DONE")
         if self.event_only:
             self._close_single_line_if_finished()
@@ -950,10 +957,13 @@ class _FinalistProgressBoard:
         )
         self._render()
 
-    def _record_done(self, idx: int, *, local_min_score: float, early_stopped: bool):
+    def _record_done(self, idx: int, *, local_min_score: float, early_stopped: bool, evaluated_neighbors: int | None = None):
         score = float(local_min_score)
         passed = bool(score > 0.0)
         self.completed_status[int(idx)] = (score, passed, bool(early_stopped))
+        if evaluated_neighbors is not None:
+            previous_neighbors = int(self.completed_neighbor_counts.get(int(idx), 0) or 0)
+            self.completed_neighbor_counts[int(idx)] = max(previous_neighbors, max(0, int(evaluated_neighbors or 0)))
         if score > self.best_local_score:
             self.best_local_score = score
             self.best_local_trial = self.finalists[idx]["trial"]

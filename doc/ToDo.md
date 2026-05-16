@@ -1,10 +1,6 @@
 ## Going
 
- rolling為何沒有顯示下列，不是都一致口徑、唯一來源了嗎?
-
-⏳ seed ensemble replay 報表準備：載入 dashboard raw data...
-⏳ seed ensemble replay 報表準備：計算 policy OOS table...
-⏳ seed ensemble policy replay | done   
+理論上，每個neighor的時間是否相當於每個trail?
 
 1. 在Training_policy設定非rolling訓練突破時是否顯示結果表格。
 2. OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True 時
