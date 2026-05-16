@@ -622,7 +622,7 @@ def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> d
         "selection_end": f"{selection_end_year:04d}-12-31" if selection_end_year > 0 else "",
         "selection_period": f"{selection_start_year:04d}-01~{selection_end_year % 100:02d}-12" if selection_start_year > 0 and selection_end_year > 0 else "",
         "oos_year": oos_start_year,
-        "oos_period": f"{oos_start_year:04d}~latest" if oos_start_year > 0 else "",
+        "oos_period": f"{oos_start_year:04d}-01~latest" if oos_start_year > 0 else "",
     }
 
 
