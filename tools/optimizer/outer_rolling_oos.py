@@ -1602,8 +1602,7 @@ def _resolve_latest_year_from_csv_data_dir(data_dir: str) -> int | None:
 
 def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None, latest_date=None, default_trials: int, timing_mode: bool = False) -> OuterRollingConfig:
     env = os.environ if environ is None else environ
-    train_start_default = int(base_policy.get("train_start_year", 2016) or 2016)
-    first_oos_year_default = int(base_policy.get("oos_start_year") or base_policy.get("search_train_end_year", train_start_default + 4) + 1)
+    first_oos_year_default = int(base_policy.get("oos_start_year") or base_policy.get("search_train_end_year", 0) + 1 or 2023)
     first_oos_date_default = pd.Timestamp(year=first_oos_year_default, month=1, day=1)
     latest_ts = pd.Timestamp(latest_date).normalize() if latest_date is not None else pd.Timestamp(year=int(latest_year or first_oos_year_default), month=1, day=1)
     last_oos_date_default = _month_start(latest_ts)
@@ -1618,75 +1617,43 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
             or OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
         )
     )
-    window_mode_default = str(env.get("V16_OUTER_ROLLING_WINDOW_MODE", "fixed") or "fixed").strip().lower()
-    if window_mode_default not in ("fixed", "expanding"):
-        window_mode_default = "fixed"
-    train_window_month_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_MONTHS", str(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)) or OUTER_ROLLING_TRAIN_WINDOW_MONTHS))
-    oos_horizon_month_default = max(1, int(env.get("V16_OUTER_ROLLING_OOS_MONTHS", str(OUTER_ROLLING_OOS_HORIZON_MONTHS)) or OUTER_ROLLING_OOS_HORIZON_MONTHS))
-    # 既有 years env/CLI 保留相容：未提供 months 時，years * 12。
-    if not str(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_MONTHS", "")).strip() and str(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS", "")).strip():
-        train_window_month_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS")) * 12)
 
-    cli_train_start = _extract_cli_value(argv, "--outer-train-start")
     cli_first_date = _extract_cli_value(argv, "--outer-first-oos-date")
     cli_last_date = _extract_cli_value(argv, "--outer-last-oos-date")
     cli_first = _extract_cli_value(argv, "--outer-first-oos")
     cli_last = _extract_cli_value(argv, "--outer-last-oos")
     cli_trials = _extract_cli_value(argv, "--trials")
     cli_window_mode = _extract_cli_value(argv, "--outer-window-mode")
+    cli_train_start = _extract_cli_value(argv, "--outer-train-start")
     cli_train_window_months = _extract_cli_value(argv, "--outer-train-window-months")
     cli_train_window_years = _extract_cli_value(argv, "--outer-train-window-years")
     cli_oos_months = _extract_cli_value(argv, "--outer-oos-months")
 
-    if cli_window_mode:
-        window_mode = str(cli_window_mode).strip().lower()
-        if window_mode not in ("fixed", "expanding"):
-            raise ValueError("--outer-window-mode 必須是 fixed 或 expanding")
-    elif bool(timing_mode):
-        window_mode = window_mode_default
-    else:
-        window_mode = _prompt_str("window mode", window_mode_default, allowed=("fixed", "expanding"))
+    requested_window_mode = str(cli_window_mode or env.get("V16_OUTER_ROLLING_WINDOW_MODE", "fixed") or "fixed").strip().lower()
+    if requested_window_mode != "fixed":
+        raise ValueError("目前固定採 fixed-window 架構，--outer-window-mode / V16_OUTER_ROLLING_WINDOW_MODE 只接受 fixed。")
+    window_mode = "fixed"
 
+    train_window_month_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_MONTHS", str(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)) or OUTER_ROLLING_TRAIN_WINDOW_MONTHS))
+    if not str(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_MONTHS", "")).strip() and str(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS", "")).strip():
+        train_window_month_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS")) * 12)
     if cli_train_window_months:
         train_window_months = int(cli_train_window_months)
     elif cli_train_window_years:
         train_window_months = int(cli_train_window_years) * 12
-    elif bool(timing_mode):
-        train_window_months = train_window_month_default
     else:
-        train_window_months = _prompt_int("train window months", train_window_month_default, minimum=1)
+        train_window_months = train_window_month_default
 
+    oos_horizon_month_default = max(1, int(env.get("V16_OUTER_ROLLING_OOS_MONTHS", str(OUTER_ROLLING_OOS_HORIZON_MONTHS)) or OUTER_ROLLING_OOS_HORIZON_MONTHS))
     if cli_oos_months:
         oos_horizon_months = int(cli_oos_months)
-    elif bool(timing_mode):
+    else:
         oos_horizon_months = oos_horizon_month_default
-    else:
-        oos_horizon_months = _prompt_int("OOS horizon months", oos_horizon_month_default, minimum=1)
-
-    if cli_train_start:
-        train_start = int(cli_train_start)
-    elif str(env.get("V16_OUTER_ROLLING_TRAIN_START", "")).strip():
-        train_start = int(str(env["V16_OUTER_ROLLING_TRAIN_START"]).strip())
-    elif bool(timing_mode):
-        train_start = train_start_default
-    else:
-        train_start = _prompt_int("training start year", train_start_default, minimum=1900)
 
     first_source = cli_first_date or cli_first or str(env.get("V16_OUTER_ROLLING_FIRST_OOS_DATE", "")).strip() or str(env.get("V16_OUTER_ROLLING_FIRST_OOS", "")).strip()
     last_source = cli_last_date or cli_last or str(env.get("V16_OUTER_ROLLING_LAST_OOS_DATE", "")).strip() or str(env.get("V16_OUTER_ROLLING_LAST_OOS", "")).strip()
-    if first_source:
-        first_oos_date = _parse_oos_boundary(first_source, default=first_oos_date_default)
-    elif bool(timing_mode):
-        first_oos_date = first_oos_date_default
-    else:
-        first_oos_date = _parse_oos_boundary(input(f"{'first OOS date':<28} [{first_oos_date_default.strftime('%Y-%m-%d')}] : ").strip(), default=first_oos_date_default) if is_interactive_console() else first_oos_date_default
-
-    if last_source:
-        last_oos_date = _parse_oos_boundary(last_source, default=last_oos_date_default, year_boundary="end")
-    elif bool(timing_mode):
-        last_oos_date = last_oos_date_default
-    else:
-        last_oos_date = _parse_oos_boundary(input(f"{'last OOS date':<28} [{last_oos_date_default.strftime('%Y-%m-%d')}] : ").strip(), default=last_oos_date_default, year_boundary="end") if is_interactive_console() else last_oos_date_default
+    first_oos_date = _parse_oos_boundary(first_source, default=first_oos_date_default) if first_source else first_oos_date_default
+    last_oos_date = _parse_oos_boundary(last_source, default=last_oos_date_default, year_boundary="end") if last_source else last_oos_date_default
 
     if cli_trials:
         trials = int(cli_trials)
@@ -1701,20 +1668,27 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         raise ValueError("OOS horizon months 必須大於 0")
     if first_oos_date > last_oos_date:
         raise ValueError("first OOS date 不可晚於 last OOS date")
-    train_start_date = pd.Timestamp(year=int(train_start), month=1, day=1)
-    if train_start_date >= first_oos_date:
-        raise ValueError("training start date 必須早於 first OOS date")
-    if str(window_mode).lower() == "fixed" and first_oos_date - pd.DateOffset(months=int(train_window_months)) < train_start_date:
-        raise ValueError("fixed window 下 first OOS date - train window months 不可早於 training start date")
     if trials <= 0:
         raise ValueError("optimizer trials per fold 必須大於 0")
+
+    derived_train_start_date = first_oos_date - pd.DateOffset(months=int(train_window_months))
+    derived_train_start_year = int(derived_train_start_date.year)
+    explicit_train_start = cli_train_start or str(env.get("V16_OUTER_ROLLING_TRAIN_START", "")).strip()
+    if explicit_train_start:
+        explicit_year = int(str(explicit_train_start).strip())
+        if explicit_year != derived_train_start_year:
+            raise ValueError(
+                "fixed-window 架構下 training start year 由 first OOS date - train window months 推導，"
+                f"不可獨立設定為 {explicit_year}；目前推導值為 {derived_train_start_year}。"
+            )
+
     return OuterRollingConfig(
-        int(train_start),
+        int(derived_train_start_year),
         int(first_oos_date.year),
         int(last_oos_date.year),
         int(trials),
         window_mode=window_mode,
-        train_window_years=max(1, int(train_window_months) // 12),
+        train_window_years=max(1, int(math.ceil(int(train_window_months) / 12.0))),
         confirm=False,
         first_oos_date=first_oos_date.strftime("%Y-%m-%d"),
         last_oos_date=last_oos_date.strftime("%Y-%m-%d"),
@@ -1722,13 +1696,11 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         oos_horizon_months=int(oos_horizon_months),
     )
 
-
 def _selection_start_for_oos(config: OuterRollingConfig, oos_year: int) -> int:
-    # Backward-compatible helper for legacy year-mode callers.  New rolling code
-    # uses _build_rolling_folds(), which is date/month based.
-    if str(config.window_mode).lower() == "fixed":
-        return int(oos_year) - int(config.train_window_years)
-    return int(config.training_start_year)
+    # Backward-compatible helper for legacy year-mode callers.  The optimizer now
+    # uses fixed-window only, so selection start is derived from the OOS year and
+    # train window instead of an independent training-start setting.
+    return int(oos_year) - int(config.train_window_years)
 
 
 def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None):

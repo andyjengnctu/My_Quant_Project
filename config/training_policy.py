@@ -27,6 +27,15 @@ SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'
 
 SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0  # 系統得分顯示倍率，僅影響 console/report 顯示)
 
+# optimizer 提供兩種資料區間模式：
+# split = 指定資料選參; 額外切 OOS
+# full  = 全資料選參；不額外切 OOS
+
+DEFAULT_OPTIMIZER_MODEL_MODE = 'split'
+OOS_EVALUATION_START_YEAR = 2023
+OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
+OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
+
 # 停利比例固定開關
 # None = 由 optimizer 搜尋 tp_percent
 # 0.0 = 固定關閉停利
@@ -88,18 +97,18 @@ def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
     proportional_top_k = int(math.ceil(requested_trials * OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE))
     return max(int(OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN), proportional_top_k)
 
-# optimizer 提供兩種資料區間模式：
-# split = 指定資料選參; 額外切 OOS
-# full  = 全資料選參；不額外切 OOS
 
-DEFAULT_OPTIMIZER_MODEL_MODE = 'split'
-PREDEPLOY_SELECTION_START_YEAR = 2013
-OOS_EVALUATION_START_YEAR = 2023
 
-# Outer rolling OOS 預設改以月份切窗：60 個月訓練、6 個月 OOS。
-# 年份欄位仍保留給一般 optimizer split/full 與既有相容邏輯。
-OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
-OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
+def _derive_fixed_window_selection_start_year(oos_start_year: int, train_window_months: int) -> int:
+    oos_start_month_index = int(oos_start_year) * 12
+    selection_start_month_index = oos_start_month_index - max(1, int(train_window_months))
+    return int(selection_start_month_index // 12)
+
+# Legacy alias：仍提供舊匯入名稱，但值只能由 fixed-window 公式推導。
+PREDEPLOY_SELECTION_START_YEAR = _derive_fixed_window_selection_start_year(
+    OOS_EVALUATION_START_YEAR,
+    OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+)
 
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數。
 # rolling / 非 rolling 都必須輸出 active-param ensemble；交易時不得把 ensemble JSON 靜默降級成單一 params。
