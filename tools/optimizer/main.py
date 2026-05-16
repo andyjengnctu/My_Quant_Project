@@ -173,12 +173,9 @@ def _visible_policy_paramset_paths(policy_paramset_paths: dict) -> dict[str, str
 
 
 def _print_optimizer_output_files(title: str, entries: list[tuple[str, str]]) -> None:
-    visible_entries = [(str(label), str(path)) for label, path in list(entries or []) if str(path or "").strip()]
-    if not visible_entries:
-        return
-    print(f"{C_GREEN}{title}{C_RESET}")
-    for label, path in visible_entries:
-        print(f"{C_GREEN}  {label}: {_project_relative_path(path)}{C_RESET}")
+    from tools.optimizer.outer_rolling_oos import print_optimizer_output_files
+
+    print_optimizer_output_files(entries, title=title, project_root=PROJECT_ROOT, color=True)
 
 
 def _ensure_study_effective_policy_compatible(*, study, walk_forward_policy: dict):

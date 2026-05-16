@@ -146,6 +146,61 @@ NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
 }
 
 
+SEED_ENSEMBLE_OOS_TABLE_TITLE = "SEED ENSEMBLE OOS RESULTS"
+SEED_ENSEMBLE_RETENTION_TABLE_TITLE = "SEED ENSEMBLE BASE RETENTION THRESHOLD OOS RESULTS"
+
+
+def optimizer_seed_ensemble_table_titles() -> tuple[str, str]:
+    return SEED_ENSEMBLE_OOS_TABLE_TITLE, SEED_ENSEMBLE_RETENTION_TABLE_TITLE
+
+
+def _active_optimizer_table_titles() -> tuple[str, str]:
+    if _is_rolling_random_seed_ensemble_enabled():
+        return optimizer_seed_ensemble_table_titles()
+    return "ROLLING MONTHLY OOS RESULTS", "BASE RETENTION THRESHOLD OOS RESULTS"
+
+
+def format_optimizer_output_file_lines(
+    entries: list[tuple[str, str]] | tuple[tuple[str, str], ...],
+    *,
+    title: str = "💾 輸出檔案",
+    project_root: str | None = None,
+) -> list[str]:
+    root = str(project_root or os.getcwd())
+    visible_entries: list[tuple[str, str]] = []
+    for label, path in list(entries or []):
+        label_text = str(label or "").strip()
+        path_text = str(path or "").strip()
+        if not label_text or not path_text:
+            continue
+        try:
+            display_path = os.path.relpath(path_text, root)
+        except ValueError:
+            display_path = os.path.basename(path_text)
+        visible_entries.append((label_text, display_path))
+    if not visible_entries:
+        return []
+    lines = [str(title or "💾 輸出檔案")]
+    lines.extend(f"  {label}: {path}" for label, path in visible_entries)
+    return lines
+
+
+def print_optimizer_output_files(
+    entries: list[tuple[str, str]] | tuple[tuple[str, str], ...],
+    *,
+    title: str = "💾 輸出檔案",
+    project_root: str | None = None,
+    color: bool = True,
+) -> None:
+    lines = format_optimizer_output_file_lines(entries, title=title, project_root=project_root)
+    if not lines:
+        return
+    if color:
+        print("\n".join(f"{C_GREEN}{line}{C_RESET}" for line in lines))
+    else:
+        print("\n".join(lines))
+
+
 def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
     raw_value = (environ or {}).get("OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS")
     if raw_value is None:
@@ -4298,7 +4353,15 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
     return summary
 
 def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False) -> str:
-    rendered = _render_optimizer_results_tables(rows, color=color, include_chain=True, chained_override=summary.get("chained_oos"))
+    main_title, retention_title = _active_optimizer_table_titles()
+    rendered = _render_optimizer_results_tables(
+        rows,
+        color=color,
+        include_chain=True,
+        chained_override=summary.get("chained_oos"),
+        main_table_title=main_title,
+        retention_table_title=retention_title,
+    )
     lines = []
     if rendered:
         lines.append(rendered)
@@ -4891,9 +4954,11 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         best_text = "N/A" if best is None else f"{float(best):.3f}"
         status = str(progress.get("status") or "").strip()
         status_text = f"{status} | " if status else ""
+        local_best = progress.get("best_local_min_score")
+        local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
         return (
             f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
-            f"{status_text}trial {completed}/{total} | best_base={best_text}{elapsed_text}"
+            f"{status_text}trial {completed}/{total} | best_base={best_text} | best_local_min={local_best_text}{elapsed_text}"
         )
     if stage == "LOCAL_MIN_REVIEW":
         finalist_idx = int(progress.get("finalist_idx", 0) or 0)
@@ -4993,7 +5058,9 @@ def _format_seed_ensemble_progress_line(context: dict, progress: dict, *, log_st
         total = int(progress.get("total", 0) or 0)
         best = progress.get("best_score")
         best_text = "N/A" if best is None else f"{float(best):.3f}"
-        return f"{prefix} | trial {completed}/{total} | best_base={best_text}{elapsed_text}"
+        local_best = progress.get("best_local_min_score")
+        local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
+        return f"{prefix} | trial {completed}/{total} | best_base={best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage == "LOCAL_MIN_REVIEW":
         finalist_idx = int(progress.get("finalist_idx", 0) or 0)
         finalist_total = int(progress.get("finalist_total", 0) or 0)
@@ -5482,7 +5549,15 @@ class _ParallelFoldLiveBoard:
                 lines.append(f"{C_GRAY}  {_format_parallel_fold_progress_line(task, progress, log_status=log_status)}{C_RESET}")
         live_result_rows = _merge_live_result_rows(completed_rows_sorted, self.tasks)
         if live_result_rows:
-            table = _render_optimizer_results_tables(live_result_rows, color=True, include_chain=False, include_oos_avg=True)
+            main_title, retention_title = _active_optimizer_table_titles()
+            table = _render_optimizer_results_tables(
+                live_result_rows,
+                color=True,
+                include_chain=False,
+                include_oos_avg=True,
+                main_table_title=main_title,
+                retention_table_title=retention_title,
+            )
             if table:
                 lines.append("")
                 lines.extend(table.splitlines())
@@ -7104,13 +7179,15 @@ def run_outer_rolling_oos(
         resource_samples=resource_sampler.samples,
         performance_alignment_rows=performance_alignment_rows,
     )
-    print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
-    print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
+    final_report = _format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True)
+    if final_report.strip():
+        print("\n" + final_report)
     if bool(timing_mode):
-        print(_format_timing_phase_line(timing_paths.get("payload") or {}))
+        pass
     if not bool(timing_mode):
-        for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
-            print(f"{C_GREEN}已輸出 params {policy_name}: {paramset_path}{C_RESET}")
-    _print_outer_timing_summary(timing_paths.get("payload", {}), include_details=bool(timing_mode))
-    print(_format_resource_usage_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
+        visible_paramsets = [
+            (str(policy_name), str(paramset_path))
+            for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items()
+        ]
+        print_optimizer_output_files(visible_paramsets, title="💾 輸出檔案", project_root=project_root)
     return 0

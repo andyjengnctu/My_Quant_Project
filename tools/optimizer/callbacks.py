@@ -1139,7 +1139,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
 
 def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None, progress_callback=None) -> dict | None:
     """Print non-rolling ensemble summary through the exact rolling-OOS table renderer."""
-    from tools.optimizer.outer_rolling_oos import render_optimizer_results_tables
+    from tools.optimizer.outer_rolling_oos import optimizer_seed_ensemble_table_titles, render_optimizer_results_tables
 
     row = build_optimizer_static_ensemble_single_fold_oos_row(
         session,
@@ -1148,13 +1148,14 @@ def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_paylo
         policy_paramsets=policy_paramsets,
         progress_callback=progress_callback,
     )
+    main_title, retention_title = optimizer_seed_ensemble_table_titles()
     table_text = render_optimizer_results_tables(
         [row],
         color=True,
         include_chain=False,
         include_oos_avg=False,
-        main_table_title="SEED ENSEMBLE OOS RESULTS",
-        retention_table_title="SEED ENSEMBLE BASE RETENTION THRESHOLD OOS RESULTS",
+        main_table_title=main_title,
+        retention_table_title=retention_title,
     )
     if table_text:
         print("\n" + table_text)
