@@ -1305,17 +1305,32 @@ def _run_nonrolling_random_seed_ensemble_training(
             contexts.append(context)
         progress_board = OptimizerSeedEnsembleProgressBoard(
             contexts,
-            header=format_optimizer_seed_ensemble_progress_header(
-                folds=1,
-                seeds=len(seeds),
-                min_agree=int(policy["min_agree"]),
-                parallel_workers=int(parallel_workers),
-                backend=parallel_backend,
-            ),
+            header_context={
+                "folds": 1,
+                "seeds": len(seeds),
+                "min_agree": int(policy["min_agree"]),
+                "parallel_workers": int(parallel_workers),
+                "backend": parallel_backend,
+            },
+            overall_start=ensemble_started_at,
+            board_start=ensemble_started_at,
         )
         progress_board.render(force=True)
     else:
-        print(f"{C_GRAY}🎲 Random seed ensemble｜N={len(seeds)}｜min_agree={policy['min_agree']}｜backend={parallel_backend}｜seeds={','.join(str(seed) for seed in seeds)}{C_RESET}")
+        header = format_optimizer_seed_ensemble_progress_header(
+            folds=1,
+            seeds=len(seeds),
+            min_agree=int(policy["min_agree"]),
+            parallel_workers=int(parallel_workers),
+            backend=parallel_backend,
+            completed_folds=0,
+            pending_folds=1,
+            total_elapsed_sec=0.0,
+            fold_elapsed_sec=0.0,
+            setup_elapsed_sec=0.0,
+        )
+        seed_text = ",".join(str(seed) for seed in seeds)
+        print(f"{C_GRAY}{header} | seeds={seed_text}{C_RESET}")
     configure_optuna_logging()
 
     def _emit_seed_progress_for_member(member_index: int, seed: int, **kwargs) -> None:
@@ -1603,7 +1618,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     if compact_display and progress_board is not None:
         progress_board.close()
     if dashboard_session is None:
-        print(f"{C_GRAY}⏳ nonrolling replay 報表準備：載入 dashboard raw data...{C_RESET}", flush=True)
+        print(f"{C_GRAY}⏳ seed ensemble replay 報表準備：載入 dashboard raw data...{C_RESET}", flush=True)
         dashboard_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         dashboard_session.load_raw_data(
             selected_data_dir,
@@ -1611,14 +1626,14 @@ def _run_nonrolling_random_seed_ensemble_training(
             required_min_rows=optimizer_required_min_rows,
             verbose=False,
         )
-    print(f"{C_GRAY}⏳ nonrolling replay 報表準備：計算 rolling-style policy table...{C_RESET}", flush=True)
+    print(f"{C_GRAY}⏳ seed ensemble replay 報表準備：計算 policy OOS table...{C_RESET}", flush=True)
     print_optimizer_static_ensemble_rolling_oos_table(
         dashboard_session,
         ensemble_payload=ensemble_payload,
         elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
         policy_paramsets=dict((_ensemble_summary or {}).get("policy_paramsets") or {}),
     )
-    print(f"{C_GRAY}⏳ nonrolling replay 報表準備：計算 ensemble dashboard...{C_RESET}", flush=True)
+    print(f"{C_GRAY}⏳ seed ensemble replay 報表準備：計算 ensemble dashboard...{C_RESET}", flush=True)
     print_optimizer_static_ensemble_console_dashboard(
         dashboard_session,
         ensemble_payload=ensemble_payload,

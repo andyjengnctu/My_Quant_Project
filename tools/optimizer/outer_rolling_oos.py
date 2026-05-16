@@ -3604,6 +3604,21 @@ def _table_separator(width: int = 218) -> str:
     return "-" * int(width)
 
 
+def _rows_use_seed_ensemble(rows: list[dict]) -> bool:
+    for row in list(rows or []):
+        policy = row.get("random_seed_ensemble")
+        if isinstance(policy, dict) and policy:
+            return True
+    return False
+
+
+def _resolve_results_table_title(rows: list[dict], requested_title: str, default_title: str, seed_ensemble_title: str) -> str:
+    title = str(requested_title or default_title)
+    if title == default_title and _rows_use_seed_ensemble(rows):
+        return seed_ensemble_title
+    return title
+
+
 def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, table_title: str = "ROLLING MONTHLY OOS RESULTS") -> str:
     display_rows = list(rows or [])
     if include_oos_avg and display_rows:
@@ -3627,7 +3642,13 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     }
     policy_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
-    lines.append(str(table_title or "ROLLING MONTHLY OOS RESULTS"))
+    resolved_title = _resolve_results_table_title(
+        display_rows,
+        str(table_title or "ROLLING MONTHLY OOS RESULTS"),
+        "ROLLING MONTHLY OOS RESULTS",
+        "SEED ENSEMBLE OOS RESULTS",
+    )
+    lines.append(resolved_title)
     policy_header = " | ".join(_pad_ansi(REPORT_POLICY_LABELS[name], policy_group_width, align="^") for name in REPORT_POLICY_NAMES)
     policy_subheader = " | ".join(
         f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')}"
@@ -3753,7 +3774,13 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
         "elapsed": 8,
     }
     lines: list[str] = []
-    lines.append(str(table_title or "BASE RETENTION THRESHOLD OOS RESULTS"))
+    resolved_title = _resolve_results_table_title(
+        display_rows,
+        str(table_title or "BASE RETENTION THRESHOLD OOS RESULTS"),
+        "BASE RETENTION THRESHOLD OOS RESULTS",
+        "SEED ENSEMBLE BASE RETENTION THRESHOLD OOS RESULTS",
+    )
+    lines.append(resolved_title)
     policy_header = " | ".join(
         _pad_ansi(BASE_RETENTION_COMPARISON_POLICY_LABELS[name], widths["score"], align="^")
         for name in BASE_RETENTION_COMPARISON_POLICY_NAMES
@@ -4656,12 +4683,23 @@ def _read_latest_parallel_fold_seed_progresses_for_task(task: dict) -> dict[int,
 class OptimizerSeedEnsembleProgressBoard:
     """Render fold × seed progress lines from one source for rolling and non-rolling."""
 
-    def __init__(self, contexts: list[dict], *, header: str = ""):
+    def __init__(
+        self,
+        contexts: list[dict],
+        *,
+        header: str = "",
+        header_context: dict | None = None,
+        overall_start: float | None = None,
+        board_start: float | None = None,
+    ):
         self.contexts = sorted(
             [dict(item) for item in list(contexts or [])],
             key=lambda item: (int(item.get("fold_idx", 0) or 0), int(item.get("seed_index", 0) or 0)),
         )
         self.header = str(header or "")
+        self.header_context = dict(header_context or {})
+        self.started_at = float(board_start) if board_start is not None else time.perf_counter()
+        self.overall_start = float(overall_start) if overall_start is not None else self.started_at
         self.inline = stdout_supports_inline_progress()
         self.rendered_lines = 0
         self.progress_by_key: dict[tuple[int, int], dict] = {}
@@ -4669,6 +4707,41 @@ class OptimizerSeedEnsembleProgressBoard:
 
     def _context_key(self, context: dict) -> tuple[int, int]:
         return (int(context.get("fold_idx", 0) or 0), int(context.get("seed_index", 0) or 0))
+
+    def _completed_fold_count(self) -> int:
+        fold_to_seed_keys: dict[int, list[tuple[int, int]]] = {}
+        for context in self.contexts:
+            fold_idx = int(context.get("fold_idx", 0) or 0)
+            if fold_idx <= 0:
+                continue
+            fold_to_seed_keys.setdefault(fold_idx, []).append(self._context_key(context))
+        completed = 0
+        for keys in fold_to_seed_keys.values():
+            if keys and all(str((self.progress_by_key.get(key) or {}).get("stage") or "").upper() == "DONE" for key in keys):
+                completed += 1
+        return int(completed)
+
+    def _build_header(self) -> str:
+        if not self.header_context:
+            return self.header
+        context = dict(self.header_context)
+        folds = int(context.get("folds") or max((int(item.get("fold_idx", 0) or 0) for item in self.contexts), default=1) or 1)
+        seeds = int(context.get("seeds") or max((int(item.get("seed_count", 0) or 0) for item in self.contexts), default=1) or 1)
+        completed_folds = self._completed_fold_count()
+        pending_folds = max(0, folds - completed_folds)
+        now = time.perf_counter()
+        return format_optimizer_seed_ensemble_progress_header(
+            folds=folds,
+            seeds=seeds,
+            min_agree=int(context.get("min_agree", seeds) or seeds),
+            parallel_workers=int(context.get("parallel_workers", seeds) or seeds),
+            backend=str(context.get("backend") or "thread"),
+            completed_folds=completed_folds,
+            pending_folds=pending_folds,
+            total_elapsed_sec=max(0.0, now - self.overall_start),
+            fold_elapsed_sec=max(0.0, now - self.started_at),
+            setup_elapsed_sec=max(0.0, self.started_at - self.overall_start),
+        )
 
     def update(self, *, fold_idx: int, seed_index: int, progress: dict, force: bool = False) -> None:
         key = (int(fold_idx), int(seed_index))
@@ -4686,8 +4759,9 @@ class OptimizerSeedEnsembleProgressBoard:
 
     def _build_lines(self) -> list[str]:
         lines: list[str] = []
-        if self.header:
-            lines.append(f"{C_CYAN}{self.header}{C_RESET}")
+        header = self._build_header()
+        if header:
+            lines.append(f"{C_CYAN}{header}{C_RESET}")
         for context in self.contexts:
             key = self._context_key(context)
             progress = self.progress_by_key.get(key) or {"stage": "QUEUED", "status": "queued"}

@@ -996,7 +996,7 @@ def _build_static_policy_rows_from_paramsets(
         if total > 0:
             _emit_static_replay_progress(
                 progress_state,
-                f"nonrolling policy replay | {step}/{total} | {policy_name}",
+                f"seed ensemble policy replay | {step}/{total} | {policy_name}",
             )
         try:
             candidate_metrics, benchmark_metrics, _range_text = _run_static_ensemble_dashboard_replay(
@@ -1042,7 +1042,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     replay_payloads = _load_static_policy_paramset_payloads(replay_policy_paramsets)
     progress_state: dict = {}
     replay_total = 1 + int(len(replay_payloads))
-    _emit_static_replay_progress(progress_state, f"nonrolling policy replay | 1/{replay_total} | candidate_best")
+    _emit_static_replay_progress(progress_state, f"seed ensemble policy replay | 1/{replay_total} | candidate_best")
     try:
         candidate_metrics, benchmark_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
             session,
@@ -1065,7 +1065,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
             progress_total=replay_total,
         )
     finally:
-        _emit_static_replay_progress(progress_state, "nonrolling policy replay | done", finish=True)
+        _emit_static_replay_progress(progress_state, "seed ensemble policy replay | done", finish=True)
     unavailable_policy = {
         "available": False,
         "rank_1_oos": 0.0,
@@ -1110,8 +1110,8 @@ def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_paylo
         color=True,
         include_chain=False,
         include_oos_avg=False,
-        main_table_title="NON-ROLLING SEED ENSEMBLE OOS RESULTS",
-        retention_table_title="NON-ROLLING BASE RETENTION THRESHOLD OOS RESULTS",
+        main_table_title="SEED ENSEMBLE OOS RESULTS",
+        retention_table_title="SEED ENSEMBLE BASE RETENTION THRESHOLD OOS RESULTS",
     )
     if table_text:
         print("\n" + table_text)
@@ -1130,7 +1130,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         return {"payload_sec": 0.0, "render_sec": 0.0}
     payload_started_at = time.perf_counter()
     progress_state: dict = {}
-    _emit_static_replay_progress(progress_state, "nonrolling dashboard replay | train")
+    _emit_static_replay_progress(progress_state, "seed ensemble dashboard replay | train")
     policy = get_active_param_ensemble_policy(ensemble_payload)
     schedule = ensemble_payload.get("params_ensemble") or []
     first_member = schedule[0] if schedule else {}
@@ -1161,7 +1161,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
             oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
         if oos_start_date:
-            _emit_static_replay_progress(progress_state, "nonrolling dashboard replay | OOS")
+            _emit_static_replay_progress(progress_state, "seed ensemble dashboard replay | OOS")
             candidate_test_metrics, benchmark_test_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
                 session,
                 ensemble_payload,
@@ -1189,7 +1189,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         *[f"代表 member#1｜{line}" if idx == 0 else line for idx, line in enumerate(_build_training_param_lines(primary_params))],
     ]
     payload_elapsed = max(0.0, time.perf_counter() - payload_started_at)
-    _emit_static_replay_progress(progress_state, "nonrolling dashboard replay | render")
+    _emit_static_replay_progress(progress_state, "seed ensemble dashboard replay | render")
     render_started_at = time.perf_counter()
     print_optimizer_trial_console_dashboard(
         title=title,
@@ -1211,7 +1211,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         params_lines=params_lines,
         hard_gate_lines=_build_hard_gate_lines(),
     )
-    _emit_static_replay_progress(progress_state, "nonrolling dashboard replay | done", finish=True)
+    _emit_static_replay_progress(progress_state, "seed ensemble dashboard replay | done", finish=True)
     return {
         "payload_sec": float(payload_elapsed),
         "render_sec": float(max(0.0, time.perf_counter() - render_started_at)),
