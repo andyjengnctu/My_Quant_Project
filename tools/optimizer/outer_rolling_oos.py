@@ -1313,6 +1313,189 @@ def _display_month_period(value, end_value=None) -> str:
     return _display_month_value(text)
 
 
+def _canonical_date_text(value, default: str = "") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return str(default or "")
+    if text.lower() == "latest":
+        return "latest"
+    try:
+        return pd.Timestamp(text).normalize().strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OverflowError):
+        return text or str(default or "")
+
+
+def _split_period_text(value) -> tuple[str, str]:
+    text = str(value or "").replace(" ~ ", "~").strip()
+    if "~" not in text:
+        return text, ""
+    start, end = text.split("~", 1)
+    return start.strip(), end.strip()
+
+
+def _infer_period_start(row: dict, *, period_key: str, start_key: str) -> str:
+    direct = str((row or {}).get(start_key) or "").strip()
+    if direct:
+        return _canonical_date_text(direct)
+    start, _end = _split_period_text((row or {}).get(period_key))
+    return _canonical_date_text(start) if start else ""
+
+
+def _infer_period_end(row: dict, *, period_key: str, end_key: str) -> str:
+    direct = str((row or {}).get(end_key) or "").strip()
+    if direct:
+        return _canonical_date_text(direct)
+    _start, end = _split_period_text((row or {}).get(period_key))
+    return _canonical_date_text(end) if end else ""
+
+
+def _oos_key_from_start_date(value, default: int = 0) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return int(default)
+    try:
+        return _period_key(pd.Timestamp(text))
+    except (TypeError, ValueError, OverflowError):
+        pass
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 6:
+        try:
+            return int(digits[:6])
+        except ValueError:
+            return int(default)
+    if len(digits) >= 4:
+        try:
+            return int(digits[:4]) * 100 + 1
+        except ValueError:
+            return int(default)
+    return int(default)
+
+
+def build_optimizer_seed_ensemble_fold_context(
+    *,
+    fold_idx: int,
+    fold_count: int,
+    selection_start_date: str,
+    selection_end_date: str,
+    oos_start_date: str,
+    oos_end_date: str | None = None,
+    selection_period: str | None = None,
+    oos_period: str | None = None,
+) -> dict:
+    """Return the canonical seed-ensemble fold context for rolling and non-rolling.
+
+    Non-rolling must use this with ``fold_count=1``.  Rolling uses the exact same
+    schema with ``fold_count>1``.  Downstream progress events, result rows, and
+    renderers rely on ``oos_year`` being the sortable numeric OOS key; period text
+    belongs in ``oos_period`` only.
+    """
+    sel_start = _canonical_date_text(selection_start_date)
+    sel_end = _canonical_date_text(selection_end_date)
+    oos_start = _canonical_date_text(oos_start_date)
+    oos_end = _canonical_date_text(oos_end_date or "latest")
+    sel_period = str(selection_period or "").strip()
+    if not sel_period and sel_start and sel_end:
+        sel_period = f"{sel_start}~{sel_end}"
+    oos_period_text = str(oos_period or "").strip()
+    if not oos_period_text and oos_start:
+        oos_period_text = f"{oos_start}~{oos_end or 'latest'}"
+    oos_key = _oos_key_from_start_date(oos_start)
+    return {
+        "fold_idx": int(fold_idx),
+        "fold_count": int(fold_count),
+        "fold": f"{int(fold_idx)}/{int(fold_count)}",
+        "selection_start_date": sel_start,
+        "selection_end_date": sel_end,
+        "selection_start": sel_start,
+        "selection_end": sel_end,
+        "selection_period": sel_period,
+        "oos_start_date": oos_start,
+        "oos_end_date": oos_end,
+        "oos_year": int(oos_key),
+        "oos_period": oos_period_text,
+    }
+
+
+def normalize_optimizer_seed_ensemble_fold_row(row: dict, *, context: dict | None = None) -> dict:
+    """Normalize a rolling/non-rolling seed-ensemble result row before display.
+
+    This is intentionally the only row schema adapter for live tables and final
+    tables.  It prevents period strings such as ``2023-01-01~latest`` from being
+    stored in ``oos_year`` while keeping the human-readable range in
+    ``oos_period``.
+    """
+    source = dict(row or {})
+    ctx = dict(context or {})
+    merged = dict(ctx)
+    merged.update(source)
+
+    selection_start = _infer_period_start(merged, period_key="selection_period", start_key="selection_start_date") or str(ctx.get("selection_start") or "")
+    selection_end = _infer_period_end(merged, period_key="selection_period", end_key="selection_end_date") or str(ctx.get("selection_end") or "")
+    oos_start = _infer_period_start(merged, period_key="oos_period", start_key="oos_start_date")
+    oos_end = _infer_period_end(merged, period_key="oos_period", end_key="oos_end_date")
+
+    raw_oos_year = merged.get("oos_year")
+    if not oos_start and isinstance(raw_oos_year, str) and "~" in raw_oos_year:
+        start_from_year, end_from_year = _split_period_text(raw_oos_year)
+        oos_start = _canonical_date_text(start_from_year)
+        if not oos_end:
+            oos_end = _canonical_date_text(end_from_year)
+    if not oos_start and raw_oos_year not in (None, ""):
+        raw = str(raw_oos_year).strip()
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) >= 6:
+            oos_start = f"{digits[:4]}-{digits[4:6]}-01"
+        elif len(digits) >= 4:
+            oos_start = f"{digits[:4]}-01-01"
+
+    if not oos_end:
+        oos_end = "latest" if str(merged.get("oos_period") or raw_oos_year or "").lower().endswith("latest") else ""
+    fold_text = str(merged.get("fold") or "1/1")
+    try:
+        fold_idx = int(merged.get("fold_idx") or fold_text.split("/", 1)[0] or 1)
+    except (TypeError, ValueError):
+        fold_idx = 1
+    try:
+        fold_count = int(
+            merged.get("fold_count")
+            or (fold_text.split("/", 1)[1] if "/" in fold_text else ctx.get("fold_count", 1))
+            or 1
+        )
+    except (TypeError, ValueError):
+        fold_count = max(1, int(ctx.get("fold_count", 1) or 1))
+    canonical = build_optimizer_seed_ensemble_fold_context(
+        fold_idx=fold_idx,
+        fold_count=fold_count,
+        selection_start_date=selection_start,
+        selection_end_date=selection_end,
+        oos_start_date=oos_start,
+        oos_end_date=oos_end or None,
+        selection_period=merged.get("selection_period"),
+        oos_period=merged.get("oos_period") if str(merged.get("oos_period") or "").strip() else None,
+    )
+    if str(canonical.get("oos_period") or "").strip() in {"", "latest"} and oos_start:
+        canonical["oos_period"] = f"{oos_start}~{oos_end or 'latest'}"
+    source.update(canonical)
+    try:
+        source["selection_start_year"] = int(pd.Timestamp(source["selection_start_date"]).year)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    try:
+        source["selection_end_year"] = int(pd.Timestamp(source["selection_end_date"]).year)
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return source
+
+
+def normalize_optimizer_seed_ensemble_fold_rows(rows: list[dict]) -> list[dict]:
+    return [normalize_optimizer_seed_ensemble_fold_row(row) for row in list(rows or [])]
+
+
+def optimizer_seed_ensemble_row_sort_key(row: dict) -> tuple[int, int]:
+    normalized = normalize_optimizer_seed_ensemble_fold_row(row)
+    return (int(normalized.get("oos_year", 0) or 0), int(normalized.get("fold_idx", 0) or 0))
+
+
 def _fold_label(fold: dict) -> str:
     return str(fold.get("oos_period") or _period_label(fold.get("oos_start_date"), fold.get("oos_end_date")))
 
@@ -1349,20 +1532,24 @@ def _build_rolling_folds(config: OuterRollingConfig) -> list[dict]:
             selection_start = training_start
         if selection_start < training_start:
             raise ValueError("fixed window 下 first OOS date - train window months 不可早於 training start date")
-        key = _period_key(oos_start)
-        folds.append({
-            "fold_key": int(key),
-            "oos_year": int(key),
-            "oos_start_date": oos_start.strftime("%Y-%m-%d"),
-            "oos_end_date": oos_end.strftime("%Y-%m-%d"),
-            "oos_period": _period_label(oos_start, oos_end),
-            "selection_start_date": selection_start.strftime("%Y-%m-%d"),
-            "selection_end_date": selection_end.strftime("%Y-%m-%d"),
-            "selection_period": _period_label(selection_start, selection_end),
-            "selection_start_year": int(selection_start.year),
-            "selection_end_year": int(selection_end.year),
-        })
+        context = build_optimizer_seed_ensemble_fold_context(
+            fold_idx=len(folds) + 1,
+            fold_count=0,
+            selection_start_date=selection_start.strftime("%Y-%m-%d"),
+            selection_end_date=selection_end.strftime("%Y-%m-%d"),
+            oos_start_date=oos_start.strftime("%Y-%m-%d"),
+            oos_end_date=oos_end.strftime("%Y-%m-%d"),
+        )
+        context["fold_key"] = int(context["oos_year"])
+        context["selection_start_year"] = int(selection_start.year)
+        context["selection_end_year"] = int(selection_end.year)
+        folds.append(context)
         current = oos_start + pd.DateOffset(months=horizon_months)
+    total_folds = len(folds)
+    for idx, fold in enumerate(folds, start=1):
+        fold["fold_idx"] = int(idx)
+        fold["fold_count"] = int(total_folds)
+        fold["fold"] = f"{idx}/{total_folds}"
     return folds
 
 
@@ -2645,7 +2832,7 @@ def _derive_curve_initial_capital(curve_rows: list[dict], explicit_initial_capit
 
 
 def _stitch_strategy_equity_curves(rows: list[dict], *, policy_name: str | None = None, best_finalist: bool = False) -> dict:
-    ordered_rows = sorted(list(rows or []), key=lambda row: int(row.get("oos_year", 0) or 0))
+    ordered_rows = sorted((normalize_optimizer_seed_ensemble_fold_row(row) for row in list(rows or [])), key=optimizer_seed_ensemble_row_sort_key)
     stitched: list[dict] = []
     chain_initial = 0.0
     current_start = 0.0
@@ -2673,7 +2860,7 @@ def _stitch_strategy_equity_curves(rows: list[dict], *, policy_name: str | None 
 
 
 def _stitch_benchmark_equity_curve(rows: list[dict]) -> dict:
-    ordered_rows = sorted(list(rows or []), key=lambda row: int(row.get("oos_year", 0) or 0))
+    ordered_rows = sorted((normalize_optimizer_seed_ensemble_fold_row(row) for row in list(rows or [])), key=optimizer_seed_ensemble_row_sort_key)
     stitched: list[dict] = []
     chain_initial = 0.0
     current_start = 0.0
@@ -2791,7 +2978,7 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
     params_ensemble_by_effective_date: dict[str, list[dict]] = {}
     fold_entries: list[dict] = []
     has_ensemble_members = False
-    for row in sorted(list(rows or []), key=lambda item: str(item.get("oos_start_date") or item.get("oos_year") or "")):
+    for row in sorted((normalize_optimizer_seed_ensemble_fold_row(item) for item in list(rows or [])), key=optimizer_seed_ensemble_row_sort_key):
         try:
             oos_key = int(row.get("oos_year"))
         except (TypeError, ValueError):
@@ -2927,8 +3114,8 @@ def _row_oos_start_date(row: dict) -> str:
 
 def _policy_has_complete_active_schedule(rows: list[dict], policy_name: str) -> bool:
     source_rows = sorted(
-        list(rows or []),
-        key=lambda item: str(item.get("oos_start_date") or item.get("oos_year") or ""),
+        (normalize_optimizer_seed_ensemble_fold_row(item) for item in list(rows or [])),
+        key=optimizer_seed_ensemble_row_sort_key,
     )
     if not source_rows:
         return False
@@ -3605,81 +3792,30 @@ def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = 
 
 
 
-def _coerce_period_date(value, *, endpoint: str = "start") -> pd.Timestamp | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if "~" in text:
-        left, right = text.split("~", 1)
-        text = left.strip() if endpoint == "start" else right.strip()
-    if not text or text.lower() == "latest" or text == "-":
-        return None
-    try:
-        return pd.Timestamp(text).normalize()
-    except (TypeError, ValueError):
-        return None
-
-
-def _coerce_row_year_key(row: dict) -> int:
-    for key in ("oos_start_date", "oos_period", "oos_year"):
-        ts = _coerce_period_date(row.get(key), endpoint="start")
-        if ts is not None:
-            return int(ts.year)
-    try:
-        return int(row.get("oos_year", 0) or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _rows_period_bounds(rows: list[dict]) -> dict:
-    source_rows = [dict(row) for row in list(rows or []) if str(row.get("fold", "")).upper() not in {"OOS_CHAIN", "OOS_AVG"}]
+    source_rows = [
+        normalize_optimizer_seed_ensemble_fold_row(row)
+        for row in list(rows or [])
+        if str((row or {}).get("fold", "")).upper() not in {"OOS_CHAIN", "OOS_AVG"}
+    ]
     if not source_rows:
         return {}
-    first_oos_candidates = [
-        _coerce_period_date(row.get("oos_start_date"), endpoint="start")
-        or _coerce_period_date(row.get("oos_period"), endpoint="start")
-        or _coerce_period_date(row.get("oos_year"), endpoint="start")
-        for row in source_rows
-    ]
-    last_oos_candidates = [
-        _coerce_period_date(row.get("oos_end_date"), endpoint="end")
-        or _coerce_period_date(row.get("oos_period"), endpoint="end")
-        or _coerce_period_date(row.get("oos_year"), endpoint="end")
-        for row in source_rows
-    ]
-    first_oos_dates = [ts for ts in first_oos_candidates if ts is not None]
-    last_oos_dates = [ts for ts in last_oos_candidates if ts is not None]
-    if not first_oos_dates:
-        first_oos_dates = [pd.Timestamp("1970-01-01").normalize()]
-    if not last_oos_dates:
-        last_oos_dates = list(first_oos_dates)
-    first_oos_start = min(first_oos_dates)
-    last_oos_end = max(last_oos_dates)
-    selection_start_dates = [
-        _coerce_period_date(row.get("selection_start_date"), endpoint="start")
-        or _coerce_period_date(row.get("selection_period"), endpoint="start")
-        for row in source_rows
-    ]
-    selection_end_dates = [
-        _coerce_period_date(row.get("selection_end_date"), endpoint="end")
-        or _coerce_period_date(row.get("selection_period"), endpoint="end")
-        for row in source_rows
-    ]
-    selection_start_values = [ts for ts in selection_start_dates if ts is not None]
-    selection_end_values = [ts for ts in selection_end_dates if ts is not None]
-    if not selection_start_values:
-        selection_start_values = [pd.Timestamp(f"{first_oos_start.year}-01-01").normalize()]
-    if not selection_end_values:
-        selection_end_values = [pd.Timestamp(f"{last_oos_end.year}-12-31").normalize()]
-    selection_start = min(selection_start_values)
-    selection_end = max(selection_end_values)
-    oos_keys = [_coerce_row_year_key(row) for row in source_rows]
-    oos_keys = [key for key in oos_keys if key > 0]
+
+    def _date_or_latest(value, fallback):
+        text = str(value or "").strip()
+        if text.lower() == "latest" or not text:
+            return pd.Timestamp(fallback).normalize()
+        return pd.Timestamp(text).normalize()
+
+    first_oos_start = min(pd.Timestamp(row.get("oos_start_date")).normalize() for row in source_rows if row.get("oos_start_date"))
+    last_oos_end = max(_date_or_latest(row.get("oos_end_date"), pd.Timestamp.today().normalize()) for row in source_rows)
+    selection_start = min(pd.Timestamp(row.get("selection_start_date")).normalize() for row in source_rows if row.get("selection_start_date"))
+    selection_end = max(pd.Timestamp(row.get("selection_end_date")).normalize() for row in source_rows if row.get("selection_end_date"))
     return {
         "selection_period": _period_label(selection_start, selection_end),
         "oos_period": _period_label(first_oos_start, last_oos_end),
-        "first_oos_key": min(oos_keys) if oos_keys else int(first_oos_start.year),
-        "last_oos_key": max(oos_keys) if oos_keys else int(last_oos_end.year),
+        "first_oos_key": min(int(row.get("oos_year", 0) or 0) for row in source_rows),
+        "last_oos_key": max(int(row.get("oos_year", 0) or 0) for row in source_rows),
     }
 
 
@@ -3775,7 +3911,7 @@ def _table_separator(width: int = 218) -> str:
 
 
 def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, table_title: str = "ROLLING MONTHLY OOS RESULTS") -> str:
-    display_rows = list(rows or [])
+    display_rows = normalize_optimizer_seed_ensemble_fold_rows(list(rows or []))
     if include_oos_avg and display_rows:
         avg_row = _build_oos_avg_row(display_rows)
         if avg_row is not None:
@@ -3904,7 +4040,7 @@ def _build_base_retention_comparison_oos_avg_row(rows: list[dict]) -> dict | Non
 
 
 def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
-    display_rows = list(rows or [])
+    display_rows = normalize_optimizer_seed_ensemble_fold_rows(list(rows or []))
     if include_oos_avg and not include_chain:
         avg_row = _build_base_retention_comparison_oos_avg_row(display_rows)
         if avg_row is not None:
@@ -4176,6 +4312,7 @@ def _build_params_ensemble_members_for_schedule(schedule: dict) -> list[dict]:
 
 
 def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
+    rows = normalize_optimizer_seed_ensemble_fold_rows(list(rows or []))
     params_by_oos_year = {}
     params_by_effective_date = {}
     params_ensemble_by_effective_date = {}
@@ -4346,6 +4483,7 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
 def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None, chained_override: dict | None = None) -> dict:
     if not rows:
         return {"folds": 0}
+    rows = normalize_optimizer_seed_ensemble_fold_rows(list(rows or []))
     bounds = _rows_period_bounds(rows)
     chained = _build_chained_oos_summary(rows, chained_override=chained_override)
     summary = {
@@ -4668,22 +4806,18 @@ def _merge_live_result_rows(completed_rows: list[dict], tasks: list[dict]) -> li
     for row in list(completed_rows or []):
         if not row:
             continue
-        try:
-            oos_key = int(row.get("oos_year", 0) or 0)
-        except (TypeError, ValueError):
-            oos_key = 0
+        normalized = normalize_optimizer_seed_ensemble_fold_row(row)
+        oos_key = int(normalized.get("oos_year", 0) or 0)
         if oos_key > 0:
-            rows_by_oos[oos_key] = dict(row)
+            rows_by_oos[oos_key] = normalized
     for task in list(tasks or []):
         row = _read_parallel_fold_result_row(str((task or {}).get("log_path") or ""))
         if not row:
             continue
-        try:
-            oos_key = int(row.get("oos_year", 0) or 0)
-        except (TypeError, ValueError):
-            oos_key = 0
+        normalized = normalize_optimizer_seed_ensemble_fold_row(row, context=task)
+        oos_key = int(normalized.get("oos_year", 0) or 0)
         if oos_key > 0 and oos_key not in rows_by_oos:
-            rows_by_oos[oos_key] = dict(row)
+            rows_by_oos[oos_key] = normalized
     return [rows_by_oos[key] for key in sorted(rows_by_oos)]
 
 
@@ -5565,7 +5699,7 @@ class OptimizerSeedEnsembleProgressBoard:
         if self.result_rows_by_fold:
             main_title, retention_title = _active_optimizer_table_titles()
             table_text = _render_optimizer_results_tables(
-                sorted(self.result_rows_by_fold.values(), key=lambda row: int(row.get("oos_year", 0) or 0)),
+                sorted((normalize_optimizer_seed_ensemble_fold_row(row) for row in self.result_rows_by_fold.values()), key=optimizer_seed_ensemble_row_sort_key),
                 color=True,
                 include_chain=False,
                 include_oos_avg=True,
@@ -5621,7 +5755,7 @@ class _ParallelFoldProgressBoard:
 
     def update(self, *, pending: set, future_map: dict, completed_rows: list[dict], force: bool = False) -> None:
         pending_tasks = {id(future_map[future]): future_map[future] for future in pending if future in future_map}
-        completed_oos = {int(row.get("oos_year", 0) or 0) for row in list(completed_rows or [])}
+        completed_oos = {int(normalize_optimizer_seed_ensemble_fold_row(row).get("oos_year", 0) or 0) for row in list(completed_rows or [])}
         new_lines: dict[int, str] = {}
         for task in self.tasks:
             fold_idx = int(task.get("fold_idx", 0) or 0)
@@ -5663,7 +5797,7 @@ class _ParallelCompletedResultsBoard:
         self.inline = stdout_supports_inline_progress()
 
     def render(self, rows: list[dict]) -> None:
-        completed = sorted(list(rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
+        completed = sorted((normalize_optimizer_seed_ensemble_fold_row(item) for item in list(rows or [])), key=optimizer_seed_ensemble_row_sort_key)
         if not completed:
             return
         table = _render_optimizer_results_tables(completed, color=True, include_chain=False, include_oos_avg=True)
@@ -5704,7 +5838,7 @@ class _ParallelFoldLiveBoard:
         self.last_render_key: list[str] = []
 
     def _build_lines(self, *, pending: set, future_map: dict, completed_rows: list[dict], fold_timing_rows: list[dict] | None = None) -> list[str]:
-        completed_rows_sorted = sorted(list(completed_rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
+        completed_rows_sorted = sorted((normalize_optimizer_seed_ensemble_fold_row(item) for item in list(completed_rows or [])), key=optimizer_seed_ensemble_row_sort_key)
         completed_oos = {int(row.get("oos_year", 0) or 0) for row in completed_rows_sorted}
         fold_wall_elapsed = max(0.0, time.perf_counter() - self.started_at)
         total_elapsed = max(0.0, time.perf_counter() - self.overall_start)
@@ -7077,7 +7211,7 @@ def run_outer_rolling_oos(
             chain_max_positions = int(chain_state.get("chain_max_positions"))
         if chain_state.get("chain_enable_rotation") is not None:
             chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
-        rows.sort(key=lambda item: int(item.get("oos_year", 0) or 0))
+        rows[:] = sorted((normalize_optimizer_seed_ensemble_fold_row(item) for item in rows), key=optimizer_seed_ensemble_row_sort_key)
         fold_timing_rows.sort(key=lambda item: int(item.get("fold_idx", 0) or 0))
         for idx, row in enumerate(rows, start=1):
             row["fold"] = f"{idx}/{fold_count}"

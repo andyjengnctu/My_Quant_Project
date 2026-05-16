@@ -1113,51 +1113,44 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
         "rank_1_oos": 0.0,
         "unavailable_reason": "nonrolling_policy_paramset_not_available",
     }
-    selection_period = ""
-    selection_start_text = str(selection_start)[:10] if selection_start is not None else ""
-    selection_end_text = str(selection_end)[:10] if selection_end is not None else ""
-    if selection_start_text and selection_end_text:
-        selection_period = f"{selection_start_text}~{selection_end_text}"
-    oos_period_text = str(oos_range_text).replace(" ~ ", "~")
-    oos_start_text = ""
-    oos_end_text = ""
-    if "~" in oos_period_text:
-        oos_start_text, oos_end_text = [part.strip() for part in oos_period_text.split("~", 1)]
-    elif oos_period_text and oos_period_text != "-":
-        oos_start_text = oos_period_text.strip()
-        oos_end_text = oos_period_text.strip()
-    if not oos_start_text and oos_start_date:
-        oos_start_text = str(oos_start_date)[:10]
-    if not oos_end_text and oos_end_date:
-        oos_end_text = str(oos_end_date)[:10]
-    try:
-        oos_year_value = int(pd.Timestamp(oos_start_text).year) if oos_start_text else 0
-    except (TypeError, ValueError):
-        oos_year_value = 0
-    row = {
-        "fold": "1/1",
-        "selection_period": selection_period,
-        "selection_start_date": selection_start_text,
-        "selection_end_date": selection_end_text,
-        "oos_period": oos_period_text,
-        "oos_year": int(oos_year_value),
-        "oos_start_date": oos_start_text,
-        "oos_end_date": oos_end_text,
+    range_text = str(oos_range_text or "").replace(" ~ ", "~")
+    range_start = str(oos_start_date or "")[:10]
+    range_end = str(oos_end_date or "")[:10] if oos_end_date else ""
+    if "~" in range_text:
+        parsed_start, parsed_end = range_text.split("~", 1)
+        range_start = str(parsed_start or range_start).strip()[:10]
+        range_end = str(parsed_end or range_end).strip()[:10]
+    from tools.optimizer.outer_rolling_oos import (
+        BASE_RETENTION_COMPARISON_POLICY_NAMES,
+        REPORT_POLICY_NAMES,
+        build_optimizer_seed_ensemble_fold_context,
+        normalize_optimizer_seed_ensemble_fold_row,
+    )
+
+    fold_context = build_optimizer_seed_ensemble_fold_context(
+        fold_idx=1,
+        fold_count=1,
+        selection_start_date=str(selection_start or "")[:10],
+        selection_end_date=str(selection_end or "")[:10],
+        oos_start_date=range_start or str(oos_start_date or "")[:10],
+        oos_end_date=range_end or "latest",
+    )
+    row = dict(fold_context)
+    row.update({
         "best_finalist_oos_score": float(candidate_score),
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": _safe_float(benchmark_metrics.get("pf_return", 0.0)),
         "benchmark_mdd_pct": _safe_float(benchmark_metrics.get("pf_mdd", 0.0)),
         "elapsed_sec": elapsed_sec,
         "random_seed_ensemble": dict(policy),
-    }
-    from tools.optimizer.outer_rolling_oos import BASE_RETENTION_COMPARISON_POLICY_NAMES, REPORT_POLICY_NAMES
+    })
 
     for policy_name in tuple(REPORT_POLICY_NAMES) + tuple(BASE_RETENTION_COMPARISON_POLICY_NAMES):
         if policy_name in policy_rows:
             row[str(policy_name)] = dict(policy_rows[policy_name])
         else:
             row[str(policy_name)] = dict(unavailable_policy)
-    return row
+    return normalize_optimizer_seed_ensemble_fold_row(row)
 
 def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None, progress_callback=None) -> dict | None:
     """Print non-rolling ensemble summary through the exact rolling-OOS table renderer."""

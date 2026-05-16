@@ -612,18 +612,19 @@ def _format_nonrolling_result_number(value) -> str:
 
 
 def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> dict:
+    from tools.optimizer.outer_rolling_oos import build_optimizer_seed_ensemble_fold_context
+
     selection_start_year = int(walk_forward_policy.get("selection_start_year", walk_forward_policy.get("train_start_year", 0)) or 0)
     selection_end_year = int(walk_forward_policy.get("search_train_end_year", selection_start_year) or selection_start_year)
     oos_start_year = int(walk_forward_policy.get("oos_start_year", selection_end_year + 1) or (selection_end_year + 1))
-    return {
-        "fold_idx": 1,
-        "fold_count": 1,
-        "selection_start": f"{selection_start_year:04d}-01-01" if selection_start_year > 0 else "",
-        "selection_end": f"{selection_end_year:04d}-12-31" if selection_end_year > 0 else "",
-        "selection_period": f"{selection_start_year:04d}-01~{selection_end_year % 100:02d}-12" if selection_start_year > 0 and selection_end_year > 0 else "",
-        "oos_year": oos_start_year,
-        "oos_period": f"{oos_start_year:04d}-01~latest" if oos_start_year > 0 else "",
-    }
+    return build_optimizer_seed_ensemble_fold_context(
+        fold_idx=1,
+        fold_count=1,
+        selection_start_date=f"{selection_start_year:04d}-01-01" if selection_start_year > 0 else "",
+        selection_end_date=f"{selection_end_year:04d}-12-31" if selection_end_year > 0 else "",
+        oos_start_date=f"{oos_start_year:04d}-01-01" if oos_start_year > 0 else "",
+        oos_end_date="latest",
+    )
 
 
 def _render_nonrolling_single_fold_progress_line(walk_forward_policy: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None) -> str:
