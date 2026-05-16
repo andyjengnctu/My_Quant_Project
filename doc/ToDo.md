@@ -1,8 +1,6 @@
 ## Going
 
-- 加速rolling訓練時間
-- 改成每月，預計6個月為一個fold
-- 加一個是取local_gate後的base score, 移除best
+  [1/4] selection=2013-01~22-12 | OOS 2023-01~23-12 | seed 1/2 | finalist 2/2 | neighbor 1/10 | current : 7.293 | best_base : 24.297 | best_lm : 16.548 | RUN | elapsed=01:25 =>   [1/4] train=13-01~22-12 | OOS 23-01~23-12 | seed 1/2 | finalist 2/2 | local 1/10 | current : 7.293 | best_base : 24.29 | best_lm : 16.54 | elapsed=01:25
 
 1. 在Training_policy設定非rolling訓練突破時是否顯示結果表格。
 2. OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True 時

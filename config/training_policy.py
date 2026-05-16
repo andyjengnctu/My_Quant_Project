@@ -93,8 +93,8 @@ def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
 # full  = 全資料選參；不額外切 OOS
 
 DEFAULT_OPTIMIZER_MODEL_MODE = 'split'
-PREDEPLOY_SELECTION_START_YEAR = 2011
-OOS_EVALUATION_START_YEAR = 2021
+PREDEPLOY_SELECTION_START_YEAR = 2013
+OOS_EVALUATION_START_YEAR = 2023
 
 # Outer rolling OOS 預設改以月份切窗：60 個月訓練、6 個月 OOS。
 # 年份欄位仍保留給一般 optimizer split/full 與既有相容邏輯。

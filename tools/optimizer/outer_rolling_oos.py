@@ -445,6 +445,16 @@ def _fmt_duration_compact(seconds: float | int | None) -> str:
     return text
 
 
+def _fmt_seconds_3(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "N/A"
+    try:
+        value = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{value:.3f}s"
+
+
 def _resolve_resource_sample_interval_sec(environ) -> float:
     raw_value = _env_value_for_display(environ, "OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC", "2.0")
     try:
@@ -4428,6 +4438,8 @@ def format_optimizer_seed_ensemble_progress_header(
     fold_elapsed_sec: float | None = None,
     setup_elapsed_sec: float | None = None,
     completed_trials: int | None = None,
+    local_min_completed_trials: int | None = None,
+    local_min_elapsed_sec: float | None = None,
 ) -> str:
     """Format the seed-ensemble progress header used by rolling and non-rolling paths.
 
@@ -4452,7 +4464,13 @@ def format_optimizer_seed_ensemble_progress_header(
         except (TypeError, ValueError):
             trial_count = 0
         if trial_count > 0:
-            parts.append(f"avg_trial_time={_fmt_duration(float(total_elapsed_sec) / float(trial_count))}")
+            parts.append(f"avg_trial_time={_fmt_seconds_3(float(total_elapsed_sec) / float(trial_count))}")
+    try:
+        local_count = int(local_min_completed_trials or 0)
+    except (TypeError, ValueError):
+        local_count = 0
+    if local_count > 0 and local_min_elapsed_sec is not None:
+        parts.append(f"avg_local_min_trial_time={_fmt_seconds_3(float(local_min_elapsed_sec) / float(local_count))}")
     return " | ".join(parts)
 
 
@@ -4626,6 +4644,48 @@ def _seed_progress_key_from_event(event: dict) -> tuple[int, int] | None:
     return (fold_idx, seed_idx)
 
 
+def _is_local_min_progress(progress: dict) -> bool:
+    return str(dict(progress or {}).get("stage") or "").upper() == "LOCAL_MIN_REVIEW"
+
+
+def _local_min_completed_trial_count_from_progress(progress: dict) -> int:
+    data = dict(progress or {})
+    if not _is_local_min_progress(data):
+        return 0
+    try:
+        idx = int(data.get("finalist_idx", 0) or 0)
+    except (TypeError, ValueError):
+        idx = 0
+    try:
+        total = int(data.get("finalist_total", 0) or 0)
+    except (TypeError, ValueError):
+        total = 0
+    if idx <= 0 or total <= 0:
+        return 0
+    status = str(data.get("status") or "").strip().upper()
+    completed = max(0, idx - 1)
+    if status in {"DONE", "CACHE", "EARLY_STOP", "EARLY STOP", "PASS", "FAIL"}:
+        completed = max(completed, idx)
+    return max(0, min(int(completed), int(total)))
+
+
+def _is_active_local_min_progress(progress: dict) -> bool:
+    data = dict(progress or {})
+    if not _is_local_min_progress(data):
+        return False
+    status = str(data.get("status") or "").strip().upper()
+    if status in {"DONE", "CACHE", "EARLY_STOP", "EARLY STOP", "PASS", "FAIL"}:
+        return False
+    try:
+        idx = int(data.get("finalist_idx", 0) or 0)
+        total = int(data.get("finalist_total", 0) or 0)
+    except (TypeError, ValueError):
+        return True
+    if idx <= 0 or total <= 0:
+        return True
+    return _local_min_completed_trial_count_from_progress(data) < total
+
+
 def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
     if not path or not os.path.exists(path):
         return {}
@@ -4636,6 +4696,9 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
         return {}
     latest: dict[int, dict] = {}
     completed_by_member: dict[int, int] = {}
+    local_min_completed_by_member: dict[int, int] = {}
+    local_min_first_ts_by_member: dict[int, float] = {}
+    local_min_last_ts_by_member: dict[int, float] = {}
     for line in reversed(lines[-2000:]):
         raw = str(line).strip()
         if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
@@ -4653,11 +4716,32 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
             completed = 0
         if completed > int(completed_by_member.get(member_index, 0) or 0):
             completed_by_member[member_index] = int(completed)
+        if _is_local_min_progress(payload):
+            local_completed = _local_min_completed_trial_count_from_progress(payload)
+            if local_completed > int(local_min_completed_by_member.get(member_index, 0) or 0):
+                local_min_completed_by_member[member_index] = int(local_completed)
+            try:
+                event_ts = float(payload.get("ts", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                event_ts = 0.0
+            if event_ts > 0.0:
+                if member_index not in local_min_first_ts_by_member or event_ts < float(local_min_first_ts_by_member[member_index]):
+                    local_min_first_ts_by_member[member_index] = float(event_ts)
+                if event_ts > float(local_min_last_ts_by_member.get(member_index, 0.0) or 0.0):
+                    local_min_last_ts_by_member[member_index] = float(event_ts)
         if member_index not in latest:
             latest[member_index] = payload
     for member_index, completed in completed_by_member.items():
         if member_index in latest and completed > int(latest[member_index].get("completed", 0) or 0):
             latest[member_index]["completed"] = int(completed)
+    for member_index, local_completed in local_min_completed_by_member.items():
+        if member_index not in latest:
+            continue
+        latest[member_index]["local_min_completed_trials"] = int(local_completed)
+        if member_index in local_min_first_ts_by_member:
+            latest[member_index]["local_min_first_ts"] = float(local_min_first_ts_by_member[member_index])
+        if member_index in local_min_last_ts_by_member:
+            latest[member_index]["local_min_last_ts"] = float(local_min_last_ts_by_member[member_index])
     return latest
 
 
@@ -4703,21 +4787,48 @@ class OptimizerSeedEnsembleProgressBoard:
         self.rendered_lines = 0
         self.progress_by_key: dict[tuple[int, int], dict] = {}
         self.completed_trials_by_key: dict[tuple[int, int], int] = {}
+        self.local_min_completed_trials_by_key: dict[tuple[int, int], int] = {}
+        self.local_min_started_at: float | None = None
+        self.local_min_last_update_at: float | None = None
         self.last_lines: list[str] = []
 
     def _context_key(self, context: dict) -> tuple[int, int]:
         return (int(context.get("fold_idx", 0) or 0), int(context.get("seed_index", 0) or 0))
 
     def _record_completed_trials(self, key: tuple[int, int], progress: dict) -> None:
+        data = dict(progress or {})
         try:
-            completed = int(dict(progress or {}).get("completed", 0) or 0)
+            completed = int(data.get("completed", 0) or 0)
         except (TypeError, ValueError):
             completed = 0
         if completed > int(self.completed_trials_by_key.get(key, 0) or 0):
             self.completed_trials_by_key[key] = int(completed)
+        local_completed = _local_min_completed_trial_count_from_progress(data)
+        try:
+            payload_local_completed = int(data.get("local_min_completed_trials", 0) or 0)
+        except (TypeError, ValueError):
+            payload_local_completed = 0
+        local_completed = max(int(local_completed), int(payload_local_completed))
+        if local_completed > int(self.local_min_completed_trials_by_key.get(key, 0) or 0):
+            self.local_min_completed_trials_by_key[key] = int(local_completed)
+        if _is_local_min_progress(data) or local_completed > 0:
+            now = time.perf_counter()
+            if self.local_min_started_at is None:
+                self.local_min_started_at = now
+            self.local_min_last_update_at = now
 
     def get_completed_trial_count(self) -> int:
         return sum(int(value or 0) for value in self.completed_trials_by_key.values())
+
+    def get_completed_local_min_trial_count(self) -> int:
+        return sum(int(value or 0) for value in self.local_min_completed_trials_by_key.values())
+
+    def get_local_min_elapsed_sec(self) -> float | None:
+        if self.local_min_started_at is None:
+            return None
+        active = any(_is_active_local_min_progress(progress) for progress in self.progress_by_key.values())
+        end_at = time.perf_counter() if active or self.local_min_last_update_at is None else float(self.local_min_last_update_at)
+        return max(0.0, float(end_at) - float(self.local_min_started_at))
 
     def update(self, *, fold_idx: int, seed_index: int, progress: dict, force: bool = False) -> None:
         key = (int(fold_idx), int(seed_index))
@@ -4867,6 +4978,37 @@ class _ParallelFoldLiveBoard:
         self.rendered_lines = 0
         self.last_lines: list[str] = []
         self.last_render_key: list[str] = []
+        self.local_min_completed_trials_by_key: dict[tuple[int, int], int] = {}
+        self.local_min_started_at: float | None = None
+        self.local_min_last_update_at: float | None = None
+        self.seed_progress_by_key: dict[tuple[int, int], dict] = {}
+
+    def _record_seed_local_min_progress(self, key: tuple[int, int], progress: dict) -> None:
+        data = dict(progress or {})
+        self.seed_progress_by_key[key] = dict(data)
+        local_completed = _local_min_completed_trial_count_from_progress(data)
+        try:
+            payload_local_completed = int(data.get("local_min_completed_trials", 0) or 0)
+        except (TypeError, ValueError):
+            payload_local_completed = 0
+        local_completed = max(int(local_completed), int(payload_local_completed))
+        if local_completed > int(self.local_min_completed_trials_by_key.get(key, 0) or 0):
+            self.local_min_completed_trials_by_key[key] = int(local_completed)
+        if _is_local_min_progress(data) or local_completed > 0:
+            now = time.perf_counter()
+            if self.local_min_started_at is None:
+                self.local_min_started_at = now
+            self.local_min_last_update_at = now
+
+    def _completed_local_min_trial_count(self) -> int:
+        return sum(int(value or 0) for value in self.local_min_completed_trials_by_key.values())
+
+    def _local_min_elapsed_sec(self) -> float | None:
+        if self.local_min_started_at is None:
+            return None
+        active = any(_is_active_local_min_progress(progress) for progress in self.seed_progress_by_key.values())
+        end_at = time.perf_counter() if active or self.local_min_last_update_at is None else float(self.local_min_last_update_at)
+        return max(0.0, float(end_at) - float(self.local_min_started_at))
 
     def _build_lines(self, *, pending: set, future_map: dict, completed_rows: list[dict], fold_timing_rows: list[dict] | None = None) -> list[str]:
         completed_rows_sorted = sorted(list(completed_rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
@@ -4881,12 +5023,17 @@ class _ParallelFoldLiveBoard:
             seed_policy = _build_rolling_seed_ensemble_policy_payload()
             seed_count = int(seed_policy.get("seed_count", 1) or 1)
             completed_trials = 0
+            seed_progress_by_task: dict[int, dict[int, dict]] = {}
             for task in self.tasks:
-                for progress in _read_latest_parallel_fold_seed_progresses_for_task(task).values():
+                task_key = int(task.get("fold_idx", 0) or 0)
+                seed_progresses = _read_latest_parallel_fold_seed_progresses_for_task(task)
+                seed_progress_by_task[task_key] = seed_progresses
+                for seed_index, progress in seed_progresses.items():
                     try:
                         completed_trials += int(dict(progress or {}).get("completed", 0) or 0)
                     except (TypeError, ValueError):
                         continue
+                    self._record_seed_local_min_progress((task_key, int(seed_index)), dict(progress or {}))
             header = format_optimizer_seed_ensemble_progress_header(
                 folds=total_folds,
                 seeds=seed_count,
@@ -4899,10 +5046,12 @@ class _ParallelFoldLiveBoard:
                 fold_elapsed_sec=fold_wall_elapsed,
                 setup_elapsed_sec=setup_elapsed,
                 completed_trials=completed_trials,
+                local_min_completed_trials=self._completed_local_min_trial_count(),
+                local_min_elapsed_sec=self._local_min_elapsed_sec(),
             )
             lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
-                seed_progresses = _read_latest_parallel_fold_seed_progresses_for_task(task)
+                seed_progresses = seed_progress_by_task.get(int(task.get("fold_idx", 0) or 0)) or {}
                 fold_completed = int(task.get("oos_year", 0) or 0) in completed_oos
                 for seed_index in range(1, seed_count + 1):
                     progress = dict(seed_progresses.get(seed_index) or {})

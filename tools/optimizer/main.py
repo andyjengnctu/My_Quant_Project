@@ -1416,6 +1416,8 @@ def _run_nonrolling_random_seed_ensemble_training(
                 completed_folds=completed,
                 total_elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
                 completed_trials=board.get_completed_trial_count() if hasattr(board, "get_completed_trial_count") else 0,
+                local_min_completed_trials=board.get_completed_local_min_trial_count() if hasattr(board, "get_completed_local_min_trial_count") else 0,
+                local_min_elapsed_sec=board.get_local_min_elapsed_sec() if hasattr(board, "get_local_min_elapsed_sec") else None,
             )
 
         progress_board = OptimizerSeedEnsembleProgressBoard(
@@ -1513,6 +1515,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 _finalize_nonrolling_single_fold_inline_progress(member_session)
             best_base_score = _resolve_study_best_base_score(member_session, study)
             local_progress_installed = False
+            local_started_at = time.perf_counter()
             if compact_display and progress_board is not None:
                 local_progress_installed = _install_nonrolling_local_min_seed_board_progress(
                     session=member_session,
@@ -1523,7 +1526,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                     member_count=int(len(seeds)),
                     seed=int(seed),
                     best_base_score=best_base_score,
-                    started_at=ensemble_started_at,
+                    started_at=local_started_at,
                     completed_trials=int(requested_trials),
                 )
             elif compact_display:
