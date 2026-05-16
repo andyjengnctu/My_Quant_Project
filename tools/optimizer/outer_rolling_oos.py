@@ -1448,7 +1448,7 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
 
     if cli_trials:
         trials = int(cli_trials)
-    elif bool(timing_mode):
+    elif bool(timing_mode) or int(default_trials or 0) > 0:
         trials = trials_default
     else:
         trials = _prompt_int("optimizer trials per fold", trials_default, minimum=1)
@@ -1473,7 +1473,7 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         int(trials),
         window_mode=window_mode,
         train_window_years=max(1, int(train_window_months) // 12),
-        confirm=not _has_cli_flag(argv, "--yes"),
+        confirm=False,
         first_oos_date=first_oos_date.strftime("%Y-%m-%d"),
         last_oos_date=last_oos_date.strftime("%Y-%m-%d"),
         train_window_months=int(train_window_months),
@@ -1518,10 +1518,7 @@ def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | Non
 
 
 def _confirm_plan(config: OuterRollingConfig) -> bool:
-    if not config.confirm or not is_interactive_console():
-        return True
-    choice = safe_prompt_choice("開始執行 outer rolling OOS？[Y/n] : ", "Y", ("Y", "N"), "outer rolling OOS 確認")
-    return choice.upper() == "Y"
+    return True
 
 
 def _profile_avg_float(profile_summary: dict, key: str) -> float:
@@ -4934,12 +4931,13 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     if stage == "FOLD_RESULT":
         return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | fold result ready{elapsed_text}"
     if stage == "DONE":
-        status = _strip_redundant_seed_status(str(progress.get("status") or "done")) or "done"
+        status = _strip_redundant_seed_status(str(progress.get("status") or ""))
+        done_label = "DONE" if not status or status.lower() == "done" else f"DONE {status}"
         base_best = progress.get("best_base_score")
         local_best = progress.get("best_local_min_score")
         base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | DONE {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | {done_label} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
         status = str(progress.get("status") or stage).replace("_", " ")
         return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | {status}{elapsed_text}"
@@ -5019,12 +5017,13 @@ def _format_seed_ensemble_progress_line(context: dict, progress: dict, *, log_st
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
         return f"{prefix} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage == "DONE":
-        status = _strip_redundant_seed_status(str(progress.get("status") or "done")) or "done"
+        status = _strip_redundant_seed_status(str(progress.get("status") or ""))
+        done_label = "DONE" if not status or status.lower() == "done" else f"DONE {status}"
         base_best = progress.get("best_base_score")
         local_best = progress.get("best_local_min_score")
         base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
-        return f"{prefix} | DONE {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
+        return f"{prefix} | {done_label} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage in {"QUEUED", "START", "RAW_DATA", "STUDY_CREATE"}:
         status = _strip_redundant_seed_status(str(progress.get("status") or ""))
         if not status:
@@ -5184,11 +5183,6 @@ class OptimizerSeedEnsembleProgressBoard:
         self.search_last_done_ts_by_key: dict[tuple[int, int], float] = {}
         self.local_min_started_ts_by_key: dict[tuple[int, int], float] = {}
         self.local_min_last_done_ts_by_key: dict[tuple[int, int], float] = {}
-        self.fold_progress_by_fold: dict[int, dict] = {}
-        self.result_rows_by_oos: dict[int, dict] = {}
-        self.completed_replays_by_fold: dict[int, int] = {}
-        self.replay_started_ts_by_fold: dict[int, float] = {}
-        self.replay_last_done_ts_by_fold: dict[int, float] = {}
         self.last_lines: list[str] = []
 
     def _context_key(self, context: dict) -> tuple[int, int]:
@@ -5254,60 +5248,6 @@ class OptimizerSeedEnsembleProgressBoard:
             return None
         return max(0.0, max(self.local_min_last_done_ts_by_key.values()) - min(self.local_min_started_ts_by_key.values()))
 
-    def get_completed_replay_count(self) -> int:
-        return sum(int(value or 0) for value in self.completed_replays_by_fold.values())
-
-    def get_replay_wall_elapsed_sec(self) -> float | None:
-        if not self.replay_started_ts_by_fold or not self.replay_last_done_ts_by_fold:
-            return None
-        return max(0.0, max(self.replay_last_done_ts_by_fold.values()) - min(self.replay_started_ts_by_fold.values()))
-
-    def get_completed_fold_count(self) -> int:
-        return len(self.result_rows_by_oos)
-
-    def _record_fold_progress_metrics(self, fold_idx: int, progress: dict) -> None:
-        data = dict(progress or {})
-        if "ts" not in data:
-            data["ts"] = time.time()
-        if str(data.get("stage") or "").upper() != "ENSEMBLE_REPLAY":
-            return
-        replay_started = _safe_progress_float(data, "replay_started_ts")
-        ts = _safe_progress_ts(data)
-        if replay_started is None:
-            replay_started = ts
-        if replay_started is not None:
-            previous = self.replay_started_ts_by_fold.get(int(fold_idx))
-            self.replay_started_ts_by_fold[int(fold_idx)] = replay_started if previous is None else min(previous, replay_started)
-        try:
-            replay_done = int(data.get("replay_done", 0) or 0)
-        except (TypeError, ValueError):
-            replay_done = 0
-        if replay_done > int(self.completed_replays_by_fold.get(int(fold_idx), 0) or 0):
-            self.completed_replays_by_fold[int(fold_idx)] = int(replay_done)
-        replay_done_ts = _safe_progress_float(data, "replay_last_done_ts")
-        if replay_done_ts is None and replay_done > 0:
-            replay_done_ts = ts
-        if replay_done_ts is not None:
-            self.replay_last_done_ts_by_fold[int(fold_idx)] = max(float(self.replay_last_done_ts_by_fold.get(int(fold_idx), 0.0) or 0.0), replay_done_ts)
-
-    def update_fold_progress(self, *, fold_idx: int, progress: dict, force: bool = False) -> None:
-        normalized_fold_idx = int(fold_idx)
-        data = dict(progress or {})
-        data.setdefault("fold_idx", normalized_fold_idx)
-        self.fold_progress_by_fold[normalized_fold_idx] = data
-        self._record_fold_progress_metrics(normalized_fold_idx, data)
-        self.render(force=force)
-
-    def update_result_row(self, row: dict, *, force: bool = False) -> None:
-        if not isinstance(row, dict) or not row:
-            return
-        try:
-            key = int(row.get("oos_year", 0) or row.get("fold_idx", 0) or 1)
-        except (TypeError, ValueError):
-            key = 1
-        self.result_rows_by_oos[int(key)] = dict(row)
-        self.render(force=force)
-
     def update(self, *, fold_idx: int, seed_index: int, progress: dict, force: bool = False) -> None:
         key = (int(fold_idx), int(seed_index))
         self.progress_by_key[key] = dict(progress or {})
@@ -5325,16 +5265,15 @@ class OptimizerSeedEnsembleProgressBoard:
         self.render(force=force)
 
     def _build_lines(self) -> list[str]:
+        lines: list[str] = []
         header_text = str(self.header_factory(self) if callable(self.header_factory) else self.header)
-        return build_optimizer_seed_ensemble_live_lines(
-            contexts=self.contexts,
-            progress_by_key=self.progress_by_key,
-            header_text=header_text,
-            fold_progress_by_fold=self.fold_progress_by_fold,
-            result_rows=[self.result_rows_by_oos[key] for key in sorted(self.result_rows_by_oos)],
-            color=True,
-            include_oos_avg=(len(self.result_rows_by_oos) > 1),
-        )
+        if header_text:
+            lines.append(f"{C_CYAN}{header_text}{C_RESET}")
+        for context in self.contexts:
+            key = self._context_key(context)
+            progress = self.progress_by_key.get(key) or {"stage": "QUEUED", "status": "queued"}
+            lines.append(f"{C_GRAY}{_format_seed_ensemble_progress_line(context, progress)}{C_RESET}")
+        return lines
 
     def render(self, *, force: bool = False) -> None:
         lines = self._build_lines()
@@ -5360,67 +5299,6 @@ class OptimizerSeedEnsembleProgressBoard:
             sys.stdout.write("\n")
             sys.stdout.flush()
         self.rendered_lines = 0
-
-
-
-
-def build_optimizer_seed_ensemble_live_lines(
-    *,
-    contexts: list[dict],
-    progress_by_key: dict[tuple[int, int], dict] | None = None,
-    header_text: str = "",
-    fold_progress_by_fold: dict[int, dict] | None = None,
-    result_rows: list[dict] | None = None,
-    color: bool = True,
-    include_oos_avg: bool | None = None,
-) -> list[str]:
-    """Build the canonical seed-ensemble live display block.
-
-    Rolling and non-rolling seed ensemble paths must differ only by their inputs
-    (fold count, seed count, progress/result payloads).  This function owns the
-    visible header, seed progress lines, fold replay/result line, and completed
-    result table layout.
-    """
-    progress_map = dict(progress_by_key or {})
-    fold_progress_map = dict(fold_progress_by_fold or {})
-    sorted_contexts = sorted(
-        [dict(item) for item in list(contexts or [])],
-        key=lambda item: (int(item.get("fold_idx", 0) or 0), int(item.get("seed_index", 0) or 0)),
-    )
-    lines: list[str] = []
-    if str(header_text or "").strip():
-        header_line = str(header_text).strip()
-        lines.append(f"{C_CYAN}{header_line}{C_RESET}" if color else header_line)
-    contexts_by_fold: dict[int, list[dict]] = {}
-    for context in sorted_contexts:
-        contexts_by_fold.setdefault(int(context.get("fold_idx", 0) or 0), []).append(context)
-    for fold_idx in sorted(contexts_by_fold):
-        for context in contexts_by_fold[fold_idx]:
-            key = (int(context.get("fold_idx", 0) or 0), int(context.get("seed_index", 0) or 0))
-            progress = progress_map.get(key) or {"stage": "QUEUED", "status": "queued"}
-            line = _format_seed_ensemble_progress_line(context, progress)
-            lines.append(f"{C_GRAY}{line}{C_RESET}" if color else line)
-        fold_progress = dict(fold_progress_map.get(int(fold_idx)) or {})
-        if fold_progress:
-            task_context = contexts_by_fold[fold_idx][0] if contexts_by_fold[fold_idx] else {"fold_idx": fold_idx}
-            line = _format_parallel_fold_progress_line(task_context, fold_progress)
-            lines.append(f"{C_GRAY}{line}{C_RESET}" if color else line)
-    completed_rows = [dict(row) for row in list(result_rows or []) if isinstance(row, dict) and row]
-    if completed_rows:
-        if include_oos_avg is None:
-            include_oos_avg = len(completed_rows) > 1
-        table = _render_optimizer_results_tables(
-            completed_rows,
-            color=bool(color),
-            include_chain=False,
-            include_oos_avg=bool(include_oos_avg),
-            main_table_title="SEED ENSEMBLE OOS RESULTS",
-            retention_table_title="SEED ENSEMBLE BASE RETENTION THRESHOLD OOS RESULTS",
-        )
-        if table:
-            lines.append("")
-            lines.extend(table.splitlines())
-    return lines
 
 
 def render_optimizer_seed_progress_line(*, context: dict, progress: dict) -> str:
@@ -5539,15 +5417,14 @@ class _ParallelFoldLiveBoard:
             )
             completed_trials = int(phase_metrics.get("completed_trials", 0) or 0)
             replay_metrics = _collect_parallel_fold_replay_phase_metrics(self.tasks)
-            live_result_rows = _merge_live_result_rows(completed_rows_sorted, self.tasks)
             header = format_optimizer_seed_ensemble_progress_header(
                 folds=total_folds,
                 seeds=seed_count,
                 min_agree=int(seed_policy.get("min_agree", seed_count) or seed_count),
                 parallel_workers=resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_count),
                 backend=resolve_optimizer_random_seed_ensemble_parallel_backend_default(),
-                completed_folds=len(live_result_rows),
-                pending_folds=max(0, total_folds - len(live_result_rows)),
+                completed_folds=len(completed_rows_sorted),
+                pending_folds=len(pending),
                 total_elapsed_sec=total_elapsed,
                 fold_elapsed_sec=fold_wall_elapsed,
                 setup_elapsed_sec=setup_elapsed,
@@ -5558,19 +5435,16 @@ class _ParallelFoldLiveBoard:
                 completed_replays=int(replay_metrics.get("completed_replays", 0) or 0),
                 replay_wall_elapsed_sec=replay_metrics.get("replay_wall_elapsed_sec"),
             )
-            contexts: list[dict] = []
-            progress_by_key: dict[tuple[int, int], dict] = {}
-            fold_progress_by_fold: dict[int, dict] = {}
+            lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
                 seed_progresses = dict(seed_progress_maps.get(id(task)) or {})
                 fold_completed = int(task.get("oos_year", 0) or 0) in completed_oos
-                fold_idx = int(task.get("fold_idx", 0) or 0)
                 for seed_index in range(1, seed_count + 1):
                     progress = dict(seed_progresses.get(seed_index) or {})
                     if not progress:
                         progress = {"stage": "DONE" if fold_completed else "QUEUED", "status": "done" if fold_completed else "queued"}
                     context = {
-                        "fold_idx": fold_idx,
+                        "fold_idx": int(task.get("fold_idx", 0) or 0),
                         "fold_count": int(task.get("fold_count", 0) or 0),
                         "seed_index": int(seed_index),
                         "seed_count": int(seed_count),
@@ -5581,21 +5455,11 @@ class _ParallelFoldLiveBoard:
                         "selection_end": str(task.get("selection_end_date") or ""),
                         "selection_period": str(task.get("selection_period") or ""),
                     }
-                    contexts.append(context)
-                    progress_by_key[(fold_idx, int(seed_index))] = progress
+                    lines.append(f"{C_GRAY}  {_format_seed_ensemble_progress_line(context, progress)}{C_RESET}")
                 fold_progress = _read_latest_parallel_fold_progress(str(task.get("log_path") or ""))
                 fold_stage = str(fold_progress.get("stage") or "").upper()
                 if fold_progress and fold_stage in {"ENSEMBLE_REPLAY", "FOLD_RESULT"}:
-                    fold_progress_by_fold[fold_idx] = dict(fold_progress)
-            lines = build_optimizer_seed_ensemble_live_lines(
-                contexts=contexts,
-                progress_by_key=progress_by_key,
-                header_text=header,
-                fold_progress_by_fold=fold_progress_by_fold,
-                result_rows=live_result_rows,
-                color=True,
-                include_oos_avg=(len(live_result_rows) > 1),
-            )
+                    lines.append(f"{C_GRAY}  {_format_parallel_fold_progress_line(task, fold_progress)}{C_RESET}")
         else:
             _ = (pending, fold_wall_elapsed, setup_elapsed)
             header = (
@@ -5616,13 +5480,12 @@ class _ParallelFoldLiveBoard:
                     }
                 log_status = _latest_parallel_fold_log_status(log_path)
                 lines.append(f"{C_GRAY}  {_format_parallel_fold_progress_line(task, progress, log_status=log_status)}{C_RESET}")
-        if not _is_rolling_random_seed_ensemble_enabled():
-            live_result_rows = _merge_live_result_rows(completed_rows_sorted, self.tasks)
-            if live_result_rows:
-                table = _render_optimizer_results_tables(live_result_rows, color=True, include_chain=False, include_oos_avg=True)
-                if table:
-                    lines.append("")
-                    lines.extend(table.splitlines())
+        live_result_rows = _merge_live_result_rows(completed_rows_sorted, self.tasks)
+        if live_result_rows:
+            table = _render_optimizer_results_tables(live_result_rows, color=True, include_chain=False, include_oos_avg=True)
+            if table:
+                lines.append("")
+                lines.extend(table.splitlines())
         return lines
 
     @staticmethod

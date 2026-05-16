@@ -41,6 +41,9 @@ OPTIMIZER_MENU_ACTION_PROMOTE_CANDIDATE = "promote_candidate"
 OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS = "outer_rolling_oos"
 
 def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
+    # Backward-compatible parser for ENV / non-interactive callers.  The
+    # interactive console uses the two-step mode + trial prompt below so all
+    # modes share the same trial-count source.
     normalized = str(raw_value or "").strip()
     if normalized == "":
         return {
@@ -57,7 +60,7 @@ def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
         }
     if normalized_upper == "R":
         return {
-            "n_trials": 0,
+            "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
             "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
             "source": source_label,
         }
@@ -76,19 +79,51 @@ def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
     }
 
 
+def _parse_optimizer_mode_request_raw(raw_value: str, *, source_label: str):
+    normalized = str(raw_value or "").strip().upper()
+    if normalized == "":
+        return {
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+            "model_mode": "split",
+        }
+    if normalized == "R":
+        return {
+            "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
+            "source": source_label,
+            "model_mode": "split",
+        }
+    if normalized == "F":
+        return {
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+            "model_mode": "full",
+        }
+    raise ValueError("Optimizer Mode 只接受 Enter、R 或 F。")
+
+
+def _parse_interactive_trial_count_raw(raw_value: str) -> int:
+    normalized = str(raw_value or "").strip()
+    if normalized == "":
+        return int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE)
+    return int(parse_int_strict(normalized, "訓練次數", min_value=1))
+
+
+def _resolve_interactive_optimizer_run_request():
+    mode_prompt = "👉 Optimizer Mode：[Enter] Split  [R] Rolling OOS  [F] Full : "
+    mode_request = _parse_optimizer_mode_request_raw(input(mode_prompt), source_label="UI/MENU")
+    trial_prompt = f"👉 訓練次數：[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  [數字] 訓練指定次數  "
+    mode_request["n_trials"] = _parse_interactive_trial_count_raw(input(trial_prompt))
+    return mode_request
+
+
 def resolve_optimizer_run_request(environ):
     env_value = str(environ.get(OPTIMIZER_TRIALS_ENV_VAR, "")).strip()
     if env_value != "":
         return _parse_optimizer_run_request_raw(env_value, source_label=f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}")
 
     if is_interactive_stdin():
-        prompt = (
-            "👉 Optimizer 動作："
-            f"[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  "
-            "[數字] 訓練指定次數  [R] Rolling OOS  [F] Full : "
-        )
-        raw_input = input(prompt)
-        return _parse_optimizer_run_request_raw(raw_input, source_label="UI/MENU")
+        return _resolve_interactive_optimizer_run_request()
 
     return {
         "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE),
