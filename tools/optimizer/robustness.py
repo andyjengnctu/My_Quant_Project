@@ -765,6 +765,7 @@ class _FinalistProgressBoard:
         self.lines: list[str] = []
         self.rendered = False
         self.single_line_context = getattr(session, "outer_rolling_local_progress_context", None)
+        self.event_only = bool(getattr(session, "local_min_progress_event_only", False))
         self.inline_progress_enabled = bool(self.single_line_context) and stdout_supports_inline_progress()
         self.inline_progress_width = 0
         self.inline_progress_closed = False
@@ -820,7 +821,9 @@ class _FinalistProgressBoard:
 
     def initialize(self):
         self._emit_progress_event(0, current_neighbor=0, total_neighbors=0, current_local_min=None, status_text="WAIT")
-        if self.single_line_context:
+        if self.event_only:
+            return
+        if self.single_line_context and self.inline_progress_enabled:
             self._render_single_line(0, current_neighbor=0, total_neighbors=0, local_min_score=None, status_text="WAIT")
             return
         self.lines = [
@@ -831,7 +834,9 @@ class _FinalistProgressBoard:
 
     def update_pending(self, idx: int, *, total_neighbors: int):
         self._emit_progress_event(idx, current_neighbor=0, total_neighbors=total_neighbors, current_local_min=None, status_text="RUN")
-        if self.single_line_context:
+        if self.event_only:
+            return
+        if self.single_line_context and self.inline_progress_enabled:
             self._render_single_line(idx, current_neighbor=0, total_neighbors=total_neighbors, local_min_score=None, status_text="RUN")
             return
         self.lines[idx] = self._format_line(
@@ -862,7 +867,9 @@ class _FinalistProgressBoard:
         if not self._should_render_progress_update(current_neighbor=current_neighbor, total_neighbors=total_neighbors):
             return
         self._emit_progress_event(idx, current_neighbor=current_neighbor, total_neighbors=total_neighbors, current_local_min=current_local_min, status_text="RUN")
-        if self.single_line_context:
+        if self.event_only:
+            return
+        if self.single_line_context and self.inline_progress_enabled:
             self._render_single_line(
                 idx,
                 current_neighbor=current_neighbor,
@@ -882,10 +889,13 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_cache(self, idx: int, *, total_neighbors: int, local_min_score: float):
+        self._record_done(idx, local_min_score=float(local_min_score), early_stopped=False)
         self._emit_progress_event(idx, current_neighbor=total_neighbors, total_neighbors=total_neighbors, current_local_min=local_min_score, status_text="cache")
-        if self.single_line_context:
+        if self.event_only:
+            self._close_single_line_if_finished()
+            return
+        if self.single_line_context and self.inline_progress_enabled:
             gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
-            self._record_done(idx, local_min_score=float(local_min_score), early_stopped=False)
             self._render_single_line(
                 idx,
                 current_neighbor=total_neighbors,
@@ -907,11 +917,14 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_done(self, idx: int, *, evaluated_neighbors: int, total_neighbors: int, local_min_score: float, early_stopped: bool = False):
+        self._record_done(idx, local_min_score=float(local_min_score), early_stopped=bool(early_stopped))
         self._emit_progress_event(idx, current_neighbor=evaluated_neighbors, total_neighbors=total_neighbors, current_local_min=local_min_score, status_text="early_stop" if bool(early_stopped) else "DONE")
-        if self.single_line_context:
+        if self.event_only:
+            self._close_single_line_if_finished()
+            return
+        if self.single_line_context and self.inline_progress_enabled:
             gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
             stop_text = " early_stop" if bool(early_stopped) else ""
-            self._record_done(idx, local_min_score=float(local_min_score), early_stopped=bool(early_stopped))
             self._render_single_line(
                 idx,
                 current_neighbor=evaluated_neighbors,

@@ -697,7 +697,7 @@ def _make_nonrolling_seed_trial_progress_callback(
 
 
 
-def _emit_nonrolling_seed_process_progress_event(task: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None) -> None:
+def _emit_nonrolling_seed_process_progress_event(task: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None, **extra_payload) -> None:
     from tools.optimizer.outer_rolling_oos import write_optimizer_seed_progress_event
 
     context = dict((task or {}).get("progress_context") or {})
@@ -721,6 +721,7 @@ def _emit_nonrolling_seed_process_progress_event(task: dict, *, stage: str, stat
         payload["best_base_score"] = float(best_base_score)
     if best_local_min_score is not None:
         payload["best_local_min_score"] = float(best_local_min_score)
+    payload.update(dict(extra_payload or {}))
     write_optimizer_seed_progress_event(
         stage=str(stage),
         fold_idx=int(context.get("fold_idx", 1) or 1),
@@ -755,6 +756,84 @@ def _make_nonrolling_seed_process_trial_progress_callback(*, task: dict, member_
         state["last_completed"] = int(completed)
 
     return _callback
+
+
+def _resolve_study_best_base_score(session, study):
+    try:
+        best_trial = session.get_best_completed_trial_or_none(study)
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return None
+    if best_trial is None:
+        return None
+    try:
+        return float(best_trial.value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _make_nonrolling_local_min_progress_context(walk_forward_policy: dict, *, best_base_score=None, completed_results=None, overall_start=None) -> dict:
+    context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
+    context["best_base_score"] = best_base_score
+    context["completed_results"] = list(completed_results or [])
+    if overall_start is not None:
+        context["overall_start"] = overall_start
+    return context
+
+
+def _install_nonrolling_local_min_seed_board_progress(
+    *,
+    session,
+    walk_forward_policy: dict,
+    progress_board,
+    progress_lock,
+    member_index: int,
+    member_count: int,
+    seed: int,
+    best_base_score=None,
+    started_at: float | None = None,
+) -> bool:
+    if progress_board is None:
+        return False
+    period_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
+    started_at = time.perf_counter() if started_at is None else float(started_at)
+
+    def _sink(event: dict) -> None:
+        data = dict(event or {})
+        progress = {
+            "stage": "LOCAL_MIN_REVIEW",
+            "seed_ensemble_member_index": int(member_index),
+            "seed_ensemble_member_count": int(member_count),
+            "seed": int(seed),
+            "selection_start": str(period_context.get("selection_start") or ""),
+            "selection_end": str(period_context.get("selection_end") or ""),
+            "oos_period": str(period_context.get("oos_period") or ""),
+            "finalist_idx": int(data.get("finalist_idx", 0) or 0),
+            "finalist_total": int(data.get("finalist_total", 0) or 0),
+            "trial_number": data.get("trial_number"),
+            "neighbor_done": int(data.get("neighbor_done", 0) or 0),
+            "neighbor_total": int(data.get("neighbor_total", 0) or 0),
+            "current": data.get("current"),
+            "best": data.get("best"),
+            "best_base_score": best_base_score,
+            "status": str(data.get("status") or "RUN"),
+            "elapsed_sec": max(0.0, time.perf_counter() - started_at),
+        }
+        with progress_lock:
+            progress_board.update(fold_idx=1, seed_index=int(member_index), progress=progress)
+
+    session.outer_rolling_parallel_progress_sink = _sink
+    session.local_min_progress_event_only = True
+    return True
+
+
+def _clear_nonrolling_local_min_progress_hooks(session) -> None:
+    for attr_name in (
+        "outer_rolling_parallel_progress_sink",
+        "outer_rolling_local_progress_context",
+        "local_min_progress_event_only",
+    ):
+        if hasattr(session, attr_name):
+            delattr(session, attr_name)
 
 
 def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None:
@@ -831,15 +910,40 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                     ),
                 ],
             )
-            finalists, best_trial = print_local_min_score_finalist_review(
-                study,
-                session=member_session,
-                objective_mode=str(task.get("objective_mode") or "split_train_romd"),
-                colors=COLORS,
-                winner_trial=None,
-                emit_table=False,
-                show_progress=False,
-            )
+            best_base_score = _resolve_study_best_base_score(member_session, study)
+            local_started_at = time.perf_counter()
+
+            def _process_local_min_progress_sink(event: dict) -> None:
+                data = dict(event or {})
+                _emit_nonrolling_seed_process_progress_event(
+                    task,
+                    stage="LOCAL_MIN_REVIEW",
+                    status=str(data.get("status") or "RUN"),
+                    finalist_idx=int(data.get("finalist_idx", 0) or 0),
+                    finalist_total=int(data.get("finalist_total", 0) or 0),
+                    trial_number=data.get("trial_number"),
+                    neighbor_done=int(data.get("neighbor_done", 0) or 0),
+                    neighbor_total=int(data.get("neighbor_total", 0) or 0),
+                    current=data.get("current"),
+                    best=data.get("best"),
+                    best_base_score=best_base_score,
+                    elapsed_sec=max(0.0, time.perf_counter() - local_started_at),
+                )
+
+            member_session.outer_rolling_parallel_progress_sink = _process_local_min_progress_sink
+            member_session.local_min_progress_event_only = True
+            try:
+                finalists, best_trial = print_local_min_score_finalist_review(
+                    study,
+                    session=member_session,
+                    objective_mode=str(task.get("objective_mode") or "split_train_romd"),
+                    colors=COLORS,
+                    winner_trial=None,
+                    emit_table=False,
+                    show_progress=True,
+                )
+            finally:
+                _clear_nonrolling_local_min_progress_hooks(member_session)
             if best_trial is None or not is_qualified_trial_value(best_trial.value):
                 _emit_nonrolling_seed_process_progress_event(
                     task,
@@ -1282,18 +1386,41 @@ def _run_nonrolling_random_seed_ensemble_training(
             )
             if compact_display:
                 _finalize_nonrolling_single_fold_inline_progress(member_session)
-            member_session.outer_rolling_local_progress_context = _build_nonrolling_single_fold_period_context(walk_forward_policy) if compact_display and int(parallel_workers) <= 1 else None
-            finalists, best_trial = print_local_min_score_finalist_review(
-                study,
-                session=member_session,
-                objective_mode=objective_mode,
-                colors=COLORS,
-                winner_trial=None,
-                emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
-                show_progress=True if compact_display and int(parallel_workers) <= 1 else bool(is_optimizer_nonrolling_train_result_table_enabled()),
-            )
-            if compact_display:
-                _finalize_nonrolling_single_fold_inline_progress(member_session)
+            best_base_score = _resolve_study_best_base_score(member_session, study)
+            local_progress_installed = False
+            if compact_display and progress_board is not None:
+                local_progress_installed = _install_nonrolling_local_min_seed_board_progress(
+                    session=member_session,
+                    walk_forward_policy=walk_forward_policy,
+                    progress_board=progress_board,
+                    progress_lock=progress_lock,
+                    member_index=int(member_index),
+                    member_count=int(len(seeds)),
+                    seed=int(seed),
+                    best_base_score=best_base_score,
+                    started_at=ensemble_started_at,
+                )
+            elif compact_display:
+                member_session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(
+                    walk_forward_policy,
+                    best_base_score=best_base_score,
+                    overall_start=ensemble_started_at,
+                )
+            try:
+                finalists, best_trial = print_local_min_score_finalist_review(
+                    study,
+                    session=member_session,
+                    objective_mode=objective_mode,
+                    colors=COLORS,
+                    winner_trial=None,
+                    emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+                    show_progress=bool(compact_display or is_optimizer_nonrolling_train_result_table_enabled()),
+                )
+            finally:
+                if compact_display:
+                    _finalize_nonrolling_single_fold_inline_progress(member_session)
+                if local_progress_installed or compact_display:
+                    _clear_nonrolling_local_min_progress_hooks(member_session)
             if best_trial is None or not is_qualified_trial_value(best_trial.value):
                 print(f"{C_YELLOW}ℹ️ seed={int(seed)} 目前尚無通過 local_min_score gate 的 winner；本次不建立完整 N-seed ensemble member。{C_RESET}")
                 return None
@@ -1757,14 +1884,26 @@ def main(argv=None, environ=None):
                 required_min_rows=optimizer_required_min_rows,
                 verbose=bool(is_optimizer_nonrolling_train_result_table_enabled()),
             )
-            finalists, best_trial = print_local_min_score_finalist_review(
-                study,
-                session=session,
-                objective_mode=objective_mode,
-                colors=COLORS,
-                winner_trial=None,
-                emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
-            )
+            compact_display = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+            if compact_display:
+                session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(
+                    walk_forward_policy,
+                    best_base_score=_resolve_study_best_base_score(session, study),
+                )
+            try:
+                finalists, best_trial = print_local_min_score_finalist_review(
+                    study,
+                    session=session,
+                    objective_mode=objective_mode,
+                    colors=COLORS,
+                    winner_trial=None,
+                    emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+                    show_progress=bool(compact_display or is_optimizer_nonrolling_train_result_table_enabled()),
+                )
+            finally:
+                if compact_display:
+                    _finalize_nonrolling_single_fold_inline_progress(session)
+                    _clear_nonrolling_local_min_progress_hooks(session)
             if best_trial is None or not is_qualified_trial_value(best_trial.value):
                 print(f"{C_YELLOW}ℹ️ 匯出模式完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
                 return 0
@@ -1987,14 +2126,27 @@ def main(argv=None, environ=None):
             )
             print_timing_summary(payload=timing_payload)
         elif should_export:
-            finalists, best_trial = print_local_min_score_finalist_review(
-                study,
-                session=session,
-                objective_mode=objective_mode,
-                colors=COLORS,
-                winner_trial=None,
-                emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
-            )
+            compact_display = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+            if compact_display:
+                session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(
+                    walk_forward_policy,
+                    best_base_score=_resolve_study_best_base_score(session, study),
+                    overall_start=overall_started_at,
+                )
+            try:
+                finalists, best_trial = print_local_min_score_finalist_review(
+                    study,
+                    session=session,
+                    objective_mode=objective_mode,
+                    colors=COLORS,
+                    winner_trial=None,
+                    emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+                    show_progress=bool(compact_display or is_optimizer_nonrolling_train_result_table_enabled()),
+                )
+            finally:
+                if compact_display:
+                    _finalize_nonrolling_single_fold_inline_progress(session)
+                    _clear_nonrolling_local_min_progress_hooks(session)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
                 print_local_min_score_winner_summary(
                     winner_trial=best_trial,
