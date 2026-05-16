@@ -85,7 +85,7 @@ def resolve_optimizer_run_request(environ):
         prompt = (
             "👉 Optimizer 動作："
             f"[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  "
-            "[數字] 訓練指定次數  [0]  [R] outer rolling OOS  [F] Full : "
+            "[數字] 訓練指定次數  [R] Rolling OOS  [F] Full : "
         )
         raw_input = input(prompt)
         return _parse_optimizer_run_request_raw(raw_input, source_label="UI/MENU")

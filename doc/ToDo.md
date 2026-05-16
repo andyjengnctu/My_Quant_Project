@@ -1,6 +1,10 @@
 ## Going
 
-  [1/4] selection=2013-01~22-12 | OOS 2023-01~23-12 | seed 1/2 | finalist 2/2 | neighbor 1/10 | current : 7.293 | best_base : 24.297 | best_lm : 16.548 | RUN | elapsed=01:25 =>   [1/4] train=13-01~22-12 | OOS 23-01~23-12 | seed 1/2 | finalist 2/2 | local 1/10 | current : 7.293 | best_base : 24.29 | best_lm : 16.54 | elapsed=01:25
+ rolling為何沒有顯示下列，不是都一致口徑、唯一來源了嗎?
+
+⏳ seed ensemble replay 報表準備：載入 dashboard raw data...
+⏳ seed ensemble replay 報表準備：計算 policy OOS table...
+⏳ seed ensemble policy replay | done   
 
 1. 在Training_policy設定非rolling訓練突破時是否顯示結果表格。
 2. OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True 時

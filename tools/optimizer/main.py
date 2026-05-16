@@ -683,6 +683,7 @@ def _make_nonrolling_seed_trial_progress_callback(
     walk_forward_policy: dict,
     requested_trials: int,
     started_at: float,
+    search_started_ts: float | None = None,
     status: str = "",
     inline: bool = True,
     emit_lock=None,
@@ -722,17 +723,23 @@ def _make_nonrolling_seed_trial_progress_callback(
                 "best_score": kwargs.get("best_score"),
                 "elapsed_sec": kwargs.get("elapsed_sec"),
             }
+            for phase_key in ("search_started_ts", "search_last_done_ts"):
+                if kwargs.get(phase_key) is not None:
+                    progress[phase_key] = kwargs.get(phase_key)
             if emit_lock is None:
                 progress_board.update(fold_idx=1, seed_index=int(seed_index), progress=progress)
                 return
             with emit_lock:
                 progress_board.update(fold_idx=1, seed_index=int(seed_index), progress=progress)
             return
+        print_kwargs = dict(kwargs)
+        for phase_key in ("search_started_ts", "search_last_done_ts"):
+            print_kwargs.pop(phase_key, None)
         if emit_lock is None:
-            _print_nonrolling_single_fold_progress(**kwargs)
+            _print_nonrolling_single_fold_progress(**print_kwargs)
             return
         with emit_lock:
-            _print_nonrolling_single_fold_progress(**kwargs)
+            _print_nonrolling_single_fold_progress(**print_kwargs)
 
     def _callback(study, trial):
         completed = int(getattr(trial, "number", -1)) + 1
@@ -749,6 +756,8 @@ def _make_nonrolling_seed_trial_progress_callback(
             total=int(requested_trials),
             best_score=best_score,
             elapsed_sec=max(0.0, now - float(started_at)),
+            search_started_ts=search_started_ts,
+            search_last_done_ts=time.time(),
             inline=bool(inline),
             progress_owner=member_session if inline else None,
         )
@@ -796,7 +805,7 @@ def _emit_nonrolling_seed_process_progress_event(task: dict, *, stage: str, stat
     )
 
 
-def _make_nonrolling_seed_process_trial_progress_callback(*, task: dict, member_session, requested_trials: int, started_at: float):
+def _make_nonrolling_seed_process_trial_progress_callback(*, task: dict, member_session, requested_trials: int, started_at: float, search_started_ts: float | None = None):
     state = {"last_completed": 0}
 
     def _callback(study, trial):
@@ -815,6 +824,8 @@ def _make_nonrolling_seed_process_trial_progress_callback(*, task: dict, member_
             total=int(requested_trials),
             best_score=best_score,
             elapsed_sec=max(0.0, time.perf_counter() - float(started_at)),
+            search_started_ts=search_started_ts,
+            search_last_done_ts=time.time(),
         )
         state["last_completed"] = int(completed)
 
@@ -855,11 +866,14 @@ def _install_nonrolling_local_min_seed_board_progress(
     best_base_score=None,
     started_at: float | None = None,
     completed_trials: int = 0,
+    search_started_ts: float | None = None,
+    search_last_done_ts: float | None = None,
 ) -> bool:
     if progress_board is None:
         return False
     period_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
     started_at = time.perf_counter() if started_at is None else float(started_at)
+    local_started_ts = time.time()
 
     def _sink(event: dict) -> None:
         data = dict(event or {})
@@ -882,6 +896,11 @@ def _install_nonrolling_local_min_seed_board_progress(
             "best_base_score": best_base_score,
             "status": str(data.get("status") or "RUN"),
             "elapsed_sec": max(0.0, time.perf_counter() - started_at),
+            "search_started_ts": search_started_ts,
+            "search_last_done_ts": search_last_done_ts,
+            "local_min_started_ts": data.get("local_min_started_ts") or local_started_ts,
+            "local_min_completed": int(data.get("local_min_completed", 0) or 0),
+            "local_min_last_done_ts": data.get("local_min_last_done_ts"),
         }
         with progress_lock:
             progress_board.update(fold_idx=1, seed_index=int(member_index), progress=progress)
@@ -952,13 +971,16 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
             )
             member_session.profile_recorder.init_output_files()
             member_session.profile_recorder.mark_run_started()
+            search_started_perf = time.perf_counter()
+            search_started_ts = time.time()
             _emit_nonrolling_seed_process_progress_event(
                 task,
                 stage="OPTIMIZER_SEARCH",
                 status=f"seed {member_index}/{member_count}",
                 completed=0,
                 total=int(requested_trials),
-                elapsed_sec=max(0.0, time.perf_counter() - started_at),
+                elapsed_sec=0.0,
+                search_started_ts=search_started_ts,
             )
             search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(task.get("environ") or os.environ, sampler_kind="tpe")
             study.optimize(
@@ -971,12 +993,15 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                         task=task,
                         member_session=member_session,
                         requested_trials=int(requested_trials),
-                        started_at=started_at,
+                        started_at=search_started_perf,
+                        search_started_ts=search_started_ts,
                     ),
                 ],
             )
+            search_done_ts = time.time()
             best_base_score = _resolve_study_best_base_score(member_session, study)
             local_started_at = time.perf_counter()
+            local_started_ts = time.time()
 
             def _process_local_min_progress_sink(event: dict) -> None:
                 data = dict(event or {})
@@ -995,6 +1020,11 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                     total=int(requested_trials),
                     best_base_score=best_base_score,
                     elapsed_sec=max(0.0, time.perf_counter() - local_started_at),
+                    search_started_ts=search_started_ts,
+                    search_last_done_ts=search_done_ts,
+                    local_min_started_ts=data.get("local_min_started_ts") or local_started_ts,
+                    local_min_completed=int(data.get("local_min_completed", 0) or 0),
+                    local_min_last_done_ts=data.get("local_min_last_done_ts"),
                 )
 
             member_session.outer_rolling_parallel_progress_sink = _process_local_min_progress_sink
@@ -1416,8 +1446,9 @@ def _run_nonrolling_random_seed_ensemble_training(
                 completed_folds=completed,
                 total_elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
                 completed_trials=board.get_completed_trial_count() if hasattr(board, "get_completed_trial_count") else 0,
-                local_min_completed_trials=board.get_completed_local_min_trial_count() if hasattr(board, "get_completed_local_min_trial_count") else 0,
-                local_min_elapsed_sec=board.get_local_min_elapsed_sec() if hasattr(board, "get_local_min_elapsed_sec") else None,
+                search_wall_elapsed_sec=board.get_search_wall_elapsed_sec() if hasattr(board, "get_search_wall_elapsed_sec") else None,
+                completed_local_min_trials=board.get_completed_local_min_trial_count() if hasattr(board, "get_completed_local_min_trial_count") else 0,
+                local_min_wall_elapsed_sec=board.get_local_min_wall_elapsed_sec() if hasattr(board, "get_local_min_wall_elapsed_sec") else None,
             )
 
         progress_board = OptimizerSeedEnsembleProgressBoard(
@@ -1477,6 +1508,8 @@ def _run_nonrolling_random_seed_ensemble_training(
             search_callbacks = [member_session.monitoring_callback]
             # 多 seed 並行時避免多個 inline trial progress 同時爭用 stdout；仍保留 seed-level rolling 同源進度。
             emit_trial_progress = compact_display
+            search_started_perf = time.perf_counter()
+            search_started_ts = time.time()
             if emit_trial_progress:
                 progress_status = f"seed {member_index}/{len(seeds)}" if int(parallel_workers) > 1 else ""
                 _emit_seed_progress_for_member(
@@ -1486,14 +1519,16 @@ def _run_nonrolling_random_seed_ensemble_training(
                     status=progress_status,
                     completed=0,
                     total=int(requested_trials),
-                    elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
+                    elapsed_sec=0.0,
+                    search_started_ts=search_started_ts,
                 )
                 search_callbacks.append(
                     _make_nonrolling_seed_trial_progress_callback(
                         member_session=member_session,
                         walk_forward_policy=walk_forward_policy,
                         requested_trials=int(requested_trials),
-                        started_at=ensemble_started_at,
+                        started_at=search_started_perf,
+                        search_started_ts=search_started_ts,
                         status=progress_status,
                         inline=False if progress_board is not None else bool(int(parallel_workers) <= 1),
                         emit_lock=progress_lock,
@@ -1511,11 +1546,11 @@ def _run_nonrolling_random_seed_ensemble_training(
                 n_jobs=int(search_parallel_trials),
                 callbacks=search_callbacks,
             )
+            search_done_ts = time.time()
             if compact_display:
                 _finalize_nonrolling_single_fold_inline_progress(member_session)
             best_base_score = _resolve_study_best_base_score(member_session, study)
             local_progress_installed = False
-            local_started_at = time.perf_counter()
             if compact_display and progress_board is not None:
                 local_progress_installed = _install_nonrolling_local_min_seed_board_progress(
                     session=member_session,
@@ -1526,8 +1561,10 @@ def _run_nonrolling_random_seed_ensemble_training(
                     member_count=int(len(seeds)),
                     seed=int(seed),
                     best_base_score=best_base_score,
-                    started_at=local_started_at,
+                    started_at=ensemble_started_at,
                     completed_trials=int(requested_trials),
+                    search_started_ts=search_started_ts,
+                    search_last_done_ts=search_done_ts,
                 )
             elif compact_display:
                 member_session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(

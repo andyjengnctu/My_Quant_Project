@@ -770,6 +770,7 @@ class _FinalistProgressBoard:
         self.inline_progress_width = 0
         self.inline_progress_closed = False
         self.stage_start = time.perf_counter()
+        self.stage_start_ts = time.time()
         self.best_local_score = float("-inf")
         self.best_local_trial = None
         self.completed_status: dict[int, tuple[float, bool, bool]] = {}
@@ -807,6 +808,9 @@ class _FinalistProgressBoard:
                 "current": None if current_local_min is None else float(current_local_min),
                 "best": best_score,
                 "status": str(status_text or "RUN"),
+                "local_min_started_ts": float(self.stage_start_ts),
+                "local_min_completed": int(len(self.completed_status)),
+                "local_min_last_done_ts": time.time() if int(len(self.completed_status)) > 0 else None,
             },
         )
 

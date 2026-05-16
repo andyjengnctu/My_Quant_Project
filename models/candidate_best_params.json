@@ -7,14 +7,14 @@
     "params_ensemble": [
         {
             "member_index": 1,
-            "seed": 386281241,
-            "selected_trial": 1,
+            "seed": 27528100,
+            "selected_trial": 6,
             "params": {
-                "high_len": 180,
-                "atr_len": 4,
-                "atr_buy_tol": 2.8,
-                "atr_times_init": 2.8,
-                "atr_times_trail": 2.8,
+                "high_len": 160,
+                "atr_len": 8,
+                "atr_buy_tol": 2.6,
+                "atr_times_init": 3.5,
+                "atr_times_trail": 4.1,
                 "tp_percent": 0.0,
                 "use_bb": false,
                 "bb_len": 20,
@@ -38,10 +38,10 @@
                 "min_entry_notional": 50126.0,
                 "use_compounding": true
             },
-            "score": 9.72609789381966,
-            "base_score": 9.72609789381966,
-            "local_min_score": 6.711030502542445,
-            "retention": 0.6900023602278252,
+            "score": 16.542059046545965,
+            "base_score": 16.542059046545965,
+            "local_min_score": 10.699449897490714,
+            "retention": 0.6468027872095399,
             "local_gate": true,
             "local_min_review_enabled": true,
             "local_min_review_mode": "exact",
@@ -49,14 +49,14 @@
         },
         {
             "member_index": 2,
-            "seed": 1225390208,
-            "selected_trial": 10,
+            "seed": 2084991575,
+            "selected_trial": 5,
             "params": {
-                "high_len": 255,
+                "high_len": 280,
                 "atr_len": 23,
-                "atr_buy_tol": 2.7,
-                "atr_times_init": 4.5,
-                "atr_times_trail": 4.4,
+                "atr_buy_tol": 2.5,
+                "atr_times_init": 3.3,
+                "atr_times_trail": 4.0,
                 "tp_percent": 0.0,
                 "use_bb": false,
                 "bb_len": 20,
@@ -80,17 +80,17 @@
                 "min_entry_notional": 50126.0,
                 "use_compounding": true
             },
-            "score": 10.656836068051357,
-            "base_score": 10.656836068051357,
-            "local_min_score": 7.6395122875612005,
-            "retention": 0.7168649530477497,
+            "score": 21.01355015931603,
+            "base_score": 21.01355015931603,
+            "local_min_score": 10.163338273956564,
+            "retention": 0.4836564120247338,
             "local_gate": true,
             "local_min_review_enabled": true,
             "local_min_review_mode": "exact",
             "local_min_exact": true
         }
     ],
-    "created_at": "2026-05-16T16:38:21.380846+08:00",
+    "created_at": "2026-05-16T17:05:56.577434+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 2,
@@ -108,8 +108,8 @@
         "objective_mode": "split_train_romd",
         "trials_per_seed": 10,
         "seeds": [
-            386281241,
-            1225390208
+            27528100,
+            2084991575
         ],
         "walk_forward_policy": {
             "selection_start_year": 2013,
@@ -139,33 +139,33 @@
         "trials_per_seed": 10,
         "seed_count": 2,
         "seeds": [
-            386281241,
-            1225390208
+            27528100,
+            2084991575
         ],
-        "base_score": 9.72609789381966,
-        "local_min_score": 6.711030502542445,
-        "retention": 0.6900023602278252,
+        "base_score": 16.542059046545965,
+        "local_min_score": 10.163338273956564,
+        "retention": 0.4836564120247338,
         "local_gate": true,
         "local_min_review_enabled": true,
         "member_metrics": [
             {
                 "member_index": 1,
-                "seed": 386281241,
-                "selected_trial": 1,
-                "base_score": 9.72609789381966,
-                "local_min_score": 6.711030502542445,
-                "retention": 0.6900023602278252,
+                "seed": 27528100,
+                "selected_trial": 6,
+                "base_score": 16.542059046545965,
+                "local_min_score": 10.699449897490714,
+                "retention": 0.6468027872095399,
                 "local_gate": true,
                 "local_min_review_enabled": true,
                 "local_min_review_mode": "exact"
             },
             {
                 "member_index": 2,
-                "seed": 1225390208,
-                "selected_trial": 10,
-                "base_score": 10.656836068051357,
-                "local_min_score": 7.6395122875612005,
-                "retention": 0.7168649530477497,
+                "seed": 2084991575,
+                "selected_trial": 5,
+                "base_score": 21.01355015931603,
+                "local_min_score": 10.163338273956564,
+                "retention": 0.4836564120247338,
                 "local_gate": true,
                 "local_min_review_enabled": true,
                 "local_min_review_mode": "exact"
@@ -182,7 +182,7 @@
             "params_storage": "same_json"
         },
         "nonrolling_train_result_table_enabled": false,
-        "created_at": "2026-05-16T16:38:21.383097+08:00",
+        "created_at": "2026-05-16T17:05:56.579647+08:00",
         "policy_paramsets": {
             "base": "c:\\Users\\User\\Desktop\\My_Quant_Project\\models\\base.json",
             "base_retention_gt_min": "c:\\Users\\User\\Desktop\\My_Quant_Project\\models\\base_r.json",

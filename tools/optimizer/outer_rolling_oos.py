@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import glob
 import json
+import math
 import os
 import re
 import statistics
@@ -443,16 +444,6 @@ def _fmt_duration_compact(seconds: float | int | None) -> str:
     if text.startswith("00:"):
         return text[3:]
     return text
-
-
-def _fmt_seconds_3(seconds: float | int | None) -> str:
-    if seconds is None:
-        return "N/A"
-    try:
-        value = max(0.0, float(seconds))
-    except (TypeError, ValueError):
-        return "N/A"
-    return f"{value:.3f}s"
 
 
 def _resolve_resource_sample_interval_sec(environ) -> float:
@@ -2057,6 +2048,7 @@ class _SearchProgress:
         self.completed_results = completed_results
         self.overall_start = float(overall_start)
         self.stage_start = time.perf_counter()
+        self.stage_start_ts = time.time()
         self.best_score = float("-inf")
         self.last_render = 0.0
         self._lock = Lock()
@@ -4425,6 +4417,126 @@ def _parallel_progress_pct(done, total) -> float:
         return 0.0
 
 
+def _fmt_seconds_3(seconds) -> str:
+    try:
+        value = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        value = 0.0
+    return f"{value:.3f}s"
+
+
+def _fmt_score_trunc_2(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    scaled = math.trunc(number * 100.0) / 100.0
+    if scaled == 0.0:
+        scaled = 0.0
+    return f"{scaled:.2f}"
+
+
+def _safe_progress_ts(progress: dict) -> float | None:
+    try:
+        value = float(dict(progress or {}).get("ts"))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0.0 else None
+
+
+def _safe_progress_float(progress: dict, key: str) -> float | None:
+    try:
+        value = float(dict(progress or {}).get(str(key)))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0.0 else None
+
+
+def _display_short_month_period(value, end_value=None) -> str:
+    text = _display_month_period(value, end_value)
+    parts = []
+    for part in str(text or "").split("~"):
+        part = part.strip()
+        if re.fullmatch(r"\d{4}-\d{2}", part):
+            parts.append(part[2:])
+        else:
+            parts.append(part)
+    return "~".join(parts)
+
+
+def _count_local_min_completed_from_progress(progress: dict) -> int:
+    data = dict(progress or {})
+    for key in ("local_min_completed", "completed_local_min_trials"):
+        try:
+            value = int(data.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+    if str(data.get("stage") or "").upper() != "LOCAL_MIN_REVIEW":
+        return 0
+    status = str(data.get("status") or "").strip().upper()
+    if status not in {"DONE", "CACHE", "EARLY_STOP", "PASS", "FAIL", "PASS CACHE", "FAIL CACHE"}:
+        return 0
+    try:
+        return max(0, int(data.get("finalist_idx", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _collect_seed_progress_phase_metrics(progresses) -> dict:
+    search_started: list[float] = []
+    search_done: list[float] = []
+    local_started: list[float] = []
+    local_done: list[float] = []
+    completed_trials = 0
+    completed_local = 0
+    for raw in list(progresses or []):
+        progress = dict(raw or {})
+        stage = str(progress.get("stage") or "").upper()
+        ts = _safe_progress_ts(progress)
+        search_start = _safe_progress_float(progress, "search_started_ts")
+        if search_start is not None:
+            search_started.append(search_start)
+        elif stage == "OPTIMIZER_SEARCH" and ts is not None and int(progress.get("completed", 0) or 0) <= 0:
+            search_started.append(ts)
+        search_end = _safe_progress_float(progress, "search_last_done_ts")
+        if search_end is not None:
+            search_done.append(search_end)
+        elif stage == "OPTIMIZER_SEARCH" and ts is not None:
+            try:
+                completed = int(progress.get("completed", 0) or 0)
+            except (TypeError, ValueError):
+                completed = 0
+            if completed > 0:
+                search_done.append(ts)
+        local_start = _safe_progress_float(progress, "local_min_started_ts")
+        if local_start is not None:
+            local_started.append(local_start)
+        local_end = _safe_progress_float(progress, "local_min_last_done_ts")
+        if local_end is not None:
+            local_done.append(local_end)
+        elif stage == "LOCAL_MIN_REVIEW" and ts is not None and _count_local_min_completed_from_progress(progress) > 0:
+            local_done.append(ts)
+        try:
+            completed_trials += int(progress.get("completed", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+        completed_local += _count_local_min_completed_from_progress(progress)
+    search_span = None
+    if search_started and search_done:
+        search_span = max(0.0, max(search_done) - min(search_started))
+    local_span = None
+    if local_started and local_done:
+        local_span = max(0.0, max(local_done) - min(local_started))
+    return {
+        "completed_trials": int(completed_trials),
+        "completed_local_min_trials": int(completed_local),
+        "search_wall_elapsed_sec": search_span,
+        "local_min_wall_elapsed_sec": local_span,
+    }
+
+
 def format_optimizer_seed_ensemble_progress_header(
     *,
     folds: int,
@@ -4438,14 +4550,11 @@ def format_optimizer_seed_ensemble_progress_header(
     fold_elapsed_sec: float | None = None,
     setup_elapsed_sec: float | None = None,
     completed_trials: int | None = None,
-    local_min_completed_trials: int | None = None,
-    local_min_elapsed_sec: float | None = None,
+    search_wall_elapsed_sec: float | None = None,
+    completed_local_min_trials: int | None = None,
+    local_min_wall_elapsed_sec: float | None = None,
 ) -> str:
-    """Format the seed-ensemble progress header used by rolling and non-rolling paths.
-
-    The count field is always named ``folds``.  Duration fields use explicit
-    ``*_time`` names so the display cannot mix a fold count with elapsed time.
-    """
+    """Format the seed-ensemble progress header used by rolling and non-rolling paths."""
     parts = [
         "seed ensemble",
         f"folds={int(folds)}",
@@ -4458,19 +4567,19 @@ def format_optimizer_seed_ensemble_progress_header(
         parts.append(f"completed={int(completed_folds)}/{int(folds)}")
     _ = (pending_folds, fold_elapsed_sec, setup_elapsed_sec)
     if total_elapsed_sec is not None:
-        parts.append(f"total_time={_fmt_duration(total_elapsed_sec)}")
-        try:
-            trial_count = int(completed_trials or 0)
-        except (TypeError, ValueError):
-            trial_count = 0
-        if trial_count > 0:
-            parts.append(f"avg_trial_time={_fmt_seconds_3(float(total_elapsed_sec) / float(trial_count))}")
+        parts.append(f"total={_fmt_duration(total_elapsed_sec)}")
     try:
-        local_count = int(local_min_completed_trials or 0)
+        trial_count = int(completed_trials or 0)
+    except (TypeError, ValueError):
+        trial_count = 0
+    if trial_count > 0 and search_wall_elapsed_sec is not None:
+        parts.append(f"avg_trial={_fmt_seconds_3(float(search_wall_elapsed_sec) / float(trial_count))}")
+    try:
+        local_count = int(completed_local_min_trials or 0)
     except (TypeError, ValueError):
         local_count = 0
-    if local_count > 0 and local_min_elapsed_sec is not None:
-        parts.append(f"avg_local_min_trial_time={_fmt_seconds_3(float(local_min_elapsed_sec) / float(local_count))}")
+    if local_count > 0 and local_min_wall_elapsed_sec is not None:
+        parts.append(f"avg_local={_fmt_seconds_3(float(local_min_wall_elapsed_sec) / float(local_count))}")
     return " | ".join(parts)
 
 
@@ -4478,15 +4587,15 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     fold_idx = int(task.get("fold_idx", progress.get("fold_idx", 0)) or 0)
     fold_count = int(task.get("fold_count", progress.get("fold_count", 0)) or 0)
     oos_year = int(task.get("oos_year", progress.get("oos_year", 0)) or 0)
-    oos_label = _display_month_period(task.get("oos_period") or oos_year)
+    oos_label = _display_short_month_period(task.get("oos_period") or oos_year)
     selection_start = str(progress.get("selection_start") or task.get("selection_period") or "").strip()
     selection_end = str(progress.get("selection_end") or "").strip()
     if selection_start and selection_end:
-        selection_text = f"selection={_display_month_period(selection_start, selection_end)}"
+        selection_text = f"train={_display_short_month_period(selection_start, selection_end)}"
     elif selection_start:
-        selection_text = f"selection={_display_month_period(selection_start)}"
+        selection_text = f"train={_display_short_month_period(selection_start)}"
     else:
-        selection_text = "selection=?"
+        selection_text = "train=?"
     stage = str(progress.get("stage") or "QUEUED").upper()
     elapsed_text = ""
     if progress.get("elapsed_sec") is not None:
@@ -4510,17 +4619,16 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         current = progress.get("current")
         current_text = "N/A" if current is None else f"{float(current):.3f}"
         best = progress.get("best")
-        best_text = "N/A" if best is None else f"{float(best):.3f}"
+        best_text = _fmt_score_trunc_2(best)
         base_best = progress.get("best_base_score")
-        base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
-        status = str(progress.get("status") or "RUN")
+        base_best_text = _fmt_score_trunc_2(base_best)
         local_min_elapsed_text = ""
         if progress.get("elapsed_sec") is not None:
-            local_min_elapsed_text = f" | elapsed : {_fmt_duration_compact(progress.get('elapsed_sec'))}"
+            local_min_elapsed_text = f" | elapsed={_fmt_duration_compact(progress.get('elapsed_sec'))}"
         return (
             f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
-            f"finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} | "
-            f"current : {current_text} | best_base : {base_best_text} | best_lm : {best_text} | {status}{local_min_elapsed_text}"
+            f"finalist {finalist_idx}/{finalist_total} | local {neighbor_done}/{neighbor_total} | "
+            f"current : {current_text} | best_base : {base_best_text} | best_lm : {best_text}{local_min_elapsed_text}"
         )
     if stage == "OOS_DIAGNOSTICS":
         status = str(progress.get("status") or "RUN")
@@ -4551,15 +4659,15 @@ def _format_seed_ensemble_progress_line(context: dict, progress: dict, *, log_st
     seed_count = int(context.get("seed_count", progress.get("seed_ensemble_member_count", 0)) or 0)
     seed = context.get("seed", progress.get("seed"))
     oos_year = int(context.get("oos_year", progress.get("oos_year", 0)) or 0)
-    oos_label = _display_month_period(context.get("oos_period") or oos_year)
+    oos_label = _display_short_month_period(context.get("oos_period") or oos_year)
     selection_start = str(progress.get("selection_start") or context.get("selection_start") or context.get("selection_period") or "").strip()
     selection_end = str(progress.get("selection_end") or context.get("selection_end") or "").strip()
     if selection_start and selection_end:
-        selection_text = f"selection={_display_month_period(selection_start, selection_end)}"
+        selection_text = f"train={_display_short_month_period(selection_start, selection_end)}"
     elif selection_start:
-        selection_text = f"selection={_display_month_period(selection_start)}"
+        selection_text = f"train={_display_short_month_period(selection_start)}"
     else:
-        selection_text = "selection=?"
+        selection_text = "train=?"
     _ = seed
     seed_text = f"seed {seed_index}/{seed_count}" if seed_index and seed_count else "seed ?/?"
     stage = str(progress.get("stage") or "QUEUED").upper()
@@ -4600,13 +4708,12 @@ def _format_seed_ensemble_progress_line(context: dict, progress: dict, *, log_st
         current = progress.get("current")
         current_text = "N/A" if current is None else f"{float(current):.3f}"
         best = progress.get("best")
-        best_text = "N/A" if best is None else f"{float(best):.3f}"
+        best_text = _fmt_score_trunc_2(best)
         base_best = progress.get("best_base_score")
-        base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
-        status = str(progress.get("status") or "RUN")
+        base_best_text = _fmt_score_trunc_2(base_best)
         return (
-            f"{prefix} | finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} | "
-            f"current : {current_text} | best_base : {base_best_text} | best_lm : {best_text} | {status}{elapsed_text}"
+            f"{prefix} | finalist {finalist_idx}/{finalist_total} | local {neighbor_done}/{neighbor_total} | "
+            f"current : {current_text} | best_base : {base_best_text} | best_lm : {best_text}{elapsed_text}"
         )
     if stage == "OOS_DIAGNOSTICS":
         status = str(progress.get("status") or "RUN")
@@ -4644,48 +4751,6 @@ def _seed_progress_key_from_event(event: dict) -> tuple[int, int] | None:
     return (fold_idx, seed_idx)
 
 
-def _is_local_min_progress(progress: dict) -> bool:
-    return str(dict(progress or {}).get("stage") or "").upper() == "LOCAL_MIN_REVIEW"
-
-
-def _local_min_completed_trial_count_from_progress(progress: dict) -> int:
-    data = dict(progress or {})
-    if not _is_local_min_progress(data):
-        return 0
-    try:
-        idx = int(data.get("finalist_idx", 0) or 0)
-    except (TypeError, ValueError):
-        idx = 0
-    try:
-        total = int(data.get("finalist_total", 0) or 0)
-    except (TypeError, ValueError):
-        total = 0
-    if idx <= 0 or total <= 0:
-        return 0
-    status = str(data.get("status") or "").strip().upper()
-    completed = max(0, idx - 1)
-    if status in {"DONE", "CACHE", "EARLY_STOP", "EARLY STOP", "PASS", "FAIL"}:
-        completed = max(completed, idx)
-    return max(0, min(int(completed), int(total)))
-
-
-def _is_active_local_min_progress(progress: dict) -> bool:
-    data = dict(progress or {})
-    if not _is_local_min_progress(data):
-        return False
-    status = str(data.get("status") or "").strip().upper()
-    if status in {"DONE", "CACHE", "EARLY_STOP", "EARLY STOP", "PASS", "FAIL"}:
-        return False
-    try:
-        idx = int(data.get("finalist_idx", 0) or 0)
-        total = int(data.get("finalist_total", 0) or 0)
-    except (TypeError, ValueError):
-        return True
-    if idx <= 0 or total <= 0:
-        return True
-    return _local_min_completed_trial_count_from_progress(data) < total
-
-
 def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
     if not path or not os.path.exists(path):
         return {}
@@ -4695,10 +4760,9 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
     except OSError:
         return {}
     latest: dict[int, dict] = {}
+    events_by_member: dict[int, list[dict]] = {}
     completed_by_member: dict[int, int] = {}
-    local_min_completed_by_member: dict[int, int] = {}
-    local_min_first_ts_by_member: dict[int, float] = {}
-    local_min_last_ts_by_member: dict[int, float] = {}
+    local_completed_by_member: dict[int, int] = {}
     for line in reversed(lines[-2000:]):
         raw = str(line).strip()
         if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
@@ -4710,38 +4774,59 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
             member_index = 0
         if member_index <= 0:
             continue
+        events_by_member.setdefault(member_index, []).append(dict(payload))
         try:
             completed = int(payload.get("completed", 0) or 0)
         except (TypeError, ValueError):
             completed = 0
         if completed > int(completed_by_member.get(member_index, 0) or 0):
             completed_by_member[member_index] = int(completed)
-        if _is_local_min_progress(payload):
-            local_completed = _local_min_completed_trial_count_from_progress(payload)
-            if local_completed > int(local_min_completed_by_member.get(member_index, 0) or 0):
-                local_min_completed_by_member[member_index] = int(local_completed)
-            try:
-                event_ts = float(payload.get("ts", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                event_ts = 0.0
-            if event_ts > 0.0:
-                if member_index not in local_min_first_ts_by_member or event_ts < float(local_min_first_ts_by_member[member_index]):
-                    local_min_first_ts_by_member[member_index] = float(event_ts)
-                if event_ts > float(local_min_last_ts_by_member.get(member_index, 0.0) or 0.0):
-                    local_min_last_ts_by_member[member_index] = float(event_ts)
+        local_completed = _count_local_min_completed_from_progress(payload)
+        if local_completed > int(local_completed_by_member.get(member_index, 0) or 0):
+            local_completed_by_member[member_index] = int(local_completed)
         if member_index not in latest:
             latest[member_index] = payload
-    for member_index, completed in completed_by_member.items():
-        if member_index in latest and completed > int(latest[member_index].get("completed", 0) or 0):
-            latest[member_index]["completed"] = int(completed)
-    for member_index, local_completed in local_min_completed_by_member.items():
-        if member_index not in latest:
-            continue
-        latest[member_index]["local_min_completed_trials"] = int(local_completed)
-        if member_index in local_min_first_ts_by_member:
-            latest[member_index]["local_min_first_ts"] = float(local_min_first_ts_by_member[member_index])
-        if member_index in local_min_last_ts_by_member:
-            latest[member_index]["local_min_last_ts"] = float(local_min_last_ts_by_member[member_index])
+    for member_index, payload in list(latest.items()):
+        completed = int(completed_by_member.get(member_index, 0) or 0)
+        if completed > int(payload.get("completed", 0) or 0):
+            payload["completed"] = int(completed)
+        local_completed = int(local_completed_by_member.get(member_index, 0) or 0)
+        if local_completed > int(payload.get("local_min_completed", 0) or 0):
+            payload["local_min_completed"] = int(local_completed)
+        events = events_by_member.get(member_index, [])
+        search_starts = []
+        search_dones = []
+        local_starts = []
+        local_dones = []
+        for event in events:
+            stage = str(event.get("stage") or "").upper()
+            ts = _safe_progress_ts(event)
+            search_start = _safe_progress_float(event, "search_started_ts")
+            if search_start is not None:
+                search_starts.append(search_start)
+            elif stage == "OPTIMIZER_SEARCH" and ts is not None and int(event.get("completed", 0) or 0) <= 0:
+                search_starts.append(ts)
+            search_done = _safe_progress_float(event, "search_last_done_ts")
+            if search_done is not None:
+                search_dones.append(search_done)
+            elif stage == "OPTIMIZER_SEARCH" and ts is not None and int(event.get("completed", 0) or 0) > 0:
+                search_dones.append(ts)
+            local_start = _safe_progress_float(event, "local_min_started_ts")
+            if local_start is not None:
+                local_starts.append(local_start)
+            local_done = _safe_progress_float(event, "local_min_last_done_ts")
+            if local_done is not None:
+                local_dones.append(local_done)
+            elif _count_local_min_completed_from_progress(event) > 0 and ts is not None:
+                local_dones.append(ts)
+        if search_starts:
+            payload["search_started_ts"] = min(search_starts)
+        if search_dones:
+            payload["search_last_done_ts"] = max(search_dones)
+        if local_starts:
+            payload["local_min_started_ts"] = min(local_starts)
+        if local_dones:
+            payload["local_min_last_done_ts"] = max(local_dones)
     return latest
 
 
@@ -4787,53 +4872,70 @@ class OptimizerSeedEnsembleProgressBoard:
         self.rendered_lines = 0
         self.progress_by_key: dict[tuple[int, int], dict] = {}
         self.completed_trials_by_key: dict[tuple[int, int], int] = {}
-        self.local_min_completed_trials_by_key: dict[tuple[int, int], int] = {}
-        self.local_min_started_at: float | None = None
-        self.local_min_last_update_at: float | None = None
+        self.completed_local_min_trials_by_key: dict[tuple[int, int], int] = {}
+        self.search_started_ts_by_key: dict[tuple[int, int], float] = {}
+        self.search_last_done_ts_by_key: dict[tuple[int, int], float] = {}
+        self.local_min_started_ts_by_key: dict[tuple[int, int], float] = {}
+        self.local_min_last_done_ts_by_key: dict[tuple[int, int], float] = {}
         self.last_lines: list[str] = []
 
     def _context_key(self, context: dict) -> tuple[int, int]:
         return (int(context.get("fold_idx", 0) or 0), int(context.get("seed_index", 0) or 0))
 
-    def _record_completed_trials(self, key: tuple[int, int], progress: dict) -> None:
+    def _record_progress_metrics(self, key: tuple[int, int], progress: dict) -> None:
         data = dict(progress or {})
+        if "ts" not in data:
+            data["ts"] = time.time()
         try:
             completed = int(data.get("completed", 0) or 0)
         except (TypeError, ValueError):
             completed = 0
         if completed > int(self.completed_trials_by_key.get(key, 0) or 0):
             self.completed_trials_by_key[key] = int(completed)
-        local_completed = _local_min_completed_trial_count_from_progress(data)
-        try:
-            payload_local_completed = int(data.get("local_min_completed_trials", 0) or 0)
-        except (TypeError, ValueError):
-            payload_local_completed = 0
-        local_completed = max(int(local_completed), int(payload_local_completed))
-        if local_completed > int(self.local_min_completed_trials_by_key.get(key, 0) or 0):
-            self.local_min_completed_trials_by_key[key] = int(local_completed)
-        if _is_local_min_progress(data) or local_completed > 0:
-            now = time.perf_counter()
-            if self.local_min_started_at is None:
-                self.local_min_started_at = now
-            self.local_min_last_update_at = now
+        local_completed = _count_local_min_completed_from_progress(data)
+        if local_completed > int(self.completed_local_min_trials_by_key.get(key, 0) or 0):
+            self.completed_local_min_trials_by_key[key] = int(local_completed)
+        explicit_search_start = _safe_progress_float(data, "search_started_ts")
+        if explicit_search_start is None and str(data.get("stage") or "").upper() == "OPTIMIZER_SEARCH" and completed <= 0:
+            explicit_search_start = _safe_progress_ts(data)
+        if explicit_search_start is not None:
+            previous = self.search_started_ts_by_key.get(key)
+            self.search_started_ts_by_key[key] = explicit_search_start if previous is None else min(previous, explicit_search_start)
+        explicit_search_done = _safe_progress_float(data, "search_last_done_ts")
+        if explicit_search_done is None and str(data.get("stage") or "").upper() == "OPTIMIZER_SEARCH" and completed > 0:
+            explicit_search_done = _safe_progress_ts(data)
+        if explicit_search_done is not None:
+            self.search_last_done_ts_by_key[key] = max(float(self.search_last_done_ts_by_key.get(key, 0.0) or 0.0), explicit_search_done)
+        explicit_local_start = _safe_progress_float(data, "local_min_started_ts")
+        if explicit_local_start is not None:
+            previous = self.local_min_started_ts_by_key.get(key)
+            self.local_min_started_ts_by_key[key] = explicit_local_start if previous is None else min(previous, explicit_local_start)
+        explicit_local_done = _safe_progress_float(data, "local_min_last_done_ts")
+        if explicit_local_done is None and local_completed > 0:
+            explicit_local_done = _safe_progress_ts(data)
+        if explicit_local_done is not None:
+            self.local_min_last_done_ts_by_key[key] = max(float(self.local_min_last_done_ts_by_key.get(key, 0.0) or 0.0), explicit_local_done)
 
     def get_completed_trial_count(self) -> int:
         return sum(int(value or 0) for value in self.completed_trials_by_key.values())
 
     def get_completed_local_min_trial_count(self) -> int:
-        return sum(int(value or 0) for value in self.local_min_completed_trials_by_key.values())
+        return sum(int(value or 0) for value in self.completed_local_min_trials_by_key.values())
 
-    def get_local_min_elapsed_sec(self) -> float | None:
-        if self.local_min_started_at is None:
+    def get_search_wall_elapsed_sec(self) -> float | None:
+        if not self.search_started_ts_by_key or not self.search_last_done_ts_by_key:
             return None
-        active = any(_is_active_local_min_progress(progress) for progress in self.progress_by_key.values())
-        end_at = time.perf_counter() if active or self.local_min_last_update_at is None else float(self.local_min_last_update_at)
-        return max(0.0, float(end_at) - float(self.local_min_started_at))
+        return max(0.0, max(self.search_last_done_ts_by_key.values()) - min(self.search_started_ts_by_key.values()))
+
+    def get_local_min_wall_elapsed_sec(self) -> float | None:
+        if not self.local_min_started_ts_by_key or not self.local_min_last_done_ts_by_key:
+            return None
+        return max(0.0, max(self.local_min_last_done_ts_by_key.values()) - min(self.local_min_started_ts_by_key.values()))
 
     def update(self, *, fold_idx: int, seed_index: int, progress: dict, force: bool = False) -> None:
         key = (int(fold_idx), int(seed_index))
         self.progress_by_key[key] = dict(progress or {})
-        self._record_completed_trials(key, dict(progress or {}))
+        self._record_progress_metrics(key, dict(progress or {}))
         self.render(force=force)
 
     def update_many(self, progress_map: dict[tuple[int, int], dict], *, force: bool = False) -> None:
@@ -4843,7 +4945,7 @@ class OptimizerSeedEnsembleProgressBoard:
             except (TypeError, ValueError, IndexError):
                 continue
             self.progress_by_key[normalized_key] = dict(progress or {})
-            self._record_completed_trials(normalized_key, dict(progress or {}))
+            self._record_progress_metrics(normalized_key, dict(progress or {}))
         self.render(force=force)
 
     def _build_lines(self) -> list[str]:
@@ -4978,37 +5080,6 @@ class _ParallelFoldLiveBoard:
         self.rendered_lines = 0
         self.last_lines: list[str] = []
         self.last_render_key: list[str] = []
-        self.local_min_completed_trials_by_key: dict[tuple[int, int], int] = {}
-        self.local_min_started_at: float | None = None
-        self.local_min_last_update_at: float | None = None
-        self.seed_progress_by_key: dict[tuple[int, int], dict] = {}
-
-    def _record_seed_local_min_progress(self, key: tuple[int, int], progress: dict) -> None:
-        data = dict(progress or {})
-        self.seed_progress_by_key[key] = dict(data)
-        local_completed = _local_min_completed_trial_count_from_progress(data)
-        try:
-            payload_local_completed = int(data.get("local_min_completed_trials", 0) or 0)
-        except (TypeError, ValueError):
-            payload_local_completed = 0
-        local_completed = max(int(local_completed), int(payload_local_completed))
-        if local_completed > int(self.local_min_completed_trials_by_key.get(key, 0) or 0):
-            self.local_min_completed_trials_by_key[key] = int(local_completed)
-        if _is_local_min_progress(data) or local_completed > 0:
-            now = time.perf_counter()
-            if self.local_min_started_at is None:
-                self.local_min_started_at = now
-            self.local_min_last_update_at = now
-
-    def _completed_local_min_trial_count(self) -> int:
-        return sum(int(value or 0) for value in self.local_min_completed_trials_by_key.values())
-
-    def _local_min_elapsed_sec(self) -> float | None:
-        if self.local_min_started_at is None:
-            return None
-        active = any(_is_active_local_min_progress(progress) for progress in self.seed_progress_by_key.values())
-        end_at = time.perf_counter() if active or self.local_min_last_update_at is None else float(self.local_min_last_update_at)
-        return max(0.0, float(end_at) - float(self.local_min_started_at))
 
     def _build_lines(self, *, pending: set, future_map: dict, completed_rows: list[dict], fold_timing_rows: list[dict] | None = None) -> list[str]:
         completed_rows_sorted = sorted(list(completed_rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
@@ -5022,18 +5093,13 @@ class _ParallelFoldLiveBoard:
         if _is_rolling_random_seed_ensemble_enabled():
             seed_policy = _build_rolling_seed_ensemble_policy_payload()
             seed_count = int(seed_policy.get("seed_count", 1) or 1)
-            completed_trials = 0
-            seed_progress_by_task: dict[int, dict[int, dict]] = {}
-            for task in self.tasks:
-                task_key = int(task.get("fold_idx", 0) or 0)
-                seed_progresses = _read_latest_parallel_fold_seed_progresses_for_task(task)
-                seed_progress_by_task[task_key] = seed_progresses
-                for seed_index, progress in seed_progresses.items():
-                    try:
-                        completed_trials += int(dict(progress or {}).get("completed", 0) or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    self._record_seed_local_min_progress((task_key, int(seed_index)), dict(progress or {}))
+            seed_progress_maps = {id(task): _read_latest_parallel_fold_seed_progresses_for_task(task) for task in self.tasks}
+            phase_metrics = _collect_seed_progress_phase_metrics(
+                progress
+                for progress_map in seed_progress_maps.values()
+                for progress in dict(progress_map or {}).values()
+            )
+            completed_trials = int(phase_metrics.get("completed_trials", 0) or 0)
             header = format_optimizer_seed_ensemble_progress_header(
                 folds=total_folds,
                 seeds=seed_count,
@@ -5046,12 +5112,13 @@ class _ParallelFoldLiveBoard:
                 fold_elapsed_sec=fold_wall_elapsed,
                 setup_elapsed_sec=setup_elapsed,
                 completed_trials=completed_trials,
-                local_min_completed_trials=self._completed_local_min_trial_count(),
-                local_min_elapsed_sec=self._local_min_elapsed_sec(),
+                search_wall_elapsed_sec=phase_metrics.get("search_wall_elapsed_sec"),
+                completed_local_min_trials=int(phase_metrics.get("completed_local_min_trials", 0) or 0),
+                local_min_wall_elapsed_sec=phase_metrics.get("local_min_wall_elapsed_sec"),
             )
             lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
-                seed_progresses = seed_progress_by_task.get(int(task.get("fold_idx", 0) or 0)) or {}
+                seed_progresses = dict(seed_progress_maps.get(id(task)) or {})
                 fold_completed = int(task.get("oos_year", 0) or 0) in completed_oos
                 for seed_index in range(1, seed_count + 1):
                     progress = dict(seed_progresses.get(seed_index) or {})
@@ -5301,6 +5368,8 @@ class _FoldLogSearchProgress:
             total=self.total_trials,
             best_score=best_score,
             elapsed_sec=max(0.0, time.perf_counter() - self.stage_start),
+            search_started_ts=float(self.stage_start_ts),
+            search_last_done_ts=time.time() if int(completed) > 0 else None,
         )
 
     def callback(self, session):
@@ -5872,6 +5941,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 n_jobs=int(search_parallel_trials),
                 callbacks=[progress.callback(session)],
             )
+            search_done_ts = time.time()
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             trial_count = len(list(getattr(study, "trials", []) or []))
             session.current_session_trial = int(trial_count or config.trials_per_fold)
@@ -5881,6 +5951,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | optimizer search DONE | best_base_score={best_base_text} | elapsed={_fmt_duration(optimize_sec)}", flush=True)
 
             local_started = time.perf_counter()
+            local_started_ts = time.time()
 
             def _parallel_local_min_progress_sink(event: dict) -> None:
                 data = dict(event or {})
@@ -5904,6 +5975,11 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     best_base_score=best_base_score,
                     status=str(data.get("status") or "RUN"),
                     elapsed_sec=max(0.0, time.perf_counter() - local_started),
+                    search_started_ts=float(progress.stage_start_ts),
+                    search_last_done_ts=search_done_ts,
+                    local_min_started_ts=data.get("local_min_started_ts") or local_started_ts,
+                    local_min_completed=int(data.get("local_min_completed", 0) or 0),
+                    local_min_last_done_ts=data.get("local_min_last_done_ts"),
                 )
 
             session.outer_rolling_parallel_progress_sink = _parallel_local_min_progress_sink
@@ -5955,6 +6031,11 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 best_local_min_score=best_local_min_score,
                 status="DONE",
                 elapsed_sec=local_elapsed,
+                search_started_ts=float(progress.stage_start_ts),
+                search_last_done_ts=search_done_ts,
+                local_min_started_ts=local_started_ts,
+                local_min_completed=len(finalists),
+                local_min_last_done_ts=time.time(),
             )
             policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
             if not any(item is not None for item in policy_items.values()):
