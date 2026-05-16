@@ -5098,6 +5098,56 @@ def format_optimizer_seed_ensemble_progress_header(
     return " | ".join(parts)
 
 
+def _optimizer_resource_usage_suffix(summary: dict | None) -> str:
+    payload = dict(summary or {})
+    if not bool(payload.get("resource_sampling_available", False)):
+        return "CPU avg=N/A | MEM avg=N/A | HD avg=N/A"
+    cpu_avg = float(payload.get("cpu_avg_percent", 0.0) or 0.0)
+    mem_avg = float(payload.get("memory_avg_percent", 0.0) or 0.0)
+    hd_avg = float(payload.get("disk_load_avg_percent", payload.get("disk_busy_avg_percent", 0.0)) or 0.0)
+    return f"CPU avg={cpu_avg:.1f}% | MEM avg={mem_avg:.1f}% | HD avg={hd_avg:.1f}%"
+
+
+def format_optimizer_final_performance_summary(
+    *,
+    folds: int,
+    seeds: int,
+    min_agree: int,
+    completed_folds: int,
+    total_elapsed_sec: float,
+    completed_trials: int = 0,
+    search_wall_elapsed_sec: float | None = None,
+    completed_local_min_trials: int = 0,
+    local_min_wall_elapsed_sec: float | None = None,
+    completed_replays: int = 0,
+    replay_wall_elapsed_sec: float | None = None,
+    resource_summary: dict | None = None,
+    color: bool = True,
+) -> str:
+    """Format final performance/resource summary from the same seed-ensemble schema.
+
+    This is intentionally shared by rolling and non-rolling; callers only provide
+    different fold counts and collected metrics.
+    """
+    header = format_optimizer_seed_ensemble_progress_header(
+        folds=int(folds),
+        seeds=int(seeds),
+        min_agree=int(min_agree),
+        parallel_workers=0,
+        backend="",
+        completed_folds=int(completed_folds),
+        total_elapsed_sec=float(total_elapsed_sec),
+        completed_trials=int(completed_trials or 0),
+        search_wall_elapsed_sec=search_wall_elapsed_sec,
+        completed_local_min_trials=int(completed_local_min_trials or 0),
+        local_min_wall_elapsed_sec=local_min_wall_elapsed_sec,
+        completed_replays=int(completed_replays or 0),
+        replay_wall_elapsed_sec=replay_wall_elapsed_sec,
+    )
+    line = f"📏 訓練效能摘要: {header} | {_optimizer_resource_usage_suffix(resource_summary)}"
+    return f"{C_CYAN}{line}{C_RESET}" if bool(color) else line
+
+
 def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_status: str = "") -> str:
     fold_idx = int(task.get("fold_idx", progress.get("fold_idx", 0)) or 0)
     fold_count = int(task.get("fold_count", progress.get("fold_count", 0)) or 0)
@@ -6076,6 +6126,17 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
             live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=bool(done))
     finally:
         live_board.close()
+    if _is_rolling_random_seed_ensemble_enabled():
+        phase_metrics = _collect_seed_progress_phase_metrics(
+            progress
+            for task in list(tasks or [])
+            for progress in dict(_read_latest_parallel_fold_seed_progresses_for_task(task) or {}).values()
+        )
+        replay_metrics = _collect_parallel_fold_replay_phase_metrics(list(tasks or []))
+        chain_state["seed_ensemble_performance_metrics"] = {
+            **dict(phase_metrics or {}),
+            **dict(replay_metrics or {}),
+        }
     return chain_state
 
 
@@ -7096,6 +7157,7 @@ def run_outer_rolling_oos(
         fold_workers=int(fold_workers),
         sampler_kind=sampler_kind,
     )
+    seed_ensemble_performance_metrics: dict = {}
     shared_raw_context = None
     if fold_parallel_enabled:
         raw_data_load_sec = 0.0
@@ -7183,6 +7245,7 @@ def run_outer_rolling_oos(
             chain_max_positions = int(chain_state.get("chain_max_positions"))
         if chain_state.get("chain_enable_rotation") is not None:
             chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
+        seed_ensemble_performance_metrics = dict(chain_state.get("seed_ensemble_performance_metrics") or {})
         rows[:] = sorted((normalize_optimizer_seed_ensemble_fold_row(item) for item in rows), key=optimizer_seed_ensemble_row_sort_key)
         fold_timing_rows.sort(key=lambda item: int(item.get("fold_idx", 0) or 0))
         for idx, row in enumerate(rows, start=1):
@@ -7540,6 +7603,33 @@ def run_outer_rolling_oos(
     final_report = _format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True)
     if final_report.strip():
         print("\n" + final_report)
+    timing_payload = dict((timing_paths or {}).get("payload") or {})
+    timing_summary = dict(timing_payload.get("summary") or {})
+    seed_policy = _build_rolling_seed_ensemble_policy_payload()
+    if not seed_ensemble_performance_metrics:
+        seed_ensemble_performance_metrics = {
+            "completed_trials": int(timing_summary.get("completed_trials", 0) or 0),
+            "search_wall_elapsed_sec": float(timing_summary.get("optimize_sum_sec", 0.0) or 0.0),
+            "completed_local_min_trials": int(timing_summary.get("local_min_neighbors_evaluated", 0) or 0),
+            "local_min_wall_elapsed_sec": float(timing_summary.get("local_min_review_sum_sec", 0.0) or 0.0),
+            "completed_replays": 0,
+            "replay_wall_elapsed_sec": None,
+        }
+    print(format_optimizer_final_performance_summary(
+        folds=int(fold_count),
+        seeds=int(seed_policy.get("seed_count", 1) or 1),
+        min_agree=int(seed_policy.get("min_agree", seed_policy.get("seed_count", 1)) or 1),
+        completed_folds=int(len(rows)),
+        total_elapsed_sec=float(timing_summary.get("overall_sec", max(0.0, time.perf_counter() - overall_start)) or 0.0),
+        completed_trials=int(seed_ensemble_performance_metrics.get("completed_trials", 0) or 0),
+        search_wall_elapsed_sec=seed_ensemble_performance_metrics.get("search_wall_elapsed_sec"),
+        completed_local_min_trials=int(seed_ensemble_performance_metrics.get("completed_local_min_trials", 0) or 0),
+        local_min_wall_elapsed_sec=seed_ensemble_performance_metrics.get("local_min_wall_elapsed_sec"),
+        completed_replays=int(seed_ensemble_performance_metrics.get("completed_replays", 0) or 0),
+        replay_wall_elapsed_sec=seed_ensemble_performance_metrics.get("replay_wall_elapsed_sec"),
+        resource_summary=timing_summary,
+        color=True,
+    ))
     if bool(timing_mode):
         pass
     if not bool(timing_mode):

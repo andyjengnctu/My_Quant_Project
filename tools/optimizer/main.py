@@ -1407,6 +1407,9 @@ def _run_nonrolling_random_seed_ensemble_training(
     policy_members_by_policy: dict[str, list[dict]] = {}
     dashboard_session = None
     ensemble_started_at = time.perf_counter()
+    from tools.optimizer.outer_rolling_oos import _ResourceUsageSampler, _resolve_resource_sample_interval_sec
+    resource_sampler = _ResourceUsageSampler(interval_sec=_resolve_resource_sample_interval_sec(environ))
+    resource_sampler.start()
     parallel_workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(len(seeds))
     parallel_backend = resolve_optimizer_random_seed_ensemble_parallel_backend_default()
     process_parallel_enabled = bool(int(parallel_workers) > 1 and parallel_backend == "process")
@@ -1735,6 +1738,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         members.sort(key=lambda item: int(item.get("member_index", 0) or 0))
 
     if len(members) != len(seeds):
+        resource_sampler.stop()
         if compact_display and progress_board is not None:
             progress_board.close()
         print(
@@ -1806,6 +1810,40 @@ def _run_nonrolling_random_seed_ensemble_training(
             title="ENSEMBLE 績效與風險對比表",
             force=True,
         )
+    resource_sampler.stop()
+    from tools.optimizer.outer_rolling_oos import format_optimizer_final_performance_summary
+
+    if progress_board is not None:
+        completed_trials = progress_board.get_completed_trial_count()
+        search_wall_elapsed_sec = progress_board.get_search_wall_elapsed_sec()
+        completed_local_min_trials = progress_board.get_completed_local_min_trial_count()
+        local_min_wall_elapsed_sec = progress_board.get_local_min_wall_elapsed_sec()
+        completed_replays = progress_board.get_completed_replay_count()
+        replay_wall_elapsed_sec = progress_board.get_replay_wall_elapsed_sec()
+        completed_folds = progress_board.get_completed_fold_count()
+    else:
+        completed_trials = int(requested_trials) * int(len(seeds))
+        search_wall_elapsed_sec = None
+        completed_local_min_trials = 0
+        local_min_wall_elapsed_sec = None
+        completed_replays = 0
+        replay_wall_elapsed_sec = None
+        completed_folds = 1
+    print(format_optimizer_final_performance_summary(
+        folds=1,
+        seeds=int(len(seeds)),
+        min_agree=int(policy["min_agree"]),
+        completed_folds=int(completed_folds or 1),
+        total_elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
+        completed_trials=int(completed_trials or 0),
+        search_wall_elapsed_sec=search_wall_elapsed_sec,
+        completed_local_min_trials=int(completed_local_min_trials or 0),
+        local_min_wall_elapsed_sec=local_min_wall_elapsed_sec,
+        completed_replays=int(completed_replays or 0),
+        replay_wall_elapsed_sec=replay_wall_elapsed_sec,
+        resource_summary=resource_sampler.summary(),
+        color=True,
+    ))
     if str(selected_model_mode).strip().lower() == "full":
         promote_status = _promote_candidate_to_run_best(emit_output=False)
         if promote_status != 0:
