@@ -1594,6 +1594,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     if compact_display and progress_board is not None:
         progress_board.close()
     if dashboard_session is None:
+        print(f"{C_GRAY}⏳ nonrolling replay 報表準備：載入 dashboard raw data...{C_RESET}", flush=True)
         dashboard_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         dashboard_session.load_raw_data(
             selected_data_dir,
@@ -1601,11 +1602,13 @@ def _run_nonrolling_random_seed_ensemble_training(
             required_min_rows=optimizer_required_min_rows,
             verbose=False,
         )
+    print(f"{C_GRAY}⏳ nonrolling replay 報表準備：計算 rolling-style policy table...{C_RESET}", flush=True)
     print_optimizer_static_ensemble_rolling_oos_table(
         dashboard_session,
         ensemble_payload=ensemble_payload,
         policy_paramsets=dict((_ensemble_summary or {}).get("policy_paramsets") or {}),
     )
+    print(f"{C_GRAY}⏳ nonrolling replay 報表準備：計算 ensemble dashboard...{C_RESET}", flush=True)
     print_optimizer_static_ensemble_console_dashboard(
         dashboard_session,
         ensemble_payload=ensemble_payload,

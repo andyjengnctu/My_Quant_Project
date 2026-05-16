@@ -14,7 +14,7 @@ from core.config import (
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
 )
-from core.display_common import C_CYAN, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
+from core.display_common import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
 from core.walk_forward_policy import filter_search_train_dates
 from core.model_paths import resolve_run_best_params_path
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
@@ -873,6 +873,29 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
 
 
 
+
+
+def _static_replay_progress_message(message: str) -> str:
+    return f"{C_GRAY}⏳ {str(message).strip()}{C_RESET}"
+
+
+def _emit_static_replay_progress(progress_state: dict | None, message: str, *, finish: bool = False) -> None:
+    if progress_state is None:
+        return
+    text = _static_replay_progress_message(message)
+    if stdout_supports_inline_progress():
+        previous_width = int(progress_state.get("width", 0) or 0)
+        progress_state["width"] = write_inline_progress(text, previous_width=previous_width)
+        if finish:
+            print(flush=True)
+            progress_state["width"] = 0
+    else:
+        last = str(progress_state.get("last", ""))
+        if text != last or finish:
+            print(text, flush=True)
+            progress_state["last"] = text
+
+
 def _build_static_policy_oos_row_from_metrics(candidate_metrics: dict, benchmark_metrics: dict) -> dict:
     candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
     benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
@@ -912,10 +935,20 @@ def _build_static_policy_rows_from_paramsets(
     start_date,
     end_date,
     initial_capital: float,
+    progress_state: dict | None = None,
+    progress_offset: int = 0,
+    progress_total: int | None = None,
 ) -> dict[str, dict]:
     rows: dict[str, dict] = {}
     payloads = _load_static_policy_paramset_payloads(policy_paramsets)
-    for policy_name, payload in payloads.items():
+    total = int(progress_total if progress_total is not None else len(payloads))
+    for idx, (policy_name, payload) in enumerate(payloads.items(), start=1):
+        step = int(progress_offset) + int(idx)
+        if total > 0:
+            _emit_static_replay_progress(
+                progress_state,
+                f"nonrolling policy replay | {step}/{total} | {policy_name}",
+            )
         try:
             candidate_metrics, benchmark_metrics, _range_text = _run_static_ensemble_dashboard_replay(
                 session,
@@ -956,23 +989,34 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     if not oos_start_date:
         oos_start_date = selection_start
         oos_end_date = selection_end
-    candidate_metrics, benchmark_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
-        session,
-        ensemble_payload,
-        start_date=oos_start_date,
-        end_date=oos_end_date,
-        initial_capital=initial_capital,
-    )
-    candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
-    benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
-    candidate_policy_row = _build_static_policy_oos_row_from_metrics(candidate_metrics, benchmark_metrics)
-    policy_rows = _build_static_policy_rows_from_paramsets(
-        session,
-        policy_paramsets=policy_paramsets or ensemble_payload.get("policy_paramsets"),
-        start_date=oos_start_date,
-        end_date=oos_end_date,
-        initial_capital=initial_capital,
-    )
+    replay_policy_paramsets = policy_paramsets or ensemble_payload.get("policy_paramsets")
+    replay_payloads = _load_static_policy_paramset_payloads(replay_policy_paramsets)
+    progress_state: dict = {}
+    replay_total = 1 + int(len(replay_payloads))
+    _emit_static_replay_progress(progress_state, f"nonrolling policy replay | 1/{replay_total} | candidate_best")
+    try:
+        candidate_metrics, benchmark_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
+            session,
+            ensemble_payload,
+            start_date=oos_start_date,
+            end_date=oos_end_date,
+            initial_capital=initial_capital,
+        )
+        candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
+        benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
+        candidate_policy_row = _build_static_policy_oos_row_from_metrics(candidate_metrics, benchmark_metrics)
+        policy_rows = _build_static_policy_rows_from_paramsets(
+            session,
+            policy_paramsets=replay_payloads,
+            start_date=oos_start_date,
+            end_date=oos_end_date,
+            initial_capital=initial_capital,
+            progress_state=progress_state,
+            progress_offset=1,
+            progress_total=replay_total,
+        )
+    finally:
+        _emit_static_replay_progress(progress_state, "nonrolling policy replay | done", finish=True)
     unavailable_policy = {
         "available": False,
         "rank_1_oos": 0.0,
@@ -1031,6 +1075,8 @@ def print_optimizer_static_ensemble_console_dashboard(
     if not bool(force) and not bool(is_optimizer_nonrolling_train_result_table_enabled()):
         return {"payload_sec": 0.0, "render_sec": 0.0}
     payload_started_at = time.perf_counter()
+    progress_state: dict = {}
+    _emit_static_replay_progress(progress_state, "nonrolling dashboard replay | train")
     policy = get_active_param_ensemble_policy(ensemble_payload)
     schedule = ensemble_payload.get("params_ensemble") or []
     first_member = schedule[0] if schedule else {}
@@ -1061,6 +1107,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
             oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
         if oos_start_date:
+            _emit_static_replay_progress(progress_state, "nonrolling dashboard replay | OOS")
             candidate_test_metrics, benchmark_test_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
                 session,
                 ensemble_payload,
@@ -1088,6 +1135,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         *[f"代表 member#1｜{line}" if idx == 0 else line for idx, line in enumerate(_build_training_param_lines(primary_params))],
     ]
     payload_elapsed = max(0.0, time.perf_counter() - payload_started_at)
+    _emit_static_replay_progress(progress_state, "nonrolling dashboard replay | render")
     render_started_at = time.perf_counter()
     print_optimizer_trial_console_dashboard(
         title=title,
@@ -1109,6 +1157,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         params_lines=params_lines,
         hard_gate_lines=_build_hard_gate_lines(),
     )
+    _emit_static_replay_progress(progress_state, "nonrolling dashboard replay | done", finish=True)
     return {
         "payload_sec": float(payload_elapsed),
         "render_sec": float(max(0.0, time.perf_counter() - render_started_at)),
