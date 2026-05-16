@@ -133,6 +133,13 @@ PARAMSET_FILENAME_BY_POLICY = {
     "retention": "roos_retention.json",
 }
 
+NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
+    "base": "base.json",
+    "base_retention_gt_min": "base_r.json",
+    "local": "local.json",
+    "retention": "retention.json",
+}
+
 
 def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
     raw_value = (environ or {}).get("OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS")
@@ -2225,8 +2232,13 @@ def get_optimizer_paramset_policy_names() -> tuple[str, ...]:
 
 
 def get_optimizer_policy_paramset_filename(policy_name: str) -> str:
-    """Return the canonical JSON filename for an optimizer policy paramset."""
+    """Return the canonical JSON filename for a rolling-OOS optimizer policy paramset."""
     return str(PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"roos_{policy_name}.json"))
+
+
+def get_optimizer_nonrolling_policy_paramset_filename(policy_name: str) -> str:
+    """Return the canonical JSON filename for a non-rolling optimizer policy paramset."""
+    return str(NONROLLING_PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"{policy_name}.json"))
 
 
 def build_optimizer_policy_members_from_finalists(
@@ -3604,21 +3616,6 @@ def _table_separator(width: int = 218) -> str:
     return "-" * int(width)
 
 
-def _rows_use_seed_ensemble(rows: list[dict]) -> bool:
-    for row in list(rows or []):
-        policy = row.get("random_seed_ensemble")
-        if isinstance(policy, dict) and policy:
-            return True
-    return False
-
-
-def _resolve_results_table_title(rows: list[dict], requested_title: str, default_title: str, seed_ensemble_title: str) -> str:
-    title = str(requested_title or default_title)
-    if title == default_title and _rows_use_seed_ensemble(rows):
-        return seed_ensemble_title
-    return title
-
-
 def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, table_title: str = "ROLLING MONTHLY OOS RESULTS") -> str:
     display_rows = list(rows or [])
     if include_oos_avg and display_rows:
@@ -3642,13 +3639,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     }
     policy_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
-    resolved_title = _resolve_results_table_title(
-        display_rows,
-        str(table_title or "ROLLING MONTHLY OOS RESULTS"),
-        "ROLLING MONTHLY OOS RESULTS",
-        "SEED ENSEMBLE OOS RESULTS",
-    )
-    lines.append(resolved_title)
+    lines.append(str(table_title or "ROLLING MONTHLY OOS RESULTS"))
     policy_header = " | ".join(_pad_ansi(REPORT_POLICY_LABELS[name], policy_group_width, align="^") for name in REPORT_POLICY_NAMES)
     policy_subheader = " | ".join(
         f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')}"
@@ -3774,13 +3765,7 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
         "elapsed": 8,
     }
     lines: list[str] = []
-    resolved_title = _resolve_results_table_title(
-        display_rows,
-        str(table_title or "BASE RETENTION THRESHOLD OOS RESULTS"),
-        "BASE RETENTION THRESHOLD OOS RESULTS",
-        "SEED ENSEMBLE BASE RETENTION THRESHOLD OOS RESULTS",
-    )
-    lines.append(resolved_title)
+    lines.append(str(table_title or "BASE RETENTION THRESHOLD OOS RESULTS"))
     policy_header = " | ".join(
         _pad_ansi(BASE_RETENTION_COMPARISON_POLICY_LABELS[name], widths["score"], align="^")
         for name in BASE_RETENTION_COMPARISON_POLICY_NAMES
@@ -4446,14 +4431,9 @@ def format_optimizer_seed_ensemble_progress_header(
     ]
     if completed_folds is not None:
         parts.append(f"completed={int(completed_folds)}/{int(folds)}")
-    if pending_folds is not None:
-        parts.append(f"pending={int(pending_folds)}")
+    _ = (pending_folds, fold_elapsed_sec, setup_elapsed_sec)
     if total_elapsed_sec is not None:
         parts.append(f"total_time={_fmt_duration(total_elapsed_sec)}")
-    if fold_elapsed_sec is not None:
-        parts.append(f"fold_time={_fmt_duration(fold_elapsed_sec)}")
-    if setup_elapsed_sec is not None:
-        parts.append(f"setup_time={_fmt_duration(setup_elapsed_sec)}")
     return " | ".join(parts)
 
 
@@ -4543,9 +4523,8 @@ def _format_seed_ensemble_progress_line(context: dict, progress: dict, *, log_st
         selection_text = f"selection={_display_month_period(selection_start)}"
     else:
         selection_text = "selection=?"
+    _ = seed
     seed_text = f"seed {seed_index}/{seed_count}" if seed_index and seed_count else "seed ?/?"
-    if seed is not None and str(seed).strip():
-        seed_text += f" seed={int(seed)}"
     stage = str(progress.get("stage") or "QUEUED").upper()
     elapsed_text = ""
     if progress.get("elapsed_sec") is not None:
@@ -4683,23 +4662,13 @@ def _read_latest_parallel_fold_seed_progresses_for_task(task: dict) -> dict[int,
 class OptimizerSeedEnsembleProgressBoard:
     """Render fold × seed progress lines from one source for rolling and non-rolling."""
 
-    def __init__(
-        self,
-        contexts: list[dict],
-        *,
-        header: str = "",
-        header_context: dict | None = None,
-        overall_start: float | None = None,
-        board_start: float | None = None,
-    ):
+    def __init__(self, contexts: list[dict], *, header: str = "", header_factory=None):
         self.contexts = sorted(
             [dict(item) for item in list(contexts or [])],
             key=lambda item: (int(item.get("fold_idx", 0) or 0), int(item.get("seed_index", 0) or 0)),
         )
         self.header = str(header or "")
-        self.header_context = dict(header_context or {})
-        self.started_at = float(board_start) if board_start is not None else time.perf_counter()
-        self.overall_start = float(overall_start) if overall_start is not None else self.started_at
+        self.header_factory = header_factory
         self.inline = stdout_supports_inline_progress()
         self.rendered_lines = 0
         self.progress_by_key: dict[tuple[int, int], dict] = {}
@@ -4707,41 +4676,6 @@ class OptimizerSeedEnsembleProgressBoard:
 
     def _context_key(self, context: dict) -> tuple[int, int]:
         return (int(context.get("fold_idx", 0) or 0), int(context.get("seed_index", 0) or 0))
-
-    def _completed_fold_count(self) -> int:
-        fold_to_seed_keys: dict[int, list[tuple[int, int]]] = {}
-        for context in self.contexts:
-            fold_idx = int(context.get("fold_idx", 0) or 0)
-            if fold_idx <= 0:
-                continue
-            fold_to_seed_keys.setdefault(fold_idx, []).append(self._context_key(context))
-        completed = 0
-        for keys in fold_to_seed_keys.values():
-            if keys and all(str((self.progress_by_key.get(key) or {}).get("stage") or "").upper() == "DONE" for key in keys):
-                completed += 1
-        return int(completed)
-
-    def _build_header(self) -> str:
-        if not self.header_context:
-            return self.header
-        context = dict(self.header_context)
-        folds = int(context.get("folds") or max((int(item.get("fold_idx", 0) or 0) for item in self.contexts), default=1) or 1)
-        seeds = int(context.get("seeds") or max((int(item.get("seed_count", 0) or 0) for item in self.contexts), default=1) or 1)
-        completed_folds = self._completed_fold_count()
-        pending_folds = max(0, folds - completed_folds)
-        now = time.perf_counter()
-        return format_optimizer_seed_ensemble_progress_header(
-            folds=folds,
-            seeds=seeds,
-            min_agree=int(context.get("min_agree", seeds) or seeds),
-            parallel_workers=int(context.get("parallel_workers", seeds) or seeds),
-            backend=str(context.get("backend") or "thread"),
-            completed_folds=completed_folds,
-            pending_folds=pending_folds,
-            total_elapsed_sec=max(0.0, now - self.overall_start),
-            fold_elapsed_sec=max(0.0, now - self.started_at),
-            setup_elapsed_sec=max(0.0, self.started_at - self.overall_start),
-        )
 
     def update(self, *, fold_idx: int, seed_index: int, progress: dict, force: bool = False) -> None:
         key = (int(fold_idx), int(seed_index))
@@ -4759,9 +4693,9 @@ class OptimizerSeedEnsembleProgressBoard:
 
     def _build_lines(self) -> list[str]:
         lines: list[str] = []
-        header = self._build_header()
-        if header:
-            lines.append(f"{C_CYAN}{header}{C_RESET}")
+        header_text = str(self.header_factory(self) if callable(self.header_factory) else self.header)
+        if header_text:
+            lines.append(f"{C_CYAN}{header_text}{C_RESET}")
         for context in self.contexts:
             key = self._context_key(context)
             progress = self.progress_by_key.get(key) or {"stage": "QUEUED", "status": "queued"}
@@ -4821,9 +4755,10 @@ class _ParallelFoldProgressBoard:
         if not force and new_lines == self.lines:
             return
         self.lines = new_lines
+        _ = pending
         header = (
             f"⏱️ Rolling fold parallel | completed={len(completed_rows)}/{len(self.tasks)} | "
-            f"pending={len(pending)} | elapsed={_fmt_duration(time.perf_counter() - self.started_at)}"
+            f"total_time={_fmt_duration(time.perf_counter() - self.started_at)}"
         )
         output_lines = [f"{C_CYAN}{header}{C_RESET}"] + [f"{C_GRAY}  {line}{C_RESET}" for _, line in sorted(new_lines.items())]
         if self.inline:
@@ -4935,10 +4870,10 @@ class _ParallelFoldLiveBoard:
                     }
                     lines.append(f"{C_GRAY}  {_format_seed_ensemble_progress_line(context, progress)}{C_RESET}")
         else:
+            _ = (pending, fold_wall_elapsed, setup_elapsed)
             header = (
                 f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{total_folds} | "
-                f"pending={len(pending)} | total_time={_fmt_duration(total_elapsed)} | "
-                f"fold_time={_fmt_duration(fold_wall_elapsed)} | setup_time={_fmt_duration(setup_elapsed)}"
+                f"total_time={_fmt_duration(total_elapsed)}"
             )
             lines = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:

@@ -543,7 +543,7 @@ def validate_strategy_repeatability_case(base_params):
             number=2,
             preset_values={
                 "use_bb": False,
-                "use_kc": True,
+                "use_kc": False,
                 "use_vol": False,
                 "atr_len": 11,
                 "atr_times_init": 1.6,
@@ -636,7 +636,7 @@ def validate_strategy_minimum_viability_case(base_params):
         number=3,
         preset_values={
             "use_bb": False,
-            "use_kc": True,
+            "use_kc": False,
             "use_vol": False,
             "atr_len": 11,
             "atr_times_init": 1.6,
@@ -939,7 +939,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         number=0,
         preset_values={
             "use_bb": False,
-            "use_kc": True,
+            "use_kc": False,
             "use_vol": False,
             "atr_len": 10,
             "atr_times_init": 1.5,
@@ -976,7 +976,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         number=1,
         preset_values={
             "use_bb": False,
-            "use_kc": True,
+            "use_kc": False,
             "use_vol": False,
             "atr_len": 11,
             "atr_times_init": 1.6,

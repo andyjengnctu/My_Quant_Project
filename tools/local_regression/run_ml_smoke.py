@@ -327,8 +327,14 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
                 failures.append("no_trials_recorded")
 
         candidate_params_info = _load_params_payload(candidate_params_path)
-        candidate_summary_payload = _load_json_payload(candidate_summary_path)
-        candidate_summary_exists = candidate_summary_path.exists()
+        embedded_candidate_summary = {}
+        if isinstance(candidate_params_info.get("payload"), dict):
+            embedded = candidate_params_info["payload"].get("summary")
+            if isinstance(embedded, dict):
+                embedded_candidate_summary = dict(embedded)
+        candidate_summary_payload = embedded_candidate_summary or _load_json_payload(candidate_summary_path)
+        candidate_summary_sidecar_exists = candidate_summary_path.exists()
+        candidate_summary_exists = bool(embedded_candidate_summary) or candidate_summary_sidecar_exists
         candidate_retention_params_exists = candidate_retention_params_path.exists()
         candidate_retention_summary_exists = candidate_retention_summary_path.exists()
         candidate_best_available = candidate_params_path.exists() or candidate_summary_exists
@@ -340,7 +346,7 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
             elif candidate_params_info["missing_keys"]:
                 failures.append(f"candidate_best_params_missing_keys:{','.join(candidate_params_info['missing_keys'])}")
         if candidate_params_path.exists() and not candidate_summary_exists:
-            failures.append("missing_candidate_best_summary")
+            failures.append("missing_candidate_best_embedded_summary")
         if candidate_summary_exists and not candidate_params_path.exists():
             failures.append("missing_candidate_best_params")
 
@@ -398,6 +404,8 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
             "candidate_best_available": bool(candidate_best_available),
             "candidate_best_params_exists": candidate_params_path.exists(),
             "candidate_best_summary_exists": candidate_summary_exists,
+            "candidate_best_summary_embedded": bool(embedded_candidate_summary),
+            "candidate_best_summary_sidecar_exists": bool(candidate_summary_sidecar_exists),
             "candidate_best_params_keys": sorted(candidate_params_info["payload"].keys()) if candidate_params_info["payload"] else [],
             "candidate_best_params_digest": candidate_payload_digest,
             "candidate_best_is_active_param_ensemble": bool(candidate_params_info.get("is_active_param_ensemble", False)),
@@ -564,6 +572,8 @@ def main(argv=None) -> int:
             "candidate_best_is_active_param_ensemble": first_run.get("candidate_best_is_active_param_ensemble", False),
             "candidate_best_ensemble_member_count": first_run.get("candidate_best_ensemble_member_count", 0),
             "candidate_best_params_read_error": first_run.get("candidate_best_params_read_error", ""),
+            "candidate_best_summary_embedded": first_run.get("candidate_best_summary_embedded", False),
+            "candidate_best_summary_sidecar_exists": first_run.get("candidate_best_summary_sidecar_exists", False),
             "candidate_retention_best_params_path": first_run.get("candidate_retention_best_params_path", ""),
             "candidate_retention_best_summary_path": first_run.get("candidate_retention_best_summary_path", ""),
             "candidate_retention_best_params_exists": first_run.get("candidate_retention_best_params_exists", False),

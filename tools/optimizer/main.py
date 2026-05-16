@@ -127,6 +127,60 @@ def _load_json_file_or_none(path: str):
         return json.load(handle)
 
 
+def _project_relative_path(path: str) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    try:
+        return os.path.relpath(raw, PROJECT_ROOT)
+    except ValueError:
+        return os.path.basename(raw)
+
+
+def _embed_summary_in_params_file(params_path: str, summary: dict, *, remove_summary_sidecar: str = "") -> dict:
+    payload = _load_json_file_or_none(params_path)
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["summary"] = dict(summary or {})
+    _write_json_file(params_path, payload)
+    if remove_summary_sidecar:
+        try:
+            if os.path.exists(remove_summary_sidecar):
+                os.remove(remove_summary_sidecar)
+        except OSError as exc:
+            print(f"{C_YELLOW}⚠️ 無法移除舊 summary sidecar：{_project_relative_path(remove_summary_sidecar)}｜{type(exc).__name__}: {exc}{C_RESET}")
+    return payload
+
+
+def _extract_params_embedded_summary(payload: dict | None) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("summary")
+    return dict(summary) if isinstance(summary, dict) else None
+
+
+def _load_params_summary_or_legacy_sidecar(params_path: str, legacy_summary_path: str) -> dict | None:
+    payload = _load_json_file_or_none(params_path)
+    embedded_summary = _extract_params_embedded_summary(payload)
+    if embedded_summary is not None:
+        return embedded_summary
+    return _load_json_file_or_none(legacy_summary_path)
+
+
+def _visible_policy_paramset_paths(policy_paramset_paths: dict) -> dict[str, str]:
+    visible_names = ("base", "base_retention_gt_min", "local", "retention")
+    return {name: str(policy_paramset_paths[name]) for name in visible_names if name in dict(policy_paramset_paths or {})}
+
+
+def _print_optimizer_output_files(title: str, entries: list[tuple[str, str]]) -> None:
+    visible_entries = [(str(label), str(path)) for label, path in list(entries or []) if str(path or "").strip()]
+    if not visible_entries:
+        return
+    print(f"{C_GREEN}{title}{C_RESET}")
+    for label, path in visible_entries:
+        print(f"{C_GREEN}  {label}: {_project_relative_path(path)}{C_RESET}")
+
+
 def _ensure_study_effective_policy_compatible(*, study, walk_forward_policy: dict):
     if not hasattr(study, "user_attrs") or not hasattr(study, "set_user_attr"):
         return
@@ -306,7 +360,7 @@ def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict
 def _load_candidate_params_payload_for_promote():
     candidate_params = _load_json_file_or_none(CANDIDATE_BEST_PARAMS_PATH)
     if candidate_params is None:
-        print(f"{C_RED}❌ 找不到 candidate_best 參數檔: {CANDIDATE_BEST_PARAMS_PATH}{C_RESET}", file=sys.stderr)
+        print(f"{C_RED}❌ 找不到 candidate_best 參數檔: {_project_relative_path(CANDIDATE_BEST_PARAMS_PATH)}{C_RESET}", file=sys.stderr)
         return None
     if is_active_param_ensemble_payload(candidate_params):
         return candidate_params
@@ -318,21 +372,27 @@ def _promote_candidate_to_run_best():
     candidate_params = _load_candidate_params_payload_for_promote()
     if candidate_params is None:
         return 1
-    candidate_summary = _load_json_file_or_none(CANDIDATE_BEST_SUMMARY_PATH)
+    candidate_summary = _load_params_summary_or_legacy_sidecar(CANDIDATE_BEST_PARAMS_PATH, CANDIDATE_BEST_SUMMARY_PATH)
     if candidate_summary is None:
-        print(f"{C_RED}❌ 找不到 candidate_best summary: {CANDIDATE_BEST_SUMMARY_PATH}{C_RESET}", file=sys.stderr)
+        print(f"{C_RED}❌ 找不到 candidate_best summary: {_project_relative_path(CANDIDATE_BEST_PARAMS_PATH)}{C_RESET}", file=sys.stderr)
         return 1
-    run_best_summary = _load_json_file_or_none(RUN_BEST_SUMMARY_PATH)
+    run_best_summary = _load_params_summary_or_legacy_sidecar(RUN_BEST_PARAMS_PATH, RUN_BEST_SUMMARY_PATH)
     _print_candidate_vs_run_best_summary(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
     should_promote, reason = _should_promote_candidate(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
     if not should_promote:
-        print(f"{C_YELLOW}ℹ️ run_best 未進版 ：{reason}{C_RESET}")
+        print(f"{C_YELLOW}ℹ️ run_best 未進版：{reason}{C_RESET}")
         return 0
     promoted_summary = dict(candidate_summary)
     promoted_summary["promoted_at"] = get_taipei_now().isoformat()
-    _write_json_file(RUN_BEST_PARAMS_PATH, candidate_params)
-    _write_json_file(RUN_BEST_SUMMARY_PATH, promoted_summary)
-    print(f"{C_GREEN}✅ run_best 已進版：{RUN_BEST_PARAMS_PATH}{C_RESET}")
+    promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
+    promoted_payload["summary"] = promoted_summary
+    _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+    try:
+        if os.path.exists(RUN_BEST_SUMMARY_PATH):
+            os.remove(RUN_BEST_SUMMARY_PATH)
+    except OSError as exc:
+        print(f"{C_YELLOW}⚠️ 無法移除舊 run_best summary sidecar：{_project_relative_path(RUN_BEST_SUMMARY_PATH)}｜{type(exc).__name__}: {exc}{C_RESET}")
+    _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
     return 0
 
 
@@ -501,9 +561,13 @@ def _export_selected_candidate_artifacts(
         selection_rule=selection_rule,
         compare_only=compare_only,
     )
-    _write_json_file(summary_path, candidate_summary)
+    if os.path.abspath(summary_path) == os.path.abspath(CANDIDATE_BEST_SUMMARY_PATH):
+        _embed_summary_in_params_file(params_path, candidate_summary, remove_summary_sidecar=summary_path)
+    else:
+        _embed_summary_in_params_file(params_path, candidate_summary)
+        _write_json_file(summary_path, candidate_summary)
     compare_note = "（比較用，不參與 promote）" if compare_only else ""
-    print(f"{C_GREEN}💾 {artifact_label}{compare_note} 已寫入：{params_path}{C_RESET}")
+    _print_optimizer_output_files(f"💾 {artifact_label}{compare_note} 已寫入", [(artifact_label, params_path)])
     return True
 
 
@@ -865,7 +929,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
             _emit_nonrolling_seed_process_progress_event(
                 task,
                 stage="START",
-                status=f"seed {member_index}/{member_count} seed={seed}",
+                status=f"seed {member_index}/{member_count}",
                 elapsed_sec=0.0,
             )
             task_db_name = task.get("db_name")
@@ -1009,7 +1073,7 @@ def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dic
     reset = colors.get("reset", "")
     member_count = len(members)
     min_agree = int(policy.get("min_agree", member_count or 1))
-    title = "NON-ROLLING RANDOM SEED ENSEMBLE RESULTS"
+    title = "SEED ENSEMBLE RESULTS"
     header = (
         f"{'member':<8} | {'seed':>10} | {'trial':>8} | "
         f"{'base':>10} | {'local_min':>10} | {'retention':>10} | {'gate':>8} | {'result':>10}"
@@ -1121,7 +1185,7 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
     from tools.optimizer.outer_rolling_oos import (
         BASE_RETENTION_COMPARISON_POLICY_NAMES,
         get_optimizer_paramset_policy_names,
-        get_optimizer_policy_paramset_filename,
+        get_optimizer_nonrolling_policy_paramset_filename,
     )
 
     policy_names = tuple(get_optimizer_paramset_policy_names()) + tuple(
@@ -1171,7 +1235,7 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             "trials_per_seed": int(trials_per_seed),
             "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
         }
-        filename = get_optimizer_policy_paramset_filename(str(policy_name))
+        filename = get_optimizer_nonrolling_policy_paramset_filename(str(policy_name))
         path = os.path.join(MODELS_DIR, filename)
         _write_json_file(path, payload)
         paths[str(policy_name)] = path
@@ -1214,12 +1278,13 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         trials_per_seed=trials_per_seed,
     )
     summary["policy_paramsets"] = dict(policy_paramset_paths)
+    payload["summary"] = dict(summary)
     _write_json_file(CANDIDATE_BEST_PARAMS_PATH, payload)
-    _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, summary)
-    print(f"{C_GREEN}💾 candidate_best seed ensemble 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
-    if policy_paramset_paths:
-        joined = " | ".join(f"{name}={path}" for name, path in policy_paramset_paths.items())
-        print(f"{C_GREEN}💾 nonrolling policy paramsets 已寫入：{joined}{C_RESET}")
+    try:
+        if os.path.exists(CANDIDATE_BEST_SUMMARY_PATH):
+            os.remove(CANDIDATE_BEST_SUMMARY_PATH)
+    except OSError as exc:
+        print(f"{C_YELLOW}⚠️ 無法移除舊 candidate_best summary sidecar：{_project_relative_path(CANDIDATE_BEST_SUMMARY_PATH)}｜{type(exc).__name__}: {exc}{C_RESET}")
     return payload, summary
 
 
@@ -1303,34 +1368,31 @@ def _run_nonrolling_random_seed_ensemble_training(
                 "oos_period": str(period_context.get("oos_period") or ""),
             })
             contexts.append(context)
+        def _format_nonrolling_seed_header(board):
+            done_count = sum(
+                1
+                for progress in dict(getattr(board, "progress_by_key", {}) or {}).values()
+                if str(dict(progress or {}).get("stage") or "").upper() == "DONE"
+            )
+            completed = 1 if int(done_count) >= int(len(seeds)) else 0
+            return format_optimizer_seed_ensemble_progress_header(
+                folds=1,
+                seeds=len(seeds),
+                min_agree=int(policy["min_agree"]),
+                parallel_workers=int(parallel_workers),
+                backend=parallel_backend,
+                completed_folds=completed,
+                total_elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
+            )
+
         progress_board = OptimizerSeedEnsembleProgressBoard(
             contexts,
-            header_context={
-                "folds": 1,
-                "seeds": len(seeds),
-                "min_agree": int(policy["min_agree"]),
-                "parallel_workers": int(parallel_workers),
-                "backend": parallel_backend,
-            },
-            overall_start=ensemble_started_at,
-            board_start=ensemble_started_at,
+            header_factory=_format_nonrolling_seed_header,
         )
         progress_board.render(force=True)
     else:
-        header = format_optimizer_seed_ensemble_progress_header(
-            folds=1,
-            seeds=len(seeds),
-            min_agree=int(policy["min_agree"]),
-            parallel_workers=int(parallel_workers),
-            backend=parallel_backend,
-            completed_folds=0,
-            pending_folds=1,
-            total_elapsed_sec=0.0,
-            fold_elapsed_sec=0.0,
-            setup_elapsed_sec=0.0,
-        )
-        seed_text = ",".join(str(seed) for seed in seeds)
-        print(f"{C_GRAY}{header} | seeds={seed_text}{C_RESET}")
+        from tools.optimizer.outer_rolling_oos import format_optimizer_seed_ensemble_progress_header
+        print(f"{C_GRAY}{format_optimizer_seed_ensemble_progress_header(folds=1, seeds=len(seeds), min_agree=int(policy['min_agree']), parallel_workers=int(parallel_workers), backend=parallel_backend, completed_folds=0, total_elapsed_sec=0.0)}{C_RESET}")
     configure_optuna_logging()
 
     def _emit_seed_progress_for_member(member_index: int, seed: int, **kwargs) -> None:
@@ -1355,11 +1417,11 @@ def _run_nonrolling_random_seed_ensemble_training(
             if compact_display:
                 _emit_seed_progress_for_member(member_index, int(seed),
                     stage="START",
-                    status=f"seed {member_index}/{len(seeds)} seed={int(seed)}",
+                    status=f"seed {member_index}/{len(seeds)}",
                     elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
                 )
             else:
-                print(f"{C_CYAN}[seed {member_index}/{len(seeds)}] seed={int(seed)} | trials={int(requested_trials)}{C_RESET}")
+                print(f"{C_CYAN}[seed {member_index}/{len(seeds)}] trials={int(requested_trials)}{C_RESET}")
             study = create_optimizer_study(None, seed=int(seed), sampler_kind="tpe")
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
             if compact_display:
@@ -1452,7 +1514,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 if local_progress_installed or compact_display:
                     _clear_nonrolling_local_min_progress_hooks(member_session)
             if best_trial is None or not is_qualified_trial_value(best_trial.value):
-                print(f"{C_YELLOW}ℹ️ seed={int(seed)} 目前尚無通過 local_min_score gate 的 winner；本次不建立完整 N-seed ensemble member。{C_RESET}")
+                print(f"{C_YELLOW}ℹ️ seed {member_index}/{len(seeds)} 目前尚無通過 local_min_score gate 的 winner；本次不建立完整 N-seed ensemble member。{C_RESET}")
                 return None
             print_local_min_score_winner_summary(
                 winner_trial=best_trial,
@@ -1563,7 +1625,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                     elif compact_display:
                         _emit_seed_progress_for_member(member_index, int(seeds[member_index - 1]),
                             stage="DONE",
-                            status=f"seed {member_index}/{len(seeds)} seed={int(seeds[member_index - 1])} skipped",
+                            status=f"seed {member_index}/{len(seeds)} skipped",
                             elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
                         )
             _refresh_process_progress_board(force=True)
@@ -1587,7 +1649,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                     elif compact_display:
                         _emit_seed_progress_for_member(member_index, int(seed),
                             stage="DONE",
-                            status=f"seed {member_index}/{len(seeds)} seed={int(seed)} skipped",
+                            status=f"seed {member_index}/{len(seeds)} skipped",
                             elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
                         )
         members.sort(key=lambda item: int(item.get("member_index", 0) or 0))
@@ -1645,7 +1707,10 @@ def _run_nonrolling_random_seed_ensemble_training(
     promote_status = _promote_candidate_to_run_best()
     if promote_status != 0:
         return int(promote_status)
-    print(f"{C_GREEN}✅ 非 rolling random seed ensemble 訓練完成｜members={len(members)}｜params={CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
+    print(f"{C_GREEN}✅ seed ensemble 訓練完成｜members={len(members)}{C_RESET}")
+    visible_policy_paths = _visible_policy_paramset_paths(dict((_ensemble_summary or {}).get("policy_paramsets") or {}))
+    output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)] + list(visible_policy_paths.items())
+    _print_optimizer_output_files("💾 輸出檔案", output_entries)
     return 0
 
 
@@ -2208,8 +2273,8 @@ def main(argv=None, environ=None):
                     selection_rule=_resolve_candidate_best_selection_rule(),
                     compare_only=False,
                 )
-                _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, candidate_summary)
-                print(f"{C_GREEN}💾 candidate_best 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
+                _embed_summary_in_params_file(CANDIDATE_BEST_PARAMS_PATH, candidate_summary, remove_summary_sidecar=CANDIDATE_BEST_SUMMARY_PATH)
+                _print_optimizer_output_files("💾 candidate_best 已寫入", [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)])
                 retention_best_finalist = select_best_finalist_by_local_retention(finalists)
                 retention_best_trial = None if retention_best_finalist is None else retention_best_finalist["trial"]
                 _export_selected_candidate_artifacts(

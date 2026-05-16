@@ -81,7 +81,7 @@ def _validate_param_payload(data):
     if not isinstance(data, dict):
         raise ValueError(f"參數檔根層必須是 object/dict，收到 {type(data).__name__}")
 
-    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES)
+    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES) | {"summary"}
     unknown_keys = sorted(set(data) - allowed_keys)
     if unknown_keys:
         raise ValueError(f"參數檔含未知欄位: {unknown_keys}")
