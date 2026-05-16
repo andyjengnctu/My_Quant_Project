@@ -4558,49 +4558,95 @@ def _count_local_min_completed_neighbors_from_progress(progress: dict) -> int:
     return max(0, (finalist_idx - 1) * neighbor_total + neighbor_done)
 
 
+def _progress_identity_key(progress: dict) -> tuple[int, int]:
+    data = dict(progress or {})
+    try:
+        fold_idx = int(data.get("fold_idx", 0) or 0)
+    except (TypeError, ValueError):
+        fold_idx = 0
+    try:
+        seed_index = int(data.get("seed_ensemble_member_index", 0) or 0)
+    except (TypeError, ValueError):
+        seed_index = 0
+    if seed_index <= 0:
+        try:
+            seed_index = int(data.get("seed_index", 0) or 0)
+        except (TypeError, ValueError):
+            seed_index = 0
+    return (fold_idx, seed_index)
+
+
+def _merge_progress_phase_metrics(target: dict, progress: dict) -> None:
+    data = dict(progress or {})
+    stage = str(data.get("stage") or "").upper()
+    ts = _safe_progress_ts(data)
+    search_start = _safe_progress_float(data, "search_started_ts")
+    try:
+        completed = int(data.get("completed", 0) or 0)
+    except (TypeError, ValueError):
+        completed = 0
+    if search_start is None and stage == "OPTIMIZER_SEARCH" and completed <= 0:
+        search_start = ts
+    if search_start is not None:
+        previous = target.get("search_started_ts")
+        target["search_started_ts"] = search_start if previous is None else min(float(previous), float(search_start))
+    search_end = _safe_progress_float(data, "search_last_done_ts")
+    if search_end is None and stage == "OPTIMIZER_SEARCH" and completed > 0:
+        search_end = ts
+    if search_end is not None:
+        target["search_last_done_ts"] = max(float(target.get("search_last_done_ts", 0.0) or 0.0), float(search_end))
+    if completed > int(target.get("completed_trials", 0) or 0):
+        target["completed_trials"] = int(completed)
+
+    local_start = _safe_progress_float(data, "local_min_started_ts")
+    if local_start is not None:
+        previous = target.get("local_min_started_ts")
+        target["local_min_started_ts"] = local_start if previous is None else min(float(previous), float(local_start))
+    local_neighbors = _count_local_min_completed_neighbors_from_progress(data)
+    local_finalists = _count_local_min_completed_from_progress(data)
+    if local_neighbors > int(target.get("completed_local_min_neighbors", 0) or 0):
+        target["completed_local_min_neighbors"] = int(local_neighbors)
+    if local_finalists > int(target.get("completed_local_min_finalists", 0) or 0):
+        target["completed_local_min_finalists"] = int(local_finalists)
+    local_end = _safe_progress_float(data, "local_min_last_neighbor_done_ts")
+    if local_end is None:
+        local_end = _safe_progress_float(data, "local_min_last_done_ts")
+    if local_end is None and local_neighbors > 0:
+        local_end = ts
+    if local_end is not None:
+        target["local_min_last_done_ts"] = max(float(target.get("local_min_last_done_ts", 0.0) or 0.0), float(local_end))
+
+
 def _collect_seed_progress_phase_metrics(progresses) -> dict:
+    merged_by_key: dict[tuple[int, int], dict] = {}
+    anonymous_index = 0
+    for raw in list(progresses or []):
+        progress = dict(raw or {})
+        key = _progress_identity_key(progress)
+        if key == (0, 0):
+            anonymous_index += 1
+            key = (-anonymous_index, 0)
+        merged = merged_by_key.setdefault(key, {})
+        _merge_progress_phase_metrics(merged, progress)
+    completed_trials = 0
+    completed_local = 0
+    completed_local_neighbors = 0
     search_started: list[float] = []
     search_done: list[float] = []
     local_started: list[float] = []
     local_done: list[float] = []
-    completed_trials = 0
-    completed_local = 0
-    completed_local_neighbors = 0
-    for raw in list(progresses or []):
-        progress = dict(raw or {})
-        stage = str(progress.get("stage") or "").upper()
-        ts = _safe_progress_ts(progress)
-        search_start = _safe_progress_float(progress, "search_started_ts")
-        if search_start is not None:
-            search_started.append(search_start)
-        elif stage == "OPTIMIZER_SEARCH" and ts is not None and int(progress.get("completed", 0) or 0) <= 0:
-            search_started.append(ts)
-        search_end = _safe_progress_float(progress, "search_last_done_ts")
-        if search_end is not None:
-            search_done.append(search_end)
-        elif stage == "OPTIMIZER_SEARCH" and ts is not None:
-            try:
-                completed = int(progress.get("completed", 0) or 0)
-            except (TypeError, ValueError):
-                completed = 0
-            if completed > 0:
-                search_done.append(ts)
-        local_start = _safe_progress_float(progress, "local_min_started_ts")
-        if local_start is not None:
-            local_started.append(local_start)
-        local_end = _safe_progress_float(progress, "local_min_last_neighbor_done_ts")
-        if local_end is None:
-            local_end = _safe_progress_float(progress, "local_min_last_done_ts")
-        if local_end is not None:
-            local_done.append(local_end)
-        elif stage == "LOCAL_MIN_REVIEW" and ts is not None and _count_local_min_completed_neighbors_from_progress(progress) > 0:
-            local_done.append(ts)
-        try:
-            completed_trials += int(progress.get("completed", 0) or 0)
-        except (TypeError, ValueError):
-            pass
-        completed_local += _count_local_min_completed_from_progress(progress)
-        completed_local_neighbors += _count_local_min_completed_neighbors_from_progress(progress)
+    for metrics in merged_by_key.values():
+        completed_trials += int(metrics.get("completed_trials", 0) or 0)
+        completed_local += int(metrics.get("completed_local_min_finalists", 0) or 0)
+        completed_local_neighbors += int(metrics.get("completed_local_min_neighbors", 0) or 0)
+        if metrics.get("search_started_ts") is not None:
+            search_started.append(float(metrics["search_started_ts"]))
+        if metrics.get("search_last_done_ts") is not None:
+            search_done.append(float(metrics["search_last_done_ts"]))
+        if metrics.get("local_min_started_ts") is not None:
+            local_started.append(float(metrics["local_min_started_ts"]))
+        if metrics.get("local_min_last_done_ts") is not None:
+            local_done.append(float(metrics["local_min_last_done_ts"]))
     search_span = None
     if search_started and search_done:
         search_span = max(0.0, max(search_done) - min(search_started))
@@ -4651,12 +4697,15 @@ def format_optimizer_seed_ensemble_progress_header(
         trial_count = int(completed_trials or 0)
     except (TypeError, ValueError):
         trial_count = 0
-    if trial_count > 0 and search_wall_elapsed_sec is not None:
-        parts.append(f"avg_trial={_fmt_seconds_3(float(search_wall_elapsed_sec) / float(trial_count))}")
     try:
         local_count = int(completed_local_min_trials or 0)
     except (TypeError, ValueError):
         local_count = 0
+    all_count = max(0, int(trial_count) + int(local_count))
+    if all_count > 0 and total_elapsed_sec is not None:
+        parts.append(f"avg_all={_fmt_seconds_3(float(total_elapsed_sec) / float(all_count))}")
+    if trial_count > 0 and search_wall_elapsed_sec is not None:
+        parts.append(f"avg_trial={_fmt_seconds_3(float(search_wall_elapsed_sec) / float(trial_count))}")
     if local_count > 0 and local_min_wall_elapsed_sec is not None:
         parts.append(f"avg_local={_fmt_seconds_3(float(local_min_wall_elapsed_sec) / float(local_count))}")
     return " | ".join(parts)
@@ -5446,6 +5495,7 @@ class _FoldLogSearchProgress:
         self.total_trials = int(total_trials)
         self.seed_context = dict(seed_context or {})
         self.stage_start = time.perf_counter()
+        self.stage_start_ts = time.time()
         self.best_score = float("-inf")
         self.last_completed = -1
         self._lock = Lock()

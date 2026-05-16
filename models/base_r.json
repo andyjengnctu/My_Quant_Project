@@ -7,28 +7,28 @@
     "params_ensemble": [
         {
             "member_index": 1,
-            "seed": 27528100,
+            "seed": 483211609,
             "policy": "base_retention_gt_min",
-            "selected_trial": 6,
-            "optimizer_seed": 27528100,
-            "score": 16.542059046545965,
-            "base_score": 16.542059046545965,
-            "base_rank": 2,
-            "local_min_score": 10.699449897490714,
-            "local_min": 10.699449897490714,
+            "selected_trial": 1,
+            "optimizer_seed": 483211609,
+            "score": 29.815969074652436,
+            "base_score": 29.815969074652436,
+            "base_rank": 1,
+            "local_min_score": 21.43147763530326,
+            "local_min": 21.43147763530326,
             "local_min_review_enabled": true,
             "local_min_exact": true,
             "local_min_review_mode": "exact",
             "local_rank": 1,
-            "retention": 0.6468027872095399,
-            "retention_rank": 1,
+            "retention": 0.7187919192444724,
+            "retention_rank": 2,
             "local_gate": true,
             "params": {
-                "high_len": 160,
+                "high_len": 240,
                 "atr_len": 8,
-                "atr_buy_tol": 2.6,
-                "atr_times_init": 3.5,
-                "atr_times_trail": 4.1,
+                "atr_buy_tol": 2.8,
+                "atr_times_init": 1.9,
+                "atr_times_trail": 3.4,
                 "tp_percent": 0.0,
                 "use_bb": false,
                 "bb_len": 20,
@@ -54,7 +54,7 @@
             }
         }
     ],
-    "created_at": "2026-05-16T17:05:56.578276+08:00",
+    "created_at": "2026-05-16T17:22:18.930904+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 2,
@@ -72,8 +72,8 @@
         "objective_mode": "split_train_romd",
         "trials_per_seed": 10,
         "seeds": [
-            27528100,
-            2084991575
+            483211609,
+            1875928515
         ],
         "walk_forward_policy": {
             "selection_start_year": 2013,
