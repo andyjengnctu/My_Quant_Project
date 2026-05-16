@@ -4680,17 +4680,14 @@ def format_optimizer_seed_ensemble_progress_header(
     local_min_wall_elapsed_sec: float | None = None,
 ) -> str:
     """Format the seed-ensemble progress header used by rolling and non-rolling paths."""
+    _ = (parallel_workers, backend, pending_folds, fold_elapsed_sec, setup_elapsed_sec)
     parts = [
-        "seed ensemble",
         f"folds={int(folds)}",
         f"seeds={int(seeds)}",
         f"min_agree={int(min_agree)}",
-        f"parallel_workers={int(parallel_workers)}",
-        f"backend={str(backend or 'thread')}",
     ]
     if completed_folds is not None:
         parts.append(f"completed={int(completed_folds)}/{int(folds)}")
-    _ = (pending_folds, fold_elapsed_sec, setup_elapsed_sec)
     if total_elapsed_sec is not None:
         parts.append(f"total={_fmt_duration(total_elapsed_sec)}")
     try:
@@ -4701,13 +4698,13 @@ def format_optimizer_seed_ensemble_progress_header(
         local_count = int(completed_local_min_trials or 0)
     except (TypeError, ValueError):
         local_count = 0
-    all_count = max(0, int(trial_count) + int(local_count))
-    if all_count > 0 and total_elapsed_sec is not None:
-        parts.append(f"avg_all={_fmt_seconds_3(float(total_elapsed_sec) / float(all_count))}")
     if trial_count > 0 and search_wall_elapsed_sec is not None:
         parts.append(f"avg_trial={_fmt_seconds_3(float(search_wall_elapsed_sec) / float(trial_count))}")
     if local_count > 0 and local_min_wall_elapsed_sec is not None:
         parts.append(f"avg_local={_fmt_seconds_3(float(local_min_wall_elapsed_sec) / float(local_count))}")
+    all_count = max(0, int(trial_count) + int(local_count))
+    if all_count > 0 and total_elapsed_sec is not None:
+        parts.append(f"avg_all = {_fmt_seconds_3(float(total_elapsed_sec) / float(all_count))}")
     return " | ".join(parts)
 
 
