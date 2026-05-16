@@ -276,6 +276,9 @@ def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_cou
         return exit_code, None
     session.n_trials = int(request["n_trials"])
     session.run_action = str(request.get("action", "train"))
+    requested_model_mode = str(request.get("model_mode", "") or "").strip().lower()
+    if requested_model_mode:
+        session.requested_model_mode = requested_model_mode
     return None, str(request.get("source", "unknown"))
 
 

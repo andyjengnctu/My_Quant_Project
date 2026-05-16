@@ -61,6 +61,13 @@ def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
             "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
             "source": source_label,
         }
+    if normalized_upper == "F":
+        return {
+            "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+            "model_mode": "full",
+        }
     trial_count = parse_int_strict(normalized, "訓練次數", min_value=0)
     return {
         "n_trials": int(trial_count),
@@ -78,7 +85,7 @@ def resolve_optimizer_run_request(environ):
         prompt = (
             "👉 Optimizer 動作："
             f"[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  "
-            "[數字] 訓練指定次數  [0] 匯出 candidate_best + retention比較  [P] promote candidate  [R] outer rolling OOS: "
+            "[數字] 訓練指定次數  [0]  [R] outer rolling OOS  [F] Full : "
         )
         raw_input = input(prompt)
         return _parse_optimizer_run_request_raw(raw_input, source_label="UI/MENU")

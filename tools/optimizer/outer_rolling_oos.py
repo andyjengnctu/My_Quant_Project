@@ -4157,9 +4157,21 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
 def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     paths = {}
+    first_class_policy_set = set(REPORT_POLICY_NAMES)
     for policy_name in CHAIN_POLICY_NAMES:
-        payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
         path = os.path.join(models_dir, str(PARAMSET_FILENAME_BY_POLICY.get(policy_name, f"roos_{policy_name}.json")))
+        if policy_name not in first_class_policy_set:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError as exc:
+                try:
+                    display_path = os.path.relpath(path, os.path.dirname(models_dir))
+                except ValueError:
+                    display_path = os.path.basename(path)
+                print(f"{C_YELLOW}⚠️ 無法移除舊 threshold policy 檔：{display_path}｜{type(exc).__name__}: {exc}{C_RESET}")
+            continue
+        payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
         paths[policy_name] = path
@@ -4415,6 +4427,7 @@ def format_optimizer_seed_ensemble_progress_header(
     total_elapsed_sec: float | None = None,
     fold_elapsed_sec: float | None = None,
     setup_elapsed_sec: float | None = None,
+    completed_trials: int | None = None,
 ) -> str:
     """Format the seed-ensemble progress header used by rolling and non-rolling paths.
 
@@ -4434,6 +4447,12 @@ def format_optimizer_seed_ensemble_progress_header(
     _ = (pending_folds, fold_elapsed_sec, setup_elapsed_sec)
     if total_elapsed_sec is not None:
         parts.append(f"total_time={_fmt_duration(total_elapsed_sec)}")
+        try:
+            trial_count = int(completed_trials or 0)
+        except (TypeError, ValueError):
+            trial_count = 0
+        if trial_count > 0:
+            parts.append(f"avg_trial_time={_fmt_duration(float(total_elapsed_sec) / float(trial_count))}")
     return " | ".join(parts)
 
 
@@ -4616,6 +4635,7 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
     except OSError:
         return {}
     latest: dict[int, dict] = {}
+    completed_by_member: dict[int, int] = {}
     for line in reversed(lines[-2000:]):
         raw = str(line).strip()
         if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
@@ -4625,9 +4645,19 @@ def _read_latest_parallel_fold_seed_progresses(path: str) -> dict[int, dict]:
             member_index = int(payload.get("seed_ensemble_member_index", 0) or 0)
         except (TypeError, ValueError):
             member_index = 0
-        if member_index <= 0 or member_index in latest:
+        if member_index <= 0:
             continue
-        latest[member_index] = payload
+        try:
+            completed = int(payload.get("completed", 0) or 0)
+        except (TypeError, ValueError):
+            completed = 0
+        if completed > int(completed_by_member.get(member_index, 0) or 0):
+            completed_by_member[member_index] = int(completed)
+        if member_index not in latest:
+            latest[member_index] = payload
+    for member_index, completed in completed_by_member.items():
+        if member_index in latest and completed > int(latest[member_index].get("completed", 0) or 0):
+            latest[member_index]["completed"] = int(completed)
     return latest
 
 
@@ -4672,14 +4702,27 @@ class OptimizerSeedEnsembleProgressBoard:
         self.inline = stdout_supports_inline_progress()
         self.rendered_lines = 0
         self.progress_by_key: dict[tuple[int, int], dict] = {}
+        self.completed_trials_by_key: dict[tuple[int, int], int] = {}
         self.last_lines: list[str] = []
 
     def _context_key(self, context: dict) -> tuple[int, int]:
         return (int(context.get("fold_idx", 0) or 0), int(context.get("seed_index", 0) or 0))
 
+    def _record_completed_trials(self, key: tuple[int, int], progress: dict) -> None:
+        try:
+            completed = int(dict(progress or {}).get("completed", 0) or 0)
+        except (TypeError, ValueError):
+            completed = 0
+        if completed > int(self.completed_trials_by_key.get(key, 0) or 0):
+            self.completed_trials_by_key[key] = int(completed)
+
+    def get_completed_trial_count(self) -> int:
+        return sum(int(value or 0) for value in self.completed_trials_by_key.values())
+
     def update(self, *, fold_idx: int, seed_index: int, progress: dict, force: bool = False) -> None:
         key = (int(fold_idx), int(seed_index))
         self.progress_by_key[key] = dict(progress or {})
+        self._record_completed_trials(key, dict(progress or {}))
         self.render(force=force)
 
     def update_many(self, progress_map: dict[tuple[int, int], dict], *, force: bool = False) -> None:
@@ -4689,6 +4732,7 @@ class OptimizerSeedEnsembleProgressBoard:
             except (TypeError, ValueError, IndexError):
                 continue
             self.progress_by_key[normalized_key] = dict(progress or {})
+            self._record_completed_trials(normalized_key, dict(progress or {}))
         self.render(force=force)
 
     def _build_lines(self) -> list[str]:
@@ -4836,6 +4880,13 @@ class _ParallelFoldLiveBoard:
         if _is_rolling_random_seed_ensemble_enabled():
             seed_policy = _build_rolling_seed_ensemble_policy_payload()
             seed_count = int(seed_policy.get("seed_count", 1) or 1)
+            completed_trials = 0
+            for task in self.tasks:
+                for progress in _read_latest_parallel_fold_seed_progresses_for_task(task).values():
+                    try:
+                        completed_trials += int(dict(progress or {}).get("completed", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
             header = format_optimizer_seed_ensemble_progress_header(
                 folds=total_folds,
                 seeds=seed_count,
@@ -4847,6 +4898,7 @@ class _ParallelFoldLiveBoard:
                 total_elapsed_sec=total_elapsed,
                 fold_elapsed_sec=fold_wall_elapsed,
                 setup_elapsed_sec=setup_elapsed,
+                completed_trials=completed_trials,
             )
             lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
@@ -5698,6 +5750,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     neighbor_total=int(data.get("neighbor_total", 0) or 0),
                     current=data.get("current"),
                     best=data.get("best"),
+                    completed=int(config.trials_per_fold),
+                    total=int(config.trials_per_fold),
                     best_base_score=best_base_score,
                     status=str(data.get("status") or "RUN"),
                     elapsed_sec=max(0.0, time.perf_counter() - local_started),
@@ -5746,6 +5800,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 neighbor_total=1,
                 current=best_local_min_score,
                 best=best_local_min_score,
+                completed=int(config.trials_per_fold),
+                total=int(config.trials_per_fold),
                 best_base_score=best_base_score,
                 best_local_min_score=best_local_min_score,
                 status="DONE",

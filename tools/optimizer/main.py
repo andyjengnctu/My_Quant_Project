@@ -377,7 +377,6 @@ def _promote_candidate_to_run_best():
         print(f"{C_RED}❌ 找不到 candidate_best summary: {_project_relative_path(CANDIDATE_BEST_PARAMS_PATH)}{C_RESET}", file=sys.stderr)
         return 1
     run_best_summary = _load_params_summary_or_legacy_sidecar(RUN_BEST_PARAMS_PATH, RUN_BEST_SUMMARY_PATH)
-    _print_candidate_vs_run_best_summary(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
     should_promote, reason = _should_promote_candidate(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
     if not should_promote:
         print(f"{C_YELLOW}ℹ️ run_best 未進版：{reason}{C_RESET}")
@@ -855,6 +854,7 @@ def _install_nonrolling_local_min_seed_board_progress(
     seed: int,
     best_base_score=None,
     started_at: float | None = None,
+    completed_trials: int = 0,
 ) -> bool:
     if progress_board is None:
         return False
@@ -868,6 +868,7 @@ def _install_nonrolling_local_min_seed_board_progress(
             "seed_ensemble_member_index": int(member_index),
             "seed_ensemble_member_count": int(member_count),
             "seed": int(seed),
+            "completed": int(completed_trials or 0),
             "selection_start": str(period_context.get("selection_start") or ""),
             "selection_end": str(period_context.get("selection_end") or ""),
             "oos_period": str(period_context.get("oos_period") or ""),
@@ -990,6 +991,8 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                     neighbor_total=int(data.get("neighbor_total", 0) or 0),
                     current=data.get("current"),
                     best=data.get("best"),
+                    completed=int(requested_trials),
+                    total=int(requested_trials),
                     best_base_score=best_base_score,
                     elapsed_sec=max(0.0, time.perf_counter() - local_started_at),
                 )
@@ -1013,6 +1016,8 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                     task,
                     stage="DONE",
                     status=f"seed {member_index}/{member_count} skipped",
+                    completed=int(requested_trials),
+                    total=int(requested_trials),
                     elapsed_sec=max(0.0, time.perf_counter() - started_at),
                 )
                 return None
@@ -1039,6 +1044,8 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 task,
                 stage="DONE",
                 status=f"seed {member_index}/{member_count} done",
+                completed=int(requested_trials),
+                total=int(requested_trials),
                 best_base_score=member_payload.get("base_score"),
                 best_local_min_score=member_payload.get("local_min_score"),
                 elapsed_sec=max(0.0, time.perf_counter() - started_at),
@@ -1181,68 +1188,93 @@ def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, w
     return meta
 
 
-def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict[str, str]:
+def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict:
+    requested_policy = _resolve_nonrolling_seed_ensemble_policy()
+    payload = build_static_active_param_ensemble_payload(
+        members=members,
+        random_seed_ensemble=requested_policy,
+        selector=str(policy_name),
+        created_at=get_taipei_now().isoformat(),
+        meta=_build_static_seed_ensemble_meta(
+            seeds=seeds,
+            objective_mode=objective_mode,
+            walk_forward_policy=walk_forward_policy,
+            dataset_label=dataset_label,
+            selected_model_mode=selected_model_mode,
+            trials_per_seed=trials_per_seed,
+            source="nonrolling_random_seed_ensemble_policy_paramset",
+            policy_name=str(policy_name),
+        ),
+    )
+    selection_start = str(walk_forward_policy.get("train_start_date") or f"{int(walk_forward_policy.get('train_start_year', 0) or 0):04d}-01-01")
+    selection_end = str(walk_forward_policy.get("search_train_end_date") or f"{int(walk_forward_policy.get('search_train_end_year', 0) or 0):04d}-12-31")
+    oos_start_raw = walk_forward_policy.get("oos_start_date")
+    if not oos_start_raw and int(walk_forward_policy.get("oos_start_year", 0) or 0) > 0:
+        oos_start_raw = f"{int(walk_forward_policy.get('oos_start_year', 0) or 0):04d}-01-01"
+    oos_end_raw = walk_forward_policy.get("oos_end_date") or "latest"
+    payload["summary"] = {
+        "folds": 1,
+        "mode": "static",
+        "selector": str(policy_name),
+        "selection_period": f"{selection_start}~{selection_end}",
+        "oos_period": f"{oos_start_raw}~{oos_end_raw}" if oos_start_raw else "",
+        "member_count": int(len(members)),
+        "requested_seed_count": int(len(seeds)),
+        "trials_per_seed": int(trials_per_seed),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+    }
+    return payload
+
+
+def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> tuple[dict[str, str], dict[str, dict]]:
     from tools.optimizer.outer_rolling_oos import (
         BASE_RETENTION_COMPARISON_POLICY_NAMES,
         get_optimizer_paramset_policy_names,
         get_optimizer_nonrolling_policy_paramset_filename,
     )
 
-    policy_names = tuple(get_optimizer_paramset_policy_names()) + tuple(
+    first_class_policy_names = tuple(get_optimizer_paramset_policy_names())
+    replay_policy_names = first_class_policy_names + tuple(
         name
         for name in BASE_RETENTION_COMPARISON_POLICY_NAMES
-        if name not in set(get_optimizer_paramset_policy_names())
+        if name not in set(first_class_policy_names)
     )
     paths: dict[str, str] = {}
-    requested_policy = _resolve_nonrolling_seed_ensemble_policy()
-    for policy_name in policy_names:
+    payloads: dict[str, dict] = {}
+    first_class_policy_set = set(first_class_policy_names)
+    for policy_name in replay_policy_names:
         members = sorted(
             list((policy_members_by_policy or {}).get(str(policy_name)) or []),
             key=lambda item: int(dict(item).get("member_index", 0) or 0),
         )
         if not members:
             continue
-        payload = build_static_active_param_ensemble_payload(
+        payload = _build_static_seed_ensemble_policy_paramset_payload(
+            policy_name=str(policy_name),
             members=members,
-            random_seed_ensemble=requested_policy,
-            selector=str(policy_name),
-            created_at=get_taipei_now().isoformat(),
-            meta=_build_static_seed_ensemble_meta(
-                seeds=seeds,
-                objective_mode=objective_mode,
-                walk_forward_policy=walk_forward_policy,
-                dataset_label=dataset_label,
-                selected_model_mode=selected_model_mode,
-                trials_per_seed=trials_per_seed,
-                source="nonrolling_random_seed_ensemble_policy_paramset",
-                policy_name=str(policy_name),
-            ),
+            seeds=seeds,
+            objective_mode=objective_mode,
+            walk_forward_policy=walk_forward_policy,
+            dataset_label=dataset_label,
+            selected_model_mode=selected_model_mode,
+            trials_per_seed=trials_per_seed,
         )
-        selection_start = str(walk_forward_policy.get("train_start_date") or f"{int(walk_forward_policy.get('train_start_year', 0) or 0):04d}-01-01")
-        selection_end = str(walk_forward_policy.get("search_train_end_date") or f"{int(walk_forward_policy.get('search_train_end_year', 0) or 0):04d}-12-31")
-        oos_start_raw = walk_forward_policy.get("oos_start_date")
-        if not oos_start_raw and int(walk_forward_policy.get("oos_start_year", 0) or 0) > 0:
-            oos_start_raw = f"{int(walk_forward_policy.get('oos_start_year', 0) or 0):04d}-01-01"
-        oos_end_raw = walk_forward_policy.get("oos_end_date") or "latest"
-        payload["summary"] = {
-            "folds": 1,
-            "mode": "static",
-            "selector": str(policy_name),
-            "selection_period": f"{selection_start}~{selection_end}",
-            "oos_period": f"{oos_start_raw}~{oos_end_raw}" if oos_start_raw else "",
-            "member_count": int(len(members)),
-            "requested_seed_count": int(len(seeds)),
-            "trials_per_seed": int(trials_per_seed),
-            "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
-        }
+        payloads[str(policy_name)] = payload
         filename = get_optimizer_nonrolling_policy_paramset_filename(str(policy_name))
         path = os.path.join(MODELS_DIR, filename)
+        if str(policy_name) not in first_class_policy_set:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError as exc:
+                print(f"{C_YELLOW}⚠️ 無法移除舊 threshold policy 檔：{_project_relative_path(path)}｜{type(exc).__name__}: {exc}{C_RESET}")
+            continue
         _write_json_file(path, payload)
         paths[str(policy_name)] = path
-    return paths
+    return paths, payloads
 
 
-def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None) -> None:
+def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None) -> tuple[dict, dict, dict[str, dict]]:
     policy = _resolve_nonrolling_seed_ensemble_policy()
     payload = build_static_active_param_ensemble_payload(
         members=members,
@@ -1259,7 +1291,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
             source="nonrolling_random_seed_ensemble",
         ),
     )
-    policy_paramset_paths = _write_static_seed_ensemble_policy_paramsets(
+    policy_paramset_paths, policy_paramset_payloads = _write_static_seed_ensemble_policy_paramsets(
         policy_members_by_policy=dict(policy_members_by_policy or {}),
         seeds=seeds,
         objective_mode=objective_mode,
@@ -1285,7 +1317,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
             os.remove(CANDIDATE_BEST_SUMMARY_PATH)
     except OSError as exc:
         print(f"{C_YELLOW}⚠️ 無法移除舊 candidate_best summary sidecar：{_project_relative_path(CANDIDATE_BEST_SUMMARY_PATH)}｜{type(exc).__name__}: {exc}{C_RESET}")
-    return payload, summary
+    return payload, summary, policy_paramset_payloads
 
 
 
@@ -1383,6 +1415,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 backend=parallel_backend,
                 completed_folds=completed,
                 total_elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
+                completed_trials=board.get_completed_trial_count() if hasattr(board, "get_completed_trial_count") else 0,
             )
 
         progress_board = OptimizerSeedEnsembleProgressBoard(
@@ -1392,7 +1425,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         progress_board.render(force=True)
     else:
         from tools.optimizer.outer_rolling_oos import format_optimizer_seed_ensemble_progress_header
-        print(f"{C_GRAY}{format_optimizer_seed_ensemble_progress_header(folds=1, seeds=len(seeds), min_agree=int(policy['min_agree']), parallel_workers=int(parallel_workers), backend=parallel_backend, completed_folds=0, total_elapsed_sec=0.0)}{C_RESET}")
+        print(f"{C_GRAY}{format_optimizer_seed_ensemble_progress_header(folds=1, seeds=len(seeds), min_agree=int(policy['min_agree']), parallel_workers=int(parallel_workers), backend=parallel_backend, completed_folds=0, total_elapsed_sec=0.0, completed_trials=0)}{C_RESET}")
     configure_optuna_logging()
 
     def _emit_seed_progress_for_member(member_index: int, seed: int, **kwargs) -> None:
@@ -1491,6 +1524,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                     seed=int(seed),
                     best_base_score=best_base_score,
                     started_at=ensemble_started_at,
+                    completed_trials=int(requested_trials),
                 )
             elif compact_display:
                 member_session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(
@@ -1543,6 +1577,8 @@ def _run_nonrolling_random_seed_ensemble_training(
                 _emit_seed_progress_for_member(member_index, int(seed),
                     stage="DONE",
                     status=f"seed {member_index}/{len(seeds)} done",
+                    completed=int(requested_trials),
+                    total=int(requested_trials),
                     best_base_score=member_payload.get("base_score"),
                     best_local_min_score=member_payload.get("local_min_score"),
                     elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
@@ -1663,7 +1699,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         )
         return 0
 
-    ensemble_payload, _ensemble_summary = _write_static_seed_ensemble_candidate(
+    ensemble_payload, _ensemble_summary, _policy_paramset_payloads = _write_static_seed_ensemble_candidate(
         members=members,
         seeds=seeds,
         objective_mode=objective_mode,
@@ -1693,7 +1729,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         dashboard_session,
         ensemble_payload=ensemble_payload,
         elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
-        policy_paramsets=dict((_ensemble_summary or {}).get("policy_paramsets") or {}),
+        policy_paramsets=dict(_policy_paramset_payloads or {}),
     )
     print(f"{C_GRAY}⏳ seed ensemble replay 報表準備：計算 ensemble dashboard...{C_RESET}", flush=True)
     print_optimizer_static_ensemble_console_dashboard(
@@ -1707,7 +1743,6 @@ def _run_nonrolling_random_seed_ensemble_training(
     promote_status = _promote_candidate_to_run_best()
     if promote_status != 0:
         return int(promote_status)
-    print(f"{C_GREEN}✅ seed ensemble 訓練完成｜members={len(members)}{C_RESET}")
     visible_policy_paths = _visible_policy_paramset_paths(dict((_ensemble_summary or {}).get("policy_paramsets") or {}))
     output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)] + list(visible_policy_paths.items())
     _print_optimizer_output_files("💾 輸出檔案", output_entries)
@@ -1766,15 +1801,9 @@ def _resolve_cli_run_request(argv):
 
 def _prompt_optimizer_model_mode(default_model: str):
     default_normalized = str(default_model).strip().lower() or 'split'
-    default_choice = '1' if default_normalized == 'split' else '2'
-    print(f"{C_GRAY}ℹ️ 模式說明：split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。{C_RESET}")
-    choice = safe_prompt_choice(
-        "👉 訓練模式：[1] split (預設)  [2] full : ",
-        default_choice,
-        ('1', '2'),
-        'optimizer 模式',
-    )
-    return ('split', 'UI/MENU') if choice == '1' else ('full', 'UI/MENU')
+    if default_normalized not in {'split', 'full'}:
+        default_normalized = 'split'
+    return default_normalized, 'UI/MENU_DEFAULT'
 
 
 def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_OPTIMIZER_MODEL_MODE):
@@ -1808,7 +1837,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
-        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 與 val_score 最大的 candidate_val_score_best 作比較；輸入 P promote candidate；輸入 R 或 --outer-oos 執行 outer rolling monthly OOS test；outer rolling 可搭配 --timing 輸出分段耗時。正常完成訓練後會自動寫入 candidate_best、candidate_retention_best 與 candidate_val_score_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
+        print("說明: 預設 split；互動選單輸入 F 以 full 模式訓練。可用 --model split|full、--trials N 直接指定；輸入 0 匯出 candidate_best；輸入 R 或 --outer-oos 執行 outer rolling monthly OOS test。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -1894,6 +1923,22 @@ def main(argv=None, environ=None):
         )
     if trial_count_exit is not None:
         return trial_count_exit
+
+    requested_model_mode = str(getattr(session, "requested_model_mode", "") or "").strip().lower()
+    if requested_model_mode in {"split", "full"} and requested_model_mode != selected_model_mode:
+        requested_trials = int(getattr(session, "n_trials", 0) or 0)
+        requested_action = str(getattr(session, "run_action", "train") or "train")
+        selected_model_mode = requested_model_mode
+        walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode)
+        objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
+        session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+        session.n_trials = int(requested_trials)
+        session.run_action = requested_action
+        session.requested_model_mode = requested_model_mode
+        best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
+        db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if timing_mode else build_optimizer_db_file_path(dataset_profile_key, MODELS_DIR)
+        db_name = f"sqlite:///{db_file}"
+
     if str(getattr(session, "run_action", "train")) == "outer_rolling_oos":
         from tools.optimizer.outer_rolling_oos import run_outer_rolling_oos
         try:

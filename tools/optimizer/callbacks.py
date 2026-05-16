@@ -945,6 +945,14 @@ def _emit_static_replay_progress(progress_state: dict | None, message: str, *, f
             progress_state["last"] = text
 
 
+def _finish_static_replay_progress(progress_state: dict | None) -> None:
+    if progress_state is None:
+        return
+    if stdout_supports_inline_progress() and int(progress_state.get("width", 0) or 0) > 0:
+        print(flush=True)
+    progress_state["width"] = 0
+
+
 def _build_static_policy_oos_row_from_metrics(candidate_metrics: dict, benchmark_metrics: dict) -> dict:
     candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
     benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
@@ -1211,7 +1219,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         params_lines=params_lines,
         hard_gate_lines=_build_hard_gate_lines(),
     )
-    _emit_static_replay_progress(progress_state, "seed ensemble dashboard replay | done", finish=True)
+    _finish_static_replay_progress(progress_state)
     return {
         "payload_sec": float(payload_elapsed),
         "render_sec": float(max(0.0, time.perf_counter() - render_started_at)),
