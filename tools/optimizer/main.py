@@ -1287,7 +1287,7 @@ def _run_nonrolling_random_seed_ensemble_training(
             policy_members_by_policy.setdefault(str(policy_name), []).append(dict(member))
 
     if compact_display:
-        from tools.optimizer.outer_rolling_oos import OptimizerSeedEnsembleProgressBoard
+        from tools.optimizer.outer_rolling_oos import OptimizerSeedEnsembleProgressBoard, format_optimizer_seed_ensemble_progress_header
 
         period_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
         contexts = []
@@ -1305,9 +1305,12 @@ def _run_nonrolling_random_seed_ensemble_training(
             contexts.append(context)
         progress_board = OptimizerSeedEnsembleProgressBoard(
             contexts,
-            header=(
-                f"seed ensemble | folds=1 | seeds={len(seeds)} | min_agree={policy['min_agree']} | "
-                f"parallel_workers={int(parallel_workers)} | backend={parallel_backend}"
+            header=format_optimizer_seed_ensemble_progress_header(
+                folds=1,
+                seeds=len(seeds),
+                min_agree=int(policy["min_agree"]),
+                parallel_workers=int(parallel_workers),
+                backend=parallel_backend,
             ),
         )
         progress_board.render(force=True)

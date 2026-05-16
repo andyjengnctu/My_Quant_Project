@@ -4391,6 +4391,45 @@ def _parallel_progress_pct(done, total) -> float:
         return 0.0
 
 
+def format_optimizer_seed_ensemble_progress_header(
+    *,
+    folds: int,
+    seeds: int,
+    min_agree: int,
+    parallel_workers: int,
+    backend: str,
+    completed_folds: int | None = None,
+    pending_folds: int | None = None,
+    total_elapsed_sec: float | None = None,
+    fold_elapsed_sec: float | None = None,
+    setup_elapsed_sec: float | None = None,
+) -> str:
+    """Format the seed-ensemble progress header used by rolling and non-rolling paths.
+
+    The count field is always named ``folds``.  Duration fields use explicit
+    ``*_time`` names so the display cannot mix a fold count with elapsed time.
+    """
+    parts = [
+        "seed ensemble",
+        f"folds={int(folds)}",
+        f"seeds={int(seeds)}",
+        f"min_agree={int(min_agree)}",
+        f"parallel_workers={int(parallel_workers)}",
+        f"backend={str(backend or 'thread')}",
+    ]
+    if completed_folds is not None:
+        parts.append(f"completed={int(completed_folds)}/{int(folds)}")
+    if pending_folds is not None:
+        parts.append(f"pending={int(pending_folds)}")
+    if total_elapsed_sec is not None:
+        parts.append(f"total_time={_fmt_duration(total_elapsed_sec)}")
+    if fold_elapsed_sec is not None:
+        parts.append(f"fold_time={_fmt_duration(fold_elapsed_sec)}")
+    if setup_elapsed_sec is not None:
+        parts.append(f"setup_time={_fmt_duration(setup_elapsed_sec)}")
+    return " | ".join(parts)
+
+
 def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_status: str = "") -> str:
     fold_idx = int(task.get("fold_idx", progress.get("fold_idx", 0)) or 0)
     fold_count = int(task.get("fold_count", progress.get("fold_count", 0)) or 0)
@@ -4783,16 +4822,24 @@ class _ParallelFoldLiveBoard:
         total_elapsed = max(0.0, time.perf_counter() - self.overall_start)
         setup_elapsed = max(0.0, self.started_at - self.overall_start)
         # parallel fold 模式下，raw data 由各 fold worker 自行載入，
-        # worker raw 時間已包含在 folds wall 裡；不要再以 raw/other 顯示，避免與總時間對帳時重複或缺項。
-        header = (
-            f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{len(self.tasks)} | "
-            f"pending={len(pending)} | total={_fmt_duration(total_elapsed)} | "
-            f"folds={_fmt_duration(fold_wall_elapsed)} | setup={_fmt_duration(setup_elapsed)}"
-        )
-        lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
+        # worker raw 時間已包含在 fold_time wall 裡；不要再以 raw/other 顯示，避免與總時間對帳時重複或缺項。
+        total_folds = max((int(task.get("fold_count", 0) or 0) for task in self.tasks), default=len(self.tasks)) or len(self.tasks)
         if _is_rolling_random_seed_ensemble_enabled():
             seed_policy = _build_rolling_seed_ensemble_policy_payload()
             seed_count = int(seed_policy.get("seed_count", 1) or 1)
+            header = format_optimizer_seed_ensemble_progress_header(
+                folds=total_folds,
+                seeds=seed_count,
+                min_agree=int(seed_policy.get("min_agree", seed_count) or seed_count),
+                parallel_workers=resolve_optimizer_random_seed_ensemble_parallel_workers_default(seed_count),
+                backend=resolve_optimizer_random_seed_ensemble_parallel_backend_default(),
+                completed_folds=len(completed_rows_sorted),
+                pending_folds=len(pending),
+                total_elapsed_sec=total_elapsed,
+                fold_elapsed_sec=fold_wall_elapsed,
+                setup_elapsed_sec=setup_elapsed,
+            )
+            lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
                 seed_progresses = _read_latest_parallel_fold_seed_progresses_for_task(task)
                 fold_completed = int(task.get("oos_year", 0) or 0) in completed_oos
@@ -4814,6 +4861,12 @@ class _ParallelFoldLiveBoard:
                     }
                     lines.append(f"{C_GRAY}  {_format_seed_ensemble_progress_line(context, progress)}{C_RESET}")
         else:
+            header = (
+                f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{total_folds} | "
+                f"pending={len(pending)} | total_time={_fmt_duration(total_elapsed)} | "
+                f"fold_time={_fmt_duration(fold_wall_elapsed)} | setup_time={_fmt_duration(setup_elapsed)}"
+            )
+            lines = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
                 log_path = str(task.get("log_path") or "")
                 progress = _read_latest_parallel_fold_progress(log_path)
@@ -4842,8 +4895,8 @@ class _ParallelFoldLiveBoard:
             text = str(line)
             if "⏱️ 耗時摘要" in text:
                 text = "⏱️ 耗時摘要"
-            elif "⏱️ Rolling fold parallel" in text:
-                for marker in (" | total=", " | elapsed="):
+            elif "seed ensemble |" in text or "⏱️ Rolling fold parallel" in text:
+                for marker in (" | total_time=", " | total=", " | elapsed="):
                     if marker in text:
                         text = text.split(marker, 1)[0]
                         break
