@@ -4411,6 +4411,87 @@ def _read_latest_parallel_fold_progress(path: str) -> dict:
     return {}
 
 
+def _compact_policy_for_live_result(policy: dict) -> dict:
+    payload = dict(policy or {})
+    available = _policy_is_available(payload)
+    compact = {
+        "available": bool(available),
+        "unavailable_reason": str(payload.get("unavailable_reason") or payload.get("skip_reason") or ""),
+    }
+    if available:
+        for key in ("rank_1_oos", "rank_1_return_pct", "rank_1_mdd_pct", "benchmark_0050_gap", "best_gap"):
+            if key in payload:
+                try:
+                    compact[key] = float(payload.get(key, 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    compact[key] = 0.0
+        for key in ("rank_1_trial", "rank_1_trades"):
+            if key in payload:
+                compact[key] = payload.get(key)
+    return compact
+
+
+def _compact_row_for_live_result(row: dict) -> dict:
+    source = dict(row or {})
+    compact = {
+        "fold": source.get("fold"),
+        "oos_year": source.get("oos_year"),
+        "selection_period": source.get("selection_period", ""),
+        "oos_period": source.get("oos_period") or source.get("oos_year", ""),
+        "best_finalist_oos_score": float(source.get("best_finalist_oos_score", 0.0) or 0.0),
+        "benchmark_oos_score": float(source.get("benchmark_oos_score", 0.0) or 0.0),
+        "elapsed_sec": source.get("elapsed_sec"),
+    }
+    for policy_name in list(REPORT_POLICY_NAMES) + list(BASE_RETENTION_COMPARISON_POLICY_NAMES):
+        compact[policy_name] = _compact_policy_for_live_result(source.get(policy_name) or {})
+    return compact
+
+
+def _read_parallel_fold_result_row(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return None
+    for line in reversed(lines[-400:]):
+        raw = str(line).strip()
+        if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
+            continue
+        payload = _safe_progress_json_loads(raw.split("\t", 1)[1])
+        if str(payload.get("stage") or "").upper() != "FOLD_RESULT":
+            continue
+        result_row = payload.get("result_row")
+        if isinstance(result_row, dict) and result_row:
+            return dict(result_row)
+    return None
+
+
+def _merge_live_result_rows(completed_rows: list[dict], tasks: list[dict]) -> list[dict]:
+    rows_by_oos: dict[int, dict] = {}
+    for row in list(completed_rows or []):
+        if not row:
+            continue
+        try:
+            oos_key = int(row.get("oos_year", 0) or 0)
+        except (TypeError, ValueError):
+            oos_key = 0
+        if oos_key > 0:
+            rows_by_oos[oos_key] = dict(row)
+    for task in list(tasks or []):
+        row = _read_parallel_fold_result_row(str((task or {}).get("log_path") or ""))
+        if not row:
+            continue
+        try:
+            oos_key = int(row.get("oos_year", 0) or 0)
+        except (TypeError, ValueError):
+            oos_key = 0
+        if oos_key > 0 and oos_key not in rows_by_oos:
+            rows_by_oos[oos_key] = dict(row)
+    return [rows_by_oos[key] for key in sorted(rows_by_oos)]
+
+
 def _write_parallel_fold_progress_event(*, stage: str, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, **payload) -> None:
     event = {
         "stage": str(stage),
@@ -4762,6 +4843,15 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
         return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
+    if stage == "ENSEMBLE_REPLAY":
+        replay_done = int(progress.get("replay_done", 0) or 0)
+        replay_total = int(progress.get("replay_total", 0) or 0)
+        policy = str(progress.get("policy") or progress.get("status") or "policy").strip()
+        if replay_total > 0:
+            return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | policy replay {replay_done}/{replay_total} | {policy}{elapsed_text}"
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | policy replay | {policy}{elapsed_text}"
+    if stage == "FOLD_RESULT":
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | fold result ready{elapsed_text}"
     if stage == "DONE":
         status = _strip_redundant_seed_status(str(progress.get("status") or "done")) or "done"
         base_best = progress.get("best_base_score")
@@ -5283,6 +5373,10 @@ class _ParallelFoldLiveBoard:
                         "selection_period": str(task.get("selection_period") or ""),
                     }
                     lines.append(f"{C_GRAY}  {_format_seed_ensemble_progress_line(context, progress)}{C_RESET}")
+                fold_progress = _read_latest_parallel_fold_progress(str(task.get("log_path") or ""))
+                fold_stage = str(fold_progress.get("stage") or "").upper()
+                if fold_progress and fold_stage in {"ENSEMBLE_REPLAY", "FOLD_RESULT"}:
+                    lines.append(f"{C_GRAY}  {_format_parallel_fold_progress_line(task, fold_progress)}{C_RESET}")
         else:
             _ = (pending, fold_wall_elapsed, setup_elapsed)
             header = (
@@ -5303,8 +5397,9 @@ class _ParallelFoldLiveBoard:
                     }
                 log_status = _latest_parallel_fold_log_status(log_path)
                 lines.append(f"{C_GRAY}  {_format_parallel_fold_progress_line(task, progress, log_status=log_status)}{C_RESET}")
-        if completed_rows_sorted:
-            table = _render_optimizer_results_tables(completed_rows_sorted, color=True, include_chain=False, include_oos_avg=True)
+        live_result_rows = _merge_live_result_rows(completed_rows_sorted, self.tasks)
+        if live_result_rows:
+            table = _render_optimizer_results_tables(live_result_rows, color=True, include_chain=False, include_oos_avg=True)
             if table:
                 lines.append("")
                 lines.extend(table.splitlines())
@@ -5318,7 +5413,7 @@ class _ParallelFoldLiveBoard:
             text = str(line)
             if "⏱️ 耗時摘要" in text:
                 text = "⏱️ 耗時摘要"
-            elif "seed ensemble |" in text or "⏱️ Rolling fold parallel" in text:
+            elif "seed ensemble |" in text or "⏱️ Rolling fold parallel" in text or text.lstrip().startswith("folds="):
                 for marker in (" | total_time=", " | total=", " | elapsed="):
                     if marker in text:
                         text = text.split(marker, 1)[0]
@@ -5722,7 +5817,26 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
     chain_enable_rotation = bool((seed_results[0] or {}).get("chain_enable_rotation", False))
 
     eval_started = time.perf_counter()
+    replay_total = 1 + sum(1 for policy_name in CHAIN_POLICY_NAMES if _build_members_from_seed_rows_for_policy(seed_rows, policy_name))
+    replay_done = 0
+
+    def _emit_ensemble_replay_progress(policy_name: str, *, done: int | None = None, status: str = "RUN") -> None:
+        _write_parallel_fold_progress_event(
+            stage="ENSEMBLE_REPLAY",
+            fold_idx=fold_idx,
+            fold_count=fold_count,
+            oos_year=oos_year,
+            selection_start=selection_start,
+            selection_end=selection_end,
+            status=str(status),
+            policy=str(policy_name),
+            replay_done=int(replay_done if done is None else done),
+            replay_total=int(replay_total),
+            elapsed_sec=max(0.0, time.perf_counter() - eval_started),
+        )
+
     best_members = _build_members_from_seed_rows_for_best(seed_rows)
+    _emit_ensemble_replay_progress("candidate", done=0, status="RUN")
     best_metrics = _evaluate_period_ensemble_members(
         selected_data_dir=selected_data_dir,
         members=best_members,
@@ -5732,6 +5846,8 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
         max_positions=chain_max_positions,
         enable_rotation=chain_enable_rotation,
     ) if best_members else {}
+    replay_done += 1
+    _emit_ensemble_replay_progress("candidate", done=replay_done, status="DONE")
     best_score = float(best_metrics.get("score", 0.0))
     benchmark_score = float(best_metrics.get("benchmark_oos_score", 0.0))
     benchmark_return_pct = float(best_metrics.get("benchmark_return_pct", 0.0))
@@ -5752,6 +5868,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
             oos_end_date=oos_end_date,
         )
         policy_schedules[policy_name] = schedule
+        _emit_ensemble_replay_progress(policy_name, done=replay_done, status="RUN")
         metrics = _evaluate_period_ensemble_members(
             selected_data_dir=selected_data_dir,
             members=members,
@@ -5761,6 +5878,8 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
             max_positions=chain_max_positions,
             enable_rotation=chain_enable_rotation,
         )
+        replay_done += 1
+        _emit_ensemble_replay_progress(policy_name, done=replay_done, status="DONE")
         if benchmark_score == 0.0:
             benchmark_score = float(metrics.get("benchmark_oos_score", 0.0))
             benchmark_return_pct = float(metrics.get("benchmark_return_pct", 0.0))
@@ -5812,6 +5931,18 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
         "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
         "optimizer_seeds": [_extract_seed_from_policy_schedules(row) for row in seed_rows],
     }
+
+    _write_parallel_fold_progress_event(
+        stage="FOLD_RESULT",
+        fold_idx=fold_idx,
+        fold_count=fold_count,
+        oos_year=oos_year,
+        selection_start=selection_start,
+        selection_end=selection_end,
+        status="row ready",
+        result_row=_compact_row_for_live_result(row),
+        elapsed_sec=float(row.get("elapsed_sec", 0.0) or 0.0),
+    )
 
     timing_row = dict(timing_rows[0]) if timing_rows else {
         "fold": f"{fold_idx}/{fold_count}",
