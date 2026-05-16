@@ -1435,24 +1435,21 @@ def _run_nonrolling_random_seed_ensemble_training(
             })
             contexts.append(context)
         def _format_nonrolling_seed_header(board):
-            done_count = sum(
-                1
-                for progress in dict(getattr(board, "progress_by_key", {}) or {}).values()
-                if str(dict(progress or {}).get("stage") or "").upper() == "DONE"
-            )
-            completed = 1 if int(done_count) >= int(len(seeds)) else 0
+            completed = board.get_completed_fold_count() if hasattr(board, "get_completed_fold_count") else 0
             return format_optimizer_seed_ensemble_progress_header(
                 folds=1,
                 seeds=len(seeds),
                 min_agree=int(policy["min_agree"]),
                 parallel_workers=int(parallel_workers),
                 backend=parallel_backend,
-                completed_folds=completed,
+                completed_folds=int(completed),
                 total_elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
                 completed_trials=board.get_completed_trial_count() if hasattr(board, "get_completed_trial_count") else 0,
                 search_wall_elapsed_sec=board.get_search_wall_elapsed_sec() if hasattr(board, "get_search_wall_elapsed_sec") else None,
                 completed_local_min_trials=board.get_completed_local_min_trial_count() if hasattr(board, "get_completed_local_min_trial_count") else 0,
                 local_min_wall_elapsed_sec=board.get_local_min_wall_elapsed_sec() if hasattr(board, "get_local_min_wall_elapsed_sec") else None,
+                completed_replays=board.get_completed_replay_count() if hasattr(board, "get_completed_replay_count") else 0,
+                replay_wall_elapsed_sec=board.get_replay_wall_elapsed_sec() if hasattr(board, "get_replay_wall_elapsed_sec") else None,
             )
 
         progress_board = OptimizerSeedEnsembleProgressBoard(
@@ -1754,13 +1751,11 @@ def _run_nonrolling_random_seed_ensemble_training(
         policy_members_by_policy=policy_members_by_policy,
     )
     from tools.optimizer.callbacks import (
+        build_optimizer_static_ensemble_single_fold_oos_row,
         print_optimizer_static_ensemble_console_dashboard,
         print_optimizer_static_ensemble_rolling_oos_table,
     )
-    if compact_display and progress_board is not None:
-        progress_board.close()
     if dashboard_session is None:
-        print(f"{C_GRAY}⏳ seed ensemble replay 報表準備：載入 dashboard raw data...{C_RESET}", flush=True)
         dashboard_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         dashboard_session.load_raw_data(
             selected_data_dir,
@@ -1768,22 +1763,44 @@ def _run_nonrolling_random_seed_ensemble_training(
             required_min_rows=optimizer_required_min_rows,
             verbose=False,
         )
-    print(f"{C_GRAY}⏳ seed ensemble replay 報表準備：計算 policy OOS table...{C_RESET}", flush=True)
-    print_optimizer_static_ensemble_rolling_oos_table(
-        dashboard_session,
-        ensemble_payload=ensemble_payload,
-        elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
-        policy_paramsets=dict(_policy_paramset_payloads or {}),
-    )
-    print(f"{C_GRAY}⏳ seed ensemble replay 報表準備：計算 ensemble dashboard...{C_RESET}", flush=True)
-    print_optimizer_static_ensemble_console_dashboard(
-        dashboard_session,
-        ensemble_payload=ensemble_payload,
-        seeds=seeds,
-        milestone_title="🏆 ENSEMBLE 訓練結果",
-        title="ENSEMBLE 績效與風險對比表",
-        force=True,
-    )
+    if compact_display and progress_board is not None:
+        period_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
+
+        def _nonrolling_replay_progress(event: dict) -> None:
+            progress = dict(event or {})
+            progress.setdefault("fold_idx", 1)
+            progress.setdefault("fold_count", 1)
+            progress.setdefault("oos_year", int(period_context.get("oos_year", 0) or 0))
+            progress.setdefault("selection_start", str(period_context.get("selection_start") or ""))
+            progress.setdefault("selection_end", str(period_context.get("selection_end") or ""))
+            with progress_lock:
+                progress_board.update_fold_progress(fold_idx=1, progress=progress)
+
+        oos_row = build_optimizer_static_ensemble_single_fold_oos_row(
+            dashboard_session,
+            ensemble_payload=ensemble_payload,
+            elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
+            policy_paramsets=dict(_policy_paramset_payloads or {}),
+            progress_callback=_nonrolling_replay_progress,
+        )
+        with progress_lock:
+            progress_board.update_result_row(oos_row, force=True)
+            progress_board.close()
+    else:
+        print_optimizer_static_ensemble_rolling_oos_table(
+            dashboard_session,
+            ensemble_payload=ensemble_payload,
+            elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
+            policy_paramsets=dict(_policy_paramset_payloads or {}),
+        )
+        print_optimizer_static_ensemble_console_dashboard(
+            dashboard_session,
+            ensemble_payload=ensemble_payload,
+            seeds=seeds,
+            milestone_title="🏆 ENSEMBLE 訓練結果",
+            title="ENSEMBLE 績效與風險對比表",
+            force=True,
+        )
     promote_status = _promote_candidate_to_run_best()
     if promote_status != 0:
         return int(promote_status)

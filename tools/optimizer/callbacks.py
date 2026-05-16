@@ -995,6 +995,7 @@ def _build_static_policy_rows_from_paramsets(
     progress_state: dict | None = None,
     progress_offset: int = 0,
     progress_total: int | None = None,
+    progress_emit=None,
 ) -> dict[str, dict]:
     rows: dict[str, dict] = {}
     payloads = _load_static_policy_paramset_payloads(policy_paramsets)
@@ -1002,10 +1003,13 @@ def _build_static_policy_rows_from_paramsets(
     for idx, (policy_name, payload) in enumerate(payloads.items(), start=1):
         step = int(progress_offset) + int(idx)
         if total > 0:
-            _emit_static_replay_progress(
-                progress_state,
-                f"seed ensemble policy replay | {step}/{total} | {policy_name}",
-            )
+            if callable(progress_emit):
+                progress_emit(str(policy_name), done=max(0, step - 1), total=total, status="RUN")
+            else:
+                _emit_static_replay_progress(
+                    progress_state,
+                    f"seed ensemble policy replay | {step}/{total} | {policy_name}",
+                )
         try:
             candidate_metrics, benchmark_metrics, _range_text = _run_static_ensemble_dashboard_replay(
                 session,
@@ -1022,10 +1026,12 @@ def _build_static_policy_rows_from_paramsets(
             }
             continue
         rows[str(policy_name)] = _build_static_policy_oos_row_from_metrics(candidate_metrics, benchmark_metrics)
+        if total > 0 and callable(progress_emit):
+            progress_emit(str(policy_name), done=step, total=total, status="DONE")
     return rows
 
 
-def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None) -> dict:
+def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None, progress_callback=None) -> dict:
     """Build the single-fold row used by the shared rolling-OOS table renderer."""
     policy = get_active_param_ensemble_policy(ensemble_payload)
     schedule = ensemble_payload.get("params_ensemble") or []
@@ -1048,9 +1054,34 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
         oos_end_date = selection_end
     replay_policy_paramsets = policy_paramsets or ensemble_payload.get("policy_paramsets")
     replay_payloads = _load_static_policy_paramset_payloads(replay_policy_paramsets)
-    progress_state: dict = {}
+    progress_state: dict | None = None if callable(progress_callback) else {}
     replay_total = 1 + int(len(replay_payloads))
-    _emit_static_replay_progress(progress_state, f"seed ensemble policy replay | 1/{replay_total} | candidate_best")
+    replay_started_perf = time.perf_counter()
+    replay_started_ts = time.time()
+    replay_last_done_ts: float | None = None
+
+    def _emit_replay(policy_name: str, *, done: int, total: int | None = None, status: str = "RUN") -> None:
+        nonlocal replay_last_done_ts
+        done_value = int(done or 0)
+        total_value = int(replay_total if total is None else total)
+        if done_value > 0:
+            replay_last_done_ts = time.time()
+        if callable(progress_callback):
+            progress_callback({
+                "stage": "ENSEMBLE_REPLAY",
+                "status": str(status or "RUN"),
+                "policy": str(policy_name),
+                "replay_done": int(done_value),
+                "replay_total": int(total_value),
+                "replay_started_ts": float(replay_started_ts),
+                "replay_last_done_ts": float(replay_last_done_ts) if replay_last_done_ts is not None else None,
+                "elapsed_sec": max(0.0, time.perf_counter() - replay_started_perf),
+            })
+        else:
+            step = max(1, min(total_value, done_value if done_value > 0 else 1))
+            _emit_static_replay_progress(progress_state, f"seed ensemble policy replay | {step}/{total_value} | {policy_name}")
+
+    _emit_replay("candidate_best", done=0, total=replay_total, status="RUN")
     try:
         candidate_metrics, benchmark_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
             session,
@@ -1059,6 +1090,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
             end_date=oos_end_date,
             initial_capital=initial_capital,
         )
+        _emit_replay("candidate_best", done=1, total=replay_total, status="DONE")
         candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
         benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
         candidate_policy_row = _build_static_policy_oos_row_from_metrics(candidate_metrics, benchmark_metrics)
@@ -1071,9 +1103,11 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
             progress_state=progress_state,
             progress_offset=1,
             progress_total=replay_total,
+            progress_emit=_emit_replay if callable(progress_callback) else None,
         )
     finally:
-        _emit_static_replay_progress(progress_state, "seed ensemble policy replay | done", finish=True)
+        if not callable(progress_callback):
+            _emit_static_replay_progress(progress_state, "seed ensemble policy replay | done", finish=True)
     unavailable_policy = {
         "available": False,
         "rank_1_oos": 0.0,
@@ -1103,7 +1137,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
             row[str(policy_name)] = dict(unavailable_policy)
     return row
 
-def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None) -> None:
+def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None, progress_callback=None) -> dict | None:
     """Print non-rolling ensemble summary through the exact rolling-OOS table renderer."""
     from tools.optimizer.outer_rolling_oos import render_optimizer_results_tables
 
@@ -1112,6 +1146,7 @@ def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_paylo
         ensemble_payload=ensemble_payload,
         elapsed_sec=elapsed_sec,
         policy_paramsets=policy_paramsets,
+        progress_callback=progress_callback,
     )
     table_text = render_optimizer_results_tables(
         [row],
