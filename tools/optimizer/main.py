@@ -44,8 +44,9 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
-    is_optimizer_nonrolling_train_result_table_enabled,
 )
+
+from config.display_policy import is_optimizer_nonrolling_train_result_table_enabled
 
 from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
 

@@ -25,7 +25,6 @@ SCORE_CALC_METHOD = 'RoMD'
 # 'ANNUAL_RETURN' = 分子使用年化報酬率
 SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'  
 
-SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0  # 系統得分顯示倍率，僅影響 console/report 顯示)
 
 # optimizer 提供兩種資料區間模式：
 # split = 指定資料選參; 額外切 OOS
@@ -88,9 +87,6 @@ def is_optimizer_local_min_review_enabled() -> bool:
     return bool(OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED)
 
 
-def is_optimizer_nonrolling_train_result_table_enabled() -> bool:
-    return bool(OPTIMIZER_NONROLLING_TRAIN_RESULT_TABLE_ENABLED)
-
 
 def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
     requested_trials = max(0, int(n_trials))
@@ -116,11 +112,6 @@ OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 2
 # "auto" = 過半數；整數 = 至少幾個 seed 同意。解析後會 clamp 到 1~N，因此最大值永遠是 N。
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 2
-
-# 非 rolling 訓練結果表格顯示開關。
-# True  = 訓練結束後顯示 candidate / seed ensemble 結果表格。
-# False = 仍計算與輸出正式 artifacts，但不顯示結果表格，降低 console 洗版。
-OPTIMIZER_NONROLLING_TRAIN_RESULT_TABLE_ENABLED = False
 
 # Rolling OOS optimizer search 預設 trial 數。
 # CLI --trials 仍可覆寫；此值只控制互動提示與未指定 trials 時的預設。
@@ -180,7 +171,6 @@ def build_training_score_policy_snapshot():
         "BUY_SORT_METHOD": BUY_SORT_METHOD,
         "SCORE_CALC_METHOD": SCORE_CALC_METHOD,
         "SCORE_NUMERATOR_METHOD": SCORE_NUMERATOR_METHOD,
-        "SYSTEM_SCORE_DISPLAY_MULTIPLIER": SYSTEM_SCORE_DISPLAY_MULTIPLIER,
         "OPTIMIZER_FIXED_TP_PERCENT": OPTIMIZER_FIXED_TP_PERCENT,
         "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED": is_optimizer_local_min_review_enabled(),
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,
@@ -191,7 +181,6 @@ def build_training_score_policy_snapshot():
             seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
             min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
         ),
-        "OPTIMIZER_NONROLLING_TRAIN_RESULT_TABLE_ENABLED": is_optimizer_nonrolling_train_result_table_enabled(),
         "OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED": OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
         "OPTIMIZER_INNER_VALIDATE_MIN_SCORE": OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
         "OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE": OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
@@ -213,5 +202,4 @@ def build_optimizer_train_test_policy_snapshot():
         seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
         min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     )
-    payload["OPTIMIZER_NONROLLING_TRAIN_RESULT_TABLE_ENABLED"] = is_optimizer_nonrolling_train_result_table_enabled()
     return payload

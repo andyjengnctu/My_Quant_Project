@@ -40,7 +40,6 @@ from config.training_policy import (  # noqa: F401
     EV_CALC_METHOD,
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
-    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
     OPTIMIZER_FIXED_TP_PERCENT,
     DEFAULT_OPTIMIZER_MODEL_MODE,
     PREDEPLOY_SELECTION_START_YEAR,
@@ -48,6 +47,10 @@ from config.training_policy import (  # noqa: F401
     build_selection_policy_snapshot,
     build_training_score_policy_snapshot,
     build_training_threshold_snapshot,
+)
+from config.display_policy import (  # noqa: F401
+    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+    build_display_policy_snapshot,
 )
 from config.training_performance_policy import (  # noqa: F401
     OPTIMIZER_FEATURE_BANK_MAX_ITEMS,

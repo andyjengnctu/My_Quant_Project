@@ -16,6 +16,7 @@ project/
 │  └─ workbench.py                    # GUI 工作台正式入口（薄入口）
 ├─ config/
 │  ├─ training_policy.py              # 訓練政策與 selection gate
+│  ├─ display_policy.py               # console/report 顯示政策
 │  └─ execution_policy.py             # 資金、費用與 runtime 執行預設
 ├─ core/
 │  ├─ config.py                       # 相容 façade；穩定匯出設定常數與參數契約
