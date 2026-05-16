@@ -4468,6 +4468,79 @@ def _read_parallel_fold_result_row(path: str) -> dict | None:
     return None
 
 
+
+
+def _read_parallel_fold_replay_phase_metrics(path: str) -> dict:
+    """Read fold-level policy replay throughput metrics from a fold log.
+
+    The replay display metric uses the same wall-clock throughput definition as
+    search/local-min: first replay event timestamp to last completed replay event
+    timestamp, divided by completed replay units.  The completed count is the
+    latest replay_done value for this fold, not the number of log events.
+    """
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return {}
+    started: list[float] = []
+    done_ts: list[float] = []
+    completed = 0
+    for line in lines[-800:]:
+        raw = str(line).strip()
+        if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
+            continue
+        payload = _safe_progress_json_loads(raw.split("\t", 1)[1])
+        if str(payload.get("stage") or "").upper() != "ENSEMBLE_REPLAY":
+            continue
+        ts = _safe_progress_ts(payload)
+        replay_started = _safe_progress_float(payload, "replay_started_ts")
+        if replay_started is not None:
+            started.append(float(replay_started))
+        elif ts is not None:
+            started.append(float(ts))
+        try:
+            replay_done = int(payload.get("replay_done", 0) or 0)
+        except (TypeError, ValueError):
+            replay_done = 0
+        if replay_done > completed:
+            completed = int(replay_done)
+        replay_done_ts = _safe_progress_float(payload, "replay_last_done_ts")
+        if replay_done_ts is not None:
+            done_ts.append(float(replay_done_ts))
+        elif replay_done > 0 and ts is not None:
+            done_ts.append(float(ts))
+    result = {"completed_replays": int(max(0, completed))}
+    if started:
+        result["replay_started_ts"] = min(started)
+    if done_ts:
+        result["replay_last_done_ts"] = max(done_ts)
+    if started and done_ts:
+        result["replay_wall_elapsed_sec"] = max(0.0, max(done_ts) - min(started))
+    return result
+
+
+def _collect_parallel_fold_replay_phase_metrics(tasks: list[dict]) -> dict:
+    completed_replays = 0
+    replay_started: list[float] = []
+    replay_done: list[float] = []
+    for task in list(tasks or []):
+        metrics = _read_parallel_fold_replay_phase_metrics(str((task or {}).get("log_path") or ""))
+        completed_replays += int(metrics.get("completed_replays", 0) or 0)
+        if metrics.get("replay_started_ts") is not None:
+            replay_started.append(float(metrics["replay_started_ts"]))
+        if metrics.get("replay_last_done_ts") is not None:
+            replay_done.append(float(metrics["replay_last_done_ts"]))
+    replay_span = None
+    if replay_started and replay_done:
+        replay_span = max(0.0, max(replay_done) - min(replay_started))
+    return {
+        "completed_replays": int(completed_replays),
+        "replay_wall_elapsed_sec": replay_span,
+    }
+
 def _merge_live_result_rows(completed_rows: list[dict], tasks: list[dict]) -> list[dict]:
     rows_by_oos: dict[int, dict] = {}
     for row in list(completed_rows or []):
@@ -4759,6 +4832,8 @@ def format_optimizer_seed_ensemble_progress_header(
     search_wall_elapsed_sec: float | None = None,
     completed_local_min_trials: int | None = None,
     local_min_wall_elapsed_sec: float | None = None,
+    completed_replays: int | None = None,
+    replay_wall_elapsed_sec: float | None = None,
 ) -> str:
     """Format the seed-ensemble progress header used by rolling and non-rolling paths."""
     _ = (parallel_workers, backend, pending_folds, fold_elapsed_sec, setup_elapsed_sec)
@@ -4781,11 +4856,17 @@ def format_optimizer_seed_ensemble_progress_header(
         local_count = 0
     if trial_count > 0 and search_wall_elapsed_sec is not None:
         parts.append(f"avg_trial={_fmt_seconds_3(float(search_wall_elapsed_sec) / float(trial_count))}")
+    try:
+        replay_count = int(completed_replays or 0)
+    except (TypeError, ValueError):
+        replay_count = 0
     if local_count > 0 and local_min_wall_elapsed_sec is not None:
         parts.append(f"avg_local={_fmt_seconds_3(float(local_min_wall_elapsed_sec) / float(local_count))}")
-    all_count = max(0, int(trial_count) + int(local_count))
+    if replay_count > 0 and replay_wall_elapsed_sec is not None:
+        parts.append(f"avg_replay={_fmt_seconds_3(float(replay_wall_elapsed_sec) / float(replay_count))}")
+    all_count = max(0, int(trial_count) + int(local_count) + int(replay_count))
     if all_count > 0 and total_elapsed_sec is not None:
-        parts.append(f"avg_all = {_fmt_seconds_3(float(total_elapsed_sec) / float(all_count))}")
+        parts.append(f"avg_all={_fmt_seconds_3(float(total_elapsed_sec) / float(all_count))}")
     return " | ".join(parts)
 
 
@@ -5336,6 +5417,7 @@ class _ParallelFoldLiveBoard:
                 for progress in dict(progress_map or {}).values()
             )
             completed_trials = int(phase_metrics.get("completed_trials", 0) or 0)
+            replay_metrics = _collect_parallel_fold_replay_phase_metrics(self.tasks)
             header = format_optimizer_seed_ensemble_progress_header(
                 folds=total_folds,
                 seeds=seed_count,
@@ -5351,6 +5433,8 @@ class _ParallelFoldLiveBoard:
                 search_wall_elapsed_sec=phase_metrics.get("search_wall_elapsed_sec"),
                 completed_local_min_trials=int(phase_metrics.get("completed_local_min_trials", 0) or 0),
                 local_min_wall_elapsed_sec=phase_metrics.get("local_min_wall_elapsed_sec"),
+                completed_replays=int(replay_metrics.get("completed_replays", 0) or 0),
+                replay_wall_elapsed_sec=replay_metrics.get("replay_wall_elapsed_sec"),
             )
             lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
             for task in self.tasks:
@@ -5817,10 +5901,16 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
     chain_enable_rotation = bool((seed_results[0] or {}).get("chain_enable_rotation", False))
 
     eval_started = time.perf_counter()
+    replay_started_ts = time.time()
+    replay_last_done_ts: float | None = None
     replay_total = 1 + sum(1 for policy_name in CHAIN_POLICY_NAMES if _build_members_from_seed_rows_for_policy(seed_rows, policy_name))
     replay_done = 0
 
     def _emit_ensemble_replay_progress(policy_name: str, *, done: int | None = None, status: str = "RUN") -> None:
+        nonlocal replay_last_done_ts
+        done_value = int(replay_done if done is None else done)
+        if done_value > 0:
+            replay_last_done_ts = time.time()
         _write_parallel_fold_progress_event(
             stage="ENSEMBLE_REPLAY",
             fold_idx=fold_idx,
@@ -5830,8 +5920,10 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
             selection_end=selection_end,
             status=str(status),
             policy=str(policy_name),
-            replay_done=int(replay_done if done is None else done),
+            replay_done=int(done_value),
             replay_total=int(replay_total),
+            replay_started_ts=float(replay_started_ts),
+            replay_last_done_ts=float(replay_last_done_ts) if replay_last_done_ts is not None else None,
             elapsed_sec=max(0.0, time.perf_counter() - eval_started),
         )
 
@@ -6575,7 +6667,6 @@ def run_outer_rolling_oos(
     shared_raw_context = None
     if fold_parallel_enabled:
         raw_data_load_sec = 0.0
-        print(f"{C_CYAN}⏱️ Rolling 資料載入模式：parallel folds 共用磁碟 raw cache lock | folds={fold_count}{C_RESET}")
     else:
         shared_load_start = time.perf_counter()
         shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
