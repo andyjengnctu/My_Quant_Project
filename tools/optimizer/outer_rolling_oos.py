@@ -3604,7 +3604,7 @@ def _table_separator(width: int = 218) -> str:
     return "-" * int(width)
 
 
-def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None) -> str:
+def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, table_title: str = "ROLLING MONTHLY OOS RESULTS") -> str:
     display_rows = list(rows or [])
     if include_oos_avg and display_rows:
         avg_row = _build_oos_avg_row(display_rows)
@@ -3627,7 +3627,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     }
     policy_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
-    lines.append("ROLLING MONTHLY OOS RESULTS")
+    lines.append(str(table_title or "ROLLING MONTHLY OOS RESULTS"))
     policy_header = " | ".join(_pad_ansi(REPORT_POLICY_LABELS[name], policy_group_width, align="^") for name in REPORT_POLICY_NAMES)
     policy_subheader = " | ".join(
         f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')}"
@@ -3733,7 +3733,7 @@ def _build_base_retention_comparison_oos_avg_row(rows: list[dict]) -> dict | Non
     return row
 
 
-def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None) -> str:
+def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
     display_rows = list(rows or [])
     if include_oos_avg and not include_chain:
         avg_row = _build_base_retention_comparison_oos_avg_row(display_rows)
@@ -3753,7 +3753,7 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
         "elapsed": 8,
     }
     lines: list[str] = []
-    lines.append("BASE RETENTION THRESHOLD OOS RESULTS")
+    lines.append(str(table_title or "BASE RETENTION THRESHOLD OOS RESULTS"))
     policy_header = " | ".join(
         _pad_ansi(BASE_RETENTION_COMPARISON_POLICY_LABELS[name], widths["score"], align="^")
         for name in BASE_RETENTION_COMPARISON_POLICY_NAMES
@@ -3796,7 +3796,7 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
     return "\n".join(lines)
 
 
-def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None) -> str:
+def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
     tables = []
     main_table = _render_results_table(
         rows,
@@ -3804,6 +3804,7 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         include_chain=include_chain,
         include_oos_avg=include_oos_avg,
         chained_override=chained_override,
+        table_title=main_table_title,
     )
     if main_table:
         tables.append(main_table)
@@ -3813,13 +3814,14 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         include_chain=include_chain,
         include_oos_avg=include_oos_avg,
         chained_override=chained_override,
+        table_title=retention_table_title,
     )
     if retention_table:
         tables.append(retention_table)
     return "\n\n".join(tables)
 
 
-def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None) -> str:
+def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
     """Render optimizer OOS result tables through the rolling-OOS table source.
 
     Non-rolling summary display intentionally uses this public wrapper with a
@@ -3831,6 +3833,8 @@ def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, inc
         include_chain=include_chain,
         include_oos_avg=include_oos_avg,
         chained_override=chained_override,
+        main_table_title=main_table_title,
+        retention_table_title=retention_table_title,
     )
 
 

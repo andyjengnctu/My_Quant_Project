@@ -1612,6 +1612,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     print_optimizer_static_ensemble_rolling_oos_table(
         dashboard_session,
         ensemble_payload=ensemble_payload,
+        elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
         policy_paramsets=dict((_ensemble_summary or {}).get("policy_paramsets") or {}),
     )
     print(f"{C_GRAY}⏳ nonrolling replay 報表準備：計算 ensemble dashboard...{C_RESET}", flush=True)

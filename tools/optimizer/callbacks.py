@@ -226,6 +226,22 @@ def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: fl
     return f"{rendered} {_colorize(delta_text, _delta_color(delta_value))}"
 
 
+def _optimizer_score_metric_label() -> str:
+    method = str(SCORE_CALC_METHOD or "").strip() or "Score"
+    numerator = str(SCORE_NUMERATOR_METHOD or "").strip() or "TOTAL_RETURN"
+    if method == "RoMD" and numerator == "TOTAL_RETURN":
+        return "報酬回撤比 (RoMD)"
+    if method == "RoMD" and numerator == "ANNUAL_RETURN":
+        return "年化報酬回撤比 (RoMD)"
+    return f"策略評分 ({method}/{numerator})"
+
+
+def _optimizer_train_score_display_label() -> str:
+    method = str(SCORE_CALC_METHOD or "").strip() or "Score"
+    numerator = str(SCORE_NUMERATOR_METHOD or "").strip() or "TOTAL_RETURN"
+    return f"Train Score[{method}/{numerator}]"
+
+
 def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict | None, benchmark_metrics: dict | None = None):
     reference_metrics = dict(reference_metrics or {})
     benchmark_metrics = dict(benchmark_metrics or {})
@@ -340,7 +356,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
             bench_delta_text = ""
             reference_delta_text = ""
 
-        use_blue = name == "報酬回撤比 (RoMD)"
+        use_blue = name == _optimizer_score_metric_label()
         _append_row(
             name,
             cand_plain,
@@ -359,7 +375,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
     add_row("總資產報酬率", "pf_return", kind="pct")
     add_row("年化報酬率", "annual_return_pct", kind="pct")
     add_row("年度最差報酬", "min_full_year_return_pct", kind="pct")
-    add_row("報酬回撤比 (RoMD)", "pf_romd", kind="float2")
+    add_row(_optimizer_score_metric_label(), "pf_romd", kind="float2")
     add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
     add_row("月度獲利勝率", "m_win_rate", kind="pct")
     add_row("系統實戰勝率", "win_rate", kind="pct")
@@ -641,7 +657,13 @@ def _compute_reference_console_cache(session):
             "reserved_buy_fill_rate": float(reserved_buy_fill_rate),
             "avg_exposure": float(avg_exp),
             "final_equity": float(final_eq),
-            "pf_romd": _calc_romd(float(ret_pct), float(mdd)),
+            "pf_romd": float(calc_portfolio_score(
+                float(ret_pct),
+                float(mdd),
+                float(m_win_rate),
+                float(r_sq),
+                annual_return_pct=float(annual_return_pct),
+            )),
             "source_path": params_path,
             "wf_report": None,
         }
@@ -719,7 +741,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
     search_train_dates = _build_search_train_dates_for_session(session)
     latest_data_end = _latest_data_end_text(session)
     if model_mode == "split":
-        system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.3f}（Train RoMD／僅供選參）"
+        system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.3f}（{_optimizer_train_score_display_label()}／僅供選參）"
     else:
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
     initial_capital = _safe_float(get_p(params, "initial_capital", 0.0))
@@ -743,7 +765,13 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "reserved_buy_fill_rate": _safe_float(attrs.get("reserved_buy_fill_rate", 0.0)),
         "avg_exposure": _safe_float(attrs.get("avg_exposure", 0.0)),
         "final_equity": _safe_float(attrs.get("final_equity", 0.0)),
-        "pf_romd": _calc_romd(_safe_float(attrs.get("pf_return", 0.0)), _safe_float(attrs.get("pf_mdd", 0.0))),
+        "pf_romd": float(calc_portfolio_score(
+            _safe_float(attrs.get("pf_return", 0.0)),
+            _safe_float(attrs.get("pf_mdd", 0.0)),
+            _safe_float(attrs.get("m_win_rate", 0.0)),
+            _safe_float(attrs.get("r_squared", 0.0)),
+            annual_return_pct=_safe_float(attrs.get("annual_return_pct", 0.0)),
+        )),
     }
     benchmark_train_metrics = {
         "pf_return": _safe_float(attrs.get("bm_return", 0.0)),
@@ -752,7 +780,13 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "pf_mdd": _safe_float(attrs.get("bm_mdd", 0.0)),
         "r_squared": _safe_float(attrs.get("bm_r_squared", 0.0)),
         "m_win_rate": _safe_float(attrs.get("bm_m_win_rate", 0.0)),
-        "pf_romd": _calc_romd(_safe_float(attrs.get("bm_return", 0.0)), _safe_float(attrs.get("bm_mdd", 0.0))),
+        "pf_romd": float(calc_portfolio_score(
+            _safe_float(attrs.get("bm_return", 0.0)),
+            _safe_float(attrs.get("bm_mdd", 0.0)),
+            _safe_float(attrs.get("bm_m_win_rate", 0.0)),
+            _safe_float(attrs.get("bm_r_squared", 0.0)),
+            annual_return_pct=_safe_float(attrs.get("bm_annual_return_pct", 0.0)),
+        )),
         "final_equity": _benchmark_final_equity(initial_capital, _safe_float(attrs.get("bm_return", 0.0))),
     }
     reference_cache = _get_reference_console_cache(session)
@@ -1071,7 +1105,14 @@ def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_paylo
         elapsed_sec=elapsed_sec,
         policy_paramsets=policy_paramsets,
     )
-    table_text = render_optimizer_results_tables([row], color=True, include_chain=False, include_oos_avg=False)
+    table_text = render_optimizer_results_tables(
+        [row],
+        color=True,
+        include_chain=False,
+        include_oos_avg=False,
+        main_table_title="NON-ROLLING SEED ENSEMBLE OOS RESULTS",
+        retention_table_title="NON-ROLLING BASE RETENTION THRESHOLD OOS RESULTS",
+    )
     if table_text:
         print("\n" + table_text)
 
@@ -1160,7 +1201,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         objective_mode=str(session.objective_mode),
         score_calc_method=SCORE_CALC_METHOD,
         score_numerator_method=SCORE_NUMERATOR_METHOD,
-        system_score_display=f"{_safe_float(candidate_train_metrics.get('pf_romd', 0.0)):.3f}（Train RoMD／ENSEMBLE）",
+        system_score_display=f"{_safe_float(candidate_train_metrics.get('pf_romd', 0.0)):.3f}（{_optimizer_train_score_display_label()}／ENSEMBLE）",
         training_title=f"【訓練期間績效對比｜{train_range_text}】",
         training_rows=train_rows,
         testing_title=test_title,
