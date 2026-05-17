@@ -1409,14 +1409,27 @@ def _infer_period_end(row: dict, *, period_key: str, end_key: str) -> str:
     return _canonical_date_text(end) if end else ""
 
 
+def _timestamp_or_none(value):
+    timestamp = pd.to_datetime(value, errors="coerce")
+    if pd.isna(timestamp):
+        return None
+    return pd.Timestamp(timestamp)
+
+
+def _timestamp_year_or_none(value) -> int | None:
+    timestamp = _timestamp_or_none(value)
+    if timestamp is None:
+        return None
+    return int(timestamp.year)
+
+
 def _oos_key_from_start_date(value, default: int = 0) -> int:
     text = str(value or "").strip()
     if not text:
         return int(default)
-    try:
-        return _period_key(pd.Timestamp(text))
-    except (TypeError, ValueError, OverflowError):
-        pass
+    timestamp = _timestamp_or_none(text)
+    if timestamp is not None:
+        return _period_key(timestamp)
     digits = re.sub(r"\D", "", text)
     if len(digits) >= 6:
         try:
@@ -1536,14 +1549,12 @@ def normalize_optimizer_seed_ensemble_fold_row(row: dict, *, context: dict | Non
     if str(canonical.get("oos_period") or "").strip() in {"", "latest"} and oos_start:
         canonical["oos_period"] = f"{oos_start}~{oos_end or 'latest'}"
     source.update(canonical)
-    try:
-        source["selection_start_year"] = int(pd.Timestamp(source["selection_start_date"]).year)
-    except (TypeError, ValueError, OverflowError):
-        pass
-    try:
-        source["selection_end_year"] = int(pd.Timestamp(source["selection_end_date"]).year)
-    except (TypeError, ValueError, OverflowError):
-        pass
+    selection_start_year = _timestamp_year_or_none(source.get("selection_start_date"))
+    if selection_start_year is not None:
+        source["selection_start_year"] = selection_start_year
+    selection_end_year = _timestamp_year_or_none(source.get("selection_end_date"))
+    if selection_end_year is not None:
+        source["selection_end_year"] = selection_end_year
     return source
 
 

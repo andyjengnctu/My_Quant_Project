@@ -4,6 +4,7 @@ import os
 import pickle
 import time
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 import pandas as pd
@@ -278,10 +279,8 @@ def _build_portfolio_prepared_tmp_path(final_path: Path) -> Path:
 
 
 def _cleanup_portfolio_prepared_tmp_path(tmp_path: Path) -> None:
-    try:
+    with suppress(OSError):
         tmp_path.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def _replace_portfolio_prepared_cache_file(tmp_path: Path, final_path: Path, cache_paths) -> bool:
