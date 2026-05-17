@@ -62,6 +62,28 @@ OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 4
 # - 預設 0，避免 process 巢狀併發造成記憶體放大。
 OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS = 0
 
+
+# OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS:
+# - "policy_count"/"auto" = 預設使用本次實際需要 replay 的唯一 policy signature 數量。
+# - 正整數 = 固定 policy replay process 數，會 clamp 到 1~policy_count。
+# - 只改 policy replay 執行併發，不改 policy 選擇、交易與評分口徑。
+OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS = "policy_count"
+
+# OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND:
+# - "process" = 每個 policy replay 使用獨立 Python process，預設用於壓縮 replay wall time。
+# - "thread" = 保留作為低記憶體 fallback。
+OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND = "process"
+
+# OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE:
+# - True = 相同 params ensemble signature 的 policy 只 replay 一次，結果映射回所有同源 policy。
+# - False = 每個 policy 都 replay。
+OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE = True
+
+# OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED:
+# - True = 同一 fold 內 policy replay 共用同一個 replay context 定義與任務建構入口；
+#          process backend 下實際市場資料仍透過既有 prepared/raw cache 重用，不跨 process 共享記憶體。
+OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED = True
+
 # OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS:
 # - 控制 random seed ensemble 內同時運行幾個 seed member。
 # - 1 = 維持循序，最省記憶體。
@@ -243,6 +265,45 @@ def resolve_optimizer_random_seed_ensemble_parallel_backend_default():
     return resolve_seed_ensemble_parallel_backend(OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND)
 
 
+def resolve_optimizer_policy_replay_parallel_workers_default(policy_count):
+    resolved_policy_count = _coerce_int(policy_count, default=1, min_value=1)
+    raw_value = os.environ.get(
+        "OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS",
+        OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS,
+    )
+    text = str(raw_value or "").strip().lower()
+    if text in {"", "auto", "policy_count", "policies", "replay_count"}:
+        return resolved_policy_count
+    return _coerce_int(raw_value, default=resolved_policy_count, min_value=1, max_value=resolved_policy_count)
+
+
+def resolve_optimizer_policy_replay_parallel_backend_default():
+    raw_value = os.environ.get(
+        "OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND",
+        OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND,
+    )
+    text = str(raw_value or "").strip().lower()
+    if text in {"thread", "threads", "threadpool"}:
+        return "thread"
+    return "process"
+
+
+def is_optimizer_policy_replay_dedup_by_signature_enabled_default():
+    raw_value = os.environ.get(
+        "OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE",
+        OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE,
+    )
+    return _coerce_bool(raw_value, default=True)
+
+
+def is_optimizer_policy_replay_context_reuse_enabled_default():
+    raw_value = os.environ.get(
+        "OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED",
+        OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED,
+    )
+    return _coerce_bool(raw_value, default=True)
+
+
 def is_optimizer_local_min_dependency_stats_enabled():
     raw_value = os.environ.get(
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED",
@@ -272,6 +333,11 @@ def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_si
         ),
         "OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND": OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND,
         "OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND_RESOLVED": resolve_optimizer_random_seed_ensemble_parallel_backend_default(),
+        "OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS": OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS,
+        "OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND": OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND,
+        "OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND_RESOLVED": resolve_optimizer_policy_replay_parallel_backend_default(),
+        "OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE": is_optimizer_policy_replay_dedup_by_signature_enabled_default(),
+        "OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED": is_optimizer_policy_replay_context_reuse_enabled_default(),
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
         "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER": resolve_optimizer_local_min_portfolio_dependency_order(),
         "OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER": ",".join(resolve_optimizer_local_min_signal_dependency_field_order()),

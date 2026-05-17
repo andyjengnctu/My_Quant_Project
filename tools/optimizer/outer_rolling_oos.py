@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import glob
+import hashlib
 import json
 import math
 import os
@@ -46,6 +47,10 @@ from config.training_performance_policy import (
     resolve_optimizer_single_fold_local_min_parallel_workers_default,
     resolve_optimizer_single_fold_local_min_process_workers_default,
     resolve_optimizer_single_fold_search_parallel_trials_default,
+    is_optimizer_policy_replay_context_reuse_enabled_default,
+    is_optimizer_policy_replay_dedup_by_signature_enabled_default,
+    resolve_optimizer_policy_replay_parallel_backend_default,
+    resolve_optimizer_policy_replay_parallel_workers_default,
 )
 from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
@@ -6381,6 +6386,126 @@ def _evaluate_period_ensemble_members(
     return _extract_active_replay_metrics(result)
 
 
+def _build_policy_replay_context(
+    *,
+    selected_data_dir: str,
+    oos_year: int,
+    oos_start_date: str,
+    oos_end_date: str,
+    max_positions: int,
+    enable_rotation: bool,
+) -> dict:
+    """Build the single replay context shared by all policies in a fold.
+
+    The process backend cannot share large in-memory market contexts across workers;
+    those are still reused through the existing portfolio prepared/raw cache.  This
+    object is the canonical policy-replay input schema so rolling/non-rolling do not
+    rebuild date/position inputs differently.
+    """
+    _ = is_optimizer_policy_replay_context_reuse_enabled_default()
+    return {
+        "selected_data_dir": str(selected_data_dir),
+        "oos_year": int(oos_year),
+        "oos_start_date": str(oos_start_date),
+        "oos_end_date": str(oos_end_date),
+        "max_positions": int(max_positions),
+        "enable_rotation": bool(enable_rotation),
+        "start_year": int(pd.Timestamp(oos_start_date).year),
+        "end_year": int(pd.Timestamp(oos_end_date).year),
+        "benchmark_ticker": "0050",
+    }
+
+
+def _stable_policy_replay_signature(payload: dict) -> str:
+    material = json.dumps(payload or {}, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _build_policy_replay_payload_from_members(*, members: list[dict], replay_context: dict) -> dict:
+    return _build_single_period_ensemble_payload(
+        members=members,
+        effective_start=str(replay_context["oos_start_date"]),
+        effective_end=str(replay_context["oos_end_date"]),
+        oos_year=int(replay_context["oos_year"]),
+    )
+
+
+def _evaluate_active_param_ensemble_replay_payload_task(task: dict) -> dict:
+    from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_ensemble
+
+    payload = dict(task.get("payload") or {})
+    replay_context = dict(task.get("replay_context") or {})
+    result = run_portfolio_simulation_with_param_ensemble(
+        str(replay_context["selected_data_dir"]),
+        payload,
+        max_positions=int(replay_context["max_positions"]),
+        enable_rotation=bool(replay_context["enable_rotation"]),
+        start_year=int(replay_context["start_year"]),
+        end_year=int(replay_context["end_year"]),
+        start_date=str(replay_context["oos_start_date"]),
+        end_date=str(replay_context["oos_end_date"]),
+        benchmark_ticker=str(replay_context.get("benchmark_ticker") or "0050"),
+        verbose=False,
+    )
+    return {
+        "signature": str(task.get("signature") or ""),
+        "policy_names": list(task.get("policy_names") or []),
+        "metrics": _extract_active_replay_metrics(result),
+    }
+
+
+def _policy_replay_executor_class(backend: str):
+    return ThreadPoolExecutor if str(backend or "").strip().lower() == "thread" else ProcessPoolExecutor
+
+
+def _run_policy_replay_tasks(
+    replay_tasks: list[dict],
+    *,
+    progress_emit=None,
+) -> dict[str, dict]:
+    tasks = [dict(task) for task in list(replay_tasks or [])]
+    if not tasks:
+        return {}
+    replay_count = len(tasks)
+    backend = resolve_optimizer_policy_replay_parallel_backend_default()
+    workers = resolve_optimizer_policy_replay_parallel_workers_default(replay_count)
+    workers = max(1, min(int(workers), replay_count))
+    results: dict[str, dict] = {}
+    completed = 0
+
+    def _label(task: dict) -> str:
+        names = [str(name) for name in list(task.get("policy_names") or []) if str(name)]
+        return "/".join(names) if names else str(task.get("signature") or "policy")[:12]
+
+    if workers <= 1:
+        for task in tasks:
+            if callable(progress_emit):
+                progress_emit(_label(task), done=completed, total=replay_count, status="RUN")
+            output = _evaluate_active_param_ensemble_replay_payload_task(task)
+            completed += 1
+            results[str(output.get("signature") or task.get("signature"))] = dict(output.get("metrics") or {})
+            if callable(progress_emit):
+                progress_emit(_label(task), done=completed, total=replay_count, status="DONE")
+        return results
+
+    executor_class = _policy_replay_executor_class(backend)
+    executor_kwargs = get_process_pool_executor_kwargs() if executor_class is ProcessPoolExecutor else {}
+    with executor_class(max_workers=workers, **executor_kwargs) as executor:
+        future_to_task = {}
+        for task in tasks:
+            if callable(progress_emit):
+                progress_emit(_label(task), done=completed, total=replay_count, status="RUN")
+            future_to_task[executor.submit(_evaluate_active_param_ensemble_replay_payload_task, task)] = task
+        for future in as_completed(future_to_task):
+            task = future_to_task[future]
+            output = future.result()
+            completed += 1
+            results[str(output.get("signature") or task.get("signature"))] = dict(output.get("metrics") or {})
+            if callable(progress_emit):
+                progress_emit(_label(task), done=completed, total=replay_count, status="DONE")
+    return results
+
+
 def _policy_metrics_from_ensemble_metrics(metrics: dict, *, best_score: float, benchmark_score: float) -> dict:
     rank_1_oos = float(metrics.get("score", 0.0))
     return {
@@ -6446,50 +6571,20 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
     eval_started = time.perf_counter()
     replay_started_ts = time.time()
     replay_last_done_ts: float | None = None
-    replay_total = 1 + sum(1 for policy_name in CHAIN_POLICY_NAMES if _build_members_from_seed_rows_for_policy(seed_rows, policy_name))
-    replay_done = 0
 
-    def _emit_ensemble_replay_progress(policy_name: str, *, done: int | None = None, status: str = "RUN") -> None:
-        nonlocal replay_last_done_ts
-        done_value = int(replay_done if done is None else done)
-        if done_value > 0:
-            replay_last_done_ts = time.time()
-        _write_parallel_fold_progress_event(
-            stage="ENSEMBLE_REPLAY",
-            fold_idx=fold_idx,
-            fold_count=fold_count,
-            oos_year=oos_year,
-            selection_start=selection_start,
-            selection_end=selection_end,
-            status=str(status),
-            policy=str(policy_name),
-            replay_done=int(done_value),
-            replay_total=int(replay_total),
-            replay_started_ts=float(replay_started_ts),
-            replay_last_done_ts=float(replay_last_done_ts) if replay_last_done_ts is not None else None,
-            elapsed_sec=max(0.0, time.perf_counter() - eval_started),
-        )
-
-    best_members = _build_members_from_seed_rows_for_best(seed_rows)
-    _emit_ensemble_replay_progress("candidate", done=0, status="RUN")
-    best_metrics = _evaluate_period_ensemble_members(
+    replay_context = _build_policy_replay_context(
         selected_data_dir=selected_data_dir,
-        members=best_members,
         oos_year=oos_year,
         oos_start_date=oos_start_date,
         oos_end_date=oos_end_date,
         max_positions=chain_max_positions,
         enable_rotation=chain_enable_rotation,
-    ) if best_members else {}
-    replay_done += 1
-    _emit_ensemble_replay_progress("candidate", done=replay_done, status="DONE")
-    best_score = float(best_metrics.get("score", 0.0))
-    benchmark_score = float(best_metrics.get("benchmark_oos_score", 0.0))
-    benchmark_return_pct = float(best_metrics.get("benchmark_return_pct", 0.0))
-    benchmark_mdd_pct = float(best_metrics.get("benchmark_mdd_pct", 0.0))
+    )
 
     policy_schedules: dict[str, dict] = {}
-    policy_metrics: dict[str, dict] = {}
+    policy_jobs_by_name: dict[str, dict] = {}
+    unique_jobs_by_signature: OrderedDict[str, dict] = OrderedDict()
+    dedup_enabled = is_optimizer_policy_replay_dedup_by_signature_enabled_default()
     for policy_name in CHAIN_POLICY_NAMES:
         members = _build_members_from_seed_rows_for_policy(seed_rows, policy_name)
         if not members:
@@ -6503,22 +6598,70 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
             oos_end_date=oos_end_date,
         )
         policy_schedules[policy_name] = schedule
-        _emit_ensemble_replay_progress(policy_name, done=replay_done, status="RUN")
-        metrics = _evaluate_period_ensemble_members(
-            selected_data_dir=selected_data_dir,
-            members=members,
+        payload = _build_policy_replay_payload_from_members(members=members, replay_context=replay_context)
+        signature = _stable_policy_replay_signature(payload) if dedup_enabled else f"{policy_name}:{_stable_policy_replay_signature(payload)}"
+        job = policy_jobs_by_name[policy_name] = {
+            "signature": signature,
+            "policy_name": policy_name,
+            "policy_names": [policy_name],
+            "payload": payload,
+            "replay_context": replay_context,
+            "members": members,
+        }
+        if signature in unique_jobs_by_signature:
+            unique_jobs_by_signature[signature].setdefault("policy_names", []).append(policy_name)
+            continue
+        unique_jobs_by_signature[signature] = dict(job)
+
+    replay_total = len(unique_jobs_by_signature)
+    replay_done = 0
+
+    def _emit_ensemble_replay_progress(policy_name: str, *, done: int | None = None, total: int | None = None, status: str = "RUN") -> None:
+        nonlocal replay_last_done_ts, replay_done
+        done_value = int(replay_done if done is None else done)
+        if done_value > 0:
+            replay_last_done_ts = time.time()
+        _write_parallel_fold_progress_event(
+            stage="ENSEMBLE_REPLAY",
+            fold_idx=fold_idx,
+            fold_count=fold_count,
             oos_year=oos_year,
-            oos_start_date=oos_start_date,
-            oos_end_date=oos_end_date,
-            max_positions=chain_max_positions,
-            enable_rotation=chain_enable_rotation,
+            selection_start=selection_start,
+            selection_end=selection_end,
+            status=str(status),
+            policy=str(policy_name),
+            replay_done=int(done_value),
+            replay_total=int(replay_total if total is None else total),
+            replay_started_ts=float(replay_started_ts),
+            replay_last_done_ts=float(replay_last_done_ts) if replay_last_done_ts is not None else None,
+            elapsed_sec=max(0.0, time.perf_counter() - eval_started),
         )
-        replay_done += 1
-        _emit_ensemble_replay_progress(policy_name, done=replay_done, status="DONE")
-        if benchmark_score == 0.0:
-            benchmark_score = float(metrics.get("benchmark_oos_score", 0.0))
-            benchmark_return_pct = float(metrics.get("benchmark_return_pct", 0.0))
-            benchmark_mdd_pct = float(metrics.get("benchmark_mdd_pct", 0.0))
+
+    metrics_by_signature = _run_policy_replay_tasks(
+        list(unique_jobs_by_signature.values()),
+        progress_emit=_emit_ensemble_replay_progress,
+    )
+    replay_done = int(len(metrics_by_signature))
+
+    policy_raw_metrics: dict[str, dict] = {}
+    for policy_name, job in policy_jobs_by_name.items():
+        policy_raw_metrics[policy_name] = dict(metrics_by_signature.get(str(job.get("signature"))) or {})
+
+    valid_policy_metrics = [metrics for metrics in policy_raw_metrics.values() if metrics]
+    best_metrics = max(valid_policy_metrics, key=lambda item: float(item.get("score", 0.0)), default={})
+    best_score = float(best_metrics.get("score", 0.0))
+    benchmark_source = next((metrics for metrics in valid_policy_metrics if metrics.get("benchmark_oos_score") is not None), {})
+    benchmark_score = float(benchmark_source.get("benchmark_oos_score", 0.0))
+    benchmark_return_pct = float(benchmark_source.get("benchmark_return_pct", 0.0))
+    benchmark_mdd_pct = float(benchmark_source.get("benchmark_mdd_pct", 0.0))
+
+    best_policy_name = next((name for name, metrics in policy_raw_metrics.items() if metrics is best_metrics), "")
+    best_members = list((policy_jobs_by_name.get(best_policy_name) or {}).get("members") or [])
+
+    policy_metrics: dict[str, dict] = {}
+    for policy_name, metrics in policy_raw_metrics.items():
+        if not metrics:
+            continue
         policy_metrics[policy_name] = _policy_metrics_from_ensemble_metrics(
             metrics,
             best_score=best_score,

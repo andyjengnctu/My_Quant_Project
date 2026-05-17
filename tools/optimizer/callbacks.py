@@ -967,6 +967,22 @@ def _build_static_policy_oos_row_from_metrics(candidate_metrics: dict, benchmark
     }
 
 
+def _build_static_policy_oos_row_from_active_metrics(metrics: dict, *, benchmark_score: float) -> dict:
+    candidate_score = _safe_float(metrics.get("score", 0.0))
+    return {
+        "available": True,
+        "rank_1_trial": None,
+        "rank_1_oos": float(candidate_score),
+        "rank_1_return_pct": _safe_float(metrics.get("return_pct", 0.0)),
+        "rank_1_mdd_pct": _safe_float(metrics.get("mdd_pct", 0.0)),
+        "rank_1_trades": _safe_int(metrics.get("trade_count", 0)),
+        "benchmark_0050_gap": float(candidate_score) - float(benchmark_score),
+        "benchmark_return_pct": _safe_float(metrics.get("benchmark_return_pct", 0.0)),
+        "benchmark_mdd_pct": _safe_float(metrics.get("benchmark_mdd_pct", 0.0)),
+        "benchmark_oos_score": _safe_float(metrics.get("benchmark_oos_score", 0.0)),
+    }
+
+
 def _load_static_policy_paramset_payloads(policy_paramsets: dict | None) -> dict[str, dict]:
     payloads: dict[str, dict] = {}
     for policy_name, source in dict(policy_paramsets or {}).items():
@@ -996,39 +1012,69 @@ def _build_static_policy_rows_from_paramsets(
     progress_offset: int = 0,
     progress_total: int | None = None,
     progress_emit=None,
-) -> dict[str, dict]:
-    rows: dict[str, dict] = {}
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    _ = (initial_capital, progress_offset, progress_total)
     payloads = _load_static_policy_paramset_payloads(policy_paramsets)
-    total = int(progress_total if progress_total is not None else len(payloads))
-    for idx, (policy_name, payload) in enumerate(payloads.items(), start=1):
-        step = int(progress_offset) + int(idx)
-        if total > 0:
-            if callable(progress_emit):
-                progress_emit(str(policy_name), done=max(0, step - 1), total=total, status="RUN")
-            else:
-                _emit_static_replay_progress(
-                    progress_state,
-                    f"seed ensemble policy replay | {step}/{total} | {policy_name}",
-                )
-        try:
-            candidate_metrics, benchmark_metrics, _range_text = _run_static_ensemble_dashboard_replay(
-                session,
-                payload,
-                start_date=start_date,
-                end_date=end_date,
-                initial_capital=initial_capital,
-            )
-        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+    if not payloads:
+        return {}, {}
+    data_dir = getattr(session, "raw_data_cache_data_dir", None)
+    if not data_dir:
+        raise ValueError("session 尚未載入 data_dir，無法建立 ensemble policy replay")
+    from tools.optimizer.outer_rolling_oos import (
+        _build_policy_replay_context,
+        _run_policy_replay_tasks,
+        _stable_policy_replay_signature,
+        is_optimizer_policy_replay_dedup_by_signature_enabled_default,
+    )
+
+    replay_context = _build_policy_replay_context(
+        selected_data_dir=str(data_dir),
+        oos_year=int(pd.Timestamp(start_date).year) if start_date is not None else int(session.train_start_year),
+        oos_start_date=str(start_date)[:10],
+        oos_end_date=str(end_date)[:10] if end_date is not None else str(_latest_data_end_text(session))[:10],
+        max_positions=int(session.train_max_positions),
+        enable_rotation=bool(session.train_enable_rotation),
+    )
+    dedup_enabled = is_optimizer_policy_replay_dedup_by_signature_enabled_default()
+    unique_jobs_by_signature: dict[str, dict] = {}
+    policy_jobs_by_name: dict[str, dict] = {}
+    for policy_name, payload in payloads.items():
+        signature = _stable_policy_replay_signature(payload) if dedup_enabled else f"{policy_name}:{_stable_policy_replay_signature(payload)}"
+        job = policy_jobs_by_name[str(policy_name)] = {
+            "signature": signature,
+            "policy_name": str(policy_name),
+            "policy_names": [str(policy_name)],
+            "payload": dict(payload),
+            "replay_context": replay_context,
+        }
+        if signature in unique_jobs_by_signature:
+            unique_jobs_by_signature[signature].setdefault("policy_names", []).append(str(policy_name))
+            continue
+        unique_jobs_by_signature[signature] = dict(job)
+
+    metrics_by_signature = _run_policy_replay_tasks(
+        list(unique_jobs_by_signature.values()),
+        progress_emit=progress_emit,
+    )
+    if not callable(progress_emit):
+        _emit_static_replay_progress(progress_state, "seed ensemble policy replay | done", finish=True)
+    raw_metrics_by_policy: dict[str, dict] = {
+        name: dict(metrics_by_signature.get(str(job.get("signature"))) or {})
+        for name, job in policy_jobs_by_name.items()
+    }
+    benchmark_source = next((metrics for metrics in raw_metrics_by_policy.values() if metrics.get("benchmark_oos_score") is not None), {})
+    benchmark_score = _safe_float(benchmark_source.get("benchmark_oos_score", 0.0))
+    rows: dict[str, dict] = {}
+    for policy_name, metrics in raw_metrics_by_policy.items():
+        if not metrics:
             rows[str(policy_name)] = {
                 "available": False,
                 "rank_1_oos": 0.0,
                 "unavailable_reason": "policy_paramset_replay_failed",
             }
             continue
-        rows[str(policy_name)] = _build_static_policy_oos_row_from_metrics(candidate_metrics, benchmark_metrics)
-        if total > 0 and callable(progress_emit):
-            progress_emit(str(policy_name), done=step, total=total, status="DONE")
-    return rows
+        rows[str(policy_name)] = _build_static_policy_oos_row_from_active_metrics(metrics, benchmark_score=benchmark_score)
+    return rows, raw_metrics_by_policy
 
 
 def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None, progress_callback=None) -> dict:
@@ -1055,7 +1101,6 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     replay_policy_paramsets = policy_paramsets or ensemble_payload.get("policy_paramsets")
     replay_payloads = _load_static_policy_paramset_payloads(replay_policy_paramsets)
     progress_state: dict | None = None if callable(progress_callback) else {}
-    replay_total = 1 + int(len(replay_payloads))
     replay_started_perf = time.perf_counter()
     replay_started_ts = time.time()
     replay_last_done_ts: float | None = None
@@ -1063,7 +1108,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     def _emit_replay(policy_name: str, *, done: int, total: int | None = None, status: str = "RUN") -> None:
         nonlocal replay_last_done_ts
         done_value = int(done or 0)
-        total_value = int(replay_total if total is None else total)
+        total_value = int(total if total is not None else len(replay_payloads))
         if done_value > 0:
             replay_last_done_ts = time.time()
         if callable(progress_callback):
@@ -1078,48 +1123,31 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
                 "elapsed_sec": max(0.0, time.perf_counter() - replay_started_perf),
             })
         else:
-            step = max(1, min(total_value, done_value if done_value > 0 else 1))
-            _emit_static_replay_progress(progress_state, f"seed ensemble policy replay | {step}/{total_value} | {policy_name}")
+            step = max(1, min(max(1, total_value), done_value if done_value > 0 else 1))
+            _emit_static_replay_progress(progress_state, f"seed ensemble policy replay | {step}/{max(1, total_value)} | {policy_name}")
 
-    _emit_replay("candidate_best", done=0, total=replay_total, status="RUN")
-    try:
-        candidate_metrics, benchmark_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
-            session,
-            ensemble_payload,
-            start_date=oos_start_date,
-            end_date=oos_end_date,
-            initial_capital=initial_capital,
-        )
-        _emit_replay("candidate_best", done=1, total=replay_total, status="DONE")
-        candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
-        benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
-        candidate_policy_row = _build_static_policy_oos_row_from_metrics(candidate_metrics, benchmark_metrics)
-        policy_rows = _build_static_policy_rows_from_paramsets(
-            session,
-            policy_paramsets=replay_payloads,
-            start_date=oos_start_date,
-            end_date=oos_end_date,
-            initial_capital=initial_capital,
-            progress_state=progress_state,
-            progress_offset=1,
-            progress_total=replay_total,
-            progress_emit=_emit_replay if callable(progress_callback) else None,
-        )
-    finally:
-        if not callable(progress_callback):
-            _emit_static_replay_progress(progress_state, "seed ensemble policy replay | done", finish=True)
-    unavailable_policy = {
-        "available": False,
-        "rank_1_oos": 0.0,
-        "unavailable_reason": "nonrolling_policy_paramset_not_available",
-    }
-    range_text = str(oos_range_text or "").replace(" ~ ", "~")
+    policy_rows, raw_policy_metrics = _build_static_policy_rows_from_paramsets(
+        session,
+        policy_paramsets=replay_payloads,
+        start_date=oos_start_date,
+        end_date=oos_end_date,
+        initial_capital=initial_capital,
+        progress_state=progress_state,
+        progress_emit=_emit_replay if callable(progress_callback) else None,
+    )
+    available_policy_rows = [dict(row) for row in policy_rows.values() if bool(dict(row).get("available", False))]
+    candidate_score = max((_safe_float(row.get("rank_1_oos", 0.0)) for row in available_policy_rows), default=0.0)
+    benchmark_score = 0.0
+    benchmark_return_pct = 0.0
+    benchmark_mdd_pct = 0.0
+    for metrics in raw_policy_metrics.values():
+        if metrics:
+            benchmark_score = _safe_float(metrics.get("benchmark_oos_score", 0.0))
+            benchmark_return_pct = _safe_float(metrics.get("benchmark_return_pct", 0.0))
+            benchmark_mdd_pct = _safe_float(metrics.get("benchmark_mdd_pct", 0.0))
+            break
     range_start = str(oos_start_date or "")[:10]
     range_end = str(oos_end_date or "")[:10] if oos_end_date else ""
-    if "~" in range_text:
-        parsed_start, parsed_end = range_text.split("~", 1)
-        range_start = str(parsed_start or range_start).strip()[:10]
-        range_end = str(parsed_end or range_end).strip()[:10]
     from tools.optimizer.outer_rolling_oos import (
         BASE_RETENTION_COMPARISON_POLICY_NAMES,
         REPORT_POLICY_NAMES,
@@ -1139,12 +1167,17 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     row.update({
         "best_finalist_oos_score": float(candidate_score),
         "benchmark_oos_score": float(benchmark_score),
-        "benchmark_return_pct": _safe_float(benchmark_metrics.get("pf_return", 0.0)),
-        "benchmark_mdd_pct": _safe_float(benchmark_metrics.get("pf_mdd", 0.0)),
+        "benchmark_return_pct": float(benchmark_return_pct),
+        "benchmark_mdd_pct": float(benchmark_mdd_pct),
         "elapsed_sec": elapsed_sec,
         "random_seed_ensemble": dict(policy),
     })
 
+    unavailable_policy = {
+        "available": False,
+        "rank_1_oos": 0.0,
+        "unavailable_reason": "nonrolling_policy_paramset_not_available",
+    }
     for policy_name in tuple(REPORT_POLICY_NAMES) + tuple(BASE_RETENTION_COMPARISON_POLICY_NAMES):
         if policy_name in policy_rows:
             row[str(policy_name)] = dict(policy_rows[policy_name])
