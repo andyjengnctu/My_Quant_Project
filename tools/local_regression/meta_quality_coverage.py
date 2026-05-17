@@ -22,8 +22,17 @@ from tools.local_regression.meta_quality_targets import (
     CRITICAL_COVERAGE_LINE_MIN_FLOOR,
     CRITICAL_COVERAGE_TARGETS,
 )
+from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+def _optimizer_search_space_default(name: str) -> Any:
+    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[name]
+    return spec.get("default", spec.get("low"))
+
+
+SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES = _optimizer_search_space_default("min_history_trades")
+SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV = _optimizer_search_space_default("min_history_ev")
+SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE = _optimizer_search_space_default("min_history_win_rate")
 HEADLESS_COVERAGE_OMIT_PATTERNS = [
     str(PROJECT_ROOT / "apps" / "workbench.py"),
     str(PROJECT_ROOT / "tools" / "workbench_ui" / "*.py"),
@@ -105,9 +114,9 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "atr_buy_tol": 1.0,
         "high_len": 20,
         "tp_percent": 0.25,
-        "min_history_trades": 5,
-        "min_history_ev": 0.1,
-        "min_history_win_rate": 0.55,
+        "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
+        "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
+        "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
     }
     params_path = probe_dir / "coverage_run_best_params.json"
     params_path.write_text(json.dumps(valid_params_payload, ensure_ascii=False), encoding="utf-8")
@@ -160,12 +169,12 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "use_bb": False,
         "use_kc": False,
         "use_vol": False,
-        "min_history_trades": 5,
-        "min_history_win_rate": 0.55,
-        "min_history_ev": 0.1,
+        "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
+        "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
+        "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
     }))
     _silent_call(lambda: print_strategy_dashboard(
-        {"high_len": 20, "atr_len": 14, "atr_buy_tol": 1.0, "atr_times_init": 2.0, "atr_times_trail": 3.0, "tp_percent": 0.25, "use_bb": False, "use_kc": False, "use_vol": False, "min_history_trades": 5, "min_history_win_rate": 0.55, "min_history_ev": 0.1},
+        {"high_len": 20, "atr_len": 14, "atr_buy_tol": 1.0, "atr_times_init": 2.0, "atr_times_trail": 3.0, "tp_percent": 0.25, "use_bb": False, "use_kc": False, "use_vol": False, "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES, "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE, "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV},
         title="coverage-probe",
         mode_display="投組模式",
         max_pos=3,

@@ -43,6 +43,30 @@ from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from .checks import add_check
 
 
+def _optimizer_search_space_default(name):
+    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[name]
+    return spec.get("default", spec.get("low"))
+
+
+SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES = _optimizer_search_space_default("min_history_trades")
+SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV = _optimizer_search_space_default("min_history_ev")
+SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE = _optimizer_search_space_default("min_history_win_rate")
+
+
+def _extract_reference_param_payloads(payload):
+    from core.active_param_ensemble import build_active_param_ensemble_schedule, is_active_param_ensemble_payload
+
+    if not is_active_param_ensemble_payload(payload):
+        return [payload]
+    members = []
+    for record in build_active_param_ensemble_schedule(payload):
+        for member in record.get("members") or []:
+            params = member.get("params")
+            if isinstance(params, dict):
+                members.append(params)
+    return members
+
+
 def _existing_shipped_reference_param_paths():
     candidate_names = (
         "candidate_best_params.json",
@@ -221,9 +245,9 @@ def validate_model_io_schema_case(base_params):
         "vol_short_len": 4,
         "vol_long_len": 10,
         "fixed_risk": 0.02,
-        "min_history_trades": 5,
-        "min_history_ev": 0.2,
-        "min_history_win_rate": 0.5,
+        "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
+        "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
+        "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
     }
     fake_trial = _FakeTrial(trial_params, user_attrs={"fixed_tp_percent": 0.25})
     best_params_payload = build_best_params_payload_from_trial(fake_trial, fixed_tp_percent=None)
@@ -263,19 +287,6 @@ def validate_model_io_schema_case(base_params):
             expected = True
             actual = isinstance(actual_value, type(default_value))
         add_check(results, "strategy_schema", case_id, f"best_params_type::{field_name}", expected, actual)
-
-    from core.active_param_ensemble import build_active_param_ensemble_schedule, is_active_param_ensemble_payload
-
-    def _extract_reference_param_payloads(payload):
-        if not is_active_param_ensemble_payload(payload):
-            return [payload]
-        members = []
-        for record in build_active_param_ensemble_schedule(payload):
-            for member in record.get("members") or []:
-                params = member.get("params")
-                if isinstance(params, dict):
-                    members.append(params)
-        return members
 
     shipped_best_params_paths = _existing_shipped_reference_param_paths()
     shipped_payload_keys = {}
@@ -568,9 +579,9 @@ def validate_strategy_repeatability_case(base_params):
                 "atr_times_trail": 2.6,
                 "atr_buy_tol": 2.5,
                 "high_len": 100,
-                "min_history_trades": 5,
-                "min_history_ev": 0.0,
-                "min_history_win_rate": 0.5,
+                "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
+                "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
+                "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
             },
         )
         perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
@@ -661,9 +672,9 @@ def validate_strategy_minimum_viability_case(base_params):
             "atr_times_trail": 2.6,
             "atr_buy_tol": 2.5,
             "high_len": 100,
-            "min_history_trades": 5,
-            "min_history_ev": 0.0,
-            "min_history_win_rate": 0.5,
+            "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
+            "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
+            "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
         },
     )
     perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
@@ -769,9 +780,9 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
             "vol_short_len": 5,
             "vol_long_len": 19,
             "fixed_risk": 0.01,
-            "min_history_trades": 5,
-            "min_history_ev": 0.0,
-            "min_history_win_rate": 0.5,
+            "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
+            "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
+            "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
         },
         user_attrs={"fixed_tp_percent": 0.27},
         value=88.123,
@@ -964,9 +975,9 @@ def validate_optimizer_objective_export_contract_case(_base_params):
             "atr_times_trail": 2.5,
             "atr_buy_tol": 2.5,
             "high_len": 100,
-            "min_history_trades": 5,
-            "min_history_ev": 0.0,
-            "min_history_win_rate": 0.5,
+            "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
+            "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
+            "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
         },
     )
     with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02"])), patch(
@@ -1001,9 +1012,9 @@ def validate_optimizer_objective_export_contract_case(_base_params):
             "atr_times_trail": 2.6,
             "atr_buy_tol": 2.5,
             "high_len": 100,
-            "min_history_trades": 5,
-            "min_history_ev": 0.0,
-            "min_history_win_rate": 0.5,
+            "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
+            "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
+            "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
         },
     )
     with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
