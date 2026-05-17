@@ -10,7 +10,7 @@ SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0
 # 非 rolling 訓練結果表格顯示開關。
 # True  = 訓練結束後顯示 candidate / seed ensemble 結果表格。
 # False = 仍計算與輸出正式 artifacts，但不顯示結果表格，降低 console 洗版。
-OPTIMIZER_NONROLLING_TRAIN_RESULT_TABLE_ENABLED = False
+OPTIMIZER_NONROLLING_TRAIN_RESULT_TABLE_ENABLED = True
 
 
 def is_optimizer_nonrolling_train_result_table_enabled() -> bool:

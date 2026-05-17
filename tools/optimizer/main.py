@@ -1704,7 +1704,8 @@ def _run_nonrolling_random_seed_ensemble_training(
         return None
 
     seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
-    compact_display = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+    result_table_enabled = bool(is_optimizer_nonrolling_train_result_table_enabled())
+    compact_display = True
 
     members: list[dict] = []
     policy_members_by_policy: dict[str, list[dict]] = {}
@@ -1810,7 +1811,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 selected_data_dir,
                 load_all_raw_data=load_all_raw_data,
                 required_min_rows=optimizer_required_min_rows,
-                verbose=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+                verbose=result_table_enabled,
             )
             member_session.profile_recorder.init_output_files()
             member_session.profile_recorder.mark_run_started()
@@ -1889,8 +1890,8 @@ def _run_nonrolling_random_seed_ensemble_training(
                     objective_mode=objective_mode,
                     colors=COLORS,
                     winner_trial=None,
-                    emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
-                    show_progress=bool(compact_display or is_optimizer_nonrolling_train_result_table_enabled()),
+                    emit_table=bool(result_table_enabled),
+                    show_progress=True,
                 )
             finally:
                 if compact_display:
