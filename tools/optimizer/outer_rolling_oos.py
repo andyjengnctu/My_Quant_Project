@@ -25,6 +25,7 @@ PARALLEL_FOLD_PROGRESS_PREFIX = "FOLD_PROGRESS\t"
 import pandas as pd
 
 from config.training_policy import (
+    OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
     OPTIMIZER_BASE_RETENTION_GT_MIN,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
@@ -35,6 +36,8 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
     is_optimizer_local_min_review_enabled,
+    resolve_optimizer_base_finalists_agree_min_agree,
+    resolve_optimizer_enabled_policy_indicators,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
 from config.training_performance_policy import (
@@ -71,6 +74,7 @@ from core.seed_ensemble_policy import (
     build_seed_ensemble_policy_snapshot,
     generate_random_seed_ensemble,
     normalize_seed_ensemble_members,
+    renumber_seed_ensemble_members,
 )
 from core.strategy_params import build_runtime_param_raw_value
 from core.walk_forward_policy import build_optimizer_runtime_policy
@@ -114,16 +118,30 @@ class OuterRollingConfig:
 
 OOS_SCORE_DECIMALS = 2
 
-REPORT_POLICY_NAMES = ("base", "base_retention_gt_0_0", "base_retention_gt_min", "local", "retention")
+BASE_FINALISTS_AGREE_POLICY_NAME = "base_finalists_agree"
+ALL_REPORT_POLICY_NAMES = (
+    "base",
+    "base_retention_gt_0_0",
+    "base_retention_gt_min",
+    BASE_FINALISTS_AGREE_POLICY_NAME,
+    "local",
+    "retention",
+)
+REPORT_POLICY_NAMES = resolve_optimizer_enabled_policy_indicators(ALL_REPORT_POLICY_NAMES)
 REPORT_POLICY_LABELS = {
     "base": "base",
     "base_retention_gt_0_0": "base (r > 0)",
     "base_retention_gt_min": f"base (r > {OPTIMIZER_BASE_RETENTION_GT_MIN:g})",
+    BASE_FINALISTS_AGREE_POLICY_NAME: "base agree",
     "local": "local",
     "retention": "retention",
 }
-PRIMARY_RESULT_POLICY_NAMES = ("base", "base_retention_gt_0_0", "base_retention_gt_min")
-SECONDARY_RESULT_POLICY_NAMES = ("local", "retention")
+PRIMARY_RESULT_POLICY_NAMES = tuple(
+    name
+    for name in ("base", "base_retention_gt_0_0", "base_retention_gt_min", BASE_FINALISTS_AGREE_POLICY_NAME)
+    if name in set(REPORT_POLICY_NAMES)
+)
+SECONDARY_RESULT_POLICY_NAMES = tuple(name for name in ("local", "retention") if name in set(REPORT_POLICY_NAMES))
 
 BASE_RETENTION_COMPARISON_THRESHOLDS = (0.0, 0.2, 0.4, 0.6, 0.8)
 BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS = OrderedDict(
@@ -132,7 +150,7 @@ BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS = OrderedDict(
 )
 BASE_RETENTION_COMPARISON_POLICY_NAMES = tuple(
     name for name in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS.keys()
-    if name not in set(REPORT_POLICY_NAMES)
+    if name not in set(ALL_REPORT_POLICY_NAMES)
 )
 BASE_RETENTION_COMPARISON_POLICY_LABELS = {
     name: f"base (r > {BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS[name]:g})"
@@ -144,6 +162,7 @@ PARAMSET_FILENAME_BY_POLICY = {
     "base": "roos_base.json",
     "base_retention_gt_0_0": "roos_base_r0.json",
     "base_retention_gt_min": "roos_base_r05.json",
+    BASE_FINALISTS_AGREE_POLICY_NAME: "roos_base_finalists_agree.json",
     "local": "roos_local.json",
     "retention": "roos_retention.json",
 }
@@ -152,6 +171,7 @@ NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
     "base": "base.json",
     "base_retention_gt_0_0": "base_r0.json",
     "base_retention_gt_min": "base_r05.json",
+    BASE_FINALISTS_AGREE_POLICY_NAME: "base_finalists_agree.json",
     "local": "local.json",
     "retention": "retention.json",
 }
@@ -166,6 +186,7 @@ POLICY_OUTPUT_LABELS = {
     "base": "base",
     "base_retention_gt_0_0": "base_r0",
     "base_retention_gt_min": "base_r05",
+    BASE_FINALISTS_AGREE_POLICY_NAME: "base_agree",
     "local": "local",
     "retention": "retention",
 }
@@ -195,6 +216,10 @@ STALE_POLICY_PARAMSET_FILENAMES = (
     "trade_base_retention_gt_0_4.json",
     "trade_base_retention_gt_0_6.json",
     "trade_base_retention_gt_0_8.json",
+    "roos_base_agree.json",
+    "base_agree.json",
+    "oos_base_agree.json",
+    "trade_base_agree.json",
 )
 
 
@@ -2496,6 +2521,69 @@ def _select_base_rank1_item(finalists: list[dict]):
 
 
 
+def _rank_base_finalist_items(finalists: list[dict]) -> list[dict]:
+    items = [item for item in list(finalists or []) if item.get("trial") is not None]
+    return sorted(
+        items,
+        key=lambda item: (
+            int(item.get("base_rank", 10**9) or 10**9),
+            -float(item.get("base_score", INVALID_TRIAL_VALUE)),
+            int(item["trial"].number),
+        ),
+    )
+
+
+def _build_finalist_base_agree_member(*, item: dict, member_index: int, policy_name: str, seed: int | None = None) -> dict:
+    trial = item["trial"]
+    trial_number = int(trial.number)
+    return {
+        "member_index": int(member_index),
+        "seed": None if seed is None else int(seed),
+        "policy": str(policy_name),
+        "selected_trial": trial_number + 1,
+        "optimizer_seed": None if seed is None else int(seed),
+        "score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
+        "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
+        "base_rank": int(item.get("base_rank", 0) or 0),
+        "local_min_score": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
+        "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
+        "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
+        "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
+        "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
+        "retention": float(item.get("local_retention", 0.0)),
+        "params": build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT),
+    }
+
+
+def _select_base_finalists_agree_item(finalists: list[dict]) -> dict | None:
+    ranked = _rank_base_finalist_items(finalists)
+    if not ranked:
+        return None
+    policy_name = BASE_FINALISTS_AGREE_POLICY_NAME
+    members = [
+        _build_finalist_base_agree_member(item=item, member_index=idx, policy_name=policy_name)
+        for idx, item in enumerate(ranked, start=1)
+    ]
+    min_agree = resolve_optimizer_base_finalists_agree_min_agree(len(members), OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE)
+    representative = dict(ranked[0])
+    representative.update({
+        "policy_type": "finalist_base_param_agree",
+        "params_ensemble": members,
+        "member_count": int(len(members)),
+        "min_agree": int(min_agree),
+        "min_agree_requested": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+    })
+    return representative
+
+
+def _is_base_finalists_agree_policy(policy_name: str) -> bool:
+    return str(policy_name) == BASE_FINALISTS_AGREE_POLICY_NAME
+
+
+def _is_policy_ensemble_item(item: dict | None) -> bool:
+    return isinstance(item, dict) and bool(normalize_seed_ensemble_members(item.get("params_ensemble")))
+
+
 def _select_base_retention_gt_threshold_rank1_item(finalists: list[dict], *, threshold: float):
     retention_min = float(threshold)
     items = [
@@ -2550,11 +2638,12 @@ def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[s
     items = {
         "base": _select_base_rank1_item(finalists),
         "base_retention_gt_min": _select_base_retention_gt_min_rank1_item(finalists),
+        BASE_FINALISTS_AGREE_POLICY_NAME: _select_base_finalists_agree_item(finalists),
         "local": _select_local_rank1_item(finalists, objective_mode=objective_mode),
         "retention": _select_retention_rank1_item(finalists),
     }
     items.update(_select_base_retention_comparison_policy_items(finalists))
-    return items
+    return {name: item for name, item in items.items() if name in set(REPORT_POLICY_NAMES) or name in set(BASE_RETENTION_COMPARISON_POLICY_NAMES)}
 
 
 def get_optimizer_paramset_policy_names() -> tuple[str, ...]:
@@ -2597,7 +2686,7 @@ def build_optimizer_policy_members_from_finalists(
     objective_mode: str,
     member_index: int,
     seed: int | None = None,
-) -> dict[str, dict]:
+) -> dict[str, dict | list[dict]]:
     """Build static active-param ensemble members with the same policy selectors as rolling OOS.
 
     Non-rolling training is a single-fold case, so it must reuse rolling's policy
@@ -2606,10 +2695,24 @@ def build_optimizer_policy_members_from_finalists(
     policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
     local_rank_map = _build_local_rank_map(finalists)
     retention_rank_map = _build_retention_rank_map(finalists)
-    members: dict[str, dict] = {}
+    members: dict[str, dict | list[dict]] = {}
     for policy_name in CHAIN_POLICY_NAMES:
         item = policy_items.get(policy_name)
-        if item is None or item.get("trial") is None:
+        if item is None:
+            continue
+        if _is_base_finalists_agree_policy(policy_name):
+            finalist_members = []
+            for idx, raw_member in enumerate(normalize_seed_ensemble_members(item.get("params_ensemble")), start=1):
+                member_payload = dict(raw_member)
+                member_payload["member_index"] = (int(member_index) - 1) * max(1, int(item.get("member_count", 1) or 1)) + int(idx)
+                member_payload["seed"] = None if seed is None else int(seed)
+                member_payload["optimizer_seed"] = None if seed is None else int(seed)
+                member_payload["policy"] = str(policy_name)
+                finalist_members.append(member_payload)
+            if finalist_members:
+                members[str(policy_name)] = finalist_members
+            continue
+        if item.get("trial") is None:
             continue
         trial = item["trial"]
         trial_number = int(trial.number)
@@ -2642,6 +2745,8 @@ def _policy_description(policy_name: str) -> str:
         return "Use base_rank #1 params for each OOS year."
     if policy_name == "base_retention_gt_min":
         return f"Use the first base_rank candidate whose local_retention > {OPTIMIZER_BASE_RETENTION_GT_MIN:g} for each OOS period."
+    if _is_base_finalists_agree_policy(policy_name):
+        return "Replay all finalist base params and keep only stocks agreed by at least the configured n members."
     if policy_name in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS:
         threshold = float(BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS[policy_name])
         return f"Use the first base_rank candidate whose local_retention > {threshold:g} for each OOS period."
@@ -2653,10 +2758,37 @@ def _policy_description(policy_name: str) -> str:
 
 
 def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int, selection_period: str, local_rank_map: dict[int, int], retention_rank_map: dict[int, int], oos_start_date: str | None = None, oos_end_date: str | None = None, optimizer_seed: int | None = None) -> dict:
-    trial = item["trial"]
-    trial_number = int(trial.number)
     effective_start = str(oos_start_date or f"{str(oos_year)[:4]}-01-01")
     effective_end = str(oos_end_date or f"{str(oos_year)[:4]}-12-31")
+    ensemble_members = renumber_seed_ensemble_members(item.get("params_ensemble"))
+    if ensemble_members:
+        first_member = dict(ensemble_members[0])
+        return {
+            "effective_start": effective_start,
+            "effective_end": effective_end,
+            "selection": str(selection_period),
+            "oos_year": int(oos_year),
+            "oos_period": f"{effective_start}~{effective_end}",
+            "policy": str(policy_name),
+            "policy_type": str(item.get("policy_type") or "param_ensemble"),
+            "selected_trial": first_member.get("selected_trial"),
+            "optimizer_seed": None if optimizer_seed is None else int(optimizer_seed),
+            "optimizer_seeds": [member.get("seed") for member in ensemble_members],
+            "member_count": int(len(ensemble_members)),
+            "min_agree": int(item.get("min_agree") or resolve_optimizer_base_finalists_agree_min_agree(len(ensemble_members), OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE)),
+            "min_agree_requested": item.get("min_agree_requested", OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE),
+            "base_score": float(item.get("base_score", first_member.get("base_score", INVALID_TRIAL_VALUE))),
+            "base_rank": int(item.get("base_rank", first_member.get("base_rank", 0)) or 0),
+            "local_min": float(item.get("local_min_score", first_member.get("local_min_score", INVALID_TRIAL_VALUE))),
+            "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
+            "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
+            "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
+            "retention": float(item.get("local_retention", first_member.get("retention", 0.0))),
+            "params": dict(first_member.get("params") or {}),
+            "params_ensemble": ensemble_members,
+        }
+    trial = item["trial"]
+    trial_number = int(trial.number)
     return {
         "effective_start": effective_start,
         "effective_end": effective_end,
@@ -2775,6 +2907,41 @@ def _format_oos_delta(reference_score, selected_score) -> str:
     return f"{ref:.{OOS_SCORE_DECIMALS}f} ({selected - ref:+.{OOS_SCORE_DECIMALS}f})"
 
 
+def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name: str, oos_year: int, oos_start_date: str | None = None, oos_end_date: str | None = None) -> dict:
+    from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_ensemble
+
+    members = renumber_seed_ensemble_members(item.get("params_ensemble"))
+    if not members:
+        return {}
+    data_dir = getattr(session, "raw_data_cache_data_dir", None)
+    if not data_dir:
+        raise RuntimeError("session 尚未載入 data_dir，無法建立 finalist agree OOS diagnostics")
+    start_text = str(oos_start_date or f"{int(str(oos_year)[:4])}-01-01")
+    end_text = str(oos_end_date or f"{int(str(oos_year)[:4])}-12-31")
+    payload = _build_single_period_ensemble_payload(
+        members=members,
+        effective_start=start_text,
+        effective_end=end_text,
+        oos_year=int(oos_year),
+        policy_name=str(policy_name),
+    )
+    result = run_portfolio_simulation_with_param_ensemble(
+        str(data_dir),
+        payload,
+        max_positions=int(getattr(session, "train_max_positions", 10) or 10),
+        enable_rotation=bool(getattr(session, "train_enable_rotation", False)),
+        start_year=int(pd.Timestamp(start_text).year),
+        end_year=int(pd.Timestamp(end_text).year),
+        start_date=start_text,
+        end_date=end_text,
+        benchmark_ticker="0050",
+        verbose=False,
+        use_prepared_cache=False,
+        write_prepared_cache=False,
+    )
+    return _extract_active_replay_metrics(result)
+
+
 def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy_items: dict[str, dict | None], oos_year: int, oos_start_date: str | None = None, oos_end_date: str | None = None) -> dict:
     best_score = float("-inf")
     best_trial_number = None
@@ -2788,7 +2955,7 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
     curve_trial_numbers = {
         int(item["trial"].number)
         for item in dict(policy_items or {}).values()
-        if item is not None and item.get("trial") is not None
+        if item is not None and item.get("trial") is not None and not _is_policy_ensemble_item(item)
     }
 
     def _load_trial_metrics(trial, *, include_equity_curve: bool) -> dict:
@@ -2839,6 +3006,27 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         best_metrics = _load_trial_metrics(best_trial, include_equity_curve=True)
     policies: dict[str, dict] = {}
     for policy_name, item in dict(policy_items or {}).items():
+        if item is not None and _is_policy_ensemble_item(item):
+            ensemble_metrics = _evaluate_finalist_ensemble_oos_metrics(
+                session=session,
+                item=item,
+                policy_name=str(policy_name),
+                oos_year=int(oos_year),
+                oos_start_date=oos_start_date,
+                oos_end_date=oos_end_date,
+            )
+            benchmark_score = float(ensemble_metrics.get("benchmark_oos_score", benchmark_score))
+            benchmark_return_pct = float(ensemble_metrics.get("benchmark_return_pct", benchmark_return_pct))
+            benchmark_mdd_pct = float(ensemble_metrics.get("benchmark_mdd_pct", benchmark_mdd_pct))
+            policy_metrics = _policy_metrics_from_ensemble_metrics(
+                ensemble_metrics,
+                best_score=float(best_score),
+                benchmark_score=float(benchmark_score),
+            )
+            policy_metrics["member_count"] = int(item.get("member_count") or len(normalize_seed_ensemble_members(item.get("params_ensemble"))))
+            policy_metrics["min_agree"] = int(item.get("min_agree") or 1)
+            policies[policy_name] = policy_metrics
+            continue
         if item is None or item.get("trial") is None:
             policies[policy_name] = {
                 "available": False,
@@ -3092,13 +3280,13 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
         effective_end = str(row.get("oos_end_date") or f"{str(oos_key)[:4]}-12-31")
         if best_finalist:
             params_payload = dict(row.get("best_finalist_params") or {})
-            members = normalize_seed_ensemble_members(row.get("best_finalist_params_ensemble"))
+            members = renumber_seed_ensemble_members(row.get("best_finalist_params_ensemble"))
         else:
             schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
             params_payload = dict(schedule.get("params") or {})
             effective_start = str(schedule.get("effective_start") or effective_start)
             effective_end = str(schedule.get("effective_end") or effective_end)
-            members = _build_params_ensemble_members_for_schedule(schedule)
+            members = renumber_seed_ensemble_members(_build_params_ensemble_members_for_schedule(schedule))
         if not params_payload and members:
             params_payload = dict(members[0].get("params") or {})
         if not params_payload:
@@ -3123,7 +3311,7 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
             "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
             "type": "outer_rolling_oos_param_set",
             "active_param_policy": "daily_active_param_ensemble",
-            "random_seed_ensemble": _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date),
+            "random_seed_ensemble": _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date, policy_name=policy_name),
             "params_ensemble_by_effective_date": params_ensemble_by_effective_date,
             "params_by_oos_year": params_by_oos_year,
             "params_by_effective_date": params_by_effective_date,
@@ -4389,7 +4577,13 @@ def _build_random_seed_ensemble_policy_payload() -> dict:
     )
 
 
-def _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date: dict) -> dict:
+def _resolve_policy_min_agree_for_member_count(policy_name: str | None, member_count: int) -> int | str:
+    if _is_base_finalists_agree_policy(str(policy_name or "")):
+        return resolve_optimizer_base_finalists_agree_min_agree(member_count, OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE)
+    return "auto"
+
+
+def _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date: dict, *, policy_name: str | None = None) -> dict:
     requested_policy = _build_random_seed_ensemble_policy_payload()
     member_counts = [
         len(normalize_seed_ensemble_members(members))
@@ -4399,7 +4593,18 @@ def _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_d
     actual_min_members = max(1, min(member_counts) if member_counts else 1)
     actual_max_members = max(member_counts) if member_counts else actual_min_members
     requested_count = int(requested_policy.get("seed_count", 1) or 1)
-    if actual_min_members == actual_max_members == requested_count:
+    policy_min_agree = _resolve_policy_min_agree_for_member_count(policy_name, actual_min_members)
+    if _is_base_finalists_agree_policy(str(policy_name or "")):
+        policy = build_seed_ensemble_policy_snapshot(
+            enabled=actual_min_members > 1,
+            seed_count=actual_min_members,
+            min_agree=policy_min_agree,
+        )
+        policy["selection_rule"] = "finalist_base_param_agree"
+        policy["finalists_agree_min_agree_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
+        policy["resolved_min_agree_source"] = "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE"
+        policy["requested_random_seed_ensemble"] = dict(requested_policy)
+    elif actual_min_members == actual_max_members == requested_count:
         policy = dict(requested_policy)
     else:
         policy = build_seed_ensemble_policy_snapshot(
@@ -4412,6 +4617,7 @@ def _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_d
             "outer rolling 目前此 policy schedule 實際產出的 members 數量與設定 N 不一致；"
             "正式 replay 口徑以 JSON 實際 members 數量為準，避免 min_agree 大於可用 members。"
         )
+    policy["policy_name"] = str(policy_name or "")
     policy["member_count_min"] = int(actual_min_members)
     policy["member_count_max"] = int(actual_max_members)
     policy["member_count_mismatch"] = bool(actual_min_members != requested_count or actual_max_members != requested_count)
@@ -4451,7 +4657,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
         params_by_effective_date[effective_start_key] = params_payload
         params_ensemble_members = _build_params_ensemble_members_for_schedule(schedule)
         if params_ensemble_members:
-            params_ensemble_by_effective_date[effective_start_key] = params_ensemble_members
+            params_ensemble_by_effective_date[effective_start_key] = renumber_seed_ensemble_members(params_ensemble_members)
         policy_metrics = dict(row.get(policy_name) or {})
         fold_entries.append({
             "fold": row.get("fold"),
@@ -4484,7 +4690,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "best_finalist_return_pct": row.get("best_finalist_return_pct"),
             "best_finalist_oos_score": row.get("best_finalist_oos_score"),
         })
-    seed_ensemble_policy = _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date)
+    seed_ensemble_policy = _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date, policy_name=policy_name)
     chain_all = dict(summary.get("chained_oos") or {})
     chain_policy = dict(chain_all.get(policy_name) or {})
     chain_policy_available = _policy_is_available(chain_policy)
@@ -5388,6 +5594,10 @@ def _seed_progress_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _strip_redundant_seed_status(raw_status: str) -> str:
+    return _strip_redundant_member_status(raw_status, member_text="")
 
 
 def _strip_redundant_member_status(raw_status: str, *, member_text: str = "") -> str:
@@ -6393,6 +6603,21 @@ def _build_members_from_seed_rows_for_policy(seed_rows: list[dict], policy_name:
     members: list[dict] = []
     for idx, row in enumerate(list(seed_rows or []), start=1):
         schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
+        explicit_members = _build_params_ensemble_members_for_schedule(schedule) if schedule.get("params_ensemble") else []
+        if explicit_members:
+            fallback_seed = schedule.get("optimizer_seed")
+            if fallback_seed is None:
+                fallback_seed = _extract_seed_from_policy_schedules(row)
+            for raw_member in explicit_members:
+                member = dict(raw_member)
+                member["member_index"] = int(len(members) + 1)
+                if member.get("seed") is None:
+                    member["seed"] = fallback_seed
+                if member.get("optimizer_seed") is None:
+                    member["optimizer_seed"] = fallback_seed
+                member["policy"] = str(policy_name)
+                members.append(member)
+            continue
         params_payload = dict(schedule.get("params") or {})
         if not params_payload:
             continue
@@ -6409,7 +6634,7 @@ def _build_members_from_seed_rows_for_policy(seed_rows: list[dict], policy_name:
             if key in schedule:
                 member[key] = schedule.get(key)
         members.append(member)
-    return normalize_seed_ensemble_members(members)
+    return renumber_seed_ensemble_members(members)
 
 
 def _build_members_from_seed_rows_for_best(seed_rows: list[dict]) -> list[dict]:
@@ -6432,8 +6657,8 @@ def _build_members_from_seed_rows_for_best(seed_rows: list[dict]) -> list[dict]:
     return normalize_seed_ensemble_members(members)
 
 
-def _build_single_period_ensemble_payload(*, members: list[dict], effective_start: str, effective_end: str, oos_year: int) -> dict:
-    normalized_members = normalize_seed_ensemble_members(members)
+def _build_single_period_ensemble_payload(*, members: list[dict], effective_start: str, effective_end: str, oos_year: int, policy_name: str | None = None) -> dict:
+    normalized_members = renumber_seed_ensemble_members(members)
     if not normalized_members:
         raise ValueError("rolling seed ensemble 缺少可用 params members")
     params_ensemble_by_effective_date = {str(effective_start): normalized_members}
@@ -6442,8 +6667,12 @@ def _build_single_period_ensemble_payload(*, members: list[dict], effective_star
         "schema_version": 1,
         "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
         "type": "outer_rolling_oos_param_set",
+        "selector": str(policy_name or ""),
         "active_param_policy": "daily_active_param_ensemble",
-        "random_seed_ensemble": _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date),
+        "random_seed_ensemble": _build_effective_seed_ensemble_policy_payload(
+            params_ensemble_by_effective_date,
+            policy_name=str(policy_name or ""),
+        ),
         "params_ensemble_by_effective_date": params_ensemble_by_effective_date,
         "folds": [{
             "oos_year": int(oos_year),
@@ -6525,12 +6754,13 @@ def _stable_policy_replay_signature(payload: dict) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def _build_policy_replay_payload_from_members(*, members: list[dict], replay_context: dict) -> dict:
+def _build_policy_replay_payload_from_members(*, members: list[dict], replay_context: dict, policy_name: str | None = None) -> dict:
     return _build_single_period_ensemble_payload(
         members=members,
         effective_start=str(replay_context["oos_start_date"]),
         effective_end=str(replay_context["oos_end_date"]),
         oos_year=int(replay_context["oos_year"]),
+        policy_name=str(policy_name or ""),
     )
 
 
@@ -6633,11 +6863,11 @@ def _policy_metrics_from_ensemble_metrics(metrics: dict, *, best_score: float, b
 
 
 def _build_ensemble_policy_schedule_from_seed_rows(*, seed_rows: list[dict], policy_name: str, oos_year: int, selection_period: str, oos_start_date: str, oos_end_date: str) -> dict:
-    members = _build_members_from_seed_rows_for_policy(seed_rows, policy_name)
+    members = renumber_seed_ensemble_members(_build_members_from_seed_rows_for_policy(seed_rows, policy_name))
     if not members:
         return {}
     first_member = dict(members[0])
-    return {
+    schedule = {
         "effective_start": str(oos_start_date),
         "effective_end": str(oos_end_date),
         "selection": str(selection_period),
@@ -6651,6 +6881,14 @@ def _build_ensemble_policy_schedule_from_seed_rows(*, seed_rows: list[dict], pol
         "params": dict(first_member.get("params") or {}),
         "params_ensemble": members,
     }
+    if _is_base_finalists_agree_policy(policy_name):
+        schedule["policy_type"] = "finalist_base_param_agree"
+        schedule["min_agree"] = resolve_optimizer_base_finalists_agree_min_agree(
+            len(members),
+            OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+        )
+        schedule["min_agree_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
+    return schedule
 
 
 def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict]) -> dict:
@@ -6707,7 +6945,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
             oos_end_date=oos_end_date,
         )
         policy_schedules[policy_name] = schedule
-        payload = _build_policy_replay_payload_from_members(members=members, replay_context=replay_context)
+        payload = _build_policy_replay_payload_from_members(members=members, replay_context=replay_context, policy_name=policy_name)
         signature = _stable_policy_replay_signature(payload) if dedup_enabled else f"{policy_name}:{_stable_policy_replay_signature(payload)}"
         job = policy_jobs_by_name[policy_name] = {
             "signature": signature,
@@ -6802,11 +7040,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": float(benchmark_return_pct),
         "benchmark_mdd_pct": float(benchmark_mdd_pct),
-        "base": policy_metrics.get("base", {}),
-        "base_retention_gt_0_0": policy_metrics.get("base_retention_gt_0_0", {}),
-        "base_retention_gt_min": policy_metrics.get("base_retention_gt_min", {}),
-        "local": policy_metrics.get("local", {}),
-        "retention": policy_metrics.get("retention", {}),
+        **{policy_name: policy_metrics.get(policy_name, {}) for policy_name in REPORT_POLICY_NAMES},
         **{policy_name: policy_metrics.get(policy_name, {}) for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES},
         "policy_schedules": policy_schedules,
         "elapsed_sec": float(fold_elapsed),
@@ -7317,11 +7551,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "benchmark_oos_score": float(diagnostics.get("benchmark_oos_score", 0.0)),
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
-                "base": diagnostics.get("policies", {}).get("base", {}),
-                "base_retention_gt_0_0": diagnostics.get("policies", {}).get("base_retention_gt_0_0", {}),
-                "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
-                "local": diagnostics.get("policies", {}).get("local", {}),
-                "retention": diagnostics.get("policies", {}).get("retention", {}),
+                **{
+                    policy_name: diagnostics.get("policies", {}).get(policy_name, {})
+                    for policy_name in REPORT_POLICY_NAMES
+                },
                 **{
                     policy_name: diagnostics.get("policies", {}).get(policy_name, {})
                     for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES
@@ -7813,11 +8046,10 @@ def run_outer_rolling_oos(
                 "benchmark_oos_score": float(diagnostics.get("benchmark_oos_score", 0.0)),
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
-                "base": diagnostics.get("policies", {}).get("base", {}),
-                "base_retention_gt_0_0": diagnostics.get("policies", {}).get("base_retention_gt_0_0", {}),
-                "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
-                "local": diagnostics.get("policies", {}).get("local", {}),
-                "retention": diagnostics.get("policies", {}).get("retention", {}),
+                **{
+                    policy_name: diagnostics.get("policies", {}).get(policy_name, {})
+                    for policy_name in REPORT_POLICY_NAMES
+                },
                 **{
                     policy_name: diagnostics.get("policies", {}).get(policy_name, {})
                     for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES

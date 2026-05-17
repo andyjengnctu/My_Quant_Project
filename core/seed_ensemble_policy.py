@@ -89,3 +89,10 @@ def normalize_seed_ensemble_members(members: Any) -> list[dict]:
         member["params"] = dict(params)
         normalized.append(member)
     return normalized
+
+
+def renumber_seed_ensemble_members(members: Any) -> list[dict]:
+    normalized = normalize_seed_ensemble_members(members)
+    for idx, member in enumerate(normalized, start=1):
+        member["member_index"] = int(idx)
+    return normalized

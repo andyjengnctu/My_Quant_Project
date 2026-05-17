@@ -33,7 +33,7 @@ from core.walk_forward_policy import (
     normalize_optimizer_model_mode,
 )
 from core.active_param_ensemble import build_static_active_param_ensemble_payload, is_active_param_ensemble_payload
-from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, generate_random_seed_ensemble
+from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, generate_random_seed_ensemble, renumber_seed_ensemble_members
 from config.training_policy import (
     DEFAULT_OPTIMIZER_MODEL_MODE,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
@@ -51,6 +51,8 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+    OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+    resolve_optimizer_base_finalists_agree_min_agree,
 )
 
 
@@ -163,6 +165,10 @@ def _normalize_trade_selector(selector: str) -> str:
         "base_r_gt_0_6": "base_retention_gt_0_6",
         "base_r_gt_0_8": "base_retention_gt_0_8",
         "base_r_gt_min": "base_retention_gt_min",
+        "base_agree": "base_finalists_agree",
+        "finalists_agree": "base_finalists_agree",
+        "base_finalist_agree": "base_finalists_agree",
+        "base_finalists_agree": "base_finalists_agree",
     }
     return aliases.get(raw, raw or "retention")
 
@@ -261,7 +267,9 @@ def _load_params_summary_or_legacy_sidecar(params_path: str, legacy_summary_path
 def _visible_policy_paramset_paths(policy_paramset_paths: dict) -> dict[str, str]:
     from tools.optimizer.outer_rolling_oos import get_optimizer_policy_output_label
 
-    visible_names = ("base", "base_retention_gt_0_0", "base_retention_gt_min", "local", "retention")
+    from tools.optimizer.outer_rolling_oos import get_optimizer_paramset_policy_names
+
+    visible_names = tuple(get_optimizer_paramset_policy_names())
     return {
         get_optimizer_policy_output_label(name): str(policy_paramset_paths[name])
         for name in visible_names
@@ -435,7 +443,7 @@ def _score_from_summary_for_promote(summary: dict | None, selector: str | None =
     if not isinstance(summary, dict):
         return None
     selector_key = _normalize_trade_selector(selector or _resolve_trade_run_best_selector())
-    if selector_key in {"retention", "local", "base", "base_r0", "base_r05"}:
+    if selector_key in {"retention", "local", "base", "base_r0", "base_r05", "base_finalists_agree"}:
         try:
             return _selector_score_from_summary(summary, selector_key)
         except (TypeError, ValueError, KeyError):
@@ -875,6 +883,30 @@ def _resolve_nonrolling_seed_ensemble_policy(*, seed_count: int | None = None):
         seed_count=resolved_seed_count,
         min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     )
+
+
+def _is_base_finalists_agree_policy_name(policy_name: str | None) -> bool:
+    return str(policy_name or "").strip() == "base_finalists_agree"
+
+
+def _resolve_nonrolling_policy_seed_ensemble_policy(*, policy_name: str, members: list[dict], seeds: list[int]) -> dict:
+    if _is_base_finalists_agree_policy_name(policy_name):
+        member_count = max(1, len(renumber_seed_ensemble_members(list(members or []))))
+        min_agree = resolve_optimizer_base_finalists_agree_min_agree(
+            member_count,
+            OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+        )
+        policy = build_seed_ensemble_policy_snapshot(
+            enabled=member_count > 1,
+            seed_count=member_count,
+            min_agree=min_agree,
+        )
+        policy["selection_rule"] = "finalist_base_param_agree"
+        policy["finalists_agree_min_agree_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
+        policy["resolved_min_agree_source"] = "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE"
+        policy["requested_random_seed_ensemble"] = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
+        return policy
+    return _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
 
 
 def _resolve_optimizer_session_ts(session, *, fallback_label: str = "") -> str:
@@ -1493,7 +1525,7 @@ def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dic
     print(f"{yellow}static ensemble 已完成；Trade mode 產生 candidate_best/run_best，OOS mode 只產生 validation policy outputs。{reset}")
 
 
-def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict:
+def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_name: str = "") -> dict:
     local_scores = [float(item.get("local_min_score", 0.0)) for item in members]
     base_scores = [float(item.get("base_score", 0.0)) for item in members]
     retentions = [float(item.get("retention", 0.0)) for item in members]
@@ -1542,7 +1574,7 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
             }
             for idx, item in enumerate(members)
         ],
-        "random_seed_ensemble": _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds)),
+        "random_seed_ensemble": _resolve_nonrolling_policy_seed_ensemble_policy(policy_name=str(policy_name or ""), members=list(members or []), seeds=seeds),
         "created_at": get_taipei_now().isoformat(),
     }
 
@@ -1564,9 +1596,14 @@ def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, w
 
 
 def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict:
-    requested_policy = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
+    normalized_members = renumber_seed_ensemble_members(list(members or []))
+    requested_policy = _resolve_nonrolling_policy_seed_ensemble_policy(
+        policy_name=str(policy_name),
+        members=normalized_members,
+        seeds=seeds,
+    )
     payload = build_static_active_param_ensemble_payload(
-        members=members,
+        members=normalized_members,
         random_seed_ensemble=requested_policy,
         selector=str(policy_name),
         created_at=get_taipei_now().isoformat(),
@@ -1593,7 +1630,7 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
         "selector": str(policy_name),
         "selection_period": f"{selection_start}~{selection_end}",
         "oos_period": f"{oos_start_raw}~{oos_end_raw}" if oos_start_raw else "",
-        "member_count": int(len(members)),
+        "member_count": int(len(normalized_members)),
         "requested_seed_count": int(len(seeds)),
         "trials_per_seed": int(trials_per_seed),
         "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
@@ -1651,13 +1688,18 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
 
 
 def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None, write_candidate_best: bool = True, write_policy_files: bool = True) -> tuple[dict, dict, dict[str, dict]]:
-    policy = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
     candidate_selector = _resolve_trade_candidate_selector() if normalize_optimizer_model_mode(selected_model_mode) == "trade" else "candidate_best"
     candidate_members = list(members)
     if candidate_selector != "candidate_best":
         selector_members = list((policy_members_by_policy or {}).get(candidate_selector) or [])
         if selector_members:
             candidate_members = sorted(selector_members, key=lambda item: int(dict(item).get("member_index", 0) or 0))
+    candidate_members = renumber_seed_ensemble_members(candidate_members)
+    policy = _resolve_nonrolling_policy_seed_ensemble_policy(
+        policy_name=str(candidate_selector),
+        members=candidate_members,
+        seeds=seeds,
+    )
     payload = build_static_active_param_ensemble_payload(
         members=candidate_members,
         random_seed_ensemble=policy,
@@ -1692,6 +1734,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         dataset_label=dataset_label,
         selected_model_mode=selected_model_mode,
         trials_per_seed=trials_per_seed,
+        policy_name=str(candidate_selector),
     )
     summary["selector"] = str(candidate_selector)
     summary["run_best_selector"] = _resolve_trade_run_best_selector()
@@ -1746,7 +1789,12 @@ def _finalize_single_seed_study_outputs(
         member_index=1,
         seed=seed_value,
     )
-    policy_members_by_policy = {str(name): [dict(member_payload)] for name, member_payload in dict(policy_members or {}).items()}
+    policy_members_by_policy: dict[str, list[dict]] = {}
+    for name, member_payload in dict(policy_members or {}).items():
+        if isinstance(member_payload, list):
+            policy_members_by_policy[str(name)] = [dict(item) for item in member_payload if isinstance(item, dict)]
+        elif isinstance(member_payload, dict):
+            policy_members_by_policy[str(name)] = [dict(member_payload)]
     ensemble_payload, ensemble_summary, policy_paramset_payloads = _write_static_seed_ensemble_candidate(
         members=[member],
         seeds=[seed_value],
@@ -1830,6 +1878,11 @@ def _run_nonrolling_random_seed_ensemble_training(
     progress_board = None
     def _collect_policy_members(policy_members: dict | None) -> None:
         for policy_name, member in dict(policy_members or {}).items():
+            if isinstance(member, list):
+                for item in member:
+                    if isinstance(item, dict):
+                        policy_members_by_policy.setdefault(str(policy_name), []).append(dict(item))
+                continue
             if not isinstance(member, dict):
                 continue
             policy_members_by_policy.setdefault(str(policy_name), []).append(dict(member))

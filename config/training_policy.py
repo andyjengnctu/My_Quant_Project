@@ -35,6 +35,15 @@ TRADE_MODE_AUTO_PROMOTE_RUN_BEST = True
 TRADE_PROMOTE_MIN_SCORE_DELTA = 0.10
 TRADE_PROMOTE_ON_POLICY_MISMATCH = 'candidate_only'
 
+# optimizer 指標輸出開關。False 會停用該指標的表格、replay 與 paramset 輸出。
+OPTIMIZER_POLICY_INDICATOR_ENABLED = {
+    "base": True,
+    "base_retention_gt_0_0": True,
+    "base_retention_gt_min": True,
+    "base_finalists_agree": True,
+    "local": True,
+    "retention": True,
+}
 
 # ============================== 區間/次數 ====================================
 
@@ -54,7 +63,7 @@ OPTIMIZER_ALLOW_PER_RUN_TEMP_DB = True
 # local_min review 計算開關。
 OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 10  # local_min_score finalist review 的最小候選數
 
 # Rolling OOS optimizer search 預設 trial 數。
 OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 1000
@@ -63,6 +72,9 @@ OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 1000
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 5 # "auto" = 過半數；整數 = 至少幾個 seed 同意。最大值永遠是 N。
+
+# base finalists agree：取 finalists 中 base 參數 replay 候選 >= n 組同意的股票。
+OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE = "auto" # "auto" = finalists 數量的一半向上取整；整數 = 至少幾組 finalist base 參數同意。
 
 
 # ============================== Gates ====================================
@@ -102,6 +114,38 @@ MIN_EQUITY_CURVE_R_SQUARED = 0.40  # 權益曲線最小 R 平方門檻
 
 def is_optimizer_local_min_review_enabled() -> bool:
     return bool(OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED)
+
+
+def resolve_optimizer_policy_indicator_enabled_map() -> dict[str, bool]:
+    return {
+        str(name): bool(enabled)
+        for name, enabled in dict(OPTIMIZER_POLICY_INDICATOR_ENABLED or {}).items()
+    }
+
+
+def is_optimizer_policy_indicator_enabled(policy_name: str) -> bool:
+    # 未列入 map 的新指標預設開啟，避免外部擴充 policy 被意外關閉。
+    return bool(resolve_optimizer_policy_indicator_enabled_map().get(str(policy_name), True))
+
+
+def resolve_optimizer_enabled_policy_indicators(policy_names=None) -> tuple[str, ...]:
+    names = tuple(str(name) for name in list(policy_names or []) if str(name))
+    return tuple(name for name in names if is_optimizer_policy_indicator_enabled(name))
+
+
+def resolve_optimizer_base_finalists_agree_min_agree(finalist_count, min_agree=None) -> int:
+    n = max(1, int(finalist_count or 1))
+    raw_value = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE if min_agree is None else min_agree
+    text = str(raw_value).strip().lower() if raw_value is not None else "auto"
+    if text in {"", "none", "null", "auto", "half", "half_up", "ceil_half"}:
+        requested = int(math.ceil(n / 2.0))
+    else:
+        try:
+            requested = int(raw_value)
+        except (TypeError, ValueError):
+            requested = int(math.ceil(n / 2.0))
+    return min(n, max(1, int(requested)))
+
 
 def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
     requested_trials = max(0, int(n_trials))
@@ -157,6 +201,8 @@ def build_training_score_policy_snapshot():
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN,
         "OPTIMIZER_BASE_RETENTION_GT_MIN": OPTIMIZER_BASE_RETENTION_GT_MIN,
+        "OPTIMIZER_POLICY_INDICATOR_ENABLED": resolve_optimizer_policy_indicator_enabled_map(),
+        "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
         "OPTIMIZER_RANDOM_SEED_ENSEMBLE": build_seed_ensemble_policy_snapshot(
             enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
             seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
@@ -189,6 +235,8 @@ def build_optimizer_train_test_policy_snapshot():
     payload["OPTIMIZER_STUDY_STORAGE_MODE"] = str(OPTIMIZER_STUDY_STORAGE_MODE)
     payload["OPTIMIZER_ALLOW_PER_RUN_TEMP_DB"] = bool(OPTIMIZER_ALLOW_PER_RUN_TEMP_DB)
     payload["OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED"] = is_optimizer_local_min_review_enabled()
+    payload["OPTIMIZER_POLICY_INDICATOR_ENABLED"] = resolve_optimizer_policy_indicator_enabled_map()
+    payload["OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
     payload["OPTIMIZER_RANDOM_SEED_ENSEMBLE"] = build_seed_ensemble_policy_snapshot(
         enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
         seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
