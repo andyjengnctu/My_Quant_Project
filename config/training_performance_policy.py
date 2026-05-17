@@ -11,7 +11,7 @@ from core.seed_ensemble_policy import resolve_seed_ensemble_parallel_backend, re
 # - "fold_count" = timing/rolling 平行模式預設使用 fold 總數。
 # - 正整數 = 固定 rolling fold process 數。
 # - 環境變數 OPTIMIZER_ROLLING_FOLD_WORKERS 仍可覆寫此預設。
-OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count"
+OPTIMIZER_ROLLING_FOLD_WORKERS = 1
 
 # OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS:
 # - 0 = 關閉 parallel rolling worker 內的 prepared trial input cache。
@@ -68,7 +68,7 @@ OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS = 0
 # - >1 = 同時跑多個 seeds；實際值會 clamp 到 1~OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE。
 # - "auto" = 自動使用最大併發，也就是目前 random seed ensemble 的 N。
 # - 這是效能設定，只改執行併發，不改 seed ensemble 的選參、交易或統計口徑。
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = "auto"
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = 8
 
 # OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND:
 # - "process" = 每個 seed member 使用獨立 Python process，CPU 利用率較高，但記憶體用量較大。
