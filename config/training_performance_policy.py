@@ -64,15 +64,23 @@ OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS = 0
 
 
 # OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS:
-# - "policy_count"/"auto" = 預設使用本次實際需要 replay 的唯一 policy signature 數量。
-# - 正整數 = 固定 policy replay process 數，會 clamp 到 1~policy_count。
+# - 1 = policy/signature replay 維持序列，避免多個 policy 同時重建同一批 ensemble prepared cache。
+# - 正整數 = 固定 policy replay worker 數，會 clamp 到 1~policy_count。
+# - "policy_count"/"auto" = 使用本次實際需要 replay 的唯一 policy signature 數量。
 # - 只改 policy replay 執行併發，不改 policy 選擇、交易與評分口徑。
-OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS = "policy_count"
+OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS = 1
 
 # OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND:
-# - "process" = 每個 policy replay 使用獨立 Python process，預設用於壓縮 replay wall time。
-# - "thread" = 保留作為低記憶體 fallback。
+# - "process" = 每個 policy replay 使用獨立 Python process；僅在 OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS > 1 時有意義。
+# - "thread" = 低記憶體 fallback。
 OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND = "process"
+
+# OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS:
+# - "seed_count"/"auto" = replay 階段預設改用 seed/member 數量平行準備 market context。
+# - 1 = seed/member context 準備序列，最省記憶體。
+# - 正整數 = 固定 replay seed/member context worker 數，會 clamp 到 1~實際 seed/member 數。
+# - 只改 replay 階段的資料準備併發；正式 ensemble timeline、共識成交與評分口徑不變。
+OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS = "seed_count"
 
 # OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE:
 # - True = 相同 params ensemble signature 的 policy 只 replay 一次，結果映射回所有同源 policy。
@@ -288,6 +296,18 @@ def resolve_optimizer_policy_replay_parallel_backend_default():
     return "process"
 
 
+def resolve_optimizer_policy_replay_seed_parallel_workers_default(seed_count):
+    resolved_seed_count = _coerce_int(seed_count, default=1, min_value=1)
+    raw_value = os.environ.get(
+        "OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS",
+        OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS,
+    )
+    text = str(raw_value or "").strip().lower()
+    if text in {"", "auto", "seed_count", "seeds", "member_count", "members"}:
+        return resolved_seed_count
+    return _coerce_int(raw_value, default=resolved_seed_count, min_value=1, max_value=resolved_seed_count)
+
+
 def is_optimizer_policy_replay_dedup_by_signature_enabled_default():
     raw_value = os.environ.get(
         "OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE",
@@ -336,6 +356,7 @@ def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_si
         "OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS": OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS,
         "OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND": OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND,
         "OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND_RESOLVED": resolve_optimizer_policy_replay_parallel_backend_default(),
+        "OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS": OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS,
         "OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE": is_optimizer_policy_replay_dedup_by_signature_enabled_default(),
         "OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED": is_optimizer_policy_replay_context_reuse_enabled_default(),
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
