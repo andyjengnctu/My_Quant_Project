@@ -737,13 +737,26 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     _copy_file_if_exists(params_path, broken_db_models_dir / "run_best_params.json")
     sandbox_db_path = broken_db_models_dir / db_path.name
 
+    def _optimizer_export_rejects_with_expected_contract(outcome, legacy_message: str) -> bool:
+        combined = f"{outcome['stdout']}\n{outcome['stderr']}"
+        memory_message = "memory study，不保留長期 DB"
+        return (
+            (not outcome.get("timed_out"))
+            and outcome["returncode"] != 0
+            and (legacy_message in combined or memory_message in combined)
+        )
+
     sandbox_db_path.write_text("not-a-sqlite-db", encoding="utf-8")
     outcome = _run_python_cli_probe(
         [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
     )
-    results.append(summarize_result("error_path::broken_optimizer_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "Optimizer 記憶庫檔案損壞或不可讀" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "壞 DB 應 fail-fast")))
+    results.append(summarize_result(
+        "error_path::broken_optimizer_db",
+        _optimizer_export_rejects_with_expected_contract(outcome, "Optimizer 記憶庫檔案損壞或不可讀"),
+        detail=_outcome_detail(outcome, "壞 DB 或 memory-study export-only 應 fail-fast"),
+    ))
 
     sandbox_db_path.unlink(missing_ok=True)
     outcome = _run_python_cli_probe(
@@ -751,7 +764,11 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
     )
-    results.append(summarize_result("error_path::export_only_missing_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "記憶庫不存在，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "無 DB export-only 應 fail-fast")))
+    results.append(summarize_result(
+        "error_path::export_only_missing_db",
+        _optimizer_export_rejects_with_expected_contract(outcome, "記憶庫不存在，無法匯出"),
+        detail=_outcome_detail(outcome, "無 DB 或 memory-study export-only 應 fail-fast"),
+    ))
 
     import sqlite3
 
@@ -761,7 +778,11 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
     )
-    results.append(summarize_result("error_path::export_only_empty_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "記憶庫為空，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "空 DB export-only 應 fail-fast")))
+    results.append(summarize_result(
+        "error_path::export_only_empty_db",
+        _optimizer_export_rejects_with_expected_contract(outcome, "記憶庫為空，無法匯出"),
+        detail=_outcome_detail(outcome, "空 DB 或 memory-study export-only 應 fail-fast"),
+    ))
     return results
 
 

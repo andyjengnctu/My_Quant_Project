@@ -1139,7 +1139,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         candidate_summary=incompatible_candidate_summary,
         run_best_summary=stale_run_best_summary,
     )
-    add_check(results, "strategy_contract", case_id, "optimizer_promote_ignores_stale_run_best_policy_baseline", True, should_promote_stale_policy)
+    add_check(results, "strategy_contract", case_id, "optimizer_promote_rejects_stale_run_best_policy_baseline", False, should_promote_stale_policy)
     add_check(results, "strategy_contract", case_id, "optimizer_promote_reports_stale_run_best_policy_baseline", True, "effective policy" in stale_policy_reason)
 
     robustness = importlib.import_module("tools.optimizer.robustness")

@@ -155,15 +155,17 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
         raised_exc = exc
         run_info["stderr"] = f"{type(exc).__name__}: {exc}"
     finally:
-        cov.stop()
-        cov.save()
-        if os.path.exists(data_file):
-            try:
-                cov.json_report(outfile=json_file, pretty_print=True)
-                run_info["json_generated"] = True
-            except Exception as exc:  # pragma: no cover - defensive artifact reporting
-                run_info["stderr"] = (run_info["stderr"] + "\n" if run_info["stderr"] else "") + f"json_report: {type(exc).__name__}: {exc}"
-
+        try:
+            cov.stop()
+            cov.save()
+            if os.path.exists(data_file):
+                try:
+                    cov.json_report(outfile=json_file, pretty_print=True)
+                    run_info["json_generated"] = True
+                except Exception as exc:  # pragma: no cover - defensive artifact reporting
+                    run_info["stderr"] = (run_info["stderr"] + "\n" if run_info["stderr"] else "") + f"json_report: {type(exc).__name__}: {exc}"
+        except Exception as exc:  # pragma: no cover - defensive artifact reporting
+            run_info["stderr"] = (run_info["stderr"] + "\n" if run_info["stderr"] else "") + f"coverage_artifact: {type(exc).__name__}: {exc}"
         write_json(Path(run_info_file), run_info)
 
     if raised_exc is not None:

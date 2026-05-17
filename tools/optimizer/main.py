@@ -425,6 +425,47 @@ def _summaries_have_compatible_policy(*, candidate_summary: dict, run_best_summa
     return _summary_policy_signature(candidate_summary) == _summary_policy_signature(run_best_summary)
 
 
+def _score_from_summary_for_promote(summary: dict | None, selector: str | None = None):
+    if not isinstance(summary, dict):
+        return None
+    selector_key = _normalize_trade_selector(selector or _resolve_trade_run_best_selector())
+    if selector_key in {"retention", "local", "base", "base_r0", "base_r05"}:
+        try:
+            return _selector_score_from_summary(summary, selector_key)
+        except (TypeError, ValueError, KeyError):
+            return None
+    for key in ("selector_score", "local_min_score", "base_score"):
+        value = summary.get(key)
+        if _is_finite_number(value) and float(value) != float(INVALID_TRIAL_VALUE):
+            return float(value)
+    return None
+
+
+def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict | None, selector: str | None = None):
+    """Compatibility helper for validation code; real promotion uses same-window replay.
+
+    The old implementation allowed policy mismatch to auto-promote.  Trade mode
+    now treats policy mismatch as candidate-only, because run_best can only be
+    replaced after same-policy, same-window replay or when no run_best exists.
+    """
+    if not isinstance(candidate_summary, dict):
+        return False, "candidate summary 缺失"
+    if run_best_summary is None:
+        return True, "run_best summary 不存在"
+    if not _summaries_have_compatible_policy(candidate_summary=candidate_summary, run_best_summary=run_best_summary):
+        return False, "effective policy 不相容，保留 candidate_best，不自動 promote run_best"
+    candidate_score = _score_from_summary_for_promote(candidate_summary, selector=selector)
+    run_best_score = _score_from_summary_for_promote(run_best_summary, selector=selector)
+    if candidate_score is None:
+        return False, "candidate selector score 無效"
+    if run_best_score is None:
+        return True, "run_best selector score 無效"
+    delta = float(candidate_score) - float(run_best_score)
+    if delta >= float(TRADE_PROMOTE_MIN_SCORE_DELTA):
+        return True, f"candidate selector score delta={delta:.3f} 通過"
+    return False, f"candidate selector score delta={delta:.3f} 未達門檻"
+
+
 def _summary_is_trade_mode(summary: dict | None) -> bool:
     if not isinstance(summary, dict):
         return False
