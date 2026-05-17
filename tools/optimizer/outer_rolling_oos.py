@@ -122,6 +122,8 @@ REPORT_POLICY_LABELS = {
     "local": "local",
     "retention": "retention",
 }
+PRIMARY_RESULT_POLICY_NAMES = ("base", "base_retention_gt_0_0", "base_retention_gt_min")
+SECONDARY_RESULT_POLICY_NAMES = ("local", "retention")
 
 BASE_RETENTION_COMPARISON_THRESHOLDS = (0.0, 0.2, 0.4, 0.6, 0.8)
 BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS = OrderedDict(
@@ -1353,24 +1355,47 @@ def _compact_year_month_label(text: str) -> str:
     return f"{match.group(1)[2:]}-{match.group(2)}"
 
 
-def _display_compact_month_period(value, end_value=None) -> str:
+def _display_short_date_value(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "~" in text:
+        return _display_short_date_period(text)
+    if text.lower() == "latest":
+        return "latest"
+    try:
+        if re.fullmatch(r"\d{8}", text):
+            return pd.Timestamp(f"{text[:4]}-{text[4:6]}-{text[6:8]}").strftime("%y-%m-%d")
+        if re.fullmatch(r"\d{6}", text):
+            return pd.Timestamp(f"{text[:4]}-{text[4:6]}-01").strftime("%y-%m-%d")
+        if re.fullmatch(r"\d{4}-\d{2}$", text):
+            return pd.Timestamp(f"{text}-01").strftime("%y-%m-%d")
+        if re.fullmatch(r"\d{4}$", text):
+            return pd.Timestamp(f"{text}-01-01").strftime("%y-%m-%d")
+        return pd.Timestamp(text).strftime("%y-%m-%d")
+    except (TypeError, ValueError, OverflowError):
+        return text
+
+
+def _display_short_date_period(value, end_value=None) -> str:
     if end_value is not None:
-        start_text = _compact_year_month_label(_display_month_value(value))
+        start_text = _display_short_date_value(value)
         end_raw = str(end_value or "").strip()
-        if end_raw.lower() == "latest":
-            end_text = "latest"
-        else:
-            end_text = _compact_year_month_label(_display_month_value(end_value))
+        end_text = "latest" if end_raw.lower() == "latest" else _display_short_date_value(end_value)
         if start_text and end_text and start_text != end_text:
             return f"{start_text}~{end_text}"
         return start_text or end_text
     text = str(value or "").strip()
     if "~" in text:
         start_text, end_text = text.split("~", 1)
-        return _display_compact_month_period(start_text, end_text)
+        return _display_short_date_period(start_text, end_text)
     if text.lower() == "latest":
         return "latest"
-    return _compact_year_month_label(_display_month_value(text))
+    return _display_short_date_value(text)
+
+
+def _display_compact_month_period(value, end_value=None) -> str:
+    return _display_short_date_period(value, end_value)
 
 
 def _canonical_date_text(value, default: str = "") -> str:
@@ -3855,15 +3880,23 @@ def _rows_period_bounds(rows: list[dict]) -> dict:
             return pd.Timestamp(fallback).normalize()
         return pd.Timestamp(text).normalize()
 
-    first_oos_start = min(pd.Timestamp(row.get("oos_start_date")).normalize() for row in source_rows if row.get("oos_start_date"))
-    last_oos_end = max(_date_or_latest(row.get("oos_end_date"), pd.Timestamp.today().normalize()) for row in source_rows)
-    selection_start = min(pd.Timestamp(row.get("selection_start_date")).normalize() for row in source_rows if row.get("selection_start_date"))
-    selection_end = max(pd.Timestamp(row.get("selection_end_date")).normalize() for row in source_rows if row.get("selection_end_date"))
+    selection_starts = [pd.Timestamp(row.get("selection_start_date")).normalize() for row in source_rows if row.get("selection_start_date")]
+    selection_ends = [pd.Timestamp(row.get("selection_end_date")).normalize() for row in source_rows if row.get("selection_end_date")]
+    oos_starts = [pd.Timestamp(row.get("oos_start_date")).normalize() for row in source_rows if row.get("oos_start_date")]
+    oos_ends = [_date_or_latest(row.get("oos_end_date"), pd.Timestamp.today().normalize()) for row in source_rows if row.get("oos_start_date") or row.get("oos_end_date")]
+    oos_keys = [int(row.get("oos_year", 0) or 0) for row in source_rows if int(row.get("oos_year", 0) or 0) > 0]
+
+    selection_period = ""
+    if selection_starts and selection_ends:
+        selection_period = _period_label(min(selection_starts), max(selection_ends))
+    oos_period = ""
+    if oos_starts:
+        oos_period = _period_label(min(oos_starts), max(oos_ends) if oos_ends else min(oos_starts))
     return {
-        "selection_period": _period_label(selection_start, selection_end),
-        "oos_period": _period_label(first_oos_start, last_oos_end),
-        "first_oos_key": min(int(row.get("oos_year", 0) or 0) for row in source_rows),
-        "last_oos_key": max(int(row.get("oos_year", 0) or 0) for row in source_rows),
+        "selection_period": selection_period,
+        "oos_period": oos_period,
+        "first_oos_key": min(oos_keys) if oos_keys else 0,
+        "last_oos_key": max(oos_keys) if oos_keys else 0,
     }
 
 
@@ -3958,7 +3991,7 @@ def _table_separator(width: int = 218) -> str:
     return "-" * int(width)
 
 
-def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, table_title: str = "ROLLING MONTHLY OOS RESULTS") -> str:
+def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, table_title: str = "ROLLING MONTHLY OOS RESULTS", policy_names: tuple[str, ...] | None = None) -> str:
     display_rows = normalize_optimizer_seed_ensemble_fold_rows(list(rows or []))
     if include_oos_avg and display_rows:
         avg_row = _build_oos_avg_row(display_rows)
@@ -3970,10 +4003,11 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
             display_rows = display_rows + [chain_row]
     if not display_rows:
         return ""
+    active_policy_names = tuple(policy_names or REPORT_POLICY_NAMES)
     widths = {
         "fold": 9,
-        "selection": 13,
-        "oos_year": 13,
+        "selection": 19,
+        "oos_year": 19,
         "rank": 8,
         "best": 17,
         "bench": 15,
@@ -3982,10 +4016,10 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     policy_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
     lines.append(str(table_title or "ROLLING MONTHLY OOS RESULTS"))
-    policy_header = " | ".join(_pad_ansi(REPORT_POLICY_LABELS[name], policy_group_width, align="^") for name in REPORT_POLICY_NAMES)
+    policy_header = " | ".join(_pad_ansi(REPORT_POLICY_LABELS[name], policy_group_width, align="^") for name in active_policy_names)
     policy_subheader = " | ".join(
         f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')}"
-        for _ in REPORT_POLICY_NAMES
+        for _ in active_policy_names
     )
     header1 = (
         f"{_pad_ansi('fold', widths['fold'], align='^')} | {_pad_ansi('train', widths['selection'], align='^')} | {_pad_ansi('oos_period', widths['oos_year'], align='^')} | "
@@ -4010,7 +4044,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         best_score = float(row.get("best_finalist_oos_score", 0.0))
         benchmark_score = float(row.get("benchmark_oos_score", 0.0))
         policy_cells: list[str] = []
-        for policy_name in REPORT_POLICY_NAMES:
+        for policy_name in active_policy_names:
             rank_text, _best_text, bench_text = _policy_cell_text(row.get(policy_name) or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
             policy_cells.append(f"{_pad_ansi(rank_text, widths['rank'], align='>')} | {_pad_ansi(bench_text, widths['bench'], align='>')}")
         line = (
@@ -4150,16 +4184,27 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
     return "\n".join(lines)
 
 
-def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
-    _ = retention_table_title
-    return _render_results_table(
+def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "LOCAL / RETENTION RESULTS") -> str:
+    upper_table = _render_results_table(
         rows,
         color=color,
         include_chain=include_chain,
         include_oos_avg=include_oos_avg,
         chained_override=chained_override,
         table_title=main_table_title,
+        policy_names=PRIMARY_RESULT_POLICY_NAMES,
     )
+    lower_title = str(retention_table_title or "LOCAL / RETENTION RESULTS")
+    lower_table = _render_results_table(
+        rows,
+        color=color,
+        include_chain=include_chain,
+        include_oos_avg=include_oos_avg,
+        chained_override=chained_override,
+        table_title=lower_title,
+        policy_names=SECONDARY_RESULT_POLICY_NAMES,
+    )
+    return "\n\n".join(part for part in (upper_table, lower_table) if part)
 
 
 def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
@@ -4947,15 +4992,7 @@ def _safe_progress_float(progress: dict, key: str) -> float | None:
 
 
 def _display_short_month_period(value, end_value=None) -> str:
-    text = _display_month_period(value, end_value)
-    parts = []
-    for part in str(text or "").split("~"):
-        part = part.strip()
-        if re.fullmatch(r"\d{4}-\d{2}", part):
-            parts.append(part[2:])
-        else:
-            parts.append(part)
-    return "~".join(parts)
+    return _display_short_date_period(value, end_value)
 
 
 def _count_local_min_completed_from_progress(progress: dict) -> int:
@@ -5795,16 +5832,18 @@ class OptimizerSeedEnsembleProgressBoard:
                 "selection_period": str(context.get("selection_period") or context.get("selection_start") or ""),
                 "selection_start_date": str(context.get("selection_start") or ""),
                 "selection_end_date": str(context.get("selection_end") or ""),
+                "show_oos": bool(context.get("show_oos", True)),
             }
             fold_progress_lines.append(_format_parallel_fold_progress_line(task, dict(progress or {})))
         table_text = ""
         if self.result_rows_by_fold:
             main_title, retention_title = _active_optimizer_table_titles()
+            show_oos_avg = any(bool(ctx.get("show_oos", True)) for ctx in self.contexts)
             table_text = _render_optimizer_results_tables(
                 sorted((normalize_optimizer_seed_ensemble_fold_row(row) for row in self.result_rows_by_fold.values()), key=optimizer_seed_ensemble_row_sort_key),
                 color=True,
                 include_chain=False,
-                include_oos_avg=True,
+                include_oos_avg=show_oos_avg,
                 main_table_title=main_title,
                 retention_table_title=retention_title,
             )

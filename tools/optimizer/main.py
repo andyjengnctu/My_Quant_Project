@@ -2089,6 +2089,7 @@ def _run_nonrolling_random_seed_ensemble_training(
             progress.setdefault("oos_year", int(period_context.get("oos_year", 0) or 0))
             progress.setdefault("selection_start", str(period_context.get("selection_start") or ""))
             progress.setdefault("selection_end", str(period_context.get("selection_end") or ""))
+            progress.setdefault("show_oos", bool(period_context.get("show_oos", True)))
             with progress_lock:
                 progress_board.update_fold_progress(fold_idx=1, progress=progress)
 
@@ -2102,6 +2103,15 @@ def _run_nonrolling_random_seed_ensemble_training(
         with progress_lock:
             progress_board.update_result_row(oos_row, force=True)
             progress_board.close()
+        if trade_mode:
+            print_optimizer_static_ensemble_console_dashboard(
+                dashboard_session,
+                ensemble_payload=ensemble_payload,
+                seeds=seeds,
+                milestone_title="🏆 candidate_best 詳細結果",
+                title="candidate_best 詳細結果表格",
+                force=True,
+            )
     else:
         print_optimizer_static_ensemble_rolling_oos_table(
             dashboard_session,
@@ -2113,8 +2123,8 @@ def _run_nonrolling_random_seed_ensemble_training(
             dashboard_session,
             ensemble_payload=ensemble_payload,
             seeds=seeds,
-            milestone_title="🏆 ENSEMBLE 訓練結果",
-            title="ENSEMBLE 績效與風險對比表",
+            milestone_title="🏆 candidate_best 詳細結果" if trade_mode else "🏆 ENSEMBLE 訓練結果",
+            title="candidate_best 詳細結果表格" if trade_mode else "ENSEMBLE 績效與風險對比表",
             force=True,
         )
     resource_sampler.stop()

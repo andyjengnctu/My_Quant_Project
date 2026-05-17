@@ -1112,9 +1112,8 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
         if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
             oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
         oos_end_date = _policy_date(session, "oos_end_date")
-    if not oos_start_date:
-        oos_start_date = selection_start
-        oos_end_date = selection_end
+    replay_start_date = oos_start_date if model_mode == "oos" and oos_start_date else selection_start
+    replay_end_date = oos_end_date if model_mode == "oos" and oos_start_date else selection_end
     replay_policy_paramsets = policy_paramsets or ensemble_payload.get("policy_paramsets")
     replay_payloads = _load_static_policy_paramset_payloads(replay_policy_paramsets)
     progress_state: dict | None = None if callable(progress_callback) else {}
@@ -1146,8 +1145,8 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     policy_rows, raw_policy_metrics = _build_static_policy_rows_from_paramsets(
         session,
         policy_paramsets=replay_payloads,
-        start_date=oos_start_date,
-        end_date=oos_end_date,
+        start_date=replay_start_date,
+        end_date=replay_end_date,
         initial_capital=initial_capital,
         progress_state=progress_state,
         progress_emit=_emit_replay if callable(progress_callback) else None,
@@ -1163,8 +1162,8 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
             benchmark_return_pct = _safe_float(metrics.get("benchmark_return_pct", 0.0))
             benchmark_mdd_pct = _safe_float(metrics.get("benchmark_mdd_pct", 0.0))
             break
-    range_start = str(oos_start_date or "")[:10]
-    range_end = str(oos_end_date or "")[:10] if oos_end_date else ""
+    range_start = str(oos_start_date or "")[:10] if model_mode == "oos" else ""
+    range_end = str(oos_end_date or "")[:10] if model_mode == "oos" and oos_end_date else ""
     from tools.optimizer.outer_rolling_oos import (
         BASE_RETENTION_COMPARISON_POLICY_NAMES,
         REPORT_POLICY_NAMES,
@@ -1177,8 +1176,9 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
         fold_count=1,
         selection_start_date=str(selection_start or "")[:10],
         selection_end_date=str(selection_end or "")[:10],
-        oos_start_date=range_start or str(oos_start_date or "")[:10],
-        oos_end_date=range_end or "latest",
+        oos_start_date=range_start,
+        oos_end_date=range_end or ("latest" if model_mode == "oos" else ""),
+        oos_period="" if model_mode != "oos" else None,
     )
     row = dict(fold_context)
     row.update({
