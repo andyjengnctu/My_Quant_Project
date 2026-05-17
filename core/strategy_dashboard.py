@@ -66,29 +66,75 @@ def _format_training_param_lines(params):
     ]
 
 
-def _format_schedule_row_label(record):
+def _record_get(record, key, default=None):
     if isinstance(record, dict):
-        year = record.get("year") or record.get("oos_year")
-        effective_date = record.get("effective_date_text") or record.get("effective_date") or "-"
-    else:
-        year = getattr(record, "year", None) or getattr(record, "oos_year", None)
-        effective_date = getattr(record, "effective_date_text", None) or getattr(record, "effective_date", "-")
+        return record.get(key, default)
+    return getattr(record, key, default)
+
+
+def _format_schedule_row_label(record, *, row_index=None, row_count=None):
+    year = _record_get(record, "year") or _record_get(record, "oos_year")
+    effective_date = _record_get(record, "effective_date_text") or _record_get(record, "effective_date") or "-"
+    effective_end = _record_get(record, "effective_end_date_text") or _record_get(record, "effective_end_date") or ""
+    mode = str(_record_get(record, "mode", "") or "").strip().lower()
+    row_prefix = ""
+    if row_index is not None and row_count is not None and row_count > 1:
+        row_prefix = f"fold {int(row_index)}/{int(row_count)} | "
+    elif row_index is not None and row_count is not None and mode == "rolling":
+        row_prefix = f"fold {int(row_index)}/{int(row_count)} | "
     year_text = str(year).strip() if year is not None else "-"
-    return f"OOS {year_text}（effective={effective_date}）"
+    if mode == "static":
+        if str(effective_date) in {"", "-", "1900-01-01"} and str(effective_end) in {"", "-", "9999-12-31"}:
+            return f"{row_prefix}static ensemble"
+    range_text = f"{effective_date}~{effective_end}" if effective_end else str(effective_date)
+    return f"{row_prefix}OOS {year_text}（effective={range_text}）"
 
 
 def _resolve_schedule_row_params(record):
-    if isinstance(record, dict):
-        return record.get("params_obj") or record.get("params") or record
-    return getattr(record, "params_obj", None) or getattr(record, "params", None) or record
+    return _record_get(record, "params_obj") or _record_get(record, "params") or record
+
+
+def _resolve_schedule_row_members(record):
+    members = _record_get(record, "members")
+    return list(members or [])
+
+
+def _format_schedule_member_label(member, *, member_index=None, member_count=None):
+    seed = _record_get(member, "seed") or _record_get(member, "optimizer_seed")
+    member_key = _record_get(member, "member_key") or _record_get(member, "member_index")
+    trial = _record_get(member, "selected_trial") or _record_get(member, "trial_number") or _record_get(member, "trial")
+    parts = []
+    if member_index is not None and member_count is not None:
+        parts.append(f"seed {int(member_index)}/{int(member_count)}")
+    elif member_key is not None:
+        parts.append(f"member {member_key}")
+    if seed is not None and str(seed).strip():
+        parts.append(f"seed={seed}")
+    if trial is not None and str(trial).strip():
+        parts.append(f"trial=#{trial}")
+    return " | ".join(parts) if parts else "member"
+
+
+def _resolve_schedule_member_params(member):
+    return _record_get(member, "params_obj") or _record_get(member, "params") or member
 
 
 def _print_training_params_section(params, params_schedule_rows=None):
     schedule_rows = list(params_schedule_rows or [])
     if schedule_rows:
-        for record in schedule_rows:
+        row_count = len(schedule_rows)
+        for row_idx, record in enumerate(schedule_rows, start=1):
+            print(f"{C_CYAN}{_format_schedule_row_label(record, row_index=row_idx, row_count=row_count)}{C_RESET}")
+            members = _resolve_schedule_row_members(record)
+            if members:
+                member_count = len(members)
+                for member_idx, member in enumerate(members, start=1):
+                    row_params = _resolve_schedule_member_params(member)
+                    print(f"  {C_YELLOW}{_format_schedule_member_label(member, member_index=member_idx, member_count=member_count)}{C_RESET}")
+                    for line in _format_training_param_lines(row_params):
+                        print(f"    {line}")
+                continue
             row_params = _resolve_schedule_row_params(record)
-            print(f"{C_CYAN}{_format_schedule_row_label(record)}{C_RESET}")
             for line in _format_training_param_lines(row_params):
                 print(f"  {line}")
         return
