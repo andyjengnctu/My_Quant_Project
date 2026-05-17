@@ -426,33 +426,6 @@ def _summaries_have_compatible_policy(*, candidate_summary: dict, run_best_summa
     return _summary_policy_signature(candidate_summary) == _summary_policy_signature(run_best_summary)
 
 
-def _print_candidate_vs_run_best_summary(*, candidate_summary: dict, run_best_summary: dict | None):
-    selector = _resolve_trade_run_best_selector()
-    candidate_selector_score = _selector_score_from_summary(candidate_summary, selector)
-    print(f"{C_GRAY}{'-' * 96}{C_RESET}")
-    print(
-        f"      candidate | selector={selector} "
-        f"| selector_score={_format_nonrolling_result_number(candidate_selector_score)} "
-        f"| base={float(candidate_summary.get('base_score', 0.0)):.3f} "
-        f"| local_min={float(candidate_summary.get('local_min_score', 0.0)):.3f} "
-        f"| retention={float(candidate_summary.get('retention', 0.0)):.3f} "
-        f"| policy=({_format_summary_policy_signature(candidate_summary)})"
-    )
-    if run_best_summary is None:
-        print(f"      run_best  | 尚無 summary，視同未建立 promote 基線")
-    else:
-        run_best_selector_score = _selector_score_from_summary(run_best_summary, selector)
-        print(
-            f"      run_best  | selector={selector} "
-            f"| selector_score={_format_nonrolling_result_number(run_best_selector_score)} "
-            f"| base={float(run_best_summary.get('base_score', 0.0)):.3f} "
-            f"| local_min={float(run_best_summary.get('local_min_score', 0.0)):.3f} "
-            f"| retention={float(run_best_summary.get('retention', 0.0)):.3f} "
-            f"| policy=({_format_summary_policy_signature(run_best_summary)})"
-        )
-    print(f"{C_GRAY}{'-' * 96}{C_RESET}")
-
-
 def _summary_is_trade_mode(summary: dict | None) -> bool:
     if not isinstance(summary, dict):
         return False
@@ -578,8 +551,6 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
     candidate_selector_score = _selector_score_from_summary(candidate_summary, selector)
     run_best_payload = _load_json_file_or_none(RUN_BEST_PARAMS_PATH)
     run_best_summary = _load_params_summary_or_legacy_sidecar(RUN_BEST_PARAMS_PATH, RUN_BEST_SUMMARY_PATH)
-    _print_candidate_vs_run_best_summary(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
-
     if not _summary_is_trade_mode(candidate_summary):
         result = _build_promote_result_payload(
             status="candidate_only",
