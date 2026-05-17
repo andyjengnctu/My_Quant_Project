@@ -53,7 +53,6 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
 )
 
-from config.training_display_policy import is_optimizer_nonrolling_train_result_table_enabled
 
 from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
 
@@ -1391,8 +1390,6 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
 
 
 def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dict, colors: dict) -> None:
-    if not bool(is_optimizer_nonrolling_train_result_table_enabled()):
-        return
     gray = colors.get("gray", "")
     green = colors.get("green", "")
     red = colors.get("red", "")
@@ -1498,7 +1495,6 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
             for idx, item in enumerate(members)
         ],
         "random_seed_ensemble": _resolve_nonrolling_seed_ensemble_policy(),
-        "nonrolling_train_result_table_enabled": bool(is_optimizer_nonrolling_train_result_table_enabled()),
         "created_at": get_taipei_now().isoformat(),
     }
 
@@ -1704,7 +1700,6 @@ def _run_nonrolling_random_seed_ensemble_training(
         return None
 
     seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
-    result_table_enabled = bool(is_optimizer_nonrolling_train_result_table_enabled())
     compact_display = True
 
     members: list[dict] = []
@@ -1811,7 +1806,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 selected_data_dir,
                 load_all_raw_data=load_all_raw_data,
                 required_min_rows=optimizer_required_min_rows,
-                verbose=result_table_enabled,
+                verbose=False,
             )
             member_session.profile_recorder.init_output_files()
             member_session.profile_recorder.mark_run_started()
@@ -1890,7 +1885,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                     objective_mode=objective_mode,
                     colors=COLORS,
                     winner_trial=None,
-                    emit_table=bool(result_table_enabled),
+                    emit_table=False,
                     show_progress=True,
                 )
             finally:
@@ -2120,14 +2115,15 @@ def _run_nonrolling_random_seed_ensemble_training(
             elapsed_sec=max(0.0, time.perf_counter() - float(ensemble_started_at)),
             policy_paramsets=dict(_policy_paramset_payloads or {}),
         )
-        print_optimizer_static_ensemble_console_dashboard(
-            dashboard_session,
-            ensemble_payload=ensemble_payload,
-            seeds=seeds,
-            milestone_title="🏆 candidate_best 詳細結果" if trade_mode else "🏆 ENSEMBLE 訓練結果",
-            title="candidate_best 詳細結果表格" if trade_mode else "ENSEMBLE 績效與風險對比表",
-            force=True,
-        )
+        if trade_mode:
+            print_optimizer_static_ensemble_console_dashboard(
+                dashboard_session,
+                ensemble_payload=ensemble_payload,
+                seeds=seeds,
+                milestone_title="🏆 candidate_best 詳細結果",
+                title="candidate_best 詳細結果表格",
+                force=True,
+            )
     resource_sampler.stop()
     from tools.optimizer.outer_rolling_oos import format_optimizer_final_performance_summary
 
@@ -2498,9 +2494,9 @@ def main(argv=None, environ=None):
                 selected_data_dir,
                 load_all_raw_data=load_all_raw_data,
                 required_min_rows=optimizer_required_min_rows,
-                verbose=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+                verbose=False,
             )
-            compact_display = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+            compact_display = True
             if compact_display:
                 session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(
                     walk_forward_policy,
@@ -2513,8 +2509,8 @@ def main(argv=None, environ=None):
                     objective_mode=objective_mode,
                     colors=COLORS,
                     winner_trial=None,
-                    emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
-                    show_progress=bool(compact_display or is_optimizer_nonrolling_train_result_table_enabled()),
+                    emit_table=True,
+                    show_progress=True,
                 )
             finally:
                 if compact_display:
@@ -2629,7 +2625,7 @@ def main(argv=None, environ=None):
         return 1
 
     session.timing_mode = timing_mode
-    session.disable_milestone_dashboard = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+    session.disable_milestone_dashboard = True
 
     overall_started_at = time.perf_counter()
     raw_data_load_sec = 0.0
@@ -2641,7 +2637,7 @@ def main(argv=None, environ=None):
                 selected_data_dir,
                 load_all_raw_data=load_all_raw_data,
                 required_min_rows=optimizer_required_min_rows,
-                verbose=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+                verbose=False,
             )
         raw_data_load_sec = max(0.0, time.perf_counter() - raw_data_load_started_at)
 
@@ -2708,7 +2704,7 @@ def main(argv=None, environ=None):
             )
             print_timing_summary(payload=timing_payload)
         elif should_export:
-            compact_display = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+            compact_display = True
             if compact_display:
                 session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(
                     walk_forward_policy,
@@ -2722,8 +2718,8 @@ def main(argv=None, environ=None):
                     objective_mode=objective_mode,
                     colors=COLORS,
                     winner_trial=None,
-                    emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
-                    show_progress=bool(compact_display or is_optimizer_nonrolling_train_result_table_enabled()),
+                    emit_table=True,
+                    show_progress=True,
                 )
             finally:
                 if compact_display:

@@ -35,7 +35,6 @@ from core.strategy_dashboard import (
     _format_value_with_delta,
     print_optimizer_trial_console_dashboard,
 )
-from config.training_display_policy import is_optimizer_nonrolling_train_result_table_enabled
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
@@ -1235,7 +1234,7 @@ def print_optimizer_static_ensemble_console_dashboard(
     title: str = "ENSEMBLE 績效與風險對比表",
     force: bool = False,
 ):
-    if not bool(force) and not bool(is_optimizer_nonrolling_train_result_table_enabled()):
+    if not bool(force):
         return {"payload_sec": 0.0, "render_sec": 0.0}
     payload_started_at = time.perf_counter()
     progress_state: dict = {}
@@ -1377,7 +1376,7 @@ def run_optimizer_monitoring_callback(session, study, trial):
     callback_best_lookup_sec = max(0.0, time.perf_counter() - best_lookup_started_at)
     disable_milestone_dashboard = getattr(session, "disable_milestone_dashboard", None)
     if disable_milestone_dashboard is None:
-        disable_milestone_dashboard = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+        disable_milestone_dashboard = True
     should_render_milestone_dashboard = not bool(disable_milestone_dashboard)
     is_new_best = (
         should_render_milestone_dashboard
