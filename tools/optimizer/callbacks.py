@@ -1105,16 +1105,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     replay_started_ts = time.time()
     replay_last_done_ts: float | None = None
 
-    def _emit_replay(
-        policy_name: str,
-        *,
-        done: int,
-        total: int | None = None,
-        status: str = "RUN",
-        seed_done: int | None = None,
-        seed_total: int | None = None,
-        seed_label: str = "",
-    ) -> None:
+    def _emit_replay(policy_name: str, *, done: int, total: int | None = None, status: str = "RUN") -> None:
         nonlocal replay_last_done_ts
         done_value = int(done or 0)
         total_value = int(total if total is not None else len(replay_payloads))
@@ -1127,17 +1118,13 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
                 "policy": str(policy_name),
                 "replay_done": int(done_value),
                 "replay_total": int(total_value),
-                "seed_done": int(seed_done or 0),
-                "seed_total": int(seed_total or 0),
-                "seed_label": str(seed_label or ""),
                 "replay_started_ts": float(replay_started_ts),
                 "replay_last_done_ts": float(replay_last_done_ts) if replay_last_done_ts is not None else None,
                 "elapsed_sec": max(0.0, time.perf_counter() - replay_started_perf),
             })
         else:
             step = max(1, min(max(1, total_value), done_value if done_value > 0 else 1))
-            seed_text = f" | seed {int(seed_done or 0)}/{int(seed_total or 0)}" if int(seed_total or 0) > 0 else ""
-            _emit_static_replay_progress(progress_state, f"seed ensemble policy replay | {step}/{max(1, total_value)}{seed_text} | {policy_name}")
+            _emit_static_replay_progress(progress_state, f"seed ensemble policy replay | {step}/{max(1, total_value)} | {policy_name}")
 
     policy_rows, raw_policy_metrics = _build_static_policy_rows_from_paramsets(
         session,

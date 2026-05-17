@@ -4,8 +4,6 @@ import os
 import pickle
 import time
 import uuid
-from collections import OrderedDict
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -17,7 +15,6 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_YELLOW, C_RESET
 from core.log_utils import format_exception_summary, write_issue_log
-from core.runtime_utils import get_process_pool_executor_kwargs
 from core.params_io import build_params_from_mapping
 from core.portfolio_param_runtime import (
     build_active_param_objects_from_payload,
@@ -90,100 +87,31 @@ def _load_contexts_for_active_schedule(data_dir, schedule_records, *, verbose=Tr
     return contexts_by_effective_date
 
 
-def _build_ensemble_member_context(data_dir, record, member, *, verbose=True):
-    signature = str(member["params_signature"])
-    if verbose:
-        print(
-            f"{C_CYAN}📦 建立 ensemble active param 快取 "
-            f"生效日={record['effective_date_text'] or 'static'} member={member.get('member_index')}...{C_RESET}"
-        )
-    context = load_portfolio_market_context(data_dir, member["params_obj"], verbose=verbose)
-    context = dict(context)
-    if not context.get("all_pit_stats_index"):
-        context["all_pit_stats_index"] = {
-            ticker: build_trade_stats_index(logs)
-            for ticker, logs in (context.get("all_trade_logs") or {}).items()
-        }
-    context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
-    return signature, context
-
-
-def _format_ensemble_member_progress_label(record, member, fallback_index):
-    member_id = member.get("member_index") or member.get("seed") or fallback_index
-    effective = str(record.get("effective_date_text") or "static")
-    return f"{effective} seed={member_id}"
-
-
-def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, verbose=True, context_progress_callback=None):
-    unique_jobs_by_signature = OrderedDict()
-    contexts_by_effective_date = {}
-    ordinal = 0
-    for record in schedule_records:
-        for member in record.get("members") or []:
-            ordinal += 1
-            signature = str(member["params_signature"])
-            if signature in unique_jobs_by_signature:
-                continue
-            unique_jobs_by_signature[signature] = {
-                "record": record,
-                "member": member,
-                "ordinal": ordinal,
-                "label": _format_ensemble_member_progress_label(record, member, ordinal),
-            }
-
-    total_members = max(1, len(unique_jobs_by_signature))
-
-    def _emit_progress(done, label, status):
-        if callable(context_progress_callback):
-            context_progress_callback(
-                seed_done=int(done),
-                seed_total=int(total_members),
-                seed_label=str(label or ""),
-                status=str(status or "RUN"),
-            )
-
-    from config.training_performance_policy import resolve_optimizer_policy_replay_seed_parallel_workers_default
-
-    workers = resolve_optimizer_policy_replay_seed_parallel_workers_default(total_members)
-    workers = max(1, min(int(workers), int(total_members)))
+def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, verbose=True):
     contexts_by_signature = {}
-    completed = 0
-
-    if workers <= 1 or total_members <= 1:
-        for job in unique_jobs_by_signature.values():
-            signature, context = _build_ensemble_member_context(
-                data_dir,
-                job["record"],
-                job["member"],
-                verbose=verbose,
-            )
-            contexts_by_signature[signature] = context
-            completed += 1
-            _emit_progress(completed, job.get("label"), "RUN")
-    else:
-        executor_kwargs, _start_method = get_process_pool_executor_kwargs()
-        with ProcessPoolExecutor(max_workers=workers, **executor_kwargs) as executor:
-            future_to_job = {
-                executor.submit(
-                    _build_ensemble_member_context,
-                    data_dir,
-                    job["record"],
-                    job["member"],
-                    verbose=verbose,
-                ): job
-                for job in unique_jobs_by_signature.values()
-            }
-            for future in as_completed(future_to_job):
-                job = future_to_job[future]
-                signature, context = future.result()
-                contexts_by_signature[signature] = context
-                completed += 1
-                _emit_progress(completed, job.get("label"), "RUN")
-
+    contexts_by_effective_date = {}
+    total_members = sum(len(record.get("members") or []) for record in schedule_records)
+    loaded_count = 0
     for record in schedule_records:
         member_contexts = []
         for member in record.get("members") or []:
+            loaded_count += 1
             signature = str(member["params_signature"])
+            if signature not in contexts_by_signature:
+                if verbose:
+                    print(
+                        f"{C_CYAN}📦 建立 ensemble active param 快取 [{loaded_count}/{total_members}] "
+                        f"生效日={record['effective_date_text'] or 'static'} member={member.get('member_index')}...{C_RESET}"
+                    )
+                context = load_portfolio_market_context(data_dir, member["params_obj"], verbose=verbose)
+                context = dict(context)
+                if not context.get("all_pit_stats_index"):
+                    context["all_pit_stats_index"] = {
+                        ticker: build_trade_stats_index(logs)
+                        for ticker, logs in (context.get("all_trade_logs") or {}).items()
+                    }
+                context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
+                contexts_by_signature[signature] = context
             member_contexts.append(contexts_by_signature[signature])
         contexts_by_effective_date[record["effective_date_text"]] = member_contexts
     return contexts_by_effective_date
@@ -801,7 +729,6 @@ def run_portfolio_simulation_with_param_ensemble(
     return_context=False,
     start_date=None,
     end_date=None,
-    context_progress_callback=None,
 ):
     schedule_records = build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
     if not schedule_records:
@@ -839,12 +766,7 @@ def run_portfolio_simulation_with_param_ensemble(
     if resolved_end_date is not None and resolved_end_date < resolved_start_date:
         raise ValueError("active-param ensemble replay 日期區間無效：結束日早於開始日")
 
-    contexts_by_effective_date = _load_contexts_for_active_ensemble_schedule(
-        data_dir,
-        schedule_records,
-        verbose=verbose,
-        context_progress_callback=context_progress_callback,
-    )
+    contexts_by_effective_date = _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, verbose=verbose)
     merged_dates = _merge_context_market_dates_from_ensemble(contexts_by_effective_date)
     resolved_sorted_dates = _filter_market_dates_by_date_range(
         merged_dates,

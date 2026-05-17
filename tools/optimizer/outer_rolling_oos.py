@@ -5262,13 +5262,10 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     if stage == "ENSEMBLE_REPLAY":
         replay_done = int(progress.get("replay_done", 0) or 0)
         replay_total = int(progress.get("replay_total", 0) or 0)
-        seed_done = int(progress.get("seed_done", 0) or 0)
-        seed_total = int(progress.get("seed_total", 0) or 0)
-        seed_text = f" | seed {seed_done}/{seed_total}" if seed_total > 0 else ""
         policy = str(progress.get("policy") or progress.get("status") or "policy").strip()
         if replay_total > 0:
-            return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | policy replay {replay_done}/{replay_total}{seed_text} | {policy}{elapsed_text}"
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | policy replay{seed_text} | {policy}{elapsed_text}"
+            return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | policy replay {replay_done}/{replay_total} | {policy}{elapsed_text}"
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | policy replay | {policy}{elapsed_text}"
     if stage == "FOLD_RESULT":
         return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | fold result ready{elapsed_text}"
     if stage == "DONE":
@@ -6433,7 +6430,7 @@ def _build_policy_replay_payload_from_members(*, members: list[dict], replay_con
     )
 
 
-def _evaluate_active_param_ensemble_replay_payload_task(task: dict, *, context_progress_callback=None) -> dict:
+def _evaluate_active_param_ensemble_replay_payload_task(task: dict) -> dict:
     from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_ensemble
 
     payload = dict(task.get("payload") or {})
@@ -6449,7 +6446,6 @@ def _evaluate_active_param_ensemble_replay_payload_task(task: dict, *, context_p
         end_date=str(replay_context["oos_end_date"]),
         benchmark_ticker=str(replay_context.get("benchmark_ticker") or "0050"),
         verbose=False,
-        context_progress_callback=context_progress_callback,
     )
     return {
         "signature": str(task.get("signature") or ""),
@@ -6460,15 +6456,6 @@ def _evaluate_active_param_ensemble_replay_payload_task(task: dict, *, context_p
 
 def _policy_replay_executor_class(backend: str):
     return ThreadPoolExecutor if str(backend or "").strip().lower() == "thread" else ProcessPoolExecutor
-
-
-def _count_replay_task_seed_members(task: dict) -> int:
-    payload = dict(task.get("payload") or {})
-    by_effective = payload.get("params_ensemble_by_effective_date")
-    if isinstance(by_effective, dict) and by_effective:
-        return max(1, max(len(list(members or [])) for members in by_effective.values()))
-    members = payload.get("params_ensemble") or []
-    return max(1, len(list(members or [])))
 
 
 def _run_policy_replay_tasks(
@@ -6492,31 +6479,13 @@ def _run_policy_replay_tasks(
 
     if workers <= 1:
         for task in tasks:
-            task_label = _label(task)
-            seed_total = _count_replay_task_seed_members(task)
             if callable(progress_emit):
-                progress_emit(task_label, done=completed, total=replay_count, status="RUN", seed_done=0, seed_total=seed_total)
-
-            def _context_progress(**kwargs):
-                if callable(progress_emit):
-                    progress_emit(
-                        task_label,
-                        done=completed,
-                        total=replay_count,
-                        status="RUN",
-                        seed_done=int(kwargs.get("seed_done", 0) or 0),
-                        seed_total=int(kwargs.get("seed_total", seed_total) or seed_total),
-                        seed_label=str(kwargs.get("seed_label") or ""),
-                    )
-
-            output = _evaluate_active_param_ensemble_replay_payload_task(
-                task,
-                context_progress_callback=_context_progress,
-            )
+                progress_emit(_label(task), done=completed, total=replay_count, status="RUN")
+            output = _evaluate_active_param_ensemble_replay_payload_task(task)
             completed += 1
             results[str(output.get("signature") or task.get("signature"))] = dict(output.get("metrics") or {})
             if callable(progress_emit):
-                progress_emit(task_label, done=completed, total=replay_count, status="DONE", seed_done=seed_total, seed_total=seed_total)
+                progress_emit(_label(task), done=completed, total=replay_count, status="DONE")
         return results
 
     executor_class = _policy_replay_executor_class(backend)
@@ -6528,7 +6497,7 @@ def _run_policy_replay_tasks(
         future_to_task = {}
         for task in tasks:
             if callable(progress_emit):
-                progress_emit(_label(task), done=completed, total=replay_count, status="RUN", seed_done=0, seed_total=_count_replay_task_seed_members(task))
+                progress_emit(_label(task), done=completed, total=replay_count, status="RUN")
             future_to_task[executor.submit(_evaluate_active_param_ensemble_replay_payload_task, task)] = task
         for future in as_completed(future_to_task):
             task = future_to_task[future]
@@ -6536,8 +6505,7 @@ def _run_policy_replay_tasks(
             completed += 1
             results[str(output.get("signature") or task.get("signature"))] = dict(output.get("metrics") or {})
             if callable(progress_emit):
-                seed_total = _count_replay_task_seed_members(task)
-                progress_emit(_label(task), done=completed, total=replay_count, status="DONE", seed_done=seed_total, seed_total=seed_total)
+                progress_emit(_label(task), done=completed, total=replay_count, status="DONE")
     return results
 
 
@@ -6651,16 +6619,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
     replay_total = len(unique_jobs_by_signature)
     replay_done = 0
 
-    def _emit_ensemble_replay_progress(
-        policy_name: str,
-        *,
-        done: int | None = None,
-        total: int | None = None,
-        status: str = "RUN",
-        seed_done: int | None = None,
-        seed_total: int | None = None,
-        seed_label: str = "",
-    ) -> None:
+    def _emit_ensemble_replay_progress(policy_name: str, *, done: int | None = None, total: int | None = None, status: str = "RUN") -> None:
         nonlocal replay_last_done_ts, replay_done
         done_value = int(replay_done if done is None else done)
         if done_value > 0:
@@ -6676,9 +6635,6 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
             policy=str(policy_name),
             replay_done=int(done_value),
             replay_total=int(replay_total if total is None else total),
-            seed_done=int(seed_done or 0),
-            seed_total=int(seed_total or 0),
-            seed_label=str(seed_label or ""),
             replay_started_ts=float(replay_started_ts),
             replay_last_done_ts=float(replay_last_done_ts) if replay_last_done_ts is not None else None,
             elapsed_sec=max(0.0, time.perf_counter() - eval_started),
