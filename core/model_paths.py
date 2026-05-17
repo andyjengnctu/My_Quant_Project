@@ -22,13 +22,28 @@ CANONICAL_PARAM_FILENAME_ORDER = tuple(CANONICAL_PARAM_FILENAME_LABELS.keys())
 
 PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
     "run_best_params.json",
-    "base.json",
     "candidate_best_params.json",
+    "trade_base.json",
+    "trade_retention.json",
+    "trade_local.json",
+    "trade_base_r05.json",
+    "trade_base_r0.json",
+    "base.json",
     "candidate_retention_best_params.json",
     "retention.json",
     "local.json",
     "base_r05.json",
     "base_r0.json",
+    "oos_base.json",
+    "oos_retention.json",
+    "oos_local.json",
+    "oos_base_r05.json",
+    "oos_base_r0.json",
+    "roos_base.json",
+    "roos_retention.json",
+    "roos_local.json",
+    "roos_base_r05.json",
+    "roos_base_r0.json",
 )
 
 

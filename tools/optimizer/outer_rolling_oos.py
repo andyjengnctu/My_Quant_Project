@@ -156,6 +156,12 @@ NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
     "retention": "retention.json",
 }
 
+NONROLLING_PARAMSET_FILENAME_PREFIX_BY_MODE = {
+    "study": "",
+    "oos": "oos_",
+    "trade": "trade_",
+}
+
 POLICY_OUTPUT_LABELS = {
     "base": "base",
     "base_retention_gt_0_0": "base_r0",
@@ -167,6 +173,8 @@ POLICY_OUTPUT_LABELS = {
 STALE_POLICY_PARAMSET_FILENAMES = (
     "roos_base_r.json",
     "base_r.json",
+    "oos_base_r.json",
+    "trade_base_r.json",
     "roos_base_retention_gt_0_0.json",
     "roos_base_retention_gt_0_2.json",
     "roos_base_retention_gt_0_4.json",
@@ -177,6 +185,16 @@ STALE_POLICY_PARAMSET_FILENAMES = (
     "base_retention_gt_0_4.json",
     "base_retention_gt_0_6.json",
     "base_retention_gt_0_8.json",
+    "oos_base_retention_gt_0_0.json",
+    "oos_base_retention_gt_0_2.json",
+    "oos_base_retention_gt_0_4.json",
+    "oos_base_retention_gt_0_6.json",
+    "oos_base_retention_gt_0_8.json",
+    "trade_base_retention_gt_0_0.json",
+    "trade_base_retention_gt_0_2.json",
+    "trade_base_retention_gt_0_4.json",
+    "trade_base_retention_gt_0_6.json",
+    "trade_base_retention_gt_0_8.json",
 )
 
 
@@ -2549,9 +2567,23 @@ def get_optimizer_policy_paramset_filename(policy_name: str) -> str:
     return str(PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"roos_{policy_name}.json"))
 
 
-def get_optimizer_nonrolling_policy_paramset_filename(policy_name: str) -> str:
-    """Return the canonical JSON filename for a non-rolling optimizer policy paramset."""
-    return str(NONROLLING_PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"{policy_name}.json"))
+def get_optimizer_nonrolling_policy_paramset_filename(policy_name: str, *, mode: str | None = None) -> str:
+    """Return the canonical JSON filename for a non-rolling optimizer policy paramset.
+
+    Study mode keeps the legacy first-class filenames (base/local/retention) as
+    the single-seed study artifact.  OOS and Trade use explicit mode prefixes so
+    validation artifacts do not overwrite Study outputs or live Trade outputs.
+    """
+    base_filename = str(NONROLLING_PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"{policy_name}.json"))
+    normalized_mode = str(mode or "study").strip().lower()
+    if normalized_mode == "split":
+        normalized_mode = "oos"
+    elif normalized_mode == "full":
+        normalized_mode = "trade"
+    prefix = str(NONROLLING_PARAMSET_FILENAME_PREFIX_BY_MODE.get(normalized_mode, ""))
+    if prefix == "":
+        return base_filename
+    return f"{prefix}{base_filename}"
 
 
 def get_optimizer_policy_output_label(policy_name: str) -> str:

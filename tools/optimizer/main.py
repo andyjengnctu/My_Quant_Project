@@ -1585,7 +1585,10 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             trials_per_seed=trials_per_seed,
         )
         payloads[str(policy_name)] = payload
-        filename = get_optimizer_nonrolling_policy_paramset_filename(str(policy_name))
+        filename = get_optimizer_nonrolling_policy_paramset_filename(
+            str(policy_name),
+            mode=normalize_optimizer_model_mode(selected_model_mode),
+        )
         path = os.path.join(MODELS_DIR, filename)
         if str(policy_name) not in first_class_policy_set:
             try:
