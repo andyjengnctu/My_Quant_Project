@@ -87,7 +87,20 @@ def _load_contexts_for_active_schedule(data_dir, schedule_records, *, verbose=Tr
     return contexts_by_effective_date
 
 
-def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, verbose=True):
+def _prepare_context_for_ensemble_replay(context, *, keep_trade_logs=False):
+    replay_context = dict(context)
+    if not replay_context.get("all_pit_stats_index"):
+        replay_context["all_pit_stats_index"] = {
+            ticker: build_trade_stats_index(logs)
+            for ticker, logs in (replay_context.get("all_trade_logs") or {}).items()
+        }
+    replay_context["normal_setup_index"] = build_normal_setup_index(replay_context.get("all_dfs_fast") or {})
+    if not keep_trade_logs and replay_context.get("all_pit_stats_index"):
+        replay_context["all_trade_logs"] = {}
+    return replay_context
+
+
+def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, verbose=True, keep_trade_logs=False):
     contexts_by_signature = {}
     contexts_by_effective_date = {}
     total_members = sum(len(record.get("members") or []) for record in schedule_records)
@@ -104,14 +117,10 @@ def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, v
                         f"生效日={record['effective_date_text'] or 'static'} member={member.get('member_index')}...{C_RESET}"
                     )
                 context = load_portfolio_market_context(data_dir, member["params_obj"], verbose=verbose)
-                context = dict(context)
-                if not context.get("all_pit_stats_index"):
-                    context["all_pit_stats_index"] = {
-                        ticker: build_trade_stats_index(logs)
-                        for ticker, logs in (context.get("all_trade_logs") or {}).items()
-                    }
-                context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
-                contexts_by_signature[signature] = context
+                contexts_by_signature[signature] = _prepare_context_for_ensemble_replay(
+                    context,
+                    keep_trade_logs=keep_trade_logs,
+                )
             member_contexts.append(contexts_by_signature[signature])
         contexts_by_effective_date[record["effective_date_text"]] = member_contexts
     return contexts_by_effective_date
@@ -766,7 +775,12 @@ def run_portfolio_simulation_with_param_ensemble(
     if resolved_end_date is not None and resolved_end_date < resolved_start_date:
         raise ValueError("active-param ensemble replay 日期區間無效：結束日早於開始日")
 
-    contexts_by_effective_date = _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, verbose=verbose)
+    contexts_by_effective_date = _load_contexts_for_active_ensemble_schedule(
+        data_dir,
+        schedule_records,
+        verbose=verbose,
+        keep_trade_logs=return_context,
+    )
     merged_dates = _merge_context_market_dates_from_ensemble(contexts_by_effective_date)
     resolved_sorted_dates = _filter_market_dates_by_date_range(
         merged_dates,

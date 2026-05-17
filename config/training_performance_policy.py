@@ -1,103 +1,29 @@
 import os
 from core.seed_ensemble_policy import resolve_seed_ensemble_parallel_backend, resolve_seed_ensemble_parallel_workers
 
-# Optimizer 訓練效能參數區
-#
-# 本檔只放會影響訓練時間、記憶體、process/cache 併發行為的設定。
-# 策略口徑、分數口徑與交易規則仍維持在 training_policy.py / execution_policy.py。
-# 一般 outer rolling 與 timing outer rolling 預設共用本檔，避免效能口徑分叉。
-
 # OPTIMIZER_ROLLING_FOLD_WORKERS:
-# - "fold_count" = timing/rolling 平行模式預設使用 fold 總數。
-# - 正整數 = 固定 rolling fold process 數。
-# - 環境變數 OPTIMIZER_ROLLING_FOLD_WORKERS 仍可覆寫此預設。
-OPTIMIZER_ROLLING_FOLD_WORKERS = 1
+OPTIMIZER_ROLLING_FOLD_WORKERS = 1 # "fold_count" 使用 fold 總數; # 正整數 = 固定 rolling fold process 數
+OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0 
+OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024 
 
-# OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS:
-# - 0 = 關閉 parallel rolling worker 內的 prepared trial input cache。
-# - 正整數 = 每個 fold worker 最多保留的 prepared trial input 筆數。
-# - 環境變數 OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS 仍可覆寫此預設。
-OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0
-
-# OPTIMIZER_FEATURE_BANK_MAX_ITEMS:
-# - 0 = 關閉 optimizer worker feature bank。
-# - 正整數 = 每個 prep worker 的 feature bank 上限。
-# - timing 顯示 hit rate 長期偏低時，應降低此值以減少多 process 記憶體疊加。
-# - 環境變數 OPTIMIZER_FEATURE_BANK_MAX_ITEMS 仍可覆寫此預設。
-OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024
-
+# OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS:
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = 8 # - "auto" = 自動使用最大併發，也就是目前 random seed ensemble 的 N
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND = "process"
 
 # 單一 optimizer search unit 內加速參數區
-#
-# 這一區控制「單一 optimizer search unit 內部」的平行化。
-# 適用範圍：
-# - 非 rolling 一般 optimizer / 一般 OOS：整次 optimizer search 視為一個 single unit。
-# - rolling OOS：每一個 rolling fold 視為一個 single unit。
-#
-# 與 OPTIMIZER_ROLLING_FOLD_WORKERS 不同：
-# - OPTIMIZER_ROLLING_FOLD_WORKERS 只控制 rolling OOS 時幾個 OOS fold 同時跑。
-# - 本區控制單一 search unit 內 optimizer search / local_min review 的併發程度。
-#
-# 預設保守，不改既有 trial 序列與正式結果；需要壓縮單一 unit 時間時再手動調高。
-
-# OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS:
-# - 1 = 保持既有單一 search unit trial 串行搜尋，正式模式預設使用。
-# - >1 = 同一 search unit 內同時評估多個 Optuna trial。
-# - TPE sampler 預設仍會被保護為 1，除非打開 OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH。
 OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 1
-
-# OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH:
-# - False = 正式 TPE 搜尋維持 n_jobs=1，避免平行 ask 導致 trial 序列漂移。
-# - True = 允許 TPE 也使用 OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS。
-# - 只改搜尋路徑，不改策略、交易與評分口徑。
 OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH = False
-
-# OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS:
-# - 控制 local_min review 內鄰點 ordered prefetch 的 thread worker 數。
-# - 預設 1，保留最穩定的 local_min 評估節奏；需要加速可調高，但不設硬性上限。
 OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 4
-
-# OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS:
-# - 保留給 local_min process-level 併發；目前正式流程仍以 thread ordered prefetch 為主。
-# - 預設 0，避免 process 巢狀併發造成記憶體放大。
 OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS = 0
 
 
 # OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS:
-# - "policy_count"/"auto" = 預設使用本次實際需要 replay 的唯一 policy signature 數量。
-# - 正整數 = 固定 policy replay process 數，會 clamp 到 1~policy_count。
-# - 只改 policy replay 執行併發，不改 policy 選擇、交易與評分口徑。
-OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS = "policy_count"
-
-# OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND:
-# - "process" = 每個 policy replay 使用獨立 Python process，預設用於壓縮 replay wall time。
-# - "thread" = 保留作為低記憶體 fallback。
+OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS = 2 
 OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND = "process"
-
-# OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE:
-# - True = 相同 params ensemble signature 的 policy 只 replay 一次，結果映射回所有同源 policy。
-# - False = 每個 policy 都 replay。
 OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE = True
-
-# OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED:
-# - True = 同一 fold 內 policy replay 共用同一個 replay context 定義與任務建構入口；
-#          process backend 下實際市場資料仍透過既有 prepared/raw cache 重用，不跨 process 共享記憶體。
 OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED = True
 
-# OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS:
-# - 控制 random seed ensemble 內同時運行幾個 seed member。
-# - 1 = 維持循序，最省記憶體。
-# - >1 = 同時跑多個 seeds；實際值會 clamp 到 1~OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE。
-# - "auto" = 自動使用最大併發，也就是目前 random seed ensemble 的 N。
-# - 這是效能設定，只改執行併發，不改 seed ensemble 的選參、交易或統計口徑。
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = 8
-
-# OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND:
-# - "process" = 每個 seed member 使用獨立 Python process，CPU 利用率較高，但記憶體用量較大。
-# - "thread" = 同一 Python process 內用 threads，較省記憶體，但 CPU-bound 訓練較難吃滿核心。
-# - 這是效能設定，只改 seed member 執行 backend，不改選參、交易或統計口徑。
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND = "process"
-
+#========================= Functions ===========================================
 
 def _coerce_int(value, *, default: int, min_value: int = 0, max_value: int | None = None) -> int:
     try:
