@@ -19,6 +19,7 @@ from core.buy_sort import calc_buy_sort_value
 from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
 from core.walk_forward_policy import load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams
+from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import params_to_json_dict
 from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_runner import run_optimizer_objective
@@ -40,6 +41,23 @@ from tools.validate.scanner_expectations import normalize_scanner_result
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
 from .checks import add_check
+
+
+def _existing_shipped_reference_param_paths():
+    candidate_names = (
+        "candidate_best_params.json",
+        *PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES,
+    )
+    paths = []
+    seen = set()
+    for filename in candidate_names:
+        path = Path("models") / filename
+        key = str(path)
+        if key in seen or not path.exists():
+            continue
+        seen.add(key)
+        paths.append(path)
+    return paths
 
 
 def _optimizer_export_canonical_decimal_places():
@@ -259,7 +277,7 @@ def validate_model_io_schema_case(base_params):
                     members.append(params)
         return members
 
-    shipped_best_params_paths = [Path("models/candidate_best_params.json"), Path("models/run_best_params.json")]
+    shipped_best_params_paths = _existing_shipped_reference_param_paths()
     shipped_payload_keys = {}
     shipped_payload_type_mismatches = {}
     for shipped_path in shipped_best_params_paths:
@@ -1061,24 +1079,22 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_status_for_unqualified_best_trial", 1, failure_status)
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_does_not_create_payload", False, failure_export_path.exists())
 
-    canonical_model_files = [
-        Path("models/candidate_best_params.json"),
-        Path("models/run_best_params.json"),
-    ]
+    canonical_model_files = _existing_shipped_reference_param_paths()
     canonical_field_names = set(_optimizer_export_canonical_decimal_places()) | {"buy_fee", "sell_fee"}
     shipped_repr_map = {}
     expected_shipped_repr_map = {}
     for artifact_path in canonical_model_files:
         artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-        for field_name in canonical_field_names:
-            if field_name not in artifact_payload:
-                continue
-            map_key = f"{artifact_path.name}::{field_name}"
-            shipped_repr_map[map_key] = repr(artifact_payload[field_name])
-            if field_name in {"buy_fee", "sell_fee"}:
-                expected_shipped_repr_map[map_key] = "0.000399"
-            else:
-                expected_shipped_repr_map[map_key] = _canonicalize_optimizer_export_repr(field_name, artifact_payload[field_name])
+        for member_idx, param_payload in enumerate(_extract_reference_param_payloads(artifact_payload), start=1):
+            for field_name in canonical_field_names:
+                if field_name not in param_payload:
+                    continue
+                map_key = f"{artifact_path.name}::member#{member_idx}::{field_name}"
+                shipped_repr_map[map_key] = repr(param_payload[field_name])
+                if field_name in {"buy_fee", "sell_fee"}:
+                    expected_shipped_repr_map[map_key] = "0.000399"
+                else:
+                    expected_shipped_repr_map[map_key] = _canonicalize_optimizer_export_repr(field_name, param_payload[field_name])
 
     add_check(
         results,

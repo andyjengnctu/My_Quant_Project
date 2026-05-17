@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
+from core.model_paths import resolve_default_primary_param_source_path
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data, prep_stock_data_and_trades
@@ -503,13 +504,15 @@ def main(argv=None) -> int:
         dataset_info = ensure_reduced_dataset()
 
         try:
-            param_source = load_portfolio_param_source_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
+            param_source_path = resolve_default_primary_param_source_path(PROJECT_ROOT)
+            param_source = load_portfolio_param_source_from_json(param_source_path)
             params = param_source["primary_params"]
             param_source_info = {
                 "source_type": str(param_source.get("source_type") or ""),
                 "primary_params_signature": str(param_source.get("primary_params_signature") or ""),
                 "member_count": int(param_source.get("member_count") or 1),
                 "chain_check_mode": "primary_params_for_single_stock_consistency",
+                "param_source_path": str(param_source_path),
             }
             start_year = int(manifest["portfolio_start_year"])
             max_positions = int(manifest["portfolio_max_positions"])

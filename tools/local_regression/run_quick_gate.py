@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.model_paths import MODELS_DIR_ENV_VAR
+from core.model_paths import MODELS_DIR_ENV_VAR, resolve_default_primary_param_source_path
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
@@ -708,7 +708,7 @@ def _build_models_sandbox_dir(case_name: str) -> Path:
 
 def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     results = []
-    params_path = PROJECT_ROOT / "models" / "run_best_params.json"
+    params_path = Path(resolve_default_primary_param_source_path(PROJECT_ROOT))
     db_path = PROJECT_ROOT / "models" / "portfolio_ai_10pos_overnight_reduced.db"
 
     params_missing_models_dir = _build_models_sandbox_dir("missing_run_best_params")

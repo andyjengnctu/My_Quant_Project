@@ -436,6 +436,7 @@ def build_coverage_summary(
     *,
     suite_runner: Callable[[Dict[str, Any]], tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] | None = None,
 ) -> Dict[str, Any]:
+    from core.model_paths import resolve_default_primary_param_source_path
     from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
 
     coverage_dir = run_dir / "coverage_artifacts"
@@ -480,7 +481,7 @@ def build_coverage_summary(
                 omit=HEADLESS_COVERAGE_OMIT_PATTERNS,
             )
             try:
-                base_params = load_portfolio_primary_params_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
+                base_params = load_portfolio_primary_params_from_json(resolve_default_primary_param_source_path(PROJECT_ROOT))
                 cov.start()
                 results, summaries = suite_runner(base_params)
                 synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")

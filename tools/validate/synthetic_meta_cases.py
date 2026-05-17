@@ -10,6 +10,7 @@ import tempfile
 from unittest.mock import patch
 
 from .checks import add_check
+from core.model_paths import resolve_default_primary_param_source_path
 from .module_loader import build_project_absolute_path
 
 
@@ -405,8 +406,9 @@ def _validate_architecture_models_run_best_params_file_tree_sync(_base_params):
     models_dir = PROJECT_ROOT / "models"
 
     required_tree_fragments = [
-        "│  ├─ candidate_best_params.json     # 本輪訓練最佳候選參數檔",
-        "│  └─ run_best_params.json           # 目前正式現役參數檔",
+        "│  ├─ base.json                      # static ensemble base policy 參數檔",
+        "│  ├─ local.json                     # static ensemble local policy 參數檔",
+        "│  └─ retention.json                 # static ensemble retention policy 參數檔",
     ]
     stale_tree_fragments = [
         "│  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄",
@@ -415,18 +417,18 @@ def _validate_architecture_models_run_best_params_file_tree_sync(_base_params):
     ]
 
     for idx, fragment in enumerate(required_tree_fragments, start=1):
-        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_lists_required_run_best_params_{idx}", True, fragment in architecture_text)
+        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_lists_required_reference_params_{idx}", True, fragment in architecture_text)
     for stale_idx, fragment in enumerate(stale_tree_fragments, start=1):
         add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_omits_stale_params_artifact_{stale_idx}", False, fragment in architecture_text)
 
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_candidate_best_params", True, (models_dir / "candidate_best_params.json").exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_run_best_params", True, (models_dir / "run_best_params.json").exists())
+    default_param_source_path = Path(resolve_default_primary_param_source_path(PROJECT_ROOT))
+    add_check(results, "meta_architecture_contract", case_id, "repo_ships_default_reference_params", True, default_param_source_path.exists())
+    add_check(results, "meta_architecture_contract", case_id, "repo_default_reference_params_is_under_models", True, default_param_source_path.parent == models_dir)
 
     summary["required_tree_fragments"] = required_tree_fragments
     summary["source_paths"] = [
         "doc/ARCHITECTURE.md",
-        "models/candidate_best_params.json",
-        "models/run_best_params.json",
+        str(default_param_source_path.relative_to(PROJECT_ROOT)) if default_param_source_path.exists() else str(default_param_source_path),
     ]
     return results, summary
 

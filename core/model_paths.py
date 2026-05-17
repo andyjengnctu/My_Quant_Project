@@ -20,6 +20,17 @@ CANONICAL_PARAM_FILENAME_LABELS = {
 }
 CANONICAL_PARAM_FILENAME_ORDER = tuple(CANONICAL_PARAM_FILENAME_LABELS.keys())
 
+PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
+    "run_best_params.json",
+    "base.json",
+    "candidate_best_params.json",
+    "candidate_retention_best_params.json",
+    "retention.json",
+    "local.json",
+    "base_r05.json",
+    "base_r0.json",
+)
+
 
 def _resolve_override_path(project_root: str, raw_value: str) -> str:
     resolved = str(raw_value).strip()
@@ -91,9 +102,10 @@ def _canonical_param_source_sort_rank(filename: str) -> int:
         return len(CANONICAL_PARAM_FILENAME_ORDER)
 
 
-def _discover_active_param_ensemble_sets(project_root: str) -> List[Dict[str, str]]:
+def _discover_active_param_ensemble_sets(project_root: str, environ: Optional[Mapping[str, str]] = None) -> List[Dict[str, str]]:
+    env = os.environ if environ is None else environ
     search_dirs = [
-        resolve_models_dir(project_root),
+        resolve_models_dir(project_root, environ=env),
         os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
     ]
     records: List[Dict[str, str]] = []
@@ -138,11 +150,12 @@ def _discover_active_param_ensemble_sets(project_root: str) -> List[Dict[str, st
     return records
 
 
-def _discover_rolling_oos_param_sets(project_root: str) -> List[Dict[str, str]]:
+def _discover_rolling_oos_param_sets(project_root: str, environ: Optional[Mapping[str, str]] = None) -> List[Dict[str, str]]:
     # Workbench 下拉選單以「實際檔名」作為唯一顯示名稱；models/ 為主來源，
     # outputs/ 只補充尚未複製到 models/ 的 rolling OOS 參數組。
+    env = os.environ if environ is None else environ
     search_dirs = [
-        resolve_models_dir(project_root),
+        resolve_models_dir(project_root, environ=env),
         os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
     ]
     records: List[Dict[str, str]] = []
@@ -218,10 +231,10 @@ def discover_model_param_sources(project_root: str, environ: Optional[Mapping[st
         })
 
     if include_active_param_ensemble:
-        records.extend(_discover_active_param_ensemble_sets(project_root))
+        records.extend(_discover_active_param_ensemble_sets(project_root, environ=env))
 
     if include_rolling_oos:
-        records.extend(_discover_rolling_oos_param_sets(project_root))
+        records.extend(_discover_rolling_oos_param_sets(project_root, environ=env))
 
     kind_rank = {"single_param": 0, "active_param_ensemble": 1, "rolling_oos_param_set": 2}
     records.sort(key=lambda item: (
@@ -233,5 +246,66 @@ def discover_model_param_sources(project_root: str, environ: Optional[Mapping[st
     return records
 
 
+
+def _model_record_for_path(path: str, *, key: str, label: Optional[str] = None) -> Dict[str, str]:
+    filename = os.path.basename(str(path))
+    kind = "single_param"
+    try:
+        if is_active_param_ensemble_file(path):
+            kind = "active_param_ensemble"
+        elif is_rolling_oos_param_set_file(path):
+            kind = "rolling_oos_param_set"
+    except (OSError, UnicodeDecodeError, ValueError):
+        kind = "single_param"
+    return {
+        "key": key,
+        "label": str(label or _format_param_source_label(filename)),
+        "path": os.path.abspath(str(path)),
+        "filename": filename,
+        "kind": kind,
+    }
+
+
+def resolve_default_primary_param_source_record(project_root: str, environ: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """Return the default executable parameter source shipped with the project.
+
+    Legacy installs may still provide ``models/run_best_params.json``.  Current
+    static seed-ensemble exports ship active-param ensemble files such as
+    ``models/base.json``.  This resolver is the single source used by formal
+    checks and non-interactive tooling so they do not keep hard-coding one
+    obsolete filename.
+    """
+    env = os.environ if environ is None else environ
+    override = str(env.get(RUN_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
+    if override != "":
+        path = _resolve_override_path(project_root, override)
+        return _model_record_for_path(path, key="run_best_override", label=os.path.basename(path))
+
+    models_dir = resolve_models_dir(project_root, environ=env)
+    for filename in PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES:
+        path = os.path.abspath(os.path.join(models_dir, filename))
+        if os.path.isfile(path):
+            return _model_record_for_path(path, key=_param_source_key_from_filename(filename), label=filename)
+
+    records = discover_model_param_sources(
+        project_root,
+        environ=env,
+        include_active_param_ensemble=True,
+        include_rolling_oos=False,
+    )
+    if records:
+        return dict(records[0])
+
+    return _model_record_for_path(
+        os.path.join(models_dir, "run_best_params.json"),
+        key="run_best",
+        label="run_best_params.json",
+    )
+
+
+def resolve_default_primary_param_source_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
+    return str(resolve_default_primary_param_source_record(project_root, environ=environ)["path"])
+
+
 def resolve_active_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
-    return resolve_run_best_params_path(project_root, environ=environ)
+    return resolve_default_primary_param_source_path(project_root, environ=environ)

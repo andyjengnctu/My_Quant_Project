@@ -20,6 +20,7 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.log_utils import format_exception_summary
+from core.model_paths import resolve_default_primary_param_source_path
 from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
 from core.runtime_utils import PeakTracedMemoryTracker, run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
@@ -27,7 +28,6 @@ from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_js
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
-PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "run_best_params.json")
 MAX_CONSOLE_FAIL_PREVIEW = 20
 HEADLESS_COVERAGE_OMIT_PATTERNS = [
     os.path.join(PROJECT_ROOT, "apps", "workbench.py"),
@@ -79,8 +79,8 @@ def resolve_validate_dataset_profile_key(argv, environ):
     return normalize_dataset_profile_key(selected_value), "UI"
 
 
-def load_params():
-    return load_portfolio_primary_params_from_json(PARAMS_FILE)
+def load_params(environ=None):
+    return load_portfolio_primary_params_from_json(resolve_default_primary_param_source_path(PROJECT_ROOT, environ=environ))
 
 
 def discover_available_tickers():
@@ -209,7 +209,7 @@ def main(argv=None, environ=None):
             return 1
 
         try:
-            base_params = load_params()
+            base_params = load_params(environ)
         except (FileNotFoundError, RuntimeError, ValueError) as e:
             print(f"❌ {e}", file=sys.stderr)
             return 1

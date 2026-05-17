@@ -8,7 +8,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
-from core.model_paths import discover_model_param_sources, resolve_candidate_best_params_path, resolve_run_best_params_path
+from core.model_paths import discover_model_param_sources, resolve_candidate_best_params_path, resolve_default_primary_param_source_record, resolve_run_best_params_path
 from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_date_range, get_active_param_year_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
@@ -111,8 +111,9 @@ def main(argv=None, env=None):
             param_source = str(selected_record.get("key") or "rolling_oos")
             params_path = str(selected_record["path"])
         else:
-            param_source = "run_best"
-            params_path = resolve_run_best_params_path(PROJECT_ROOT)
+            default_record = resolve_default_primary_param_source_record(PROJECT_ROOT)
+            param_source = str(default_record.get("key") or "default")
+            params_path = str(default_record["path"])
         print(f"{C_GRAY}ℹ️ 參數來源: {param_source}{C_RESET}")
         is_rolling_paramset = is_rolling_oos_param_set_file(params_path)
         rolling_payload = None
