@@ -6489,7 +6489,10 @@ def _run_policy_replay_tasks(
         return results
 
     executor_class = _policy_replay_executor_class(backend)
-    executor_kwargs = get_process_pool_executor_kwargs() if executor_class is ProcessPoolExecutor else {}
+    if executor_class is ProcessPoolExecutor:
+        executor_kwargs, _start_method = get_process_pool_executor_kwargs()
+    else:
+        executor_kwargs = {}
     with executor_class(max_workers=workers, **executor_kwargs) as executor:
         future_to_task = {}
         for task in tasks:
