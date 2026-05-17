@@ -276,11 +276,12 @@ def normalize_optimizer_model_mode(model_mode: str) -> str:
     aliases = {
         'split': 'oos',
         'oos': 'oos',
+        'study': 'study',
         'full': 'trade',
         'trade': 'trade',
     }
     if normalized not in aliases:
-        raise ValueError(f"optimizer model_mode 只接受 trade 或 oos，收到: {model_mode}")
+        raise ValueError(f"optimizer model_mode 只接受 trade、oos 或 study，收到: {model_mode}")
     return aliases[normalized]
 
 
@@ -308,8 +309,8 @@ def build_optimizer_runtime_policy(base_policy: dict, model_mode: str, *, latest
     runtime_policy = dict(base_policy or {})
     runtime_policy['model_mode'] = normalized
     runtime_policy['objective_mode'] = 'split_train_romd'
-    if normalized == 'oos':
-        runtime_policy['evaluation_scope'] = 'oos_single_fold'
+    if normalized in {'oos', 'study'}:
+        runtime_policy['evaluation_scope'] = 'study_single_seed' if normalized == 'study' else 'oos_single_fold'
         if runtime_policy.get('oos_start_year') is not None and not runtime_policy.get('search_train_end_date'):
             runtime_policy['search_train_end_year'] = int(runtime_policy['oos_start_year']) - 1
         return runtime_policy

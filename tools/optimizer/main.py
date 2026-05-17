@@ -821,10 +821,11 @@ def _export_selected_candidate_artifacts(
     return True
 
 
-def _resolve_nonrolling_seed_ensemble_policy():
+def _resolve_nonrolling_seed_ensemble_policy(*, seed_count: int | None = None):
+    resolved_seed_count = OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE if seed_count is None else int(seed_count)
     return build_seed_ensemble_policy_snapshot(
         enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
-        seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+        seed_count=resolved_seed_count,
         min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     )
 
@@ -1494,7 +1495,7 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
             }
             for idx, item in enumerate(members)
         ],
-        "random_seed_ensemble": _resolve_nonrolling_seed_ensemble_policy(),
+        "random_seed_ensemble": _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds)),
         "created_at": get_taipei_now().isoformat(),
     }
 
@@ -1516,7 +1517,7 @@ def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, w
 
 
 def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict:
-    requested_policy = _resolve_nonrolling_seed_ensemble_policy()
+    requested_policy = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
     payload = build_static_active_param_ensemble_payload(
         members=members,
         random_seed_ensemble=requested_policy,
@@ -1600,7 +1601,7 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
 
 
 def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None, write_candidate_best: bool = True, write_policy_files: bool = True) -> tuple[dict, dict, dict[str, dict]]:
-    policy = _resolve_nonrolling_seed_ensemble_policy()
+    policy = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
     candidate_selector = _resolve_trade_candidate_selector() if normalize_optimizer_model_mode(selected_model_mode) == "trade" else "candidate_best"
     candidate_members = list(members)
     if candidate_selector != "candidate_best":
@@ -1656,6 +1657,67 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
     return payload, summary, policy_paramset_payloads
 
 
+
+
+
+def _finalize_single_seed_study_outputs(
+    *,
+    session,
+    finalists: list[dict],
+    best_trial,
+    optimizer_seed: int,
+    objective_mode: str,
+    walk_forward_policy: dict,
+    dataset_label: str,
+    selected_model_mode: str,
+    trials_per_seed: int,
+    build_best_params_payload_from_trial,
+    elapsed_sec: float | None = None,
+) -> int:
+    from tools.optimizer.callbacks import print_optimizer_static_ensemble_rolling_oos_table
+    from tools.optimizer.outer_rolling_oos import build_optimizer_policy_members_from_finalists
+
+    finalist_entry = _find_finalist_entry(finalists, best_trial)
+    if finalist_entry is None:
+        print(f"{C_YELLOW}ℹ️ Study mode 完成，但找不到 winner finalist entry，略過 validation policy output。{C_RESET}")
+        return 0
+    params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
+    seed_value = int(optimizer_seed)
+    member = _build_seed_ensemble_member(
+        member_index=1,
+        seed=seed_value,
+        best_trial=best_trial,
+        finalist_entry=finalist_entry,
+        params_payload=params_payload,
+    )
+    policy_members = build_optimizer_policy_members_from_finalists(
+        list(finalists or []),
+        objective_mode=objective_mode,
+        member_index=1,
+        seed=seed_value,
+    )
+    policy_members_by_policy = {str(name): [dict(member_payload)] for name, member_payload in dict(policy_members or {}).items()}
+    ensemble_payload, ensemble_summary, policy_paramset_payloads = _write_static_seed_ensemble_candidate(
+        members=[member],
+        seeds=[seed_value],
+        objective_mode=objective_mode,
+        walk_forward_policy=walk_forward_policy,
+        dataset_label=dataset_label,
+        selected_model_mode=selected_model_mode,
+        trials_per_seed=int(trials_per_seed),
+        policy_members_by_policy=policy_members_by_policy,
+        write_candidate_best=False,
+        write_policy_files=True,
+    )
+    print_optimizer_static_ensemble_rolling_oos_table(
+        session,
+        ensemble_payload=ensemble_payload,
+        elapsed_sec=elapsed_sec,
+        policy_paramsets=dict(policy_paramset_payloads or {}),
+    )
+    visible_policy_paths = _visible_policy_paramset_paths(dict((ensemble_summary or {}).get("policy_paramsets") or {}))
+    _print_optimizer_output_files("💾 輸出檔案", list(visible_policy_paths.items()))
+    return 0
 
 
 def _tail_nonrolling_seed_log(path: str, *, max_lines: int = 24) -> str:
@@ -2252,7 +2314,7 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
     try:
         normalized = normalize_optimizer_model_mode(normalized)
     except ValueError as exc:
-        raise ValueError(f"optimizer 模式只接受 trade 或 oos，收到: {normalized}") from exc
+        raise ValueError(f"optimizer 模式只接受 trade、oos 或 study，收到: {normalized}") from exc
     return normalized, source
 
 
@@ -2263,8 +2325,8 @@ def main(argv=None, environ=None):
     validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model trade|oos] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
-        print("說明: 預設 trade；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為單 fold validation；--outer-oos 執行 rolling monthly OOS test。舊 --model full/split 仍分別相容為 trade/oos。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model trade|oos|study] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
+        print("說明: 預設 trade；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為 seed ensemble 單 fold validation；study 為單一隨機 seed 的 OOS study；--outer-oos 執行 rolling monthly OOS test。舊 --model full/split 仍分別相容為 trade/oos。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -2366,7 +2428,7 @@ def main(argv=None, environ=None):
             requested_model_mode = normalize_optimizer_model_mode(requested_model_mode)
         except ValueError:
             requested_model_mode = ""
-    if requested_model_mode in {"oos", "trade"} and requested_model_mode != selected_model_mode:
+    if requested_model_mode in {"oos", "study", "trade"} and requested_model_mode != selected_model_mode:
         requested_trials = int(getattr(session, "n_trials", 0) or 0)
         requested_action = str(getattr(session, "run_action", "train") or "train")
         selected_model_mode = requested_model_mode
@@ -2439,8 +2501,11 @@ def main(argv=None, environ=None):
         return 1
     if timing_mode and optimizer_seed is None:
         optimizer_seed, seed_source = 42, 'TIMING_DEFAULT:42'
+    if selected_model_mode == "study" and optimizer_seed is None:
+        optimizer_seed = int(generate_random_seed_ensemble(1)[0])
+        seed_source = "STUDY_RANDOM_SEED"
 
-    if not timing_mode and str(getattr(session, "run_action", "train")) == "train":
+    if not timing_mode and selected_model_mode != "study" and str(getattr(session, "run_action", "train")) == "train":
         ensemble_result = _run_nonrolling_random_seed_ensemble_training(
             environ=environ,
             selected_data_dir=selected_data_dir,
@@ -2588,7 +2653,7 @@ def main(argv=None, environ=None):
     selection_start_year = int(walk_forward_policy.get('selection_start_year', walk_forward_policy['train_start_year']))
     search_train_end_year = int(walk_forward_policy['search_train_end_year'])
     oos_start_year = walk_forward_policy.get('oos_start_year')
-    if selected_model_mode == 'oos':
+    if selected_model_mode in {'oos', 'study'}:
         inner_scope_text = ""
         if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
             inner_validate_year = int(search_train_end_year)
@@ -2625,7 +2690,7 @@ def main(argv=None, environ=None):
         return 1
 
     session.timing_mode = timing_mode
-    session.disable_milestone_dashboard = True
+    session.disable_milestone_dashboard = False if selected_model_mode == "study" else True
 
     overall_started_at = time.perf_counter()
     raw_data_load_sec = 0.0
@@ -2771,6 +2836,22 @@ def main(argv=None, environ=None):
                     if os.path.exists(RUN_BEST_PARAMS_PATH):
                         output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
                     _print_optimizer_output_files("💾 輸出檔案", output_entries)
+                elif selected_model_mode == 'study':
+                    status = _finalize_single_seed_study_outputs(
+                        session=session,
+                        finalists=finalists,
+                        best_trial=best_trial,
+                        optimizer_seed=int(optimizer_seed),
+                        objective_mode=objective_mode,
+                        walk_forward_policy=walk_forward_policy,
+                        dataset_label=dataset_label,
+                        selected_model_mode=selected_model_mode,
+                        trials_per_seed=int(session.n_trials),
+                        build_best_params_payload_from_trial=build_best_params_payload_from_trial,
+                        elapsed_sec=max(0.0, time.perf_counter() - optimize_started_at),
+                    )
+                    if status != 0:
+                        return int(status)
                 elif selected_model_mode == 'oos':
                     finalize_best_trial_outputs(
                         session=session,

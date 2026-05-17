@@ -75,12 +75,14 @@ def _resolve_session_model_mode(session) -> str:
         return "oos"
     if mode == "full":
         return "trade"
+    if mode == "study":
+        return "oos"
     if mode in {"trade", "oos"}:
         return mode
     scope = str(policy.get("evaluation_scope") or "").strip().lower()
     if scope.startswith("trade"):
         return "trade"
-    if scope.startswith("oos"):
+    if scope.startswith("oos") or scope.startswith("study"):
         return "oos"
     return _resolve_model_mode(getattr(session, "objective_mode", ""))
 

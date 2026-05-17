@@ -64,6 +64,13 @@ def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
             "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
             "source": source_label,
         }
+    if normalized_upper == "S":
+        return {
+            "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+            "model_mode": "study",
+        }
     if normalized_upper in {"F", "T"}:
         return {
             "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
@@ -87,6 +94,12 @@ def _parse_optimizer_mode_request_raw(raw_value: str, *, source_label: str):
             "source": source_label,
             "model_mode": "oos",
         }
+    if normalized == "S":
+        return {
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+            "model_mode": "study",
+        }
     if normalized == "R":
         return {
             "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
@@ -99,7 +112,7 @@ def _parse_optimizer_mode_request_raw(raw_value: str, *, source_label: str):
             "source": source_label,
             "model_mode": "trade",
         }
-    raise ValueError("Optimizer Mode 只接受 Enter、R 或 T。")
+    raise ValueError("Optimizer Mode 只接受 Enter、S、R 或 T。")
 
 
 def _parse_interactive_trial_count_raw(raw_value: str) -> int:
@@ -110,7 +123,7 @@ def _parse_interactive_trial_count_raw(raw_value: str) -> int:
 
 
 def _resolve_interactive_optimizer_run_request():
-    mode_prompt = "👉 Optimizer Mode：[Enter] OOS Mode [R] Rolling OOS Mode  [T] Trade Mode: "
+    mode_prompt = "👉 Optimizer Mode：[Enter] OOS Mode [S] Study Mode [R] Rolling OOS Mode  [T] Trade Mode: "
     mode_request = _parse_optimizer_mode_request_raw(input(mode_prompt), source_label="UI/MENU")
     trial_prompt = f"👉 訓練次數：[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  [數字] 訓練指定次數  "
     mode_request["n_trials"] = _parse_interactive_trial_count_raw(input(trial_prompt))
