@@ -1,5 +1,6 @@
 import inspect
 import json
+import math
 import os
 import sys
 import threading
@@ -29,6 +30,7 @@ from core.walk_forward_policy import (
     build_optimizer_effective_policy_fingerprint,
     build_optimizer_runtime_policy,
     load_walk_forward_policy,
+    normalize_optimizer_model_mode,
 )
 from core.active_param_ensemble import build_static_active_param_ensemble_payload, is_active_param_ensemble_payload
 from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, generate_random_seed_ensemble
@@ -40,6 +42,11 @@ from config.training_policy import (
     OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
     OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    TRADE_MODE_AUTO_PROMOTE_RUN_BEST,
+    TRADE_MODE_CANDIDATE_SELECTOR,
+    TRADE_MODE_RUN_BEST_SELECTOR,
+    TRADE_PROMOTE_MIN_SCORE_DELTA,
+    OPTIMIZER_PERSIST_STUDY_DB,
     is_optimizer_local_min_review_enabled,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
@@ -138,6 +145,84 @@ def _project_relative_path(path: str) -> str:
         return os.path.basename(raw)
 
 
+def _is_finite_number(value) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalize_trade_selector(selector: str) -> str:
+    raw = str(selector or "").strip().lower()
+    aliases = {
+        "base_r_gt_0": "base_retention_gt_0_0",
+        "base_r_gt_0_0": "base_retention_gt_0_0",
+        "base_r_gt_0_2": "base_retention_gt_0_2",
+        "base_r_gt_0_4": "base_retention_gt_0_4",
+        "base_r_gt_0_6": "base_retention_gt_0_6",
+        "base_r_gt_0_8": "base_retention_gt_0_8",
+        "base_r_gt_min": "base_retention_gt_min",
+    }
+    return aliases.get(raw, raw or "retention")
+
+
+def _selector_score_from_summary(summary: dict | None, selector: str):
+    if not isinstance(summary, dict):
+        return None
+    normalized = _normalize_trade_selector(selector)
+    if normalized == "retention":
+        return summary.get("retention")
+    if normalized == "local":
+        return summary.get("local_min_score")
+    return summary.get("base_score")
+
+
+def _selector_score_is_valid(summary: dict | None, selector: str) -> bool:
+    score = _selector_score_from_summary(summary, selector)
+    return _is_finite_number(score) and float(score) != -9999.0
+
+
+def _resolve_trade_candidate_selector() -> str:
+    return _normalize_trade_selector(TRADE_MODE_CANDIDATE_SELECTOR)
+
+
+def _resolve_trade_run_best_selector() -> str:
+    return _normalize_trade_selector(TRADE_MODE_RUN_BEST_SELECTOR)
+
+
+def _policy_fingerprint_from_summary(summary: dict | None) -> str:
+    if not isinstance(summary, dict):
+        return ""
+    return str(summary.get("policy_fingerprint_sha256") or "").strip()
+
+
+def _resolve_latest_dataset_date(data_dir: str):
+    import pandas as pd
+    from core.data_utils import discover_unique_csv_inputs
+
+    latest = None
+    csv_inputs, _duplicate_issue_lines = discover_unique_csv_inputs(data_dir)
+    for _ticker, csv_path in csv_inputs:
+        try:
+            df = pd.read_csv(csv_path, usecols=lambda col: str(col).strip().lower() in {"date", "time"})
+        except (OSError, ValueError, pd.errors.EmptyDataError, pd.errors.ParserError):
+            continue
+        if df.empty:
+            continue
+        columns = list(df.columns)
+        if not columns:
+            continue
+        series = pd.to_datetime(df[columns[0]], errors="coerce").dropna()
+        if series.empty:
+            continue
+        value = series.max().normalize()
+        if latest is None or value > latest:
+            latest = value
+    if latest is None:
+        raise ValueError("Trade mode 無法從資料集 CSV 解析最新交易日，請確認資料包含 Date/Time 欄位。")
+    return latest.strftime("%Y-%m-%d")
+
+
 def _embed_summary_in_params_file(params_path: str, summary: dict, *, remove_summary_sidecar: str = "") -> dict:
     payload = _load_json_file_or_none(params_path)
     if not isinstance(payload, dict):
@@ -222,14 +307,30 @@ def _find_finalist_entry(finalists, winner_trial):
     return None
 
 
+def _select_finalist_entry_by_selector(finalists, *, objective_mode: str, selector: str):
+    from tools.optimizer.outer_rolling_oos import _build_policy_items
+
+    normalized = _normalize_trade_selector(selector)
+    policy_items = _build_policy_items(list(finalists or []), objective_mode=objective_mode)
+    item = policy_items.get(normalized)
+    if item is not None and item.get("trial") is not None:
+        return item
+    return None
+
+
 def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode: str, walk_forward_policy: dict, action_label: str, selection_rule: str, compare_only: bool = False):
     if winner_trial is None or finalist_entry is None:
         raise ValueError("缺少 winner_trial 或 finalist_entry，無法建立 summary")
     effective_search_train_end_year = int(
         winner_trial.user_attrs.get("search_train_end_year", walk_forward_policy.get("search_train_end_year", 0))
     )
+    policy_contract = build_optimizer_effective_policy_fingerprint(walk_forward_policy)
     payload = {
         "trial_number": int(winner_trial.number) + 1,
+        "mode": str(walk_forward_policy.get("model_mode", "")),
+        "evaluation_scope": str(walk_forward_policy.get("evaluation_scope", "")),
+        "policy_fingerprint_sha256": str(policy_contract["fingerprint_sha256"]),
+        "policy_snapshot": policy_contract["snapshot"],
         "base_score": float(finalist_entry["base_score"]),
         "local_min_score": float(finalist_entry["local_min_score"]),
         "retention": float(finalist_entry["local_retention"]),
@@ -238,7 +339,13 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
         "train_start_year": int(walk_forward_policy.get("train_start_year", 0)),
         "search_train_end_year": int(effective_search_train_end_year),
         "selection_end_year": int(walk_forward_policy.get("search_train_end_year", effective_search_train_end_year)),
+        "train_start_date": walk_forward_policy.get("train_start_date"),
+        "search_train_end_date": walk_forward_policy.get("search_train_end_date"),
+        "latest_data_date": walk_forward_policy.get("latest_data_date"),
+        "train_window_months": walk_forward_policy.get("trade_train_window_months") or walk_forward_policy.get("train_window_months"),
         "oos_start_year": walk_forward_policy.get("oos_start_year"),
+        "oos_start_date": walk_forward_policy.get("oos_start_date"),
+        "oos_end_date": walk_forward_policy.get("oos_end_date"),
         "action": str(action_label),
         "selection_rule": str(selection_rule),
         "compare_only": bool(compare_only),
@@ -286,10 +393,12 @@ def _summary_policy_signature(summary: dict | None):
     if not isinstance(summary, dict):
         return None
     return (
+        str(summary.get("mode") or summary.get("selected_model_mode") or ""),
         str(summary.get("objective_mode", "")),
-        summary.get("train_start_year"),
-        summary.get("search_train_end_year"),
-        summary.get("oos_start_year"),
+        summary.get("train_start_date"),
+        summary.get("search_train_end_date"),
+        summary.get("train_window_months"),
+        summary.get("oos_start_date"),
     )
 
 
@@ -297,25 +406,34 @@ def _format_summary_policy_signature(summary: dict | None) -> str:
     signature = _summary_policy_signature(summary)
     if signature is None:
         return "N/A"
-    objective_mode, train_start_year, search_train_end_year, oos_start_year = signature
+    mode, objective_mode, train_start_date, search_train_end_date, train_window_months, oos_start_date = signature
     return (
-        f"objective={objective_mode or 'N/A'}"
-        f", train_start={train_start_year if train_start_year is not None else 'N/A'}"
-        f", search_end={search_train_end_year if search_train_end_year is not None else 'N/A'}"
-        f", oos_start={oos_start_year if oos_start_year is not None else 'N/A'}"
+        f"mode={mode or 'N/A'}"
+        f", objective={objective_mode or 'N/A'}"
+        f", train={train_start_date or 'N/A'}~{search_train_end_date or 'N/A'}"
+        f", window_m={train_window_months if train_window_months is not None else 'N/A'}"
+        f", oos_start={oos_start_date if oos_start_date is not None else 'N/A'}"
     )
 
 
 def _summaries_have_compatible_policy(*, candidate_summary: dict, run_best_summary: dict | None) -> bool:
     if run_best_summary is None:
         return False
+    candidate_fp = _policy_fingerprint_from_summary(candidate_summary)
+    run_best_fp = _policy_fingerprint_from_summary(run_best_summary)
+    if candidate_fp and run_best_fp:
+        return candidate_fp == run_best_fp
     return _summary_policy_signature(candidate_summary) == _summary_policy_signature(run_best_summary)
 
 
 def _print_candidate_vs_run_best_summary(*, candidate_summary: dict, run_best_summary: dict | None):
+    selector = _resolve_trade_run_best_selector()
+    candidate_selector_score = _selector_score_from_summary(candidate_summary, selector)
     print(f"{C_GRAY}{'-' * 96}{C_RESET}")
     print(
-        f"      candidate | base={float(candidate_summary.get('base_score', 0.0)):.3f} "
+        f"      candidate | selector={selector} "
+        f"| selector_score={_format_nonrolling_result_number(candidate_selector_score)} "
+        f"| base={float(candidate_summary.get('base_score', 0.0)):.3f} "
         f"| local_min={float(candidate_summary.get('local_min_score', 0.0)):.3f} "
         f"| retention={float(candidate_summary.get('retention', 0.0)):.3f} "
         f"| policy=({_format_summary_policy_signature(candidate_summary)})"
@@ -323,8 +441,11 @@ def _print_candidate_vs_run_best_summary(*, candidate_summary: dict, run_best_su
     if run_best_summary is None:
         print(f"      run_best  | 尚無 summary，視同未建立 promote 基線")
     else:
+        run_best_selector_score = _selector_score_from_summary(run_best_summary, selector)
         print(
-            f"      run_best  | base={float(run_best_summary.get('base_score', 0.0)):.3f} "
+            f"      run_best  | selector={selector} "
+            f"| selector_score={_format_nonrolling_result_number(run_best_selector_score)} "
+            f"| base={float(run_best_summary.get('base_score', 0.0)):.3f} "
             f"| local_min={float(run_best_summary.get('local_min_score', 0.0)):.3f} "
             f"| retention={float(run_best_summary.get('retention', 0.0)):.3f} "
             f"| policy=({_format_summary_policy_signature(run_best_summary)})"
@@ -332,33 +453,14 @@ def _print_candidate_vs_run_best_summary(*, candidate_summary: dict, run_best_su
     print(f"{C_GRAY}{'-' * 96}{C_RESET}")
 
 
-def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict | None):
-    candidate_local_min = float(candidate_summary.get("local_min_score", 0.0))
-    candidate_base_score = float(candidate_summary.get("base_score", 0.0))
-    candidate_retention = float(candidate_summary.get("retention", float("-inf")))
-    if candidate_local_min <= 0.0:
-        return False, "candidate.local_min_score <= 0"
-    if candidate_base_score <= 0.0:
-        return False, "candidate.base_score <= 0"
-    if bool(candidate_summary.get("inner_validate_anti_overfit_enabled", False)):
-        if not bool(candidate_summary.get("inner_validate_gate", False)):
-            return False, "candidate.inner_validate_gate = FAIL"
-    if run_best_summary is None:
-        return True, "run_best summary 缺失，視同首次 promote"
-    if not _summaries_have_compatible_policy(candidate_summary=candidate_summary, run_best_summary=run_best_summary):
-        return True, "run_best summary effective policy 與 candidate 不一致，視同舊基準重新 promote"
-    run_best_local_min = float(run_best_summary.get("local_min_score", float("-inf")))
-    run_best_retention = float(run_best_summary.get("retention", float("-inf")))
-    local_min_not_worse = candidate_local_min >= run_best_local_min
-    retention_not_worse = candidate_retention >= run_best_retention
-    strictly_better = candidate_local_min > run_best_local_min or candidate_retention > run_best_retention
-    if local_min_not_worse and retention_not_worse and strictly_better:
-        return True, "candidate local_min_score 與 retention 對 run_best 形成 Pareto 不劣，且至少一項勝出"
-    if candidate_local_min > run_best_local_min and candidate_retention < run_best_retention:
-        return False, "trade-off：candidate.local_min_score 較高，但 retention 較低，不自動 promote"
-    if candidate_local_min < run_best_local_min and candidate_retention > run_best_retention:
-        return False, "trade-off：candidate.retention 較高，但 local_min_score 較低，不自動 promote"
-    return False, "candidate 未通過 Pareto promote 比較規則"
+def _summary_is_trade_mode(summary: dict | None) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    mode = str(summary.get("mode") or summary.get("selected_model_mode") or "").strip().lower()
+    try:
+        return normalize_optimizer_model_mode(mode) == "trade"
+    except ValueError:
+        return False
 
 
 def _load_candidate_params_payload_for_promote():
@@ -372,7 +474,99 @@ def _load_candidate_params_payload_for_promote():
     return load_params_from_json(CANDIDATE_BEST_PARAMS_PATH)
 
 
-def _promote_candidate_to_run_best(*, emit_output: bool = True):
+def _first_params_from_payload(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    if is_active_param_ensemble_payload(payload):
+        members = payload.get("params_ensemble")
+        if isinstance(members, list) and members and isinstance(members[0], dict):
+            return dict(members[0])
+        by_date = payload.get("params_ensemble_by_effective_date")
+        if isinstance(by_date, dict) and by_date:
+            first_key = sorted(by_date.keys())[0]
+            first_members = by_date.get(first_key)
+            if isinstance(first_members, list) and first_members and isinstance(first_members[0], dict):
+                return dict(first_members[0])
+    return dict(payload)
+
+
+def _payload_for_trade_replay(payload: dict, *, selector: str) -> dict:
+    if is_active_param_ensemble_payload(payload):
+        replay_payload = dict(payload)
+        replay_payload["selector"] = str(selector)
+        return replay_payload
+    return build_static_active_param_ensemble_payload(
+        members=[dict(payload)],
+        selector=str(selector),
+        created_at=get_taipei_now().isoformat(),
+        meta={"source": "trade_promote_replay"},
+    )
+
+
+def _initial_capital_from_payload(payload: dict | None) -> float:
+    params = _first_params_from_payload(payload)
+    value = params.get("initial_capital", 0.0)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _trade_window_from_policy(policy: dict) -> tuple[str, str]:
+    start = str((policy or {}).get("train_start_date") or "").strip()
+    end = str((policy or {}).get("search_train_end_date") or "").strip()
+    if not start or not end:
+        raise ValueError("Trade mode 缺少 train_start_date / search_train_end_date，無法 same-window replay。")
+    return start, end
+
+
+def _replay_payload_on_current_trade_window(session, payload: dict, *, selector: str) -> float:
+    if session is None:
+        raise ValueError("promote gate 需要目前 Trade session 才能重跑 same-window replay")
+    from tools.optimizer.callbacks import _run_static_ensemble_dashboard_replay
+
+    start_date, end_date = _trade_window_from_policy(getattr(session, "walk_forward_policy", {}) or {})
+    replay_payload = _payload_for_trade_replay(dict(payload), selector=selector)
+    initial_capital = _initial_capital_from_payload(replay_payload)
+    metrics, _benchmark_metrics, _range_text = _run_static_ensemble_dashboard_replay(
+        session,
+        replay_payload,
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=float(initial_capital),
+    )
+    score = metrics.get("pf_romd")
+    if not _is_finite_number(score):
+        raise ValueError("same-window replay score 無效")
+    return float(score)
+
+
+def _build_promote_result_payload(*, status: str, reason: str, selector: str, candidate_selector_score, candidate_replay_score=None, run_best_replay_score=None) -> dict:
+    def _optional_float(value):
+        return float(value) if _is_finite_number(value) else None
+
+    candidate_selector_score_value = _optional_float(candidate_selector_score)
+    candidate_replay_score_value = _optional_float(candidate_replay_score)
+    run_best_replay_score_value = _optional_float(run_best_replay_score)
+    delta = None
+    if candidate_replay_score_value is not None and run_best_replay_score_value is not None:
+        delta = float(candidate_replay_score_value) - float(run_best_replay_score_value)
+    return {
+        "promote_status": str(status),
+        "promote_reason": str(reason),
+        "candidate_selector": _resolve_trade_candidate_selector(),
+        "run_best_selector": str(selector),
+        "candidate_selector_score": candidate_selector_score_value,
+        "candidate_trade_replay_score": candidate_replay_score_value,
+        "run_best_replay_score": run_best_replay_score_value,
+        "score_delta": delta,
+        "required_score_delta": float(TRADE_PROMOTE_MIN_SCORE_DELTA),
+        "run_best_replayed_on_current_window": run_best_replay_score is not None,
+        "created_at": get_taipei_now().isoformat(),
+    }
+
+
+def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
     candidate_params = _load_candidate_params_payload_for_promote()
     if candidate_params is None:
         return 1
@@ -380,13 +574,95 @@ def _promote_candidate_to_run_best(*, emit_output: bool = True):
     if candidate_summary is None:
         print(f"{C_RED}❌ 找不到 candidate_best summary: {_project_relative_path(CANDIDATE_BEST_PARAMS_PATH)}{C_RESET}", file=sys.stderr)
         return 1
+    selector = _resolve_trade_run_best_selector()
+    candidate_selector_score = _selector_score_from_summary(candidate_summary, selector)
+    run_best_payload = _load_json_file_or_none(RUN_BEST_PARAMS_PATH)
     run_best_summary = _load_params_summary_or_legacy_sidecar(RUN_BEST_PARAMS_PATH, RUN_BEST_SUMMARY_PATH)
-    should_promote, reason = _should_promote_candidate(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
-    if not should_promote:
-        print(f"{C_YELLOW}ℹ️ run_best 未進版：{reason}{C_RESET}")
+    _print_candidate_vs_run_best_summary(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
+
+    if not _summary_is_trade_mode(candidate_summary):
+        result = _build_promote_result_payload(
+            status="candidate_only",
+            reason="candidate_not_from_trade_mode",
+            selector=selector,
+            candidate_selector_score=candidate_selector_score,
+        )
+        print(f"{C_YELLOW}ℹ️ run_best 未進版：candidate 不是 Trade mode 產物{C_RESET}")
         return 0
+    if not _selector_score_is_valid(candidate_summary, selector):
+        result = _build_promote_result_payload(
+            status="candidate_only",
+            reason="candidate_selector_score_invalid",
+            selector=selector,
+            candidate_selector_score=candidate_selector_score,
+        )
+        print(f"{C_YELLOW}ℹ️ run_best 未進版：candidate selector score 無效{C_RESET}")
+        return 0
+
+    try:
+        candidate_replay_score = _replay_payload_on_current_trade_window(session, candidate_params, selector=selector)
+    except (ValueError, RuntimeError, OSError) as exc:
+        print(f"{C_YELLOW}ℹ️ run_best 未進版：candidate same-window replay 失敗｜{type(exc).__name__}: {exc}{C_RESET}")
+        return 0
+
+    if run_best_payload is None or run_best_summary is None:
+        promoted_summary = dict(candidate_summary)
+        promoted_summary["promoted_at"] = get_taipei_now().isoformat()
+        promoted_summary["promote_gate"] = _build_promote_result_payload(
+            status="promoted",
+            reason="no_existing_run_best",
+            selector=selector,
+            candidate_selector_score=candidate_selector_score,
+            candidate_replay_score=candidate_replay_score,
+        )
+        promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
+        promoted_payload["summary"] = promoted_summary
+        _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+        if bool(emit_output):
+            _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
+        return 0
+
+    if not _summaries_have_compatible_policy(candidate_summary=candidate_summary, run_best_summary=run_best_summary):
+        print(f"{C_YELLOW}ℹ️ run_best 未進版：policy fingerprint 不相容，保留 candidate_best{C_RESET}")
+        return 0
+
+    try:
+        run_best_replay_score = _replay_payload_on_current_trade_window(session, run_best_payload, selector=selector)
+    except (ValueError, RuntimeError, OSError) as exc:
+        promoted_summary = dict(candidate_summary)
+        promoted_summary["promoted_at"] = get_taipei_now().isoformat()
+        promoted_summary["promote_gate"] = _build_promote_result_payload(
+            status="promoted",
+            reason=f"existing_run_best_replay_invalid:{type(exc).__name__}",
+            selector=selector,
+            candidate_selector_score=candidate_selector_score,
+            candidate_replay_score=candidate_replay_score,
+        )
+        promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
+        promoted_payload["summary"] = promoted_summary
+        _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+        if bool(emit_output):
+            _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
+        return 0
+
+    score_delta = float(candidate_replay_score) - float(run_best_replay_score)
+    if score_delta < float(TRADE_PROMOTE_MIN_SCORE_DELTA):
+        print(
+            f"{C_YELLOW}ℹ️ run_best 未進版：same-window replay delta={score_delta:.3f} "
+            f"< required={float(TRADE_PROMOTE_MIN_SCORE_DELTA):.3f}{C_RESET}"
+        )
+        return 0
+
     promoted_summary = dict(candidate_summary)
     promoted_summary["promoted_at"] = get_taipei_now().isoformat()
+    promoted_summary["promote_gate"] = _build_promote_result_payload(
+        status="promoted",
+        reason="candidate_score_delta_passed",
+        selector=selector,
+        candidate_selector_score=candidate_selector_score,
+        candidate_replay_score=candidate_replay_score,
+        run_best_replay_score=run_best_replay_score,
+    )
     promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
     promoted_payload["summary"] = promoted_summary
     _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
@@ -1165,15 +1441,20 @@ def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dic
         f"retention_min={_format_nonrolling_result_number(min(retentions) if retentions else None)} | "
         f"result={ensemble_color}{ensemble_result}{reset}"
     )
-    print(f"{yellow}正式輸出：candidate_best / run_best 使用同一個 static ensemble JSON。{reset}")
+    print(f"{yellow}static ensemble 已完成；Trade mode 產生 candidate_best/run_best，OOS mode 只產生 validation policy outputs。{reset}")
 
 
 def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict:
     local_scores = [float(item.get("local_min_score", 0.0)) for item in members]
     base_scores = [float(item.get("base_score", 0.0)) for item in members]
     retentions = [float(item.get("retention", 0.0)) for item in members]
+    policy_contract = build_optimizer_effective_policy_fingerprint(walk_forward_policy)
     return {
         "schema_type": "optimizer_active_param_ensemble_summary",
+        "mode": str(walk_forward_policy.get("model_mode", "")),
+        "evaluation_scope": str(walk_forward_policy.get("evaluation_scope", "")),
+        "policy_fingerprint_sha256": str(policy_contract["fingerprint_sha256"]),
+        "policy_snapshot": policy_contract["snapshot"],
         "schema_version": 1,
         "action": "train",
         "selection_rule": "random_seed_ensemble_static_consensus",
@@ -1181,7 +1462,13 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
         "train_start_year": int(walk_forward_policy.get("train_start_year", 0)),
         "search_train_end_year": int(walk_forward_policy.get("search_train_end_year", 0)),
         "selection_end_year": int(walk_forward_policy.get("search_train_end_year", 0)),
+        "train_start_date": walk_forward_policy.get("train_start_date"),
+        "search_train_end_date": walk_forward_policy.get("search_train_end_date"),
+        "latest_data_date": walk_forward_policy.get("latest_data_date"),
+        "train_window_months": walk_forward_policy.get("trade_train_window_months") or walk_forward_policy.get("train_window_months"),
         "oos_start_year": walk_forward_policy.get("oos_start_year"),
+        "oos_start_date": walk_forward_policy.get("oos_start_date"),
+        "oos_end_date": walk_forward_policy.get("oos_end_date"),
         "dataset_label": str(dataset_label),
         "selected_model_mode": str(selected_model_mode),
         "trials_per_seed": int(trials_per_seed),
@@ -1314,10 +1601,16 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
 
 def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None, write_candidate_best: bool = True, write_policy_files: bool = True) -> tuple[dict, dict, dict[str, dict]]:
     policy = _resolve_nonrolling_seed_ensemble_policy()
+    candidate_selector = _resolve_trade_candidate_selector() if normalize_optimizer_model_mode(selected_model_mode) == "trade" else "candidate_best"
+    candidate_members = list(members)
+    if candidate_selector != "candidate_best":
+        selector_members = list((policy_members_by_policy or {}).get(candidate_selector) or [])
+        if selector_members:
+            candidate_members = sorted(selector_members, key=lambda item: int(dict(item).get("member_index", 0) or 0))
     payload = build_static_active_param_ensemble_payload(
-        members=members,
+        members=candidate_members,
         random_seed_ensemble=policy,
-        selector="candidate_best",
+        selector=str(candidate_selector),
         created_at=get_taipei_now().isoformat(),
         meta=_build_static_seed_ensemble_meta(
             seeds=seeds,
@@ -1327,6 +1620,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
             selected_model_mode=selected_model_mode,
             trials_per_seed=trials_per_seed,
             source="nonrolling_random_seed_ensemble",
+            policy_name=str(candidate_selector),
         ),
     )
     policy_paramset_paths, policy_paramset_payloads = _write_static_seed_ensemble_policy_paramsets(
@@ -1340,7 +1634,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         write_files=bool(write_policy_files),
     )
     summary = _build_static_seed_ensemble_summary(
-        members=members,
+        members=candidate_members,
         seeds=seeds,
         objective_mode=objective_mode,
         walk_forward_policy=walk_forward_policy,
@@ -1348,6 +1642,8 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         selected_model_mode=selected_model_mode,
         trials_per_seed=trials_per_seed,
     )
+    summary["selector"] = str(candidate_selector)
+    summary["run_best_selector"] = _resolve_trade_run_best_selector()
     summary["policy_paramsets"] = dict(policy_paramset_paths)
     payload["summary"] = dict(summary)
     if bool(write_candidate_best):
@@ -1759,14 +2055,13 @@ def _run_nonrolling_random_seed_ensemble_training(
         selected_model_mode=selected_model_mode,
         trials_per_seed=int(requested_trials),
         policy_members_by_policy=policy_members_by_policy,
-        write_candidate_best=(str(selected_model_mode).strip().lower() == "full"),
-        write_policy_files=(str(selected_model_mode).strip().lower() != "full"),
+        write_candidate_best=(normalize_optimizer_model_mode(selected_model_mode) == "trade"),
+        # base/base_r/local/retention are selector-study artifacts and must remain
+        # available in every non-rolling mode. Only candidate_best/run_best are
+        # restricted to Trade mode.
+        write_policy_files=True,
     )
-    from tools.optimizer.callbacks import (
-        build_optimizer_static_ensemble_single_fold_oos_row,
-        print_optimizer_static_ensemble_console_dashboard,
-        print_optimizer_static_ensemble_rolling_oos_table,
-    )
+    trade_mode = normalize_optimizer_model_mode(selected_model_mode) == "trade"
     if dashboard_session is None:
         dashboard_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         dashboard_session.load_raw_data(
@@ -1775,6 +2070,11 @@ def _run_nonrolling_random_seed_ensemble_training(
             required_min_rows=optimizer_required_min_rows,
             verbose=False,
         )
+    from tools.optimizer.callbacks import (
+        build_optimizer_static_ensemble_single_fold_oos_row,
+        print_optimizer_static_ensemble_console_dashboard,
+        print_optimizer_static_ensemble_rolling_oos_table,
+    )
     if compact_display and progress_board is not None:
         period_context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
 
@@ -1847,11 +2147,15 @@ def _run_nonrolling_random_seed_ensemble_training(
         resource_summary=resource_sampler.summary(),
         color=True,
     ))
-    if str(selected_model_mode).strip().lower() == "full":
-        promote_status = _promote_candidate_to_run_best(emit_output=False)
-        if promote_status != 0:
-            return int(promote_status)
-        _print_optimizer_output_files("💾 輸出檔案", [("candidate_best", CANDIDATE_BEST_PARAMS_PATH), ("run_best", RUN_BEST_PARAMS_PATH)])
+    if normalize_optimizer_model_mode(selected_model_mode) == "trade":
+        if bool(TRADE_MODE_AUTO_PROMOTE_RUN_BEST):
+            promote_status = _promote_candidate_to_run_best(session=dashboard_session, emit_output=False)
+            if promote_status != 0:
+                return int(promote_status)
+        output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)]
+        if os.path.exists(RUN_BEST_PARAMS_PATH):
+            output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
+        _print_optimizer_output_files("💾 輸出檔案", output_entries)
         return 0
     visible_policy_paths = _visible_policy_paramset_paths(dict((_ensemble_summary or {}).get("policy_paramsets") or {}))
     _print_optimizer_output_files("💾 輸出檔案", list(visible_policy_paths.items()))
@@ -1909,9 +2213,10 @@ def _resolve_cli_run_request(argv):
 
 
 def _prompt_optimizer_model_mode(default_model: str):
-    default_normalized = str(default_model).strip().lower() or 'split'
-    if default_normalized not in {'split', 'full'}:
-        default_normalized = 'split'
+    try:
+        default_normalized = normalize_optimizer_model_mode(default_model)
+    except ValueError:
+        default_normalized = 'trade'
     return default_normalized, 'UI/MENU_DEFAULT'
 
 
@@ -1921,8 +2226,8 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
         normalized = cli_value.strip().lower()
         source = 'CLI:--model'
     elif _has_cli_flag(argv, '--timing'):
-        normalized = 'split'
-        source = 'TIMING_DEFAULT:split'
+        normalized = 'oos'
+        source = 'TIMING_DEFAULT:oos'
     else:
         env_value = str((environ or {}).get('V16_OPTIMIZER_MODEL', '')).strip()
         if env_value:
@@ -1931,10 +2236,12 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
         elif is_interactive_console():
             return _prompt_optimizer_model_mode(default_model)
         else:
-            normalized = str(default_model).strip().lower() or 'split'
+            normalized = str(default_model).strip().lower() or 'trade'
             source = 'DEFAULT'
-    if normalized not in {'split', 'full'}:
-        raise ValueError(f"optimizer 模式只接受 split 或 full，收到: {normalized}")
+    try:
+        normalized = normalize_optimizer_model_mode(normalized)
+    except ValueError as exc:
+        raise ValueError(f"optimizer 模式只接受 trade 或 oos，收到: {normalized}") from exc
     return normalized, source
 
 
@@ -1945,8 +2252,8 @@ def main(argv=None, environ=None):
     validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
-        print("說明: 預設 split；互動選單輸入 F 以 full 模式訓練。可用 --model split|full、--trials N 直接指定；輸入 0 匯出 candidate_best；輸入 R 或 --outer-oos 執行 outer rolling monthly OOS test。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model trade|oos] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
+        print("說明: 預設 trade；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為單 fold validation；--outer-oos 執行 rolling monthly OOS test。舊 --model full/split 仍分別相容為 trade/oos。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -1993,11 +2300,6 @@ def main(argv=None, environ=None):
     except ValueError as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
-    walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode)
-    optimizer_required_min_rows = get_breakout_optimizer_required_min_rows()
-    objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
-    session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
-    best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(argv, environ, default=DEFAULT_DATASET_PROFILE)
@@ -2007,6 +2309,19 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
+    latest_data_date = None
+    if selected_model_mode == "trade":
+        try:
+            latest_data_date = _resolve_latest_dataset_date(selected_data_dir)
+        except ValueError as exc:
+            print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+            return 1
+    walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode, latest_data_date=latest_data_date)
+    optimizer_required_min_rows = get_breakout_optimizer_required_min_rows()
+    objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
+    session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+    best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
+
     try:
         cli_run_request = _resolve_cli_run_request(argv)
     except ValueError as exc:
@@ -2014,8 +2329,9 @@ def main(argv=None, environ=None):
         return 1
 
     timing_mode = bool(cli_run_request and cli_run_request.get("timing_mode"))
-    db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if timing_mode else build_optimizer_db_file_path(dataset_profile_key, MODELS_DIR)
-    db_name = f"sqlite:///{db_file}"
+    persist_study_db = bool(timing_mode or OPTIMIZER_PERSIST_STUDY_DB)
+    db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if persist_study_db else ""
+    db_name = f"sqlite:///{db_file}" if db_file else None
     ensure_runtime_dirs()
 
     if cli_run_request is not None:
@@ -2034,19 +2350,32 @@ def main(argv=None, environ=None):
         return trial_count_exit
 
     requested_model_mode = str(getattr(session, "requested_model_mode", "") or "").strip().lower()
-    if requested_model_mode in {"split", "full"} and requested_model_mode != selected_model_mode:
+    if requested_model_mode:
+        try:
+            requested_model_mode = normalize_optimizer_model_mode(requested_model_mode)
+        except ValueError:
+            requested_model_mode = ""
+    if requested_model_mode in {"oos", "trade"} and requested_model_mode != selected_model_mode:
         requested_trials = int(getattr(session, "n_trials", 0) or 0)
         requested_action = str(getattr(session, "run_action", "train") or "train")
         selected_model_mode = requested_model_mode
-        walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode)
+        latest_data_date = None
+        if selected_model_mode == "trade":
+            try:
+                latest_data_date = _resolve_latest_dataset_date(selected_data_dir)
+            except ValueError as exc:
+                print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+                return 1
+        walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode, latest_data_date=latest_data_date)
         objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
         session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         session.n_trials = int(requested_trials)
         session.run_action = requested_action
         session.requested_model_mode = requested_model_mode
         best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
-        db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if timing_mode else build_optimizer_db_file_path(dataset_profile_key, MODELS_DIR)
-        db_name = f"sqlite:///{db_file}"
+        persist_study_db = bool(timing_mode or OPTIMIZER_PERSIST_STUDY_DB)
+        db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if persist_study_db else ""
+        db_name = f"sqlite:///{db_file}" if db_file else None
 
     if str(getattr(session, "run_action", "train")) == "outer_rolling_oos":
         from tools.optimizer.outer_rolling_oos import run_outer_rolling_oos
@@ -2078,7 +2407,19 @@ def main(argv=None, environ=None):
         )
     if str(getattr(session, "run_action", "train")) == "promote_candidate":
         ensure_runtime_dirs()
-        return _promote_candidate_to_run_best()
+        try:
+            if not os.path.isdir(selected_data_dir):
+                raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
+            session.load_raw_data(
+                selected_data_dir,
+                load_all_raw_data=load_all_raw_data,
+                required_min_rows=optimizer_required_min_rows,
+                verbose=False,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+            return 1
+        return _promote_candidate_to_run_best(session=session)
 
     try:
         optimizer_seed, seed_source = resolve_optimizer_seed(environ)
@@ -2115,8 +2456,14 @@ def main(argv=None, environ=None):
             return int(ensemble_result)
 
     if session.n_trials == 0:
+        if selected_model_mode != "trade":
+            print(f"{C_YELLOW}ℹ️ OOS mode 只輸出 validation study，不支援 candidate_best / run_best 匯出。請用 --trials N 重新產生 OOS 結果。{C_RESET}")
+            return 0
+        if not db_file:
+            print(f"{C_RED}❌ 目前預設使用 memory study，不保留長期 DB；export_candidate 不支援從硬碟接續匯出。請用 Trade mode --trials N 重新訓練產生 candidate_best。{C_RESET}", file=sys.stderr)
+            return 1
         if not os.path.exists(db_file):
-            print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}；非互動模式預設 trial 數為 0，若要在乾淨 repo 建立新記憶庫，請先設定 V16_OPTIMIZER_TRIALS>0、使用 --trials N，或先完成一次訓練。{C_RESET}", file=sys.stderr)
+            print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}；請用 Trade mode --trials N 重新訓練產生 candidate_best。{C_RESET}", file=sys.stderr)
             return 1
         try:
             ensure_optimizer_db_usable(db_file)
@@ -2158,19 +2505,22 @@ def main(argv=None, environ=None):
                 if compact_display:
                     _finalize_nonrolling_single_fold_inline_progress(session)
                     _clear_nonrolling_local_min_progress_hooks(session)
-            if best_trial is None or not is_qualified_trial_value(best_trial.value):
-                print(f"{C_YELLOW}ℹ️ 匯出模式完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
+            selector = _resolve_trade_candidate_selector()
+            selected_entry = _select_finalist_entry_by_selector(finalists, objective_mode=objective_mode, selector=selector)
+            selected_trial = None if selected_entry is None else selected_entry.get("trial")
+            if selected_trial is None or not is_qualified_trial_value(selected_trial.value):
+                print(f"{C_YELLOW}ℹ️ 匯出模式完成，但目前 selector={selector} 無可匯出 winner。{C_RESET}")
                 return 0
 
             print_local_min_score_winner_summary(
-                winner_trial=best_trial,
+                winner_trial=selected_trial,
                 session=session,
                 colors=COLORS,
             )
             exported = _export_selected_candidate_artifacts(
                 study=study,
                 finalists=finalists,
-                selected_trial=best_trial,
+                selected_trial=selected_trial,
                 params_path=CANDIDATE_BEST_PARAMS_PATH,
                 summary_path=CANDIDATE_BEST_SUMMARY_PATH,
                 fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
@@ -2178,7 +2528,7 @@ def main(argv=None, environ=None):
                 objective_mode=objective_mode,
                 walk_forward_policy=walk_forward_policy,
                 action_label="export_candidate",
-                selection_rule=_resolve_candidate_best_selection_rule(),
+                selection_rule=f"trade_selector:{selector}",
                 compare_only=False,
                 artifact_label="candidate_best",
                 export_best_params_if_requested=export_best_params_if_requested,
@@ -2186,54 +2536,14 @@ def main(argv=None, environ=None):
             )
             if not exported:
                 return 1
-            retention_best_finalist = select_best_finalist_by_local_retention(finalists)
-            retention_best_trial = None if retention_best_finalist is None else retention_best_finalist["trial"]
-            _export_selected_candidate_artifacts(
-                study=study,
-                finalists=finalists,
-                selected_trial=retention_best_trial,
-                params_path=CANDIDATE_RETENTION_BEST_PARAMS_PATH,
-                summary_path=CANDIDATE_RETENTION_BEST_SUMMARY_PATH,
-                fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-                colors=COLORS,
-                objective_mode=objective_mode,
-                walk_forward_policy=walk_forward_policy,
-                action_label="export_candidate",
-                selection_rule="max_retention_compare",
-                compare_only=True,
-                artifact_label="candidate_retention_best",
-                export_best_params_if_requested=export_best_params_if_requested,
-                is_qualified_trial_value=is_qualified_trial_value,
-            )
-            if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
-                val_score_best_finalist = select_best_finalist_by_inner_validate_score(finalists)
-                val_score_best_trial = None if val_score_best_finalist is None else val_score_best_finalist["trial"]
-                _export_selected_candidate_artifacts(
-                    study=study,
-                    finalists=finalists,
-                    selected_trial=val_score_best_trial,
-                    params_path=CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH,
-                    summary_path=CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH,
-                    fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-                    colors=COLORS,
-                    objective_mode=objective_mode,
-                    walk_forward_policy=walk_forward_policy,
-                    action_label="export_candidate",
-                    selection_rule="max_inner_validate_score_compare",
-                    compare_only=True,
-                    artifact_label="candidate_val_score_best",
-                    export_best_params_if_requested=export_best_params_if_requested,
-                    is_qualified_trial_value=is_qualified_trial_value,
-                )
-            if selected_model_mode == 'split':
-                return finalize_best_trial_outputs(
-                    session=session,
-                    study=study,
-                    best_trial_resolver=(lambda _study, _best_trial=best_trial: _best_trial),
-                    dataset_label=dataset_label,
-                    db_file=db_file,
-                    walk_forward_policy=walk_forward_policy,
-                )
+            if bool(TRADE_MODE_AUTO_PROMOTE_RUN_BEST):
+                promote_status = _promote_candidate_to_run_best(session=session, emit_output=False)
+                if promote_status != 0:
+                    return int(promote_status)
+            output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)]
+            if os.path.exists(RUN_BEST_PARAMS_PATH):
+                output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
+            _print_optimizer_output_files("💾 輸出檔案", output_entries)
             return 0
         finally:
             session.close_trial_prep_executor()
@@ -2252,7 +2562,7 @@ def main(argv=None, environ=None):
         return 1
 
     try:
-        if os.path.exists(db_file):
+        if db_file and os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
     except RuntimeError as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -2267,7 +2577,7 @@ def main(argv=None, environ=None):
     selection_start_year = int(walk_forward_policy.get('selection_start_year', walk_forward_policy['train_start_year']))
     search_train_end_year = int(walk_forward_policy['search_train_end_year'])
     oos_start_year = walk_forward_policy.get('oos_start_year')
-    if selected_model_mode == 'split':
+    if selected_model_mode == 'oos':
         inner_scope_text = ""
         if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
             inner_validate_year = int(search_train_end_year)
@@ -2278,7 +2588,10 @@ def main(argv=None, environ=None):
             f"oos={oos_start_year if oos_start_year is not None else search_train_end_year + 1}~latest"
         )
     else:
-        scope_text = 'selection=all_data | oos=disabled'
+        train_start_date = walk_forward_policy.get("train_start_date") or str(selection_start_year)
+        train_end_date = walk_forward_policy.get("search_train_end_date") or str(search_train_end_year)
+        latest_text = walk_forward_policy.get("latest_data_date") or train_end_date
+        scope_text = f"selection={train_start_date}~{train_end_date} | oos=disabled | latest={latest_text}"
     inline_override_fields = list(walk_forward_policy.get("inline_override_fields", []) or [])
     override_text = "" if not inline_override_fields else f" | override={','.join(inline_override_fields)}"
     print(
@@ -2402,75 +2715,52 @@ def main(argv=None, environ=None):
                     _finalize_nonrolling_single_fold_inline_progress(session)
                     _clear_nonrolling_local_min_progress_hooks(session)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
-                print_local_min_score_winner_summary(
-                    winner_trial=best_trial,
-                    session=session,
-                    colors=COLORS,
-                )
-                export_status = export_best_params_if_requested(
-                    study,
-                    best_params_path=CANDIDATE_BEST_PARAMS_PATH,
-                    fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-                    colors=COLORS,
-                    best_trial_resolver=(lambda _study, _best_trial=best_trial: _best_trial),
-                    suppress_success_message=True,
-                )
-                if export_status != 0:
-                    return 1
-                finalist_entry = _find_finalist_entry(finalists, best_trial)
-                candidate_summary = _build_best_summary_payload(
-                    winner_trial=best_trial,
-                    finalist_entry=finalist_entry,
-                    objective_mode=objective_mode,
-                    walk_forward_policy=walk_forward_policy,
-                    action_label="train",
-                    selection_rule=_resolve_candidate_best_selection_rule(),
-                    compare_only=False,
-                )
-                _embed_summary_in_params_file(CANDIDATE_BEST_PARAMS_PATH, candidate_summary, remove_summary_sidecar=CANDIDATE_BEST_SUMMARY_PATH)
-                retention_best_finalist = select_best_finalist_by_local_retention(finalists)
-                retention_best_trial = None if retention_best_finalist is None else retention_best_finalist["trial"]
-                _export_selected_candidate_artifacts(
-                    study=study,
-                    finalists=finalists,
-                    selected_trial=retention_best_trial,
-                    params_path=CANDIDATE_RETENTION_BEST_PARAMS_PATH,
-                    summary_path=CANDIDATE_RETENTION_BEST_SUMMARY_PATH,
-                    fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-                    colors=COLORS,
-                    objective_mode=objective_mode,
-                    walk_forward_policy=walk_forward_policy,
-                    action_label="train",
-                    selection_rule="max_retention_compare",
-                    compare_only=True,
-                    artifact_label="candidate_retention_best",
-                    export_best_params_if_requested=export_best_params_if_requested,
-                    is_qualified_trial_value=is_qualified_trial_value,
-                )
-                if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
-                    val_score_best_finalist = select_best_finalist_by_inner_validate_score(finalists)
-                    val_score_best_trial = None if val_score_best_finalist is None else val_score_best_finalist["trial"]
-                    _export_selected_candidate_artifacts(
+                if selected_model_mode != 'trade':
+                    print_local_min_score_winner_summary(
+                        winner_trial=best_trial,
+                        session=session,
+                        colors=COLORS,
+                    )
+                if selected_model_mode == 'trade':
+                    selector = _resolve_trade_candidate_selector()
+                    selected_entry = _select_finalist_entry_by_selector(finalists, objective_mode=objective_mode, selector=selector)
+                    selected_trial = None if selected_entry is None else selected_entry.get("trial")
+                    if selected_trial is None or not is_qualified_trial_value(selected_trial.value):
+                        print(f"{C_YELLOW}ℹ️ Trade mode 完成，但 selector={selector} 無可匯出的 candidate。{C_RESET}")
+                        return 0
+                    print_local_min_score_winner_summary(
+                        winner_trial=selected_trial,
+                        session=session,
+                        colors=COLORS,
+                    )
+                    exported = _export_selected_candidate_artifacts(
                         study=study,
                         finalists=finalists,
-                        selected_trial=val_score_best_trial,
-                        params_path=CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH,
-                        summary_path=CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH,
+                        selected_trial=selected_trial,
+                        params_path=CANDIDATE_BEST_PARAMS_PATH,
+                        summary_path=CANDIDATE_BEST_SUMMARY_PATH,
                         fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                         colors=COLORS,
                         objective_mode=objective_mode,
                         walk_forward_policy=walk_forward_policy,
                         action_label="train",
-                        selection_rule="max_inner_validate_score_compare",
-                        compare_only=True,
-                        artifact_label="candidate_val_score_best",
+                        selection_rule=f"trade_selector:{selector}",
+                        compare_only=False,
+                        artifact_label="candidate_best",
                         export_best_params_if_requested=export_best_params_if_requested,
                         is_qualified_trial_value=is_qualified_trial_value,
                     )
-                if selected_model_mode == 'full':
-                    _promote_candidate_to_run_best(emit_output=False)
-                    _print_optimizer_output_files("💾 輸出檔案", [("candidate_best", CANDIDATE_BEST_PARAMS_PATH), ("run_best", RUN_BEST_PARAMS_PATH)])
-                if selected_model_mode == 'split':
+                    if not exported:
+                        return 1
+                    if bool(TRADE_MODE_AUTO_PROMOTE_RUN_BEST):
+                        promote_status = _promote_candidate_to_run_best(session=session, emit_output=False)
+                        if promote_status != 0:
+                            return int(promote_status)
+                    output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)]
+                    if os.path.exists(RUN_BEST_PARAMS_PATH):
+                        output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
+                    _print_optimizer_output_files("💾 輸出檔案", output_entries)
+                elif selected_model_mode == 'oos':
                     finalize_best_trial_outputs(
                         session=session,
                         study=study,

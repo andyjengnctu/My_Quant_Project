@@ -7,7 +7,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整、預設 optimizer 模式為 split；互動選單輸入 F 以 full 模式訓練。可用 --model split|full、--trials N 直接指定；可用 --outer-oos 執行 outer rolling monthly OOS test；輸入 0 匯出 candidate_best。正常完成訓練後會自動寫入 candidate_best 並自動挑戰進版 run_best；若使用者中斷則不做。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整、預設 optimizer 模式為 trade；Trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；OOS 為單 fold validation；--outer-oos 執行 rolling monthly OOS test。舊 --model full/split 仍分別相容為 trade/oos。"
 
 
 def main(argv=None, environ=None):
@@ -15,7 +15,7 @@ def main(argv=None, environ=None):
     validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/ml_optimizer.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model trade|oos] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
         print(HELP_DESCRIPTION)
         return 0
 

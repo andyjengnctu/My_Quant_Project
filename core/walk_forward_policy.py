@@ -5,7 +5,7 @@ import os
 from typing import Mapping, Optional
 
 from config.training_display_policy import build_display_policy_snapshot
-from config.training_policy import build_training_score_policy_snapshot
+from config.training_policy import OUTER_ROLLING_TRAIN_WINDOW_MONTHS, build_training_score_policy_snapshot
 
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
 WALK_FORWARD_SELECTION_START_YEAR_ENV_VAR = "V16_WF_SELECTION_START_YEAR"
@@ -107,8 +107,12 @@ def build_walk_forward_policy_effective_snapshot(policy: Mapping[str, object]) -
         "search_train_end_date": policy.get("search_train_end_date"),
         "oos_start_date": policy.get("oos_start_date"),
         "oos_end_date": policy.get("oos_end_date"),
+        "latest_data_date": policy.get("latest_data_date"),
+        "trade_train_window_months": policy.get("trade_train_window_months"),
+        "train_window_months": policy.get("train_window_months"),
+        "evaluation_scope": str(policy.get("evaluation_scope", "")),
         "objective_mode": str(policy.get("objective_mode", "split_train_romd")),
-        "model_mode": str(policy.get("model_mode", "split")),
+        "model_mode": str(policy.get("model_mode", "oos")),
     }
 
 
@@ -267,17 +271,58 @@ def filter_search_train_dates(*, sorted_dates, train_start_year: int, search_tra
     return filtered
 
 
-def build_optimizer_runtime_policy(base_policy: dict, model_mode: str) -> dict:
-    normalized = str(model_mode or '').strip().lower() or 'split'
-    if normalized not in {'split', 'full'}:
-        raise ValueError(f"optimizer model_mode 只接受 split 或 full，收到: {model_mode}")
+def normalize_optimizer_model_mode(model_mode: str) -> str:
+    normalized = str(model_mode or '').strip().lower() or 'oos'
+    aliases = {
+        'split': 'oos',
+        'oos': 'oos',
+        'full': 'trade',
+        'trade': 'trade',
+    }
+    if normalized not in aliases:
+        raise ValueError(f"optimizer model_mode 只接受 trade 或 oos，收到: {model_mode}")
+    return aliases[normalized]
+
+
+def _resolve_trade_window_from_latest_date(latest_data_date, train_window_months: int) -> dict:
+    import pandas as pd
+
+    latest_ts = pd.Timestamp(_normalize_date_text(latest_data_date)).normalize()
+    train_months = max(1, int(train_window_months or OUTER_ROLLING_TRAIN_WINDOW_MONTHS))
+    selection_start = latest_ts - pd.DateOffset(months=train_months)
+    selection_end = latest_ts
+    return {
+        'selection_start_year': int(selection_start.year),
+        'train_start_year': int(selection_start.year),
+        'search_train_end_year': int(selection_end.year),
+        'selection_start_date': selection_start.strftime('%Y-%m-%d'),
+        'train_start_date': selection_start.strftime('%Y-%m-%d'),
+        'search_train_end_date': selection_end.strftime('%Y-%m-%d'),
+        'latest_data_date': selection_end.strftime('%Y-%m-%d'),
+        'trade_train_window_months': int(train_months),
+    }
+
+
+def build_optimizer_runtime_policy(base_policy: dict, model_mode: str, *, latest_data_date=None) -> dict:
+    normalized = normalize_optimizer_model_mode(model_mode)
     runtime_policy = dict(base_policy or {})
     runtime_policy['model_mode'] = normalized
-    if normalized == 'split':
-        runtime_policy['objective_mode'] = 'split_train_romd'
+    runtime_policy['objective_mode'] = 'split_train_romd'
+    if normalized == 'oos':
+        runtime_policy['evaluation_scope'] = 'oos_single_fold'
         if runtime_policy.get('oos_start_year') is not None and not runtime_policy.get('search_train_end_date'):
             runtime_policy['search_train_end_year'] = int(runtime_policy['oos_start_year']) - 1
-    else:
-        runtime_policy['objective_mode'] = 'legacy_base_score'
-        runtime_policy['oos_start_year'] = None
+        return runtime_policy
+
+    runtime_policy['evaluation_scope'] = 'trade_train_only'
+    runtime_policy['oos_start_year'] = None
+    runtime_policy['oos_start_date'] = None
+    runtime_policy['oos_end_date'] = None
+    runtime_policy['oos_horizon_months'] = 0
+    runtime_policy['train_window_months'] = int(runtime_policy.get('trade_train_window_months') or OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
+    if latest_data_date is not None:
+        runtime_policy.update(_resolve_trade_window_from_latest_date(
+            latest_data_date,
+            int(runtime_policy.get('train_window_months') or OUTER_ROLLING_TRAIN_WINDOW_MONTHS),
+        ))
     return runtime_policy

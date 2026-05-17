@@ -64,12 +64,12 @@ def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
             "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
             "source": source_label,
         }
-    if normalized_upper == "F":
+    if normalized_upper in {"F", "T"}:
         return {
             "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
             "action": OPTIMIZER_MENU_ACTION_TRAIN,
             "source": source_label,
-            "model_mode": "full",
+            "model_mode": "trade",
         }
     trial_count = parse_int_strict(normalized, "訓練次數", min_value=0)
     return {
@@ -85,21 +85,27 @@ def _parse_optimizer_mode_request_raw(raw_value: str, *, source_label: str):
         return {
             "action": OPTIMIZER_MENU_ACTION_TRAIN,
             "source": source_label,
-            "model_mode": "split",
+            "model_mode": "trade",
+        }
+    if normalized == "O":
+        return {
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+            "model_mode": "oos",
         }
     if normalized == "R":
         return {
             "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
             "source": source_label,
-            "model_mode": "split",
+            "model_mode": "oos",
         }
-    if normalized == "F":
+    if normalized in {"F", "T"}:
         return {
             "action": OPTIMIZER_MENU_ACTION_TRAIN,
             "source": source_label,
-            "model_mode": "full",
+            "model_mode": "trade",
         }
-    raise ValueError("Optimizer Mode 只接受 Enter、R 或 F。")
+    raise ValueError("Optimizer Mode 只接受 Enter、O、R 或 T/F。")
 
 
 def _parse_interactive_trial_count_raw(raw_value: str) -> int:
@@ -110,7 +116,7 @@ def _parse_interactive_trial_count_raw(raw_value: str) -> int:
 
 
 def _resolve_interactive_optimizer_run_request():
-    mode_prompt = "👉 Optimizer Mode：[Enter] Split  [R] Rolling OOS  [F] Full : "
+    mode_prompt = "👉 Optimizer Mode：[Enter] Trade  [O] OOS  [R] Rolling OOS  [T/F] Trade : "
     mode_request = _parse_optimizer_mode_request_raw(input(mode_prompt), source_label="UI/MENU")
     trial_prompt = f"👉 訓練次數：[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  [數字] 訓練指定次數  "
     mode_request["n_trials"] = _parse_interactive_trial_count_raw(input(trial_prompt))

@@ -23,7 +23,7 @@ from tools.optimizer.study_utils import (
 
 
 def prompt_existing_db_policy(db_file, colors):
-    if not os.path.exists(db_file):
+    if not db_file or not os.path.exists(db_file):
         return
     if not is_interactive_console():
         return

@@ -29,23 +29,39 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0 # None = 由 optimizer 搜尋 tp_percent; 0.0 =
 
 # ============================== 區間/次數 ====================================
 
-# optimizer 提供兩種資料區間模式：
-DEFAULT_OPTIMIZER_MODEL_MODE = 'split' # split = 指定資料選參; 額外切 OOS; full  = 全資料選參；不額外切 OOS
+# optimizer 提供三種資料區間語意：
+# trade = 最新實際交易參數訓練；最近 OUTER_ROLLING_TRAIN_WINDOW_MONTHS；無 OOS。
+# oos = 單一 fold OOS validation。rolling OOS = 多 fold OOS validation。
+DEFAULT_OPTIMIZER_MODEL_MODE = 'trade'
 OOS_EVALUATION_START_YEAR = 2021
 OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
 OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
 
+# Trade mode 實戰參數輸出與 promote 設定。selector 名稱沿用 rolling/OOS policy：
+# base / local / retention / base_retention_gt_0_0 / base_retention_gt_0_2 / base_retention_gt_0_4 / base_retention_gt_0_6 / base_retention_gt_0_8 / base_retention_gt_min
+# 兼容別名：base_r_gt_0 / base_r_gt_0_2 / base_r_gt_0_4 / base_r_gt_0_6 / base_r_gt_0_8。
+TRADE_MODE_CANDIDATE_SELECTOR = 'retention'
+TRADE_MODE_RUN_BEST_SELECTOR = 'retention'
+TRADE_MODE_AUTO_PROMOTE_RUN_BEST = True
+TRADE_PROMOTE_MIN_SCORE_DELTA = 0.10
+TRADE_PROMOTE_ON_POLICY_MISMATCH = 'candidate_only'
+
+# Study 儲存策略：正式流程不使用長期硬碟 DB / resume；必要時才用 per-run temp DB。
+OPTIMIZER_PERSIST_STUDY_DB = False
+OPTIMIZER_STUDY_STORAGE_MODE = 'memory'
+OPTIMIZER_ALLOW_PER_RUN_TEMP_DB = True
+
 # local_min review 計算開關。
 OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 2  # local_min_score finalist review 的最小候選數
 
 # Rolling OOS optimizer search 預設 trial 數。
 OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 1000
 
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 2
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = "auto" # "auto" = 過半數；整數 = 至少幾個 seed 同意。最大值永遠是 N。
 
 
@@ -150,6 +166,11 @@ def build_training_score_policy_snapshot():
         "OPTIMIZER_INNER_VALIDATE_MIN_SCORE": OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
         "OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE": OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
         "OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS": OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS,
+        "TRADE_MODE_CANDIDATE_SELECTOR": TRADE_MODE_CANDIDATE_SELECTOR,
+        "TRADE_MODE_RUN_BEST_SELECTOR": TRADE_MODE_RUN_BEST_SELECTOR,
+        "TRADE_MODE_AUTO_PROMOTE_RUN_BEST": TRADE_MODE_AUTO_PROMOTE_RUN_BEST,
+        "TRADE_PROMOTE_MIN_SCORE_DELTA": TRADE_PROMOTE_MIN_SCORE_DELTA,
+        "TRADE_PROMOTE_ON_POLICY_MISMATCH": TRADE_PROMOTE_ON_POLICY_MISMATCH,
     }
 
 def build_selection_policy_snapshot():
@@ -160,6 +181,13 @@ def build_optimizer_train_test_policy_snapshot():
     payload["OUTER_ROLLING_TRAIN_WINDOW_MONTHS"] = int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
     payload["OUTER_ROLLING_OOS_HORIZON_MONTHS"] = int(OUTER_ROLLING_OOS_HORIZON_MONTHS)
     payload["OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT"] = int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+    payload["TRADE_MODE_CANDIDATE_SELECTOR"] = str(TRADE_MODE_CANDIDATE_SELECTOR)
+    payload["TRADE_MODE_RUN_BEST_SELECTOR"] = str(TRADE_MODE_RUN_BEST_SELECTOR)
+    payload["TRADE_MODE_AUTO_PROMOTE_RUN_BEST"] = bool(TRADE_MODE_AUTO_PROMOTE_RUN_BEST)
+    payload["TRADE_PROMOTE_MIN_SCORE_DELTA"] = float(TRADE_PROMOTE_MIN_SCORE_DELTA)
+    payload["OPTIMIZER_PERSIST_STUDY_DB"] = bool(OPTIMIZER_PERSIST_STUDY_DB)
+    payload["OPTIMIZER_STUDY_STORAGE_MODE"] = str(OPTIMIZER_STUDY_STORAGE_MODE)
+    payload["OPTIMIZER_ALLOW_PER_RUN_TEMP_DB"] = bool(OPTIMIZER_ALLOW_PER_RUN_TEMP_DB)
     payload["OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED"] = is_optimizer_local_min_review_enabled()
     payload["OPTIMIZER_RANDOM_SEED_ENSEMBLE"] = build_seed_ensemble_policy_snapshot(
         enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,

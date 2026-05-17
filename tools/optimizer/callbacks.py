@@ -65,8 +65,25 @@ def _safe_int(value, default=0):
 def _resolve_model_mode(objective_mode: str) -> str:
     mode = normalize_objective_mode(objective_mode)
     if mode == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD:
-        return "split"
+        return "oos"
     return "legacy"
+
+
+def _resolve_session_model_mode(session) -> str:
+    policy = dict(getattr(session, "walk_forward_policy", {}) or {})
+    mode = str(policy.get("model_mode") or "").strip().lower()
+    if mode == "split":
+        return "oos"
+    if mode == "full":
+        return "trade"
+    if mode in {"trade", "oos"}:
+        return mode
+    scope = str(policy.get("evaluation_scope") or "").strip().lower()
+    if scope.startswith("trade"):
+        return "trade"
+    if scope.startswith("oos"):
+        return "oos"
+    return _resolve_model_mode(getattr(session, "objective_mode", ""))
 
 
 
@@ -145,7 +162,7 @@ def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: floa
 
 def _build_search_train_dates_for_session(session):
     sorted_dates = list(session.sorted_master_dates or [])
-    if _resolve_model_mode(session.objective_mode) == "legacy":
+    if normalize_objective_mode(session.objective_mode) != OBJECTIVE_MODE_SPLIT_TRAIN_ROMD:
         return sorted_dates
     return filter_search_train_dates(
         sorted_dates=sorted_dates,
@@ -568,7 +585,7 @@ def _compute_reference_console_cache(session):
             )
             cache["source_path"] = params_path
             cache["wf_report"] = None
-            if _resolve_model_mode(session.objective_mode) == "split":
+            if _resolve_session_model_mode(session) == "oos":
                 oos_start_date = _policy_date(session, "oos_start_date")
                 if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
                     oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
@@ -667,7 +684,7 @@ def _compute_reference_console_cache(session):
             "source_path": params_path,
             "wf_report": None,
         }
-        if _resolve_model_mode(session.objective_mode) == "split":
+        if _resolve_session_model_mode(session) == "oos":
             cache["wf_report"] = evaluate_walk_forward(
                 all_dfs_fast=prep_result["all_dfs_fast"],
                 all_trade_logs=prep_result["all_trade_logs"],
@@ -737,10 +754,10 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
     params_mapping = session.build_optimizer_trial_params(trial.params, attrs, fixed_tp_percent=session.optimizer_fixed_tp_percent)
     params = _build_trial_params_object(params_mapping)
     mode_display = "關閉明牌（穩定鎖倉）" if not session.train_enable_rotation else "啟用 (汰弱換強)"
-    model_mode = _resolve_model_mode(session.objective_mode)
+    model_mode = _resolve_session_model_mode(session)
     search_train_dates = _build_search_train_dates_for_session(session)
     latest_data_end = _latest_data_end_text(session)
-    if model_mode == "split":
+    if model_mode == "oos":
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.3f}（{_optimizer_train_score_display_label()}／僅供選參）"
     else:
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
@@ -799,7 +816,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
 
     test_title = None
     test_rows = None
-    if model_mode == "split":
+    if model_mode == "oos":
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         consume_trial_milestone_inputs = getattr(session, "consume_trial_milestone_inputs", None)
         cached_trial_inputs = consume_trial_milestone_inputs(trial.number) if callable(consume_trial_milestone_inputs) else None
@@ -1084,13 +1101,13 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     first_member = schedule[0] if schedule else {}
     primary_params = _build_trial_params_object(first_member.get("params") or {})
     initial_capital = _safe_float(get_p(primary_params, "initial_capital", 0.0))
-    model_mode = _resolve_model_mode(session.objective_mode)
+    model_mode = _resolve_session_model_mode(session)
     search_train_dates = _build_search_train_dates_for_session(session)
     selection_start = search_train_dates[0] if search_train_dates else _policy_date(session, "train_start_date")
     selection_end = search_train_dates[-1] if search_train_dates else _policy_date(session, "search_train_end_date")
     oos_start_date = None
     oos_end_date = None
-    if model_mode == "split":
+    if model_mode == "oos":
         oos_start_date = _policy_date(session, "oos_start_date")
         if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
             oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
@@ -1228,7 +1245,7 @@ def print_optimizer_static_ensemble_console_dashboard(
     first_member = schedule[0] if schedule else {}
     primary_params = _build_trial_params_object(first_member.get("params") or {})
     initial_capital = _safe_float(get_p(primary_params, "initial_capital", 0.0))
-    model_mode = _resolve_model_mode(session.objective_mode)
+    model_mode = _resolve_session_model_mode(session)
     search_train_dates = _build_search_train_dates_for_session(session)
     train_start_date = search_train_dates[0] if search_train_dates else _policy_date(session, "train_start_date")
     train_end_date = search_train_dates[-1] if search_train_dates else _policy_date(session, "search_train_end_date")
@@ -1248,7 +1265,7 @@ def print_optimizer_static_ensemble_console_dashboard(
     test_title = None
     test_rows = None
     latest_data_end = _latest_data_end_text(session)
-    if model_mode == "split":
+    if model_mode == "oos":
         oos_start_date = _policy_date(session, "oos_start_date")
         if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
             oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
