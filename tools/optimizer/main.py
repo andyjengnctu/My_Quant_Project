@@ -869,17 +869,50 @@ def _format_nonrolling_result_number(value) -> str:
 def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> dict:
     from tools.optimizer.outer_rolling_oos import build_optimizer_seed_ensemble_fold_context
 
-    selection_start_year = int(walk_forward_policy.get("selection_start_year", walk_forward_policy.get("train_start_year", 0)) or 0)
-    selection_end_year = int(walk_forward_policy.get("search_train_end_year", selection_start_year) or selection_start_year)
-    oos_start_year = int(walk_forward_policy.get("oos_start_year", selection_end_year + 1) or (selection_end_year + 1))
-    return build_optimizer_seed_ensemble_fold_context(
+    policy = dict(walk_forward_policy or {})
+    normalized_mode = normalize_optimizer_model_mode(policy.get("model_mode", "oos"))
+    is_trade_mode = normalized_mode == "trade" or str(policy.get("evaluation_scope") or "").strip().lower() == "trade_train_only"
+
+    selection_start_year = int(policy.get("selection_start_year", policy.get("train_start_year", 0)) or 0)
+    selection_end_year = int(policy.get("search_train_end_year", selection_start_year) or selection_start_year)
+    selection_start_date = str(policy.get("selection_start_date") or policy.get("train_start_date") or "").strip()
+    selection_end_date = str(policy.get("search_train_end_date") or "").strip()
+    if not selection_start_date and selection_start_year > 0:
+        selection_start_date = f"{selection_start_year:04d}-01-01"
+    if not selection_end_date and selection_end_year > 0:
+        selection_end_date = f"{selection_end_year:04d}-12-31"
+
+    if is_trade_mode:
+        context = build_optimizer_seed_ensemble_fold_context(
+            fold_idx=1,
+            fold_count=1,
+            selection_start_date=selection_start_date,
+            selection_end_date=selection_end_date,
+            oos_start_date="",
+            oos_end_date="",
+            oos_period="",
+        )
+        context["model_mode"] = "trade"
+        context["evaluation_scope"] = "trade_train_only"
+        context["show_oos"] = False
+        return context
+
+    oos_start_year = int(policy.get("oos_start_year", selection_end_year + 1) or (selection_end_year + 1))
+    oos_start_date = str(policy.get("oos_start_date") or "").strip()
+    if not oos_start_date and oos_start_year > 0:
+        oos_start_date = f"{oos_start_year:04d}-01-01"
+    context = build_optimizer_seed_ensemble_fold_context(
         fold_idx=1,
         fold_count=1,
-        selection_start_date=f"{selection_start_year:04d}-01-01" if selection_start_year > 0 else "",
-        selection_end_date=f"{selection_end_year:04d}-12-31" if selection_end_year > 0 else "",
-        oos_start_date=f"{oos_start_year:04d}-01-01" if oos_start_year > 0 else "",
-        oos_end_date="latest",
+        selection_start_date=selection_start_date,
+        selection_end_date=selection_end_date,
+        oos_start_date=oos_start_date,
+        oos_end_date=str(policy.get("oos_end_date") or "latest"),
     )
+    context["model_mode"] = "oos"
+    context["evaluation_scope"] = str(policy.get("evaluation_scope") or "oos_single_fold")
+    context["show_oos"] = True
+    return context
 
 
 def _render_nonrolling_single_fold_progress_line(walk_forward_policy: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None) -> str:

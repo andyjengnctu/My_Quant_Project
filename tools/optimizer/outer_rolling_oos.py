@@ -4188,6 +4188,7 @@ def render_optimizer_fold_progress_line(
     selection_period: str = "",
     oos_period: str = "",
     oos_year: int = 0,
+    show_oos: bool = True,
     stage: str = "START",
     status: str = "",
     completed: int = 0,
@@ -4196,6 +4197,7 @@ def render_optimizer_fold_progress_line(
     best_base_score=None,
     best_local_min_score=None,
     elapsed_sec=None,
+    **_unused_context,
 ) -> str:
     """Render one optimizer fold progress line through the rolling-OOS source.
 
@@ -4208,6 +4210,7 @@ def render_optimizer_fold_progress_line(
         "oos_year": int(oos_year or 0),
         "oos_period": str(oos_period or ""),
         "selection_period": str(selection_period or selection_start or ""),
+        "show_oos": bool(show_oos),
     }
     progress = {
         "fold_idx": int(fold_idx),
@@ -4215,6 +4218,7 @@ def render_optimizer_fold_progress_line(
         "oos_year": int(oos_year or 0),
         "stage": str(stage or "START"),
         "status": str(status or ""),
+        "show_oos": bool(show_oos),
         "selection_start": str(selection_start or selection_period or ""),
         "selection_end": str(selection_end or ""),
         "completed": int(completed or 0),
@@ -5218,7 +5222,8 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     fold_idx = int(task.get("fold_idx", progress.get("fold_idx", 0)) or 0)
     fold_count = int(task.get("fold_count", progress.get("fold_count", 0)) or 0)
     oos_year = int(task.get("oos_year", progress.get("oos_year", 0)) or 0)
-    oos_label = _display_short_month_period(task.get("oos_period") or oos_year)
+    show_oos = bool(task.get("show_oos", progress.get("show_oos", True)))
+    oos_label = _display_short_month_period(task.get("oos_period") or oos_year) if show_oos else ""
     selection_start = str(progress.get("selection_start") or task.get("selection_period") or "").strip()
     selection_end = str(progress.get("selection_end") or "").strip()
     if selection_start and selection_end:
@@ -5228,6 +5233,13 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     else:
         selection_text = "train=?"
     stage = str(progress.get("stage") or "QUEUED").upper()
+
+    def _progress_prefix() -> str:
+        parts = [f"[{fold_idx}/{fold_count}] {selection_text}"]
+        if show_oos:
+            parts.append(f"OOS {oos_label}")
+        return " | ".join(parts)
+
     elapsed_text = ""
     if progress.get("elapsed_sec") is not None:
         elapsed_text = f" | elapsed={_fmt_duration_compact(progress.get('elapsed_sec'))}"
@@ -5241,7 +5253,7 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         local_best = progress.get("best_local_min_score")
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
         return (
-            f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
+            f"{_progress_prefix()} | "
             f"{status_text}trial {completed}/{total} | best_base={best_text} | best_local_min={local_best_text}{elapsed_text}"
         )
     if stage == "LOCAL_MIN_REVIEW":
@@ -5259,7 +5271,7 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         if progress.get("elapsed_sec") is not None:
             local_min_elapsed_text = f" | elapsed={_fmt_duration_compact(progress.get('elapsed_sec'))}"
         return (
-            f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
+            f"{_progress_prefix()} | "
             f"finalist {finalist_idx}/{finalist_total} | local {neighbor_done}/{neighbor_total} | "
             f"current : {current_text} | best_base : {base_best_text} | best_lm : {best_text}{local_min_elapsed_text}"
         )
@@ -5269,16 +5281,16 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         local_best = progress.get("best_local_min_score")
         base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
+        return f"{_progress_prefix()} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage == "ENSEMBLE_REPLAY":
         replay_done = int(progress.get("replay_done", 0) or 0)
         replay_total = int(progress.get("replay_total", 0) or 0)
         policy = str(progress.get("policy") or progress.get("status") or "policy").strip()
         if replay_total > 0:
-            return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | policy replay {replay_done}/{replay_total} | {policy}{elapsed_text}"
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | policy replay | {policy}{elapsed_text}"
+            return f"{_progress_prefix()} | policy replay {replay_done}/{replay_total} | {policy}{elapsed_text}"
+        return f"{_progress_prefix()} | policy replay | {policy}{elapsed_text}"
     if stage == "FOLD_RESULT":
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | fold result ready{elapsed_text}"
+        return f"{_progress_prefix()} | fold result ready{elapsed_text}"
     if stage == "DONE":
         status = _strip_redundant_seed_status(str(progress.get("status") or ""))
         done_label = "DONE" if not status or status.lower() == "done" else f"DONE {status}"
@@ -5286,12 +5298,12 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         local_best = progress.get("best_local_min_score")
         base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
         local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | {done_label} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
+        return f"{_progress_prefix()} | {done_label} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
         status = str(progress.get("status") or stage).replace("_", " ")
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | {status}{elapsed_text}"
+        return f"{_progress_prefix()} | {status}{elapsed_text}"
     fallback = str(log_status or "queued").strip()
-    return f"[{fold_idx}/{fold_count}] OOS {oos_label} | {fallback}"
+    return f"{_progress_prefix()} | {fallback}"
 
 
 
@@ -5361,8 +5373,9 @@ def _normalize_seed_progress_display_record(context: dict, progress: dict, *, lo
     fold_count = _seed_progress_int(context.get("fold_count", progress.get("fold_count", 0)), 0)
     seed_index = _seed_progress_int(context.get("seed_index", progress.get("seed_ensemble_member_index", 0)), 0)
     seed_count = _seed_progress_int(context.get("seed_count", progress.get("seed_ensemble_member_count", 0)), 0)
+    show_oos = bool(context.get("show_oos", True))
     oos_year = _seed_progress_int(context.get("oos_year", progress.get("oos_year", 0)), 0)
-    oos_label = _display_short_month_period(context.get("oos_period") or progress.get("oos_period") or oos_year)
+    oos_label = _display_short_month_period(context.get("oos_period") or progress.get("oos_period") or oos_year) if show_oos else ""
     selection_start = str(progress.get("selection_start") or context.get("selection_start") or context.get("selection_period") or "").strip()
     selection_end = str(progress.get("selection_end") or context.get("selection_end") or "").strip()
     if selection_start and selection_end:
@@ -5384,6 +5397,7 @@ def _normalize_seed_progress_display_record(context: dict, progress: dict, *, lo
         "fold_idx": fold_idx,
         "fold_count": fold_count,
         "selection_text": selection_text,
+        "show_oos": show_oos,
         "oos_label": oos_label,
         "seed_text": seed_text,
         "stage": stage,
@@ -5401,11 +5415,11 @@ def _render_seed_progress_display_record(record: dict) -> str:
     fold_count = _seed_progress_int(record.get("fold_count", 0), 0)
     stage = str(record.get("stage") or "QUEUED").upper()
     status_label = str(record.get("status_label") or stage).strip()
-    prefix = (
-        f"[{fold_idx}/{fold_count}] {record.get('selection_text') or 'train=?'} | "
-        f"OOS {record.get('oos_label') or '?'} | {record.get('seed_text') or 'seed ?/?'}"
-    )
-    parts = [prefix, status_label]
+    prefix_parts = [f"[{fold_idx}/{fold_count}] {record.get('selection_text') or 'train=?'}"]
+    if bool(record.get("show_oos", True)):
+        prefix_parts.append(f"OOS {record.get('oos_label') or '?'}")
+    prefix_parts.append(str(record.get('seed_text') or 'seed ?/?'))
+    parts = [" | ".join(prefix_parts), status_label]
     if stage == "LOCAL_MIN_REVIEW":
         current = record.get("current")
         current_text = "N/A" if current is None else f"{float(current):.3f}"
