@@ -5,7 +5,7 @@ import pickle
 import time
 import uuid
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +17,7 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_YELLOW, C_RESET
 from core.log_utils import format_exception_summary, write_issue_log
+from core.runtime_utils import get_process_pool_executor_kwargs
 from core.params_io import build_params_from_mapping
 from core.portfolio_param_runtime import (
     build_active_param_objects_from_payload,
@@ -141,14 +142,6 @@ def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, v
                 status=str(status or "RUN"),
             )
 
-    def _load_job(job):
-        return _build_ensemble_member_context(
-            data_dir,
-            job["record"],
-            job["member"],
-            verbose=verbose,
-        )
-
     from config.training_performance_policy import resolve_optimizer_policy_replay_seed_parallel_workers_default
 
     workers = resolve_optimizer_policy_replay_seed_parallel_workers_default(total_members)
@@ -158,13 +151,28 @@ def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, v
 
     if workers <= 1 or total_members <= 1:
         for job in unique_jobs_by_signature.values():
-            signature, context = _load_job(job)
+            signature, context = _build_ensemble_member_context(
+                data_dir,
+                job["record"],
+                job["member"],
+                verbose=verbose,
+            )
             contexts_by_signature[signature] = context
             completed += 1
             _emit_progress(completed, job.get("label"), "RUN")
     else:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_job = {executor.submit(_load_job, job): job for job in unique_jobs_by_signature.values()}
+        executor_kwargs, _start_method = get_process_pool_executor_kwargs()
+        with ProcessPoolExecutor(max_workers=workers, **executor_kwargs) as executor:
+            future_to_job = {
+                executor.submit(
+                    _build_ensemble_member_context,
+                    data_dir,
+                    job["record"],
+                    job["member"],
+                    verbose=verbose,
+                ): job
+                for job in unique_jobs_by_signature.values()
+            }
             for future in as_completed(future_to_job):
                 job = future_to_job[future]
                 signature, context = future.result()

@@ -1,5 +1,7 @@
 ## Going
 
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE
+
 1. 在Training_policy設定非rolling訓練突破時是否顯示結果表格。
 2. OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True 時
 訓練結整時顯示 ENSEMBLE的結果表格。 

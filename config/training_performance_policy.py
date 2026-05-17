@@ -76,9 +76,10 @@ OPTIMIZER_POLICY_REPLAY_PARALLEL_WORKERS = 1
 OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND = "process"
 
 # OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS:
-# - "seed_count"/"auto" = replay 階段預設改用 seed/member 數量平行準備 market context。
+# - "seed_count" = replay 階段使用實際 seed/member 數量平行準備 market context。
 # - 1 = seed/member context 準備序列，最省記憶體。
-# - 正整數 = 固定 replay seed/member context worker 數，會 clamp 到 1~實際 seed/member 數。
+# - 正整數 = 固定 replay seed/member context worker 數。
+# - 實際值一律 clamp 到 1~min(實際 seed/member 數, OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS resolved)。
 # - 只改 replay 階段的資料準備併發；正式 ensemble timeline、共識成交與評分口徑不變。
 OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS = "seed_count"
 
@@ -298,14 +299,14 @@ def resolve_optimizer_policy_replay_parallel_backend_default():
 
 def resolve_optimizer_policy_replay_seed_parallel_workers_default(seed_count):
     resolved_seed_count = _coerce_int(seed_count, default=1, min_value=1)
-    raw_value = os.environ.get(
-        "OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS",
-        OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS,
-    )
+    random_seed_worker_limit = resolve_optimizer_random_seed_ensemble_parallel_workers_default(resolved_seed_count)
+    max_workers = max(1, min(int(resolved_seed_count), int(random_seed_worker_limit)))
+    raw_override = os.environ.get("OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS")
+    raw_value = OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS if raw_override is None else raw_override
     text = str(raw_value or "").strip().lower()
-    if text in {"", "auto", "seed_count", "seeds", "member_count", "members"}:
-        return resolved_seed_count
-    return _coerce_int(raw_value, default=resolved_seed_count, min_value=1, max_value=resolved_seed_count)
+    if text == "seed_count":
+        return max_workers
+    return _coerce_int(raw_value, default=1, min_value=1, max_value=max_workers)
 
 
 def is_optimizer_policy_replay_dedup_by_signature_enabled_default():
@@ -357,6 +358,11 @@ def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_si
         "OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND": OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND,
         "OPTIMIZER_POLICY_REPLAY_PARALLEL_BACKEND_RESOLVED": resolve_optimizer_policy_replay_parallel_backend_default(),
         "OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS": OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS,
+        "OPTIMIZER_POLICY_REPLAY_SEED_PARALLEL_WORKERS_RESOLVED": (
+            None
+            if seed_ensemble_size is None
+            else resolve_optimizer_policy_replay_seed_parallel_workers_default(seed_ensemble_size)
+        ),
         "OPTIMIZER_POLICY_REPLAY_DEDUP_BY_SIGNATURE": is_optimizer_policy_replay_dedup_by_signature_enabled_default(),
         "OPTIMIZER_POLICY_REPLAY_CONTEXT_REUSE_ENABLED": is_optimizer_policy_replay_context_reuse_enabled_default(),
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
