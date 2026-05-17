@@ -1,7 +1,28 @@
 import os
+import re
 from pathlib import Path
 
 import pandas as pd
+
+_EXCEL_ILLEGAL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _sanitize_excel_cell(value):
+    if isinstance(value, str):
+        cleaned = _ANSI_ESCAPE_PATTERN.sub("", value)
+        return _EXCEL_ILLEGAL_CHAR_PATTERN.sub("", cleaned)
+    return value
+
+
+def _sanitize_excel_dataframe(df):
+    if df is None or df.empty:
+        return df
+    sanitized = df.copy()
+    for column in sanitized.columns:
+        if sanitized[column].dtype == "object":
+            sanitized[column] = sanitized[column].map(_sanitize_excel_cell)
+    return sanitized
 
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json
 
@@ -14,10 +35,14 @@ def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, tim
 
     report_path = os.path.join(output_dir, f"consistency_issues_{timestamp}.xlsx")
 
+    excel_failed = _sanitize_excel_dataframe(df_failed)
+    excel_failed_summary = _sanitize_excel_dataframe(df_failed_summary)
+    excel_failed_module = _sanitize_excel_dataframe(df_failed_module)
+
     with pd.ExcelWriter(report_path, engine="openpyxl") as writer:
-        df_failed.to_excel(writer, sheet_name="failed_only", index=False)
-        df_failed_summary.to_excel(writer, sheet_name="failed_tickers", index=False)
-        df_failed_module.to_excel(writer, sheet_name="failed_modules", index=False)
+        excel_failed.to_excel(writer, sheet_name="failed_only", index=False)
+        excel_failed_summary.to_excel(writer, sheet_name="failed_tickers", index=False)
+        excel_failed_module.to_excel(writer, sheet_name="failed_modules", index=False)
 
         for sheet_name in ["failed_only", "failed_tickers"]:
             ws = writer.book[sheet_name]

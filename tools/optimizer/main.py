@@ -203,7 +203,11 @@ def _resolve_latest_dataset_date(data_dir: str):
 
     latest = None
     csv_inputs, _duplicate_issue_lines = discover_unique_csv_inputs(data_dir)
-    for _ticker, csv_path in csv_inputs:
+    for csv_entry in csv_inputs:
+        if isinstance(csv_entry, (tuple, list)) and len(csv_entry) >= 2:
+            _ticker, csv_path = csv_entry[0], csv_entry[1]
+        else:
+            _ticker, csv_path = "", csv_entry
         try:
             df = pd.read_csv(csv_path, usecols=lambda col: str(col).strip().lower() in {"date", "time"})
         except (OSError, ValueError, pd.errors.EmptyDataError, pd.errors.ParserError):
@@ -396,10 +400,10 @@ def _summary_policy_signature(summary: dict | None):
     return (
         str(summary.get("mode") or summary.get("selected_model_mode") or ""),
         str(summary.get("objective_mode", "")),
-        summary.get("train_start_date"),
-        summary.get("search_train_end_date"),
+        summary.get("train_start_date") or summary.get("train_start_year"),
+        summary.get("search_train_end_date") or summary.get("search_train_end_year"),
         summary.get("train_window_months"),
-        summary.get("oos_start_date"),
+        summary.get("oos_start_date") or summary.get("oos_start_year"),
     )
 
 

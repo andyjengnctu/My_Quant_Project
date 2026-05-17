@@ -1551,7 +1551,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return lines
         options = result_payload.get("options") or {}
         params = self._resolve_single_stock_history_params()
-        fixed_risk = options.get("fixed_risk") if options.get("fixed_risk") is not None else getattr(params, "fixed_risk", None)
+        fixed_risk = getattr(params, "fixed_risk", options.get("fixed_risk", None))
+        if options.get("fixed_risk") is not None:
+            fixed_risk = options.get("fixed_risk")
         cache_key = (resolved_ticker, str(options.get("params_path") or "").strip(), None if fixed_risk is None else float(fixed_risk))
         if cache_key in self._history_summary_cache:
             return list(self._history_summary_cache[cache_key])

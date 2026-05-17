@@ -25,11 +25,5 @@
   "tax_rate": 0.003,
   "min_fee": 20.0,
   "min_entry_notional": 50126.0,
-  "use_compounding": true,
-  "summary": {
-    "artifact_role": "reference_default_params",
-    "source_mode": "reference",
-    "selector": "retention",
-    "note": "Fallback reference parameters for formal validation and default workbench/scanner loading when no Trade run_best exists."
-  }
+  "use_compounding": true
 }
