@@ -3390,7 +3390,13 @@ def _load_active_replay_contexts_by_signature(
                 "prep_mode": f"active_replay_shared_raw_{prep_result.get('prep_mode')}",
             }
         else:
-            context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=False)
+            context = load_portfolio_market_context(
+                data_dir,
+                record["params_obj"],
+                verbose=False,
+                use_prepared_cache=use_prepared_cache,
+                write_prepared_cache=write_prepared_cache,
+            )
             context = dict(context)
 
         if not context.get("all_pit_stats_index"):
@@ -6446,6 +6452,8 @@ def _evaluate_period_ensemble_members(
         end_date=str(oos_end_date),
         benchmark_ticker="0050",
         verbose=False,
+        use_prepared_cache=False,
+        write_prepared_cache=False,
     )
     return _extract_active_replay_metrics(result)
 
@@ -6510,6 +6518,8 @@ def _evaluate_active_param_ensemble_replay_payload_task(task: dict) -> dict:
         end_date=str(replay_context["oos_end_date"]),
         benchmark_ticker=str(replay_context.get("benchmark_ticker") or "0050"),
         verbose=False,
+        use_prepared_cache=False,
+        write_prepared_cache=False,
     )
     return {
         "signature": str(task.get("signature") or ""),

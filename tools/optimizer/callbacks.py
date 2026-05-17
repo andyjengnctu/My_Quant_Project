@@ -561,6 +561,8 @@ def _run_static_ensemble_dashboard_replay(session, ensemble_payload: dict, *, st
         verbose=False,
         start_date=start_date,
         end_date=end_date,
+        use_prepared_cache=False,
+        write_prepared_cache=False,
     )
     return _portfolio_replay_metrics_from_result(result, initial_capital=float(initial_capital))
 

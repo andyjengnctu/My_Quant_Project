@@ -52,6 +52,26 @@ def _portfolio_prepared_cache_include_trade_logs() -> bool:
     return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_INCLUDE_TRADE_LOGS", False)
 
 
+def _portfolio_prepared_cache_use_enabled() -> bool:
+    return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_ENABLED", True)
+
+
+def _portfolio_prepared_cache_write_enabled() -> bool:
+    return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_WRITE_ENABLED", True)
+
+
+def _resolve_optional_bool(value, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    return bool(value)
+
+
+def _prepared_cache_requested(use_prepared_cache, write_prepared_cache) -> tuple[bool, bool]:
+    return (
+        _resolve_optional_bool(use_prepared_cache, _portfolio_prepared_cache_use_enabled()),
+        _resolve_optional_bool(write_prepared_cache, _portfolio_prepared_cache_write_enabled()),
+    )
+
 
 def _coerce_schedule_trade_date(value):
     if hasattr(value, "to_pydatetime"):
@@ -75,7 +95,22 @@ def _resolve_active_schedule_record(schedule_records, trade_date):
     return selected
 
 
-def _load_contexts_for_active_schedule(data_dir, schedule_records, *, verbose=True):
+def _load_contexts_for_active_schedule(
+    data_dir,
+    schedule_records,
+    *,
+    verbose=True,
+    use_prepared_cache=None,
+    write_prepared_cache=None,
+):
+    use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
+    raw_context_source = None
+    if not (use_cache or write_cache):
+        raw_context_source = _build_in_memory_raw_context_source(
+            data_dir,
+            [record.get("params_obj") for record in schedule_records],
+            verbose=verbose,
+        )
     contexts_by_signature = {}
     contexts_by_effective_date = {}
     for idx, record in enumerate(schedule_records, start=1):
@@ -86,7 +121,21 @@ def _load_contexts_for_active_schedule(data_dir, schedule_records, *, verbose=Tr
                     f"{C_CYAN}📦 建立 active param 快取 [{idx}/{len(schedule_records)}] "
                     f"生效日={record['effective_date_text']}...{C_RESET}"
                 )
-            context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=verbose)
+            if raw_context_source is not None:
+                context = _prepare_portfolio_context_from_in_memory_source(
+                    raw_context_source,
+                    record["params_obj"],
+                    verbose=verbose,
+                    include_trade_logs=False,
+                )
+            else:
+                context = load_portfolio_market_context(
+                    data_dir,
+                    record["params_obj"],
+                    verbose=verbose,
+                    use_prepared_cache=use_cache,
+                    write_prepared_cache=write_cache,
+                )
             context = dict(context)
             if not context.get("all_pit_stats_index"):
                 context["all_pit_stats_index"] = {
@@ -112,10 +161,27 @@ def _prepare_context_for_ensemble_replay(context, *, keep_trade_logs=False):
     return replay_context
 
 
-def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, verbose=True, keep_trade_logs=False):
+def _load_contexts_for_active_ensemble_schedule(
+    data_dir,
+    schedule_records,
+    *,
+    verbose=True,
+    keep_trade_logs=False,
+    use_prepared_cache=None,
+    write_prepared_cache=None,
+):
+    use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
+    all_members = [member for record in schedule_records for member in (record.get("members") or [])]
+    raw_context_source = None
+    if not (use_cache or write_cache):
+        raw_context_source = _build_in_memory_raw_context_source(
+            data_dir,
+            [member.get("params_obj") for member in all_members],
+            verbose=verbose,
+        )
     contexts_by_signature = {}
     contexts_by_effective_date = {}
-    total_members = sum(len(record.get("members") or []) for record in schedule_records)
+    total_members = len(all_members)
     loaded_count = 0
     for record in schedule_records:
         member_contexts = []
@@ -128,7 +194,22 @@ def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, v
                         f"{C_CYAN}📦 建立 ensemble active param 快取 [{loaded_count}/{total_members}] "
                         f"生效日={record['effective_date_text'] or 'static'} member={member.get('member_index')}...{C_RESET}"
                     )
-                context = load_portfolio_market_context(data_dir, member["params_obj"], verbose=verbose)
+                if raw_context_source is not None:
+                    context = _prepare_portfolio_context_from_in_memory_source(
+                        raw_context_source,
+                        member["params_obj"],
+                        verbose=verbose,
+                        include_trade_logs=bool(keep_trade_logs),
+                    )
+                else:
+                    context = load_portfolio_market_context(
+                        data_dir,
+                        member["params_obj"],
+                        verbose=verbose,
+                        use_prepared_cache=use_cache,
+                        write_prepared_cache=write_cache,
+                        include_trade_logs=bool(keep_trade_logs),
+                    )
                 contexts_by_signature[signature] = _prepare_context_for_ensemble_replay(
                     context,
                     keep_trade_logs=keep_trade_logs,
@@ -510,7 +591,62 @@ def _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, *, ve
         "prep_mode": "sequential",
     }
 
-def load_portfolio_market_context(data_dir, params, *, verbose=True):
+
+def _build_in_memory_raw_context_source(data_dir, params_list, *, verbose=True):
+    params_objects = [params for params in list(params_list or []) if params is not None]
+    if not params_objects:
+        return None
+    required_min_rows = max(get_required_min_rows(params) for params in params_objects)
+    raw_data_cache = load_all_raw_data(data_dir, required_min_rows, OUTPUT_DIR, verbose=verbose)
+    if not raw_data_cache:
+        raise RuntimeError("未能成功載入任何股票資料！")
+    return {
+        "raw_data_cache": raw_data_cache,
+        "static_fast_cache": {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()},
+        "static_master_dates": set().union(*(set(df.index) for df in raw_data_cache.values())),
+        "prep_workers": _resolve_portfolio_prep_workers(len(raw_data_cache)),
+    }
+
+
+def _prepare_portfolio_context_from_in_memory_source(source, params, *, verbose=True, include_trade_logs=False):
+    if not source:
+        return None
+    prep_result = prepare_trial_inputs(
+        source["raw_data_cache"],
+        params,
+        default_max_workers=int(source.get("prep_workers") or 1),
+        static_fast_cache=source.get("static_fast_cache"),
+        static_master_dates=source.get("static_master_dates"),
+        include_trade_logs=bool(include_trade_logs),
+        include_pit_stats_index=True,
+        profile_enabled=False,
+    )
+    all_dfs_fast = prep_result.get("all_dfs_fast") or {}
+    if not all_dfs_fast:
+        raise RuntimeError("未能成功建立任何 portfolio sim 快取標的！")
+    if verbose:
+        print(
+            f"{C_GREEN}✅ 投組記憶體 replay context 完成｜標的={len(all_dfs_fast)}｜"
+            f"mode={prep_result.get('prep_mode')}｜workers={int(source.get('prep_workers') or 1)}{C_RESET}"
+        )
+    return {
+        "all_dfs_fast": all_dfs_fast,
+        "all_trade_logs": (prep_result.get("all_trade_logs") or {}) if include_trade_logs else {},
+        "all_pit_stats_index": prep_result.get("all_pit_stats_index") or {},
+        "sorted_dates": sorted(prep_result.get("master_dates") or []),
+        "prep_wall_sec": float(prep_result.get("prep_wall_sec", 0.0) or 0.0),
+        "prep_mode": f"in_memory_{prep_result.get('prep_mode')}",
+    }
+
+def load_portfolio_market_context(
+    data_dir,
+    params,
+    *,
+    verbose=True,
+    use_prepared_cache=None,
+    write_prepared_cache=None,
+    include_trade_logs=None,
+):
     ensure_runtime_dirs()
     if not data_dir:
         profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
@@ -523,15 +659,19 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
     if len(csv_inputs) < 30:
         return _load_portfolio_market_context_sequential(data_dir, params, verbose=verbose)
 
-    include_trade_logs = _portfolio_prepared_cache_include_trade_logs()
-    cache_paths = _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, include_trade_logs=include_trade_logs)
-    cached_context = _load_portfolio_prepared_cache(cache_paths)
-    if cached_context is not None:
-        if verbose:
-            print(f"{C_GREEN}📦 投組預處理快取命中｜標的={len(cached_context.get('all_dfs_fast', {}))}{C_RESET}")
-        cached_context["prep_wall_sec"] = 0.0
-        cached_context["prep_mode"] = "prepared_cache"
-        return cached_context
+    include_trade_logs = _resolve_optional_bool(include_trade_logs, _portfolio_prepared_cache_include_trade_logs())
+    use_prepared_cache, write_prepared_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
+    cache_paths = None
+    if use_prepared_cache or write_prepared_cache:
+        cache_paths = _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, include_trade_logs=include_trade_logs)
+    if use_prepared_cache and cache_paths is not None:
+        cached_context = _load_portfolio_prepared_cache(cache_paths)
+        if cached_context is not None:
+            if verbose:
+                print(f"{C_GREEN}📦 投組預處理快取命中｜標的={len(cached_context.get('all_dfs_fast', {}))}{C_RESET}")
+            cached_context["prep_wall_sec"] = 0.0
+            cached_context["prep_mode"] = "prepared_cache"
+            return cached_context
 
     required_min_rows = get_required_min_rows(params)
     raw_data_cache = load_all_raw_data(data_dir, required_min_rows, OUTPUT_DIR, verbose=verbose)
@@ -548,7 +688,8 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
     if max_workers <= 1:
         # # (AI註: reduced/small dataset 走單執行緒，但直接吃 raw cache，避免 process pool 冷啟動與重讀 CSV)
         context = _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, verbose=verbose)
-        _save_portfolio_prepared_cache(cache_paths, context)
+        if write_prepared_cache and cache_paths is not None:
+            _save_portfolio_prepared_cache(cache_paths, context)
         return context
 
     prep_result = prepare_trial_inputs(
@@ -590,7 +731,8 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
         "prep_wall_sec": float(prep_result.get("prep_wall_sec", 0.0)),
         "prep_mode": prep_result.get("prep_mode"),
     }
-    _save_portfolio_prepared_cache(cache_paths, context)
+    if write_prepared_cache and cache_paths is not None:
+        _save_portfolio_prepared_cache(cache_paths, context)
     return context
 
 
@@ -634,6 +776,8 @@ def run_portfolio_simulation_with_param_schedule(
     return_context=False,
     start_date=None,
     end_date=None,
+    use_prepared_cache=None,
+    write_prepared_cache=None,
 ):
     schedule_records = build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
     if not schedule_records:
@@ -655,7 +799,13 @@ def run_portfolio_simulation_with_param_schedule(
     if resolved_end_date < resolved_start_date:
         raise ValueError("active-param replay 日期區間無效：結束日早於開始日")
 
-    contexts_by_effective_date = _load_contexts_for_active_schedule(data_dir, schedule_records, verbose=verbose)
+    contexts_by_effective_date = _load_contexts_for_active_schedule(
+        data_dir,
+        schedule_records,
+        verbose=verbose,
+        use_prepared_cache=use_prepared_cache,
+        write_prepared_cache=write_prepared_cache,
+    )
     merged_dates = _merge_context_market_dates(contexts_by_effective_date)
     resolved_sorted_dates = _filter_market_dates_by_date_range(
         merged_dates,
@@ -750,6 +900,8 @@ def run_portfolio_simulation_with_param_ensemble(
     return_context=False,
     start_date=None,
     end_date=None,
+    use_prepared_cache=None,
+    write_prepared_cache=None,
 ):
     schedule_records = build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
     if not schedule_records:
@@ -792,6 +944,8 @@ def run_portfolio_simulation_with_param_ensemble(
         schedule_records,
         verbose=verbose,
         keep_trade_logs=return_context,
+        use_prepared_cache=use_prepared_cache,
+        write_prepared_cache=write_prepared_cache,
     )
     merged_dates = _merge_context_market_dates_from_ensemble(contexts_by_effective_date)
     resolved_sorted_dates = _filter_market_dates_by_date_range(
@@ -884,8 +1038,25 @@ def run_portfolio_simulation_with_param_ensemble(
         }
     return (*result, pf_profile)
 
-def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True):
-    context = load_portfolio_market_context(data_dir, params, verbose=verbose)
+def run_portfolio_simulation(
+    data_dir,
+    params,
+    max_positions=5,
+    enable_rotation=False,
+    start_year=None,
+    end_year=None,
+    benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
+    verbose=True,
+    use_prepared_cache=None,
+    write_prepared_cache=None,
+):
+    context = load_portfolio_market_context(
+        data_dir,
+        params,
+        verbose=verbose,
+        use_prepared_cache=use_prepared_cache,
+        write_prepared_cache=write_prepared_cache,
+    )
     result = run_portfolio_simulation_prepared(
         context["all_dfs_fast"],
         context["all_trade_logs"],
