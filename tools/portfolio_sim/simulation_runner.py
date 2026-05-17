@@ -736,9 +736,12 @@ def load_portfolio_market_context(
     return context
 
 
-def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True, pit_stats_index=None):
+def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, start_date=None, end_date=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True, pit_stats_index=None):
     resolved_start_year = resolve_default_portfolio_start_year() if start_year is None else int(start_year)
-    resolved_sorted_dates = _filter_market_dates_by_end_year(sorted_dates, start_year=resolved_start_year, end_year=end_year)
+    if start_date is not None or end_date is not None:
+        resolved_sorted_dates = _filter_market_dates_by_date_range(sorted_dates, start_date=start_date, end_date=end_date)
+    else:
+        resolved_sorted_dates = _filter_market_dates_by_end_year(sorted_dates, start_year=resolved_start_year, end_year=end_year)
     benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
     if verbose:
         print(" " * 120, end="\r")
@@ -1066,6 +1069,8 @@ def run_portfolio_simulation(
         enable_rotation=enable_rotation,
         start_year=start_year,
         end_year=end_year,
+        start_date=None,
+        end_date=None,
         benchmark_ticker=benchmark_ticker,
         verbose=verbose,
         pit_stats_index=context.get("all_pit_stats_index"),

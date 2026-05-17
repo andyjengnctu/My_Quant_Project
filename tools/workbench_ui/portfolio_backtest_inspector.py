@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import threading
@@ -87,7 +88,7 @@ ROTATION_LABEL_TO_BOOL = {
     "啟用 (強勢輪動)": True,
 }
 DEFAULT_ROTATION_LABEL = "關閉 (穩定鎖倉)"
-FIXED_RISK_LABELS = ("0.01", "0.02", "自訂")
+FIXED_RISK_LABELS = ("參數檔", "0.01", "0.02", "自訂")
 END_YEAR_LATEST_LABEL = "最新"
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 PORTFOLIO_CONSOLE_COLORS = {
@@ -119,6 +120,7 @@ COMBOBOX_WIDTH_RULES = {
     "rotation": {"min_chars": 12, "max_chars": 18, "extra_px": 30},
     "start_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
     "end_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
+    "range_mode": {"min_chars": 8, "max_chars": 12, "extra_px": 24},
     "risk": {"min_chars": 6, "max_chars": 7, "extra_px": 22},
     "ticker": {"min_chars": 18, "max_chars": 60, "extra_px": 24},
 }
@@ -147,6 +149,158 @@ class _PortfolioConsoleWriter(io.TextIOBase):
 def _resolve_default_portfolio_start_year_hint():
     policy = load_walk_forward_policy(WORKBENCH_PROJECT_ROOT)
     return int(policy["search_train_end_year"]) + 1
+
+
+def _load_param_source_payload_silent(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _normalize_source_mode(value):
+    text = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "split": "oos",
+        "outer_rolling_oos": "rolling_oos",
+        "rolling": "rolling_oos",
+        "roos": "rolling_oos",
+        "full": "trade",
+    }
+    return aliases.get(text, text)
+
+
+def _parse_optimizer_period(period_text):
+    text = str(period_text or "").strip()
+    if not text or "~" not in text:
+        return None, None
+    start_raw, end_raw = [part.strip() for part in text.split("~", 1)]
+
+    def _parse(raw):
+        value = str(raw or "").strip()
+        if not value or value.lower() in {"latest", "n/a", "na", "none", "-"}:
+            return None
+        try:
+            return pd.Timestamp(value).normalize().strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            return None
+
+    return _parse(start_raw), _parse(end_raw)
+
+
+def _walk_forward_policy_from_payload(payload):
+    if not isinstance(payload, dict):
+        return {}
+    candidates = []
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    candidates.append(meta.get("walk_forward_policy"))
+    policy_snapshot = summary.get("policy_snapshot") if isinstance(summary.get("policy_snapshot"), dict) else {}
+    candidates.append(policy_snapshot.get("walk_forward_policy"))
+    candidates.append(summary.get("walk_forward_policy"))
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            return dict(candidate)
+    return {}
+
+
+def _resolve_source_mode_from_payload(payload, *, filename=""):
+    if not isinstance(payload, dict):
+        return ""
+    filename_key = os.path.splitext(os.path.basename(str(filename or "")))[0].lower()
+    if filename_key.startswith("roos_"):
+        return "rolling_oos"
+    if filename_key.startswith("oos_"):
+        return "oos"
+    if filename_key.startswith("trade_") or filename_key in {"run_best_params", "candidate_best_params"}:
+        return "trade"
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    for raw in (
+        summary.get("mode"),
+        summary.get("source_mode"),
+        meta.get("selected_model_mode"),
+        meta.get("model_mode"),
+        meta.get("mode"),
+        payload.get("selected_model_mode"),
+        payload.get("model_mode"),
+    ):
+        mode = _normalize_source_mode(raw)
+        if mode in {"study", "oos", "trade", "rolling_oos"}:
+            return mode
+    payload_mode = _normalize_source_mode(payload.get("mode"))
+    if payload_mode == "rolling_oos":
+        return "rolling_oos"
+    return ""
+
+
+def _resolve_optimizer_artifact_metadata(path):
+    payload = _load_param_source_payload_silent(path)
+    filename = os.path.basename(str(path or ""))
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    wf_policy = _walk_forward_policy_from_payload(payload)
+    source_mode = _resolve_source_mode_from_payload(payload, filename=filename)
+    selector = str(payload.get("selector") or meta.get("selector") or summary.get("selector") or os.path.splitext(filename)[0]).strip()
+    selection_start, selection_end = _parse_optimizer_period(summary.get("selection_period"))
+    oos_start, oos_end = _parse_optimizer_period(summary.get("oos_period"))
+
+    def _date_from_policy(*keys):
+        for key in keys:
+            raw = wf_policy.get(key)
+            if raw:
+                try:
+                    return pd.Timestamp(raw).normalize().strftime("%Y-%m-%d")
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    train_start = _date_from_policy("train_start_date", "selection_start_date") or selection_start
+    train_end = _date_from_policy("search_train_end_date", "selection_end_date") or selection_end
+    oos_start = _date_from_policy("oos_start_date") or oos_start
+    oos_end = _date_from_policy("oos_end_date") or oos_end
+
+    if source_mode in {"study", "oos"}:
+        replay_start = oos_start
+        replay_end = oos_end
+        replay_scope = "optimizer_oos"
+    elif source_mode == "rolling_oos":
+        replay_start = oos_start
+        replay_end = oos_end
+        replay_scope = "rolling_oos_chain"
+    elif source_mode == "trade":
+        replay_start = train_start or selection_start
+        replay_end = train_end or selection_end
+        replay_scope = "trade_train_window"
+    else:
+        replay_start = None
+        replay_end = None
+        replay_scope = "custom"
+
+    return {
+        "payload": payload,
+        "filename": filename,
+        "source_mode": source_mode or "custom",
+        "selector": selector,
+        "selection_start_date": selection_start,
+        "selection_end_date": selection_end,
+        "oos_start_date": oos_start,
+        "oos_end_date": oos_end,
+        "train_start_date": train_start,
+        "train_end_date": train_end,
+        "replay_start_date": replay_start,
+        "replay_end_date": replay_end,
+        "replay_scope": replay_scope,
+        "has_optimizer_range": bool(replay_start),
+    }
+
+
+def _format_date_range_label(start_date, end_date):
+    start_text = str(start_date or "-")
+    end_text = str(end_date or "latest") if end_date else "latest"
+    return f"{start_text}~{end_text}"
 
 
 def _coerce_float(value, default=np.nan):
@@ -190,7 +344,8 @@ def _build_rolling_params_schedule_rows(payload):
 
 
 def _build_ensemble_params_schedule_rows(payload, *, fixed_risk):
-    return list(build_active_param_ensemble_objects_from_payload(payload, fixed_risk=float(fixed_risk)))
+    override = None if fixed_risk is None else float(fixed_risk)
+    return list(build_active_param_ensemble_objects_from_payload(payload, fixed_risk=override))
 
 
 def _fast_data_to_price_df(fast_data):
@@ -1004,7 +1159,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._max_positions_var = tk.StringVar(value="10")
         self._start_year_var = tk.StringVar(value=str(_resolve_default_portfolio_start_year_hint()))
         self._end_year_display_var = tk.StringVar(value=END_YEAR_LATEST_LABEL)
-        self._fixed_risk_display_var = tk.StringVar(value="0.01")
+        self._use_optimizer_range_var = tk.BooleanVar(value=True)
+        self._fixed_risk_display_var = tk.StringVar(value="參數檔")
         self._custom_fixed_risk_var = tk.StringVar(value="0.01")
         self._ticker_display_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
@@ -1065,6 +1221,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         )
         self._autosize_combobox(self._param_source_combo, values=self._param_source_labels, current_text=self._param_source_display_var.get(), rule_key="param_source")
         self._param_source_combo.grid(row=0, column=1, padx=(0, 10), pady=pady, sticky="w")
+        self._param_source_combo.bind("<<ComboboxSelected>>", self._on_param_source_selected)
 
         ttk.Label(controls_bar, text="汰弱換股", style="Workbench.TLabel").grid(row=0, column=2, padx=(0, 6), pady=pady, sticky="w")
         self._rotation_combo = ttk.Combobox(
@@ -1108,7 +1265,15 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._autosize_combobox(self._end_year_combo, values=end_year_values, current_text=self._end_year_display_var.get(), rule_key="end_year")
         self._end_year_combo.grid(row=0, column=9, padx=(0, 10), pady=pady, sticky="w")
 
-        ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=10, padx=(0, 6), pady=pady, sticky="w")
+        self._optimizer_range_check = ttk.Checkbutton(
+            controls_bar,
+            text="Optimizer區間",
+            variable=self._use_optimizer_range_var,
+            style="Workbench.TCheckbutton",
+        )
+        self._optimizer_range_check.grid(row=0, column=10, padx=(0, 10), pady=pady, sticky="w")
+
+        ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=11, padx=(0, 6), pady=pady, sticky="w")
         self._risk_combo = ttk.Combobox(
             controls_bar,
             state="readonly",
@@ -1118,18 +1283,18 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             values=FIXED_RISK_LABELS,
         )
         self._autosize_combobox(self._risk_combo, values=FIXED_RISK_LABELS, current_text=self._fixed_risk_display_var.get(), rule_key="risk")
-        self._risk_combo.grid(row=0, column=11, padx=(0, 6), pady=pady, sticky="w")
+        self._risk_combo.grid(row=0, column=12, padx=(0, 6), pady=pady, sticky="w")
         self._risk_combo.bind("<<ComboboxSelected>>", self._on_fixed_risk_selected)
         self._custom_fixed_risk_entry = ttk.Entry(controls_bar, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
-        self._custom_fixed_risk_entry.grid(row=0, column=12, padx=(0, 10), pady=pady, sticky="w")
+        self._custom_fixed_risk_entry.grid(row=0, column=13, padx=(0, 10), pady=pady, sticky="w")
         self._custom_fixed_risk_entry.state(["disabled"])
 
-        ttk.Button(controls_bar, text="執行投組回測", command=self._run_portfolio_backtest, style="Workbench.TButton").grid(row=0, column=13, padx=(0, 10), pady=pady, sticky="w")
+        ttk.Button(controls_bar, text="執行投組回測", command=self._run_portfolio_backtest, style="Workbench.TButton").grid(row=0, column=14, padx=(0, 10), pady=pady, sticky="w")
 
-        ttk.Label(controls_bar, text="K線股票", style="Workbench.TLabel").grid(row=0, column=14, padx=(0, 6), pady=pady, sticky="w")
+        ttk.Label(controls_bar, text="K線股票", style="Workbench.TLabel").grid(row=0, column=15, padx=(0, 6), pady=pady, sticky="w")
         self._ticker_combo = ttk.Combobox(controls_bar, state="readonly", width=22, textvariable=self._ticker_display_var, style="Workbench.TCombobox", values=[])
         self._autosize_combobox(self._ticker_combo, values=[], current_text="", rule_key="ticker")
-        self._ticker_combo.grid(row=0, column=15, padx=(0, 8), pady=pady, sticky="w")
+        self._ticker_combo.grid(row=0, column=16, padx=(0, 8), pady=pady, sticky="w")
         self._ticker_combo.bind("<<ComboboxSelected>>", self._on_ticker_selected)
 
         ttk.Checkbutton(
@@ -1138,7 +1303,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             variable=self._show_volume_var,
             command=self._rerender_selected_ticker_chart,
             style="Workbench.TCheckbutton",
-        ).grid(row=0, column=16, padx=(0, 0), pady=pady, sticky="w")
+        ).grid(row=0, column=17, padx=(0, 0), pady=pady, sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -1361,7 +1526,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return None
 
         loaded_params = load_strict_params(params_path)
-        if "fixed_risk" in options:
+        if options.get("fixed_risk") is not None:
             loaded_params.fixed_risk = float(options["fixed_risk"])
         return loaded_params
 
@@ -1386,7 +1551,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return lines
         options = result_payload.get("options") or {}
         params = self._resolve_single_stock_history_params()
-        fixed_risk = getattr(params, "fixed_risk", options.get("fixed_risk", None))
+        fixed_risk = options.get("fixed_risk") if options.get("fixed_risk") is not None else getattr(params, "fixed_risk", None)
         cache_key = (resolved_ticker, str(options.get("params_path") or "").strip(), None if fixed_risk is None else float(fixed_risk))
         if cache_key in self._history_summary_cache:
             return list(self._history_summary_cache[cache_key])
@@ -1478,6 +1643,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         else:
             self._custom_fixed_risk_entry.state(["disabled"])
 
+    def _on_param_source_selected(self, _event=None):
+        self._refresh_param_source_options()
+
     def _refresh_param_source_options(self):
         current_label = self._param_source_display_var.get().strip()
         labels, path_by_label, key_by_label, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True, include_active_param_ensemble=True)
@@ -1510,25 +1678,50 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         _, path_by_label, _, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True, include_active_param_ensemble=True)
         return path_by_label[default_label]
 
-    def _resolve_fixed_risk(self):
+    def _resolve_fixed_risk_override(self):
         selected = self._fixed_risk_display_var.get().strip()
+        if selected == "參數檔":
+            return None
         raw_value = self._custom_fixed_risk_var.get().strip() if selected == "自訂" else selected
         return parse_float_strict(raw_value, "固定風險比例", min_value=0.0, max_value=1.0, strict_gt=True)
 
     def _resolve_user_options(self):
         max_positions = parse_int_strict(self._max_positions_var.get().strip(), "最大持倉數量", min_value=1)
-        start_year = parse_int_strict(self._start_year_var.get().strip(), "開始回測年份", min_value=1900)
-        end_year = self._resolve_end_year(start_year)
+        ui_start_year = parse_int_strict(self._start_year_var.get().strip(), "開始回測年份", min_value=1900)
+        ui_end_year = self._resolve_end_year(ui_start_year)
         param_source_label = self._param_source_display_var.get().strip() or DEFAULT_PARAM_SOURCE_LABEL
+        params_path = self._get_selected_params_path()
+        artifact_meta = _resolve_optimizer_artifact_metadata(params_path)
+        use_optimizer_range = bool(self._use_optimizer_range_var.get() and artifact_meta.get("has_optimizer_range"))
+        replay_start_date = str(artifact_meta.get("replay_start_date") or "") if use_optimizer_range else ""
+        replay_end_date = str(artifact_meta.get("replay_end_date") or "") if use_optimizer_range else ""
+        start_year = int(pd.Timestamp(replay_start_date).year) if replay_start_date else ui_start_year
+        end_year = None if replay_start_date else ui_end_year
+        if replay_end_date and not replay_start_date:
+            end_year = int(pd.Timestamp(replay_end_date).year)
+        fixed_risk_override = self._resolve_fixed_risk_override()
+        fixed_risk_source = "param_file" if fixed_risk_override is None else "override"
+        optimizer_aligned = bool(use_optimizer_range and fixed_risk_source == "param_file")
         return {
-            "params_path": self._get_selected_params_path(),
+            "params_path": params_path,
             "param_source": self._get_selected_param_source(),
             "param_source_label": param_source_label,
+            "param_source_mode": artifact_meta.get("source_mode") or "custom",
+            "selector": artifact_meta.get("selector") or "",
+            "replay_scope": artifact_meta.get("replay_scope") or "custom",
+            "use_optimizer_range": use_optimizer_range,
+            "optimizer_aligned_replay": optimizer_aligned,
+            "replay_start_date": replay_start_date or None,
+            "replay_end_date": replay_end_date or None,
+            "replay_range_label": _format_date_range_label(replay_start_date, replay_end_date) if replay_start_date else f"{ui_start_year}-01-01~{('latest' if ui_end_year is None else str(ui_end_year) + '-12-31')}",
+            "fixed_risk": fixed_risk_override,
+            "fixed_risk_source": fixed_risk_source,
             "enable_rotation": ROTATION_LABEL_TO_BOOL.get(self._rotation_display_var.get().strip(), False),
             "max_positions": max_positions,
             "start_year": start_year,
             "end_year": end_year,
-            "fixed_risk": self._resolve_fixed_risk(),
+            "ui_start_year": ui_start_year,
+            "ui_end_year": ui_end_year,
             "benchmark_ticker": PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
         }
 
@@ -1719,6 +1912,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         print(f"{C_CYAN}================================================================================{C_RESET}")
         print(f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} | 來源: workbench | 路徑: {data_dir}{C_RESET}")
         print(f"{C_GRAY}ℹ️ 參數來源: {options['param_source']}{C_RESET}")
+        print(f"{C_GRAY}ℹ️ source_mode={options.get('param_source_mode', 'custom')} | selector={options.get('selector') or '-'} | replay_range={options.get('replay_range_label')}{C_RESET}")
+        print(f"{C_GRAY}ℹ️ fixed_risk_source={options.get('fixed_risk_source')} | optimizer_aligned_replay={bool(options.get('optimizer_aligned_replay'))}{C_RESET}")
 
         ensure_runtime_dirs()
         start_time = time.time()
@@ -1731,14 +1926,15 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             except ValueError:
                 ensemble_first_date, ensemble_last_date = "", ""
             if ensemble_first_date:
-                representative_date = max(pd.Timestamp(f"{options['start_year']}-01-01").normalize(), pd.Timestamp(ensemble_first_date).normalize()).strftime("%Y-%m-%d")
+                representative_date = max(pd.Timestamp(options.get("replay_start_date") or f"{options['start_year']}-01-01").normalize(), pd.Timestamp(ensemble_first_date).normalize()).strftime("%Y-%m-%d")
             else:
-                representative_date = pd.Timestamp(f"{options['start_year']}-01-01").normalize().strftime("%Y-%m-%d")
+                representative_date = pd.Timestamp(options.get("replay_start_date") or f"{options['start_year']}-01-01").normalize().strftime("%Y-%m-%d")
             representative_members = get_active_param_ensemble_members_for_date(ensemble_payload, representative_date)
             params = build_params_from_mapping(representative_members[0]["params"])
-            params.fixed_risk = float(options["fixed_risk"])
+            if options.get("fixed_risk") is not None:
+                params.fixed_risk = float(options["fixed_risk"])
             params_section_title = "Active-param ensemble 訓練參數"
-            rolling_params_schedule_rows = _build_ensemble_params_schedule_rows(ensemble_payload, fixed_risk=float(options["fixed_risk"]))
+            rolling_params_schedule_rows = _build_ensemble_params_schedule_rows(ensemble_payload, fixed_risk=options.get("fixed_risk"))
             print(f"\n{C_GREEN}✅ 成功載入 active-param ensemble 參數組！{C_RESET}")
             print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
             for line in format_active_param_ensemble_summary_lines(ensemble_payload):
@@ -1750,19 +1946,20 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 enable_rotation=options["enable_rotation"],
                 start_year=options["start_year"],
                 end_year=options["end_year"],
-                start_date=representative_date if ensemble_first_date else None,
-                end_date=ensemble_last_date or None,
+                start_date=options.get("replay_start_date") or (representative_date if ensemble_first_date else None),
+                end_date=options.get("replay_end_date") or ensemble_last_date or None,
                 benchmark_ticker=options["benchmark_ticker"],
-                fixed_risk=float(options["fixed_risk"]),
+                fixed_risk=options.get("fixed_risk"),
                 verbose=True,
                 return_context=True,
             )
         elif is_rolling_paramset:
             rolling_payload = load_rolling_oos_param_set(options["params_path"])
             rolling_first_date, rolling_last_date = get_active_param_date_range(rolling_payload)
-            representative_date = max(pd.Timestamp(f"{options['start_year']}-01-01").normalize(), pd.Timestamp(rolling_first_date).normalize()).strftime("%Y-%m-%d")
+            representative_date = max(pd.Timestamp(options.get("replay_start_date") or f"{options['start_year']}-01-01").normalize(), pd.Timestamp(rolling_first_date).normalize()).strftime("%Y-%m-%d")
             params = build_params_from_mapping(get_active_params_for_date(rolling_payload, representative_date))
-            params.fixed_risk = float(options["fixed_risk"])
+            if options.get("fixed_risk") is not None:
+                params.fixed_risk = float(options["fixed_risk"])
             params_section_title = "Rolling OOS 訓練參數"
             rolling_params_schedule_rows = _build_rolling_params_schedule_rows(rolling_payload)
             print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
@@ -1776,19 +1973,20 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 enable_rotation=options["enable_rotation"],
                 start_year=options["start_year"],
                 end_year=options["end_year"],
-                start_date=representative_date,
-                end_date=rolling_last_date,
+                start_date=options.get("replay_start_date") or representative_date,
+                end_date=options.get("replay_end_date") or rolling_last_date,
                 benchmark_ticker=options["benchmark_ticker"],
-                fixed_risk=float(options["fixed_risk"]),
+                fixed_risk=options.get("fixed_risk"),
                 verbose=True,
                 return_context=True,
             )
         else:
             params = load_strict_params(options["params_path"])
-            params.fixed_risk = float(options["fixed_risk"])
+            if options.get("fixed_risk") is not None:
+                params.fixed_risk = float(options["fixed_risk"])
             print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
             print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
-            print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f}{C_RESET}")
+            print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f} ({options.get('fixed_risk_source')}){C_RESET}")
             context = load_portfolio_market_context(data_dir, params, verbose=True)
             result = run_portfolio_simulation_prepared(
                 context["all_dfs_fast"],
@@ -1799,6 +1997,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 enable_rotation=options["enable_rotation"],
                 start_year=options["start_year"],
                 end_year=options["end_year"],
+                start_date=options.get("replay_start_date"),
+                end_date=options.get("replay_end_date"),
                 benchmark_ticker=options["benchmark_ticker"],
                 verbose=True,
                 pit_stats_index=context.get("all_pit_stats_index"),
@@ -1820,9 +2020,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         min_full_year_return_pct = pf_profile.get("min_full_year_return_pct", 0.0)
         bm_min_full_year_return_pct = pf_profile.get("bm_min_full_year_return_pct", 0.0)
 
-        end_year_label = "最新資料" if options.get("end_year") is None else f"{options['end_year']} 年"
+        replay_range_label = str(options.get("replay_range_label") or "-")
         print(f"\n{C_CYAN}================================================================================{C_RESET}")
-        print(f"📊 【投資組合實戰模擬報告 ({options['start_year']} 年 ~ {end_year_label})】")
+        print(f"📊 【投資組合實戰模擬報告 ({replay_range_label})】")
         print(f"{C_CYAN}================================================================================{C_RESET}")
         print(f"回測總耗時: {end_time - start_time:.2f} 秒")
 
@@ -2027,7 +2227,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         else:
             params = build_params_from_mapping(get_active_params_for_date(rolling_payload, trade_date))
         options = result_payload.get("options") or {}
-        if "fixed_risk" in options:
+        if options.get("fixed_risk") is not None:
             params.fixed_risk = float(options["fixed_risk"])
         return params
 
@@ -2117,8 +2317,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _resolve_performance_tab_title(self, options):
         self._performance_tab_seq += 1
         timestamp = datetime.now().strftime("%H:%M:%S")
-        end_year_label = "至今" if options.get("end_year") is None else f"至{options.get('end_year')}"
-        return f"績效 {self._performance_tab_seq}｜{timestamp}｜{options.get('start_year', '-')} {end_year_label}"
+        return f"績效 {self._performance_tab_seq}｜{timestamp}｜{options.get('replay_range_label', '-')}"
 
     def _get_workbench_notebook_font(self):
         if hasattr(self, "_workbench_notebook_font"):
@@ -2338,14 +2537,15 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         return f"{numeric:.3g}"
 
     def _build_performance_setting_title(self, *, options):
-        end_year_label = "至今" if options.get("end_year") is None else str(options.get("end_year"))
         rotation_label = "開" if options.get("enable_rotation") else "關"
         param_source = str(options.get("param_source_label") or options.get("param_source") or "-")
         param_file = os.path.basename(str(options.get("params_path") or "")) or "-"
+        fixed_risk_text = "參數檔" if options.get("fixed_risk") is None else self._format_performance_param_value(options.get("fixed_risk"))
         return (
-            f"設定：{param_source}｜{param_file}｜區間 {options.get('start_year', '-')}~{end_year_label}"
+            f"設定：{param_source}｜{param_file}｜區間 {options.get('replay_range_label', '-')}"
+            f"｜mode {options.get('param_source_mode', 'custom')}｜selector {options.get('selector') or '-'}"
             f"｜持股 {options.get('max_positions', '-')}｜汰弱 {rotation_label}"
-            f"｜固定風險 {self._format_performance_param_value(options.get('fixed_risk'))}"
+            f"｜固定風險 {fixed_risk_text}"
             f"｜Benchmark {options.get('benchmark_ticker', PORTFOLIO_DEFAULT_BENCHMARK_TICKER)}"
         )
 
