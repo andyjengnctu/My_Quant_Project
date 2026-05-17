@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import pickle
+import time
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -261,7 +263,46 @@ def _load_portfolio_prepared_cache(cache_paths):
     return payload
 
 
+def _build_portfolio_prepared_tmp_path(final_path: Path) -> Path:
+    tmp_token = f"{os.getpid()}_{time.monotonic_ns()}_{uuid.uuid4().hex}"
+    return final_path.with_name(f"{final_path.name}.{tmp_token}.tmp")
+
+
+def _cleanup_portfolio_prepared_tmp_path(tmp_path: Path) -> None:
+    try:
+        tmp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _replace_portfolio_prepared_cache_file(tmp_path: Path, final_path: Path, cache_paths) -> bool:
+    retry_delays = (0.05, 0.10, 0.20, 0.40, 0.80, 1.20, 1.60, 2.00)
+    last_error = None
+    for delay_sec in retry_delays:
+        try:
+            os.replace(tmp_path, final_path)
+            return True
+        except PermissionError as exc:
+            last_error = exc
+            if _load_portfolio_prepared_cache(cache_paths) is not None:
+                _cleanup_portfolio_prepared_tmp_path(tmp_path)
+                return False
+            time.sleep(delay_sec)
+    try:
+        os.replace(tmp_path, final_path)
+        return True
+    except PermissionError as exc:
+        last_error = exc
+        if _load_portfolio_prepared_cache(cache_paths) is not None:
+            _cleanup_portfolio_prepared_tmp_path(tmp_path)
+            return False
+    raise last_error
+
+
 def _save_portfolio_prepared_cache(cache_paths, context):
+    if _load_portfolio_prepared_cache(cache_paths) is not None:
+        return
+
     payload_path = cache_paths["payload_path"]
     meta_path = cache_paths["meta_path"]
     payload_path.parent.mkdir(parents=True, exist_ok=True)
@@ -274,13 +315,17 @@ def _save_portfolio_prepared_cache(cache_paths, context):
     }
     meta = dict(cache_paths["meta"])
     meta["ticker_count"] = int(len(payload["all_dfs_fast"]))
-    tmp_payload = payload_path.with_suffix(payload_path.suffix + ".tmp")
-    tmp_meta = meta_path.with_suffix(meta_path.suffix + ".tmp")
-    with open(tmp_payload, "wb") as handle:
-        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
-    tmp_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp_payload, payload_path)
-    os.replace(tmp_meta, meta_path)
+    tmp_payload = _build_portfolio_prepared_tmp_path(payload_path)
+    tmp_meta = _build_portfolio_prepared_tmp_path(meta_path)
+    try:
+        with open(tmp_payload, "wb") as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        _replace_portfolio_prepared_cache_file(tmp_payload, payload_path, cache_paths)
+        _replace_portfolio_prepared_cache_file(tmp_meta, meta_path, cache_paths)
+    finally:
+        _cleanup_portfolio_prepared_tmp_path(tmp_payload)
+        _cleanup_portfolio_prepared_tmp_path(tmp_meta)
 
 def _resolve_portfolio_prep_workers(raw_data_count: int) -> int:
     raw_override = str(os.environ.get("V16_PORTFOLIO_MAX_WORKERS", "")).strip()
