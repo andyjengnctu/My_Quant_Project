@@ -56,6 +56,8 @@ from config.training_policy import (
 
 from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
 
+from tools.optimizer.study_utils import INVALID_TRIAL_VALUE
+
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=FutureWarning, module=r"optuna(\..*)?$")
 warnings.filterwarnings("once", category=RuntimeWarning)
