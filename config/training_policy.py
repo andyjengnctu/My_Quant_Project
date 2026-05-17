@@ -27,6 +27,15 @@ SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'
 # 停利比例固定開關
 OPTIMIZER_FIXED_TP_PERCENT = 0.0 # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
 
+# Trade mode 實戰參數輸出與 promote 設定。selector 名稱沿用 rolling/OOS policy：
+# base / local / retention / base_retention_gt_0_0 / base_retention_gt_0_2 / base_retention_gt_0_4 / base_retention_gt_0_6 / base_retention_gt_0_8 / base_retention_gt_min
+TRADE_MODE_CANDIDATE_SELECTOR = 'base_retention_gt_0_0'
+TRADE_MODE_RUN_BEST_SELECTOR = 'base_retention_gt_0_0'
+TRADE_MODE_AUTO_PROMOTE_RUN_BEST = True
+TRADE_PROMOTE_MIN_SCORE_DELTA = 0.10
+TRADE_PROMOTE_ON_POLICY_MISMATCH = 'candidate_only'
+
+
 # ============================== 區間/次數 ====================================
 
 # optimizer 提供三種資料區間語意：
@@ -36,15 +45,6 @@ DEFAULT_OPTIMIZER_MODEL_MODE = 'trade'
 OOS_EVALUATION_START_YEAR = 2021
 OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
 OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
-
-# Trade mode 實戰參數輸出與 promote 設定。selector 名稱沿用 rolling/OOS policy：
-# base / local / retention / base_retention_gt_0_0 / base_retention_gt_0_2 / base_retention_gt_0_4 / base_retention_gt_0_6 / base_retention_gt_0_8 / base_retention_gt_min
-# 兼容別名：base_r_gt_0 / base_r_gt_0_2 / base_r_gt_0_4 / base_r_gt_0_6 / base_r_gt_0_8。
-TRADE_MODE_CANDIDATE_SELECTOR = 'retention'
-TRADE_MODE_RUN_BEST_SELECTOR = 'retention'
-TRADE_MODE_AUTO_PROMOTE_RUN_BEST = True
-TRADE_PROMOTE_MIN_SCORE_DELTA = 0.10
-TRADE_PROMOTE_ON_POLICY_MISMATCH = 'candidate_only'
 
 # Study 儲存策略：正式流程不使用長期硬碟 DB / resume；必要時才用 per-run temp DB。
 OPTIMIZER_PERSIST_STUDY_DB = False
