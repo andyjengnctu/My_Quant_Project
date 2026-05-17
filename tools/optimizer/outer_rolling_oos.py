@@ -109,10 +109,11 @@ class OuterRollingConfig:
 
 OOS_SCORE_DECIMALS = 2
 
-REPORT_POLICY_NAMES = ("base", "base_retention_gt_min", "local", "retention")
+REPORT_POLICY_NAMES = ("base", "base_retention_gt_0_0", "base_retention_gt_min", "local", "retention")
 REPORT_POLICY_LABELS = {
     "base": "base",
-    "base_retention_gt_min": f"base (r>{OPTIMIZER_BASE_RETENTION_GT_MIN:g})",
+    "base_retention_gt_0_0": "base (r > 0)",
+    "base_retention_gt_min": f"base (r > {OPTIMIZER_BASE_RETENTION_GT_MIN:g})",
     "local": "local",
     "retention": "retention",
 }
@@ -122,32 +123,58 @@ BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS = OrderedDict(
     (f"base_retention_gt_{str(threshold).replace('.', '_')}", float(threshold))
     for threshold in BASE_RETENTION_COMPARISON_THRESHOLDS
 )
-BASE_RETENTION_COMPARISON_POLICY_NAMES = tuple(BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS.keys())
-BASE_RETENTION_COMPARISON_POLICY_LABELS = {
-    name: f"base (r>{threshold:g})"
-    for name, threshold in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS.items()
-}
-CHAIN_POLICY_NAMES = REPORT_POLICY_NAMES + tuple(
-    name for name in BASE_RETENTION_COMPARISON_POLICY_NAMES if name not in REPORT_POLICY_NAMES
+BASE_RETENTION_COMPARISON_POLICY_NAMES = tuple(
+    name for name in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS.keys()
+    if name not in set(REPORT_POLICY_NAMES)
 )
+BASE_RETENTION_COMPARISON_POLICY_LABELS = {
+    name: f"base (r > {BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS[name]:g})"
+    for name in BASE_RETENTION_COMPARISON_POLICY_NAMES
+}
+CHAIN_POLICY_NAMES = REPORT_POLICY_NAMES
 
 PARAMSET_FILENAME_BY_POLICY = {
     "base": "roos_base.json",
-    "base_retention_gt_min": "roos_base_r.json",
+    "base_retention_gt_0_0": "roos_base_r0.json",
+    "base_retention_gt_min": "roos_base_r05.json",
     "local": "roos_local.json",
     "retention": "roos_retention.json",
 }
 
 NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
     "base": "base.json",
-    "base_retention_gt_min": "base_r.json",
+    "base_retention_gt_0_0": "base_r0.json",
+    "base_retention_gt_min": "base_r05.json",
     "local": "local.json",
     "retention": "retention.json",
 }
 
+POLICY_OUTPUT_LABELS = {
+    "base": "base",
+    "base_retention_gt_0_0": "base_r0",
+    "base_retention_gt_min": "base_r05",
+    "local": "local",
+    "retention": "retention",
+}
+
+STALE_POLICY_PARAMSET_FILENAMES = (
+    "roos_base_r.json",
+    "base_r.json",
+    "roos_base_retention_gt_0_0.json",
+    "roos_base_retention_gt_0_2.json",
+    "roos_base_retention_gt_0_4.json",
+    "roos_base_retention_gt_0_6.json",
+    "roos_base_retention_gt_0_8.json",
+    "base_retention_gt_0_0.json",
+    "base_retention_gt_0_2.json",
+    "base_retention_gt_0_4.json",
+    "base_retention_gt_0_6.json",
+    "base_retention_gt_0_8.json",
+)
+
 
 SEED_ENSEMBLE_OOS_TABLE_TITLE = "SEED ENSEMBLE OOS RESULTS"
-SEED_ENSEMBLE_RETENTION_TABLE_TITLE = "SEED ENSEMBLE BASE RETENTION THRESHOLD OOS RESULTS"
+SEED_ENSEMBLE_RETENTION_TABLE_TITLE = ""
 
 
 def optimizer_seed_ensemble_table_titles() -> tuple[str, str]:
@@ -1313,6 +1340,34 @@ def _display_month_period(value, end_value=None) -> str:
     return _display_month_value(text)
 
 
+def _compact_year_month_label(text: str) -> str:
+    value = str(text or "").strip()
+    match = re.fullmatch(r"(\d{4})-(\d{2})", value)
+    if not match:
+        return value
+    return f"{match.group(1)[2:]}-{match.group(2)}"
+
+
+def _display_compact_month_period(value, end_value=None) -> str:
+    if end_value is not None:
+        start_text = _compact_year_month_label(_display_month_value(value))
+        end_raw = str(end_value or "").strip()
+        if end_raw.lower() == "latest":
+            end_text = "latest"
+        else:
+            end_text = _compact_year_month_label(_display_month_value(end_value))
+        if start_text and end_text and start_text != end_text:
+            return f"{start_text}~{end_text}"
+        return start_text or end_text
+    text = str(value or "").strip()
+    if "~" in text:
+        start_text, end_text = text.split("~", 1)
+        return _display_compact_month_period(start_text, end_text)
+    if text.lower() == "latest":
+        return "latest"
+    return _compact_year_month_label(_display_month_value(text))
+
+
 def _canonical_date_text(value, default: str = "") -> str:
     text = str(value or "").strip()
     if not text:
@@ -2456,6 +2511,11 @@ def get_optimizer_policy_paramset_filename(policy_name: str) -> str:
 def get_optimizer_nonrolling_policy_paramset_filename(policy_name: str) -> str:
     """Return the canonical JSON filename for a non-rolling optimizer policy paramset."""
     return str(NONROLLING_PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"{policy_name}.json"))
+
+
+def get_optimizer_policy_output_label(policy_name: str) -> str:
+    """Return the canonical console label for an optimizer policy paramset."""
+    return str(POLICY_OUTPUT_LABELS.get(str(policy_name), str(policy_name)))
 
 
 def build_optimizer_policy_members_from_finalists(
@@ -3896,8 +3956,8 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         return ""
     widths = {
         "fold": 9,
-        "selection": 15,
-        "oos_year": 15,
+        "selection": 13,
+        "oos_year": 13,
         "rank": 8,
         "best": 17,
         "bench": 15,
@@ -3912,7 +3972,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         for _ in REPORT_POLICY_NAMES
     )
     header1 = (
-        f"{_pad_ansi('fold', widths['fold'], align='^')} | {_pad_ansi('selection', widths['selection'], align='^')} | {_pad_ansi('oos_period', widths['oos_year'], align='^')} | "
+        f"{_pad_ansi('fold', widths['fold'], align='^')} | {_pad_ansi('train', widths['selection'], align='^')} | {_pad_ansi('oos_period', widths['oos_year'], align='^')} | "
         f"{policy_header} | {_pad_ansi('elapsed', widths['elapsed'], align='^')}"
     )
     header2 = (
@@ -3938,7 +3998,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
             rank_text, _best_text, bench_text = _policy_cell_text(row.get(policy_name) or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
             policy_cells.append(f"{_pad_ansi(rank_text, widths['rank'], align='>')} | {_pad_ansi(bench_text, widths['bench'], align='>')}")
         line = (
-            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(_display_month_period(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(_display_month_period(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
+            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(_display_compact_month_period(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(_display_compact_month_period(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
             f"{' | '.join(policy_cells)} | "
             f"{_pad_ansi('' if row.get('elapsed_sec') is None else _fmt_duration(row.get('elapsed_sec', 0.0)), widths['elapsed'], align='>')}"
         )
@@ -4025,8 +4085,8 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
         return ""
     widths = {
         "fold": 9,
-        "selection": 15,
-        "oos_year": 15,
+        "selection": 13,
+        "oos_year": 13,
         "score": 12,
         "elapsed": 8,
     }
@@ -4041,7 +4101,7 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
         for _ in BASE_RETENTION_COMPARISON_POLICY_NAMES
     )
     header1 = (
-        f"{_pad_ansi('fold', widths['fold'], align='^')} | {_pad_ansi('selection', widths['selection'], align='^')} | {_pad_ansi('oos_period', widths['oos_year'], align='^')} | "
+        f"{_pad_ansi('fold', widths['fold'], align='^')} | {_pad_ansi('train', widths['selection'], align='^')} | {_pad_ansi('oos_period', widths['oos_year'], align='^')} | "
         f"{policy_header} | {_pad_ansi('elapsed', widths['elapsed'], align='^')}"
     )
     header2 = (
@@ -4065,7 +4125,7 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
             for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES
         ]
         line = (
-            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(_display_month_period(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(_display_month_period(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
+            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(_display_compact_month_period(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(_display_compact_month_period(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
             f"{' | '.join(policy_cells)} | "
             f"{_pad_ansi('' if row.get('elapsed_sec') is None else _fmt_duration(row.get('elapsed_sec', 0.0)), widths['elapsed'], align='>')}"
         )
@@ -4075,8 +4135,8 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
 
 
 def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
-    tables = []
-    main_table = _render_results_table(
+    _ = retention_table_title
+    return _render_results_table(
         rows,
         color=color,
         include_chain=include_chain,
@@ -4084,19 +4144,6 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         chained_override=chained_override,
         table_title=main_table_title,
     )
-    if main_table:
-        tables.append(main_table)
-    retention_table = _render_base_retention_comparison_table(
-        rows,
-        color=color,
-        include_chain=include_chain,
-        include_oos_avg=include_oos_avg,
-        chained_override=chained_override,
-        table_title=retention_table_title,
-    )
-    if retention_table:
-        tables.append(retention_table)
-    return "\n\n".join(tables)
 
 
 def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
@@ -4421,23 +4468,26 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
     }
 
 
+def _remove_stale_policy_paramset_files(models_dir: str) -> None:
+    for filename in STALE_POLICY_PARAMSET_FILENAMES:
+        path = os.path.join(models_dir, str(filename))
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as exc:
+            try:
+                display_path = os.path.relpath(path, os.path.dirname(models_dir))
+            except ValueError:
+                display_path = os.path.basename(path)
+            print(f"{C_YELLOW}⚠️ 無法移除舊 policy 檔：{display_path}｜{type(exc).__name__}: {exc}{C_RESET}")
+
+
 def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
     os.makedirs(models_dir, exist_ok=True)
+    _remove_stale_policy_paramset_files(models_dir)
     paths = {}
-    first_class_policy_set = set(REPORT_POLICY_NAMES)
-    for policy_name in CHAIN_POLICY_NAMES:
+    for policy_name in REPORT_POLICY_NAMES:
         path = os.path.join(models_dir, str(PARAMSET_FILENAME_BY_POLICY.get(policy_name, f"roos_{policy_name}.json")))
-        if policy_name not in first_class_policy_set:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except OSError as exc:
-                try:
-                    display_path = os.path.relpath(path, os.path.dirname(models_dir))
-                except ValueError:
-                    display_path = os.path.basename(path)
-                print(f"{C_YELLOW}⚠️ 無法移除舊 threshold policy 檔：{display_path}｜{type(exc).__name__}: {exc}{C_RESET}")
-            continue
         payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
@@ -6501,6 +6551,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
         "benchmark_return_pct": float(benchmark_return_pct),
         "benchmark_mdd_pct": float(benchmark_mdd_pct),
         "base": policy_metrics.get("base", {}),
+        "base_retention_gt_0_0": policy_metrics.get("base_retention_gt_0_0", {}),
         "base_retention_gt_min": policy_metrics.get("base_retention_gt_min", {}),
         "local": policy_metrics.get("local", {}),
         "retention": policy_metrics.get("retention", {}),
@@ -7015,6 +7066,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
                 "base": diagnostics.get("policies", {}).get("base", {}),
+                "base_retention_gt_0_0": diagnostics.get("policies", {}).get("base_retention_gt_0_0", {}),
                 "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
@@ -7510,6 +7562,7 @@ def run_outer_rolling_oos(
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
                 "base": diagnostics.get("policies", {}).get("base", {}),
+                "base_retention_gt_0_0": diagnostics.get("policies", {}).get("base_retention_gt_0_0", {}),
                 "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
@@ -7634,7 +7687,7 @@ def run_outer_rolling_oos(
         pass
     if not bool(timing_mode):
         visible_paramsets = [
-            (str(policy_name), str(paramset_path))
+            (get_optimizer_policy_output_label(str(policy_name)), str(paramset_path))
             for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items()
         ]
         print_optimizer_output_files(visible_paramsets, title="💾 輸出檔案", project_root=project_root)

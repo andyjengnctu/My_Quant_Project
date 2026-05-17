@@ -169,8 +169,14 @@ def _load_params_summary_or_legacy_sidecar(params_path: str, legacy_summary_path
 
 
 def _visible_policy_paramset_paths(policy_paramset_paths: dict) -> dict[str, str]:
-    visible_names = ("base", "base_retention_gt_min", "local", "retention")
-    return {name: str(policy_paramset_paths[name]) for name in visible_names if name in dict(policy_paramset_paths or {})}
+    from tools.optimizer.outer_rolling_oos import get_optimizer_policy_output_label
+
+    visible_names = ("base", "base_retention_gt_0_0", "base_retention_gt_min", "local", "retention")
+    return {
+        get_optimizer_policy_output_label(name): str(policy_paramset_paths[name])
+        for name in visible_names
+        if name in dict(policy_paramset_paths or {})
+    }
 
 
 def _print_optimizer_output_files(title: str, entries: list[tuple[str, str]]) -> None:
@@ -1262,17 +1268,14 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
 
 def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, write_files: bool = True) -> tuple[dict[str, str], dict[str, dict]]:
     from tools.optimizer.outer_rolling_oos import (
-        BASE_RETENTION_COMPARISON_POLICY_NAMES,
         get_optimizer_paramset_policy_names,
         get_optimizer_nonrolling_policy_paramset_filename,
+        _remove_stale_policy_paramset_files,
     )
 
     first_class_policy_names = tuple(get_optimizer_paramset_policy_names())
-    replay_policy_names = first_class_policy_names + tuple(
-        name
-        for name in BASE_RETENTION_COMPARISON_POLICY_NAMES
-        if name not in set(first_class_policy_names)
-    )
+    replay_policy_names = first_class_policy_names
+    _remove_stale_policy_paramset_files(MODELS_DIR)
     paths: dict[str, str] = {}
     payloads: dict[str, dict] = {}
     first_class_policy_set = set(first_class_policy_names)
