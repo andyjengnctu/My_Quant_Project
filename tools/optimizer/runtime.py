@@ -174,6 +174,7 @@ def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation
         bm_annual_return_pct=attrs.get("bm_annual_return_pct", 0.0),
         min_full_year_return_pct=attrs.get("min_full_year_return_pct", 0.0),
         bm_min_full_year_return_pct=attrs.get("bm_min_full_year_return_pct", 0.0),
+        params_section_title="目前 trial 參數（非 final artifact ensemble）",
     )
     print(
         f"{colors['gray']}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | "

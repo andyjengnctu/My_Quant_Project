@@ -57,6 +57,50 @@ def build_active_param_ensemble_objects_from_payload(payload: Mapping[str, Any],
     return resolved
 
 
+
+
+def build_params_schedule_rows_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    fixed_risk: float | None = None,
+    include_single_param: bool = False,
+) -> list[dict]:
+    """Return dashboard-ready parameter schedule rows from any supported param payload.
+
+    This is the single display adapter for Workbench / portfolio_sim / optimizer final
+    reports. It preserves the source semantics:
+    - active-param ensemble payloads keep every effective period and every seed/member;
+    - rolling active-param payloads keep every effective period;
+    - legacy single-param payloads are returned only when explicitly requested.
+    """
+    if not isinstance(payload, Mapping):
+        return []
+
+    if is_active_param_ensemble_payload(payload):
+        return build_active_param_ensemble_objects_from_payload(payload, fixed_risk=fixed_risk)
+
+    if is_rolling_oos_param_set_payload(payload):
+        if isinstance(payload.get("params_ensemble_by_effective_date"), Mapping) and payload.get("params_ensemble_by_effective_date"):
+            return build_active_param_ensemble_objects_from_payload(payload, fixed_risk=fixed_risk)
+        return build_active_param_objects_from_payload(payload, fixed_risk=fixed_risk)
+
+    if not include_single_param:
+        return []
+
+    params = build_params_from_mapping(payload)
+    if fixed_risk is not None:
+        params.fixed_risk = float(fixed_risk)
+    return [{
+        "mode": "single",
+        "effective_date_text": "",
+        "effective_end_date_text": "",
+        "year": "",
+        "params": dict(payload),
+        "params_obj": params,
+        "params_signature": build_portfolio_params_signature(params),
+    }]
+
+
 def load_portfolio_param_source_from_json(json_file: str | os.PathLike[str], *, fixed_risk: float | None = None) -> dict:
     """Load a runtime parameter source for tools that must accept either single params or active-param schedules.
 

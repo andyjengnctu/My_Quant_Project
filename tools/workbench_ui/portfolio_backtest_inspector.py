@@ -27,7 +27,7 @@ from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
 from core.params_io import build_params_from_mapping
-from core.portfolio_param_runtime import build_active_param_ensemble_objects_from_payload
+from core.portfolio_param_runtime import build_params_schedule_rows_from_payload
 from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_date_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from core.active_param_ensemble import (
     format_active_param_ensemble_summary_lines,
@@ -339,13 +339,9 @@ def _format_pct(value):
         return "-"
 
 
-def _build_rolling_params_schedule_rows(payload):
-    return list(build_active_param_schedule(payload))
-
-
-def _build_ensemble_params_schedule_rows(payload, *, fixed_risk):
+def _build_params_schedule_rows(payload, *, fixed_risk=None):
     override = None if fixed_risk is None else float(fixed_risk)
-    return list(build_active_param_ensemble_objects_from_payload(payload, fixed_risk=override))
+    return list(build_params_schedule_rows_from_payload(payload, fixed_risk=override))
 
 
 def _fast_data_to_price_df(fast_data):
@@ -1936,7 +1932,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             if options.get("fixed_risk") is not None:
                 params.fixed_risk = float(options["fixed_risk"])
             params_section_title = "Active-param ensemble 訓練參數"
-            rolling_params_schedule_rows = _build_ensemble_params_schedule_rows(ensemble_payload, fixed_risk=options.get("fixed_risk"))
+            rolling_params_schedule_rows = _build_params_schedule_rows(ensemble_payload, fixed_risk=options.get("fixed_risk"))
             print(f"\n{C_GREEN}✅ 成功載入 active-param ensemble 參數組！{C_RESET}")
             print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
             for line in format_active_param_ensemble_summary_lines(ensemble_payload):
@@ -1963,7 +1959,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             if options.get("fixed_risk") is not None:
                 params.fixed_risk = float(options["fixed_risk"])
             params_section_title = "Rolling OOS 訓練參數"
-            rolling_params_schedule_rows = _build_rolling_params_schedule_rows(rolling_payload)
+            rolling_params_schedule_rows = _build_params_schedule_rows(rolling_payload, fixed_risk=options.get("fixed_risk"))
             print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
             print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
             for line in format_rolling_oos_summary_lines(rolling_payload):
