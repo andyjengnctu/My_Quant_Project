@@ -2103,8 +2103,13 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             self._status_var.set("完成：Rolling OOS 驗證摘要")
             self._notebook.select(self._console_tab)
             return
-        self._render_performance_chart(result_payload)
+        performance_tab = self._render_performance_chart(result_payload)
         self._refresh_trade_ticker_dropdown(result_payload)
+        if performance_tab is not None:
+            try:
+                self._notebook.select(performance_tab)
+            except tk.TclError as exc:
+                _warn_gui_fallback("portfolio.performance_tab.select_after_refresh", exc)
         self._status_var.set("完成：投組回測")
 
     def _finish_portfolio_error(self, request_token, exc):
@@ -2553,17 +2558,17 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if df_eq is None or df_eq.empty:
             self._status_var.set("完成：投組回測，但沒有績效曲線資料")
             self._append_console_text("[portfolio] 投組回測完成，但沒有績效曲線資料。\n")
-            return
+            return None
         if FigureCanvasTkAgg is None:
             self._status_var.set("缺少 matplotlib TkAgg backend，無法內嵌績效圖。")
-            return
+            return None
         try:
             from matplotlib.figure import Figure
             from matplotlib import rcParams
             from matplotlib.font_manager import FontProperties
         except ImportError as exc:
             self._report_runtime_exception("render_performance.import", exc, status_prefix="績效圖渲染失敗")
-            return
+            return None
 
         rcParams["axes.unicode_minus"] = False
         dates = pd.to_datetime(df_eq["Date"])
@@ -2615,6 +2620,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._get_or_create_performance_close_button(tab_id)
         self._notebook.select(tab_frame)
         self.after_idle(self._refresh_performance_tab_close_buttons)
+        return tab_frame
 
     def _clear_kline_chart(self):
         if self._chart_canvas is not None:
