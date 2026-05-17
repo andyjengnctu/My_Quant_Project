@@ -3,6 +3,7 @@ import json
 import os
 import pickle
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import pandas as pd
@@ -21,6 +22,21 @@ RAW_CACHE_LOCK_POLL_SEC = 0.25
 RAW_CACHE_LOCK_STALE_SEC = 6 * 60 * 60
 RAW_CACHE_REPLACE_RETRY_COUNT = 20
 RAW_CACHE_REPLACE_RETRY_SEC = 0.10
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _raw_cache_use_enabled() -> bool:
+    return _env_flag("OPTIMIZER_RAW_CACHE_ENABLED", False)
+
+
+def _raw_cache_write_enabled() -> bool:
+    return _env_flag("OPTIMIZER_RAW_CACHE_WRITE_ENABLED", False)
 
 
 def _build_raw_cache_paths(output_dir, profile_key, required_min_rows):
@@ -292,18 +308,16 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
         raise FileNotFoundError(build_empty_dataset_dir_message(profile_key, data_dir))
 
     profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
-    cache_paths = _build_raw_cache_paths(output_dir, profile_key, required_min_rows)
-    signature, signature_payload = _build_raw_cache_signature(csv_inputs, required_min_rows)
-    persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
-    if persisted_payload is not None:
-        return _persisted_payload_to_raw_data_cache(
-            persisted_payload,
-            duplicate_file_issue_lines,
-            output_dir=output_dir,
-            verbose=verbose,
-        )
+    use_raw_cache = _raw_cache_use_enabled()
+    write_raw_cache = _raw_cache_write_enabled()
+    cache_paths = None
+    signature = None
+    signature_payload = None
+    if use_raw_cache or write_raw_cache:
+        cache_paths = _build_raw_cache_paths(output_dir, profile_key, required_min_rows)
+        signature, signature_payload = _build_raw_cache_signature(csv_inputs, required_min_rows)
 
-    with _RawCacheBuildLock(cache_paths):
+    if use_raw_cache and cache_paths is not None:
         persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
         if persisted_payload is not None:
             return _persisted_payload_to_raw_data_cache(
@@ -312,6 +326,18 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
                 output_dir=output_dir,
                 verbose=verbose,
             )
+
+    lock_context = _RawCacheBuildLock(cache_paths) if write_raw_cache and cache_paths is not None else nullcontext()
+    with lock_context:
+        if use_raw_cache and cache_paths is not None:
+            persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
+            if persisted_payload is not None:
+                return _persisted_payload_to_raw_data_cache(
+                    persisted_payload,
+                    duplicate_file_issue_lines,
+                    output_dir=output_dir,
+                    verbose=verbose,
+                )
 
         load_issues = list(duplicate_file_issue_lines)
         total_invalid_rows = 0
@@ -362,17 +388,18 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
             "total_duplicate_dates": total_duplicate_dates,
             "total_dropped_rows": total_dropped_rows,
         }
-        _save_persisted_raw_cache(
-            cache_paths,
-            signature=signature,
-            signature_payload=signature_payload,
-            raw_data_cache=fresh_raw_data_cache,
-            load_issues=load_issues,
-            totals=totals,
-            profile_key=profile_key,
-            data_dir=data_dir,
-            required_min_rows=required_min_rows,
-        )
+        if write_raw_cache and cache_paths is not None:
+            _save_persisted_raw_cache(
+                cache_paths,
+                signature=signature,
+                signature_payload=signature_payload,
+                raw_data_cache=fresh_raw_data_cache,
+                load_issues=load_issues,
+                totals=totals,
+                profile_key=profile_key,
+                data_dir=data_dir,
+                required_min_rows=required_min_rows,
+            )
         issue_path = _write_load_issues_if_needed(load_issues, output_dir=output_dir)
         _print_load_summary(
             fresh_raw_data_cache=fresh_raw_data_cache,

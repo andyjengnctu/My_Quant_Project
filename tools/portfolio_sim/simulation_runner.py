@@ -53,11 +53,11 @@ def _portfolio_prepared_cache_include_trade_logs() -> bool:
 
 
 def _portfolio_prepared_cache_use_enabled() -> bool:
-    return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_ENABLED", True)
+    return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_ENABLED", False)
 
 
 def _portfolio_prepared_cache_write_enabled() -> bool:
-    return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_WRITE_ENABLED", True)
+    return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_WRITE_ENABLED", False)
 
 
 def _resolve_optional_bool(value, default: bool) -> bool:
