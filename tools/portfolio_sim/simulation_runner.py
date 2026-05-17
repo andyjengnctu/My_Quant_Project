@@ -38,7 +38,18 @@ from tools.optimizer.walk_forward import resolve_first_walk_forward_test_boundar
 from .runtime_common import LOAD_PROGRESS_EVERY, OUTPUT_DIR, PROJECT_ROOT, ensure_runtime_dirs, is_insufficient_data_error
 
 PORTFOLIO_DEFAULT_BENCHMARK_TICKER = "0050"
-PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 1
+PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 2
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _portfolio_prepared_cache_include_trade_logs() -> bool:
+    return _env_flag("PORTFOLIO_SIM_PREPARED_CACHE_INCLUDE_TRADE_LOGS", False)
 
 
 
@@ -225,7 +236,7 @@ def _build_portfolio_data_signature(csv_inputs):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params):
+def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, include_trade_logs: bool = False):
     profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
     data_sig = _build_portfolio_data_signature(csv_inputs)
     params_sig = build_portfolio_params_signature(params)
@@ -234,6 +245,7 @@ def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params):
         "profile_key": str(profile_key),
         "data_signature": data_sig,
         "params_signature": params_sig,
+        "include_trade_logs": bool(include_trade_logs),
     }
     combined = json.dumps(combined_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     cache_key = hashlib.sha256(combined.encode("utf-8")).hexdigest()[:24]
@@ -317,7 +329,7 @@ def _save_portfolio_prepared_cache(cache_paths, context):
     payload = {
         "schema_version": PORTFOLIO_PREP_CACHE_SCHEMA_VERSION,
         "all_dfs_fast": context.get("all_dfs_fast") or {},
-        "all_trade_logs": context.get("all_trade_logs") or {},
+        "all_trade_logs": (context.get("all_trade_logs") or {}) if bool((cache_paths.get("meta") or {}).get("include_trade_logs")) else {},
         "all_pit_stats_index": context.get("all_pit_stats_index") or {},
         "sorted_dates": context.get("sorted_dates") or [],
     }
@@ -511,7 +523,8 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
     if len(csv_inputs) < 30:
         return _load_portfolio_market_context_sequential(data_dir, params, verbose=verbose)
 
-    cache_paths = _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params)
+    include_trade_logs = _portfolio_prepared_cache_include_trade_logs()
+    cache_paths = _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, include_trade_logs=include_trade_logs)
     cached_context = _load_portfolio_prepared_cache(cache_paths)
     if cached_context is not None:
         if verbose:
@@ -542,7 +555,7 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
         raw_data_cache,
         params,
         default_max_workers=max_workers,
-        include_trade_logs=True,
+        include_trade_logs=bool(include_trade_logs),
         include_pit_stats_index=True,
     )
     prep_failures = prep_result.get("prep_failures") or []
@@ -571,7 +584,7 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
 
     context = {
         "all_dfs_fast": all_dfs_fast,
-        "all_trade_logs": prep_result.get("all_trade_logs") or {},
+        "all_trade_logs": (prep_result.get("all_trade_logs") or {}) if include_trade_logs else {},
         "all_pit_stats_index": prep_result.get("all_pit_stats_index") or {},
         "sorted_dates": sorted_dates,
         "prep_wall_sec": float(prep_result.get("prep_wall_sec", 0.0)),
