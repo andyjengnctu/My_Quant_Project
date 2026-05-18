@@ -25,7 +25,7 @@ PARALLEL_FOLD_PROGRESS_PREFIX = "FOLD_PROGRESS\t"
 import pandas as pd
 
 from config.training_policy import (
-    OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+    OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K,
     OPTIMIZER_BASE_RETENTION_GT_MIN,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
@@ -36,7 +36,7 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
     is_optimizer_local_min_review_enabled,
-    resolve_optimizer_base_finalists_agree_min_agree,
+    resolve_optimizer_base_finalists_agree_top_k,
     resolve_optimizer_enabled_policy_indicators,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
@@ -2533,48 +2533,89 @@ def _rank_base_finalist_items(finalists: list[dict]) -> list[dict]:
     )
 
 
-def _build_finalist_base_agree_member(*, item: dict, member_index: int, policy_name: str, seed: int | None = None) -> dict:
-    trial = item["trial"]
-    trial_number = int(trial.number)
+def _base_finalists_agree_top_k_stats(finalists: list[dict]) -> dict:
+    ranked = _rank_base_finalist_items(finalists)
+    if not ranked:
+        return {"top_k": 0, "top_k_base_score_sum": 0.0, "top_k_selected_trials": []}
+    top_k = resolve_optimizer_base_finalists_agree_top_k(
+        len(ranked),
+        OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K,
+    )
+    top_items = ranked[: int(top_k)]
     return {
-        "member_index": int(member_index),
-        "seed": None if seed is None else int(seed),
-        "policy": str(policy_name),
-        "selected_trial": trial_number + 1,
-        "optimizer_seed": None if seed is None else int(seed),
-        "score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
-        "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
-        "base_rank": int(item.get("base_rank", 0) or 0),
-        "local_min_score": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-        "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-        "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
-        "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
-        "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
-        "retention": float(item.get("local_retention", 0.0)),
-        "params": build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT),
+        "top_k": int(top_k),
+        "top_k_base_score_sum": float(sum(float(item.get("base_score", INVALID_TRIAL_VALUE)) for item in top_items)),
+        "top_k_selected_trials": [int(item["trial"].number) + 1 for item in top_items if item.get("trial") is not None],
     }
+
+
+def _annotate_base_finalists_agree_selection(item: dict, finalists: list[dict]) -> dict:
+    selected = dict(item)
+    stats = _base_finalists_agree_top_k_stats(finalists)
+    selected.update({
+        "policy_type": "top_k_base_score_sum_best_finalist",
+        "selection_rule": "top_k_base_score_sum_best_finalist",
+        "base_agree_top_k": int(stats.get("top_k", 0) or 0),
+        "base_agree_top_k_requested": OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K,
+        "base_agree_top_k_base_score_sum": float(stats.get("top_k_base_score_sum", 0.0) or 0.0),
+        "base_agree_top_k_selected_trials": list(stats.get("top_k_selected_trials") or []),
+    })
+    return selected
+
+
+def _safe_float_for_base_agree_sort(value, default: float = INVALID_TRIAL_VALUE) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _base_finalists_agree_member_sort_key(member: dict) -> tuple:
+    data = dict(member or {})
+    selected_trial = data.get("selected_trial")
+    try:
+        selected_trial_value = int(selected_trial)
+    except (TypeError, ValueError):
+        selected_trial_value = 10**9
+    try:
+        base_rank_value = int(data.get("base_rank", 10**9) or 10**9)
+    except (TypeError, ValueError):
+        base_rank_value = 10**9
+    try:
+        member_index_value = int(data.get("member_index", 10**9) or 10**9)
+    except (TypeError, ValueError):
+        member_index_value = 10**9
+    base_score_value = _safe_float_for_base_agree_sort(data.get("base_score"))
+    top_k_sum_value = _safe_float_for_base_agree_sort(
+        data.get("base_agree_top_k_base_score_sum"),
+        base_score_value,
+    )
+    return (
+        top_k_sum_value,
+        base_score_value,
+        -base_rank_value,
+        -selected_trial_value,
+        -member_index_value,
+    )
+
+
+def select_base_finalists_agree_members(members: list[dict]) -> list[dict]:
+    candidates = [dict(member) for member in list(members or []) if isinstance(member, dict) and dict(member).get("params")]
+    if not candidates:
+        return []
+    selected = max(candidates, key=_base_finalists_agree_member_sort_key)
+    selected["member_index"] = 1
+    selected["policy"] = BASE_FINALISTS_AGREE_POLICY_NAME
+    selected["selection_rule"] = "top_k_base_score_sum_best_finalist"
+    selected["policy_type"] = "single_param_top_k_base_score_sum"
+    return renumber_seed_ensemble_members([selected])
 
 
 def _select_base_finalists_agree_item(finalists: list[dict]) -> dict | None:
     ranked = _rank_base_finalist_items(finalists)
     if not ranked:
         return None
-    policy_name = BASE_FINALISTS_AGREE_POLICY_NAME
-    members = [
-        _build_finalist_base_agree_member(item=item, member_index=idx, policy_name=policy_name)
-        for idx, item in enumerate(ranked, start=1)
-    ]
-    min_agree = resolve_optimizer_base_finalists_agree_min_agree(len(members), OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE)
-    representative = dict(ranked[0])
-    representative.update({
-        "policy_type": "finalist_base_param_agree",
-        "params_ensemble": members,
-        "member_count": int(len(members)),
-        "min_agree": int(min_agree),
-        "min_agree_requested": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
-    })
-    return representative
-
+    return _annotate_base_finalists_agree_selection(ranked[0], finalists)
 
 def _is_base_finalists_agree_policy(policy_name: str) -> bool:
     return str(policy_name) == BASE_FINALISTS_AGREE_POLICY_NAME
@@ -2700,24 +2741,12 @@ def build_optimizer_policy_members_from_finalists(
         item = policy_items.get(policy_name)
         if item is None:
             continue
-        if _is_base_finalists_agree_policy(policy_name):
-            finalist_members = []
-            for idx, raw_member in enumerate(normalize_seed_ensemble_members(item.get("params_ensemble")), start=1):
-                member_payload = dict(raw_member)
-                member_payload["member_index"] = (int(member_index) - 1) * max(1, int(item.get("member_count", 1) or 1)) + int(idx)
-                member_payload["seed"] = None if seed is None else int(seed)
-                member_payload["optimizer_seed"] = None if seed is None else int(seed)
-                member_payload["policy"] = str(policy_name)
-                finalist_members.append(member_payload)
-            if finalist_members:
-                members[str(policy_name)] = finalist_members
-            continue
         if item.get("trial") is None:
             continue
         trial = item["trial"]
         trial_number = int(trial.number)
         params_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
-        members[str(policy_name)] = {
+        member_payload = {
             "member_index": int(member_index),
             "seed": None if seed is None else int(seed),
             "policy": str(policy_name),
@@ -2737,6 +2766,18 @@ def build_optimizer_policy_members_from_finalists(
             "local_gate": bool(item.get("gate_pass", False)),
             "params": dict(params_payload),
         }
+        if _is_base_finalists_agree_policy(policy_name):
+            for key in (
+                "selection_rule",
+                "policy_type",
+                "base_agree_top_k",
+                "base_agree_top_k_requested",
+                "base_agree_top_k_base_score_sum",
+                "base_agree_top_k_selected_trials",
+            ):
+                if key in item:
+                    member_payload[key] = item.get(key)
+        members[str(policy_name)] = member_payload
     return members
 
 
@@ -2746,7 +2787,7 @@ def _policy_description(policy_name: str) -> str:
     if policy_name == "base_retention_gt_min":
         return f"Use the first base_rank candidate whose local_retention > {OPTIMIZER_BASE_RETENTION_GT_MIN:g} for each OOS period."
     if _is_base_finalists_agree_policy(policy_name):
-        return "Replay all finalist base params and keep only stocks agreed by at least the configured n members."
+        return "Select the single finalist from the seed whose top-k base finalists have the highest summed base_score."
     if policy_name in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS:
         threshold = float(BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS[policy_name])
         return f"Use the first base_rank candidate whose local_retention > {threshold:g} for each OOS period."
@@ -2775,8 +2816,8 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
             "optimizer_seed": None if optimizer_seed is None else int(optimizer_seed),
             "optimizer_seeds": [member.get("seed") for member in ensemble_members],
             "member_count": int(len(ensemble_members)),
-            "min_agree": int(item.get("min_agree") or resolve_optimizer_base_finalists_agree_min_agree(len(ensemble_members), OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE)),
-            "min_agree_requested": item.get("min_agree_requested", OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE),
+            "min_agree": int(item.get("min_agree") or resolve_optimizer_base_finalists_agree_top_k(len(ensemble_members), OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K)),
+            "min_agree_requested": item.get("min_agree_requested", OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K),
             "base_score": float(item.get("base_score", first_member.get("base_score", INVALID_TRIAL_VALUE))),
             "base_rank": int(item.get("base_rank", first_member.get("base_rank", 0)) or 0),
             "local_min": float(item.get("local_min_score", first_member.get("local_min_score", INVALID_TRIAL_VALUE))),
@@ -2789,7 +2830,7 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
         }
     trial = item["trial"]
     trial_number = int(trial.number)
-    return {
+    entry = {
         "effective_start": effective_start,
         "effective_end": effective_end,
         "selection": str(selection_period),
@@ -2809,6 +2850,18 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
         "retention_rank": int(retention_rank_map.get(trial_number, 0)),
         "params": build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT),
     }
+    if _is_base_finalists_agree_policy(policy_name):
+        for key in (
+            "selection_rule",
+            "policy_type",
+            "base_agree_top_k",
+            "base_agree_top_k_requested",
+            "base_agree_top_k_base_score_sum",
+            "base_agree_top_k_selected_trials",
+        ):
+            if key in item:
+                entry[key] = item.get(key)
+    return entry
 
 
 def _prep_result_has_pit_index(prep_result) -> bool:
@@ -4578,8 +4631,7 @@ def _build_random_seed_ensemble_policy_payload() -> dict:
 
 
 def _resolve_policy_min_agree_for_member_count(policy_name: str | None, member_count: int) -> int | str:
-    if _is_base_finalists_agree_policy(str(policy_name or "")):
-        return resolve_optimizer_base_finalists_agree_min_agree(member_count, OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE)
+    _ = (policy_name, member_count)
     return "auto"
 
 
@@ -4593,16 +4645,15 @@ def _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_d
     actual_min_members = max(1, min(member_counts) if member_counts else 1)
     actual_max_members = max(member_counts) if member_counts else actual_min_members
     requested_count = int(requested_policy.get("seed_count", 1) or 1)
-    policy_min_agree = _resolve_policy_min_agree_for_member_count(policy_name, actual_min_members)
     if _is_base_finalists_agree_policy(str(policy_name or "")):
         policy = build_seed_ensemble_policy_snapshot(
-            enabled=actual_min_members > 1,
+            enabled=False,
             seed_count=actual_min_members,
-            min_agree=policy_min_agree,
+            min_agree=1,
         )
-        policy["selection_rule"] = "finalist_base_param_agree"
-        policy["finalists_agree_min_agree_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
-        policy["resolved_min_agree_source"] = "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE"
+        policy["selection_rule"] = "top_k_base_score_sum_best_finalist"
+        policy["base_agree_top_k_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K
+        policy["member_selection"] = "max_base_agree_top_k_base_score_sum"
         policy["requested_random_seed_ensemble"] = dict(requested_policy)
     elif actual_min_members == actual_max_members == requested_count:
         policy = dict(requested_policy)
@@ -4631,12 +4682,25 @@ def _build_params_ensemble_members_for_schedule(schedule: dict) -> list[dict]:
     params_payload = dict(schedule.get("params") or {})
     if not params_payload:
         return []
-    return [{
+    member = {
         "member_index": 1,
         "seed": schedule.get("optimizer_seed"),
         "selected_trial": schedule.get("selected_trial"),
         "params": params_payload,
-    }]
+    }
+    for key in (
+        "base_score",
+        "base_rank",
+        "selection_rule",
+        "policy_type",
+        "base_agree_top_k",
+        "base_agree_top_k_requested",
+        "base_agree_top_k_base_score_sum",
+        "base_agree_top_k_selected_trials",
+    ):
+        if key in schedule:
+            member[key] = schedule.get(key)
+    return [member]
 
 
 def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
@@ -4674,6 +4738,12 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "optimizer_seed": schedule.get("optimizer_seed"),
             "base_score": schedule.get("base_score"),
             "base_rank": schedule.get("base_rank"),
+            "selection_rule": schedule.get("selection_rule"),
+            "policy_type": schedule.get("policy_type"),
+            "base_agree_top_k": schedule.get("base_agree_top_k"),
+            "base_agree_top_k_requested": schedule.get("base_agree_top_k_requested"),
+            "base_agree_top_k_base_score_sum": schedule.get("base_agree_top_k_base_score_sum"),
+            "base_agree_top_k_selected_trials": schedule.get("base_agree_top_k_selected_trials"),
             "local_min": schedule.get("local_min"),
             "local_min_review_enabled": schedule.get("local_min_review_enabled", bool(is_optimizer_local_min_review_enabled())),
             "local_min_review_mode": schedule.get("local_min_review_mode"),
@@ -6630,11 +6700,30 @@ def _build_members_from_seed_rows_for_policy(seed_rows: list[dict], policy_name:
             "selected_trial": schedule.get("selected_trial"),
             "params": params_payload,
         }
-        for key in ("base_score", "base_rank", "local_min", "local_rank", "retention", "retention_rank", "local_min_review_enabled", "local_min_review_mode", "local_min_exact"):
+        for key in (
+            "base_score",
+            "base_rank",
+            "local_min",
+            "local_rank",
+            "retention",
+            "retention_rank",
+            "local_min_review_enabled",
+            "local_min_review_mode",
+            "local_min_exact",
+            "selection_rule",
+            "policy_type",
+            "base_agree_top_k",
+            "base_agree_top_k_requested",
+            "base_agree_top_k_base_score_sum",
+            "base_agree_top_k_selected_trials",
+        ):
             if key in schedule:
                 member[key] = schedule.get(key)
         members.append(member)
-    return renumber_seed_ensemble_members(members)
+    normalized = renumber_seed_ensemble_members(members)
+    if _is_base_finalists_agree_policy(policy_name):
+        return select_base_finalists_agree_members(normalized)
+    return normalized
 
 
 def _build_members_from_seed_rows_for_best(seed_rows: list[dict]) -> list[dict]:
@@ -6882,12 +6971,16 @@ def _build_ensemble_policy_schedule_from_seed_rows(*, seed_rows: list[dict], pol
         "params_ensemble": members,
     }
     if _is_base_finalists_agree_policy(policy_name):
-        schedule["policy_type"] = "finalist_base_param_agree"
-        schedule["min_agree"] = resolve_optimizer_base_finalists_agree_min_agree(
-            len(members),
-            OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
-        )
-        schedule["min_agree_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
+        schedule["policy_type"] = "single_param_top_k_base_score_sum"
+        schedule["selection_rule"] = "top_k_base_score_sum_best_finalist"
+        for key in (
+            "base_agree_top_k",
+            "base_agree_top_k_requested",
+            "base_agree_top_k_base_score_sum",
+            "base_agree_top_k_selected_trials",
+        ):
+            if key in first_member:
+                schedule[key] = first_member.get(key)
     return schedule
 
 

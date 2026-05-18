@@ -51,8 +51,7 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
-    OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
-    resolve_optimizer_base_finalists_agree_min_agree,
+    OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K,
 )
 
 
@@ -892,18 +891,14 @@ def _is_base_finalists_agree_policy_name(policy_name: str | None) -> bool:
 def _resolve_nonrolling_policy_seed_ensemble_policy(*, policy_name: str, members: list[dict], seeds: list[int]) -> dict:
     if _is_base_finalists_agree_policy_name(policy_name):
         member_count = max(1, len(renumber_seed_ensemble_members(list(members or []))))
-        min_agree = resolve_optimizer_base_finalists_agree_min_agree(
-            member_count,
-            OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
-        )
         policy = build_seed_ensemble_policy_snapshot(
-            enabled=member_count > 1,
+            enabled=False,
             seed_count=member_count,
-            min_agree=min_agree,
+            min_agree=1,
         )
-        policy["selection_rule"] = "finalist_base_param_agree"
-        policy["finalists_agree_min_agree_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
-        policy["resolved_min_agree_source"] = "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE"
+        policy["selection_rule"] = "top_k_base_score_sum_best_finalist"
+        policy["base_agree_top_k_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K
+        policy["member_selection"] = "max_base_agree_top_k_base_score_sum"
         policy["requested_random_seed_ensemble"] = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
         return policy
     return _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
@@ -1642,6 +1637,7 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
     from tools.optimizer.outer_rolling_oos import (
         get_optimizer_paramset_policy_names,
         get_optimizer_nonrolling_policy_paramset_filename,
+        select_base_finalists_agree_members,
         _remove_stale_policy_paramset_files,
     )
 
@@ -1656,6 +1652,8 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             list((policy_members_by_policy or {}).get(str(policy_name)) or []),
             key=lambda item: int(dict(item).get("member_index", 0) or 0),
         )
+        if _is_base_finalists_agree_policy_name(policy_name):
+            members = select_base_finalists_agree_members(members)
         if not members:
             continue
         payload = _build_static_seed_ensemble_policy_paramset_payload(
@@ -1688,12 +1686,16 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
 
 
 def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None, write_candidate_best: bool = True, write_policy_files: bool = True) -> tuple[dict, dict, dict[str, dict]]:
+    from tools.optimizer.outer_rolling_oos import select_base_finalists_agree_members
+
     candidate_selector = _resolve_trade_candidate_selector() if normalize_optimizer_model_mode(selected_model_mode) == "trade" else "candidate_best"
     candidate_members = list(members)
     if candidate_selector != "candidate_best":
         selector_members = list((policy_members_by_policy or {}).get(candidate_selector) or [])
         if selector_members:
             candidate_members = sorted(selector_members, key=lambda item: int(dict(item).get("member_index", 0) or 0))
+            if _is_base_finalists_agree_policy_name(candidate_selector):
+                candidate_members = select_base_finalists_agree_members(candidate_members)
     candidate_members = renumber_seed_ensemble_members(candidate_members)
     policy = _resolve_nonrolling_policy_seed_ensemble_policy(
         policy_name=str(candidate_selector),
