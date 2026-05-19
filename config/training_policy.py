@@ -63,7 +63,7 @@ OPTIMIZER_ALLOW_PER_RUN_TEMP_DB = True
 # local_min review 計算開關。
 OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 10  # local_min_score finalist review 的最小候選數
 
 # Rolling OOS optimizer search 預設 trial 數。
 OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 1000
@@ -74,7 +74,7 @@ OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 5 # "auto" = 過半數；整數 = 至少幾個 seed 同意。最大值永遠是 N。
 
 # base finalists agree：每個 seed 先取 base_rank 前 top-k finalists，計算 base_score 加總；seed ensemble 時只保留加總最高的單一 finalist。
-OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K = "auto" # "auto" = finalists 數量的一半向上取整；整數 = top-k base finalists 數量。
+OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K = 10 # "auto" = finalists 數量的一半向上取整；整數 = top-k base finalists 數量。
 # Backward-compatible alias：舊名稱不再代表 replay min_agree，只等同 TOP_K。
 OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE = OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K
 
