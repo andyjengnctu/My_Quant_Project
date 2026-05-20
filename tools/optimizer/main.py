@@ -51,7 +51,8 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
-    OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K,
+    OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+    resolve_optimizer_base_finalists_agree_min_agree,
 )
 
 
@@ -892,13 +893,14 @@ def _resolve_nonrolling_policy_seed_ensemble_policy(*, policy_name: str, members
     if _is_base_finalists_agree_policy_name(policy_name):
         member_count = max(1, len(renumber_seed_ensemble_members(list(members or []))))
         policy = build_seed_ensemble_policy_snapshot(
-            enabled=False,
+            enabled=member_count > 1,
             seed_count=member_count,
-            min_agree=1,
+            min_agree=resolve_optimizer_base_finalists_agree_min_agree(member_count, OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE),
         )
-        policy["selection_rule"] = "top_k_base_score_sum_best_finalist"
-        policy["base_agree_top_k_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_TOP_K
-        policy["member_selection"] = "max_base_agree_top_k_base_score_sum"
+        policy["selection_rule"] = "all_finalists_base_score_sum_best_seed_finalist_agree"
+        policy["base_agree_min_agree_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
+        policy["member_selection"] = "seed_with_max_all_finalists_base_score_sum"
+        policy["intra_seed_agree"] = "selected_seed_finalists"
         policy["requested_random_seed_ensemble"] = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
         return policy
     return _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
