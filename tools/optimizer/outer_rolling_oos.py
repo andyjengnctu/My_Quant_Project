@@ -144,10 +144,12 @@ REPORT_POLICY_LABELS = {
 }
 PRIMARY_RESULT_POLICY_NAMES = tuple(
     name
-    for name in ("base", "base_retention_gt_0_0", "base_retention_gt_min", BASE_FINALISTS_AGREE_POLICY_NAME)
+    for name in ("base", "base_retention_gt_0_0", "base_retention_gt_min")
     if name in set(REPORT_POLICY_NAMES)
 )
-SECONDARY_RESULT_POLICY_NAMES = tuple(name for name in ("local", LOCAL_FINALISTS_AGREE_POLICY_NAME, "retention") if name in set(REPORT_POLICY_NAMES))
+SECONDARY_RESULT_POLICY_NAMES = tuple(name for name in ("local", "retention") if name in set(REPORT_POLICY_NAMES))
+FINALISTS_AGREE_RESULT_POLICY_NAMES = tuple(name for name in FINALISTS_AGREE_POLICY_NAMES if name in set(REPORT_POLICY_NAMES))
+FINALISTS_AGREE_TABLE_TITLE = "FINALISTS AGREE RESULTS"
 
 BASE_RETENTION_COMPARISON_THRESHOLDS = (0.0, 0.2, 0.4, 0.6, 0.8)
 BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS = OrderedDict(
@@ -4560,6 +4562,8 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     if not display_rows:
         return ""
     active_policy_names = tuple(policy_names or REPORT_POLICY_NAMES)
+    if not active_policy_names:
+        return ""
     widths = {
         "fold": 9,
         "selection": 19,
@@ -4750,6 +4754,15 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         table_title=main_table_title,
         policy_names=PRIMARY_RESULT_POLICY_NAMES,
     )
+    finalists_agree_table = _render_results_table(
+        rows,
+        color=color,
+        include_chain=include_chain,
+        include_oos_avg=include_oos_avg,
+        chained_override=chained_override,
+        table_title=FINALISTS_AGREE_TABLE_TITLE,
+        policy_names=FINALISTS_AGREE_RESULT_POLICY_NAMES,
+    )
     lower_title = str(retention_table_title or "LOCAL / RETENTION RESULTS")
     lower_table = _render_results_table(
         rows,
@@ -4760,7 +4773,7 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         table_title=lower_title,
         policy_names=SECONDARY_RESULT_POLICY_NAMES,
     )
-    return "\n\n".join(part for part in (upper_table, lower_table) if part)
+    return "\n\n".join(part for part in (upper_table, finalists_agree_table, lower_table) if part)
 
 
 def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "BASE RETENTION THRESHOLD OOS RESULTS") -> str:
