@@ -52,7 +52,9 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
     OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+    OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
     resolve_optimizer_base_finalists_agree_min_agree,
+    resolve_optimizer_local_finalists_agree_min_agree,
 )
 
 
@@ -169,6 +171,9 @@ def _normalize_trade_selector(selector: str) -> str:
         "finalists_agree": "base_finalists_agree",
         "base_finalist_agree": "base_finalists_agree",
         "base_finalists_agree": "base_finalists_agree",
+        "local_agree": "local_finalists_agree",
+        "local_finalist_agree": "local_finalists_agree",
+        "local_finalists_agree": "local_finalists_agree",
     }
     return aliases.get(raw, raw or "retention")
 
@@ -179,7 +184,7 @@ def _selector_score_from_summary(summary: dict | None, selector: str):
     normalized = _normalize_trade_selector(selector)
     if normalized == "retention":
         return summary.get("retention")
-    if normalized == "local":
+    if normalized in {"local", "local_finalists_agree"}:
         return summary.get("local_min_score")
     return summary.get("base_score")
 
@@ -443,7 +448,7 @@ def _score_from_summary_for_promote(summary: dict | None, selector: str | None =
     if not isinstance(summary, dict):
         return None
     selector_key = _normalize_trade_selector(selector or _resolve_trade_run_best_selector())
-    if selector_key in {"retention", "local", "base", "base_r0", "base_r05", "base_finalists_agree"}:
+    if selector_key in {"retention", "local", "base", "base_r0", "base_r05", "base_finalists_agree", "local_finalists_agree"}:
         try:
             return _selector_score_from_summary(summary, selector_key)
         except (TypeError, ValueError, KeyError):
@@ -889,17 +894,48 @@ def _is_base_finalists_agree_policy_name(policy_name: str | None) -> bool:
     return str(policy_name or "").strip() == "base_finalists_agree"
 
 
+def _is_local_finalists_agree_policy_name(policy_name: str | None) -> bool:
+    return str(policy_name or "").strip() == "local_finalists_agree"
+
+
+def _is_finalists_agree_policy_name(policy_name: str | None) -> bool:
+    return str(policy_name or "").strip() in {"base_finalists_agree", "local_finalists_agree"}
+
+
+def _resolve_finalists_agree_min_agree_for_policy_name(policy_name: str, member_count: int) -> int:
+    if _is_local_finalists_agree_policy_name(policy_name):
+        return int(resolve_optimizer_local_finalists_agree_min_agree(member_count, OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE))
+    return int(resolve_optimizer_base_finalists_agree_min_agree(member_count, OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE))
+
+
+def _finalists_agree_policy_metadata(policy_name: str) -> dict:
+    if _is_local_finalists_agree_policy_name(policy_name):
+        return {
+            "selection_rule": "all_finalists_local_min_sum_best_seed_finalist_agree",
+            "min_agree_requested_key": "local_agree_min_agree_requested",
+            "min_agree_requested": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
+            "member_selection": "seed_with_max_all_finalists_local_min_sum",
+        }
+    return {
+        "selection_rule": "all_finalists_base_score_sum_best_seed_finalist_agree",
+        "min_agree_requested_key": "base_agree_min_agree_requested",
+        "min_agree_requested": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+        "member_selection": "seed_with_max_all_finalists_base_score_sum",
+    }
+
+
 def _resolve_nonrolling_policy_seed_ensemble_policy(*, policy_name: str, members: list[dict], seeds: list[int]) -> dict:
-    if _is_base_finalists_agree_policy_name(policy_name):
+    if _is_finalists_agree_policy_name(policy_name):
         member_count = max(1, len(renumber_seed_ensemble_members(list(members or []))))
+        metadata = _finalists_agree_policy_metadata(policy_name)
         policy = build_seed_ensemble_policy_snapshot(
             enabled=member_count > 1,
             seed_count=member_count,
-            min_agree=resolve_optimizer_base_finalists_agree_min_agree(member_count, OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE),
+            min_agree=_resolve_finalists_agree_min_agree_for_policy_name(policy_name, member_count),
         )
-        policy["selection_rule"] = "all_finalists_base_score_sum_best_seed_finalist_agree"
-        policy["base_agree_min_agree_requested"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
-        policy["member_selection"] = "seed_with_max_all_finalists_base_score_sum"
+        policy["selection_rule"] = str(metadata["selection_rule"])
+        policy[str(metadata["min_agree_requested_key"])] = metadata["min_agree_requested"]
+        policy["member_selection"] = str(metadata["member_selection"])
         policy["intra_seed_agree"] = "selected_seed_finalists"
         policy["requested_random_seed_ensemble"] = _resolve_nonrolling_seed_ensemble_policy(seed_count=len(seeds))
         return policy
@@ -1639,7 +1675,7 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
     from tools.optimizer.outer_rolling_oos import (
         get_optimizer_paramset_policy_names,
         get_optimizer_nonrolling_policy_paramset_filename,
-        select_base_finalists_agree_members,
+        select_finalists_agree_members,
         _remove_stale_policy_paramset_files,
     )
 
@@ -1654,8 +1690,8 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             list((policy_members_by_policy or {}).get(str(policy_name)) or []),
             key=lambda item: int(dict(item).get("member_index", 0) or 0),
         )
-        if _is_base_finalists_agree_policy_name(policy_name):
-            members = select_base_finalists_agree_members(members)
+        if _is_finalists_agree_policy_name(policy_name):
+            members = select_finalists_agree_members(members, policy_name=str(policy_name))
         if not members:
             continue
         payload = _build_static_seed_ensemble_policy_paramset_payload(
@@ -1688,7 +1724,7 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
 
 
 def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None, write_candidate_best: bool = True, write_policy_files: bool = True) -> tuple[dict, dict, dict[str, dict]]:
-    from tools.optimizer.outer_rolling_oos import select_base_finalists_agree_members
+    from tools.optimizer.outer_rolling_oos import select_finalists_agree_members
 
     candidate_selector = _resolve_trade_candidate_selector() if normalize_optimizer_model_mode(selected_model_mode) == "trade" else "candidate_best"
     candidate_members = list(members)
@@ -1696,8 +1732,8 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         selector_members = list((policy_members_by_policy or {}).get(candidate_selector) or [])
         if selector_members:
             candidate_members = sorted(selector_members, key=lambda item: int(dict(item).get("member_index", 0) or 0))
-            if _is_base_finalists_agree_policy_name(candidate_selector):
-                candidate_members = select_base_finalists_agree_members(candidate_members)
+            if _is_finalists_agree_policy_name(candidate_selector):
+                candidate_members = select_finalists_agree_members(candidate_members, policy_name=str(candidate_selector))
     candidate_members = renumber_seed_ensemble_members(candidate_members)
     policy = _resolve_nonrolling_policy_seed_ensemble_policy(
         policy_name=str(candidate_selector),

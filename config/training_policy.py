@@ -42,6 +42,7 @@ OPTIMIZER_POLICY_INDICATOR_ENABLED = {
     "base_retention_gt_min": True,
     "base_finalists_agree": True,
     "local": True,
+    "local_finalists_agree": True,
     "retention": True,
 }
 
@@ -73,8 +74,9 @@ OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = "auto" # "auto" = 過半數；整數 = 至少幾個 seed 同意。最大值永遠是 N。
 
-# base finalists agree：先以每個 seed 的全部 finalists base_score 加總選出單一 seed；
+#  finalists agree：先以每個 seed 的全部 finalists 加總選出單一 seed。
 OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE = "auto" # "auto" = 該 seed finalist 數量的一半向上取整；整數 = 至少幾個 finalist 同意。
+OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE = "auto" # "auto" = 該 seed finalist 數量的一半向上取整；整數 = 至少幾個 finalist 同意。
 
 
 # ============================== Gates ====================================
@@ -133,9 +135,8 @@ def resolve_optimizer_enabled_policy_indicators(policy_names=None) -> tuple[str,
     return tuple(name for name in names if is_optimizer_policy_indicator_enabled(name))
 
 
-def resolve_optimizer_base_finalists_agree_min_agree(finalist_count, min_agree=None) -> int:
+def _resolve_optimizer_finalists_agree_min_agree(finalist_count, raw_value) -> int:
     n = max(1, int(finalist_count or 1))
-    raw_value = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE if min_agree is None else min_agree
     text = str(raw_value).strip().lower() if raw_value is not None else "auto"
     if text in {"", "none", "null", "auto", "half", "half_up", "ceil_half"}:
         requested = int(math.ceil(n / 2.0))
@@ -145,6 +146,16 @@ def resolve_optimizer_base_finalists_agree_min_agree(finalist_count, min_agree=N
         except (TypeError, ValueError):
             requested = int(math.ceil(n / 2.0))
     return min(n, max(1, int(requested)))
+
+
+def resolve_optimizer_base_finalists_agree_min_agree(finalist_count, min_agree=None) -> int:
+    raw_value = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE if min_agree is None else min_agree
+    return _resolve_optimizer_finalists_agree_min_agree(finalist_count, raw_value)
+
+
+def resolve_optimizer_local_finalists_agree_min_agree(finalist_count, min_agree=None) -> int:
+    raw_value = OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE if min_agree is None else min_agree
+    return _resolve_optimizer_finalists_agree_min_agree(finalist_count, raw_value)
 
 
 def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
@@ -203,6 +214,7 @@ def build_training_score_policy_snapshot():
         "OPTIMIZER_BASE_RETENTION_GT_MIN": OPTIMIZER_BASE_RETENTION_GT_MIN,
         "OPTIMIZER_POLICY_INDICATOR_ENABLED": resolve_optimizer_policy_indicator_enabled_map(),
         "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
+        "OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
         "OPTIMIZER_RANDOM_SEED_ENSEMBLE": build_seed_ensemble_policy_snapshot(
             enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
             seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
@@ -237,6 +249,7 @@ def build_optimizer_train_test_policy_snapshot():
     payload["OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED"] = is_optimizer_local_min_review_enabled()
     payload["OPTIMIZER_POLICY_INDICATOR_ENABLED"] = resolve_optimizer_policy_indicator_enabled_map()
     payload["OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
+    payload["OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE"] = OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE
     payload["OPTIMIZER_RANDOM_SEED_ENSEMBLE"] = build_seed_ensemble_policy_snapshot(
         enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
         seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
