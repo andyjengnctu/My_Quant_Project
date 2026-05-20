@@ -43,6 +43,7 @@ OPTIMIZER_POLICY_INDICATOR_ENABLED = {
     "base_finalists_agree": True,
     "local": True,
     "local_finalists_agree": True,
+    "retention_finalists_agree": True,
     "retention": True,
 }
 
@@ -77,6 +78,7 @@ OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = "auto" # "auto" = 過半數；整數 
 #  finalists agree：先以每個 seed 的全部 finalists 加總選出單一 seed。
 OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE = "auto" # "auto" = 該 seed finalist 數量的一半向上取整；整數 = 至少幾個 finalist 同意。
 OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE = "auto" # "auto" = 該 seed finalist 數量的一半向上取整；整數 = 至少幾個 finalist 同意。
+OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE = "auto" # "auto" = 該 seed finalist 數量的一半向上取整；整數 = 至少幾個 finalist 同意。
 
 
 # ============================== Gates ====================================
@@ -158,6 +160,11 @@ def resolve_optimizer_local_finalists_agree_min_agree(finalist_count, min_agree=
     return _resolve_optimizer_finalists_agree_min_agree(finalist_count, raw_value)
 
 
+def resolve_optimizer_retention_finalists_agree_min_agree(finalist_count, min_agree=None) -> int:
+    raw_value = OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE if min_agree is None else min_agree
+    return _resolve_optimizer_finalists_agree_min_agree(finalist_count, raw_value)
+
+
 def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
     requested_trials = max(0, int(n_trials))
     proportional_top_k = int(math.ceil(requested_trials * OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE))
@@ -215,6 +222,7 @@ def build_training_score_policy_snapshot():
         "OPTIMIZER_POLICY_INDICATOR_ENABLED": resolve_optimizer_policy_indicator_enabled_map(),
         "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
         "OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
+        "OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE": OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
         "OPTIMIZER_RANDOM_SEED_ENSEMBLE": build_seed_ensemble_policy_snapshot(
             enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
             seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,

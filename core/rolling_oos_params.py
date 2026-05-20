@@ -15,7 +15,7 @@ from core.active_param_ensemble import (
 
 ROLLING_OOS_PARAM_SET_SCHEMA_TYPE = "rolling_oos_param_set"
 ROLLING_OOS_USAGE = "validation_only"
-ROLLING_OOS_POLICY_NAMES = ("base", "base_retention_gt_min", "base_finalists_agree", "local", "local_finalists_agree", "retention")
+ROLLING_OOS_POLICY_NAMES = ("base", "base_retention_gt_min", "base_finalists_agree", "local", "local_finalists_agree", "retention_finalists_agree", "retention")
 
 
 def is_rolling_oos_param_set_payload(payload: Mapping[str, Any] | None) -> bool:

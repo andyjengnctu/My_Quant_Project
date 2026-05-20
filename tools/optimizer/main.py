@@ -53,8 +53,10 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
     OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
     OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
+    OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
     resolve_optimizer_base_finalists_agree_min_agree,
     resolve_optimizer_local_finalists_agree_min_agree,
+    resolve_optimizer_retention_finalists_agree_min_agree,
 )
 
 
@@ -174,6 +176,9 @@ def _normalize_trade_selector(selector: str) -> str:
         "local_agree": "local_finalists_agree",
         "local_finalist_agree": "local_finalists_agree",
         "local_finalists_agree": "local_finalists_agree",
+        "retention_agree": "retention_finalists_agree",
+        "retention_finalist_agree": "retention_finalists_agree",
+        "retention_finalists_agree": "retention_finalists_agree",
     }
     return aliases.get(raw, raw or "retention")
 
@@ -182,7 +187,7 @@ def _selector_score_from_summary(summary: dict | None, selector: str):
     if not isinstance(summary, dict):
         return None
     normalized = _normalize_trade_selector(selector)
-    if normalized == "retention":
+    if normalized in {"retention", "retention_finalists_agree"}:
         return summary.get("retention")
     if normalized in {"local", "local_finalists_agree"}:
         return summary.get("local_min_score")
@@ -448,7 +453,7 @@ def _score_from_summary_for_promote(summary: dict | None, selector: str | None =
     if not isinstance(summary, dict):
         return None
     selector_key = _normalize_trade_selector(selector or _resolve_trade_run_best_selector())
-    if selector_key in {"retention", "local", "base", "base_r0", "base_r05", "base_finalists_agree", "local_finalists_agree"}:
+    if selector_key in {"retention", "retention_finalists_agree", "local", "base", "base_r0", "base_r05", "base_finalists_agree", "local_finalists_agree"}:
         try:
             return _selector_score_from_summary(summary, selector_key)
         except (TypeError, ValueError, KeyError):
@@ -898,13 +903,19 @@ def _is_local_finalists_agree_policy_name(policy_name: str | None) -> bool:
     return str(policy_name or "").strip() == "local_finalists_agree"
 
 
+def _is_retention_finalists_agree_policy_name(policy_name: str | None) -> bool:
+    return str(policy_name or "").strip() == "retention_finalists_agree"
+
+
 def _is_finalists_agree_policy_name(policy_name: str | None) -> bool:
-    return str(policy_name or "").strip() in {"base_finalists_agree", "local_finalists_agree"}
+    return str(policy_name or "").strip() in {"base_finalists_agree", "local_finalists_agree", "retention_finalists_agree"}
 
 
 def _resolve_finalists_agree_min_agree_for_policy_name(policy_name: str, member_count: int) -> int:
     if _is_local_finalists_agree_policy_name(policy_name):
         return int(resolve_optimizer_local_finalists_agree_min_agree(member_count, OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE))
+    if _is_retention_finalists_agree_policy_name(policy_name):
+        return int(resolve_optimizer_retention_finalists_agree_min_agree(member_count, OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE))
     return int(resolve_optimizer_base_finalists_agree_min_agree(member_count, OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE))
 
 
@@ -915,6 +926,13 @@ def _finalists_agree_policy_metadata(policy_name: str) -> dict:
             "min_agree_requested_key": "local_agree_min_agree_requested",
             "min_agree_requested": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
             "member_selection": "seed_with_max_all_finalists_local_min_sum",
+        }
+    if _is_retention_finalists_agree_policy_name(policy_name):
+        return {
+            "selection_rule": "all_finalists_retention_sum_best_seed_finalist_agree",
+            "min_agree_requested_key": "retention_agree_min_agree_requested",
+            "min_agree_requested": OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
+            "member_selection": "seed_with_max_all_finalists_retention_sum",
         }
     return {
         "selection_rule": "all_finalists_base_score_sum_best_seed_finalist_agree",

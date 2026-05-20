@@ -27,6 +27,7 @@ import pandas as pd
 from config.training_policy import (
     OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
     OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,
+    OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
     OPTIMIZER_BASE_RETENTION_GT_MIN,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
@@ -39,6 +40,7 @@ from config.training_policy import (
     is_optimizer_local_min_review_enabled,
     resolve_optimizer_base_finalists_agree_min_agree,
     resolve_optimizer_local_finalists_agree_min_agree,
+    resolve_optimizer_retention_finalists_agree_min_agree,
     resolve_optimizer_enabled_policy_indicators,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
@@ -122,7 +124,12 @@ OOS_SCORE_DECIMALS = 2
 
 BASE_FINALISTS_AGREE_POLICY_NAME = "base_finalists_agree"
 LOCAL_FINALISTS_AGREE_POLICY_NAME = "local_finalists_agree"
-FINALISTS_AGREE_POLICY_NAMES = (BASE_FINALISTS_AGREE_POLICY_NAME, LOCAL_FINALISTS_AGREE_POLICY_NAME)
+RETENTION_FINALISTS_AGREE_POLICY_NAME = "retention_finalists_agree"
+FINALISTS_AGREE_POLICY_NAMES = (
+    BASE_FINALISTS_AGREE_POLICY_NAME,
+    LOCAL_FINALISTS_AGREE_POLICY_NAME,
+    RETENTION_FINALISTS_AGREE_POLICY_NAME,
+)
 ALL_REPORT_POLICY_NAMES = (
     "base",
     "base_retention_gt_0_0",
@@ -130,6 +137,7 @@ ALL_REPORT_POLICY_NAMES = (
     BASE_FINALISTS_AGREE_POLICY_NAME,
     "local",
     LOCAL_FINALISTS_AGREE_POLICY_NAME,
+    RETENTION_FINALISTS_AGREE_POLICY_NAME,
     "retention",
 )
 REPORT_POLICY_NAMES = resolve_optimizer_enabled_policy_indicators(ALL_REPORT_POLICY_NAMES)
@@ -140,6 +148,7 @@ REPORT_POLICY_LABELS = {
     BASE_FINALISTS_AGREE_POLICY_NAME: "base agree",
     "local": "local",
     LOCAL_FINALISTS_AGREE_POLICY_NAME: "local agree",
+    RETENTION_FINALISTS_AGREE_POLICY_NAME: "retention agree",
     "retention": "retention",
 }
 PRIMARY_RESULT_POLICY_NAMES = tuple(
@@ -173,6 +182,7 @@ PARAMSET_FILENAME_BY_POLICY = {
     BASE_FINALISTS_AGREE_POLICY_NAME: "roos_base_finalists_agree.json",
     "local": "roos_local.json",
     LOCAL_FINALISTS_AGREE_POLICY_NAME: "roos_local_finalists_agree.json",
+    RETENTION_FINALISTS_AGREE_POLICY_NAME: "roos_retention_finalists_agree.json",
     "retention": "roos_retention.json",
 }
 
@@ -183,6 +193,7 @@ NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
     BASE_FINALISTS_AGREE_POLICY_NAME: "base_finalists_agree.json",
     "local": "local.json",
     LOCAL_FINALISTS_AGREE_POLICY_NAME: "local_finalists_agree.json",
+    RETENTION_FINALISTS_AGREE_POLICY_NAME: "retention_finalists_agree.json",
     "retention": "retention.json",
 }
 
@@ -199,6 +210,7 @@ POLICY_OUTPUT_LABELS = {
     BASE_FINALISTS_AGREE_POLICY_NAME: "base_agree",
     "local": "local",
     LOCAL_FINALISTS_AGREE_POLICY_NAME: "local_agree",
+    RETENTION_FINALISTS_AGREE_POLICY_NAME: "retention_agree",
     "retention": "retention",
 }
 
@@ -235,6 +247,10 @@ STALE_POLICY_PARAMSET_FILENAMES = (
     "local_agree.json",
     "oos_local_agree.json",
     "trade_local_agree.json",
+    "roos_retention_agree.json",
+    "retention_agree.json",
+    "oos_retention_agree.json",
+    "trade_retention_agree.json",
 )
 
 
@@ -2561,12 +2577,29 @@ def _rank_local_finalist_items(finalists: list[dict]) -> list[dict]:
     )
 
 
+def _rank_retention_finalist_items(finalists: list[dict]) -> list[dict]:
+    items = [item for item in list(finalists or []) if item.get("trial") is not None]
+    return sorted(
+        items,
+        key=lambda item: (
+            -float(item.get("local_retention", float("-inf"))),
+            -float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
+            -float(item.get("base_score", INVALID_TRIAL_VALUE)),
+            int(item["trial"].number),
+        ),
+    )
+
+
 def _is_base_finalists_agree_policy(policy_name: str) -> bool:
     return str(policy_name) == BASE_FINALISTS_AGREE_POLICY_NAME
 
 
 def _is_local_finalists_agree_policy(policy_name: str) -> bool:
     return str(policy_name) == LOCAL_FINALISTS_AGREE_POLICY_NAME
+
+
+def _is_retention_finalists_agree_policy(policy_name: str) -> bool:
+    return str(policy_name) == RETENTION_FINALISTS_AGREE_POLICY_NAME
 
 
 def _is_finalists_agree_policy(policy_name: str) -> bool:
@@ -2593,6 +2626,21 @@ def _finalists_agree_policy_config(policy_name: str) -> dict:
             "member_selection": "seed_with_max_all_finalists_local_min_sum",
             "ranker": _rank_local_finalist_items,
             "resolver": resolve_optimizer_local_finalists_agree_min_agree,
+        }
+    if _is_retention_finalists_agree_policy(name):
+        return {
+            "policy_name": RETENTION_FINALISTS_AGREE_POLICY_NAME,
+            "label": "retention_agree",
+            "score_field": "local_retention",
+            "seed_score_sum_key": "retention_agree_seed_retention_sum",
+            "seed_finalist_count_key": "retention_agree_seed_finalist_count",
+            "seed_selected_trials_key": "retention_agree_seed_selected_trials",
+            "min_agree_requested_key": "retention_agree_min_agree_requested",
+            "min_agree_requested": OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE,
+            "selection_rule": "all_finalists_retention_sum_best_seed_finalist_agree",
+            "member_selection": "seed_with_max_all_finalists_retention_sum",
+            "ranker": _rank_retention_finalist_items,
+            "resolver": resolve_optimizer_retention_finalists_agree_min_agree,
         }
     return {
         "policy_name": BASE_FINALISTS_AGREE_POLICY_NAME,
@@ -2642,6 +2690,10 @@ def _base_finalists_agree_metadata(finalists: list[dict]) -> dict:
 
 def _local_finalists_agree_metadata(finalists: list[dict]) -> dict:
     return _finalists_agree_metadata(finalists, policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME)
+
+
+def _retention_finalists_agree_metadata(finalists: list[dict]) -> dict:
+    return _finalists_agree_metadata(finalists, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME)
 
 
 def _build_finalists_agree_member_payloads(
@@ -2727,6 +2779,24 @@ def _build_local_finalists_agree_member_payloads(
     )
 
 
+def _build_retention_finalists_agree_member_payloads(
+    finalists: list[dict],
+    *,
+    member_index: int = 1,
+    seed: int | None = None,
+    local_rank_map: dict[int, int] | None = None,
+    retention_rank_map: dict[int, int] | None = None,
+) -> list[dict]:
+    return _build_finalists_agree_member_payloads(
+        finalists,
+        policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME,
+        member_index=member_index,
+        seed=seed,
+        local_rank_map=local_rank_map,
+        retention_rank_map=retention_rank_map,
+    )
+
+
 def _annotate_base_finalists_agree_selection(item: dict, finalists: list[dict]) -> dict:
     selected = dict(item)
     selected.update(_base_finalists_agree_metadata(finalists))
@@ -2756,6 +2826,7 @@ def _finalists_agree_seed_group_sort_key(group: list[dict], *, policy_name: str)
         _safe_float_for_finalists_agree_sort(member.get(config["seed_score_sum_key"]), INVALID_TRIAL_VALUE)
         for member in members
     )
+    best_retention = max(_safe_float_for_finalists_agree_sort(member.get("retention"), float("-inf")) for member in members)
     best_local_min = max(_safe_float_for_finalists_agree_sort(member.get("local_min_score", member.get("local_min")), INVALID_TRIAL_VALUE) for member in members)
     best_base_score = max(_safe_float_for_finalists_agree_sort(member.get("base_score"), INVALID_TRIAL_VALUE) for member in members)
     best_base_rank = min(_safe_int_for_finalists_agree_sort(member.get("base_rank"), 10**9) for member in members)
@@ -2765,8 +2836,10 @@ def _finalists_agree_seed_group_sort_key(group: list[dict], *, policy_name: str)
     ]
     seed_value = min(seed_values) if seed_values else 10**9
     if _is_local_finalists_agree_policy(policy_name):
-        return (seed_score_sum, best_local_min, best_base_score, -best_base_rank, -seed_value)
-    return (seed_score_sum, best_base_score, best_local_min, -best_base_rank, -seed_value)
+        return (seed_score_sum, best_local_min, best_retention, best_base_score, -best_base_rank, -seed_value)
+    if _is_retention_finalists_agree_policy(policy_name):
+        return (seed_score_sum, best_retention, best_local_min, best_base_score, -best_base_rank, -seed_value)
+    return (seed_score_sum, best_base_score, best_local_min, best_retention, -best_base_rank, -seed_value)
 
 
 def _finalists_agree_member_order_key(member: dict, *, policy_name: str) -> tuple:
@@ -2774,6 +2847,16 @@ def _finalists_agree_member_order_key(member: dict, *, policy_name: str) -> tupl
     if _is_local_finalists_agree_policy(policy_name):
         return (
             _safe_int_for_finalists_agree_sort(data.get("local_rank"), 10**9),
+            -_safe_float_for_finalists_agree_sort(data.get("local_min_score", data.get("local_min")), INVALID_TRIAL_VALUE),
+            -_safe_float_for_finalists_agree_sort(data.get("retention"), float("-inf")),
+            -_safe_float_for_finalists_agree_sort(data.get("base_score"), INVALID_TRIAL_VALUE),
+            _safe_int_for_finalists_agree_sort(data.get("selected_trial"), 10**9),
+            _safe_int_for_finalists_agree_sort(data.get("member_index"), 10**9),
+        )
+    if _is_retention_finalists_agree_policy(policy_name):
+        return (
+            _safe_int_for_finalists_agree_sort(data.get("retention_rank"), 10**9),
+            -_safe_float_for_finalists_agree_sort(data.get("retention"), float("-inf")),
             -_safe_float_for_finalists_agree_sort(data.get("local_min_score", data.get("local_min")), INVALID_TRIAL_VALUE),
             -_safe_float_for_finalists_agree_sort(data.get("base_score"), INVALID_TRIAL_VALUE),
             _safe_int_for_finalists_agree_sort(data.get("selected_trial"), 10**9),
@@ -2828,6 +2911,10 @@ def select_local_finalists_agree_members(members: list[dict]) -> list[dict]:
     return select_finalists_agree_members(members, policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME)
 
 
+def select_retention_finalists_agree_members(members: list[dict]) -> list[dict]:
+    return select_finalists_agree_members(members, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME)
+
+
 def _select_finalists_agree_item(finalists: list[dict], *, policy_name: str) -> dict | None:
     config = _finalists_agree_policy_config(policy_name)
     ranked = config["ranker"](finalists)
@@ -2857,6 +2944,10 @@ def _select_base_finalists_agree_item(finalists: list[dict]) -> dict | None:
 
 def _select_local_finalists_agree_item(finalists: list[dict]) -> dict | None:
     return _select_finalists_agree_item(finalists, policy_name=LOCAL_FINALISTS_AGREE_POLICY_NAME)
+
+
+def _select_retention_finalists_agree_item(finalists: list[dict]) -> dict | None:
+    return _select_finalists_agree_item(finalists, policy_name=RETENTION_FINALISTS_AGREE_POLICY_NAME)
 
 
 def _select_base_retention_gt_threshold_rank1_item(finalists: list[dict], *, threshold: float):
@@ -2916,6 +3007,7 @@ def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[s
         BASE_FINALISTS_AGREE_POLICY_NAME: _select_base_finalists_agree_item(finalists),
         "local": _select_local_rank1_item(finalists, objective_mode=objective_mode),
         LOCAL_FINALISTS_AGREE_POLICY_NAME: _select_local_finalists_agree_item(finalists),
+        RETENTION_FINALISTS_AGREE_POLICY_NAME: _select_retention_finalists_agree_item(finalists),
         "retention": _select_retention_rank1_item(finalists),
     }
     items.update(_select_base_retention_comparison_policy_items(finalists))
@@ -3045,6 +3137,10 @@ def _finalists_agree_metadata_keys() -> tuple[str, ...]:
         "local_agree_seed_local_min_sum",
         "local_agree_seed_selected_trials",
         "local_agree_min_agree_requested",
+        "retention_agree_seed_finalist_count",
+        "retention_agree_seed_retention_sum",
+        "retention_agree_seed_selected_trials",
+        "retention_agree_min_agree_requested",
     )
 
 def _policy_description(policy_name: str) -> str:
@@ -3056,6 +3152,8 @@ def _policy_description(policy_name: str) -> str:
         return "Select the seed whose finalists have the highest summed base_score, then replay that seed's finalists as an agree ensemble."
     if _is_local_finalists_agree_policy(policy_name):
         return "Select the seed whose finalists have the highest summed local_min_score, then replay that seed's finalists as an agree ensemble."
+    if _is_retention_finalists_agree_policy(policy_name):
+        return "Select the seed whose finalists have the highest summed retention, then replay that seed's finalists as an agree ensemble."
     if policy_name in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS:
         threshold = float(BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS[policy_name])
         return f"Use the first base_rank candidate whose local_retention > {threshold:g} for each OOS period."
@@ -3093,9 +3191,10 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
             "optimizer_seeds": optimizer_seed_values,
             "member_count": int(len(ensemble_members)),
             "min_agree": int(item.get("min_agree") or (_resolve_finalists_agree_min_agree(policy_name, len(ensemble_members)) if _is_finalists_agree_policy(policy_name) else 1)),
-            "min_agree_requested": item.get("min_agree_requested", item.get("base_agree_min_agree_requested", item.get("local_agree_min_agree_requested"))),
+            "min_agree_requested": item.get("min_agree_requested", item.get("base_agree_min_agree_requested", item.get("local_agree_min_agree_requested", item.get("retention_agree_min_agree_requested")))),
             "base_agree_min_agree_requested": item.get("base_agree_min_agree_requested"),
             "local_agree_min_agree_requested": item.get("local_agree_min_agree_requested"),
+            "retention_agree_min_agree_requested": item.get("retention_agree_min_agree_requested"),
             "base_score": float(item.get("base_score", first_member.get("base_score", INVALID_TRIAL_VALUE))),
             "base_rank": int(item.get("base_rank", first_member.get("base_rank", 0)) or 0),
             "local_min": float(item.get("local_min_score", first_member.get("local_min_score", INVALID_TRIAL_VALUE))),
@@ -3113,6 +3212,9 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
             "local_agree_seed_finalist_count": item.get("local_agree_seed_finalist_count", first_member.get("local_agree_seed_finalist_count")),
             "local_agree_seed_local_min_sum": item.get("local_agree_seed_local_min_sum", first_member.get("local_agree_seed_local_min_sum")),
             "local_agree_seed_selected_trials": item.get("local_agree_seed_selected_trials", first_member.get("local_agree_seed_selected_trials")),
+            "retention_agree_seed_finalist_count": item.get("retention_agree_seed_finalist_count", first_member.get("retention_agree_seed_finalist_count")),
+            "retention_agree_seed_retention_sum": item.get("retention_agree_seed_retention_sum", first_member.get("retention_agree_seed_retention_sum")),
+            "retention_agree_seed_selected_trials": item.get("retention_agree_seed_selected_trials", first_member.get("retention_agree_seed_selected_trials")),
         }
     trial = item["trial"]
     trial_number = int(trial.number)
@@ -4993,6 +5095,10 @@ def _build_params_ensemble_members_for_schedule(schedule: dict) -> list[dict]:
         "local_agree_seed_local_min_sum",
         "local_agree_seed_selected_trials",
         "local_agree_min_agree_requested",
+        "retention_agree_seed_finalist_count",
+        "retention_agree_seed_retention_sum",
+        "retention_agree_seed_selected_trials",
+        "retention_agree_min_agree_requested",
         "min_agree",
         "min_agree_requested",
         "member_count",
@@ -5050,6 +5156,10 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "local_agree_seed_local_min_sum": schedule.get("local_agree_seed_local_min_sum"),
             "local_agree_seed_selected_trials": schedule.get("local_agree_seed_selected_trials"),
             "local_agree_min_agree_requested": schedule.get("local_agree_min_agree_requested"),
+            "retention_agree_seed_finalist_count": schedule.get("retention_agree_seed_finalist_count"),
+            "retention_agree_seed_retention_sum": schedule.get("retention_agree_seed_retention_sum"),
+            "retention_agree_seed_selected_trials": schedule.get("retention_agree_seed_selected_trials"),
+            "retention_agree_min_agree_requested": schedule.get("retention_agree_min_agree_requested"),
             "local_min": schedule.get("local_min"),
             "local_min_review_enabled": schedule.get("local_min_review_enabled", bool(is_optimizer_local_min_review_enabled())),
             "local_min_review_mode": schedule.get("local_min_review_mode"),
@@ -7026,6 +7136,10 @@ def _build_members_from_seed_rows_for_policy(seed_rows: list[dict], policy_name:
             "local_agree_seed_local_min_sum",
             "local_agree_seed_selected_trials",
             "local_agree_min_agree_requested",
+            "retention_agree_seed_finalist_count",
+            "retention_agree_seed_retention_sum",
+            "retention_agree_seed_selected_trials",
+            "retention_agree_min_agree_requested",
         ):
             if key in schedule:
                 member[key] = schedule.get(key)

@@ -30,6 +30,7 @@ PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
     "trade_base_r0.json",
     "trade_base_finalists_agree.json",
     "trade_local_finalists_agree.json",
+    "trade_retention_finalists_agree.json",
     "base.json",
     "candidate_retention_best_params.json",
     "retention.json",
@@ -38,6 +39,7 @@ PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
     "base_r0.json",
     "base_finalists_agree.json",
     "local_finalists_agree.json",
+    "retention_finalists_agree.json",
     "oos_base.json",
     "oos_retention.json",
     "oos_local.json",
@@ -45,6 +47,7 @@ PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
     "oos_base_r0.json",
     "oos_base_finalists_agree.json",
     "oos_local_finalists_agree.json",
+    "oos_retention_finalists_agree.json",
     "roos_base.json",
     "roos_retention.json",
     "roos_local.json",
@@ -52,6 +55,7 @@ PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
     "roos_base_r0.json",
     "roos_base_finalists_agree.json",
     "roos_local_finalists_agree.json",
+    "roos_retention_finalists_agree.json",
 )
 
 
