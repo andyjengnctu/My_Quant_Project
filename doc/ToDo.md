@@ -1,10 +1,5 @@
 ## Going
 
-1. local* -> local
-2. 報表移除local的best欄位
-3. base與local之間加一個檢查 local_min > 0的base排序版本
-4. 進度條在trail完成時保留顯示最好base分數，在local_min結束時保留顯示最好local_min分數
-
 
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議
