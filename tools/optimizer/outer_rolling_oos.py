@@ -5425,6 +5425,11 @@ def _format_exception_summary(exc: BaseException) -> str:
     if exc is None:
         return "unknown"
     message = str(exc).strip()
+    if "\n最後 fold log：" in message:
+        message = message.split("\n最後 fold log：", 1)[0].strip()
+    message = " ".join(message.split())
+    if len(message) > 600:
+        message = message[:597] + "..."
     name = type(exc).__name__
     return f"{name}: {message}" if message else name
 
@@ -6909,11 +6914,18 @@ def _cancel_parallel_fold_executor_after_failure(executor, pending: set) -> None
         except Exception as exc:
             _format_exception_summary(exc)
     processes = getattr(executor, "_processes", None)
+    live_processes = []
     if isinstance(processes, dict):
         for process in list(processes.values()):
             try:
                 if process is not None and process.is_alive():
+                    live_processes.append(process)
                     process.terminate()
+            except Exception as exc:
+                _format_exception_summary(exc)
+        for process in list(live_processes):
+            try:
+                process.join(timeout=5.0)
             except Exception as exc:
                 _format_exception_summary(exc)
     shutdown = getattr(executor, "shutdown", None)
@@ -6939,6 +6951,9 @@ def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: li
     for task in missing_tasks:
         fallback_task = dict(task)
         fallback_task["log_path"] = _parallel_fold_log_path_for_fallback(str(task.get("log_path") or ""))
+        fallback_task["force_safe_sequential"] = True
+        fallback_task["safe_sequential_fallback"] = True
+        fallback_task["fold_workers"] = 1
         print(
             f"{C_CYAN}↪ fallback fold | fold={int(task.get('fold_idx', 0) or 0)}/{int(task.get('fold_count', 0) or 0)} "
             f"| OOS={_display_month_period(task.get('oos_period') or task.get('oos_year'))} | log={fallback_task.get('log_path')}{C_RESET}",
@@ -7307,6 +7322,26 @@ def _policy_replay_executor_class(backend: str):
     return ThreadPoolExecutor if str(backend or "").strip().lower() == "thread" else ProcessPoolExecutor
 
 
+def _is_safe_sequential_fold_task(task: dict | None) -> bool:
+    return bool((task or {}).get("force_safe_sequential") or (task or {}).get("safe_sequential_fallback"))
+
+
+def _should_disable_nested_parallelism(task: dict | None) -> bool:
+    if _is_safe_sequential_fold_task(task):
+        return True
+    try:
+        return int((task or {}).get("fold_workers", 1) or 1) > 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _resolve_fold_seed_ensemble_parallel_workers(task: dict | None, seed_count: int) -> int:
+    workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(int(seed_count))
+    if _should_disable_nested_parallelism(task):
+        return 1
+    return max(1, int(workers))
+
+
 def _run_policy_replay_tasks(
     replay_tasks: list[dict],
     *,
@@ -7317,7 +7352,8 @@ def _run_policy_replay_tasks(
         return {}
     replay_count = len(tasks)
     backend = resolve_optimizer_policy_replay_parallel_backend_default()
-    workers = resolve_optimizer_policy_replay_parallel_workers_default(replay_count)
+    force_serial = any(bool(task.get("force_serial_policy_replay")) for task in tasks)
+    workers = 1 if force_serial else resolve_optimizer_policy_replay_parallel_workers_default(replay_count)
     workers = max(1, min(int(workers), replay_count))
     results: dict[str, dict] = {}
     completed = 0
@@ -7473,6 +7509,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
             "payload": payload,
             "replay_context": replay_context,
             "members": members,
+            "force_serial_policy_replay": bool(_should_disable_nested_parallelism(task)),
         }
         if signature in unique_jobs_by_signature:
             unique_jobs_by_signature[signature].setdefault("policy_names", []).append(policy_name)
@@ -7622,7 +7659,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
 def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
     policy = _build_rolling_seed_ensemble_policy_payload()
     seeds = generate_random_seed_ensemble(int(policy.get("seed_count", 1) or 1))
-    parallel_workers = resolve_optimizer_random_seed_ensemble_parallel_workers_default(len(seeds))
+    parallel_workers = _resolve_fold_seed_ensemble_parallel_workers(task, len(seeds))
     log_path = str(task.get("log_path") or "")
     fold_idx = int(task.get("fold_idx", 0) or 0)
     fold_count = int(task.get("fold_count", 0) or 0)
@@ -7648,6 +7685,17 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
             selection_start=selection_start,
             selection_end=selection_end,
             status=f"seed ensemble parallel workers={int(parallel_workers)}",
+            elapsed_sec=0.0,
+        )
+    elif _should_disable_nested_parallelism(task):
+        _write_parallel_fold_progress_event(
+            stage="START",
+            fold_idx=fold_idx,
+            fold_count=fold_count,
+            oos_year=oos_year,
+            selection_start=selection_start,
+            selection_end=selection_end,
+            status="seed ensemble safe sequential workers=1",
             elapsed_sec=0.0,
         )
 
