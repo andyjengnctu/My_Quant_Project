@@ -280,6 +280,9 @@ def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_cou
     requested_model_mode = str(request.get("model_mode", "") or "").strip().lower()
     if requested_model_mode:
         session.requested_model_mode = requested_model_mode
+    requested_study_scope = str(request.get("study_scope", "") or "").strip().lower()
+    if requested_study_scope:
+        session.requested_study_scope = requested_study_scope
     return None, str(request.get("source", "unknown"))
 
 

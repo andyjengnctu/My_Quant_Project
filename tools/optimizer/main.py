@@ -31,6 +31,7 @@ from core.walk_forward_policy import (
     build_optimizer_runtime_policy,
     load_walk_forward_policy,
     normalize_optimizer_model_mode,
+    normalize_optimizer_study_scope,
 )
 from core.active_param_ensemble import build_static_active_param_ensemble_payload, is_active_param_ensemble_payload
 from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, generate_random_seed_ensemble, renumber_seed_ensemble_members
@@ -1001,7 +1002,12 @@ def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> d
 
     policy = dict(walk_forward_policy or {})
     normalized_mode = normalize_optimizer_model_mode(policy.get("model_mode", "oos"))
-    is_trade_mode = normalized_mode == "trade" or str(policy.get("evaluation_scope") or "").strip().lower() == "trade_train_only"
+    evaluation_scope = str(policy.get("evaluation_scope") or "").strip().lower()
+    is_train_only_scope = (
+        normalized_mode == "trade"
+        or evaluation_scope == "trade_train_only"
+        or evaluation_scope.startswith("study_full")
+    )
 
     selection_start_year = int(policy.get("selection_start_year", policy.get("train_start_year", 0)) or 0)
     selection_end_year = int(policy.get("search_train_end_year", selection_start_year) or selection_start_year)
@@ -1012,7 +1018,7 @@ def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> d
     if not selection_end_date and selection_end_year > 0:
         selection_end_date = f"{selection_end_year:04d}-12-31"
 
-    if is_trade_mode:
+    if is_train_only_scope:
         context = build_optimizer_seed_ensemble_fold_context(
             fold_idx=1,
             fold_count=1,
@@ -1022,8 +1028,8 @@ def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> d
             oos_end_date="",
             oos_period="",
         )
-        context["model_mode"] = "trade"
-        context["evaluation_scope"] = "trade_train_only"
+        context["model_mode"] = normalized_mode
+        context["evaluation_scope"] = evaluation_scope or ("trade_train_only" if normalized_mode == "trade" else "study_full_single_seed")
         context["show_oos"] = False
         return context
 
@@ -2412,6 +2418,35 @@ def _has_cli_flag(argv, option_name: str) -> bool:
     return any(str(arg).strip() == option_name for arg in args[1:])
 
 
+def _mode_needs_latest_data_date(model_mode: str, study_scope: str | None = None) -> bool:
+    normalized_mode = normalize_optimizer_model_mode(model_mode)
+    if normalized_mode == "trade":
+        return True
+    if normalized_mode == "study" and normalize_optimizer_study_scope(study_scope) == "full":
+        return True
+    return False
+
+
+def _resolve_optimizer_study_scope(argv, environ, *, selected_model_mode: str) -> str:
+    if normalize_optimizer_model_mode(selected_model_mode) != "study":
+        return ""
+    cli_value = _extract_cli_value(argv, "--study-scope")
+    if cli_value:
+        return normalize_optimizer_study_scope(cli_value)
+    env_value = str((environ or {}).get("V16_OPTIMIZER_STUDY_SCOPE", "") or "").strip()
+    if env_value:
+        return normalize_optimizer_study_scope(env_value)
+    return normalize_optimizer_study_scope(None)
+
+
+def _format_optimizer_model_mode_for_display(model_mode: str, walk_forward_policy: dict) -> str:
+    normalized_mode = normalize_optimizer_model_mode(model_mode)
+    if normalized_mode == "study":
+        study_scope = normalize_optimizer_study_scope((walk_forward_policy or {}).get("study_scope"))
+        return "Study-Full" if study_scope == "full" else "Study-OOS"
+    return normalized_mode
+
+
 def _resolve_cli_run_request(argv):
     from core.runtime_utils import parse_int_strict
     from tools.optimizer.benchmark import OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS
@@ -2483,11 +2518,11 @@ def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
+    validate_cli_args(argv, value_options=("--dataset", "--model", "--study-scope", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model trade|oos|study] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
-        print("說明: 預設 trade；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為 seed ensemble 單 fold validation；study 為單一隨機 seed 的 OOS study；--outer-oos 執行 rolling monthly OOS test。舊 --model full/split 仍分別相容為 trade/oos。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model trade|oos|study] [--study-scope oos|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
+        print("說明: 預設 trade；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為 seed ensemble 單 fold validation；study 可選 Study-OOS 或 Study-Full，且維持單一隨機 seed study 輸出；--outer-oos 執行 rolling monthly OOS test。舊 --model full/split 仍分別相容為 trade/oos。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -2543,14 +2578,24 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
+    try:
+        selected_study_scope = _resolve_optimizer_study_scope(argv, environ, selected_model_mode=selected_model_mode)
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
     latest_data_date = None
-    if selected_model_mode == "trade":
+    if _mode_needs_latest_data_date(selected_model_mode, selected_study_scope):
         try:
             latest_data_date = _resolve_latest_dataset_date(selected_data_dir)
         except ValueError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
-    walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode, latest_data_date=latest_data_date)
+    walk_forward_policy = build_optimizer_runtime_policy(
+        loaded_policy,
+        selected_model_mode,
+        latest_data_date=latest_data_date,
+        study_scope=selected_study_scope,
+    )
     optimizer_required_min_rows = get_breakout_optimizer_required_min_rows()
     objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
     session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
@@ -2589,23 +2634,42 @@ def main(argv=None, environ=None):
             requested_model_mode = normalize_optimizer_model_mode(requested_model_mode)
         except ValueError:
             requested_model_mode = ""
-    if requested_model_mode in {"oos", "study", "trade"} and requested_model_mode != selected_model_mode:
+    requested_study_scope = str(getattr(session, "requested_study_scope", "") or "").strip().lower()
+    if requested_study_scope:
+        try:
+            requested_study_scope = normalize_optimizer_study_scope(requested_study_scope)
+        except ValueError:
+            requested_study_scope = ""
+    target_model_mode = requested_model_mode if requested_model_mode in {"oos", "study", "trade"} else selected_model_mode
+    target_study_scope = ""
+    if target_model_mode == "study":
+        target_study_scope = requested_study_scope or selected_study_scope or normalize_optimizer_study_scope(None)
+    needs_policy_rebuild = target_model_mode != selected_model_mode or target_study_scope != selected_study_scope
+    if needs_policy_rebuild:
         requested_trials = int(getattr(session, "n_trials", 0) or 0)
         requested_action = str(getattr(session, "run_action", "train") or "train")
-        selected_model_mode = requested_model_mode
+        selected_model_mode = target_model_mode
+        selected_study_scope = target_study_scope
         latest_data_date = None
-        if selected_model_mode == "trade":
+        if _mode_needs_latest_data_date(selected_model_mode, selected_study_scope):
             try:
                 latest_data_date = _resolve_latest_dataset_date(selected_data_dir)
             except ValueError as exc:
                 print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
                 return 1
-        walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode, latest_data_date=latest_data_date)
+        walk_forward_policy = build_optimizer_runtime_policy(
+            loaded_policy,
+            selected_model_mode,
+            latest_data_date=latest_data_date,
+            study_scope=selected_study_scope,
+        )
         objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
         session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         session.n_trials = int(requested_trials)
         session.run_action = requested_action
         session.requested_model_mode = requested_model_mode
+        if selected_model_mode == "study":
+            session.requested_study_scope = selected_study_scope
         best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
         persist_study_db = bool(timing_mode or OPTIMIZER_PERSIST_STUDY_DB)
         db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if persist_study_db else ""
@@ -2814,7 +2878,8 @@ def main(argv=None, environ=None):
     selection_start_year = int(walk_forward_policy.get('selection_start_year', walk_forward_policy['train_start_year']))
     search_train_end_year = int(walk_forward_policy['search_train_end_year'])
     oos_start_year = walk_forward_policy.get('oos_start_year')
-    if selected_model_mode in {'oos', 'study'}:
+    is_study_full_mode = selected_model_mode == "study" and normalize_optimizer_study_scope(walk_forward_policy.get("study_scope")) == "full"
+    if selected_model_mode in {'oos', 'study'} and not is_study_full_mode:
         inner_scope_text = ""
         if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
             inner_validate_year = int(search_train_end_year)
@@ -2831,8 +2896,9 @@ def main(argv=None, environ=None):
         scope_text = f"selection={train_start_date}~{train_end_date} | oos=disabled | latest={latest_text}"
     inline_override_fields = list(walk_forward_policy.get("inline_override_fields", []) or [])
     override_text = "" if not inline_override_fields else f" | override={','.join(inline_override_fields)}"
+    display_model_mode = _format_optimizer_model_mode_for_display(selected_model_mode, walk_forward_policy)
     print(
-        f"{C_GRAY}📌 設定｜資料集={dataset_label}｜模式={selected_model_mode}{override_text}｜"
+        f"{C_GRAY}📌 設定｜資料集={dataset_label}｜模式={display_model_mode}{override_text}｜"
         f"{scope_text}｜trials={session.n_trials}{C_RESET}"
     )
     seed_text = str(optimizer_seed) if optimizer_seed is not None else "未設定"

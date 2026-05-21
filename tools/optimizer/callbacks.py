@@ -71,6 +71,9 @@ def _resolve_model_mode(objective_mode: str) -> str:
 def _resolve_session_model_mode(session) -> str:
     policy = dict(getattr(session, "walk_forward_policy", {}) or {})
     mode = str(policy.get("model_mode") or "").strip().lower()
+    scope = str(policy.get("evaluation_scope") or "").strip().lower()
+    if scope.startswith("study_full"):
+        return "trade"
     if mode == "split":
         return "oos"
     if mode == "full":
@@ -79,7 +82,6 @@ def _resolve_session_model_mode(session) -> str:
         return "oos"
     if mode in {"trade", "oos"}:
         return mode
-    scope = str(policy.get("evaluation_scope") or "").strip().lower()
     if scope.startswith("trade"):
         return "trade"
     if scope.startswith("oos") or scope.startswith("study"):

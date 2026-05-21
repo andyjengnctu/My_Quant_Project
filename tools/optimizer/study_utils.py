@@ -10,10 +10,12 @@ from core.dataset_profiles import (
 )
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.runtime_utils import is_interactive_stdin, parse_int_strict
+from core.walk_forward_policy import normalize_optimizer_study_scope
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
 OPTIMIZER_TRIALS_ENV_VAR = "V16_OPTIMIZER_TRIALS"
 OPTIMIZER_SEED_ENV_VAR = "V16_OPTIMIZER_SEED"
+OPTIMIZER_STUDY_SCOPE_ENV_VAR = "V16_OPTIMIZER_STUDY_SCOPE"
 DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = 1000
 DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
 INVALID_TRIAL_VALUE = -9999.0
@@ -39,6 +41,26 @@ OPTIMIZER_MENU_ACTION_TRAIN = "train"
 OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE = "export_candidate"
 OPTIMIZER_MENU_ACTION_PROMOTE_CANDIDATE = "promote_candidate"
 OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS = "outer_rolling_oos"
+
+
+def _parse_optimizer_study_scope_request_raw(raw_value: str, *, source_label: str):
+    try:
+        return normalize_optimizer_study_scope(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"Study Mode 只接受 Enter/Study-OOS 或 F/Study-Full。來源={source_label}，收到: {raw_value!r}") from exc
+
+
+def _attach_study_scope_from_env(request: dict, environ) -> dict:
+    resolved = dict(request or {})
+    if str(resolved.get("model_mode", "") or "").strip().lower() != "study":
+        return resolved
+    raw_scope = str((environ or {}).get(OPTIMIZER_STUDY_SCOPE_ENV_VAR, "") or "").strip()
+    resolved["study_scope"] = _parse_optimizer_study_scope_request_raw(
+        raw_scope,
+        source_label=f"ENV:{OPTIMIZER_STUDY_SCOPE_ENV_VAR}" if raw_scope else "DEFAULT:Study-OOS",
+    )
+    return resolved
+
 
 def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
     # Backward-compatible parser for ENV / non-interactive callers.  The
@@ -125,6 +147,12 @@ def _parse_interactive_trial_count_raw(raw_value: str) -> int:
 def _resolve_interactive_optimizer_run_request():
     mode_prompt = "👉 Optimizer Mode：[Enter] OOS Mode [S] Study Mode [R] Rolling OOS Mode  [T] Trade Mode: "
     mode_request = _parse_optimizer_mode_request_raw(input(mode_prompt), source_label="UI/MENU")
+    if str(mode_request.get("model_mode", "") or "").strip().lower() == "study":
+        study_scope_prompt = "👉 Study Mode：[Enter] Study-OOS [F] Study-Full: "
+        mode_request["study_scope"] = _parse_optimizer_study_scope_request_raw(
+            input(study_scope_prompt),
+            source_label="UI/MENU",
+        )
     trial_prompt = f"👉 訓練次數：[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  [數字] 訓練指定次數  "
     mode_request["n_trials"] = _parse_interactive_trial_count_raw(input(trial_prompt))
     return mode_request
@@ -133,7 +161,10 @@ def _resolve_interactive_optimizer_run_request():
 def resolve_optimizer_run_request(environ):
     env_value = str(environ.get(OPTIMIZER_TRIALS_ENV_VAR, "")).strip()
     if env_value != "":
-        return _parse_optimizer_run_request_raw(env_value, source_label=f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}")
+        return _attach_study_scope_from_env(
+            _parse_optimizer_run_request_raw(env_value, source_label=f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}"),
+            environ,
+        )
 
     if is_interactive_stdin():
         return _resolve_interactive_optimizer_run_request()
