@@ -131,6 +131,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     atr_len = int(params.atr_len)
     use_breakout_buy = bool(getattr(params, 'use_breakout_buy', True))
     high_len = int(params.high_len)
+    breakout_ema_len = int(getattr(params, 'breakout_ema_len', 240))
     atr_times_trail = float(params.atr_times_trail)
     use_bb = bool(getattr(params, 'use_bb', True))
     use_vol = bool(getattr(params, 'use_vol', True))
@@ -160,8 +161,10 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
             (high_len,),
             lambda: pd.Series(H).shift(1).rolling(high_len, min_periods=high_len).max().values,
         )
+        BreakoutEMA = _feature('ema_close', (breakout_ema_len,), lambda: tv_ema(C, breakout_ema_len))
     else:
         HighN = None
+        BreakoutEMA = None
 
     SuperTrend_Dir = _feature(
         'supertrend_dir',
@@ -237,8 +240,10 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     else:
         kcSellCondition = np.zeros_like(C, dtype=bool)
 
+    breakoutEmaCondition = (C > BreakoutEMA) if use_breakout_buy else np.zeros_like(C, dtype=bool)
+
     breakoutBuyCondition = (
-        is_tradable_bar & (C > O) & isPriceCrossover & bbCondition & volCondition
+        is_tradable_bar & (C > O) & isPriceCrossover & breakoutEmaCondition & bbCondition & volCondition
         if use_breakout_buy
         else np.zeros_like(C, dtype=bool)
     )

@@ -113,6 +113,7 @@ def normalize_strategy_param_value(field_name: str, raw_value: Any, expected_typ
 class V16StrategyParams:
     use_breakout_buy: bool = BREAKOUT_PARAM_SPECS["use_breakout_buy"]["default"]
     high_len: int = BREAKOUT_PARAM_SPECS["high_len"]["default"]
+    breakout_ema_len: int = BREAKOUT_PARAM_SPECS["breakout_ema_len"]["default"]
     atr_len: int = BREAKOUT_PARAM_SPECS["atr_len"]["default"]
     atr_buy_tol: float = BREAKOUT_PARAM_SPECS["atr_buy_tol"]["default"]
     atr_times_init: float = BREAKOUT_PARAM_SPECS["atr_times_init"]["default"]

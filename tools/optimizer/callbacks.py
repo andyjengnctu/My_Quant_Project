@@ -482,7 +482,7 @@ def _build_training_param_lines(params):
         else "突破買進 關閉"
     )
     return [
-        f"進場：{breakout_str}",
+        f"進場：{breakout_str}｜EMA濾網 Close > EMA{get_p(params, 'breakout_ema_len', 240)}",
         f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%",
         f"濾網：{bb_str}｜{kc_str}｜{vol_str}",
         f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R",

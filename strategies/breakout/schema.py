@@ -3,6 +3,7 @@
 BREAKOUT_PARAM_SPECS = {
     "use_breakout_buy": {"type": bool, "default": True},
     "high_len": {"type": int, "default": 201, "min_value": 1},  # (AI註: 突破新高觀察窗長度，預設 201)
+    "breakout_ema_len": {"type": int, "default": 240, "min_value": 1},  # (AI註: 突破買進需 Close > EMA_x，x 由 optimizer 訓練)
     "atr_len": {"type": int, "default": 14, "min_value": 1},  # (AI註: ATR 計算窗長，預設 14)
     "atr_buy_tol": {"type": float, "default": 1.5, "min_value": 0.0},  # (AI註: 買點容忍 ATR 倍數，預設 1.5)
     "atr_times_init": {"type": float, "default": 2.0, "min_value": 0.0, "strict_gt": True},  # (AI註: 初始停損 ATR 倍數，預設 2.0)

@@ -96,6 +96,7 @@ def resolve_unique_csv_path(data_dir, ticker):
 def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
     use_breakout_buy = bool(getattr(params, "use_breakout_buy", True))
     high_len = getattr(params, "high_len", 0) if use_breakout_buy else 0
+    breakout_ema_len = getattr(params, "breakout_ema_len", 0) if use_breakout_buy else 0
     atr_len = getattr(params, "atr_len", 0)
     bb_len = getattr(params, "bb_len", 0) if use_breakout_buy and getattr(params, "use_bb", False) else 0
     kc_len = getattr(params, "kc_len", 0) if getattr(params, "use_kc", False) else 0
@@ -103,6 +104,7 @@ def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=B
     vol_long_len = getattr(params, "vol_long_len", 0) if use_breakout_buy and getattr(params, "use_vol", False) else 0
     return get_required_min_rows_from_lookbacks(
         high_len,
+        breakout_ema_len,
         atr_len,
         bb_len,
         kc_len,
