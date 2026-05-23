@@ -4,6 +4,7 @@ EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS = 20
 
 
 BREAKOUT_PARAM_SPECS = {
+    "use_breakout_buy": {"type": bool, "default": True},
     "high_len": {"type": int, "default": 201, "min_value": 1},  # (AI註: 突破新高觀察窗長度，預設 201)
     "atr_len": {"type": int, "default": 14, "min_value": 1},  # (AI註: ATR 計算窗長，預設 14)
     "atr_buy_tol": {"type": float, "default": 1.5, "min_value": 0.0},  # (AI註: 買點容忍 ATR 倍數，預設 1.5)

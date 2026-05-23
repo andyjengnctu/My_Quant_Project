@@ -4,10 +4,11 @@ from strategies.breakout.schema import BREAKOUT_PARAM_SPECS, EMA_PULLBACK_LONG_S
 
 
 BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
+    "use_breakout_buy": {"kind": "categorical", "choices": [True]},
+    "use_ema_pullback": {"kind": "categorical", "choices": [True]},
     "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
     "use_kc": {"kind": "categorical", "choices": [True, False],},  # (AI註: 肯特納通道濾網開關搜尋)
     "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 量能濾網開關搜尋)
-    "use_ema_pullback": {"kind": "categorical", "choices": [True]},
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 40~250、步長 5)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
     "atr_times_init": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~3.5)
@@ -67,6 +68,7 @@ def _suggest_ema_pullback_params(trial):
 
 
 def build_trial_params(session, trial):
+    ai_use_breakout_buy = _suggest_optimizer_switch(trial, "use_breakout_buy")
     ai_use_bb = _suggest_optimizer_switch(trial, "use_bb")
     ai_use_kc = _suggest_optimizer_switch(trial, "use_kc")
     ai_use_vol = _suggest_optimizer_switch(trial, "use_vol")
@@ -86,6 +88,7 @@ def build_trial_params(session, trial):
         atr_times_init=trial.suggest_float("atr_times_init", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["step"]),
         atr_times_trail=trial.suggest_float("atr_times_trail", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["step"]),
         atr_buy_tol=trial.suggest_float("atr_buy_tol", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["step"]),
+        use_breakout_buy=ai_use_breakout_buy,
         high_len=trial.suggest_int("high_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["step"]),
         tp_percent=session.resolve_optimizer_tp_percent(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent),
         use_bb=ai_use_bb,
@@ -157,12 +160,13 @@ def classify_breakout_local_min_dependency_layer(field_name: str) -> str:
 
 def get_breakout_local_min_candidate_fields(trial, *, center_payload):
     candidate_fields = [
-        "high_len",
         "atr_len",
         "atr_times_init",
         "atr_times_trail",
         "atr_buy_tol",
     ]
+    if bool(center_payload.get("use_breakout_buy", True)):
+        candidate_fields.append("high_len")
     if "tp_percent" in getattr(trial, "params", {}):
         candidate_fields.append("tp_percent")
     if bool(center_payload.get("use_bb", False)):

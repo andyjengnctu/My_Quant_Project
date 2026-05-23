@@ -21,6 +21,7 @@ RUNTIME_PARAM_NAMES = tuple(RUNTIME_PARAM_DEFAULTS)
 PARAM_FIELD_DEFAULTS = {field.name: field.default for field in PARAM_FIELDS}
 PARAM_COMPAT_DEFAULT_FIELDS = {
     "min_entry_notional",
+    "use_breakout_buy",
     "use_ema_pullback",
     "ema_pullback_short_len",
     "ema_pullback_long_len",

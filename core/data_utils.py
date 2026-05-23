@@ -95,12 +95,13 @@ def resolve_unique_csv_path(data_dir, ticker):
 
 # # (AI註: 單一真理來源 - 由策略參數物件推導最低資料長度需求)
 def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
-    high_len = getattr(params, "high_len", 0)
+    use_breakout_buy = bool(getattr(params, "use_breakout_buy", True))
+    high_len = getattr(params, "high_len", 0) if use_breakout_buy else 0
     atr_len = getattr(params, "atr_len", 0)
-    bb_len = getattr(params, "bb_len", 0) if getattr(params, "use_bb", False) else 0
+    bb_len = getattr(params, "bb_len", 0) if use_breakout_buy and getattr(params, "use_bb", False) else 0
     kc_len = getattr(params, "kc_len", 0) if getattr(params, "use_kc", False) else 0
-    vol_short_len = getattr(params, "vol_short_len", 0) if getattr(params, "use_vol", False) else 0
-    vol_long_len = getattr(params, "vol_long_len", 0) if getattr(params, "use_vol", False) else 0
+    vol_short_len = getattr(params, "vol_short_len", 0) if use_breakout_buy and getattr(params, "use_vol", False) else 0
+    vol_long_len = getattr(params, "vol_long_len", 0) if use_breakout_buy and getattr(params, "use_vol", False) else 0
     ema_pullback_required_len = (
         int(getattr(params, "ema_pullback_long_len", 0) or 0) + EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS
         if getattr(params, "use_ema_pullback", False)
