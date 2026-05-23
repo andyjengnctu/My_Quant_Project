@@ -146,9 +146,32 @@ class _PortfolioConsoleWriter(io.TextIOBase):
 
 
 
+def _resolve_year_hint_from_date_or_year(date_value=None, year_value=None):
+    try:
+        if date_value:
+            return int(pd.Timestamp(date_value).year)
+    except (TypeError, ValueError):
+        pass
+    try:
+        if year_value is not None and str(year_value).strip() != "":
+            return int(year_value)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def _resolve_default_portfolio_start_year_hint():
     policy = load_walk_forward_policy(WORKBENCH_PROJECT_ROOT)
     return int(policy["search_train_end_year"]) + 1
+
+
+def _resolve_training_data_start_year_hint():
+    policy = load_walk_forward_policy(WORKBENCH_PROJECT_ROOT)
+    for date_key, year_key in (("train_start_date", "train_start_year"), ("selection_start_date", "selection_start_year")):
+        resolved = _resolve_year_hint_from_date_or_year(policy.get(date_key), policy.get(year_key))
+        if resolved is not None:
+            return resolved
+    return int(policy["train_start_year"])
 
 
 def _load_param_source_payload_silent(path):
@@ -1421,11 +1444,35 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         width_chars = min(width_chars, int(rule.get("max_chars") or width_chars))
         combo.configure(width=width_chars)
 
+    def _resolve_selected_training_start_year_hint(self):
+        candidates = [_resolve_training_data_start_year_hint()]
+        selected_label = self._param_source_display_var.get().strip()
+        params_path = self._param_source_path_by_label.get(selected_label)
+        if params_path:
+            artifact_meta = _resolve_optimizer_artifact_metadata(params_path)
+            for key in ("train_start_date", "selection_start_date"):
+                resolved = _resolve_year_hint_from_date_or_year(artifact_meta.get(key), None)
+                if resolved is not None:
+                    candidates.append(resolved)
+        return min(int(year) for year in candidates if year is not None)
+
     def _build_start_year_options(self):
         default_year = int(_resolve_default_portfolio_start_year_hint())
-        current_year = max(default_year, datetime.now().year)
-        first_year = max(2000, default_year - 6)
+        training_start_year = int(self._resolve_selected_training_start_year_hint())
+        current_year = max(default_year, training_start_year, datetime.now().year)
+        first_year = min(default_year, training_start_year)
         return [str(year) for year in range(first_year, current_year + 1)]
+
+    def _refresh_start_year_options(self):
+        if not hasattr(self, "_start_year_combo"):
+            return
+        start_year_values = self._build_start_year_options()
+        current_start_year = self._start_year_var.get().strip()
+        if current_start_year not in start_year_values:
+            self._start_year_var.set(str(_resolve_default_portfolio_start_year_hint()))
+        self._start_year_combo.configure(values=start_year_values)
+        self._autosize_combobox(self._start_year_combo, values=start_year_values, current_text=self._start_year_var.get(), rule_key="start_year")
+        self._on_start_year_selected()
 
     def _build_end_year_options(self):
         start_year = parse_int_strict(self._start_year_var.get().strip(), "開始回測年份", min_value=1900)
@@ -1643,6 +1690,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
     def _on_param_source_selected(self, _event=None):
         self._refresh_param_source_options()
+        self._refresh_start_year_options()
 
     def _refresh_param_source_options(self):
         current_label = self._param_source_display_var.get().strip()
