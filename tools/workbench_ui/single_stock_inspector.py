@@ -1153,7 +1153,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             probe_trade_count = self._resolve_scan_dropdown_trade_count(sort_probe_payload)
             win_rate_text = "-" if probe_win_rate is None else f"{probe_win_rate:.1f}%"
             trade_count_text = "-" if probe_trade_count is None else str(probe_trade_count)
-        return f"{ticker}|{kind_label}|{sort_metric_label} {sort_value_text}|勝率 {win_rate_text}|次 {trade_count_text}"
+        source_label = str(item.get("entry_signal_label") or "").strip()
+        source_text = f"|來源 {source_label}" if source_label and source_label != "未知" else ""
+        return f"{ticker}|{kind_label}{source_text}|{sort_metric_label} {sort_value_text}|勝率 {win_rate_text}|次 {trade_count_text}"
 
     def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values, rule_key):
         mapping.clear()

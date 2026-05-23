@@ -18,7 +18,7 @@ def _order_trade_history_columns(df_tr):
     if df_tr is None or df_tr.empty:
         return df_tr
     preferred = [
-        "Date", "Ticker", "Type", "買訊日", "候選日", "候選類型", "進場類型",
+        "Date", "Ticker", "Type", "買訊日", "候選日", "候選類型", "買訊來源", "進場類型",
         "買入限價", "成交價", "成本均價", "停損價", "半倉停利價", "Shadow買進價", "參考收盤價", "股數",
         "預留總金額", "投入總金額", "單筆損益", "該筆總損益", "R_Multiple", "Risk", "備註",
     ]

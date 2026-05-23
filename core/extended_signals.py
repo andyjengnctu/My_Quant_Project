@@ -2,6 +2,8 @@ import copy
 import numpy as np
 import pandas as pd
 
+from core.signal_utils import buy_signal_source_to_label, normalize_buy_signal_source
+
 from core.entry_plans import (
     build_counterfactual_shadow_position_from_plan,
     execute_pre_market_entry_plan,
@@ -78,9 +80,11 @@ def is_extended_tbd_display_day(signal_state, day_low):
 
 
 # # (AI註: 單一真理來源 - 延續候選原始訊號狀態統一由此建立；共用同一份 shadow trade 狀態，不再拆 extended / TBD 雙核心)
-def create_signal_tracking_state(original_limit, atr, params, ticker=None, security_profile=None, signal_date=None):
+def create_signal_tracking_state(original_limit, atr, params, ticker=None, security_profile=None, signal_date=None, entry_signal_type=None):
     if pd.isna(original_limit) or pd.isna(atr):
         return None
+
+    resolved_entry_signal_type = normalize_buy_signal_source(entry_signal_type)
 
     return {
         "orig_limit": original_limit,
@@ -92,6 +96,8 @@ def create_signal_tracking_state(original_limit, atr, params, ticker=None, secur
         "ticker": ticker,
         "security_profile": security_profile,
         "signal_date": signal_date,
+        "entry_signal_type": resolved_entry_signal_type,
+        "entry_signal_label": buy_signal_source_to_label(resolved_entry_signal_type),
     }
 
 
@@ -312,6 +318,8 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
         "security_profile": resolved_security_profile,
         "trade_date": trade_date,
         "signal_date": signal_state.get("signal_date"),
+        "entry_signal_type": signal_state.get("entry_signal_type", "unknown"),
+        "entry_signal_label": signal_state.get("entry_signal_label") or buy_signal_source_to_label(signal_state.get("entry_signal_type")),
     }
     if shadow_position is not None:
         base_plan["shadow_position_state"] = copy.deepcopy(shadow_position)

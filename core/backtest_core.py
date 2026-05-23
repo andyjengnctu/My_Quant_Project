@@ -6,7 +6,7 @@ from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_
 from core.strategy_params import V16StrategyParams
 from core.position_step import execute_bar_step
 from core.price_utils import adjust_long_sell_fill_price
-from core.signal_utils import generate_signals
+from core.signal_utils import buy_signal_source_to_label, generate_signals, normalize_buy_signal_source, unpack_precomputed_signals
 from core.trade_plans import (
     build_extended_entry_plan_from_signal,
     build_normal_entry_plan,
@@ -126,9 +126,9 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     Dates = df.index
 
     if precomputed_signals is None:
-        ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params, ticker=resolved_ticker)
+        ATR_main, buyCondition, sellCondition, buy_limits, buySignalSource = generate_signals(df, params, ticker=resolved_ticker)
     else:
-        ATR_main, buyCondition, sellCondition, buy_limits = precomputed_signals
+        ATR_main, buyCondition, sellCondition, buy_limits, buySignalSource = unpack_precomputed_signals(precomputed_signals)
 
     position = {'qty': 0}
     active_extended_signal = None
@@ -264,6 +264,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
         if isSetup_prev:
             sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
+            entry_signal_type = normalize_buy_signal_source(buySignalSource[j - 1])
             signal_state = create_signal_tracking_state(
                 buy_limits[j - 1],
                 ATR_main[j - 1],
@@ -271,6 +272,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 ticker=resolved_ticker,
                 security_profile=resolved_security_profile,
                 signal_date=Dates[j - 1],
+                entry_signal_type=entry_signal_type,
             )
             if signal_state is not None:
                 active_extended_signal = signal_state
@@ -282,6 +284,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                         ticker=resolved_ticker,
                         security_profile=resolved_security_profile,
                         signal_date=Dates[j - 1],
+                        entry_signal_type=entry_signal_type,
                     )
 
             should_try_normal_entry = collect_stats or _optimizer_limit_reachable_for_entry_day(
@@ -318,6 +321,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             if entry_filled:
                 filled_signal_state = active_extended_signal
                 position = entry_result['position']
+                position['entry_signal_type'] = entry_signal_type
+                position['entry_signal_label'] = buy_signal_source_to_label(entry_signal_type)
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
@@ -360,6 +365,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             if entry_filled:
                 filled_signal_state = active_extended_signal
                 position = entry_result['position']
+                position['entry_signal_type'] = normalize_buy_signal_source((filled_signal_state or {}).get('entry_signal_type'))
+                position['entry_signal_label'] = buy_signal_source_to_label(position['entry_signal_type'])
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
@@ -499,6 +506,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         atr_last=ATR_main[-1],
         close_last=C[-1],
         buy_limit_last=buy_limits[-1],
+        buy_signal_source_last=buySignalSource[-1],
         low_last=L[-1],
         had_open_position_at_end=had_open_position_at_end,
         active_extended_signal=active_extended_signal,

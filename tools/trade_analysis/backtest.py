@@ -14,7 +14,7 @@ from core.exact_accounting import (
     round_money_for_display,
 )
 from core.portfolio_fast_data import build_trade_stats_index
-from core.signal_utils import generate_signals
+from core.signal_utils import generate_signals, unpack_precomputed_signals
 from tools.trade_analysis.charting import (
     create_debug_chart_context,
     record_active_levels,
@@ -38,12 +38,15 @@ def _extract_precomputed_signals(df):
     required_columns = {'ATR', 'is_setup', 'ind_sell_signal', 'buy_limit'}
     if not required_columns.issubset(df.columns):
         return None
-    return (
+    signals = (
         df['ATR'].to_numpy(copy=False),
         df['is_setup'].to_numpy(copy=False),
         df['ind_sell_signal'].to_numpy(copy=False),
         df['buy_limit'].to_numpy(copy=False),
     )
+    if 'buy_signal_source' in df.columns:
+        signals = signals + (df['buy_signal_source'].to_numpy(copy=False),)
+    return signals
 
 
 def _resolve_active_tp_half(position):
@@ -260,7 +263,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         precomputed_signals = _extract_precomputed_signals(df)
     if precomputed_signals is None:
         precomputed_signals = generate_signals(df, params, ticker=ticker)
-    atr_main, buy_condition, sell_condition, buy_limits = precomputed_signals
+    atr_main, buy_condition, sell_condition, buy_limits, _buy_signal_source = unpack_precomputed_signals(precomputed_signals)
     stats_dict, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True, precomputed_signals=precomputed_signals, ticker=ticker)
     stats_index = build_trade_stats_index(standalone_logs)
     position = {'qty': 0}

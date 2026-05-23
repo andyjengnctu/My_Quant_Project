@@ -7,6 +7,7 @@ from core.data_utils import get_required_min_rows, resolve_latest_trade_date_fro
 from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_reference_candidate_qty, can_execute_half_take_profit
 from core.scanner_display import build_scanner_sort_probe_text
+from core.signal_utils import buy_signal_source_to_label, normalize_buy_signal_source
 from .runtime_common import is_insufficient_data_error
 
 
@@ -43,7 +44,9 @@ def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, as
     )
 
 
-def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue):
+def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue, entry_signal_type=None):
+    resolved_entry_signal_type = normalize_buy_signal_source(entry_signal_type)
+    entry_signal_label = buy_signal_source_to_label(resolved_entry_signal_type)
     sort_value = _calc_sort_value(
         expected_value=expected_value,
         proj_cost=proj_cost,
@@ -70,6 +73,8 @@ def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_coun
         'win_rate': win_rate_pct,
         'trade_count': trade_count,
         'asset_growth': asset_growth_pct,
+        'entry_signal_type': resolved_entry_signal_type,
+        'entry_signal_label': entry_signal_label,
     }
 
 
@@ -88,6 +93,9 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
     shadow_entry_price = None
     if candidate_plan is not None:
         shadow_entry_price = candidate_plan.get('shadow_entry_price', candidate_plan.get('entry_ref_price'))
+        entry_signal_type = normalize_buy_signal_source(candidate_plan.get('entry_signal_type'))
+        entry_signal_label = buy_signal_source_to_label(entry_signal_type)
+        barrier_parts.append(f"來源:{entry_signal_label}")
     if shadow_entry_price is not None and not pd.isna(shadow_entry_price):
         barrier_parts.append(f"Shadow買進:{float(shadow_entry_price):>6.2f}")
     if invalidation_barrier is not None and not pd.isna(invalidation_barrier):
@@ -128,6 +136,7 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
         proj_cost=proj_cost,
         detail=' | '.join(barrier_parts),
         sanitize_issue=sanitize_issue,
+        entry_signal_type=entry_signal_type if candidate_plan is not None else None,
     )
 
 
@@ -168,15 +177,17 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
         )
 
     if stats['is_setup_today']:
+        entry_signal_type = normalize_buy_signal_source(stats.get('entry_signal_type'))
+        entry_signal_label = buy_signal_source_to_label(entry_signal_type)
         proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)
         if proj_qty > 0:
             proj_cost = calc_entry_total_cost(stats['buy_limit'], proj_qty, params)
             half_tp_note = " | 半倉停利:股數不足" if not can_execute_half_take_profit(proj_qty, params.tp_percent) else ""
-            detail = f"限價買進:{stats['buy_limit']:>6.2f} | 參考投入:{proj_cost:>7,.0f}{half_tp_note}"
+            detail = f"來源:{entry_signal_label} | 限價買進:{stats['buy_limit']:>6.2f} | 參考投入:{proj_cost:>7,.0f}{half_tp_note}"
             kind = 'buy'
         else:
             proj_cost = 0.0
-            detail = "新訊號成立 | 股數不足，今日不掛單"
+            detail = f"來源:{entry_signal_label} | 新訊號成立 | 股數不足，今日不掛單"
             kind = 'candidate'
         return _build_scanner_row(
             kind=kind,
@@ -188,6 +199,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             proj_cost=proj_cost,
             detail=detail,
             sanitize_issue=sanitize_issue,
+            entry_signal_type=entry_signal_type,
         )
 
     if extended_candidate is not None:
@@ -248,7 +260,7 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats, 
         return None
 
     if history_row['kind'] not in ('buy', 'extended', 'extended_tbd'):
-        return ('candidate', None, None, None, None, ticker, history_row['sanitize_issue'])
+        return ('candidate', None, None, None, None, ticker, history_row['sanitize_issue'], history_row.get('entry_signal_type'), history_row.get('entry_signal_label'))
 
     return (
         history_row['kind'],
@@ -258,6 +270,8 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats, 
         history_row['text'],
         history_row['ticker'],
         history_row['sanitize_issue'],
+        history_row.get('entry_signal_type'),
+        history_row.get('entry_signal_label'),
     )
 
 
@@ -265,12 +279,15 @@ def _build_precomputed_signals(df):
     required_columns = {'ATR', 'is_setup', 'ind_sell_signal', 'buy_limit'}
     if not required_columns.issubset(df.columns):
         return None
-    return (
+    signals = (
         df['ATR'].to_numpy(copy=False),
         df['is_setup'].to_numpy(copy=False),
         df['ind_sell_signal'].to_numpy(copy=False),
         df['buy_limit'].to_numpy(copy=False),
     )
+    if 'buy_signal_source' in df.columns:
+        signals = signals + (df['buy_signal_source'].to_numpy(copy=False),)
+    return signals
 
 
 def process_prepared_stock(df, ticker, params, sanitize_stats=None):
