@@ -1817,6 +1817,104 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
 
 
 
+def _resolve_trial_base_score(trial) -> float:
+    attrs = getattr(trial, "user_attrs", {}) or {}
+    value = attrs.get("base_score", getattr(trial, "value", INVALID_TRIAL_VALUE))
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(INVALID_TRIAL_VALUE)
+
+
+def _remove_study_full_non_base_policy_outputs() -> None:
+    from tools.optimizer.outer_rolling_oos import (
+        get_optimizer_nonrolling_policy_paramset_filename,
+        get_optimizer_paramset_policy_names,
+    )
+
+    for policy_name in get_optimizer_paramset_policy_names():
+        if str(policy_name) == "base":
+            continue
+        path = os.path.join(
+            MODELS_DIR,
+            get_optimizer_nonrolling_policy_paramset_filename(str(policy_name), mode="study"),
+        )
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as exc:
+            print(
+                f"{C_YELLOW}⚠️ Study-Full 無法移除非 base 舊檔："
+                f"{_project_relative_path(path)}｜{type(exc).__name__}: {exc}{C_RESET}"
+            )
+
+
+def _finalize_single_seed_study_base_only_outputs(
+    *,
+    best_trial,
+    optimizer_seed: int,
+    objective_mode: str,
+    walk_forward_policy: dict,
+    dataset_label: str,
+    selected_model_mode: str,
+    trials_per_seed: int,
+    build_best_params_payload_from_trial,
+) -> int:
+    from tools.optimizer.outer_rolling_oos import get_optimizer_nonrolling_policy_paramset_filename
+
+    base_score = _resolve_trial_base_score(best_trial)
+    params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
+    seed_value = int(optimizer_seed)
+    member = {
+        "member_index": 1,
+        "seed": seed_value,
+        "selected_trial": int(best_trial.number) + 1,
+        "params": dict(params_payload),
+        "score": float(base_score),
+        "base_score": float(base_score),
+    }
+    base_payload = _build_static_seed_ensemble_policy_paramset_payload(
+        policy_name="base",
+        members=[member],
+        seeds=[seed_value],
+        objective_mode=objective_mode,
+        walk_forward_policy=walk_forward_policy,
+        dataset_label=dataset_label,
+        selected_model_mode=selected_model_mode,
+        trials_per_seed=int(trials_per_seed),
+    )
+    if isinstance(base_payload.get("meta"), dict):
+        base_payload["meta"].update({
+            "base_only": True,
+            "local_min_review_enabled": False,
+            "local_min_review_skipped_reason": "Study-Full only exports base.",
+        })
+    base_payload.setdefault("summary", {})
+    base_payload["summary"].update({
+        "selected_policy": "base",
+        "study_scope": "full",
+        "base_only": True,
+        "local_min_review_enabled": False,
+        "selected_trial": int(best_trial.number) + 1,
+        "seed": seed_value,
+        "base_score": float(base_score),
+    })
+    base_path = os.path.join(
+        MODELS_DIR,
+        get_optimizer_nonrolling_policy_paramset_filename("base", mode=selected_model_mode),
+    )
+    _remove_study_full_non_base_policy_outputs()
+    _write_json_file(base_path, base_payload)
+    print(
+        f"{C_GREEN}✅ Study-Full base 完成｜"
+        f"trial=#{int(best_trial.number) + 1}｜base={base_score:.3f}{C_RESET}"
+    )
+    _print_optimizer_output_files("💾 輸出檔案", [("base", base_path)])
+    return 0
+
+
+
+
 
 def _finalize_single_seed_study_outputs(
     *,
@@ -2448,6 +2546,13 @@ def _format_optimizer_model_mode_for_display(model_mode: str, walk_forward_polic
     return normalized_mode
 
 
+def _is_study_full_runtime_mode(model_mode: str, walk_forward_policy: dict) -> bool:
+    return (
+        normalize_optimizer_model_mode(model_mode) == "study"
+        and normalize_optimizer_study_scope((walk_forward_policy or {}).get("study_scope")) == "full"
+    )
+
+
 def _build_optimizer_study_db_file_path(*, output_dir: str, dataset_profile_key: str, study_scope: str) -> str:
     safe_dataset = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
     safe_scope = normalize_optimizer_study_scope(study_scope)
@@ -2953,7 +3058,7 @@ def main(argv=None, environ=None):
     selection_start_year = int(walk_forward_policy.get('selection_start_year', walk_forward_policy['train_start_year']))
     search_train_end_year = int(walk_forward_policy['search_train_end_year'])
     oos_start_year = walk_forward_policy.get('oos_start_year')
-    is_study_full_mode = selected_model_mode == "study" and normalize_optimizer_study_scope(walk_forward_policy.get("study_scope")) == "full"
+    is_study_full_mode = _is_study_full_runtime_mode(selected_model_mode, walk_forward_policy)
     if selected_model_mode in {'oos', 'study'} and not is_study_full_mode:
         inner_scope_text = ""
         if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
@@ -3080,77 +3185,10 @@ def main(argv=None, environ=None):
             )
             print_timing_summary(payload=timing_payload)
         elif should_export:
-            compact_display = True
-            if compact_display:
-                session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(
-                    walk_forward_policy,
-                    best_base_score=_resolve_study_best_base_score(session, study),
-                    overall_start=overall_started_at,
-                )
-            try:
-                finalists, best_trial = print_local_min_score_finalist_review(
-                    study,
-                    session=session,
-                    objective_mode=objective_mode,
-                    colors=COLORS,
-                    winner_trial=None,
-                    emit_table=True,
-                    show_progress=True,
-                )
-            finally:
-                if compact_display:
-                    _finalize_nonrolling_single_fold_inline_progress(session)
-                    _clear_nonrolling_local_min_progress_hooks(session)
-            if best_trial is not None and is_qualified_trial_value(best_trial.value):
-                if selected_model_mode != 'trade':
-                    print_local_min_score_winner_summary(
-                        winner_trial=best_trial,
-                        session=session,
-                        colors=COLORS,
-                    )
-                if selected_model_mode == 'trade':
-                    selector = _resolve_trade_candidate_selector()
-                    selected_entry = _select_finalist_entry_by_selector(finalists, objective_mode=objective_mode, selector=selector)
-                    selected_trial = None if selected_entry is None else selected_entry.get("trial")
-                    if selected_trial is None or not is_qualified_trial_value(selected_trial.value):
-                        print(f"{C_YELLOW}ℹ️ Trade mode 完成，但 selector={selector} 無可匯出的 candidate。{C_RESET}")
-                        return 0
-                    print_local_min_score_winner_summary(
-                        winner_trial=selected_trial,
-                        session=session,
-                        colors=COLORS,
-                    )
-                    exported = _export_selected_candidate_artifacts(
-                        study=study,
-                        finalists=finalists,
-                        selected_trial=selected_trial,
-                        params_path=CANDIDATE_BEST_PARAMS_PATH,
-                        summary_path=CANDIDATE_BEST_SUMMARY_PATH,
-                        fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-                        colors=COLORS,
-                        objective_mode=objective_mode,
-                        walk_forward_policy=walk_forward_policy,
-                        action_label="train",
-                        selection_rule=f"trade_selector:{selector}",
-                        compare_only=False,
-                        artifact_label="candidate_best",
-                        export_best_params_if_requested=export_best_params_if_requested,
-                        is_qualified_trial_value=is_qualified_trial_value,
-                    )
-                    if not exported:
-                        return 1
-                    if bool(TRADE_MODE_AUTO_PROMOTE_RUN_BEST):
-                        promote_status = _promote_candidate_to_run_best(session=session, emit_output=False)
-                        if promote_status != 0:
-                            return int(promote_status)
-                    output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)]
-                    if os.path.exists(RUN_BEST_PARAMS_PATH):
-                        output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
-                    _print_optimizer_output_files("💾 輸出檔案", output_entries)
-                elif selected_model_mode == 'study':
-                    status = _finalize_single_seed_study_outputs(
-                        session=session,
-                        finalists=finalists,
+            if _is_study_full_runtime_mode(selected_model_mode, walk_forward_policy):
+                best_trial = session.get_best_completed_trial_or_none(study)
+                if best_trial is not None and is_qualified_trial_value(best_trial.value):
+                    status = _finalize_single_seed_study_base_only_outputs(
                         best_trial=best_trial,
                         optimizer_seed=int(optimizer_seed),
                         objective_mode=objective_mode,
@@ -3159,21 +3197,106 @@ def main(argv=None, environ=None):
                         selected_model_mode=selected_model_mode,
                         trials_per_seed=int(session.n_trials),
                         build_best_params_payload_from_trial=build_best_params_payload_from_trial,
-                        elapsed_sec=max(0.0, time.perf_counter() - optimize_started_at),
                     )
                     if status != 0:
                         return int(status)
-                elif selected_model_mode == 'oos':
-                    finalize_best_trial_outputs(
-                        session=session,
-                        study=study,
-                        best_trial_resolver=(lambda _study, _best_trial=best_trial: _best_trial),
-                        dataset_label=dataset_label,
-                        db_file=db_file,
-                        walk_forward_policy=walk_forward_policy,
-                    )
+                else:
+                    print(f"{C_YELLOW}ℹ️ Study-Full 訓練完成，但目前尚無可匯出的 base trial。{C_RESET}")
             else:
-                print(f"{C_YELLOW}ℹ️ 訓練完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
+                compact_display = True
+                if compact_display:
+                    session.outer_rolling_local_progress_context = _make_nonrolling_local_min_progress_context(
+                        walk_forward_policy,
+                        best_base_score=_resolve_study_best_base_score(session, study),
+                        overall_start=overall_started_at,
+                    )
+                try:
+                    finalists, best_trial = print_local_min_score_finalist_review(
+                        study,
+                        session=session,
+                        objective_mode=objective_mode,
+                        colors=COLORS,
+                        winner_trial=None,
+                        emit_table=True,
+                        show_progress=True,
+                    )
+                finally:
+                    if compact_display:
+                        _finalize_nonrolling_single_fold_inline_progress(session)
+                        _clear_nonrolling_local_min_progress_hooks(session)
+                if best_trial is not None and is_qualified_trial_value(best_trial.value):
+                    if selected_model_mode != 'trade':
+                        print_local_min_score_winner_summary(
+                            winner_trial=best_trial,
+                            session=session,
+                            colors=COLORS,
+                        )
+                    if selected_model_mode == 'trade':
+                        selector = _resolve_trade_candidate_selector()
+                        selected_entry = _select_finalist_entry_by_selector(finalists, objective_mode=objective_mode, selector=selector)
+                        selected_trial = None if selected_entry is None else selected_entry.get("trial")
+                        if selected_trial is None or not is_qualified_trial_value(selected_trial.value):
+                            print(f"{C_YELLOW}ℹ️ Trade mode 完成，但 selector={selector} 無可匯出的 candidate。{C_RESET}")
+                            return 0
+                        print_local_min_score_winner_summary(
+                            winner_trial=selected_trial,
+                            session=session,
+                            colors=COLORS,
+                        )
+                        exported = _export_selected_candidate_artifacts(
+                            study=study,
+                            finalists=finalists,
+                            selected_trial=selected_trial,
+                            params_path=CANDIDATE_BEST_PARAMS_PATH,
+                            summary_path=CANDIDATE_BEST_SUMMARY_PATH,
+                            fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                            colors=COLORS,
+                            objective_mode=objective_mode,
+                            walk_forward_policy=walk_forward_policy,
+                            action_label="train",
+                            selection_rule=f"trade_selector:{selector}",
+                            compare_only=False,
+                            artifact_label="candidate_best",
+                            export_best_params_if_requested=export_best_params_if_requested,
+                            is_qualified_trial_value=is_qualified_trial_value,
+                        )
+                        if not exported:
+                            return 1
+                        if bool(TRADE_MODE_AUTO_PROMOTE_RUN_BEST):
+                            promote_status = _promote_candidate_to_run_best(session=session, emit_output=False)
+                            if promote_status != 0:
+                                return int(promote_status)
+                        output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)]
+                        if os.path.exists(RUN_BEST_PARAMS_PATH):
+                            output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
+                        _print_optimizer_output_files("💾 輸出檔案", output_entries)
+                    elif selected_model_mode == 'study':
+                        status = _finalize_single_seed_study_outputs(
+                            session=session,
+                            finalists=finalists,
+                            best_trial=best_trial,
+                            optimizer_seed=int(optimizer_seed),
+                            objective_mode=objective_mode,
+                            walk_forward_policy=walk_forward_policy,
+                            dataset_label=dataset_label,
+                            selected_model_mode=selected_model_mode,
+                            trials_per_seed=int(session.n_trials),
+                            build_best_params_payload_from_trial=build_best_params_payload_from_trial,
+                            elapsed_sec=max(0.0, time.perf_counter() - optimize_started_at),
+                        )
+                        if status != 0:
+                            return int(status)
+                    elif selected_model_mode == 'oos':
+                        finalize_best_trial_outputs(
+                            session=session,
+                            study=study,
+                            best_trial_resolver=(lambda _study, _best_trial=best_trial: _best_trial),
+                            dataset_label=dataset_label,
+                            db_file=db_file,
+                            walk_forward_policy=walk_forward_policy,
+                        )
+                else:
+                    print(f"{C_YELLOW}ℹ️ 訓練完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
         elif export_policy == "interrupted_before_target":
             print(
                 f"{C_YELLOW}ℹ️ 本輪由使用者中斷，已完成 {session.current_session_trial}/{session.n_trials}；"

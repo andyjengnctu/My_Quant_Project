@@ -47,7 +47,7 @@ def _parse_optimizer_study_scope_request_raw(raw_value: str, *, source_label: st
     try:
         return normalize_optimizer_study_scope(raw_value)
     except ValueError as exc:
-        raise ValueError(f"Study Mode 只接受 Enter/Study-OOS 或 F/Study-Full。來源={source_label}，收到: {raw_value!r}") from exc
+        raise ValueError(f"Study Mode 只接受 F/Study-Full 或 2/Study-OOS。來源={source_label}，收到: {raw_value!r}") from exc
 
 
 def _attach_study_scope_from_env(request: dict, environ) -> dict:
@@ -57,7 +57,7 @@ def _attach_study_scope_from_env(request: dict, environ) -> dict:
     raw_scope = str((environ or {}).get(OPTIMIZER_STUDY_SCOPE_ENV_VAR, "") or "").strip()
     resolved["study_scope"] = _parse_optimizer_study_scope_request_raw(
         raw_scope,
-        source_label=f"ENV:{OPTIMIZER_STUDY_SCOPE_ENV_VAR}" if raw_scope else "DEFAULT:Study-OOS",
+        source_label=f"ENV:{OPTIMIZER_STUDY_SCOPE_ENV_VAR}" if raw_scope else "DEFAULT:Study-Full",
     )
     return resolved
 
@@ -148,7 +148,7 @@ def _resolve_interactive_optimizer_run_request():
     mode_prompt = "👉 Optimizer Mode：[Enter] OOS Mode [S] Study Mode [R] Rolling OOS Mode  [T] Trade Mode: "
     mode_request = _parse_optimizer_mode_request_raw(input(mode_prompt), source_label="UI/MENU")
     if str(mode_request.get("model_mode", "") or "").strip().lower() == "study":
-        study_scope_prompt = "👉 Study Mode：[Enter] Study-OOS [F] Study-Full: "
+        study_scope_prompt = "👉 Study Mode：[F] Study-Full [2] Study-OOS: "
         mode_request["study_scope"] = _parse_optimizer_study_scope_request_raw(
             input(study_scope_prompt),
             source_label="UI/MENU",

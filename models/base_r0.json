@@ -3,12 +3,12 @@
     "schema_version": 1,
     "mode": "static",
     "type": "active_param_ensemble",
-    "selector": "base",
+    "selector": "base_retention_gt_0_0",
     "params_ensemble": [
         {
             "member_index": 1,
             "seed": 1952893620,
-            "policy": "base",
+            "policy": "base_retention_gt_0_0",
             "selected_trial": 256,
             "optimizer_seed": 1952893620,
             "score": 167.40264428385166,
@@ -58,7 +58,7 @@
             }
         }
     ],
-    "created_at": "2026-05-23T16:10:58.386095+08:00",
+    "created_at": "2026-05-23T16:10:58.386602+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 1,
@@ -99,12 +99,12 @@
             "latest_data_date": "2026-03-02"
         },
         "local_min_review_enabled": true,
-        "policy": "base"
+        "policy": "base_retention_gt_0_0"
     },
     "summary": {
         "folds": 1,
         "mode": "static",
-        "selector": "base",
+        "selector": "base_retention_gt_0_0",
         "selection_period": "2011-01-01~2026-03-02",
         "oos_period": "",
         "member_count": 1,
