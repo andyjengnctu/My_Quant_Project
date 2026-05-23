@@ -44,9 +44,7 @@ def _adapt_candidate_scan_result(result):
     if result is None:
         return {"history_qualified": False, "skip_insufficient": False, "row": None, "sanitize_issue": None}
 
-    status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = result[:7]
-    entry_signal_type = result[7] if len(result) >= 8 else None
-    entry_signal_label = result[8] if len(result) >= 9 else None
+    status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = result
     history_qualified = status in ['buy', 'extended', 'extended_tbd', 'candidate']
     row = None
     if status in ['buy', 'extended', 'extended_tbd']:
@@ -59,8 +57,6 @@ def _adapt_candidate_scan_result(result):
             'text': msg,
             'ticker': ticker,
             'sanitize_issue': sanitize_issue,
-            'entry_signal_type': entry_signal_type,
-            'entry_signal_label': entry_signal_label,
         }
     return {
         "history_qualified": history_qualified,
