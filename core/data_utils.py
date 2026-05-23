@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+from strategies.breakout.schema import EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS
 
 LOAD_DATA_MIN_ROWS = 50
 LOAD_DATA_REQUIRED_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -100,8 +101,8 @@ def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=B
     kc_len = getattr(params, "kc_len", 0) if getattr(params, "use_kc", False) else 0
     vol_short_len = getattr(params, "vol_short_len", 0) if getattr(params, "use_vol", False) else 0
     vol_long_len = getattr(params, "vol_long_len", 0) if getattr(params, "use_vol", False) else 0
-    ema_pullback_long_len = (
-        int(getattr(params, "ema_pullback_long_len", 0) or 0) + 20
+    ema_pullback_required_len = (
+        int(getattr(params, "ema_pullback_long_len", 0) or 0) + EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS
         if getattr(params, "use_ema_pullback", False)
         else 0
     )
@@ -113,7 +114,7 @@ def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=B
         kc_len,
         vol_short_len,
         vol_long_len,
-        ema_pullback_long_len,
+        ema_pullback_required_len,
         base_min_rows=base_min_rows,
         extra_rows=extra_rows
     )

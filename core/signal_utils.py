@@ -3,6 +3,7 @@ import pandas as pd
 
 from core.price_utils import adjust_long_buy_limit_array
 from core.feature_bank import coerce_feature_bank
+from strategies.breakout.schema import EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS
 
 OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
 
@@ -285,31 +286,30 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
 
     if use_ema_pullback:
         ema_short_len = int(params.ema_pullback_short_len)
-        ema_mid_len = int(params.ema_pullback_mid_len)
         ema_long_len = int(params.ema_pullback_long_len)
+        ema_long_slope_min_pct = float(params.ema_pullback_long_slope_min_pct)
+        ema_long_slope_lookback = EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS
         EMA_Short = _feature('ema_close', (ema_short_len,), lambda: tv_ema(C, ema_short_len))
-        EMA_Mid = _feature('ema_close', (ema_mid_len,), lambda: tv_ema(C, ema_mid_len))
         EMA_Long = _feature('ema_close', (ema_long_len,), lambda: tv_ema(C, ema_long_len))
 
         prev_ema_short = np.empty_like(EMA_Short)
         prev_ema_short[0] = EMA_Short[0]
         prev_ema_short[1:] = EMA_Short[:-1]
-        prev_ema_mid = np.empty_like(EMA_Mid)
-        prev_ema_mid[0] = EMA_Mid[0]
-        prev_ema_mid[1:] = EMA_Mid[:-1]
-        ema_long_lag20 = np.empty_like(EMA_Long)
-        ema_long_lag20[:20] = np.nan
-        ema_long_lag20[20:] = EMA_Long[:-20]
+        ema_long_lag = np.empty_like(EMA_Long)
+        ema_long_lag[:ema_long_slope_lookback] = np.nan
+        ema_long_lag[ema_long_slope_lookback:] = EMA_Long[:-ema_long_slope_lookback]
+
+        ema_long_slope_pct = (EMA_Long / ema_long_lag) - 1.0
 
         emaPullbackBuyCondition = (
             is_tradable_bar
             & (C > prev_close)
-            & (C > EMA_Long)
-            & (EMA_Long >= ema_long_lag20)
-            & (EMA_Short > EMA_Mid)
-            & (prev_ema_short <= prev_ema_mid)
+            & (C > EMA_Short)
+            & (prev_close <= prev_ema_short)
+            & (EMA_Short > EMA_Long)
+            & (ema_long_slope_pct >= ema_long_slope_min_pct)
         )
-        emaPullbackBuyCondition[:20] = False
+        emaPullbackBuyCondition[:ema_long_slope_lookback] = False
     else:
         emaPullbackBuyCondition = np.zeros_like(C, dtype=bool)
 

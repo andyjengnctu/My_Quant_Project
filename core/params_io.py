@@ -23,8 +23,8 @@ PARAM_COMPAT_DEFAULT_FIELDS = {
     "min_entry_notional",
     "use_ema_pullback",
     "ema_pullback_short_len",
-    "ema_pullback_mid_len",
     "ema_pullback_long_len",
+    "ema_pullback_long_slope_min_pct",
 }
 
 

@@ -180,7 +180,6 @@ def resolve_chart_price_overlay_specs(*, params=None, overlay_specs=None):
     elif params is not None and bool(getattr(params, "use_ema_pullback", False)):
         raw_specs = [
             {"label": f"EMA{int(getattr(params, 'ema_pullback_short_len'))}", "kind": "ema", "period": int(getattr(params, 'ema_pullback_short_len'))},
-            {"label": f"EMA{int(getattr(params, 'ema_pullback_mid_len'))}", "kind": "ema", "period": int(getattr(params, 'ema_pullback_mid_len'))},
             {"label": f"EMA{int(getattr(params, 'ema_pullback_long_len'))}", "kind": "ema", "period": int(getattr(params, 'ema_pullback_long_len'))},
         ]
     else:
