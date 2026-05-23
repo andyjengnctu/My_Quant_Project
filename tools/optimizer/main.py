@@ -16,6 +16,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
+    normalize_dataset_profile_key,
     get_dataset_dir,
     get_dataset_profile_label,
     resolve_dataset_profile_from_cli_env,
@@ -2447,6 +2448,52 @@ def _format_optimizer_model_mode_for_display(model_mode: str, walk_forward_polic
     return normalized_mode
 
 
+def _build_optimizer_study_db_file_path(*, output_dir: str, dataset_profile_key: str, study_scope: str) -> str:
+    safe_dataset = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
+    safe_scope = normalize_optimizer_study_scope(study_scope)
+    return os.path.join(output_dir, "study_db", f"optimizer_study_{safe_dataset}_{safe_scope}.db")
+
+
+def _resolve_optimizer_db_file_for_mode(*, output_dir: str, dataset_profile_key: str, selected_model_mode: str, selected_study_scope: str, session_ts: str, timing_mode: bool) -> str:
+    from tools.optimizer.benchmark import build_timing_db_file_path
+
+    if bool(timing_mode):
+        return build_timing_db_file_path(output_dir=output_dir, dataset_profile_key=dataset_profile_key, session_ts=session_ts)
+    if normalize_optimizer_model_mode(selected_model_mode) == "study":
+        return _build_optimizer_study_db_file_path(
+            output_dir=output_dir,
+            dataset_profile_key=dataset_profile_key,
+            study_scope=selected_study_scope,
+        )
+    if bool(OPTIMIZER_PERSIST_STUDY_DB):
+        return build_timing_db_file_path(output_dir=output_dir, dataset_profile_key=dataset_profile_key, session_ts=session_ts)
+    return ""
+
+
+def _apply_interactive_study_db_policy(*, selected_model_mode: str, db_file: str, colors: dict) -> None:
+    if normalize_optimizer_model_mode(selected_model_mode) != "study":
+        return
+    if not db_file or not is_interactive_console():
+        return
+    choice = safe_prompt_choice(
+        "\n👉 Study 記憶庫：[Enter] 重頭開始  [2] 接續訓練 : ",
+        "",
+        ("", "2"),
+        "Study 記憶庫操作選項",
+    )
+    if choice == "2":
+        if os.path.exists(db_file):
+            print(f"{colors['green']}🔁 Study mode 接續既有記憶庫：{_project_relative_path(db_file)}{colors['reset']}")
+        else:
+            print(f"{colors['yellow']}ℹ️ 找不到既有 Study 記憶庫，改用重頭開始：{_project_relative_path(db_file)}{colors['reset']}")
+        return
+    if os.path.exists(db_file):
+        os.remove(db_file)
+        print(f"{colors['red']}🗑️ Study mode 已刪除舊記憶，重頭開始：{_project_relative_path(db_file)}{colors['reset']}")
+    else:
+        print(f"{colors['gray']}🆕 Study mode 重頭開始：{_project_relative_path(db_file)}{colors['reset']}")
+
+
 def _resolve_cli_run_request(argv):
     from core.runtime_utils import parse_int_strict
     from tools.optimizer.benchmark import OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS
@@ -2608,8 +2655,14 @@ def main(argv=None, environ=None):
         return 1
 
     timing_mode = bool(cli_run_request and cli_run_request.get("timing_mode"))
-    persist_study_db = bool(timing_mode or OPTIMIZER_PERSIST_STUDY_DB)
-    db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if persist_study_db else ""
+    db_file = _resolve_optimizer_db_file_for_mode(
+        output_dir=OUTPUT_DIR,
+        dataset_profile_key=dataset_profile_key,
+        selected_model_mode=selected_model_mode,
+        selected_study_scope=selected_study_scope,
+        session_ts=session.session_ts,
+        timing_mode=timing_mode,
+    )
     db_name = f"sqlite:///{db_file}" if db_file else None
     ensure_runtime_dirs()
 
@@ -2671,8 +2724,14 @@ def main(argv=None, environ=None):
         if selected_model_mode == "study":
             session.requested_study_scope = selected_study_scope
         best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
-        persist_study_db = bool(timing_mode or OPTIMIZER_PERSIST_STUDY_DB)
-        db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if persist_study_db else ""
+        db_file = _resolve_optimizer_db_file_for_mode(
+            output_dir=OUTPUT_DIR,
+            dataset_profile_key=dataset_profile_key,
+            selected_model_mode=selected_model_mode,
+            selected_study_scope=selected_study_scope,
+            session_ts=session.session_ts,
+            timing_mode=timing_mode,
+        )
         db_name = f"sqlite:///{db_file}" if db_file else None
 
     if str(getattr(session, "run_action", "train")) == "outer_rolling_oos":
@@ -2863,7 +2922,7 @@ def main(argv=None, environ=None):
         return 1
 
     try:
-        if db_file and os.path.exists(db_file):
+        if db_file and selected_model_mode != "study" and os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
     except RuntimeError as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -2905,8 +2964,12 @@ def main(argv=None, environ=None):
     print(f"{C_GRAY}🎲 Optimizer seed: {seed_text} | 來源: {seed_source}{C_RESET}")
 
     try:
-        if not timing_mode:
+        if not timing_mode and selected_model_mode == "study":
+            _apply_interactive_study_db_policy(selected_model_mode=selected_model_mode, db_file=db_file, colors=COLORS)
+        elif not timing_mode:
             prompt_existing_db_policy(db_file, COLORS)
+        if db_file:
+            os.makedirs(os.path.dirname(db_file), exist_ok=True)
         if os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
         sampler_kind = "random" if timing_mode else "tpe"
