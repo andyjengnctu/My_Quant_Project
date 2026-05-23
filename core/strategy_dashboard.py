@@ -342,6 +342,21 @@ def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=24, w3=31, w4=32):
     )
 
 
+def _table_row_cells(cells, widths):
+    rendered = [f" {_pad_display(cell, width)} " for cell, width in zip(cells, widths)]
+    return "|" + "|".join(rendered) + "|"
+
+
+def _build_table_widths(rows, *, min_widths):
+    widths = [int(v) for v in min_widths]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            if idx >= len(widths):
+                widths.append(0)
+            widths[idx] = max(widths[idx], _display_width(cell))
+    return tuple(widths)
+
+
 def _build_table4_compact_widths(rows: list[tuple[str, str, str, str]], *, min_widths: tuple[int, int, int, int] = (20, 24, 31, 32)) -> tuple[int, int, int, int]:
     widths = [int(v) for v in min_widths]
     for row in rows:
@@ -440,6 +455,7 @@ def print_optimizer_trial_console_dashboard(*,
     compare_rows: list[dict] | None,
     params_lines: list[str],
     hard_gate_lines: list[str],
+    study_full_breakout_stats: dict | None = None,
 ):
     training_header = ("指標項目", "本輪候選", "run_best (差異)", "同期大盤0050 (差異)")
     training_table_rows = [training_header]
@@ -502,12 +518,32 @@ def print_optimizer_trial_console_dashboard(*,
         compare_widths = _build_table5_widths(compare_render_rows)
         compare_header_line = _table_row5(*compare_header, *compare_widths)
 
+    study_full_stats_header = ("交易數", "勝率", "風報比", "平均 R", "R 中位數", "總 R")
+    study_full_stats_rows = []
+    study_full_stats_header_line = ""
+    study_full_stats_widths = None
+    if study_full_breakout_stats:
+        study_full_stats_rows = [
+            study_full_stats_header,
+            (
+                str(study_full_breakout_stats.get("trade_count", "-")),
+                str(study_full_breakout_stats.get("win_rate", "-")),
+                str(study_full_breakout_stats.get("payoff", "-")),
+                str(study_full_breakout_stats.get("avg_r", "-")),
+                str(study_full_breakout_stats.get("median_r", "-")),
+                str(study_full_breakout_stats.get("total_r", "-")),
+            ),
+        ]
+        study_full_stats_widths = _build_table_widths(study_full_stats_rows, min_widths=(10, 10, 10, 12, 12, 14))
+        study_full_stats_header_line = _table_row_cells(study_full_stats_header, study_full_stats_widths)
+
 
     separator_width = max(
         120,
         _display_width(training_header_line),
         _display_width(upgrade_header_line) if upgrade_header_line else 0,
         _display_width(compare_header_line) if compare_header_line else 0,
+        _display_width(study_full_stats_header_line) if study_full_stats_header_line else 0,
     )
     separator = "-" * separator_width
     print(f"{C_GRAY}{separator}{C_RESET}")
@@ -521,6 +557,11 @@ def print_optimizer_trial_console_dashboard(*,
         f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | "
         f"系統得分：{C_CYAN}{system_score_display}{C_RESET}"
     )
+    if study_full_stats_rows and study_full_stats_widths is not None:
+        print(separator)
+        print(f"{C_CYAN}【Study-Full 單股突破統計】{C_RESET}")
+        print(study_full_stats_header_line)
+        print(_table_row_cells(study_full_stats_rows[1], study_full_stats_widths))
     print(separator)
     print(training_title)
     print(separator)

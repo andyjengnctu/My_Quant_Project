@@ -20,6 +20,7 @@ from core.trade_plans import (
 def _empty_pit_stats_index():
     return {
         'exit_dates': [],
+        'trade_r_mult': np.array([], dtype=np.float64),
         'cum_trade_count': np.array([], dtype=np.int32),
         'cum_win_count': np.array([], dtype=np.int32),
         'cum_win_r_sum': np.array([], dtype=np.float64),
@@ -32,6 +33,7 @@ def _empty_pit_stats_index():
 def _create_pit_stats_builder():
     return {
         'exit_dates': [],
+        'trade_r_mult': [],
         'cum_trade_count': [],
         'cum_win_count': [],
         'cum_win_r_sum': [],
@@ -61,6 +63,7 @@ def _append_pit_trade(builder, *, exit_date, pnl, r_mult):
         builder['_loss_r_sum'] += float(r_mult)
 
     builder['exit_dates'].append(exit_date)
+    builder['trade_r_mult'].append(float(r_mult))
     builder['cum_trade_count'].append(builder['_trade_count'])
     builder['cum_win_count'].append(builder['_win_count'])
     builder['cum_win_r_sum'].append(builder['_win_r_sum'])
@@ -76,6 +79,7 @@ def _finalize_pit_stats_index(builder):
         return _empty_pit_stats_index()
     return {
         'exit_dates': list(builder['exit_dates']),
+        'trade_r_mult': np.array(builder['trade_r_mult'], dtype=np.float64),
         'cum_trade_count': np.array(builder['cum_trade_count'], dtype=np.int32),
         'cum_win_count': np.array(builder['cum_win_count'], dtype=np.int32),
         'cum_win_r_sum': np.array(builder['cum_win_r_sum'], dtype=np.float64),

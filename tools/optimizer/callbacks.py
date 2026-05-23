@@ -11,6 +11,7 @@ from core.config import (
     MAX_PORTFOLIO_MDD_PCT,
     MIN_EQUITY_CURVE_R_SQUARED,
     MIN_MONTHLY_WIN_RATE,
+    MIN_TRADE_WIN_RATE,
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
 )
@@ -94,6 +95,34 @@ def _is_study_full_session(session) -> bool:
     return str(policy.get("evaluation_scope") or "").strip().lower().startswith("study_full")
 
 
+
+def _format_signed_r(value, *, digits: int = 3, large: bool = False) -> str:
+    numeric = _safe_float(value, 0.0)
+    if large:
+        return f"{numeric:+,.1f} R"
+    return f"{numeric:+.{int(digits)}f} R"
+
+
+def _colorize_signed_number(text: str, value) -> str:
+    return f"{C_GREEN if _safe_float(value, 0.0) >= 0.0 else C_RED}{text}{C_RESET}"
+
+
+def _build_study_full_breakout_stats(attrs: dict) -> dict:
+    trade_count = _safe_int(attrs.get("single_stock_trade_count", 0))
+    win_rate = _safe_float(attrs.get("single_stock_win_rate", 0.0))
+    payoff = _safe_float(attrs.get("single_stock_payoff_r", 0.0))
+    avg_r = _safe_float(attrs.get("single_stock_avg_r", 0.0))
+    median_r = _safe_float(attrs.get("single_stock_median_r", 0.0))
+    total_r = _safe_float(attrs.get("single_stock_total_r", 0.0))
+    win_rate_text = f"{win_rate:.2f}%"
+    return {
+        "trade_count": f"{trade_count:,}",
+        "win_rate": f"{C_GREEN if win_rate >= MIN_TRADE_WIN_RATE else C_RED}{win_rate_text}{C_RESET}",
+        "payoff": f"{C_CYAN}{payoff:.2f}{C_RESET}",
+        "avg_r": _colorize_signed_number(_format_signed_r(avg_r), avg_r),
+        "median_r": _colorize_signed_number(_format_signed_r(median_r), median_r),
+        "total_r": _colorize_signed_number(_format_signed_r(total_r, large=True), total_r),
+    }
 
 
 def _policy_date(session, key: str) -> str | None:
@@ -916,6 +945,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "test_rows": test_rows,
         "upgrade_rows": None,
         "compare_rows": None,
+        "study_full_breakout_stats": _build_study_full_breakout_stats(attrs) if _is_study_full_session(session) else None,
         "base_score": _safe_float(attrs.get("base_score", 0.0)),
     }
 
@@ -945,6 +975,7 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
         compare_rows=payload["compare_rows"],
         params_lines=_build_training_param_lines(payload["params"]),
         hard_gate_lines=_build_hard_gate_lines(),
+        study_full_breakout_stats=payload.get("study_full_breakout_stats"),
     )
     render_elapsed = max(0.0, time.perf_counter() - render_started_at)
     return {

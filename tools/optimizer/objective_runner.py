@@ -8,6 +8,7 @@ from config.training_policy import (
     OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS,
 )
 from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_fast_data import summarize_single_stock_trade_stats_from_pit_index
 from core.portfolio_stats import calc_portfolio_score
 from core.strategy_params import build_runtime_param_raw_value
 from tools.optimizer.objective_filters import apply_filter_rules
@@ -301,6 +302,12 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     full_year_count = int(pf_profile.get("full_year_count", 0))
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
     bm_min_full_year_return_pct = float(pf_profile.get("bm_min_full_year_return_pct", 0.0))
+    policy_scope = str((getattr(session, "walk_forward_policy", {}) or {}).get("evaluation_scope") or "").strip().lower()
+    single_stock_trade_stats = (
+        summarize_single_stock_trade_stats_from_pit_index(all_pit_stats_index, search_scope["search_train_dates"])
+        if policy_scope.startswith("study_full")
+        else {}
+    )
     metrics = {
         "mdd": mdd,
         "annual_trades": annual_trades,
@@ -330,6 +337,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             "win_rate": win_rate,
             "pf_ev": pf_ev,
             "pf_payoff": pf_payoff,
+            "single_stock_trade_stats": single_stock_trade_stats,
             "missed_buys": total_missed,
             "missed_sells": total_missed_sells,
             "normal_trades": normal_trade_count,
@@ -367,6 +375,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         "win_rate": win_rate,
         "pf_ev": pf_ev,
         "pf_payoff": pf_payoff,
+        "single_stock_trade_stats": single_stock_trade_stats,
         "missed_buys": total_missed,
         "missed_sells": total_missed_sells,
         "normal_trades": normal_trade_count,
@@ -589,6 +598,13 @@ def run_optimizer_objective(session, trial):
     profile_row["min_full_year_return_pct"] = float(evaluation.get("min_full_year_return_pct", 0.0))
     profile_row["m_win_rate"] = float(evaluation.get("m_win_rate", 0.0))
     profile_row["r_squared"] = float(evaluation.get("r_squared", 0.0))
+    single_stock_trade_stats = dict(evaluation.get("single_stock_trade_stats") or {})
+    profile_row["single_stock_trade_count"] = int(single_stock_trade_stats.get("trade_count", 0) or 0)
+    profile_row["single_stock_win_rate"] = float(single_stock_trade_stats.get("win_rate", 0.0) or 0.0)
+    profile_row["single_stock_payoff_r"] = float(single_stock_trade_stats.get("payoff_r", 0.0) or 0.0)
+    profile_row["single_stock_avg_r"] = float(single_stock_trade_stats.get("avg_r", 0.0) or 0.0)
+    profile_row["single_stock_median_r"] = float(single_stock_trade_stats.get("median_r", 0.0) or 0.0)
+    profile_row["single_stock_total_r"] = float(single_stock_trade_stats.get("total_r", 0.0) or 0.0)
     profile_row["base_score"] = float(evaluation.get("base_score", INVALID_TRIAL_VALUE))
     if not evaluation["ok"]:
         return _append_invalid_profile_row(
@@ -610,6 +626,12 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("win_rate", evaluation["win_rate"])
     trial.set_user_attr("pf_ev", evaluation["pf_ev"])
     trial.set_user_attr("pf_payoff", evaluation["pf_payoff"])
+    trial.set_user_attr("single_stock_trade_count", int(single_stock_trade_stats.get("trade_count", 0) or 0))
+    trial.set_user_attr("single_stock_win_rate", float(single_stock_trade_stats.get("win_rate", 0.0) or 0.0))
+    trial.set_user_attr("single_stock_payoff_r", float(single_stock_trade_stats.get("payoff_r", 0.0) or 0.0))
+    trial.set_user_attr("single_stock_avg_r", float(single_stock_trade_stats.get("avg_r", 0.0) or 0.0))
+    trial.set_user_attr("single_stock_median_r", float(single_stock_trade_stats.get("median_r", 0.0) or 0.0))
+    trial.set_user_attr("single_stock_total_r", float(single_stock_trade_stats.get("total_r", 0.0) or 0.0))
     trial.set_user_attr("missed_buys", evaluation["missed_buys"])
     trial.set_user_attr("missed_sells", evaluation["missed_sells"])
     trial.set_user_attr("normal_trades", evaluation["normal_trades"])
