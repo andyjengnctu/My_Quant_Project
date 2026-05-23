@@ -283,6 +283,9 @@ def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_cou
     requested_study_scope = str(request.get("study_scope", "") or "").strip().lower()
     if requested_study_scope:
         session.requested_study_scope = requested_study_scope
+    requested_study_db_action = str(request.get("study_db_action", "") or "").strip().lower()
+    if requested_study_db_action:
+        session.requested_study_db_action = requested_study_db_action
     return None, str(request.get("source", "unknown"))
 
 

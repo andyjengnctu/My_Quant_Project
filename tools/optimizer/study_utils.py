@@ -9,7 +9,7 @@ from core.dataset_profiles import (
     normalize_dataset_profile_key,
 )
 from core.params_io import build_params_from_mapping, params_to_json_dict
-from core.runtime_utils import is_interactive_stdin, parse_int_strict
+from core.runtime_utils import is_interactive_stdin, parse_int_strict, safe_prompt_choice
 from core.walk_forward_policy import normalize_optimizer_study_scope
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
@@ -153,6 +153,13 @@ def _resolve_interactive_optimizer_run_request():
             input(study_scope_prompt),
             source_label="UI/MENU",
         )
+        study_db_choice = safe_prompt_choice(
+            "👉 Study 記憶庫：[Enter] 重頭開始  [2] 接續訓練 : ",
+            "",
+            ("", "2"),
+            "Study 記憶庫操作選項",
+        )
+        mode_request["study_db_action"] = "resume" if study_db_choice == "2" else "restart"
     trial_prompt = f"👉 訓練次數：[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  [數字] 訓練指定次數  "
     mode_request["n_trials"] = _parse_interactive_trial_count_raw(input(trial_prompt))
     return mode_request

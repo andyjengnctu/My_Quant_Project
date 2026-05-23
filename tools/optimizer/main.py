@@ -2470,18 +2470,31 @@ def _resolve_optimizer_db_file_for_mode(*, output_dir: str, dataset_profile_key:
     return ""
 
 
-def _apply_interactive_study_db_policy(*, selected_model_mode: str, db_file: str, colors: dict) -> None:
+def _normalize_study_db_action(raw_action: str) -> str:
+    normalized = str(raw_action or "").strip().lower()
+    if normalized in {"restart", "reset", "new", "start_over", ""}:
+        return "restart"
+    if normalized in {"resume", "continue", "2"}:
+        return "resume"
+    raise ValueError(f"Study 記憶庫操作只接受 restart/resume，收到: {raw_action!r}")
+
+
+def _apply_interactive_study_db_policy(*, selected_model_mode: str, db_file: str, colors: dict, study_db_action: str = "") -> None:
     if normalize_optimizer_model_mode(selected_model_mode) != "study":
         return
     if not db_file or not is_interactive_console():
         return
-    choice = safe_prompt_choice(
-        "\n👉 Study 記憶庫：[Enter] 重頭開始  [2] 接續訓練 : ",
-        "",
-        ("", "2"),
-        "Study 記憶庫操作選項",
-    )
-    if choice == "2":
+    if str(study_db_action or "").strip():
+        action = _normalize_study_db_action(study_db_action)
+    else:
+        choice = safe_prompt_choice(
+            "\n👉 Study 記憶庫：[Enter] 重頭開始  [2] 接續訓練 : ",
+            "",
+            ("", "2"),
+            "Study 記憶庫操作選項",
+        )
+        action = "resume" if choice == "2" else "restart"
+    if action == "resume":
         if os.path.exists(db_file):
             print(f"{colors['green']}🔁 Study mode 接續既有記憶庫：{_project_relative_path(db_file)}{colors['reset']}")
         else:
@@ -2701,6 +2714,7 @@ def main(argv=None, environ=None):
     if needs_policy_rebuild:
         requested_trials = int(getattr(session, "n_trials", 0) or 0)
         requested_action = str(getattr(session, "run_action", "train") or "train")
+        requested_study_db_action = str(getattr(session, "requested_study_db_action", "") or "").strip().lower()
         selected_model_mode = target_model_mode
         selected_study_scope = target_study_scope
         latest_data_date = None
@@ -2723,6 +2737,8 @@ def main(argv=None, environ=None):
         session.requested_model_mode = requested_model_mode
         if selected_model_mode == "study":
             session.requested_study_scope = selected_study_scope
+            if requested_study_db_action:
+                session.requested_study_db_action = requested_study_db_action
         best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
         db_file = _resolve_optimizer_db_file_for_mode(
             output_dir=OUTPUT_DIR,
@@ -2965,7 +2981,12 @@ def main(argv=None, environ=None):
 
     try:
         if not timing_mode and selected_model_mode == "study":
-            _apply_interactive_study_db_policy(selected_model_mode=selected_model_mode, db_file=db_file, colors=COLORS)
+            _apply_interactive_study_db_policy(
+                selected_model_mode=selected_model_mode,
+                db_file=db_file,
+                colors=COLORS,
+                study_db_action=str(getattr(session, "requested_study_db_action", "") or ""),
+            )
         elif not timing_mode:
             prompt_existing_db_policy(db_file, COLORS)
         if db_file:
