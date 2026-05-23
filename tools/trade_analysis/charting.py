@@ -366,15 +366,30 @@ def record_trade_marker(chart_context, *, current_date, action, price, qty, note
 
 def _normalize_buy_signal_source_key_from_meta(meta):
     meta = dict(meta or {})
-    raw_key = str(meta.get("entry_signal_type") or meta.get("buy_signal_source") or "").strip().lower()
+    raw_value = meta.get("entry_signal_type")
+    if raw_value is None:
+        raw_value = meta.get("buy_signal_source")
+    try:
+        raw_int = int(raw_value)
+    except (TypeError, ValueError):
+        raw_int = None
+    if raw_int == 1:
+        return "breakout"
+    if raw_int == 2:
+        return "ema_pullback"
+    if raw_int == 3:
+        return "both"
+
+    raw_key = str(raw_value or "").strip().lower()
     if raw_key in {"breakout", "ema_pullback", "both"}:
         return raw_key
     raw_label = str(meta.get("entry_signal_label") or meta.get("buy_signal_source_label") or "").strip()
-    if "突破" in raw_label and ("回檔" in raw_label or "pullback" in raw_label.lower()):
+    raw_label_lower = raw_label.lower()
+    if "突破" in raw_label and ("回檔" in raw_label or "pullback" in raw_label_lower):
         return "both"
-    if "突破" in raw_label or "breakout" in raw_label.lower():
+    if "突破" in raw_label or "breakout" in raw_label_lower:
         return "breakout"
-    if "回檔" in raw_label or "pullback" in raw_label.lower():
+    if "回檔" in raw_label or "pullback" in raw_label_lower:
         return "ema_pullback"
     return "unknown"
 
@@ -1258,7 +1273,7 @@ CHART_INFO_FIELD_SPECS = {
     "stop_price": {"label": "停損", "keys": ("stop_price",), "format": "price"},
     "buy_capital": {"label": "實支", "keys": ("buy_capital",), "format": "amount"},
     "entry_type": {"label": "進場類型", "keys": ("entry_type",), "format": "entry_type"},
-    "entry_signal_label": {"label": "買訊來源", "keys": ("entry_signal_label", "buy_signal_source_label"), "format": "buy_signal_label"},
+    "entry_signal_label": {"label": "買訊來源", "keys": ("entry_signal_label", "buy_signal_source_label", "entry_signal_type", "buy_signal_source"), "format": "buy_signal_label"},
     "result": {"label": "結果", "keys": ("result",), "format": "text"},
     "reference_close": {"label": "參考收", "keys": ("reference_price", "reference_close", "close_price"), "format": "price"},
     "sell_capital": {"label": "金額", "keys": ("sell_capital",), "format": "amount"},
@@ -1323,7 +1338,7 @@ def _format_chart_info_field(field_key, meta, *, marker=None):
     elif fmt == "entry_type":
         rendered = _format_chart_entry_type(value)
     elif fmt == "buy_signal_label":
-        rendered = _format_buy_signal_source_label_for_chart({"entry_signal_label": value}) or "-"
+        rendered = _format_buy_signal_source_label_for_chart({"entry_signal_label": value, "entry_signal_type": value}) or "-"
     elif fmt == "trade_sequence":
         if _is_missing_info_value(value):
             rendered = "-"
@@ -1596,11 +1611,11 @@ def _render_future_preview_lines(axis_price, chart_payload):
     return rendered
 
 
-def _build_complete_matplotlib_legend_handles():
+def _build_complete_matplotlib_legend_handles(*, show_price_ma=False):
     from matplotlib.lines import Line2D
 
-    def _build_line_handle(label, color, linestyle, linewidth):
-        return Line2D([0], [0], color=color, linestyle=linestyle, linewidth=linewidth, label=label)
+    def _build_line_handle(label, color, linestyle, linewidth, alpha=1.0):
+        return Line2D([0], [0], color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha, label=label)
 
     def _build_marker_handle(label, style):
         return Line2D(
@@ -1621,6 +1636,15 @@ def _build_complete_matplotlib_legend_handles():
     line_handle_lookup = {label: _build_line_handle(label, color, linestyle, linewidth) for label, color, linestyle, linewidth in CHART_LINE_LEGEND_SPECS}
     for label, color, linestyle, linewidth in CHART_SHADOW_LINE_LEGEND_SPECS:
         line_handle_lookup.setdefault(label, _build_line_handle(label, color, linestyle, linewidth))
+    if show_price_ma:
+        for label, spec in CHART_PRICE_MA_LINE_SPECS.items():
+            line_handle_lookup[str(label)] = _build_line_handle(
+                str(label),
+                spec.get("color", MATPLOTLIB_MUTED_TEXT_COLOR),
+                spec.get("linestyle", "solid"),
+                float(spec.get("linewidth", 1.2)),
+                alpha=CHART_PRICE_MA_ALPHA,
+            )
 
     event_handle_lookup = {}
     for label in CHART_EVENT_LEGEND_ORDER:
@@ -1634,6 +1658,8 @@ def _build_complete_matplotlib_legend_handles():
         return line_handle_lookup.get(label) or event_handle_lookup.get(label) or _build_spacer_handle()
 
     top_row_labels = list(CHART_LEGEND_FIRST_ROW_ITEMS)
+    if show_price_ma:
+        top_row_labels.extend(str(label) for label in CHART_PRICE_MA_LINE_SPECS)
     bottom_row_labels = list(CHART_LEGEND_SECOND_ROW_ITEMS)
     total_columns = max(len(top_row_labels), len(bottom_row_labels), int(CHART_MATPLOTLIB_LEGEND_COLUMNS))
     top_row_labels.extend([None] * (total_columns - len(top_row_labels)))
@@ -1785,8 +1811,9 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         return date_labels[rounded] if 0 <= rounded < len(date_labels) else ""
     axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
-    legend_handles = _build_complete_matplotlib_legend_handles()
-    axis_price.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="upper left", ncol=CHART_MATPLOTLIB_LEGEND_COLUMNS, frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.0, columnspacing=0.85)
+    legend_handles = _build_complete_matplotlib_legend_handles(show_price_ma=bool(show_price_ma))
+    legend_columns = max(int(CHART_MATPLOTLIB_LEGEND_COLUMNS), int(len(legend_handles) / 2))
+    axis_price.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="upper left", ncol=legend_columns, frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.0, columnspacing=0.85)
     hover_text_artist = axis_price.text(0.01, 0.998, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
     hover_text_artist.set_visible(False)
     crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)
