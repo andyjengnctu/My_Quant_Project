@@ -73,9 +73,10 @@ def print_scanner_header(params):
         f"逐項輸出應顯示 {sort_probe_fields}；"
         f"目前排序欄位 = {sort_metric_label}"
     )
+    ema_filter_str = f"Close > EMA{get_p(params, 'breakout_ema_len', 240)}"
     print(
         f"   ➤ 訓練參數: "
-        f"突破買進 {breakout_str} | EMA濾網 Close > EMA{get_p(params, 'breakout_ema_len', 240)} | "
+        f"突破買進 {breakout_str} | "
         f"ATR {get_p(params, 'atr_len', 14)}日 | "
         f"掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f}倍 | "
         f"初始 -{get_p(params, 'atr_times_init', 2.0):.1f}倍 | "
@@ -86,7 +87,8 @@ def print_scanner_header(params):
         f"   ➤ 濾網參數: "
         f"布林(BB) {bb_str} | "
         f"阿肯那(KC) {kc_str} | "
-        f"均量 {vol_str}"
+        f"均量 {vol_str} | "
+        f"{ema_filter_str}"
     )
     print(
         f"   ➤ 歷史門檻: "
