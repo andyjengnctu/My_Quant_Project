@@ -58,6 +58,7 @@ from tools.trade_analysis.charting import (
     record_limit_order,
     record_signal_annotation,
     record_trade_marker,
+    resolve_chart_price_overlay_specs,
     restore_chart_view_state,
     scroll_chart_to_adjacent_trade,
     scroll_chart_to_latest,
@@ -1041,7 +1042,7 @@ def _apply_trade_sequence_to_marker_meta(marker_meta, trade_sequence):
 
 def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, params_resolver=None, ticker_dropdown_stats=None, active_level_rows=None, df_eq=None):
     price_df = _fast_data_to_price_df(fast_data)
-    chart_context = create_debug_chart_context(price_df)
+    chart_context = create_debug_chart_context(price_df, price_overlay_specs=resolve_chart_price_overlay_specs(params=params))
     dropdown_stats = dict(ticker_dropdown_stats or {})
     actual_stats = dict(dropdown_stats.get("portfolio_actual_stats") or _build_portfolio_ticker_actual_stats(ticker_trades_df, ticker))
     equity_snapshots = _build_portfolio_equity_snapshot_index(df_eq)

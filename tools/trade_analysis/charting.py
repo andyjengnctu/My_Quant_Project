@@ -140,15 +140,19 @@ CHART_LINE_LEGEND_SPECS = (
 CHART_SHADOW_LINE_LEGEND_SPECS = ()
 CHART_MATPLOTLIB_LEGEND_COLUMNS = 8
 CHART_MATPLOTLIB_LEGEND_SPACER_COUNT = 2
-CHART_PRICE_MA_PERIODS = (20, 60, 120)
 CHART_PRICE_MA_ALPHA = 0.50
 CHART_BUY_SIGNAL_NAV_BREAKOUT_KEYS = {"breakout", "both"}
 CHART_BUY_SIGNAL_NAV_PULLBACK_KEYS = {"ema_pullback", "both"}
-CHART_PRICE_MA_LINE_SPECS = {
-    "MA20": {"color": "#ffd166", "linewidth": 1.35, "linestyle": "solid"},
-    "MA60": {"color": "#7dd3fc", "linewidth": 1.35, "linestyle": "solid"},
-    "MA120": {"color": "#c084fc", "linewidth": 1.35, "linestyle": "solid"},
-}
+CHART_DEFAULT_PRICE_OVERLAY_SPECS = (
+    {"label": "MA20", "kind": "ma", "period": 20, "color": "#ffd166", "linewidth": 1.35, "linestyle": "solid"},
+    {"label": "MA60", "kind": "ma", "period": 60, "color": "#7dd3fc", "linewidth": 1.35, "linestyle": "solid"},
+    {"label": "MA120", "kind": "ma", "period": 120, "color": "#c084fc", "linewidth": 1.35, "linestyle": "solid"},
+)
+CHART_DYNAMIC_PRICE_OVERLAY_STYLE_SEQUENCE = (
+    {"color": "#ffd166", "linewidth": 1.35, "linestyle": "solid"},
+    {"color": "#7dd3fc", "linewidth": 1.35, "linestyle": "solid"},
+    {"color": "#c084fc", "linewidth": 1.35, "linestyle": "solid"},
+)
 
 CHART_SIGNAL_LEGEND_STYLE = {
     "買訊": {"mpl_marker": "^", "plotly_symbol": "triangle-up", "color": "#68d8ff"},
@@ -160,6 +164,82 @@ ORDER_STATUS_LABELS = {
     "missed": "未成交",
     "abandoned": "放棄進場",
 }
+
+
+def _coerce_positive_overlay_period(value):
+    try:
+        period = int(value)
+    except (TypeError, ValueError):
+        return None
+    return period if period > 1 else None
+
+
+def resolve_chart_price_overlay_specs(*, params=None, overlay_specs=None):
+    if overlay_specs:
+        raw_specs = list(overlay_specs)
+    elif params is not None and bool(getattr(params, "use_ema_pullback", False)):
+        raw_specs = [
+            {"label": f"EMA{int(getattr(params, 'ema_pullback_short_len'))}", "kind": "ema", "period": int(getattr(params, 'ema_pullback_short_len'))},
+            {"label": f"EMA{int(getattr(params, 'ema_pullback_mid_len'))}", "kind": "ema", "period": int(getattr(params, 'ema_pullback_mid_len'))},
+            {"label": f"EMA{int(getattr(params, 'ema_pullback_long_len'))}", "kind": "ema", "period": int(getattr(params, 'ema_pullback_long_len'))},
+        ]
+    else:
+        raw_specs = []
+
+    resolved_specs = []
+    seen_labels = set()
+    for idx, raw_spec in enumerate(raw_specs):
+        spec = dict(raw_spec or {})
+        period = _coerce_positive_overlay_period(spec.get("period"))
+        if period is None:
+            continue
+        label = str(spec.get("label") or "").strip() or f"MA{period}"
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        kind = str(spec.get("kind") or "ma").strip().lower()
+        if kind not in {"ma", "ema"}:
+            kind = "ma"
+        style = CHART_DYNAMIC_PRICE_OVERLAY_STYLE_SEQUENCE[min(idx, len(CHART_DYNAMIC_PRICE_OVERLAY_STYLE_SEQUENCE) - 1)]
+        resolved_specs.append(
+            {
+                "label": label,
+                "kind": kind,
+                "period": int(period),
+                "color": str(spec.get("color") or style["color"]),
+                "linewidth": float(spec.get("linewidth", style["linewidth"])),
+                "linestyle": str(spec.get("linestyle") or style["linestyle"]),
+            }
+        )
+    return resolved_specs
+
+
+def _normalize_price_overlay_specs(overlay_specs, price_ma_lines=None):
+    normalized_specs = resolve_chart_price_overlay_specs(overlay_specs=overlay_specs)
+    if normalized_specs:
+        return normalized_specs
+    fallback_specs = []
+    line_labels = list(dict(price_ma_lines or {}).keys())
+    for idx, label in enumerate(line_labels):
+        match = re.search(r"(EMA|MA)?\s*(\d+)", str(label), flags=re.IGNORECASE)
+        if match is None:
+            continue
+        kind = "ema" if str(match.group(1) or "").upper() == "EMA" else "ma"
+        period = _coerce_positive_overlay_period(match.group(2))
+        if period is None:
+            continue
+        style = CHART_DYNAMIC_PRICE_OVERLAY_STYLE_SEQUENCE[min(idx, len(CHART_DYNAMIC_PRICE_OVERLAY_STYLE_SEQUENCE) - 1)]
+        fallback_specs.append(
+            {
+                "label": str(label),
+                "kind": kind,
+                "period": int(period),
+                "color": style["color"],
+                "linewidth": float(style["linewidth"]),
+                "linestyle": style["linestyle"],
+            }
+        )
+    return fallback_specs
 
 
 def _normalize_chart_trace_name(trace_name):
@@ -193,12 +273,13 @@ def get_matplotlib_font_manager_import_error():
     return MATPLOTLIB_FONT_MANAGER_IMPORT_ERROR
 
 
-def create_debug_chart_context(df):
+def create_debug_chart_context(df, *, price_overlay_specs=None):
     dates = pd.DatetimeIndex(pd.to_datetime(df.index))
     total = len(dates)
     return {
         "dates": dates,
         "date_to_pos": {pd.Timestamp(dt): idx for idx, dt in enumerate(dates)},
+        "price_overlay_specs": _normalize_price_overlay_specs(price_overlay_specs),
         "stop_line": np.full(total, np.nan, dtype=np.float32),
         "tp_line": np.full(total, np.nan, dtype=np.float32),
         "limit_line": np.full(total, np.nan, dtype=np.float32),
@@ -644,23 +725,38 @@ def _apply_chart_display_line_clipping(payload):
     return payload
 
 
-def _build_price_ma_lines(close_values, *, periods=CHART_PRICE_MA_PERIODS):
+def _build_ema_overlay_line(close_values, period):
     close_series = pd.Series(np.asarray(close_values, dtype=np.float64))
+    return close_series.ewm(span=int(period), adjust=False).mean().to_numpy(dtype=np.float32)
+
+
+def _build_price_ma_lines(close_values, *, periods=None, overlay_specs=None):
+    close_array = np.asarray(close_values, dtype=np.float64)
+    normalized_specs = _normalize_price_overlay_specs(overlay_specs)
+    if not normalized_specs:
+        normalized_specs = resolve_chart_price_overlay_specs(
+            overlay_specs=[{"label": f"MA{int(period)}", "kind": "ma", "period": int(period)} for period in (periods or [])]
+        )
+
+    close_series = pd.Series(close_array)
     ma_lines = {}
-    for period in periods:
-        period_int = int(period)
+    for spec in normalized_specs:
+        period_int = int(spec["period"])
         if period_int <= 1:
             continue
-        label = f"MA{period_int}"
-        values = close_series.rolling(window=period_int, min_periods=period_int).mean().to_numpy(dtype=np.float32)
+        label = str(spec["label"])
+        if spec.get("kind") == "ema":
+            values = _build_ema_overlay_line(close_array, period_int)
+        else:
+            values = close_series.rolling(window=period_int, min_periods=period_int).mean().to_numpy(dtype=np.float32)
         ma_lines[label] = values
     return ma_lines
 
 
-def _normalize_price_ma_lines(value, close_values, total_bars):
+def _normalize_price_ma_lines(value, close_values, total_bars, *, overlay_specs=None):
     raw_lines = dict(value or {})
     if not raw_lines:
-        raw_lines = _build_price_ma_lines(close_values)
+        raw_lines = _build_price_ma_lines(close_values, overlay_specs=overlay_specs)
     normalized = {}
     for label, values in raw_lines.items():
         normalized[str(label)] = _normalize_line_array(values, total_bars)
@@ -685,6 +781,7 @@ def build_debug_chart_payload(price_df, chart_context):
     marker_groups, focus_positions = _build_marker_groups(marker_lists=[*(chart_context or {}).get("order_markers", []), *((chart_context or {}).get("trade_markers", []))], date_to_pos=date_to_pos)
     signal_annotations, signal_focus_positions = _build_signal_annotations(signal_annotations=(chart_context or {}).get("signal_annotations", []), date_to_pos=date_to_pos)
     focus_positions = [*focus_positions, *signal_focus_positions]
+    price_overlay_specs = _normalize_price_overlay_specs((chart_context or {}).get("price_overlay_specs"))
     payload = {
         "dates": dates,
         "date_labels": [dt.strftime("%Y-%m-%d") for dt in dates],
@@ -695,7 +792,8 @@ def build_debug_chart_payload(price_df, chart_context):
         "close": df_chart["Close"].to_numpy(dtype=np.float32, copy=False),
         "volume": df_chart["Volume"].to_numpy(dtype=np.float32, copy=False),
         "up_mask": (df_chart["Close"] >= df_chart["Open"]).to_numpy(dtype=bool, copy=False),
-        "price_ma_lines": _build_price_ma_lines(df_chart["Close"].to_numpy(dtype=np.float32, copy=False)),
+        "price_overlay_specs": price_overlay_specs,
+        "price_ma_lines": _build_price_ma_lines(df_chart["Close"].to_numpy(dtype=np.float32, copy=False), overlay_specs=price_overlay_specs),
         "stop_line": _normalize_line_array((chart_context or {}).get("stop_line"), total_bars),
         "tp_line": _normalize_line_array((chart_context or {}).get("tp_line"), total_bars),
         "limit_line": _normalize_line_array((chart_context or {}).get("limit_line"), total_bars),
@@ -742,7 +840,13 @@ def normalize_chart_payload_contract(chart_payload):
     for key in ("open", "high", "low", "close"):
         normalized[key] = np.asarray(normalized[key], dtype=np.float32)
     normalized["volume"] = np.asarray(normalized.get("volume", np.zeros(total_bars, dtype=np.float32)), dtype=np.float32)
-    normalized["price_ma_lines"] = _normalize_price_ma_lines(normalized.get("price_ma_lines"), normalized["close"], total_bars)
+    normalized["price_overlay_specs"] = _normalize_price_overlay_specs(normalized.get("price_overlay_specs"), normalized.get("price_ma_lines"))
+    normalized["price_ma_lines"] = _normalize_price_ma_lines(
+        normalized.get("price_ma_lines"),
+        normalized["close"],
+        total_bars,
+        overlay_specs=normalized["price_overlay_specs"],
+    )
 
     up_mask = normalized.get("up_mask")
     if up_mask is None or len(up_mask) != total_bars:
@@ -1611,7 +1715,7 @@ def _render_future_preview_lines(axis_price, chart_payload):
     return rendered
 
 
-def _build_complete_matplotlib_legend_handles(*, show_price_ma=False):
+def _build_complete_matplotlib_legend_handles(*, show_price_ma=False, price_overlay_specs=None):
     from matplotlib.lines import Line2D
 
     def _build_line_handle(label, color, linestyle, linewidth, alpha=1.0):
@@ -1636,10 +1740,14 @@ def _build_complete_matplotlib_legend_handles(*, show_price_ma=False):
     line_handle_lookup = {label: _build_line_handle(label, color, linestyle, linewidth) for label, color, linestyle, linewidth in CHART_LINE_LEGEND_SPECS}
     for label, color, linestyle, linewidth in CHART_SHADOW_LINE_LEGEND_SPECS:
         line_handle_lookup.setdefault(label, _build_line_handle(label, color, linestyle, linewidth))
+    normalized_price_overlay_specs = _normalize_price_overlay_specs(price_overlay_specs)
     if show_price_ma:
-        for label, spec in CHART_PRICE_MA_LINE_SPECS.items():
-            line_handle_lookup[str(label)] = _build_line_handle(
-                str(label),
+        for spec in normalized_price_overlay_specs:
+            label = str(spec.get("label") or "")
+            if not label:
+                continue
+            line_handle_lookup[label] = _build_line_handle(
+                label,
                 spec.get("color", MATPLOTLIB_MUTED_TEXT_COLOR),
                 spec.get("linestyle", "solid"),
                 float(spec.get("linewidth", 1.2)),
@@ -1659,7 +1767,7 @@ def _build_complete_matplotlib_legend_handles(*, show_price_ma=False):
 
     top_row_labels = list(CHART_LEGEND_FIRST_ROW_ITEMS)
     if show_price_ma:
-        top_row_labels.extend(str(label) for label in CHART_PRICE_MA_LINE_SPECS)
+        top_row_labels.extend(str(spec.get("label") or "") for spec in normalized_price_overlay_specs if str(spec.get("label") or "").strip())
     bottom_row_labels = list(CHART_LEGEND_SECOND_ROW_ITEMS)
     total_columns = max(len(top_row_labels), len(bottom_row_labels), int(CHART_MATPLOTLIB_LEGEND_COLUMNS))
     top_row_labels.extend([None] * (total_columns - len(top_row_labels)))
@@ -1749,8 +1857,13 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     if np.any(~up_mask):
         body_down_collection = axis_price.vlines(x_positions[~up_mask], body_low[~up_mask], body_high[~up_mask], colors=MATPLOTLIB_DOWN_COLOR, linewidth=4.8, zorder=3)
     if show_price_ma:
+        price_overlay_spec_lookup = {
+            str(spec.get("label") or ""): spec
+            for spec in list(chart_payload.get("price_overlay_specs") or [])
+            if str(spec.get("label") or "").strip()
+        }
         for label, values in dict(chart_payload.get("price_ma_lines") or {}).items():
-            spec = CHART_PRICE_MA_LINE_SPECS.get(str(label), {})
+            spec = price_overlay_spec_lookup.get(str(label), {})
             axis_price.plot(
                 x_positions,
                 values,
@@ -1811,7 +1924,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         return date_labels[rounded] if 0 <= rounded < len(date_labels) else ""
     axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
-    legend_handles = _build_complete_matplotlib_legend_handles(show_price_ma=bool(show_price_ma))
+    legend_handles = _build_complete_matplotlib_legend_handles(show_price_ma=bool(show_price_ma), price_overlay_specs=chart_payload.get("price_overlay_specs"))
     legend_columns = max(int(CHART_MATPLOTLIB_LEGEND_COLUMNS), int(len(legend_handles) / 2))
     axis_price.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="upper left", ncol=legend_columns, frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.0, columnspacing=0.85)
     hover_text_artist = axis_price.text(0.01, 0.998, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
@@ -1899,10 +2012,12 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     _apply_axis_text_font(axis_price, base_font)
     if axis_volume is not None:
         _apply_axis_text_font(axis_volume, base_font)
+    resolved_price_overlay_specs = list(chart_payload.get("price_overlay_specs") or [])
     figure._stock_chart_contract = {
         "volume_visible": bool(show_volume),
-        "price_ma_visible": bool(show_price_ma),
-        "price_ma_periods": [int(period) for period in CHART_PRICE_MA_PERIODS],
+        "price_ma_visible": bool(show_price_ma and resolved_price_overlay_specs),
+        "price_ma_periods": [int(spec.get("period")) for spec in resolved_price_overlay_specs if spec.get("period") is not None],
+        "price_ma_labels": [str(spec.get("label") or "") for spec in resolved_price_overlay_specs if str(spec.get("label") or "").strip()],
         "volume_overlay_mode": "inset" if show_volume else "hidden",
         "volume_overlay_axis_present": bool(axis_volume is not None),
         "selected_font_family": font_family or "",

@@ -19,6 +19,7 @@ from tools.trade_analysis.charting import (
     create_debug_chart_context,
     record_active_levels,
     record_signal_annotation,
+    resolve_chart_price_overlay_specs,
     resolve_position_tp_half_line,
     set_chart_status_box,
     set_chart_summary_box,
@@ -275,7 +276,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     active_extended_signal = None
     current_capital = params.initial_capital
     trade_logs = []
-    chart_context = create_debug_chart_context(df) if (export_chart or return_chart_payload) else None
+    chart_context = create_debug_chart_context(df, price_overlay_specs=resolve_chart_price_overlay_specs(params=params)) if (export_chart or return_chart_payload) else None
     for j in range(1, len(c)):
         if np.isnan(atr_main[j - 1]):
             continue
