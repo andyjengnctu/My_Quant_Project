@@ -5,50 +5,9 @@ from core.price_utils import adjust_long_buy_limit_array
 from core.feature_bank import coerce_feature_bank
 OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
 
-BUY_SIGNAL_SOURCE_NONE = 0
-BUY_SIGNAL_SOURCE_BREAKOUT = 1
-
-BUY_SIGNAL_SOURCE_KEYS = {
-    BUY_SIGNAL_SOURCE_NONE: "unknown",
-    BUY_SIGNAL_SOURCE_BREAKOUT: "breakout",
-}
-
-BUY_SIGNAL_SOURCE_LABELS = {
-    "unknown": "未知",
-    "breakout": "突破",
-}
-
-
-def build_buy_signal_source(buy_condition):
-    breakout = np.asarray(buy_condition, dtype=bool)
-    source = np.zeros(breakout.shape, dtype=np.uint8)
-    source[breakout] = BUY_SIGNAL_SOURCE_BREAKOUT
-    return source
-
-
-def normalize_buy_signal_source(value):
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in BUY_SIGNAL_SOURCE_LABELS:
-            return normalized
-        return "unknown"
-    try:
-        return BUY_SIGNAL_SOURCE_KEYS.get(int(value), "unknown")
-    except (TypeError, ValueError):
-        return "unknown"
-
-
-def buy_signal_source_to_label(value):
-    return BUY_SIGNAL_SOURCE_LABELS.get(normalize_buy_signal_source(value), BUY_SIGNAL_SOURCE_LABELS["unknown"])
-
-
 def unpack_precomputed_signals(precomputed_signals):
     atr_main, buy_condition, sell_condition, buy_limits = precomputed_signals[:4]
-    if len(precomputed_signals) >= 5:
-        buy_signal_source = precomputed_signals[4]
-    else:
-        buy_signal_source = np.zeros(np.asarray(buy_condition, dtype=bool).shape, dtype=np.uint8)
-    return atr_main, buy_condition, sell_condition, buy_limits, buy_signal_source
+    return atr_main, buy_condition, sell_condition, buy_limits
 
 
 def tv_rma(source, length):
@@ -161,8 +120,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     if len(df) == 0:
         empty_float = np.array([], dtype=np.float64)
         empty_bool = np.array([], dtype=bool)
-        empty_source = np.array([], dtype=np.uint8)
-        return empty_float, empty_bool, empty_bool, empty_float, empty_source
+        return empty_float, empty_bool, empty_bool, empty_float
     H = df['High'].to_numpy(dtype=np.float64, copy=False)
     L = df['Low'].to_numpy(dtype=np.float64, copy=False)
     C = df['Close'].to_numpy(dtype=np.float64, copy=False)
@@ -286,11 +244,10 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     )
 
     buyCondition = breakoutBuyCondition
-    buySignalSource = build_buy_signal_source(buyCondition)
     sellCondition = is_tradable_bar & ((isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition)
     raw_buy_limits = C + ATR_main * params.atr_buy_tol
     buy_limits = np.full_like(C, np.nan)
     valid_buy_mask = buyCondition & ~np.isnan(raw_buy_limits)
     if np.any(valid_buy_mask):
         buy_limits[valid_buy_mask] = adjust_long_buy_limit_array(raw_buy_limits[valid_buy_mask], ticker=resolved_ticker)
-    return ATR_main, buyCondition, sellCondition, buy_limits, buySignalSource
+    return ATR_main, buyCondition, sellCondition, buy_limits

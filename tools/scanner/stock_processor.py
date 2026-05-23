@@ -271,8 +271,6 @@ def _build_precomputed_signals(df):
         df['ind_sell_signal'].to_numpy(copy=False),
         df['buy_limit'].to_numpy(copy=False),
     )
-    if 'buy_signal_source' in df.columns:
-        signals = signals + (df['buy_signal_source'].to_numpy(copy=False),)
     return signals
 
 
@@ -327,7 +325,3 @@ def process_single_stock_history_qualified(file_path, ticker, params):
             return {'status': 'skip_insufficient', 'ticker': ticker, 'sanitize_issue': None}
         raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
 
-
-# # (AI註: 相容舊名稱，避免外部直接引用時中斷)
-def _build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
-    return build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats)

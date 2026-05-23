@@ -2501,7 +2501,21 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     add_check(results, "output_contract", case_id, "portfolio_history_summary_labels_are_compact", True, 'text="單股歷史績效表"' in portfolio_inspector_source and "口徑: 單股獨立回測，非投組實際成交" not in portfolio_inspector_source and "全資料區間" not in portfolio_inspector_source and 'f"固定風險: {fixed_risk_text}"' not in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "portfolio_sidebar_width_increases_by_one_third", True, "PORTFOLIO_RIGHT_SIDEBAR_WIDTH_SCALE = 4 / 3" in portfolio_inspector_source and "width=PORTFOLIO_RIGHT_SIDEBAR_WIDTH" in portfolio_inspector_source and "minsize=PORTFOLIO_RIGHT_SIDEBAR_WIDTH" in portfolio_inspector_source and "wraplength=PORTFOLIO_RIGHT_SIDEBAR_WRAPLENGTH" in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "single_sidebar_width_matches_portfolio_expanded_width", True, "SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH_SCALE = 4 / 3" in inspector_source and "width=SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH" in inspector_source and "minsize=SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH" in inspector_source and "wraplength=SINGLE_STOCK_RIGHT_SIDEBAR_WRAPLENGTH" in inspector_source)
-    add_check(results, "output_contract", case_id, "single_and_portfolio_trade_nav_has_no_gap_after_latest_button", True, 'trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))' in inspector_source and 'trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))' in portfolio_inspector_source and 'padx=(0, 2)' not in inspector_source and 'padx=(2, 0)' not in inspector_source and 'padx=(0, 2)' not in portfolio_inspector_source and 'padx=(2, 0)' not in portfolio_inspector_source)
+    add_check(
+        results,
+        "output_contract",
+        case_id,
+        "single_and_portfolio_trade_nav_has_no_gap_after_latest_button",
+        True,
+        'nav_section.grid(row=19, column=0, sticky="ew", pady=(0, 0))' in inspector_source
+        and 'nav_section.grid(row=19, column=0, sticky="ew", pady=(0, 0))' in portfolio_inspector_source
+        and 'trade_nav.grid(row=1, column=0, sticky="ew", pady=(0, 0))' in inspector_source
+        and 'trade_nav.grid(row=1, column=0, sticky="ew", pady=(0, 0))' in portfolio_inspector_source
+        and 'padx=(0, 2)' not in inspector_source
+        and 'padx=(2, 0)' not in inspector_source
+        and 'padx=(0, 2)' not in portfolio_inspector_source
+        and 'padx=(2, 0)' not in portfolio_inspector_source,
+    )
     add_check(results, "output_contract", case_id, "portfolio_marker_price_requires_recorded_execution_or_missed_reference_price", True, "return np.nan" in marker_price_block and '"Low"' not in marker_price_block and '"High"' not in marker_price_block and '"Close"' not in marker_price_block and '"買入限價"' in marker_price_block and '"停損價", "參考收盤價"' in marker_price_block)
     add_check(results, "output_contract", case_id, "portfolio_active_level_rows_are_engine_output_not_gui_replay", True, "execute_bar_step" not in portfolio_inspector_source and "portfolio_active_level_rows" in portfolio_engine_source and "_record_portfolio_active_level_rows" in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "single_stock_exit_day_active_levels_are_recorded", True, "_record_exit_day_active_levels(" in exit_flow_source and "fallback_qty=prev_qty" in exit_flow_source and "stop_price=_resolve_exit_day_stop_line" in exit_flow_source)
@@ -2924,8 +2938,8 @@ def validate_gui_workbench_contract_case(base_params):
     add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_title_omits_legacy_x", False, "end_year_label}  ×" in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "gui_portfolio_performance_chart_header_is_compact", True, "PERFORMANCE_CHART_TITLE_FONT_SIZE = 12" in portfolio_inspector_source and "PERFORMANCE_CHART_TITLE_PAD_PX = 6" in portfolio_inspector_source and "PERFORMANCE_CHART_SUBPLOT_TOP = 0.945" in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_header_click_close_unbound", False, 'notebook.bind("<Button-1>", self._on_performance_tab_click)' in portfolio_inspector_source or 'notebook.bind("<ButtonRelease-1>", self._on_performance_tab_click)' in portfolio_inspector_source)
-    add_check(results, "output_contract", case_id, "gui_single_trade_indexes_survive_chart_clear", True, "trade_indexes = extract_trade_marker_indexes" in inspector_source and "self._current_chart_trade_indexes = trade_indexes" in inspector_source)
-    add_check(results, "output_contract", case_id, "gui_portfolio_trade_indexes_survive_chart_clear", True, "trade_indexes = _extract_trade_marker_indexes" in portfolio_inspector_source and "self._current_chart_trade_indexes = trade_indexes" in portfolio_inspector_source)
+    add_check(results, "output_contract", case_id, "gui_single_trade_indexes_survive_chart_clear", True, "trade_indexes = self._resolve_chart_navigation_indexes(chart_payload)" in inspector_source and "self._current_chart_trade_indexes = trade_indexes" in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_portfolio_trade_indexes_survive_chart_clear", True, "trade_indexes = self._resolve_kline_navigation_indexes(chart_payload)" in portfolio_inspector_source and "self._current_chart_trade_indexes = trade_indexes" in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_analysis_runner", True, "run_ticker_analysis" in inspector_source and "run_debug_ticker_analysis" not in inspector_source)
     add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_analysis_data_dir_helper", True, "resolve_trade_analysis_data_dir" in inspector_source and "resolve_debug_data_dir" not in inspector_source)
     add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_chart_figure_alias", True, "create_matplotlib_trade_chart_figure" in inspector_source and "create_matplotlib_debug_chart_figure" not in inspector_source)

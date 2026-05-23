@@ -13,7 +13,6 @@ from core.trade_plans import (
     should_clear_extended_signal,
 )
 from core.portfolio_fast_data import get_fast_close, get_fast_pos, get_fast_value
-from core.signal_utils import buy_signal_source_to_label, normalize_buy_signal_source
 
 
 def _format_candidate_date(value):
@@ -32,8 +31,6 @@ def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
     sizing_capital = candidate_row.get('sizing_capital')
     if (sizing_capital is None or sizing_capital != sizing_capital) and sizing_equity is not None:
         sizing_capital = sizing_equity
-    entry_signal_type = normalize_buy_signal_source(candidate_row.get('entry_signal_type'))
-
     plan = {
         'limit_price': candidate_row['limit_px'],
         'init_sl': candidate_row['init_sl'],
@@ -46,8 +43,6 @@ def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
         'sizing_capital': sizing_capital,
         'orig_limit': candidate_row.get('orig_limit'),
         'orig_atr': candidate_row.get('orig_atr'),
-        'entry_signal_type': entry_signal_type,
-        'entry_signal_label': buy_signal_source_to_label(entry_signal_type),
     }
 
     shadow_position_state = candidate_row.get('shadow_position_state')
@@ -127,8 +122,6 @@ def execute_reserved_entries_for_day(
         if cand.get('is_orderable') is False:
             continue
         candidate_kind_label = _candidate_kind_label(cand.get('type'))
-        entry_signal_type = normalize_buy_signal_source(cand.get('entry_signal_type'))
-        entry_signal_label = buy_signal_source_to_label(entry_signal_type)
         signal_date_text = _format_candidate_date(cand.get('signal_date'))
         candidate_date_text = _format_candidate_date(cand.get('candidate_date') or cand.get('trade_date') or today)
 
@@ -179,8 +172,6 @@ def execute_reserved_entries_for_day(
             entry_result['position']['_entry_params_signature'] = str(cand.get('params_signature') or '')
             entry_result['position']['_ensemble_vote_count'] = cand.get('ensemble_vote_count')
             entry_result['position']['_ensemble_min_agree'] = cand.get('ensemble_min_agree')
-            entry_result['position']['entry_signal_type'] = entry_signal_type
-            entry_result['position']['entry_signal_label'] = entry_signal_label
             if candidate_context:
                 entry_result['position']['_entry_context'] = candidate_context
             portfolio[cand['ticker']] = entry_result['position']

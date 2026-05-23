@@ -14,7 +14,7 @@ from core.exact_accounting import (
     round_money_for_display,
 )
 from core.portfolio_fast_data import build_trade_stats_index
-from core.signal_utils import buy_signal_source_to_label, generate_signals, normalize_buy_signal_source, unpack_precomputed_signals
+from core.signal_utils import generate_signals, unpack_precomputed_signals
 from tools.trade_analysis.charting import (
     create_debug_chart_context,
     record_active_levels,
@@ -45,8 +45,6 @@ def _extract_precomputed_signals(df):
         df['ind_sell_signal'].to_numpy(copy=False),
         df['buy_limit'].to_numpy(copy=False),
     )
-    if 'buy_signal_source' in df.columns:
-        signals = signals + (df['buy_signal_source'].to_numpy(copy=False),)
     return signals
 
 
@@ -92,15 +90,10 @@ def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
     return True
 
 
-def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, entry_plan, history_snapshot, params, entry_signal_type=None):
+def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, entry_plan, history_snapshot, params):
     if chart_context is None:
         return
     meta = dict(history_snapshot or {})
-    resolved_entry_signal_type = normalize_buy_signal_source(entry_signal_type)
-    meta.update({
-        'entry_signal_type': resolved_entry_signal_type,
-        'entry_signal_label': buy_signal_source_to_label(resolved_entry_signal_type),
-    })
     current_capital = meta.get('current_capital')
     anchor_price = float(signal_low)
     detail_lines = []
@@ -269,7 +262,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         precomputed_signals = _extract_precomputed_signals(df)
     if precomputed_signals is None:
         precomputed_signals = generate_signals(df, params, ticker=ticker)
-    atr_main, buy_condition, sell_condition, buy_limits, buy_signal_source = unpack_precomputed_signals(precomputed_signals)
+    atr_main, buy_condition, sell_condition, buy_limits = unpack_precomputed_signals(precomputed_signals)
     stats_dict, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True, precomputed_signals=precomputed_signals, ticker=ticker)
     stats_index = build_trade_stats_index(standalone_logs)
     position = {'qty': 0}
@@ -301,7 +294,6 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 entry_plan=entry_plan_preview,
                 history_snapshot=signal_history_snapshot,
                 params=params,
-                entry_signal_type=buy_signal_source[j - 1],
             )
         if chart_context is not None and pos_qty_start_of_bar > 0 and sell_condition[j - 1]:
             _record_sell_signal_annotation(
@@ -361,7 +353,6 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             security_profile=resolved_security_profile,
             trade_date=dates[j],
             signal_date=signal_date,
-            entry_signal_type=buy_signal_source[j - 1],
         )
         current_capital -= spent_cash
         if chart_context is not None and position['qty'] > 0:
@@ -396,7 +387,6 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 entry_plan=latest_entry_plan_preview,
                 history_snapshot=latest_history_snapshot,
                 params=params,
-                entry_signal_type=buy_signal_source[-1],
             )
             if latest_history_snapshot.get('is_candidate', False):
                 _apply_chart_future_preview_from_plan(chart_context, latest_entry_plan_preview)

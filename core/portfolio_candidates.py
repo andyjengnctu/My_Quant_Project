@@ -17,17 +17,6 @@ from core.portfolio_fast_data import (
     get_fast_value,
     get_pit_stats_from_index,
 )
-from core.signal_utils import buy_signal_source_to_label, normalize_buy_signal_source
-
-
-def _resolve_fast_buy_signal_type(fast_df, y_pos):
-    try:
-        source_value = get_fast_value(fast_df, 'buy_signal_source', pos=y_pos)
-    except (KeyError, TypeError, IndexError, ValueError):
-        source_value = None
-    return normalize_buy_signal_source(source_value)
-
-
 def _make_candidate_row(
     *,
     buy_sort_method,
@@ -55,13 +44,9 @@ def _make_candidate_row(
     security_profile=None,
     trade_date=None,
     signal_date=None,
-    entry_signal_type=None,
     sizing_capital=None,
     shadow_position_state=None,
 ):
-    resolved_entry_signal_type = normalize_buy_signal_source(
-        entry_signal_type if entry_signal_type is not None else (signal_state or {}).get('entry_signal_type')
-    )
     if est_qty > 0:
         est_ledger = build_buy_ledger_from_price(est_limit_px, est_qty, params)
         est_cost_milli = int(est_ledger["net_buy_total_milli"])
@@ -97,8 +82,6 @@ def _make_candidate_row(
         'trade_date': trade_date,
         'candidate_date': trade_date,
         'signal_date': signal_date,
-        'entry_signal_type': resolved_entry_signal_type,
-        'entry_signal_label': buy_signal_source_to_label(resolved_entry_signal_type),
         'sizing_capital': sizing_capital,
         'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
         'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
@@ -145,7 +128,6 @@ def _collect_normal_candidates(
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-        entry_signal_type = _resolve_fast_buy_signal_type(fast_df, y_pos)
         signal_date = get_fast_dates(fast_df)[y_pos]
         security_profile = get_fast_security_profile(fast_df)
 
@@ -174,7 +156,6 @@ def _collect_normal_candidates(
             ticker=ticker,
             security_profile=security_profile,
             signal_date=signal_date,
-            entry_signal_type=entry_signal_type,
         )
         if signal_state is not None:
             active_extended_signals[ticker] = signal_state
@@ -204,7 +185,6 @@ def _collect_normal_candidates(
             security_profile=candidate_plan.get('security_profile'),
             trade_date=today,
             signal_date=signal_date,
-            entry_signal_type=entry_signal_type,
             sizing_capital=candidate_plan.get('sizing_capital'),
         )
         if candidates_today is not None:
@@ -242,7 +222,6 @@ def track_normal_setup_signals_for_day(
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-        entry_signal_type = _resolve_fast_buy_signal_type(fast_df, y_pos)
         signal_date = get_fast_dates(fast_df)[y_pos]
         security_profile = get_fast_security_profile(fast_df)
 
@@ -259,7 +238,6 @@ def track_normal_setup_signals_for_day(
             ticker=ticker,
             security_profile=security_profile,
             signal_date=signal_date,
-            entry_signal_type=entry_signal_type,
         )
         if signal_state is not None:
             active_extended_signals[ticker] = signal_state
@@ -347,7 +325,6 @@ def _collect_extended_candidates(
             security_profile=candidate_plan.get('security_profile'),
             trade_date=today,
             signal_date=candidate_plan.get('signal_date'),
-            entry_signal_type=candidate_plan.get('entry_signal_type'),
             sizing_capital=candidate_plan.get('sizing_capital'),
             signal_state=active_extended_signals[ticker],
             continuation_invalidation_barrier=candidate_plan.get('continuation_invalidation_barrier'),

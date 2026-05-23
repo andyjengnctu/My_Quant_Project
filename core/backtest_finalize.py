@@ -5,7 +5,6 @@ from core.price_utils import (
     calc_frozen_target_price,
     calc_initial_stop_from_reference,
 )
-from core.signal_utils import buy_signal_source_to_label, normalize_buy_signal_source
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
@@ -151,7 +150,6 @@ def build_backtest_stats(
     atr_last,
     close_last,
     buy_limit_last=None,
-    buy_signal_source_last=None,
     low_last=None,
     had_open_position_at_end=False,
     active_extended_signal=None,
@@ -180,8 +178,6 @@ def build_backtest_stats(
     total_net_profit = current_equity - params.initial_capital
     total_net_profit_pct = ((current_equity / params.initial_capital) - 1) * 100 if params.initial_capital > 0 else 0.0
     buy_next_day = bool(buy_condition_last)
-    entry_signal_type = normalize_buy_signal_source(buy_signal_source_last if buy_next_day else None)
-    entry_signal_label = buy_signal_source_to_label(entry_signal_type)
 
     resolved_ticker = ticker or (active_extended_signal_tbd or {}).get("ticker") or (active_extended_signal or {}).get("ticker")
     resolved_security_profile = security_profile or (active_extended_signal or {}).get("security_profile")
@@ -299,8 +295,6 @@ def build_backtest_stats(
         'missed_sells': missed_sell_count,
         'is_setup_today': buy_next_day,
         'buy_limit': buy_limit,
-        'entry_signal_type': entry_signal_type,
-        'entry_signal_label': entry_signal_label,
         'stop_loss': stop_loss,
         'tp_price': tp_price,
         'extended_candidate_today': extended_candidate_today,

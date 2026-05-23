@@ -47,7 +47,7 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
 FAST_STATIC_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'Volume')
 FAST_DYNAMIC_FLOAT_FIELDS = ('ATR', 'buy_limit')
 FAST_DYNAMIC_BOOL_FIELDS = ('is_setup', 'ind_sell_signal')
-FAST_DYNAMIC_INT_FIELDS = ('buy_signal_source',)
+FAST_DYNAMIC_INT_FIELDS = ()
 FAST_FLOAT_FIELDS = FAST_STATIC_FLOAT_FIELDS + FAST_DYNAMIC_FLOAT_FIELDS
 FAST_BOOL_FIELDS = FAST_DYNAMIC_BOOL_FIELDS
 FAST_INT_FIELDS = FAST_DYNAMIC_INT_FIELDS
@@ -67,13 +67,12 @@ def pack_static_market_data(df):
 
 
 def pack_optimizer_dynamic_data(precomputed_signals):
-    atr_main, buy_condition, sell_condition, buy_limits, buy_signal_source = unpack_precomputed_signals(precomputed_signals)
+    atr_main, buy_condition, sell_condition, buy_limits = unpack_precomputed_signals(precomputed_signals)
     return {
         'ATR': np.asarray(atr_main, dtype=np.float64),
         'buy_limit': np.asarray(buy_limits, dtype=np.float64),
         'is_setup': np.asarray(buy_condition, dtype=bool),
         'ind_sell_signal': np.asarray(sell_condition, dtype=bool),
-        'buy_signal_source': np.asarray(buy_signal_source, dtype=np.uint8),
     }
 
 
@@ -192,7 +191,7 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    _atr_main, buy_condition, _sell_condition, _buy_limits, _buy_signal_source = unpack_precomputed_signals(precomputed_signals)
+    _atr_main, buy_condition, _sell_condition, _buy_limits = unpack_precomputed_signals(precomputed_signals)
     has_executable_setup = bool(np.any(np.asarray(buy_condition, dtype=bool)[:-1]))
     if not has_executable_setup:
         standalone_logs = [] if include_trade_logs else None
@@ -242,7 +241,7 @@ def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=Fals
 
     t0 = time.perf_counter() if profile_stats is not None else None
     precomputed_signals = generate_signals(df, params, ticker=resolved_ticker)
-    ATR_main, buyCondition, sellCondition, buy_limits, buySignalSource = unpack_precomputed_signals(precomputed_signals)
+    ATR_main, buyCondition, sellCondition, buy_limits = unpack_precomputed_signals(precomputed_signals)
     if profile_stats is not None:
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0
 
@@ -251,7 +250,6 @@ def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=Fals
     df['is_setup'] = buyCondition
     df['ind_sell_signal'] = sellCondition
     df['buy_limit'] = buy_limits
-    df['buy_signal_source'] = np.asarray(buySignalSource, dtype=np.uint8)
     if profile_stats is not None:
         profile_stats['assign_columns_sec'] = time.perf_counter() - t0
 

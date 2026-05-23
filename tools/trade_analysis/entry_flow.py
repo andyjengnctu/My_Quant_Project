@@ -8,7 +8,6 @@ from core.extended_signals import (
     should_clear_extended_signal,
 )
 from core.exact_accounting import calc_entry_total_cost, milli_to_money, round_money_for_display
-from core.signal_utils import buy_signal_source_to_label, normalize_buy_signal_source
 from tools.trade_analysis.charting import record_active_levels, record_shadow_active_levels, record_limit_order, record_trade_marker
 from tools.trade_analysis.log_rows import append_debug_trade_row, get_debug_tp_half_price
 
@@ -146,14 +145,11 @@ def process_debug_entry_for_day(
     security_profile=None,
     trade_date=None,
     signal_date=None,
-    entry_signal_type=None,
 ):
     buy_triggered = False
     spent_cash = 0.0
     effective_trade_date = current_date if trade_date is None else trade_date
     date_str = current_date.strftime('%Y-%m-%d')
-    resolved_entry_signal_type = normalize_buy_signal_source(entry_signal_type)
-    resolved_entry_signal_label = buy_signal_source_to_label(resolved_entry_signal_type)
     effective_signal_date = signal_date
 
     if buy_condition_prev and pos_qty_start_of_bar == 0:
@@ -164,7 +160,6 @@ def process_debug_entry_for_day(
             ticker=ticker,
             security_profile=security_profile,
             signal_date=effective_signal_date,
-            entry_signal_type=resolved_entry_signal_type,
         )
         if signal_state is not None:
             active_extended_signal = signal_state
@@ -202,8 +197,6 @@ def process_debug_entry_for_day(
         if entry_result['filled']:
             position = entry_result['position']
             position['limit_price'] = entry_plan['limit_price']
-            position['entry_signal_type'] = resolved_entry_signal_type
-            position['entry_signal_label'] = resolved_entry_signal_label
             buy_triggered = True
             active_extended_signal = None
             spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
@@ -236,8 +229,6 @@ def process_debug_entry_for_day(
                     'buy_capital': spent_cash,
                     'current_capital': None if current_capital is None else float(current_capital),
                     'entry_type': 'normal',
-                    'entry_signal_type': resolved_entry_signal_type,
-                    'entry_signal_label': resolved_entry_signal_label,
                     'result': '成交',
                 },
             )
@@ -275,8 +266,6 @@ def process_debug_entry_for_day(
             )
 
     elif active_extended_signal is not None and pos_qty_start_of_bar == 0:
-        resolved_extended_signal_type = normalize_buy_signal_source((active_extended_signal or {}).get('entry_signal_type'))
-        resolved_extended_signal_label = buy_signal_source_to_label(resolved_extended_signal_type)
         preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params, ticker=ticker, security_profile=security_profile, trade_date=effective_trade_date)
         _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
         entry_plan = build_extended_entry_plan_from_signal(
@@ -318,8 +307,6 @@ def process_debug_entry_for_day(
         if entry_result['filled']:
             position = entry_result['position']
             position['limit_price'] = entry_plan['limit_price']
-            position['entry_signal_type'] = resolved_extended_signal_type
-            position['entry_signal_label'] = resolved_extended_signal_label
             buy_triggered = True
             active_extended_signal = None
             spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
@@ -352,8 +339,6 @@ def process_debug_entry_for_day(
                     'buy_capital': spent_cash,
                     'current_capital': None if current_capital is None else float(current_capital),
                     'entry_type': 'extended',
-                    'entry_signal_type': resolved_extended_signal_type,
-                    'entry_signal_label': resolved_extended_signal_label,
                     'result': '成交',
                 },
             )

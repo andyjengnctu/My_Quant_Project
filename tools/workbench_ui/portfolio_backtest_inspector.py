@@ -152,16 +152,16 @@ class _PortfolioConsoleWriter(io.TextIOBase):
 
 
 def _resolve_year_hint_from_date_or_year(date_value=None, year_value=None):
-    try:
-        if date_value:
+    if date_value:
+        try:
             return int(pd.Timestamp(date_value).year)
-    except (TypeError, ValueError):
-        pass
+        except (TypeError, ValueError):
+            date_year = None
     try:
         if year_value is not None and str(year_value).strip() != "":
             return int(year_value)
     except (TypeError, ValueError):
-        pass
+        return None
     return None
 
 
@@ -1197,7 +1197,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._ticker_display_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
         self._show_price_ma_var = tk.BooleanVar(value=False)
-        self._nav_buy_breakout_var = tk.BooleanVar(value=True)
         self._result = None
         self._ticker_map = {}
         self._chart_canvas = None
@@ -1388,11 +1387,11 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Label(capital_frame, textvariable=self._selected_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=0, column=0, sticky="ew")
         sidebar.rowconfigure(18, weight=1)
         nav_section = ttk.Frame(sidebar, style="Workbench.TFrame")
-        nav_section.grid(row=19, column=0, sticky="ew", pady=(10, 0))
+        nav_section.grid(row=19, column=0, sticky="ew", pady=(0, 0))
         nav_section.columnconfigure(0, weight=1)
-        ttk.Button(nav_section, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        ttk.Button(nav_section, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", pady=(0, 0))
         trade_nav = ttk.Frame(nav_section, style="Workbench.TFrame")
-        trade_nav.grid(row=1, column=0, sticky="ew", pady=(2, 2))
+        trade_nav.grid(row=1, column=0, sticky="ew", pady=(0, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
         ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0), pady=(0, 0))
@@ -1668,11 +1667,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if chart_payload is None and self._chart_figure is not None:
             state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
             chart_payload = state.get("chart_payload") if isinstance(state, dict) else None
-        indexes = extract_buy_signal_annotation_indexes(
-            chart_payload,
-            include_breakout=bool(self._nav_buy_breakout_var.get()),
-        )
-        if not indexes and bool(self._nav_buy_breakout_var.get()):
+        indexes = extract_buy_signal_annotation_indexes(chart_payload)
+        if not indexes:
             indexes = _extract_trade_marker_indexes(chart_payload)
         return indexes
 

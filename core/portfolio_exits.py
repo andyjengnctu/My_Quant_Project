@@ -70,8 +70,6 @@ def _build_closed_trade_stat(position, *, ticker, pnl, r_mult, exit_date):
         'pnl': pnl,
         'r_mult': r_mult,
         'entry_type': position.get('entry_type', 'normal'),
-        'entry_signal_type': position.get('entry_signal_type', 'unknown'),
-        'entry_signal_label': position.get('entry_signal_label', '未知'),
         'ticker': str(ticker or position.get('ticker') or ''),
         'entry_trade_date': _format_date_or_none(entry_trade_date),
         'entry_year': _resolve_year_or_none(entry_trade_date),

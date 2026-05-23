@@ -141,7 +141,6 @@ CHART_SHADOW_LINE_LEGEND_SPECS = ()
 CHART_MATPLOTLIB_LEGEND_COLUMNS = 8
 CHART_MATPLOTLIB_LEGEND_SPACER_COUNT = 2
 CHART_PRICE_MA_ALPHA = 0.50
-CHART_BUY_SIGNAL_NAV_BREAKOUT_KEYS = {"breakout"}
 CHART_DEFAULT_PRICE_OVERLAY_SPECS = (
     {"label": "MA20", "kind": "ma", "period": 20, "color": "#ffd166", "linewidth": 1.35, "linestyle": "solid"},
     {"label": "MA60", "kind": "ma", "period": 60, "color": "#7dd3fc", "linewidth": 1.35, "linestyle": "solid"},
@@ -436,27 +435,6 @@ def record_trade_marker(chart_context, *, current_date, action, price, qty, note
         hover_text=hover_text,
         meta=meta,
     )
-
-
-def _normalize_buy_signal_source_key_from_meta(meta):
-    meta = dict(meta or {})
-    raw_value = meta.get("entry_signal_type")
-    if raw_value is None:
-        raw_value = meta.get("buy_signal_source")
-    try:
-        raw_int = int(raw_value)
-    except (TypeError, ValueError):
-        raw_int = None
-    if raw_int == 1:
-        return "breakout"
-
-    raw_key = str(raw_value or "").strip().lower()
-    if raw_key == "breakout":
-        return "breakout"
-    raw_label = str(meta.get("entry_signal_label") or meta.get("buy_signal_source_label") or "").strip()
-    if "突破" in raw_label or "breakout" in raw_label.lower():
-        return "breakout"
-    return "unknown"
 
 
 def _format_buy_signal_annotation_title(title, meta):
@@ -1117,24 +1095,10 @@ def extract_trade_marker_indexes(chart_payload, *, trace_names=None):
     return sorted(set(indexes))
 
 
-def _buy_signal_source_matches_filter(source_key, *, include_breakout=True):
-    source_key = str(source_key or "unknown").strip().lower()
-    if source_key in CHART_BUY_SIGNAL_NAV_BREAKOUT_KEYS and bool(include_breakout):
-        return True
-    if source_key == "unknown" and bool(include_breakout):
-        return True
-    return False
-
-
-def extract_buy_signal_annotation_indexes(chart_payload, *, include_breakout=True):
-    if not bool(include_breakout):
-        return []
+def extract_buy_signal_annotation_indexes(chart_payload):
     indexes = []
     for item in list((chart_payload or {}).get("signal_annotations") or []):
         if str(item.get("signal_type", "")).strip().lower() != "buy":
-            continue
-        source_key = _normalize_buy_signal_source_key_from_meta(item.get("meta") or {})
-        if not _buy_signal_source_matches_filter(source_key, include_breakout=include_breakout):
             continue
         try:
             indexes.append(int(item.get("x")))
