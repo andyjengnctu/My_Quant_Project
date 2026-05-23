@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import io
 import json
 import os
@@ -371,96 +370,6 @@ def _format_pct(value):
 def _build_params_schedule_rows(payload, *, fixed_risk=None):
     override = None if fixed_risk is None else float(fixed_risk)
     return list(build_params_schedule_rows_from_payload(payload, fixed_risk=override))
-
-
-def _looks_like_strategy_param_mapping(value):
-    return isinstance(value, dict) and "high_len" in value and "atr_len" in value
-
-
-def _find_first_strategy_param_mapping(value):
-    if _looks_like_strategy_param_mapping(value):
-        return value
-    if isinstance(value, dict):
-        preferred_keys = (
-            "params",
-            "params_ensemble",
-            "params_ensemble_by_effective_date",
-            "params_by_effective_date",
-            "params_by_oos_year",
-            "folds",
-            "members",
-        )
-        for key in preferred_keys:
-            if key in value:
-                found = _find_first_strategy_param_mapping(value[key])
-                if found is not None:
-                    return found
-        for child in value.values():
-            found = _find_first_strategy_param_mapping(child)
-            if found is not None:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = _find_first_strategy_param_mapping(child)
-            if found is not None:
-                return found
-    return None
-
-
-def _read_entry_strategy_switch_defaults_from_path(params_path):
-    with open(params_path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-    param_mapping = _find_first_strategy_param_mapping(payload) or {}
-    return {
-        "use_breakout_buy": bool(param_mapping.get("use_breakout_buy", True)),
-        "use_ema_pullback": bool(param_mapping.get("use_ema_pullback", False)),
-    }
-
-
-def _entry_strategy_switch_kwargs_from_options(options):
-    return {
-        "use_breakout_buy": bool((options or {}).get("use_breakout_buy", True)),
-        "use_ema_pullback": bool((options or {}).get("use_ema_pullback", False)),
-    }
-
-
-def _apply_entry_strategy_switches_to_param_mapping(param_mapping, *, use_breakout_buy, use_ema_pullback):
-    param_mapping["use_breakout_buy"] = bool(use_breakout_buy)
-    param_mapping["use_ema_pullback"] = bool(use_ema_pullback)
-    return param_mapping
-
-
-def _apply_entry_strategy_switches_to_payload(payload, *, use_breakout_buy, use_ema_pullback):
-    adjusted_payload = copy.deepcopy(payload)
-
-    def _visit(value):
-        if _looks_like_strategy_param_mapping(value):
-            _apply_entry_strategy_switches_to_param_mapping(
-                value,
-                use_breakout_buy=use_breakout_buy,
-                use_ema_pullback=use_ema_pullback,
-            )
-        if isinstance(value, dict):
-            for child in value.values():
-                _visit(child)
-        elif isinstance(value, list):
-            for child in value:
-                _visit(child)
-
-    _visit(adjusted_payload)
-    return adjusted_payload
-
-
-def _apply_entry_strategy_switches_to_params(params, *, use_breakout_buy, use_ema_pullback):
-    params.use_breakout_buy = bool(use_breakout_buy)
-    params.use_ema_pullback = bool(use_ema_pullback)
-    return params
-
-
-def _format_entry_strategy_switch_text(*, use_breakout_buy, use_ema_pullback):
-    breakout_text = "啟用" if bool(use_breakout_buy) else "關閉"
-    pullback_text = "啟用" if bool(use_ema_pullback) else "關閉"
-    return f"突破買進={breakout_text} | EMA回檔={pullback_text}"
 
 
 def _fast_data_to_price_df(fast_data):
@@ -1292,8 +1201,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._ticker_display_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
         self._show_price_ma_var = tk.BooleanVar(value=False)
-        self._use_breakout_buy_var = tk.BooleanVar(value=True)
-        self._use_ema_pullback_var = tk.BooleanVar(value=True)
         self._nav_buy_breakout_var = tk.BooleanVar(value=True)
         self._nav_buy_pullback_var = tk.BooleanVar(value=True)
         self._result = None
@@ -1429,21 +1336,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             style="Workbench.TCheckbutton",
         ).grid(row=0, column=16, padx=(0, 0), pady=pady, sticky="w")
 
-        entry_switch_frame = ttk.LabelFrame(controls_bar, text="進場策略開關", style="Workbench.TLabelframe")
-        entry_switch_frame.grid(row=1, column=0, columnspan=17, sticky="w", padx=(0, 0), pady=(2, 0))
-        ttk.Checkbutton(
-            entry_switch_frame,
-            text="突破買進",
-            variable=self._use_breakout_buy_var,
-            style="Workbench.TCheckbutton",
-        ).grid(row=0, column=0, sticky="w", padx=(6, 8), pady=(2, 2))
-        ttk.Checkbutton(
-            entry_switch_frame,
-            text="EMA回檔",
-            variable=self._use_ema_pullback_var,
-            style="Workbench.TCheckbutton",
-        ).grid(row=0, column=1, sticky="w", padx=(0, 8), pady=(2, 2))
-
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
         self._notebook = notebook
@@ -1536,7 +1428,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         footer.pack(fill="x", pady=(2, 0))
         ttk.Label(footer, textvariable=self._status_var, style="Workbench.TLabel").pack(anchor="w")
         self._notebook.select(kline_tab)
-        self._sync_entry_strategy_switches_from_param_source()
 
     def _make_placeholder(self, master, text):
         label_fg = ttk.Style(self).lookup("Workbench.TLabel", "foreground") or "#f7fbff"
@@ -1834,20 +1725,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         for code, color in PORTFOLIO_CONSOLE_COLORS.items():
             self._console_text.tag_configure(f"ansi_{code}", foreground=color)
 
-    def _sync_entry_strategy_switches_from_param_source(self):
-        try:
-            defaults = _read_entry_strategy_switch_defaults_from_path(self._get_selected_params_path())
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, KeyError, IndexError) as exc:
-            warnings.warn(
-                f"進場策略開關預設值讀取失敗，沿用目前 UI 值: {type(exc).__name__}: {exc}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            return
-        self._use_breakout_buy_var.set(bool(defaults["use_breakout_buy"]))
-        self._use_ema_pullback_var.set(bool(defaults["use_ema_pullback"]))
-
-
     def _on_fixed_risk_selected(self, _event=None):
         if self._fixed_risk_display_var.get() == "自訂":
             self._custom_fixed_risk_entry.state(["!disabled"])
@@ -1858,7 +1735,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _on_param_source_selected(self, _event=None):
         self._refresh_param_source_options()
         self._refresh_start_year_options()
-        self._sync_entry_strategy_switches_from_param_source()
 
     def _refresh_param_source_options(self):
         current_label = self._param_source_display_var.get().strip()
@@ -1930,8 +1806,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             "replay_range_label": _format_date_range_label(replay_start_date, replay_end_date) if replay_start_date else f"{ui_start_year}-01-01~{('latest' if ui_end_year is None else str(ui_end_year) + '-12-31')}",
             "fixed_risk": fixed_risk_override,
             "fixed_risk_source": fixed_risk_source,
-            "use_breakout_buy": bool(self._use_breakout_buy_var.get()),
-            "use_ema_pullback": bool(self._use_ema_pullback_var.get()),
             "enable_rotation": ROTATION_LABEL_TO_BOOL.get(self._rotation_display_var.get().strip(), False),
             "max_positions": max_positions,
             "start_year": start_year,
@@ -2130,18 +2004,13 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         print(f"{C_GRAY}ℹ️ 參數來源: {options['param_source']}{C_RESET}")
         print(f"{C_GRAY}ℹ️ source_mode={options.get('param_source_mode', 'custom')} | selector={options.get('selector') or '-'} | replay_range={options.get('replay_range_label')}{C_RESET}")
         print(f"{C_GRAY}ℹ️ fixed_risk_source={options.get('fixed_risk_source')} | optimizer_aligned_replay={bool(options.get('optimizer_aligned_replay'))}{C_RESET}")
-        entry_switch_kwargs = _entry_strategy_switch_kwargs_from_options(options)
-        print(f"{C_GRAY}ℹ️ 手動策略開關: {_format_entry_strategy_switch_text(**entry_switch_kwargs)}{C_RESET}")
 
         ensure_runtime_dirs()
         start_time = time.time()
         rolling_params_schedule_rows = []
         params_section_title = "訓練參數"
         if is_ensemble_paramset:
-            ensemble_payload = _apply_entry_strategy_switches_to_payload(
-                load_active_param_ensemble_set(options["params_path"]),
-                **entry_switch_kwargs,
-            )
+            ensemble_payload = load_active_param_ensemble_set(options["params_path"])
             try:
                 ensemble_first_date, ensemble_last_date = get_active_param_ensemble_date_range(ensemble_payload)
             except ValueError:
@@ -2175,10 +2044,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 return_context=True,
             )
         elif is_rolling_paramset:
-            rolling_payload = _apply_entry_strategy_switches_to_payload(
-                load_rolling_oos_param_set(options["params_path"]),
-                **entry_switch_kwargs,
-            )
+            rolling_payload = load_rolling_oos_param_set(options["params_path"])
             rolling_first_date, rolling_last_date = get_active_param_date_range(rolling_payload)
             representative_date = max(pd.Timestamp(options.get("replay_start_date") or f"{options['start_year']}-01-01").normalize(), pd.Timestamp(rolling_first_date).normalize()).strftime("%Y-%m-%d")
             params = build_params_from_mapping(get_active_params_for_date(rolling_payload, representative_date))
@@ -2205,10 +2071,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 return_context=True,
             )
         else:
-            params = _apply_entry_strategy_switches_to_params(
-                load_strict_params(options["params_path"]),
-                **entry_switch_kwargs,
-            )
+            params = load_strict_params(options["params_path"])
             if options.get("fixed_risk") is not None:
                 params.fixed_risk = float(options["fixed_risk"])
             print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
