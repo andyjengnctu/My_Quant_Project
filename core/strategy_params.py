@@ -172,12 +172,15 @@ class V16StrategyParams:
         old_value = getattr(self, name) if had_old_value else MISSING
         object.__setattr__(self, name, normalized_value)
 
+        if not _strategy_param_instance_has_all_fields(self):
+            return
+
         try:
             validate_strategy_param_ranges(_build_strategy_param_snapshot(self))
         except ValueError:
             if had_old_value:
                 object.__setattr__(self, name, old_value)
-            elif hasattr(self, name):
+            elif name in getattr(self, "__dict__", {}):
                 object.__delattr__(self, name)
             raise
 
@@ -197,11 +200,17 @@ def build_runtime_param_raw_value(params, field_name):
     return getattr(params, field_name, RUNTIME_PARAM_DEFAULTS[field_name])
 
 
+def _strategy_param_instance_has_all_fields(instance):
+    instance_dict = getattr(instance, "__dict__", {})
+    return all(field.name in instance_dict for field in fields(type(instance)))
+
+
 def _build_strategy_param_snapshot(instance):
     snapshot = {}
+    instance_dict = getattr(instance, "__dict__", {})
     for field in fields(type(instance)):
-        if hasattr(instance, field.name):
-            snapshot[field.name] = getattr(instance, field.name)
+        if field.name in instance_dict:
+            snapshot[field.name] = instance_dict[field.name]
         elif field.default is not MISSING:
             snapshot[field.name] = field.default
         elif field.default_factory is not MISSING:  # type: ignore[attr-defined]

@@ -28,8 +28,22 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
 }
 
 
+def _resolve_optimizer_categorical_choices(field_name):
+    choices = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]["choices"]
+    if isinstance(choices, bool):
+        return [choices]
+    normalized = list(choices)
+    if not normalized:
+        raise ValueError(f"參數 {field_name} 的 choices 不可為空")
+    return normalized
+
+
+def _suggest_optimizer_switch(trial, field_name):
+    return bool(trial.suggest_categorical(field_name, _resolve_optimizer_categorical_choices(field_name)))
+
+
 def _suggest_ema_pullback_lengths(trial):
-    if not trial.suggest_categorical("use_ema_pullback", BREAKOUT_OPTIMIZER_SEARCH_SPACE["use_ema_pullback"]["choices"]):
+    if not _suggest_optimizer_switch(trial, "use_ema_pullback"):
         return (
             False,
             BREAKOUT_PARAM_SPECS["ema_pullback_short_len"]["default"],
@@ -49,9 +63,9 @@ def _suggest_ema_pullback_lengths(trial):
 
 
 def build_trial_params(session, trial):
-    ai_use_bb = trial.suggest_categorical("use_bb", BREAKOUT_OPTIMIZER_SEARCH_SPACE["use_bb"]["choices"])
-    ai_use_kc = trial.suggest_categorical("use_kc", BREAKOUT_OPTIMIZER_SEARCH_SPACE["use_kc"]["choices"])
-    ai_use_vol = trial.suggest_categorical("use_vol", BREAKOUT_OPTIMIZER_SEARCH_SPACE["use_vol"]["choices"])
+    ai_use_bb = _suggest_optimizer_switch(trial, "use_bb")
+    ai_use_kc = _suggest_optimizer_switch(trial, "use_kc")
+    ai_use_vol = _suggest_optimizer_switch(trial, "use_vol")
     ai_use_ema_pullback, ema_short_len, ema_mid_len, ema_long_len = _suggest_ema_pullback_lengths(trial)
 
     if ai_use_vol:
