@@ -58,12 +58,6 @@ def print_scanner_header(params):
         if get_p(params, 'use_breakout_buy', True)
         else "關閉"
     )
-    ema_pullback_str = (
-        f"啟用 (Close回站EMA{get_p(params, 'ema_pullback_short_len', 5)}，短EMA>長EMA，長EMA斜率≥{get_p(params, 'ema_pullback_long_slope_min_pct', 0.0) * 100:.1f}%)"
-        if get_p(params, 'use_ema_pullback', False)
-        else "關閉"
-    )
-
     print(
         f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | "
         f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
@@ -92,8 +86,7 @@ def print_scanner_header(params):
         f"   ➤ 濾網參數: "
         f"布林(BB) {bb_str} | "
         f"阿肯那(KC) {kc_str} | "
-        f"均量 {vol_str} | "
-        f"EMA回檔 {ema_pullback_str}"
+        f"均量 {vol_str}"
     )
     print(
         f"   ➤ 歷史門檻: "

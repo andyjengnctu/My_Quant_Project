@@ -3,36 +3,26 @@ import pandas as pd
 
 from core.price_utils import adjust_long_buy_limit_array
 from core.feature_bank import coerce_feature_bank
-from strategies.breakout.schema import EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS
-
 OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
 
 BUY_SIGNAL_SOURCE_NONE = 0
 BUY_SIGNAL_SOURCE_BREAKOUT = 1
-BUY_SIGNAL_SOURCE_EMA_PULLBACK = 2
-BUY_SIGNAL_SOURCE_BOTH = BUY_SIGNAL_SOURCE_BREAKOUT | BUY_SIGNAL_SOURCE_EMA_PULLBACK
 
 BUY_SIGNAL_SOURCE_KEYS = {
     BUY_SIGNAL_SOURCE_NONE: "unknown",
     BUY_SIGNAL_SOURCE_BREAKOUT: "breakout",
-    BUY_SIGNAL_SOURCE_EMA_PULLBACK: "ema_pullback",
-    BUY_SIGNAL_SOURCE_BOTH: "both",
 }
 
 BUY_SIGNAL_SOURCE_LABELS = {
     "unknown": "未知",
     "breakout": "突破",
-    "ema_pullback": "EMA回檔",
-    "both": "突破+EMA回檔",
 }
 
 
-def build_buy_signal_source(breakout_condition, ema_pullback_condition):
-    breakout = np.asarray(breakout_condition, dtype=bool)
-    ema_pullback = np.asarray(ema_pullback_condition, dtype=bool)
+def build_buy_signal_source(buy_condition):
+    breakout = np.asarray(buy_condition, dtype=bool)
     source = np.zeros(breakout.shape, dtype=np.uint8)
-    source[breakout] |= BUY_SIGNAL_SOURCE_BREAKOUT
-    source[ema_pullback] |= BUY_SIGNAL_SOURCE_EMA_PULLBACK
+    source[breakout] = BUY_SIGNAL_SOURCE_BREAKOUT
     return source
 
 
@@ -187,7 +177,6 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     use_bb = bool(getattr(params, 'use_bb', True))
     use_vol = bool(getattr(params, 'use_vol', True))
     use_kc = bool(getattr(params, 'use_kc', True))
-    use_ema_pullback = bool(getattr(params, 'use_ema_pullback', False))
 
     def _feature(feature_name, feature_args, builder):
         if feature_cache is None or resolved_ticker is None:
@@ -296,37 +285,8 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
         else np.zeros_like(C, dtype=bool)
     )
 
-    if use_ema_pullback:
-        ema_short_len = int(params.ema_pullback_short_len)
-        ema_long_len = int(params.ema_pullback_long_len)
-        ema_long_slope_min_pct = float(params.ema_pullback_long_slope_min_pct)
-        ema_long_slope_lookback = EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS
-        EMA_Short = _feature('ema_close', (ema_short_len,), lambda: tv_ema(C, ema_short_len))
-        EMA_Long = _feature('ema_close', (ema_long_len,), lambda: tv_ema(C, ema_long_len))
-
-        prev_ema_short = np.empty_like(EMA_Short)
-        prev_ema_short[0] = EMA_Short[0]
-        prev_ema_short[1:] = EMA_Short[:-1]
-        ema_long_lag = np.empty_like(EMA_Long)
-        ema_long_lag[:ema_long_slope_lookback] = np.nan
-        ema_long_lag[ema_long_slope_lookback:] = EMA_Long[:-ema_long_slope_lookback]
-
-        ema_long_slope_pct = (EMA_Long / ema_long_lag) - 1.0
-
-        emaPullbackBuyCondition = (
-            is_tradable_bar
-            & (C > prev_close)
-            & (C > EMA_Short)
-            & (prev_close <= prev_ema_short)
-            & (EMA_Short > EMA_Long)
-            & (ema_long_slope_pct >= ema_long_slope_min_pct)
-        )
-        emaPullbackBuyCondition[:ema_long_slope_lookback] = False
-    else:
-        emaPullbackBuyCondition = np.zeros_like(C, dtype=bool)
-
-    buyCondition = breakoutBuyCondition | emaPullbackBuyCondition
-    buySignalSource = build_buy_signal_source(breakoutBuyCondition, emaPullbackBuyCondition)
+    buyCondition = breakoutBuyCondition
+    buySignalSource = build_buy_signal_source(buyCondition)
     sellCondition = is_tradable_bar & ((isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition)
     raw_buy_limits = C + ATR_main * params.atr_buy_tol
     buy_limits = np.full_like(C, np.nan)

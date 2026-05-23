@@ -459,7 +459,6 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._chart_figure = None
         self._show_price_ma_var = tk.BooleanVar(value=False)
         self._nav_buy_breakout_var = tk.BooleanVar(value=True)
-        self._nav_buy_pullback_var = tk.BooleanVar(value=True)
         self._current_chart_trade_indexes = []
         self._current_chart_trade_cursor_index = None
         self._console_writer = _ConsoleWriter(self)
@@ -648,12 +647,6 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         trade_nav.columnconfigure(1, weight=1)
         ttk.Button(trade_nav, text="前交易", command=self._move_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0), pady=(0, 0))
         ttk.Button(trade_nav, text="後交易", command=self._move_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(0, 0), pady=(0, 0))
-        filter_frame = ttk.LabelFrame(nav_section, text="交易導航過濾", style="Workbench.TLabelframe")
-        filter_frame.grid(row=2, column=0, sticky="ew", pady=(2, 2))
-        filter_frame.columnconfigure(0, weight=1)
-        filter_frame.columnconfigure(1, weight=1)
-        ttk.Checkbutton(filter_frame, text="買訊 (突破)", variable=self._nav_buy_breakout_var, command=self._refresh_chart_navigation_indexes, style="Workbench.TCheckbutton").grid(row=0, column=0, sticky="w", padx=(4, 4), pady=(2, 2))
-        ttk.Checkbutton(filter_frame, text="買訊 (回檔)", variable=self._nav_buy_pullback_var, command=self._refresh_chart_navigation_indexes, style="Workbench.TCheckbutton").grid(row=0, column=1, sticky="w", padx=(4, 4), pady=(2, 2))
         sidebar.rowconfigure(20, weight=0)
 
         table_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
@@ -1176,9 +1169,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             probe_trade_count = self._resolve_scan_dropdown_trade_count(sort_probe_payload)
             win_rate_text = "-" if probe_win_rate is None else f"{probe_win_rate:.1f}%"
             trade_count_text = "-" if probe_trade_count is None else str(probe_trade_count)
-        source_label = str(item.get("entry_signal_label") or "").strip()
-        source_text = f"|來源 {source_label}" if source_label and source_label != "未知" else ""
-        return f"{ticker}|{kind_label}{source_text}|{sort_metric_label} {sort_value_text}|勝率 {win_rate_text}|次 {trade_count_text}"
+        return f"{ticker}|{kind_label}|{sort_metric_label} {sort_value_text}|勝率 {win_rate_text}|次 {trade_count_text}"
 
     def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values, rule_key):
         mapping.clear()
@@ -1513,9 +1504,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         indexes = extract_buy_signal_annotation_indexes(
             chart_payload,
             include_breakout=bool(self._nav_buy_breakout_var.get()),
-            include_pullback=bool(self._nav_buy_pullback_var.get()),
         )
-        if not indexes and bool(self._nav_buy_breakout_var.get()) and bool(self._nav_buy_pullback_var.get()):
+        if not indexes and bool(self._nav_buy_breakout_var.get()):
             indexes = extract_trade_marker_indexes(chart_payload, trace_names=BUY_TRADE_TRACE_NAMES)
         return indexes
 

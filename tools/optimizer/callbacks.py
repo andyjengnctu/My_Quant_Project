@@ -461,20 +461,13 @@ def _build_training_param_lines(params):
     bb_str = f"布林(BB) 啟用（長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x）" if get_p(params, 'use_bb', False) else "布林(BB) 關閉"
     kc_str = f"阿肯那(KC) 啟用（長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x）" if get_p(params, 'use_kc', False) else "阿肯那(KC) 關閉"
     vol_str = f"均量 啟用（短{get_p(params, 'vol_short_len', 5)} > 長{get_p(params, 'vol_long_len', 19)}）" if get_p(params, 'use_vol', False) else "均量 關閉"
-    ema_pullback_str = (
-        f"EMA回檔 啟用（Close回站 EMA{get_p(params, 'ema_pullback_short_len', 5)}｜"
-        f"EMA{get_p(params, 'ema_pullback_short_len', 5)} > EMA{get_p(params, 'ema_pullback_long_len', 120)}｜"
-        f"EMA{get_p(params, 'ema_pullback_long_len', 120)} 斜率≥{get_p(params, 'ema_pullback_long_slope_min_pct', 0.0) * 100:.1f}%）"
-        if get_p(params, 'use_ema_pullback', False)
-        else "EMA回檔 關閉"
-    )
     breakout_str = (
         f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高)"
         if get_p(params, 'use_breakout_buy', True)
         else "突破買進 關閉"
     )
     return [
-        f"進場：{breakout_str}｜{ema_pullback_str}",
+        f"進場：{breakout_str}",
         f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%",
         f"濾網：{bb_str}｜{kc_str}｜{vol_str}",
         f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R",

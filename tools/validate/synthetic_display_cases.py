@@ -132,7 +132,7 @@ def validate_display_reporting_sanity_case(_base_params):
     add_check(results, "display_reporting", case_id, "dashboard_contains_return_row", True, "總資產報酬率" in dashboard_text and "+18.76%" in dashboard_text and "+10.11%" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_benchmark_ticker", True, "同期大盤 (0050)" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_ev_row", True, "實戰期望值(EV)" in dashboard_text and "0.72 R" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_entry_summary", True, "進場：突破買進 啟用 (突破 123 日新高)｜EMA回檔 關閉" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_entry_summary", True, "進場：突破買進 啟用 (突破 123 日新高)" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_filter_summary", True, "濾網：布林(BB) 啟用（長21, 寬2.5x）｜阿肯那(KC) 啟用（長34, 寬1.8x）｜均量 啟用（短7 > 長21）" in dashboard_text)
 
     summary["scanner_lines"] = len([line for line in scanner_text.splitlines() if line.strip()])

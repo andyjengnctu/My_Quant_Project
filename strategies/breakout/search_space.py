@@ -1,6 +1,6 @@
 from core.data_utils import get_required_min_rows_from_lookbacks
 from strategies.breakout.adapter import build_breakout_strategy_params
-from strategies.breakout.schema import BREAKOUT_PARAM_SPECS, EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS
+from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
 
 BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
@@ -8,7 +8,6 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
     "use_kc": {"kind": "categorical", "choices": [True, False],},  # (AI註: 肯特納通道濾網開關搜尋)
     "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 量能濾網開關搜尋)
-    "use_ema_pullback": {"kind": "categorical", "choices": [True]},
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 40~250、步長 5)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
     "atr_times_init": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~3.5)
@@ -20,9 +19,6 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "kc_mult": {"kind": "float", "low": 1.0, "high": 3.0, "step": 0.1, "enabled_by": "use_kc"},  # (AI註: 肯特納通道倍數搜尋，僅 use_kc=True 啟用)
     "vol_short_len": {"kind": "int", "low": 1, "high": 10, "enabled_by": "use_vol"},  # (AI註: 短期量能窗長搜尋，僅 use_vol=True 啟用)
     "vol_long_len": {"kind": "int", "high": 30, "depends_on": "vol_short_len", "enabled_by": "use_vol"},  # (AI註: 長期量能窗長搜尋，僅 use_vol=True 啟用且下限跟隨 vol_short_len)
-    "ema_pullback_short_len": {"kind": "int", "low": 3, "high": 20, "enabled_by": "use_ema_pullback"},
-    "ema_pullback_long_len": {"kind": "int", "low": 80, "high": 240, "enabled_by": "use_ema_pullback"},
-    "ema_pullback_long_slope_min_pct": {"kind": "float", "low": 0.00, "high": 0.40, "step": 0.02, "enabled_by": "use_ema_pullback"},
     "min_history_trades": {"kind": "int", "low": 3, "high": 3},  # (AI註: 歷史績效最少交易次數搜尋，預設區間 0~5)
     "min_history_ev": {"kind": "float", "low": 0.0, "high": 0.0, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設區間 -1.0~0.5)
     "min_history_win_rate": {"kind": "float", "low": 0.45, "high": 0.45, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設區間 0.0~0.6)
@@ -43,36 +39,11 @@ def _suggest_optimizer_switch(trial, field_name):
     return bool(trial.suggest_categorical(field_name, _resolve_optimizer_categorical_choices(field_name)))
 
 
-def _suggest_ema_pullback_params(trial):
-    if not _suggest_optimizer_switch(trial, "use_ema_pullback"):
-        return (
-            False,
-            BREAKOUT_PARAM_SPECS["ema_pullback_short_len"]["default"],
-            BREAKOUT_PARAM_SPECS["ema_pullback_long_len"]["default"],
-            BREAKOUT_PARAM_SPECS["ema_pullback_long_slope_min_pct"]["default"],
-        )
-
-    short_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["ema_pullback_short_len"]
-    long_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["ema_pullback_long_len"]
-    slope_threshold_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["ema_pullback_long_slope_min_pct"]
-    short_len = trial.suggest_int("ema_pullback_short_len", short_spec["low"], short_spec["high"])
-    long_low = max(int(long_spec["low"]), int(short_len) + 1)
-    long_len = trial.suggest_int("ema_pullback_long_len", long_low, int(long_spec["high"]))
-    slope_min_pct = trial.suggest_float(
-        "ema_pullback_long_slope_min_pct",
-        float(slope_threshold_spec["low"]),
-        float(slope_threshold_spec["high"]),
-        step=float(slope_threshold_spec["step"]),
-    )
-    return True, short_len, long_len, slope_min_pct
-
-
 def build_trial_params(session, trial):
     ai_use_breakout_buy = _suggest_optimizer_switch(trial, "use_breakout_buy")
     ai_use_bb = _suggest_optimizer_switch(trial, "use_bb")
     ai_use_kc = _suggest_optimizer_switch(trial, "use_kc")
     ai_use_vol = _suggest_optimizer_switch(trial, "use_vol")
-    ai_use_ema_pullback, ema_short_len, ema_long_len, ema_long_slope_min_pct = _suggest_ema_pullback_params(trial)
 
     if ai_use_vol:
         vol_short_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_short_len"]
@@ -94,7 +65,6 @@ def build_trial_params(session, trial):
         use_bb=ai_use_bb,
         use_kc=ai_use_kc,
         use_vol=ai_use_vol,
-        use_ema_pullback=ai_use_ema_pullback,
         bb_len=(
             trial.suggest_int("bb_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["step"])
             if ai_use_bb
@@ -117,9 +87,6 @@ def build_trial_params(session, trial):
         ),
         vol_short_len=vol_short_len,
         vol_long_len=vol_long_len,
-        ema_pullback_short_len=ema_short_len,
-        ema_pullback_long_len=ema_long_len,
-        ema_pullback_long_slope_min_pct=ema_long_slope_min_pct,
         min_history_trades=trial.suggest_int("min_history_trades", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_trades"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_trades"]["high"]),
         min_history_ev=trial.suggest_float("min_history_ev", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["step"]),
         min_history_win_rate=trial.suggest_float("min_history_win_rate", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["step"]),
@@ -138,9 +105,6 @@ BREAKOUT_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELDS = frozenset({
     "kc_mult",
     "vol_short_len",
     "vol_long_len",
-    "ema_pullback_short_len",
-    "ema_pullback_long_len",
-    "ema_pullback_long_slope_min_pct",
 })
 
 BREAKOUT_LOCAL_MIN_PORTFOLIO_DEPENDENCY_FIELDS = frozenset({
@@ -175,8 +139,6 @@ def get_breakout_local_min_candidate_fields(trial, *, center_payload):
         candidate_fields.extend(("kc_len", "kc_mult"))
     if bool(center_payload.get("use_vol", False)):
         candidate_fields.extend(("vol_short_len", "vol_long_len"))
-    if bool(center_payload.get("use_ema_pullback", False)):
-        candidate_fields.extend(("ema_pullback_short_len", "ema_pullback_long_len", "ema_pullback_long_slope_min_pct"))
     return tuple(candidate_fields)
 
 
@@ -192,14 +154,6 @@ def resolve_breakout_neighbor_spec(field_name, *, center_payload=None):
         if center_payload is not None:
             anchor_value = max(anchor_value, int(center_payload["vol_short_len"]))
         low_value = anchor_value
-    elif field_name == "ema_pullback_short_len":
-        low_value = spec["low"]
-        if center_payload is not None:
-            high_value = min(int(high_value), int(center_payload["ema_pullback_long_len"]) - 1)
-    elif field_name == "ema_pullback_long_len":
-        low_value = spec["low"]
-        if center_payload is not None:
-            low_value = max(int(low_value), int(center_payload["ema_pullback_short_len"]) + 1)
     else:
         low_value = spec["low"]
 
@@ -214,5 +168,4 @@ def get_breakout_optimizer_required_min_rows():
         BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_len"]["high"],
         BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_short_len"]["high"],
         BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_long_len"]["high"],
-        BREAKOUT_OPTIMIZER_SEARCH_SPACE["ema_pullback_long_len"]["high"] + EMA_PULLBACK_LONG_SLOPE_LOOKBACK_DAYS,
     )

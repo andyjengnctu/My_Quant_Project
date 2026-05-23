@@ -141,8 +141,7 @@ CHART_SHADOW_LINE_LEGEND_SPECS = ()
 CHART_MATPLOTLIB_LEGEND_COLUMNS = 8
 CHART_MATPLOTLIB_LEGEND_SPACER_COUNT = 2
 CHART_PRICE_MA_ALPHA = 0.50
-CHART_BUY_SIGNAL_NAV_BREAKOUT_KEYS = {"breakout", "both"}
-CHART_BUY_SIGNAL_NAV_PULLBACK_KEYS = {"ema_pullback", "both"}
+CHART_BUY_SIGNAL_NAV_BREAKOUT_KEYS = {"breakout"}
 CHART_DEFAULT_PRICE_OVERLAY_SPECS = (
     {"label": "MA20", "kind": "ma", "period": 20, "color": "#ffd166", "linewidth": 1.35, "linestyle": "solid"},
     {"label": "MA60", "kind": "ma", "period": 60, "color": "#7dd3fc", "linewidth": 1.35, "linestyle": "solid"},
@@ -177,11 +176,6 @@ def _coerce_positive_overlay_period(value):
 def resolve_chart_price_overlay_specs(*, params=None, overlay_specs=None):
     if overlay_specs:
         raw_specs = list(overlay_specs)
-    elif params is not None and bool(getattr(params, "use_ema_pullback", False)):
-        raw_specs = [
-            {"label": f"EMA{int(getattr(params, 'ema_pullback_short_len'))}", "kind": "ema", "period": int(getattr(params, 'ema_pullback_short_len'))},
-            {"label": f"EMA{int(getattr(params, 'ema_pullback_long_len'))}", "kind": "ema", "period": int(getattr(params, 'ema_pullback_long_len'))},
-        ]
     else:
         raw_specs = []
 
@@ -455,51 +449,18 @@ def _normalize_buy_signal_source_key_from_meta(meta):
         raw_int = None
     if raw_int == 1:
         return "breakout"
-    if raw_int == 2:
-        return "ema_pullback"
-    if raw_int == 3:
-        return "both"
 
     raw_key = str(raw_value or "").strip().lower()
-    if raw_key in {"breakout", "ema_pullback", "both"}:
-        return raw_key
-    raw_label = str(meta.get("entry_signal_label") or meta.get("buy_signal_source_label") or "").strip()
-    raw_label_lower = raw_label.lower()
-    if "突破" in raw_label and ("回檔" in raw_label or "pullback" in raw_label_lower):
-        return "both"
-    if "突破" in raw_label or "breakout" in raw_label_lower:
+    if raw_key == "breakout":
         return "breakout"
-    if "回檔" in raw_label or "pullback" in raw_label_lower:
-        return "ema_pullback"
+    raw_label = str(meta.get("entry_signal_label") or meta.get("buy_signal_source_label") or "").strip()
+    if "突破" in raw_label or "breakout" in raw_label.lower():
+        return "breakout"
     return "unknown"
 
 
-def _format_buy_signal_source_label_for_chart(meta):
-    source_key = _normalize_buy_signal_source_key_from_meta(meta)
-    if source_key == "breakout":
-        return "突破"
-    if source_key == "ema_pullback":
-        return "回檔"
-    if source_key == "both":
-        return "突破+回檔"
-    raw_label = str((meta or {}).get("entry_signal_label") or "").strip()
-    if raw_label == "EMA回檔":
-        return "回檔"
-    if raw_label == "突破+EMA回檔":
-        return "突破+回檔"
-    return raw_label if raw_label and raw_label != "未知" else ""
-
-
 def _format_buy_signal_annotation_title(title, meta):
-    base_title = str(title or "買訊").strip() or "買訊"
-    if not base_title.startswith("買訊"):
-        return base_title
-    source_label = _format_buy_signal_source_label_for_chart(meta)
-    if not source_label:
-        return base_title
-    is_missed = "錯失" in base_title
-    suffix = "・錯失" if is_missed else ""
-    return f"買訊 ({source_label}{suffix})"
+    return str(title or "買訊").strip() or "買訊"
 
 
 def record_signal_annotation(chart_context, *, current_date, signal_type, anchor_price, title, detail_lines, note="", meta=None):
@@ -1156,26 +1117,24 @@ def extract_trade_marker_indexes(chart_payload, *, trace_names=None):
     return sorted(set(indexes))
 
 
-def _buy_signal_source_matches_filter(source_key, *, include_breakout=True, include_pullback=True):
+def _buy_signal_source_matches_filter(source_key, *, include_breakout=True):
     source_key = str(source_key or "unknown").strip().lower()
     if source_key in CHART_BUY_SIGNAL_NAV_BREAKOUT_KEYS and bool(include_breakout):
         return True
-    if source_key in CHART_BUY_SIGNAL_NAV_PULLBACK_KEYS and bool(include_pullback):
-        return True
-    if source_key == "unknown" and bool(include_breakout) and bool(include_pullback):
+    if source_key == "unknown" and bool(include_breakout):
         return True
     return False
 
 
-def extract_buy_signal_annotation_indexes(chart_payload, *, include_breakout=True, include_pullback=True):
-    if not bool(include_breakout) and not bool(include_pullback):
+def extract_buy_signal_annotation_indexes(chart_payload, *, include_breakout=True):
+    if not bool(include_breakout):
         return []
     indexes = []
     for item in list((chart_payload or {}).get("signal_annotations") or []):
         if str(item.get("signal_type", "")).strip().lower() != "buy":
             continue
         source_key = _normalize_buy_signal_source_key_from_meta(item.get("meta") or {})
-        if not _buy_signal_source_matches_filter(source_key, include_breakout=include_breakout, include_pullback=include_pullback):
+        if not _buy_signal_source_matches_filter(source_key, include_breakout=include_breakout):
             continue
         try:
             indexes.append(int(item.get("x")))
@@ -1376,7 +1335,6 @@ CHART_INFO_FIELD_SPECS = {
     "stop_price": {"label": "停損", "keys": ("stop_price",), "format": "price"},
     "buy_capital": {"label": "實支", "keys": ("buy_capital",), "format": "amount"},
     "entry_type": {"label": "進場類型", "keys": ("entry_type",), "format": "entry_type"},
-    "entry_signal_label": {"label": "買訊來源", "keys": ("entry_signal_label", "buy_signal_source_label", "entry_signal_type", "buy_signal_source"), "format": "buy_signal_label"},
     "result": {"label": "結果", "keys": ("result",), "format": "text"},
     "reference_close": {"label": "參考收", "keys": ("reference_price", "reference_close", "close_price"), "format": "price"},
     "sell_capital": {"label": "金額", "keys": ("sell_capital",), "format": "amount"},
@@ -1388,9 +1346,9 @@ CHART_INFO_FIELD_SPECS = {
 }
 
 CHART_INFO_BOX_SCHEMAS = {
-    "買訊": ("entry_signal_label", "capital", "qty", "limit_price", "reserved_capital"),
-    "買進": ("entry_signal_label", "capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type", "result"),
-    "錯失買進": ("entry_signal_label", "capital", "qty", "limit_price", "reserved_capital", "entry_type", "result"),
+    "買訊": ("capital", "qty", "limit_price", "reserved_capital"),
+    "買進": ("capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type", "result"),
+    "錯失買進": ("capital", "qty", "limit_price", "reserved_capital", "entry_type", "result"),
     "賣訊": ("capital", "qty", "reference_close"),
     "停利": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct"),
     "停損": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
@@ -1440,8 +1398,6 @@ def _format_chart_info_field(field_key, meta, *, marker=None):
         rendered = _format_chart_pct(value, digits=2)
     elif fmt == "entry_type":
         rendered = _format_chart_entry_type(value)
-    elif fmt == "buy_signal_label":
-        rendered = _format_buy_signal_source_label_for_chart({"entry_signal_label": value, "entry_signal_type": value}) or "-"
     elif fmt == "trade_sequence":
         if _is_missing_info_value(value):
             rendered = "-"

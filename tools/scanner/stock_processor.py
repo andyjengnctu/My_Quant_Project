@@ -94,8 +94,6 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
     if candidate_plan is not None:
         shadow_entry_price = candidate_plan.get('shadow_entry_price', candidate_plan.get('entry_ref_price'))
         entry_signal_type = normalize_buy_signal_source(candidate_plan.get('entry_signal_type'))
-        entry_signal_label = buy_signal_source_to_label(entry_signal_type)
-        barrier_parts.append(f"來源:{entry_signal_label}")
     if shadow_entry_price is not None and not pd.isna(shadow_entry_price):
         barrier_parts.append(f"Shadow買進:{float(shadow_entry_price):>6.2f}")
     if invalidation_barrier is not None and not pd.isna(invalidation_barrier):
@@ -178,16 +176,15 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
 
     if stats['is_setup_today']:
         entry_signal_type = normalize_buy_signal_source(stats.get('entry_signal_type'))
-        entry_signal_label = buy_signal_source_to_label(entry_signal_type)
         proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)
         if proj_qty > 0:
             proj_cost = calc_entry_total_cost(stats['buy_limit'], proj_qty, params)
             half_tp_note = " | 半倉停利:股數不足" if not can_execute_half_take_profit(proj_qty, params.tp_percent) else ""
-            detail = f"來源:{entry_signal_label} | 限價買進:{stats['buy_limit']:>6.2f} | 參考投入:{proj_cost:>7,.0f}{half_tp_note}"
+            detail = f"限價買進:{stats['buy_limit']:>6.2f} | 參考投入:{proj_cost:>7,.0f}{half_tp_note}"
             kind = 'buy'
         else:
             proj_cost = 0.0
-            detail = f"來源:{entry_signal_label} | 新訊號成立 | 股數不足，今日不掛單"
+            detail = "新訊號成立 | 股數不足，今日不掛單"
             kind = 'candidate'
         return _build_scanner_row(
             kind=kind,

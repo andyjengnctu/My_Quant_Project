@@ -22,6 +22,8 @@ PARAM_FIELD_DEFAULTS = {field.name: field.default for field in PARAM_FIELDS}
 PARAM_COMPAT_DEFAULT_FIELDS = {
     "min_entry_notional",
     "use_breakout_buy",
+}
+LEGACY_IGNORED_PARAM_FIELDS = {
     "use_ema_pullback",
     "ema_pullback_short_len",
     "ema_pullback_long_len",
@@ -88,7 +90,7 @@ def _validate_param_payload(data):
     if not isinstance(data, dict):
         raise ValueError(f"參數檔根層必須是 object/dict，收到 {type(data).__name__}")
 
-    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES) | {"summary"}
+    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES) | LEGACY_IGNORED_PARAM_FIELDS | {"summary"}
     unknown_keys = sorted(set(data) - allowed_keys)
     if unknown_keys:
         raise ValueError(f"參數檔含未知欄位: {unknown_keys}")

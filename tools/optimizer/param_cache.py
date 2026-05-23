@@ -26,7 +26,6 @@ _CONDITIONAL_INACTIVE_FIELD_GROUPS = (
     ("use_bb", ("bb_len", "bb_mult")),
     ("use_kc", ("kc_len", "kc_mult")),
     ("use_vol", ("vol_short_len", "vol_long_len")),
-    ("use_ema_pullback", ("ema_pullback_short_len", "ema_pullback_long_len", "ema_pullback_long_slope_min_pct")),
 )
 
 

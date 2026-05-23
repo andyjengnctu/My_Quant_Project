@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 
-ENTRY_SIGNAL_TRADE_STATS_ORDER = ("breakout", "ema_pullback", "both", "unknown")
+ENTRY_SIGNAL_TRADE_STATS_ORDER = ("breakout", "unknown")
 
 
 def _new_entry_signal_trade_bucket(key, label):

@@ -722,22 +722,11 @@ def _build_portfolio_buy_marker_meta(row, *, fast_data, params, equity_snapshots
     if pd.isna(reserved_capital):
         reserved_capital = buy_capital
     current_capital = _resolve_portfolio_event_capital(row)
-    entry_signal_label = str(
-        row.get("買訊來源")
-        or row.get("entry_signal_label")
-        or row.get("buy_signal_source_label")
-        or ""
-    ).strip()
-    entry_signal_type = row.get("entry_signal_type") if "entry_signal_type" in row else row.get("buy_signal_source")
     meta = {
         "buy_capital": None if pd.isna(buy_capital) else float(buy_capital),
         "reserved_capital": None if pd.isna(reserved_capital) else float(reserved_capital),
         "current_capital": current_capital,
     }
-    if entry_signal_label and entry_signal_label not in {"-", "未知"}:
-        meta["entry_signal_label"] = entry_signal_label
-    if entry_signal_type is not None and str(entry_signal_type).strip() not in {"", "-", "未知"}:
-        meta["entry_signal_type"] = entry_signal_type
     position = _build_position_from_portfolio_buy_row(row, fast_data=fast_data, params=params)
     if position is None:
         limit_price = _resolve_buy_limit_from_row(row, fast_data)
@@ -892,8 +881,6 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
                 "current_capital": marker_meta.get("current_capital"),
                 "entry_price": marker_meta.get("entry_price"),
                 "limit_price": limit_price,
-                "entry_signal_type": marker_meta.get("entry_signal_type"),
-                "entry_signal_label": marker_meta.get("entry_signal_label"),
             },
         )
         return
@@ -1211,7 +1198,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._show_volume_var = tk.BooleanVar(value=False)
         self._show_price_ma_var = tk.BooleanVar(value=False)
         self._nav_buy_breakout_var = tk.BooleanVar(value=True)
-        self._nav_buy_pullback_var = tk.BooleanVar(value=True)
         self._result = None
         self._ticker_map = {}
         self._chart_canvas = None
@@ -1411,12 +1397,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         trade_nav.columnconfigure(1, weight=1)
         ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0), pady=(0, 0))
         ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(0, 0), pady=(0, 0))
-        filter_frame = ttk.LabelFrame(nav_section, text="交易導航過濾", style="Workbench.TLabelframe")
-        filter_frame.grid(row=2, column=0, sticky="ew", pady=(2, 2))
-        filter_frame.columnconfigure(0, weight=1)
-        filter_frame.columnconfigure(1, weight=1)
-        ttk.Checkbutton(filter_frame, text="買訊 (突破)", variable=self._nav_buy_breakout_var, command=self._refresh_kline_navigation_indexes, style="Workbench.TCheckbutton").grid(row=0, column=0, sticky="w", padx=(4, 4), pady=(2, 2))
-        ttk.Checkbutton(filter_frame, text="買訊 (回檔)", variable=self._nav_buy_pullback_var, command=self._refresh_kline_navigation_indexes, style="Workbench.TCheckbutton").grid(row=0, column=1, sticky="w", padx=(4, 4), pady=(2, 2))
         sidebar.rowconfigure(20, weight=0)
 
         console_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
@@ -1691,9 +1671,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         indexes = extract_buy_signal_annotation_indexes(
             chart_payload,
             include_breakout=bool(self._nav_buy_breakout_var.get()),
-            include_pullback=bool(self._nav_buy_pullback_var.get()),
         )
-        if not indexes and bool(self._nav_buy_breakout_var.get()) and bool(self._nav_buy_pullback_var.get()):
+        if not indexes and bool(self._nav_buy_breakout_var.get()):
             indexes = _extract_trade_marker_indexes(chart_payload)
         return indexes
 
