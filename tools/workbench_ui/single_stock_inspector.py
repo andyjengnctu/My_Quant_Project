@@ -40,6 +40,7 @@ from tools.trade_analysis.charting import (
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
 from tools.workbench_ui.workbench import (
+    build_workbench_chart_overlay_checkbutton,
     build_workbench_scrollable_sidebar,
     grid_workbench_selected_ohlcv_labels,
     resolve_workbench_capital_display_mode_for_snapshot,
@@ -453,6 +454,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._columns = []
         self._chart_canvas = None
         self._chart_figure = None
+        self._show_price_ma_var = tk.BooleanVar(value=False)
         self._current_chart_trade_indexes = []
         self._current_chart_trade_cursor_index = None
         self._console_writer = _ConsoleWriter(self)
@@ -587,6 +589,12 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             font=("Microsoft JhengHei", 12),
         )
         self._chart_placeholder.pack(fill="both", expand=True)
+        self._price_ma_check = build_workbench_chart_overlay_checkbutton(
+            self._chart_canvas_host,
+            text="顯示均線",
+            variable=self._show_price_ma_var,
+            command=self._rerender_current_chart,
+        )
 
         sidebar_outer, sidebar = build_workbench_scrollable_sidebar(
             chart_tab,
@@ -1538,10 +1546,15 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             except TypeError:
                 payload_bar_count = 0
         self._append_console_text(
-            f"[render_embedded_chart] ticker={ticker or '-'} | chart_payload_bars={payload_bar_count} | show_volume={int(bool(self._show_volume_var.get()))}\n"
+            f"[render_embedded_chart] ticker={ticker or '-'} | chart_payload_bars={payload_bar_count} | show_volume={int(bool(self._show_volume_var.get()))} | show_price_ma={int(bool(self._show_price_ma_var.get()))}\n"
         )
         try:
-            figure = create_matplotlib_trade_chart_figure(chart_payload=self._build_gui_chart_payload(result), ticker=ticker, show_volume=bool(self._show_volume_var.get()))
+            figure = create_matplotlib_trade_chart_figure(
+                chart_payload=self._build_gui_chart_payload(result),
+                ticker=ticker,
+                show_volume=bool(self._show_volume_var.get()),
+                show_price_ma=bool(self._show_price_ma_var.get()),
+            )
         except Exception as exc:
             self._clear_embedded_chart()
             error_text = self._report_runtime_exception("render_embedded_chart.figure", exc, status_prefix="圖表渲染失敗")
@@ -1559,6 +1572,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             canvas_widget = canvas.get_tk_widget()
             canvas_widget.configure(background="#02050a", highlightthickness=0, bd=0, takefocus=1)
             canvas_widget.pack(fill="both", expand=True)
+            self._price_ma_check.lift()
             canvas_widget.focus_set()
         except Exception as exc:
             self._clear_embedded_chart()
@@ -1590,6 +1604,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._current_chart_trade_cursor_index = None
         if not self._chart_placeholder.winfo_ismapped():
             self._chart_placeholder.pack(fill="both", expand=True)
+        self._price_ma_check.lift()
 
     def _open_excel(self):
         self._open_result_path("excel_path")

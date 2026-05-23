@@ -264,6 +264,29 @@ def build_workbench_scrollable_sidebar(master, *, width, row=0, column=1, outer_
     return outer, inner
 
 
+def build_workbench_chart_overlay_checkbutton(master, *, text, variable, command):
+    button = tk.Checkbutton(
+        master,
+        text=str(text),
+        variable=variable,
+        command=command,
+        bg="#04070c",
+        fg=WORKBENCH_TEXT,
+        activebackground=WORKBENCH_SURFACE_ALT,
+        activeforeground=WORKBENCH_TEXT,
+        selectcolor="#04070c",
+        font=WORKBENCH_UI_FONT,
+        padx=6,
+        pady=2,
+        bd=0,
+        highlightthickness=0,
+        cursor="hand2",
+    )
+    button.place(relx=1.0, rely=0.0, x=-12, y=12, anchor="ne")
+    button.lift()
+    return button
+
+
 WORKBENCH_SELECTED_OHLCV_UP_OR_FLAT_ORDER = ("date", "high", "close", "open", "low", "volume")
 WORKBENCH_SELECTED_OHLCV_DOWN_ORDER = ("date", "high", "open", "close", "low", "volume")
 WORKBENCH_CAPITAL_MODE_RESERVED = "reserved"

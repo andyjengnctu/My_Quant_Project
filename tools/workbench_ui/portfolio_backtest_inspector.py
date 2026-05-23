@@ -60,6 +60,7 @@ from tools.trade_analysis.charting import (
     scroll_chart_to_latest,
 )
 from tools.workbench_ui.workbench import (
+    build_workbench_chart_overlay_checkbutton,
     build_workbench_scrollable_sidebar,
     grid_workbench_selected_ohlcv_labels,
     resolve_workbench_capital_display_mode_for_snapshot,
@@ -1178,11 +1179,11 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._max_positions_var = tk.StringVar(value="10")
         self._start_year_var = tk.StringVar(value=str(_resolve_default_portfolio_start_year_hint()))
         self._end_year_display_var = tk.StringVar(value=END_YEAR_LATEST_LABEL)
-        self._use_optimizer_range_var = tk.BooleanVar(value=True)
         self._fixed_risk_display_var = tk.StringVar(value="參數檔")
         self._custom_fixed_risk_var = tk.StringVar(value="0.01")
         self._ticker_display_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
+        self._show_price_ma_var = tk.BooleanVar(value=False)
         self._result = None
         self._ticker_map = {}
         self._chart_canvas = None
@@ -1284,15 +1285,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._autosize_combobox(self._end_year_combo, values=end_year_values, current_text=self._end_year_display_var.get(), rule_key="end_year")
         self._end_year_combo.grid(row=0, column=9, padx=(0, 10), pady=pady, sticky="w")
 
-        self._optimizer_range_check = ttk.Checkbutton(
-            controls_bar,
-            text="Optimizer區間",
-            variable=self._use_optimizer_range_var,
-            style="Workbench.TCheckbutton",
-        )
-        self._optimizer_range_check.grid(row=0, column=10, padx=(0, 10), pady=pady, sticky="w")
-
-        ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=11, padx=(0, 6), pady=pady, sticky="w")
+        ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=10, padx=(0, 6), pady=pady, sticky="w")
         self._risk_combo = ttk.Combobox(
             controls_bar,
             state="readonly",
@@ -1302,18 +1295,18 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             values=FIXED_RISK_LABELS,
         )
         self._autosize_combobox(self._risk_combo, values=FIXED_RISK_LABELS, current_text=self._fixed_risk_display_var.get(), rule_key="risk")
-        self._risk_combo.grid(row=0, column=12, padx=(0, 6), pady=pady, sticky="w")
+        self._risk_combo.grid(row=0, column=11, padx=(0, 6), pady=pady, sticky="w")
         self._risk_combo.bind("<<ComboboxSelected>>", self._on_fixed_risk_selected)
         self._custom_fixed_risk_entry = ttk.Entry(controls_bar, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
-        self._custom_fixed_risk_entry.grid(row=0, column=13, padx=(0, 10), pady=pady, sticky="w")
+        self._custom_fixed_risk_entry.grid(row=0, column=12, padx=(0, 10), pady=pady, sticky="w")
         self._custom_fixed_risk_entry.state(["disabled"])
 
-        ttk.Button(controls_bar, text="執行投組回測", command=self._run_portfolio_backtest, style="Workbench.TButton").grid(row=0, column=14, padx=(0, 10), pady=pady, sticky="w")
+        ttk.Button(controls_bar, text="執行投組回測", command=self._run_portfolio_backtest, style="Workbench.TButton").grid(row=0, column=13, padx=(0, 10), pady=pady, sticky="w")
 
-        ttk.Label(controls_bar, text="K線股票", style="Workbench.TLabel").grid(row=0, column=15, padx=(0, 6), pady=pady, sticky="w")
+        ttk.Label(controls_bar, text="K線股票", style="Workbench.TLabel").grid(row=0, column=14, padx=(0, 6), pady=pady, sticky="w")
         self._ticker_combo = ttk.Combobox(controls_bar, state="readonly", width=22, textvariable=self._ticker_display_var, style="Workbench.TCombobox", values=[])
         self._autosize_combobox(self._ticker_combo, values=[], current_text="", rule_key="ticker")
-        self._ticker_combo.grid(row=0, column=16, padx=(0, 8), pady=pady, sticky="w")
+        self._ticker_combo.grid(row=0, column=15, padx=(0, 8), pady=pady, sticky="w")
         self._ticker_combo.bind("<<ComboboxSelected>>", self._on_ticker_selected)
 
         ttk.Checkbutton(
@@ -1322,7 +1315,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             variable=self._show_volume_var,
             command=self._rerender_selected_ticker_chart,
             style="Workbench.TCheckbutton",
-        ).grid(row=0, column=17, padx=(0, 0), pady=pady, sticky="w")
+        ).grid(row=0, column=16, padx=(0, 0), pady=pady, sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -1339,6 +1332,12 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._kline_host = tk.Frame(kline_tab, bg="#000000", highlightthickness=0, bd=0)
         self._kline_host.grid(row=0, column=0, sticky="nsew")
         self._kline_placeholder = self._make_placeholder(self._kline_host, "請先執行投組回測；選擇有成交過的股票後會顯示 K 線結果。")
+        self._price_ma_check = build_workbench_chart_overlay_checkbutton(
+            self._kline_host,
+            text="顯示均線",
+            variable=self._show_price_ma_var,
+            command=self._rerender_selected_ticker_chart,
+        )
 
         sidebar_outer, sidebar = build_workbench_scrollable_sidebar(
             kline_tab,
@@ -1738,7 +1737,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         param_source_label = self._param_source_display_var.get().strip() or DEFAULT_PARAM_SOURCE_LABEL
         params_path = self._get_selected_params_path()
         artifact_meta = _resolve_optimizer_artifact_metadata(params_path)
-        use_optimizer_range = bool(self._use_optimizer_range_var.get() and artifact_meta.get("has_optimizer_range"))
+        use_optimizer_range = bool(artifact_meta.get("has_optimizer_range"))
         replay_start_date = str(artifact_meta.get("replay_start_date") or "") if use_optimizer_range else ""
         replay_end_date = str(artifact_meta.get("replay_end_date") or "") if use_optimizer_range else ""
         start_year = int(pd.Timestamp(replay_start_date).year) if replay_start_date else ui_start_year
@@ -2332,6 +2331,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 chart_payload=self._build_gui_chart_payload(chart_payload),
                 ticker=f"{ticker} 投組",
                 show_volume=bool(self._show_volume_var.get()),
+                show_price_ma=bool(self._show_price_ma_var.get()),
             )
         except Exception as exc:
             return self._report_runtime_exception("render_portfolio_kline.figure", exc, status_prefix="K線圖渲染失敗")
@@ -2348,6 +2348,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             widget = canvas.get_tk_widget()
             widget.configure(background="#02050a", highlightthickness=0, bd=0, takefocus=1)
             widget.pack(fill="both", expand=True)
+            self._price_ma_check.lift()
             widget.focus_set()
         except Exception as exc:
             self._clear_kline_chart()
@@ -2681,6 +2682,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._current_chart_trade_cursor_index = None
         if hasattr(self, "_kline_placeholder") and not self._kline_placeholder.winfo_ismapped():
             self._kline_placeholder.pack(fill="both", expand=True)
+        if hasattr(self, "_price_ma_check"):
+            self._price_ma_check.lift()
 
     def _clear_all_performance_tabs(self):
         notebook = getattr(self, "_notebook", None)

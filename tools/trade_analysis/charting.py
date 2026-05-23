@@ -140,6 +140,12 @@ CHART_LINE_LEGEND_SPECS = (
 CHART_SHADOW_LINE_LEGEND_SPECS = ()
 CHART_MATPLOTLIB_LEGEND_COLUMNS = 8
 CHART_MATPLOTLIB_LEGEND_SPACER_COUNT = 2
+CHART_PRICE_MA_PERIODS = (20, 60, 120)
+CHART_PRICE_MA_LINE_SPECS = {
+    "MA20": {"color": "#ffd166", "linewidth": 1.35, "linestyle": "solid"},
+    "MA60": {"color": "#7dd3fc", "linewidth": 1.35, "linestyle": "solid"},
+    "MA120": {"color": "#c084fc", "linewidth": 1.35, "linestyle": "solid"},
+}
 
 CHART_SIGNAL_LEGEND_STYLE = {
     "買訊": {"mpl_marker": "^", "plotly_symbol": "triangle-up", "color": "#68d8ff"},
@@ -576,6 +582,29 @@ def _apply_chart_display_line_clipping(payload):
     return payload
 
 
+def _build_price_ma_lines(close_values, *, periods=CHART_PRICE_MA_PERIODS):
+    close_series = pd.Series(np.asarray(close_values, dtype=np.float64))
+    ma_lines = {}
+    for period in periods:
+        period_int = int(period)
+        if period_int <= 1:
+            continue
+        label = f"MA{period_int}"
+        values = close_series.rolling(window=period_int, min_periods=period_int).mean().to_numpy(dtype=np.float32)
+        ma_lines[label] = values
+    return ma_lines
+
+
+def _normalize_price_ma_lines(value, close_values, total_bars):
+    raw_lines = dict(value or {})
+    if not raw_lines:
+        raw_lines = _build_price_ma_lines(close_values)
+    normalized = {}
+    for label, values in raw_lines.items():
+        normalized[str(label)] = _normalize_line_array(values, total_bars)
+    return normalized
+
+
 def compute_gui_render_window(chart_payload):
     total_bars = int(len(chart_payload["x"]))
     if total_bars <= 0:
@@ -604,6 +633,7 @@ def build_debug_chart_payload(price_df, chart_context):
         "close": df_chart["Close"].to_numpy(dtype=np.float32, copy=False),
         "volume": df_chart["Volume"].to_numpy(dtype=np.float32, copy=False),
         "up_mask": (df_chart["Close"] >= df_chart["Open"]).to_numpy(dtype=bool, copy=False),
+        "price_ma_lines": _build_price_ma_lines(df_chart["Close"].to_numpy(dtype=np.float32, copy=False)),
         "stop_line": _normalize_line_array((chart_context or {}).get("stop_line"), total_bars),
         "tp_line": _normalize_line_array((chart_context or {}).get("tp_line"), total_bars),
         "limit_line": _normalize_line_array((chart_context or {}).get("limit_line"), total_bars),
@@ -650,6 +680,7 @@ def normalize_chart_payload_contract(chart_payload):
     for key in ("open", "high", "low", "close"):
         normalized[key] = np.asarray(normalized[key], dtype=np.float32)
     normalized["volume"] = np.asarray(normalized.get("volume", np.zeros(total_bars, dtype=np.float32)), dtype=np.float32)
+    normalized["price_ma_lines"] = _normalize_price_ma_lines(normalized.get("price_ma_lines"), normalized["close"], total_bars)
 
     up_mask = normalized.get("up_mask")
     if up_mask is None or len(up_mask) != total_bars:
@@ -683,7 +714,7 @@ def _slice_visible_window(array, start_idx, end_idx):
     return np.asarray(array[start_idx : end_idx + 1])
 
 
-def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_padding_ratio=CHART_PRICE_PADDING_RATIO, volume_padding_ratio=CHART_VOLUME_PADDING_RATIO):
+def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_padding_ratio=CHART_PRICE_PADDING_RATIO, volume_padding_ratio=CHART_VOLUME_PADDING_RATIO, price_ma_visible=False):
     total_bars = int(len(chart_payload["x"]))
     if total_bars <= 0:
         return {"price_min": 0.0, "price_max": 1.0, "volume_min": 0.0, "volume_max": 1.0}
@@ -703,6 +734,9 @@ def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_pad
         _slice_visible_window(chart_payload["shadow_entry_line"], start_idx, end_idx),
     ]
     marker_prices = []
+    if price_ma_visible:
+        for values in dict(chart_payload.get("price_ma_lines") or {}).values():
+            candidate_price_arrays.append(_slice_visible_window(values, start_idx, end_idx))
     for markers in chart_payload["marker_groups"].values():
         marker_prices.extend(marker["price"] for marker in markers if start_idx <= int(marker["x"]) <= end_idx and not pd.isna(marker["price"]))
     signal_annotation_prices = []
@@ -1476,11 +1510,11 @@ def _build_complete_matplotlib_legend_handles():
     return handles
 
 
-def create_matplotlib_trade_chart_figure(*, chart_payload, ticker, show_volume=False):
-    return create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=show_volume)
+def create_matplotlib_trade_chart_figure(*, chart_payload, ticker, show_volume=False, show_price_ma=False):
+    return create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=show_volume, show_price_ma=show_price_ma)
 
 
-def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=False):
+def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=False, show_price_ma=False):
     chart_payload = normalize_chart_payload_contract(chart_payload)
     try:
         from matplotlib.figure import Figure
@@ -1550,6 +1584,18 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         body_up_collection = axis_price.vlines(x_positions[up_mask], body_low[up_mask], body_high[up_mask], colors=MATPLOTLIB_UP_COLOR, linewidth=4.8, zorder=3)
     if np.any(~up_mask):
         body_down_collection = axis_price.vlines(x_positions[~up_mask], body_low[~up_mask], body_high[~up_mask], colors=MATPLOTLIB_DOWN_COLOR, linewidth=4.8, zorder=3)
+    if show_price_ma:
+        for label, values in dict(chart_payload.get("price_ma_lines") or {}).items():
+            spec = CHART_PRICE_MA_LINE_SPECS.get(str(label), {})
+            axis_price.plot(
+                x_positions,
+                values,
+                color=spec.get("color", MATPLOTLIB_MUTED_TEXT_COLOR),
+                linewidth=float(spec.get("linewidth", 1.2)),
+                linestyle=spec.get("linestyle", "solid"),
+                alpha=0.96,
+                zorder=3.45,
+            )
     shadow_entry_line_for_render = _mask_entry_line_when_same_as_limit_for_render(
         chart_payload["shadow_entry_line"],
         chart_payload["shadow_limit_line"],
@@ -1619,7 +1665,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     x_start, x_end = _clamp_chart_xlim(default_view["start_idx"] - 1, default_view["end_idx"] + 1, total_points=len(chart_payload["x"]))
     if axis_volume is not None:
         axis_volume.set_xlim(x_start, x_end, emit=False)
-    ranges = compute_visible_value_ranges(chart_payload, start_idx=x_start, end_idx=x_end)
+    ranges = compute_visible_value_ranges(chart_payload, start_idx=x_start, end_idx=x_end, price_ma_visible=bool(show_price_ma))
     axis_price.set_xlim(x_start, x_end)
     axis_price.set_ylim(ranges["price_min"], ranges["price_max"])
     if axis_volume is not None:
@@ -1668,7 +1714,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
                     axis_volume.set_xlim(clamped_left, clamped_right, emit=False)
             visible_window = (int(np.floor(clamped_left)), int(np.ceil(clamped_right)))
             if force or sync_state["last_window"] != visible_window:
-                visible_ranges = compute_visible_value_ranges(chart_payload, start_idx=clamped_left, end_idx=clamped_right)
+                visible_ranges = compute_visible_value_ranges(chart_payload, start_idx=clamped_left, end_idx=clamped_right, price_ma_visible=bool(show_price_ma))
                 axis_price.set_ylim(visible_ranges["price_min"], visible_ranges["price_max"])
                 if axis_volume is not None:
                     axis_volume.set_ylim(visible_ranges["volume_min"], visible_ranges["volume_max"])
@@ -1690,6 +1736,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         _apply_axis_text_font(axis_volume, base_font)
     figure._stock_chart_contract = {
         "volume_visible": bool(show_volume),
+        "price_ma_visible": bool(show_price_ma),
+        "price_ma_periods": [int(period) for period in CHART_PRICE_MA_PERIODS],
         "volume_overlay_mode": "inset" if show_volume else "hidden",
         "volume_overlay_axis_present": bool(axis_volume is not None),
         "selected_font_family": font_family or "",
