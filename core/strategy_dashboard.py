@@ -442,6 +442,7 @@ def print_optimizer_trial_console_dashboard(*,
     compare_rows: list[dict] | None,
     params_lines: list[str],
     hard_gate_lines: list[str],
+    entry_signal_trade_rows: list[dict] | None = None,
 ):
     training_header = ("指標項目", "本輪候選", "run_best (差異)", "同期大盤0050 (差異)")
     training_table_rows = [training_header]
@@ -504,11 +505,30 @@ def print_optimizer_trial_console_dashboard(*,
         compare_widths = _build_table5_widths(compare_render_rows)
         compare_header_line = _table_row5(*compare_header, *compare_widths)
 
+    entry_signal_header = ("進場策略", "交易次數", "成功筆數", "成功率")
+    entry_signal_widths = None
+    entry_signal_header_line = ""
+    entry_signal_render_rows = []
+    if entry_signal_trade_rows:
+        entry_signal_render_rows = [entry_signal_header]
+        for row in entry_signal_trade_rows:
+            entry_signal_render_rows.append(
+                (
+                    str(row.get("label", "-")),
+                    str(row.get("trade_count", 0)),
+                    str(row.get("win_count", 0)),
+                    str(row.get("win_rate", "0.0%")),
+                )
+            )
+        entry_signal_widths = _build_table4_compact_widths(entry_signal_render_rows, min_widths=(16, 10, 10, 10))
+        entry_signal_header_line = _table_row4_compact(*entry_signal_header, *entry_signal_widths)
+
     separator_width = max(
         120,
         _display_width(training_header_line),
         _display_width(upgrade_header_line) if upgrade_header_line else 0,
         _display_width(compare_header_line) if compare_header_line else 0,
+        _display_width(entry_signal_header_line) if entry_signal_header_line else 0,
     )
     separator = "-" * separator_width
     print(f"{C_GRAY}{separator}{C_RESET}")
@@ -528,6 +548,13 @@ def print_optimizer_trial_console_dashboard(*,
     print(training_header_line)
     for rendered_row in training_table_rows[1:len(training_rows) + 1]:
         print(_table_row4_compact(*rendered_row, *training_widths))
+    if entry_signal_trade_rows and entry_signal_widths is not None:
+        print(separator)
+        print("【進場策略統計｜已完成交易｜成功 = pnl > 0】")
+        print(separator)
+        print(entry_signal_header_line)
+        for rendered_row in entry_signal_render_rows[1:]:
+            print(_table_row4_compact(*rendered_row, *entry_signal_widths))
     if testing_title and testing_rows:
         print(separator)
         print(testing_title)

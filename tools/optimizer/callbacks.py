@@ -21,7 +21,7 @@ from core.params_io import build_params_from_mapping, load_params_from_json, par
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.active_param_ensemble import get_active_param_ensemble_policy, load_json_file
 from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_stats import calc_portfolio_score
+from core.portfolio_stats import calc_portfolio_score, iter_entry_signal_trade_stat_rows
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
@@ -87,6 +87,11 @@ def _resolve_session_model_mode(session) -> str:
     if scope.startswith("oos") or scope.startswith("study"):
         return "oos"
     return _resolve_model_mode(getattr(session, "objective_mode", ""))
+
+
+def _is_study_full_session(session) -> bool:
+    policy = dict(getattr(session, "walk_forward_policy", {}) or {})
+    return str(policy.get("evaluation_scope") or "").strip().lower().startswith("study_full")
 
 
 
@@ -260,6 +265,18 @@ def _optimizer_train_score_display_label() -> str:
     method = str(SCORE_CALC_METHOD or "").strip() or "Score"
     numerator = str(SCORE_NUMERATOR_METHOD or "").strip() or "TOTAL_RETURN"
     return f"Train Score[{method}/{numerator}]"
+
+
+def _build_entry_signal_trade_table_rows(entry_signal_trade_stats):
+    rows = []
+    for row in iter_entry_signal_trade_stat_rows(entry_signal_trade_stats, include_zero=True):
+        rows.append({
+            "label": str(row.get("label") or "-"),
+            "trade_count": int(row.get("trade_count", 0) or 0),
+            "win_count": int(row.get("win_count", 0) or 0),
+            "win_rate": f"{float(row.get('win_rate', 0.0) or 0.0):.1f}%",
+        })
+    return rows
 
 
 def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict | None, benchmark_metrics: dict | None = None):
@@ -774,6 +791,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
     else:
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
     initial_capital = _safe_float(get_p(params, "initial_capital", 0.0))
+    entry_signal_trade_stats = attrs.get("entry_signal_trade_stats") if _is_study_full_session(session) else None
+    entry_signal_trade_rows = _build_entry_signal_trade_table_rows(entry_signal_trade_stats) if entry_signal_trade_stats is not None else None
     candidate_train_metrics = {
         "pf_return": _safe_float(attrs.get("pf_return", 0.0)),
         "annual_return_pct": _safe_float(attrs.get("annual_return_pct", 0.0)),
@@ -912,6 +931,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "test_rows": test_rows,
         "upgrade_rows": None,
         "compare_rows": None,
+        "entry_signal_trade_rows": entry_signal_trade_rows,
         "base_score": _safe_float(attrs.get("base_score", 0.0)),
     }
 
@@ -941,6 +961,7 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
         compare_rows=payload["compare_rows"],
         params_lines=_build_training_param_lines(payload["params"]),
         hard_gate_lines=_build_hard_gate_lines(),
+        entry_signal_trade_rows=payload.get("entry_signal_trade_rows"),
     )
     render_elapsed = max(0.0, time.perf_counter() - render_started_at)
     return {

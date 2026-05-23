@@ -2,6 +2,90 @@ import pandas as pd
 import numpy as np
 
 
+ENTRY_SIGNAL_TRADE_STATS_ORDER = ("breakout", "ema_pullback", "both", "unknown")
+
+
+def build_entry_signal_trade_stats(closed_trades_stats):
+    from core.signal_utils import BUY_SIGNAL_SOURCE_LABELS, normalize_buy_signal_source
+
+    stats = {
+        key: {
+            "key": key,
+            "label": BUY_SIGNAL_SOURCE_LABELS.get(key, "未知"),
+            "trade_count": 0,
+            "win_count": 0,
+            "loss_count": 0,
+            "win_rate": 0.0,
+        }
+        for key in ENTRY_SIGNAL_TRADE_STATS_ORDER
+    }
+    for trade in list(closed_trades_stats or []):
+        if not isinstance(trade, dict):
+            continue
+        key = normalize_buy_signal_source(trade.get("entry_signal_type"))
+        bucket = stats.setdefault(
+            key,
+            {
+                "key": key,
+                "label": BUY_SIGNAL_SOURCE_LABELS.get(key, "未知"),
+                "trade_count": 0,
+                "win_count": 0,
+                "loss_count": 0,
+                "win_rate": 0.0,
+            },
+        )
+        bucket["trade_count"] = int(bucket.get("trade_count", 0) or 0) + 1
+        try:
+            pnl = float(trade.get("pnl", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pnl = 0.0
+        if pnl > 0:
+            bucket["win_count"] = int(bucket.get("win_count", 0) or 0) + 1
+        else:
+            bucket["loss_count"] = int(bucket.get("loss_count", 0) or 0) + 1
+    for bucket in stats.values():
+        trade_count = int(bucket.get("trade_count", 0) or 0)
+        win_count = int(bucket.get("win_count", 0) or 0)
+        bucket["win_rate"] = (win_count / trade_count * 100.0) if trade_count > 0 else 0.0
+    return stats
+
+
+def iter_entry_signal_trade_stat_rows(entry_signal_trade_stats, *, include_zero=False):
+    if not isinstance(entry_signal_trade_stats, dict):
+        return []
+    rows = []
+    for key in ENTRY_SIGNAL_TRADE_STATS_ORDER:
+        bucket = entry_signal_trade_stats.get(key)
+        if not isinstance(bucket, dict):
+            continue
+        trade_count = int(bucket.get("trade_count", 0) or 0)
+        if trade_count <= 0 and (not include_zero or key == "unknown"):
+            continue
+        win_count = int(bucket.get("win_count", 0) or 0)
+        label = str(bucket.get("label") or key)
+        try:
+            win_rate = float(bucket.get("win_rate", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            win_rate = 0.0
+        rows.append({
+            "key": key,
+            "label": label,
+            "trade_count": trade_count,
+            "win_count": win_count,
+            "win_rate": win_rate,
+        })
+    return rows
+
+
+def format_entry_signal_trade_stats(entry_signal_trade_stats, *, include_zero=False):
+    rows = iter_entry_signal_trade_stat_rows(entry_signal_trade_stats, include_zero=include_zero)
+    parts = [
+        f"{row['label']}:{int(row['trade_count'])}筆/{float(row['win_rate']):.1f}%"
+        for row in rows
+    ]
+    return "｜".join(parts) if parts else "-"
+
+
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
     from core.config import get_score_calc_method, get_score_numerator_method
 
