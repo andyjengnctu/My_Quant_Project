@@ -303,6 +303,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
 
         emaPullbackBuyCondition = (
             is_tradable_bar
+            & (C > prev_close)
             & (C > EMA_Long)
             & (EMA_Long >= ema_long_lag20)
             & (EMA_Short > EMA_Mid)
