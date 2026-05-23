@@ -348,7 +348,6 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             "bm_r_squared": bm_r_sq,
             "bm_m_win_rate": bm_m_win_rate,
             "base_score": float(INVALID_TRIAL_VALUE),
-            "entry_signal_trade_stats": pf_profile.get("entry_signal_trade_stats", {}),
         }
 
     base_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq, annual_return_pct=annual_return_pct)
@@ -386,7 +385,6 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         "bm_r_squared": bm_r_sq,
         "bm_m_win_rate": bm_m_win_rate,
         "base_score": float(base_score),
-        "entry_signal_trade_stats": pf_profile.get("entry_signal_trade_stats", {}),
     }
 
 
@@ -630,7 +628,6 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("m_win_rate", evaluation["m_win_rate"])
     trial.set_user_attr("bm_r_squared", evaluation["bm_r_squared"])
     trial.set_user_attr("bm_m_win_rate", evaluation["bm_m_win_rate"])
-    trial.set_user_attr("entry_signal_trade_stats", evaluation.get("entry_signal_trade_stats", {}))
 
     cache_trial_milestone_inputs = getattr(session, "cache_trial_milestone_inputs", None)
     if callable(cache_trial_milestone_inputs):

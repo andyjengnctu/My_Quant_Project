@@ -23,12 +23,6 @@ PARAM_COMPAT_DEFAULT_FIELDS = {
     "min_entry_notional",
     "use_breakout_buy",
 }
-LEGACY_IGNORED_PARAM_FIELDS = {
-    "use_ema_pullback",
-    "ema_pullback_short_len",
-    "ema_pullback_long_len",
-    "ema_pullback_long_slope_min_pct",
-}
 
 
 # # (AI註: 參數載入時先做型別收斂，避免錯型別延後到回測/優化流程才爆炸)
@@ -90,7 +84,7 @@ def _validate_param_payload(data):
     if not isinstance(data, dict):
         raise ValueError(f"參數檔根層必須是 object/dict，收到 {type(data).__name__}")
 
-    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES) | LEGACY_IGNORED_PARAM_FIELDS | {"summary"}
+    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES) | {"summary"}
     unknown_keys = sorted(set(data) - allowed_keys)
     if unknown_keys:
         raise ValueError(f"參數檔含未知欄位: {unknown_keys}")
