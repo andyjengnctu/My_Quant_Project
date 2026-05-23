@@ -141,6 +141,9 @@ CHART_SHADOW_LINE_LEGEND_SPECS = ()
 CHART_MATPLOTLIB_LEGEND_COLUMNS = 8
 CHART_MATPLOTLIB_LEGEND_SPACER_COUNT = 2
 CHART_PRICE_MA_PERIODS = (20, 60, 120)
+CHART_PRICE_MA_ALPHA = 0.50
+CHART_BUY_SIGNAL_NAV_BREAKOUT_KEYS = {"breakout", "both"}
+CHART_BUY_SIGNAL_NAV_PULLBACK_KEYS = {"ema_pullback", "both"}
 CHART_PRICE_MA_LINE_SPECS = {
     "MA20": {"color": "#ffd166", "linewidth": 1.35, "linestyle": "solid"},
     "MA60": {"color": "#7dd3fc", "linewidth": 1.35, "linestyle": "solid"},
@@ -361,6 +364,49 @@ def record_trade_marker(chart_context, *, current_date, action, price, qty, note
     )
 
 
+def _normalize_buy_signal_source_key_from_meta(meta):
+    meta = dict(meta or {})
+    raw_key = str(meta.get("entry_signal_type") or meta.get("buy_signal_source") or "").strip().lower()
+    if raw_key in {"breakout", "ema_pullback", "both"}:
+        return raw_key
+    raw_label = str(meta.get("entry_signal_label") or meta.get("buy_signal_source_label") or "").strip()
+    if "突破" in raw_label and ("回檔" in raw_label or "pullback" in raw_label.lower()):
+        return "both"
+    if "突破" in raw_label or "breakout" in raw_label.lower():
+        return "breakout"
+    if "回檔" in raw_label or "pullback" in raw_label.lower():
+        return "ema_pullback"
+    return "unknown"
+
+
+def _format_buy_signal_source_label_for_chart(meta):
+    source_key = _normalize_buy_signal_source_key_from_meta(meta)
+    if source_key == "breakout":
+        return "突破"
+    if source_key == "ema_pullback":
+        return "回檔"
+    if source_key == "both":
+        return "突破+回檔"
+    raw_label = str((meta or {}).get("entry_signal_label") or "").strip()
+    if raw_label == "EMA回檔":
+        return "回檔"
+    if raw_label == "突破+EMA回檔":
+        return "突破+回檔"
+    return raw_label if raw_label and raw_label != "未知" else ""
+
+
+def _format_buy_signal_annotation_title(title, meta):
+    base_title = str(title or "買訊").strip() or "買訊"
+    if not base_title.startswith("買訊"):
+        return base_title
+    source_label = _format_buy_signal_source_label_for_chart(meta)
+    if not source_label:
+        return base_title
+    is_missed = "錯失" in base_title
+    suffix = "・錯失" if is_missed else ""
+    return f"買訊 ({source_label}{suffix})"
+
+
 def record_signal_annotation(chart_context, *, current_date, signal_type, anchor_price, title, detail_lines, note="", meta=None):
     if chart_context is None or pd.isna(anchor_price):
         return
@@ -368,7 +414,8 @@ def record_signal_annotation(chart_context, *, current_date, signal_type, anchor
     if normalized_signal_type not in {"buy", "sell"}:
         raise ValueError(f"不支援的 signal_type: {signal_type!r}")
     normalized_meta = dict(meta or {})
-    detail_text = _build_signal_label_detail_text(str(title), normalized_meta)
+    display_title = _format_buy_signal_annotation_title(title, normalized_meta) if normalized_signal_type == "buy" else str(title)
+    detail_text = _build_signal_label_detail_text(str(display_title), normalized_meta)
     if not detail_text:
         detail_text = "\n".join(str(line) for line in detail_lines if str(line).strip())
     chart_context["signal_annotations"].append(
@@ -376,7 +423,7 @@ def record_signal_annotation(chart_context, *, current_date, signal_type, anchor
             "date": pd.Timestamp(current_date),
             "signal_type": normalized_signal_type,
             "anchor_price": float(anchor_price),
-            "title": str(title),
+            "title": str(display_title),
             "detail_text": detail_text,
             "note": str(note or ""),
             "meta": normalized_meta,
@@ -991,6 +1038,94 @@ def extract_trade_marker_indexes(chart_payload, *, trace_names=None):
     return sorted(set(indexes))
 
 
+def _buy_signal_source_matches_filter(source_key, *, include_breakout=True, include_pullback=True):
+    source_key = str(source_key or "unknown").strip().lower()
+    if source_key in CHART_BUY_SIGNAL_NAV_BREAKOUT_KEYS and bool(include_breakout):
+        return True
+    if source_key in CHART_BUY_SIGNAL_NAV_PULLBACK_KEYS and bool(include_pullback):
+        return True
+    if source_key == "unknown" and bool(include_breakout) and bool(include_pullback):
+        return True
+    return False
+
+
+def extract_buy_signal_annotation_indexes(chart_payload, *, include_breakout=True, include_pullback=True):
+    if not bool(include_breakout) and not bool(include_pullback):
+        return []
+    indexes = []
+    for item in list((chart_payload or {}).get("signal_annotations") or []):
+        if str(item.get("signal_type", "")).strip().lower() != "buy":
+            continue
+        source_key = _normalize_buy_signal_source_key_from_meta(item.get("meta") or {})
+        if not _buy_signal_source_matches_filter(source_key, include_breakout=include_breakout, include_pullback=include_pullback):
+            continue
+        try:
+            indexes.append(int(item.get("x")))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(indexes))
+
+
+def capture_chart_view_state(figure):
+    state = getattr(figure, "_stock_chart_navigation_state", None)
+    if not isinstance(state, dict):
+        return None
+    axis_price = state.get("axis_price")
+    if axis_price is None:
+        return None
+    try:
+        left, right = axis_price.get_xlim()
+    except (TypeError, ValueError, RuntimeError):
+        return None
+    return {
+        "xlim": (float(left), float(right)),
+        "hover_last_index": int(state.get("hover_last_index", 0) or 0),
+    }
+
+
+def restore_chart_view_state(figure, view_state, *, redraw=True):
+    if not view_state:
+        return False
+    state = getattr(figure, "_stock_chart_navigation_state", None)
+    if not isinstance(state, dict):
+        return False
+    axis_price = state.get("axis_price")
+    if axis_price is None:
+        return False
+    try:
+        left, right = view_state.get("xlim") or (None, None)
+        next_left, next_right = _clamp_chart_xlim(float(left), float(right), total_points=int(state.get("total_points", 0) or 0))
+    except (TypeError, ValueError, RuntimeError):
+        return False
+    axis_price.set_xlim(next_left, next_right, emit=False)
+    axis_volume = state.get("axis_volume")
+    if axis_volume is not None:
+        axis_volume.set_xlim(next_left, next_right, emit=False)
+    sync_visible_ranges = state.get("sync_visible_ranges")
+    if callable(sync_visible_ranges):
+        sync_visible_ranges(force=True, redraw=False)
+    hover_index = int(np.clip(int(view_state.get("hover_last_index", 0) or 0), 0, max(0, int(state.get("total_points", 1) or 1) - 1)))
+    chart_payload = state.get("chart_payload")
+    hover_text_artist = state.get("hover_text_artist")
+    crosshair_vline = state.get("crosshair_vline")
+    crosshair_hline = state.get("crosshair_hline")
+    state["hover_last_index"] = hover_index
+    if chart_payload is not None:
+        if hover_text_artist is not None:
+            hover_text_artist.set_text(_build_hover_text(chart_payload, hover_index))
+        if crosshair_vline is not None:
+            crosshair_vline.set_xdata([hover_index, hover_index])
+        if crosshair_hline is not None:
+            close_price = float(chart_payload["close"][hover_index])
+            crosshair_hline.set_ydata([close_price, close_price])
+        external_hover_callback = state.get("external_hover_callback")
+        if callable(external_hover_callback):
+            external_hover_callback(_build_hover_snapshot(chart_payload, hover_index))
+    if redraw and figure.canvas is not None:
+        figure.canvas.draw_idle()
+    return True
+
+
 def _build_hover_snapshot(chart_payload, index):
     return build_chart_hover_snapshot(chart_payload, index)
 
@@ -1123,6 +1258,7 @@ CHART_INFO_FIELD_SPECS = {
     "stop_price": {"label": "停損", "keys": ("stop_price",), "format": "price"},
     "buy_capital": {"label": "實支", "keys": ("buy_capital",), "format": "amount"},
     "entry_type": {"label": "進場類型", "keys": ("entry_type",), "format": "entry_type"},
+    "entry_signal_label": {"label": "買訊來源", "keys": ("entry_signal_label", "buy_signal_source_label"), "format": "buy_signal_label"},
     "result": {"label": "結果", "keys": ("result",), "format": "text"},
     "reference_close": {"label": "參考收", "keys": ("reference_price", "reference_close", "close_price"), "format": "price"},
     "sell_capital": {"label": "金額", "keys": ("sell_capital",), "format": "amount"},
@@ -1134,9 +1270,9 @@ CHART_INFO_FIELD_SPECS = {
 }
 
 CHART_INFO_BOX_SCHEMAS = {
-    "買訊": ("capital", "qty", "limit_price", "reserved_capital"),
-    "買進": ("capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type", "result"),
-    "錯失買進": ("capital", "qty", "limit_price", "reserved_capital", "entry_type", "result"),
+    "買訊": ("entry_signal_label", "capital", "qty", "limit_price", "reserved_capital"),
+    "買進": ("entry_signal_label", "capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type", "result"),
+    "錯失買進": ("entry_signal_label", "capital", "qty", "limit_price", "reserved_capital", "entry_type", "result"),
     "賣訊": ("capital", "qty", "reference_close"),
     "停利": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct"),
     "停損": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
@@ -1186,6 +1322,8 @@ def _format_chart_info_field(field_key, meta, *, marker=None):
         rendered = _format_chart_pct(value, digits=2)
     elif fmt == "entry_type":
         rendered = _format_chart_entry_type(value)
+    elif fmt == "buy_signal_label":
+        rendered = _format_buy_signal_source_label_for_chart({"entry_signal_label": value}) or "-"
     elif fmt == "trade_sequence":
         if _is_missing_info_value(value):
             rendered = "-"
@@ -1593,7 +1731,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
                 color=spec.get("color", MATPLOTLIB_MUTED_TEXT_COLOR),
                 linewidth=float(spec.get("linewidth", 1.2)),
                 linestyle=spec.get("linestyle", "solid"),
-                alpha=0.96,
+                alpha=CHART_PRICE_MA_ALPHA,
                 zorder=3.45,
             )
     shadow_entry_line_for_render = _mask_entry_line_when_same_as_limit_for_render(

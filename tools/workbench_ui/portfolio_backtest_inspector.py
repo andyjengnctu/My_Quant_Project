@@ -48,14 +48,17 @@ from tools.trade_analysis.charting import (
     bind_matplotlib_chart_navigation,
     build_chart_hover_snapshot,
     build_debug_chart_payload,
+    capture_chart_view_state,
     create_debug_chart_context,
     create_matplotlib_trade_chart_figure,
+    extract_buy_signal_annotation_indexes,
     extract_trade_marker_indexes,
     record_active_levels,
     record_shadow_active_levels,
     record_limit_order,
     record_signal_annotation,
     record_trade_marker,
+    restore_chart_view_state,
     scroll_chart_to_adjacent_trade,
     scroll_chart_to_latest,
 )
@@ -709,11 +712,14 @@ def _build_portfolio_buy_marker_meta(row, *, fast_data, params, equity_snapshots
     if pd.isna(reserved_capital):
         reserved_capital = buy_capital
     current_capital = _resolve_portfolio_event_capital(row)
+    entry_signal_label = str(row.get("買訊來源") or "").strip()
     meta = {
         "buy_capital": None if pd.isna(buy_capital) else float(buy_capital),
         "reserved_capital": None if pd.isna(reserved_capital) else float(reserved_capital),
         "current_capital": current_capital,
     }
+    if entry_signal_label:
+        meta["entry_signal_label"] = entry_signal_label
     position = _build_position_from_portfolio_buy_row(row, fast_data=fast_data, params=params)
     if position is None:
         limit_price = _resolve_buy_limit_from_row(row, fast_data)
@@ -1184,6 +1190,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._ticker_display_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
         self._show_price_ma_var = tk.BooleanVar(value=False)
+        self._nav_buy_breakout_var = tk.BooleanVar(value=True)
+        self._nav_buy_pullback_var = tk.BooleanVar(value=True)
         self._result = None
         self._ticker_map = {}
         self._chart_canvas = None
@@ -1372,14 +1380,24 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         capital_frame.grid(row=16, column=0, sticky="ew", pady=(0, 4))
         capital_frame.columnconfigure(0, weight=1)
         ttk.Label(capital_frame, textvariable=self._selected_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=0, column=0, sticky="ew")
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
-        trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
-        trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))
+        sidebar.rowconfigure(18, weight=1)
+        nav_section = ttk.Frame(sidebar, style="Workbench.TFrame")
+        nav_section.grid(row=19, column=0, sticky="ew", pady=(10, 0))
+        nav_section.columnconfigure(0, weight=1)
+        ttk.Button(nav_section, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        filter_frame = ttk.LabelFrame(nav_section, text="交易導航過濾", style="Workbench.TLabelframe")
+        filter_frame.grid(row=1, column=0, sticky="ew", pady=(2, 2))
+        filter_frame.columnconfigure(0, weight=1)
+        filter_frame.columnconfigure(1, weight=1)
+        ttk.Checkbutton(filter_frame, text="買訊 (突破)", variable=self._nav_buy_breakout_var, command=self._refresh_kline_navigation_indexes, style="Workbench.TCheckbutton").grid(row=0, column=0, sticky="w", padx=(4, 4), pady=(2, 2))
+        ttk.Checkbutton(filter_frame, text="買訊 (回檔)", variable=self._nav_buy_pullback_var, command=self._refresh_kline_navigation_indexes, style="Workbench.TCheckbutton").grid(row=0, column=1, sticky="w", padx=(4, 4), pady=(2, 2))
+        trade_nav = ttk.Frame(nav_section, style="Workbench.TFrame")
+        trade_nav.grid(row=2, column=0, sticky="ew", pady=(0, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
         ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0), pady=(0, 0))
         ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(0, 0), pady=(0, 0))
-        sidebar.rowconfigure(20, weight=1)
+        sidebar.rowconfigure(20, weight=0)
 
         console_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         self._console_tab = console_tab
@@ -1645,6 +1663,22 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         gui_payload["status_box"] = {}
         return gui_payload
 
+    def _resolve_kline_navigation_indexes(self, chart_payload=None):
+        if chart_payload is None and self._chart_figure is not None:
+            state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
+            chart_payload = state.get("chart_payload") if isinstance(state, dict) else None
+        indexes = extract_buy_signal_annotation_indexes(
+            chart_payload,
+            include_breakout=bool(self._nav_buy_breakout_var.get()),
+            include_pullback=bool(self._nav_buy_pullback_var.get()),
+        )
+        if not indexes and bool(self._nav_buy_breakout_var.get()) and bool(self._nav_buy_pullback_var.get()):
+            indexes = _extract_trade_marker_indexes(chart_payload)
+        return indexes
+
+    def _refresh_kline_navigation_indexes(self):
+        self._current_chart_trade_indexes = self._resolve_kline_navigation_indexes()
+
     def _move_kline_chart_to_latest(self):
         if self._chart_figure is None:
             return
@@ -1666,7 +1700,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if not trade_indexes:
             state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
             chart_payload = state.get("chart_payload") if isinstance(state, dict) else None
-            trade_indexes = _extract_trade_marker_indexes(chart_payload)
+            trade_indexes = self._resolve_kline_navigation_indexes(chart_payload)
             self._current_chart_trade_indexes = trade_indexes
         if scroll_chart_to_adjacent_trade(self._chart_figure, trade_indexes, direction=direction, redraw=True):
             state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
@@ -2263,7 +2297,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
     def _rerender_selected_ticker_chart(self):
         if self._ticker_display_var.get().strip():
-            self._render_selected_ticker_chart(self._ticker_display_var.get())
+            view_state = capture_chart_view_state(self._chart_figure)
+            self._render_selected_ticker_chart(self._ticker_display_var.get(), preserve_view_state=view_state)
 
     def _resolve_active_params_for_trade_date(self, trade_date):
         result_payload = self._result or {}
@@ -2281,7 +2316,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             params.fixed_risk = float(options["fixed_risk"])
         return params
 
-    def _render_selected_ticker_chart(self, display_label):
+    def _render_selected_ticker_chart(self, display_label, *, preserve_view_state=None):
         if self._result is None:
             return
         display_key = str(display_label or "").strip()
@@ -2311,9 +2346,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             df_eq=self._result.get("df_eq"),
         )
         chart_payload["history_summary_box"] = self._resolve_single_stock_history_summary_lines(ticker)
-        self._render_kline_chart({"ticker": ticker, "chart_payload": chart_payload})
+        self._render_kline_chart({"ticker": ticker, "chart_payload": chart_payload}, preserve_view_state=preserve_view_state)
 
-    def _render_kline_chart(self, result):
+    def _render_kline_chart(self, result, *, preserve_view_state=None):
         if FigureCanvasTkAgg is None:
             backend_error_text = "缺少 matplotlib TkAgg backend，無法內嵌圖表。"
             if FIGURE_CANVAS_TKAGG_IMPORT_ERROR:
@@ -2322,7 +2357,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return backend_error_text
         ticker = result.get("ticker", "")
         chart_payload = result.get("chart_payload")
-        trade_indexes = _extract_trade_marker_indexes(chart_payload)
+        trade_indexes = self._resolve_kline_navigation_indexes(chart_payload)
         self._current_chart_trade_indexes = trade_indexes
         self._current_chart_trade_cursor_index = None
         self._update_sidebar_from_chart_payload(chart_payload)
@@ -2360,10 +2395,13 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
         self._chart_canvas = canvas
         self._chart_figure = figure
-        self._current_chart_trade_indexes = trade_indexes
+        self._current_chart_trade_indexes = self._resolve_kline_navigation_indexes()
         self._current_chart_trade_cursor_index = None
         self._notebook.select(0)
-        self._move_kline_chart_to_latest()
+        if preserve_view_state:
+            restore_chart_view_state(self._chart_figure, preserve_view_state, redraw=True)
+        else:
+            self._move_kline_chart_to_latest()
         return ""
 
     def _resolve_performance_tab_title(self, options):
