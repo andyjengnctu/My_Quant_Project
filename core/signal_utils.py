@@ -214,20 +214,21 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
         bbCondition = np.ones_like(C, dtype=bool)
 
     if use_breakout_buy and use_vol:
-        vol_short_len = int(params.vol_short_len)
         vol_long_len = int(params.vol_long_len)
+        vol_breakout_mult = float(getattr(params, 'vol_breakout_mult', 1.5))
         volume_series = pd.Series(V)
-        VolS = _feature(
-            'volume_rolling_mean',
-            (vol_short_len,),
-            lambda: volume_series.rolling(vol_short_len).mean().values,
-        )
-        VolL = _feature(
-            'volume_rolling_mean',
+        PrevVolAvg = _feature(
+            'volume_shift1_rolling_mean',
             (vol_long_len,),
-            lambda: volume_series.rolling(vol_long_len).mean().values,
+            lambda: volume_series.shift(1).rolling(vol_long_len, min_periods=vol_long_len).mean().values,
         )
-        volCondition = np.isnan(V) | (VolS > VolL)
+        volCondition = (
+            np.isfinite(V)
+            & np.isfinite(PrevVolAvg)
+            & (V > 0)
+            & (PrevVolAvg > 0)
+            & (V > PrevVolAvg * vol_breakout_mult)
+        )
     else:
         volCondition = np.ones_like(C, dtype=bool)
 

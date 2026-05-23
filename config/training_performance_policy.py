@@ -109,7 +109,7 @@ _LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER_HARD_FAIL_FIRST = (
     "kc_len",
     "kc_mult",
     "vol_long_len",
-    "vol_short_len",
+    "vol_breakout_mult",
 )
 
 

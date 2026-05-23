@@ -89,21 +89,22 @@ local_min_score(p) = min_{q in N(p)} S(q)
 - `tp_percent`（僅在 `tp_percent` 確實為 optimizer 搜尋維度時納入）
 - `use_bb=True`：納入 `bb_len`、`bb_mult`
 - `use_kc=True`：納入 `kc_len`、`kc_mult`
-- `use_vol=True`：納入 `vol_short_len`、`vol_long_len`
+- `use_vol=True`：納入 `vol_long_len`、`vol_breakout_mult`
 
 但第一版仍：
 - **不翻動** `use_bb / use_kc / use_vol` 布林值本身
 - 只檢查「已啟用結構下的數值參數局部穩健性」
 
 ### 3.5 `vol` 合法鄰點規則
-`vol_short_len / vol_long_len` 必須遵守正式契約：
+`vol_long_len / vol_breakout_mult` 分別依正式搜尋範圍產生鄰點：
 
 ```text
-vol_long_len >= vol_short_len
+vol_long_len: 突破日前均量窗長
+vol_breakout_mult: 突破日量需大於前均量的倍數
 ```
 
 處理規則：
-- 只保留符合原 search range 且滿足正式契約的合法鄰點
+- 只保留符合原 search range 的合法鄰點
 - 不做 clamp
 - 不偷偷聯動改另一個參數
 - 不合法點直接跳過，不納入 `N(p)`

@@ -52,7 +52,7 @@ def build_scanner_sort_probe_text(
 def print_scanner_header(params):
     bb_str = f"啟用 (長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x)" if get_p(params, 'use_bb', False) else "關閉"
     kc_str = f"啟用 (長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x)" if get_p(params, 'use_kc', False) else "關閉"
-    vol_str = f"啟用 (短{get_p(params, 'vol_short_len', 5)}>長{get_p(params, 'vol_long_len', 19)})" if get_p(params, 'use_vol', False) else "關閉"
+    vol_str = f"啟用 (突破日量 > 前{get_p(params, 'vol_long_len', 20)}日均量×{get_p(params, 'vol_breakout_mult', 1.5):.1f})" if get_p(params, 'use_vol', False) else "關閉"
     breakout_str = (
         f"啟用 ({get_p(params, 'high_len', 201)}日新高)"
         if get_p(params, 'use_breakout_buy', True)

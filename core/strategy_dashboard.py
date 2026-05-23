@@ -32,7 +32,7 @@ from core.portfolio_stats import calc_portfolio_score
 def _format_filter_param_text(params):
     bb_str = f"布林(BB) 啟用（長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x）" if get_p(params, 'use_bb', False) else "布林(BB) 關閉"
     kc_str = f"阿肯那(KC) 啟用（長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x）" if get_p(params, 'use_kc', False) else "阿肯那(KC) 關閉"
-    vol_str = f"均量 啟用（短{get_p(params, 'vol_short_len', 5)} > 長{get_p(params, 'vol_long_len', 19)}）" if get_p(params, 'use_vol', False) else "均量 關閉"
+    vol_str = f"均量 啟用（突破日量 > 前{get_p(params, 'vol_long_len', 20)}日均量 × {get_p(params, 'vol_breakout_mult', 1.5):.1f}）" if get_p(params, 'use_vol', False) else "均量 關閉"
     return bb_str, kc_str, vol_str
 
 

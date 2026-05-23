@@ -7,23 +7,23 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_breakout_buy": {"kind": "categorical", "choices": [True]},
     "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
     "use_kc": {"kind": "categorical", "choices": [True, False],},  # (AI註: 肯特納通道濾網開關搜尋)
-    "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 量能濾網開關搜尋)
-    "use_breakout_ema_filter": {"kind": "categorical", "choices": [True]},  # (AI註: 突破 EMA 濾網開關搜尋)
+    "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日放量濾網開關搜尋)
+    "use_breakout_ema_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破 EMA 濾網開關搜尋)
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
     "breakout_ema_len": {"kind": "int", "low": 60, "high": 300, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋，僅 use_breakout_ema_filter=True 啟用)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
-    "atr_times_init": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~3.5)
-    "atr_times_trail": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 移動停損 ATR 倍數搜尋，預設區間 2.0~4.5)
-    "atr_buy_tol": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 買點容忍 ATR 倍數搜尋，預設區間 0.1~3.5)
+    "atr_times_init": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~4.5)
+    "atr_times_trail": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 移動停損 ATR 倍數搜尋，預設區間 1.0~4.5)
+    "atr_buy_tol": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 買點容忍 ATR 倍數搜尋，預設區間 1.0~4.5)
     "bb_len": {"kind": "int", "low": 3, "high": 30, "step": 1, "enabled_by": "use_bb"},  # (AI註: 布林通道長度搜尋，僅 use_bb=True 啟用)
     "bb_mult": {"kind": "float", "low": 1.0, "high": 3.0, "step": 0.1, "enabled_by": "use_bb"},  # (AI註: 布林通道倍數搜尋，僅 use_bb=True 啟用)
     "kc_len": {"kind": "int", "low": 3, "high": 30, "step": 1, "enabled_by": "use_kc"},  # (AI註: 肯特納通道長度搜尋，僅 use_kc=True 啟用)
     "kc_mult": {"kind": "float", "low": 1.0, "high": 3.0, "step": 0.1, "enabled_by": "use_kc"},  # (AI註: 肯特納通道倍數搜尋，僅 use_kc=True 啟用)
-    "vol_short_len": {"kind": "int", "low": 1, "high": 10, "enabled_by": "use_vol"},  # (AI註: 短期量能窗長搜尋，僅 use_vol=True 啟用)
-    "vol_long_len": {"kind": "int", "high": 30, "depends_on": "vol_short_len", "enabled_by": "use_vol"},  # (AI註: 長期量能窗長搜尋，僅 use_vol=True 啟用且下限跟隨 vol_short_len)
-    "min_history_trades": {"kind": "int", "low": 3, "high": 3},  # (AI註: 歷史績效最少交易次數搜尋，預設區間 0~5)
-    "min_history_ev": {"kind": "float", "low": 0.0, "high": 0.0, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設區間 -1.0~0.5)
-    "min_history_win_rate": {"kind": "float", "low": 0.45, "high": 0.45, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設區間 0.0~0.6)
+    "vol_long_len": {"kind": "int", "low": 5, "high": 30, "step": 1, "enabled_by": "use_vol"},  # (AI註: 突破日前均量窗長搜尋，僅 use_vol=True 啟用)
+    "vol_breakout_mult": {"kind": "float", "low": 1.0, "high": 3.0, "step": 0.1, "enabled_by": "use_vol"},  # (AI註: 突破日量相對前均量倍數搜尋，僅 use_vol=True 啟用)
+    "min_history_trades": {"kind": "int", "low": 3, "high": 3},  # (AI註: 歷史績效最少交易次數搜尋，預設區間固定 3)
+    "min_history_ev": {"kind": "float", "low": 0.0, "high": 0.0, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設固定 0.0)
+    "min_history_win_rate": {"kind": "float", "low": 0.45, "high": 0.45, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設固定 45%)
 }
 
 
@@ -49,13 +49,23 @@ def build_trial_params(session, trial):
     ai_use_breakout_ema_filter = _suggest_optimizer_switch(trial, "use_breakout_ema_filter")
 
     if ai_use_vol:
-        vol_short_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_short_len"]
-        vol_short_len = trial.suggest_int("vol_short_len", vol_short_spec["low"], vol_short_spec["high"])
         vol_long_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_long_len"]
-        vol_long_len = trial.suggest_int("vol_long_len", vol_short_len, vol_long_spec["high"])
+        vol_long_len = trial.suggest_int(
+            "vol_long_len",
+            vol_long_spec["low"],
+            vol_long_spec["high"],
+            step=vol_long_spec["step"],
+        )
+        vol_mult_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_breakout_mult"]
+        vol_breakout_mult = trial.suggest_float(
+            "vol_breakout_mult",
+            vol_mult_spec["low"],
+            vol_mult_spec["high"],
+            step=vol_mult_spec["step"],
+        )
     else:
-        vol_short_len = BREAKOUT_PARAM_SPECS["vol_short_len"]["default"]
         vol_long_len = BREAKOUT_PARAM_SPECS["vol_long_len"]["default"]
+        vol_breakout_mult = BREAKOUT_PARAM_SPECS["vol_breakout_mult"]["default"]
 
     breakout_ema_len = (
         trial.suggest_int(
@@ -101,8 +111,8 @@ def build_trial_params(session, trial):
             if ai_use_kc
             else BREAKOUT_PARAM_SPECS["kc_mult"]["default"]
         ),
-        vol_short_len=vol_short_len,
         vol_long_len=vol_long_len,
+        vol_breakout_mult=vol_breakout_mult,
         min_history_trades=trial.suggest_int("min_history_trades", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_trades"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_trades"]["high"]),
         min_history_ev=trial.suggest_float("min_history_ev", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["step"]),
         min_history_win_rate=trial.suggest_float("min_history_win_rate", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["step"]),
@@ -121,8 +131,8 @@ BREAKOUT_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELDS = frozenset({
     "bb_mult",
     "kc_len",
     "kc_mult",
-    "vol_short_len",
     "vol_long_len",
+    "vol_breakout_mult",
 })
 
 BREAKOUT_LOCAL_MIN_PORTFOLIO_DEPENDENCY_FIELDS = frozenset({
@@ -158,7 +168,7 @@ def get_breakout_local_min_candidate_fields(trial, *, center_payload):
     if bool(center_payload.get("use_kc", False)):
         candidate_fields.extend(("kc_len", "kc_mult"))
     if bool(center_payload.get("use_vol", False)):
-        candidate_fields.extend(("vol_short_len", "vol_long_len"))
+        candidate_fields.extend(("vol_long_len", "vol_breakout_mult"))
     return tuple(candidate_fields)
 
 
@@ -166,17 +176,8 @@ def resolve_breakout_neighbor_spec(field_name, *, center_payload=None):
     spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
     kind = str(spec["kind"])
     step = spec.get("step", 1)
+    low_value = spec["low"]
     high_value = spec["high"]
-
-    if field_name == "vol_long_len":
-        floor_value = int(BREAKOUT_PARAM_SPECS["vol_long_len"].get("min_value", 1))
-        anchor_value = floor_value
-        if center_payload is not None:
-            anchor_value = max(anchor_value, int(center_payload["vol_short_len"]))
-        low_value = anchor_value
-    else:
-        low_value = spec["low"]
-
     return step, kind, low_value, high_value
 
 
@@ -187,6 +188,5 @@ def get_breakout_optimizer_required_min_rows():
         BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["high"],
         BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["high"],
         BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_len"]["high"],
-        BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_short_len"]["high"],
         BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_long_len"]["high"],
     )

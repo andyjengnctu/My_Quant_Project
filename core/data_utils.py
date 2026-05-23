@@ -101,7 +101,6 @@ def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=B
     atr_len = getattr(params, "atr_len", 0)
     bb_len = getattr(params, "bb_len", 0) if use_breakout_buy and getattr(params, "use_bb", False) else 0
     kc_len = getattr(params, "kc_len", 0) if getattr(params, "use_kc", False) else 0
-    vol_short_len = getattr(params, "vol_short_len", 0) if use_breakout_buy and getattr(params, "use_vol", False) else 0
     vol_long_len = getattr(params, "vol_long_len", 0) if use_breakout_buy and getattr(params, "use_vol", False) else 0
     return get_required_min_rows_from_lookbacks(
         high_len,
@@ -109,7 +108,6 @@ def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=B
         atr_len,
         bb_len,
         kc_len,
-        vol_short_len,
         vol_long_len,
         base_min_rows=base_min_rows,
         extra_rows=extra_rows

@@ -16,9 +16,10 @@ BREAKOUT_PARAM_SPECS = {
     "use_kc": {"type": bool, "default": False},  # (AI註: 是否啟用肯特納通道濾網，預設 False)
     "kc_len": {"type": int, "default": 20, "min_value": 1},  # (AI註: 肯特納通道長度，預設 20)
     "kc_mult": {"type": float, "default": 2.0, "min_value": 0.0, "strict_gt": True},  # (AI註: 肯特納通道倍數，預設 2.0)
-    "use_vol": {"type": bool, "default": True},  # (AI註: 是否啟用量能濾網，預設 True)
-    "vol_short_len": {"type": int, "default": 5, "min_value": 1},  # (AI註: 短期量能窗長，預設 5)
-    "vol_long_len": {"type": int, "default": 19, "min_value": 1},  # (AI註: 長期量能窗長，預設 19)
+    "use_vol": {"type": bool, "default": True},  # (AI註: 是否啟用突破日放量濾網，預設 True)
+    "vol_short_len": {"type": int, "default": 5, "min_value": 1},  # (AI註: 舊版量能欄位，僅保留 JSON 相容；正式訊號不再使用)
+    "vol_long_len": {"type": int, "default": 20, "min_value": 1},  # (AI註: 突破日前均量窗長，預設 20)
+    "vol_breakout_mult": {"type": float, "default": 1.5, "min_value": 0.0, "strict_gt": True},  # (AI註: 突破日量需大於前均量的倍數，預設 1.5)
 }
 
 
@@ -39,10 +40,5 @@ def validate_breakout_param_ranges(param_values, *, build_rule_text):
             condition = value < max_value if max_exclusive else value <= max_value
             if not condition:
                 raise ValueError(f"參數 {field_name} 驗證失敗: {build_rule_text(spec)}，收到 {value!r}")
-
-    if param_values["vol_long_len"] < param_values["vol_short_len"]:
-        raise ValueError(
-            f"參數 vol_long_len 驗證失敗: 需 >= vol_short_len，收到 {param_values['vol_long_len']!r} < {param_values['vol_short_len']!r}"
-        )
 
     return param_values

@@ -33,6 +33,7 @@ def validate_display_reporting_sanity_case(_base_params):
         "use_vol": True,
         "vol_short_len": 7,
         "vol_long_len": 21,
+        "vol_breakout_mult": 1.8,
         "use_breakout_buy": True,
         "high_len": 123,
         "atr_len": 17,
@@ -51,7 +52,7 @@ def validate_display_reporting_sanity_case(_base_params):
     expected_scanner_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{SCORE_NUMERATOR_METHOD}]"
     add_check(results, "display_reporting", case_id, "scanner_score_header_separates_model_and_numerator", True, expected_scanner_score_header in scanner_text and " / 分子 " not in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_training_params", True, "突破買進 啟用 (123日新高) | ATR 17日 | 掛單 +1.2倍 | 初始 -2.3倍 | 追蹤 -3.4倍 | 半倉 45%" in scanner_text)
-    add_check(results, "display_reporting", case_id, "scanner_contains_filter_params", True, "布林(BB) 啟用 (長21, 寬2.5x) | 阿肯那(KC) 啟用 (長34, 寬1.8x) | 均量 啟用 (短7>長21)" in scanner_text)
+    add_check(results, "display_reporting", case_id, "scanner_contains_filter_params", True, "布林(BB) 啟用 (長21, 寬2.5x) | 阿肯那(KC) 啟用 (長34, 寬1.8x) | 均量 啟用 (突破日量 > 前21日均量×1.8)" in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_history_thresholds", True, "交易 >= 11 次 | 勝率 >= 56% | 期望值 >= 0.78R" in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_live_capital", True, "Scanner資金: live capital = 2,000,000" in scanner_text)
 
@@ -133,7 +134,7 @@ def validate_display_reporting_sanity_case(_base_params):
     add_check(results, "display_reporting", case_id, "dashboard_contains_benchmark_ticker", True, "同期大盤 (0050)" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_ev_row", True, "實戰期望值(EV)" in dashboard_text and "0.72 R" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_entry_summary", True, "進場：突破買進 啟用 (突破 123 日新高)" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_filter_summary", True, "濾網：布林(BB) 啟用（長21, 寬2.5x）｜阿肯那(KC) 啟用（長34, 寬1.8x）｜均量 啟用（短7 > 長21）" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_filter_summary", True, "濾網：布林(BB) 啟用（長21, 寬2.5x）｜阿肯那(KC) 啟用（長34, 寬1.8x）｜均量 啟用（突破日量 > 前21日均量 × 1.8）" in dashboard_text)
 
     summary["scanner_lines"] = len([line for line in scanner_text.splitlines() if line.strip()])
     summary["scanner_summary_lines"] = len([line for line in scanner_summary_text.splitlines() if line.strip()])
