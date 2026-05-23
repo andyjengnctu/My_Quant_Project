@@ -275,6 +275,9 @@ def _build_entry_signal_trade_table_rows(entry_signal_trade_stats):
             "trade_count": int(row.get("trade_count", 0) or 0),
             "win_count": int(row.get("win_count", 0) or 0),
             "win_rate": f"{float(row.get('win_rate', 0.0) or 0.0):.1f}%",
+            "payoff": f"{float(row.get('payoff', 0.0) or 0.0):.2f}",
+            "ev": f"{float(row.get('ev', 0.0) or 0.0):.2f} R",
+            "total_return_pct": f"{float(row.get('total_return_pct', 0.0) or 0.0):+.2f}%",
         })
     return rows
 

@@ -360,6 +360,18 @@ def _build_table5_widths(rows: list[tuple[str, str, str, str, str]], *, min_widt
     return tuple(widths)
 
 
+def _table_row_compact_cells(cells, widths):
+    return "| " + " | ".join(_pad_display(cell, width) for cell, width in zip(cells, widths)) + " |"
+
+
+def _build_table_compact_widths(rows, *, min_widths):
+    widths = [int(v) for v in min_widths]
+    for row in rows:
+        for idx, cell in enumerate(row[:len(widths)]):
+            widths[idx] = max(widths[idx], _display_width(cell))
+    return tuple(widths)
+
+
 def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
     metric_name = str(metric_name or "")
     value_text = str(value or "").strip()
@@ -505,7 +517,7 @@ def print_optimizer_trial_console_dashboard(*,
         compare_widths = _build_table5_widths(compare_render_rows)
         compare_header_line = _table_row5(*compare_header, *compare_widths)
 
-    entry_signal_header = ("進場策略", "交易次數", "成功筆數", "成功率")
+    entry_signal_header = ("進場策略", "交易次數", "成功筆數", "成功率", "風報比", "期望值", "總報酬率")
     entry_signal_widths = None
     entry_signal_header_line = ""
     entry_signal_render_rows = []
@@ -518,10 +530,13 @@ def print_optimizer_trial_console_dashboard(*,
                     str(row.get("trade_count", 0)),
                     str(row.get("win_count", 0)),
                     str(row.get("win_rate", "0.0%")),
+                    str(row.get("payoff", "0.00")),
+                    str(row.get("ev", "0.00 R")),
+                    str(row.get("total_return_pct", "+0.00%")),
                 )
             )
-        entry_signal_widths = _build_table4_compact_widths(entry_signal_render_rows, min_widths=(16, 10, 10, 10))
-        entry_signal_header_line = _table_row4_compact(*entry_signal_header, *entry_signal_widths)
+        entry_signal_widths = _build_table_compact_widths(entry_signal_render_rows, min_widths=(16, 10, 10, 10, 8, 10, 10))
+        entry_signal_header_line = _table_row_compact_cells(entry_signal_header, entry_signal_widths)
 
     separator_width = max(
         120,
@@ -550,11 +565,11 @@ def print_optimizer_trial_console_dashboard(*,
         print(_table_row4_compact(*rendered_row, *training_widths))
     if entry_signal_trade_rows and entry_signal_widths is not None:
         print(separator)
-        print("【進場策略統計｜已完成交易｜成功 = pnl > 0】")
+        print("【進場策略統計｜已完成交易｜成功 = pnl > 0｜總報酬率 = 策略總損益 / 初始資金】")
         print(separator)
         print(entry_signal_header_line)
         for rendered_row in entry_signal_render_rows[1:]:
-            print(_table_row4_compact(*rendered_row, *entry_signal_widths))
+            print(_table_row_compact_cells(rendered_row, entry_signal_widths))
     if testing_title and testing_rows:
         print(separator)
         print(testing_title)

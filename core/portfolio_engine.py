@@ -981,7 +981,10 @@ def run_portfolio_timeline(
         profile_stats['bm_annual_return_pct'] = bm_annual_return_pct
         profile_stats['reserved_buy_fill_rate'] = reserved_buy_fill_rate
         profile_stats['filled_buy_count'] = filled_buy_count
-        profile_stats['entry_signal_trade_stats'] = build_entry_signal_trade_stats(closed_trades_stats)
+        profile_stats['entry_signal_trade_stats'] = build_entry_signal_trade_stats(
+            closed_trades_stats,
+            initial_capital=initial_capital,
+        )
         if active_level_rows is not None:
             profile_stats['portfolio_active_level_rows'] = list(active_level_rows)
         if capture_equity_curve:
