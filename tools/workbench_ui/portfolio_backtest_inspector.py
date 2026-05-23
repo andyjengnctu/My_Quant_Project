@@ -372,6 +372,15 @@ def _build_params_schedule_rows(payload, *, fixed_risk=None):
     return list(build_params_schedule_rows_from_payload(payload, fixed_risk=override))
 
 
+def _is_single_member_static_active_param_ensemble(payload):
+    if not isinstance(payload, dict):
+        return False
+    if str(payload.get("mode") or "").strip().lower() != "static":
+        return False
+    members = payload.get("params_ensemble")
+    return isinstance(members, list) and len(members) == 1
+
+
 def _fast_data_to_price_df(fast_data):
     dates = pd.DatetimeIndex(pd.to_datetime(get_fast_dates(fast_data)))
     return pd.DataFrame(
@@ -1613,7 +1622,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             ]
             self._history_summary_cache[(resolved_ticker, "rolling_active_param_replay")] = list(lines)
             return lines
-        if result_payload.get("ensemble_payload"):
+        ensemble_payload = result_payload.get("ensemble_payload")
+        if ensemble_payload and not _is_single_member_static_active_param_ensemble(ensemble_payload):
             lines = [
                 "Active-param ensemble replay：投組績效以本次 N-seed 共識回測報表為準。",
                 "單股歷史摘要不套用單一固定參數，避免與 ensemble min_agree 共識口徑混淆。",
