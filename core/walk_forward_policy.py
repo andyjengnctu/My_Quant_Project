@@ -289,16 +289,17 @@ def normalize_optimizer_model_mode(model_mode: str) -> str:
 def normalize_optimizer_study_scope(study_scope: str | None) -> str:
     normalized = str(study_scope or '').strip().lower().replace('_', '-').replace(' ', '-')
     aliases = {
-        '': 'oos',
-        'o': 'oos',
-        'oos': 'oos',
-        'study-oos': 'oos',
+        '': 'full',
         'f': 'full',
         'full': 'full',
         'study-full': 'full',
+        '2': 'oos',
+        'o': 'oos',
+        'oos': 'oos',
+        'study-oos': 'oos',
     }
     if normalized not in aliases:
-        raise ValueError(f"study mode 只接受 Study-OOS 或 Study-Full，收到: {study_scope}")
+        raise ValueError(f"study mode 只接受 Enter/Study-Full 或 2/Study-OOS，收到: {study_scope}")
     return aliases[normalized]
 
 
