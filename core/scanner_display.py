@@ -73,7 +73,7 @@ def print_scanner_header(params):
         f"逐項輸出應顯示 {sort_probe_fields}；"
         f"目前排序欄位 = {sort_metric_label}"
     )
-    ema_filter_str = f"Close > EMA{get_p(params, 'breakout_ema_len', 240)}"
+    ema_filter_str = f"EMA濾網 啟用 (Close > EMA{get_p(params, 'breakout_ema_len', 240)})" if get_p(params, 'use_breakout_ema_filter', True) else "EMA濾網 關閉"
     print(
         f"   ➤ 訓練參數: "
         f"突破買進 {breakout_str} | "

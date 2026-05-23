@@ -27,6 +27,7 @@ REQUIRED_PARAM_KEYS = [
     "atr_times_trail",
     "atr_buy_tol",
     "high_len",
+    "use_breakout_ema_filter",
     "breakout_ema_len",
     "tp_percent",
     "min_history_trades",

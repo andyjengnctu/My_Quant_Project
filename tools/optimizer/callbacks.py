@@ -481,7 +481,7 @@ def _build_training_param_lines(params):
         if get_p(params, 'use_breakout_buy', True)
         else "突破買進 關閉"
     )
-    ema_filter_str = f"Close > EMA{get_p(params, 'breakout_ema_len', 240)}"
+    ema_filter_str = f"EMA濾網 啟用（Close > EMA{get_p(params, 'breakout_ema_len', 240)}）" if get_p(params, 'use_breakout_ema_filter', True) else "EMA濾網 關閉"
     return [
         f"進場：{breakout_str}",
         f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%",

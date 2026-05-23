@@ -8,8 +8,9 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
     "use_kc": {"kind": "categorical", "choices": [True, False],},  # (AI註: 肯特納通道濾網開關搜尋)
     "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 量能濾網開關搜尋)
+    "use_breakout_ema_filter": {"kind": "categorical", "choices": [True]},  # (AI註: 突破 EMA 濾網開關搜尋)
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
-    "breakout_ema_len": {"kind": "int", "low": 60, "high": 300, "step": 5},  # (AI註: 突破 EMA 濾網長度搜尋，Close 必須大於 EMA_x)
+    "breakout_ema_len": {"kind": "int", "low": 60, "high": 300, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋，僅 use_breakout_ema_filter=True 啟用)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
     "atr_times_init": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~3.5)
     "atr_times_trail": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 移動停損 ATR 倍數搜尋，預設區間 2.0~4.5)
@@ -45,6 +46,7 @@ def build_trial_params(session, trial):
     ai_use_bb = _suggest_optimizer_switch(trial, "use_bb")
     ai_use_kc = _suggest_optimizer_switch(trial, "use_kc")
     ai_use_vol = _suggest_optimizer_switch(trial, "use_vol")
+    ai_use_breakout_ema_filter = _suggest_optimizer_switch(trial, "use_breakout_ema_filter")
 
     if ai_use_vol:
         vol_short_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_short_len"]
@@ -55,6 +57,17 @@ def build_trial_params(session, trial):
         vol_short_len = BREAKOUT_PARAM_SPECS["vol_short_len"]["default"]
         vol_long_len = BREAKOUT_PARAM_SPECS["vol_long_len"]["default"]
 
+    breakout_ema_len = (
+        trial.suggest_int(
+            "breakout_ema_len",
+            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["low"],
+            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["high"],
+            step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["step"],
+        )
+        if ai_use_breakout_ema_filter
+        else BREAKOUT_PARAM_SPECS["breakout_ema_len"]["default"]
+    )
+
     return build_breakout_strategy_params(
         atr_len=trial.suggest_int("atr_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["high"]),
         atr_times_init=trial.suggest_float("atr_times_init", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["step"]),
@@ -62,7 +75,8 @@ def build_trial_params(session, trial):
         atr_buy_tol=trial.suggest_float("atr_buy_tol", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["step"]),
         use_breakout_buy=ai_use_breakout_buy,
         high_len=trial.suggest_int("high_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["step"]),
-        breakout_ema_len=trial.suggest_int("breakout_ema_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["step"]),
+        use_breakout_ema_filter=ai_use_breakout_ema_filter,
+        breakout_ema_len=breakout_ema_len,
         tp_percent=session.resolve_optimizer_tp_percent(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent),
         use_bb=ai_use_bb,
         use_kc=ai_use_kc,
@@ -98,6 +112,7 @@ def build_trial_params(session, trial):
 
 BREAKOUT_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELDS = frozenset({
     "high_len",
+    "use_breakout_ema_filter",
     "breakout_ema_len",
     "atr_len",
     "atr_times_trail",
@@ -133,7 +148,9 @@ def get_breakout_local_min_candidate_fields(trial, *, center_payload):
         "atr_buy_tol",
     ]
     if bool(center_payload.get("use_breakout_buy", True)):
-        candidate_fields.extend(("high_len", "breakout_ema_len"))
+        candidate_fields.append("high_len")
+        if bool(center_payload.get("use_breakout_ema_filter", True)):
+            candidate_fields.append("breakout_ema_len")
     if "tp_percent" in getattr(trial, "params", {}):
         candidate_fields.append("tp_percent")
     if bool(center_payload.get("use_bb", False)):
