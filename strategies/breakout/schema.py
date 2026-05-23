@@ -16,6 +16,10 @@ BREAKOUT_PARAM_SPECS = {
     "use_vol": {"type": bool, "default": True},  # (AI註: 是否啟用量能濾網，預設 True)
     "vol_short_len": {"type": int, "default": 5, "min_value": 1},  # (AI註: 短期量能窗長，預設 5)
     "vol_long_len": {"type": int, "default": 19, "min_value": 1},  # (AI註: 長期量能窗長，預設 19)
+    "use_ema_pullback": {"type": bool, "default": False},
+    "ema_pullback_short_len": {"type": int, "default": 5, "min_value": 1},
+    "ema_pullback_mid_len": {"type": int, "default": 20, "min_value": 1},
+    "ema_pullback_long_len": {"type": int, "default": 120, "min_value": 1},
 }
 
 
@@ -40,5 +44,14 @@ def validate_breakout_param_ranges(param_values, *, build_rule_text):
     if param_values["vol_long_len"] < param_values["vol_short_len"]:
         raise ValueError(
             f"參數 vol_long_len 驗證失敗: 需 >= vol_short_len，收到 {param_values['vol_long_len']!r} < {param_values['vol_short_len']!r}"
+        )
+
+    ema_short = param_values["ema_pullback_short_len"]
+    ema_mid = param_values["ema_pullback_mid_len"]
+    ema_long = param_values["ema_pullback_long_len"]
+    if not (ema_long > ema_mid > ema_short):
+        raise ValueError(
+            "參數 ema_pullback_long_len / ema_pullback_mid_len / ema_pullback_short_len 驗證失敗: "
+            f"需 long > mid > short，收到 {ema_long!r} > {ema_mid!r} > {ema_short!r}"
         )
     return param_values

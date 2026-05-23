@@ -53,6 +53,11 @@ def print_scanner_header(params):
     bb_str = f"啟用 (長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x)" if get_p(params, 'use_bb', False) else "關閉"
     kc_str = f"啟用 (長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x)" if get_p(params, 'use_kc', False) else "關閉"
     vol_str = f"啟用 (短{get_p(params, 'vol_short_len', 5)}>長{get_p(params, 'vol_long_len', 19)})" if get_p(params, 'use_vol', False) else "關閉"
+    ema_pullback_str = (
+        f"啟用 (短{get_p(params, 'ema_pullback_short_len', 5)}>中{get_p(params, 'ema_pullback_mid_len', 20)}，長{get_p(params, 'ema_pullback_long_len', 120)}向上)"
+        if get_p(params, 'use_ema_pullback', False)
+        else "關閉"
+    )
 
     print(
         f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | "
@@ -82,7 +87,8 @@ def print_scanner_header(params):
         f"   ➤ 濾網參數: "
         f"布林(BB) {bb_str} | "
         f"阿肯那(KC) {kc_str} | "
-        f"均量 {vol_str}"
+        f"均量 {vol_str} | "
+        f"EMA回檔 {ema_pullback_str}"
     )
     print(
         f"   ➤ 歷史門檻: "

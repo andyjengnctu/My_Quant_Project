@@ -131,6 +131,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     use_bb = bool(getattr(params, 'use_bb', True))
     use_vol = bool(getattr(params, 'use_vol', True))
     use_kc = bool(getattr(params, 'use_kc', True))
+    use_ema_pullback = bool(getattr(params, 'use_ema_pullback', False))
 
     def _feature(feature_name, feature_args, builder):
         if feature_cache is None or resolved_ticker is None:
@@ -226,7 +227,38 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     else:
         kcSellCondition = np.zeros_like(C, dtype=bool)
 
-    buyCondition = is_tradable_bar & (C > O) & isPriceCrossover & bbCondition & volCondition
+    breakoutBuyCondition = is_tradable_bar & (C > O) & isPriceCrossover & bbCondition & volCondition
+
+    if use_ema_pullback:
+        ema_short_len = int(params.ema_pullback_short_len)
+        ema_mid_len = int(params.ema_pullback_mid_len)
+        ema_long_len = int(params.ema_pullback_long_len)
+        EMA_Short = _feature('ema_close', (ema_short_len,), lambda: tv_ema(C, ema_short_len))
+        EMA_Mid = _feature('ema_close', (ema_mid_len,), lambda: tv_ema(C, ema_mid_len))
+        EMA_Long = _feature('ema_close', (ema_long_len,), lambda: tv_ema(C, ema_long_len))
+
+        prev_ema_short = np.empty_like(EMA_Short)
+        prev_ema_short[0] = EMA_Short[0]
+        prev_ema_short[1:] = EMA_Short[:-1]
+        prev_ema_mid = np.empty_like(EMA_Mid)
+        prev_ema_mid[0] = EMA_Mid[0]
+        prev_ema_mid[1:] = EMA_Mid[:-1]
+        ema_long_lag20 = np.empty_like(EMA_Long)
+        ema_long_lag20[:20] = np.nan
+        ema_long_lag20[20:] = EMA_Long[:-20]
+
+        emaPullbackBuyCondition = (
+            is_tradable_bar
+            & (C > EMA_Long)
+            & (EMA_Long >= ema_long_lag20)
+            & (EMA_Short > EMA_Mid)
+            & (prev_ema_short <= prev_ema_mid)
+        )
+        emaPullbackBuyCondition[:20] = False
+    else:
+        emaPullbackBuyCondition = np.zeros_like(C, dtype=bool)
+
+    buyCondition = breakoutBuyCondition | emaPullbackBuyCondition
     sellCondition = is_tradable_bar & ((isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition)
     raw_buy_limits = C + ATR_main * params.atr_buy_tol
     buy_limits = np.full_like(C, np.nan)

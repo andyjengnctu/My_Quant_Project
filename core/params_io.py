@@ -19,7 +19,13 @@ PARAM_FIELD_TYPES = {field.name: field.type for field in PARAM_FIELDS}
 PARAM_FIELD_NAMES = tuple(field.name for field in PARAM_FIELDS)
 RUNTIME_PARAM_NAMES = tuple(RUNTIME_PARAM_DEFAULTS)
 PARAM_FIELD_DEFAULTS = {field.name: field.default for field in PARAM_FIELDS}
-PARAM_COMPAT_DEFAULT_FIELDS = {"min_entry_notional"}
+PARAM_COMPAT_DEFAULT_FIELDS = {
+    "min_entry_notional",
+    "use_ema_pullback",
+    "ema_pullback_short_len",
+    "ema_pullback_mid_len",
+    "ema_pullback_long_len",
+}
 
 
 # # (AI註: 參數載入時先做型別收斂，避免錯型別延後到回測/優化流程才爆炸)
