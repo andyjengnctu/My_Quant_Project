@@ -21,7 +21,7 @@ from core.walk_forward_policy import load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams, get_score_mdd_denominator_epsilon, get_score_mdd_power
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
-from core.portfolio_stats import calc_portfolio_score
+from core.portfolio_stats import calc_portfolio_score, calc_score_win_rate_multiplier
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks
@@ -588,6 +588,22 @@ def validate_score_numerator_option_case(_base_params):
         low_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=40.0)
         high_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.9, annual_return_pct=40.0)
     add_check(results, "strategy_score", case_id, "log_r2_total_return_quality_monotonic", True, high_total_score > low_total_score)
+
+    old_linear_low = 40.0 / 50.0
+    old_linear_high = 50.0 / 50.0
+    new_amp_low = calc_score_win_rate_multiplier(40.0, 50.0)
+    new_amp_mid = calc_score_win_rate_multiplier(50.0, 50.0)
+    new_amp_high = calc_score_win_rate_multiplier(60.0, 50.0)
+    add_check(results, "strategy_score", case_id, "score_win_rate_amp_hits_target_at_one", 1.0, new_amp_mid)
+    add_check(results, "strategy_score", case_id, "score_win_rate_amp_stronger_than_old_linear_below_target", True, new_amp_low < old_linear_low)
+    add_check(results, "strategy_score", case_id, "score_win_rate_amp_boosts_above_target", True, new_amp_high > new_amp_mid)
+
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", True), patch("config.training_policy.SCORE_WIN_RATE_TARGET", 50.0):
+        low_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=40.0)
+        target_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=50.0)
+        high_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=60.0)
+    add_check(results, "strategy_score", case_id, "portfolio_score_win_rate_amp_monotonic", True, low_win_score < target_win_score < high_win_score)
+    add_check(results, "strategy_score", case_id, "portfolio_score_win_rate_amp_beats_old_linear_gap", True, (target_win_score / low_win_score) > (old_linear_high / old_linear_low))
 
     annual_missing = None
     with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):

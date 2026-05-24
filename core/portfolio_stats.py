@@ -1,5 +1,27 @@
+import math
+
 import pandas as pd
 import numpy as np
+
+
+_PERCENT_SCALE = 100.0
+
+
+def calc_score_win_rate_multiplier(trade_win_rate_pct, target_pct):
+    win_rate = float(trade_win_rate_pct)
+    target = float(target_pct)
+    if not math.isfinite(win_rate):
+        win_rate = 0.0
+    if not math.isfinite(target) or target <= 0.0:
+        raise ValueError(f"SCORE_WIN_RATE_TARGET 必須是有限正數，目前值: {target_pct!r}")
+
+    bounded_win_rate = min(max(win_rate, 0.0), _PERCENT_SCALE)
+    bounded_target = min(target, _PERCENT_SCALE)
+    if bounded_target >= _PERCENT_SCALE:
+        return bounded_win_rate / _PERCENT_SCALE
+
+    power = _PERCENT_SCALE / (_PERCENT_SCALE - bounded_target)
+    return (bounded_win_rate / bounded_target) ** power
 
 
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None):
@@ -35,7 +57,10 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
         raise ValueError(f"未知 SCORE_CALC_METHOD: {score_calc_method}")
 
     if is_score_win_rate_amp_enabled() and trade_win_rate_pct is not None:
-        score *= float(trade_win_rate_pct) / get_score_win_rate_target()
+        score *= calc_score_win_rate_multiplier(
+            trade_win_rate_pct,
+            get_score_win_rate_target(),
+        )
     return score
 
 
