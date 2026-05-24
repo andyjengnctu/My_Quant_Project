@@ -15,7 +15,6 @@ from core.config import (
 )
 from core.display_common import (
     C_CYAN,
-    C_BLUE,
     C_GRAY,
     C_GREEN,
     C_RED,
@@ -248,7 +247,7 @@ def print_strategy_dashboard(
     print(_table_row("報酬回撤比(RoMD)", f"{C_CYAN}{sys_romd_str}{C_RESET}", bm_romd_str, f"{romd_diff_color}{romd_diff_str}{C_RESET}"))
     print(_table_row("平滑度(Log R²)", sys_rsq_str, bm_rsq_str, f"{rsq_color}{rsq_diff_str}{C_RESET}"))
     print(_table_row("月度獲利勝率", sys_mwin_str, bm_mwin_str, f"{mwin_color}{mwin_diff_str}{C_RESET}"))
-    print(_table_row("系統實戰勝率", f"{win_rate:.2f} %", "-", "-"))
+    print(_table_row("系統實戰勝率", f"{C_CYAN}{win_rate:.2f} %{C_RESET}", "-", "-"))
     print(_table_row("盈虧風報比", f"{payoff:.2f}", "-", "-"))
     print(_table_row("實戰期望值(EV)", f"{ev:.2f} R", "-", "-"))
 
@@ -529,7 +528,7 @@ def print_optimizer_trial_console_dashboard(*,
             study_full_stats_header,
             (
                 str(study_full_breakout_stats.get("trade_count", "-")),
-                str(study_full_breakout_stats.get("win_rate", "-")),
+                f'{C_CYAN}{study_full_breakout_stats.get("win_rate", "-")}{C_RESET}',
                 str(study_full_breakout_stats.get("payoff", "-")),
                 str(study_full_breakout_stats.get("avg_r", "-")),
                 str(study_full_breakout_stats.get("median_r", "-")),

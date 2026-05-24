@@ -18,7 +18,7 @@ BUY_SORT_METHOD = 'PROJ_COST'
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
 SCORE_CALC_METHOD = 'RoMD'  
-SCORE_MDD_POWER = 1.5 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
+SCORE_MDD_POWER = 1.2 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
 SCORE_MDD_DENOMINATOR_EPSILON = 0.0001
 
 # 系統評分分子切換

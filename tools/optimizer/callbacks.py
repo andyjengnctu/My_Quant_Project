@@ -270,8 +270,10 @@ def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
     return ""
 
 
-def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: float, *, delta_text: str = "", delta_value: float | None = None, use_blue: bool = False) -> str:
-    if use_blue:
+def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: float, *, delta_text: str = "", delta_value: float | None = None, use_blue: bool = False, base_color_override: str | None = None) -> str:
+    if base_color_override:
+        rendered = _colorize(base_text, base_color_override)
+    elif use_blue:
         rendered = _colorize(base_text, C_CYAN)
     else:
         rendered = _colorize(base_text, _first_zone_base_color(metric_name, numeric_value))
@@ -309,14 +311,14 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
 
     rows = []
 
-    def _append_row(name, candidate_text, candidate_numeric, *, reference_text="-", reference_numeric=None, reference_delta_text="", reference_delta_value=None, benchmark_text="-", benchmark_numeric=None, benchmark_delta_text="", benchmark_delta_value=None, use_blue=False, candidate_color_override=None):
+    def _append_row(name, candidate_text, candidate_numeric, *, reference_text="-", reference_numeric=None, reference_delta_text="", reference_delta_value=None, benchmark_text="-", benchmark_numeric=None, benchmark_delta_text="", benchmark_delta_value=None, use_blue=False, candidate_color_override=None, base_color_override=None):
         row = {
             "name": name,
-            "candidate": _compose_first_zone_cell(name, candidate_text, float(candidate_numeric), use_blue=use_blue) if candidate_numeric is not None else str(candidate_text),
+            "candidate": _compose_first_zone_cell(name, candidate_text, float(candidate_numeric), use_blue=use_blue, base_color_override=base_color_override) if candidate_numeric is not None else str(candidate_text),
             "candidate_precolored": candidate_numeric is not None,
-            "reference": _compose_first_zone_cell(name, reference_text, float(reference_numeric), delta_text=reference_delta_text, delta_value=reference_delta_value, use_blue=use_blue) if reference_numeric is not None else str(reference_text),
+            "reference": _compose_first_zone_cell(name, reference_text, float(reference_numeric), delta_text=reference_delta_text, delta_value=reference_delta_value, use_blue=use_blue, base_color_override=base_color_override) if reference_numeric is not None else str(reference_text),
             "reference_precolored": reference_numeric is not None,
-            "benchmark": _compose_first_zone_cell(name, benchmark_text, float(benchmark_numeric), delta_text=benchmark_delta_text, delta_value=benchmark_delta_value, use_blue=use_blue) if benchmark_numeric is not None else str(benchmark_text),
+            "benchmark": _compose_first_zone_cell(name, benchmark_text, float(benchmark_numeric), delta_text=benchmark_delta_text, delta_value=benchmark_delta_value, use_blue=use_blue, base_color_override=base_color_override) if benchmark_numeric is not None else str(benchmark_text),
             "benchmark_precolored": benchmark_numeric is not None,
         }
         if candidate_color_override is not None:
@@ -412,6 +414,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
             reference_delta_text = ""
 
         use_blue = name == _optimizer_score_metric_label()
+        base_color_override = C_CYAN if name == "系統實戰勝率" else None
         _append_row(
             name,
             cand_plain,
@@ -425,6 +428,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
             benchmark_delta_text=bench_delta_text,
             benchmark_delta_value=bench_delta_value,
             use_blue=use_blue,
+            base_color_override=base_color_override,
         )
 
     add_row("總資產報酬率", "pf_return", kind="pct")
