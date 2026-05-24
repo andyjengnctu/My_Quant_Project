@@ -18,7 +18,7 @@ BUY_SORT_METHOD = 'PROJ_COST'
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
 SCORE_CALC_METHOD = 'RoMD'  
-SCORE_MDD_POWER = 1.0 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
+SCORE_MDD_POWER = 1.2 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
 SCORE_MDD_DENOMINATOR_EPSILON = 0.0001
 SCORE_WIN_RATE_AMP_ENABLED = True  # True = 以完整交易勝率對 score 做目標式倍率校正。
 SCORE_WIN_RATE_TARGET = 60.0  # 完整交易勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
@@ -26,7 +26,7 @@ SCORE_WIN_RATE_TARGET = 60.0  # 完整交易勝率達此目標時倍率為 1；�
 # 系統評分分子切換
 # 'TOTAL_RETURN' = 分子使用總報酬率
 # 'ANNUAL_RETURN' = 分子使用年化報酬率
-SCORE_NUMERATOR_METHOD = 'ANNUAL_RETURN'  
+SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'  
 
 
 
