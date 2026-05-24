@@ -27,6 +27,7 @@ from tools.filters.breakout_quality.common import (
     load_dataset_frames,
     write_json,
     dataset_output_dir,
+    event_group_summary,
 )
 
 
@@ -89,6 +90,7 @@ def main(argv=None) -> int:
         "context_columns": list(CONTEXT_COLUMNS),
         "label_counts": label_counts(y),
         "event_count": int(len(y)),
+        "event_group_summary": event_group_summary(event_df, y),
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
     write_json(out_dir / "dataset_summary.json", summary)

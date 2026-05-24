@@ -123,13 +123,135 @@ def label_counts(labels: Iterable[int]) -> dict[str, int]:
     }
 
 
+def event_group_keys(events: pd.DataFrame) -> pd.Series:
+    missing = [col for col in ("ticker", "date") if col not in events.columns]
+    if missing:
+        raise KeyError(f"events.csv 缺少 group 欄位: {missing}")
+    return events["ticker"].astype(str) + "\x1f" + events["date"].astype(str)
+
+
+def group_size_weights(events: pd.DataFrame, indices: Iterable[int]) -> np.ndarray:
+    idx = np.asarray(list(indices), dtype=np.int64)
+    if idx.size == 0:
+        return np.empty((0,), dtype=np.float32)
+    keys = event_group_keys(events).iloc[idx].reset_index(drop=True)
+    counts = keys.value_counts(sort=False)
+    weights = keys.map(lambda key: 1.0 / float(counts[key])).to_numpy(dtype=np.float32)
+    return weights
+
+
+def chronological_group_split_indices(
+    events: pd.DataFrame,
+    labels: np.ndarray,
+    *,
+    val_ratio: float,
+    label_pass: int,
+    label_reject: int,
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    labels_arr = np.asarray(labels, dtype=np.int64)
+    valid_idx = np.flatnonzero((labels_arr == int(label_pass)) | (labels_arr == int(label_reject)))
+    if valid_idx.size == 0:
+        report = {
+            "strategy": "ticker_date_group_chronological",
+            "valid_row_count": 0,
+            "group_count": 0,
+            "train_row_count": 0,
+            "val_row_count": 0,
+            "train_group_count": 0,
+            "val_group_count": 0,
+            "overlap_group_count": 0,
+        }
+        return valid_idx, valid_idx, report
+
+    valid_events = events.iloc[valid_idx].copy()
+    valid_events["_row_index"] = valid_idx
+    valid_events["_group_key"] = event_group_keys(events).iloc[valid_idx].to_numpy()
+    groups = valid_events[["ticker", "date", "_group_key"]].drop_duplicates("_group_key").copy()
+    groups["_date_sort"] = pd.to_datetime(groups["date"], errors="coerce")
+    groups["_date_text"] = groups["date"].astype(str)
+    groups = groups.sort_values(["_date_sort", "_date_text", "ticker"], kind="mergesort").reset_index(drop=True)
+
+    group_count = int(len(groups))
+    if group_count <= 1:
+        train_groups = set(groups["_group_key"].tolist())
+        val_groups: set[str] = set()
+    else:
+        split = int(round(group_count * (1.0 - float(val_ratio))))
+        split = min(max(split, 1), group_count - 1)
+        train_groups = set(groups.iloc[:split]["_group_key"].tolist())
+        val_groups = set(groups.iloc[split:]["_group_key"].tolist())
+
+    train_mask = valid_events["_group_key"].isin(train_groups).to_numpy()
+    val_mask = valid_events["_group_key"].isin(val_groups).to_numpy()
+    train_idx = valid_events.loc[train_mask, "_row_index"].to_numpy(dtype=np.int64)
+    val_idx = valid_events.loc[val_mask, "_row_index"].to_numpy(dtype=np.int64)
+    overlap = train_groups.intersection(val_groups)
+
+    def _date_range(idx: np.ndarray) -> dict[str, str | None]:
+        if idx.size == 0:
+            return {"start": None, "end": None}
+        dates = pd.to_datetime(events.iloc[idx]["date"], errors="coerce")
+        if dates.notna().any():
+            return {
+                "start": str(dates.min().date()),
+                "end": str(dates.max().date()),
+            }
+        texts = events.iloc[idx]["date"].astype(str)
+        return {"start": str(texts.min()), "end": str(texts.max())}
+
+    report = {
+        "strategy": "ticker_date_group_chronological",
+        "val_ratio": float(val_ratio),
+        "valid_row_count": int(valid_idx.size),
+        "group_count": group_count,
+        "train_row_count": int(train_idx.size),
+        "val_row_count": int(val_idx.size),
+        "train_group_count": int(len(train_groups)),
+        "val_group_count": int(len(val_groups)),
+        "overlap_group_count": int(len(overlap)),
+        "train_date_range": _date_range(train_idx),
+        "val_date_range": _date_range(val_idx),
+    }
+    return train_idx, val_idx, report
+
+
+def event_group_summary(events: pd.DataFrame, labels: Iterable[int]) -> dict:
+    if events.empty:
+        return {"group_count": 0}
+    labels_arr = np.asarray(list(labels), dtype=np.int64)
+    if labels_arr.size != len(events):
+        raise ValueError(f"labels 長度與 events 不一致: labels={labels_arr.size}, events={len(events)}")
+    frame = events[["ticker", "date"]].copy()
+    frame["label"] = labels_arr
+    frame["_group_key"] = event_group_keys(events).to_numpy()
+    group_sizes = frame.groupby("_group_key", sort=False).size()
+    label_nunique = frame.groupby("_group_key", sort=False)["label"].nunique()
+    valid = frame[frame["label"].isin([0, 1])].copy()
+    valid_group_count = int(valid["_group_key"].nunique()) if not valid.empty else 0
+    valid_label_nunique = valid.groupby("_group_key", sort=False)["label"].nunique() if not valid.empty else pd.Series(dtype="int64")
+    return {
+        "group_key": "ticker/date",
+        "group_count": int(group_sizes.size),
+        "valid_group_count": valid_group_count,
+        "rows_per_group_min": int(group_sizes.min()) if group_sizes.size else 0,
+        "rows_per_group_max": int(group_sizes.max()) if group_sizes.size else 0,
+        "rows_per_group_mean": round(float(group_sizes.mean()), 6) if group_sizes.size else 0.0,
+        "mixed_label_group_count": int((label_nunique > 1).sum()) if not label_nunique.empty else 0,
+        "mixed_valid_label_group_count": int((valid_label_nunique > 1).sum()) if not valid_label_nunique.empty else 0,
+    }
+
+
 __all__ = [
     "PROJECT_ROOT",
     "add_policy_args",
     "build_policy_from_args",
     "dataset_npz_path",
+    "chronological_group_split_indices",
     "dataset_output_dir",
+    "event_group_keys",
+    "event_group_summary",
     "events_csv_path",
+    "group_size_weights",
     "label_counts",
     "load_dataset_frames",
     "model_dir",
