@@ -4,8 +4,9 @@ import pandas as pd
 from core.backtest_core import run_v16_backtest
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan
-from core.extended_signals import build_extended_candidate_plan_from_signal
+from core.extended_signals import build_extended_candidate_plan_from_signal, create_signal_tracking_state
 from core.history_filters import evaluate_history_candidate_metrics
+from core.price_utils import adjust_long_buy_limit
 from core.exact_accounting import (
     build_sell_ledger_from_price,
     calc_entry_total_cost,
@@ -267,6 +268,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     stats_index = build_trade_stats_index(standalone_logs)
     position = {'qty': 0}
     active_extended_signal = None
+    active_reentry_watchlist = {}
     current_capital = params.initial_capital
     trade_logs = []
     chart_context = create_debug_chart_context(df, price_overlay_specs=resolve_chart_price_overlay_specs(params=params)) if (export_chart or return_chart_payload) else None
@@ -306,7 +308,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 params=params,
             )
         if pos_qty_start_of_bar > 0:
-            position, freed_cash = process_debug_position_step(
+            position, freed_cash, reentry_watch_state = process_debug_position_step(
                 position=position,
                 atr_prev=atr_main[j - 1],
                 sell_condition_prev=sell_condition[j - 1],
@@ -326,8 +328,49 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 current_capital_before_event=current_capital,
                 overall_max_drawdown=stats_dict.get('max_drawdown', 0.0),
             )
+            if reentry_watch_state is not None:
+                active_reentry_watchlist[ticker] = reentry_watch_state
             current_capital += freed_cash
+        if pos_qty_start_of_bar == 0 and active_extended_signal is None and active_reentry_watchlist:
+            state = active_reentry_watchlist.get(ticker)
+            if isinstance(state, dict):
+                last_checked_date = dates[j - 1]
+                last_checked_key = last_checked_date.strftime('%Y-%m-%d') if hasattr(last_checked_date, 'strftime') else str(last_checked_date)
+                if state.get('last_checked_date') != last_checked_key:
+                    state['last_checked_date'] = last_checked_key
+                    state['bars_checked'] = int(state.get('bars_checked', 0) or 0) + 1
+                    confirm_price = float(state.get('confirm_price', np.inf))
+                    if not np.isnan(c[j - 1]) and c[j - 1] >= confirm_price and not np.isnan(atr_main[j - 1]):
+                        reentry_limit = adjust_long_buy_limit(
+                            c[j - 1] + atr_main[j - 1] * params.atr_buy_tol,
+                            ticker=ticker,
+                            security_profile=resolved_security_profile,
+                        )
+                        active_extended_signal = create_signal_tracking_state(
+                            reentry_limit,
+                            atr_main[j - 1],
+                            params,
+                            ticker=ticker,
+                            security_profile=resolved_security_profile,
+                            signal_date=dates[j - 1],
+                        )
+                        if active_extended_signal is not None:
+                            active_extended_signal['source'] = 'reentry'
+                            active_extended_signal['parent_entry_trade_date'] = state.get('parent_entry_trade_date')
+                            active_extended_signal['parent_exit_date'] = state.get('parent_exit_date')
+                            active_extended_signal['parent_entry_price'] = state.get('parent_entry_price')
+                            active_extended_signal['parent_initial_stop'] = state.get('parent_initial_stop')
+                            active_extended_signal['reentry_confirm_price'] = state.get('confirm_price')
+                            active_reentry_watchlist.pop(ticker, None)
+                    elif int(state.get('bars_checked', 0) or 0) >= int(state.get('window_bars', 0) or 0):
+                        active_reentry_watchlist.pop(ticker, None)
+                elif int(state.get('bars_checked', 0) or 0) >= int(state.get('window_bars', 0) or 0):
+                    active_reentry_watchlist.pop(ticker, None)
+            else:
+                active_reentry_watchlist.pop(ticker, None)
+
         sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
+        previous_extended_signal = active_extended_signal
         position, active_extended_signal, spent_cash = process_debug_entry_for_day(
             position=position,
             pos_qty_start_of_bar=pos_qty_start_of_bar,
@@ -354,6 +397,8 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             trade_date=dates[j],
             signal_date=signal_date,
         )
+        if buy_condition[j - 1] and pos_qty_start_of_bar == 0 and active_extended_signal is not previous_extended_signal:
+            active_reentry_watchlist.pop(ticker, None)
         current_capital -= spent_cash
         if chart_context is not None and position['qty'] > 0:
             record_active_levels(

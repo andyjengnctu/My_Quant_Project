@@ -119,6 +119,17 @@ def _record_active_extended_shadow_levels(chart_context, *, current_date, signal
     )
 
 
+def _resolve_extended_entry_source(active_extended_signal):
+    source = str((active_extended_signal or {}).get("source") or "extended").strip().lower()
+    return "reentry" if source == "reentry" else "extended"
+
+
+def _format_extended_entry_action(base_action, entry_source):
+    if entry_source == "reentry":
+        return f"{base_action}(Re-entry)"
+    return f"{base_action}(延續候選)"
+
+
 def process_debug_entry_for_day(
     *,
     position,
@@ -266,6 +277,7 @@ def process_debug_entry_for_day(
             )
 
     elif active_extended_signal is not None and pos_qty_start_of_bar == 0:
+        extended_entry_source = _resolve_extended_entry_source(active_extended_signal)
         preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params, ticker=ticker, security_profile=security_profile, trade_date=effective_trade_date)
         _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
         entry_plan = build_extended_entry_plan_from_signal(
@@ -286,7 +298,7 @@ def process_debug_entry_for_day(
             t_volume=t_volume,
             y_close=close_prev,
             params=params,
-            entry_type='extended',
+            entry_type=extended_entry_source,
             ticker=ticker,
             security_profile=security_profile,
             trade_date=effective_trade_date,
@@ -295,12 +307,12 @@ def process_debug_entry_for_day(
         if entry_result['count_as_missed_buy']:
             marker_note = f"預掛限價 {entry_plan['limit_price']:.2f} 未成交"
         elif entry_result['is_worse_than_initial_stop']:
-            marker_note = "放棄進場(延續候選)"
+            marker_note = _format_extended_entry_action("放棄進場", extended_entry_source)
         _record_entry_plan_marker(
             chart_context,
             current_date=current_date,
             entry_plan=entry_plan,
-            entry_type='extended',
+            entry_type=extended_entry_source,
             entry_result=entry_result,
             note=marker_note,
         )
@@ -314,7 +326,7 @@ def process_debug_entry_for_day(
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
-                action="買進(延續候選)",
+                action=_format_extended_entry_action("買進", extended_entry_source),
                 price=entry_result['buy_price'],
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
@@ -338,7 +350,7 @@ def process_debug_entry_for_day(
                     'reserved_capital': reserved_cost,
                     'buy_capital': spent_cash,
                     'current_capital': None if current_capital is None else float(current_capital),
-                    'entry_type': 'extended',
+                    'entry_type': extended_entry_source,
                     'result': '成交',
                 },
             )
@@ -347,7 +359,7 @@ def process_debug_entry_for_day(
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
-                action="錯失買進(延續候選)",
+                action=_format_extended_entry_action("錯失買進", extended_entry_source),
                 price=np.nan,
                 net_price=np.nan,
                 qty=entry_plan['qty'],
@@ -363,7 +375,7 @@ def process_debug_entry_for_day(
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
-                action="放棄進場(延續候選)",
+                action=_format_extended_entry_action("放棄進場", extended_entry_source),
                 price=entry_result['buy_price'],
                 net_price=np.nan,
                 qty=entry_plan['qty'],

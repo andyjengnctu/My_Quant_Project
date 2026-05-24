@@ -9,6 +9,7 @@ from core.exact_accounting import (
     register_display_realized_pnl,
     round_money_for_display,
 )
+from core.breakout_reentry import create_breakout_reentry_watch_state
 from core.position_step import execute_bar_step, sum_last_exec_contexts_milli
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from tools.trade_analysis.charting import record_active_levels, record_trade_marker, resolve_position_tp_half_line
@@ -248,6 +249,8 @@ def process_debug_position_step(
             },
         )
 
+    reentry_watch_state = None
+
     if 'STOP' in events or 'IND_SELL' in events:
         exit_context = stop_context if 'STOP' in events else ind_sell_context
         final_exit_qty = prev_qty if exit_context is None else int(exit_context['qty'])
@@ -304,6 +307,8 @@ def process_debug_position_step(
             pnl=final_leg_pnl,
         )
         register_display_realized_pnl(position, final_leg_pnl)
+        if 'STOP' in events:
+            reentry_watch_state = create_breakout_reentry_watch_state(position, exit_date=current_date, params=params)
         record_trade_marker(
             chart_context,
             current_date=current_date,
@@ -353,7 +358,7 @@ def process_debug_position_step(
             note=reason_note,
         )
 
-    return position, freed_cash
+    return position, freed_cash, reentry_watch_state
 
 
 def append_debug_forced_closeout(

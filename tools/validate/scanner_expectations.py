@@ -23,6 +23,7 @@ def make_synthetic_validation_params(base_params, *, tp_percent=None):
     params.atr_buy_tol = 0.1
     params.atr_times_init = 1.0
     params.atr_times_trail = 1.5
+    params.use_breakout_ema_filter = False
     params.use_bb = False
     params.use_vol = False
     params.use_kc = False
