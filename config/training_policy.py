@@ -234,9 +234,9 @@ def resolve_score_win_rate_target(raw_value=None) -> float:
     try:
         resolved = float(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"SCORE_WIN_RATE_TARGET 必須是有限正數，目前值: {value!r}") from exc
-    if not math.isfinite(resolved) or resolved <= 0.0:
-        raise ValueError(f"SCORE_WIN_RATE_TARGET 必須是有限正數，目前值: {value!r}")
+        raise ValueError(f"SCORE_WIN_RATE_TARGET 必須是 0~100 的有限正數，目前值: {value!r}") from exc
+    if not math.isfinite(resolved) or resolved <= 0.0 or resolved > 100.0:
+        raise ValueError(f"SCORE_WIN_RATE_TARGET 必須是 0~100 的有限正數，目前值: {value!r}")
     return resolved
 
 

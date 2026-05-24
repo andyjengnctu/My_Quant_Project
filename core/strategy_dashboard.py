@@ -34,7 +34,7 @@ def _format_filter_param_text(params):
     vol_str = f"均量 啟用（突破日量 > 前{get_p(params, 'vol_long_len', 20)}日均量 × {get_p(params, 'vol_breakout_mult', 1.5):.1f}）" if get_p(params, 'use_vol', False) else "均量 關閉"
     return_filter_str = f"漲幅 啟用（突破日漲幅 > {get_p(params, 'breakout_return_min', 0.0) * 100:.1f}%）" if get_p(params, 'use_breakout_return_filter', False) else "漲幅 關閉"
     false_filter_str = (
-        f"假突破 啟用（ATR%>{get_p(params, 'breakout_false_filter_atr_pct_min', 0.045) * 100:.1f}%）"
+        f"假突破 啟用（ATR%≤{get_p(params, 'breakout_false_filter_atr_pct_min', 0.045) * 100:.1f}%）"
         if get_p(params, 'use_breakout_false_filter', False)
         else "假突破 關閉"
     )

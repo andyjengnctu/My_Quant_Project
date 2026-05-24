@@ -20,11 +20,11 @@ def calc_score_win_rate_multiplier(trade_win_rate_pct, target_pct):
     target = float(target_pct)
     if not math.isfinite(win_rate):
         win_rate = 0.0
-    if not math.isfinite(target) or target <= 0.0:
-        raise ValueError(f"SCORE_WIN_RATE_TARGET 必須是有限正數，目前值: {target_pct!r}")
+    if not math.isfinite(target) or target <= 0.0 or target > _PERCENT_SCALE:
+        raise ValueError(f"SCORE_WIN_RATE_TARGET 必須是 0~100 的有限正數，目前值: {target_pct!r}")
 
     bounded_win_rate = min(max(win_rate, 0.0), _PERCENT_SCALE)
-    bounded_target = min(target, _PERCENT_SCALE)
+    bounded_target = target
     if bounded_target >= _PERCENT_SCALE:
         return bounded_win_rate / _PERCENT_SCALE
 
