@@ -7,30 +7,35 @@
     "params_ensemble": [
         {
             "member_index": 1,
-            "seed": 1967131454,
-            "selected_trial": 315,
+            "seed": 37415308,
+            "selected_trial": 541,
             "params": {
                 "use_breakout_buy": true,
-                "high_len": 260,
+                "high_len": 125,
                 "use_breakout_ema_filter": false,
                 "breakout_ema_len": 240,
                 "atr_len": 4,
-                "atr_buy_tol": 3.1,
-                "atr_times_init": 4.3,
+                "atr_buy_tol": 1.5,
+                "atr_times_init": 4.4,
                 "atr_times_trail": 4.4,
                 "tp_percent": 0.0,
                 "use_bb": false,
                 "bb_len": 20,
                 "bb_mult": 2.0,
-                "use_kc": false,
-                "kc_len": 20,
-                "kc_mult": 2.0,
+                "use_kc": true,
+                "kc_len": 14,
+                "kc_mult": 2.6,
                 "use_vol": false,
                 "vol_short_len": 5,
                 "vol_long_len": 20,
                 "vol_breakout_mult": 1.5,
                 "use_breakout_return_filter": false,
                 "breakout_return_min": 0.0,
+                "use_breakout_false_filter": false,
+                "breakout_false_filter_atr_pct_min": 0.045,
+                "use_breakout_reclaim_reentry": true,
+                "breakout_reclaim_window_bars": 30,
+                "breakout_reclaim_confirm_r": 0.8,
                 "min_history_trades": 3,
                 "min_history_ev": 0.0,
                 "min_history_win_rate": 0.45,
@@ -44,11 +49,11 @@
                 "min_entry_notional": 50126.0,
                 "use_compounding": true
             },
-            "score": 72.78680338249465,
-            "base_score": 72.78680338249465
+            "score": 79.14904484744207,
+            "base_score": 79.14904484744207
         }
     ],
-    "created_at": "2026-05-24T11:32:10.627172+08:00",
+    "created_at": "2026-05-24T15:39:18.210194+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 1,
@@ -66,7 +71,7 @@
         "objective_mode": "split_train_romd",
         "trials_per_seed": 1,
         "seeds": [
-            1967131454
+            37415308
         ],
         "walk_forward_policy": {
             "selection_start_year": 2011,
@@ -106,8 +111,8 @@
         "selected_policy": "base",
         "study_scope": "full",
         "base_only": true,
-        "selected_trial": 315,
-        "seed": 1967131454,
-        "base_score": 72.78680338249465
+        "selected_trial": 541,
+        "seed": 37415308,
+        "base_score": 79.14904484744207
     }
 }
