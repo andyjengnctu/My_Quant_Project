@@ -6,13 +6,13 @@ from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
 BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_breakout_buy": {"kind": "categorical", "choices": [True]},
-    "use_breakout_reclaim_reentry": {"kind": "categorical", "choices": [False]},  # (AI註: 停損後 reclaim re-entry 開關搜尋)
+    "use_breakout_reclaim_reentry": {"kind": "categorical", "choices": [True, False]},  # (AI註: 停損後 reclaim re-entry 開關搜尋)
     "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
     "use_kc": {"kind": "categorical", "choices": [True, False],},  # (AI註: 肯特納通道濾網開關搜尋)
     "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日放量濾網開關搜尋)
-    "use_breakout_return_filter": {"kind": "categorical", "choices": [False]},  # (AI註: 突破日漲幅濾網開關搜尋)
-    "use_breakout_false_filter": {"kind": "categorical", "choices": [False]},  # (AI註: 假突破濾網開關搜尋)
-    "use_breakout_ema_filter": {"kind": "categorical", "choices": [False]},  # (AI註: 突破 EMA 濾網開關搜尋)
+    "use_breakout_return_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日漲幅濾網開關搜尋)
+    "use_breakout_false_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 假突破濾網開關搜尋)
+    "use_breakout_ema_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破 EMA 濾網開關搜尋)
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
     "breakout_ema_len": {"kind": "int", "low": 60, "high": 300, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)

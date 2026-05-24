@@ -18,7 +18,7 @@ BUY_SORT_METHOD = 'PROJ_COST'
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
 SCORE_CALC_METHOD = 'RoMD'  
-SCORE_MDD_POWER = 1.2 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
+SCORE_MDD_POWER = 1.1 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
 SCORE_MDD_DENOMINATOR_EPSILON = 0.0001
 SCORE_WIN_RATE_AMP_ENABLED = True # = win_rate / SCORE_WIN_RATE_TARGET
 SCORE_WIN_RATE_TARGET = 50.0 # 完整交易勝率達此目標時 score 不加不扣；低於目標打折，高於目標放大。
