@@ -22,6 +22,8 @@ BREAKOUT_PARAM_SPECS = {
     "vol_breakout_mult": {"type": float, "default": 1.5, "min_value": 0.0, "strict_gt": True},  # (AI註: 突破日量需大於前均量的倍數，預設 1.5)
     "use_breakout_return_filter": {"type": bool, "default": False},  # (AI註: 是否啟用突破日漲幅濾網，預設 False 以相容舊模型)
     "breakout_return_min": {"type": float, "default": 0.0, "min_value": 0.0},  # (AI註: 突破日收盤相對前收漲幅門檻，0.03 代表 3%)
+    "use_breakout_false_filter": {"type": bool, "default": False},  # (AI註: 是否啟用假突破濾網，預設 False 以相容舊模型)
+    "breakout_false_filter_atr_pct_min": {"type": float, "default": 0.045, "min_value": 0.0, "strict_gt": True},  # (AI註: 假突破濾網個股 ATR/Close 下限)
     "use_breakout_reclaim_reentry": {"type": bool, "default": False},  # (AI註: 是否啟用突破停損後 reclaim re-entry，預設 False 以相容舊模型)
     "breakout_reclaim_window_bars": {"type": int, "default": 20, "min_value": 1},  # (AI註: 停損後可觸發 re-entry 的觀察交易日數)
     "breakout_reclaim_confirm_r": {"type": float, "default": 0.75, "min_value": 0.0, "strict_gt": True},  # (AI註: Close 重新站回原 entry + N R 才產生 re-entry candidate)

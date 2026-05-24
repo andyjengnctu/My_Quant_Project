@@ -33,11 +33,16 @@ def _format_filter_param_text(params):
     kc_str = f"阿肯那(KC) 啟用（長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x）" if get_p(params, 'use_kc', False) else "阿肯那(KC) 關閉"
     vol_str = f"均量 啟用（突破日量 > 前{get_p(params, 'vol_long_len', 20)}日均量 × {get_p(params, 'vol_breakout_mult', 1.5):.1f}）" if get_p(params, 'use_vol', False) else "均量 關閉"
     return_filter_str = f"漲幅 啟用（突破日漲幅 > {get_p(params, 'breakout_return_min', 0.0) * 100:.1f}%）" if get_p(params, 'use_breakout_return_filter', False) else "漲幅 關閉"
-    return bb_str, kc_str, vol_str, return_filter_str
+    false_filter_str = (
+        f"假突破 啟用（ATR%>{get_p(params, 'breakout_false_filter_atr_pct_min', 0.045) * 100:.1f}%）"
+        if get_p(params, 'use_breakout_false_filter', False)
+        else "假突破 關閉"
+    )
+    return bb_str, kc_str, vol_str, return_filter_str, false_filter_str
 
 
 def _format_training_param_lines(params):
-    bb_str, kc_str, vol_str, return_filter_str = _format_filter_param_text(params)
+    bb_str, kc_str, vol_str, return_filter_str, false_filter_str = _format_filter_param_text(params)
     breakout_str = (
         f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高)"
         if get_p(params, 'use_breakout_buy', True)
@@ -52,7 +57,7 @@ def _format_training_param_lines(params):
     return [
         f"進場：{breakout_str}｜{reentry_str}",
         f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.5) * 100:.1f}%",
-        f"濾網：{bb_str}｜{kc_str}｜{vol_str}｜{return_filter_str}｜{ema_filter_str}",
+        f"濾網：{bb_str}｜{kc_str}｜{vol_str}｜{return_filter_str}｜{false_filter_str}｜{ema_filter_str}",
         f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R",
     ]
 

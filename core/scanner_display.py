@@ -54,6 +54,11 @@ def print_scanner_header(params):
     kc_str = f"啟用 (長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x)" if get_p(params, 'use_kc', False) else "關閉"
     vol_str = f"啟用 (突破日量 > 前{get_p(params, 'vol_long_len', 20)}日均量×{get_p(params, 'vol_breakout_mult', 1.5):.1f})" if get_p(params, 'use_vol', False) else "關閉"
     return_filter_str = f"啟用 (突破日漲幅 > {get_p(params, 'breakout_return_min', 0.0) * 100:.1f}%)" if get_p(params, 'use_breakout_return_filter', False) else "關閉"
+    false_filter_str = (
+        f"啟用 (ATR%>{get_p(params, 'breakout_false_filter_atr_pct_min', 0.045) * 100:.1f}%)"
+        if get_p(params, 'use_breakout_false_filter', False)
+        else "關閉"
+    )
     breakout_str = (
         f"啟用 ({get_p(params, 'high_len', 201)}日新高)"
         if get_p(params, 'use_breakout_buy', True)
@@ -96,6 +101,7 @@ def print_scanner_header(params):
         f"阿肯那(KC) {kc_str} | "
         f"均量 {vol_str} | "
         f"漲幅 {return_filter_str} | "
+        f"假突破 {false_filter_str} | "
         f"{ema_filter_str}"
     )
     print(

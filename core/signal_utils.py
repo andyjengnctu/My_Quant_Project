@@ -3,6 +3,7 @@ import pandas as pd
 
 from core.price_utils import adjust_long_buy_limit_array
 from core.feature_bank import coerce_feature_bank
+from core.breakout_false_filter import build_breakout_false_filter_pass_condition
 OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
 
 def unpack_precomputed_signals(precomputed_signals):
@@ -137,6 +138,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     use_bb = bool(getattr(params, 'use_bb', True))
     use_vol = bool(getattr(params, 'use_vol', True))
     use_breakout_return_filter = bool(getattr(params, 'use_breakout_return_filter', False))
+    use_breakout_false_filter = bool(getattr(params, 'use_breakout_false_filter', False))
     use_kc = bool(getattr(params, 'use_kc', True))
 
     def _feature(feature_name, feature_args, builder):
@@ -244,6 +246,12 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     else:
         breakoutReturnCondition = np.ones_like(C, dtype=bool)
 
+    if use_breakout_buy and use_breakout_false_filter:
+        atr_pct_min = float(getattr(params, 'breakout_false_filter_atr_pct_min', 0.045))
+        falseBreakoutCondition = build_breakout_false_filter_pass_condition(C, ATR_main, atr_pct_min)
+    else:
+        falseBreakoutCondition = np.ones_like(C, dtype=bool)
+
     if use_kc:
         kc_len = int(params.kc_len)
         ATR_kc = ATR_main if kc_len == atr_len else _feature('atr', (kc_len,), lambda: tv_atr_from_true_range(TrueRange, kc_len))
@@ -265,7 +273,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     )
 
     breakoutBuyCondition = (
-        is_tradable_bar & (C > O) & isPriceCrossover & breakoutEmaCondition & bbCondition & volCondition & breakoutReturnCondition
+        is_tradable_bar & (C > O) & isPriceCrossover & breakoutEmaCondition & bbCondition & volCondition & breakoutReturnCondition & falseBreakoutCondition
         if use_breakout_buy
         else np.zeros_like(C, dtype=bool)
     )

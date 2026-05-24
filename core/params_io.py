@@ -19,12 +19,20 @@ PARAM_FIELD_TYPES = {field.name: field.type for field in PARAM_FIELDS}
 PARAM_FIELD_NAMES = tuple(field.name for field in PARAM_FIELDS)
 RUNTIME_PARAM_NAMES = tuple(RUNTIME_PARAM_DEFAULTS)
 PARAM_FIELD_DEFAULTS = {field.name: field.default for field in PARAM_FIELDS}
+
+DEPRECATED_PARAM_FIELDS = {
+    "breakout_false_filter_bm_ret20_max",
+    "breakout_false_filter_bm_ret60_max",
+}
+
 PARAM_COMPAT_DEFAULT_FIELDS = {
     "use_breakout_ema_filter",
     "breakout_ema_len",
     "vol_breakout_mult",
     "use_breakout_return_filter",
     "breakout_return_min",
+    "use_breakout_false_filter",
+    "breakout_false_filter_atr_pct_min",
     "use_breakout_reclaim_reentry",
     "breakout_reclaim_window_bars",
     "breakout_reclaim_confirm_r",
@@ -90,7 +98,7 @@ def _validate_param_payload(data):
     if not isinstance(data, dict):
         raise ValueError(f"參數檔根層必須是 object/dict，收到 {type(data).__name__}")
 
-    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES) | {"summary"}
+    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES) | DEPRECATED_PARAM_FIELDS | {"summary"}
     unknown_keys = sorted(set(data) - allowed_keys)
     if unknown_keys:
         raise ValueError(f"參數檔含未知欄位: {unknown_keys}")
