@@ -18,7 +18,7 @@ import pandas as pd
 from core.buy_sort import calc_buy_sort_value
 from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
 from core.walk_forward_policy import load_walk_forward_policy
-from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams
+from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams, get_score_mdd_power
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_stats import calc_portfolio_score
@@ -502,6 +502,7 @@ def validate_ranking_scoring_sanity_case(base_params):
 
     summary["score_calc_method_default"] = SCORE_CALC_METHOD
     summary["score_numerator_method_default"] = SCORE_NUMERATOR_METHOD
+    summary["score_mdd_power_default"] = get_score_mdd_power()
     return results, summary
 
 
@@ -512,14 +513,20 @@ def validate_score_numerator_option_case(_base_params):
 
     with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         annual_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
-    expected_annual = 18.0 / (abs(-20.0) + 0.0001)
+    expected_annual = 18.0 / (abs(-20.0) ** 1.0 + 0.0001)
     add_check(results, "strategy_score", case_id, "annual_return_numerator_formula", expected_annual, annual_score)
 
     with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
         total_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
-    expected_total = 12.0 / (abs(-20.0) + 0.0001)
+    expected_total = 12.0 / (abs(-20.0) ** 1.0 + 0.0001)
     add_check(results, "strategy_score", case_id, "total_return_numerator_formula", expected_total, total_score)
     add_check(results, "strategy_score", case_id, "numerator_switch_changes_score_when_returns_differ", True, annual_score != total_score)
+
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", 2.0):
+        powered_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
+    expected_powered = 12.0 / (abs(-20.0) ** 2.0 + 0.0001)
+    add_check(results, "strategy_score", case_id, "mdd_power_denominator_formula", expected_powered, powered_score)
+    add_check(results, "strategy_score", case_id, "mdd_power_stronger_than_default_penalty", True, powered_score < total_score)
 
     with patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
         low_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=40.0)
@@ -529,11 +536,12 @@ def validate_score_numerator_option_case(_base_params):
     annual_missing = None
     with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         annual_missing = calc_portfolio_score(sys_ret=9.0, sys_mdd=-15.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=None)
-    expected_fallback = 9.0 / (abs(-15.0) + 0.0001)
+    expected_fallback = 9.0 / (abs(-15.0) ** 1.0 + 0.0001)
     add_check(results, "strategy_score", case_id, "annual_return_numerator_falls_back_to_total_return_when_missing", expected_fallback, annual_missing)
 
     summary["score_calc_method_default"] = SCORE_CALC_METHOD
     summary["score_numerator_method_default"] = SCORE_NUMERATOR_METHOD
+    summary["score_mdd_power_default"] = get_score_mdd_power()
     return results, summary
 
 

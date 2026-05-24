@@ -1,8 +1,7 @@
 ## Going
 
-
-👉 Study Mode：[Enter] Study-OOS [F] Study-Full: => 👉 Study Mode：[Enter] Study-Full [2] Study-OOS: 
-Study-Full不需要執行base以外的驗證與報表
+- 避免假突破
+- 避免假跌破
 
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議

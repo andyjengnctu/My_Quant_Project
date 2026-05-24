@@ -3,10 +3,17 @@ import numpy as np
 
 
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
-    from core.config import get_score_calc_method, get_score_numerator_method
+    from core.config import (
+        get_score_calc_method,
+        get_score_mdd_denominator_epsilon,
+        get_score_mdd_power,
+        get_score_numerator_method,
+    )
 
     score_calc_method = get_score_calc_method()
     score_numerator_method = get_score_numerator_method()
+    score_mdd_power = get_score_mdd_power()
+    score_mdd_denominator_epsilon = get_score_mdd_denominator_epsilon()
 
     annual_return = sys_ret if annual_return_pct is None else annual_return_pct
     if score_numerator_method == 'ANNUAL_RETURN':
@@ -16,7 +23,8 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
     else:
         raise ValueError(f"未知 SCORE_NUMERATOR_METHOD: {score_numerator_method}")
 
-    base_score = numerator / (abs(sys_mdd) + 0.0001)
+    mdd_denominator = (abs(float(sys_mdd)) ** score_mdd_power) + score_mdd_denominator_epsilon
+    base_score = numerator / mdd_denominator
     if score_calc_method == 'LOG_R2':
         return base_score * (m_win_rate / 100.0) * r_sq
     if score_calc_method == 'RoMD':

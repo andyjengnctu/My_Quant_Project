@@ -18,11 +18,15 @@ BUY_SORT_METHOD = 'PROJ_COST'
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
 SCORE_CALC_METHOD = 'RoMD'  
+SCORE_MDD_POWER = 1.5 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
+SCORE_MDD_DENOMINATOR_EPSILON = 0.0001
 
 # 系統評分分子切換
 # 'TOTAL_RETURN' = 分子使用總報酬率
 # 'ANNUAL_RETURN' = 分子使用年化報酬率
 SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'  
+
+
 
 # 停利比例固定開關
 OPTIMIZER_FIXED_TP_PERCENT = 0.0 # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
@@ -197,6 +201,28 @@ SELECTION_POLICY_PARAM_SPECS = {
     "min_history_win_rate": {"type": float, "default": 0.30, "min_value": 0.0, "max_value": 1.0},  # 歷史績效最小勝率門檻
 }
 
+def resolve_score_mdd_power(raw_value=None) -> float:
+    value = SCORE_MDD_POWER if raw_value is None else raw_value
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"SCORE_MDD_POWER 必須是有限非負數，目前值: {value!r}") from exc
+    if not math.isfinite(resolved) or resolved < 0.0:
+        raise ValueError(f"SCORE_MDD_POWER 必須是有限非負數，目前值: {value!r}")
+    return resolved
+
+
+def resolve_score_mdd_denominator_epsilon(raw_value=None) -> float:
+    value = SCORE_MDD_DENOMINATOR_EPSILON if raw_value is None else raw_value
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"SCORE_MDD_DENOMINATOR_EPSILON 必須是有限正數，目前值: {value!r}") from exc
+    if not math.isfinite(resolved) or resolved <= 0.0:
+        raise ValueError(f"SCORE_MDD_DENOMINATOR_EPSILON 必須是有限正數，目前值: {value!r}")
+    return resolved
+
+
 def build_training_threshold_snapshot():
     return {
         "MIN_FULL_YEAR_RETURN_PCT": MIN_FULL_YEAR_RETURN_PCT,
@@ -214,6 +240,8 @@ def build_training_score_policy_snapshot():
         "BUY_SORT_METHOD": BUY_SORT_METHOD,
         "SCORE_CALC_METHOD": SCORE_CALC_METHOD,
         "SCORE_NUMERATOR_METHOD": SCORE_NUMERATOR_METHOD,
+        "SCORE_MDD_POWER": resolve_score_mdd_power(),
+        "SCORE_MDD_DENOMINATOR_EPSILON": resolve_score_mdd_denominator_epsilon(),
         "OPTIMIZER_FIXED_TP_PERCENT": OPTIMIZER_FIXED_TP_PERCENT,
         "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED": is_optimizer_local_min_review_enabled(),
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,

@@ -19,6 +19,14 @@ def get_score_numerator_method():
     return _training_policy.SCORE_NUMERATOR_METHOD
 
 
+def get_score_mdd_power():
+    return _training_policy.resolve_score_mdd_power()
+
+
+def get_score_mdd_denominator_epsilon():
+    return _training_policy.resolve_score_mdd_denominator_epsilon()
+
+
 from config.execution_policy import (  # noqa: F401
     EXECUTION_POLICY_PARAM_SPECS,
     RUNTIME_PARAM_DEFAULTS,
@@ -40,7 +48,11 @@ from config.training_policy import (  # noqa: F401
     EV_CALC_METHOD,
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
+    SCORE_MDD_POWER,
+    SCORE_MDD_DENOMINATOR_EPSILON,
     OPTIMIZER_FIXED_TP_PERCENT,
+    resolve_score_mdd_power,
+    resolve_score_mdd_denominator_epsilon,
     DEFAULT_OPTIMIZER_MODEL_MODE,
     PREDEPLOY_SELECTION_START_YEAR,
     OOS_EVALUATION_START_YEAR,
