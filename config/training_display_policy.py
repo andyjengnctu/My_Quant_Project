@@ -5,7 +5,7 @@ change trading rules, optimizer scoring, replay, or selection behavior.
 """
 
 # 系統得分顯示倍率，僅影響 console/report 顯示，不影響 score 公式或排序。
-SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0
+SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0
 
 
 def scale_system_score_for_display(score) -> float:
