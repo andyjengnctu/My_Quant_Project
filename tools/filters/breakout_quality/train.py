@@ -48,6 +48,18 @@ def parse_args(argv=None):
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--min-train-samples", type=int, default=20)
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=5,
+        help="validation loss 連續未改善幾個 epoch 後停止；<=0 表示不啟用",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        type=float,
+        default=0.0,
+        help="validation loss 至少改善多少才更新 best model",
+    )
     return parser.parse_args(argv)
 
 
@@ -152,8 +164,17 @@ def main(argv=None) -> int:
 
     batch_size = max(1, int(args.batch_size))
     best_state = None
-    best_val_loss = None
+    best_monitor_value = None
+    best_epoch = 0
+    best_train_metrics = None
+    best_val_metrics = None
+    epochs_without_improvement = 0
+    training_history = []
+    early_stopped = False
+    min_delta = max(0.0, float(args.early_stopping_min_delta))
+    patience = int(args.early_stopping_patience)
     train_idx = np.asarray(train_idx, dtype=np.int64)
+    epoch = 0
     for epoch in range(1, int(args.epochs) + 1):
         model.train()
         rng = np.random.default_rng(int(args.seed) + epoch)
@@ -174,15 +195,45 @@ def main(argv=None) -> int:
             losses.append(float(loss.item()))
         train_metrics = _evaluate(torch, model, X, C, y, train_idx, sample_weights, class_weights)
         val_metrics = _evaluate(torch, model, X, C, y, val_idx, sample_weights, class_weights)
+        monitor_name = "val_loss" if val_metrics["loss"] is not None else "train_loss"
         monitored = val_metrics["loss"] if val_metrics["loss"] is not None else train_metrics["loss"]
-        if best_val_loss is None or float(monitored) < float(best_val_loss):
-            best_val_loss = float(monitored)
+        if monitored is None:
+            raise RuntimeError("train/val loss 皆無法計算，無法選擇 best model")
+        monitored_float = float(monitored)
+        improved = best_monitor_value is None or monitored_float < (float(best_monitor_value) - min_delta)
+        if improved:
+            best_monitor_value = monitored_float
+            best_epoch = int(epoch)
+            best_train_metrics = dict(train_metrics)
+            best_val_metrics = dict(val_metrics)
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+        epoch_record = {
+            "epoch": int(epoch),
+            "loss": round(float(np.mean(losses)), 6),
+            "monitor": monitor_name,
+            "monitor_value": round(monitored_float, 6),
+            "is_best": bool(improved),
+            "train": train_metrics,
+            "val": val_metrics,
+        }
+        training_history.append(epoch_record)
         print(
             f"epoch={epoch}/{args.epochs} loss={np.mean(losses):.6f} "
+            f"monitor={monitor_name}:{monitored_float:.6f} best_epoch={best_epoch} "
             f"train={train_metrics} val={val_metrics}",
             flush=True,
         )
+        if patience > 0 and epochs_without_improvement >= patience:
+            early_stopped = True
+            print(
+                f"early_stopping triggered: patience={patience}, "
+                f"best_epoch={best_epoch}, best_{monitor_name}={best_monitor_value:.6f}",
+                flush=True,
+            )
+            break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -219,13 +270,27 @@ def main(argv=None) -> int:
         "val_label_counts": label_counts(y[val_idx]) if len(val_idx) else {"pass": 0, "reject": 0, "ignore": 0, "total": 0},
         "train_metrics": _evaluate(torch, model, X, C, y, train_idx, sample_weights, class_weights),
         "val_metrics": _evaluate(torch, model, X, C, y, val_idx, sample_weights, class_weights),
+        "best_epoch": int(best_epoch),
+        "best_monitor": "val_loss" if len(val_idx) else "train_loss",
+        "best_monitor_value": round(float(best_monitor_value), 6) if best_monitor_value is not None else None,
+        "best_train_metrics": best_train_metrics,
+        "best_val_metrics": best_val_metrics,
+        "training_history": training_history,
+        "early_stopping": {
+            "enabled": patience > 0,
+            "patience": int(patience),
+            "min_delta": float(min_delta),
+            "triggered": bool(early_stopped),
+        },
         "seed": int(args.seed),
         "epochs": int(args.epochs),
+        "epochs_trained": int(epoch),
         "elapsed_sec": round(time.perf_counter() - started, 3),
         "no_lookahead_contract": "features use D0 and earlier only; labels use future path only for supervised training",
     }
     write_json(out_model_dir / DEFAULT_MANIFEST_FILENAME, manifest)
     print(f"split_report={split_report}")
+    print(f"best_epoch={best_epoch} best_monitor_value={best_monitor_value}")
     print(f"已輸出: {out_model_dir / DEFAULT_MODEL_FILENAME}")
     print(f"已輸出: {out_model_dir / DEFAULT_MANIFEST_FILENAME}")
     return 0
