@@ -130,6 +130,8 @@ class V16StrategyParams:
     vol_short_len: int = BREAKOUT_PARAM_SPECS["vol_short_len"]["default"]
     vol_long_len: int = BREAKOUT_PARAM_SPECS["vol_long_len"]["default"]
     vol_breakout_mult: float = BREAKOUT_PARAM_SPECS["vol_breakout_mult"]["default"]
+    use_breakout_return_filter: bool = BREAKOUT_PARAM_SPECS["use_breakout_return_filter"]["default"]
+    breakout_return_min: float = BREAKOUT_PARAM_SPECS["breakout_return_min"]["default"]
     min_history_trades: int = SELECTION_POLICY_PARAM_SPECS["min_history_trades"]["default"]
     min_history_ev: float = SELECTION_POLICY_PARAM_SPECS["min_history_ev"]["default"]
     min_history_win_rate: float = SELECTION_POLICY_PARAM_SPECS["min_history_win_rate"]["default"]

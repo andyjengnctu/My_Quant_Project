@@ -136,6 +136,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     atr_times_trail = float(params.atr_times_trail)
     use_bb = bool(getattr(params, 'use_bb', True))
     use_vol = bool(getattr(params, 'use_vol', True))
+    use_breakout_return_filter = bool(getattr(params, 'use_breakout_return_filter', False))
     use_kc = bool(getattr(params, 'use_kc', True))
 
     def _feature(feature_name, feature_args, builder):
@@ -232,6 +233,17 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     else:
         volCondition = np.ones_like(C, dtype=bool)
 
+    if use_breakout_buy and use_breakout_return_filter:
+        breakout_return_min = float(getattr(params, 'breakout_return_min', 0.0))
+        breakoutReturnCondition = (
+            np.isfinite(C)
+            & np.isfinite(prev_close)
+            & (prev_close > 0)
+            & ((C / prev_close - 1.0) > breakout_return_min)
+        )
+    else:
+        breakoutReturnCondition = np.ones_like(C, dtype=bool)
+
     if use_kc:
         kc_len = int(params.kc_len)
         ATR_kc = ATR_main if kc_len == atr_len else _feature('atr', (kc_len,), lambda: tv_atr_from_true_range(TrueRange, kc_len))
@@ -253,7 +265,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     )
 
     breakoutBuyCondition = (
-        is_tradable_bar & (C > O) & isPriceCrossover & breakoutEmaCondition & bbCondition & volCondition
+        is_tradable_bar & (C > O) & isPriceCrossover & breakoutEmaCondition & bbCondition & volCondition & breakoutReturnCondition
         if use_breakout_buy
         else np.zeros_like(C, dtype=bool)
     )

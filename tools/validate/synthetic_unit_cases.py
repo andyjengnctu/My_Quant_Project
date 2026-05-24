@@ -47,6 +47,7 @@ from core.price_utils import (
     is_limit_down_bar,
     is_limit_up_bar,
 )
+from core.signal_utils import generate_signals
 
 from .checks import add_check
 
@@ -138,6 +139,47 @@ def validate_history_filters_unit_case(_base_params):
         training_policy.EV_CALC_METHOD = original_ev_method
 
     summary["ev_methods_checked"] = ["A", "B"]
+    return results, summary
+
+
+def validate_signal_utils_unit_case(_base_params):
+    case_id = "UNIT_SIGNAL_UTILS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    df = pd.DataFrame(
+        {
+            "Date": pd.date_range("2024-01-01", periods=7, freq="D"),
+            "Open": [10.0, 10.4, 10.8, 11.2, 13.5, 14.0, 14.2],
+            "High": [10.5, 11.0, 12.5, 13.8, 14.0, 14.2, 14.4],
+            "Low": [9.8, 10.2, 10.6, 11.0, 13.3, 13.9, 14.0],
+            "Close": [10.3, 10.7, 11.2, 12.0, 13.7, 14.1, 14.3],
+            "Volume": [1000, 1000, 1000, 1000, 1000, 1000, 1000],
+        }
+    )
+    params = V16StrategyParams(
+        use_breakout_buy=True,
+        high_len=3,
+        use_breakout_ema_filter=False,
+        use_bb=False,
+        use_kc=False,
+        use_vol=False,
+        atr_len=3,
+    )
+
+    _, buy_disabled, _, _ = generate_signals(df, params)
+    add_check(results, "unit_signal_utils", case_id, "return_filter_disabled_allows_breakout", True, bool(buy_disabled[5]))
+
+    params.use_breakout_return_filter = True
+    params.breakout_return_min = 0.03
+    _, buy_rejected, _, _ = generate_signals(df, params)
+    add_check(results, "unit_signal_utils", case_id, "return_filter_rejects_weak_breakout", False, bool(buy_rejected[5]))
+
+    params.breakout_return_min = 0.025
+    _, buy_allowed, _, _ = generate_signals(df, params)
+    add_check(results, "unit_signal_utils", case_id, "return_filter_accepts_strong_enough_breakout", True, bool(buy_allowed[5]))
+
+    summary["breakout_return_pct"] = round((14.1 / 13.7 - 1.0) * 100.0, 4)
     return results, summary
 
 

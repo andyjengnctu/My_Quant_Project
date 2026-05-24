@@ -51,6 +51,7 @@ from .synthetic_unit_cases import (
     validate_independent_oracle_golden_case,
     validate_portfolio_stats_unit_case,
     validate_price_utils_unit_case,
+    validate_signal_utils_unit_case,
 )
 from .synthetic_meta_cases import (
     validate_checklist_t_formal_command_single_entry_case,
@@ -304,6 +305,7 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_single_backtest_uses_compounding_capital_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/capital_policy.py", "core/backtest_core.py", "core/backtest_finalize.py", "tools/trade_analysis/backtest.py")),
         _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/strategy_params.py", "config/execution_policy.py", "tools/optimizer/objective_profiles.py")),
         _entry(validate_price_utils_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/price_utils.py",)),
+        _entry(validate_signal_utils_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/signal_utils.py", "core/strategy_params.py")),
         _entry(validate_history_filters_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/history_filters.py",)),
         _entry(validate_portfolio_stats_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/portfolio_stats.py",)),
         _entry(validate_exact_accounting_ledger_conservation_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/exact_accounting.py", "core/price_utils.py")),

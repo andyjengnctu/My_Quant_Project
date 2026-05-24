@@ -20,7 +20,7 @@ from core.strategy_dashboard import print_optimizer_trial_console_dashboard, pri
 from core.walk_forward_policy import load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
-from core.params_io import params_to_json_dict
+from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
@@ -295,17 +295,22 @@ def validate_model_io_schema_case(base_params):
     for shipped_path in shipped_best_params_paths:
         shipped_payload = json.loads(shipped_path.read_text(encoding="utf-8"))
         reference_param_payloads = _extract_reference_param_payloads(shipped_payload)
-        representative_payload = reference_param_payloads[0] if reference_param_payloads else {}
+        canonical_param_payloads = []
+        load_errors = []
+        for member_idx, param_payload in enumerate(reference_param_payloads, start=1):
+            try:
+                canonical_param_payloads.append(params_to_json_dict(build_params_from_mapping(param_payload)))
+            except (TypeError, ValueError) as exc:
+                load_errors.append(f"member#{member_idx}:{type(exc).__name__}:{exc}")
+        representative_payload = canonical_param_payloads[0] if canonical_param_payloads else {}
         shipped_payload_keys[shipped_path.name] = sorted(representative_payload.keys())
         mismatch_fields = []
         if not reference_param_payloads:
             mismatch_fields.append("params:MISSING")
-        for member_idx, param_payload in enumerate(reference_param_payloads, start=1):
-            member_prefix = f"member#{member_idx}:" if len(reference_param_payloads) > 1 else ""
+        mismatch_fields.extend(load_errors)
+        for member_idx, param_payload in enumerate(canonical_param_payloads, start=1):
+            member_prefix = f"member#{member_idx}:" if len(canonical_param_payloads) > 1 else ""
             for field_name, default_value in default_payload.items():
-                if field_name not in param_payload:
-                    mismatch_fields.append(f"{member_prefix}{field_name}:MISSING")
-                    continue
                 actual_value = param_payload[field_name]
                 if isinstance(default_value, bool):
                     field_ok = isinstance(actual_value, bool)
@@ -575,6 +580,7 @@ def validate_strategy_repeatability_case(base_params):
                 "use_bb": True,
                 "use_kc": True,
                 "use_vol": True,
+                "use_breakout_return_filter": False,
                 "atr_len": 11,
                 "atr_times_init": 1.6,
                 "atr_times_trail": 2.6,
@@ -668,6 +674,7 @@ def validate_strategy_minimum_viability_case(base_params):
             "use_bb": True,
             "use_kc": True,
             "use_vol": True,
+            "use_breakout_return_filter": False,
             "atr_len": 11,
             "atr_times_init": 1.6,
             "atr_times_trail": 2.6,
@@ -972,6 +979,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
             "use_bb": True,
             "use_kc": True,
             "use_vol": True,
+            "use_breakout_return_filter": False,
             "atr_len": 10,
             "atr_times_init": 1.5,
             "atr_times_trail": 2.5,
@@ -1009,6 +1017,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
             "use_bb": True,
             "use_kc": True,
             "use_vol": True,
+            "use_breakout_return_filter": False,
             "atr_len": 11,
             "atr_times_init": 1.6,
             "atr_times_trail": 2.6,

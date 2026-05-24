@@ -33,6 +33,7 @@ def validate_synthetic_param_guardrail_case(base_params):
         ("max_position_cap_pct_gt_one_rejected", {**case["base_payload"], "max_position_cap_pct": 1.1}, "max_position_cap_pct"),
         ("min_history_win_rate_gt_1_rejected", {**case["base_payload"], "min_history_win_rate": 1.1}, "min_history_win_rate"),
         ("vol_breakout_mult_zero_rejected", {**case["base_payload"], "vol_breakout_mult": 0.0}, "vol_breakout_mult"),
+        ("breakout_return_min_negative_rejected", {**case["base_payload"], "breakout_return_min": -0.001}, "breakout_return_min"),
         ("use_bb_string_type_rejected", {**case["base_payload"], "use_bb": "abc"}, "use_bb"),
     ]
 
@@ -117,6 +118,7 @@ def validate_synthetic_param_guardrail_case(base_params):
 
     invalid_direct_setattr_cases = [
         ("direct_setattr_use_bb_string_rejected", "use_bb", "abc", "use_bb"),
+        ("direct_setattr_use_breakout_return_filter_string_rejected", "use_breakout_return_filter", "abc", "use_breakout_return_filter"),
         ("direct_setattr_high_len_string_rejected", "high_len", "10", "high_len"),
     ]
 

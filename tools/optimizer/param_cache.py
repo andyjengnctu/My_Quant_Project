@@ -26,6 +26,7 @@ _CONDITIONAL_INACTIVE_FIELD_GROUPS = (
     ("use_bb", ("bb_len", "bb_mult")),
     ("use_kc", ("kc_len", "kc_mult")),
     ("use_vol", ("vol_short_len", "vol_long_len", "vol_breakout_mult")),
+    ("use_breakout_return_filter", ("breakout_return_min",)),
     ("use_breakout_ema_filter", ("breakout_ema_len",)),
 )
 

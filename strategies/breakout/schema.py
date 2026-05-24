@@ -20,6 +20,8 @@ BREAKOUT_PARAM_SPECS = {
     "vol_short_len": {"type": int, "default": 5, "min_value": 1},  # (AI註: 舊版量能欄位，僅保留 JSON 相容；正式訊號不再使用)
     "vol_long_len": {"type": int, "default": 20, "min_value": 1},  # (AI註: 突破日前均量窗長，預設 20)
     "vol_breakout_mult": {"type": float, "default": 1.5, "min_value": 0.0, "strict_gt": True},  # (AI註: 突破日量需大於前均量的倍數，預設 1.5)
+    "use_breakout_return_filter": {"type": bool, "default": False},  # (AI註: 是否啟用突破日漲幅濾網，預設 False 以相容舊模型)
+    "breakout_return_min": {"type": float, "default": 0.0, "min_value": 0.0},  # (AI註: 突破日收盤相對前收漲幅門檻，0.03 代表 3%)
 }
 
 
