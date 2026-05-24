@@ -184,7 +184,6 @@ BREAKOUT_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELDS = frozenset({
     "breakout_return_min",
     "use_breakout_false_filter",
     "breakout_false_filter_atr_pct_min",
-    "use_breakout_quality_filter",
 })
 
 BREAKOUT_LOCAL_MIN_PORTFOLIO_DEPENDENCY_FIELDS = frozenset({
@@ -228,7 +227,6 @@ def get_breakout_local_min_candidate_fields(trial, *, center_payload):
         candidate_fields.append("breakout_return_min")
     if bool(center_payload.get("use_breakout_false_filter", False)):
         candidate_fields.append("breakout_false_filter_atr_pct_min")
-    candidate_fields.append("use_breakout_quality_filter")
     if bool(center_payload.get("use_breakout_reclaim_reentry", False)):
         candidate_fields.extend(("breakout_reclaim_window_bars", "breakout_reclaim_confirm_r"))
     return tuple(candidate_fields)

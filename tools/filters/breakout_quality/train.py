@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import argparse
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -129,8 +130,14 @@ def main(argv=None) -> int:
     torch.set_num_threads(1)
     try:
         torch.set_num_interop_threads(1)
-    except RuntimeError:
-        pass
+    except RuntimeError as exc:
+        if "cannot set number of interop threads" not in str(exc):
+            raise
+        warnings.warn(
+            f"torch.set_num_interop_threads(1) skipped: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     torch.manual_seed(int(args.seed))
     data = np.load(dataset_npz_path(args.filter_id))
     X = data["features"].astype(np.float32)
