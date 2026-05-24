@@ -1873,7 +1873,7 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
             "build_training_threshold_snapshot",
             "build_training_score_policy_snapshot",
         },
-        "config.training_display_policy": {
+        "config.display_policy": {
             "SYSTEM_SCORE_DISPLAY_MULTIPLIER",
             "build_display_policy_snapshot",
         },

@@ -44,7 +44,7 @@ POLICY_CONTRACT_COVERAGE_TARGETS = [
     "core/params_io.py",
     "config/execution_policy.py",
     "config/training_policy.py",
-    "config/training_display_policy.py",
+    "config/display_policy.py",
 ]
 FORMAL_STEP_ENTRY_COVERAGE_TARGETS = [
     "tools/local_regression/run_quick_gate.py",

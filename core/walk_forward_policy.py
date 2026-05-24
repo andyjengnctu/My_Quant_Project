@@ -4,7 +4,7 @@ import json
 import os
 from typing import Mapping, Optional
 
-from config.training_display_policy import build_display_policy_snapshot
+from config.display_policy import build_display_policy_snapshot
 from config.training_policy import OUTER_ROLLING_TRAIN_WINDOW_MONTHS, build_training_score_policy_snapshot
 
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
@@ -121,8 +121,8 @@ def build_optimizer_effective_policy_snapshot(policy: Mapping[str, object]) -> d
     return {
         "walk_forward_policy": build_walk_forward_policy_effective_snapshot(policy),
         "training_score_policy": build_training_score_policy_snapshot(),
-        "training_display_policy": build_display_policy_snapshot(),
-        "policy_schema_version": 1,
+        "display_policy": build_display_policy_snapshot(),
+        "policy_schema_version": 2,
     }
 
 

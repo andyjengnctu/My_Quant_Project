@@ -1,20 +1,27 @@
-"""Backward-compatible alias for training display policy.
+"""Console / report display policy.
 
-Display-only settings live in config.training_display_policy.  Keep this
-module as a thin alias so legacy imports cannot drift to a different
-SYSTEM_SCORE_DISPLAY_MULTIPLIER.
+This module is the single source for display-only settings.  It must not
+change trading rules, optimizer scoring, replay, or selection behavior.
 """
 
-from config.training_display_policy import (  # noqa: F401
-    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
-    build_display_policy_snapshot,
-    format_system_score_for_display,
-    scale_system_score_for_display,
-)
+# 系統得分顯示倍率，僅影響 console/report 顯示，不影響 score 公式或排序。
+SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0
 
-__all__ = [
-    "SYSTEM_SCORE_DISPLAY_MULTIPLIER",
-    "scale_system_score_for_display",
-    "format_system_score_for_display",
-    "build_display_policy_snapshot",
-]
+
+def scale_system_score_for_display(score) -> float:
+    try:
+        raw_score = float(score)
+    except (TypeError, ValueError):
+        raw_score = 0.0
+    return raw_score * float(SYSTEM_SCORE_DISPLAY_MULTIPLIER)
+
+
+def format_system_score_for_display(score, *, decimals: int = 2) -> str:
+    precision = max(0, int(decimals))
+    return f"{scale_system_score_for_display(score):.{precision}f}"
+
+
+def build_display_policy_snapshot() -> dict:
+    return {
+        "SYSTEM_SCORE_DISPLAY_MULTIPLIER": float(SYSTEM_SCORE_DISPLAY_MULTIPLIER),
+    }
