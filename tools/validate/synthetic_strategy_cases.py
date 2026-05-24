@@ -1616,6 +1616,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     row_map = {str(row.get("name", "")): row for row in sample_rows}
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_keeps_final_equity_row", True, "最終資產" in row_names)
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_combines_payoff_and_ev_label_without_extra_spaces", True, "風報比: 期望值" in row_names and "風報比 : 期望值" not in row_names)
+    romd_row = row_map.get("報酬回撤比 (RoMD)", {})
+    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_romd_row_uses_plain_return_mdd_not_system_score", True, "1.41" in str(romd_row.get("candidate", "")) and "0.67" in str(romd_row.get("benchmark", "")))
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_payoff_ev_pair_with_consistent_spacing", True, row_map.get("風報比: 期望值", {}).get("candidate") == "1.50: 0.250R" and "1.40: 0.200R" in str(row_map.get("風報比: 期望值", {}).get("reference", "")) and "(+0.10: +0.050R)" in str(row_map.get("風報比: 期望值", {}).get("reference", "")))
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_trade_split_with_consistent_spacing", True, row_map.get("總交易次數", {}).get("candidate") == "11 (正常: 8｜延續: 3)" and row_map.get("總交易次數", {}).get("reference") == "10 (正常: 7｜延續: 3)")
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_missed_split_with_consistent_spacing", True, row_map.get("錯失交易次數", {}).get("candidate") == "2 (買: 1｜賣: 1)" and row_map.get("錯失交易次數", {}).get("reference") == "3 (買: 2｜賣: 1)")

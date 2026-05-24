@@ -25,7 +25,7 @@ from core.display_common import (
     _table_row,
     get_p,
 )
-from core.portfolio_stats import calc_portfolio_score
+from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
 
 
 def _format_filter_param_text(params):
@@ -196,8 +196,8 @@ def print_strategy_dashboard(
     bm_mdd_str = f"-{abs(bm_mdd):.2f}%"
     mdd_diff_str = f"少跌 {abs(mdd_diff):.2f}%" if mdd_diff > 0 else f"多跌 {abs(mdd_diff):.2f}%"
 
-    sys_romd = (sys_ret / (abs(sys_mdd) + 0.0001)) if sys_mdd != 0 else 0.0
-    bm_romd = (bm_ret / (abs(bm_mdd) + 0.0001)) if bm_mdd != 0 else 0.0
+    sys_romd = calc_plain_romd(sys_ret, sys_mdd)
+    bm_romd = calc_plain_romd(bm_ret, bm_mdd)
     romd_diff = sys_romd - bm_romd
     sys_romd_str = f"{sys_romd:.2f}"
     bm_romd_str = f"{bm_romd:.2f}"

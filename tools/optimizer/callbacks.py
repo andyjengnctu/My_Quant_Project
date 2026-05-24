@@ -22,7 +22,7 @@ from core.params_io import build_params_from_mapping, load_params_from_json, par
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.active_param_ensemble import get_active_param_ensemble_policy, load_json_file
 from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_stats import calc_portfolio_score
+from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
@@ -282,14 +282,8 @@ def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: fl
     return f"{rendered} {_colorize(delta_text, _delta_color(delta_value))}"
 
 
-def _optimizer_score_metric_label() -> str:
-    method = str(SCORE_CALC_METHOD or "").strip() or "Score"
-    numerator = str(SCORE_NUMERATOR_METHOD or "").strip() or "TOTAL_RETURN"
-    if method == "RoMD" and numerator == "TOTAL_RETURN":
-        return "報酬回撤比 (RoMD)"
-    if method == "RoMD" and numerator == "ANNUAL_RETURN":
-        return "年化報酬回撤比 (RoMD)"
-    return f"策略評分 ({method}/{numerator})"
+def _optimizer_romd_metric_label() -> str:
+    return "報酬回撤比 (RoMD)"
 
 
 def _optimizer_train_score_display_label() -> str:
@@ -300,8 +294,16 @@ def _optimizer_train_score_display_label() -> str:
 
 
 def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict | None, benchmark_metrics: dict | None = None):
+    candidate_metrics = dict(candidate_metrics or {})
     reference_metrics = dict(reference_metrics or {})
     benchmark_metrics = dict(benchmark_metrics or {})
+
+    comparable_romd_key = "display_romd"
+    candidate_metrics[comparable_romd_key] = calc_plain_romd(candidate_metrics.get("pf_return", 0.0), candidate_metrics.get("pf_mdd", 0.0))
+    if reference_metrics:
+        reference_metrics[comparable_romd_key] = calc_plain_romd(reference_metrics.get("pf_return", 0.0), reference_metrics.get("pf_mdd", 0.0))
+    if benchmark_metrics:
+        benchmark_metrics[comparable_romd_key] = calc_plain_romd(benchmark_metrics.get("pf_return", 0.0), benchmark_metrics.get("pf_mdd", 0.0))
 
     def champ_value(key, default=None):
         return reference_metrics.get(key, default)
@@ -413,7 +415,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
             bench_delta_text = ""
             reference_delta_text = ""
 
-        use_blue = name == _optimizer_score_metric_label()
+        use_blue = name == _optimizer_romd_metric_label()
         base_color_override = C_CYAN if name == "系統實戰勝率" else None
         _append_row(
             name,
@@ -434,7 +436,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
     add_row("總資產報酬率", "pf_return", kind="pct")
     add_row("年化報酬率", "annual_return_pct", kind="pct")
     add_row("年度最差報酬", "min_full_year_return_pct", kind="pct")
-    add_row(_optimizer_score_metric_label(), "pf_romd", kind="float2")
+    add_row(_optimizer_romd_metric_label(), comparable_romd_key, kind="float2")
     add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
     add_row("月度獲利勝率", "m_win_rate", kind="pct")
     add_row("系統實戰勝率", "win_rate", kind="pct")

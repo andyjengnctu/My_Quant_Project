@@ -5,6 +5,14 @@ import numpy as np
 
 
 _PERCENT_SCALE = 100.0
+_PLAIN_ROMD_DENOMINATOR_EPSILON = 0.0001
+
+
+def calc_plain_romd(return_pct, mdd_pct):
+    mdd = float(mdd_pct)
+    if mdd == 0.0:
+        return 0.0
+    return float(return_pct) / (abs(mdd) + _PLAIN_ROMD_DENOMINATOR_EPSILON)
 
 
 def calc_score_win_rate_multiplier(trade_win_rate_pct, target_pct):
