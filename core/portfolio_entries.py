@@ -24,7 +24,12 @@ def _format_candidate_date(value):
 
 
 def _candidate_kind_label(candidate_type):
-    return '延續候選' if candidate_type == 'extended' else '新訊號'
+    normalized = str(candidate_type or '')
+    if normalized == 'extended':
+        return '延續候選'
+    if normalized == 'reentry':
+        return 'Re-entry'
+    return '新訊號'
 
 
 def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
@@ -44,6 +49,8 @@ def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
         'orig_limit': candidate_row.get('orig_limit'),
         'orig_atr': candidate_row.get('orig_atr'),
     }
+    if candidate_row.get('entry_source') is not None:
+        plan['entry_source'] = candidate_row.get('entry_source')
 
     shadow_position_state = candidate_row.get('shadow_position_state')
     if shadow_position_state is None:
@@ -171,6 +178,7 @@ def execute_reserved_entries_for_day(
             entry_result['position']['_entry_params_obj'] = candidate_params
             entry_result['position']['_entry_params_signature'] = str(cand.get('params_signature') or '')
             entry_result['position']['_ensemble_vote_count'] = cand.get('ensemble_vote_count')
+            entry_result['position']['_ensemble_member_key'] = cand.get('ensemble_member_key')
             entry_result['position']['_ensemble_min_agree'] = cand.get('ensemble_min_agree')
             if candidate_context:
                 entry_result['position']['_entry_context'] = candidate_context
@@ -212,7 +220,7 @@ def execute_reserved_entries_for_day(
         elif entry_result['count_as_missed_buy']:
             total_missed_buys += 1
             if not is_training:
-                miss_buy_type = '錯失買進(延續候選)' if cand['type'] == 'extended' else '錯失買進(新訊號)'
+                miss_buy_type = '錯失買進(Re-entry)' if cand['type'] == 'reentry' else ('錯失買進(延續候選)' if cand['type'] == 'extended' else '錯失買進(新訊號)')
                 trade_history.append(
                     {
                         'Date': today.strftime('%Y-%m-%d'),

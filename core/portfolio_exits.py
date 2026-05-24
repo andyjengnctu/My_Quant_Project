@@ -1,4 +1,5 @@
 from core.buy_sort import calc_buy_sort_value
+from core.breakout_reentry import create_breakout_reentry_watch_state
 from core.config import get_buy_sort_method
 from core.exact_accounting import (
     build_sell_ledger_from_price,
@@ -315,6 +316,8 @@ def settle_portfolio_positions(
     normal_trade_count,
     extended_trade_count,
     active_level_rows=None,
+    active_reentry_watchlist=None,
+    active_reentry_watchlists_by_member=None,
 ):
     tickers_to_remove = []
     for ticker in sorted(portfolio.keys()):
@@ -375,6 +378,14 @@ def settle_portfolio_positions(
             closed_trades_stats.append(
                 _build_closed_trade_stat(pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=today)
             )
+            if 'STOP' in events:
+                watch_state = create_breakout_reentry_watch_state(pos, exit_date=today, params=pos_params)
+                if watch_state is not None:
+                    member_key = str(pos.get('_ensemble_member_key') or '').strip()
+                    if active_reentry_watchlists_by_member is not None and member_key:
+                        active_reentry_watchlists_by_member.setdefault(member_key, {})[ticker] = watch_state
+                    elif active_reentry_watchlist is not None:
+                        active_reentry_watchlist[ticker] = watch_state
             if is_extended_entry_type(pos.get('entry_type', 'normal')):
                 extended_trade_count += 1
             else:

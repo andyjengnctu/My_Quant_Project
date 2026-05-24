@@ -1,11 +1,12 @@
 import numpy as np
 
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
+from core.breakout_reentry import create_breakout_reentry_watch_state
 from core.capital_policy import resolve_scanner_live_capital, resolve_single_backtest_sizing_capital
 from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money, money_to_milli, price_to_milli
 from core.strategy_params import V16StrategyParams
 from core.position_step import execute_bar_step
-from core.price_utils import adjust_long_sell_fill_price
+from core.price_utils import adjust_long_buy_limit, adjust_long_sell_fill_price
 from core.signal_utils import generate_signals, unpack_precomputed_signals
 from core.trade_plans import (
     build_extended_entry_plan_from_signal,
@@ -136,6 +137,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
     position = {'qty': 0}
     active_extended_signal = None
+    active_reentry_watchlist = {}
     scanner_extended_signal = None
     pit_stats_builder = _create_pit_stats_builder() if return_pit_stats_index else None
     currentCapital_milli = money_to_milli(params.initial_capital)
@@ -206,6 +208,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             not collect_stats
             and pos_start_of_current_bar == 0
             and active_extended_signal is None
+            and not active_reentry_watchlist
             and not bool(buyCondition[j - 1])
         ):
             if optimizer_setup_entry_positions is not None:
@@ -251,6 +254,10 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                     trade_logs.append({'exit_date': Dates[j], 'pnl': total_pnl, 'r_mult': trade_r_mult})
                 if pit_stats_builder is not None:
                     _append_pit_trade(pit_stats_builder, exit_date=Dates[j], pnl=total_pnl, r_mult=trade_r_mult)
+                if 'STOP' in events:
+                    watch_state = create_breakout_reentry_watch_state(position, exit_date=Dates[j], params=params)
+                    if watch_state is not None:
+                        active_reentry_watchlist[resolved_ticker] = watch_state
                 if collect_stats:
                     if position['realized_pnl_milli'] > 0:
                         fullWins += 1
@@ -261,6 +268,44 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                         total_r_loss += abs(trade_r_mult)
             elif 'MISSED_SELL' in events and collect_stats:
                 missedSellCount += 1
+
+        if pos_start_of_current_bar == 0 and active_extended_signal is None and active_reentry_watchlist:
+            state = active_reentry_watchlist.get(resolved_ticker)
+            if isinstance(state, dict):
+                last_checked_date = Dates[j - 1]
+                last_checked_key = last_checked_date.strftime('%Y-%m-%d') if hasattr(last_checked_date, 'strftime') else str(last_checked_date)
+                if state.get('last_checked_date') != last_checked_key:
+                    state['last_checked_date'] = last_checked_key
+                    state['bars_checked'] = int(state.get('bars_checked', 0) or 0) + 1
+                    confirm_price = float(state.get('confirm_price', np.inf))
+                    if not np.isnan(C[j - 1]) and C[j - 1] >= confirm_price and not np.isnan(ATR_main[j - 1]):
+                        reentry_limit = adjust_long_buy_limit(
+                            C[j - 1] + ATR_main[j - 1] * params.atr_buy_tol,
+                            ticker=resolved_ticker,
+                            security_profile=resolved_security_profile,
+                        )
+                        active_extended_signal = create_signal_tracking_state(
+                            reentry_limit,
+                            ATR_main[j - 1],
+                            params,
+                            ticker=resolved_ticker,
+                            security_profile=resolved_security_profile,
+                            signal_date=Dates[j - 1],
+                        )
+                        if active_extended_signal is not None:
+                            active_extended_signal['source'] = 'reentry'
+                            active_extended_signal['parent_entry_trade_date'] = state.get('parent_entry_trade_date')
+                            active_extended_signal['parent_exit_date'] = state.get('parent_exit_date')
+                            active_extended_signal['parent_entry_price'] = state.get('parent_entry_price')
+                            active_extended_signal['parent_initial_stop'] = state.get('parent_initial_stop')
+                            active_extended_signal['reentry_confirm_price'] = state.get('confirm_price')
+                            active_reentry_watchlist.pop(resolved_ticker, None)
+                    elif int(state.get('bars_checked', 0) or 0) >= int(state.get('window_bars', 0) or 0):
+                        active_reentry_watchlist.pop(resolved_ticker, None)
+                elif int(state.get('bars_checked', 0) or 0) >= int(state.get('window_bars', 0) or 0):
+                    active_reentry_watchlist.pop(resolved_ticker, None)
+            else:
+                active_reentry_watchlist.pop(resolved_ticker, None)
 
         isSetup_prev = bool(buyCondition[j - 1]) and (pos_start_of_current_bar == 0)
         buyTriggered = False
@@ -278,6 +323,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             )
             if signal_state is not None:
                 active_extended_signal = signal_state
+                active_reentry_watchlist.pop(resolved_ticker, None)
                 if collect_stats:
                     scanner_extended_signal = create_signal_tracking_state(
                         buy_limits[j - 1],
@@ -351,7 +397,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                     t_volume=V[j],
                     y_close=C[j - 1],
                     params=params,
-                    entry_type='extended',
+                    entry_type=str(active_extended_signal.get('source') or 'extended'),
                     ticker=resolved_ticker,
                     trade_date=Dates[j],
                 )

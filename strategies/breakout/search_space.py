@@ -6,13 +6,14 @@ from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
 BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_breakout_buy": {"kind": "categorical", "choices": [True]},
+    "use_breakout_reclaim_reentry": {"kind": "categorical", "choices": [True]},  # (AI註: 停損後 reclaim re-entry 開關搜尋)    
     "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
     "use_kc": {"kind": "categorical", "choices": [True, False],},  # (AI註: 肯特納通道濾網開關搜尋)
     "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日放量濾網開關搜尋)
     "use_breakout_return_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日漲幅濾網開關搜尋)
     "use_breakout_ema_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破 EMA 濾網開關搜尋)
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
-    "breakout_ema_len": {"kind": "int", "low": 60, "high": 300, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋，僅 use_breakout_ema_filter=True 啟用)
+    "breakout_ema_len": {"kind": "int", "low": 60, "high": 300, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
     "atr_times_init": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~4.5)
     "atr_times_trail": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 移動停損 ATR 倍數搜尋，預設區間 1.0~4.5)
@@ -24,6 +25,8 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "vol_long_len": {"kind": "int", "low": 5, "high": 30, "step": 1, "enabled_by": "use_vol"},  # (AI註: 突破日前均量窗長搜尋，僅 use_vol=True 啟用)
     "vol_breakout_mult": {"kind": "float", "low": 1.0, "high": 3.0, "step": 0.1, "enabled_by": "use_vol"},  # (AI註: 突破日量相對前均量倍數搜尋，僅 use_vol=True 啟用)
     "breakout_return_min": {"kind": "float", "low": 0.0, "high": 0.08, "step": 0.005, "enabled_by": "use_breakout_return_filter"},  # (AI註: 突破日收盤相對前收漲幅門檻搜尋)
+    "breakout_reclaim_window_bars": {"kind": "int", "low": 5, "high": 30, "step": 5, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 觀察窗搜尋)
+    "breakout_reclaim_confirm_r": {"kind": "float", "low": 0.5, "high": 1.5, "step": 0.025, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 重新站回原 entry + N R 門檻搜尋)
     "min_history_trades": {"kind": "int", "low": 3, "high": 3},  # (AI註: 歷史績效最少交易次數搜尋，預設區間固定 3)
     "min_history_ev": {"kind": "float", "low": 0.0, "high": 0.0, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設固定 0.0)
     "min_history_win_rate": {"kind": "float", "low": 0.45, "high": 0.45, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設固定 45%)
@@ -51,6 +54,7 @@ def build_trial_params(session, trial):
     ai_use_vol = _suggest_optimizer_switch(trial, "use_vol")
     ai_use_breakout_return_filter = _suggest_optimizer_switch(trial, "use_breakout_return_filter")
     ai_use_breakout_ema_filter = _suggest_optimizer_switch(trial, "use_breakout_ema_filter")
+    ai_use_breakout_reclaim_reentry = _suggest_optimizer_switch(trial, "use_breakout_reclaim_reentry")
 
     if ai_use_vol:
         vol_long_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_long_len"]
@@ -93,6 +97,27 @@ def build_trial_params(session, trial):
         else BREAKOUT_PARAM_SPECS["breakout_ema_len"]["default"]
     )
 
+    breakout_reclaim_window_bars = (
+        trial.suggest_int(
+            "breakout_reclaim_window_bars",
+            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_window_bars"]["low"],
+            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_window_bars"]["high"],
+            step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_window_bars"]["step"],
+        )
+        if ai_use_breakout_reclaim_reentry
+        else BREAKOUT_PARAM_SPECS["breakout_reclaim_window_bars"]["default"]
+    )
+    breakout_reclaim_confirm_r = (
+        trial.suggest_float(
+            "breakout_reclaim_confirm_r",
+            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_confirm_r"]["low"],
+            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_confirm_r"]["high"],
+            step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_confirm_r"]["step"],
+        )
+        if ai_use_breakout_reclaim_reentry
+        else BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_r"]["default"]
+    )
+
     return build_breakout_strategy_params(
         atr_len=trial.suggest_int("atr_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["high"]),
         atr_times_init=trial.suggest_float("atr_times_init", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["step"]),
@@ -107,6 +132,9 @@ def build_trial_params(session, trial):
         use_kc=ai_use_kc,
         use_vol=ai_use_vol,
         use_breakout_return_filter=ai_use_breakout_return_filter,
+        use_breakout_reclaim_reentry=ai_use_breakout_reclaim_reentry,
+        breakout_reclaim_window_bars=breakout_reclaim_window_bars,
+        breakout_reclaim_confirm_r=breakout_reclaim_confirm_r,
         bb_len=(
             trial.suggest_int("bb_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["step"])
             if ai_use_bb
@@ -157,6 +185,9 @@ BREAKOUT_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELDS = frozenset({
 BREAKOUT_LOCAL_MIN_PORTFOLIO_DEPENDENCY_FIELDS = frozenset({
     "atr_times_init",
     "tp_percent",
+    "use_breakout_reclaim_reentry",
+    "breakout_reclaim_window_bars",
+    "breakout_reclaim_confirm_r",
 })
 
 
@@ -190,6 +221,8 @@ def get_breakout_local_min_candidate_fields(trial, *, center_payload):
         candidate_fields.extend(("vol_long_len", "vol_breakout_mult"))
     if bool(center_payload.get("use_breakout_return_filter", False)):
         candidate_fields.append("breakout_return_min")
+    if bool(center_payload.get("use_breakout_reclaim_reentry", False)):
+        candidate_fields.extend(("breakout_reclaim_window_bars", "breakout_reclaim_confirm_r"))
     return tuple(candidate_fields)
 
 

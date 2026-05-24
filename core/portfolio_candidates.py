@@ -85,6 +85,7 @@ def _make_candidate_row(
         'sizing_capital': sizing_capital,
         'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
         'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
+        'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
     }
     if signal_state is not None:
         row['signal_state'] = signal_state
@@ -306,7 +307,7 @@ def _collect_extended_candidates(
         candidate_row = _make_candidate_row(
             buy_sort_method=buy_sort_method,
             ticker=ticker,
-            candidate_type='extended',
+            candidate_type=str((active_extended_signals[ticker] or {}).get('source') or 'extended'),
             est_limit_px=candidate_plan['limit_price'],
             ev=ev,
             y_atr=candidate_plan['orig_atr'],

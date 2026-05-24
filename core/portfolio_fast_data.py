@@ -504,4 +504,4 @@ def get_pit_stats_from_index(stats_index, current_date, params, *, cursor_state=
 
 
 def is_extended_entry_type(entry_type):
-    return entry_type == 'extended'
+    return str(entry_type or "") in {"extended", "reentry"}

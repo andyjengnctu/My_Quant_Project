@@ -4,6 +4,7 @@ import threading
 from collections import OrderedDict
 from core.exact_accounting import milli_to_money, money_to_milli
 from core.capital_policy import resolve_portfolio_sizing_equity
+from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.config import get_ev_calc_method
 from core.portfolio_fast_data import (
     build_normal_setup_index,
@@ -367,6 +368,34 @@ def _track_ensemble_normal_setup_signals_for_day(
         )
 
 
+def _activate_ensemble_reentry_signals_for_day(
+    *,
+    ensemble_members,
+    ensemble_contexts,
+    active_reentry_watchlists_by_member,
+    active_extended_signals_by_member,
+    portfolio,
+    sold_today,
+    today,
+):
+    for idx, (member, context) in enumerate(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts), start=1):
+        params_obj = member.get("params_obj") if isinstance(member, dict) else None
+        if params_obj is None:
+            continue
+        member_key = _resolve_ensemble_member_key(member, idx)
+        member_watchlist = active_reentry_watchlists_by_member.setdefault(member_key, {})
+        member_signals = active_extended_signals_by_member.setdefault(member_key, {})
+        activate_breakout_reentry_signals_for_day(
+            active_reentry_watchlist=member_watchlist,
+            active_extended_signals=member_signals,
+            portfolio=portfolio,
+            sold_today=sold_today,
+            all_dfs_fast=context.get("all_dfs_fast") or {},
+            today=today,
+            params=params_obj,
+        )
+
+
 def _cleanup_ensemble_extended_signals_for_day(
     *,
     ensemble_members,
@@ -465,6 +494,8 @@ def run_portfolio_timeline(
     portfolio = {}
     active_extended_signals = {}
     active_extended_signals_by_member = {}
+    active_reentry_watchlist = {}
+    active_reentry_watchlists_by_member = {}
     trade_history, equity_curve, closed_trades_stats = [], [], []
     normal_trade_count, extended_trade_count = 0, 0
     portfolio_entry_stats = {'filled_buy_count': 0}
@@ -553,9 +584,10 @@ def run_portfolio_timeline(
         if use_param_ensemble:
             has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
             has_ensemble_extended = any(bool(member_signals) for member_signals in active_extended_signals_by_member.values())
-            has_portfolio_work_today = bool(portfolio) or bool(has_ensemble_extended) or bool(has_ensemble_normal_setup)
+            has_ensemble_reentry_watch = any(bool(member_watchlist) for member_watchlist in active_reentry_watchlists_by_member.values())
+            has_portfolio_work_today = bool(portfolio) or bool(has_ensemble_extended) or bool(has_ensemble_normal_setup) or bool(has_ensemble_reentry_watch)
         else:
-            has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(normal_setup_entries_today)
+            has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(active_reentry_watchlist) or bool(normal_setup_entries_today)
 
         if bool(training_idle_fast_path_enabled) and not bool(has_portfolio_work_today):
             current_equity_money = milli_to_money(current_equity)
@@ -580,6 +612,26 @@ def run_portfolio_timeline(
         if has_portfolio_work_today:
             available_cash = cash
             sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, day_params)
+            if use_param_ensemble:
+                _activate_ensemble_reentry_signals_for_day(
+                    ensemble_members=day_ensemble_members,
+                    ensemble_contexts=day_ensemble_contexts,
+                    active_reentry_watchlists_by_member=active_reentry_watchlists_by_member,
+                    active_extended_signals_by_member=active_extended_signals_by_member,
+                    portfolio=portfolio,
+                    sold_today=sold_today,
+                    today=today,
+                )
+            else:
+                activate_breakout_reentry_signals_for_day(
+                    active_reentry_watchlist=active_reentry_watchlist,
+                    active_extended_signals=active_extended_signals,
+                    portfolio=portfolio,
+                    sold_today=sold_today,
+                    all_dfs_fast=day_all_dfs_fast,
+                    today=today,
+                    params=day_params,
+                )
             pre_market_occupied = len(portfolio) + len(sold_today)
             if use_param_ensemble:
                 candidate_sources_today = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts) or any(bool(member_signals) for member_signals in active_extended_signals_by_member.values())
@@ -714,6 +766,8 @@ def run_portfolio_timeline(
                 normal_trade_count=normal_trade_count,
                 extended_trade_count=extended_trade_count,
                 active_level_rows=active_level_rows,
+                active_reentry_watchlist=active_reentry_watchlist if not use_param_ensemble else None,
+                active_reentry_watchlists_by_member=active_reentry_watchlists_by_member if use_param_ensemble else None,
             )
             if profile_timing_enabled:
                 settle_sec += time.perf_counter() - t0

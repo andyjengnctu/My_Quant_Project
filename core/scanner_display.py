@@ -74,10 +74,16 @@ def print_scanner_header(params):
         f"逐項輸出應顯示 {sort_probe_fields}；"
         f"目前排序欄位 = {sort_metric_label}"
     )
+    reentry_str = (
+        f"Re-entry 啟用 ({get_p(params, 'breakout_reclaim_window_bars', 20)}日內站回 +{get_p(params, 'breakout_reclaim_confirm_r', 0.75):.2f}R)"
+        if get_p(params, 'use_breakout_reclaim_reentry', False)
+        else "Re-entry 關閉"
+    )
     ema_filter_str = f"EMA濾網 啟用 (Close > EMA{get_p(params, 'breakout_ema_len', 240)})" if get_p(params, 'use_breakout_ema_filter', True) else "EMA濾網 關閉"
     print(
         f"   ➤ 訓練參數: "
         f"突破買進 {breakout_str} | "
+        f"{reentry_str} | "
         f"ATR {get_p(params, 'atr_len', 14)}日 | "
         f"掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f}倍 | "
         f"初始 -{get_p(params, 'atr_times_init', 2.0):.1f}倍 | "

@@ -25,6 +25,9 @@ PARAM_COMPAT_DEFAULT_FIELDS = {
     "vol_breakout_mult",
     "use_breakout_return_filter",
     "breakout_return_min",
+    "use_breakout_reclaim_reentry",
+    "breakout_reclaim_window_bars",
+    "breakout_reclaim_confirm_r",
 }
 
 
