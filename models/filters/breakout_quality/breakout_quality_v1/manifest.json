@@ -1,0 +1,158 @@
+{
+  "class_weights": {
+    "pass": 1.063768,
+    "reject": 0.943445
+  },
+  "context_columns": [
+    "high_len_norm",
+    "breakout_level_to_close",
+    "close_to_breakout_level",
+    "high_to_breakout_level"
+  ],
+  "dataset_summary": {
+    "context_columns": [
+      "high_len_norm",
+      "breakout_level_to_close",
+      "close_to_breakout_level",
+      "high_to_breakout_level"
+    ],
+    "dataset": "reduced",
+    "elapsed_sec": 15.404,
+    "event_count": 31071,
+    "event_group_summary": {
+      "group_count": 1027,
+      "group_key": "ticker/date",
+      "mixed_label_group_count": 0,
+      "mixed_valid_label_group_count": 0,
+      "rows_per_group_max": 41,
+      "rows_per_group_mean": 30.254138,
+      "rows_per_group_min": 1,
+      "valid_group_count": 918
+    },
+    "feature_columns": [
+      "open_norm",
+      "high_norm",
+      "low_norm",
+      "close_norm",
+      "volume_norm",
+      "benchmark_open_norm",
+      "benchmark_high_norm",
+      "benchmark_low_norm",
+      "benchmark_close_norm",
+      "benchmark_volume_norm"
+    ],
+    "filter_id": "breakout_quality_v1",
+    "label_counts": {
+      "ignore": 3164,
+      "pass": 13941,
+      "reject": 13966,
+      "total": 31071
+    },
+    "policy": {
+      "benchmark_ticker": "0050",
+      "dead_mfe_r": 0.5,
+      "evaluate_from_bars_after_entry": 1,
+      "feature_window_bars": 60,
+      "high_len_max": 300,
+      "high_len_min": 100,
+      "high_len_step": 5,
+      "label_atr_buy_tol": 1.5,
+      "label_atr_len": 14,
+      "label_atr_times_init": 2.0,
+      "label_horizon_bars": 40,
+      "negative_mae_r": -1.0,
+      "positive_mfe_r": 1.5,
+      "reject_confirm_mfe_r": 1.0
+    }
+  },
+  "elapsed_sec": 5.104,
+  "epochs": 3,
+  "event_group_summary": {
+    "group_count": 1027,
+    "group_key": "ticker/date",
+    "mixed_label_group_count": 0,
+    "mixed_valid_label_group_count": 0,
+    "rows_per_group_max": 41,
+    "rows_per_group_mean": 30.254138,
+    "rows_per_group_min": 1,
+    "valid_group_count": 918
+  },
+  "feature_columns": [
+    "open_norm",
+    "high_norm",
+    "low_norm",
+    "close_norm",
+    "volume_norm",
+    "benchmark_open_norm",
+    "benchmark_high_norm",
+    "benchmark_low_norm",
+    "benchmark_close_norm",
+    "benchmark_volume_norm"
+  ],
+  "filter_id": "breakout_quality_v1",
+  "label_counts": {
+    "ignore": 3164,
+    "pass": 13941,
+    "reject": 13966,
+    "total": 31071
+  },
+  "model_filename": "model.pt",
+  "model_type": "tiny_cnn",
+  "no_lookahead_contract": "features use D0 and earlier only; labels use future path only for supervised training",
+  "sample_weighting": {
+    "enabled": true,
+    "group_key": "ticker/date",
+    "method": "1 / labeled row count per ticker/date group"
+  },
+  "score_filename": "scores.csv",
+  "seed": 42,
+  "split_report": {
+    "group_count": 918,
+    "overlap_group_count": 0,
+    "strategy": "ticker_date_group_chronological",
+    "train_date_range": {
+      "end": "2023-05-26",
+      "start": "2003-10-03"
+    },
+    "train_group_count": 734,
+    "train_row_count": 21838,
+    "val_date_range": {
+      "end": "2026-02-24",
+      "start": "2023-06-02"
+    },
+    "val_group_count": 184,
+    "val_ratio": 0.2,
+    "val_row_count": 6069,
+    "valid_row_count": 27907
+  },
+  "train_label_counts": {
+    "ignore": 0,
+    "pass": 10468,
+    "reject": 11370,
+    "total": 21838
+  },
+  "train_metrics": {
+    "accuracy": 0.487373,
+    "group_weight_sum": 734.0,
+    "loss": 0.684986,
+    "pass_rate": 0.960989,
+    "row_accuracy": 0.481592,
+    "row_count": 21838,
+    "row_pass_rate": 0.982462
+  },
+  "val_label_counts": {
+    "ignore": 0,
+    "pass": 3473,
+    "reject": 2596,
+    "total": 6069
+  },
+  "val_metrics": {
+    "accuracy": 0.545334,
+    "group_weight_sum": 184.0,
+    "loss": 0.696454,
+    "pass_rate": 0.876193,
+    "row_accuracy": 0.565167,
+    "row_count": 6069,
+    "row_pass_rate": 0.865381
+  }
+}
