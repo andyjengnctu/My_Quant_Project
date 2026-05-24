@@ -31,6 +31,7 @@ from tools.filters.breakout_quality.common import (
     events_csv_path,
     label_counts,
     model_dir,
+    read_breakout_quality_csv,
     read_json,
     write_json,
     dataset_output_dir,
@@ -135,7 +136,7 @@ def main(argv=None) -> int:
     X = data["features"].astype(np.float32)
     C = data["context"].astype(np.float32)
     y = data["labels"].astype(np.int64)
-    events = pd.read_csv(events_csv_path(args.filter_id))
+    events = read_breakout_quality_csv(events_csv_path(args.filter_id))
     if len(events) != len(y):
         raise ValueError(f"events.csv 與 dataset.npz labels 長度不一致: events={len(events)}, labels={len(y)}")
 

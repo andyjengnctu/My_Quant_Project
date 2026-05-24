@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID, DEFAULT_SCORE_FILENAME
+from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.paths import resolve_filter_model_dir, resolve_filter_output_dir
 
 
@@ -39,7 +40,7 @@ def resolve_score_table_path(project_root: str, filter_id: str = DEFAULT_FILTER_
 @lru_cache(maxsize=16)
 def load_score_table(project_root: str, filter_id: str = DEFAULT_FILTER_ID, explicit_path: str | None = None) -> pd.DataFrame:
     path = resolve_score_table_path(project_root, filter_id=filter_id, explicit_path=explicit_path)
-    table = pd.read_csv(path)
+    table = read_breakout_quality_csv(path)
     required = {"ticker", "date", "high_len", "dl_pass"}
     missing = sorted(required - set(table.columns))
     if missing:

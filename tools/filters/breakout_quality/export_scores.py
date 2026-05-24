@@ -17,7 +17,7 @@ import pandas as pd
 
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID, DEFAULT_MODEL_FILENAME, DEFAULT_SCORE_FILENAME, LABEL_PASS
 from filters.breakout_quality.model import build_model, require_torch
-from tools.filters.breakout_quality.common import dataset_npz_path, events_csv_path, model_dir, scores_csv_path
+from tools.filters.breakout_quality.common import dataset_npz_path, events_csv_path, model_dir, read_breakout_quality_csv, scores_csv_path
 
 
 def parse_args(argv=None):
@@ -33,7 +33,7 @@ def main(argv=None) -> int:
     data = np.load(dataset_npz_path(args.filter_id))
     X = data["features"].astype(np.float32)
     C = data["context"].astype(np.float32)
-    events = pd.read_csv(events_csv_path(args.filter_id))
+    events = read_breakout_quality_csv(events_csv_path(args.filter_id))
     checkpoint_path = model_dir(args.filter_id) / DEFAULT_MODEL_FILENAME
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     model = build_model(int(checkpoint["feature_count"]), int(checkpoint["context_count"]))

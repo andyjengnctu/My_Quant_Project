@@ -15,6 +15,7 @@ import pandas as pd
 from core.data_utils import discover_unique_csv_inputs, sanitize_ohlcv_dataframe
 from core.dataset_profiles import get_dataset_dir, normalize_dataset_profile_key
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID, DEFAULT_LABEL_POLICY, BreakoutQualityLabelPolicy
+from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.paths import ensure_filter_output_dir, resolve_filter_model_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -73,7 +74,7 @@ def load_dataset_frames(project_root: Path, dataset: str, *, min_rows: int = 50)
     frames: dict[str, pd.DataFrame] = {}
     for ticker, path in csv_inputs:
         try:
-            raw_df = pd.read_csv(path)
+            raw_df = pd.read_csv(path, low_memory=False)
             df, _stats = sanitize_ohlcv_dataframe(raw_df, ticker=ticker, min_rows=min_rows)
         except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
             print(f"[skip] {ticker}: {exc}")

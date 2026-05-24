@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID, LABEL_PASS, LABEL_REJECT
-from tools.filters.breakout_quality.common import event_group_summary, group_size_weights, scores_csv_path
+from tools.filters.breakout_quality.common import event_group_summary, group_size_weights, read_breakout_quality_csv, scores_csv_path
 
 
 def parse_args(argv=None):
@@ -96,7 +96,7 @@ def _metrics(df: pd.DataFrame, *, group_weighted: bool) -> dict:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    df = pd.read_csv(scores_csv_path(args.filter_id))
+    df = read_breakout_quality_csv(scores_csv_path(args.filter_id))
     metrics = {
         "filter_id": args.filter_id,
         "row_level": _metrics(df, group_weighted=False),
