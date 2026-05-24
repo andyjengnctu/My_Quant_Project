@@ -28,6 +28,7 @@ _CONDITIONAL_INACTIVE_FIELD_GROUPS = (
     ("use_vol", ("vol_short_len", "vol_long_len", "vol_breakout_mult")),
     ("use_breakout_return_filter", ("breakout_return_min",)),
     ("use_breakout_ema_filter", ("breakout_ema_len",)),
+    ("use_breakout_reclaim_reentry", ("breakout_reclaim_window_bars", "breakout_reclaim_confirm_r")),
 )
 
 

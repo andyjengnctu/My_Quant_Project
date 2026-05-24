@@ -6,10 +6,10 @@ from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
 BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_breakout_buy": {"kind": "categorical", "choices": [True]},
-    "use_breakout_reclaim_reentry": {"kind": "categorical", "choices": [True]},  # (AI註: 停損後 reclaim re-entry 開關搜尋)    
+    "use_breakout_reclaim_reentry": {"kind": "categorical", "choices": [False]},  # (AI註: 停損後 reclaim re-entry 開關搜尋)
     "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
     "use_kc": {"kind": "categorical", "choices": [True, False],},  # (AI註: 肯特納通道濾網開關搜尋)
-    "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日放量濾網開關搜尋)
+    "use_vol": {"kind": "categorical", "choices": [True]},  # (AI註: 突破日放量濾網開關搜尋)
     "use_breakout_return_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日漲幅濾網開關搜尋)
     "use_breakout_ema_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破 EMA 濾網開關搜尋)
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
@@ -47,6 +47,26 @@ def _suggest_optimizer_switch(trial, field_name):
     return bool(trial.suggest_categorical(field_name, _resolve_optimizer_categorical_choices(field_name)))
 
 
+def _suggest_optimizer_int(trial, field_name):
+    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
+    return trial.suggest_int(
+        field_name,
+        int(spec["low"]),
+        int(spec["high"]),
+        step=int(spec.get("step", 1)),
+    )
+
+
+def _suggest_optimizer_float(trial, field_name):
+    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
+    return trial.suggest_float(
+        field_name,
+        float(spec["low"]),
+        float(spec["high"]),
+        step=spec.get("step"),
+    )
+
+
 def build_trial_params(session, trial):
     ai_use_breakout_buy = _suggest_optimizer_switch(trial, "use_breakout_buy")
     ai_use_bb = _suggest_optimizer_switch(trial, "use_bb")
@@ -57,74 +77,42 @@ def build_trial_params(session, trial):
     ai_use_breakout_reclaim_reentry = _suggest_optimizer_switch(trial, "use_breakout_reclaim_reentry")
 
     if ai_use_vol:
-        vol_long_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_long_len"]
-        vol_long_len = trial.suggest_int(
-            "vol_long_len",
-            vol_long_spec["low"],
-            vol_long_spec["high"],
-            step=vol_long_spec["step"],
-        )
-        vol_mult_spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_breakout_mult"]
-        vol_breakout_mult = trial.suggest_float(
-            "vol_breakout_mult",
-            vol_mult_spec["low"],
-            vol_mult_spec["high"],
-            step=vol_mult_spec["step"],
-        )
+        vol_long_len = _suggest_optimizer_int(trial, "vol_long_len")
+        vol_breakout_mult = _suggest_optimizer_float(trial, "vol_breakout_mult")
     else:
         vol_long_len = BREAKOUT_PARAM_SPECS["vol_long_len"]["default"]
         vol_breakout_mult = BREAKOUT_PARAM_SPECS["vol_breakout_mult"]["default"]
 
     breakout_return_min = (
-        trial.suggest_float(
-            "breakout_return_min",
-            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_return_min"]["low"],
-            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_return_min"]["high"],
-            step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_return_min"]["step"],
-        )
+        _suggest_optimizer_float(trial, "breakout_return_min")
         if ai_use_breakout_return_filter
         else BREAKOUT_PARAM_SPECS["breakout_return_min"]["default"]
     )
 
     breakout_ema_len = (
-        trial.suggest_int(
-            "breakout_ema_len",
-            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["low"],
-            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["high"],
-            step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_ema_len"]["step"],
-        )
+        _suggest_optimizer_int(trial, "breakout_ema_len")
         if ai_use_breakout_ema_filter
         else BREAKOUT_PARAM_SPECS["breakout_ema_len"]["default"]
     )
 
     breakout_reclaim_window_bars = (
-        trial.suggest_int(
-            "breakout_reclaim_window_bars",
-            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_window_bars"]["low"],
-            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_window_bars"]["high"],
-            step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_window_bars"]["step"],
-        )
+        _suggest_optimizer_int(trial, "breakout_reclaim_window_bars")
         if ai_use_breakout_reclaim_reentry
         else BREAKOUT_PARAM_SPECS["breakout_reclaim_window_bars"]["default"]
     )
     breakout_reclaim_confirm_r = (
-        trial.suggest_float(
-            "breakout_reclaim_confirm_r",
-            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_confirm_r"]["low"],
-            BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_confirm_r"]["high"],
-            step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["breakout_reclaim_confirm_r"]["step"],
-        )
+        _suggest_optimizer_float(trial, "breakout_reclaim_confirm_r")
         if ai_use_breakout_reclaim_reentry
         else BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_r"]["default"]
     )
 
     return build_breakout_strategy_params(
-        atr_len=trial.suggest_int("atr_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["high"]),
-        atr_times_init=trial.suggest_float("atr_times_init", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["step"]),
-        atr_times_trail=trial.suggest_float("atr_times_trail", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["step"]),
-        atr_buy_tol=trial.suggest_float("atr_buy_tol", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["step"]),
+        atr_len=_suggest_optimizer_int(trial, "atr_len"),
+        atr_times_init=_suggest_optimizer_float(trial, "atr_times_init"),
+        atr_times_trail=_suggest_optimizer_float(trial, "atr_times_trail"),
+        atr_buy_tol=_suggest_optimizer_float(trial, "atr_buy_tol"),
         use_breakout_buy=ai_use_breakout_buy,
-        high_len=trial.suggest_int("high_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["step"]),
+        high_len=_suggest_optimizer_int(trial, "high_len"),
         use_breakout_ema_filter=ai_use_breakout_ema_filter,
         breakout_ema_len=breakout_ema_len,
         tp_percent=session.resolve_optimizer_tp_percent(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent),
@@ -136,31 +124,31 @@ def build_trial_params(session, trial):
         breakout_reclaim_window_bars=breakout_reclaim_window_bars,
         breakout_reclaim_confirm_r=breakout_reclaim_confirm_r,
         bb_len=(
-            trial.suggest_int("bb_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["step"])
+            _suggest_optimizer_int(trial, "bb_len")
             if ai_use_bb
             else BREAKOUT_PARAM_SPECS["bb_len"]["default"]
         ),
         bb_mult=(
-            trial.suggest_float("bb_mult", BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_mult"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_mult"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_mult"]["step"])
+            _suggest_optimizer_float(trial, "bb_mult")
             if ai_use_bb
             else BREAKOUT_PARAM_SPECS["bb_mult"]["default"]
         ),
         kc_len=(
-            trial.suggest_int("kc_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_len"]["step"])
+            _suggest_optimizer_int(trial, "kc_len")
             if ai_use_kc
             else BREAKOUT_PARAM_SPECS["kc_len"]["default"]
         ),
         kc_mult=(
-            trial.suggest_float("kc_mult", BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_mult"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_mult"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_mult"]["step"])
+            _suggest_optimizer_float(trial, "kc_mult")
             if ai_use_kc
             else BREAKOUT_PARAM_SPECS["kc_mult"]["default"]
         ),
         vol_long_len=vol_long_len,
         vol_breakout_mult=vol_breakout_mult,
         breakout_return_min=breakout_return_min,
-        min_history_trades=trial.suggest_int("min_history_trades", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_trades"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_trades"]["high"]),
-        min_history_ev=trial.suggest_float("min_history_ev", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["step"]),
-        min_history_win_rate=trial.suggest_float("min_history_win_rate", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["step"]),
+        min_history_trades=_suggest_optimizer_int(trial, "min_history_trades"),
+        min_history_ev=_suggest_optimizer_float(trial, "min_history_ev"),
+        min_history_win_rate=_suggest_optimizer_float(trial, "min_history_win_rate"),
         use_compounding=True,
     )
 

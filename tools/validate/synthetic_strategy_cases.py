@@ -18,7 +18,7 @@ import pandas as pd
 from core.buy_sort import calc_buy_sort_value
 from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
 from core.walk_forward_policy import load_walk_forward_policy
-from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams, get_score_mdd_power
+from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams, get_score_mdd_denominator_epsilon, get_score_mdd_power
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_stats import calc_portfolio_score
@@ -43,14 +43,80 @@ from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from .checks import add_check
 
 
-def _optimizer_search_space_default(name):
+def _optimizer_search_space_spec(name):
+    if name not in BREAKOUT_OPTIMIZER_SEARCH_SPACE:
+        raise KeyError(f"optimizer search space 缺少必要參數: {name}")
     spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[name]
-    return spec.get("default", spec.get("low"))
+    kind = str(spec.get("kind", "") or "")
+    if kind not in {"categorical", "int", "float"}:
+        raise ValueError(f"optimizer search space 參數 {name} 的 kind 不合法: {kind!r}")
+    return spec
 
 
-SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES = _optimizer_search_space_default("min_history_trades")
-SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV = _optimizer_search_space_default("min_history_ev")
-SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE = _optimizer_search_space_default("min_history_win_rate")
+def _optimizer_search_space_choices(name):
+    choices = _optimizer_search_space_spec(name).get("choices")
+    if isinstance(choices, bool):
+        normalized = [choices]
+    else:
+        normalized = list(choices or [])
+    if not normalized:
+        raise ValueError(f"optimizer search space 參數 {name} 的 choices 不可為空")
+    return normalized
+
+
+def _optimizer_search_space_sample_value(name, *, prefer=None, step_offset=0, add_float_tail=False):
+    spec = _optimizer_search_space_spec(name)
+    kind = str(spec["kind"])
+
+    if kind == "categorical":
+        choices = _optimizer_search_space_choices(name)
+        if prefer in choices:
+            return prefer
+        default_value = spec.get("default")
+        if default_value in choices:
+            return default_value
+        return choices[0]
+
+    low = spec["low"]
+    high = spec["high"]
+    step = spec.get("step", 1 if kind == "int" else None)
+
+    if kind == "int":
+        low_value = int(low)
+        high_value = int(high)
+        step_value = int(step or 1)
+        candidate = low_value + max(0, int(step_offset)) * step_value
+        if candidate > high_value:
+            candidate = low_value
+        return int(candidate)
+
+    low_decimal = Decimal(str(low))
+    high_decimal = Decimal(str(high))
+    candidate_decimal = low_decimal
+    if step is not None and int(step_offset) > 0:
+        stepped = low_decimal + Decimal(str(step)) * int(step_offset)
+        if stepped <= high_decimal:
+            candidate_decimal = stepped
+    value = float(candidate_decimal)
+    if add_float_tail and step is not None and Decimal(str(value)) < high_decimal:
+        value = float(value + 3e-16)
+    return value
+
+
+def _optimizer_synthetic_trial_values(*, prefer_enabled=True):
+    values = {}
+    for field_name, spec in BREAKOUT_OPTIMIZER_SEARCH_SPACE.items():
+        preferred = True if prefer_enabled and spec.get("kind") == "categorical" else None
+        values[field_name] = _optimizer_search_space_sample_value(field_name, prefer=preferred)
+    return values
+
+
+def _optimizer_synthetic_param_payload(*, prefer_enabled=True):
+    payload = _optimizer_synthetic_trial_values(prefer_enabled=prefer_enabled)
+    defaults = V16StrategyParams()
+    payload.setdefault("vol_short_len", defaults.vol_short_len)
+    payload.setdefault("fixed_risk", defaults.fixed_risk)
+    return payload
 
 
 def _extract_reference_param_payloads(payload):
@@ -232,24 +298,7 @@ def validate_model_io_schema_case(base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     default_payload = params_to_json_dict(V16StrategyParams())
-    trial_params = {
-        "high_len": 100,
-        "atr_len": 12,
-        "atr_buy_tol": 2.5,
-        "atr_times_init": 1.7,
-        "atr_times_trail": 2.3,
-        "bb_len": 18,
-        "bb_mult": 2.1,
-        "kc_len": 20,
-        "kc_mult": 1.8,
-        "vol_short_len": 4,
-        "vol_long_len": 10,
-        "vol_breakout_mult": 1.6,
-        "fixed_risk": 0.02,
-        "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
-        "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
-        "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
-    }
+    trial_params = _optimizer_synthetic_param_payload(prefer_enabled=True)
     fake_trial = _FakeTrial(trial_params, user_attrs={"fixed_tp_percent": 0.25})
     best_params_payload = build_best_params_payload_from_trial(fake_trial, fixed_tp_percent=None)
 
@@ -511,22 +560,29 @@ def validate_score_numerator_option_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
+    base_mdd_power = 1.0
+    base_mdd_epsilon = 0.0001
+    stronger_mdd_power = 2.0
+
+    def _romd_expected(numerator, sys_mdd, *, power=base_mdd_power, epsilon=base_mdd_epsilon):
+        return float(numerator) / ((abs(float(sys_mdd)) ** float(power)) + float(epsilon))
+
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         annual_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
-    expected_annual = 18.0 / (abs(-20.0) ** 1.0 + 0.0001)
+    expected_annual = _romd_expected(18.0, -20.0)
     add_check(results, "strategy_score", case_id, "annual_return_numerator_formula", expected_annual, annual_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         total_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
-    expected_total = 12.0 / (abs(-20.0) ** 1.0 + 0.0001)
+    expected_total = _romd_expected(12.0, -20.0)
     add_check(results, "strategy_score", case_id, "total_return_numerator_formula", expected_total, total_score)
     add_check(results, "strategy_score", case_id, "numerator_switch_changes_score_when_returns_differ", True, annual_score != total_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", 2.0):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         powered_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
-    expected_powered = 12.0 / (abs(-20.0) ** 2.0 + 0.0001)
+    expected_powered = _romd_expected(12.0, -20.0, power=stronger_mdd_power)
     add_check(results, "strategy_score", case_id, "mdd_power_denominator_formula", expected_powered, powered_score)
-    add_check(results, "strategy_score", case_id, "mdd_power_stronger_than_default_penalty", True, powered_score < total_score)
+    add_check(results, "strategy_score", case_id, "mdd_power_stronger_than_base_penalty", True, powered_score < total_score)
 
     with patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
         low_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=40.0)
@@ -534,14 +590,20 @@ def validate_score_numerator_option_case(_base_params):
     add_check(results, "strategy_score", case_id, "log_r2_total_return_quality_monotonic", True, high_total_score > low_total_score)
 
     annual_missing = None
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         annual_missing = calc_portfolio_score(sys_ret=9.0, sys_mdd=-15.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=None)
-    expected_fallback = 9.0 / (abs(-15.0) ** 1.0 + 0.0001)
+    expected_fallback = _romd_expected(9.0, -15.0)
     add_check(results, "strategy_score", case_id, "annual_return_numerator_falls_back_to_total_return_when_missing", expected_fallback, annual_missing)
+
+    current_mdd_power = get_score_mdd_power()
+    current_mdd_epsilon = get_score_mdd_denominator_epsilon()
+    add_check(results, "strategy_score", case_id, "score_mdd_power_setting_accepts_manual_training_policy_value", True, math.isfinite(current_mdd_power) and current_mdd_power >= 0.0)
+    add_check(results, "strategy_score", case_id, "score_mdd_epsilon_setting_accepts_manual_training_policy_value", True, math.isfinite(current_mdd_epsilon) and current_mdd_epsilon > 0.0)
 
     summary["score_calc_method_default"] = SCORE_CALC_METHOD
     summary["score_numerator_method_default"] = SCORE_NUMERATOR_METHOD
-    summary["score_mdd_power_default"] = get_score_mdd_power()
+    summary["score_mdd_power_default"] = current_mdd_power
+    summary["score_mdd_denominator_epsilon_default"] = current_mdd_epsilon
     return results, summary
 
 
@@ -584,20 +646,7 @@ def validate_strategy_repeatability_case(base_params):
         session = _FakeOptimizerSession(fixed_tp_percent=0.25)
         trial = _FakeOptunaTrial(
             number=2,
-            preset_values={
-                "use_bb": True,
-                "use_kc": True,
-                "use_vol": True,
-                "use_breakout_return_filter": False,
-                "atr_len": 11,
-                "atr_times_init": 1.6,
-                "atr_times_trail": 2.6,
-                "atr_buy_tol": 2.5,
-                "high_len": 100,
-                "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
-                "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
-                "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
-            },
+            preset_values=_optimizer_synthetic_trial_values(prefer_enabled=True),
         )
         perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
         with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
@@ -678,20 +727,7 @@ def validate_strategy_minimum_viability_case(base_params):
     session = _FakeOptimizerSession(fixed_tp_percent=0.25)
     trial = _FakeOptunaTrial(
         number=3,
-        preset_values={
-            "use_bb": True,
-            "use_kc": True,
-            "use_vol": True,
-            "use_breakout_return_filter": False,
-            "atr_len": 11,
-            "atr_times_init": 1.6,
-            "atr_times_trail": 2.6,
-            "atr_buy_tol": 2.5,
-            "high_len": 100,
-            "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
-            "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
-            "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
-        },
+        preset_values=_optimizer_synthetic_trial_values(prefer_enabled=True),
     )
     perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
     with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
@@ -783,24 +819,7 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
     default_payload = params_to_json_dict(V16StrategyParams())
     export_trial = SimpleNamespace(
         number=4,
-        params={
-            "high_len": 65,
-            "atr_len": 13,
-            "atr_buy_tol": 2.5,
-            "atr_times_init": 1.8,
-            "atr_times_trail": 2.8,
-            "bb_len": 20,
-            "bb_mult": 2.0,
-            "kc_len": 20,
-            "kc_mult": 2.0,
-            "vol_short_len": 5,
-            "vol_long_len": 19,
-            "vol_breakout_mult": 1.5,
-            "fixed_risk": 0.01,
-            "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
-            "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
-            "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
-        },
+        params=_optimizer_synthetic_param_payload(prefer_enabled=True),
         user_attrs={"fixed_tp_percent": 0.27},
         value=88.123,
     )
@@ -956,26 +975,27 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
+    sample_high_len = _optimizer_search_space_sample_value("high_len")
     explicit_tp_params = build_optimizer_trial_params(
-        {"high_len": 100, "tp_percent": 0.11},
+        {"high_len": sample_high_len, "tp_percent": 0.11},
         user_attrs={"fixed_tp_percent": 0.22},
         fixed_tp_percent=0.33,
     )
     add_check(results, "strategy_contract", case_id, "tp_percent_prefers_trial_params", 0.11, explicit_tp_params["tp_percent"])
 
     attr_tp_params = build_optimizer_trial_params(
-        {"high_len": 55},
+        {"high_len": sample_high_len},
         user_attrs={"fixed_tp_percent": 0.22},
         fixed_tp_percent=0.33,
     )
     add_check(results, "strategy_contract", case_id, "tp_percent_falls_back_to_user_attr", 0.22, attr_tp_params["tp_percent"])
 
-    fixed_tp_params = build_optimizer_trial_params({"high_len": 55}, user_attrs={}, fixed_tp_percent=0.33)
+    fixed_tp_params = build_optimizer_trial_params({"high_len": sample_high_len}, user_attrs={}, fixed_tp_percent=0.33)
     add_check(results, "strategy_contract", case_id, "tp_percent_falls_back_to_fixed_setting", 0.33, fixed_tp_params["tp_percent"])
 
     missing_tp_raises = False
     try:
-        build_optimizer_trial_params({"high_len": 55}, user_attrs={}, fixed_tp_percent=None)
+        build_optimizer_trial_params({"high_len": sample_high_len}, user_attrs={}, fixed_tp_percent=None)
     except ValueError:
         missing_tp_raises = True
     add_check(results, "strategy_contract", case_id, "tp_percent_missing_everywhere_is_fail_fast", True, missing_tp_raises)
@@ -983,20 +1003,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     filter_fail_session = _FakeOptimizerSession(fixed_tp_percent=0.25)
     filter_fail_trial = _FakeOptunaTrial(
         number=0,
-        preset_values={
-            "use_bb": True,
-            "use_kc": True,
-            "use_vol": True,
-            "use_breakout_return_filter": False,
-            "atr_len": 10,
-            "atr_times_init": 1.5,
-            "atr_times_trail": 2.5,
-            "atr_buy_tol": 2.5,
-            "high_len": 100,
-            "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
-            "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
-            "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
-        },
+        preset_values=_optimizer_synthetic_trial_values(prefer_enabled=True),
     )
     with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02"])), patch(
         "tools.optimizer.objective_runner.run_portfolio_timeline",
@@ -1021,20 +1028,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     success_session = _FakeOptimizerSession(fixed_tp_percent=0.25)
     success_trial = _FakeOptunaTrial(
         number=1,
-        preset_values={
-            "use_bb": True,
-            "use_kc": True,
-            "use_vol": True,
-            "use_breakout_return_filter": False,
-            "atr_len": 11,
-            "atr_times_init": 1.6,
-            "atr_times_trail": 2.6,
-            "atr_buy_tol": 2.5,
-            "high_len": 100,
-            "min_history_trades": SYNTHETIC_OPTIMIZER_MIN_HISTORY_TRADES,
-            "min_history_ev": SYNTHETIC_OPTIMIZER_MIN_HISTORY_EV,
-            "min_history_win_rate": SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE,
-        },
+        preset_values=_optimizer_synthetic_trial_values(prefer_enabled=True),
     )
     with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
         "tools.optimizer.objective_runner.run_portfolio_timeline",
@@ -1059,13 +1053,17 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "objective_success_profile_row_recorded", 1, len(success_session.profile_recorder.rows))
 
     export_colors = {"red": "", "green": "", "reset": ""}
+    qualified_high_len = _optimizer_search_space_sample_value("high_len", step_offset=3)
+    qualified_atr_len = _optimizer_search_space_sample_value("atr_len", step_offset=3)
+    qualified_atr_buy_tol = _optimizer_search_space_sample_value("atr_buy_tol", step_offset=3, add_float_tail=True)
+    qualified_min_history_ev = _optimizer_search_space_sample_value("min_history_ev", step_offset=1, add_float_tail=True)
     qualified_export_trial = SimpleNamespace(
         number=3,
         params={
-            "high_len": 65,
-            "atr_len": 13,
-            "atr_buy_tol": 1.3000000000000003,
-            "min_history_ev": 0.10000000000000009,
+            "high_len": qualified_high_len,
+            "atr_len": qualified_atr_len,
+            "atr_buy_tol": qualified_atr_buy_tol,
+            "min_history_ev": qualified_min_history_ev,
             "tp_percent": 0.30000000000000004,
         },
         user_attrs={},
@@ -1073,7 +1071,10 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     )
     rejected_export_trial = SimpleNamespace(
         number=2,
-        params={"high_len": 100, "atr_len": 10},
+        params={
+            "high_len": _optimizer_search_space_sample_value("high_len"),
+            "atr_len": _optimizer_search_space_sample_value("atr_len"),
+        },
         user_attrs={"fixed_tp_percent": 0.19},
         value=INVALID_TRIAL_VALUE,
     )
@@ -1101,9 +1102,23 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "export_best_params_success_status", 0, success_status)
     add_check(results, "strategy_contract", case_id, "export_best_params_uses_best_trial_tp_percent", 0.3, exported_payload["tp_percent"])
     add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_tp_percent_step_float", "0.3", repr(exported_payload["tp_percent"]))
-    add_check(results, "strategy_contract", case_id, "export_best_params_preserves_best_trial_high_len", 65, exported_payload["high_len"])
-    add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_atr_buy_tol_step_float", "1.3", repr(exported_payload["atr_buy_tol"]))
-    add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_min_history_ev_step_float", "0.1", repr(exported_payload["min_history_ev"]))
+    add_check(results, "strategy_contract", case_id, "export_best_params_preserves_best_trial_high_len", qualified_high_len, exported_payload["high_len"])
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "export_best_params_canonicalizes_atr_buy_tol_step_float",
+        _canonicalize_optimizer_export_repr("atr_buy_tol", qualified_atr_buy_tol),
+        repr(exported_payload["atr_buy_tol"]),
+    )
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "export_best_params_canonicalizes_min_history_ev_step_float",
+        _canonicalize_optimizer_export_repr("min_history_ev", qualified_min_history_ev),
+        repr(exported_payload["min_history_ev"]),
+    )
     add_check(results, "strategy_contract", case_id, "export_best_params_keeps_default_buy_fee_canonical_decimal", "0.000399", repr(exported_payload["buy_fee"]))
     add_check(results, "strategy_contract", case_id, "export_best_params_keeps_default_sell_fee_canonical_decimal", "0.000399", repr(exported_payload["sell_fee"]))
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_status_for_unqualified_best_trial", 1, failure_status)
@@ -1178,29 +1193,39 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         1000,
         DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE,
     )
-    add_check(
-        results,
-        "strategy_contract",
-        case_id,
-        "local_min_score_finalist_top_k_defaults_to_2pct_of_1000_trials",
-        20,
-        training_policy.resolve_optimizer_local_min_score_finalist_top_k(1000),
+    sample_trial_count = 1000
+    small_trial_count = 100
+    expected_sample_top_k = max(
+        int(training_policy.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN),
+        int(math.ceil(sample_trial_count * float(training_policy.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE))),
+    )
+    expected_small_top_k = max(
+        int(training_policy.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN),
+        int(math.ceil(small_trial_count * float(training_policy.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE))),
     )
     add_check(
         results,
         "strategy_contract",
         case_id,
-        "local_min_score_finalist_top_k_uses_2pct_with_minimum_floor",
-        5,
-        training_policy.resolve_optimizer_local_min_score_finalist_top_k(100),
+        "local_min_score_finalist_top_k_respects_training_policy_rate",
+        expected_sample_top_k,
+        training_policy.resolve_optimizer_local_min_score_finalist_top_k(sample_trial_count),
+    )
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "local_min_score_finalist_top_k_respects_training_policy_floor",
+        expected_small_top_k,
+        training_policy.resolve_optimizer_local_min_score_finalist_top_k(small_trial_count),
     )
     add_check(
         results,
         "strategy_contract",
         case_id,
         "local_min_score_finalist_top_k_uses_session_trial_count_by_default",
-        20,
-        robustness._resolve_local_min_score_finalist_top_k(SimpleNamespace(n_trials=1000)),
+        expected_sample_top_k,
+        robustness._resolve_local_min_score_finalist_top_k(SimpleNamespace(n_trials=sample_trial_count)),
     )
 
     summary["success_export_key_count"] = len(exported_payload)
@@ -1284,7 +1309,10 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
 
     qualified_trial = SimpleNamespace(
         number=7,
-        params={"high_len": 65, "atr_len": 13},
+        params={
+            "high_len": _optimizer_search_space_sample_value("high_len", step_offset=3),
+            "atr_len": _optimizer_search_space_sample_value("atr_len", step_offset=3),
+        },
         user_attrs={"fixed_tp_percent": 0.27},
         value=88.123,
     )

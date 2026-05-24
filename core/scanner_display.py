@@ -83,12 +83,12 @@ def print_scanner_header(params):
     print(
         f"   ➤ 訓練參數: "
         f"突破買進 {breakout_str} | "
-        f"{reentry_str} | "
         f"ATR {get_p(params, 'atr_len', 14)}日 | "
         f"掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f}倍 | "
         f"初始 -{get_p(params, 'atr_times_init', 2.0):.1f}倍 | "
         f"追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f}倍 | "
-        f"半倉 {get_p(params, 'tp_percent', 0.5) * 100:.0f}%"
+        f"半倉 {get_p(params, 'tp_percent', 0.5) * 100:.0f}% | "
+        f"{reentry_str}"
     )
     print(
         f"   ➤ 濾網參數: "
