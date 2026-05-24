@@ -74,6 +74,8 @@ from config.training_policy import (  # noqa: F401
 from config.training_display_policy import (  # noqa: F401
     SYSTEM_SCORE_DISPLAY_MULTIPLIER,
     build_display_policy_snapshot,
+    format_system_score_for_display,
+    scale_system_score_for_display,
 )
 from config.training_performance_policy import (  # noqa: F401
     OPTIMIZER_FEATURE_BANK_MAX_ITEMS,

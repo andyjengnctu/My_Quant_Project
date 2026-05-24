@@ -14,6 +14,7 @@ from core.config import (
     MIN_TRADE_WIN_RATE,
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
+    format_system_score_for_display,
 )
 from core.display_common import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
 from core.walk_forward_policy import filter_search_train_dates
@@ -823,9 +824,9 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
     search_train_dates = _build_search_train_dates_for_session(session)
     latest_data_end = _latest_data_end_text(session)
     if model_mode == "oos":
-        system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.3f}（{_optimizer_train_score_display_label()}／僅供選參）"
+        system_score_display = f"{format_system_score_for_display(attrs.get('base_score', 0.0), decimals=3)}（{_optimizer_train_score_display_label()}／僅供選參）"
     else:
-        system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
+        system_score_display = f"{format_system_score_for_display(attrs.get('base_score', 0.0), decimals=2)}（base_score）"
     initial_capital = _safe_float(get_p(params, "initial_capital", 0.0))
     candidate_train_metrics = {
         "pf_return": _safe_float(attrs.get("pf_return", 0.0)),
@@ -1378,7 +1379,7 @@ def print_optimizer_static_ensemble_console_dashboard(
         objective_mode=str(session.objective_mode),
         score_calc_method=SCORE_CALC_METHOD,
         score_numerator_method=SCORE_NUMERATOR_METHOD,
-        system_score_display=f"{_safe_float(candidate_train_metrics.get('pf_romd', 0.0)):.3f}（{_optimizer_train_score_display_label()}／ENSEMBLE）",
+        system_score_display=f"{format_system_score_for_display(candidate_train_metrics.get('pf_romd', 0.0), decimals=3)}（{_optimizer_train_score_display_label()}／ENSEMBLE）",
         training_title=f"【訓練期間績效對比｜{train_range_text}】",
         training_rows=train_rows,
         testing_title=test_title,

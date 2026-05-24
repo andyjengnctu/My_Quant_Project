@@ -18,13 +18,13 @@ import pandas as pd
 from core.buy_sort import calc_buy_sort_value
 from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
 from core.walk_forward_policy import load_walk_forward_policy
-from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams, get_score_mdd_denominator_epsilon, get_score_mdd_power
+from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_stats import calc_portfolio_score, calc_score_win_rate_multiplier
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
-from tools.optimizer import callbacks as optimizer_callbacks
+from tools.optimizer import callbacks as optimizer_callbacks, study_utils
 from tools.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
 from tools.optimizer.study_utils import (
@@ -1692,8 +1692,19 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "optimizer_console_table_keeps_pipe_alignment_for_long_first_zone_rows", True, len(pipe_positions) == 6 and len(set(pipe_positions)) == 1)
 
     optimizer_main_source = (project_root / "tools" / "optimizer" / "main.py").read_text(encoding="utf-8")
+    optimizer_study_utils_source = (project_root / "tools" / "optimizer" / "study_utils.py").read_text(encoding="utf-8")
     train_test_policy_lines = [line for line in optimizer_main_source.splitlines() if "Train/Test policy:" in line]
     add_check(results, "strategy_contract", case_id, "optimizer_start_banner_omits_raw_objective_mode_token", True, bool(train_test_policy_lines) and all("objective=" not in line for line in train_test_policy_lines))
+    add_check(results, "strategy_contract", case_id, "system_score_display_formatter_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}", format_system_score_for_display(1.23, decimals=2))
+    add_check(results, "strategy_contract", case_id, "optimizer_callbacks_system_score_display_uses_multiplier_formatter", True, "format_system_score_for_display(attrs.get('base_score'" in callbacks_source and "format_system_score_for_display(candidate_train_metrics.get('pf_romd'" in callbacks_source)
+    add_check(results, "strategy_contract", case_id, "study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
+    add_check(results, "strategy_contract", case_id, "interactive_trial_prompt_exposes_zero_export", True, "[0] 輸出參數" in optimizer_study_utils_source and "min_value=0" in optimizer_study_utils_source)
+    with patch("builtins.input", side_effect=["S", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
+        interactive_zero_request = study_utils._resolve_interactive_optimizer_run_request()
+    add_check(results, "strategy_contract", case_id, "interactive_zero_trials_routes_to_export_candidate", True, interactive_zero_request.get("n_trials") == 0 and interactive_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE and interactive_zero_request.get("study_db_action") == "resume")
+    with patch("builtins.input", side_effect=["S", "", "1"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value="1"):
+        interactive_restart_request = study_utils._resolve_interactive_optimizer_run_request()
+    add_check(results, "strategy_contract", case_id, "interactive_study_memory_one_routes_to_restart", True, interactive_restart_request.get("study_db_action") == "restart" and interactive_restart_request.get("n_trials") == 1 and interactive_restart_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)
 
     summary["checks"] = len(results)
     return results, summary

@@ -2577,10 +2577,10 @@ def _resolve_optimizer_db_file_for_mode(*, output_dir: str, dataset_profile_key:
 
 def _normalize_study_db_action(raw_action: str) -> str:
     normalized = str(raw_action or "").strip().lower()
-    if normalized in {"restart", "reset", "new", "start_over", ""}:
-        return "restart"
-    if normalized in {"resume", "continue", "2"}:
+    if normalized in {"resume", "continue", "", "2"}:
         return "resume"
+    if normalized in {"restart", "reset", "new", "start_over", "1"}:
+        return "restart"
     raise ValueError(f"Study 記憶庫操作只接受 restart/resume，收到: {raw_action!r}")
 
 
@@ -2593,12 +2593,12 @@ def _apply_interactive_study_db_policy(*, selected_model_mode: str, db_file: str
         action = _normalize_study_db_action(study_db_action)
     else:
         choice = safe_prompt_choice(
-            "\n👉 Study 記憶庫：[Enter] 重頭開始  [2] 接續訓練 : ",
+            "\n👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : ",
             "",
-            ("", "2"),
+            ("", "1"),
             "Study 記憶庫操作選項",
         )
-        action = "resume" if choice == "2" else "restart"
+        action = "restart" if choice == "1" else "resume"
     if action == "resume":
         if os.path.exists(db_file):
             print(f"{colors['green']}🔁 Study mode 接續既有記憶庫：{_project_relative_path(db_file)}{colors['reset']}")

@@ -141,7 +141,7 @@ def _parse_interactive_trial_count_raw(raw_value: str) -> int:
     normalized = str(raw_value or "").strip()
     if normalized == "":
         return int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE)
-    return int(parse_int_strict(normalized, "訓練次數", min_value=1))
+    return int(parse_int_strict(normalized, "訓練次數", min_value=0))
 
 
 def _resolve_interactive_optimizer_run_request():
@@ -154,14 +154,17 @@ def _resolve_interactive_optimizer_run_request():
             source_label="UI/MENU",
         )
         study_db_choice = safe_prompt_choice(
-            "👉 Study 記憶庫：[Enter] 重頭開始  [2] 接續訓練 : ",
+            "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : ",
             "",
-            ("", "2"),
+            ("", "1"),
             "Study 記憶庫操作選項",
         )
-        mode_request["study_db_action"] = "resume" if study_db_choice == "2" else "restart"
-    trial_prompt = f"👉 訓練次數：[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  [數字] 訓練指定次數  "
-    mode_request["n_trials"] = _parse_interactive_trial_count_raw(input(trial_prompt))
+        mode_request["study_db_action"] = "restart" if study_db_choice == "1" else "resume"
+    trial_prompt = f"👉 訓練次數：[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  [數字] 訓練指定次數 [0] 輸出參數 : "
+    trial_count = _parse_interactive_trial_count_raw(input(trial_prompt))
+    mode_request["n_trials"] = int(trial_count)
+    if int(trial_count) == 0:
+        mode_request["action"] = OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE
     return mode_request
 
 

@@ -11,7 +11,7 @@ from core.config import (
     MIN_TRADE_WIN_RATE,
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
-    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+    format_system_score_for_display,
 )
 from core.display_common import (
     C_CYAN,
@@ -242,7 +242,7 @@ def print_strategy_dashboard(
         f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
         f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | "
         f"評分分子 [{C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}] | "
-        f"系統得分: {C_CYAN}{final_score * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}{C_RESET}"
+        f"系統得分: {C_CYAN}{format_system_score_for_display(final_score, decimals=2)}{C_RESET}"
     )
     print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
     print(f"總交易次數: {trade_split_str} | 年化交易次數: {annual_trades:.2f} 次/年")
