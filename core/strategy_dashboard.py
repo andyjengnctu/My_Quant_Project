@@ -209,6 +209,7 @@ def print_strategy_dashboard(
         m_win_rate,
         r_sq,
         annual_return_pct=annual_return_pct,
+        trade_win_rate_pct=win_rate,
     )
 
     rsq_diff = r_sq - bm_r_sq

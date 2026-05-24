@@ -184,6 +184,7 @@ def _evaluate_single_holdout_period(
         m_win_rate,
         r_sq,
         annual_return_pct=annual_return_pct,
+        trade_win_rate_pct=win_rate,
     )
     return {
         'label': str(holdout_period.get('label') or 'OOS'),

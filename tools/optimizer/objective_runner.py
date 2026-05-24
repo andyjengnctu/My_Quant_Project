@@ -358,7 +358,14 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             "base_score": float(INVALID_TRIAL_VALUE),
         }
 
-    base_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq, annual_return_pct=annual_return_pct)
+    base_score = calc_portfolio_score(
+        ret_pct,
+        mdd,
+        m_win_rate,
+        r_sq,
+        annual_return_pct=annual_return_pct,
+        trade_win_rate_pct=win_rate,
+    )
     return {
         "ok": True,
         "fail_reason": None,
@@ -468,6 +475,7 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         m_win_rate,
         r_sq,
         annual_return_pct=annual_return_pct,
+        trade_win_rate_pct=win_rate,
     )
     return {
         "enabled": True,

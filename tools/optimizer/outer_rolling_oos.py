@@ -3777,6 +3777,7 @@ def _extract_active_replay_metrics(result) -> dict:
     ret_pct = float(result[2])
     mdd_pct = float(result[3])
     trade_count = int(result[4] or 0)
+    win_rate = float(result[5] or 0.0)
     bm_ret_pct = float(result[11])
     bm_mdd_pct = float(result[12])
     r_squared = float(result[15])
@@ -3793,6 +3794,7 @@ def _extract_active_replay_metrics(result) -> dict:
         monthly_win_rate,
         r_squared,
         annual_return_pct=annual_return_pct,
+        trade_win_rate_pct=win_rate,
     )
     benchmark_score = calc_portfolio_score(
         bm_ret_pct,
@@ -3809,6 +3811,7 @@ def _extract_active_replay_metrics(result) -> dict:
         "r_squared": float(r_squared),
         "monthly_win_rate": float(monthly_win_rate),
         "trade_count": int(trade_count),
+        "win_rate": float(win_rate),
         "curve_points": int(equity_curve_points),
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": float(bm_ret_pct),

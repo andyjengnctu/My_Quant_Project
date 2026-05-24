@@ -2,12 +2,14 @@ import pandas as pd
 import numpy as np
 
 
-def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
+def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None):
     from core.config import (
         get_score_calc_method,
         get_score_mdd_denominator_epsilon,
         get_score_mdd_power,
         get_score_numerator_method,
+        get_score_win_rate_target,
+        is_score_win_rate_amp_enabled,
     )
 
     score_calc_method = get_score_calc_method()
@@ -26,10 +28,15 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
     mdd_denominator = (abs(float(sys_mdd)) ** score_mdd_power) + score_mdd_denominator_epsilon
     base_score = numerator / mdd_denominator
     if score_calc_method == 'LOG_R2':
-        return base_score * (m_win_rate / 100.0) * r_sq
-    if score_calc_method == 'RoMD':
-        return base_score
-    raise ValueError(f"未知 SCORE_CALC_METHOD: {score_calc_method}")
+        score = base_score * (m_win_rate / 100.0) * r_sq
+    elif score_calc_method == 'RoMD':
+        score = base_score
+    else:
+        raise ValueError(f"未知 SCORE_CALC_METHOD: {score_calc_method}")
+
+    if is_score_win_rate_amp_enabled() and trade_win_rate_pct is not None:
+        score *= float(trade_win_rate_pct) / get_score_win_rate_target()
+    return score
 
 
 def calc_curve_stats(eq_list):
