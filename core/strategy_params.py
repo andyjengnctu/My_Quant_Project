@@ -134,6 +134,8 @@ class V16StrategyParams:
     breakout_return_min: float = BREAKOUT_PARAM_SPECS["breakout_return_min"]["default"]
     use_breakout_false_filter: bool = BREAKOUT_PARAM_SPECS["use_breakout_false_filter"]["default"]
     breakout_false_filter_atr_pct_min: float = BREAKOUT_PARAM_SPECS["breakout_false_filter_atr_pct_min"]["default"]
+    use_breakout_quality_filter: bool = BREAKOUT_PARAM_SPECS["use_breakout_quality_filter"]["default"]
+    breakout_quality_filter_id: str = BREAKOUT_PARAM_SPECS["breakout_quality_filter_id"]["default"]
     use_breakout_reclaim_reentry: bool = BREAKOUT_PARAM_SPECS["use_breakout_reclaim_reentry"]["default"]
     breakout_reclaim_window_bars: int = BREAKOUT_PARAM_SPECS["breakout_reclaim_window_bars"]["default"]
     breakout_reclaim_confirm_r: float = BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_r"]["default"]

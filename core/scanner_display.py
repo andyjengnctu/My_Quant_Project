@@ -59,6 +59,11 @@ def print_scanner_header(params):
         if get_p(params, 'use_breakout_false_filter', False)
         else "關閉"
     )
+    quality_filter_str = (
+        f"啟用 ({get_p(params, 'breakout_quality_filter_id', 'breakout_quality_v1')})"
+        if get_p(params, 'use_breakout_quality_filter', False)
+        else "關閉"
+    )
     breakout_str = (
         f"啟用 ({get_p(params, 'high_len', 201)}日新高)"
         if get_p(params, 'use_breakout_buy', True)
@@ -102,6 +107,7 @@ def print_scanner_header(params):
         f"均量 {vol_str} | "
         f"漲幅 {return_filter_str} | "
         f"假突破 {false_filter_str} | "
+        f"品質模型 {quality_filter_str} | "
         f"{ema_filter_str}"
     )
     print(

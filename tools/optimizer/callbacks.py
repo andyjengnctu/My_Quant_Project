@@ -489,6 +489,11 @@ def _build_training_param_lines(params):
         if get_p(params, 'use_breakout_false_filter', False)
         else "假突破 關閉"
     )
+    quality_filter_str = (
+        f"品質模型 啟用（{get_p(params, 'breakout_quality_filter_id', 'breakout_quality_v1')}）"
+        if get_p(params, 'use_breakout_quality_filter', False)
+        else "品質模型 關閉"
+    )
     breakout_str = (
         f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高)"
         if get_p(params, 'use_breakout_buy', True)
@@ -503,7 +508,7 @@ def _build_training_param_lines(params):
     return [
         f"進場：{breakout_str}｜{reentry_str}",
         f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%",
-        f"濾網：{bb_str}｜{kc_str}｜{vol_str}｜{return_filter_str}｜{false_filter_str}｜{ema_filter_str}",
+        f"濾網：{bb_str}｜{kc_str}｜{vol_str}｜{return_filter_str}｜{false_filter_str}｜{quality_filter_str}｜{ema_filter_str}",
         f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R",
     ]
 
