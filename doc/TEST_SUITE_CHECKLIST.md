@@ -48,7 +48,7 @@
 |---|---|---|---|---|---|---|
 | B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | DONE | 已補 missed sell / trade log / stats 一致性，以及 validate / issue report / optimizer profile / local regression summaries（preflight / dataset prepare / chain / ml smoke / meta quality / master summary）的 CSV / XLSX / JSON contract；另已釘死 early-failure `master_summary.json` 的 `payload_failures` 必須維持與正常路徑一致的語意，且不得把合法 FAIL payload 誤標成 `summary_unreadable`；並補 `meta_quality_summary.json` 的 `formal_entry` nested schema contract，要求 `registry_steps / registry_commands / run_all_steps / preflight_steps / test_suite_steps` 完整存在，且 stale-key 排除檢查必須直接禁止已退役的 legacy `steps` 舊鍵 | `tools/validate/synthetic_contract_cases.py` |
 | B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | DONE | 已補 `run_ml_smoke.py` fixed-seed 雙跑、`run_chain_checks.py` scanner reduced snapshot 雙跑 digest、`validate_scanner_worker_repeatability_case` 與 `validate_scan_runner_repeatability_case`，正式入口與 scanner 入口重跑一致性已收斂 | `tools/local_regression/`, `tools/validate/synthetic_regression_cases.py` |
-| B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸與空序列 | `tools/validate/synthetic_unit_cases.py` |
+| B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` / `signal_utils` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸、空序列與訊號 helper 邊界 | `tools/validate/synthetic_unit_cases.py` |
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | DONE | 已新增資料清洗 expected behavior / fail-fast / `load_clean_df` 整合案例，直接釘死髒資料修正、欄位缺失、NaN、日期亂序、OHLC 異常與清洗後列數行為 | `tools/validate/synthetic_data_quality_cases.py`, `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | B15 | P1 | 錯誤處理 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | DONE | 已補 `params_io` / `module_loader` / `preflight_env` 的 module 級錯誤路徑，並補 downloader universe fetch 全失敗與 screening 初始化失敗的 fatal error path，錯誤訊息與 issue log 已可定位 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py`, `tools/validate/synthetic_error_cases.py` |
 | B16 | P2 | CLI | 互斥參數、預設值、help 與 shipped 指令文件一致 | DONE | 已補 dataset wrapper、local regression / no-arg CLI 與剩餘直接入口 CLI 契約，覆蓋 help、預設 passthrough、`--only` / `--steps` 正規化、未知參數、缺值、空值、位置參數拒絕；`apps/workbench.py` 也已納入 no-arg CLI formal 邊界，不再只驗 help。另 `run_all.py` 參數錯誤 stderr usage 必須同步列出 `meta_quality`；`doc/CMD.md` 的 shipped Python 指令與主要參數也併入同一 formal 邊界 | `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_meta_cases.py`, `apps/*.py`, `core/runtime_utils.py`, `doc/CMD.md` |
@@ -463,6 +463,7 @@
 | T257 | `validate_optimizer_walk_forward_policy_contract_case` | B52 |
 | T258 | `validate_optimizer_session_milestone_cache_case` | B52 |
 | T259 | `validate_meta_quality_coverage_threshold_uses_target_scope_case` | B22 |
+| T260 | `validate_signal_utils_unit_case` | B13 |
 
 ## G. 逐項收斂紀錄
 
@@ -1273,3 +1274,4 @@
 | 2026-05-02 | B114 | 依 bundle 檢出 GUI / debug 資訊框與側欄契約回歸：停損賣出框未輸出最大回撤標籤、hover snapshot 缺少直接 price line 快照、投組側欄交易資訊與交易導覽位置未與單股同步，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-05-02 | B114 | 補齊 chart info formatter、hover snapshot line values、單股 / 投組側欄交易資訊與交易導覽 layout 後重新收斂為 DONE | PARTIAL -> DONE | `tools/trade_analysis/charting.py` |
 | 2026-05-08 | T259 | 新增 meta quality coverage target-scope threshold contract，釘死正式 line / branch threshold 只由 declared coverage targets 計算，raw project totals 僅保留診斷用途 | NEW -> DONE | `validate_meta_quality_coverage_threshold_uses_target_scope_case` |
+| 2026-05-24 | T260 | 補齊 signal_utils unit case 的 DONE/T 摘要映射，避免已註冊 validator 未列入 checklist 正式索引 | NEW -> DONE | `validate_signal_utils_unit_case` |
