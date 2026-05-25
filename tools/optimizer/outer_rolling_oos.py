@@ -3646,6 +3646,52 @@ def _month_end_equities_from_curve(curve: list[dict], *, initial_equity: float) 
     return values
 
 
+def _calc_full_year_return_metrics_from_curve(curve: list[dict]) -> dict:
+    by_year: dict[int, dict] = {}
+    for point in list(curve or []):
+        try:
+            ts = pd.Timestamp(point.get("date"))
+            equity = float(point.get("equity", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not pd.notna(ts) or equity <= 0.0:
+            continue
+        year = int(ts.year)
+        bucket = by_year.setdefault(
+            year,
+            {"first_date": ts, "first_equity": equity, "last_date": ts, "last_equity": equity},
+        )
+        if ts < bucket["first_date"]:
+            bucket["first_date"] = ts
+            bucket["first_equity"] = equity
+        if ts > bucket["last_date"]:
+            bucket["last_date"] = ts
+            bucket["last_equity"] = equity
+
+    rows = []
+    for year in sorted(by_year):
+        bucket = by_year[year]
+        first_date = bucket["first_date"]
+        last_date = bucket["last_date"]
+        if not bool(first_date.month == 1 and last_date.month == 12):
+            continue
+        start_equity = float(bucket["first_equity"])
+        end_equity = float(bucket["last_equity"])
+        year_return_pct = (end_equity / start_equity - 1.0) * 100.0 if start_equity > 0.0 else 0.0
+        rows.append({
+            "year": int(year),
+            "year_return_pct": float(year_return_pct),
+            "start_equity": float(start_equity),
+            "end_equity": float(end_equity),
+            "is_full_year": True,
+        })
+    return {
+        "full_year_count": int(len(rows)),
+        "min_full_year_return_pct": float(min((row["year_return_pct"] for row in rows), default=0.0)),
+        "yearly_return_rows": rows,
+    }
+
+
 def _calc_stitched_curve_metrics(stitched: dict) -> dict:
     initial_equity = _safe_float(stitched.get("initial_equity"), 0.0)
     curve = list(stitched.get("curve") or [])
@@ -3655,6 +3701,9 @@ def _calc_stitched_curve_metrics(stitched: dict) -> dict:
             "return_pct": 0.0,
             "mdd_pct": 0.0,
             "annual_return_pct": 0.0,
+            "full_year_count": 0,
+            "min_full_year_return_pct": 0.0,
+            "yearly_return_rows": [],
             "r_squared": 0.0,
             "monthly_win_rate": 0.0,
             "curve_points": 0,
@@ -3677,18 +3726,24 @@ def _calc_stitched_curve_metrics(stitched: dict) -> dict:
     annual_return_pct = calc_annual_return_pct(initial_equity, final_equity, years)
     monthly_equities = _month_end_equities_from_curve(curve, initial_equity=initial_equity)
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
+    full_year_metrics = _calc_full_year_return_metrics_from_curve(curve)
+    min_full_year_return_pct = float(full_year_metrics.get("min_full_year_return_pct", 0.0))
     score = calc_portfolio_score(
         return_pct,
         max_drawdown,
         monthly_win_rate,
         r_squared,
         annual_return_pct=annual_return_pct,
+        min_full_year_return_pct=min_full_year_return_pct,
     )
     return {
         "score": float(score),
         "return_pct": float(return_pct),
         "mdd_pct": float(max_drawdown),
         "annual_return_pct": float(annual_return_pct),
+        "full_year_count": int(full_year_metrics.get("full_year_count", 0)),
+        "min_full_year_return_pct": min_full_year_return_pct,
+        "yearly_return_rows": list(full_year_metrics.get("yearly_return_rows", [])),
         "r_squared": float(r_squared),
         "monthly_win_rate": float(monthly_win_rate),
         "curve_points": int(len(curve)),
@@ -3795,6 +3850,7 @@ def _extract_active_replay_metrics(result) -> dict:
         r_squared,
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
+        min_full_year_return_pct=float(profile.get("min_full_year_return_pct", 0.0)),
     )
     benchmark_score = calc_portfolio_score(
         bm_ret_pct,
@@ -3802,12 +3858,16 @@ def _extract_active_replay_metrics(result) -> dict:
         bm_monthly_win_rate,
         bm_r_squared,
         annual_return_pct=bm_annual_return_pct,
+        min_full_year_return_pct=float(profile.get("bm_min_full_year_return_pct", 0.0)),
     )
     return {
         "score": float(score),
         "return_pct": float(ret_pct),
         "mdd_pct": float(mdd_pct),
         "annual_return_pct": float(annual_return_pct),
+        "full_year_count": int(full_year_metrics.get("full_year_count", 0)),
+        "min_full_year_return_pct": min_full_year_return_pct,
+        "yearly_return_rows": list(full_year_metrics.get("yearly_return_rows", [])),
         "r_squared": float(r_squared),
         "monthly_win_rate": float(monthly_win_rate),
         "trade_count": int(trade_count),
@@ -3817,6 +3877,7 @@ def _extract_active_replay_metrics(result) -> dict:
         "benchmark_return_pct": float(bm_ret_pct),
         "benchmark_mdd_pct": float(bm_mdd_pct),
         "benchmark_annual_return_pct": float(bm_annual_return_pct),
+        "benchmark_min_full_year_return_pct": float(profile.get("bm_min_full_year_return_pct", 0.0)),
         "benchmark_r_squared": float(bm_r_squared),
         "benchmark_monthly_win_rate": float(bm_monthly_win_rate),
     }

@@ -35,6 +35,18 @@ def get_score_win_rate_target():
     return _training_policy.resolve_score_win_rate_target()
 
 
+def is_score_min_full_year_return_amp_enabled():
+    return _training_policy.is_score_min_full_year_return_amp_enabled()
+
+
+def get_score_min_full_year_return_target():
+    return _training_policy.resolve_score_min_full_year_return_target()
+
+
+def get_min_full_year_return_pct():
+    return float(_training_policy.MIN_FULL_YEAR_RETURN_PCT)
+
+
 from config.execution_policy import (  # noqa: F401
     EXECUTION_POLICY_PARAM_SPECS,
     RUNTIME_PARAM_DEFAULTS,
@@ -60,10 +72,13 @@ from config.training_policy import (  # noqa: F401
     SCORE_MDD_DENOMINATOR_EPSILON,
     SCORE_WIN_RATE_AMP_ENABLED,
     SCORE_WIN_RATE_TARGET,
+    SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED,
+    SCORE_MIN_FULL_YEAR_RETURN_TARGET,
     OPTIMIZER_FIXED_TP_PERCENT,
     resolve_score_mdd_power,
     resolve_score_mdd_denominator_epsilon,
     resolve_score_win_rate_target,
+    resolve_score_min_full_year_return_target,
     DEFAULT_OPTIMIZER_MODEL_MODE,
     PREDEPLOY_SELECTION_START_YEAR,
     OOS_EVALUATION_START_YEAR,

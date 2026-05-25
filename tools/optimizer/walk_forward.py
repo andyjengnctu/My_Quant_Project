@@ -178,6 +178,8 @@ def _evaluate_single_holdout_period(
                 "strategy_return_pct": float(row.get("Strategy_Return_Pct", 0.0) or 0.0),
                 "benchmark_return_pct": float(row.get(benchmark_col, 0.0) or 0.0),
             })
+    min_full_year_return_pct = float(pf_profile.get('min_full_year_return_pct', 0.0))
+    benchmark_min_full_year_return_pct = float(pf_profile.get('bm_min_full_year_return_pct', 0.0))
     test_score_romd = calc_portfolio_score(
         ret_pct,
         mdd,
@@ -185,6 +187,7 @@ def _evaluate_single_holdout_period(
         r_sq,
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
+        min_full_year_return_pct=min_full_year_return_pct,
     )
     return {
         'label': str(holdout_period.get('label') or 'OOS'),
@@ -195,7 +198,7 @@ def _evaluate_single_holdout_period(
         'test_score_romd': float(test_score_romd),
         'ret_pct': float(ret_pct),
         'annual_return_pct': float(annual_return_pct),
-        'min_full_year_return_pct': float(pf_profile.get('min_full_year_return_pct', 0.0)),
+        'min_full_year_return_pct': min_full_year_return_pct,
         'full_year_count': int(pf_profile.get('full_year_count', 0)),
         'mdd': float(mdd),
         'trade_count': int(trade_count),
@@ -215,7 +218,7 @@ def _evaluate_single_holdout_period(
         'missed_sells': int(total_missed_sells),
         'benchmark_return_pct': float(bm_ret),
         'benchmark_annual_return_pct': float(bm_annual_return_pct),
-        'benchmark_min_full_year_return_pct': float(pf_profile.get('bm_min_full_year_return_pct', 0.0)),
+        'benchmark_min_full_year_return_pct': benchmark_min_full_year_return_pct,
         'benchmark_mdd': float(bm_mdd),
         'benchmark_r_squared': float(bm_r_sq),
         'benchmark_monthly_win_rate': float(bm_m_win_rate),
@@ -225,6 +228,7 @@ def _evaluate_single_holdout_period(
             bm_m_win_rate,
             bm_r_sq,
             annual_return_pct=bm_annual_return_pct,
+            min_full_year_return_pct=benchmark_min_full_year_return_pct,
         )),
         'initial_capital': float(getattr(params, 'initial_capital', 0.0) or 0.0),
         'equity_curve': equity_curve_rows,

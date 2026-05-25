@@ -21,7 +21,7 @@ from core.walk_forward_policy import load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
-from core.portfolio_stats import calc_portfolio_score, calc_score_win_rate_multiplier
+from core.portfolio_stats import calc_portfolio_score, calc_score_min_full_year_return_multiplier, calc_score_win_rate_multiplier
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
@@ -605,6 +605,18 @@ def validate_score_numerator_option_case(_base_params):
     add_check(results, "strategy_score", case_id, "portfolio_score_win_rate_amp_monotonic", True, low_win_score < target_win_score < high_win_score)
     add_check(results, "strategy_score", case_id, "portfolio_score_win_rate_amp_beats_old_linear_gap", True, (target_win_score / low_win_score) > (old_linear_high / old_linear_low))
 
+    min_year_low_amp = calc_score_min_full_year_return_multiplier(-20.0, -35.0, 0.0)
+    min_year_target_amp = calc_score_min_full_year_return_multiplier(0.0, -35.0, 0.0)
+    min_year_high_amp = calc_score_min_full_year_return_multiplier(10.0, -35.0, 0.0)
+    add_check(results, "strategy_score", case_id, "score_min_full_year_return_amp_hits_target_at_one", 1.0, min_year_target_amp)
+    add_check(results, "strategy_score", case_id, "score_min_full_year_return_amp_monotonic", True, min_year_low_amp < min_year_target_amp < min_year_high_amp)
+
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", True), patch("config.training_policy.MIN_FULL_YEAR_RETURN_PCT", -35.0), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_TARGET", 0.0):
+        low_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=-20.0)
+        target_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=0.0)
+        high_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=10.0)
+    add_check(results, "strategy_score", case_id, "portfolio_score_min_full_year_return_amp_monotonic", True, low_min_year_score < target_min_year_score < high_min_year_score)
+
     annual_missing = None
     with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         annual_missing = calc_portfolio_score(sys_ret=9.0, sys_mdd=-15.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=None)
@@ -620,6 +632,8 @@ def validate_score_numerator_option_case(_base_params):
     summary["score_numerator_method_default"] = SCORE_NUMERATOR_METHOD
     summary["score_mdd_power_default"] = current_mdd_power
     summary["score_mdd_denominator_epsilon_default"] = current_mdd_epsilon
+    summary["score_min_full_year_return_amp_enabled_default"] = bool(__import__("config.training_policy", fromlist=["SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED"]).SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED)
+    summary["score_min_full_year_return_target_default"] = float(__import__("config.training_policy", fromlist=["SCORE_MIN_FULL_YEAR_RETURN_TARGET"]).SCORE_MIN_FULL_YEAR_RETURN_TARGET)
     return results, summary
 
 

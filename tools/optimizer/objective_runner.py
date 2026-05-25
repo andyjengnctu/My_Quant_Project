@@ -365,6 +365,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         r_sq,
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
+        min_full_year_return_pct=min_full_year_return_pct,
     )
     return {
         "ok": True,
@@ -469,6 +470,7 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         verbose=False,
         pit_stats_index=all_pit_stats_index,
     )
+    min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
     inner_validate_score = calc_portfolio_score(
         ret_pct,
         mdd,
@@ -476,6 +478,7 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         r_sq,
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
+        min_full_year_return_pct=min_full_year_return_pct,
     )
     return {
         "enabled": True,
@@ -489,6 +492,7 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         "mdd": float(mdd),
         "trade_count": int(trade_count),
         "annual_return_pct": float(annual_return_pct),
+        "min_full_year_return_pct": float(min_full_year_return_pct),
         "monthly_win_rate": float(m_win_rate),
         "r_squared": float(r_sq),
         "normal_trades": int(normal_trade_count),

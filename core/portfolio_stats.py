@@ -32,13 +32,30 @@ def calc_score_win_rate_multiplier(trade_win_rate_pct, target_pct):
     return (bounded_win_rate / bounded_target) ** power
 
 
-def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None):
+def calc_score_min_full_year_return_multiplier(min_full_year_return_pct, floor_pct, target_pct):
+    min_return = float(min_full_year_return_pct)
+    floor = float(floor_pct)
+    target = float(target_pct)
+    if not math.isfinite(min_return):
+        min_return = floor
+    if not math.isfinite(floor) or not math.isfinite(target) or target <= floor:
+        raise ValueError(
+            f"SCORE_MIN_FULL_YEAR_RETURN_TARGET 必須大於 MIN_FULL_YEAR_RETURN_PCT，"
+            f"目前 target={target_pct!r}, floor={floor_pct!r}"
+        )
+    return max(0.0, (min_return - floor) / (target - floor))
+
+
+def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None, min_full_year_return_pct=None):
     from core.config import (
         get_score_calc_method,
         get_score_mdd_denominator_epsilon,
+        get_min_full_year_return_pct,
         get_score_mdd_power,
+        get_score_min_full_year_return_target,
         get_score_numerator_method,
         get_score_win_rate_target,
+        is_score_min_full_year_return_amp_enabled,
         is_score_win_rate_amp_enabled,
     )
 
@@ -68,6 +85,12 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
         score *= calc_score_win_rate_multiplier(
             trade_win_rate_pct,
             get_score_win_rate_target(),
+        )
+    if is_score_min_full_year_return_amp_enabled() and min_full_year_return_pct is not None:
+        score *= calc_score_min_full_year_return_multiplier(
+            min_full_year_return_pct,
+            get_min_full_year_return_pct(),
+            get_score_min_full_year_return_target(),
         )
     return score
 

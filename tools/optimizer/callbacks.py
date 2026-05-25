@@ -564,6 +564,7 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         r_squared,
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
+        min_full_year_return_pct=_safe_float(profile.get("min_full_year_return_pct", 0.0)),
     )
     benchmark_score = calc_portfolio_score(
         benchmark_return,
@@ -571,6 +572,7 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         bm_monthly_win_rate,
         bm_r_squared,
         annual_return_pct=bm_annual_return_pct,
+        min_full_year_return_pct=_safe_float(profile.get("bm_min_full_year_return_pct", 0.0)),
     )
     candidate_metrics = {
         "pf_return": total_return,
@@ -751,6 +753,7 @@ def _compute_reference_console_cache(session):
                 float(r_sq),
                 annual_return_pct=float(annual_return_pct),
                 trade_win_rate_pct=float(win_rate),
+                min_full_year_return_pct=float(pf_profile.get("min_full_year_return_pct", 0.0)),
             )),
             "source_path": params_path,
             "wf_report": None,
@@ -860,6 +863,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
             _safe_float(attrs.get("r_squared", 0.0)),
             annual_return_pct=_safe_float(attrs.get("annual_return_pct", 0.0)),
             trade_win_rate_pct=_safe_float(attrs.get("win_rate", 0.0)),
+            min_full_year_return_pct=_safe_float(attrs.get("min_full_year_return_pct", 0.0)),
         )),
     }
     benchmark_train_metrics = {
@@ -875,6 +879,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
             _safe_float(attrs.get("bm_m_win_rate", 0.0)),
             _safe_float(attrs.get("bm_r_squared", 0.0)),
             annual_return_pct=_safe_float(attrs.get("bm_annual_return_pct", 0.0)),
+            min_full_year_return_pct=_safe_float(attrs.get("bm_min_full_year_return_pct", 0.0)),
         )),
         "final_equity": _benchmark_final_equity(initial_capital, _safe_float(attrs.get("bm_return", 0.0))),
     }

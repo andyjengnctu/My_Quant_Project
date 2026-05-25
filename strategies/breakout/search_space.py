@@ -30,9 +30,9 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "breakout_false_filter_atr_pct_min": {"kind": "float", "low": 0.05, "high": 0.4, "step": 0.05, "enabled_by": "use_breakout_false_filter"},  # (AI註: 假突破濾網 ATR/Close 下限搜尋)
     "breakout_reclaim_window_bars": {"kind": "int", "low": 5, "high": 60, "step": 5, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 觀察窗搜尋)
     "breakout_reclaim_confirm_r": {"kind": "float", "low": 0.5, "high": 1.0, "step": 0.1, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 重新站回原 entry + N R 門檻搜尋)
-    "min_history_trades": {"kind": "int", "low": 3, "high": 3},  # (AI註: 歷史績效最少交易次數搜尋，預設區間固定 3)
-    "min_history_ev": {"kind": "float", "low": -1.0, "high": 0.5, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設固定 0.0)
-    "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.65, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設固定 45%)
+    "min_history_trades": {"kind": "int", "low": 0, "high": 0},  # (AI註: 歷史績效最少交易次數搜尋，預設區間固定 3)
+    "min_history_ev": {"kind": "float", "low": -1.0, "high": -1.0, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設固定 0.0)
+    "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.0, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設固定 45%)
 }
 
 
