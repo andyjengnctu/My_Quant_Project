@@ -18,6 +18,7 @@ from core.config import (
     SCORE_NUMERATOR_METHOD,
 )
 from core.display_common import C_RESET, C_YELLOW, get_p
+from core.history_filters import history_threshold_is_enabled
 
 
 def _normalize_history_win_rate_pct(win_rate):
@@ -110,12 +111,15 @@ def print_scanner_header(params):
         f"品質模型 {quality_filter_str} | "
         f"{ema_filter_str}"
     )
-    print(
-        f"   ➤ 歷史門檻: "
-        f"交易 >= {get_p(params, 'min_history_trades', 0)} 次 | "
-        f"勝率 >= {get_p(params, 'min_history_win_rate', 0.30) * 100:.0f}% | "
-        f"期望值 >= {get_p(params, 'min_history_ev', 0.0):.2f}R"
-    )
+    if history_threshold_is_enabled(params):
+        print(
+            f"   ➤ 歷史門檻: "
+            f"交易 >= {get_p(params, 'min_history_trades', 0)} 次 | "
+            f"勝率 >= {get_p(params, 'min_history_win_rate', 0.30) * 100:.0f}% | "
+            f"期望值 >= {get_p(params, 'min_history_ev', 0.0):.2f}R"
+        )
+    else:
+        print("   ➤ 歷史門檻: 關閉")
     print(
         f"   ➤ Scanner資金: "
         f"live capital = {resolve_scanner_live_capital(params):,.0f}"

@@ -26,6 +26,7 @@ DEPRECATED_PARAM_FIELDS = {
 }
 
 PARAM_COMPAT_DEFAULT_FIELDS = {
+    "use_history_threshold",
     "use_breakout_ema_filter",
     "breakout_ema_len",
     "vol_breakout_mult",
@@ -96,6 +97,20 @@ def _coerce_param_value(field_name, raw_value, expected_type):
     return raw_value
 
 
+def _history_threshold_payload_is_neutral(data):
+    try:
+        min_trades = int(data.get("min_history_trades", PARAM_FIELD_DEFAULTS["min_history_trades"]))
+        min_ev = float(data.get("min_history_ev", PARAM_FIELD_DEFAULTS["min_history_ev"]))
+        min_win_rate = float(data.get("min_history_win_rate", PARAM_FIELD_DEFAULTS["min_history_win_rate"]))
+    except (TypeError, ValueError):
+        return False
+    return min_trades == 0 and min_ev <= 0.0 and min_win_rate <= 0.0
+
+
+def _infer_use_history_threshold_from_payload(data):
+    return not _history_threshold_payload_is_neutral(data)
+
+
 def _validate_param_payload(data):
     if not isinstance(data, dict):
         raise ValueError(f"參數檔根層必須是 object/dict，收到 {type(data).__name__}")
@@ -122,7 +137,12 @@ def build_params_from_mapping(data):
     _validate_param_payload(data)
     coerced_values = {}
     for field_name in PARAM_FIELD_NAMES:
-        raw_value = data[field_name] if field_name in data else PARAM_FIELD_DEFAULTS[field_name]
+        if field_name in data:
+            raw_value = data[field_name]
+        elif field_name == "use_history_threshold":
+            raw_value = _infer_use_history_threshold_from_payload(data)
+        else:
+            raw_value = PARAM_FIELD_DEFAULTS[field_name]
         coerced_values[field_name] = _coerce_param_value(
             field_name,
             raw_value,

@@ -26,6 +26,17 @@ from core.display_common import (
     get_p,
 )
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
+from core.history_filters import history_threshold_is_enabled
+
+
+def _format_history_threshold_text(params):
+    if not history_threshold_is_enabled(params):
+        return "歷史門檻：關閉"
+    return (
+        f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜"
+        f"勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜"
+        f"EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R"
+    )
 
 
 def _format_filter_param_text(params):
@@ -63,7 +74,7 @@ def _format_training_param_lines(params):
         f"進場：{breakout_str}｜{reentry_str}",
         f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.5) * 100:.1f}%",
         f"濾網：{bb_str}｜{kc_str}｜{vol_str}｜{return_filter_str}｜{false_filter_str}｜{quality_filter_str}｜{ema_filter_str}",
-        f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R",
+        _format_history_threshold_text(params),
     ]
 
 

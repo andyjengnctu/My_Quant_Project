@@ -3,7 +3,6 @@ from strategies.breakout.adapter import build_breakout_strategy_params
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
 
-
 BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_breakout_buy": {"kind": "categorical", "choices": [True]},
     "use_breakout_reclaim_reentry": {"kind": "categorical", "choices": [True, False]},  # (AI註: 停損後 reclaim re-entry 開關搜尋)
@@ -12,8 +11,9 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日放量濾網開關搜尋)
     "use_breakout_return_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日漲幅濾網開關搜尋)
     "use_breakout_false_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 假突破濾網開關搜尋)
-    "use_breakout_quality_filter": {"kind": "categorical", "choices": [False]},  # (AI註: breakout quality filter 開關；score table 建好後可手動改成 [True, False])
     "use_breakout_ema_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破 EMA 濾網開關搜尋)
+    "use_breakout_quality_filter": {"kind": "categorical", "choices": [False]},  # (AI註: breakout quality filter 開關；score table 建好後可手動改成 [True, False])
+    "use_history_threshold": {"kind": "categorical", "choices": [False]},  # (AI註: 歷史門檻開關搜尋)
     "high_len": {"kind": "int", "low": 100, "high": 300, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
     "breakout_ema_len": {"kind": "int", "low": 60, "high": 300, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
@@ -30,9 +30,9 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "breakout_false_filter_atr_pct_min": {"kind": "float", "low": 0.05, "high": 0.4, "step": 0.05, "enabled_by": "use_breakout_false_filter"},  # (AI註: 假突破濾網 ATR/Close 下限搜尋)
     "breakout_reclaim_window_bars": {"kind": "int", "low": 5, "high": 60, "step": 5, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 觀察窗搜尋)
     "breakout_reclaim_confirm_r": {"kind": "float", "low": 0.5, "high": 1.0, "step": 0.1, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 重新站回原 entry + N R 門檻搜尋)
-    "min_history_trades": {"kind": "int", "low": 0, "high": 0},  # (AI註: 歷史績效最少交易次數搜尋，預設區間固定 3)
-    "min_history_ev": {"kind": "float", "low": -1.0, "high": -1.0, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設固定 0.0)
-    "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.0, "step": 0.05},  # (AI註: 歷史績效最小勝率搜尋，預設固定 45%)
+    "min_history_trades": {"kind": "int", "low": 3, "high": 3, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最少交易次數門檻搜尋)
+    "min_history_ev": {"kind": "float", "low": -1.0, "high": -1.0, "step": 0.1, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小期望值門檻搜尋)
+    "min_history_win_rate": {"kind": "float", "low": 0.45, "high": 0.45, "step": 0.05, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小勝率門檻搜尋)
 }
 
 
@@ -80,6 +80,7 @@ def build_trial_params(session, trial):
     ai_use_breakout_false_filter = _suggest_optimizer_switch(trial, "use_breakout_false_filter")
     ai_use_breakout_quality_filter = _suggest_optimizer_switch(trial, "use_breakout_quality_filter")
     ai_use_breakout_reclaim_reentry = _suggest_optimizer_switch(trial, "use_breakout_reclaim_reentry")
+    ai_use_history_threshold = _suggest_optimizer_switch(trial, "use_history_threshold")
 
     if ai_use_vol:
         vol_long_len = _suggest_optimizer_int(trial, "vol_long_len")
@@ -115,6 +116,9 @@ def build_trial_params(session, trial):
         if ai_use_breakout_reclaim_reentry
         else BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_r"]["default"]
     )
+    min_history_trades = _suggest_optimizer_int(trial, "min_history_trades") if ai_use_history_threshold else 0
+    min_history_ev = _suggest_optimizer_float(trial, "min_history_ev") if ai_use_history_threshold else -1.0
+    min_history_win_rate = _suggest_optimizer_float(trial, "min_history_win_rate") if ai_use_history_threshold else 0.0
 
     return build_breakout_strategy_params(
         atr_len=_suggest_optimizer_int(trial, "atr_len"),
@@ -137,6 +141,7 @@ def build_trial_params(session, trial):
         use_breakout_reclaim_reentry=ai_use_breakout_reclaim_reentry,
         breakout_reclaim_window_bars=breakout_reclaim_window_bars,
         breakout_reclaim_confirm_r=breakout_reclaim_confirm_r,
+        use_history_threshold=ai_use_history_threshold,
         bb_len=(
             _suggest_optimizer_int(trial, "bb_len")
             if ai_use_bb
@@ -160,9 +165,9 @@ def build_trial_params(session, trial):
         vol_long_len=vol_long_len,
         vol_breakout_mult=vol_breakout_mult,
         breakout_return_min=breakout_return_min,
-        min_history_trades=_suggest_optimizer_int(trial, "min_history_trades"),
-        min_history_ev=_suggest_optimizer_float(trial, "min_history_ev"),
-        min_history_win_rate=_suggest_optimizer_float(trial, "min_history_win_rate"),
+        min_history_trades=min_history_trades,
+        min_history_ev=min_history_ev,
+        min_history_win_rate=min_history_win_rate,
         use_compounding=True,
     )
 

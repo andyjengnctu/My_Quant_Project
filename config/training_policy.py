@@ -187,6 +187,7 @@ PREDEPLOY_SELECTION_START_YEAR = _derive_fixed_window_selection_start_year(
     OOS_EVALUATION_START_YEAR,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
+STUDY_FULL_START_YEAR = PREDEPLOY_SELECTION_START_YEAR
 
 OPTIMIZER_TRAIN_START_YEAR = PREDEPLOY_SELECTION_START_YEAR
 OPTIMIZER_MIN_TRAIN_YEARS = OOS_EVALUATION_START_YEAR - PREDEPLOY_SELECTION_START_YEAR
@@ -196,10 +197,12 @@ TRAINING_SPLIT_POLICY = {
     "min_train_years": OPTIMIZER_MIN_TRAIN_YEARS,
     "search_train_end_year": OOS_EVALUATION_START_YEAR - 1,
     "oos_start_year": OOS_EVALUATION_START_YEAR,
+    "study_full_start_year": STUDY_FULL_START_YEAR,
     "objective_mode": 'split_train_romd',
 }
 
 SELECTION_POLICY_PARAM_SPECS = {
+    "use_history_threshold": {"type": bool, "default": True},  # 是否啟用歷史績效門檻
     "min_history_trades": {"type": int, "default": 0, "min_value": 0},  # 歷史績效最少交易次數門檻
     "min_history_ev": {"type": float, "default": -1.0},  # 歷史績效最小期望值門檻
     "min_history_win_rate": {"type": float, "default": 0.30, "min_value": 0.0, "max_value": 1.0},  # 歷史績效最小勝率門檻

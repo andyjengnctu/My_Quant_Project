@@ -139,6 +139,7 @@ class V16StrategyParams:
     use_breakout_reclaim_reentry: bool = BREAKOUT_PARAM_SPECS["use_breakout_reclaim_reentry"]["default"]
     breakout_reclaim_window_bars: int = BREAKOUT_PARAM_SPECS["breakout_reclaim_window_bars"]["default"]
     breakout_reclaim_confirm_r: float = BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_r"]["default"]
+    use_history_threshold: bool = SELECTION_POLICY_PARAM_SPECS["use_history_threshold"]["default"]
     min_history_trades: int = SELECTION_POLICY_PARAM_SPECS["min_history_trades"]["default"]
     min_history_ev: float = SELECTION_POLICY_PARAM_SPECS["min_history_ev"]["default"]
     min_history_win_rate: float = SELECTION_POLICY_PARAM_SPECS["min_history_win_rate"]["default"]

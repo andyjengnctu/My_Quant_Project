@@ -59,6 +59,7 @@ def _build_default_training_split_policy(project_root: str) -> dict:
         "min_train_years": min_train_years,
         "search_train_end_year": None,
         "oos_start_year": None if oos_start_year is None else int(oos_start_year),
+        "study_full_start_year": payload.get("study_full_start_year"),
         "objective_mode": str(payload.get("objective_mode", "split_train_romd")),
     }
 
@@ -343,17 +344,30 @@ def build_optimizer_runtime_policy(base_policy: dict, model_mode: str, *, latest
             runtime_policy['oos_start_date'] = None
             runtime_policy['oos_end_date'] = None
             runtime_policy['oos_horizon_months'] = 0
-            train_start_year = int(runtime_policy.get('train_start_year', runtime_policy.get('selection_start_year', 0)) or 0)
-            if train_start_year > 0:
-                runtime_policy['selection_start_year'] = int(runtime_policy.get('selection_start_year', train_start_year) or train_start_year)
-                runtime_policy['train_start_year'] = train_start_year
-                runtime_policy['selection_start_date'] = runtime_policy.get('selection_start_date') or f"{int(runtime_policy['selection_start_year']):04d}-01-01"
-                runtime_policy['train_start_date'] = runtime_policy.get('train_start_date') or f"{train_start_year:04d}-01-01"
+            study_full_start_year = int(
+                runtime_policy.get('study_full_start_year')
+                or runtime_policy.get('train_start_year')
+                or runtime_policy.get('selection_start_year')
+                or 0
+            )
+            if study_full_start_year <= 0:
+                raise ValueError('training split policy: study_full_start_year 必須是有效西元年')
+            runtime_policy['study_full_start_year'] = study_full_start_year
+            runtime_policy['selection_start_year'] = study_full_start_year
+            runtime_policy['train_start_year'] = study_full_start_year
+            runtime_policy['selection_start_date'] = f"{study_full_start_year:04d}-01-01"
+            runtime_policy['train_start_date'] = f"{study_full_start_year:04d}-01-01"
             if latest_data_date is not None:
                 latest_text = _normalize_date_text(latest_data_date)
                 runtime_policy['search_train_end_date'] = latest_text
                 runtime_policy['search_train_end_year'] = _year_from_date_text(latest_text)
                 runtime_policy['latest_data_date'] = latest_text
+            if int(runtime_policy['search_train_end_year']) < int(runtime_policy['train_start_year']):
+                raise ValueError('training split policy: study_full_start_year 不可晚於 search_train_end_year')
+            runtime_policy['min_train_years'] = max(
+                1,
+                int(runtime_policy['search_train_end_year']) - int(runtime_policy['train_start_year']) + 1,
+            )
             return runtime_policy
         runtime_policy['evaluation_scope'] = 'study_single_seed'
         if runtime_policy.get('oos_start_year') is not None and not runtime_policy.get('search_train_end_date'):

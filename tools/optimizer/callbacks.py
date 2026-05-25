@@ -24,6 +24,7 @@ from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.active_param_ensemble import get_active_param_ensemble_policy, load_json_file
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
+from core.history_filters import history_threshold_is_enabled
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
@@ -47,6 +48,16 @@ from tools.optimizer.walk_forward import build_test_holdout_period, build_test_p
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _format_history_threshold_text(params):
+    if not history_threshold_is_enabled(params):
+        return "歷史門檻：關閉"
+    return (
+        f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜"
+        f"勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜"
+        f"EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R"
+    )
 
 
 def _safe_float(value, default=0.0):
@@ -509,7 +520,7 @@ def _build_training_param_lines(params):
         f"進場：{breakout_str}｜{reentry_str}",
         f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%",
         f"濾網：{bb_str}｜{kc_str}｜{vol_str}｜{return_filter_str}｜{false_filter_str}｜{quality_filter_str}｜{ema_filter_str}",
-        f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R",
+        _format_history_threshold_text(params),
     ]
 
 

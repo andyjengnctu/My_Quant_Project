@@ -1,18 +1,45 @@
 from core.config import get_ev_calc_method
 
 
+def _get_param(params, key, default=None):
+    if isinstance(params, dict):
+        return params.get(key, default)
+    return getattr(params, key, default)
+
+
+def _history_threshold_payload_is_neutral(params) -> bool:
+    try:
+        min_trades = int(_get_param(params, "min_history_trades", 0))
+        min_ev = float(_get_param(params, "min_history_ev", -1.0))
+        min_win_rate = float(_get_param(params, "min_history_win_rate", 0.0))
+    except (TypeError, ValueError):
+        return False
+    return min_trades == 0 and min_ev <= 0.0 and min_win_rate <= 0.0
+
+
+def history_threshold_is_enabled(params) -> bool:
+    explicit_value = _get_param(params, "use_history_threshold", None)
+    if explicit_value is not None:
+        return bool(explicit_value)
+    return not _history_threshold_payload_is_neutral(params)
+
+
 def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_r_sum, loss_r_sum, params):
-    min_trades_req = getattr(params, "min_history_trades", 0)
-    min_ev_req = getattr(params, "min_history_ev", 0.0)
-    min_win_rate_req = getattr(params, "min_history_win_rate", 0.30)
+    use_history_threshold = history_threshold_is_enabled(params)
+    min_trades_req = _get_param(params, "min_history_trades", 0)
+    min_ev_req = _get_param(params, "min_history_ev", 0.0)
+    min_win_rate_req = _get_param(params, "min_history_win_rate", 0.30)
 
     allow_zero_history = (
-        (min_trades_req == 0)
-        and (min_ev_req <= 0)
-        and (min_win_rate_req <= 0)
+        not use_history_threshold
+        or (
+            (min_trades_req == 0)
+            and (min_ev_req <= 0)
+            and (min_win_rate_req <= 0)
+        )
     )
 
-    if trade_count < min_trades_req:
+    if use_history_threshold and trade_count < min_trades_req:
         return False, 0.0, 0.0, trade_count
 
     if trade_count == 0:
@@ -36,5 +63,7 @@ def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_
     else:
         expected_value = total_r_sum / trade_count
 
-    is_candidate = (win_rate >= min_win_rate_req) and (expected_value >= min_ev_req)
+    is_candidate = True
+    if use_history_threshold:
+        is_candidate = (win_rate >= min_win_rate_req) and (expected_value >= min_ev_req)
     return is_candidate, expected_value, win_rate, trade_count

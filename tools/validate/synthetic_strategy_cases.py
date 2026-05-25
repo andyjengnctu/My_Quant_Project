@@ -168,6 +168,26 @@ def _canonicalize_optimizer_export_repr(field_name, raw_value):
     return repr(float(Decimal(str(float(raw_value))).quantize(quantizer)))
 
 
+def _history_threshold_payload_is_neutral(payload):
+    try:
+        min_trades = int(payload.get("min_history_trades", 0))
+        min_ev = float(payload.get("min_history_ev", -1.0))
+        min_win_rate = float(payload.get("min_history_win_rate", 0.0))
+    except (TypeError, ValueError):
+        return False
+    return min_trades == 0 and min_ev <= 0.0 and min_win_rate <= 0.0
+
+
+def _optimizer_dependent_field_is_active(field_name, param_payload):
+    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE.get(field_name, {})
+    switch_field = spec.get("enabled_by")
+    if not switch_field:
+        return True
+    if switch_field == "use_history_threshold" and switch_field not in param_payload:
+        return not _history_threshold_payload_is_neutral(param_payload)
+    return bool(param_payload.get(switch_field, False))
+
+
 class _FakeTrial:
     def __init__(self, params, user_attrs=None):
         self.params = dict(params)
@@ -1163,6 +1183,8 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         for member_idx, param_payload in enumerate(_extract_reference_param_payloads(artifact_payload), start=1):
             for field_name in canonical_field_names:
                 if field_name not in param_payload:
+                    continue
+                if not _optimizer_dependent_field_is_active(field_name, param_payload):
                     continue
                 map_key = f"{artifact_path.name}::member#{member_idx}::{field_name}"
                 shipped_repr_map[map_key] = repr(param_payload[field_name])
