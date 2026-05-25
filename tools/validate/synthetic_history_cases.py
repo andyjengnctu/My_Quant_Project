@@ -15,6 +15,7 @@ from .checks import add_check, make_synthetic_validation_params, run_scanner_ref
 
 def validate_synthetic_history_ev_threshold_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.use_history_threshold = True
     params.min_history_trades = 1
     params.min_history_ev = 0.5
     params.min_history_win_rate = 0.5
@@ -200,6 +201,7 @@ def validate_synthetic_pit_same_day_exit_excluded_case(base_params):
 
 def validate_synthetic_single_backtest_not_gated_by_own_history_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.use_history_threshold = True
     params.min_history_trades = 5
     params.min_history_ev = 0.5
     params.min_history_win_rate = 0.8
@@ -295,6 +297,7 @@ def validate_synthetic_single_backtest_uses_compounding_capital_case(base_params
 
 def validate_synthetic_portfolio_history_filter_only_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.use_history_threshold = True
     params.min_history_trades = 5
     params.min_history_ev = 0.5
     params.min_history_win_rate = 0.8
@@ -342,6 +345,7 @@ def validate_synthetic_portfolio_history_filter_only_case(base_params):
 
 def validate_synthetic_pit_multiple_same_day_exits_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.use_history_threshold = True
     params.min_history_trades = 2
     params.min_history_ev = 0.1
     params.min_history_win_rate = 0.5
@@ -394,6 +398,7 @@ def validate_synthetic_pit_multiple_same_day_exits_case(base_params):
 
 def validate_synthetic_lookahead_prev_day_only_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.use_history_threshold = True
     params.min_history_trades = 1
     params.min_history_ev = 0.5
     params.min_history_win_rate = 0.5

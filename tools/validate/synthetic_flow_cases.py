@@ -191,6 +191,7 @@ def _run_entry_layer_outcome_case(params, *, low_on_entry_day, volume_on_entry_d
 
 def validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.use_history_threshold = True
     params.min_history_trades = 1
     params.min_history_ev = 0.0
     params.min_history_win_rate = 0.0

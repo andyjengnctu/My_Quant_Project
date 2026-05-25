@@ -89,6 +89,7 @@ def validate_history_filters_unit_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
     params = V16StrategyParams()
+    params.use_history_threshold = True
 
     params.min_history_trades = 0
     params.min_history_ev = -1e9
