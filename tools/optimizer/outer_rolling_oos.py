@@ -3843,6 +3843,12 @@ def _extract_active_replay_metrics(result) -> dict:
     bm_annual_return_pct = float(result[24])
     profile = dict(result[-1]) if isinstance(result[-1], dict) else {}
     equity_curve_points = len(profile.get("equity_curve") or [])
+    full_year_count = int(profile.get("full_year_count", 0) or 0)
+    min_full_year_return_pct = float(profile.get("min_full_year_return_pct", 0.0) or 0.0)
+    yearly_return_rows = list(profile.get("yearly_return_rows") or [])
+    benchmark_full_year_count = int(profile.get("bm_full_year_count", 0) or 0)
+    benchmark_min_full_year_return_pct = float(profile.get("bm_min_full_year_return_pct", 0.0) or 0.0)
+    benchmark_yearly_return_rows = list(profile.get("bm_yearly_return_rows") or [])
     score = calc_portfolio_score(
         ret_pct,
         mdd_pct,
@@ -3850,7 +3856,7 @@ def _extract_active_replay_metrics(result) -> dict:
         r_squared,
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
-        min_full_year_return_pct=float(profile.get("min_full_year_return_pct", 0.0)),
+        min_full_year_return_pct=min_full_year_return_pct,
     )
     benchmark_score = calc_portfolio_score(
         bm_ret_pct,
@@ -3858,16 +3864,16 @@ def _extract_active_replay_metrics(result) -> dict:
         bm_monthly_win_rate,
         bm_r_squared,
         annual_return_pct=bm_annual_return_pct,
-        min_full_year_return_pct=float(profile.get("bm_min_full_year_return_pct", 0.0)),
+        min_full_year_return_pct=benchmark_min_full_year_return_pct,
     )
     return {
         "score": float(score),
         "return_pct": float(ret_pct),
         "mdd_pct": float(mdd_pct),
         "annual_return_pct": float(annual_return_pct),
-        "full_year_count": int(full_year_metrics.get("full_year_count", 0)),
-        "min_full_year_return_pct": min_full_year_return_pct,
-        "yearly_return_rows": list(full_year_metrics.get("yearly_return_rows", [])),
+        "full_year_count": int(full_year_count),
+        "min_full_year_return_pct": float(min_full_year_return_pct),
+        "yearly_return_rows": yearly_return_rows,
         "r_squared": float(r_squared),
         "monthly_win_rate": float(monthly_win_rate),
         "trade_count": int(trade_count),
@@ -3877,7 +3883,9 @@ def _extract_active_replay_metrics(result) -> dict:
         "benchmark_return_pct": float(bm_ret_pct),
         "benchmark_mdd_pct": float(bm_mdd_pct),
         "benchmark_annual_return_pct": float(bm_annual_return_pct),
-        "benchmark_min_full_year_return_pct": float(profile.get("bm_min_full_year_return_pct", 0.0)),
+        "benchmark_full_year_count": int(benchmark_full_year_count),
+        "benchmark_min_full_year_return_pct": float(benchmark_min_full_year_return_pct),
+        "benchmark_yearly_return_rows": benchmark_yearly_return_rows,
         "benchmark_r_squared": float(bm_r_squared),
         "benchmark_monthly_win_rate": float(bm_monthly_win_rate),
     }
