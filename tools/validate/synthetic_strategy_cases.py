@@ -1801,6 +1801,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
     add_check(results, "strategy_contract", case_id, "interactive_optimizer_menu_defaults_to_study_and_numbers_modes", True, "[Enter] Study Mode [1] OOS Mode [2] Rolling OOS Mode  [3] Trade Mode" in optimizer_study_utils_source)
     add_check(results, "strategy_contract", case_id, "interactive_study_scope_menu_uses_one_for_oos", True, "[Enter] Study-Full [1] Study-OOS" in optimizer_study_utils_source and "[2] Study-OOS" not in optimizer_study_utils_source)
+    add_check(results, "strategy_contract", case_id, "study_oos_dashboard_shows_train_period_single_stock_breakout_stats", True, "def _study_single_stock_breakout_stats_title" in callbacks_source and "Study-OOS 單股突破統計｜Train Period" in callbacks_source and "study_full_breakout_stats_title" in callbacks_source)
     add_check(results, "strategy_contract", case_id, "interactive_trial_prompt_exposes_zero_export", True, "[0] 輸出參數" in optimizer_study_utils_source and "min_value=0" in optimizer_study_utils_source)
     with patch("builtins.input", side_effect=["S", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
         interactive_zero_request = study_utils._resolve_interactive_optimizer_run_request()

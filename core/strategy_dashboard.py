@@ -509,6 +509,7 @@ def print_optimizer_trial_console_dashboard(*,
     params_lines: list[str],
     hard_gate_lines: list[str],
     study_full_breakout_stats: dict | None = None,
+    study_full_breakout_stats_title: str | None = None,
 ):
     training_header = ("指標項目", "本輪候選", "run_best (差異)", "同期大盤0050 (差異)")
     training_table_rows = [training_header]
@@ -613,7 +614,8 @@ def print_optimizer_trial_console_dashboard(*,
     )
     if study_full_stats_rows and study_full_stats_widths is not None:
         print(separator)
-        print(f"{C_CYAN}【Study-Full 單股突破統計】{C_RESET}")
+        stats_title = str(study_full_breakout_stats_title or "【Study-Full 單股突破統計】")
+        print(f"{C_CYAN}{stats_title}{C_RESET}")
         print(study_full_stats_header_line)
         print(_table_row_cells(study_full_stats_rows[1], study_full_stats_widths))
     print(separator)

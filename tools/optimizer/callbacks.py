@@ -93,10 +93,14 @@ def _resolve_session_model_mode(session) -> str:
     return _resolve_model_mode(getattr(session, "objective_mode", ""))
 
 
-def _is_study_full_session(session) -> bool:
+def _study_single_stock_breakout_stats_title(session) -> str | None:
     policy = dict(getattr(session, "walk_forward_policy", {}) or {})
-    return str(policy.get("evaluation_scope") or "").strip().lower().startswith("study_full")
-
+    scope = str(policy.get("evaluation_scope") or "").strip().lower()
+    if scope.startswith("study_full"):
+        return "【Study-Full 單股突破統計】"
+    if scope == "study_single_seed" or scope.startswith("study_oos") or scope.startswith("study-oos"):
+        return "【Study-OOS 單股突破統計｜Train Period】"
+    return None
 
 
 def _format_signed_r(value, *, digits: int = 3, large: bool = False) -> str:
@@ -982,6 +986,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
             benchmark_metrics=benchmark_test_metrics,
         )
 
+    study_breakout_stats_title = _study_single_stock_breakout_stats_title(session)
     return {
         "mode_display": mode_display,
         "model_mode": model_mode,
@@ -993,7 +998,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "test_rows": test_rows,
         "upgrade_rows": None,
         "compare_rows": None,
-        "study_full_breakout_stats": _build_study_full_breakout_stats(attrs) if _is_study_full_session(session) else None,
+        "study_full_breakout_stats": _build_study_full_breakout_stats(attrs) if study_breakout_stats_title else None,
+        "study_full_breakout_stats_title": study_breakout_stats_title,
         "base_score": _safe_float(attrs.get("base_score", 0.0)),
     }
 
@@ -1024,6 +1030,7 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
         params_lines=_build_training_param_lines(payload["params"]),
         hard_gate_lines=_build_hard_gate_lines(),
         study_full_breakout_stats=payload.get("study_full_breakout_stats"),
+        study_full_breakout_stats_title=payload.get("study_full_breakout_stats_title"),
     )
     render_elapsed = max(0.0, time.perf_counter() - render_started_at)
     return {
