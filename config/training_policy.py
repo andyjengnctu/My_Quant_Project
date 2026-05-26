@@ -17,13 +17,17 @@ BUY_SORT_METHOD = 'PROJ_COST'
 # 系統評分 (Score) 算法切換
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
-SCORE_CALC_METHOD = 'RoMD'  
-SCORE_MDD_POWER = 1.1 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
+# 'TOTAL_R' = 直接使用投組完成交易總 R 作為基底分數
+SCORE_CALC_METHOD = 'TOTAL_R'  
+SCORE_MDD_POWER = 1.0 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
 SCORE_MDD_DENOMINATOR_EPSILON = 0.0001
-SCORE_WIN_RATE_AMP_ENABLED = True  # True = 以完整交易勝率對 score 做目標式倍率校正。
+SCORE_WIN_RATE_AMP_ENABLED = False  # True = 以完整交易勝率對 score 做目標式倍率校正。
 SCORE_WIN_RATE_TARGET = 60.0  # 完整交易勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
-SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = True  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
+SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = False  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_FULL_YEAR_RETURN_TARGET = 20.0  # 完整年度最差報酬達此目標時倍率為 1；高於目標會放大。
+SCORE_MEDIAN_R_AMP_ENABLED = False  # True = 以投組完成交易 R 中位數對 score 做目標式倍率校正。
+SCORE_MEDIAN_R_FLOOR = -1.0  # R 中位數低於此值時倍率歸零；-1.0 代表完整 1R 虧損。
+SCORE_MEDIAN_R_TARGET = 0.0  # R 中位數達此目標時倍率為 1；高於目標會放大。
 
 # 系統評分分子切換
 # 'TOTAL_RETURN' = 分子使用總報酬率
@@ -248,6 +252,40 @@ def is_score_min_full_year_return_amp_enabled() -> bool:
     return bool(SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED)
 
 
+def is_score_median_r_amp_enabled() -> bool:
+    return bool(SCORE_MEDIAN_R_AMP_ENABLED)
+
+
+def resolve_score_median_r_floor(raw_value=None) -> float:
+    value = SCORE_MEDIAN_R_FLOOR if raw_value is None else raw_value
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"SCORE_MEDIAN_R_FLOOR 必須是有限數，目前值: {value!r}") from exc
+    if not math.isfinite(resolved):
+        raise ValueError(f"SCORE_MEDIAN_R_FLOOR 必須是有限數，目前值: {value!r}")
+    return resolved
+
+
+def resolve_score_median_r_target(raw_value=None, floor_r=None) -> float:
+    value = SCORE_MEDIAN_R_TARGET if raw_value is None else raw_value
+    floor = SCORE_MEDIAN_R_FLOOR if floor_r is None else floor_r
+    try:
+        resolved = float(value)
+        resolved_floor = float(floor)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"SCORE_MEDIAN_R_TARGET 必須是大於 SCORE_MEDIAN_R_FLOOR 的有限數，"
+            f"目前 target={value!r}, floor={floor!r}"
+        ) from exc
+    if not math.isfinite(resolved) or not math.isfinite(resolved_floor) or resolved <= resolved_floor:
+        raise ValueError(
+            f"SCORE_MEDIAN_R_TARGET 必須是大於 SCORE_MEDIAN_R_FLOOR 的有限數，"
+            f"目前 target={value!r}, floor={floor!r}"
+        )
+    return resolved
+
+
 def resolve_score_min_full_year_return_target(raw_value=None, floor_pct=None) -> float:
     value = SCORE_MIN_FULL_YEAR_RETURN_TARGET if raw_value is None else raw_value
     floor = MIN_FULL_YEAR_RETURN_PCT if floor_pct is None else floor_pct
@@ -290,6 +328,9 @@ def build_training_score_policy_snapshot():
         "SCORE_WIN_RATE_TARGET": resolve_score_win_rate_target(),
         "SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED": is_score_min_full_year_return_amp_enabled(),
         "SCORE_MIN_FULL_YEAR_RETURN_TARGET": resolve_score_min_full_year_return_target(),
+        "SCORE_MEDIAN_R_AMP_ENABLED": is_score_median_r_amp_enabled(),
+        "SCORE_MEDIAN_R_FLOOR": resolve_score_median_r_floor(),
+        "SCORE_MEDIAN_R_TARGET": resolve_score_median_r_target(),
         "OPTIMIZER_FIXED_TP_PERCENT": OPTIMIZER_FIXED_TP_PERCENT,
         "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED": is_optimizer_local_min_review_enabled(),
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,

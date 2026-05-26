@@ -2132,6 +2132,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             bm_annual_return_pct=bm_annual_return_pct,
             min_full_year_return_pct=min_full_year_return_pct,
             bm_min_full_year_return_pct=bm_min_full_year_return_pct,
+            portfolio_total_r=pf_profile.get("portfolio_total_r", 0.0),
+            portfolio_median_r=pf_profile.get("portfolio_median_r", 0.0),
             params_section_title=params_section_title,
             params_schedule_rows=rolling_params_schedule_rows,
         )

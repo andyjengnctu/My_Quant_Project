@@ -258,6 +258,8 @@ def main(argv=None, env=None):
         annual_trades=annual_trades, reserved_buy_fill_rate=reserved_buy_fill_rate,
         annual_return_pct=annual_return_pct, bm_annual_return_pct=bm_annual_return_pct,
         min_full_year_return_pct=min_full_year_return_pct, bm_min_full_year_return_pct=bm_min_full_year_return_pct,
+        portfolio_total_r=pf_profile.get("portfolio_total_r", 0.0),
+        portfolio_median_r=pf_profile.get("portfolio_median_r", 0.0),
         params_section_title=dashboard_params_section_title,
         params_schedule_rows=dashboard_params_schedule_rows
     )

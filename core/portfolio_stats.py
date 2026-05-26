@@ -46,40 +46,96 @@ def calc_score_min_full_year_return_multiplier(min_full_year_return_pct, floor_p
     return max(0.0, (min_return - floor) / (target - floor))
 
 
-def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None, min_full_year_return_pct=None):
+def calc_score_median_r_multiplier(median_r, floor_r, target_r):
+    median_value = float(median_r)
+    floor = float(floor_r)
+    target = float(target_r)
+    if not math.isfinite(median_value):
+        median_value = floor
+    if not math.isfinite(floor) or not math.isfinite(target) or target <= floor:
+        raise ValueError(
+            f"SCORE_MEDIAN_R_TARGET 必須大於 SCORE_MEDIAN_R_FLOOR，"
+            f"目前 target={target_r!r}, floor={floor_r!r}"
+        )
+    return max(0.0, (median_value - floor) / (target - floor))
+
+
+def summarize_closed_trade_r_stats(closed_trades_stats):
+    r_values = []
+    for trade in list(closed_trades_stats or []):
+        try:
+            r_value = float((trade or {}).get('r_mult', 0.0))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(r_value):
+            r_values.append(r_value)
+
+    trade_count = len(r_values)
+    total_r = float(sum(r_values)) if r_values else 0.0
+    if trade_count <= 0:
+        median_r = 0.0
+    else:
+        sorted_values = sorted(r_values)
+        mid = trade_count // 2
+        if trade_count % 2 == 1:
+            median_r = float(sorted_values[mid])
+        else:
+            median_r = float((sorted_values[mid - 1] + sorted_values[mid]) / 2.0)
+
+    return {
+        'trade_count': int(trade_count),
+        'total_r': float(total_r),
+        'median_r': float(median_r),
+        'avg_r': float(total_r / trade_count) if trade_count > 0 else 0.0,
+    }
+
+
+def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None, min_full_year_return_pct=None, total_r=None, median_r=None):
     from core.config import (
         get_score_calc_method,
         get_score_mdd_denominator_epsilon,
         get_min_full_year_return_pct,
         get_score_mdd_power,
+        get_score_median_r_floor,
+        get_score_median_r_target,
         get_score_min_full_year_return_target,
         get_score_numerator_method,
         get_score_win_rate_target,
+        is_score_median_r_amp_enabled,
         is_score_min_full_year_return_amp_enabled,
         is_score_win_rate_amp_enabled,
     )
 
     score_calc_method = get_score_calc_method()
-    score_numerator_method = get_score_numerator_method()
-    score_mdd_power = get_score_mdd_power()
-    score_mdd_denominator_epsilon = get_score_mdd_denominator_epsilon()
 
-    annual_return = sys_ret if annual_return_pct is None else annual_return_pct
-    if score_numerator_method == 'ANNUAL_RETURN':
-        numerator = annual_return
-    elif score_numerator_method == 'TOTAL_RETURN':
-        numerator = sys_ret
+    if score_calc_method == 'TOTAL_R':
+        try:
+            score = float(total_r)
+        except (TypeError, ValueError):
+            score = 0.0
+        if not math.isfinite(score):
+            score = 0.0
     else:
-        raise ValueError(f"未知 SCORE_NUMERATOR_METHOD: {score_numerator_method}")
+        score_numerator_method = get_score_numerator_method()
+        score_mdd_power = get_score_mdd_power()
+        score_mdd_denominator_epsilon = get_score_mdd_denominator_epsilon()
 
-    mdd_denominator = (abs(float(sys_mdd)) ** score_mdd_power) + score_mdd_denominator_epsilon
-    base_score = numerator / mdd_denominator
-    if score_calc_method == 'LOG_R2':
-        score = base_score * (m_win_rate / 100.0) * r_sq
-    elif score_calc_method == 'RoMD':
-        score = base_score
-    else:
-        raise ValueError(f"未知 SCORE_CALC_METHOD: {score_calc_method}")
+        annual_return = sys_ret if annual_return_pct is None else annual_return_pct
+        if score_numerator_method == 'ANNUAL_RETURN':
+            numerator = annual_return
+        elif score_numerator_method == 'TOTAL_RETURN':
+            numerator = sys_ret
+        else:
+            raise ValueError(f"未知 SCORE_NUMERATOR_METHOD: {score_numerator_method}")
+
+        mdd_denominator = (abs(float(sys_mdd)) ** score_mdd_power) + score_mdd_denominator_epsilon
+        base_score = numerator / mdd_denominator
+        if score_calc_method == 'LOG_R2':
+            score = base_score * (m_win_rate / 100.0) * r_sq
+        elif score_calc_method == 'RoMD':
+            score = base_score
+        else:
+            raise ValueError(f"未知 SCORE_CALC_METHOD: {score_calc_method}")
 
     if is_score_win_rate_amp_enabled() and trade_win_rate_pct is not None:
         score *= calc_score_win_rate_multiplier(
@@ -91,6 +147,12 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
             min_full_year_return_pct,
             get_min_full_year_return_pct(),
             get_score_min_full_year_return_target(),
+        )
+    if is_score_median_r_amp_enabled() and median_r is not None:
+        score *= calc_score_median_r_multiplier(
+            median_r,
+            get_score_median_r_floor(),
+            get_score_median_r_target(),
         )
     return score
 

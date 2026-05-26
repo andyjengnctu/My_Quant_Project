@@ -179,6 +179,8 @@ def _evaluate_single_holdout_period(
                 "benchmark_return_pct": float(row.get(benchmark_col, 0.0) or 0.0),
             })
     min_full_year_return_pct = float(pf_profile.get('min_full_year_return_pct', 0.0))
+    portfolio_total_r = float(pf_profile.get('portfolio_total_r', 0.0))
+    portfolio_median_r = float(pf_profile.get('portfolio_median_r', 0.0))
     benchmark_min_full_year_return_pct = float(pf_profile.get('bm_min_full_year_return_pct', 0.0))
     test_score_romd = calc_portfolio_score(
         ret_pct,
@@ -188,6 +190,8 @@ def _evaluate_single_holdout_period(
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        total_r=portfolio_total_r,
+        median_r=portfolio_median_r,
     )
     return {
         'label': str(holdout_period.get('label') or 'OOS'),
@@ -209,6 +213,8 @@ def _evaluate_single_holdout_period(
         'win_rate': float(win_rate),
         'pf_payoff': float(pf_payoff),
         'pf_ev': float(pf_ev),
+        'portfolio_total_r': float(portfolio_total_r),
+        'portfolio_median_r': float(portfolio_median_r),
         'r_squared': float(r_sq),
         'monthly_win_rate': float(m_win_rate),
         'final_equity': float(final_eq),
@@ -345,6 +351,8 @@ def _empty_test_period_metrics() -> dict:
         'win_rate': 0.0,
         'payoff': 0.0,
         'ev': 0.0,
+        'portfolio_total_r': 0.0,
+        'portfolio_median_r': 0.0,
         'r_squared': 0.0,
         'monthly_win_rate': 0.0,
         'avg_exposure': 0.0,
@@ -380,6 +388,8 @@ def build_test_period_metrics(report: dict | None) -> dict:
         'win_rate': float(period.get('win_rate', 0.0)),
         'payoff': float(period.get('pf_payoff', 0.0)),
         'ev': float(period.get('pf_ev', 0.0)),
+        'portfolio_total_r': float(period.get('portfolio_total_r', 0.0)),
+        'portfolio_median_r': float(period.get('portfolio_median_r', 0.0)),
         'r_squared': float(period.get('r_squared', 0.0)),
         'monthly_win_rate': float(period.get('monthly_win_rate', 0.0)),
         'avg_exposure': float(period.get('avg_exposure', 0.0)),

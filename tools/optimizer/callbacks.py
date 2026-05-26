@@ -300,6 +300,8 @@ def _optimizer_romd_metric_label() -> str:
 
 def _optimizer_train_score_display_label() -> str:
     method = str(SCORE_CALC_METHOD or "").strip() or "Score"
+    if method == "TOTAL_R":
+        return f"Train Score[{method}]"
     numerator = str(SCORE_NUMERATOR_METHOD or "").strip() or "TOTAL_RETURN"
     return f"Train Score[{method}/{numerator}]"
 
@@ -568,6 +570,8 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
     annual_return_pct = _safe_float(result[23])
     bm_annual_return_pct = _safe_float(result[24])
     profile = dict(result[25] or {})
+    portfolio_total_r = _safe_float(profile.get("portfolio_total_r", 0.0))
+    portfolio_median_r = _safe_float(profile.get("portfolio_median_r", 0.0))
     candidate_score = calc_portfolio_score(
         total_return,
         max_drawdown,
@@ -576,6 +580,8 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=_safe_float(profile.get("min_full_year_return_pct", 0.0)),
+        total_r=portfolio_total_r,
+        median_r=portfolio_median_r,
     )
     benchmark_score = calc_portfolio_score(
         benchmark_return,
@@ -596,6 +602,8 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         "win_rate": win_rate,
         "pf_payoff": pf_payoff,
         "pf_ev": pf_ev,
+        "pf_total_r": portfolio_total_r,
+        "pf_median_r": portfolio_median_r,
         "pf_trades": trade_count,
         "normal_trades": normal_trade_count,
         "extended_trades": extended_trade_count,
@@ -741,6 +749,8 @@ def _compute_reference_console_cache(session):
             "pf_return": float(ret_pct),
             "annual_return_pct": float(annual_return_pct),
             "min_full_year_return_pct": float(pf_profile.get("min_full_year_return_pct", 0.0)),
+            "pf_total_r": float(pf_profile.get("portfolio_total_r", 0.0)),
+            "pf_median_r": float(pf_profile.get("portfolio_median_r", 0.0)),
             "pf_mdd": float(mdd),
             "r_squared": float(r_sq),
             "m_win_rate": float(m_win_rate),
@@ -765,6 +775,8 @@ def _compute_reference_console_cache(session):
                 annual_return_pct=float(annual_return_pct),
                 trade_win_rate_pct=float(win_rate),
                 min_full_year_return_pct=float(pf_profile.get("min_full_year_return_pct", 0.0)),
+                total_r=float(pf_profile.get("portfolio_total_r", 0.0)),
+                median_r=float(pf_profile.get("portfolio_median_r", 0.0)),
             )),
             "source_path": params_path,
             "wf_report": None,
@@ -851,6 +863,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "pf_return": _safe_float(attrs.get("pf_return", 0.0)),
         "annual_return_pct": _safe_float(attrs.get("annual_return_pct", 0.0)),
         "min_full_year_return_pct": _safe_float(attrs.get("min_full_year_return_pct", 0.0)),
+        "pf_total_r": _safe_float(attrs.get("pf_total_r", 0.0)),
+        "pf_median_r": _safe_float(attrs.get("pf_median_r", 0.0)),
         "pf_mdd": _safe_float(attrs.get("pf_mdd", 0.0)),
         "r_squared": _safe_float(attrs.get("r_squared", 0.0)),
         "m_win_rate": _safe_float(attrs.get("m_win_rate", 0.0)),
@@ -875,6 +889,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
             annual_return_pct=_safe_float(attrs.get("annual_return_pct", 0.0)),
             trade_win_rate_pct=_safe_float(attrs.get("win_rate", 0.0)),
             min_full_year_return_pct=_safe_float(attrs.get("min_full_year_return_pct", 0.0)),
+            total_r=_safe_float(attrs.get("pf_total_r", 0.0)),
+            median_r=_safe_float(attrs.get("pf_median_r", 0.0)),
         )),
     }
     benchmark_train_metrics = {

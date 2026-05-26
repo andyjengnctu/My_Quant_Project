@@ -70,11 +70,12 @@ def print_scanner_header(params):
         if get_p(params, 'use_breakout_buy', True)
         else "關閉"
     )
+    score_numerator_display = "不適用" if str(SCORE_CALC_METHOD) == "TOTAL_R" else SCORE_NUMERATOR_METHOD
     print(
         f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | "
         f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
         f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | "
-        f"評分分子 [{C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}]"
+        f"評分分子 [{C_YELLOW}{score_numerator_display}{C_RESET}]"
     )
     sort_metric_label = get_buy_sort_metric_label(BUY_SORT_METHOD)
     sort_probe_fields = "EV / 勝率 / 資產成長 / 交易次數"

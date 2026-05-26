@@ -3327,6 +3327,8 @@ def _extract_period_metrics(report: dict) -> dict:
         "ret_pct": float(period.get("ret_pct", 0.0)),
         "mdd_pct": float(period.get("mdd", 0.0)),
         "trades": int(period.get("trade_count", 0) or 0),
+        "portfolio_total_r": float(period.get("portfolio_total_r", 0.0)),
+        "portfolio_median_r": float(period.get("portfolio_median_r", 0.0)),
         "benchmark_oos_score": float(period.get("benchmark_score_romd", 0.0)),
         "benchmark_return_pct": float(period.get("benchmark_return_pct", 0.0)),
         "benchmark_mdd_pct": float(period.get("benchmark_mdd", 0.0)),
@@ -3488,6 +3490,8 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
             "rank_1_return_pct": float(metrics.get("ret_pct", 0.0)),
             "rank_1_mdd_pct": float(metrics.get("mdd_pct", 0.0)),
             "rank_1_trades": int(metrics.get("trades", 0) or 0),
+            "rank_1_total_r": float(metrics.get("portfolio_total_r", 0.0)),
+            "rank_1_median_r": float(metrics.get("portfolio_median_r", 0.0)),
             "best_gap": rank_1_oos - float(best_score),
             "benchmark_0050_gap": rank_1_oos - float(benchmark_score),
             "rank_1_initial_capital": float(metrics.get("initial_capital", 0.0)),
@@ -3499,6 +3503,8 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         "best_finalist_return_pct": float(best_metrics.get("ret_pct", 0.0)),
         "best_finalist_mdd_pct": float(best_metrics.get("mdd_pct", 0.0)),
         "best_finalist_trades": int(best_metrics.get("trades", 0) or 0),
+        "best_finalist_total_r": float(best_metrics.get("portfolio_total_r", 0.0)),
+        "best_finalist_median_r": float(best_metrics.get("portfolio_median_r", 0.0)),
         "best_finalist_initial_capital": float(best_metrics.get("initial_capital", 0.0)),
         "best_finalist_equity_curve": list(best_metrics.get("equity_curve") or []),
         "best_finalist_params": build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT) if best_trial is not None else {},
@@ -3849,6 +3855,8 @@ def _extract_active_replay_metrics(result) -> dict:
     benchmark_full_year_count = int(profile.get("bm_full_year_count", 0) or 0)
     benchmark_min_full_year_return_pct = float(profile.get("bm_min_full_year_return_pct", 0.0) or 0.0)
     benchmark_yearly_return_rows = list(profile.get("bm_yearly_return_rows") or [])
+    portfolio_total_r = float(profile.get("portfolio_total_r", 0.0) or 0.0)
+    portfolio_median_r = float(profile.get("portfolio_median_r", 0.0) or 0.0)
     score = calc_portfolio_score(
         ret_pct,
         mdd_pct,
@@ -3857,6 +3865,8 @@ def _extract_active_replay_metrics(result) -> dict:
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        total_r=portfolio_total_r,
+        median_r=portfolio_median_r,
     )
     benchmark_score = calc_portfolio_score(
         bm_ret_pct,
@@ -3878,6 +3888,8 @@ def _extract_active_replay_metrics(result) -> dict:
         "monthly_win_rate": float(monthly_win_rate),
         "trade_count": int(trade_count),
         "win_rate": float(win_rate),
+        "portfolio_total_r": float(portfolio_total_r),
+        "portfolio_median_r": float(portfolio_median_r),
         "curve_points": int(equity_curve_points),
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": float(bm_ret_pct),
@@ -7475,6 +7487,8 @@ def _policy_metrics_from_ensemble_metrics(metrics: dict, *, best_score: float, b
         "rank_1_return_pct": float(metrics.get("return_pct", 0.0)),
         "rank_1_mdd_pct": float(metrics.get("mdd_pct", 0.0)),
         "rank_1_trades": int(metrics.get("trade_count", 0) or 0),
+        "rank_1_total_r": float(metrics.get("portfolio_total_r", 0.0)),
+        "rank_1_median_r": float(metrics.get("portfolio_median_r", 0.0)),
         "best_gap": rank_1_oos - float(best_score),
         "benchmark_0050_gap": rank_1_oos - float(benchmark_score),
         "rank_1_initial_capital": float(metrics.get("initial_equity", 0.0) or 0.0),

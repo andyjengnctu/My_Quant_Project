@@ -187,6 +187,8 @@ def print_strategy_dashboard(
     bm_annual_return_pct=0.0,
     min_full_year_return_pct=0.0,
     bm_min_full_year_return_pct=0.0,
+    portfolio_total_r=0.0,
+    portfolio_median_r=0.0,
     params_section_title="訓練參數",
     params_note_lines=None,
     params_schedule_rows=None,
@@ -227,6 +229,8 @@ def print_strategy_dashboard(
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        total_r=portfolio_total_r,
+        median_r=portfolio_median_r,
     )
 
     rsq_diff = r_sq - bm_r_sq
@@ -254,11 +258,12 @@ def print_strategy_dashboard(
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
     if title:
         print(f"{C_CYAN}{title}{C_RESET}")
+    score_numerator_display = "不適用" if str(SCORE_CALC_METHOD) == "TOTAL_R" else SCORE_NUMERATOR_METHOD
     print(
         f"🎯 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | "
         f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
         f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | "
-        f"評分分子 [{C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}] | "
+        f"評分分子 [{C_YELLOW}{score_numerator_display}{C_RESET}] | "
         f"系統得分: {C_CYAN}{format_system_score_for_display(final_score, decimals=2)}{C_RESET}"
     )
     print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
@@ -581,9 +586,10 @@ def print_optimizer_trial_console_dashboard(*,
         f"{C_CYAN}【全域戰略】{C_RESET} {C_YELLOW}{global_strategy_text}{C_RESET} | "
         f"模式：{mode_display} | 最大持股：{max_pos} 檔 | model_mode：{C_YELLOW}{model_mode.upper()}{C_RESET}"
     )
+    score_numerator_display = "不適用" if str(score_calc_method) == "TOTAL_R" else score_numerator_method
     print(
         f"{C_CYAN}【評分模式】{C_RESET} 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
-        f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | "
+        f"評分分子：[{C_YELLOW}{score_numerator_display}{C_RESET}] | "
         f"系統得分：{C_CYAN}{system_score_display}{C_RESET}"
     )
     if study_full_stats_rows and study_full_stats_widths is not None:

@@ -302,6 +302,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     full_year_count = int(pf_profile.get("full_year_count", 0))
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
     bm_min_full_year_return_pct = float(pf_profile.get("bm_min_full_year_return_pct", 0.0))
+    portfolio_total_r = float(pf_profile.get("portfolio_total_r", 0.0))
+    portfolio_median_r = float(pf_profile.get("portfolio_median_r", 0.0))
     policy_scope = str((getattr(session, "walk_forward_policy", {}) or {}).get("evaluation_scope") or "").strip().lower()
     single_stock_trade_stats = (
         summarize_single_stock_trade_stats_from_pit_index(all_pit_stats_index, search_scope["search_train_dates"])
@@ -337,6 +339,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             "win_rate": win_rate,
             "pf_ev": pf_ev,
             "pf_payoff": pf_payoff,
+            "portfolio_total_r": portfolio_total_r,
+            "portfolio_median_r": portfolio_median_r,
             "single_stock_trade_stats": single_stock_trade_stats,
             "missed_buys": total_missed,
             "missed_sells": total_missed_sells,
@@ -366,6 +370,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        total_r=portfolio_total_r,
+        median_r=portfolio_median_r,
     )
     return {
         "ok": True,
@@ -383,6 +389,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         "win_rate": win_rate,
         "pf_ev": pf_ev,
         "pf_payoff": pf_payoff,
+        "portfolio_total_r": portfolio_total_r,
+        "portfolio_median_r": portfolio_median_r,
         "single_stock_trade_stats": single_stock_trade_stats,
         "missed_buys": total_missed,
         "missed_sells": total_missed_sells,
@@ -471,6 +479,8 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         pit_stats_index=all_pit_stats_index,
     )
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
+    portfolio_total_r = float(pf_profile.get("portfolio_total_r", 0.0))
+    portfolio_median_r = float(pf_profile.get("portfolio_median_r", 0.0))
     inner_validate_score = calc_portfolio_score(
         ret_pct,
         mdd,
@@ -479,6 +489,8 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        total_r=portfolio_total_r,
+        median_r=portfolio_median_r,
     )
     return {
         "enabled": True,
@@ -493,6 +505,8 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         "trade_count": int(trade_count),
         "annual_return_pct": float(annual_return_pct),
         "min_full_year_return_pct": float(min_full_year_return_pct),
+        "portfolio_total_r": float(portfolio_total_r),
+        "portfolio_median_r": float(portfolio_median_r),
         "monthly_win_rate": float(m_win_rate),
         "r_squared": float(r_sq),
         "normal_trades": int(normal_trade_count),
@@ -617,6 +631,8 @@ def run_optimizer_objective(session, trial):
     profile_row["single_stock_avg_r"] = float(single_stock_trade_stats.get("avg_r", 0.0) or 0.0)
     profile_row["single_stock_median_r"] = float(single_stock_trade_stats.get("median_r", 0.0) or 0.0)
     profile_row["single_stock_total_r"] = float(single_stock_trade_stats.get("total_r", 0.0) or 0.0)
+    profile_row["pf_total_r"] = float(evaluation.get("portfolio_total_r", 0.0) or 0.0)
+    profile_row["pf_median_r"] = float(evaluation.get("portfolio_median_r", 0.0) or 0.0)
     profile_row["base_score"] = float(evaluation.get("base_score", INVALID_TRIAL_VALUE))
     if not evaluation["ok"]:
         return _append_invalid_profile_row(
@@ -638,6 +654,8 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("win_rate", evaluation["win_rate"])
     trial.set_user_attr("pf_ev", evaluation["pf_ev"])
     trial.set_user_attr("pf_payoff", evaluation["pf_payoff"])
+    trial.set_user_attr("pf_total_r", evaluation.get("portfolio_total_r", 0.0))
+    trial.set_user_attr("pf_median_r", evaluation.get("portfolio_median_r", 0.0))
     trial.set_user_attr("single_stock_trade_count", int(single_stock_trade_stats.get("trade_count", 0) or 0))
     trial.set_user_attr("single_stock_win_rate", float(single_stock_trade_stats.get("win_rate", 0.0) or 0.0))
     trial.set_user_attr("single_stock_payoff_r", float(single_stock_trade_stats.get("payoff_r", 0.0) or 0.0))

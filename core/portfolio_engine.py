@@ -22,6 +22,7 @@ from core.portfolio_stats import (
     calc_curve_stats,
     calc_sim_years,
     find_sim_start_idx,
+    summarize_closed_trade_r_stats,
 )
 from core.portfolio_stats import calc_portfolio_score
 from core.portfolio_attribution import build_dominant_year_dependency_diagnostics
@@ -955,6 +956,7 @@ def run_portfolio_timeline(
     curve_stats_sec = (time.perf_counter() - t0) if profile_timing_enabled else 0.0
 
     trade_count = len(closed_trades_stats)
+    portfolio_r_stats = summarize_closed_trade_r_stats(closed_trades_stats)
     if trade_count > 0:
         wins = [t for t in closed_trades_stats if t['pnl'] > 0]
         losses = [t for t in closed_trades_stats if t['pnl'] <= 0]
@@ -1033,6 +1035,9 @@ def run_portfolio_timeline(
         profile_stats['annual_return_pct'] = annual_return_pct
         profile_stats['bm_annual_return_pct'] = bm_annual_return_pct
         profile_stats['reserved_buy_fill_rate'] = reserved_buy_fill_rate
+        profile_stats['portfolio_total_r'] = float(portfolio_r_stats.get('total_r', 0.0))
+        profile_stats['portfolio_median_r'] = float(portfolio_r_stats.get('median_r', 0.0))
+        profile_stats['portfolio_avg_r'] = float(portfolio_r_stats.get('avg_r', 0.0))
         profile_stats['filled_buy_count'] = filled_buy_count
         if active_level_rows is not None:
             profile_stats['portfolio_active_level_rows'] = list(active_level_rows)
