@@ -117,6 +117,11 @@ PERFORMANCE_CHART_TITLE_PAD_PX = 6
 PERFORMANCE_CHART_SUBPLOT_TOP = 0.945
 PERFORMANCE_CHART_CLOSE_BUTTON_SIZE_PX = 22
 PERFORMANCE_CHART_CLOSE_BUTTON_MARGIN_PX = 5
+PERFORMANCE_HOVER_CROSSHAIR_COLOR = "#f7fbff"
+PERFORMANCE_HOVER_TEXT_FACE = "#07111f"
+PERFORMANCE_HOVER_TEXT_EDGE = "#243447"
+PERFORMANCE_HOVER_LINE_ALPHA = 0.62
+PERFORMANCE_HOVER_MARKER_SIZE = 42
 PORTFOLIO_RIGHT_SIDEBAR_WIDTH_SCALE = 4 / 3
 PORTFOLIO_RIGHT_SIDEBAR_WIDTH = int(round(WORKBENCH_RIGHT_SIDEBAR_WIDTH * PORTFOLIO_RIGHT_SIDEBAR_WIDTH_SCALE))
 PORTFOLIO_RIGHT_SIDEBAR_WRAPLENGTH = PORTFOLIO_RIGHT_SIDEBAR_WIDTH - (WORKBENCH_RIGHT_SIDEBAR_WIDTH - WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH)
@@ -2590,6 +2595,11 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         canvas = record.get("canvas")
         figure = record.get("figure")
         if canvas is not None:
+            for connection_id in dict(record.get("hover_connection_ids") or {}).values():
+                try:
+                    canvas.mpl_disconnect(connection_id)
+                except (KeyError, ValueError, RuntimeError) as exc:
+                    _warn_gui_fallback("performance_chart.hover.disconnect", exc)
             canvas.get_tk_widget().destroy()
         if figure is not None:
             figure.clear()
@@ -2639,6 +2649,221 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             f"｜Benchmark {options.get('benchmark_ticker', PORTFOLIO_DEFAULT_BENCHMARK_TICKER)}"
         )
 
+    def _bind_performance_chart_hover(self, *, canvas, figure, axis, dates, strategy_values, benchmark_values=None, benchmark_label="0050", font_prop=None):
+        try:
+            from matplotlib import dates as mdates
+        except ImportError as exc:
+            _warn_gui_fallback("performance_chart.hover.import", exc)
+            return {}
+
+        date_series = pd.to_datetime(pd.Series(dates), errors="coerce").reset_index(drop=True)
+        strategy_series = pd.to_numeric(pd.Series(strategy_values), errors="coerce").reset_index(drop=True)
+        row_count = min(len(date_series), len(strategy_series))
+        if row_count <= 0:
+            return {}
+        date_series = date_series.iloc[:row_count]
+        strategy_series = strategy_series.iloc[:row_count]
+        valid_mask = date_series.notna() & strategy_series.notna()
+        if not bool(valid_mask.any()):
+            return {}
+
+        date_series = date_series.loc[valid_mask].reset_index(drop=True)
+        strategy_series = strategy_series.loc[valid_mask].reset_index(drop=True)
+        date_nums = mdates.date2num(date_series.to_numpy(dtype="datetime64[ns]"))
+        strategy_array = strategy_series.astype(float).to_numpy()
+
+        benchmark_array = None
+        has_benchmark = benchmark_values is not None
+        if has_benchmark:
+            benchmark_series = pd.to_numeric(pd.Series(benchmark_values), errors="coerce").reset_index(drop=True)
+            benchmark_series = benchmark_series.iloc[:row_count]
+            benchmark_series = benchmark_series.loc[valid_mask].reset_index(drop=True)
+            benchmark_array = benchmark_series.astype(float).to_numpy()
+            has_benchmark = len(benchmark_array) == len(strategy_array)
+
+        hover_vline = axis.axvline(
+            x=date_nums[-1],
+            color=PERFORMANCE_HOVER_CROSSHAIR_COLOR,
+            linewidth=0.9,
+            linestyle=(0, (4, 4)),
+            alpha=PERFORMANCE_HOVER_LINE_ALPHA,
+            zorder=8,
+        )
+        strategy_hline = axis.axhline(
+            y=float(strategy_array[-1]),
+            color=PERFORMANCE_STRATEGY_COLOR,
+            linewidth=0.9,
+            linestyle=(0, (4, 4)),
+            alpha=PERFORMANCE_HOVER_LINE_ALPHA,
+            zorder=8,
+        )
+        strategy_marker = axis.scatter(
+            [],
+            [],
+            s=PERFORMANCE_HOVER_MARKER_SIZE,
+            color=PERFORMANCE_STRATEGY_COLOR,
+            edgecolors=PERFORMANCE_HOVER_CROSSHAIR_COLOR,
+            linewidths=0.8,
+            zorder=9,
+        )
+        benchmark_hline = None
+        benchmark_marker = None
+        if has_benchmark and benchmark_array is not None:
+            benchmark_hline = axis.axhline(
+                y=float(benchmark_array[-1]),
+                color=PERFORMANCE_BENCHMARK_COLOR,
+                linewidth=0.9,
+                linestyle=(0, (4, 4)),
+                alpha=PERFORMANCE_HOVER_LINE_ALPHA,
+                zorder=8,
+            )
+            benchmark_marker = axis.scatter(
+                [],
+                [],
+                s=PERFORMANCE_HOVER_MARKER_SIZE,
+                color=PERFORMANCE_BENCHMARK_COLOR,
+                edgecolors=PERFORMANCE_HOVER_CROSSHAIR_COLOR,
+                linewidths=0.8,
+                zorder=9,
+            )
+
+        hover_text = axis.text(
+            0.985,
+            0.985,
+            "",
+            transform=axis.transAxes,
+            ha="right",
+            va="top",
+            color=PERFORMANCE_HOVER_CROSSHAIR_COLOR,
+            fontsize=10 if font_prop is None else None,
+            fontproperties=font_prop,
+            bbox={"boxstyle": "round,pad=0.36", "fc": PERFORMANCE_HOVER_TEXT_FACE, "ec": PERFORMANCE_HOVER_TEXT_EDGE, "lw": 0.9, "alpha": 0.92},
+            zorder=10,
+        )
+
+        hover_artists = [hover_vline, strategy_hline, strategy_marker, hover_text]
+        if benchmark_hline is not None:
+            hover_artists.append(benchmark_hline)
+        if benchmark_marker is not None:
+            hover_artists.append(benchmark_marker)
+        for artist in hover_artists:
+            artist.set_visible(False)
+
+        state = {
+            "last_index": None,
+            "date_nums": date_nums,
+            "strategy_values": strategy_array,
+            "benchmark_values": benchmark_array if has_benchmark else None,
+            "benchmark_label": str(benchmark_label or "0050"),
+            "hover_artists": hover_artists,
+        }
+
+        def _nearest_index(x_value):
+            if x_value is None or not np.isfinite(float(x_value)):
+                return None
+            insertion_index = int(np.searchsorted(date_nums, float(x_value), side="left"))
+            if insertion_index <= 0:
+                return 0
+            if insertion_index >= len(date_nums):
+                return len(date_nums) - 1
+            left_index = insertion_index - 1
+            right_index = insertion_index
+            left_distance = abs(float(x_value) - float(date_nums[left_index]))
+            right_distance = abs(float(date_nums[right_index]) - float(x_value))
+            return left_index if left_distance <= right_distance else right_index
+
+        def _format_return(value):
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return "-"
+            if not np.isfinite(numeric):
+                return "-"
+            return f"{numeric:+.2f}%"
+
+        def _set_hover_visible(visible):
+            for artist in hover_artists:
+                artist.set_visible(bool(visible))
+
+        def _update_hover(index):
+            if index is None:
+                _set_hover_visible(False)
+                state["last_index"] = None
+                return True
+            index = int(index)
+            if index < 0 or index >= len(date_nums):
+                _set_hover_visible(False)
+                state["last_index"] = None
+                return True
+            x_value = float(date_nums[index])
+            strategy_value = float(strategy_array[index])
+            if not np.isfinite(strategy_value):
+                _set_hover_visible(False)
+                state["last_index"] = None
+                return True
+
+            hover_vline.set_xdata([x_value, x_value])
+            strategy_hline.set_ydata([strategy_value, strategy_value])
+            strategy_marker.set_offsets(np.array([[x_value, strategy_value]], dtype=float))
+            text_lines = [
+                f"日期：{date_series.iloc[index].strftime('%Y-%m-%d')}",
+                f"V16：{_format_return(strategy_value)}",
+            ]
+            if has_benchmark and benchmark_array is not None and benchmark_hline is not None and benchmark_marker is not None:
+                benchmark_value = float(benchmark_array[index])
+                if np.isfinite(benchmark_value):
+                    benchmark_hline.set_ydata([benchmark_value, benchmark_value])
+                    benchmark_marker.set_offsets(np.array([[x_value, benchmark_value]], dtype=float))
+                    benchmark_hline.set_visible(True)
+                    benchmark_marker.set_visible(True)
+                    text_lines.append(f"{state['benchmark_label']}：{_format_return(benchmark_value)}")
+                else:
+                    benchmark_hline.set_visible(False)
+                    benchmark_marker.set_visible(False)
+                    text_lines.append(f"{state['benchmark_label']}：-")
+            hover_text.set_text("\n".join(text_lines))
+            hover_vline.set_visible(True)
+            strategy_hline.set_visible(True)
+            strategy_marker.set_visible(True)
+            hover_text.set_visible(True)
+            state["last_index"] = index
+            return True
+
+        def _on_motion(event):
+            if getattr(event, "inaxes", None) is not axis:
+                return None
+            index = _nearest_index(getattr(event, "xdata", None))
+            if index is None:
+                if _update_hover(None):
+                    canvas.draw_idle()
+                return None
+            if state.get("last_index") == index:
+                return None
+            _update_hover(index)
+            canvas.draw_idle()
+            return None
+
+        def _on_leave(_event):
+            if state.get("last_index") is None:
+                return None
+            _update_hover(None)
+            canvas.draw_idle()
+            return None
+
+        connection_ids = {
+            "motion_notify_event": canvas.mpl_connect("motion_notify_event", _on_motion),
+            "axes_leave_event": canvas.mpl_connect("axes_leave_event", _on_leave),
+            "figure_leave_event": canvas.mpl_connect("figure_leave_event", _on_leave),
+        }
+        state["connection_ids"] = connection_ids
+        figure._workbench_performance_hover_state = state
+        figure._workbench_performance_hover_contract = {
+            "mouse_time_axis_enabled": True,
+            "strategy_return_line_enabled": True,
+            "benchmark_return_line_enabled": bool(has_benchmark),
+        }
+        return connection_ids
+
     def _render_performance_chart(self, result_payload):
         df_eq = result_payload.get("df_eq")
         options = result_payload.get("options") or {}
@@ -2659,8 +2884,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
         rcParams["axes.unicode_minus"] = False
         dates = pd.to_datetime(df_eq["Date"])
+        strategy_return_values = pd.to_numeric(df_eq["Strategy_Return_Pct"], errors="coerce")
         benchmark_ticker = options.get("benchmark_ticker", PORTFOLIO_DEFAULT_BENCHMARK_TICKER)
         bm_col = f"Benchmark_{benchmark_ticker}_Pct"
+        benchmark_return_values = pd.to_numeric(df_eq[bm_col], errors="coerce") if bm_col in df_eq.columns else None
         font_prop = FontProperties(family="Microsoft JhengHei", size=11)
         title_font = FontProperties(family="Microsoft JhengHei", weight="bold", size=PERFORMANCE_CHART_TITLE_FONT_SIZE)
         figure = Figure(figsize=(18.2, 10.6), dpi=96, facecolor="#000000")
@@ -2668,9 +2895,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         figure.subplots_adjust(left=0.055, right=0.985, top=PERFORMANCE_CHART_SUBPLOT_TOP, bottom=0.08)
         axis.set_facecolor("#000000")
         axis.grid(True, color="#0a1824", alpha=0.22, linewidth=0.7)
-        axis.plot(dates, df_eq["Strategy_Return_Pct"].astype(float), linewidth=3.0, color=PERFORMANCE_STRATEGY_COLOR, label="V16 尊爵系統報酬 (%)")
-        if bm_col in df_eq.columns:
-            axis.plot(dates, df_eq[bm_col].astype(float), linewidth=2.0, color=PERFORMANCE_BENCHMARK_COLOR, label=f"同期大盤 {benchmark_ticker} (%)", alpha=0.8)
+        axis.plot(dates, strategy_return_values.astype(float), linewidth=3.0, color=PERFORMANCE_STRATEGY_COLOR, label="V16 尊爵系統報酬 (%)")
+        if benchmark_return_values is not None:
+            axis.plot(dates, benchmark_return_values.astype(float), linewidth=2.0, color=PERFORMANCE_BENCHMARK_COLOR, label=f"同期大盤 {benchmark_ticker} (%)", alpha=0.8)
         axis.set_title(
             self._build_performance_setting_title(options=options),
             color="#f7fbff",
@@ -2696,6 +2923,16 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         host = tk.Frame(tab_frame, bg="#000000", highlightthickness=0, bd=0)
         host.grid(row=0, column=0, sticky="nsew")
         canvas = FigureCanvasTkAgg(figure, master=host)
+        hover_connection_ids = self._bind_performance_chart_hover(
+            canvas=canvas,
+            figure=figure,
+            axis=axis,
+            dates=dates,
+            strategy_values=strategy_return_values,
+            benchmark_values=benchmark_return_values,
+            benchmark_label=str(benchmark_ticker or PORTFOLIO_DEFAULT_BENCHMARK_TICKER),
+            font_prop=font_prop,
+        )
         canvas.draw()
         widget = canvas.get_tk_widget()
         widget.configure(background="#02050a", highlightthickness=0, bd=0)
@@ -2703,7 +2940,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         tab_title = self._resolve_performance_tab_title(options)
         self._notebook.insert(self._resolve_performance_tab_insert_index(), tab_frame, text=tab_title)
         tab_id = self._notebook.tabs()[self._notebook.index(tab_frame)]
-        self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "close_host": host, "canvas": canvas, "figure": figure})
+        self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "close_host": host, "canvas": canvas, "figure": figure, "hover_connection_ids": hover_connection_ids})
         self._get_or_create_performance_close_button(tab_id)
         self._notebook.select(tab_frame)
         self.after_idle(self._refresh_performance_tab_close_buttons)
