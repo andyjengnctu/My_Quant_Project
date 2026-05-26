@@ -291,8 +291,6 @@ def _optimizer_romd_metric_label() -> str:
 
 def _optimizer_train_score_display_label() -> str:
     method = str(SCORE_CALC_METHOD or "").strip() or "Score"
-    if method == "TOTAL_R":
-        return f"Train Score[{method}]"
     numerator = str(SCORE_NUMERATOR_METHOD or "").strip() or "TOTAL_RETURN"
     return f"Train Score[{method}/{numerator}]"
 

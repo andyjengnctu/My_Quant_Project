@@ -51,7 +51,7 @@ def validate_display_reporting_sanity_case(_base_params):
 
     scanner_text = _capture_output(lambda: print_scanner_header(params))
     add_check(results, "display_reporting", case_id, "scanner_contains_global_strategy_header", True, "全域戰略: 買入排序" in scanner_text)
-    expected_score_numerator = "不適用" if str(SCORE_CALC_METHOD) == "TOTAL_R" else SCORE_NUMERATOR_METHOD
+    expected_score_numerator = SCORE_NUMERATOR_METHOD
     expected_scanner_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{expected_score_numerator}]"
     add_check(results, "display_reporting", case_id, "scanner_score_header_separates_model_and_numerator", True, expected_scanner_score_header in scanner_text and " / 分子 " not in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_training_params", True, "突破買進 啟用 (123日新高) | ATR 17日 | 掛單 +1.2倍 | 初始 -2.3倍 | 追蹤 -3.4倍 | 半倉 45%" in scanner_text)

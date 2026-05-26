@@ -272,7 +272,7 @@ def print_strategy_dashboard(
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
     if title:
         print(f"{C_CYAN}{title}{C_RESET}")
-    score_numerator_display = "不適用" if str(SCORE_CALC_METHOD) == "TOTAL_R" else SCORE_NUMERATOR_METHOD
+    score_numerator_display = SCORE_NUMERATOR_METHOD
     print(
         f"🎯 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | "
         f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
@@ -603,7 +603,7 @@ def print_optimizer_trial_console_dashboard(*,
         f"{C_CYAN}【全域戰略】{C_RESET} {C_YELLOW}{global_strategy_text}{C_RESET} | "
         f"模式：{mode_display} | 最大持股：{max_pos} 檔 | model_mode：{C_YELLOW}{model_mode.upper()}{C_RESET}"
     )
-    score_numerator_display = "不適用" if str(score_calc_method) == "TOTAL_R" else score_numerator_method
+    score_numerator_display = score_numerator_method
     print(
         f"{C_CYAN}【評分模式】{C_RESET} 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
         f"評分分子：[{C_YELLOW}{score_numerator_display}{C_RESET}] | "

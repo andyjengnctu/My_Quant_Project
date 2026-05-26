@@ -609,11 +609,15 @@ def validate_score_numerator_option_case(_base_params):
         high_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.9, annual_return_pct=40.0)
     add_check(results, "strategy_score", case_id, "log_r2_total_return_quality_monotonic", True, high_total_score > low_total_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_low = calc_portfolio_score(sys_ret=500.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
-        total_r_high = calc_portfolio_score(sys_ret=-20.0, sys_mdd=-80.0, m_win_rate=10.0, r_sq=0.10, annual_return_pct=-5.0, total_r=24.0)
-    add_check(results, "strategy_score", case_id, "total_r_score_uses_total_r_not_return_or_mdd", 12.5, total_r_low)
-    add_check(results, "strategy_score", case_id, "total_r_score_monotonic", True, total_r_high > total_r_low)
+        total_r_high = calc_portfolio_score(sys_ret=-20.0, sys_mdd=-5.0, m_win_rate=10.0, r_sq=0.10, annual_return_pct=-5.0, total_r=24.0)
+    add_check(results, "strategy_score", case_id, "total_r_numerator_formula", _romd_expected(12.5, -5.0), total_r_low)
+    add_check(results, "strategy_score", case_id, "total_r_numerator_monotonic_when_mdd_equal", True, total_r_high > total_r_low)
+
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+        total_r_powered_score = calc_portfolio_score(sys_ret=500.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
+    add_check(results, "strategy_score", case_id, "total_r_numerator_still_uses_mdd_denominator", True, total_r_powered_score < total_r_low)
 
     old_linear_low = 40.0 / 50.0
     old_linear_high = 50.0 / 50.0
@@ -649,7 +653,7 @@ def validate_score_numerator_option_case(_base_params):
         high_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=10.0)
     add_check(results, "strategy_score", case_id, "portfolio_score_min_full_year_return_amp_monotonic", True, low_min_year_score < target_min_year_score < high_min_year_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", True), patch("config.training_policy.SCORE_MEDIAN_R_FLOOR", -1.0), patch("config.training_policy.SCORE_MEDIAN_R_TARGET", 0.0):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", True), patch("config.training_policy.SCORE_MEDIAN_R_FLOOR", -1.0), patch("config.training_policy.SCORE_MEDIAN_R_TARGET", 0.0):
         low_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=-0.5)
         target_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=0.0)
         high_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=0.5)

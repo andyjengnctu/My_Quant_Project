@@ -107,35 +107,33 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
     )
 
     score_calc_method = get_score_calc_method()
+    score_numerator_method = get_score_numerator_method()
+    score_mdd_power = get_score_mdd_power()
+    score_mdd_denominator_epsilon = get_score_mdd_denominator_epsilon()
 
-    if score_calc_method == 'TOTAL_R':
+    annual_return = sys_ret if annual_return_pct is None else annual_return_pct
+    if score_numerator_method == 'ANNUAL_RETURN':
+        numerator = annual_return
+    elif score_numerator_method == 'TOTAL_RETURN':
+        numerator = sys_ret
+    elif score_numerator_method == 'TOTAL_R':
         try:
-            score = float(total_r)
+            numerator = float(total_r)
         except (TypeError, ValueError):
-            score = 0.0
-        if not math.isfinite(score):
-            score = 0.0
+            numerator = 0.0
+        if not math.isfinite(numerator):
+            numerator = 0.0
     else:
-        score_numerator_method = get_score_numerator_method()
-        score_mdd_power = get_score_mdd_power()
-        score_mdd_denominator_epsilon = get_score_mdd_denominator_epsilon()
+        raise ValueError(f"未知 SCORE_NUMERATOR_METHOD: {score_numerator_method}")
 
-        annual_return = sys_ret if annual_return_pct is None else annual_return_pct
-        if score_numerator_method == 'ANNUAL_RETURN':
-            numerator = annual_return
-        elif score_numerator_method == 'TOTAL_RETURN':
-            numerator = sys_ret
-        else:
-            raise ValueError(f"未知 SCORE_NUMERATOR_METHOD: {score_numerator_method}")
-
-        mdd_denominator = (abs(float(sys_mdd)) ** score_mdd_power) + score_mdd_denominator_epsilon
-        base_score = numerator / mdd_denominator
-        if score_calc_method == 'LOG_R2':
-            score = base_score * (m_win_rate / 100.0) * r_sq
-        elif score_calc_method == 'RoMD':
-            score = base_score
-        else:
-            raise ValueError(f"未知 SCORE_CALC_METHOD: {score_calc_method}")
+    mdd_denominator = (abs(float(sys_mdd)) ** score_mdd_power) + score_mdd_denominator_epsilon
+    base_score = numerator / mdd_denominator
+    if score_calc_method == 'LOG_R2':
+        score = base_score * (m_win_rate / 100.0) * r_sq
+    elif score_calc_method == 'RoMD':
+        score = base_score
+    else:
+        raise ValueError(f"未知 SCORE_CALC_METHOD: {score_calc_method}")
 
     if is_score_win_rate_amp_enabled() and trade_win_rate_pct is not None:
         score *= calc_score_win_rate_multiplier(
