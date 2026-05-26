@@ -22,7 +22,7 @@ from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
-from core.portfolio_stats import calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_win_rate_multiplier
+from core.portfolio_stats import calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
@@ -623,6 +623,16 @@ def validate_score_numerator_option_case(_base_params):
     add_check(results, "strategy_score", case_id, "portfolio_return_multiplier_clamps_negative", 0.0, calc_score_portfolio_return_multiplier(-20.0))
     add_check(results, "strategy_score", case_id, "total_r_x_portfolio_return_numerator_formula", _romd_expected(12.5 * 1.5, -5.0), total_r_x_return_positive)
     add_check(results, "strategy_score", case_id, "total_r_x_portfolio_return_zero_when_portfolio_loss", 0.0, total_r_x_return_negative)
+
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+        total_r_x_annual_positive = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
+        total_r_x_annual_negative = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=-20.0, total_r=12.5)
+        total_r_x_annual_missing = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=None, total_r=12.5)
+    add_check(results, "strategy_score", case_id, "positive_return_multiplier_pct_to_multiple", 0.8, calc_score_positive_return_multiplier(80.0))
+    add_check(results, "strategy_score", case_id, "positive_return_multiplier_clamps_negative", 0.0, calc_score_positive_return_multiplier(-20.0))
+    add_check(results, "strategy_score", case_id, "total_r_x_annual_return_numerator_formula", _romd_expected(12.5 * 0.8, -5.0), total_r_x_annual_positive)
+    add_check(results, "strategy_score", case_id, "total_r_x_annual_return_zero_when_annual_loss", 0.0, total_r_x_annual_negative)
+    add_check(results, "strategy_score", case_id, "total_r_x_annual_return_missing_uses_total_return_fallback", _romd_expected(12.5 * 1.5, -5.0), total_r_x_annual_missing)
 
     single_stock_score_fields = build_score_single_stock_profile_fields({
         "trade_count": 2854,

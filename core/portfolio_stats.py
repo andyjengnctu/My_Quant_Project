@@ -60,7 +60,7 @@ def calc_score_median_r_multiplier(median_r, floor_r, target_r):
     return max(0.0, (median_value - floor) / (target - floor))
 
 
-def calc_score_portfolio_return_multiplier(return_pct):
+def calc_score_positive_return_multiplier(return_pct):
     try:
         value = float(return_pct)
     except (TypeError, ValueError):
@@ -68,6 +68,10 @@ def calc_score_portfolio_return_multiplier(return_pct):
     if not math.isfinite(value):
         return 0.0
     return max(0.0, value / _PERCENT_SCALE)
+
+
+def calc_score_portfolio_return_multiplier(return_pct):
+    return calc_score_positive_return_multiplier(return_pct)
 
 
 def summarize_closed_trade_r_stats(closed_trades_stats):
@@ -126,7 +130,7 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
         numerator = annual_return
     elif score_numerator_method == 'TOTAL_RETURN':
         numerator = sys_ret
-    elif score_numerator_method in {'TOTAL_R', 'TOTAL_R_X_PORTFOLIO_RETURN'}:
+    elif score_numerator_method in {'TOTAL_R', 'TOTAL_R_X_PORTFOLIO_RETURN', 'TOTAL_R_X_ANNUAL_RETURN'}:
         try:
             numerator = float(total_r)
         except (TypeError, ValueError):
@@ -135,6 +139,8 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
             numerator = 0.0
         if score_numerator_method == 'TOTAL_R_X_PORTFOLIO_RETURN':
             numerator *= calc_score_portfolio_return_multiplier(sys_ret)
+        elif score_numerator_method == 'TOTAL_R_X_ANNUAL_RETURN':
+            numerator *= calc_score_positive_return_multiplier(annual_return)
     else:
         raise ValueError(f"未知 SCORE_NUMERATOR_METHOD: {score_numerator_method}")
 

@@ -25,20 +25,21 @@ SCORE_WIN_RATE_TARGET = 70.0  # 完整交易勝率達此目標時倍率為 1；�
 SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = True  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_FULL_YEAR_RETURN_TARGET = 10.0  # 完整年度最差報酬達此目標時倍率為 1；高於目標會放大。
 SCORE_MEDIAN_R_AMP_ENABLED = True  # True = 以單股回測 R 中位數對 score 做目標式倍率校正。
-SCORE_MEDIAN_R_FLOOR = -0.15  # R 中位數低於此值時倍率歸零；-1.0 代表完整 1R 虧損。
-SCORE_MEDIAN_R_TARGET = 0.0  # R 中位數達此目標時倍率為 1；高於目標會放大。
+SCORE_MEDIAN_R_FLOOR = -0.4  # R 中位數低於此值時倍率歸零；-1.0 代表完整 1R 虧損。
+SCORE_MEDIAN_R_TARGET = 0.4  # R 中位數達此目標時倍率為 1；高於目標會放大。
 
 # 系統評分分子切換
 # 'TOTAL_RETURN' = 分子使用總報酬率
 # 'ANNUAL_RETURN' = 分子使用年化報酬率
 # 'TOTAL_R' = 分子使用單股回測總 R
 # 'TOTAL_R_X_PORTFOLIO_RETURN' = 分子使用單股回測總 R × max(0, 投組總資產報酬率% / 100)
-SCORE_NUMERATOR_METHOD = 'TOTAL_R_X_PORTFOLIO_RETURN'  
+# 'TOTAL_R_X_ANNUAL_RETURN' = 分子使用單股回測總 R × max(0, 投組年化報酬率% / 100)
+SCORE_NUMERATOR_METHOD = 'TOTAL_R_X_ANNUAL_RETURN'  
 
 
 
 # 停利比例固定開關
-OPTIMIZER_FIXED_TP_PERCENT = 0.0 # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
+OPTIMIZER_FIXED_TP_PERCENT = None # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
 
 # Trade mode 實戰參數輸出與 promote 設定。selector 名稱沿用 rolling/OOS policy：
 # base / local / retention / base_retention_gt_0_0 / base_retention_gt_0_2 / base_retention_gt_0_4 / base_retention_gt_0_6 / base_retention_gt_0_8 / base_retention_gt_min
