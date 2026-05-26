@@ -21,6 +21,7 @@ from core.walk_forward_policy import load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
+from core.portfolio_fast_data import build_score_single_stock_profile_fields
 from core.portfolio_stats import calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_win_rate_multiplier
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
@@ -614,6 +615,18 @@ def validate_score_numerator_option_case(_base_params):
         total_r_high = calc_portfolio_score(sys_ret=-20.0, sys_mdd=-5.0, m_win_rate=10.0, r_sq=0.10, annual_return_pct=-5.0, total_r=24.0)
     add_check(results, "strategy_score", case_id, "total_r_numerator_formula", _romd_expected(12.5, -5.0), total_r_low)
     add_check(results, "strategy_score", case_id, "total_r_numerator_monotonic_when_mdd_equal", True, total_r_high > total_r_low)
+
+    single_stock_score_fields = build_score_single_stock_profile_fields({
+        "trade_count": 2854,
+        "win_rate": 46.39,
+        "payoff_r": 3.04,
+        "avg_r": 0.601,
+        "median_r": -0.109,
+        "total_r": 1715.0,
+    })
+    add_check(results, "strategy_score", case_id, "total_r_score_source_is_single_stock", 1715.0, single_stock_score_fields["score_total_r"])
+    add_check(results, "strategy_score", case_id, "median_r_score_source_is_single_stock", -0.109, single_stock_score_fields["score_median_r"])
+    add_check(results, "strategy_score", case_id, "score_r_source_label_is_single_stock", "single_stock", single_stock_score_fields["score_r_source"])
 
     with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_powered_score = calc_portfolio_score(sys_ret=500.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)

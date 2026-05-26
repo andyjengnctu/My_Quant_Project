@@ -372,9 +372,18 @@ def _cum_diff(values, start_idx, end_idx):
     return end_value - start_value
 
 
-def summarize_single_stock_trade_stats_from_pit_index(all_pit_stats_index, target_dates):
-    sorted_dates = sorted([] if target_dates is None else target_dates)
-    if not sorted_dates:
+def summarize_single_stock_r_values(r_values):
+    values = []
+    for raw_value in list([] if r_values is None else r_values):
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            values.append(value)
+
+    trade_count = len(values)
+    if trade_count <= 0:
         return {
             'trade_count': 0,
             'win_rate': 0.0,
@@ -384,13 +393,34 @@ def summarize_single_stock_trade_stats_from_pit_index(all_pit_stats_index, targe
             'total_r': 0.0,
         }
 
+    value_array = np.asarray(values, dtype=np.float64)
+    wins = value_array[value_array > 0.0]
+    losses = value_array[value_array <= 0.0]
+    win_count = int(len(wins))
+    loss_count = int(len(losses))
+    win_r_sum = float(np.sum(wins)) if win_count > 0 else 0.0
+    loss_r_sum = float(np.sum(losses)) if loss_count > 0 else 0.0
+    total_r_sum = float(np.sum(value_array))
+    avg_win_r = (win_r_sum / win_count) if win_count > 0 else 0.0
+    avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0
+    payoff_r = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+    return {
+        'trade_count': int(trade_count),
+        'win_rate': float(win_count / trade_count * 100.0),
+        'payoff_r': float(payoff_r),
+        'avg_r': float(total_r_sum / trade_count),
+        'median_r': float(np.median(value_array)),
+        'total_r': float(total_r_sum),
+    }
+
+
+def collect_single_stock_r_values_from_pit_index(all_pit_stats_index, target_dates):
+    sorted_dates = sorted([] if target_dates is None else target_dates)
+    if not sorted_dates:
+        return []
+
     start_date = sorted_dates[0]
     end_date = sorted_dates[-1]
-    trade_count = 0
-    win_count = 0
-    win_r_sum = 0.0
-    loss_r_sum = 0.0
-    total_r_sum = 0.0
     r_chunks = []
 
     for stats_index in (all_pit_stats_index or {}).values():
@@ -405,31 +435,36 @@ def summarize_single_stock_trade_stats_from_pit_index(all_pit_stats_index, targe
         if end_idx <= start_idx:
             continue
 
-        trade_count += int(_cum_diff(stats_index.get('cum_trade_count'), start_idx, end_idx))
-        win_count += int(_cum_diff(stats_index.get('cum_win_count'), start_idx, end_idx))
-        win_r_sum += _cum_diff(stats_index.get('cum_win_r_sum'), start_idx, end_idx)
-        loss_r_sum += _cum_diff(stats_index.get('cum_loss_r_sum'), start_idx, end_idx)
-        total_r_sum += _cum_diff(stats_index.get('cum_total_r_sum'), start_idx, end_idx)
-
         trade_r_mult = stats_index.get('trade_r_mult')
         if trade_r_mult is not None and len(trade_r_mult) >= end_idx:
             r_chunks.append(np.asarray(trade_r_mult[start_idx:end_idx], dtype=np.float64))
 
-    loss_count = trade_count - win_count
-    win_rate = (win_count / trade_count * 100.0) if trade_count > 0 else 0.0
-    avg_win_r = (win_r_sum / win_count) if win_count > 0 else 0.0
-    avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0
-    payoff_r = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
-    avg_r = (total_r_sum / trade_count) if trade_count > 0 else 0.0
-    median_r = float(np.median(np.concatenate(r_chunks))) if r_chunks else 0.0
+    if not r_chunks:
+        return []
+    return [float(value) for value in np.concatenate(r_chunks).astype(np.float64)]
+
+
+def summarize_single_stock_trade_stats_from_pit_index(all_pit_stats_index, target_dates):
+    return summarize_single_stock_r_values(
+        collect_single_stock_r_values_from_pit_index(all_pit_stats_index, target_dates)
+    )
+
+
+def build_score_single_stock_profile_fields(single_stock_trade_stats):
+    stats = dict(single_stock_trade_stats or {})
+    total_r = float(stats.get('total_r', 0.0) or 0.0)
+    median_r = float(stats.get('median_r', 0.0) or 0.0)
 
     return {
-        'trade_count': int(trade_count),
-        'win_rate': float(win_rate),
-        'payoff_r': float(payoff_r),
-        'avg_r': float(avg_r),
-        'median_r': float(median_r),
-        'total_r': float(total_r_sum),
+        'score_r_source': 'single_stock',
+        'score_total_r': float(total_r),
+        'score_median_r': float(median_r),
+        'single_stock_trade_count': int(stats.get('trade_count', 0) or 0),
+        'single_stock_win_rate': float(stats.get('win_rate', 0.0) or 0.0),
+        'single_stock_payoff_r': float(stats.get('payoff_r', 0.0) or 0.0),
+        'single_stock_avg_r': float(stats.get('avg_r', 0.0) or 0.0),
+        'single_stock_median_r': float(median_r),
+        'single_stock_total_r': float(total_r),
     }
 
 

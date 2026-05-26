@@ -175,6 +175,8 @@ def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation
         min_full_year_return_pct=attrs.get("min_full_year_return_pct", 0.0),
         portfolio_total_r=attrs.get("pf_total_r", 0.0),
         portfolio_median_r=attrs.get("pf_median_r", 0.0),
+        score_total_r=attrs.get("score_total_r", attrs.get("single_stock_total_r", 0.0)),
+        score_median_r=attrs.get("score_median_r", attrs.get("single_stock_median_r", 0.0)),
         bm_min_full_year_return_pct=attrs.get("bm_min_full_year_return_pct", 0.0),
         params_section_title="目前 trial 參數（非 final artifact ensemble）",
     )

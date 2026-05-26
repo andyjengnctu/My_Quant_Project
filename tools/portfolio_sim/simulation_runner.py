@@ -31,7 +31,18 @@ from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_MODE_STATIC,
 )
 from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, merge_static_market_with_dynamic, pack_static_market_data, pack_prepared_stock_data, prep_optimizer_stock_data_bundle, prep_stock_data_and_trades
+from core.portfolio_fast_data import (
+    build_normal_setup_index,
+    build_score_single_stock_profile_fields,
+    build_trade_stats_index,
+    collect_single_stock_r_values_from_pit_index,
+    merge_static_market_with_dynamic,
+    pack_static_market_data,
+    pack_prepared_stock_data,
+    prep_optimizer_stock_data_bundle,
+    prep_stock_data_and_trades,
+    summarize_single_stock_r_values,
+)
 from tools.optimizer.raw_cache import load_all_raw_data
 from tools.optimizer.trial_inputs import prepare_trial_inputs
 from tools.optimizer.walk_forward import resolve_first_walk_forward_test_boundary
@@ -93,6 +104,68 @@ def _resolve_active_schedule_record(schedule_records, trade_date):
         first_date = schedule_records[0]["effective_date_text"] if schedule_records else "N/A"
         raise ValueError(f"{current_date.isoformat()} 早於第一個 active param 生效日 {first_date}")
     return selected
+
+
+def _active_record_date_window(schedule_records, index: int, resolved_sorted_dates) -> tuple[pd.Timestamp, pd.Timestamp]:
+    record = schedule_records[index]
+    start_ts = pd.Timestamp(record.get("effective_date_text") or resolved_sorted_dates[0]).normalize()
+    raw_end = record.get("effective_end_date_text") or ""
+    if raw_end:
+        end_ts = pd.Timestamp(raw_end).normalize()
+    elif index + 1 < len(schedule_records):
+        end_ts = pd.Timestamp(schedule_records[index + 1].get("effective_date_text")).normalize() - pd.Timedelta(days=1)
+    else:
+        end_ts = pd.Timestamp(resolved_sorted_dates[-1]).normalize()
+    first_ts = pd.Timestamp(resolved_sorted_dates[0]).normalize()
+    last_ts = pd.Timestamp(resolved_sorted_dates[-1]).normalize()
+    return max(start_ts, first_ts), min(end_ts, last_ts)
+
+
+def _filter_dates_for_active_record(schedule_records, index: int, resolved_sorted_dates):
+    start_ts, end_ts = _active_record_date_window(schedule_records, index, resolved_sorted_dates)
+    if end_ts < start_ts:
+        return []
+    return [dt for dt in resolved_sorted_dates if start_ts <= pd.Timestamp(dt).normalize() <= end_ts]
+
+
+def _apply_active_single_stock_score_stats(pf_profile: dict, schedule_records, contexts_by_effective_date, resolved_sorted_dates, *, ensemble: bool = False):
+    all_r_values = []
+    total_r_for_score = 0.0
+    trade_count_for_score = 0.0
+    for idx, record in enumerate(list(schedule_records or [])):
+        period_dates = _filter_dates_for_active_record(schedule_records, idx, resolved_sorted_dates)
+        if not period_dates:
+            continue
+        context_value = contexts_by_effective_date.get(record.get("effective_date_text"))
+        contexts = list(context_value or []) if ensemble else [context_value]
+        contexts = [ctx for ctx in contexts if isinstance(ctx, dict)]
+        if not contexts:
+            continue
+
+        member_stats = []
+        for context in contexts:
+            r_values = collect_single_stock_r_values_from_pit_index(
+                context.get("all_pit_stats_index") or {},
+                period_dates,
+            )
+            if r_values:
+                all_r_values.extend(r_values)
+                member_stats.append(summarize_single_stock_r_values(r_values))
+        if not member_stats:
+            continue
+        if ensemble:
+            total_r_for_score += sum(float(stats.get("total_r", 0.0) or 0.0) for stats in member_stats) / len(member_stats)
+            trade_count_for_score += sum(float(stats.get("trade_count", 0.0) or 0.0) for stats in member_stats) / len(member_stats)
+        else:
+            total_r_for_score += float(member_stats[0].get("total_r", 0.0) or 0.0)
+            trade_count_for_score += float(member_stats[0].get("trade_count", 0.0) or 0.0)
+
+    stats = summarize_single_stock_r_values(all_r_values)
+    if all_r_values:
+        stats["total_r"] = float(total_r_for_score)
+        stats["trade_count"] = int(round(trade_count_for_score))
+        stats["avg_r"] = float(total_r_for_score / trade_count_for_score) if trade_count_for_score > 0 else 0.0
+    pf_profile.update(build_score_single_stock_profile_fields(stats))
 
 
 def _load_contexts_for_active_schedule(
@@ -845,6 +918,13 @@ def run_portfolio_simulation_with_param_schedule(
             for record in schedule_records
         ],
     }
+    _apply_active_single_stock_score_stats(
+        pf_profile,
+        schedule_records,
+        contexts_by_effective_date,
+        resolved_sorted_dates,
+        ensemble=False,
+    )
     if verbose:
         print(
             f"{C_GREEN}✅ active-param replay 準備完成："
@@ -994,6 +1074,13 @@ def run_portfolio_simulation_with_param_ensemble(
             for record in schedule_records
         ],
     }
+    _apply_active_single_stock_score_stats(
+        pf_profile,
+        schedule_records,
+        contexts_by_effective_date,
+        resolved_sorted_dates,
+        ensemble=True,
+    )
     if verbose:
         date_label = (
             f"{schedule_records[0]['effective_date_text']}~{schedule_records[-1]['effective_date_text']}"

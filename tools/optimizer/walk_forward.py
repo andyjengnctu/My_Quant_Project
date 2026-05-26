@@ -181,6 +181,8 @@ def _evaluate_single_holdout_period(
     min_full_year_return_pct = float(pf_profile.get('min_full_year_return_pct', 0.0))
     portfolio_total_r = float(pf_profile.get('portfolio_total_r', 0.0))
     portfolio_median_r = float(pf_profile.get('portfolio_median_r', 0.0))
+    score_total_r = float(pf_profile.get('score_total_r', pf_profile.get('single_stock_total_r', 0.0)) or 0.0)
+    score_median_r = float(pf_profile.get('score_median_r', pf_profile.get('single_stock_median_r', 0.0)) or 0.0)
     benchmark_min_full_year_return_pct = float(pf_profile.get('bm_min_full_year_return_pct', 0.0))
     test_score_romd = calc_portfolio_score(
         ret_pct,
@@ -190,8 +192,8 @@ def _evaluate_single_holdout_period(
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
-        total_r=portfolio_total_r,
-        median_r=portfolio_median_r,
+        total_r=score_total_r,
+        median_r=score_median_r,
     )
     return {
         'label': str(holdout_period.get('label') or 'OOS'),
@@ -215,6 +217,9 @@ def _evaluate_single_holdout_period(
         'pf_ev': float(pf_ev),
         'portfolio_total_r': float(portfolio_total_r),
         'portfolio_median_r': float(portfolio_median_r),
+        'score_total_r': float(score_total_r),
+        'score_median_r': float(score_median_r),
+        'score_r_source': str(pf_profile.get('score_r_source', 'single_stock')),
         'r_squared': float(r_sq),
         'monthly_win_rate': float(m_win_rate),
         'final_equity': float(final_eq),

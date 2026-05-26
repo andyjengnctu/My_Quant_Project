@@ -203,6 +203,8 @@ def print_strategy_dashboard(
     bm_min_full_year_return_pct=0.0,
     portfolio_total_r=0.0,
     portfolio_median_r=0.0,
+    score_total_r=None,
+    score_median_r=None,
     params_section_title="訓練參數",
     params_note_lines=None,
     params_schedule_rows=None,
@@ -243,8 +245,8 @@ def print_strategy_dashboard(
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
-        total_r=portfolio_total_r,
-        median_r=portfolio_median_r,
+        total_r=portfolio_total_r if score_total_r is None else score_total_r,
+        median_r=portfolio_median_r if score_median_r is None else score_median_r,
     )
 
     rsq_diff = r_sq - bm_r_sq

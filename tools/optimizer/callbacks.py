@@ -128,6 +128,22 @@ def _build_study_full_breakout_stats(attrs: dict) -> dict:
     }
 
 
+def _score_total_r_from_attrs(attrs: dict) -> float:
+    return _safe_float(attrs.get("score_total_r", attrs.get("single_stock_total_r", 0.0)))
+
+
+def _score_median_r_from_attrs(attrs: dict) -> float:
+    return _safe_float(attrs.get("score_median_r", attrs.get("single_stock_median_r", 0.0)))
+
+
+def _score_total_r_from_profile(profile: dict) -> float:
+    return _safe_float(profile.get("score_total_r", profile.get("single_stock_total_r", 0.0)))
+
+
+def _score_median_r_from_profile(profile: dict) -> float:
+    return _safe_float(profile.get("score_median_r", profile.get("single_stock_median_r", 0.0)))
+
+
 def _policy_date(session, key: str) -> str | None:
     policy = dict(getattr(session, "walk_forward_policy", {}) or {})
     text = str(policy.get(key) or "").strip()
@@ -173,6 +189,9 @@ def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: floa
         "win_rate": float(total.get("win_rate", 0.0)),
         "pf_payoff": float(total.get("payoff", 0.0)),
         "pf_ev": float(total.get("ev", 0.0)),
+        "score_total_r": float(total.get("score_total_r", total.get("single_stock_total_r", 0.0))),
+        "score_median_r": float(total.get("score_median_r", total.get("single_stock_median_r", 0.0))),
+        "score_r_source": str(total.get("score_r_source", "single_stock")),
         "pf_trades": int(total.get("trade_count", 0)),
         "normal_trades": int(total.get("normal_trades", 0)),
         "extended_trades": int(total.get("extended_trades", 0)),
@@ -531,6 +550,8 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
     profile = dict(result[25] or {})
     portfolio_total_r = _safe_float(profile.get("portfolio_total_r", 0.0))
     portfolio_median_r = _safe_float(profile.get("portfolio_median_r", 0.0))
+    score_total_r = _score_total_r_from_profile(profile)
+    score_median_r = _score_median_r_from_profile(profile)
     candidate_score = calc_portfolio_score(
         total_return,
         max_drawdown,
@@ -539,8 +560,8 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=_safe_float(profile.get("min_full_year_return_pct", 0.0)),
-        total_r=portfolio_total_r,
-        median_r=portfolio_median_r,
+        total_r=score_total_r,
+        median_r=score_median_r,
     )
     benchmark_score = calc_portfolio_score(
         benchmark_return,
@@ -563,6 +584,9 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         "pf_ev": pf_ev,
         "pf_total_r": portfolio_total_r,
         "pf_median_r": portfolio_median_r,
+        "score_total_r": score_total_r,
+        "score_median_r": score_median_r,
+        "score_r_source": str(profile.get("score_r_source", "single_stock")),
         "pf_trades": trade_count,
         "normal_trades": normal_trade_count,
         "extended_trades": extended_trade_count,
@@ -710,6 +734,9 @@ def _compute_reference_console_cache(session):
             "min_full_year_return_pct": float(pf_profile.get("min_full_year_return_pct", 0.0)),
             "pf_total_r": float(pf_profile.get("portfolio_total_r", 0.0)),
             "pf_median_r": float(pf_profile.get("portfolio_median_r", 0.0)),
+            "score_total_r": _score_total_r_from_profile(pf_profile),
+            "score_median_r": _score_median_r_from_profile(pf_profile),
+            "score_r_source": str(pf_profile.get("score_r_source", "single_stock")),
             "pf_mdd": float(mdd),
             "r_squared": float(r_sq),
             "m_win_rate": float(m_win_rate),
@@ -734,8 +761,8 @@ def _compute_reference_console_cache(session):
                 annual_return_pct=float(annual_return_pct),
                 trade_win_rate_pct=float(win_rate),
                 min_full_year_return_pct=float(pf_profile.get("min_full_year_return_pct", 0.0)),
-                total_r=float(pf_profile.get("portfolio_total_r", 0.0)),
-                median_r=float(pf_profile.get("portfolio_median_r", 0.0)),
+                total_r=_score_total_r_from_profile(pf_profile),
+                median_r=_score_median_r_from_profile(pf_profile),
             )),
             "source_path": params_path,
             "wf_report": None,
@@ -824,6 +851,9 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "min_full_year_return_pct": _safe_float(attrs.get("min_full_year_return_pct", 0.0)),
         "pf_total_r": _safe_float(attrs.get("pf_total_r", 0.0)),
         "pf_median_r": _safe_float(attrs.get("pf_median_r", 0.0)),
+        "score_total_r": _score_total_r_from_attrs(attrs),
+        "score_median_r": _score_median_r_from_attrs(attrs),
+        "score_r_source": str(attrs.get("score_r_source", "single_stock") or "single_stock"),
         "pf_mdd": _safe_float(attrs.get("pf_mdd", 0.0)),
         "r_squared": _safe_float(attrs.get("r_squared", 0.0)),
         "m_win_rate": _safe_float(attrs.get("m_win_rate", 0.0)),
@@ -848,8 +878,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
             annual_return_pct=_safe_float(attrs.get("annual_return_pct", 0.0)),
             trade_win_rate_pct=_safe_float(attrs.get("win_rate", 0.0)),
             min_full_year_return_pct=_safe_float(attrs.get("min_full_year_return_pct", 0.0)),
-            total_r=_safe_float(attrs.get("pf_total_r", 0.0)),
-            median_r=_safe_float(attrs.get("pf_median_r", 0.0)),
+            total_r=_score_total_r_from_attrs(attrs),
+            median_r=_score_median_r_from_attrs(attrs),
         )),
     }
     benchmark_train_metrics = {

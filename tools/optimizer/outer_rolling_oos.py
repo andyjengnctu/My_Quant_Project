@@ -3329,6 +3329,9 @@ def _extract_period_metrics(report: dict) -> dict:
         "trades": int(period.get("trade_count", 0) or 0),
         "portfolio_total_r": float(period.get("portfolio_total_r", 0.0)),
         "portfolio_median_r": float(period.get("portfolio_median_r", 0.0)),
+        "score_total_r": float(period.get("score_total_r", period.get("single_stock_total_r", 0.0)) or 0.0),
+        "score_median_r": float(period.get("score_median_r", period.get("single_stock_median_r", 0.0)) or 0.0),
+        "score_r_source": str(period.get("score_r_source", "single_stock")),
         "benchmark_oos_score": float(period.get("benchmark_score_romd", 0.0)),
         "benchmark_return_pct": float(period.get("benchmark_return_pct", 0.0)),
         "benchmark_mdd_pct": float(period.get("benchmark_mdd", 0.0)),
@@ -3492,6 +3495,9 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
             "rank_1_trades": int(metrics.get("trades", 0) or 0),
             "rank_1_total_r": float(metrics.get("portfolio_total_r", 0.0)),
             "rank_1_median_r": float(metrics.get("portfolio_median_r", 0.0)),
+            "rank_1_score_total_r": float(metrics.get("score_total_r", 0.0)),
+            "rank_1_score_median_r": float(metrics.get("score_median_r", 0.0)),
+            "rank_1_score_r_source": str(metrics.get("score_r_source", "single_stock")),
             "best_gap": rank_1_oos - float(best_score),
             "benchmark_0050_gap": rank_1_oos - float(benchmark_score),
             "rank_1_initial_capital": float(metrics.get("initial_capital", 0.0)),
@@ -3505,6 +3511,9 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         "best_finalist_trades": int(best_metrics.get("trades", 0) or 0),
         "best_finalist_total_r": float(best_metrics.get("portfolio_total_r", 0.0)),
         "best_finalist_median_r": float(best_metrics.get("portfolio_median_r", 0.0)),
+        "best_finalist_score_total_r": float(best_metrics.get("score_total_r", 0.0)),
+        "best_finalist_score_median_r": float(best_metrics.get("score_median_r", 0.0)),
+        "best_finalist_score_r_source": str(best_metrics.get("score_r_source", "single_stock")),
         "best_finalist_initial_capital": float(best_metrics.get("initial_capital", 0.0)),
         "best_finalist_equity_curve": list(best_metrics.get("equity_curve") or []),
         "best_finalist_params": build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT) if best_trial is not None else {},
@@ -3569,16 +3578,24 @@ def _stitch_strategy_equity_curves(rows: list[dict], *, policy_name: str | None 
     stitched: list[dict] = []
     chain_initial = 0.0
     current_start = 0.0
+    score_total_r = 0.0
+    score_median_samples = []
     for row in ordered_rows:
         if best_finalist:
             raw_curve = _normalize_equity_curve_rows(list(row.get("best_finalist_equity_curve") or []))
             raw_initial = _derive_curve_initial_capital(raw_curve, row.get("best_finalist_initial_capital"))
+            row_score_total_r = _safe_float(row.get("best_finalist_score_total_r", row.get("best_finalist_total_r", 0.0)), 0.0)
+            row_score_median_r = _safe_float(row.get("best_finalist_score_median_r", row.get("best_finalist_median_r", 0.0)), 0.0)
         else:
             policy = dict(row.get(str(policy_name)) or {})
             raw_curve = _normalize_equity_curve_rows(list(policy.get("rank_1_equity_curve") or []))
             raw_initial = _derive_curve_initial_capital(raw_curve, policy.get("rank_1_initial_capital"))
+            row_score_total_r = _safe_float(policy.get("rank_1_score_total_r", policy.get("rank_1_total_r", 0.0)), 0.0)
+            row_score_median_r = _safe_float(policy.get("rank_1_score_median_r", policy.get("rank_1_median_r", 0.0)), 0.0)
         if not raw_curve or raw_initial <= 0.0:
             continue
+        score_total_r += float(row_score_total_r)
+        score_median_samples.append(float(row_score_median_r))
         if current_start <= 0.0:
             current_start = raw_initial
             chain_initial = raw_initial
@@ -3589,7 +3606,14 @@ def _stitch_strategy_equity_curves(rows: list[dict], *, policy_name: str | None 
                 "equity": float(point["equity"]) * scale,
             })
         current_start = float(stitched[-1]["equity"])
-    return {"initial_equity": float(chain_initial), "curve": stitched}
+    score_median_r = float(pd.Series(score_median_samples).median()) if score_median_samples else 0.0
+    return {
+        "initial_equity": float(chain_initial),
+        "curve": stitched,
+        "score_total_r": float(score_total_r),
+        "score_median_r": float(score_median_r),
+        "score_r_source": "single_stock",
+    }
 
 
 def _stitch_benchmark_equity_curve(rows: list[dict]) -> dict:
@@ -3734,6 +3758,8 @@ def _calc_stitched_curve_metrics(stitched: dict) -> dict:
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
     full_year_metrics = _calc_full_year_return_metrics_from_curve(curve)
     min_full_year_return_pct = float(full_year_metrics.get("min_full_year_return_pct", 0.0))
+    score_total_r = _safe_float(stitched.get("score_total_r", 0.0), 0.0)
+    score_median_r = _safe_float(stitched.get("score_median_r", 0.0), 0.0)
     score = calc_portfolio_score(
         return_pct,
         max_drawdown,
@@ -3741,6 +3767,8 @@ def _calc_stitched_curve_metrics(stitched: dict) -> dict:
         r_squared,
         annual_return_pct=annual_return_pct,
         min_full_year_return_pct=min_full_year_return_pct,
+        total_r=score_total_r,
+        median_r=score_median_r,
     )
     return {
         "score": float(score),
@@ -3752,6 +3780,9 @@ def _calc_stitched_curve_metrics(stitched: dict) -> dict:
         "yearly_return_rows": list(full_year_metrics.get("yearly_return_rows", [])),
         "r_squared": float(r_squared),
         "monthly_win_rate": float(monthly_win_rate),
+        "score_total_r": float(score_total_r),
+        "score_median_r": float(score_median_r),
+        "score_r_source": str(stitched.get("score_r_source", "single_stock")),
         "curve_points": int(len(curve)),
         "start_date": str(curve[0].get("date", "")),
         "end_date": str(curve[-1].get("date", "")),
@@ -3857,6 +3888,8 @@ def _extract_active_replay_metrics(result) -> dict:
     benchmark_yearly_return_rows = list(profile.get("bm_yearly_return_rows") or [])
     portfolio_total_r = float(profile.get("portfolio_total_r", 0.0) or 0.0)
     portfolio_median_r = float(profile.get("portfolio_median_r", 0.0) or 0.0)
+    score_total_r = float(profile.get("score_total_r", profile.get("single_stock_total_r", 0.0)) or 0.0)
+    score_median_r = float(profile.get("score_median_r", profile.get("single_stock_median_r", 0.0)) or 0.0)
     score = calc_portfolio_score(
         ret_pct,
         mdd_pct,
@@ -3865,8 +3898,8 @@ def _extract_active_replay_metrics(result) -> dict:
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
-        total_r=portfolio_total_r,
-        median_r=portfolio_median_r,
+        total_r=score_total_r,
+        median_r=score_median_r,
     )
     benchmark_score = calc_portfolio_score(
         bm_ret_pct,
@@ -3890,6 +3923,11 @@ def _extract_active_replay_metrics(result) -> dict:
         "win_rate": float(win_rate),
         "portfolio_total_r": float(portfolio_total_r),
         "portfolio_median_r": float(portfolio_median_r),
+        "score_total_r": float(score_total_r),
+        "score_median_r": float(score_median_r),
+        "score_r_source": str(profile.get("score_r_source", "single_stock")),
+        "single_stock_total_r": float(profile.get("single_stock_total_r", score_total_r) or 0.0),
+        "single_stock_median_r": float(profile.get("single_stock_median_r", score_median_r) or 0.0),
         "curve_points": int(equity_curve_points),
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": float(bm_ret_pct),
@@ -4204,7 +4242,11 @@ def _run_active_replay_metrics_from_schedule_records(
         return {}
     from core.portfolio_engine import run_portfolio_timeline
     from core.portfolio_stats import find_sim_start_idx
-    from tools.portfolio_sim.simulation_runner import _filter_market_dates_by_end_year, _resolve_active_schedule_record
+    from tools.portfolio_sim.simulation_runner import (
+        _apply_active_single_stock_score_stats,
+        _filter_market_dates_by_end_year,
+        _resolve_active_schedule_record,
+    )
 
     all_market_dates = _merge_active_replay_market_dates(contexts_by_signature)
     if start_date or end_date:
@@ -4261,6 +4303,20 @@ def _run_active_replay_metrics_from_schedule_records(
                 for record in schedule_records
             ],
         }
+        contexts_by_effective_date = {
+            str(record.get("effective_date_text")): [
+                contexts_by_signature[str(member["params_signature"])]
+                for member in list(record.get("members") or [])
+            ]
+            for record in schedule_records
+        }
+        _apply_active_single_stock_score_stats(
+            pf_profile,
+            schedule_records,
+            contexts_by_effective_date,
+            resolved_sorted_dates,
+            ensemble=True,
+        )
         result = run_portfolio_timeline(
             base_context.get("all_dfs_fast") or {},
             base_context.get("all_trade_logs") or {},
@@ -4303,6 +4359,17 @@ def _run_active_replay_metrics_from_schedule_records(
             for record in schedule_records
         ],
     }
+    contexts_by_effective_date = {
+        str(record.get("effective_date_text")): contexts_by_signature[str(record["params_signature"])]
+        for record in schedule_records
+    }
+    _apply_active_single_stock_score_stats(
+        pf_profile,
+        schedule_records,
+        contexts_by_effective_date,
+        resolved_sorted_dates,
+        ensemble=False,
+    )
     result = run_portfolio_timeline(
         base_context.get("all_dfs_fast") or {},
         base_context.get("all_trade_logs") or {},
@@ -7489,6 +7556,9 @@ def _policy_metrics_from_ensemble_metrics(metrics: dict, *, best_score: float, b
         "rank_1_trades": int(metrics.get("trade_count", 0) or 0),
         "rank_1_total_r": float(metrics.get("portfolio_total_r", 0.0)),
         "rank_1_median_r": float(metrics.get("portfolio_median_r", 0.0)),
+        "rank_1_score_total_r": float(metrics.get("score_total_r", 0.0)),
+        "rank_1_score_median_r": float(metrics.get("score_median_r", 0.0)),
+        "rank_1_score_r_source": str(metrics.get("score_r_source", "single_stock")),
         "best_gap": rank_1_oos - float(best_score),
         "benchmark_0050_gap": rank_1_oos - float(benchmark_score),
         "rank_1_initial_capital": float(metrics.get("initial_equity", 0.0) or 0.0),

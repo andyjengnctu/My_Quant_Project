@@ -7,6 +7,7 @@ from core.capital_policy import resolve_portfolio_sizing_equity
 from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.config import get_ev_calc_method
 from core.portfolio_fast_data import (
+    build_score_single_stock_profile_fields,
     build_normal_setup_index,
     build_trade_stats_index,
     calc_mark_to_market_equity,
@@ -14,6 +15,7 @@ from core.portfolio_fast_data import (
     get_fast_close_on_or_before,
     has_fast_date,
     is_extended_entry_type,
+    summarize_single_stock_trade_stats_from_pit_index,
 )
 from core.portfolio_stats import (
     build_benchmark_full_year_return_stats,
@@ -957,6 +959,12 @@ def run_portfolio_timeline(
 
     trade_count = len(closed_trades_stats)
     portfolio_r_stats = summarize_closed_trade_r_stats(closed_trades_stats)
+    score_single_stock_trade_stats = {}
+    if profile_stats is not None and active_context_resolver is None and active_context_ensemble_resolver is None:
+        score_single_stock_trade_stats = summarize_single_stock_trade_stats_from_pit_index(
+            pit_stats_index,
+            sorted_dates[start_idx:],
+        )
     if trade_count > 0:
         wins = [t for t in closed_trades_stats if t['pnl'] > 0]
         losses = [t for t in closed_trades_stats if t['pnl'] <= 0]
@@ -1038,6 +1046,8 @@ def run_portfolio_timeline(
         profile_stats['portfolio_total_r'] = float(portfolio_r_stats.get('total_r', 0.0))
         profile_stats['portfolio_median_r'] = float(portfolio_r_stats.get('median_r', 0.0))
         profile_stats['portfolio_avg_r'] = float(portfolio_r_stats.get('avg_r', 0.0))
+        if score_single_stock_trade_stats:
+            profile_stats.update(build_score_single_stock_profile_fields(score_single_stock_trade_stats))
         profile_stats['filled_buy_count'] = filled_buy_count
         if active_level_rows is not None:
             profile_stats['portfolio_active_level_rows'] = list(active_level_rows)
