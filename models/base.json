@@ -7,37 +7,37 @@
     "params_ensemble": [
         {
             "member_index": 1,
-            "seed": 1306095037,
-            "selected_trial": 2359,
+            "seed": 0,
+            "selected_trial": 106,
             "params": {
                 "use_breakout_buy": true,
-                "high_len": 295,
+                "high_len": 275,
                 "use_breakout_ema_filter": false,
                 "breakout_ema_len": 240,
-                "atr_len": 4,
-                "atr_buy_tol": 4.5,
-                "atr_times_init": 4.1,
-                "atr_times_trail": 3.4,
+                "atr_len": 21,
+                "atr_buy_tol": 3.7,
+                "atr_times_init": 4.5,
+                "atr_times_trail": 2.7,
                 "tp_percent": 0.0,
                 "use_bb": false,
                 "bb_len": 20,
                 "bb_mult": 2.0,
-                "use_kc": false,
-                "kc_len": 20,
-                "kc_mult": 2.0,
-                "use_vol": false,
+                "use_kc": true,
+                "kc_len": 8,
+                "kc_mult": 2.9,
+                "use_vol": true,
                 "vol_short_len": 5,
-                "vol_long_len": 20,
+                "vol_long_len": 18,
                 "vol_breakout_mult": 1.5,
                 "use_breakout_return_filter": false,
                 "breakout_return_min": 0.0,
                 "use_breakout_false_filter": true,
-                "breakout_false_filter_atr_pct_min": 0.35,
+                "breakout_false_filter_atr_pct_min": 0.2,
                 "use_breakout_quality_filter": false,
                 "breakout_quality_filter_id": "breakout_quality_v1",
-                "use_breakout_reclaim_reentry": true,
-                "breakout_reclaim_window_bars": 40,
-                "breakout_reclaim_confirm_r": 0.7,
+                "use_breakout_reclaim_reentry": false,
+                "breakout_reclaim_window_bars": 20,
+                "breakout_reclaim_confirm_r": 0.75,
                 "use_history_threshold": false,
                 "min_history_trades": 0,
                 "min_history_ev": -1.0,
@@ -52,11 +52,11 @@
                 "min_entry_notional": 50126.0,
                 "use_compounding": true
             },
-            "score": 16.170590148879995,
-            "base_score": 16.170590148879995
+            "score": 181.0090899070409,
+            "base_score": 181.0090899070409
         }
     ],
-    "created_at": "2026-05-26T15:59:43.979603+08:00",
+    "created_at": "2026-05-26T17:05:13.337709+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 1,
@@ -72,9 +72,9 @@
         "dataset_label": "完整",
         "selected_model_mode": "study",
         "objective_mode": "split_train_romd",
-        "trials_per_seed": 1,
+        "trials_per_seed": 0,
         "seeds": [
-            1306095037
+            0
         ],
         "walk_forward_policy": {
             "selection_start_year": 2021,
@@ -110,13 +110,13 @@
         "oos_period": "",
         "member_count": 1,
         "requested_seed_count": 1,
-        "trials_per_seed": 1,
+        "trials_per_seed": 0,
         "local_min_review_enabled": false,
         "selected_policy": "base",
         "study_scope": "full",
         "base_only": true,
-        "selected_trial": 2359,
-        "seed": 1306095037,
-        "base_score": 16.170590148879995
+        "selected_trial": 106,
+        "seed": 0,
+        "base_score": 181.0090899070409
     }
 }

@@ -294,7 +294,7 @@ def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_cou
 def print_resolved_run_request(*, n_trials, action, source, colors):
     action_labels = {
         "train": f"訓練 {int(n_trials)} 次",
-        "export_candidate": "匯出 candidate_best + retention比較",
+        "export_candidate": "輸出參數",
         "promote_candidate": "promote candidate",
         "outer_rolling_oos": "outer rolling monthly OOS test",
     }

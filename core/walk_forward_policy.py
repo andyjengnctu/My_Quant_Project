@@ -294,13 +294,14 @@ def normalize_optimizer_study_scope(study_scope: str | None) -> str:
         'f': 'full',
         'full': 'full',
         'study-full': 'full',
+        '1': 'oos',
         '2': 'oos',
         'o': 'oos',
         'oos': 'oos',
         'study-oos': 'oos',
     }
     if normalized not in aliases:
-        raise ValueError(f"study mode 只接受 Enter/Study-Full 或 2/Study-OOS，收到: {study_scope}")
+        raise ValueError(f"study mode 只接受 Enter/Study-Full 或 1/Study-OOS，收到: {study_scope}")
     return aliases[normalized]
 
 

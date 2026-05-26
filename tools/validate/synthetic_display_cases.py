@@ -51,7 +51,8 @@ def validate_display_reporting_sanity_case(_base_params):
 
     scanner_text = _capture_output(lambda: print_scanner_header(params))
     add_check(results, "display_reporting", case_id, "scanner_contains_global_strategy_header", True, "全域戰略: 買入排序" in scanner_text)
-    expected_scanner_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{SCORE_NUMERATOR_METHOD}]"
+    expected_score_numerator = "不適用" if str(SCORE_CALC_METHOD) == "TOTAL_R" else SCORE_NUMERATOR_METHOD
+    expected_scanner_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{expected_score_numerator}]"
     add_check(results, "display_reporting", case_id, "scanner_score_header_separates_model_and_numerator", True, expected_scanner_score_header in scanner_text and " / 分子 " not in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_training_params", True, "突破買進 啟用 (123日新高) | ATR 17日 | 掛單 +1.2倍 | 初始 -2.3倍 | 追蹤 -3.4倍 | 半倉 45%" in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_filter_params", True, "布林(BB) 啟用 (長21, 寬2.5x) | 阿肯那(KC) 啟用 (長34, 寬1.8x) | 均量 啟用 (突破日量 > 前21日均量×1.8) | 漲幅 啟用 (突破日漲幅 > 3.5%)" in scanner_text)
@@ -126,7 +127,7 @@ def validate_display_reporting_sanity_case(_base_params):
     )
     add_check(results, "display_reporting", case_id, "core_display_reexports_expected_symbols", True, reexport_checks)
     add_check(results, "display_reporting", case_id, "dashboard_contains_title", True, "策略測試儀表板" in dashboard_text)
-    expected_dashboard_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{SCORE_NUMERATOR_METHOD}] | 系統得分:"
+    expected_dashboard_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{expected_score_numerator}] | 系統得分:"
     add_check(results, "display_reporting", case_id, "dashboard_score_header_separates_model_and_numerator", True, expected_dashboard_score_header in dashboard_text and " / 分子 " not in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_mode_and_positions", True, "模式: 投組模式 | 最大持股: 5 檔" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_trade_split", True, "總交易次數: 12 筆 (正常:9 | 延續:3) | 年化交易次數: 4.25 次/年" in dashboard_text)
@@ -136,7 +137,8 @@ def validate_display_reporting_sanity_case(_base_params):
     add_check(results, "display_reporting", case_id, "dashboard_contains_benchmark_ticker", True, "同期大盤 (0050)" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_ev_row", True, "實戰期望值(EV)" in dashboard_text and "0.72 R" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_entry_summary", True, "進場：突破買進 啟用 (突破 123 日新高)" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_filter_summary", True, "濾網：布林(BB) 啟用（長21, 寬2.5x）｜阿肯那(KC) 啟用（長34, 寬1.8x）｜均量 啟用（突破日量 > 前21日均量 × 1.8）｜漲幅 啟用（突破日漲幅 > 3.5%）" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_base_filter_summary", True, "基礎濾網：布林(BB) 啟用（長21, 寬2.5x）｜阿肯那(KC) 啟用（長34, 寬1.8x）｜均量 啟用（突破日量 > 前21日均量 × 1.8）" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_advanced_filter_summary", True, "進階濾網：漲幅 啟用（突破日漲幅 > 3.5%）｜假突破 關閉｜EMA濾網 啟用" in dashboard_text and "品質模型 關閉" in dashboard_text)
 
     summary["scanner_lines"] = len([line for line in scanner_text.splitlines() if line.strip()])
     summary["scanner_summary_lines"] = len([line for line in scanner_summary_text.splitlines() if line.strip()])

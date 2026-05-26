@@ -1753,12 +1753,26 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     train_test_policy_lines = [line for line in optimizer_main_source.splitlines() if "Train/Test policy:" in line]
     add_check(results, "strategy_contract", case_id, "optimizer_start_banner_omits_raw_objective_mode_token", True, bool(train_test_policy_lines) and all("objective=" not in line for line in train_test_policy_lines))
     add_check(results, "strategy_contract", case_id, "system_score_display_formatter_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}", format_system_score_for_display(1.23, decimals=2))
-    add_check(results, "strategy_contract", case_id, "optimizer_callbacks_system_score_display_uses_multiplier_formatter", True, "format_system_score_for_display(attrs.get('base_score'" in callbacks_source and "format_system_score_for_display(candidate_train_metrics.get('pf_romd'" in callbacks_source)
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "optimizer_callbacks_system_score_display_uses_multiplier_formatter",
+        True,
+        "format_system_score_for_display(attrs.get('base_score'" in callbacks_source
+        and "format_system_score_for_display(candidate_train_metrics.get('pf_romd'" in callbacks_source
+        and "format_system_score_for_display(trial.value" in callbacks_source,
+    )
     add_check(results, "strategy_contract", case_id, "study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
+    add_check(results, "strategy_contract", case_id, "interactive_optimizer_menu_defaults_to_study_and_numbers_modes", True, "[Enter] Study Mode [1] OOS Mode [2] Rolling OOS Mode  [3] Trade Mode" in optimizer_study_utils_source)
+    add_check(results, "strategy_contract", case_id, "interactive_study_scope_menu_uses_one_for_oos", True, "[Enter] Study-Full [1] Study-OOS" in optimizer_study_utils_source and "[2] Study-OOS" not in optimizer_study_utils_source)
     add_check(results, "strategy_contract", case_id, "interactive_trial_prompt_exposes_zero_export", True, "[0] 輸出參數" in optimizer_study_utils_source and "min_value=0" in optimizer_study_utils_source)
     with patch("builtins.input", side_effect=["S", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
         interactive_zero_request = study_utils._resolve_interactive_optimizer_run_request()
-    add_check(results, "strategy_contract", case_id, "interactive_zero_trials_routes_to_export_candidate", True, interactive_zero_request.get("n_trials") == 0 and interactive_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE and interactive_zero_request.get("study_db_action") == "resume")
+    add_check(results, "strategy_contract", case_id, "interactive_zero_trials_routes_to_export_candidate", True, interactive_zero_request.get("n_trials") == 0 and interactive_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE and interactive_zero_request.get("model_mode") == "study" and interactive_zero_request.get("study_db_action") == "resume")
+    with patch("builtins.input", side_effect=["", "", "0"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value=""):
+        interactive_default_zero_request = study_utils._resolve_interactive_optimizer_run_request()
+    add_check(results, "strategy_contract", case_id, "interactive_enter_mode_defaults_to_study_base_export", True, interactive_default_zero_request.get("model_mode") == "study" and interactive_default_zero_request.get("n_trials") == 0 and interactive_default_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
     with patch("builtins.input", side_effect=["S", "", "1"]), patch("tools.optimizer.study_utils.safe_prompt_choice", return_value="1"):
         interactive_restart_request = study_utils._resolve_interactive_optimizer_run_request()
     add_check(results, "strategy_contract", case_id, "interactive_study_memory_one_routes_to_restart", True, interactive_restart_request.get("study_db_action") == "restart" and interactive_restart_request.get("n_trials") == 1 and interactive_restart_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_TRAIN)

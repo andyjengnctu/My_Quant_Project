@@ -24,7 +24,6 @@ from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.active_param_ensemble import get_active_param_ensemble_policy, load_json_file
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
-from core.history_filters import history_threshold_is_enabled
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
@@ -36,6 +35,7 @@ from core.strategy_dashboard import (
     _format_pct_diff,
     _format_pct_plain,
     _format_value_with_delta,
+    format_training_param_lines,
     print_optimizer_trial_console_dashboard,
 )
 from tools.optimizer.prep import prepare_trial_inputs
@@ -49,15 +49,6 @@ from tools.optimizer.walk_forward import build_test_holdout_period, build_test_p
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-def _format_history_threshold_text(params):
-    if not history_threshold_is_enabled(params):
-        return "歷史門檻：關閉"
-    return (
-        f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜"
-        f"勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜"
-        f"EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R"
-    )
 
 
 def _safe_float(value, default=0.0):
@@ -493,37 +484,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
 
 
 def _build_training_param_lines(params):
-    bb_str = f"布林(BB) 啟用（長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x）" if get_p(params, 'use_bb', False) else "布林(BB) 關閉"
-    kc_str = f"阿肯那(KC) 啟用（長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x）" if get_p(params, 'use_kc', False) else "阿肯那(KC) 關閉"
-    vol_str = f"均量 啟用（突破日量 > 前{get_p(params, 'vol_long_len', 20)}日均量 × {get_p(params, 'vol_breakout_mult', 1.5):.1f}）" if get_p(params, 'use_vol', False) else "均量 關閉"
-    return_filter_str = f"漲幅 啟用（突破日漲幅 > {get_p(params, 'breakout_return_min', 0.0) * 100:.1f}%）" if get_p(params, 'use_breakout_return_filter', False) else "漲幅 關閉"
-    false_filter_str = (
-        f"假突破 啟用（ATR%≤{get_p(params, 'breakout_false_filter_atr_pct_min', 0.045) * 100:.1f}%）"
-        if get_p(params, 'use_breakout_false_filter', False)
-        else "假突破 關閉"
-    )
-    quality_filter_str = (
-        f"品質模型 啟用（{get_p(params, 'breakout_quality_filter_id', 'breakout_quality_v1')}）"
-        if get_p(params, 'use_breakout_quality_filter', False)
-        else "品質模型 關閉"
-    )
-    breakout_str = (
-        f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高)"
-        if get_p(params, 'use_breakout_buy', True)
-        else "突破買進 關閉"
-    )
-    reentry_str = (
-        f"Re-entry 啟用（{get_p(params, 'breakout_reclaim_window_bars', 20)}日內站回 +{get_p(params, 'breakout_reclaim_confirm_r', 0.75):.2f}R）"
-        if get_p(params, 'use_breakout_reclaim_reentry', False)
-        else "Re-entry 關閉"
-    )
-    ema_filter_str = f"EMA濾網 啟用（Close > EMA{get_p(params, 'breakout_ema_len', 240)}）" if get_p(params, 'use_breakout_ema_filter', True) else "EMA濾網 關閉"
-    return [
-        f"進場：{breakout_str}｜{reentry_str}",
-        f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%",
-        f"濾網：{bb_str}｜{kc_str}｜{vol_str}｜{return_filter_str}｜{false_filter_str}｜{quality_filter_str}｜{ema_filter_str}",
-        _format_history_threshold_text(params),
-    ]
+    return format_training_param_lines(params)
 
 
 def _build_hard_gate_lines():
@@ -1458,7 +1419,8 @@ def run_optimizer_monitoring_callback(session, study, trial):
         fail_msg = trial.user_attrs.get("fail_reason", "策略無效")
         status_text, score_text = f"{session.colors['yellow']}淘汰 [{fail_msg}]{mode_suffix}{session.colors['reset']}", "N/A"
     else:
-        status_text, score_text = f"{session.colors['green']}進化中{mode_suffix}{session.colors['reset']}", f"{trial.value:.3f}"
+        status_text = f"{session.colors['green']}進化中{mode_suffix}{session.colors['reset']}"
+        score_text = format_system_score_for_display(trial.value, decimals=3)
 
     total_trials_display = str(session.n_trials) if isinstance(session.n_trials, int) and session.n_trials > 0 else "?"
 
@@ -1468,7 +1430,7 @@ def run_optimizer_monitoring_callback(session, study, trial):
         status_started_at = time.perf_counter()
         line = (
             f"{session.colors['gray']}⏳ [累積 {trial.number + 1:>4} | 本輪 {session.current_session_trial:>3}/{total_trials_display}] "
-            f"耗時: {float(display_total_wall_sec):>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{session.colors['reset']}"
+            f"耗時: {float(display_total_wall_sec):>5.1f}s | 系統得分: {score_text:>7} | 狀態: {status_text}{session.colors['reset']}"
         )
         if bool(getattr(session, "timing_mode", False)):
             print(line, flush=True)

@@ -25,9 +25,9 @@ SCORE_WIN_RATE_AMP_ENABLED = False  # True = 以完整交易勝率對 score 做�
 SCORE_WIN_RATE_TARGET = 60.0  # 完整交易勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
 SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = False  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_FULL_YEAR_RETURN_TARGET = 20.0  # 完整年度最差報酬達此目標時倍率為 1；高於目標會放大。
-SCORE_MEDIAN_R_AMP_ENABLED = False  # True = 以投組完成交易 R 中位數對 score 做目標式倍率校正。
-SCORE_MEDIAN_R_FLOOR = -1.0  # R 中位數低於此值時倍率歸零；-1.0 代表完整 1R 虧損。
-SCORE_MEDIAN_R_TARGET = 0.0  # R 中位數達此目標時倍率為 1；高於目標會放大。
+SCORE_MEDIAN_R_AMP_ENABLED = True  # True = 以投組完成交易 R 中位數對 score 做目標式倍率校正。
+SCORE_MEDIAN_R_FLOOR = -0.5  # R 中位數低於此值時倍率歸零；-1.0 代表完整 1R 虧損。
+SCORE_MEDIAN_R_TARGET = 0.5  # R 中位數達此目標時倍率為 1；高於目標會放大。
 
 # 系統評分分子切換
 # 'TOTAL_RETURN' = 分子使用總報酬率

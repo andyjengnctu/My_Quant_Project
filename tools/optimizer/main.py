@@ -2906,7 +2906,7 @@ def main(argv=None, environ=None):
         return 1
     if timing_mode and optimizer_seed is None:
         optimizer_seed, seed_source = 42, 'TIMING_DEFAULT:42'
-    if selected_model_mode == "study" and optimizer_seed is None:
+    if selected_model_mode == "study" and optimizer_seed is None and int(getattr(session, "n_trials", 0) or 0) > 0:
         optimizer_seed = int(generate_random_seed_ensemble(1)[0])
         seed_source = "STUDY_RANDOM_SEED"
 
@@ -2937,8 +2937,45 @@ def main(argv=None, environ=None):
             return int(ensemble_result)
 
     if session.n_trials == 0:
+        if selected_model_mode == "study":
+            if not db_file:
+                print(f"{C_RED}❌ Study Mode 輸出 base.json 需要既有 study 記憶庫；目前未設定 db_file。{C_RESET}", file=sys.stderr)
+                return 1
+            if not os.path.exists(db_file):
+                print(f"{C_RED}❌ 記憶庫不存在，無法輸出 base.json: {db_file}；請先用 Study Mode 訓練產生 study 記憶庫。{C_RESET}", file=sys.stderr)
+                return 1
+            study = None
+            try:
+                ensure_optimizer_db_usable(db_file)
+                ensure_export_only_db_not_empty(db_file)
+                study = create_optimizer_study(
+                    db_name,
+                    seed=(int(optimizer_seed) if optimizer_seed is not None else 0),
+                    sampler_kind=("random" if timing_mode else "tpe"),
+                )
+                _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
+                best_trial = session.get_best_completed_trial_or_none(study)
+                if best_trial is None or not is_qualified_trial_value(best_trial.value):
+                    print(f"{C_YELLOW}ℹ️ Study Mode 輸出模式完成，但目前尚無可匯出的 base trial。{C_RESET}")
+                    return 0
+                return _finalize_single_seed_study_base_only_outputs(
+                    best_trial=best_trial,
+                    optimizer_seed=(int(optimizer_seed) if optimizer_seed is not None else 0),
+                    objective_mode=objective_mode,
+                    walk_forward_policy=walk_forward_policy,
+                    dataset_label=dataset_label,
+                    selected_model_mode=selected_model_mode,
+                    trials_per_seed=0,
+                    build_best_params_payload_from_trial=build_best_params_payload_from_trial,
+                )
+            except RuntimeError as exc:
+                print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+                return 1
+            finally:
+                if study is not None:
+                    close_study_storage(study)
         if selected_model_mode != "trade":
-            print(f"{C_YELLOW}ℹ️ OOS mode 只輸出 validation study，不支援 candidate_best / run_best 匯出。請用 --trials N 重新產生 OOS 結果。{C_RESET}")
+            print(f"{C_YELLOW}ℹ️ OOS Mode 目前沒有可接續的單一 study 記憶庫輸出；請用 --trials N 重新產生 OOS 結果。{C_RESET}")
             return 0
         if not db_file:
             print(f"{C_RED}❌ 目前預設使用 memory study，不保留長期 DB；export_candidate 不支援從硬碟接續匯出。請用 Trade mode --trials N 重新訓練產生 candidate_best。{C_RESET}", file=sys.stderr)

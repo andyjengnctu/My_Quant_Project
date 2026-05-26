@@ -49,16 +49,17 @@ def _format_filter_param_text(params):
         if get_p(params, 'use_breakout_false_filter', False)
         else "假突破 關閉"
     )
+    ema_filter_str = f"EMA濾網 啟用（Close > EMA{get_p(params, 'breakout_ema_len', 240)}）" if get_p(params, 'use_breakout_ema_filter', True) else "EMA濾網 關閉"
     quality_filter_str = (
         f"品質模型 啟用（{get_p(params, 'breakout_quality_filter_id', 'breakout_quality_v1')}）"
         if get_p(params, 'use_breakout_quality_filter', False)
         else "品質模型 關閉"
     )
-    return bb_str, kc_str, vol_str, return_filter_str, false_filter_str, quality_filter_str
+    return bb_str, kc_str, vol_str, return_filter_str, false_filter_str, ema_filter_str, quality_filter_str
 
 
-def _format_training_param_lines(params):
-    bb_str, kc_str, vol_str, return_filter_str, false_filter_str, quality_filter_str = _format_filter_param_text(params)
+def format_training_param_lines(params):
+    bb_str, kc_str, vol_str, return_filter_str, false_filter_str, ema_filter_str, quality_filter_str = _format_filter_param_text(params)
     breakout_str = (
         f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高)"
         if get_p(params, 'use_breakout_buy', True)
@@ -69,13 +70,17 @@ def _format_training_param_lines(params):
         if get_p(params, 'use_breakout_reclaim_reentry', False)
         else "Re-entry 關閉"
     )
-    ema_filter_str = f"EMA濾網 啟用（Close > EMA{get_p(params, 'breakout_ema_len', 240)}）" if get_p(params, 'use_breakout_ema_filter', True) else "EMA濾網 關閉"
     return [
         f"進場：{breakout_str}｜{reentry_str}",
         f"風控：ATR {get_p(params, 'atr_len', 14)} 日| 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR｜半倉停利 {get_p(params, 'tp_percent', 0.5) * 100:.1f}%",
-        f"濾網：{bb_str}｜{kc_str}｜{vol_str}｜{return_filter_str}｜{false_filter_str}｜{quality_filter_str}｜{ema_filter_str}",
+        f"基礎濾網：{bb_str}｜{kc_str}｜{vol_str}",
+        f"進階濾網：{return_filter_str}｜{false_filter_str}｜{ema_filter_str}｜{quality_filter_str}",
         _format_history_threshold_text(params),
     ]
+
+
+def _format_training_param_lines(params):
+    return format_training_param_lines(params)
 
 
 def _record_get(record, key, default=None):
@@ -131,9 +136,16 @@ def _resolve_schedule_member_params(member):
     return _record_get(member, "params_obj") or _record_get(member, "params") or member
 
 
-def _print_training_params_section(params, params_schedule_rows=None):
+def _print_prefixed_training_param_lines(lines, *, params_section_title="訓練參數"):
+    for idx, line in enumerate(list(lines or [])):
+        prefix = f"{C_CYAN}【{params_section_title}】{C_RESET} " if idx == 0 else "　　　　     "
+        print(f"{prefix}{line}")
+
+
+def _print_training_params_section(params, params_schedule_rows=None, *, params_section_title="訓練參數"):
     schedule_rows = list(params_schedule_rows or [])
     if schedule_rows:
+        print(f"{C_CYAN}【{params_section_title}】{C_RESET}")
         row_count = len(schedule_rows)
         for row_idx, record in enumerate(schedule_rows, start=1):
             print(f"{C_CYAN}{_format_schedule_row_label(record, row_index=row_idx, row_count=row_count)}{C_RESET}")
@@ -151,8 +163,10 @@ def _print_training_params_section(params, params_schedule_rows=None):
                 print(f"  {line}")
         return
 
-    for line in _format_training_param_lines(params):
-        print(line)
+    _print_prefixed_training_param_lines(
+        _format_training_param_lines(params),
+        params_section_title=params_section_title,
+    )
 
 
 
@@ -285,10 +299,13 @@ def print_strategy_dashboard(
     print(_table_row("實戰期望值(EV)", f"{ev:.2f} R", "-", "-"))
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    print(f"【{params_section_title}】")
     for note_line in (params_note_lines or []):
         print(f"{C_GRAY}{note_line}{C_RESET}")
-    _print_training_params_section(params, params_schedule_rows=params_schedule_rows)
+    _print_training_params_section(
+        params,
+        params_schedule_rows=params_schedule_rows,
+        params_section_title=params_section_title,
+    )
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
     print("【共用硬門檻】")
