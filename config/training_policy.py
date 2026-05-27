@@ -20,7 +20,7 @@ BUY_SORT_METHOD = 'PROJ_COST'
 SCORE_CALC_METHOD = 'RoMD'  
 SCORE_MDD_POWER = 1.0 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
 SCORE_MDD_DENOMINATOR_EPSILON = 0.0001
-SCORE_WIN_RATE_AMP_ENABLED = False  # True = 以完整交易勝率對 score 做目標式倍率校正。
+SCORE_WIN_RATE_AMP_ENABLED = True  # True = 以完整交易勝率對 score 做目標式倍率校正。
 SCORE_WIN_RATE_TARGET = 70.0  # 完整交易勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
 SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = True  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_FULL_YEAR_RETURN_TARGET = 10.0  # 完整年度最差報酬達此目標時倍率為 1；高於目標會放大。
@@ -39,7 +39,7 @@ SCORE_NUMERATOR_METHOD = 'TOTAL_R_X_PORTFOLIO_RETURN'
 
 
 # 停利比例固定開關
-OPTIMIZER_FIXED_TP_PERCENT = 0.55 # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
+OPTIMIZER_FIXED_TP_PERCENT = 0.0 # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
 
 # Trade mode 實戰參數輸出與 promote 設定。selector 名稱沿用 rolling/OOS policy：
 # base / local / retention / base_retention_gt_0_0 / base_retention_gt_0_2 / base_retention_gt_0_4 / base_retention_gt_0_6 / base_retention_gt_0_8 / base_retention_gt_min
