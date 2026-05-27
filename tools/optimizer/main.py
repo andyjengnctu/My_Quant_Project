@@ -1859,6 +1859,7 @@ def _finalize_single_seed_study_base_only_outputs(
     selected_model_mode: str,
     trials_per_seed: int,
     build_best_params_payload_from_trial,
+    dashboard_session=None,
 ) -> int:
     from tools.optimizer.outer_rolling_oos import get_optimizer_nonrolling_policy_paramset_filename
 
@@ -1909,6 +1910,29 @@ def _finalize_single_seed_study_base_only_outputs(
         f"{C_GREEN}✅ Study-Full base 完成｜"
         f"trial=#{int(best_trial.number) + 1}｜base={base_score:.3f}{C_RESET}"
     )
+
+    # AI註: Study-Full 訓練中的 milestone dashboard 來自 trial user_attrs，
+    # 主要用於快速觀察進化中的候選；Workbench 則會讀取匯出的 base.json
+    # 重新 replay。為避免最後輸出的 Optimizer 畫面與 Workbench 口徑分叉，
+    # Study-Full 匯出後也立刻用同一份 base_payload 走 active-param ensemble replay。
+    if dashboard_session is not None and getattr(dashboard_session, "raw_data_cache_data_dir", None):
+        try:
+            from tools.optimizer.callbacks import print_optimizer_static_ensemble_console_dashboard
+
+            print_optimizer_static_ensemble_console_dashboard(
+                dashboard_session,
+                ensemble_payload=base_payload,
+                seeds=[seed_value],
+                milestone_title="🏆 Study-Full base 匯出後 replay 詳細結果",
+                title="Study-Full base 匯出後 replay 績效與風險對比表",
+                force=True,
+            )
+        except Exception as exc:
+            print(
+                f"{C_YELLOW}⚠️ Study-Full base 匯出後 replay 顯示略過："
+                f"{type(exc).__name__}: {exc}{C_RESET}"
+            )
+
     _print_optimizer_output_files("💾 輸出檔案", [("base", base_path)])
     return 0
 
@@ -2958,6 +2982,20 @@ def main(argv=None, environ=None):
                 if best_trial is None or not is_qualified_trial_value(best_trial.value):
                     print(f"{C_YELLOW}ℹ️ Study Mode 輸出模式完成，但目前尚無可匯出的 base trial。{C_RESET}")
                     return 0
+                if not getattr(session, "raw_data_cache_data_dir", None):
+                    try:
+                        if not os.path.isdir(selected_data_dir):
+                            raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
+                        session.load_raw_data(
+                            selected_data_dir,
+                            load_all_raw_data=load_all_raw_data,
+                            required_min_rows=optimizer_required_min_rows,
+                            verbose=False,
+                        )
+                    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                        print(
+                            f"{C_YELLOW}⚠️ Study Mode 輸出模式略過 base replay 顯示：{exc}{C_RESET}"
+                        )
                 return _finalize_single_seed_study_base_only_outputs(
                     best_trial=best_trial,
                     optimizer_seed=(int(optimizer_seed) if optimizer_seed is not None else 0),
@@ -2967,6 +3005,7 @@ def main(argv=None, environ=None):
                     selected_model_mode=selected_model_mode,
                     trials_per_seed=0,
                     build_best_params_payload_from_trial=build_best_params_payload_from_trial,
+                    dashboard_session=session,
                 )
             except RuntimeError as exc:
                 print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -3234,6 +3273,7 @@ def main(argv=None, environ=None):
                         selected_model_mode=selected_model_mode,
                         trials_per_seed=int(session.n_trials),
                         build_best_params_payload_from_trial=build_best_params_payload_from_trial,
+                        dashboard_session=session,
                     )
                     if status != 0:
                         return int(status)

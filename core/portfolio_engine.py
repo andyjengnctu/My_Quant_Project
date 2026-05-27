@@ -559,8 +559,16 @@ def run_portfolio_timeline(
         today = sorted_dates[i]
         day_ensemble_members = list(active_param_ensemble_resolver(today) or []) if active_param_ensemble_resolver is not None else []
         day_ensemble_contexts = list(active_context_ensemble_resolver(today) or []) if active_context_ensemble_resolver is not None else []
-        use_param_ensemble = bool(day_ensemble_members)
-        if use_param_ensemble:
+        day_ensemble_min_agree = resolve_seed_ensemble_min_agree(
+            len(day_ensemble_members),
+            ensemble_min_agree if ensemble_min_agree is not None else "auto",
+        ) if day_ensemble_members else None
+        single_member_identity_replay = bool(
+            len(day_ensemble_members) == 1
+            and int(day_ensemble_min_agree or 1) <= 1
+        )
+        use_param_ensemble = bool(day_ensemble_members) and not single_member_identity_replay
+        if day_ensemble_members:
             day_params = day_ensemble_members[0].get("params_obj") or params
             day_context = day_ensemble_contexts[0] if day_ensemble_contexts else None
         else:
@@ -692,10 +700,7 @@ def run_portfolio_timeline(
                         current_equity_money=current_equity_money,
                         initial_capital=initial_capital,
                         collect_all_candidates=replay_counts is not None,
-                        min_agree=resolve_seed_ensemble_min_agree(
-                            len(day_ensemble_members),
-                            ensemble_min_agree if ensemble_min_agree is not None else "auto",
-                        ),
+                        min_agree=int(day_ensemble_min_agree or 1),
                     )
                 else:
                     candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
