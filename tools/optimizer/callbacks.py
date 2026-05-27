@@ -567,14 +567,7 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         total_r=score_total_r,
         median_r=score_median_r,
     )
-    benchmark_score = calc_portfolio_score(
-        benchmark_return,
-        benchmark_mdd,
-        bm_monthly_win_rate,
-        bm_r_squared,
-        annual_return_pct=bm_annual_return_pct,
-        min_full_year_return_pct=_safe_float(profile.get("bm_min_full_year_return_pct", 0.0)),
-    )
+    benchmark_score = calc_plain_romd(benchmark_return, benchmark_mdd)
     candidate_metrics = {
         "pf_return": total_return,
         "annual_return_pct": annual_return_pct,

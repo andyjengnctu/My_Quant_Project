@@ -22,7 +22,7 @@ from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
-from core.portfolio_stats import calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
+from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
@@ -633,6 +633,45 @@ def validate_score_numerator_option_case(_base_params):
     add_check(results, "strategy_score", case_id, "total_r_x_annual_return_numerator_formula", _romd_expected(12.5 * 0.8, -5.0), total_r_x_annual_positive)
     add_check(results, "strategy_score", case_id, "total_r_x_annual_return_zero_when_annual_loss", 0.0, total_r_x_annual_negative)
     add_check(results, "strategy_score", case_id, "total_r_x_annual_return_missing_uses_total_return_fallback", _romd_expected(12.5 * 1.5, -5.0), total_r_x_annual_missing)
+
+    replay_result = (
+        None,
+        None,
+        141.48,
+        -17.56,
+        10,
+        40.0,
+        0.4,
+        2.0,
+        2414813.0,
+        79.32,
+        None,
+        203.67,
+        -33.96,
+        0,
+        0,
+        0.7,
+        58.73,
+        0.6,
+        61.90,
+        10,
+        0,
+        10.0,
+        95.0,
+        18.64,
+        24.03,
+        {
+            "score_total_r": 728.1,
+            "score_median_r": -0.117,
+            "single_stock_total_r": 728.1,
+            "single_stock_median_r": -0.117,
+            "min_full_year_return_pct": -5.89,
+            "bm_min_full_year_return_pct": -21.84,
+        },
+    )
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False):
+        _candidate_metrics, benchmark_metrics, _range_text = optimizer_callbacks._portfolio_replay_metrics_from_result(replay_result, initial_capital=1000000.0)
+    add_check(results, "strategy_score", case_id, "benchmark_oos_display_uses_plain_romd_under_total_r_numerator", calc_plain_romd(203.67, -33.96), benchmark_metrics["pf_romd"])
 
     single_stock_score_fields = build_score_single_stock_profile_fields({
         "trade_count": 2854,

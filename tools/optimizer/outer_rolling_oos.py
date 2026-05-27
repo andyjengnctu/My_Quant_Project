@@ -67,7 +67,7 @@ from core.active_param_ensemble import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
-from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_portfolio_score
+from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_plain_romd, calc_portfolio_score
 from core.portfolio_param_runtime import (
     build_active_param_objects_from_payload,
     build_active_param_ensemble_objects_from_payload,
@@ -3722,7 +3722,7 @@ def _calc_full_year_return_metrics_from_curve(curve: list[dict]) -> dict:
     }
 
 
-def _calc_stitched_curve_metrics(stitched: dict) -> dict:
+def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool = False) -> dict:
     initial_equity = _safe_float(stitched.get("initial_equity"), 0.0)
     curve = list(stitched.get("curve") or [])
     if initial_equity <= 0.0 or not curve:
@@ -3760,16 +3760,19 @@ def _calc_stitched_curve_metrics(stitched: dict) -> dict:
     min_full_year_return_pct = float(full_year_metrics.get("min_full_year_return_pct", 0.0))
     score_total_r = _safe_float(stitched.get("score_total_r", 0.0), 0.0)
     score_median_r = _safe_float(stitched.get("score_median_r", 0.0), 0.0)
-    score = calc_portfolio_score(
-        return_pct,
-        max_drawdown,
-        monthly_win_rate,
-        r_squared,
-        annual_return_pct=annual_return_pct,
-        min_full_year_return_pct=min_full_year_return_pct,
-        total_r=score_total_r,
-        median_r=score_median_r,
-    )
+    if benchmark_plain_romd:
+        score = calc_plain_romd(return_pct, max_drawdown)
+    else:
+        score = calc_portfolio_score(
+            return_pct,
+            max_drawdown,
+            monthly_win_rate,
+            r_squared,
+            annual_return_pct=annual_return_pct,
+            min_full_year_return_pct=min_full_year_return_pct,
+            total_r=score_total_r,
+            median_r=score_median_r,
+        )
     return {
         "score": float(score),
         "return_pct": float(return_pct),
@@ -3901,14 +3904,7 @@ def _extract_active_replay_metrics(result) -> dict:
         total_r=score_total_r,
         median_r=score_median_r,
     )
-    benchmark_score = calc_portfolio_score(
-        bm_ret_pct,
-        bm_mdd_pct,
-        bm_monthly_win_rate,
-        bm_r_squared,
-        annual_return_pct=bm_annual_return_pct,
-        min_full_year_return_pct=benchmark_min_full_year_return_pct,
-    )
+    benchmark_score = calc_plain_romd(bm_ret_pct, bm_mdd_pct)
     return {
         "score": float(score),
         "return_pct": float(ret_pct),
@@ -4557,7 +4553,7 @@ def _build_chained_oos_summary(rows: list[dict], *, chained_override: dict | Non
     best_stitched = _stitch_strategy_equity_curves(rows, best_finalist=True)
     benchmark_stitched = _stitch_benchmark_equity_curve(rows)
     best_metrics = _calc_stitched_curve_metrics(best_stitched)
-    benchmark_metrics = _calc_stitched_curve_metrics(benchmark_stitched)
+    benchmark_metrics = _calc_stitched_curve_metrics(benchmark_stitched, benchmark_plain_romd=True)
     best_score = float(best_metrics.get("score", 0.0))
     benchmark_score = float(benchmark_metrics.get("score", 0.0))
     best_return = float(best_metrics.get("return_pct", 0.0))

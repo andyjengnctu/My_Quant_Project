@@ -34,12 +34,12 @@ SCORE_MEDIAN_R_TARGET = 0.2  # R 中位數達此目標時倍率為 1；高於目
 # 'TOTAL_R' = 分子使用單股回測總 R
 # 'TOTAL_R_X_PORTFOLIO_RETURN' = 分子使用單股回測總 R × max(0, 投組總資產報酬率% / 100)
 # 'TOTAL_R_X_ANNUAL_RETURN' = 分子使用單股回測總 R × max(0, 投組年化報酬率% / 100)
-SCORE_NUMERATOR_METHOD = 'TOTAL_R_X_ANNUAL_RETURN'  
+SCORE_NUMERATOR_METHOD = 'TOTAL_R_X_PORTFOLIO_RETURN'  
 
 
 
 # 停利比例固定開關
-OPTIMIZER_FIXED_TP_PERCENT = None # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
+OPTIMIZER_FIXED_TP_PERCENT = 0.55 # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
 
 # Trade mode 實戰參數輸出與 promote 設定。selector 名稱沿用 rolling/OOS policy：
 # base / local / retention / base_retention_gt_0_0 / base_retention_gt_0_2 / base_retention_gt_0_4 / base_retention_gt_0_6 / base_retention_gt_0_8 / base_retention_gt_min
@@ -67,7 +67,7 @@ OPTIMIZER_POLICY_INDICATOR_ENABLED = {
 # trade = 最新實際交易參數訓練；最近 OUTER_ROLLING_TRAIN_WINDOW_MONTHS；無 OOS。
 # oos = 單一 fold OOS validation。rolling OOS = 多 fold OOS validation。
 DEFAULT_OPTIMIZER_MODEL_MODE = 'trade'
-STUDY_FULL_START_YEAR = 2021
+STUDY_FULL_START_YEAR = 2011
 OOS_EVALUATION_START_YEAR = 2021
 OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
 OUTER_ROLLING_OOS_HORIZON_MONTHS = 12

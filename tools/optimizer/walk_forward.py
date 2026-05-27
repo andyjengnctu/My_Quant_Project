@@ -8,7 +8,7 @@ from typing import Iterable
 import pandas as pd
 
 from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_stats import calc_portfolio_score
+from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
 from core.runtime_utils import get_taipei_now
 
 WF_MIN_TRAIN_YEARS = 8
@@ -233,14 +233,7 @@ def _evaluate_single_holdout_period(
         'benchmark_mdd': float(bm_mdd),
         'benchmark_r_squared': float(bm_r_sq),
         'benchmark_monthly_win_rate': float(bm_m_win_rate),
-        'benchmark_score_romd': float(calc_portfolio_score(
-            bm_ret,
-            bm_mdd,
-            bm_m_win_rate,
-            bm_r_sq,
-            annual_return_pct=bm_annual_return_pct,
-            min_full_year_return_pct=benchmark_min_full_year_return_pct,
-        )),
+        'benchmark_score_romd': float(calc_plain_romd(bm_ret, bm_mdd)),
         'initial_capital': float(getattr(params, 'initial_capital', 0.0) or 0.0),
         'equity_curve': equity_curve_rows,
     }
