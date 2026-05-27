@@ -295,6 +295,7 @@ def build_backtest_stats(
         'missed_sells': missed_sell_count,
         'is_setup_today': buy_next_day,
         'buy_limit': buy_limit,
+        'close_last': close_last,
         'stop_loss': stop_loss,
         'tp_price': tp_price,
         'extended_candidate_today': extended_candidate_today,

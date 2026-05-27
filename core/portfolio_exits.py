@@ -1,4 +1,4 @@
-from core.buy_sort import calc_buy_sort_value
+from core.buy_sort import calc_buy_sort_value, is_sort_value_better
 from core.breakout_reentry import create_breakout_reentry_watch_state
 from core.config import get_buy_sort_method
 from core.exact_accounting import (
@@ -212,7 +212,7 @@ def try_rotate_weakest_position(
                 holding_trade_count,
                 holding_asset_growth_pct,
             )
-            is_strategically_better = cand['sort_value'] > holding_sort_value
+            is_strategically_better = is_sort_value_better(cand['sort_value'], holding_sort_value, get_buy_sort_method())
 
             if is_strategically_better and ret < lowest_ret:
                 lowest_ret = ret

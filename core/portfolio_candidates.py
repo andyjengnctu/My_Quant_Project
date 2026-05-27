@@ -1,6 +1,6 @@
 import copy
 
-from core.buy_sort import calc_buy_sort_value
+from core.buy_sort import calc_buy_sort_value, sort_candidate_rows
 from core.config import get_buy_sort_method
 from core.exact_accounting import build_buy_ledger_from_price, milli_to_money
 from core.trade_plans import (
@@ -46,6 +46,7 @@ def _make_candidate_row(
     signal_date=None,
     sizing_capital=None,
     shadow_position_state=None,
+    prev_close=None,
 ):
     if est_qty > 0:
         est_ledger = build_buy_ledger_from_price(est_limit_px, est_qty, params)
@@ -54,7 +55,26 @@ def _make_candidate_row(
     else:
         est_cost_milli = 0
         est_cost = 0.0
-    sort_value = calc_buy_sort_value(buy_sort_method, ev, est_cost, win_rate, trade_count, asset_growth_pct)
+    buy_limit_overage_pct = calc_buy_sort_value(
+        'BUY_LIMIT_OVERAGE_THEN_PROJ_COST',
+        ev,
+        est_cost,
+        win_rate,
+        trade_count,
+        asset_growth_pct,
+        prev_close=prev_close,
+        limit_price=est_limit_px,
+    )
+    sort_value = calc_buy_sort_value(
+        buy_sort_method,
+        ev,
+        est_cost,
+        win_rate,
+        trade_count,
+        asset_growth_pct,
+        prev_close=prev_close,
+        limit_price=est_limit_px,
+    )
     row = {
         'ticker': ticker,
         'type': candidate_type,
@@ -67,6 +87,8 @@ def _make_candidate_row(
         'proj_cost': est_cost,
         'proj_cost_milli': est_cost_milli,
         'sort_value': sort_value,
+        'buy_limit_overage_pct': buy_limit_overage_pct,
+        'prev_close': prev_close,
         'hist_win_rate': win_rate,
         'hist_trade_count': trade_count,
         'asset_growth_pct': asset_growth_pct,
@@ -129,6 +151,7 @@ def _collect_normal_candidates(
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
+        y_close = get_fast_close(fast_df, pos=y_pos)
         signal_date = get_fast_dates(fast_df)[y_pos]
         security_profile = get_fast_security_profile(fast_df)
 
@@ -187,6 +210,7 @@ def _collect_normal_candidates(
             trade_date=today,
             signal_date=signal_date,
             sizing_capital=candidate_plan.get('sizing_capital'),
+            prev_close=y_close,
         )
         if candidates_today is not None:
             candidates_today.append(candidate_row)
@@ -332,6 +356,7 @@ def _collect_extended_candidates(
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
             entry_ref_price=candidate_plan.get('entry_ref_price'),
             shadow_position_state=candidate_plan.get('shadow_position_state'),
+            prev_close=y_close,
         )
         if candidates_today is not None:
             candidates_today.append(candidate_row)
@@ -391,6 +416,6 @@ def build_daily_candidates(
         candidates_today = []
     orderable_candidates_today = normal_orderable + extended_orderable
     if collect_all_candidates:
-        candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
-    orderable_candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
+        sort_candidate_rows(candidates_today, buy_sort_method)
+    sort_candidate_rows(orderable_candidates_today, buy_sort_method)
     return candidates_today, orderable_candidates_today, normal_setup_tickers_today

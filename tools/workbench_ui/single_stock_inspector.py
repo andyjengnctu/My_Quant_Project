@@ -26,7 +26,7 @@ import pandas as pd
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
 from core.runtime_utils import parse_float_strict
-from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
+from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method, sort_candidate_rows
 from core.scanner_display import build_scanner_sort_probe_text
 from tools.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
 from tools.trade_analysis.charting import (
@@ -117,6 +117,7 @@ SCAN_DROPDOWN_SORT_LABELS = {
     "預估投入": "投入",
     "勝率×次數": "勝×次",
     "資產成長": "成長",
+    "超限幅": "超限",
 }
 SCAN_DROPDOWN_WIN_RATE_PATTERN = re.compile(r"勝率\s+(-?\d+(?:\.\d+)?)%")
 SCAN_DROPDOWN_TRADE_COUNT_PATTERN = re.compile(r"交易\s+([0-9]+)")
@@ -1235,7 +1236,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._scanner_thread = None
         if mode == "candidate":
             candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
-            candidate_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
+            sort_candidate_rows(candidate_rows, get_buy_sort_method())
             display_values = [self._format_scan_dropdown_label(item) for item in candidate_rows]
             self._apply_scan_dropdown(
                 combo=self._candidate_combo,
@@ -1248,7 +1249,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return
 
         history_rows = list((scan_result or {}).get("history_qualified_rows") or [])
-        history_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
+        sort_candidate_rows(history_rows, get_buy_sort_method())
         display_values = [self._format_scan_dropdown_label(item) for item in history_rows]
         self._apply_scan_dropdown(
             combo=self._history_combo,

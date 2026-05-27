@@ -29,10 +29,11 @@ def _build_stat_str(*, expected_value, win_rate_pct, trade_count, asset_growth_p
         trade_count=trade_count,
         asset_growth_pct=asset_growth_pct,
         sort_value=sort_value,
+        method=get_buy_sort_method(),
     )
 
 
-def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, asset_growth_pct):
+def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, asset_growth_pct, prev_close=None, limit_price=None):
     return calc_buy_sort_value(
         get_buy_sort_method(),
         expected_value,
@@ -40,16 +41,20 @@ def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, as
         win_rate_pct / 100.0,
         trade_count,
         asset_growth_pct,
+        prev_close=prev_close,
+        limit_price=limit_price,
     )
 
 
-def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue):
+def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue, prev_close=None, limit_price=None):
     sort_value = _calc_sort_value(
         expected_value=expected_value,
         proj_cost=proj_cost,
         win_rate_pct=win_rate_pct,
         trade_count=trade_count,
         asset_growth_pct=asset_growth_pct,
+        prev_close=prev_close,
+        limit_price=limit_price,
     )
     stat_str = _build_stat_str(
         expected_value=expected_value,
@@ -65,6 +70,8 @@ def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_coun
         'ev': expected_value,
         'expected_value': expected_value,
         'sort_value': sort_value,
+        'prev_close': prev_close,
+        'limit_price': limit_price,
         'text': f"{ticker:<6} | {stat_str} | {detail}",
         'sanitize_issue': sanitize_issue,
         'win_rate': win_rate_pct,
@@ -73,7 +80,7 @@ def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_coun
     }
 
 
-def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, params, trade_date, sanitize_issue, candidate_plan, orderable_today, label_prefix, kind_if_orderable):
+def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, params, trade_date, sanitize_issue, candidate_plan, orderable_today, label_prefix, kind_if_orderable, prev_close=None):
     limit_price = candidate_plan.get('limit_price') if candidate_plan is not None else None
     init_sl = candidate_plan.get('init_sl') if candidate_plan is not None else None
     proj_cost = None
@@ -128,6 +135,8 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
         proj_cost=proj_cost,
         detail=' | '.join(barrier_parts),
         sanitize_issue=sanitize_issue,
+        prev_close=prev_close,
+        limit_price=limit_price,
     )
 
 
@@ -142,6 +151,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
     win_rate_pct = float(stats['win_rate'])
     trade_count = int(stats['trade_count'])
     asset_growth_pct = float(stats.get('asset_growth', 0.0))
+    prev_close = stats.get('close_last')
 
     extended_candidate = stats.get('extended_candidate_today')
     extended_orderable_today = bool(stats.get('extended_orderable_today', extended_candidate is not None))
@@ -165,6 +175,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             orderable_today=extended_tbd_orderable_today,
             label_prefix='延續(TBD)',
             kind_if_orderable='extended_tbd',
+            prev_close=prev_close,
         )
 
     if stats['is_setup_today']:
@@ -188,6 +199,8 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             proj_cost=proj_cost,
             detail=detail,
             sanitize_issue=sanitize_issue,
+            prev_close=prev_close,
+            limit_price=stats['buy_limit'],
         )
 
     if extended_candidate is not None:
@@ -204,6 +217,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             orderable_today=extended_orderable_today,
             label_prefix='延續',
             kind_if_orderable='extended',
+            prev_close=prev_close,
         )
 
     extended_tbd_orderable_today = bool(stats.get('extended_tbd_orderable_today', extended_candidate_tbd is not None))
@@ -221,6 +235,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             orderable_today=extended_tbd_orderable_today,
             label_prefix='延續(TBD)',
             kind_if_orderable='extended_tbd',
+            prev_close=prev_close,
         )
 
     return _build_scanner_row(

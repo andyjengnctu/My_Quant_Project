@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from core.buy_sort import calc_buy_sort_value
+from core.buy_sort import calc_buy_sort_value, sort_candidate_rows
 from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
 from core.walk_forward_policy import load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
@@ -438,6 +438,7 @@ def validate_model_io_schema_case(base_params):
             "is_candidate": True,
             "is_setup_today": True,
             "buy_limit": 105.0,
+            "close_last": 103.0,
             "stop_loss": 99.0,
             "expected_value": 1.25,
             "win_rate": 55.0,
@@ -450,6 +451,7 @@ def validate_model_io_schema_case(base_params):
             "is_candidate": True,
             "is_setup_today": False,
             "buy_limit": 105.0,
+            "close_last": 103.0,
             "stop_loss": 99.0,
             "expected_value": 0.8,
             "win_rate": 52.0,
@@ -518,6 +520,43 @@ def validate_ranking_scoring_sanity_case(base_params):
     add_check(results, "strategy_score", case_id, "buy_sort_asset_growth_type", True, isinstance(growth_high, float))
     add_check(results, "strategy_score", case_id, "buy_sort_asset_growth_finite", True, math.isfinite(growth_high))
 
+    overage_below_limit = calc_buy_sort_value(
+        "BUY_LIMIT_OVERAGE_THEN_PROJ_COST",
+        0.5,
+        10000,
+        0.4,
+        10,
+        prev_close=98.0,
+        limit_price=100.0,
+    )
+    overage_above_limit = calc_buy_sort_value(
+        "BUY_LIMIT_OVERAGE_THEN_PROJ_COST",
+        0.5,
+        10000,
+        0.4,
+        10,
+        prev_close=101.0,
+        limit_price=100.0,
+    )
+    overage_far_above_limit = calc_buy_sort_value(
+        "BUY_LIMIT_OVERAGE_THEN_PROJ_COST",
+        0.5,
+        10000,
+        0.4,
+        10,
+        prev_close=103.0,
+        limit_price=100.0,
+    )
+    add_check(results, "strategy_score", case_id, "buy_sort_limit_overage_below_limit_zero", 0.0, overage_below_limit)
+    add_check(results, "strategy_score", case_id, "buy_sort_limit_overage_monotonic", True, overage_below_limit < overage_above_limit < overage_far_above_limit)
+    overage_rows = [
+        {"ticker": "A", "sort_value": overage_above_limit, "proj_cost": 9000.0},
+        {"ticker": "B", "sort_value": overage_below_limit, "proj_cost": 5000.0},
+        {"ticker": "C", "sort_value": overage_below_limit, "proj_cost": 8000.0},
+    ]
+    sort_candidate_rows(overage_rows, "BUY_LIMIT_OVERAGE_THEN_PROJ_COST")
+    add_check(results, "strategy_score", case_id, "buy_sort_limit_overage_order", ["C", "B", "A"], [row["ticker"] for row in overage_rows])
+
     with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=10.0)
         score_high_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=20.0)
@@ -546,6 +585,7 @@ def validate_ranking_scoring_sanity_case(base_params):
             "is_candidate": True,
             "is_setup_today": True,
             "buy_limit": 105.0,
+            "close_last": 103.0,
             "stop_loss": 99.0,
             "expected_value": 1.25,
             "win_rate": 55.0,
@@ -566,6 +606,8 @@ def validate_ranking_scoring_sanity_case(base_params):
             buy_stats["win_rate"] / 100.0,
             buy_stats["trade_count"],
             buy_stats["asset_growth"],
+            prev_close=buy_stats.get("close_last"),
+            limit_price=buy_stats.get("buy_limit"),
         )
         add_check(results, "strategy_score", case_id, "scanner_sort_value_matches_buy_sort_formula", expected_sort, buy_result["sort_value"])
         add_check(results, "strategy_score", case_id, "scanner_sort_value_comparable", True, isinstance(buy_result["sort_value"], float) and math.isfinite(float(buy_result["sort_value"])))
@@ -772,6 +814,7 @@ def validate_strategy_repeatability_case(base_params):
             "is_candidate": True,
             "is_setup_today": True,
             "buy_limit": 105.0,
+            "close_last": 103.0,
             "stop_loss": 99.0,
             "expected_value": 1.25,
             "win_rate": 55.0,
@@ -856,6 +899,7 @@ def validate_strategy_minimum_viability_case(base_params):
             "is_candidate": True,
             "is_setup_today": True,
             "buy_limit": 105.0,
+            "close_last": 103.0,
             "stop_loss": 99.0,
             "expected_value": 1.25,
             "win_rate": 55.0,
@@ -994,6 +1038,7 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
             "is_candidate": True,
             "is_setup_today": True,
             "buy_limit": 105.0,
+            "close_last": 103.0,
             "stop_loss": 99.0,
             "expected_value": 1.25,
             "win_rate": 55.0,

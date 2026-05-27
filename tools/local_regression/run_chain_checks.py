@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.buy_sort import sort_candidate_rows
 from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
 from core.model_paths import resolve_default_primary_param_source_path
 from core.portfolio_param_runtime import load_portfolio_param_source_from_json
@@ -165,7 +166,7 @@ def _build_scanner_snapshot_from_context(context: Dict[str, Any], params) -> Dic
                 "text": msg,
             }))
 
-    candidate_rows.sort(key=lambda item: (item["sort_value"], item["ticker"]), reverse=True)
+    sort_candidate_rows(candidate_rows)
     return {
         "entry_script": "apps/vip_scanner.py",
         "count_scanned": len(discovered_tickers),

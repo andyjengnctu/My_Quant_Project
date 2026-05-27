@@ -9,14 +9,15 @@ EV_CALC_METHOD = 'A'
 
 # 買入優先序切換開關
 # 'EV' = 優先買入期望值最高的標的 (單筆質量極大化)
-# 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'HIST_WIN_X_TRADES' = 優先買入歷史勝率 × 交易次數最高的標的 (穩定度 × 樣本數)
 # 'ASSET_GROWTH' = 優先買入歷史資產成長最高的標的 (歷史複利成長極大化)
-BUY_SORT_METHOD = 'PROJ_COST'  
+# 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
+# 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST' = 優先買入前收未超出買入限價或超出幅度最小者，再按預估投入資金由大到小排序
+BUY_SORT_METHOD = 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST'  
 
 # 系統評分 (Score) 算法切換
 # 'RoMD' = 分子 / MDD 分母的報酬回撤比風格模型
-# 'LOG_R2' = 在 RoMD 基底上結合對數 R 平方與月度勝率的不對稱模型
+# 'LOG_R2' = 在 RoMD 基底上結合對數 R 平方與月度勝率的不對稱模型s
 SCORE_CALC_METHOD = 'RoMD'  
 SCORE_MDD_POWER = 1.0 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
 SCORE_MDD_DENOMINATOR_EPSILON = 0.0001

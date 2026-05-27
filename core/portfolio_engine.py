@@ -5,7 +5,8 @@ from collections import OrderedDict
 from core.exact_accounting import milli_to_money, money_to_milli
 from core.capital_policy import resolve_portfolio_sizing_equity
 from core.breakout_reentry import activate_breakout_reentry_signals_for_day
-from core.config import get_ev_calc_method
+from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD
+from core.config import get_buy_sort_method, get_ev_calc_method
 from core.portfolio_fast_data import (
     build_score_single_stock_profile_fields,
     build_normal_setup_index,
@@ -279,7 +280,18 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         representative["sort_value"] = float(median_sort)
         representative["ensemble_member_keys"] = sorted(member_keys)
         aggregated.append(representative)
-    aggregated.sort(key=lambda item: (int(item.get("ensemble_vote_count", 0) or 0), float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0), str(item.get("ticker") or "")), reverse=True)
+    active_sort_method = get_buy_sort_method()
+    if active_sort_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
+        aggregated.sort(
+            key=lambda item: (
+                -int(item.get("ensemble_vote_count", 0) or 0),
+                float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0),
+                -float(item.get("proj_cost", 0.0) or 0.0),
+                str(item.get("ticker") or ""),
+            )
+        )
+    else:
+        aggregated.sort(key=lambda item: (int(item.get("ensemble_vote_count", 0) or 0), float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0), str(item.get("ticker") or "")), reverse=True)
     return aggregated
 
 
