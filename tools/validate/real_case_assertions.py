@@ -9,6 +9,7 @@ from tools.validate.checks import (
     add_fail_result,
     add_skip_result,
     build_expected_scanner_payload,
+    calc_expected_full_month_metrics,
     calc_expected_full_quarter_metrics,
     calc_expected_full_year_metrics,
     calc_validation_annual_return_pct,
@@ -126,6 +127,14 @@ def append_real_case_checks(
     add_check(results, "single_vs_portfolio", ticker, "bm_full_year_count", expected_bm_full_year_metrics["full_year_count"], portfolio_stats["bm_full_year_count"])
     add_check(results, "single_vs_portfolio", ticker, "bm_min_full_year_return_pct", expected_bm_full_year_metrics["min_full_year_return_pct"], portfolio_stats["bm_min_full_year_return_pct"])
     add_check(results, "single_vs_portfolio", ticker, "bm_yearly_return_rows", portfolio_stats["bm_yearly_return_rows"], portfolio_stats["bm_yearly_return_rows"], note="Benchmark 年度報酬明細需保留完整列內容，供後續與 portfolio_sim 對照。")
+    expected_full_month_metrics = calc_expected_full_month_metrics(portfolio_stats["monthly_return_rows"])
+    expected_bm_full_month_metrics = calc_expected_full_month_metrics(portfolio_stats["bm_monthly_return_rows"])
+    add_check(results, "single_vs_portfolio", ticker, "full_month_count", expected_full_month_metrics["full_month_count"], portfolio_stats["full_month_count"])
+    add_check(results, "single_vs_portfolio", ticker, "min_month_return_pct", expected_full_month_metrics["min_month_return_pct"], portfolio_stats["min_month_return_pct"])
+    add_check(results, "single_vs_portfolio", ticker, "monthly_return_rows", portfolio_stats["monthly_return_rows"], portfolio_stats["monthly_return_rows"], note="月度報酬明細需保留完整列內容，供後續與 portfolio_sim 對照。")
+    add_check(results, "single_vs_portfolio", ticker, "bm_full_month_count", expected_bm_full_month_metrics["full_month_count"], portfolio_stats["bm_full_month_count"])
+    add_check(results, "single_vs_portfolio", ticker, "bm_min_month_return_pct", expected_bm_full_month_metrics["min_month_return_pct"], portfolio_stats["bm_min_month_return_pct"])
+    add_check(results, "single_vs_portfolio", ticker, "bm_monthly_return_rows", portfolio_stats["bm_monthly_return_rows"], portfolio_stats["bm_monthly_return_rows"], note="Benchmark 月度報酬明細需保留完整列內容，供後續與 portfolio_sim 對照。")
     expected_full_quarter_metrics = calc_expected_full_quarter_metrics(portfolio_stats["quarterly_return_rows"])
     expected_bm_full_quarter_metrics = calc_expected_full_quarter_metrics(portfolio_stats["bm_quarterly_return_rows"])
     add_check(results, "single_vs_portfolio", ticker, "full_quarter_count", expected_full_quarter_metrics["full_quarter_count"], portfolio_stats["full_quarter_count"])
@@ -173,6 +182,8 @@ def append_real_case_checks(
     add_check(results, "portfolio_sim", ticker, "df_trades_completed_trade_realized_pnl_sum", expected_realized_pnl_sum, actual_portfolio_realized_pnl_sum, tol=0.01, note="portfolio df_trades 重建後的 completed trades 總已實現損益，必須與核心一致。")
     portfolio_sim_full_year_metrics = calc_expected_full_year_metrics(portfolio_sim_stats["yearly_return_rows"])
     portfolio_sim_bm_full_year_metrics = calc_expected_full_year_metrics(portfolio_sim_stats["bm_yearly_return_rows"])
+    portfolio_sim_full_month_metrics = calc_expected_full_month_metrics(portfolio_sim_stats["monthly_return_rows"])
+    portfolio_sim_bm_full_month_metrics = calc_expected_full_month_metrics(portfolio_sim_stats["bm_monthly_return_rows"])
     portfolio_sim_full_quarter_metrics = calc_expected_full_quarter_metrics(portfolio_sim_stats["quarterly_return_rows"])
     portfolio_sim_bm_full_quarter_metrics = calc_expected_full_quarter_metrics(portfolio_sim_stats["bm_quarterly_return_rows"])
     add_check(results, "portfolio_sim", ticker, "r_sq", portfolio_stats["r_sq"], portfolio_sim_stats["r_sq"], note="portfolio_sim 風險報酬指標必須與同次輸出 payload 自洽。")
@@ -188,6 +199,10 @@ def append_real_case_checks(
     add_check(results, "portfolio_sim", ticker, "min_full_year_return_pct_formula", portfolio_sim_full_year_metrics["min_full_year_return_pct"], portfolio_sim_stats["min_full_year_return_pct"], note="portfolio_sim 最差完整年度報酬必須與 yearly_return_rows 重算一致。")
     add_check(results, "portfolio_sim", ticker, "bm_full_year_count_formula", portfolio_sim_bm_full_year_metrics["full_year_count"], portfolio_sim_stats["bm_full_year_count"], note="portfolio_sim benchmark 完整年度數必須與 bm_yearly_return_rows 重算一致。")
     add_check(results, "portfolio_sim", ticker, "bm_min_full_year_return_pct_formula", portfolio_sim_bm_full_year_metrics["min_full_year_return_pct"], portfolio_sim_stats["bm_min_full_year_return_pct"], note="portfolio_sim benchmark 最差完整年度報酬必須與 bm_yearly_return_rows 重算一致。")
+    add_check(results, "portfolio_sim", ticker, "full_month_count_formula", portfolio_sim_full_month_metrics["full_month_count"], portfolio_sim_stats["full_month_count"], note="portfolio_sim 完整月度數必須與 monthly_return_rows 重算一致。")
+    add_check(results, "portfolio_sim", ticker, "min_month_return_pct_formula", portfolio_sim_full_month_metrics["min_month_return_pct"], portfolio_sim_stats["min_month_return_pct"], note="portfolio_sim 最差完整月度報酬必須與 monthly_return_rows 重算一致。")
+    add_check(results, "portfolio_sim", ticker, "bm_full_month_count_formula", portfolio_sim_bm_full_month_metrics["full_month_count"], portfolio_sim_stats["bm_full_month_count"], note="portfolio_sim benchmark 完整月度數必須與 bm_monthly_return_rows 重算一致。")
+    add_check(results, "portfolio_sim", ticker, "bm_min_month_return_pct_formula", portfolio_sim_bm_full_month_metrics["min_month_return_pct"], portfolio_sim_stats["bm_min_month_return_pct"], note="portfolio_sim benchmark 最差完整月度報酬必須與 bm_monthly_return_rows 重算一致。")
     add_check(results, "portfolio_sim", ticker, "full_quarter_count_formula", portfolio_sim_full_quarter_metrics["full_quarter_count"], portfolio_sim_stats["full_quarter_count"], note="portfolio_sim 完整季度數必須與 quarterly_return_rows 重算一致。")
     add_check(results, "portfolio_sim", ticker, "min_quarter_return_pct_formula", portfolio_sim_full_quarter_metrics["min_quarter_return_pct"], portfolio_sim_stats["min_quarter_return_pct"], note="portfolio_sim 最差完整季度報酬必須與 quarterly_return_rows 重算一致。")
     add_check(results, "portfolio_sim", ticker, "bm_full_quarter_count_formula", portfolio_sim_bm_full_quarter_metrics["full_quarter_count"], portfolio_sim_stats["bm_full_quarter_count"], note="portfolio_sim benchmark 完整季度數必須與 bm_quarterly_return_rows 重算一致。")

@@ -2099,6 +2099,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         mode_display = "開啟 (強勢輪動)" if options["enable_rotation"] else "關閉 (穩定鎖倉)"
         min_full_year_return_pct = pf_profile.get("min_full_year_return_pct", 0.0)
         bm_min_full_year_return_pct = pf_profile.get("bm_min_full_year_return_pct", 0.0)
+        min_month_return_pct = pf_profile.get("min_month_return_pct", 0.0)
+        bm_min_month_return_pct = pf_profile.get("bm_min_month_return_pct", 0.0)
         min_quarter_return_pct = pf_profile.get("min_quarter_return_pct", 0.0)
         bm_min_quarter_return_pct = pf_profile.get("bm_min_quarter_return_pct", 0.0)
 
@@ -2139,6 +2141,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             bm_annual_return_pct=bm_annual_return_pct,
             min_full_year_return_pct=min_full_year_return_pct,
             bm_min_full_year_return_pct=bm_min_full_year_return_pct,
+            min_month_return_pct=min_month_return_pct,
+            bm_min_month_return_pct=bm_min_month_return_pct,
             min_quarter_return_pct=min_quarter_return_pct,
             bm_min_quarter_return_pct=bm_min_quarter_return_pct,
             portfolio_total_r=pf_profile.get("portfolio_total_r", 0.0),

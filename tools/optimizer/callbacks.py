@@ -186,6 +186,7 @@ def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: floa
         "pf_return": float(total.get("total_return_pct", 0.0)),
         "annual_return_pct": float(total.get("annualized_return_pct", 0.0)),
         "min_full_year_return_pct": float(total.get("min_full_year_return_pct", 0.0)),
+        "min_month_return_pct": float(total.get("min_month_return_pct", 0.0)),
         "min_quarter_return_pct": float(total.get("min_quarter_return_pct", 0.0)),
         "pf_mdd": float(total.get("max_drawdown_pct", 0.0)),
         "pf_romd": float(total.get("test_score_romd", 0.0)),
@@ -212,6 +213,7 @@ def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: floa
         "pf_return": float(total.get("benchmark_total_return_pct", 0.0)),
         "annual_return_pct": float(total.get("benchmark_annualized_return_pct", 0.0)),
         "min_full_year_return_pct": float(total.get("benchmark_min_full_year_return_pct", 0.0)),
+        "min_month_return_pct": float(total.get("benchmark_min_month_return_pct", 0.0)),
         "min_quarter_return_pct": float(total.get("benchmark_min_quarter_return_pct", 0.0)),
         "pf_mdd": float(total.get("benchmark_max_drawdown_pct", 0.0)),
         "r_squared": float(total.get("benchmark_r_squared", 0.0)),
@@ -464,6 +466,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
     add_row("總資產報酬率", "pf_return", kind="pct")
     add_row("年化報酬率", "annual_return_pct", kind="pct")
     add_row("年度最差報酬", "min_full_year_return_pct", kind="pct")
+    add_row("月度最差報酬", "min_month_return_pct", kind="pct")
     add_row("季度最差報酬", "min_quarter_return_pct", kind="pct")
     add_row(_optimizer_romd_metric_label(), comparable_romd_key, kind="float2")
     add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
@@ -567,6 +570,7 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=_safe_float(profile.get("min_full_year_return_pct", 0.0)),
+        min_month_return_pct=_safe_float(profile.get("min_month_return_pct", 0.0)),
         min_quarter_return_pct=_safe_float(profile.get("min_quarter_return_pct", 0.0)),
         total_r=score_total_r,
         median_r=score_median_r,
@@ -576,6 +580,7 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         "pf_return": total_return,
         "annual_return_pct": annual_return_pct,
         "min_full_year_return_pct": _safe_float(profile.get("min_full_year_return_pct", 0.0)),
+        "min_month_return_pct": _safe_float(profile.get("min_month_return_pct", 0.0)),
         "min_quarter_return_pct": _safe_float(profile.get("min_quarter_return_pct", 0.0)),
         "pf_mdd": max_drawdown,
         "pf_romd": float(candidate_score),
@@ -604,6 +609,7 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         "pf_return": benchmark_return,
         "annual_return_pct": bm_annual_return_pct,
         "min_full_year_return_pct": _safe_float(profile.get("bm_min_full_year_return_pct", 0.0)),
+        "min_month_return_pct": _safe_float(profile.get("bm_min_month_return_pct", 0.0)),
         "min_quarter_return_pct": _safe_float(profile.get("bm_min_quarter_return_pct", 0.0)),
         "pf_mdd": benchmark_mdd,
         "pf_romd": float(benchmark_score),
@@ -735,6 +741,7 @@ def _compute_reference_console_cache(session):
             "pf_return": float(ret_pct),
             "annual_return_pct": float(annual_return_pct),
             "min_full_year_return_pct": float(pf_profile.get("min_full_year_return_pct", 0.0)),
+            "min_month_return_pct": float(pf_profile.get("min_month_return_pct", 0.0)),
             "min_quarter_return_pct": float(pf_profile.get("min_quarter_return_pct", 0.0)),
             "pf_total_r": float(pf_profile.get("portfolio_total_r", 0.0)),
             "pf_median_r": float(pf_profile.get("portfolio_median_r", 0.0)),
@@ -765,6 +772,7 @@ def _compute_reference_console_cache(session):
                 annual_return_pct=float(annual_return_pct),
                 trade_win_rate_pct=float(win_rate),
                 min_full_year_return_pct=float(pf_profile.get("min_full_year_return_pct", 0.0)),
+                min_month_return_pct=float(pf_profile.get("min_month_return_pct", 0.0)),
                 min_quarter_return_pct=float(pf_profile.get("min_quarter_return_pct", 0.0)),
                 total_r=_score_total_r_from_profile(pf_profile),
                 median_r=_score_median_r_from_profile(pf_profile),
@@ -854,6 +862,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "pf_return": _safe_float(attrs.get("pf_return", 0.0)),
         "annual_return_pct": _safe_float(attrs.get("annual_return_pct", 0.0)),
         "min_full_year_return_pct": _safe_float(attrs.get("min_full_year_return_pct", 0.0)),
+        "min_month_return_pct": _safe_float(attrs.get("min_month_return_pct", 0.0)),
         "min_quarter_return_pct": _safe_float(attrs.get("min_quarter_return_pct", 0.0)),
         "pf_total_r": _safe_float(attrs.get("pf_total_r", 0.0)),
         "pf_median_r": _safe_float(attrs.get("pf_median_r", 0.0)),
@@ -884,6 +893,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
             annual_return_pct=_safe_float(attrs.get("annual_return_pct", 0.0)),
             trade_win_rate_pct=_safe_float(attrs.get("win_rate", 0.0)),
             min_full_year_return_pct=_safe_float(attrs.get("min_full_year_return_pct", 0.0)),
+            min_month_return_pct=_safe_float(attrs.get("min_month_return_pct", 0.0)),
             min_quarter_return_pct=_safe_float(attrs.get("min_quarter_return_pct", 0.0)),
             total_r=_score_total_r_from_attrs(attrs),
             median_r=_score_median_r_from_attrs(attrs),
@@ -893,6 +903,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "pf_return": _safe_float(attrs.get("bm_return", 0.0)),
         "annual_return_pct": _safe_float(attrs.get("bm_annual_return_pct", 0.0)),
         "min_full_year_return_pct": _safe_float(attrs.get("bm_min_full_year_return_pct", 0.0)),
+        "min_month_return_pct": _safe_float(attrs.get("bm_min_month_return_pct", 0.0)),
         "min_quarter_return_pct": _safe_float(attrs.get("bm_min_quarter_return_pct", 0.0)),
         "pf_mdd": _safe_float(attrs.get("bm_mdd", 0.0)),
         "r_squared": _safe_float(attrs.get("bm_r_squared", 0.0)),
@@ -904,6 +915,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
             _safe_float(attrs.get("bm_r_squared", 0.0)),
             annual_return_pct=_safe_float(attrs.get("bm_annual_return_pct", 0.0)),
             min_full_year_return_pct=_safe_float(attrs.get("bm_min_full_year_return_pct", 0.0)),
+            min_month_return_pct=_safe_float(attrs.get("bm_min_month_return_pct", 0.0)),
             min_quarter_return_pct=_safe_float(attrs.get("bm_min_quarter_return_pct", 0.0)),
         )),
         "final_equity": _benchmark_final_equity(initial_capital, _safe_float(attrs.get("bm_return", 0.0))),

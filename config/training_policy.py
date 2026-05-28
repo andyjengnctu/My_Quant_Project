@@ -30,8 +30,10 @@ SCORE_MONTHLY_WIN_RATE_TARGET = 80.0  # 月度獲利勝率達此目標時倍率�
 
 SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = False  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_FULL_YEAR_RETURN_TARGET = 10.0  # 完整年度最差報酬達此目標時倍率為 1；高於目標會放大。
-SCORE_MIN_QUARTER_RETURN_AMP_ENABLED = True  # True = 以完整季度最差報酬對 score 做目標式倍率校正。
+SCORE_MIN_QUARTER_RETURN_AMP_ENABLED = False  # True = 以完整季度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_QUARTER_RETURN_TARGET = 10.0  # 完整季度最差報酬達此目標時倍率為 1；高於目標會放大。
+SCORE_MIN_MONTH_RETURN_AMP_ENABLED = True  # True = 以完整月度最差報酬對 score 做目標式倍率校正。
+SCORE_MIN_MONTH_RETURN_TARGET = 10.0  # 完整月度最差報酬達此目標時倍率為 1；高於目標會放大。
 
 SCORE_MEDIAN_R_AMP_ENABLED = False  # True = 以單股回測 R 中位數對 score 做目標式倍率校正。
 SCORE_MEDIAN_R_FLOOR = -0.2  # R 中位數低於此值時倍率歸零；-1.0 代表完整 1R 虧損。
@@ -278,6 +280,10 @@ def is_score_min_full_year_return_amp_enabled() -> bool:
     return bool(SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED)
 
 
+def is_score_min_month_return_amp_enabled() -> bool:
+    return bool(SCORE_MIN_MONTH_RETURN_AMP_ENABLED)
+
+
 def is_score_min_quarter_return_amp_enabled() -> bool:
     return bool(SCORE_MIN_QUARTER_RETURN_AMP_ENABLED)
 
@@ -330,6 +336,38 @@ def resolve_score_min_full_year_return_target(raw_value=None, floor_pct=None) ->
     if not math.isfinite(resolved) or not math.isfinite(resolved_floor) or resolved <= resolved_floor:
         raise ValueError(
             f"SCORE_MIN_FULL_YEAR_RETURN_TARGET 必須是大於 MIN_FULL_YEAR_RETURN_PCT 的有限數，"
+            f"目前 target={value!r}, floor={floor!r}"
+        )
+    return resolved
+
+
+def resolve_score_min_month_return_floor(target_pct=None) -> float:
+    value = SCORE_MIN_MONTH_RETURN_TARGET if target_pct is None else target_pct
+    try:
+        target = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"SCORE_MIN_MONTH_RETURN_TARGET 必須是有限數，目前值: {value!r}") from exc
+    if not math.isfinite(target):
+        raise ValueError(f"SCORE_MIN_MONTH_RETURN_TARGET 必須是有限數，目前值: {value!r}")
+    if target > 0.0:
+        return -abs(target)
+    return float(MIN_FULL_YEAR_RETURN_PCT) / 12.0
+
+
+def resolve_score_min_month_return_target(raw_value=None, floor_pct=None) -> float:
+    value = SCORE_MIN_MONTH_RETURN_TARGET if raw_value is None else raw_value
+    floor = resolve_score_min_month_return_floor(value) if floor_pct is None else floor_pct
+    try:
+        resolved = float(value)
+        resolved_floor = float(floor)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"SCORE_MIN_MONTH_RETURN_TARGET 必須是大於月度最差報酬 floor 的有限數，"
+            f"目前 target={value!r}, floor={floor!r}"
+        ) from exc
+    if not math.isfinite(resolved) or not math.isfinite(resolved_floor) or resolved <= resolved_floor:
+        raise ValueError(
+            f"SCORE_MIN_MONTH_RETURN_TARGET 必須是大於月度最差報酬 floor 的有限數，"
             f"目前 target={value!r}, floor={floor!r}"
         )
     return resolved
@@ -390,6 +428,9 @@ def build_training_score_policy_snapshot():
         "SCORE_WIN_RATE_TARGET": resolve_score_win_rate_target(),
         "SCORE_MONTHLY_WIN_RATE_AMP_ENABLED": is_score_monthly_win_rate_amp_enabled(),
         "SCORE_MONTHLY_WIN_RATE_TARGET": resolve_score_monthly_win_rate_target(),
+        "SCORE_MIN_MONTH_RETURN_AMP_ENABLED": is_score_min_month_return_amp_enabled(),
+        "SCORE_MIN_MONTH_RETURN_TARGET": resolve_score_min_month_return_target(),
+        "SCORE_MIN_MONTH_RETURN_FLOOR": resolve_score_min_month_return_floor(),
         "SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED": is_score_min_full_year_return_amp_enabled(),
         "SCORE_MIN_FULL_YEAR_RETURN_TARGET": resolve_score_min_full_year_return_target(),
         "SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": is_score_min_quarter_return_amp_enabled(),

@@ -24,6 +24,7 @@ from core.exact_accounting import (
 )
 from core.history_filters import evaluate_history_candidate_metrics
 from core.portfolio_stats import (
+    build_full_month_return_stats,
     build_full_quarter_return_stats,
     build_full_year_return_stats,
     calc_annual_return_pct,
@@ -206,6 +207,19 @@ def validate_portfolio_stats_unit_case(_base_params):
         year_first_sim_date={2024: sorted_dates[1], 2025: sorted_dates[2]},
         year_last_sim_date={2024: sorted_dates[1], 2025: sorted_dates[3]},
     )
+    month_sorted_dates = list(pd.to_datetime([
+        "2024-01-02",
+        "2024-01-31",
+        "2024-02-01",
+        "2024-02-29",
+    ]))
+    full_month_stats = build_full_month_return_stats(
+        month_sorted_dates,
+        month_start_equity={(2024, 1): 100.0, (2024, 2): 120.0},
+        month_end_equity={(2024, 1): 110.0, (2024, 2): 90.0},
+        month_first_sim_date={(2024, 1): month_sorted_dates[1], (2024, 2): month_sorted_dates[2]},
+        month_last_sim_date={(2024, 1): month_sorted_dates[1], (2024, 2): month_sorted_dates[3]},
+    )
     quarter_sorted_dates = list(pd.to_datetime([
         "2024-01-02",
         "2024-03-29",
@@ -228,6 +242,9 @@ def validate_portfolio_stats_unit_case(_base_params):
     add_check(results, "unit_portfolio_stats", case_id, "partial_year_excluded_from_full_year_count", 1, full_year_stats["full_year_count"])
     add_check(results, "unit_portfolio_stats", case_id, "partial_year_still_kept_in_rows", 2, len(full_year_stats["yearly_return_rows"]))
     add_check(results, "unit_portfolio_stats", case_id, "full_year_min_return_uses_only_complete_years", -25.0, full_year_stats["min_full_year_return_pct"], tol=1e-9)
+    add_check(results, "unit_portfolio_stats", case_id, "partial_month_excluded_from_full_month_count", 1, full_month_stats["full_month_count"])
+    add_check(results, "unit_portfolio_stats", case_id, "partial_month_still_kept_in_rows", 2, len(full_month_stats["monthly_return_rows"]))
+    add_check(results, "unit_portfolio_stats", case_id, "full_month_min_return_uses_only_complete_months", -25.0, full_month_stats["min_month_return_pct"], tol=1e-9)
     add_check(results, "unit_portfolio_stats", case_id, "partial_quarter_excluded_from_full_quarter_count", 1, full_quarter_stats["full_quarter_count"])
     add_check(results, "unit_portfolio_stats", case_id, "partial_quarter_still_kept_in_rows", 2, len(full_quarter_stats["quarterly_return_rows"]))
     add_check(results, "unit_portfolio_stats", case_id, "full_quarter_min_return_uses_only_complete_quarters", -25.0, full_quarter_stats["min_quarter_return_pct"], tol=1e-9)
@@ -237,6 +254,7 @@ def validate_portfolio_stats_unit_case(_base_params):
     add_check(results, "unit_portfolio_stats", case_id, "calc_annual_return_pct_end_value_non_positive", -100.0, calc_annual_return_pct(100.0, 0.0, 2.0), tol=1e-9)
 
     summary["full_year_count"] = full_year_stats["full_year_count"]
+    summary["full_month_count"] = full_month_stats["full_month_count"]
     summary["full_quarter_count"] = full_quarter_stats["full_quarter_count"]
     return results, summary
 

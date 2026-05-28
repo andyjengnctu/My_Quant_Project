@@ -3729,6 +3729,49 @@ def _calc_full_year_return_metrics_from_curve(curve: list[dict]) -> dict:
 
 
 
+def _calc_full_month_return_metrics_from_curve(curve: list[dict]) -> dict:
+    by_month: dict[tuple[int, int], dict] = {}
+    for point in list(curve or []):
+        try:
+            ts = pd.Timestamp(point.get("date"))
+            equity = float(point.get("equity", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not pd.notna(ts) or equity <= 0.0:
+            continue
+        key = (int(ts.year), int(ts.month))
+        bucket = by_month.setdefault(
+            key,
+            {"first_date": ts, "first_equity": equity, "last_date": ts, "last_equity": equity},
+        )
+        if ts < bucket["first_date"]:
+            bucket["first_date"] = ts
+            bucket["first_equity"] = equity
+        if ts > bucket["last_date"]:
+            bucket["last_date"] = ts
+            bucket["last_equity"] = equity
+
+    rows = []
+    for year, month in sorted(by_month):
+        bucket = by_month[(year, month)]
+        start_equity = float(bucket["first_equity"])
+        end_equity = float(bucket["last_equity"])
+        month_return_pct = (end_equity / start_equity - 1.0) * 100.0 if start_equity > 0.0 else 0.0
+        rows.append({
+            "year": int(year),
+            "month": int(month),
+            "period": f"{int(year):04d}-{int(month):02d}",
+            "month_return_pct": float(month_return_pct),
+            "start_equity": float(start_equity),
+            "end_equity": float(end_equity),
+            "is_full_month": True,
+        })
+    return {
+        "full_month_count": int(len(rows)),
+        "min_month_return_pct": float(min((row["month_return_pct"] for row in rows), default=0.0)),
+        "monthly_return_rows": rows,
+    }
+
 def _calc_full_quarter_return_metrics_from_curve(curve: list[dict]) -> dict:
     by_quarter: dict[tuple[int, int], dict] = {}
     for point in list(curve or []):
@@ -3790,10 +3833,14 @@ def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool =
             "mdd_pct": 0.0,
             "annual_return_pct": 0.0,
             "full_year_count": 0,
-            "full_quarter_count": 0,
-            "min_quarter_return_pct": 0.0,
             "min_full_year_return_pct": 0.0,
             "yearly_return_rows": [],
+            "full_month_count": 0,
+            "min_month_return_pct": 0.0,
+            "monthly_return_rows": [],
+            "full_quarter_count": 0,
+            "min_quarter_return_pct": 0.0,
+            "quarterly_return_rows": [],
             "r_squared": 0.0,
             "monthly_win_rate": 0.0,
             "curve_points": 0,
@@ -3817,8 +3864,10 @@ def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool =
     monthly_equities = _month_end_equities_from_curve(curve, initial_equity=initial_equity)
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
     full_year_metrics = _calc_full_year_return_metrics_from_curve(curve)
+    full_month_metrics = _calc_full_month_return_metrics_from_curve(curve)
     full_quarter_metrics = _calc_full_quarter_return_metrics_from_curve(curve)
     min_full_year_return_pct = float(full_year_metrics.get("min_full_year_return_pct", 0.0))
+    min_month_return_pct = float(full_month_metrics.get("min_month_return_pct", 0.0))
     min_quarter_return_pct = float(full_quarter_metrics.get("min_quarter_return_pct", 0.0))
     score_total_r = _safe_float(stitched.get("score_total_r", 0.0), 0.0)
     score_median_r = _safe_float(stitched.get("score_median_r", 0.0), 0.0)
@@ -3833,6 +3882,7 @@ def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool =
             r_squared,
             annual_return_pct=annual_return_pct,
             min_full_year_return_pct=min_full_year_return_pct,
+            min_month_return_pct=min_month_return_pct,
             min_quarter_return_pct=min_quarter_return_pct,
             total_r=score_total_r,
             median_r=score_median_r,
@@ -3846,6 +3896,9 @@ def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool =
         "full_year_count": int(full_year_metrics.get("full_year_count", 0)),
         "min_full_year_return_pct": min_full_year_return_pct,
         "yearly_return_rows": list(full_year_metrics.get("yearly_return_rows", [])),
+        "full_month_count": int(full_month_metrics.get("full_month_count", 0)),
+        "min_month_return_pct": min_month_return_pct,
+        "monthly_return_rows": list(full_month_metrics.get("monthly_return_rows", [])),
         "full_quarter_count": int(full_quarter_metrics.get("full_quarter_count", 0)),
         "min_quarter_return_pct": min_quarter_return_pct,
         "quarterly_return_rows": list(full_quarter_metrics.get("quarterly_return_rows", [])),
@@ -3954,12 +4007,18 @@ def _extract_active_replay_metrics(result) -> dict:
     full_year_count = int(profile.get("full_year_count", 0) or 0)
     min_full_year_return_pct = float(profile.get("min_full_year_return_pct", 0.0) or 0.0)
     yearly_return_rows = list(profile.get("yearly_return_rows") or [])
+    full_month_count = int(profile.get("full_month_count", 0) or 0)
+    min_month_return_pct = float(profile.get("min_month_return_pct", 0.0) or 0.0)
+    monthly_return_rows = list(profile.get("monthly_return_rows") or [])
     full_quarter_count = int(profile.get("full_quarter_count", 0) or 0)
     min_quarter_return_pct = float(profile.get("min_quarter_return_pct", 0.0) or 0.0)
     quarterly_return_rows = list(profile.get("quarterly_return_rows") or [])
     benchmark_full_year_count = int(profile.get("bm_full_year_count", 0) or 0)
     benchmark_min_full_year_return_pct = float(profile.get("bm_min_full_year_return_pct", 0.0) or 0.0)
     benchmark_yearly_return_rows = list(profile.get("bm_yearly_return_rows") or [])
+    benchmark_full_month_count = int(profile.get("bm_full_month_count", 0) or 0)
+    benchmark_min_month_return_pct = float(profile.get("bm_min_month_return_pct", 0.0) or 0.0)
+    benchmark_monthly_return_rows = list(profile.get("bm_monthly_return_rows") or [])
     benchmark_full_quarter_count = int(profile.get("bm_full_quarter_count", 0) or 0)
     benchmark_min_quarter_return_pct = float(profile.get("bm_min_quarter_return_pct", 0.0) or 0.0)
     benchmark_quarterly_return_rows = list(profile.get("bm_quarterly_return_rows") or [])
@@ -3975,6 +4034,7 @@ def _extract_active_replay_metrics(result) -> dict:
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        min_month_return_pct=min_month_return_pct,
         min_quarter_return_pct=min_quarter_return_pct,
         total_r=score_total_r,
         median_r=score_median_r,
@@ -3990,6 +4050,9 @@ def _extract_active_replay_metrics(result) -> dict:
         "full_year_count": int(full_year_count),
         "min_full_year_return_pct": float(min_full_year_return_pct),
         "yearly_return_rows": yearly_return_rows,
+        "full_month_count": int(full_month_count),
+        "min_month_return_pct": float(min_month_return_pct),
+        "monthly_return_rows": monthly_return_rows,
         "full_quarter_count": int(full_quarter_count),
         "min_quarter_return_pct": float(min_quarter_return_pct),
         "quarterly_return_rows": quarterly_return_rows,
@@ -4012,6 +4075,9 @@ def _extract_active_replay_metrics(result) -> dict:
         "benchmark_full_year_count": int(benchmark_full_year_count),
         "benchmark_min_full_year_return_pct": float(benchmark_min_full_year_return_pct),
         "benchmark_yearly_return_rows": benchmark_yearly_return_rows,
+        "benchmark_full_month_count": int(benchmark_full_month_count),
+        "benchmark_min_month_return_pct": float(benchmark_min_month_return_pct),
+        "benchmark_monthly_return_rows": benchmark_monthly_return_rows,
         "benchmark_full_quarter_count": int(benchmark_full_quarter_count),
         "benchmark_min_quarter_return_pct": float(benchmark_min_quarter_return_pct),
         "benchmark_quarterly_return_rows": benchmark_quarterly_return_rows,
@@ -4081,6 +4147,8 @@ def _empty_unavailable_chain_metrics() -> dict:
         "return_pct": 0.0,
         "mdd_pct": 0.0,
         "annual_return_pct": 0.0,
+        "full_month_count": 0,
+        "min_month_return_pct": 0.0,
         "full_quarter_count": 0,
         "min_quarter_return_pct": 0.0,
         "r_squared": 0.0,
@@ -4091,6 +4159,8 @@ def _empty_unavailable_chain_metrics() -> dict:
         "benchmark_return_pct": 0.0,
         "benchmark_mdd_pct": 0.0,
         "benchmark_annual_return_pct": 0.0,
+        "benchmark_full_month_count": 0,
+        "benchmark_min_month_return_pct": 0.0,
         "benchmark_full_quarter_count": 0,
         "benchmark_min_quarter_return_pct": 0.0,
         "benchmark_r_squared": 0.0,

@@ -230,6 +230,8 @@ def main(argv=None, env=None):
     mode_display = "開啟 (強勢輪動)" if user_rotation else "關閉 (穩定鎖倉)"
     min_full_year_return_pct = pf_profile.get("min_full_year_return_pct", 0.0)
     bm_min_full_year_return_pct = pf_profile.get("bm_min_full_year_return_pct", 0.0)
+    min_month_return_pct = pf_profile.get("min_month_return_pct", 0.0)
+    bm_min_month_return_pct = pf_profile.get("bm_min_month_return_pct", 0.0)
     min_quarter_return_pct = pf_profile.get("min_quarter_return_pct", 0.0)
     bm_min_quarter_return_pct = pf_profile.get("bm_min_quarter_return_pct", 0.0)
 
@@ -260,6 +262,7 @@ def main(argv=None, env=None):
         annual_trades=annual_trades, reserved_buy_fill_rate=reserved_buy_fill_rate,
         annual_return_pct=annual_return_pct, bm_annual_return_pct=bm_annual_return_pct,
         min_full_year_return_pct=min_full_year_return_pct, bm_min_full_year_return_pct=bm_min_full_year_return_pct,
+        min_month_return_pct=min_month_return_pct, bm_min_month_return_pct=bm_min_month_return_pct,
         min_quarter_return_pct=min_quarter_return_pct, bm_min_quarter_return_pct=bm_min_quarter_return_pct,
         portfolio_total_r=pf_profile.get("portfolio_total_r", 0.0),
         portfolio_median_r=pf_profile.get("portfolio_median_r", 0.0),

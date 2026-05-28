@@ -27,6 +27,21 @@ def normalize_yearly_return_rows(rows):
     return normalized
 
 
+def normalize_monthly_return_rows(rows):
+    normalized = []
+    for row in rows or []:
+        normalized.append({
+            "year": int(row.get("year", 0)),
+            "month": int(row.get("month", 0)),
+            "period": str(row.get("period", "")),
+            "month_return_pct": float(row.get("month_return_pct", 0.0)),
+            "is_full_month": bool(row.get("is_full_month", False)),
+            "start_date": str(row.get("start_date", "")),
+            "end_date": str(row.get("end_date", "")),
+        })
+    return normalized
+
+
 def normalize_quarterly_return_rows(rows):
     normalized = []
     for row in rows or []:
@@ -45,6 +60,8 @@ def normalize_quarterly_return_rows(rows):
 def extract_yearly_profile_fields(profile_stats):
     yearly_rows = normalize_yearly_return_rows(profile_stats.get("yearly_return_rows", []))
     bm_yearly_rows = normalize_yearly_return_rows(profile_stats.get("bm_yearly_return_rows", []))
+    monthly_rows = normalize_monthly_return_rows(profile_stats.get("monthly_return_rows", []))
+    bm_monthly_rows = normalize_monthly_return_rows(profile_stats.get("bm_monthly_return_rows", []))
     quarterly_rows = normalize_quarterly_return_rows(profile_stats.get("quarterly_return_rows", []))
     bm_quarterly_rows = normalize_quarterly_return_rows(profile_stats.get("bm_quarterly_return_rows", []))
     return {
@@ -54,6 +71,12 @@ def extract_yearly_profile_fields(profile_stats):
         "bm_full_year_count": int(profile_stats.get("bm_full_year_count", 0)),
         "bm_min_full_year_return_pct": float(profile_stats.get("bm_min_full_year_return_pct", 0.0)),
         "bm_yearly_return_rows": bm_yearly_rows,
+        "full_month_count": int(profile_stats.get("full_month_count", 0)),
+        "min_month_return_pct": float(profile_stats.get("min_month_return_pct", 0.0)),
+        "monthly_return_rows": monthly_rows,
+        "bm_full_month_count": int(profile_stats.get("bm_full_month_count", 0)),
+        "bm_min_month_return_pct": float(profile_stats.get("bm_min_month_return_pct", 0.0)),
+        "bm_monthly_return_rows": bm_monthly_rows,
         "full_quarter_count": int(profile_stats.get("full_quarter_count", 0)),
         "min_quarter_return_pct": float(profile_stats.get("min_quarter_return_pct", 0.0)),
         "quarterly_return_rows": quarterly_rows,
@@ -68,6 +91,14 @@ def calc_expected_full_year_metrics(yearly_rows):
     return {
         "full_year_count": len(full_year_rows),
         "min_full_year_return_pct": float(min((row["year_return_pct"] for row in full_year_rows), default=0.0)),
+    }
+
+
+def calc_expected_full_month_metrics(monthly_rows):
+    full_month_rows = [row for row in (monthly_rows or []) if row["is_full_month"]]
+    return {
+        "full_month_count": len(full_month_rows),
+        "min_month_return_pct": float(min((row["month_return_pct"] for row in full_month_rows), default=0.0)),
     }
 
 

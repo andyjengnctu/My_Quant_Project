@@ -173,12 +173,14 @@ def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation
         annual_return_pct=attrs.get("annual_return_pct", 0.0),
         bm_annual_return_pct=attrs.get("bm_annual_return_pct", 0.0),
         min_full_year_return_pct=attrs.get("min_full_year_return_pct", 0.0),
+        min_month_return_pct=attrs.get("min_month_return_pct", 0.0),
         min_quarter_return_pct=attrs.get("min_quarter_return_pct", 0.0),
         portfolio_total_r=attrs.get("pf_total_r", 0.0),
         portfolio_median_r=attrs.get("pf_median_r", 0.0),
         score_total_r=attrs.get("score_total_r", attrs.get("single_stock_total_r", 0.0)),
         score_median_r=attrs.get("score_median_r", attrs.get("single_stock_median_r", 0.0)),
         bm_min_full_year_return_pct=attrs.get("bm_min_full_year_return_pct", 0.0),
+        bm_min_month_return_pct=attrs.get("bm_min_month_return_pct", 0.0),
         bm_min_quarter_return_pct=attrs.get("bm_min_quarter_return_pct", 0.0),
         params_section_title="目前 trial 參數（非 final artifact ensemble）",
     )
@@ -188,6 +190,8 @@ def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation
         f"保留後買進成交率: {attrs.get('reserved_buy_fill_rate', 0.0):.1f}% | "
         f"完整年度數: {attrs.get('full_year_count', 0)} | "
         f"最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}% | "
+        f"完整月度數: {attrs.get('full_month_count', 0)} | "
+        f"最差完整月度: {attrs.get('min_month_return_pct', 0.0):.2f}% | "
         f"完整季度數: {attrs.get('full_quarter_count', 0)} | "
         f"最差完整季度: {attrs.get('min_quarter_return_pct', 0.0):.2f}%{colors['reset']}"
     )

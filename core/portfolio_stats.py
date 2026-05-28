@@ -46,6 +46,20 @@ def calc_score_min_full_year_return_multiplier(min_full_year_return_pct, floor_p
     return max(0.0, (min_return - floor) / (target - floor))
 
 
+def calc_score_min_month_return_multiplier(min_month_return_pct, floor_pct, target_pct):
+    min_return = float(min_month_return_pct)
+    floor = float(floor_pct)
+    target = float(target_pct)
+    if not math.isfinite(min_return):
+        min_return = floor
+    if not math.isfinite(floor) or not math.isfinite(target) or target <= floor:
+        raise ValueError(
+            f"SCORE_MIN_MONTH_RETURN_TARGET 必須大於月度最差報酬 floor，"
+            f"目前 target={target_pct!r}, floor={floor_pct!r}"
+        )
+    return max(0.0, (min_return - floor) / (target - floor))
+
+
 def calc_score_min_quarter_return_multiplier(min_quarter_return_pct, floor_pct, target_pct):
     min_return = float(min_quarter_return_pct)
     floor = float(floor_pct)
@@ -118,7 +132,7 @@ def summarize_closed_trade_r_stats(closed_trades_stats):
     }
 
 
-def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None, min_full_year_return_pct=None, min_quarter_return_pct=None, total_r=None, median_r=None):
+def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None, min_full_year_return_pct=None, min_month_return_pct=None, min_quarter_return_pct=None, total_r=None, median_r=None):
     from core.config import (
         get_score_calc_method,
         get_score_mdd_denominator_epsilon,
@@ -127,6 +141,8 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
         get_score_median_r_floor,
         get_score_median_r_target,
         get_score_min_full_year_return_target,
+        get_score_min_month_return_floor,
+        get_score_min_month_return_target,
         get_score_min_quarter_return_floor,
         get_score_min_quarter_return_target,
         get_score_monthly_win_rate_target,
@@ -134,6 +150,7 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
         get_score_win_rate_target,
         is_score_median_r_amp_enabled,
         is_score_min_full_year_return_amp_enabled,
+        is_score_min_month_return_amp_enabled,
         is_score_min_quarter_return_amp_enabled,
         is_score_monthly_win_rate_amp_enabled,
         is_score_win_rate_amp_enabled,
@@ -187,6 +204,12 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
             min_full_year_return_pct,
             get_min_full_year_return_pct(),
             get_score_min_full_year_return_target(),
+        )
+    if is_score_min_month_return_amp_enabled() and min_month_return_pct is not None:
+        score *= calc_score_min_month_return_multiplier(
+            min_month_return_pct,
+            get_score_min_month_return_floor(),
+            get_score_min_month_return_target(),
         )
     if is_score_min_quarter_return_amp_enabled() and min_quarter_return_pct is not None:
         score *= calc_score_min_quarter_return_multiplier(
@@ -268,6 +291,60 @@ def build_full_year_return_stats(sorted_dates, year_start_equity, year_end_equit
 
 
 
+def _month_key(dt):
+    ts = pd.Timestamp(dt)
+    return int(ts.year), int(ts.month)
+
+
+def _month_label(year, month):
+    return f"{int(year):04d}-{int(month):02d}"
+
+
+def build_full_month_return_stats(sorted_dates, month_start_equity, month_end_equity, month_first_sim_date, month_last_sim_date):
+    monthly_return_rows = []
+    month_market_bounds = {}
+
+    for dt in sorted_dates:
+        key = _month_key(dt)
+        if key not in month_market_bounds:
+            month_market_bounds[key] = {"first": dt, "last": dt}
+        else:
+            month_market_bounds[key]["last"] = dt
+
+    for key in sorted(month_start_equity.keys()):
+        year, month = key
+        start_equity = float(month_start_equity.get(key, 0.0))
+        end_equity = float(month_end_equity.get(key, 0.0))
+        first_sim_date = month_first_sim_date.get(key)
+        last_sim_date = month_last_sim_date.get(key)
+        market_bounds = month_market_bounds.get(key)
+
+        if start_equity <= 0 or end_equity <= 0 or market_bounds is None or first_sim_date is None or last_sim_date is None:
+            continue
+
+        month_return_pct = (end_equity / start_equity - 1.0) * 100.0
+        is_full_month = (first_sim_date == market_bounds["first"]) and (last_sim_date == market_bounds["last"])
+
+        monthly_return_rows.append({
+            "year": int(year),
+            "month": int(month),
+            "period": _month_label(year, month),
+            "month_return_pct": float(month_return_pct),
+            "is_full_month": bool(is_full_month),
+            "start_date": first_sim_date.strftime("%Y-%m-%d"),
+            "end_date": last_sim_date.strftime("%Y-%m-%d"),
+        })
+
+    full_month_rows = [row for row in monthly_return_rows if row["is_full_month"]]
+    min_month_return_pct = min((row["month_return_pct"] for row in full_month_rows), default=0.0)
+
+    return {
+        "full_month_count": len(full_month_rows),
+        "min_month_return_pct": float(min_month_return_pct),
+        "monthly_return_rows": monthly_return_rows,
+    }
+
+
 def _quarter_key(dt):
     ts = pd.Timestamp(dt)
     quarter = int((ts.month - 1) // 3 + 1)
@@ -320,6 +397,58 @@ def build_full_quarter_return_stats(sorted_dates, quarter_start_equity, quarter_
         "full_quarter_count": len(full_quarter_rows),
         "min_quarter_return_pct": float(min_quarter_return_pct),
         "quarterly_return_rows": quarterly_return_rows,
+    }
+
+
+def build_benchmark_full_month_return_stats(sorted_dates, benchmark_data, monthly_return_rows):
+    if benchmark_data is None or not monthly_return_rows:
+        return {
+            "bm_full_month_count": 0,
+            "bm_min_month_return_pct": 0.0,
+            "bm_monthly_return_rows": []
+        }
+
+    from core.portfolio_fast_data import has_fast_date, get_fast_close
+
+    month_market_bounds = {}
+    for dt in sorted_dates:
+        key = _month_key(dt)
+        if key not in month_market_bounds:
+            month_market_bounds[key] = {"first": dt, "last": dt}
+        else:
+            month_market_bounds[key]["last"] = dt
+
+    bm_monthly_rows = []
+    full_months = [(int(row["year"]), int(row["month"])) for row in monthly_return_rows if row["is_full_month"]]
+
+    for year, month in full_months:
+        bounds = month_market_bounds.get((year, month))
+        if bounds is None:
+            continue
+        if not has_fast_date(benchmark_data, bounds["first"]) or not has_fast_date(benchmark_data, bounds["last"]):
+            continue
+
+        start_value = get_fast_close(benchmark_data, date=bounds["first"])
+        end_value = get_fast_close(benchmark_data, date=bounds["last"])
+        if start_value is None or end_value is None or start_value <= 0:
+            continue
+
+        bm_monthly_rows.append({
+            "year": int(year),
+            "month": int(month),
+            "period": _month_label(year, month),
+            "month_return_pct": float((end_value / start_value - 1.0) * 100.0),
+            "is_full_month": True,
+            "start_date": bounds["first"].strftime("%Y-%m-%d"),
+            "end_date": bounds["last"].strftime("%Y-%m-%d"),
+        })
+
+    bm_min_month_return_pct = min((row["month_return_pct"] for row in bm_monthly_rows), default=0.0)
+
+    return {
+        "bm_full_month_count": len(bm_monthly_rows),
+        "bm_min_month_return_pct": float(bm_min_month_return_pct),
+        "bm_monthly_return_rows": bm_monthly_rows
     }
 
 

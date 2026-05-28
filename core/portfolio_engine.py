@@ -23,8 +23,10 @@ from core.portfolio_fast_data import (
     summarize_single_stock_trade_stats_from_pit_index,
 )
 from core.portfolio_stats import (
+    build_benchmark_full_month_return_stats,
     build_benchmark_full_quarter_return_stats,
     build_benchmark_full_year_return_stats,
+    build_full_month_return_stats,
     build_full_quarter_return_stats,
     build_full_year_return_stats,
     calc_annual_return_pct,
@@ -71,6 +73,9 @@ def _build_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
             'bm_full_year_count': 0,
             'bm_min_full_year_return_pct': 0.0,
             'bm_yearly_return_rows': [],
+            'bm_full_month_count': 0,
+            'bm_min_month_return_pct': 0.0,
+            'bm_monthly_return_rows': [],
             'bm_full_quarter_count': 0,
             'bm_min_quarter_return_pct': 0.0,
             'bm_quarterly_return_rows': [],
@@ -109,8 +114,10 @@ def _build_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
     bm_r_squared, bm_monthly_win_rate = calc_curve_stats(bm_monthly_equities)
 
     benchmark_yearly_rows = []
+    benchmark_monthly_rows = []
     benchmark_quarterly_rows = []
     year_market_bounds = {}
+    month_market_bounds = {}
     quarter_market_bounds = {}
     for dt in sorted_dates[start_idx:]:
         year = dt.year
@@ -118,6 +125,11 @@ def _build_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
             year_market_bounds[year] = {'first': dt, 'last': dt}
         else:
             year_market_bounds[year]['last'] = dt
+        month_key = (int(year), int(dt.month))
+        if month_key not in month_market_bounds:
+            month_market_bounds[month_key] = {'first': dt, 'last': dt}
+        else:
+            month_market_bounds[month_key]['last'] = dt
         quarter = int((dt.month - 1) // 3 + 1)
         quarter_key = (int(year), int(quarter))
         if quarter_key not in quarter_market_bounds:
@@ -139,6 +151,22 @@ def _build_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
             'start_date': bounds['first'].strftime('%Y-%m-%d'),
             'end_date': bounds['last'].strftime('%Y-%m-%d'),
         })
+    for (year, month), bounds in sorted(month_market_bounds.items()):
+        if not has_fast_date(benchmark_data, bounds['first']) or not has_fast_date(benchmark_data, bounds['last']):
+            continue
+        start_value = get_fast_close(benchmark_data, date=bounds['first'])
+        end_value = get_fast_close(benchmark_data, date=bounds['last'])
+        if start_value is None or end_value is None or start_value <= 0:
+            continue
+        benchmark_monthly_rows.append({
+            'year': int(year),
+            'month': int(month),
+            'period': f"{int(year):04d}-{int(month):02d}",
+            'month_return_pct': float((end_value / start_value - 1.0) * 100.0),
+            'is_full_month': True,
+            'start_date': bounds['first'].strftime('%Y-%m-%d'),
+            'end_date': bounds['last'].strftime('%Y-%m-%d'),
+        })
     for (year, quarter), bounds in sorted(quarter_market_bounds.items()):
         if not has_fast_date(benchmark_data, bounds['first']) or not has_fast_date(benchmark_data, bounds['last']):
             continue
@@ -157,6 +185,7 @@ def _build_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
         })
 
     bm_min_full_year_return_pct = min((row['year_return_pct'] for row in benchmark_yearly_rows), default=0.0)
+    bm_min_month_return_pct = min((row['month_return_pct'] for row in benchmark_monthly_rows), default=0.0)
     bm_min_quarter_return_pct = min((row['quarter_return_pct'] for row in benchmark_quarterly_rows), default=0.0)
 
     return {
@@ -169,6 +198,9 @@ def _build_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
         'bm_full_year_count': int(len(benchmark_yearly_rows)),
         'bm_min_full_year_return_pct': float(bm_min_full_year_return_pct),
         'bm_yearly_return_rows': benchmark_yearly_rows,
+        'bm_full_month_count': int(len(benchmark_monthly_rows)),
+        'bm_min_month_return_pct': float(bm_min_month_return_pct),
+        'bm_monthly_return_rows': benchmark_monthly_rows,
         'bm_full_quarter_count': int(len(benchmark_quarterly_rows)),
         'bm_min_quarter_return_pct': float(bm_min_quarter_return_pct),
         'bm_quarterly_return_rows': benchmark_quarterly_rows,
@@ -568,6 +600,8 @@ def run_portfolio_timeline(
     yesterday_equity = initial_capital
     year_start_equity, year_end_equity = {}, {}
     year_first_sim_date, year_last_sim_date = {}, {}
+    month_start_equity, month_end_equity = {}, {}
+    month_first_sim_date, month_last_sim_date = {}, {}
     quarter_start_equity, quarter_end_equity = {}, {}
     quarter_first_sim_date, quarter_last_sim_date = {}, {}
 
@@ -650,6 +684,10 @@ def run_portfolio_timeline(
         if today.year not in year_start_equity:
             year_start_equity[today.year] = milli_to_money(current_equity)
             year_first_sim_date[today.year] = pd.Timestamp(today)
+        month_key = (int(today.year), int(today.month))
+        if month_key not in month_start_equity:
+            month_start_equity[month_key] = milli_to_money(current_equity)
+            month_first_sim_date[month_key] = pd.Timestamp(today)
         quarter_key = (int(today.year), int((today.month - 1) // 3 + 1))
         if quarter_key not in quarter_start_equity:
             quarter_start_equity[quarter_key] = milli_to_money(current_equity)
@@ -673,6 +711,8 @@ def run_portfolio_timeline(
             yesterday_equity = current_equity_money
             year_end_equity[today.year] = current_equity_money
             year_last_sim_date[today.year] = pd.Timestamp(today)
+            month_end_equity[month_key] = current_equity_money
+            month_last_sim_date[month_key] = pd.Timestamp(today)
             quarter_end_equity[quarter_key] = current_equity_money
             quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
             idle_fast_path_days += 1
@@ -947,6 +987,8 @@ def run_portfolio_timeline(
             yesterday_bm_px = current_bm_px
         year_end_equity[today.year] = current_equity_money
         year_last_sim_date[today.year] = pd.Timestamp(today)
+        month_end_equity[month_key] = current_equity_money
+        month_last_sim_date[month_key] = pd.Timestamp(today)
         quarter_end_equity[quarter_key] = current_equity_money
         quarter_last_sim_date[quarter_key] = pd.Timestamp(today)
 
@@ -1000,6 +1042,9 @@ def run_portfolio_timeline(
     final_cash = today_equity
     if last_date is not None and last_date.year in year_end_equity:
         year_end_equity[last_date.year] = milli_to_money(today_equity)
+        last_month_key = (int(last_date.year), int(last_date.month))
+        if last_month_key in month_end_equity:
+            month_end_equity[last_month_key] = milli_to_money(today_equity)
         last_quarter_key = (int(last_date.year), int((last_date.month - 1) // 3 + 1))
         if last_quarter_key in quarter_end_equity:
             quarter_end_equity[last_quarter_key] = milli_to_money(today_equity)
@@ -1084,6 +1129,13 @@ def run_portfolio_timeline(
         year_first_sim_date=year_first_sim_date,
         year_last_sim_date=year_last_sim_date,
     )
+    monthly_stats = build_full_month_return_stats(
+        sorted_dates=sorted_dates,
+        month_start_equity=month_start_equity,
+        month_end_equity=month_end_equity,
+        month_first_sim_date=month_first_sim_date,
+        month_last_sim_date=month_last_sim_date,
+    )
     quarterly_stats = build_full_quarter_return_stats(
         sorted_dates=sorted_dates,
         quarter_start_equity=quarter_start_equity,
@@ -1102,6 +1154,16 @@ def run_portfolio_timeline(
             'bm_min_full_year_return_pct': float(min((row['year_return_pct'] for row in bm_yearly_rows), default=0.0)),
             'bm_yearly_return_rows': bm_yearly_rows,
         }
+        full_months = {(int(row['year']), int(row['month'])) for row in monthly_stats['monthly_return_rows'] if row.get('is_full_month')}
+        bm_monthly_rows = [
+            row for row in benchmark_period_stats.get('bm_monthly_return_rows', [])
+            if (int(row.get('year', -1)), int(row.get('month', -1))) in full_months
+        ]
+        bm_monthly_stats = {
+            'bm_full_month_count': int(len(bm_monthly_rows)),
+            'bm_min_month_return_pct': float(min((row['month_return_pct'] for row in bm_monthly_rows), default=0.0)),
+            'bm_monthly_return_rows': bm_monthly_rows,
+        }
         full_quarters = {(int(row['year']), int(row['quarter'])) for row in quarterly_stats['quarterly_return_rows'] if row.get('is_full_quarter')}
         bm_quarterly_rows = [
             row for row in benchmark_period_stats.get('bm_quarterly_return_rows', [])
@@ -1117,6 +1179,11 @@ def run_portfolio_timeline(
             sorted_dates=sorted_dates,
             benchmark_data=benchmark_data,
             yearly_return_rows=yearly_stats['yearly_return_rows'],
+        )
+        bm_monthly_stats = build_benchmark_full_month_return_stats(
+            sorted_dates=sorted_dates,
+            benchmark_data=benchmark_data,
+            monthly_return_rows=monthly_stats['monthly_return_rows'],
         )
         bm_quarterly_stats = build_benchmark_full_quarter_return_stats(
             sorted_dates=sorted_dates,
@@ -1153,8 +1220,10 @@ def run_portfolio_timeline(
         if capture_equity_curve:
             profile_stats['equity_curve'] = list(equity_curve)
         profile_stats.update(yearly_stats)
+        profile_stats.update(monthly_stats)
         profile_stats.update(quarterly_stats)
         profile_stats.update(bm_yearly_stats)
+        profile_stats.update(bm_monthly_stats)
         profile_stats.update(bm_quarterly_stats)
 
     if is_training:

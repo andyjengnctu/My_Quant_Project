@@ -53,6 +53,8 @@ def build_initial_profile_row(trial_number, prep_wall_sec, prep_profile):
         "reserved_buy_fill_rate": 0.0,
         "full_year_count": 0,
         "min_full_year_return_pct": 0.0,
+        "full_month_count": 0,
+        "min_month_return_pct": 0.0,
         "full_quarter_count": 0,
         "min_quarter_return_pct": 0.0,
         "m_win_rate": 0.0,

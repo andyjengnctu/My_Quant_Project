@@ -179,12 +179,14 @@ def _evaluate_single_holdout_period(
                 "benchmark_return_pct": float(row.get(benchmark_col, 0.0) or 0.0),
             })
     min_full_year_return_pct = float(pf_profile.get('min_full_year_return_pct', 0.0))
+    min_month_return_pct = float(pf_profile.get('min_month_return_pct', 0.0))
     min_quarter_return_pct = float(pf_profile.get('min_quarter_return_pct', 0.0))
     portfolio_total_r = float(pf_profile.get('portfolio_total_r', 0.0))
     portfolio_median_r = float(pf_profile.get('portfolio_median_r', 0.0))
     score_total_r = float(pf_profile.get('score_total_r', pf_profile.get('single_stock_total_r', 0.0)) or 0.0)
     score_median_r = float(pf_profile.get('score_median_r', pf_profile.get('single_stock_median_r', 0.0)) or 0.0)
     benchmark_min_full_year_return_pct = float(pf_profile.get('bm_min_full_year_return_pct', 0.0))
+    benchmark_min_month_return_pct = float(pf_profile.get('bm_min_month_return_pct', 0.0))
     benchmark_min_quarter_return_pct = float(pf_profile.get('bm_min_quarter_return_pct', 0.0))
     test_score_romd = calc_portfolio_score(
         ret_pct,
@@ -194,6 +196,7 @@ def _evaluate_single_holdout_period(
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        min_month_return_pct=min_month_return_pct,
         min_quarter_return_pct=min_quarter_return_pct,
         total_r=score_total_r,
         median_r=score_median_r,
@@ -209,6 +212,8 @@ def _evaluate_single_holdout_period(
         'annual_return_pct': float(annual_return_pct),
         'min_full_year_return_pct': min_full_year_return_pct,
         'full_year_count': int(pf_profile.get('full_year_count', 0)),
+        'min_month_return_pct': min_month_return_pct,
+        'full_month_count': int(pf_profile.get('full_month_count', 0)),
         'min_quarter_return_pct': min_quarter_return_pct,
         'full_quarter_count': int(pf_profile.get('full_quarter_count', 0)),
         'mdd': float(mdd),
@@ -235,6 +240,7 @@ def _evaluate_single_holdout_period(
         'benchmark_return_pct': float(bm_ret),
         'benchmark_annual_return_pct': float(bm_annual_return_pct),
         'benchmark_min_full_year_return_pct': benchmark_min_full_year_return_pct,
+        'benchmark_min_month_return_pct': benchmark_min_month_return_pct,
         'benchmark_min_quarter_return_pct': benchmark_min_quarter_return_pct,
         'benchmark_mdd': float(bm_mdd),
         'benchmark_r_squared': float(bm_r_sq),
@@ -345,6 +351,7 @@ def _empty_test_period_metrics() -> dict:
         'total_return_pct': 0.0,
         'annualized_return_pct': 0.0,
         'min_full_year_return_pct': 0.0,
+        'min_month_return_pct': 0.0,
         'min_quarter_return_pct': 0.0,
         'max_drawdown_pct': 0.0,
         'test_score_romd': 0.0,
@@ -365,6 +372,7 @@ def _empty_test_period_metrics() -> dict:
         'benchmark_total_return_pct': 0.0,
         'benchmark_annualized_return_pct': 0.0,
         'benchmark_min_full_year_return_pct': 0.0,
+        'benchmark_min_month_return_pct': 0.0,
         'benchmark_min_quarter_return_pct': 0.0,
         'benchmark_max_drawdown_pct': 0.0,
         'benchmark_score_romd': 0.0,
@@ -384,6 +392,7 @@ def build_test_period_metrics(report: dict | None) -> dict:
         'total_return_pct': float(period.get('ret_pct', 0.0)),
         'annualized_return_pct': float(period.get('annual_return_pct', 0.0)),
         'min_full_year_return_pct': float(period.get('min_full_year_return_pct', 0.0)),
+        'min_month_return_pct': float(period.get('min_month_return_pct', 0.0)),
         'min_quarter_return_pct': float(period.get('min_quarter_return_pct', 0.0)),
         'max_drawdown_pct': float(period.get('mdd', 0.0)),
         'test_score_romd': float(period.get('test_score_romd', 0.0)),
@@ -404,6 +413,7 @@ def build_test_period_metrics(report: dict | None) -> dict:
         'benchmark_total_return_pct': float(period.get('benchmark_return_pct', 0.0)),
         'benchmark_annualized_return_pct': float(period.get('benchmark_annual_return_pct', 0.0)),
         'benchmark_min_full_year_return_pct': float(period.get('benchmark_min_full_year_return_pct', 0.0)),
+        'benchmark_min_month_return_pct': float(period.get('benchmark_min_month_return_pct', 0.0)),
         'benchmark_min_quarter_return_pct': float(period.get('benchmark_min_quarter_return_pct', 0.0)),
         'benchmark_max_drawdown_pct': float(period.get('benchmark_mdd', 0.0)),
         'benchmark_score_romd': float(period.get('benchmark_score_romd', 0.0)),
@@ -443,6 +453,7 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
         'total_return_pct': float(test_total.get('benchmark_total_return_pct', 0.0)),
         'annualized_return_pct': float(test_total.get('benchmark_annualized_return_pct', 0.0)),
         'min_full_year_return_pct': float(test_total.get('benchmark_min_full_year_return_pct', 0.0)),
+        'min_month_return_pct': float(test_total.get('benchmark_min_month_return_pct', 0.0)),
         'min_quarter_return_pct': float(test_total.get('benchmark_min_quarter_return_pct', 0.0)),
         'max_drawdown_pct': float(test_total.get('benchmark_max_drawdown_pct', 0.0)),
         'test_score_romd': float(test_total.get('benchmark_score_romd', 0.0)),
@@ -502,6 +513,7 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
         f"| OOS 總報酬率 | {_format_pct(test_total.get('total_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('total_return_pct', 0.0))} |",
         f"| 年化報酬率 | {_format_pct(test_total.get('annualized_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('annualized_return_pct', 0.0))} |",
         f"| 完整年度最差報酬 | {_format_pct(test_total.get('min_full_year_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('min_full_year_return_pct', 0.0))} |",
+        f"| 完整月度最差報酬 | {_format_pct(test_total.get('min_month_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('min_month_return_pct', 0.0))} |",
         f"| 完整季度最差報酬 | {_format_pct(test_total.get('min_quarter_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('min_quarter_return_pct', 0.0))} |",
         f"| 最大回撤 | {_format_pct(test_total.get('max_drawdown_pct', 0.0))} | {_format_pct(benchmark_test_total.get('max_drawdown_pct', 0.0))} |",
         '',
