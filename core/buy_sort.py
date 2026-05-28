@@ -4,6 +4,7 @@ from core.config import get_buy_sort_method
 
 
 BUY_LIMIT_OVERAGE_SORT_METHOD = 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST'
+ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD = 'ENTRY_TYPE_THEN_PROJ_COST'
 
 
 def _as_finite_float(value, *, default):
@@ -24,6 +25,25 @@ def calc_buy_limit_overage_pct(prev_close, limit_price):
     return max(0.0, (resolved_prev_close / resolved_limit_price - 1.0) * 100.0)
 
 
+def calc_entry_type_priority(candidate_type):
+    normalized = str(candidate_type or '').strip().lower()
+    if normalized in {'normal', 'buy', 'reentry'}:
+        return 0
+    if normalized in {'extended', 'extended_tbd', 'continuation'}:
+        return 1
+    return 2
+
+
+def calc_entry_type_priority_from_row(row):
+    if row is None:
+        return 2
+    return calc_entry_type_priority(
+        row.get('type')
+        or row.get('entry_source')
+        or row.get('kind')
+    )
+
+
 def is_buy_limit_overage_sort(method=None):
     active_method = get_buy_sort_method() if method is None else method
     return active_method == BUY_LIMIT_OVERAGE_SORT_METHOD
@@ -40,6 +60,8 @@ def calc_buy_sort_value(method, ev, proj_cost, win_rate, trade_count, asset_grow
         return float(asset_growth_pct)
     if method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         return calc_buy_limit_overage_pct(prev_close, limit_price)
+    if method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
+        return float(proj_cost)
     raise ValueError(f"未知的 BUY_SORT_METHOD: {method}")
 
 
@@ -68,6 +90,8 @@ def get_buy_sort_title(method=None):
         return '按資產成長由大到小排序'
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         return '按買入限價超出幅度由小到大，再按預估投入資金排序'
+    if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
+        return '按新突破/Re-entry優先，再按預估投入資金排序'
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
@@ -83,6 +107,8 @@ def get_buy_sort_metric_label(method=None):
         return '資產成長'
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         return '超限幅'
+    if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
+        return '預估投入'
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
@@ -101,6 +127,8 @@ def format_buy_sort_metric_value(value, method=None):
         return f'{numeric_value:.2f}%'
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         return f'{numeric_value:.2f}%'
+    if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
+        return f'{numeric_value:,.0f}'
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
@@ -110,6 +138,15 @@ def sort_candidate_rows(rows, method=None):
         rows.sort(
             key=lambda item: (
                 _as_finite_float(item.get('sort_value'), default=math.inf),
+                -_as_finite_float(item.get('proj_cost'), default=0.0),
+                str(item.get('ticker') or ''),
+            )
+        )
+        return rows
+    if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
+        rows.sort(
+            key=lambda item: (
+                calc_entry_type_priority_from_row(item),
                 -_as_finite_float(item.get('proj_cost'), default=0.0),
                 str(item.get('ticker') or ''),
             )
