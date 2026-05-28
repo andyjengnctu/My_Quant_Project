@@ -576,6 +576,7 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         "pf_return": total_return,
         "annual_return_pct": annual_return_pct,
         "min_full_year_return_pct": _safe_float(profile.get("min_full_year_return_pct", 0.0)),
+        "min_quarter_return_pct": _safe_float(profile.get("min_quarter_return_pct", 0.0)),
         "pf_mdd": max_drawdown,
         "pf_romd": float(candidate_score),
         "r_squared": r_squared,
