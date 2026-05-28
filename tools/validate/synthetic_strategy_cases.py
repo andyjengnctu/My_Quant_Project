@@ -733,6 +733,31 @@ def validate_score_numerator_option_case(_base_params):
         _candidate_metrics, benchmark_metrics, _range_text = optimizer_callbacks._portfolio_replay_metrics_from_result(replay_result, initial_capital=1000000.0)
     add_check(results, "strategy_score", case_id, "benchmark_oos_display_uses_plain_romd_under_total_r_numerator", calc_plain_romd(203.67, -33.96), benchmark_metrics["pf_romd"])
 
+    from tools.optimizer.outer_rolling_oos import _render_results_table
+    optimizer_table = _render_results_table(
+        [
+            {
+                "fold": "1/1",
+                "selection_period": "2011-01-01~2020-12-31",
+                "oos_period": "2021-01-01~latest",
+                "best_finalist_oos_score": 1.94633,
+                "benchmark_oos_score": calc_plain_romd(203.67, -33.96),
+                "base_finalists_agree": {
+                    "available": True,
+                    "rank_1_oos": 1.94633,
+                    "rank_1_return_pct": 148.26,
+                    "rank_1_mdd_pct": -18.60,
+                },
+            }
+        ],
+        color=False,
+        include_chain=False,
+        policy_names=("base_finalists_agree",),
+        table_title="FINALISTS AGREE RESULTS",
+    )
+    add_check(results, "strategy_score", case_id, "optimizer_oos_table_keeps_score_and_plain_romd_separate", True, "score" in optimizer_table and "RoMD" in optimizer_table)
+    add_check(results, "strategy_score", case_id, "optimizer_oos_table_0050_compare_uses_plain_romd", True, "7.97" in optimizer_table and "6.00 (+1.97)" in optimizer_table)
+
     single_stock_score_fields = build_score_single_stock_profile_fields({
         "trade_count": 2854,
         "win_rate": 46.39,
