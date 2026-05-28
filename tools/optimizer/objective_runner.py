@@ -300,7 +300,10 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
 
     full_year_count = int(pf_profile.get("full_year_count", 0))
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
+    full_quarter_count = int(pf_profile.get("full_quarter_count", 0))
+    min_quarter_return_pct = float(pf_profile.get("min_quarter_return_pct", 0.0))
     bm_min_full_year_return_pct = float(pf_profile.get("bm_min_full_year_return_pct", 0.0))
+    bm_min_quarter_return_pct = float(pf_profile.get("bm_min_quarter_return_pct", 0.0))
     portfolio_total_r = float(pf_profile.get("portfolio_total_r", 0.0))
     portfolio_median_r = float(pf_profile.get("portfolio_median_r", 0.0))
     single_stock_trade_stats = {
@@ -320,6 +323,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         "annual_return_pct": annual_return_pct,
         "full_year_count": full_year_count,
         "min_full_year_return_pct": min_full_year_return_pct,
+        "min_quarter_return_pct": min_quarter_return_pct,
         "win_rate": win_rate,
         "m_win_rate": m_win_rate,
         "r_sq": r_sq,
@@ -358,9 +362,13 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             "bm_annual_return_pct": bm_annual_return_pct,
             "full_year_count": full_year_count,
             "min_full_year_return_pct": min_full_year_return_pct,
+            "full_quarter_count": full_quarter_count,
+            "min_quarter_return_pct": min_quarter_return_pct,
             "yearly_return_rows": pf_profile.get("yearly_return_rows", []),
+            "quarterly_return_rows": pf_profile.get("quarterly_return_rows", []),
             "dominant_year_dependency_diagnostics": pf_profile.get("dominant_year_dependency_diagnostics", {}),
             "bm_min_full_year_return_pct": bm_min_full_year_return_pct,
+            "bm_min_quarter_return_pct": bm_min_quarter_return_pct,
             "r_squared": r_sq,
             "m_win_rate": m_win_rate,
             "bm_r_squared": bm_r_sq,
@@ -376,6 +384,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        min_quarter_return_pct=min_quarter_return_pct,
         total_r=score_total_r,
         median_r=score_median_r,
     )
@@ -411,9 +420,13 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         "bm_annual_return_pct": bm_annual_return_pct,
         "full_year_count": full_year_count,
         "min_full_year_return_pct": min_full_year_return_pct,
+        "full_quarter_count": full_quarter_count,
+        "min_quarter_return_pct": min_quarter_return_pct,
         "yearly_return_rows": pf_profile.get("yearly_return_rows", []),
+        "quarterly_return_rows": pf_profile.get("quarterly_return_rows", []),
         "dominant_year_dependency_diagnostics": pf_profile.get("dominant_year_dependency_diagnostics", {}),
         "bm_min_full_year_return_pct": bm_min_full_year_return_pct,
+        "bm_min_quarter_return_pct": bm_min_quarter_return_pct,
         "r_squared": r_sq,
         "m_win_rate": m_win_rate,
         "bm_r_squared": bm_r_sq,
@@ -488,6 +501,7 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         pit_stats_index=all_pit_stats_index,
     )
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
+    min_quarter_return_pct = float(pf_profile.get("min_quarter_return_pct", 0.0))
     portfolio_total_r = float(pf_profile.get("portfolio_total_r", 0.0))
     portfolio_median_r = float(pf_profile.get("portfolio_median_r", 0.0))
     score_total_r = float(pf_profile.get("score_total_r", pf_profile.get("single_stock_total_r", 0.0)) or 0.0)
@@ -500,6 +514,7 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        min_quarter_return_pct=min_quarter_return_pct,
         total_r=score_total_r,
         median_r=score_median_r,
     )
@@ -516,6 +531,7 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         "trade_count": int(trade_count),
         "annual_return_pct": float(annual_return_pct),
         "min_full_year_return_pct": float(min_full_year_return_pct),
+        "min_quarter_return_pct": float(min_quarter_return_pct),
         "portfolio_total_r": float(portfolio_total_r),
         "portfolio_median_r": float(portfolio_median_r),
         "score_total_r": float(score_total_r),
@@ -636,6 +652,8 @@ def run_optimizer_objective(session, trial):
     profile_row["reserved_buy_fill_rate"] = float(evaluation.get("reserved_buy_fill_rate", 0.0))
     profile_row["full_year_count"] = int(evaluation.get("full_year_count", 0))
     profile_row["min_full_year_return_pct"] = float(evaluation.get("min_full_year_return_pct", 0.0))
+    profile_row["full_quarter_count"] = int(evaluation.get("full_quarter_count", 0))
+    profile_row["min_quarter_return_pct"] = float(evaluation.get("min_quarter_return_pct", 0.0))
     profile_row["m_win_rate"] = float(evaluation.get("m_win_rate", 0.0))
     profile_row["r_squared"] = float(evaluation.get("r_squared", 0.0))
     single_stock_trade_stats = dict(evaluation.get("single_stock_trade_stats") or {})
@@ -692,10 +710,14 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("bm_annual_return_pct", evaluation["bm_annual_return_pct"])
     trial.set_user_attr("full_year_count", evaluation["full_year_count"])
     trial.set_user_attr("min_full_year_return_pct", evaluation["min_full_year_return_pct"])
+    trial.set_user_attr("full_quarter_count", evaluation.get("full_quarter_count", 0))
+    trial.set_user_attr("min_quarter_return_pct", evaluation.get("min_quarter_return_pct", 0.0))
     trial.set_user_attr("yearly_return_rows", evaluation["yearly_return_rows"])
+    trial.set_user_attr("quarterly_return_rows", evaluation.get("quarterly_return_rows", []))
     trial.set_user_attr("dominant_year_dependency_diagnostics", evaluation.get("dominant_year_dependency_diagnostics", {}))
     trial.set_user_attr("base_score", evaluation["base_score"])
     trial.set_user_attr("bm_min_full_year_return_pct", evaluation["bm_min_full_year_return_pct"])
+    trial.set_user_attr("bm_min_quarter_return_pct", evaluation.get("bm_min_quarter_return_pct", 0.0))
     trial.set_user_attr("r_squared", evaluation["r_squared"])
     trial.set_user_attr("m_win_rate", evaluation["m_win_rate"])
     trial.set_user_attr("bm_r_squared", evaluation["bm_r_squared"])

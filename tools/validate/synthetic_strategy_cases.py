@@ -22,7 +22,7 @@ from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
-from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
+from core.portfolio_stats import calc_plain_romd, calc_portfolio_score, calc_score_median_r_multiplier, calc_score_min_full_year_return_multiplier, calc_score_min_quarter_return_multiplier, calc_score_portfolio_return_multiplier, calc_score_positive_return_multiplier, calc_score_win_rate_multiplier
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
@@ -575,7 +575,7 @@ def validate_ranking_scoring_sanity_case(base_params):
     entry_type_sort_value = calc_buy_sort_value("ENTRY_TYPE_THEN_PROJ_COST", 0.5, 7000, 0.4, 10)
     add_check(results, "strategy_score", case_id, "buy_sort_entry_type_uses_proj_cost_value", 7000.0, entry_type_sort_value)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=10.0)
         score_high_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=20.0)
         score_worse_mdd = calc_portfolio_score(sys_ret=10.0, sys_mdd=-30.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=20.0)
@@ -583,7 +583,7 @@ def validate_ranking_scoring_sanity_case(base_params):
     add_check(results, "strategy_score", case_id, "portfolio_score_mdd_monotonic", True, score_high_return > score_worse_mdd)
     add_check(results, "strategy_score", case_id, "portfolio_score_romd_finite", True, math.isfinite(score_high_return))
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_quality = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=20.0)
         score_high_quality = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.9, annual_return_pct=20.0)
     add_check(results, "strategy_score", case_id, "portfolio_score_log_r2_quality_monotonic", True, score_high_quality > score_low_quality)
@@ -648,35 +648,35 @@ def validate_score_numerator_option_case(_base_params):
     def _romd_expected(numerator, sys_mdd, *, power=base_mdd_power, epsilon=base_mdd_epsilon):
         return float(numerator) / ((abs(float(sys_mdd)) ** float(power)) + float(epsilon))
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         annual_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
     expected_annual = _romd_expected(18.0, -20.0)
     add_check(results, "strategy_score", case_id, "annual_return_numerator_formula", expected_annual, annual_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         total_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
     expected_total = _romd_expected(12.0, -20.0)
     add_check(results, "strategy_score", case_id, "total_return_numerator_formula", expected_total, total_score)
     add_check(results, "strategy_score", case_id, "numerator_switch_changes_score_when_returns_differ", True, annual_score != total_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         powered_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
     expected_powered = _romd_expected(12.0, -20.0, power=stronger_mdd_power)
     add_check(results, "strategy_score", case_id, "mdd_power_denominator_formula", expected_powered, powered_score)
     add_check(results, "strategy_score", case_id, "mdd_power_stronger_than_base_penalty", True, powered_score < total_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
         low_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=40.0)
         high_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.9, annual_return_pct=40.0)
     add_check(results, "strategy_score", case_id, "log_r2_total_return_quality_monotonic", True, high_total_score > low_total_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_low = calc_portfolio_score(sys_ret=500.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
         total_r_high = calc_portfolio_score(sys_ret=-20.0, sys_mdd=-5.0, m_win_rate=10.0, r_sq=0.10, annual_return_pct=-5.0, total_r=24.0)
     add_check(results, "strategy_score", case_id, "total_r_numerator_formula", _romd_expected(12.5, -5.0), total_r_low)
     add_check(results, "strategy_score", case_id, "total_r_numerator_monotonic_when_mdd_equal", True, total_r_high > total_r_low)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_PORTFOLIO_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_PORTFOLIO_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_x_return_positive = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
         total_r_x_return_negative = calc_portfolio_score(sys_ret=-20.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
     add_check(results, "strategy_score", case_id, "portfolio_return_multiplier_pct_to_multiple", 1.5, calc_score_portfolio_return_multiplier(150.0))
@@ -684,7 +684,7 @@ def validate_score_numerator_option_case(_base_params):
     add_check(results, "strategy_score", case_id, "total_r_x_portfolio_return_numerator_formula", _romd_expected(12.5 * 1.5, -5.0), total_r_x_return_positive)
     add_check(results, "strategy_score", case_id, "total_r_x_portfolio_return_zero_when_portfolio_loss", 0.0, total_r_x_return_negative)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_x_annual_positive = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
         total_r_x_annual_negative = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=-20.0, total_r=12.5)
         total_r_x_annual_missing = calc_portfolio_score(sys_ret=150.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=None, total_r=12.5)
@@ -729,7 +729,7 @@ def validate_score_numerator_option_case(_base_params):
             "bm_min_full_year_return_pct": -21.84,
         },
     )
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R_X_ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False):
         _candidate_metrics, benchmark_metrics, _range_text = optimizer_callbacks._portfolio_replay_metrics_from_result(replay_result, initial_capital=1000000.0)
     add_check(results, "strategy_score", case_id, "benchmark_oos_display_uses_plain_romd_under_total_r_numerator", calc_plain_romd(203.67, -33.96), benchmark_metrics["pf_romd"])
 
@@ -770,7 +770,7 @@ def validate_score_numerator_option_case(_base_params):
     add_check(results, "strategy_score", case_id, "median_r_score_source_is_single_stock", -0.109, single_stock_score_fields["score_median_r"])
     add_check(results, "strategy_score", case_id, "score_r_source_label_is_single_stock", "single_stock", single_stock_score_fields["score_r_source"])
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_MDD_POWER", stronger_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
         total_r_powered_score = calc_portfolio_score(sys_ret=500.0, sys_mdd=-5.0, m_win_rate=90.0, r_sq=0.99, annual_return_pct=80.0, total_r=12.5)
     add_check(results, "strategy_score", case_id, "total_r_numerator_still_uses_mdd_denominator", True, total_r_powered_score < total_r_low)
 
@@ -783,7 +783,13 @@ def validate_score_numerator_option_case(_base_params):
     add_check(results, "strategy_score", case_id, "score_win_rate_amp_stronger_than_old_linear_below_target", True, new_amp_low < old_linear_low)
     add_check(results, "strategy_score", case_id, "score_win_rate_amp_boosts_above_target", True, new_amp_high > new_amp_mid)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", True), patch("config.training_policy.SCORE_WIN_RATE_TARGET", 50.0):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", True), patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_TARGET", 50.0), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+        low_monthly_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.8, annual_return_pct=18.0)
+        target_monthly_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
+        high_monthly_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.8, annual_return_pct=18.0)
+    add_check(results, "strategy_score", case_id, "portfolio_score_monthly_win_rate_amp_monotonic", True, low_monthly_score < target_monthly_score < high_monthly_score)
+
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", True), patch("config.training_policy.SCORE_WIN_RATE_TARGET", 50.0):
         low_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=40.0)
         target_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=50.0)
         high_win_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, trade_win_rate_pct=60.0)
@@ -796,26 +802,38 @@ def validate_score_numerator_option_case(_base_params):
     add_check(results, "strategy_score", case_id, "score_min_full_year_return_amp_hits_target_at_one", 1.0, min_year_target_amp)
     add_check(results, "strategy_score", case_id, "score_min_full_year_return_amp_monotonic", True, min_year_low_amp < min_year_target_amp < min_year_high_amp)
 
+    min_quarter_low_amp = calc_score_min_quarter_return_multiplier(-5.0, -10.0, 10.0)
+    min_quarter_target_amp = calc_score_min_quarter_return_multiplier(10.0, -10.0, 10.0)
+    min_quarter_high_amp = calc_score_min_quarter_return_multiplier(15.0, -10.0, 10.0)
+    add_check(results, "strategy_score", case_id, "score_min_quarter_return_amp_hits_target_at_one", 1.0, min_quarter_target_amp)
+    add_check(results, "strategy_score", case_id, "score_min_quarter_return_amp_monotonic", True, min_quarter_low_amp < min_quarter_target_amp < min_quarter_high_amp)
+
     median_r_low_amp = calc_score_median_r_multiplier(-0.5, -1.0, 0.0)
     median_r_target_amp = calc_score_median_r_multiplier(0.0, -1.0, 0.0)
     median_r_high_amp = calc_score_median_r_multiplier(0.5, -1.0, 0.0)
     add_check(results, "strategy_score", case_id, "score_median_r_amp_hits_target_at_one", 1.0, median_r_target_amp)
     add_check(results, "strategy_score", case_id, "score_median_r_amp_monotonic", True, median_r_low_amp < median_r_target_amp < median_r_high_amp)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", True), patch("config.training_policy.MIN_FULL_YEAR_RETURN_PCT", -35.0), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_TARGET", 0.0):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", True), patch("config.training_policy.MIN_FULL_YEAR_RETURN_PCT", -35.0), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_TARGET", 0.0):
         low_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=-20.0)
         target_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=0.0)
         high_min_year_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_full_year_return_pct=10.0)
     add_check(results, "strategy_score", case_id, "portfolio_score_min_full_year_return_amp_monotonic", True, low_min_year_score < target_min_year_score < high_min_year_score)
 
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", True), patch("config.training_policy.SCORE_MEDIAN_R_FLOOR", -1.0), patch("config.training_policy.SCORE_MEDIAN_R_TARGET", 0.0):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", True), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_TARGET", 10.0), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", False):
+        low_min_quarter_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_quarter_return_pct=-5.0)
+        target_min_quarter_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_quarter_return_pct=10.0)
+        high_min_quarter_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0, min_quarter_return_pct=15.0)
+    add_check(results, "strategy_score", case_id, "portfolio_score_min_quarter_return_amp_monotonic", True, low_min_quarter_score < target_min_quarter_score < high_min_quarter_score)
+
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_R"), patch("config.training_policy.SCORE_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_MEDIAN_R_AMP_ENABLED", True), patch("config.training_policy.SCORE_MEDIAN_R_FLOOR", -1.0), patch("config.training_policy.SCORE_MEDIAN_R_TARGET", 0.0):
         low_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=-0.5)
         target_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=0.0)
         high_median_r_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, total_r=10.0, median_r=0.5)
     add_check(results, "strategy_score", case_id, "portfolio_score_median_r_amp_monotonic", True, low_median_r_score < target_median_r_score < high_median_r_score)
 
     annual_missing = None
-    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
+    with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"), patch("config.training_policy.SCORE_MDD_POWER", base_mdd_power), patch("config.training_policy.SCORE_MDD_DENOMINATOR_EPSILON", base_mdd_epsilon):
         annual_missing = calc_portfolio_score(sys_ret=9.0, sys_mdd=-15.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=None)
     expected_fallback = _romd_expected(9.0, -15.0)
     add_check(results, "strategy_score", case_id, "annual_return_numerator_falls_back_to_total_return_when_missing", expected_fallback, annual_missing)
@@ -829,8 +847,12 @@ def validate_score_numerator_option_case(_base_params):
     summary["score_numerator_method_default"] = SCORE_NUMERATOR_METHOD
     summary["score_mdd_power_default"] = current_mdd_power
     summary["score_mdd_denominator_epsilon_default"] = current_mdd_epsilon
+    summary["score_monthly_win_rate_amp_enabled_default"] = bool(__import__("config.training_policy", fromlist=["SCORE_MONTHLY_WIN_RATE_AMP_ENABLED"]).SCORE_MONTHLY_WIN_RATE_AMP_ENABLED)
+    summary["score_monthly_win_rate_target_default"] = float(__import__("config.training_policy", fromlist=["SCORE_MONTHLY_WIN_RATE_TARGET"]).SCORE_MONTHLY_WIN_RATE_TARGET)
     summary["score_min_full_year_return_amp_enabled_default"] = bool(__import__("config.training_policy", fromlist=["SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED"]).SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED)
     summary["score_min_full_year_return_target_default"] = float(__import__("config.training_policy", fromlist=["SCORE_MIN_FULL_YEAR_RETURN_TARGET"]).SCORE_MIN_FULL_YEAR_RETURN_TARGET)
+    summary["score_min_quarter_return_amp_enabled_default"] = bool(__import__("config.training_policy", fromlist=["SCORE_MIN_QUARTER_RETURN_AMP_ENABLED"]).SCORE_MIN_QUARTER_RETURN_AMP_ENABLED)
+    summary["score_min_quarter_return_target_default"] = float(__import__("config.training_policy", fromlist=["SCORE_MIN_QUARTER_RETURN_TARGET"]).SCORE_MIN_QUARTER_RETURN_TARGET)
     summary["score_median_r_amp_enabled_default"] = bool(__import__("config.training_policy", fromlist=["SCORE_MEDIAN_R_AMP_ENABLED"]).SCORE_MEDIAN_R_AMP_ENABLED)
     summary["score_median_r_floor_default"] = float(__import__("config.training_policy", fromlist=["SCORE_MEDIAN_R_FLOOR"]).SCORE_MEDIAN_R_FLOOR)
     summary["score_median_r_target_default"] = float(__import__("config.training_policy", fromlist=["SCORE_MEDIAN_R_TARGET"]).SCORE_MEDIAN_R_TARGET)

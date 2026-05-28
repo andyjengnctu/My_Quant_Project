@@ -27,9 +27,26 @@ def normalize_yearly_return_rows(rows):
     return normalized
 
 
+def normalize_quarterly_return_rows(rows):
+    normalized = []
+    for row in rows or []:
+        normalized.append({
+            "year": int(row.get("year", 0)),
+            "quarter": int(row.get("quarter", 0)),
+            "period": str(row.get("period", "")),
+            "quarter_return_pct": float(row.get("quarter_return_pct", 0.0)),
+            "is_full_quarter": bool(row.get("is_full_quarter", False)),
+            "start_date": str(row.get("start_date", "")),
+            "end_date": str(row.get("end_date", "")),
+        })
+    return normalized
+
+
 def extract_yearly_profile_fields(profile_stats):
     yearly_rows = normalize_yearly_return_rows(profile_stats.get("yearly_return_rows", []))
     bm_yearly_rows = normalize_yearly_return_rows(profile_stats.get("bm_yearly_return_rows", []))
+    quarterly_rows = normalize_quarterly_return_rows(profile_stats.get("quarterly_return_rows", []))
+    bm_quarterly_rows = normalize_quarterly_return_rows(profile_stats.get("bm_quarterly_return_rows", []))
     return {
         "full_year_count": int(profile_stats.get("full_year_count", 0)),
         "min_full_year_return_pct": float(profile_stats.get("min_full_year_return_pct", 0.0)),
@@ -37,6 +54,12 @@ def extract_yearly_profile_fields(profile_stats):
         "bm_full_year_count": int(profile_stats.get("bm_full_year_count", 0)),
         "bm_min_full_year_return_pct": float(profile_stats.get("bm_min_full_year_return_pct", 0.0)),
         "bm_yearly_return_rows": bm_yearly_rows,
+        "full_quarter_count": int(profile_stats.get("full_quarter_count", 0)),
+        "min_quarter_return_pct": float(profile_stats.get("min_quarter_return_pct", 0.0)),
+        "quarterly_return_rows": quarterly_rows,
+        "bm_full_quarter_count": int(profile_stats.get("bm_full_quarter_count", 0)),
+        "bm_min_quarter_return_pct": float(profile_stats.get("bm_min_quarter_return_pct", 0.0)),
+        "bm_quarterly_return_rows": bm_quarterly_rows,
     }
 
 
@@ -45,6 +68,14 @@ def calc_expected_full_year_metrics(yearly_rows):
     return {
         "full_year_count": len(full_year_rows),
         "min_full_year_return_pct": float(min((row["year_return_pct"] for row in full_year_rows), default=0.0)),
+    }
+
+
+def calc_expected_full_quarter_metrics(quarterly_rows):
+    full_quarter_rows = [row for row in (quarterly_rows or []) if row["is_full_quarter"]]
+    return {
+        "full_quarter_count": len(full_quarter_rows),
+        "min_quarter_return_pct": float(min((row["quarter_return_pct"] for row in full_quarter_rows), default=0.0)),
     }
 
 

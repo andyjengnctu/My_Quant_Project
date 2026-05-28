@@ -22,11 +22,18 @@ BUY_SORT_METHOD = 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST'
 SCORE_CALC_METHOD = 'RoMD'  
 SCORE_MDD_POWER = 1.0 # 1.0 = 保持原本 RoMD 口徑；>1 加重 MDD 懲罰；0~1 降低 MDD 懲罰
 SCORE_MDD_DENOMINATOR_EPSILON = 0.0001
-SCORE_WIN_RATE_AMP_ENABLED = True  # True = 以完整交易勝率對 score 做目標式倍率校正。
+
+SCORE_WIN_RATE_AMP_ENABLED = False  # True = 以完整交易勝率對 score 做目標式倍率校正。
 SCORE_WIN_RATE_TARGET = 70.0  # 完整交易勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
-SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = True  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
+SCORE_MONTHLY_WIN_RATE_AMP_ENABLED = True  # True = 以月度獲利勝率對 score 做目標式倍率校正。
+SCORE_MONTHLY_WIN_RATE_TARGET = 90.0  # 月度獲利勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
+
+SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = False  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_FULL_YEAR_RETURN_TARGET = 10.0  # 完整年度最差報酬達此目標時倍率為 1；高於目標會放大。
-SCORE_MEDIAN_R_AMP_ENABLED = True  # True = 以單股回測 R 中位數對 score 做目標式倍率校正。
+SCORE_MIN_QUARTER_RETURN_AMP_ENABLED = False  # True = 以完整季度最差報酬對 score 做目標式倍率校正。
+SCORE_MIN_QUARTER_RETURN_TARGET = 10.0  # 完整季度最差報酬達此目標時倍率為 1；高於目標會放大。
+
+SCORE_MEDIAN_R_AMP_ENABLED = False  # True = 以單股回測 R 中位數對 score 做目標式倍率校正。
 SCORE_MEDIAN_R_FLOOR = -0.2  # R 中位數低於此值時倍率歸零；-1.0 代表完整 1R 虧損。
 SCORE_MEDIAN_R_TARGET = 0.2  # R 中位數達此目標時倍率為 1；高於目標會放大。
 
@@ -36,7 +43,7 @@ SCORE_MEDIAN_R_TARGET = 0.2  # R 中位數達此目標時倍率為 1；高於目
 # 'TOTAL_R' = 分子使用單股回測總 R
 # 'TOTAL_R_X_PORTFOLIO_RETURN' = 分子使用單股回測總 R × max(0, 投組總資產報酬率% / 100)
 # 'TOTAL_R_X_ANNUAL_RETURN' = 分子使用單股回測總 R × max(0, 投組年化報酬率% / 100)
-SCORE_NUMERATOR_METHOD = 'TOTAL_R_X_PORTFOLIO_RETURN'  
+SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'  
 
 
 
@@ -252,8 +259,27 @@ def resolve_score_win_rate_target(raw_value=None) -> float:
     return resolved
 
 
+def is_score_monthly_win_rate_amp_enabled() -> bool:
+    return bool(SCORE_MONTHLY_WIN_RATE_AMP_ENABLED)
+
+
+def resolve_score_monthly_win_rate_target(raw_value=None) -> float:
+    value = SCORE_MONTHLY_WIN_RATE_TARGET if raw_value is None else raw_value
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"SCORE_MONTHLY_WIN_RATE_TARGET 必須是 0~100 的有限正數，目前值: {value!r}") from exc
+    if not math.isfinite(resolved) or resolved <= 0.0 or resolved > 100.0:
+        raise ValueError(f"SCORE_MONTHLY_WIN_RATE_TARGET 必須是 0~100 的有限正數，目前值: {value!r}")
+    return resolved
+
+
 def is_score_min_full_year_return_amp_enabled() -> bool:
     return bool(SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED)
+
+
+def is_score_min_quarter_return_amp_enabled() -> bool:
+    return bool(SCORE_MIN_QUARTER_RETURN_AMP_ENABLED)
 
 
 def is_score_median_r_amp_enabled() -> bool:
@@ -309,6 +335,38 @@ def resolve_score_min_full_year_return_target(raw_value=None, floor_pct=None) ->
     return resolved
 
 
+def resolve_score_min_quarter_return_floor(target_pct=None) -> float:
+    value = SCORE_MIN_QUARTER_RETURN_TARGET if target_pct is None else target_pct
+    try:
+        target = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"SCORE_MIN_QUARTER_RETURN_TARGET 必須是有限數，目前值: {value!r}") from exc
+    if not math.isfinite(target):
+        raise ValueError(f"SCORE_MIN_QUARTER_RETURN_TARGET 必須是有限數，目前值: {value!r}")
+    if target > 0.0:
+        return -abs(target)
+    return float(MIN_FULL_YEAR_RETURN_PCT) / 4.0
+
+
+def resolve_score_min_quarter_return_target(raw_value=None, floor_pct=None) -> float:
+    value = SCORE_MIN_QUARTER_RETURN_TARGET if raw_value is None else raw_value
+    floor = resolve_score_min_quarter_return_floor(value) if floor_pct is None else floor_pct
+    try:
+        resolved = float(value)
+        resolved_floor = float(floor)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"SCORE_MIN_QUARTER_RETURN_TARGET 必須是大於季度最差報酬 floor 的有限數，"
+            f"目前 target={value!r}, floor={floor!r}"
+        ) from exc
+    if not math.isfinite(resolved) or not math.isfinite(resolved_floor) or resolved <= resolved_floor:
+        raise ValueError(
+            f"SCORE_MIN_QUARTER_RETURN_TARGET 必須是大於季度最差報酬 floor 的有限數，"
+            f"目前 target={value!r}, floor={floor!r}"
+        )
+    return resolved
+
+
 def build_training_threshold_snapshot():
     return {
         "MIN_FULL_YEAR_RETURN_PCT": MIN_FULL_YEAR_RETURN_PCT,
@@ -330,8 +388,13 @@ def build_training_score_policy_snapshot():
         "SCORE_MDD_DENOMINATOR_EPSILON": resolve_score_mdd_denominator_epsilon(),
         "SCORE_WIN_RATE_AMP_ENABLED": is_score_win_rate_amp_enabled(),
         "SCORE_WIN_RATE_TARGET": resolve_score_win_rate_target(),
+        "SCORE_MONTHLY_WIN_RATE_AMP_ENABLED": is_score_monthly_win_rate_amp_enabled(),
+        "SCORE_MONTHLY_WIN_RATE_TARGET": resolve_score_monthly_win_rate_target(),
         "SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED": is_score_min_full_year_return_amp_enabled(),
         "SCORE_MIN_FULL_YEAR_RETURN_TARGET": resolve_score_min_full_year_return_target(),
+        "SCORE_MIN_QUARTER_RETURN_AMP_ENABLED": is_score_min_quarter_return_amp_enabled(),
+        "SCORE_MIN_QUARTER_RETURN_TARGET": resolve_score_min_quarter_return_target(),
+        "SCORE_MIN_QUARTER_RETURN_FLOOR": resolve_score_min_quarter_return_floor(),
         "SCORE_MEDIAN_R_AMP_ENABLED": is_score_median_r_amp_enabled(),
         "SCORE_MEDIAN_R_FLOOR": resolve_score_median_r_floor(),
         "SCORE_MEDIAN_R_TARGET": resolve_score_median_r_target(),

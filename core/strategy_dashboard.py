@@ -201,6 +201,8 @@ def print_strategy_dashboard(
     bm_annual_return_pct=0.0,
     min_full_year_return_pct=0.0,
     bm_min_full_year_return_pct=0.0,
+    min_quarter_return_pct=0.0,
+    bm_min_quarter_return_pct=0.0,
     portfolio_total_r=0.0,
     portfolio_median_r=0.0,
     score_total_r=None,
@@ -226,6 +228,11 @@ def print_strategy_dashboard(
     bm_worst_year_str = f"+{bm_min_full_year_return_pct:.2f}%" if bm_min_full_year_return_pct > 0 else f"{bm_min_full_year_return_pct:.2f}%"
     worst_year_alpha_str = f"+{worst_year_alpha:.2f}%" if worst_year_alpha > 0 else f"{worst_year_alpha:.2f}%"
 
+    worst_quarter_alpha = min_quarter_return_pct - bm_min_quarter_return_pct
+    sys_worst_quarter_str = f"+{min_quarter_return_pct:.2f}%" if min_quarter_return_pct > 0 else f"{min_quarter_return_pct:.2f}%"
+    bm_worst_quarter_str = f"+{bm_min_quarter_return_pct:.2f}%" if bm_min_quarter_return_pct > 0 else f"{bm_min_quarter_return_pct:.2f}%"
+    worst_quarter_alpha_str = f"+{worst_quarter_alpha:.2f}%" if worst_quarter_alpha > 0 else f"{worst_quarter_alpha:.2f}%"
+
     sys_mdd_str = f"-{abs(sys_mdd):.2f}%"
     bm_mdd_str = f"-{abs(bm_mdd):.2f}%"
     mdd_diff_str = f"少跌 {abs(mdd_diff):.2f}%" if mdd_diff > 0 else f"多跌 {abs(mdd_diff):.2f}%"
@@ -245,6 +252,7 @@ def print_strategy_dashboard(
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        min_quarter_return_pct=min_quarter_return_pct,
         total_r=portfolio_total_r if score_total_r is None else score_total_r,
         median_r=portfolio_median_r if score_median_r is None else score_median_r,
     )
@@ -265,6 +273,8 @@ def print_strategy_dashboard(
     mwin_color = C_GREEN if mwin_diff > 0 else C_RED
     sys_worst_year_color = C_GREEN if min_full_year_return_pct > 0 else C_RED
     worst_year_alpha_color = C_GREEN if worst_year_alpha > 0 else C_RED
+    sys_worst_quarter_color = C_GREEN if min_quarter_return_pct > 0 else C_RED
+    worst_quarter_alpha_color = C_GREEN if worst_quarter_alpha > 0 else C_RED
 
     exp_str = f" (最高 {max_exp:.2f} %)" if max_exp is not None else ""
     normal_trades = trades if normal_trades is None else normal_trades
@@ -292,6 +302,7 @@ def print_strategy_dashboard(
     print(_table_row("總資產報酬率", f"{sys_ret_color}{sys_ret_str}{C_RESET}", bm_ret_str, f"{alpha_color}{alpha_str}{C_RESET}"))
     print(_table_row("年化報酬率", f"{sys_ret_color}{sys_ann_ret_str}{C_RESET}", bm_ann_ret_str, f"{annual_alpha_color}{annual_alpha_str}{C_RESET}"))
     print(_table_row("年度最差報酬", f"{sys_worst_year_color}{sys_worst_year_str}{C_RESET}", bm_worst_year_str, f"{worst_year_alpha_color}{worst_year_alpha_str}{C_RESET}"))
+    print(_table_row("季度最差報酬", f"{sys_worst_quarter_color}{sys_worst_quarter_str}{C_RESET}", bm_worst_quarter_str, f"{worst_quarter_alpha_color}{worst_quarter_alpha_str}{C_RESET}"))
     print(_table_row("最大回撤 (MDD)", f"{C_YELLOW}{sys_mdd_str}{C_RESET}", bm_mdd_str, f"{mdd_diff_color}{mdd_diff_str}{C_RESET}"))
     print(_table_row("報酬回撤比(RoMD)", f"{C_CYAN}{sys_romd_str}{C_RESET}", bm_romd_str, f"{romd_diff_color}{romd_diff_str}{C_RESET}"))
     print(_table_row("平滑度(Log R²)", sys_rsq_str, bm_rsq_str, f"{rsq_color}{rsq_diff_str}{C_RESET}"))
@@ -433,7 +444,7 @@ def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
         return ""
     if any(token in metric_name for token in ("報酬回撤比", "RoMD")):
         return C_CYAN
-    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬"}:
+    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬"}:
         if value_text.startswith("+"):
             return C_GREEN
         return C_RED

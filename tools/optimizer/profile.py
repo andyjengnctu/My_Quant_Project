@@ -25,6 +25,7 @@ PROFILE_FIELDS = [
     "ret_pct", "mdd", "trade_count",
     "annual_return_pct", "annual_trades", "reserved_buy_fill_rate",
     "full_year_count", "min_full_year_return_pct",
+    "full_quarter_count", "min_quarter_return_pct",
     "m_win_rate", "r_squared",
     "base_score", "trial_value", "fail_reason",
 ]

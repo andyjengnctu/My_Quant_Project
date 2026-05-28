@@ -3728,6 +3728,57 @@ def _calc_full_year_return_metrics_from_curve(curve: list[dict]) -> dict:
     }
 
 
+
+def _calc_full_quarter_return_metrics_from_curve(curve: list[dict]) -> dict:
+    by_quarter: dict[tuple[int, int], dict] = {}
+    for point in list(curve or []):
+        try:
+            ts = pd.Timestamp(point.get("date"))
+            equity = float(point.get("equity", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not pd.notna(ts) or equity <= 0.0:
+            continue
+        quarter = int((ts.month - 1) // 3 + 1)
+        key = (int(ts.year), int(quarter))
+        bucket = by_quarter.setdefault(
+            key,
+            {"first_date": ts, "first_equity": equity, "last_date": ts, "last_equity": equity},
+        )
+        if ts < bucket["first_date"]:
+            bucket["first_date"] = ts
+            bucket["first_equity"] = equity
+        if ts > bucket["last_date"]:
+            bucket["last_date"] = ts
+            bucket["last_equity"] = equity
+
+    rows = []
+    for year, quarter in sorted(by_quarter):
+        bucket = by_quarter[(year, quarter)]
+        first_date = bucket["first_date"]
+        last_date = bucket["last_date"]
+        first_month = (int(quarter) - 1) * 3 + 1
+        last_month = first_month + 2
+        if not bool(first_date.month == first_month and last_date.month == last_month):
+            continue
+        start_equity = float(bucket["first_equity"])
+        end_equity = float(bucket["last_equity"])
+        quarter_return_pct = (end_equity / start_equity - 1.0) * 100.0 if start_equity > 0.0 else 0.0
+        rows.append({
+            "year": int(year),
+            "quarter": int(quarter),
+            "period": f"{int(year)}Q{int(quarter)}",
+            "quarter_return_pct": float(quarter_return_pct),
+            "start_equity": float(start_equity),
+            "end_equity": float(end_equity),
+            "is_full_quarter": True,
+        })
+    return {
+        "full_quarter_count": int(len(rows)),
+        "min_quarter_return_pct": float(min((row["quarter_return_pct"] for row in rows), default=0.0)),
+        "quarterly_return_rows": rows,
+    }
+
 def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool = False) -> dict:
     initial_equity = _safe_float(stitched.get("initial_equity"), 0.0)
     curve = list(stitched.get("curve") or [])
@@ -3739,6 +3790,8 @@ def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool =
             "mdd_pct": 0.0,
             "annual_return_pct": 0.0,
             "full_year_count": 0,
+            "full_quarter_count": 0,
+            "min_quarter_return_pct": 0.0,
             "min_full_year_return_pct": 0.0,
             "yearly_return_rows": [],
             "r_squared": 0.0,
@@ -3764,7 +3817,9 @@ def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool =
     monthly_equities = _month_end_equities_from_curve(curve, initial_equity=initial_equity)
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
     full_year_metrics = _calc_full_year_return_metrics_from_curve(curve)
+    full_quarter_metrics = _calc_full_quarter_return_metrics_from_curve(curve)
     min_full_year_return_pct = float(full_year_metrics.get("min_full_year_return_pct", 0.0))
+    min_quarter_return_pct = float(full_quarter_metrics.get("min_quarter_return_pct", 0.0))
     score_total_r = _safe_float(stitched.get("score_total_r", 0.0), 0.0)
     score_median_r = _safe_float(stitched.get("score_median_r", 0.0), 0.0)
     plain_romd_score = calc_plain_romd(return_pct, max_drawdown)
@@ -3778,6 +3833,7 @@ def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool =
             r_squared,
             annual_return_pct=annual_return_pct,
             min_full_year_return_pct=min_full_year_return_pct,
+            min_quarter_return_pct=min_quarter_return_pct,
             total_r=score_total_r,
             median_r=score_median_r,
         )
@@ -3895,9 +3951,15 @@ def _extract_active_replay_metrics(result) -> dict:
     full_year_count = int(profile.get("full_year_count", 0) or 0)
     min_full_year_return_pct = float(profile.get("min_full_year_return_pct", 0.0) or 0.0)
     yearly_return_rows = list(profile.get("yearly_return_rows") or [])
+    full_quarter_count = int(profile.get("full_quarter_count", 0) or 0)
+    min_quarter_return_pct = float(profile.get("min_quarter_return_pct", 0.0) or 0.0)
+    quarterly_return_rows = list(profile.get("quarterly_return_rows") or [])
     benchmark_full_year_count = int(profile.get("bm_full_year_count", 0) or 0)
     benchmark_min_full_year_return_pct = float(profile.get("bm_min_full_year_return_pct", 0.0) or 0.0)
     benchmark_yearly_return_rows = list(profile.get("bm_yearly_return_rows") or [])
+    benchmark_full_quarter_count = int(profile.get("bm_full_quarter_count", 0) or 0)
+    benchmark_min_quarter_return_pct = float(profile.get("bm_min_quarter_return_pct", 0.0) or 0.0)
+    benchmark_quarterly_return_rows = list(profile.get("bm_quarterly_return_rows") or [])
     portfolio_total_r = float(profile.get("portfolio_total_r", 0.0) or 0.0)
     portfolio_median_r = float(profile.get("portfolio_median_r", 0.0) or 0.0)
     score_total_r = float(profile.get("score_total_r", profile.get("single_stock_total_r", 0.0)) or 0.0)
@@ -3910,6 +3972,7 @@ def _extract_active_replay_metrics(result) -> dict:
         annual_return_pct=annual_return_pct,
         trade_win_rate_pct=win_rate,
         min_full_year_return_pct=min_full_year_return_pct,
+        min_quarter_return_pct=min_quarter_return_pct,
         total_r=score_total_r,
         median_r=score_median_r,
     )
@@ -3924,6 +3987,9 @@ def _extract_active_replay_metrics(result) -> dict:
         "full_year_count": int(full_year_count),
         "min_full_year_return_pct": float(min_full_year_return_pct),
         "yearly_return_rows": yearly_return_rows,
+        "full_quarter_count": int(full_quarter_count),
+        "min_quarter_return_pct": float(min_quarter_return_pct),
+        "quarterly_return_rows": quarterly_return_rows,
         "r_squared": float(r_squared),
         "monthly_win_rate": float(monthly_win_rate),
         "trade_count": int(trade_count),
@@ -3943,6 +4009,9 @@ def _extract_active_replay_metrics(result) -> dict:
         "benchmark_full_year_count": int(benchmark_full_year_count),
         "benchmark_min_full_year_return_pct": float(benchmark_min_full_year_return_pct),
         "benchmark_yearly_return_rows": benchmark_yearly_return_rows,
+        "benchmark_full_quarter_count": int(benchmark_full_quarter_count),
+        "benchmark_min_quarter_return_pct": float(benchmark_min_quarter_return_pct),
+        "benchmark_quarterly_return_rows": benchmark_quarterly_return_rows,
         "benchmark_r_squared": float(bm_r_squared),
         "benchmark_monthly_win_rate": float(bm_monthly_win_rate),
     }
@@ -4009,6 +4078,8 @@ def _empty_unavailable_chain_metrics() -> dict:
         "return_pct": 0.0,
         "mdd_pct": 0.0,
         "annual_return_pct": 0.0,
+        "full_quarter_count": 0,
+        "min_quarter_return_pct": 0.0,
         "r_squared": 0.0,
         "monthly_win_rate": 0.0,
         "trade_count": 0,
@@ -4017,6 +4088,8 @@ def _empty_unavailable_chain_metrics() -> dict:
         "benchmark_return_pct": 0.0,
         "benchmark_mdd_pct": 0.0,
         "benchmark_annual_return_pct": 0.0,
+        "benchmark_full_quarter_count": 0,
+        "benchmark_min_quarter_return_pct": 0.0,
         "benchmark_r_squared": 0.0,
         "benchmark_monthly_win_rate": 0.0,
     }

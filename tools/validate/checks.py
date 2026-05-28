@@ -9,10 +9,12 @@ from .check_result_utils import (
 )
 from .portfolio_payloads import (
     build_portfolio_stats_payload,
+    calc_expected_full_quarter_metrics,
     calc_expected_full_year_metrics,
     calc_validation_annual_return_pct,
     calc_validation_sim_years,
     extract_yearly_profile_fields,
+    normalize_quarterly_return_rows,
     normalize_yearly_return_rows,
     summarize_portfolio_trade_output,
 )
@@ -37,10 +39,12 @@ __all__ = [
     "make_consistency_params",
     "normalize_ticker_text",
     "build_portfolio_stats_payload",
+    "calc_expected_full_quarter_metrics",
     "calc_expected_full_year_metrics",
     "calc_validation_annual_return_pct",
     "calc_validation_sim_years",
     "extract_yearly_profile_fields",
+    "normalize_quarterly_return_rows",
     "normalize_yearly_return_rows",
     "summarize_portfolio_trade_output",
     "build_consistency_parity_params",

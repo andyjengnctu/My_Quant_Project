@@ -35,12 +35,32 @@ def get_score_win_rate_target():
     return _training_policy.resolve_score_win_rate_target()
 
 
+def is_score_monthly_win_rate_amp_enabled():
+    return _training_policy.is_score_monthly_win_rate_amp_enabled()
+
+
+def get_score_monthly_win_rate_target():
+    return _training_policy.resolve_score_monthly_win_rate_target()
+
+
 def is_score_min_full_year_return_amp_enabled():
     return _training_policy.is_score_min_full_year_return_amp_enabled()
 
 
 def get_score_min_full_year_return_target():
     return _training_policy.resolve_score_min_full_year_return_target()
+
+
+def is_score_min_quarter_return_amp_enabled():
+    return _training_policy.is_score_min_quarter_return_amp_enabled()
+
+
+def get_score_min_quarter_return_target():
+    return _training_policy.resolve_score_min_quarter_return_target()
+
+
+def get_score_min_quarter_return_floor():
+    return _training_policy.resolve_score_min_quarter_return_floor()
 
 
 def is_score_median_r_amp_enabled():
@@ -84,8 +104,12 @@ from config.training_policy import (  # noqa: F401
     SCORE_MDD_DENOMINATOR_EPSILON,
     SCORE_WIN_RATE_AMP_ENABLED,
     SCORE_WIN_RATE_TARGET,
+    SCORE_MONTHLY_WIN_RATE_AMP_ENABLED,
+    SCORE_MONTHLY_WIN_RATE_TARGET,
     SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED,
     SCORE_MIN_FULL_YEAR_RETURN_TARGET,
+    SCORE_MIN_QUARTER_RETURN_AMP_ENABLED,
+    SCORE_MIN_QUARTER_RETURN_TARGET,
     SCORE_MEDIAN_R_AMP_ENABLED,
     SCORE_MEDIAN_R_FLOOR,
     SCORE_MEDIAN_R_TARGET,
@@ -93,7 +117,10 @@ from config.training_policy import (  # noqa: F401
     resolve_score_mdd_power,
     resolve_score_mdd_denominator_epsilon,
     resolve_score_win_rate_target,
+    resolve_score_monthly_win_rate_target,
     resolve_score_min_full_year_return_target,
+    resolve_score_min_quarter_return_floor,
+    resolve_score_min_quarter_return_target,
     resolve_score_median_r_floor,
     resolve_score_median_r_target,
     DEFAULT_OPTIMIZER_MODEL_MODE,
