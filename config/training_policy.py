@@ -13,7 +13,7 @@ EV_CALC_METHOD = 'A'
 # 'ASSET_GROWTH' = 優先買入歷史資產成長最高的標的 (歷史複利成長極大化)
 # 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST' = 優先買入前收未超出買入限價或超出幅度最小者，再按預估投入資金由大到小排序
-# 'ENTRY_TYPE_THEN_PROJ_COST' = 優先買入新突破/Re-entry，延續候選靠後；同類再按買入前收未超出買入限價或超出幅度最小排序
+# 'ENTRY_TYPE_THEN_PROJ_COST' = 優先買入新突破/Re-entry，延續候選靠後；同類再按預估投入資金由大到小排序
 BUY_SORT_METHOD = 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST'  
 
 # 系統評分 (Score) 算法切換
@@ -26,7 +26,7 @@ SCORE_MDD_DENOMINATOR_EPSILON = 0.0001
 SCORE_WIN_RATE_AMP_ENABLED = False  # True = 以完整交易勝率對 score 做目標式倍率校正。
 SCORE_WIN_RATE_TARGET = 70.0  # 完整交易勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
 SCORE_MONTHLY_WIN_RATE_AMP_ENABLED = True  # True = 以月度獲利勝率對 score 做目標式倍率校正。
-SCORE_MONTHLY_WIN_RATE_TARGET = 85.0  # 月度獲利勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
+SCORE_MONTHLY_WIN_RATE_TARGET = 90.0  # 月度獲利勝率達此目標時倍率為 1；低於目標會加速打折，高於目標會放大。
 
 SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = False  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_FULL_YEAR_RETURN_TARGET = 10.0  # 完整年度最差報酬達此目標時倍率為 1；高於目標會放大。

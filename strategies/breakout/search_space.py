@@ -13,7 +13,7 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_breakout_false_filter": {"kind": "categorical", "choices": [False]},  # (AI註: 假突破濾網開關搜尋)
     "use_breakout_ema_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破 EMA 濾網開關搜尋)
     "use_breakout_quality_filter": {"kind": "categorical", "choices": [False]},  # (AI註: breakout quality filter 開關；score table 建好後可手動改成 [True, False])
-    "use_history_threshold": {"kind": "categorical", "choices": [False]},  # (AI註: 歷史門檻開關搜尋)
+    "use_history_threshold": {"kind": "categorical", "choices": [False, True]},  # (AI註: 歷史門檻開關搜尋)
     "high_len": {"kind": "int", "low": 60, "high": 350, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
     "breakout_ema_len": {"kind": "int", "low": 60, "high": 350, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
@@ -31,8 +31,8 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "breakout_reclaim_window_bars": {"kind": "int", "low": 5, "high": 60, "step": 5, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 觀察窗搜尋)
     "breakout_reclaim_confirm_r": {"kind": "float", "low": 0.5, "high": 1.0, "step": 0.1, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 重新站回原 entry + N R 門檻搜尋)
     "min_history_trades": {"kind": "int", "low": 5, "high": 5, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最少交易次數門檻搜尋)
-    "min_history_ev": {"kind": "float", "low": -1.0, "high": -1.0, "step": 0.1, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小期望值門檻搜尋)
-    "min_history_win_rate": {"kind": "float", "low": 0.55, "high": 0.55, "step": 0.05, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小勝率門檻搜尋)
+    "min_history_ev": {"kind": "float", "low": -1.0, "high": 0.5, "step": 0.1, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小期望值門檻搜尋)
+    "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.75, "step": 0.05, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小勝率門檻搜尋)
 }
 
 
