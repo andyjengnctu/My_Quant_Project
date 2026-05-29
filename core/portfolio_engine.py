@@ -1083,6 +1083,10 @@ def run_portfolio_timeline(
     trade_count = len(closed_trades_stats)
     portfolio_r_stats = summarize_closed_trade_r_stats(closed_trades_stats)
     entry_type_counts = summarize_closed_trade_entry_type_counts(closed_trades_stats)
+    normal_trade_count = int(entry_type_counts.get('normal_trades', 0))
+    extended_trade_count = int(entry_type_counts.get('extended_trades', 0))
+    breakout_trade_count = int(entry_type_counts.get('breakout_trades', normal_trade_count))
+    reentry_trade_count = int(entry_type_counts.get('reentry_trades', 0))
     score_single_stock_trade_stats = {}
     if profile_stats is not None and active_context_resolver is None and active_context_ensemble_resolver is None:
         score_single_stock_trade_stats = summarize_single_stock_trade_stats_from_pit_index(
