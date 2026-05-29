@@ -322,6 +322,7 @@ def settle_portfolio_positions(
     tickers_to_remove = []
     for ticker in sorted(portfolio.keys()):
         pos = portfolio[ticker]
+        pre_step_qty = int(pos.get('qty', 0) or 0)
         pos_params = _resolve_position_params(pos, params)
         pos_all_dfs_fast = _resolve_position_all_dfs_fast(pos, all_dfs_fast)
         fast_df = pos_all_dfs_fast[ticker]
@@ -379,7 +380,13 @@ def settle_portfolio_positions(
                 _build_closed_trade_stat(pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=today)
             )
             if 'STOP' in events:
-                watch_state = create_breakout_reentry_watch_state(pos, exit_date=today, params=pos_params)
+                watch_state = create_breakout_reentry_watch_state(
+                    pos,
+                    exit_date=today,
+                    params=pos_params,
+                    exit_atr=get_fast_value(fast_df, 'ATR', pos=y_pos),
+                    exit_qty=pre_step_qty,
+                )
                 if watch_state is not None:
                     member_key = str(pos.get('_ensemble_member_key') or '').strip()
                     if active_reentry_watchlists_by_member is not None and member_key:

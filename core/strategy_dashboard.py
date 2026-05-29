@@ -66,7 +66,7 @@ def format_training_param_lines(params, entry_trade_counts=None):
         else "突破買進 關閉"
     )
     reentry_str = (
-        f"Re-entry 啟用（{get_p(params, 'breakout_reclaim_window_bars', 20)}日內站回 +{get_p(params, 'breakout_reclaim_confirm_r', 0.75):.2f}R）"
+        f"Re-entry 啟用（{get_p(params, 'breakout_reclaim_window_bars', 20)}日內站回 STOP+{get_p(params, 'breakout_reclaim_confirm_atr', 0.8):.1f}ATR）"
         if get_p(params, 'use_breakout_reclaim_reentry', False)
         else "Re-entry 關閉"
     )

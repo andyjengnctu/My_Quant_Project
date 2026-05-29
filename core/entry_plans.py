@@ -103,6 +103,14 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
         security_profile=candidate_plan.get("security_profile"),
         trade_date=candidate_plan.get("trade_date"),
     )
+    max_qty = candidate_plan.get("max_qty")
+    if max_qty is not None:
+        try:
+            resolved_max_qty = int(max_qty)
+        except (TypeError, ValueError):
+            resolved_max_qty = 0
+        if resolved_max_qty > 0:
+            qty = min(qty, resolved_max_qty)
     qty = apply_board_lot_preferred_qty(limit_price, qty, params)
     resized_plan["qty"] = qty
     resized_plan["is_orderable"] = qty > 0

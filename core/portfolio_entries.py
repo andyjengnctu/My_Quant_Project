@@ -49,6 +49,7 @@ def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
         'sizing_capital': sizing_capital,
         'orig_limit': candidate_row.get('orig_limit'),
         'orig_atr': candidate_row.get('orig_atr'),
+        'max_qty': candidate_row.get('max_qty'),
     }
     if candidate_row.get('entry_source') is not None:
         plan['entry_source'] = candidate_row.get('entry_source')

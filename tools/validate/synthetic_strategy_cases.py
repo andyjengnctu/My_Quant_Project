@@ -1823,7 +1823,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         "optimizer_training_params_hide_entry_trade_counts",
         True,
         "突破買進 啟用 (突破 201 日新高)" in counted_training_text
-        and "Re-entry 啟用（20日內站回 +0.75R）" in counted_training_text
+        and "Re-entry 啟用（20日內站回 STOP+0.8ATR）" in counted_training_text
         and "交易次數" not in counted_training_text,
     )
 

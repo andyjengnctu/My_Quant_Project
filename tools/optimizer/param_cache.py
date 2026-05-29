@@ -30,7 +30,7 @@ _CONDITIONAL_INACTIVE_FIELD_GROUPS = (
     ("use_breakout_false_filter", ("breakout_false_filter_atr_pct_min",)),
     ("use_breakout_quality_filter", ("breakout_quality_filter_id",)),
     ("use_breakout_ema_filter", ("breakout_ema_len",)),
-    ("use_breakout_reclaim_reentry", ("breakout_reclaim_window_bars", "breakout_reclaim_confirm_r")),
+    ("use_breakout_reclaim_reentry", ("breakout_reclaim_window_bars", "breakout_reclaim_confirm_atr")),
 )
 
 

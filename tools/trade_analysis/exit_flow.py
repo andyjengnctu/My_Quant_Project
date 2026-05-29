@@ -308,7 +308,13 @@ def process_debug_position_step(
         )
         register_display_realized_pnl(position, final_leg_pnl)
         if 'STOP' in events:
-            reentry_watch_state = create_breakout_reentry_watch_state(position, exit_date=current_date, params=params)
+            reentry_watch_state = create_breakout_reentry_watch_state(
+                position,
+                exit_date=current_date,
+                params=params,
+                exit_atr=atr_prev,
+                exit_qty=prev_qty,
+            )
         record_trade_marker(
             chart_context,
             current_date=current_date,

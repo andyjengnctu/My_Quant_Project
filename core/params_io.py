@@ -23,6 +23,7 @@ PARAM_FIELD_DEFAULTS = {field.name: field.default for field in PARAM_FIELDS}
 DEPRECATED_PARAM_FIELDS = {
     "breakout_false_filter_bm_ret20_max",
     "breakout_false_filter_bm_ret60_max",
+    "breakout_reclaim_confirm_r",
 }
 
 PARAM_COMPAT_DEFAULT_FIELDS = {
@@ -38,7 +39,7 @@ PARAM_COMPAT_DEFAULT_FIELDS = {
     "breakout_quality_filter_id",
     "use_breakout_reclaim_reentry",
     "breakout_reclaim_window_bars",
-    "breakout_reclaim_confirm_r",
+    "breakout_reclaim_confirm_atr",
 }
 
 
@@ -135,6 +136,9 @@ def params_to_json_dict(params):
 
 def build_params_from_mapping(data):
     _validate_param_payload(data)
+    data = dict(data)
+    if "breakout_reclaim_confirm_atr" not in data and "breakout_reclaim_confirm_r" in data:
+        data["breakout_reclaim_confirm_atr"] = data["breakout_reclaim_confirm_r"]
     coerced_values = {}
     for field_name in PARAM_FIELD_NAMES:
         if field_name in data:

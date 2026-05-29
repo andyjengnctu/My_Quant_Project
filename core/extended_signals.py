@@ -320,6 +320,7 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
         "security_profile": resolved_security_profile,
         "trade_date": trade_date,
         "signal_date": signal_state.get("signal_date"),
+        "max_qty": signal_state.get("max_qty"),
     }
     if shadow_position is not None:
         base_plan["shadow_position_state"] = copy.deepcopy(shadow_position)

@@ -29,7 +29,7 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "breakout_return_min": {"kind": "float", "low": 0.0, "high": 0.08, "step": 0.005, "enabled_by": "use_breakout_return_filter"},  # (AI註: 突破日收盤相對前收漲幅門檻搜尋)
     "breakout_false_filter_atr_pct_min": {"kind": "float", "low": 0.05, "high": 0.4, "step": 0.05, "enabled_by": "use_breakout_false_filter"},  # (AI註: 假突破濾網 ATR/Close 下限搜尋)
     "breakout_reclaim_window_bars": {"kind": "int", "low": 5, "high": 60, "step": 5, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 觀察窗搜尋)
-    "breakout_reclaim_confirm_r": {"kind": "float", "low": 0.5, "high": 1.0, "step": 0.1, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 重新站回原 entry + N R 門檻搜尋)
+    "breakout_reclaim_confirm_atr": {"kind": "float", "low": 0.0, "high": 2.5, "step": 0.1, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 重新站回本次 STOP line + N ATR 門檻搜尋)
     "min_history_trades": {"kind": "int", "low": 5, "high": 5, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最少交易次數門檻搜尋)
     "min_history_ev": {"kind": "float", "low": -1.0, "high": 0.5, "step": 0.1, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小期望值門檻搜尋)
     "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.75, "step": 0.05, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小勝率門檻搜尋)
@@ -111,10 +111,10 @@ def build_trial_params(session, trial):
         if ai_use_breakout_reclaim_reentry
         else BREAKOUT_PARAM_SPECS["breakout_reclaim_window_bars"]["default"]
     )
-    breakout_reclaim_confirm_r = (
-        _suggest_optimizer_float(trial, "breakout_reclaim_confirm_r")
+    breakout_reclaim_confirm_atr = (
+        _suggest_optimizer_float(trial, "breakout_reclaim_confirm_atr")
         if ai_use_breakout_reclaim_reentry
-        else BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_r"]["default"]
+        else BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_atr"]["default"]
     )
     min_history_trades = _suggest_optimizer_int(trial, "min_history_trades") if ai_use_history_threshold else 0
     min_history_ev = _suggest_optimizer_float(trial, "min_history_ev") if ai_use_history_threshold else -1.0
@@ -140,7 +140,7 @@ def build_trial_params(session, trial):
         breakout_quality_filter_id=BREAKOUT_PARAM_SPECS["breakout_quality_filter_id"]["default"],
         use_breakout_reclaim_reentry=ai_use_breakout_reclaim_reentry,
         breakout_reclaim_window_bars=breakout_reclaim_window_bars,
-        breakout_reclaim_confirm_r=breakout_reclaim_confirm_r,
+        breakout_reclaim_confirm_atr=breakout_reclaim_confirm_atr,
         use_history_threshold=ai_use_history_threshold,
         bb_len=(
             _suggest_optimizer_int(trial, "bb_len")
@@ -196,7 +196,7 @@ BREAKOUT_LOCAL_MIN_PORTFOLIO_DEPENDENCY_FIELDS = frozenset({
     "tp_percent",
     "use_breakout_reclaim_reentry",
     "breakout_reclaim_window_bars",
-    "breakout_reclaim_confirm_r",
+    "breakout_reclaim_confirm_atr",
 })
 
 
@@ -233,7 +233,7 @@ def get_breakout_local_min_candidate_fields(trial, *, center_payload):
     if bool(center_payload.get("use_breakout_false_filter", False)):
         candidate_fields.append("breakout_false_filter_atr_pct_min")
     if bool(center_payload.get("use_breakout_reclaim_reentry", False)):
-        candidate_fields.extend(("breakout_reclaim_window_bars", "breakout_reclaim_confirm_r"))
+        candidate_fields.extend(("breakout_reclaim_window_bars", "breakout_reclaim_confirm_atr"))
     return tuple(candidate_fields)
 
 

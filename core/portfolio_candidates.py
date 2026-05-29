@@ -47,6 +47,7 @@ def _make_candidate_row(
     signal_date=None,
     sizing_capital=None,
     shadow_position_state=None,
+    max_qty=None,
     prev_close=None,
 ):
     if est_qty > 0:
@@ -107,6 +108,7 @@ def _make_candidate_row(
         'signal_date': signal_date,
         'sizing_capital': sizing_capital,
         'params_obj': params,
+        'max_qty': max_qty,
         'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
         'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
         'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
@@ -361,6 +363,7 @@ def _collect_extended_candidates(
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
             entry_ref_price=candidate_plan.get('entry_ref_price'),
             shadow_position_state=candidate_plan.get('shadow_position_state'),
+            max_qty=candidate_plan.get('max_qty'),
             prev_close=y_close,
         )
         if candidates_today is not None:
