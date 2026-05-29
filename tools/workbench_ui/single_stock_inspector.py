@@ -89,7 +89,7 @@ class _ConsoleWriter(io.TextIOBase):
         return None
 
 
-BUY_TRADE_TRACE_NAMES = ("買進", "買進(延續候選)")
+BUY_TRADE_TRACE_NAMES = ("買進", "買進(延續候選)", "買進(重進)")
 SIDEBAR_SIGNAL_CHIP_TEXT = "出現買入訊號"
 SIDEBAR_HISTORY_CHIP_TEXT = "符合歷史績效"
 SIDEBAR_CHIP_ACTIVE_BG = "#2090ff"

@@ -93,18 +93,28 @@ MATPLOTLIB_SIGNAL_SELL_LOSS_FACE = (0.10, 0.60, 0.24, CHART_SIGNAL_BOX_ALPHA)
 
 
 CHART_TRACE_NAME_ALIASES = {
-    "買進(延續候選)": "買進",
+    "買進(Re-entry)": "買進(重進)",
     "錯失買進(新訊號)": "錯失買進",
-    "錯失買進(延續候選)": "錯失買進",
+    "錯失買進(Re-entry)": "錯失買進(重進)",
     "半倉停利": "停利",
     "停損殺出": "停損賣出",
     "期末強制結算": "強制結算",
 }
 
+CHART_BUY_TRACE_NAMES = ("買進", "買進(延續候選)", "買進(重進)")
+CHART_MISSED_BUY_TRACE_NAMES = ("錯失買進", "錯失買進(延續候選)", "錯失買進(重進)")
+CHART_BUY_AND_MISSED_BUY_TRACE_NAMES = CHART_BUY_TRACE_NAMES + CHART_MISSED_BUY_TRACE_NAMES
+CHART_EXIT_TRACE_NAMES = ("停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出")
+CHART_TRADE_LABEL_TRACE_NAMES = CHART_BUY_AND_MISSED_BUY_TRACE_NAMES + CHART_EXIT_TRACE_NAMES
+
 ACTION_STYLE_MAP = {
     "限價買進": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_LIMIT_COLOR},
     "買進": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": MATPLOTLIB_ENTRY_COLOR},
+    "買進(延續候選)": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": MATPLOTLIB_ENTRY_COLOR},
+    "買進(重進)": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": MATPLOTLIB_ENTRY_COLOR},
     "錯失買進": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_LIMIT_COLOR},
+    "錯失買進(延續候選)": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_LIMIT_COLOR},
+    "錯失買進(重進)": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_LIMIT_COLOR},
     "停利": {"plotly_symbol": "diamond", "mpl_marker": "D", "color": MATPLOTLIB_TP_COLOR},
     "停損賣出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
     "指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
@@ -123,6 +133,8 @@ CHART_LEGEND_FIRST_ROW_ITEMS = (
 CHART_LEGEND_SECOND_ROW_ITEMS = (
     "買訊",
     "買進",
+    "買進(延續候選)",
+    "買進(重進)",
     "錯失買進",
     "賣訊",
     "指標賣出",
@@ -383,6 +395,8 @@ def record_shadow_active_levels(chart_context, *, current_date, stop_price=np.na
 
 def _format_order_entry_type_label(entry_type):
     normalized = str(entry_type or "").strip().lower()
+    if normalized in {"reentry", "re-entry", "重進"}:
+        return "重進"
     if normalized in {"extended", "extended_candidate", "延續", "延續候選"}:
         return "延續"
     return "正常"
@@ -656,8 +670,8 @@ def _mask_entry_line_when_same_as_limit_for_render(entry_values, limit_values):
 
 def _apply_chart_display_line_clipping(payload):
     marker_groups = dict(payload.get("marker_groups") or {})
-    payload["limit_line"] = _clip_limit_line_after_buy(payload["limit_line"], marker_groups, buy_trace_names=("買進", "買進(延續候選)"))
-    payload["shadow_limit_line"] = _clip_limit_line_after_buy(payload["shadow_limit_line"], marker_groups, buy_trace_names=("買進", "買進(延續候選)"))
+    payload["limit_line"] = _clip_limit_line_after_buy(payload["limit_line"], marker_groups, buy_trace_names=CHART_BUY_TRACE_NAMES)
+    payload["shadow_limit_line"] = _clip_limit_line_after_buy(payload["shadow_limit_line"], marker_groups, buy_trace_names=CHART_BUY_TRACE_NAMES)
     payload["entry_line"] = _clip_entry_line_after_stop_break(payload["entry_line"], payload["stop_line"])
     payload["shadow_entry_line"] = _clip_entry_line_after_stop_break(payload["shadow_entry_line"], payload["shadow_stop_line"])
     return payload
@@ -1037,14 +1051,14 @@ def build_chart_hover_snapshot(chart_payload, index):
         "tp_price": _resolve_line_value("tp_price", "tp_line", "shadow_tp_line"),
     }
     buy_signal_meta = _resolve_index_signal_annotation_meta(chart_payload, idx, signal_type="buy")
-    buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)", "錯失買進"))
+    buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=CHART_BUY_AND_MISSED_BUY_TRACE_NAMES)
     active_buy_trade_meta = {}
     active_buy_trade_marker = None
     if line_value_sources.get("entry_price") == "actual":
         active_buy_trade_meta, active_buy_trade_marker = _resolve_latest_marker_meta_at_or_before_index(
             chart_payload,
             idx,
-            trace_names=("買進", "買進(延續候選)"),
+            trace_names=CHART_BUY_TRACE_NAMES,
         )
     reserved_capital = buy_signal_meta.get("reserved_capital")
     if reserved_capital is None:
@@ -1080,7 +1094,7 @@ def build_chart_hover_snapshot(chart_payload, index):
 
 
 def extract_trade_marker_indexes(chart_payload, *, trace_names=None):
-    default_trace_names = {"買進", "買進(延續候選)", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}
+    default_trace_names = set(CHART_TRADE_LABEL_TRACE_NAMES)
     allowed_trace_names = default_trace_names if trace_names is None else {str(name) for name in trace_names}
     marker_groups = dict((chart_payload or {}).get("marker_groups") or {})
     indexes = []
@@ -1205,7 +1219,7 @@ def _resolve_signal_annotation_face(item):
 
 def _resolve_trade_box_style(trace_name, marker):
     meta = marker.get("meta") or {}
-    if trace_name in {"買進", "買進(延續候選)", "錯失買進"}:
+    if trace_name in CHART_BUY_AND_MISSED_BUY_TRACE_NAMES:
         return MATPLOTLIB_BUY_FILL_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
     if trace_name == "錯失賣出":
         return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_INDICATOR_SELL_COLOR, "above"
@@ -1276,6 +1290,8 @@ def _format_chart_entry_type(value):
     if _is_missing_info_value(value):
         return "-"
     normalized = str(value).strip().lower()
+    if normalized in {"reentry", "re-entry", "重進"}:
+        return "重進"
     if normalized in {"extended", "延續", "extended_candidate"}:
         return "延續"
     if normalized in {"normal", "正常"}:
@@ -1396,9 +1412,13 @@ def _build_signal_label_detail_text(title, meta):
 def _normalize_entry_type_for_missed_buy_marker(marker):
     meta = dict((marker or {}).get("meta") or {})
     entry_type = str(meta.get("entry_type", "") or "").strip().lower()
+    if entry_type in {"reentry", "re-entry", "重進"}:
+        return "reentry"
     if entry_type in {"extended", "extended_candidate", "延續", "延續候選"}:
         return "extended"
     note = str((marker or {}).get("note", "") or "")
+    if "重進" in note or "re-entry" in note.lower() or "reentry" in note.lower():
+        return "reentry"
     if "延續" in note:
         return "extended"
     return "normal"
@@ -1407,11 +1427,11 @@ def _normalize_entry_type_for_missed_buy_marker(marker):
 def _build_trade_label_text(trace_name, marker):
     trace_name = _normalize_chart_trace_name(trace_name)
     meta = dict(marker.get("meta") or {})
-    if trace_name == "買進":
+    if trace_name in CHART_BUY_TRACE_NAMES:
         meta.setdefault("result", "成交")
         meta.setdefault("entry_type", meta.get("entry_type") or "normal")
         return _build_chart_info_box_text("買進", meta, marker=marker)
-    if trace_name == "錯失買進":
+    if trace_name in CHART_MISSED_BUY_TRACE_NAMES:
         meta.setdefault("result", "未成交")
         meta.setdefault("entry_type", _normalize_entry_type_for_missed_buy_marker(marker))
         return _build_chart_info_box_text("錯失買進", meta, marker=marker)
@@ -1495,7 +1515,7 @@ def _count_nearby_annotation_slots(x_value, placement, occupied_positions, *, co
 
 
 def _resolve_trade_label_offsets(slot_index, *, placement, trace_name):
-    if trace_name in {"買進", "買進(延續候選)", "錯失買進"}:
+    if trace_name in CHART_BUY_AND_MISSED_BUY_TRACE_NAMES:
         base_y = -64
         step_y = 32
     elif placement == "below":
@@ -1560,7 +1580,7 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
 
 def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annotations=None, start_idx=None, end_idx=None):
     rendered = []
-    supported_traces = {"買進", "買進(延續候選)", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}
+    supported_traces = set(CHART_TRADE_LABEL_TRACE_NAMES)
     occupied_positions = []
     for item in signal_annotations or []:
         x_value = int(item.get("x", -10**9))

@@ -106,7 +106,10 @@ PORTFOLIO_CONSOLE_COLORS = {
 }
 
 
-BUY_TRADE_TRACE_NAMES = ("買進", "錯失買進", "錯失賣出")
+BUY_TRADE_ACTIONS = ("買進", "買進(延續候選)", "買進(重進)")
+MISSED_BUY_TRADE_ACTIONS = ("錯失買進", "錯失買進(延續候選)", "錯失買進(重進)")
+BUY_OR_MISSED_BUY_TRADE_ACTIONS = BUY_TRADE_ACTIONS + MISSED_BUY_TRADE_ACTIONS
+BUY_TRADE_TRACE_NAMES = BUY_OR_MISSED_BUY_TRADE_ACTIONS + ("錯失賣出",)
 PERFORMANCE_STRATEGY_COLOR = "#ff3333"
 PERFORMANCE_BENCHMARK_COLOR = "#4dabf5"
 PERFORMANCE_TAB_CLOSE_HITBOX_PX = 32
@@ -361,8 +364,34 @@ def _normalize_entry_type_value(value, default="normal"):
             return default
     except (TypeError, ValueError):
         return default
-    text = str(value).strip()
-    return text if text else default
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"reentry", "re-entry", "重進"}:
+        return "reentry"
+    if text in {"extended", "extended_candidate", "延續", "延續候選"}:
+        return "extended"
+    if text in {"normal", "正常"}:
+        return "normal"
+    return text
+
+
+def _format_portfolio_buy_action_for_entry_type(entry_type):
+    normalized = _normalize_entry_type_value(entry_type, default="normal")
+    if normalized == "reentry":
+        return "買進(重進)"
+    if normalized == "extended":
+        return "買進(延續候選)"
+    return "買進"
+
+
+def _format_portfolio_missed_buy_action_for_entry_type(entry_type):
+    normalized = _normalize_entry_type_value(entry_type, default="normal")
+    if normalized == "reentry":
+        return "錯失買進(重進)"
+    if normalized == "extended":
+        return "錯失買進(延續候選)"
+    return "錯失買進"
 
 
 def _format_pct(value):
@@ -400,13 +429,22 @@ def _fast_data_to_price_df(fast_data):
     )
 
 
+def _infer_entry_type_default_from_action(raw_type):
+    text = str(raw_type or "")
+    if "重進" in text or "re-entry" in text.lower() or "reentry" in text.lower():
+        return "reentry"
+    if "延續" in text:
+        return "extended"
+    return "normal"
+
+
 def _normalize_trade_action(row):
     raw_type = str(row.get("Type", "") or "").strip()
-    entry_type = str(row.get("進場類型", "") or "").strip()
+    entry_type = _normalize_entry_type_value(row.get("進場類型"), default=_infer_entry_type_default_from_action(raw_type))
     if raw_type.startswith("買進"):
-        return "買進(延續候選)" if entry_type == "extended" else "買進"
+        return _format_portfolio_buy_action_for_entry_type(entry_type)
     if raw_type.startswith("錯失買進"):
-        return "錯失買進"
+        return _format_portfolio_missed_buy_action_for_entry_type(entry_type)
     if raw_type == "半倉停利":
         return "停利"
     if raw_type == "全倉結算(停損)":
@@ -457,7 +495,7 @@ def _resolve_marker_price(price_df, row, action):
 
 
 def _is_buy_trade_row(row):
-    return _normalize_trade_action(row) in {"買進", "買進(延續候選)"}
+    return _normalize_trade_action(row) in BUY_TRADE_ACTIONS
 
 
 def _is_full_exit_trade_row(row):
@@ -566,7 +604,7 @@ def _collect_visible_shadow_signal_date_keys(ticker_trades_df, *, fast_data, pri
     price_dates = set(pd.DatetimeIndex(pd.to_datetime(price_df.index))) if price_df is not None else set()
     for row in ticker_trades_df.to_dict("records"):
         action = _normalize_trade_action(row)
-        if action not in {"買進", "買進(延續候選)", "錯失買進"}:
+        if action not in BUY_OR_MISSED_BUY_TRADE_ACTIONS:
             continue
         parsed_trade_date = pd.to_datetime(row.get("Date"), errors="coerce")
         if pd.isna(parsed_trade_date):
@@ -686,7 +724,7 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
     active_entry_type = None
     for row in sorted(actual_records, key=lambda item: (str(item.get("Date", "") or ""), str(item.get("Type", "") or ""))):
         action = _normalize_trade_action(row)
-        if action in {"買進", "買進(延續候選)"}:
+        if action in BUY_TRADE_ACTIONS:
             active_entry_type = _normalize_entry_type_value(row.get("進場類型"), default="normal")
             continue
         if action in {"停損賣出", "指標賣出", "強制結算"}:
@@ -871,7 +909,7 @@ def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
 
 def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, row, action, marker_meta):
     trade_date = pd.Timestamp(row.get("Date"))
-    if action in {"買進", "買進(延續候選)", "錯失買進"}:
+    if action in BUY_OR_MISSED_BUY_TRADE_ACTIONS:
         signal_date = _resolve_buy_signal_date_from_row(row, fast_data, trade_date)
         if signal_date not in price_df.index:
             return
@@ -1094,7 +1132,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
             except (ValueError, KeyError, TypeError, RuntimeError):
                 row_params = params
 
-        if action in {"買進", "買進(延續候選)"}:
+        if action in BUY_TRADE_ACTIONS:
             next_trade_sequence += 1
             marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=row_params, equity_snapshots=equity_snapshots)
             marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default="normal")
@@ -1108,7 +1146,8 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
             }
         elif str(action).startswith("錯失買進"):
             marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=row_params, equity_snapshots=equity_snapshots)
-            marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default="extended" if "延續" in str(action) else "normal")
+            default_entry_type = "reentry" if "重進" in str(action) else ("extended" if "延續" in str(action) else "normal")
+            marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default=default_entry_type)
             marker_meta["result"] = "未成交"
         elif action == "錯失賣出":
             marker_meta = _build_portfolio_missed_sell_marker_meta(row, actual_stats, equity_snapshots=equity_snapshots)
@@ -1131,7 +1170,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
             if action in {"停損賣出", "指標賣出", "強制結算"}:
                 active_entry = None
 
-        if action in {"買進", "買進(延續候選)", "錯失買進"}:
+        if action in BUY_OR_MISSED_BUY_TRADE_ACTIONS:
             limit_price = marker_meta.get("limit_price")
             if limit_price is not None and not pd.isna(limit_price):
                 record_active_levels(

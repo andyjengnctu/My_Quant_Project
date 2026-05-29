@@ -30,7 +30,7 @@ SCORE_MONTHLY_WIN_RATE_TARGET = 85.0  # 月度獲利勝率達此目標時倍率�
 
 SCORE_MIN_FULL_YEAR_RETURN_AMP_ENABLED = False  # True = 以完整年度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_FULL_YEAR_RETURN_TARGET = 10.0  # 完整年度最差報酬達此目標時倍率為 1；高於目標會放大。
-SCORE_MIN_QUARTER_RETURN_AMP_ENABLED = False  # True = 以完整季度最差報酬對 score 做目標式倍率校正。
+SCORE_MIN_QUARTER_RETURN_AMP_ENABLED = True  # True = 以完整季度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_QUARTER_RETURN_TARGET = 10.0  # 完整季度最差報酬達此目標時倍率為 1；高於目標會放大。
 SCORE_MIN_MONTH_RETURN_AMP_ENABLED = False  # True = 以完整月度最差報酬對 score 做目標式倍率校正。
 SCORE_MIN_MONTH_RETURN_TARGET = 10.0  # 完整月度最差報酬達此目標時倍率為 1；高於目標會放大。

@@ -339,7 +339,7 @@ def process_debug_entry_for_day(
             record_trade_marker(
                 chart_context,
                 current_date=current_date,
-                action="買進(延續候選)",
+                action=_format_extended_entry_action("買進", extended_entry_source),
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
                 meta={
