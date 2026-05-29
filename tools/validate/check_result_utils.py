@@ -1,4 +1,5 @@
 import copy
+import math
 
 import pandas as pd
 
@@ -35,8 +36,14 @@ def make_consistency_params(base_params):
 
 def add_check(results, module_name, ticker, metric, expected, actual, tol=FLOAT_TOL, note=""):
     if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
-        diff = abs(float(expected) - float(actual))
-        passed = diff <= tol
+        expected_float = float(expected)
+        actual_float = float(actual)
+        if math.isinf(expected_float) or math.isinf(actual_float):
+            diff = 0.0 if expected_float == actual_float else math.inf
+            passed = expected_float == actual_float
+        else:
+            diff = abs(expected_float - actual_float)
+            passed = diff <= tol
     else:
         diff = None
         passed = expected == actual

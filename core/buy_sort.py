@@ -44,6 +44,11 @@ def calc_entry_type_priority_from_row(row):
     )
 
 
+def _descending_text_key(value):
+    text = str(value or '')
+    return tuple(-ord(ch) for ch in text)
+
+
 def is_buy_limit_overage_sort(method=None):
     active_method = get_buy_sort_method() if method is None else method
     return active_method == BUY_LIMIT_OVERAGE_SORT_METHOD
@@ -139,7 +144,7 @@ def sort_candidate_rows(rows, method=None):
             key=lambda item: (
                 _as_finite_float(item.get('sort_value'), default=math.inf),
                 -_as_finite_float(item.get('proj_cost'), default=0.0),
-                str(item.get('ticker') or ''),
+                _descending_text_key(item.get('ticker')),
             )
         )
         return rows

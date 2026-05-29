@@ -1,4 +1,4 @@
-from core.buy_sort import get_buy_sort_title, sort_candidate_rows
+from core.buy_sort import calc_entry_type_priority_from_row, get_buy_sort_title, sort_candidate_rows
 from core.config import get_buy_sort_method
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 
@@ -11,6 +11,7 @@ def print_scanner_start_banner(now_label):
 
 def _sort_rows(rows):
     sort_candidate_rows(rows, get_buy_sort_method())
+    rows.sort(key=lambda item: calc_entry_type_priority_from_row(item))
 
 
 def _print_issue_log_notice(scanner_issue_log_path, count_sanitized_candidates):
