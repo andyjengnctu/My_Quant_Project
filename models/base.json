@@ -7,24 +7,24 @@
     "params_ensemble": [
         {
             "member_index": 1,
-            "seed": 895498800,
-            "selected_trial": 657,
+            "seed": 390303417,
+            "selected_trial": 205,
             "params": {
                 "use_breakout_buy": true,
-                "high_len": 340,
-                "use_breakout_ema_filter": true,
-                "breakout_ema_len": 270,
-                "atr_len": 24,
-                "atr_buy_tol": 4.4,
-                "atr_times_init": 4.1,
-                "atr_times_trail": 3.9,
+                "high_len": 305,
+                "use_breakout_ema_filter": false,
+                "breakout_ema_len": 240,
+                "atr_len": 23,
+                "atr_buy_tol": 2.8,
+                "atr_times_init": 3.4,
+                "atr_times_trail": 3.4,
                 "tp_percent": 0.0,
-                "use_bb": false,
-                "bb_len": 20,
-                "bb_mult": 2.0,
-                "use_kc": true,
-                "kc_len": 29,
-                "kc_mult": 1.8,
+                "use_bb": true,
+                "bb_len": 27,
+                "bb_mult": 1.2,
+                "use_kc": false,
+                "kc_len": 20,
+                "kc_mult": 2.0,
                 "use_vol": false,
                 "vol_short_len": 5,
                 "vol_long_len": 20,
@@ -36,7 +36,7 @@
                 "use_breakout_quality_filter": false,
                 "breakout_quality_filter_id": "breakout_quality_v1",
                 "use_breakout_reclaim_reentry": true,
-                "breakout_reclaim_window_bars": 40,
+                "breakout_reclaim_window_bars": 45,
                 "breakout_reclaim_confirm_r": 0.5,
                 "use_history_threshold": false,
                 "min_history_trades": 0,
@@ -52,11 +52,11 @@
                 "min_entry_notional": 50126.0,
                 "use_compounding": true
             },
-            "score": 10.249796416788728,
-            "base_score": 10.249796416788728
+            "score": 3.1169089882920944,
+            "base_score": 3.1169089882920944
         }
     ],
-    "created_at": "2026-05-29T12:26:20.585357+08:00",
+    "created_at": "2026-05-29T23:23:25.560916+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 1,
@@ -74,7 +74,7 @@
         "objective_mode": "split_train_romd",
         "trials_per_seed": 1000,
         "seeds": [
-            895498800
+            390303417
         ],
         "walk_forward_policy": {
             "selection_start_year": 2021,
@@ -115,8 +115,8 @@
         "selected_policy": "base",
         "study_scope": "full",
         "base_only": true,
-        "selected_trial": 657,
-        "seed": 895498800,
-        "base_score": 10.249796416788728
+        "selected_trial": 205,
+        "seed": 390303417,
+        "base_score": 3.1169089882920944
     }
 }

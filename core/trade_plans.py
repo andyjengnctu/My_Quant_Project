@@ -23,6 +23,7 @@ from core.extended_signals import (
     is_extended_tbd_orderable_for_day,
     resolve_extended_signal_effective_limit,
     resolve_extended_signal_order_limit,
+    resolve_signal_tracking_params,
     should_clear_extended_signal,
     update_extended_tbd_shadow_trade_for_bar,
 )
@@ -55,4 +56,5 @@ __all__ = [
     "is_extended_tbd_orderable_for_day",
     "resolve_extended_signal_effective_limit",
     "resolve_extended_signal_order_limit",
+    "resolve_signal_tracking_params",
 ]

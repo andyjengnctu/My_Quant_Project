@@ -2,7 +2,7 @@ import math
 
 import pandas as pd
 
-from core.extended_signals import create_signal_tracking_state
+from core.extended_signals import create_signal_tracking_state, resolve_signal_tracking_params
 from core.price_utils import adjust_long_buy_limit
 
 
@@ -59,7 +59,12 @@ def create_breakout_reentry_watch_state(position, *, exit_date, params):
         "window_bars": int(window_bars),
         "bars_checked": 0,
         "last_checked_date": None,
+        "_params_obj": params,
     }
+
+
+def _resolve_reentry_watch_params(state, fallback_params):
+    return resolve_signal_tracking_params(state, fallback_params)
 
 
 def _format_date_key(value):
@@ -86,7 +91,7 @@ def activate_breakout_reentry_signals_for_day(
     today,
     params,
 ):
-    if not active_reentry_watchlist or not is_breakout_reentry_enabled(params):
+    if not active_reentry_watchlist:
         return 0
 
     from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_security_profile, get_fast_value
@@ -95,6 +100,11 @@ def activate_breakout_reentry_signals_for_day(
     for ticker in sorted(list(active_reentry_watchlist.keys())):
         state = active_reentry_watchlist.get(ticker)
         if not isinstance(state, dict):
+            active_reentry_watchlist.pop(ticker, None)
+            continue
+
+        state_params = _resolve_reentry_watch_params(state, params)
+        if not is_breakout_reentry_enabled(state_params):
             active_reentry_watchlist.pop(ticker, None)
             continue
 
@@ -124,12 +134,12 @@ def activate_breakout_reentry_signals_for_day(
         state["bars_checked"] = int(state.get("bars_checked", 0) or 0) + 1
 
         if _watch_state_is_triggered(state, close_price=y_close) and not pd.isna(y_atr):
-            raw_limit = float(y_close) + float(y_atr) * float(getattr(params, "atr_buy_tol", 1.5))
+            raw_limit = float(y_close) + float(y_atr) * float(getattr(state_params, "atr_buy_tol", 1.5))
             reentry_limit = adjust_long_buy_limit(raw_limit, ticker=ticker, security_profile=get_fast_security_profile(fast_df))
             signal_state = create_signal_tracking_state(
                 reentry_limit,
                 y_atr,
-                params,
+                state_params,
                 ticker=ticker,
                 security_profile=get_fast_security_profile(fast_df),
                 signal_date=signal_date,

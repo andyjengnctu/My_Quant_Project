@@ -13,7 +13,7 @@ EV_CALC_METHOD = 'A'
 # 'ASSET_GROWTH' = 優先買入歷史資產成長最高的標的 (歷史複利成長極大化)
 # 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST' = 優先買入前收未超出買入限價或超出幅度最小者，再按預估投入資金由大到小排序
-# 'ENTRY_TYPE_THEN_PROJ_COST' = 優先買入新突破/Re-entry，延續候選靠後；同類再按預估投入資金由大到小排序
+# 'ENTRY_TYPE_THEN_PROJ_COST' = 優先買入新突破/Re-entry，延續候選靠後；同類再按買入前收未超出買入限價或超出幅度最小排序
 BUY_SORT_METHOD = 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST'  
 
 # 系統評分 (Score) 算法切換

@@ -10,6 +10,7 @@ from core.trade_plans import (
     build_cash_capped_entry_plan,
     entry_notional_meets_minimum,
     execute_pre_market_entry_plan,
+    resolve_signal_tracking_params,
     should_clear_extended_signal,
 )
 from core.portfolio_fast_data import get_fast_close, get_fast_pos, get_fast_value
@@ -249,6 +250,9 @@ def execute_reserved_entries_for_day(
 
 def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today, params, sizing_capital):
     for ticker in sorted(list(active_extended_signals.keys())):
+        signal_state = active_extended_signals.get(ticker)
+        signal_params = resolve_signal_tracking_params(signal_state, params)
+
         if ticker in portfolio:
             del active_extended_signals[ticker]
             continue
@@ -274,7 +278,7 @@ def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
         y_ind_sell = bool(get_fast_value(fast_df, 'ind_sell_signal', pos=y_pos))
         if should_clear_extended_signal(
-            active_extended_signals[ticker],
+            signal_state,
             t_low,
             t_high,
             t_open=t_open,
@@ -286,6 +290,6 @@ def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs
             y_ind_sell=y_ind_sell,
             sizing_capital=sizing_capital,
             current_date=today,
-            params=params,
+            params=signal_params,
         ):
             del active_extended_signals[ticker]

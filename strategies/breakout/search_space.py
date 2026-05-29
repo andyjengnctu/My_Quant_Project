@@ -13,7 +13,7 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_breakout_false_filter": {"kind": "categorical", "choices": [False]},  # (AI註: 假突破濾網開關搜尋)
     "use_breakout_ema_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破 EMA 濾網開關搜尋)
     "use_breakout_quality_filter": {"kind": "categorical", "choices": [False]},  # (AI註: breakout quality filter 開關；score table 建好後可手動改成 [True, False])
-    "use_history_threshold": {"kind": "categorical", "choices": [False, True]},  # (AI註: 歷史門檻開關搜尋)
+    "use_history_threshold": {"kind": "categorical", "choices": [False]},  # (AI註: 歷史門檻開關搜尋)
     "high_len": {"kind": "int", "low": 60, "high": 350, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
     "breakout_ema_len": {"kind": "int", "low": 60, "high": 350, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)

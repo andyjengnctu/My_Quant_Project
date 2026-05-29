@@ -8,6 +8,7 @@ from core.trade_plans import (
     build_normal_candidate_plan,
     create_signal_tracking_state,
     is_extended_signal_orderable_for_day,
+    resolve_signal_tracking_params,
 )
 from core.portfolio_fast_data import (
     get_fast_close,
@@ -105,6 +106,7 @@ def _make_candidate_row(
         'candidate_date': trade_date,
         'signal_date': signal_date,
         'sizing_capital': sizing_capital,
+        'params_obj': params,
         'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
         'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
         'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
@@ -287,6 +289,9 @@ def _collect_extended_candidates(
     orderable_candidates_today = []
 
     for ticker in sorted(list(active_extended_signals.keys())):
+        signal_state = active_extended_signals.get(ticker)
+        candidate_params = resolve_signal_tracking_params(signal_state, params)
+
         if ticker in portfolio or ticker in sold_today or ticker in normal_setup_tickers_today:
             continue
 
@@ -300,7 +305,7 @@ def _collect_extended_candidates(
         y_pos = t_pos - 1
 
         is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
-            pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
+            pit_stats_index[ticker], today, candidate_params, cursor_state=pit_stats_cursor, ticker=ticker
         )
         if not is_candidate:
             continue
@@ -308,9 +313,9 @@ def _collect_extended_candidates(
         y_close = get_fast_close(fast_df, pos=y_pos)
         security_profile = get_fast_security_profile(fast_df)
         candidate_plan = build_extended_candidate_plan_from_signal(
-            active_extended_signals[ticker],
+            signal_state,
             sizing_equity,
-            params,
+            candidate_params,
             ticker=ticker,
             security_profile=security_profile,
             trade_date=today,
@@ -319,7 +324,7 @@ def _collect_extended_candidates(
             continue
 
         today_orderable = is_extended_signal_orderable_for_day(
-            active_extended_signals[ticker],
+            signal_state,
             candidate_plan,
             y_close,
             ticker=ticker,
@@ -331,7 +336,7 @@ def _collect_extended_candidates(
         candidate_row = _make_candidate_row(
             buy_sort_method=buy_sort_method,
             ticker=ticker,
-            candidate_type=str((active_extended_signals[ticker] or {}).get('source') or 'extended'),
+            candidate_type=str((signal_state or {}).get('source') or 'extended'),
             est_limit_px=candidate_plan['limit_price'],
             ev=ev,
             y_atr=candidate_plan['orig_atr'],
@@ -346,12 +351,12 @@ def _collect_extended_candidates(
             est_target_price=candidate_plan['target_price'],
             entry_atr=candidate_plan['entry_atr'],
             is_orderable=today_orderable,
-            params=params,
+            params=candidate_params,
             security_profile=candidate_plan.get('security_profile'),
             trade_date=today,
             signal_date=candidate_plan.get('signal_date'),
             sizing_capital=candidate_plan.get('sizing_capital'),
-            signal_state=active_extended_signals[ticker],
+            signal_state=signal_state,
             continuation_invalidation_barrier=candidate_plan.get('continuation_invalidation_barrier'),
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
             entry_ref_price=candidate_plan.get('entry_ref_price'),

@@ -42,6 +42,12 @@ def resolve_extended_signal_effective_limit(signal_state):
     return resolve_extended_signal_order_limit(signal_state)
 
 
+def resolve_signal_tracking_params(signal_state, fallback_params):
+    if isinstance(signal_state, dict):
+        return signal_state.get("_params_obj") or fallback_params
+    return fallback_params
+
+
 def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
     if signal_state is None:
         return False
@@ -93,6 +99,7 @@ def create_signal_tracking_state(original_limit, atr, params, ticker=None, secur
         "ticker": ticker,
         "security_profile": security_profile,
         "signal_date": signal_date,
+        "_params_obj": params,
     }
 
 
