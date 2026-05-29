@@ -1214,10 +1214,10 @@ def run_portfolio_timeline(
         profile_stats['portfolio_total_r'] = float(portfolio_r_stats.get('total_r', 0.0))
         profile_stats['portfolio_median_r'] = float(portfolio_r_stats.get('median_r', 0.0))
         profile_stats['portfolio_avg_r'] = float(portfolio_r_stats.get('avg_r', 0.0))
-        profile_stats['breakout_trades'] = int(entry_type_counts.get('breakout_trades', normal_trade_count))
-        profile_stats['reentry_trades'] = int(entry_type_counts.get('reentry_trades', 0))
-        profile_stats['normal_trades'] = int(entry_type_counts.get('normal_trades', normal_trade_count))
-        profile_stats['extended_trades'] = int(entry_type_counts.get('extended_trades', extended_trade_count))
+        profile_stats['breakout_trades'] = int(breakout_trade_count)
+        profile_stats['reentry_trades'] = int(reentry_trade_count)
+        profile_stats['normal_trades'] = int(normal_trade_count)
+        profile_stats['extended_trades'] = int(extended_trade_count)
         if score_single_stock_trade_stats:
             profile_stats.update(build_score_single_stock_profile_fields(score_single_stock_trade_stats))
         profile_stats['filled_buy_count'] = filled_buy_count

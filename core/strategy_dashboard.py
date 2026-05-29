@@ -58,39 +58,15 @@ def _format_filter_param_text(params):
     return bb_str, kc_str, vol_str, return_filter_str, false_filter_str, ema_filter_str, quality_filter_str
 
 
-def _format_trade_count_suffix(entry_trade_counts, key):
-    if not isinstance(entry_trade_counts, dict):
-        return ""
-    raw_value = entry_trade_counts.get(key)
-    if raw_value is None:
-        return ""
-    try:
-        count = int(raw_value)
-    except (TypeError, ValueError):
-        return ""
-    return f" : 交易次數: {count}"
-
-
-def _format_reentry_trade_count_suffix(entry_trade_counts):
-    if not isinstance(entry_trade_counts, dict):
-        return ""
-    # # (AI註: Re-entry 在投組帳務中屬於延續進場；顯示交易次數必須與「總交易次數（正常/延續）」同一口徑。)
-    if entry_trade_counts.get('extended_trades') is not None:
-        return _format_trade_count_suffix(entry_trade_counts, 'extended_trades')
-    return _format_trade_count_suffix(entry_trade_counts, 'reentry_trades')
-
-
 def format_training_param_lines(params, entry_trade_counts=None):
     bb_str, kc_str, vol_str, return_filter_str, false_filter_str, ema_filter_str, quality_filter_str = _format_filter_param_text(params)
-    breakout_count_suffix = _format_trade_count_suffix(entry_trade_counts, 'breakout_trades')
-    reentry_count_suffix = _format_reentry_trade_count_suffix(entry_trade_counts)
     breakout_str = (
-        f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高{breakout_count_suffix})"
+        f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高)"
         if get_p(params, 'use_breakout_buy', True)
         else "突破買進 關閉"
     )
     reentry_str = (
-        f"Re-entry 啟用（{get_p(params, 'breakout_reclaim_window_bars', 20)}日內站回 +{get_p(params, 'breakout_reclaim_confirm_r', 0.75):.2f}R{reentry_count_suffix.replace(' : ', ' | ', 1)}）"
+        f"Re-entry 啟用（{get_p(params, 'breakout_reclaim_window_bars', 20)}日內站回 +{get_p(params, 'breakout_reclaim_confirm_r', 0.75):.2f}R）"
         if get_p(params, 'use_breakout_reclaim_reentry', False)
         else "Re-entry 關閉"
     )
@@ -219,6 +195,7 @@ def print_strategy_dashboard(
     bm_m_win_rate=0.0,
     normal_trades=None,
     extended_trades=None,
+    reentry_trades=None,
     annual_trades=0.0,
     reserved_buy_fill_rate=0.0,
     annual_return_pct=0.0,
@@ -311,9 +288,12 @@ def print_strategy_dashboard(
     worst_quarter_alpha_color = C_GREEN if worst_quarter_alpha > 0 else C_RED
 
     exp_str = f" (最高 {max_exp:.2f} %)" if max_exp is not None else ""
-    normal_trades = trades if normal_trades is None else normal_trades
-    extended_trades = 0 if extended_trades is None else extended_trades
-    trade_split_str = f"{trades} 筆 (正常:{normal_trades} | 延續:{extended_trades})"
+    normal_trades = trades if normal_trades is None else int(normal_trades)
+    extended_trades = 0 if extended_trades is None else int(extended_trades)
+    reentry_trades = 0 if reentry_trades is None else int(reentry_trades)
+    if int(normal_trades) + int(extended_trades) + int(reentry_trades) != int(trades):
+        extended_trades = max(int(trades) - int(normal_trades) - int(reentry_trades), 0)
+    trade_split_str = f"{trades} 筆 (正常:{normal_trades} | 延續:{extended_trades} | 重進:{reentry_trades})"
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
     if title:
@@ -578,7 +558,7 @@ def print_optimizer_trial_console_dashboard(*,
                     _render_optimizer_dashboard_cell(row, "benchmark_delta", row["name"]),
                 )
             )
-    training_widths = _build_table4_compact_widths(training_table_rows)
+    training_widths = _build_table4_compact_widths(training_table_rows, min_widths=(20, 36, 14, 14))
     training_header_line = _table_row4_compact(*training_header, *training_widths)
 
     upgrade_header = ("升版判斷項目", "本輪候選", "門檻 / 基準", "狀態")

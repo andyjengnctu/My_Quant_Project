@@ -84,7 +84,8 @@ def validate_display_reporting_sanity_case(_base_params):
             bm_r_sq=0.55,
             bm_m_win_rate=41.67,
             normal_trades=9,
-            extended_trades=3,
+            extended_trades=2,
+            reentry_trades=1,
             annual_trades=4.25,
             reserved_buy_fill_rate=83.33,
             annual_return_pct=12.34,
@@ -130,7 +131,7 @@ def validate_display_reporting_sanity_case(_base_params):
     expected_dashboard_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{expected_score_numerator}] | 系統得分:"
     add_check(results, "display_reporting", case_id, "dashboard_score_header_separates_model_and_numerator", True, expected_dashboard_score_header in dashboard_text and " / 分子 " not in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_mode_and_positions", True, "模式: 投組模式 | 最大持股: 5 檔" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_trade_split", True, "總交易次數: 12 筆 (正常:9 | 延續:3) | 年化交易次數: 4.25 次/年" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_trade_split", True, "總交易次數: 12 筆 (正常:9 | 延續:2 | 重進:1) | 年化交易次數: 4.25 次/年" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_missed_counts_and_asset", True, "錯失次數: 買 3 | 賣 1 | 保留後買進成交率: 83.33% | 最終資產: 1,234,567 元" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_avg_exposure", True, "平均資金水位: 62.34 % (最高 88.88 %)" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_return_row", True, "總資產報酬率" in dashboard_text and "+18.76%" in dashboard_text and "+10.11%" in dashboard_text)

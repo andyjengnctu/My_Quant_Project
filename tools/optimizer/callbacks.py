@@ -280,8 +280,18 @@ def _format_metric_pair_diff(left_value: float, right_value: float, *, left_digi
     return f"({float(left_value):+.{left_digits}f}: {float(right_value):+.{right_digits}f}{right_unit})"
 
 
-def _format_split_bucket(total: int, left_label: str, left_value: int, right_label: str, right_value: int, *, separator: str = "｜") -> str:
-    return f"{int(total)} ({left_label}: {int(left_value)}{separator}{right_label}: {int(right_value)})"
+def _format_split_bucket(total: int, left_label: str, left_value: int, right_label: str, right_value: int, *, third_label: str | None = None, third_value: int | None = None, separator: str = "｜") -> str:
+    total = int(total)
+    left_value = int(left_value)
+    right_value = int(right_value)
+    if third_label is not None and third_value is not None:
+        third_value = int(third_value)
+        if left_value + right_value + third_value != total:
+            right_value = max(total - left_value - third_value, 0)
+    text = f"{total} ({left_label}: {left_value}{separator}{right_label}: {right_value}"
+    if third_label is not None and third_value is not None:
+        text += f"{separator}{third_label}: {third_value}"
+    return text + ")"
 
 
 def _pass_color(passed: bool, *, pass_color: str = C_GREEN, fail_color: str = C_RED) -> str:
@@ -416,6 +426,8 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
                 candidate_metrics.get('normal_trades', 0),
                 '延續',
                 candidate_metrics.get('extended_trades', 0),
+                third_label='重進',
+                third_value=candidate_metrics.get('reentry_trades', 0),
             )
             reference_plain = _format_split_bucket(
                 reference_metrics.get('pf_trades', 0),
@@ -423,6 +435,8 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
                 reference_metrics.get('normal_trades', 0),
                 '延續',
                 reference_metrics.get('extended_trades', 0),
+                third_label='重進',
+                third_value=reference_metrics.get('reentry_trades', 0),
             ) if reference_metrics else "-"
             _append_row(name, cand_plain, None, reference_text=reference_plain, reference_numeric=None, benchmark_text="-", benchmark_numeric=None)
             return
@@ -615,9 +629,9 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         "score_median_r": score_median_r,
         "score_r_source": str(profile.get("score_r_source", "single_stock")),
         "pf_trades": trade_count,
-        "normal_trades": normal_trade_count,
-        "extended_trades": extended_trade_count,
-        "breakout_trades": _safe_int(profile.get("breakout_trades", normal_trade_count)),
+        "normal_trades": _safe_int(profile.get("normal_trades", normal_trade_count)),
+        "extended_trades": _safe_int(profile.get("extended_trades", extended_trade_count)),
+        "breakout_trades": _safe_int(profile.get("breakout_trades", profile.get("normal_trades", normal_trade_count))),
         "reentry_trades": _safe_int(profile.get("reentry_trades", 0)),
         "missed_buys": missed_buys,
         "missed_sells": missed_sells,
@@ -777,9 +791,9 @@ def _compute_reference_console_cache(session):
             "pf_payoff": float(pf_payoff),
             "pf_ev": float(pf_ev),
             "pf_trades": int(trade_count),
-            "normal_trades": int(normal_trade_count),
-            "extended_trades": int(extended_trade_count),
-            "breakout_trades": _safe_int(pf_profile.get("breakout_trades", normal_trade_count)),
+            "normal_trades": _safe_int(pf_profile.get("normal_trades", normal_trade_count)),
+            "extended_trades": _safe_int(pf_profile.get("extended_trades", extended_trade_count)),
+            "breakout_trades": _safe_int(pf_profile.get("breakout_trades", pf_profile.get("normal_trades", normal_trade_count))),
             "reentry_trades": _safe_int(pf_profile.get("reentry_trades", 0)),
             "missed_buys": int(total_missed),
             "missed_sells": int(total_missed_sells),

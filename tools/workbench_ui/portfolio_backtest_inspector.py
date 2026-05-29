@@ -652,6 +652,7 @@ def _empty_portfolio_ticker_actual_stats():
         "trade_count": 0,
         "normal_trade_count": 0,
         "extended_trade_count": 0,
+        "reentry_trade_count": 0,
         "missed_buy_count": 0,
         "missed_sell_count": 0,
         "total_reserved_capital": 0.0,
@@ -681,6 +682,7 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
     exit_count = len(exit_records)
     normal_trade_count = 0
     extended_trade_count = 0
+    reentry_trade_count = 0
     active_entry_type = None
     for row in sorted(actual_records, key=lambda item: (str(item.get("Date", "") or ""), str(item.get("Type", "") or ""))):
         action = _normalize_trade_action(row)
@@ -689,7 +691,9 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
             continue
         if action in {"停損賣出", "指標賣出", "強制結算"}:
             entry_type = _normalize_entry_type_value(row.get("進場類型"), default=active_entry_type or "normal")
-            if entry_type == "extended":
+            if entry_type == "reentry":
+                reentry_trade_count += 1
+            elif entry_type == "extended":
                 extended_trade_count += 1
             else:
                 normal_trade_count += 1
@@ -699,8 +703,8 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
     total_reserved_capital = sum(_coerce_float(row.get("預留總金額"), default=0.0) for row in buy_records + missed_buy_records)
     total_pnl = sum(_coerce_float(row.get("該筆總損益"), default=0.0) for row in exit_records)
     asset_growth_pct = None if total_buy_capital <= 0 else float(total_pnl) * 100.0 / float(total_buy_capital)
-    if normal_trade_count + extended_trade_count != exit_count:
-        normal_trade_count = max(int(exit_count) - int(extended_trade_count), 0)
+    if normal_trade_count + extended_trade_count + reentry_trade_count != exit_count:
+        normal_trade_count = max(int(exit_count) - int(extended_trade_count) - int(reentry_trade_count), 0)
     return {
         "buy_count": int(len(buy_records)),
         "exit_count": int(exit_count),
@@ -710,6 +714,7 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
         "trade_count": int(exit_count),
         "normal_trade_count": int(normal_trade_count),
         "extended_trade_count": int(extended_trade_count),
+        "reentry_trade_count": int(reentry_trade_count),
         "missed_buy_count": int(len(missed_buy_records)),
         "missed_sell_count": int(len(missed_sell_records)),
         "total_reserved_capital": float(total_reserved_capital),
@@ -1165,6 +1170,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     exit_count = int(actual_stats.get("exit_count", 0) or 0)
     normal_trade_count = int(actual_stats.get("normal_trade_count", 0) or 0)
     extended_trade_count = int(actual_stats.get("extended_trade_count", 0) or 0)
+    reentry_trade_count = int(actual_stats.get("reentry_trade_count", 0) or 0)
     missed_buy_count = int(actual_stats.get("missed_buy_count", 0) or 0)
     missed_sell_count = int(actual_stats.get("missed_sell_count", 0) or 0)
     total_pnl = float(actual_stats.get("total_pnl", 0.0) or 0.0)
@@ -1174,7 +1180,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     invested_return_text = "-" if asset_growth_pct is None else f"{float(asset_growth_pct):+.1f}%"
     chart_context["summary_box"] = [
         f"總損益: {total_pnl:+,.0f} ({invested_return_text})",
-        f"交易次數: {exit_count} (正常: {normal_trade_count} | 延續: {extended_trade_count})",
+        f"交易次數: {exit_count} (正常: {normal_trade_count} | 延續: {extended_trade_count} | 重進: {reentry_trade_count})",
         f"錯失買進: {missed_buy_count} | 錯失賣出: {missed_sell_count}",
         f"勝率: {win_rate_text}",
     ]
@@ -2133,8 +2139,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             m_win_rate=m_win_rate,
             bm_r_sq=bm_r_sq,
             bm_m_win_rate=bm_m_win_rate,
-            normal_trades=normal_trade_count,
-            extended_trades=extended_trade_count,
+            normal_trades=pf_profile.get("normal_trades", normal_trade_count),
+            extended_trades=pf_profile.get("extended_trades", extended_trade_count),
+            reentry_trades=pf_profile.get("reentry_trades", 0),
             annual_trades=annual_trades,
             reserved_buy_fill_rate=reserved_buy_fill_rate,
             annual_return_pct=annual_return_pct,

@@ -168,6 +168,7 @@ def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation
         bm_m_win_rate=attrs.get("bm_m_win_rate", 0.0),
         normal_trades=attrs.get("normal_trades", attrs["pf_trades"]),
         extended_trades=attrs.get("extended_trades", 0),
+        reentry_trades=attrs.get("reentry_trades", 0),
         annual_trades=attrs.get("annual_trades", 0.0),
         reserved_buy_fill_rate=attrs.get("reserved_buy_fill_rate", 0.0),
         annual_return_pct=attrs.get("annual_return_pct", 0.0),

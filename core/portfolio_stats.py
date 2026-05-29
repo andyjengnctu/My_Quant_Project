@@ -145,7 +145,6 @@ def summarize_closed_trade_entry_type_counts(closed_trades_stats):
         entry_type = str(trade.get('entry_type') or 'normal').strip().lower()
         if entry_type == 'reentry':
             counts['reentry_trades'] += 1
-            counts['extended_trades'] += 1
         elif entry_type == 'extended':
             counts['extended_trades'] += 1
         else:

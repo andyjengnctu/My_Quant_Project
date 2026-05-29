@@ -309,6 +309,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     bm_min_quarter_return_pct = float(pf_profile.get("bm_min_quarter_return_pct", 0.0))
     portfolio_total_r = float(pf_profile.get("portfolio_total_r", 0.0))
     portfolio_median_r = float(pf_profile.get("portfolio_median_r", 0.0))
+    normal_trade_count = int(pf_profile.get("normal_trades", normal_trade_count) or 0)
+    extended_trade_count = int(pf_profile.get("extended_trades", extended_trade_count) or 0)
     breakout_trade_count = int(pf_profile.get("breakout_trades", normal_trade_count) or 0)
     reentry_trade_count = int(pf_profile.get("reentry_trades", 0) or 0)
     single_stock_trade_stats = {
@@ -561,9 +563,9 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         "score_r_source": str(pf_profile.get("score_r_source", "single_stock")),
         "monthly_win_rate": float(m_win_rate),
         "r_squared": float(r_sq),
-        "normal_trades": int(normal_trade_count),
-        "extended_trades": int(extended_trade_count),
-        "breakout_trades": int(pf_profile.get("breakout_trades", normal_trade_count) or 0),
+        "normal_trades": int(pf_profile.get("normal_trades", normal_trade_count) or 0),
+        "extended_trades": int(pf_profile.get("extended_trades", extended_trade_count) or 0),
+        "breakout_trades": int(pf_profile.get("breakout_trades", pf_profile.get("normal_trades", normal_trade_count)) or 0),
         "reentry_trades": int(pf_profile.get("reentry_trades", 0) or 0),
         "reserved_buy_fill_rate": float(reserved_buy_fill_rate),
     }

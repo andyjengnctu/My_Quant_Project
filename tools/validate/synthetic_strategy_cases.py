@@ -1062,7 +1062,8 @@ def validate_strategy_minimum_viability_case(base_params):
             bm_r_sq=0.72,
             bm_m_win_rate=55.0,
             normal_trades=6,
-            extended_trades=1,
+            extended_trades=0,
+            reentry_trades=1,
             annual_trades=12.5,
             reserved_buy_fill_rate=78.0,
             annual_return_pct=18.0,
@@ -1819,10 +1820,11 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         results,
         "strategy_contract",
         case_id,
-        "optimizer_training_params_show_breakout_and_reentry_trade_counts",
+        "optimizer_training_params_hide_entry_trade_counts",
         True,
-        "突破買進 啟用 (突破 201 日新高 : 交易次數: 12)" in counted_training_text
-        and "Re-entry 啟用（20日內站回 +0.75R | 交易次數: 7）" in counted_training_text,
+        "突破買進 啟用 (突破 201 日新高)" in counted_training_text
+        and "Re-entry 啟用（20日內站回 +0.75R）" in counted_training_text
+        and "交易次數" not in counted_training_text,
     )
 
     sample_rows = optimizer_callbacks._build_first_zone_rows(
@@ -1838,7 +1840,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "pf_ev": 0.25,
             "pf_trades": 11,
             "normal_trades": 8,
-            "extended_trades": 3,
+            "extended_trades": 2,
+            "reentry_trades": 1,
             "missed_total": 2,
             "missed_buys": 1,
             "missed_sells": 1,
@@ -1859,7 +1862,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "pf_ev": 0.2,
             "pf_trades": 10,
             "normal_trades": 7,
-            "extended_trades": 3,
+            "extended_trades": 2,
+            "reentry_trades": 1,
             "missed_total": 3,
             "missed_buys": 2,
             "missed_sells": 1,
@@ -1885,7 +1889,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     romd_row = row_map.get("報酬回撤比 (RoMD)", {})
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_romd_row_uses_plain_return_mdd_not_system_score", True, "1.41" in str(romd_row.get("candidate", "")) and "0.67" in str(romd_row.get("benchmark", "")))
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_payoff_ev_pair_with_consistent_spacing", True, row_map.get("風報比: 期望值", {}).get("candidate") == "1.50: 0.250R" and "1.40: 0.200R" in str(row_map.get("風報比: 期望值", {}).get("reference", "")) and "(+0.10: +0.050R)" in str(row_map.get("風報比: 期望值", {}).get("reference", "")))
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_trade_split_with_consistent_spacing", True, row_map.get("總交易次數", {}).get("candidate") == "11 (正常: 8｜延續: 3)" and row_map.get("總交易次數", {}).get("reference") == "10 (正常: 7｜延續: 3)")
+    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_trade_split_with_consistent_spacing", True, row_map.get("總交易次數", {}).get("candidate") == "11 (正常: 8｜延續: 2｜重進: 1)" and row_map.get("總交易次數", {}).get("reference") == "10 (正常: 7｜延續: 2｜重進: 1)")
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_missed_split_with_consistent_spacing", True, row_map.get("錯失交易次數", {}).get("candidate") == "2 (買: 1｜賣: 1)" and row_map.get("錯失交易次數", {}).get("reference") == "3 (買: 2｜賣: 1)")
 
     long_training_rows = [
@@ -1900,9 +1904,9 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         },
         {
             "name": "總交易次數",
-            "candidate": "649 (正常: 346｜延續: 303)",
+            "candidate": "649 (正常: 346｜延續: 300｜重進: 3)",
             "candidate_precolored": False,
-            "reference": "510 (正常: 425｜延續: 85)",
+            "reference": "510 (正常: 425｜延續: 84｜重進: 1)",
             "reference_precolored": False,
             "benchmark": "-",
             "benchmark_precolored": False,
