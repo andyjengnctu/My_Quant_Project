@@ -71,10 +71,19 @@ def _format_trade_count_suffix(entry_trade_counts, key):
     return f" : 交易次數: {count}"
 
 
+def _format_reentry_trade_count_suffix(entry_trade_counts):
+    if not isinstance(entry_trade_counts, dict):
+        return ""
+    # # (AI註: Re-entry 在投組帳務中屬於延續進場；顯示交易次數必須與「總交易次數（正常/延續）」同一口徑。)
+    if entry_trade_counts.get('extended_trades') is not None:
+        return _format_trade_count_suffix(entry_trade_counts, 'extended_trades')
+    return _format_trade_count_suffix(entry_trade_counts, 'reentry_trades')
+
+
 def format_training_param_lines(params, entry_trade_counts=None):
     bb_str, kc_str, vol_str, return_filter_str, false_filter_str, ema_filter_str, quality_filter_str = _format_filter_param_text(params)
     breakout_count_suffix = _format_trade_count_suffix(entry_trade_counts, 'breakout_trades')
-    reentry_count_suffix = _format_trade_count_suffix(entry_trade_counts, 'reentry_trades')
+    reentry_count_suffix = _format_reentry_trade_count_suffix(entry_trade_counts)
     breakout_str = (
         f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高{breakout_count_suffix})"
         if get_p(params, 'use_breakout_buy', True)
@@ -423,7 +432,7 @@ def _table_row5(c1, c2, c3, c4, c5, w1=20, w2=19, w3=24, w4=18, w5=6):
     )
 
 
-def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=24, w3=31, w4=32):
+def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=24, w3=14, w4=14):
     return (
         f"| {_pad_display(c1, w1)} "
         f"| {_pad_display(c2, w2)} "
@@ -447,7 +456,7 @@ def _build_table_widths(rows, *, min_widths):
     return tuple(widths)
 
 
-def _build_table4_compact_widths(rows: list[tuple[str, str, str, str]], *, min_widths: tuple[int, int, int, int] = (20, 24, 31, 32)) -> tuple[int, int, int, int]:
+def _build_table4_compact_widths(rows: list[tuple[str, str, str, str]], *, min_widths: tuple[int, int, int, int] = (20, 24, 14, 14)) -> tuple[int, int, int, int]:
     widths = [int(v) for v in min_widths]
     for row in rows:
         for idx, cell in enumerate(row[:4]):

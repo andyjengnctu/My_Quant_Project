@@ -1046,6 +1046,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "base_score": _safe_float(attrs.get("base_score", 0.0)),
         "entry_trade_counts": {
             "breakout_trades": candidate_train_metrics.get("breakout_trades"),
+            "extended_trades": candidate_train_metrics.get("extended_trades"),
             "reentry_trades": candidate_train_metrics.get("reentry_trades"),
         },
     }

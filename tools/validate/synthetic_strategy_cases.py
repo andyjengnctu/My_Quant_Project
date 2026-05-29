@@ -1814,7 +1814,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     rendered_training_text = "\n".join(training_lines)
     add_check(results, "strategy_contract", case_id, "optimizer_callbacks_kc_label_matches_dashboard_wording", True, "阿肯那(KC)" in rendered_training_text and "阿唐那(KC)" not in rendered_training_text)
     params.use_breakout_reclaim_reentry = True
-    counted_training_text = "\n".join(optimizer_callbacks._build_training_param_lines(params, entry_trade_counts={"breakout_trades": 12, "reentry_trades": 3}))
+    counted_training_text = "\n".join(optimizer_callbacks._build_training_param_lines(params, entry_trade_counts={"breakout_trades": 12, "extended_trades": 7, "reentry_trades": 3}))
     add_check(
         results,
         "strategy_contract",
@@ -1822,7 +1822,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         "optimizer_training_params_show_breakout_and_reentry_trade_counts",
         True,
         "突破買進 啟用 (突破 201 日新高 : 交易次數: 12)" in counted_training_text
-        and "Re-entry 啟用（20日內站回 +0.75R | 交易次數: 3）" in counted_training_text,
+        and "Re-entry 啟用（20日內站回 +0.75R | 交易次數: 7）" in counted_training_text,
     )
 
     sample_rows = optimizer_callbacks._build_first_zone_rows(
