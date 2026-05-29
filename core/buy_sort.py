@@ -25,6 +25,20 @@ def calc_buy_limit_overage_pct(prev_close, limit_price):
     return max(0.0, (resolved_prev_close / resolved_limit_price - 1.0) * 100.0)
 
 
+def calc_buy_limit_overage_pct_from_row(row):
+    if row is None:
+        return math.inf
+    explicit_value = row.get('buy_limit_overage_pct')
+    if explicit_value is not None:
+        return _as_finite_float(explicit_value, default=math.inf)
+    if row.get('prev_close') is not None or row.get('limit_price') is not None or row.get('limit_px') is not None:
+        return calc_buy_limit_overage_pct(
+            row.get('prev_close'),
+            row.get('limit_price') if row.get('limit_price') is not None else row.get('limit_px'),
+        )
+    return _as_finite_float(row.get('sort_value'), default=math.inf)
+
+
 def calc_entry_type_priority(candidate_type):
     normalized = str(candidate_type or '').strip().lower()
     if normalized in {'normal', 'buy', 'reentry'}:
@@ -66,7 +80,7 @@ def calc_buy_sort_value(method, ev, proj_cost, win_rate, trade_count, asset_grow
     if method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         return calc_buy_limit_overage_pct(prev_close, limit_price)
     if method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
-        return float(proj_cost)
+        return calc_buy_limit_overage_pct(prev_close, limit_price)
     raise ValueError(f"未知的 BUY_SORT_METHOD: {method}")
 
 
@@ -96,7 +110,7 @@ def get_buy_sort_title(method=None):
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         return '按買入限價超出幅度由小到大，再按預估投入資金排序'
     if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
-        return '按新突破/Re-entry優先，再按預估投入資金排序'
+        return '按新突破/Re-entry優先，再按買入限價超出幅度由小到大排序'
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
@@ -113,14 +127,14 @@ def get_buy_sort_metric_label(method=None):
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         return '超限幅'
     if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
-        return '預估投入'
+        return '超限幅'
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
 def format_buy_sort_metric_value(value, method=None):
     active_method = get_buy_sort_method() if method is None else method
     numeric_value = float(value)
-    if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD and not math.isfinite(numeric_value):
+    if active_method in {BUY_LIMIT_OVERAGE_SORT_METHOD, ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD} and not math.isfinite(numeric_value):
         return 'N/A'
     if active_method == 'EV':
         return f'{numeric_value:.2f}R'
@@ -133,7 +147,7 @@ def format_buy_sort_metric_value(value, method=None):
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         return f'{numeric_value:.2f}%'
     if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
-        return f'{numeric_value:,.0f}'
+        return f'{numeric_value:.2f}%'
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
@@ -152,7 +166,7 @@ def sort_candidate_rows(rows, method=None):
         rows.sort(
             key=lambda item: (
                 calc_entry_type_priority_from_row(item),
-                -_as_finite_float(item.get('proj_cost'), default=0.0),
+                calc_buy_limit_overage_pct_from_row(item),
                 str(item.get('ticker') or ''),
             )
         )
@@ -170,8 +184,9 @@ def sort_candidate_rows(rows, method=None):
 
 def is_sort_value_better(candidate_value, incumbent_value, method=None):
     active_method = get_buy_sort_method() if method is None else method
-    candidate_numeric = _as_finite_float(candidate_value, default=math.inf if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD else -math.inf)
-    incumbent_numeric = _as_finite_float(incumbent_value, default=math.inf if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD else -math.inf)
-    if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
+    smaller_is_better = active_method in {BUY_LIMIT_OVERAGE_SORT_METHOD, ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD}
+    candidate_numeric = _as_finite_float(candidate_value, default=math.inf if smaller_is_better else -math.inf)
+    incumbent_numeric = _as_finite_float(incumbent_value, default=math.inf if smaller_is_better else -math.inf)
+    if smaller_is_better:
         return candidate_numeric < incumbent_numeric
     return candidate_numeric > incumbent_numeric

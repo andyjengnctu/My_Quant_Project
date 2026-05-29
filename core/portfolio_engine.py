@@ -8,6 +8,7 @@ from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.buy_sort import (
     BUY_LIMIT_OVERAGE_SORT_METHOD,
     ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD,
+    calc_buy_limit_overage_pct_from_row,
     calc_entry_type_priority_from_row,
 )
 from core.config import get_buy_sort_method, get_ev_calc_method
@@ -366,7 +367,7 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
             key=lambda item: (
                 -int(item.get("ensemble_vote_count", 0) or 0),
                 calc_entry_type_priority_from_row(item),
-                -float(item.get("proj_cost", 0.0) or 0.0),
+                calc_buy_limit_overage_pct_from_row(item),
                 str(item.get("ticker") or ""),
             )
         )

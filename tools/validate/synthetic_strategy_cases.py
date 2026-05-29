@@ -558,22 +558,22 @@ def validate_ranking_scoring_sanity_case(base_params):
     add_check(results, "strategy_score", case_id, "buy_sort_limit_overage_order", ["C", "B", "A"], [row["ticker"] for row in overage_rows])
 
     entry_type_rows = [
-        {"ticker": "EXT_BIG", "type": "extended", "sort_value": 12000.0, "proj_cost": 12000.0},
-        {"ticker": "NEW_SMALL", "type": "normal", "sort_value": 6000.0, "proj_cost": 6000.0},
-        {"ticker": "RE_BIG", "type": "reentry", "sort_value": 9000.0, "proj_cost": 9000.0},
-        {"ticker": "NEW_BIG", "type": "normal", "sort_value": 8000.0, "proj_cost": 8000.0},
+        {"ticker": "EXT_LOW_OVER", "type": "extended", "sort_value": 0.0, "proj_cost": 12000.0, "buy_limit_overage_pct": 0.0},
+        {"ticker": "NEW_HIGH_OVER", "type": "normal", "sort_value": 3.0, "proj_cost": 12000.0, "buy_limit_overage_pct": 3.0},
+        {"ticker": "RE_LOW_OVER", "type": "reentry", "sort_value": 0.0, "proj_cost": 5000.0, "buy_limit_overage_pct": 0.0},
+        {"ticker": "NEW_LOW_OVER", "type": "normal", "sort_value": 1.0, "proj_cost": 8000.0, "buy_limit_overage_pct": 1.0},
     ]
     sort_candidate_rows(entry_type_rows, "ENTRY_TYPE_THEN_PROJ_COST")
     add_check(
         results,
         "strategy_score",
         case_id,
-        "buy_sort_entry_type_then_proj_cost_order",
-        ["RE_BIG", "NEW_BIG", "NEW_SMALL", "EXT_BIG"],
+        "buy_sort_entry_type_then_buy_limit_overage_order",
+        ["RE_LOW_OVER", "NEW_LOW_OVER", "NEW_HIGH_OVER", "EXT_LOW_OVER"],
         [row["ticker"] for row in entry_type_rows],
     )
-    entry_type_sort_value = calc_buy_sort_value("ENTRY_TYPE_THEN_PROJ_COST", 0.5, 7000, 0.4, 10)
-    add_check(results, "strategy_score", case_id, "buy_sort_entry_type_uses_proj_cost_value", 7000.0, entry_type_sort_value)
+    entry_type_sort_value = calc_buy_sort_value("ENTRY_TYPE_THEN_PROJ_COST", 0.5, 7000, 0.4, 10, prev_close=103.0, limit_price=100.0)
+    add_check(results, "strategy_score", case_id, "buy_sort_entry_type_uses_buy_limit_overage_value", 3.0, entry_type_sort_value)
 
     with patch("config.training_policy.SCORE_MONTHLY_WIN_RATE_AMP_ENABLED", False), patch("config.training_policy.SCORE_MIN_QUARTER_RETURN_AMP_ENABLED", False), patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=10.0)
