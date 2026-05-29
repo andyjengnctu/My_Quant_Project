@@ -115,7 +115,7 @@ def validate_display_reporting_sanity_case(_base_params):
         )
     )
     add_check(results, "display_reporting", case_id, "scanner_summary_has_counts_and_runtime", True, "共掃描 77 檔標的" in scanner_summary_text and "耗時 12.34 秒" in scanner_summary_text and "max_workers: 6" in scanner_summary_text and "start_method: spawn" in scanner_summary_text)
-    add_check(results, "display_reporting", case_id, "scanner_summary_sorts_buy_before_extended", True, scanner_summary_text.find("[新訊號] 2330 | sort=3.4") < scanner_summary_text.find("[延續候選] 1101 | sort=1.2"))
+    add_check(results, "display_reporting", case_id, "scanner_summary_honors_buy_sort_order", True, scanner_summary_text.find("[延續候選] 1101 | sort=1.2") < scanner_summary_text.find("[新訊號] 2330 | sort=3.4"))
     add_check(results, "display_reporting", case_id, "scanner_summary_has_candidate_stats_and_issue_path", True, "候選統計：新訊號 1 檔 | 延續候選 1 檔" in scanner_summary_text and "outputs/vip_scanner/scanner_issues_20260402_123456.log" in scanner_summary_text)
 
     reexport_checks = all(
