@@ -312,8 +312,8 @@ def print_strategy_dashboard(
     print(_table_row("總資產報酬率", f"{sys_ret_color}{sys_ret_str}{C_RESET}", bm_ret_str, f"{alpha_color}{alpha_str}{C_RESET}"))
     print(_table_row("年化報酬率", f"{sys_ret_color}{sys_ann_ret_str}{C_RESET}", bm_ann_ret_str, f"{annual_alpha_color}{annual_alpha_str}{C_RESET}"))
     print(_table_row("年度最差報酬", f"{sys_worst_year_color}{sys_worst_year_str}{C_RESET}", bm_worst_year_str, f"{worst_year_alpha_color}{worst_year_alpha_str}{C_RESET}"))
-    print(_table_row("月度最差報酬", f"{sys_worst_month_color}{sys_worst_month_str}{C_RESET}", bm_worst_month_str, f"{worst_month_alpha_color}{worst_month_alpha_str}{C_RESET}"))
     print(_table_row("季度最差報酬", f"{sys_worst_quarter_color}{sys_worst_quarter_str}{C_RESET}", bm_worst_quarter_str, f"{worst_quarter_alpha_color}{worst_quarter_alpha_str}{C_RESET}"))
+    print(_table_row("月度最差報酬", f"{sys_worst_month_color}{sys_worst_month_str}{C_RESET}", bm_worst_month_str, f"{worst_month_alpha_color}{worst_month_alpha_str}{C_RESET}"))
     print(_table_row("最大回撤 (MDD)", f"{C_YELLOW}{sys_mdd_str}{C_RESET}", bm_mdd_str, f"{mdd_diff_color}{mdd_diff_str}{C_RESET}"))
     print(_table_row("報酬回撤比(RoMD)", f"{C_CYAN}{sys_romd_str}{C_RESET}", bm_romd_str, f"{romd_diff_color}{romd_diff_str}{C_RESET}"))
     print(_table_row("平滑度(Log R²)", sys_rsq_str, bm_rsq_str, f"{rsq_color}{rsq_diff_str}{C_RESET}"))
@@ -455,7 +455,7 @@ def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
         return ""
     if any(token in metric_name for token in ("報酬回撤比", "RoMD")):
         return C_CYAN
-    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬"}:
+    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬", "月度最差報酬"}:
         if value_text.startswith("+"):
             return C_GREEN
         return C_RED

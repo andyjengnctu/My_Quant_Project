@@ -190,10 +190,10 @@ def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation
         f"保留後買進成交率: {attrs.get('reserved_buy_fill_rate', 0.0):.1f}% | "
         f"完整年度數: {attrs.get('full_year_count', 0)} | "
         f"最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}% | "
-        f"完整月度數: {attrs.get('full_month_count', 0)} | "
-        f"最差完整月度: {attrs.get('min_month_return_pct', 0.0):.2f}% | "
         f"完整季度數: {attrs.get('full_quarter_count', 0)} | "
-        f"最差完整季度: {attrs.get('min_quarter_return_pct', 0.0):.2f}%{colors['reset']}"
+        f"最差完整季度: {attrs.get('min_quarter_return_pct', 0.0):.2f}% | "
+        f"完整月度數: {attrs.get('full_month_count', 0)} | "
+        f"最差完整月度: {attrs.get('min_month_return_pct', 0.0):.2f}%{colors['reset']}"
     )
 
 

@@ -293,7 +293,7 @@ def _pass_with_positive_color(passed: bool, numeric_value: float) -> str:
 
 
 def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
-    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬"}:
+    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬", "月度最差報酬"}:
         return C_GREEN if float(numeric_value) > 0 else C_RED
     if metric_name == "最大回撤 (MDD)":
         return C_YELLOW if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
@@ -466,8 +466,8 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
     add_row("總資產報酬率", "pf_return", kind="pct")
     add_row("年化報酬率", "annual_return_pct", kind="pct")
     add_row("年度最差報酬", "min_full_year_return_pct", kind="pct")
-    add_row("月度最差報酬", "min_month_return_pct", kind="pct")
     add_row("季度最差報酬", "min_quarter_return_pct", kind="pct")
+    add_row("月度最差報酬", "min_month_return_pct", kind="pct")
     add_row(_optimizer_romd_metric_label(), comparable_romd_key, kind="float2")
     add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
     add_row("月度獲利勝率", "m_win_rate", kind="pct")
