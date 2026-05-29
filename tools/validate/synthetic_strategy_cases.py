@@ -1813,6 +1813,17 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     training_lines = optimizer_callbacks._build_training_param_lines(params)
     rendered_training_text = "\n".join(training_lines)
     add_check(results, "strategy_contract", case_id, "optimizer_callbacks_kc_label_matches_dashboard_wording", True, "阿肯那(KC)" in rendered_training_text and "阿唐那(KC)" not in rendered_training_text)
+    params.use_breakout_reclaim_reentry = True
+    counted_training_text = "\n".join(optimizer_callbacks._build_training_param_lines(params, entry_trade_counts={"breakout_trades": 12, "reentry_trades": 3}))
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "optimizer_training_params_show_breakout_and_reentry_trade_counts",
+        True,
+        "突破買進 啟用 (突破 201 日新高 : 交易次數: 12)" in counted_training_text
+        and "Re-entry 啟用（20日內站回 +0.75R | 交易次數: 3）" in counted_training_text,
+    )
 
     sample_rows = optimizer_callbacks._build_first_zone_rows(
         candidate_metrics={
@@ -1930,6 +1941,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         )
     ansi_re = re.compile(r"\[[0-9;]*m")
     dashboard_lines = [ansi_re.sub("", line) for line in dashboard_buffer.getvalue().splitlines()]
+    dashboard_text_plain = "\n".join(dashboard_lines)
+    add_check(results, "strategy_contract", case_id, "optimizer_console_training_table_uses_benchmark_and_delta_columns", True, "| 指標項目" in dashboard_text_plain and "| 本輪候選" in dashboard_text_plain and "| 同期大盤0050" in dashboard_text_plain and "| 差異" in dashboard_text_plain and "run_best (差異)" not in dashboard_text_plain)
     table_lines = [line for line in dashboard_lines if line.startswith("| ") and any(token in line for token in ("風報比: 期望值", "總交易次數", "錯失交易次數"))]
 
     def _pipe_display_positions(text: str) -> tuple[int, ...]:

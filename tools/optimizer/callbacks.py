@@ -201,6 +201,8 @@ def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: floa
         "pf_trades": int(total.get("trade_count", 0)),
         "normal_trades": int(total.get("normal_trades", 0)),
         "extended_trades": int(total.get("extended_trades", 0)),
+        "breakout_trades": int(total.get("breakout_trades", total.get("normal_trades", 0))),
+        "reentry_trades": int(total.get("reentry_trades", 0)),
         "missed_buys": missed_buys,
         "missed_sells": missed_sells,
         "missed_total": missed_buys + missed_sells,
@@ -344,14 +346,32 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
     rows = []
 
     def _append_row(name, candidate_text, candidate_numeric, *, reference_text="-", reference_numeric=None, reference_delta_text="", reference_delta_value=None, benchmark_text="-", benchmark_numeric=None, benchmark_delta_text="", benchmark_delta_value=None, use_blue=False, candidate_color_override=None, base_color_override=None):
+        if benchmark_numeric is not None:
+            benchmark_cell = _compose_first_zone_cell(
+                name,
+                benchmark_text,
+                float(benchmark_numeric),
+                use_blue=use_blue,
+                base_color_override=base_color_override,
+            )
+            benchmark_delta_cell = (
+                _colorize(benchmark_delta_text, _delta_color(benchmark_delta_value))
+                if benchmark_delta_text not in {"", "-", None} and benchmark_delta_value is not None
+                else "-"
+            )
+        else:
+            benchmark_cell = str(benchmark_text)
+            benchmark_delta_cell = "-"
         row = {
             "name": name,
             "candidate": _compose_first_zone_cell(name, candidate_text, float(candidate_numeric), use_blue=use_blue, base_color_override=base_color_override) if candidate_numeric is not None else str(candidate_text),
             "candidate_precolored": candidate_numeric is not None,
             "reference": _compose_first_zone_cell(name, reference_text, float(reference_numeric), delta_text=reference_delta_text, delta_value=reference_delta_value, use_blue=use_blue, base_color_override=base_color_override) if reference_numeric is not None else str(reference_text),
             "reference_precolored": reference_numeric is not None,
-            "benchmark": _compose_first_zone_cell(name, benchmark_text, float(benchmark_numeric), delta_text=benchmark_delta_text, delta_value=benchmark_delta_value, use_blue=use_blue, base_color_override=base_color_override) if benchmark_numeric is not None else str(benchmark_text),
+            "benchmark": benchmark_cell,
             "benchmark_precolored": benchmark_numeric is not None,
+            "benchmark_delta": benchmark_delta_cell,
+            "benchmark_delta_precolored": benchmark_delta_cell != "-",
         }
         if candidate_color_override is not None:
             row["candidate"] = _colorize(str(candidate_text), candidate_color_override)
@@ -510,8 +530,8 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
     return rows
 
 
-def _build_training_param_lines(params):
-    return format_training_param_lines(params)
+def _build_training_param_lines(params, entry_trade_counts=None):
+    return format_training_param_lines(params, entry_trade_counts=entry_trade_counts)
 
 
 def _build_hard_gate_lines():
@@ -597,6 +617,8 @@ def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> 
         "pf_trades": trade_count,
         "normal_trades": normal_trade_count,
         "extended_trades": extended_trade_count,
+        "breakout_trades": _safe_int(profile.get("breakout_trades", normal_trade_count)),
+        "reentry_trades": _safe_int(profile.get("reentry_trades", 0)),
         "missed_buys": missed_buys,
         "missed_sells": missed_sells,
         "missed_total": missed_buys + missed_sells,
@@ -757,6 +779,8 @@ def _compute_reference_console_cache(session):
             "pf_trades": int(trade_count),
             "normal_trades": int(normal_trade_count),
             "extended_trades": int(extended_trade_count),
+            "breakout_trades": _safe_int(pf_profile.get("breakout_trades", normal_trade_count)),
+            "reentry_trades": _safe_int(pf_profile.get("reentry_trades", 0)),
             "missed_buys": int(total_missed),
             "missed_sells": int(total_missed_sells),
             "missed_total": int(total_missed) + int(total_missed_sells),
@@ -878,6 +902,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "pf_trades": _safe_int(attrs.get("pf_trades", 0)),
         "normal_trades": _safe_int(attrs.get("normal_trades", attrs.get("pf_trades", 0))),
         "extended_trades": _safe_int(attrs.get("extended_trades", 0)),
+        "breakout_trades": _safe_int(attrs.get("breakout_trades", attrs.get("normal_trades", attrs.get("pf_trades", 0)))),
+        "reentry_trades": _safe_int(attrs.get("reentry_trades", 0)),
         "missed_buys": _safe_int(attrs.get("missed_buys", 0)),
         "missed_sells": _safe_int(attrs.get("missed_sells", 0)),
         "missed_total": _safe_int(attrs.get("missed_buys", 0)) + _safe_int(attrs.get("missed_sells", 0)),
@@ -1018,6 +1044,10 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
         "study_full_breakout_stats": _build_study_full_breakout_stats(attrs) if study_breakout_stats_title else None,
         "study_full_breakout_stats_title": study_breakout_stats_title,
         "base_score": _safe_float(attrs.get("base_score", 0.0)),
+        "entry_trade_counts": {
+            "breakout_trades": candidate_train_metrics.get("breakout_trades"),
+            "reentry_trades": candidate_train_metrics.get("reentry_trades"),
+        },
     }
 
 
@@ -1044,7 +1074,7 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
         testing_rows=payload["test_rows"],
         upgrade_rows=payload["upgrade_rows"],
         compare_rows=payload["compare_rows"],
-        params_lines=_build_training_param_lines(payload["params"]),
+        params_lines=_build_training_param_lines(payload["params"], entry_trade_counts=payload.get("entry_trade_counts")),
         hard_gate_lines=_build_hard_gate_lines(),
         study_full_breakout_stats=payload.get("study_full_breakout_stats"),
         study_full_breakout_stats_title=payload.get("study_full_breakout_stats_title"),
@@ -1414,7 +1444,7 @@ def print_optimizer_static_ensemble_console_dashboard(
     seed_text = ",".join(str(int(seed)) for seed in seeds)
     params_lines = [
         f"ENSEMBLE：N={int(policy['seed_count'])}｜min_agree={int(policy['min_agree'])}｜seeds={seed_text}",
-        *[f"代表 member#1｜{line}" if idx == 0 else line for idx, line in enumerate(_build_training_param_lines(primary_params))],
+        *[f"代表 member#1｜{line}" if idx == 0 else line for idx, line in enumerate(_build_training_param_lines(primary_params, entry_trade_counts=candidate_train_metrics))],
     ]
     payload_elapsed = max(0.0, time.perf_counter() - payload_started_at)
     _emit_static_replay_progress(progress_state, "seed ensemble dashboard replay | render")

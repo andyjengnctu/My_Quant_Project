@@ -132,6 +132,28 @@ def summarize_closed_trade_r_stats(closed_trades_stats):
     }
 
 
+def summarize_closed_trade_entry_type_counts(closed_trades_stats):
+    counts = {
+        'normal_trades': 0,
+        'breakout_trades': 0,
+        'extended_trades': 0,
+        'reentry_trades': 0,
+    }
+    for trade in list(closed_trades_stats or []):
+        if not isinstance(trade, dict):
+            continue
+        entry_type = str(trade.get('entry_type') or 'normal').strip().lower()
+        if entry_type == 'reentry':
+            counts['reentry_trades'] += 1
+            counts['extended_trades'] += 1
+        elif entry_type == 'extended':
+            counts['extended_trades'] += 1
+        else:
+            counts['normal_trades'] += 1
+            counts['breakout_trades'] += 1
+    return {key: int(value) for key, value in counts.items()}
+
+
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None, trade_win_rate_pct=None, min_full_year_return_pct=None, min_month_return_pct=None, min_quarter_return_pct=None, total_r=None, median_r=None):
     from core.config import (
         get_score_calc_method,

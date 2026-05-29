@@ -33,6 +33,7 @@ from core.portfolio_stats import (
     calc_curve_stats,
     calc_sim_years,
     find_sim_start_idx,
+    summarize_closed_trade_entry_type_counts,
     summarize_closed_trade_r_stats,
 )
 from core.portfolio_stats import calc_portfolio_score
@@ -1081,6 +1082,7 @@ def run_portfolio_timeline(
 
     trade_count = len(closed_trades_stats)
     portfolio_r_stats = summarize_closed_trade_r_stats(closed_trades_stats)
+    entry_type_counts = summarize_closed_trade_entry_type_counts(closed_trades_stats)
     score_single_stock_trade_stats = {}
     if profile_stats is not None and active_context_resolver is None and active_context_ensemble_resolver is None:
         score_single_stock_trade_stats = summarize_single_stock_trade_stats_from_pit_index(
@@ -1212,6 +1214,10 @@ def run_portfolio_timeline(
         profile_stats['portfolio_total_r'] = float(portfolio_r_stats.get('total_r', 0.0))
         profile_stats['portfolio_median_r'] = float(portfolio_r_stats.get('median_r', 0.0))
         profile_stats['portfolio_avg_r'] = float(portfolio_r_stats.get('avg_r', 0.0))
+        profile_stats['breakout_trades'] = int(entry_type_counts.get('breakout_trades', normal_trade_count))
+        profile_stats['reentry_trades'] = int(entry_type_counts.get('reentry_trades', 0))
+        profile_stats['normal_trades'] = int(entry_type_counts.get('normal_trades', normal_trade_count))
+        profile_stats['extended_trades'] = int(entry_type_counts.get('extended_trades', extended_trade_count))
         if score_single_stock_trade_stats:
             profile_stats.update(build_score_single_stock_profile_fields(score_single_stock_trade_stats))
         profile_stats['filled_buy_count'] = filled_buy_count

@@ -309,6 +309,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     bm_min_quarter_return_pct = float(pf_profile.get("bm_min_quarter_return_pct", 0.0))
     portfolio_total_r = float(pf_profile.get("portfolio_total_r", 0.0))
     portfolio_median_r = float(pf_profile.get("portfolio_median_r", 0.0))
+    breakout_trade_count = int(pf_profile.get("breakout_trades", normal_trade_count) or 0)
+    reentry_trade_count = int(pf_profile.get("reentry_trades", 0) or 0)
     single_stock_trade_stats = {
         "trade_count": int(pf_profile.get("single_stock_trade_count", 0) or 0),
         "win_rate": float(pf_profile.get("single_stock_win_rate", 0.0) or 0.0),
@@ -360,6 +362,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             "missed_sells": total_missed_sells,
             "normal_trades": normal_trade_count,
             "extended_trades": extended_trade_count,
+            "breakout_trades": breakout_trade_count,
+            "reentry_trades": reentry_trade_count,
             "annual_trades": annual_trades,
             "reserved_buy_fill_rate": reserved_buy_fill_rate,
             "annual_return_pct": annual_return_pct,
@@ -423,6 +427,8 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         "missed_sells": total_missed_sells,
         "normal_trades": normal_trade_count,
         "extended_trades": extended_trade_count,
+        "breakout_trades": breakout_trade_count,
+        "reentry_trades": reentry_trade_count,
         "annual_trades": annual_trades,
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,
@@ -557,6 +563,8 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
         "r_squared": float(r_sq),
         "normal_trades": int(normal_trade_count),
         "extended_trades": int(extended_trade_count),
+        "breakout_trades": int(pf_profile.get("breakout_trades", normal_trade_count) or 0),
+        "reentry_trades": int(pf_profile.get("reentry_trades", 0) or 0),
         "reserved_buy_fill_rate": float(reserved_buy_fill_rate),
     }
 
@@ -722,6 +730,8 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("missed_sells", evaluation["missed_sells"])
     trial.set_user_attr("normal_trades", evaluation["normal_trades"])
     trial.set_user_attr("extended_trades", evaluation["extended_trades"])
+    trial.set_user_attr("breakout_trades", evaluation.get("breakout_trades", evaluation["normal_trades"]))
+    trial.set_user_attr("reentry_trades", evaluation.get("reentry_trades", 0))
     trial.set_user_attr("annual_trades", evaluation["annual_trades"])
     trial.set_user_attr("reserved_buy_fill_rate", evaluation["reserved_buy_fill_rate"])
     trial.set_user_attr("annual_return_pct", evaluation["annual_return_pct"])

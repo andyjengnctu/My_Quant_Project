@@ -58,15 +58,30 @@ def _format_filter_param_text(params):
     return bb_str, kc_str, vol_str, return_filter_str, false_filter_str, ema_filter_str, quality_filter_str
 
 
-def format_training_param_lines(params):
+def _format_trade_count_suffix(entry_trade_counts, key):
+    if not isinstance(entry_trade_counts, dict):
+        return ""
+    raw_value = entry_trade_counts.get(key)
+    if raw_value is None:
+        return ""
+    try:
+        count = int(raw_value)
+    except (TypeError, ValueError):
+        return ""
+    return f" : 交易次數: {count}"
+
+
+def format_training_param_lines(params, entry_trade_counts=None):
     bb_str, kc_str, vol_str, return_filter_str, false_filter_str, ema_filter_str, quality_filter_str = _format_filter_param_text(params)
+    breakout_count_suffix = _format_trade_count_suffix(entry_trade_counts, 'breakout_trades')
+    reentry_count_suffix = _format_trade_count_suffix(entry_trade_counts, 'reentry_trades')
     breakout_str = (
-        f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高)"
+        f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高{breakout_count_suffix})"
         if get_p(params, 'use_breakout_buy', True)
         else "突破買進 關閉"
     )
     reentry_str = (
-        f"Re-entry 啟用（{get_p(params, 'breakout_reclaim_window_bars', 20)}日內站回 +{get_p(params, 'breakout_reclaim_confirm_r', 0.75):.2f}R）"
+        f"Re-entry 啟用（{get_p(params, 'breakout_reclaim_window_bars', 20)}日內站回 +{get_p(params, 'breakout_reclaim_confirm_r', 0.75):.2f}R{reentry_count_suffix.replace(' : ', ' | ', 1)}）"
         if get_p(params, 'use_breakout_reclaim_reentry', False)
         else "Re-entry 關閉"
     )
@@ -533,15 +548,15 @@ def print_optimizer_trial_console_dashboard(*,
     study_full_breakout_stats: dict | None = None,
     study_full_breakout_stats_title: str | None = None,
 ):
-    training_header = ("指標項目", "本輪候選", "run_best (差異)", "同期大盤0050 (差異)")
+    training_header = ("指標項目", "本輪候選", "同期大盤0050", "差異")
     training_table_rows = [training_header]
     for row in training_rows:
         training_table_rows.append(
             (
                 row["name"],
                 _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                _render_optimizer_dashboard_cell(row, "reference", row["name"]),
                 _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
+                _render_optimizer_dashboard_cell(row, "benchmark_delta", row["name"]),
             )
         )
     if testing_title and testing_rows:
@@ -550,8 +565,8 @@ def print_optimizer_trial_console_dashboard(*,
                 (
                     row["name"],
                     _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                    _render_optimizer_dashboard_cell(row, "reference", row["name"]),
                     _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
+                    _render_optimizer_dashboard_cell(row, "benchmark_delta", row["name"]),
                 )
             )
     training_widths = _build_table4_compact_widths(training_table_rows)

@@ -7,24 +7,24 @@
     "params_ensemble": [
         {
             "member_index": 1,
-            "seed": 681821612,
-            "selected_trial": 286,
+            "seed": 0,
+            "selected_trial": 247,
             "params": {
                 "use_breakout_buy": true,
-                "high_len": 150,
+                "high_len": 305,
                 "use_breakout_ema_filter": true,
-                "breakout_ema_len": 260,
-                "atr_len": 23,
-                "atr_buy_tol": 3.5,
-                "atr_times_init": 4.0,
-                "atr_times_trail": 4.2,
+                "breakout_ema_len": 255,
+                "atr_len": 21,
+                "atr_buy_tol": 4.2,
+                "atr_times_init": 3.4,
+                "atr_times_trail": 3.9,
                 "tp_percent": 0.0,
                 "use_bb": false,
                 "bb_len": 20,
                 "bb_mult": 2.0,
                 "use_kc": true,
-                "kc_len": 25,
-                "kc_mult": 1.5,
+                "kc_len": 26,
+                "kc_mult": 2.4,
                 "use_vol": false,
                 "vol_short_len": 5,
                 "vol_long_len": 20,
@@ -52,11 +52,11 @@
                 "min_entry_notional": 50126.0,
                 "use_compounding": true
             },
-            "score": 249.69699692351062,
-            "base_score": 249.69699692351062
+            "score": 2.37311413105022,
+            "base_score": 2.37311413105022
         }
     ],
-    "created_at": "2026-05-29T04:21:30.650129+08:00",
+    "created_at": "2026-05-29T09:34:25.214376+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 1,
@@ -72,9 +72,9 @@
         "dataset_label": "完整",
         "selected_model_mode": "study",
         "objective_mode": "split_train_romd",
-        "trials_per_seed": 1000,
+        "trials_per_seed": 0,
         "seeds": [
-            681821612
+            0
         ],
         "walk_forward_policy": {
             "selection_start_year": 2021,
@@ -110,13 +110,13 @@
         "oos_period": "",
         "member_count": 1,
         "requested_seed_count": 1,
-        "trials_per_seed": 1000,
+        "trials_per_seed": 0,
         "local_min_review_enabled": false,
         "selected_policy": "base",
         "study_scope": "full",
         "base_only": true,
-        "selected_trial": 286,
-        "seed": 681821612,
-        "base_score": 249.69699692351062
+        "selected_trial": 247,
+        "seed": 0,
+        "base_score": 2.37311413105022
     }
 }
