@@ -908,6 +908,17 @@ def validate_artifact_lifecycle_contract_case(_base_params):
             add_check(results, "artifact_contract", case_id, "artifacts_manifest_uses_posix_relative_paths", True, all(isinstance(item, str) and "\\" not in item and not item.startswith("/") for item in manifest_paths))
             add_check(results, "artifact_contract", case_id, "artifacts_manifest_includes_nested_debug_file", True, "nested/debug.log" in manifest_paths)
 
+            written_manifest_path = run_all_module._write_stable_artifacts_manifest(run_dir)
+            written_manifest = json.loads(written_manifest_path.read_text(encoding="utf-8"))
+            written_artifacts = written_manifest.get("artifacts", [])
+            written_manifest_paths = [item.get("relative_path") for item in written_artifacts]
+            written_manifest_hashes_valid = all(
+                local_common.compute_file_sha256(run_dir / item["relative_path"]) == item.get("sha256")
+                for item in written_artifacts
+            )
+            add_check(results, "artifact_contract", case_id, "artifacts_manifest_excludes_self_reference", False, local_common.ARTIFACTS_MANIFEST_FILENAME in written_manifest_paths)
+            add_check(results, "artifact_contract", case_id, "artifacts_manifest_written_hashes_are_verifiable", True, written_manifest_hashes_valid)
+
             bundle_path = local_common.build_bundle_zip(run_dir, "to_chatgpt_bundle.zip", include_paths=[probe_master, probe_console])
             add_check(results, "artifact_contract", case_id, "bundle_zip_exists", True, bundle_path.exists())
             with zipfile.ZipFile(bundle_path, "r") as zf:

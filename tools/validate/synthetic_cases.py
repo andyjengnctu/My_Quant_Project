@@ -456,7 +456,7 @@ def get_synthetic_validator_entries():
         _entry(validate_meta_quality_reuses_existing_coverage_artifacts_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py", "tools/validate/main.py")),
         _entry(validate_run_all_preflight_early_failure_dataset_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),
         _entry(validate_run_all_manifest_failure_master_summary_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),
-        _entry(validate_artifact_lifecycle_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py",)),
+        _entry(validate_artifact_lifecycle_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py", "tools/local_regression/run_all.py")),
         _entry(validate_quick_gate_bare_except_guard_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_quick_gate.py",)),
         _entry(validate_quick_gate_output_path_guard_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_quick_gate.py", "core/output_paths.py", "core/log_utils.py")),
         _entry(validate_dataset_prepare_fallback_write_traceability_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),

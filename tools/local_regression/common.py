@@ -25,6 +25,7 @@ DEFAULT_MANIFEST_PATH = LOCAL_REGRESSION_DIR / "manifest.json"
 OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "local_regression"
 REDUCED_DATASET_DIR = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
 LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
+ARTIFACTS_MANIFEST_FILENAME = "artifacts_manifest.json"
 MANIFEST_DEFAULTS: Dict[str, Any] = {
     "benchmark_ticker": "0050",
     "bundle_name": "to_chatgpt_bundle.zip",
@@ -503,8 +504,9 @@ def compute_file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
 
 def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:
     artifacts = []
+    manifest_path = run_dir / ARTIFACTS_MANIFEST_FILENAME
     for path in sorted(run_dir.rglob("*")):
-        if path.is_dir():
+        if path.is_dir() or path == manifest_path:
             continue
         artifacts.append({
             "relative_path": str(path.relative_to(run_dir)).replace("\\", "/"),

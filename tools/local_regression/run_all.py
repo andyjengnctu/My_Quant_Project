@@ -24,6 +24,7 @@ from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMA
 from tools.validate.preflight_env import REQUIREMENTS_PATH, format_preflight_summary, run_preflight
 from tools.local_regression.common import (
     archive_bundle_history,
+    ARTIFACTS_MANIFEST_FILENAME,
     build_artifacts_manifest,
     DATASET_INFO_KEYS,
     LOCAL_REGRESSION_RUN_DIR_ENV,
@@ -298,28 +299,9 @@ def _build_dataset_prepare_placeholder(*, include_dataset: bool, blocked_by: str
     return {"status": "NOT_RUN", "blocked_by": blocked_by}
 
 
-def _write_stable_artifacts_manifest(run_dir: Path, *, max_rounds: int = 6) -> Path:
-    manifest_path = run_dir / "artifacts_manifest.json"
-    if not manifest_path.exists():
-        write_json(manifest_path, {"artifact_count": 0, "artifacts": []})
-
-    for _ in range(max_rounds):
-        write_json(manifest_path, build_artifacts_manifest(run_dir))
-        try:
-            payload = read_json_if_exists(manifest_path)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            break
-
-        self_size = None
-        for item in payload.get("artifacts", []):
-            if item.get("relative_path") == manifest_path.name:
-                try:
-                    self_size = int(item.get("size_bytes", -1))
-                except (TypeError, ValueError):
-                    self_size = None
-                break
-        if self_size == manifest_path.stat().st_size:
-            break
+def _write_stable_artifacts_manifest(run_dir: Path) -> Path:
+    manifest_path = run_dir / ARTIFACTS_MANIFEST_FILENAME
+    write_json(manifest_path, build_artifacts_manifest(run_dir))
     return manifest_path
 
 
