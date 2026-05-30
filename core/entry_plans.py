@@ -307,6 +307,33 @@ def _apply_inherited_shadow_entry_day_state(position, *, t_high):
     return position
 
 
+def _resolve_inherited_shadow_effective_stop_milli(shadow_position):
+    if shadow_position is None:
+        return None
+
+    stop_milli = shadow_position.get('sl_milli')
+    if stop_milli is not None and not pd.isna(stop_milli):
+        try:
+            return int(stop_milli)
+        except (TypeError, ValueError):
+            return None
+
+    stop_price = shadow_position.get('sl')
+    if stop_price is not None and not pd.isna(stop_price):
+        return price_to_milli(stop_price)
+
+    return None
+
+
+def _is_entry_fill_above_inherited_stop(*, buy_price, shadow_position):
+    stop_milli = _resolve_inherited_shadow_effective_stop_milli(shadow_position)
+    if stop_milli is None:
+        return False
+    if buy_price is None or pd.isna(buy_price):
+        return False
+    return price_to_milli(buy_price) > int(stop_milli)
+
+
 # # (AI註: 單一真理來源 - 延續 shadow trade 啟動時，使用與正式進場同源的 fill / stop / target / entry-day pending exit 規則；不再依賴 low<=limit 才能存在)
 def build_counterfactual_shadow_position_from_plan(entry_plan, *, t_open, t_high, t_low, params, ticker=None, security_profile=None, trade_date=None):
     if entry_plan is None:
@@ -478,6 +505,14 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
     result["buy_price"] = buy_price
 
     inherited_shadow_position = entry_plan.get("shadow_position_state")
+    if inherited_shadow_position is not None and not _is_entry_fill_above_inherited_stop(
+        buy_price=buy_price,
+        shadow_position=inherited_shadow_position,
+    ):
+        result["is_worse_than_initial_stop"] = True
+        result["count_as_missed_buy"] = should_count_miss_buy(qty, is_worse_than_initial_stop=True)
+        return result
+
     entry_atr_for_position = None if inherited_shadow_position is not None else entry_plan.get("entry_atr")
     position = build_position_from_entry_fill(
         buy_price=buy_price,

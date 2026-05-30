@@ -598,6 +598,86 @@ def validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case(base
     return results, summary
 
 
+
+def validate_synthetic_inherited_entry_fill_must_be_above_stop_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    params.atr_times_init = 2.0
+    params.atr_times_trail = 1.0
+
+    case_id = "SYNTH_INHERITED_ENTRY_FILL_MUST_BE_ABOVE_STOP"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    candidate_plan = build_normal_candidate_plan(100.0, 5.0, 1_000_000.0, params)
+    shadow_position = {
+        "sl_milli": 90000,
+        "sl": 90.0,
+        "initial_stop_milli": 90000,
+        "initial_stop": 90.0,
+        "trailing_stop_milli": 90000,
+        "trailing_stop": 90.0,
+        "tp_half_milli": 110000,
+        "tp_half": 110.0,
+        "sold_half": False,
+        "highest_high_since_entry_milli": 100000,
+        "highest_high_since_entry": 100.0,
+        "entry_fill_price_milli": 100000,
+        "entry_fill_price": 100.0,
+        "pending_exit_action": None,
+        "pending_exit_trigger_price": float("nan"),
+    }
+
+    blocked_plan = dict(candidate_plan)
+    blocked_plan["shadow_position_state"] = copy.deepcopy(shadow_position)
+    blocked_result = execute_pre_market_entry_plan(
+        entry_plan=blocked_plan,
+        t_open=89.0,
+        t_high=95.0,
+        t_low=88.5,
+        t_close=90.0,
+        t_volume=1000.0,
+        y_close=100.0,
+        params=params,
+        entry_type="reentry",
+    )
+
+    filled_result = execute_pre_market_entry_plan(
+        entry_plan=blocked_plan,
+        t_open=91.0,
+        t_high=96.0,
+        t_low=90.5,
+        t_close=95.0,
+        t_volume=1000.0,
+        y_close=100.0,
+        params=params,
+        entry_type="reentry",
+    )
+
+    normal_result = execute_pre_market_entry_plan(
+        entry_plan=candidate_plan,
+        t_open=89.0,
+        t_high=95.0,
+        t_low=88.5,
+        t_close=90.0,
+        t_volume=1000.0,
+        y_close=100.0,
+        params=params,
+        entry_type="normal",
+    )
+
+    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_fill_at_or_below_stop_is_rejected", False, bool(blocked_result["filled"]))
+    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_rejected_fill_is_labeled_worse_than_stop", True, bool(blocked_result["is_worse_than_initial_stop"]))
+    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_rejected_fill_not_counted_as_missed_buy", False, bool(blocked_result["count_as_missed_buy"]))
+    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_fill_above_stop_is_allowed", True, bool(filled_result["filled"]))
+    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "inherited_allowed_fill_keeps_parent_stop", 90.0, None if filled_result.get("position") is None else float(filled_result["position"]["sl"]))
+    add_check(results, "synthetic_inherited_entry_fill_must_be_above_stop", case_id, "normal_fill_below_limit_sizing_stop_still_allowed", True, bool(normal_result["filled"]))
+
+    summary["blocked_buy_price"] = None if pd.isna(blocked_result["buy_price"]) else float(blocked_result["buy_price"])
+    summary["inherited_stop"] = 90.0
+    summary["allowed_buy_price"] = None if pd.isna(filled_result["buy_price"]) else float(filled_result["buy_price"])
+    return results, summary
+
+
 def validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.5)
     params.atr_times_init = 2.0
