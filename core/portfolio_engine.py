@@ -330,7 +330,7 @@ def _append_portfolio_extended_shadow_level_rows(active_level_rows, active_exten
             'Shadow買進價': shadow_position.get('entry_fill_price'),
             '成交價': None,
             'level_scope': 'extended_shadow',
-            '進場類型': 'extended',
+            '進場類型': str(signal_state.get('source') or 'extended'),
             '買訊日': signal_state.get('signal_date'),
         })
 
@@ -385,12 +385,19 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         representative = _median_candidate_row(group_rows)
         sort_values = sorted(float(row.get("sort_value", 0.0) or 0.0) for row in group_rows)
         median_sort = sort_values[(len(sort_values) - 1) // 2]
+        member_params_by_key = {
+            str(row.get("ensemble_member_key") or "").strip(): row.get("params_obj")
+            for row in group_rows
+            if str(row.get("ensemble_member_key") or "").strip() and row.get("params_obj") is not None
+        }
         representative["ensemble_vote_count"] = int(vote_count)
         representative["ensemble_min_agree"] = int(min_agree)
         representative["ensemble_member_count"] = int(len(member_keys))
         representative["ensemble_median_sort_value"] = float(median_sort)
         representative["sort_value"] = float(median_sort)
         representative["ensemble_member_keys"] = sorted(member_keys)
+        # # (AI註: STOP 後 Re-entry 必須保留原始共識 member 的各自參數；只保存代表 member 會讓 min_agree>1 永遠無法重新形成共識。)
+        representative["ensemble_member_params_by_key"] = member_params_by_key
         aggregated.append(representative)
     active_sort_method = get_buy_sort_method()
     if active_sort_method == BUY_LIMIT_OVERAGE_SORT_METHOD:

@@ -59,3 +59,4 @@
 1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。
 2. `doc/ToDo.md` 與一般使用者註解屬使用者自有備忘／說明，不納入 formal / GPT 最嚴格檢查；但若其文字被正式介面直接讀取，仍視為正式輸出。
 3. 暫時只使用還原價，不考慮 raw。
+4. `doc/FINMIND_API_TOKEN.md` 為使用者本機私有憑證文件；其內容與是否被 `apps/package_zip.py` 收錄，暫時排除於 GPT 與 formal 最嚴格檢查及修正範圍之外。除非使用者另行要求，不得主動修改、移除、遮罩、加入 `.gitignore` 或調整打包器排除規則。

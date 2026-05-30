@@ -88,6 +88,26 @@ def _resolve_position_params(position, fallback_params):
     return position.get('_entry_params_obj') or fallback_params
 
 
+def _iter_reentry_watch_targets(position, fallback_params, active_reentry_watchlists_by_member):
+    if active_reentry_watchlists_by_member is None:
+        yield None, fallback_params
+        return
+
+    member_params_by_key = position.get('_ensemble_member_params_by_key')
+    if isinstance(member_params_by_key, dict) and member_params_by_key:
+        for raw_member_key in sorted(member_params_by_key, key=lambda value: str(value)):
+            member_key = str(raw_member_key or '').strip()
+            if not member_key:
+                continue
+            yield member_key, member_params_by_key.get(raw_member_key) or fallback_params
+        return
+
+    # # (AI註: 舊持倉相容路徑；新版 ensemble 成交會保存全部 member 參數。)
+    member_key = str(position.get('_ensemble_member_key') or '').strip()
+    if member_key:
+        yield member_key, fallback_params
+
+
 def _resolve_position_all_dfs_fast(position, fallback_all_dfs_fast):
     context = position.get('_entry_context') if isinstance(position.get('_entry_context'), dict) else {}
     return context.get('all_dfs_fast') or fallback_all_dfs_fast
@@ -380,15 +400,16 @@ def settle_portfolio_positions(
                 _build_closed_trade_stat(pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=today)
             )
             if 'STOP' in events:
-                watch_state = create_breakout_reentry_watch_state(
-                    pos,
-                    exit_date=today,
-                    params=pos_params,
-                    exit_atr=get_fast_value(fast_df, 'ATR', pos=y_pos),
-                    exit_qty=pre_step_qty,
-                )
-                if watch_state is not None:
-                    member_key = str(pos.get('_ensemble_member_key') or '').strip()
+                for member_key, watch_params in _iter_reentry_watch_targets(pos, pos_params, active_reentry_watchlists_by_member):
+                    watch_state = create_breakout_reentry_watch_state(
+                        pos,
+                        exit_date=today,
+                        params=watch_params,
+                        exit_atr=get_fast_value(fast_df, 'ATR', pos=y_pos),
+                        exit_qty=pre_step_qty,
+                    )
+                    if watch_state is None:
+                        continue
                     if active_reentry_watchlists_by_member is not None and member_key:
                         active_reentry_watchlists_by_member.setdefault(member_key, {})[ticker] = watch_state
                     elif active_reentry_watchlist is not None:

@@ -4,7 +4,7 @@ import tempfile
 
 import pandas as pd
 
-from core.exact_accounting import build_sell_ledger_from_price, calc_initial_risk_total_milli, rate_to_ppm
+from core.exact_accounting import build_buy_ledger_from_price, build_sell_ledger_from_price, calc_initial_risk_total_milli, rate_to_ppm
 from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_entries import cleanup_extended_signals_for_day, execute_reserved_entries_for_day
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
@@ -1117,3 +1117,156 @@ def validate_synthetic_empty_backtest_df_contract_case(base_params):
     add_check(results, "flow", case_id, "empty_df_logs_empty", 0, len(trade_logs))
     add_check(results, "flow", case_id, "empty_df_asset_growth_zero", 0.0, stats["asset_growth"])
     return results, summary
+
+
+def validate_synthetic_ensemble_reentry_consensus_watchlist_case(base_params):
+    from core.breakout_reentry import activate_breakout_reentry_signals_for_day
+    from core.portfolio_engine import _aggregate_ensemble_candidate_rows, _append_portfolio_extended_shadow_level_rows
+    from core.portfolio_exits import settle_portfolio_positions
+
+    case_id = "SYNTH_ENSEMBLE_REENTRY_CONSENSUS_WATCHLIST"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    ticker = "9903"
+
+    def _build_member_params(confirm_atr):
+        params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+        params.use_breakout_reclaim_reentry = True
+        params.breakout_reclaim_confirm_atr = float(confirm_atr)
+        params.breakout_reclaim_window_bars = 20
+        return params
+
+    params_by_key = {
+        "m1": _build_member_params(0.5),
+        "m2": _build_member_params(0.8),
+        "m3": _build_member_params(1.0),
+    }
+    dates = pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"])
+    market_df = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0, 89.0, 96.0, 100.0],
+            "High": [101.0, 101.0, 92.0, 101.0, 102.0],
+            "Low": [99.0, 99.0, 88.0, 95.0, 99.0],
+            "Close": [100.0, 100.0, 90.0, 100.0, 101.0],
+            "Volume": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+            "ATR": [5.0, 5.0, 5.0, 5.0, 5.0],
+            "buy_limit": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "is_setup": [False, False, False, False, False],
+            "ind_sell_signal": [False, False, False, False, False],
+        },
+        index=dates,
+    )
+    all_dfs_fast = {ticker: pack_prepared_stock_data(market_df)}
+    representative_params = params_by_key["m1"]
+    qty = 1000
+    reserved_cost_milli = build_buy_ledger_from_price(100.0, qty, representative_params)["net_buy_total_milli"]
+    candidate_rows = [
+        {
+            "ticker": ticker,
+            "type": "normal",
+            "sort_value": float(idx),
+            "ensemble_member_key": member_key,
+            "params_obj": params_obj,
+            "limit_px": 100.0,
+            "init_sl": 90.0,
+            "init_trail": 82.5,
+            "target_price": 110.0,
+            "entry_atr": 5.0,
+            "qty": qty,
+            "proj_cost_milli": reserved_cost_milli,
+            "today_pos": 1,
+            "yesterday_pos": 0,
+            "ev": 1.0,
+            "is_orderable": True,
+        }
+        for idx, (member_key, params_obj) in enumerate(params_by_key.items(), start=1)
+    ]
+    aggregated_rows = _aggregate_ensemble_candidate_rows(candidate_rows, min_agree=2)
+    aggregated = aggregated_rows[0] if aggregated_rows else {}
+
+    add_check(results, "ensemble_reentry", case_id, "entry_consensus_row_count", 1, len(aggregated_rows))
+    add_check(results, "ensemble_reentry", case_id, "entry_consensus_vote_count", 3, aggregated.get("ensemble_vote_count"))
+    add_check(results, "ensemble_reentry", case_id, "entry_consensus_persists_all_member_params", sorted(params_by_key), sorted((aggregated.get("ensemble_member_params_by_key") or {}).keys()))
+
+    portfolio = {}
+    cash, total_missed_buys = execute_reserved_entries_for_day(
+        portfolio,
+        {},
+        aggregated_rows,
+        set(),
+        all_dfs_fast,
+        dates[1],
+        representative_params,
+        1_000_000.0,
+        1_000_000.0,
+        1_000_000.0,
+        10,
+        [],
+        True,
+        0,
+    )
+    filled_position = portfolio.get(ticker) or {}
+    add_check(results, "ensemble_reentry", case_id, "entry_fill_exists", True, ticker in portfolio)
+    add_check(results, "ensemble_reentry", case_id, "entry_fill_has_no_missed_buy", 0, total_missed_buys)
+    add_check(results, "ensemble_reentry", case_id, "entry_fill_persists_all_member_keys", sorted(params_by_key), sorted(filled_position.get("_ensemble_member_keys") or []))
+    add_check(results, "ensemble_reentry", case_id, "entry_fill_persists_all_member_params", sorted(params_by_key), sorted((filled_position.get("_ensemble_member_params_by_key") or {}).keys()))
+
+    sold_today = set()
+    watchlists_by_member = {}
+    settle_portfolio_positions(
+        portfolio,
+        sold_today,
+        all_dfs_fast,
+        dates[2],
+        representative_params,
+        cash,
+        [],
+        [],
+        True,
+        0,
+        0,
+        0,
+        active_reentry_watchlists_by_member=watchlists_by_member,
+    )
+
+    add_check(results, "ensemble_reentry", case_id, "stop_registers_watchlist_for_every_entry_voter", sorted(params_by_key), sorted(watchlists_by_member))
+    add_check(results, "ensemble_reentry", case_id, "stop_watchlist_ticker_count", 3, sum(1 for watchlist in watchlists_by_member.values() if ticker in watchlist))
+    add_check(
+        results,
+        "ensemble_reentry",
+        case_id,
+        "stop_watchlist_preserves_member_specific_confirm_atr",
+        [0.5, 0.8, 1.0],
+        sorted(round(float(watchlists_by_member[key][ticker]["confirm_atr"]), 3) for key in sorted(watchlists_by_member)),
+    )
+
+    signals_by_member = {}
+    for member_key, params_obj in params_by_key.items():
+        member_signals = {}
+        activate_breakout_reentry_signals_for_day(
+            active_reentry_watchlist=watchlists_by_member.setdefault(member_key, {}),
+            active_extended_signals=member_signals,
+            portfolio=portfolio,
+            sold_today=set(),
+            all_dfs_fast=all_dfs_fast,
+            today=dates[4],
+            params=params_obj,
+        )
+        signals_by_member[member_key] = member_signals
+
+    add_check(results, "ensemble_reentry", case_id, "reclaim_activates_signal_for_every_entry_voter", sorted(params_by_key), sorted(key for key, signals in signals_by_member.items() if ticker in signals))
+    reentry_rows = [
+        {"ticker": ticker, "type": "reentry", "sort_value": float(idx), "ensemble_member_key": member_key, "params_obj": params_by_key[member_key]}
+        for idx, member_key in enumerate(sorted(signals_by_member), start=1)
+        if ticker in signals_by_member[member_key]
+    ]
+    reentry_consensus = _aggregate_ensemble_candidate_rows(reentry_rows, min_agree=2)
+    add_check(results, "ensemble_reentry", case_id, "reentry_can_reform_min_agree_consensus", 1, len(reentry_consensus))
+    add_check(results, "ensemble_reentry", case_id, "reentry_reformed_vote_count", 3, reentry_consensus[0].get("ensemble_vote_count") if reentry_consensus else None)
+
+    active_level_rows = []
+    _append_portfolio_extended_shadow_level_rows(active_level_rows, {ticker: signals_by_member["m1"][ticker]}, portfolio, dates[4])
+    add_check(results, "ensemble_reentry", case_id, "reentry_shadow_level_keeps_reentry_type", "reentry", active_level_rows[0].get("進場類型") if active_level_rows else None)
+    summary["watchlist_member_count"] = len(watchlists_by_member)
+    return results, summary
+

@@ -190,6 +190,8 @@
 | B166 | P2 | 文件 / ARCHITECTURE local_regression meta_quality 檔案樹同步契約 | `doc/ARCHITECTURE.md` 的 Local Regression 檔案樹必須以可機械比對的乾淨 tree entry 列出 `tools/local_regression/run_meta_quality.py`；不得把說明直接拼進檔名字串，避免 shipped file path 與文件樹條目分叉 | DONE | 已補 static document-sync contract，直接釘死 Local Regression 檔案樹需列出乾淨的 `run_meta_quality.py` tree entry、排除把 helper 說明拼進檔名的 malformed line，並保留下方職責段落承接 `meta quality` 說明 | `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md`, `tools/local_regression/run_meta_quality.py` |
 | B167 | P2 | 輸出 / validate runtime 暫存 staging 契約 | validate / synthetic error-path / regression 暫存工件若需落到 repo `outputs/`，必須收斂到既有 `outputs/local_regression/_staging/` 內部 staging；不得另建 `outputs/validate/` 根分類，避免輸出分類、retention 與文件同步再度分叉 | DONE | 已補 static output-path contract，直接比對 `tools/validate/synthetic_error_cases.py`、`tools/validate/synthetic_regression_cases.py`、`tools/local_regression/run_all.py`、`doc/CMD.md` 與 `doc/ARCHITECTURE.md`；釘死 validate runtime 暫存必須走 `outputs/local_regression/_staging/validate_runtime/`，且 staging 清理仍由既有 `local_regression_staging` retention 規則承接；不得回流 `outputs/validate/` 根分類 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_error_cases.py`, `tools/validate/synthetic_regression_cases.py`, `tools/local_regression/run_all.py`, `doc/CMD.md`, `doc/ARCHITECTURE.md` |
 
+| B168 | P0 | 交易規格 / Ensemble Re-entry 共識契約 | ensemble 共識成交後的持倉必須保存所有投票 member 的各自參數；STOP 後必須為每個原始投票 member 建立 reclaim watch state，讓後續 Re-entry 仍能依 `min_agree` 重新形成共識；不得只保留代表 member，否則 `min_agree > 1` 時 Re-entry 會永久失效。Re-entry shadow level 輸出也必須保留 `reentry` 類型，不得誤標成一般 `extended` | DONE | 已補 direct synthetic case，逐層驗證 ensemble candidate aggregation 保存全部 member params、成交持倉承接該 mapping、STOP 後為全部原始投票 member 建立含各自 confirm ATR 的 watch state、reclaim 後可再次聚合成符合 `min_agree` 的 Re-entry 共識，以及 shadow level 輸出維持 `reentry` 類型 | `tools/validate/synthetic_flow_cases.py`, `core/portfolio_engine.py`, `core/portfolio_entries.py`, `core/portfolio_exits.py` |
+
 ### B3. 可隨策略升級調整的測試
 
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
@@ -464,6 +466,7 @@
 | T258 | `validate_optimizer_session_milestone_cache_case` | B52 |
 | T259 | `validate_meta_quality_coverage_threshold_uses_target_scope_case` | B22 |
 | T260 | `validate_signal_utils_unit_case` | B13 |
+| T261 | `validate_synthetic_ensemble_reentry_consensus_watchlist_case` | B168 |
 
 ## G. 逐項收斂紀錄
 
@@ -1275,3 +1278,5 @@
 | 2026-05-02 | B114 | 補齊 chart info formatter、hover snapshot line values、單股 / 投組側欄交易資訊與交易導覽 layout 後重新收斂為 DONE | PARTIAL -> DONE | `tools/trade_analysis/charting.py` |
 | 2026-05-08 | T259 | 新增 meta quality coverage target-scope threshold contract，釘死正式 line / branch threshold 只由 declared coverage targets 計算，raw project totals 僅保留診斷用途 | NEW -> DONE | `validate_meta_quality_coverage_threshold_uses_target_scope_case` |
 | 2026-05-24 | T260 | 補齊 signal_utils unit case 的 DONE/T 摘要映射，避免已註冊 validator 未列入 checklist 正式索引 | NEW -> DONE | `validate_signal_utils_unit_case` |
+| 2026-05-30 | B168 | 補齊 ensemble 共識成交後的多 member Re-entry watchlist 與 shadow 類型契約 | NEW -> DONE | `validate_synthetic_ensemble_reentry_consensus_watchlist_case` |
+| 2026-05-30 | T261 | 新增 ensemble Re-entry 共識 watchlist direct synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_ensemble_reentry_consensus_watchlist_case` |

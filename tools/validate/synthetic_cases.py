@@ -244,6 +244,7 @@ from .synthetic_regression_cases import (
 )
 from .synthetic_flow_cases import (
     validate_synthetic_empty_backtest_df_contract_case,
+    validate_synthetic_ensemble_reentry_consensus_watchlist_case,
     validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case,
     validate_synthetic_inherited_entry_fill_must_be_above_stop_case,
 )
@@ -290,6 +291,7 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_candidates.py", "core/portfolio_entries.py", "core/entry_plans.py")),
         _entry(validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/entry_plans.py", "tools/trade_analysis/entry_flow.py")),
         _entry(validate_synthetic_inherited_entry_fill_must_be_above_stop_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/entry_plans.py", "core/extended_signals.py", "core/portfolio_entries.py")),
+        _entry(validate_synthetic_ensemble_reentry_consensus_watchlist_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_engine.py", "core/portfolio_entries.py", "core/portfolio_exits.py", "core/breakout_reentry.py", "tools/validate/synthetic_flow_cases.py")),
         _entry(validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_candidates.py", "core/extended_signals.py", "core/portfolio_fast_data.py")),
         _entry(validate_synthetic_extended_miss_buy_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/extended_signals.py", "tools/scanner/stock_processor.py")),
         _entry(validate_synthetic_competing_candidates_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_candidates.py", "core/portfolio_entries.py")),

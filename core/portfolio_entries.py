@@ -181,6 +181,13 @@ def execute_reserved_entries_for_day(
             entry_result['position']['_ensemble_vote_count'] = cand.get('ensemble_vote_count')
             entry_result['position']['_ensemble_member_key'] = cand.get('ensemble_member_key')
             entry_result['position']['_ensemble_min_agree'] = cand.get('ensemble_min_agree')
+            ensemble_member_keys = cand.get('ensemble_member_keys')
+            if isinstance(ensemble_member_keys, (list, tuple, set)):
+                entry_result['position']['_ensemble_member_keys'] = sorted({str(key) for key in ensemble_member_keys if str(key).strip()})
+            ensemble_member_params_by_key = cand.get('ensemble_member_params_by_key')
+            if isinstance(ensemble_member_params_by_key, dict):
+                # # (AI註: 持倉需承接本次共識的全部 member 參數，讓 STOP 後各 member 能獨立進入 reclaim watchlist。)
+                entry_result['position']['_ensemble_member_params_by_key'] = dict(ensemble_member_params_by_key)
             if candidate_context:
                 entry_result['position']['_entry_context'] = candidate_context
             portfolio[cand['ticker']] = entry_result['position']
