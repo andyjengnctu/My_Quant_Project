@@ -1,10 +1,9 @@
-import copy
-
 from core.buy_sort import calc_buy_sort_value, sort_candidate_rows
 from core.config import get_buy_sort_method
 from core.exact_accounting import build_buy_ledger_from_price, milli_to_money
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
+    clone_shadow_position,
     build_normal_candidate_plan,
     create_signal_tracking_state,
     is_extended_signal_orderable_for_day,
@@ -119,7 +118,7 @@ def _make_candidate_row(
     if resolved_shadow_position is None and signal_state is not None:
         resolved_shadow_position = (signal_state or {}).get('shadow_position')
     if resolved_shadow_position is not None:
-        row['shadow_position_state'] = copy.deepcopy(resolved_shadow_position)
+        row['shadow_position_state'] = clone_shadow_position(resolved_shadow_position)
     return row
 
 

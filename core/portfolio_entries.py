@@ -1,5 +1,3 @@
-import copy
-
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.exact_accounting import (
     coerce_money_like_to_milli,
@@ -8,6 +6,7 @@ from core.exact_accounting import (
 )
 from core.trade_plans import (
     build_cash_capped_entry_plan,
+    clone_shadow_position,
     entry_notional_meets_minimum,
     execute_pre_market_entry_plan,
     resolve_signal_tracking_params,
@@ -59,7 +58,7 @@ def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
         signal_state = candidate_row.get('signal_state') or {}
         shadow_position_state = signal_state.get('shadow_position')
     if shadow_position_state is not None:
-        plan['shadow_position_state'] = copy.deepcopy(shadow_position_state)
+        plan['shadow_position_state'] = clone_shadow_position(shadow_position_state)
     return plan
 
 

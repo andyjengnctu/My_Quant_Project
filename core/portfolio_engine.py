@@ -54,6 +54,46 @@ from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
 BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS = 64
 _BENCHMARK_PERIOD_STATS_CACHE = OrderedDict()
 _BENCHMARK_PERIOD_STATS_CACHE_LOCK = threading.RLock()
+
+
+def _format_replay_elapsed(seconds):
+    total_seconds = max(0, int(float(seconds or 0.0)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _format_replay_date(today):
+    if hasattr(today, "strftime"):
+        return today.strftime("%Y-%m-%d")
+    return str(today)
+
+
+def _run_portfolio_replay_phase(today, phase, callback, /, *args, **kwargs):
+    try:
+        return callback(*args, **kwargs)
+    except Exception as exc:
+        raise RuntimeError(
+            f"portfolio replay 失敗 | date={_format_replay_date(today)} | "
+            f"phase={phase} | {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _print_slow_ensemble_phase_heartbeat(*, verbose, phase, today, completed, total, started_at):
+    if not verbose or int(total or 0) <= 0:
+        return
+    elapsed = time.perf_counter() - float(started_at)
+    if elapsed < 3.0:
+        return
+    print(
+        f"\033[90m⏳ replay 階段: {_format_replay_date(today)} | "
+        f"phase={phase} | member={int(completed)}/{int(total)} | "
+        f"elapsed={_format_replay_elapsed(elapsed)}...\033[0m",
+        end="\r",
+        flush=True,
+    )
+
+
 def _make_benchmark_period_cache_key(*, benchmark_data, sorted_dates, start_idx):
     if benchmark_data is None or not sorted_dates or start_idx >= len(sorted_dates):
         return None
@@ -396,10 +436,13 @@ def _build_daily_ensemble_candidates(
     initial_capital,
     collect_all_candidates,
     min_agree,
+    verbose=False,
 ):
     all_candidate_rows = []
     all_orderable_rows = []
-    for idx, (member, context) in enumerate(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts), start=1):
+    member_pairs = list(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts))
+    phase_start = time.perf_counter()
+    for idx, (member, context) in enumerate(member_pairs, start=1):
         params_obj = member.get("params_obj") if isinstance(member, dict) else None
         if params_obj is None:
             continue
@@ -427,6 +470,14 @@ def _build_daily_ensemble_candidates(
             all_candidate_rows.append(_annotate_ensemble_candidate(row, member=member, params_obj=params_obj, member_key=member_key, context=context))
         for row in orderable_candidates_today:
             all_orderable_rows.append(_annotate_ensemble_candidate(row, member=member, params_obj=params_obj, member_key=member_key, context=context))
+        _print_slow_ensemble_phase_heartbeat(
+            verbose=verbose,
+            phase="candidate_scan",
+            today=today,
+            completed=idx,
+            total=len(member_pairs),
+            started_at=phase_start,
+        )
 
     candidates = _aggregate_ensemble_candidate_rows(all_candidate_rows, min_agree=min_agree) if collect_all_candidates else []
     orderable = _aggregate_ensemble_candidate_rows(all_orderable_rows, min_agree=min_agree)
@@ -501,8 +552,11 @@ def _cleanup_ensemble_extended_signals_for_day(
     today,
     current_equity_money,
     initial_capital,
+    verbose=False,
 ):
-    for idx, (member, context) in enumerate(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts), start=1):
+    member_pairs = list(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts))
+    phase_start = time.perf_counter()
+    for idx, (member, context) in enumerate(member_pairs, start=1):
         params_obj = member.get("params_obj") if isinstance(member, dict) else None
         if params_obj is None:
             continue
@@ -516,6 +570,14 @@ def _cleanup_ensemble_extended_signals_for_day(
             today=today,
             params=params_obj,
             sizing_capital=sizing_equity,
+        )
+        _print_slow_ensemble_phase_heartbeat(
+            verbose=verbose,
+            phase="extended_signal_cleanup",
+            today=today,
+            completed=idx,
+            total=len(member_pairs),
+            started_at=phase_start,
         )
 
 
@@ -650,6 +712,8 @@ def run_portfolio_timeline(
         and benchmark_period_stats is not None
     )
 
+    replay_progress_start = time.perf_counter()
+    replay_total_days = max(0, len(sorted_dates) - start_idx)
     for i in range(start_idx, len(sorted_dates)):
         t_day_start = time.perf_counter() if profile_timing_enabled else None
         sim_days += 1
@@ -725,15 +789,27 @@ def run_portfolio_timeline(
         current_equity_money = milli_to_money(current_equity)
         cash_money = milli_to_money(cash)
 
-        if verbose and (not is_training) and i % 20 == 0:
+        if verbose and (not is_training) and ((i - start_idx) % 5 == 0):
             exp = ((current_equity_money - cash_money) / current_equity_money) * 100 if current_equity_money > 0 else 0
-            print(f"\033[90m⏳ 推進中: {today.strftime('%Y-%m')} | 資產: {current_equity_money:,.0f} | 水位: {exp:>5.1f}%...\033[0m", end="\r", flush=True)
+            replay_day_number = i - start_idx + 1
+            replay_elapsed = _format_replay_elapsed(time.perf_counter() - replay_progress_start)
+            print(
+                f"\033[90m⏳ 推進中: {_format_replay_date(today)} | "
+                f"日序: {replay_day_number}/{replay_total_days} | "
+                f"資產: {current_equity_money:,.0f} | 水位: {exp:>5.1f}% | "
+                f"elapsed={replay_elapsed}...\033[0m",
+                end="\r",
+                flush=True,
+            )
 
         if has_portfolio_work_today:
             available_cash = cash
             sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, day_params)
             if use_param_ensemble:
-                _activate_ensemble_reentry_signals_for_day(
+                _run_portfolio_replay_phase(
+                    today,
+                    "activate_ensemble_reentry",
+                    _activate_ensemble_reentry_signals_for_day,
                     ensemble_members=day_ensemble_members,
                     ensemble_contexts=day_ensemble_contexts,
                     active_reentry_watchlists_by_member=active_reentry_watchlists_by_member,
@@ -743,7 +819,10 @@ def run_portfolio_timeline(
                     today=today,
                 )
             else:
-                activate_breakout_reentry_signals_for_day(
+                _run_portfolio_replay_phase(
+                    today,
+                    "activate_reentry",
+                    activate_breakout_reentry_signals_for_day,
                     active_reentry_watchlist=active_reentry_watchlist,
                     active_extended_signals=active_extended_signals,
                     portfolio=portfolio,
@@ -770,7 +849,10 @@ def run_portfolio_timeline(
                     has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
                     if has_ensemble_normal_setup:
                         t0 = time.perf_counter() if profile_timing_enabled else None
-                        _track_ensemble_normal_setup_signals_for_day(
+                        _run_portfolio_replay_phase(
+                            today,
+                            "track_ensemble_normal_setup",
+                            _track_ensemble_normal_setup_signals_for_day,
                             ensemble_members=day_ensemble_members,
                             ensemble_contexts=day_ensemble_contexts,
                             active_extended_signals_by_member=active_extended_signals_by_member,
@@ -782,7 +864,10 @@ def run_portfolio_timeline(
                             candidate_scan_sec += time.perf_counter() - t0
                 elif normal_setup_entries_today:
                     t0 = time.perf_counter() if profile_timing_enabled else None
-                    track_normal_setup_signals_for_day(
+                    _run_portfolio_replay_phase(
+                        today,
+                        "track_normal_setup",
+                        track_normal_setup_signals_for_day,
                         normal_setup_entries=normal_setup_entries_today,
                         portfolio=portfolio,
                         sold_today=sold_today,
@@ -799,7 +884,10 @@ def run_portfolio_timeline(
             elif candidate_sources_today:
                 t0 = time.perf_counter() if profile_timing_enabled else None
                 if use_param_ensemble:
-                    candidates_today, orderable_candidates_today, normal_setup_tickers_today = _build_daily_ensemble_candidates(
+                    candidates_today, orderable_candidates_today, normal_setup_tickers_today = _run_portfolio_replay_phase(
+                        today,
+                        "build_daily_ensemble_candidates",
+                        _build_daily_ensemble_candidates,
                         ensemble_members=day_ensemble_members,
                         ensemble_contexts=day_ensemble_contexts,
                         active_extended_signals_by_member=active_extended_signals_by_member,
@@ -810,9 +898,13 @@ def run_portfolio_timeline(
                         initial_capital=initial_capital,
                         collect_all_candidates=replay_counts is not None,
                         min_agree=int(day_ensemble_min_agree or 1),
+                        verbose=bool(verbose and (not is_training)),
                     )
                 else:
-                    candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
+                    candidates_today, orderable_candidates_today, normal_setup_tickers_today = _run_portfolio_replay_phase(
+                        today,
+                        "build_daily_candidates",
+                        build_daily_candidates,
                         normal_setup_index=day_normal_setup_index,
                         active_extended_signals=active_extended_signals,
                         portfolio=portfolio,
@@ -845,7 +937,10 @@ def run_portfolio_timeline(
 
                 if orderable_candidates_today:
                     t0 = time.perf_counter() if profile_timing_enabled else None
-                    cash, normal_trade_count, extended_trade_count = try_rotate_weakest_position(
+                    cash, normal_trade_count, extended_trade_count = _run_portfolio_replay_phase(
+                        today,
+                        "rotate_weakest_position",
+                        try_rotate_weakest_position,
                         portfolio=portfolio,
                         orderable_candidates_today=orderable_candidates_today,
                         max_positions=max_positions,
@@ -869,7 +964,10 @@ def run_portfolio_timeline(
                 before_trade_rows = len(trade_history) if replay_counts is not None else -1
 
             t0 = time.perf_counter() if profile_timing_enabled else None
-            cash, total_missed_sells, normal_trade_count, extended_trade_count = settle_portfolio_positions(
+            cash, total_missed_sells, normal_trade_count, extended_trade_count = _run_portfolio_replay_phase(
+                today,
+                "settle_positions",
+                settle_portfolio_positions,
                 portfolio=portfolio,
                 sold_today=sold_today,
                 all_dfs_fast=day_all_dfs_fast,
@@ -896,7 +994,10 @@ def run_portfolio_timeline(
             )
             if can_try_entries_today:
                 t0 = time.perf_counter() if profile_timing_enabled else None
-                cash, total_missed_buys = execute_reserved_entries_for_day(
+                cash, total_missed_buys = _run_portfolio_replay_phase(
+                    today,
+                    "execute_reserved_entries",
+                    execute_reserved_entries_for_day,
                     portfolio=portfolio,
                     active_extended_signals=active_extended_signals,
                     orderable_candidates_today=orderable_candidates_today,
@@ -917,7 +1018,10 @@ def run_portfolio_timeline(
                     buy_sec += time.perf_counter() - t0
 
             if use_param_ensemble:
-                _cleanup_ensemble_extended_signals_for_day(
+                _run_portfolio_replay_phase(
+                    today,
+                    "cleanup_ensemble_extended_signals",
+                    _cleanup_ensemble_extended_signals_for_day,
                     ensemble_members=day_ensemble_members,
                     ensemble_contexts=day_ensemble_contexts,
                     active_extended_signals_by_member=active_extended_signals_by_member,
@@ -925,9 +1029,13 @@ def run_portfolio_timeline(
                     today=today,
                     current_equity_money=current_equity_money,
                     initial_capital=initial_capital,
+                    verbose=bool(verbose and (not is_training)),
                 )
             else:
-                cleanup_extended_signals_for_day(
+                _run_portfolio_replay_phase(
+                    today,
+                    "cleanup_extended_signals",
+                    cleanup_extended_signals_for_day,
                     active_extended_signals=active_extended_signals,
                     portfolio=portfolio,
                     all_dfs_fast=day_all_dfs_fast,

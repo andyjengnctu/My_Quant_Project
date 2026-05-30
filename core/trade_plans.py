@@ -11,6 +11,7 @@ from core.entry_plans import (
 )
 from core.extended_signals import (
     build_extended_candidate_plan_from_signal,
+    clone_shadow_position,
     build_extended_entry_plan_from_signal,
     build_extended_tbd_candidate_plan_from_state,
     create_extended_tbd_tracking_state,
@@ -46,6 +47,7 @@ __all__ = [
     "create_extended_tbd_tracking_state",
     "update_extended_tbd_shadow_trade_for_bar",
     "build_extended_candidate_plan_from_signal",
+    "clone_shadow_position",
     "build_extended_tbd_candidate_plan_from_state",
     "build_extended_entry_plan_from_signal",
     "evaluate_extended_candidate_eligibility",

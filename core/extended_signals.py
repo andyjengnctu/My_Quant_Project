@@ -1,4 +1,3 @@
-import copy
 import numpy as np
 import pandas as pd
 
@@ -15,6 +14,23 @@ from core.price_utils import (
     is_limit_buy_price_reachable_for_day,
     price_to_milli,
 )
+
+
+def clone_shadow_position(shadow_position):
+    """Clone mutable shadow-trade state without recursively copying read-only metadata.
+
+    Shadow positions are flat accounting states.  The only mutable nested runtime
+    payload is ``_last_exec_contexts``; clone that list explicitly so callers
+    retain isolation without paying the recursive ``deepcopy`` cost in the daily
+    replay hot path.
+    """
+    if shadow_position is None:
+        return None
+    cloned_position = dict(shadow_position)
+    exec_contexts = shadow_position.get("_last_exec_contexts")
+    if exec_contexts is not None:
+        cloned_position["_last_exec_contexts"] = [dict(context) for context in exec_contexts]
+    return cloned_position
 
 
 def _resolve_shadow_position(signal_state):
@@ -110,7 +126,7 @@ def _sync_signal_shadow_fields(signal_state, shadow_position, *, copy_shadow_pos
         signal_state["shadow_position"] = None
         return signal_state
 
-    signal_state["shadow_position"] = copy.deepcopy(shadow_position) if copy_shadow_position else shadow_position
+    signal_state["shadow_position"] = clone_shadow_position(shadow_position) if copy_shadow_position else shadow_position
     signal_state["entry_ref_price"] = shadow_position.get("entry_fill_price", np.nan)
     signal_state["continuation_invalidation_barrier"] = shadow_position.get("sl", np.nan)
     signal_state["continuation_completion_barrier"] = shadow_position.get("tp_half", np.nan)
@@ -192,7 +208,7 @@ def update_extended_tbd_shadow_trade_for_bar(
     from core.position_step import execute_bar_step
 
     resolved_shadow_position = _resolve_shadow_position(tbd_state)
-    shadow_position = copy.deepcopy(resolved_shadow_position) if copy_shadow_position else resolved_shadow_position
+    shadow_position = clone_shadow_position(resolved_shadow_position) if copy_shadow_position else resolved_shadow_position
     if shadow_position is None:
         return tbd_state
 
@@ -323,7 +339,7 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
         "max_qty": signal_state.get("max_qty"),
     }
     if shadow_position is not None:
-        base_plan["shadow_position_state"] = copy.deepcopy(shadow_position)
+        base_plan["shadow_position_state"] = clone_shadow_position(shadow_position)
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
 
@@ -331,7 +347,7 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
 def create_extended_tbd_tracking_state(signal_state, shadow_position):
     if signal_state is None:
         return None
-    cloned_state = copy.deepcopy(signal_state)
+    cloned_state = dict(signal_state)
     return _sync_signal_shadow_fields(cloned_state, shadow_position)
 
 
@@ -374,7 +390,7 @@ def build_extended_tbd_candidate_plan_from_state(tbd_state, sizing_capital, para
     enriched_plan["shadow_entry_price"] = shadow_position.get("entry_fill_price", np.nan)
     enriched_plan["shadow_pending_exit_action"] = shadow_position.get("pending_exit_action")
     enriched_plan["shadow_pending_exit_trigger_price"] = shadow_position.get("pending_exit_trigger_price", np.nan)
-    enriched_plan["shadow_position_state"] = copy.deepcopy(shadow_position)
+    enriched_plan["shadow_position_state"] = clone_shadow_position(shadow_position)
     return enriched_plan
 
 

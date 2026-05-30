@@ -23,6 +23,7 @@ from tools.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_w
 from core.entry_plans import build_position_from_entry_fill
 from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
 from core.runtime_utils import parse_float_strict, parse_int_strict
+from core.log_utils import write_issue_log
 from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
@@ -1959,6 +1960,17 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         error_text = f"{status_prefix}：{type(exc).__name__}: {exc}"
         trace_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         self._append_console_text(f"[{context}]\n{trace_text}\n")
+        log_path = None
+        try:
+            log_path = write_issue_log(
+                "workbench_runtime_error",
+                [f"context={context}", trace_text.rstrip()],
+                log_dir=os.path.join(WORKBENCH_PROJECT_ROOT, "outputs", "workbench"),
+            )
+        except (OSError, ValueError) as log_exc:
+            self._append_console_text(f"[error_log] 寫入失敗：{type(log_exc).__name__}: {log_exc}\n")
+        if log_path:
+            self._append_console_text(f"[error_log] 已寫入：{log_path}\n")
         self._status_var.set(error_text)
         self._notebook.select(self._console_tab)
         if show_dialog:

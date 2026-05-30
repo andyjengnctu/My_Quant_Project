@@ -9,7 +9,7 @@ from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_entries import cleanup_extended_signals_for_day, execute_reserved_entries_for_day
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
 from core.price_utils import calc_half_take_profit_sell_qty
-from core.trade_plans import build_normal_candidate_plan, create_signal_tracking_state, execute_pre_market_entry_plan
+from core.trade_plans import build_normal_candidate_plan, clone_shadow_position, create_signal_tracking_state, execute_pre_market_entry_plan
 from core.position_step import execute_bar_step
 
 from .checks import add_check, add_fail_result, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
@@ -345,6 +345,17 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_sizing_stop_tracks_fixed_counterfactual_entry_ref", 88.0, None if day3_plan is None else float(day3_plan["init_sl"]))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_carries_shadow_state_into_portfolio_entry_seed", True, day3_plan is not None and day3_plan.get("shadow_position_state") is not None)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
+
+    # # (AI註: replay hot path 不得對 ensemble context 做遞迴深拷貝；shadow top-level 與 exec contexts 仍須隔離。)
+    runtime_context = {"all_dfs_fast": object()}
+    shadow_with_runtime_context = dict((active_extended_signals[ticker] or {}).get("shadow_position") or {})
+    shadow_with_runtime_context["_entry_context"] = runtime_context
+    shadow_with_runtime_context["_last_exec_contexts"] = [{"event": "STOP", "qty": 1}]
+    cloned_shadow = clone_shadow_position(shadow_with_runtime_context)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "shadow_clone_separates_top_level_state", True, cloned_shadow is not shadow_with_runtime_context)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "shadow_clone_keeps_large_runtime_context_by_reference", True, cloned_shadow.get("_entry_context") is runtime_context)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "shadow_clone_separates_exec_context_list", True, cloned_shadow.get("_last_exec_contexts") is not shadow_with_runtime_context.get("_last_exec_contexts"))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "shadow_clone_separates_exec_context_rows", True, cloned_shadow.get("_last_exec_contexts", [None])[0] is not shadow_with_runtime_context.get("_last_exec_contexts", [None])[0])
 
     buy_portfolio = {}
     buy_active_extended_signals = {ticker: copy.deepcopy(active_extended_signals[ticker])}

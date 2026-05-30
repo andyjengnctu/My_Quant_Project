@@ -1,10 +1,9 @@
-import copy
 import math
 
 import pandas as pd
 
 from core.exact_accounting import milli_to_price
-from core.extended_signals import create_signal_tracking_state, resolve_signal_tracking_params
+from core.extended_signals import clone_shadow_position, create_signal_tracking_state, resolve_signal_tracking_params
 from core.price_utils import adjust_long_buy_limit
 
 
@@ -82,7 +81,7 @@ def _sync_price_field_from_milli(state, price_field, milli_field):
 def _build_parent_management_shadow(position, *, parent_exit_qty):
     if parent_exit_qty is None or parent_exit_qty <= 0:
         return None
-    shadow_position = copy.deepcopy(position)
+    shadow_position = clone_shadow_position(position)
     shadow_position["qty"] = int(parent_exit_qty)
     shadow_position["initial_qty"] = int(parent_exit_qty)
     shadow_position["pending_exit_action"] = None
@@ -205,7 +204,7 @@ def _copy_reentry_watch_metadata(signal_state, state):
 
     parent_shadow_position = state.get("parent_shadow_position")
     if parent_shadow_position is not None:
-        signal_state["shadow_position"] = copy.deepcopy(parent_shadow_position)
+        signal_state["shadow_position"] = clone_shadow_position(parent_shadow_position)
     return signal_state
 
 
