@@ -16,7 +16,7 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_history_threshold": {"kind": "categorical", "choices": [False]},  # (AI註: 歷史門檻開關搜尋)
     "high_len": {"kind": "int", "low": 60, "high": 350, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 100~300、步長 5)
     "breakout_ema_len": {"kind": "int", "low": 60, "high": 350, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋)
-    "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
+    "atr_len": {"kind": "int", "low": 3, "high": 30},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
     "atr_times_init": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~4.5)
     "atr_times_trail": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 移動停損 ATR 倍數搜尋，預設區間 1.0~4.5)
     "atr_buy_tol": {"kind": "float", "low": 1.0, "high": 4.5, "step": 0.1},  # (AI註: 買點容忍 ATR 倍數搜尋，預設區間 1.0~4.5)
