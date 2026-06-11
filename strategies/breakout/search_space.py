@@ -29,7 +29,7 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "breakout_return_min": {"kind": "float", "low": 0.0, "high": 0.08, "step": 0.005, "enabled_by": "use_breakout_return_filter"},  # (AI註: 突破日收盤相對前收漲幅門檻搜尋)
     "breakout_false_filter_atr_pct_min": {"kind": "float", "low": 0.05, "high": 0.4, "step": 0.05, "enabled_by": "use_breakout_false_filter"},  # (AI註: 假突破濾網 ATR/Close 下限搜尋)
     "breakout_reclaim_window_bars": {"kind": "int", "low": 5, "high": 60, "step": 5, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 觀察窗搜尋)
-    "breakout_reclaim_confirm_atr": {"kind": "float", "low": 0.1, "high": .5, "step": 0.1, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 重新站回本次 STOP line + N ATR 門檻搜尋；需與 schema > 0 契約一致)
+    "breakout_reclaim_confirm_atr": {"kind": "float", "low": 0.1, "high": 2.5, "step": 0.1, "enabled_by": "use_breakout_reclaim_reentry"},  # (AI註: re-entry 重新站回本次 STOP line + N ATR 門檻搜尋；需與 schema > 0 契約一致)
     "min_history_trades": {"kind": "int", "low": 5, "high": 5, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最少交易次數門檻搜尋)
     "min_history_ev": {"kind": "float", "low": -1.0, "high": 0.5, "step": 0.1, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小期望值門檻搜尋)
     "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.75, "step": 0.05, "enabled_by": "use_history_threshold"},  # (AI註: 歷史績效最小勝率門檻搜尋)

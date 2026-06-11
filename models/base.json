@@ -8,23 +8,23 @@
         {
             "member_index": 1,
             "seed": 0,
-            "selected_trial": 2489,
+            "selected_trial": 500,
             "params": {
                 "use_breakout_buy": true,
-                "high_len": 330,
-                "use_breakout_ema_filter": true,
-                "breakout_ema_len": 250,
-                "atr_len": 25,
-                "atr_buy_tol": 3.9,
-                "atr_times_init": 3.4,
-                "atr_times_trail": 4.2,
+                "high_len": 315,
+                "use_breakout_ema_filter": false,
+                "breakout_ema_len": 240,
+                "atr_len": 3,
+                "atr_buy_tol": 2.5,
+                "atr_times_init": 4.3,
+                "atr_times_trail": 4.3,
                 "tp_percent": 0.0,
                 "use_bb": false,
                 "bb_len": 20,
                 "bb_mult": 2.0,
-                "use_kc": false,
-                "kc_len": 20,
-                "kc_mult": 2.0,
+                "use_kc": true,
+                "kc_len": 28,
+                "kc_mult": 1.0,
                 "use_vol": false,
                 "vol_short_len": 5,
                 "vol_long_len": 20,
@@ -35,9 +35,9 @@
                 "breakout_false_filter_atr_pct_min": 0.045,
                 "use_breakout_quality_filter": false,
                 "breakout_quality_filter_id": "breakout_quality_v1",
-                "use_breakout_reclaim_reentry": false,
-                "breakout_reclaim_window_bars": 20,
-                "breakout_reclaim_confirm_atr": 0.8,
+                "use_breakout_reclaim_reentry": true,
+                "breakout_reclaim_window_bars": 55,
+                "breakout_reclaim_confirm_atr": 1.2,
                 "use_history_threshold": false,
                 "min_history_trades": 0,
                 "min_history_ev": -1.0,
@@ -52,11 +52,11 @@
                 "min_entry_notional": 50126.0,
                 "use_compounding": true
             },
-            "score": 3.1860070242262295,
-            "base_score": 3.1860070242262295
+            "score": 1.5528035256917845,
+            "base_score": 1.5528035256917845
         }
     ],
-    "created_at": "2026-05-30T08:53:01.937031+08:00",
+    "created_at": "2026-06-11T01:04:03.251774+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 1,
@@ -115,8 +115,8 @@
         "selected_policy": "base",
         "study_scope": "full",
         "base_only": true,
-        "selected_trial": 2489,
+        "selected_trial": 500,
         "seed": 0,
-        "base_score": 3.1860070242262295
+        "base_score": 1.5528035256917845
     }
 }
