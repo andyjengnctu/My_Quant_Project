@@ -160,8 +160,12 @@ def validate_local_regression_cli_contract_case(_base_params):
     app_smart_downloader = importlib.import_module("apps.smart_downloader")
     export_requirements_lock = importlib.import_module("requirements.export_requirements_lock")
     downloader_main_module = importlib.import_module("tools.downloader.main")
-    from tools.local_regression import run_all, run_chain_checks, run_meta_quality, run_ml_smoke, run_quick_gate
-    from tools.validate import preflight_env
+    run_all = importlib.import_module("tools.local_regression.run_all")
+    run_chain_checks = importlib.import_module("tools.local_regression.run_chain_checks")
+    run_meta_quality = importlib.import_module("tools.local_regression.run_meta_quality")
+    run_ml_smoke = importlib.import_module("tools.local_regression.run_ml_smoke")
+    run_quick_gate = importlib.import_module("tools.local_regression.run_quick_gate")
+    preflight_env = importlib.import_module("tools.validate.preflight_env")
 
     rc, help_text = _capture_stdout(run_all.main, ["tools/local_regression/run_all.py", "--help"])
     add_check(results, "cli_contract", case_id, "run_all_help_rc", 0, rc)
@@ -217,7 +221,7 @@ def validate_run_all_cli_error_usage_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from tools.local_regression import run_all
+    run_all = importlib.import_module("tools.local_regression.run_all")
 
     rc, stderr_text = _capture_stderr(run_all.main, ["tools/local_regression/run_all.py", "--bad"])
     add_check(results, "cli_contract", case_id, "run_all_invalid_flag_main_rc", 2, rc)

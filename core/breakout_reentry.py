@@ -261,7 +261,7 @@ def activate_breakout_reentry_signals_for_day(
     if not active_reentry_watchlist:
         return 0
 
-    from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_security_profile, get_fast_value
+    from core.portfolio_fast_access import get_fast_close, get_fast_dates, get_fast_pos, get_fast_security_profile, get_fast_value
 
     activated = 0
     for ticker in sorted(list(active_reentry_watchlist.keys())):

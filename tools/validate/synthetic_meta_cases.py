@@ -611,9 +611,48 @@ def validate_no_top_level_import_cycles_case(_base_params):
     ]
     add_check(results, "meta_entry_contract", case_id, "project_has_no_top_level_import_cycles", [], violations)
 
+    with tempfile.TemporaryDirectory(prefix="top_level_cycle_contract_") as temp_dir:
+        fixture_root = Path(temp_dir)
+        (fixture_root / "apps").mkdir()
+        (fixture_root / "core").mkdir()
+        (fixture_root / "tools").mkdir()
+        (fixture_root / "core" / "a.py").write_text("from core.b import B\nA = 1\n", encoding="utf-8")
+        (fixture_root / "core" / "b.py").write_text("from core.a import A\nB = 1\n", encoding="utf-8")
+        absolute_cycle_contract = summarize_no_top_level_import_cycles_contract(fixture_root)
+
+        (fixture_root / "core" / "b.py").write_text(
+            "def load_a():\n"
+            "    from core.a import A\n"
+            "    return A\n"
+            "B = 1\n",
+            encoding="utf-8",
+        )
+        lazy_import_contract = summarize_no_top_level_import_cycles_contract(fixture_root)
+
+    absolute_cycle_modules = [item["modules"] for item in absolute_cycle_contract["violations"]]
+    add_check(
+        results,
+        "meta_entry_contract",
+        case_id,
+        "absolute_import_top_level_cycle_fixture_detected",
+        [["core.a", "core.b"]],
+        absolute_cycle_modules,
+    )
+    lazy_cycle_modules = [item["modules"] for item in lazy_import_contract["violations"]]
+    add_check(
+        results,
+        "meta_entry_contract",
+        case_id,
+        "function_local_lazy_import_cycle_fixture_detected",
+        [["core.a", "core.b"]],
+        lazy_cycle_modules,
+    )
+
     summary["module_count"] = contract["module_count"]
     summary["cycle_count"] = len(contract["violations"])
     summary["cycles"] = violations
+    summary["absolute_cycle_fixture_count"] = len(absolute_cycle_contract["violations"])
+    summary["lazy_import_fixture_count"] = len(lazy_import_contract["violations"])
     return results, summary
 
 

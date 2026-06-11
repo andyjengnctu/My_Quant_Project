@@ -251,6 +251,12 @@ def main(argv=None, env=None):
         dashboard_params_section_title = "Rolling OOS 訓練參數"
         dashboard_params_schedule_rows = list(build_params_schedule_rows_from_payload(rolling_payload, fixed_risk=user_fixed_risk))
 
+    replay_period_text = " ~ ".join(
+        str(value)
+        for value in (pf_profile.get("active_replay_start_date"), pf_profile.get("active_replay_end_date"))
+        if value
+    ) or None
+
     print_strategy_dashboard(
         params=dashboard_params, title="績效與風險對比表", mode_display=mode_display, max_pos=user_max_pos,
         trades=trade_count, missed_b=total_missed, missed_s=total_missed_sells,
@@ -270,7 +276,8 @@ def main(argv=None, env=None):
         score_total_r=pf_profile.get("score_total_r", pf_profile.get("single_stock_total_r", 0.0)),
         score_median_r=pf_profile.get("score_median_r", pf_profile.get("single_stock_median_r", 0.0)),
         params_section_title=dashboard_params_section_title,
-        params_schedule_rows=dashboard_params_schedule_rows
+        params_schedule_rows=dashboard_params_schedule_rows,
+        comparison_period_text=replay_period_text,
     )
 
     df_yearly = print_yearly_return_report(

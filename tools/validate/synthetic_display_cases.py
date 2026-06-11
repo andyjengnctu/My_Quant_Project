@@ -92,6 +92,7 @@ def validate_display_reporting_sanity_case(_base_params):
             bm_annual_return_pct=7.89,
             min_full_year_return_pct=5.43,
             bm_min_full_year_return_pct=-2.1,
+            comparison_period_text="2021-01-04~2026-03-02",
         )
     )
 
@@ -128,15 +129,18 @@ def validate_display_reporting_sanity_case(_base_params):
     )
     add_check(results, "display_reporting", case_id, "core_display_reexports_expected_symbols", True, reexport_checks)
     add_check(results, "display_reporting", case_id, "dashboard_contains_title", True, "策略測試儀表板" in dashboard_text)
-    expected_dashboard_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{expected_score_numerator}] | 系統得分:"
+    expected_dashboard_score_header = f"評分模型：[{SCORE_CALC_METHOD}] | 評分分子：[{expected_score_numerator}] | 系統得分："
     add_check(results, "display_reporting", case_id, "dashboard_score_header_separates_model_and_numerator", True, expected_dashboard_score_header in dashboard_text and " / 分子 " not in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_mode_and_positions", True, "模式: 投組模式 | 最大持股: 5 檔" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_trade_split", True, "總交易次數: 12 筆 (正常:9 | 延續:2 | 重進:1) | 年化交易次數: 4.25 次/年" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_missed_counts_and_asset", True, "錯失次數: 買 3 | 賣 1 | 保留後買進成交率: 83.33% | 最終資產: 1,234,567 元" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_avg_exposure", True, "平均資金水位: 62.34 % (最高 88.88 %)" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_mode_and_positions", True, "模式：投組模式 | 最大持股：5 檔" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_replay_period", True, "【回測期間績效對比｜2021-01-04 ~ 2026-03-02】" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_uses_study_model_metric_table", True, "| 本輪候選" in dashboard_text and "| 同期大盤0050" in dashboard_text and "| 差異" in dashboard_text and "V16 尊爵系統" not in dashboard_text and "差異 (Alpha)" not in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_trade_split", True, "12 (正常: 9｜延續: 2｜重進: 1)" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_missed_counts", True, "4 (買: 3｜賣: 1)" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_avg_exposure", True, "平均資金水位" in dashboard_text and "+62.34%" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_return_row", True, "總資產報酬率" in dashboard_text and "+18.76%" in dashboard_text and "+10.11%" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_benchmark_ticker", True, "同期大盤 (0050)" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_contains_ev_row", True, "實戰期望值(EV)" in dashboard_text and "0.72 R" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_benchmark_ticker", True, "同期大盤0050" in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_combines_payoff_and_ev_row", True, "風報比: 期望值" in dashboard_text and "1.85: 0.720R" in dashboard_text and "盈虧風報比" not in dashboard_text and "實戰期望值(EV)" not in dashboard_text)
+    add_check(results, "display_reporting", case_id, "dashboard_contains_final_equity_row", True, "最終資產" in dashboard_text and "1,234,567" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_entry_summary", True, "進場：突破買進 啟用 (突破 123 日新高)" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_base_filter_summary", True, "基礎濾網：布林(BB) 啟用（長21, 寬2.5x）｜阿肯那(KC) 啟用（長34, 寬1.8x）｜均量 啟用（突破日量 > 前21日均量 × 1.8）" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_advanced_filter_summary", True, "進階濾網：漲幅 啟用（突破日漲幅 > 3.5%）｜假突破 關閉｜EMA濾網 啟用" in dashboard_text and "品質模型 關閉" in dashboard_text)

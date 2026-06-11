@@ -1,7 +1,6 @@
 from core.buy_sort import get_buy_sort_title
 from core.config import (
     BUY_SORT_METHOD,
-    EV_CALC_METHOD,
     MAX_PORTFOLIO_MDD_PCT,
     MIN_ANNUAL_TRADES,
     MIN_BUY_FILL_RATE,
@@ -213,44 +212,13 @@ def print_strategy_dashboard(
     params_section_title="訓練參數",
     params_note_lines=None,
     params_schedule_rows=None,
+    comparison_period_text=None,
 ):
-    alpha = sys_ret - bm_ret
-    annual_alpha = annual_return_pct - bm_annual_return_pct
-    mdd_diff = bm_mdd - sys_mdd
-
-    sys_ret_str = f"+{sys_ret:.2f}%" if sys_ret > 0 else f"{sys_ret:.2f}%"
-    bm_ret_str = f"+{bm_ret:.2f}%" if bm_ret > 0 else f"{bm_ret:.2f}%"
-    alpha_str = f"+{alpha:.2f}%" if alpha > 0 else f"{alpha:.2f}%"
-
-    sys_ann_ret_str = f"+{annual_return_pct:.2f}%" if annual_return_pct > 0 else f"{annual_return_pct:.2f}%"
-    bm_ann_ret_str = f"+{bm_annual_return_pct:.2f}%" if bm_annual_return_pct > 0 else f"{bm_annual_return_pct:.2f}%"
-    annual_alpha_str = f"+{annual_alpha:.2f}%" if annual_alpha > 0 else f"{annual_alpha:.2f}%"
-
-    worst_year_alpha = min_full_year_return_pct - bm_min_full_year_return_pct
-    sys_worst_year_str = f"+{min_full_year_return_pct:.2f}%" if min_full_year_return_pct > 0 else f"{min_full_year_return_pct:.2f}%"
-    bm_worst_year_str = f"+{bm_min_full_year_return_pct:.2f}%" if bm_min_full_year_return_pct > 0 else f"{bm_min_full_year_return_pct:.2f}%"
-    worst_year_alpha_str = f"+{worst_year_alpha:.2f}%" if worst_year_alpha > 0 else f"{worst_year_alpha:.2f}%"
-
-    worst_month_alpha = min_month_return_pct - bm_min_month_return_pct
-    sys_worst_month_str = f"+{min_month_return_pct:.2f}%" if min_month_return_pct > 0 else f"{min_month_return_pct:.2f}%"
-    bm_worst_month_str = f"+{bm_min_month_return_pct:.2f}%" if bm_min_month_return_pct > 0 else f"{bm_min_month_return_pct:.2f}%"
-    worst_month_alpha_str = f"+{worst_month_alpha:.2f}%" if worst_month_alpha > 0 else f"{worst_month_alpha:.2f}%"
-
-    worst_quarter_alpha = min_quarter_return_pct - bm_min_quarter_return_pct
-    sys_worst_quarter_str = f"+{min_quarter_return_pct:.2f}%" if min_quarter_return_pct > 0 else f"{min_quarter_return_pct:.2f}%"
-    bm_worst_quarter_str = f"+{bm_min_quarter_return_pct:.2f}%" if bm_min_quarter_return_pct > 0 else f"{bm_min_quarter_return_pct:.2f}%"
-    worst_quarter_alpha_str = f"+{worst_quarter_alpha:.2f}%" if worst_quarter_alpha > 0 else f"{worst_quarter_alpha:.2f}%"
-
-    sys_mdd_str = f"-{abs(sys_mdd):.2f}%"
-    bm_mdd_str = f"-{abs(bm_mdd):.2f}%"
-    mdd_diff_str = f"少跌 {abs(mdd_diff):.2f}%" if mdd_diff > 0 else f"多跌 {abs(mdd_diff):.2f}%"
-
-    sys_romd = calc_plain_romd(sys_ret, sys_mdd)
-    bm_romd = calc_plain_romd(bm_ret, bm_mdd)
-    romd_diff = sys_romd - bm_romd
-    sys_romd_str = f"{sys_romd:.2f}"
-    bm_romd_str = f"{bm_romd:.2f}"
-    romd_diff_str = f"+{romd_diff:.2f}" if romd_diff > 0 else f"{romd_diff:.2f}"
+    normal_trades = trades if normal_trades is None else int(normal_trades)
+    extended_trades = 0 if extended_trades is None else int(extended_trades)
+    reentry_trades = 0 if reentry_trades is None else int(reentry_trades)
+    if int(normal_trades) + int(extended_trades) + int(reentry_trades) != int(trades):
+        extended_trades = max(int(trades) - int(normal_trades) - int(reentry_trades), 0)
 
     final_score = calc_portfolio_score(
         sys_ret,
@@ -265,68 +233,67 @@ def print_strategy_dashboard(
         total_r=portfolio_total_r if score_total_r is None else score_total_r,
         median_r=portfolio_median_r if score_median_r is None else score_median_r,
     )
+    initial_capital = float(get_p(params, "initial_capital", 1_000_000.0))
+    candidate_metrics = {
+        "pf_return": float(sys_ret),
+        "annual_return_pct": float(annual_return_pct),
+        "min_full_year_return_pct": float(min_full_year_return_pct),
+        "min_quarter_return_pct": float(min_quarter_return_pct),
+        "min_month_return_pct": float(min_month_return_pct),
+        "pf_mdd": float(sys_mdd),
+        "r_squared": float(r_sq),
+        "m_win_rate": float(m_win_rate),
+        "win_rate": float(win_rate),
+        "pf_payoff": float(payoff),
+        "pf_ev": float(ev),
+        "pf_trades": int(trades),
+        "normal_trades": int(normal_trades),
+        "extended_trades": int(extended_trades),
+        "reentry_trades": int(reentry_trades),
+        "missed_total": int(missed_b) + int(missed_s),
+        "missed_buys": int(missed_b),
+        "missed_sells": int(missed_s),
+        "annual_trades": float(annual_trades),
+        "reserved_buy_fill_rate": float(reserved_buy_fill_rate),
+        "avg_exposure": float(avg_exp),
+        "final_equity": float(final_eq),
+    }
+    benchmark_metrics = {
+        "pf_return": float(bm_ret),
+        "annual_return_pct": float(bm_annual_return_pct),
+        "min_full_year_return_pct": float(bm_min_full_year_return_pct),
+        "min_quarter_return_pct": float(bm_min_quarter_return_pct),
+        "min_month_return_pct": float(bm_min_month_return_pct),
+        "pf_mdd": float(bm_mdd),
+        "r_squared": float(bm_r_sq),
+        "m_win_rate": float(bm_m_win_rate),
+        "final_equity": initial_capital * (1.0 + float(bm_ret) / 100.0),
+    }
+    rows = build_optimizer_dashboard_metric_rows(
+        candidate_metrics=candidate_metrics,
+        reference_metrics=None,
+        benchmark_metrics=benchmark_metrics,
+    )
 
-    rsq_diff = r_sq - bm_r_sq
-    mwin_diff = m_win_rate - bm_m_win_rate
-    rsq_diff_str = f"+{rsq_diff:.2f}" if rsq_diff > 0 else f"{rsq_diff:.2f}"
-    mwin_diff_str = f"+{mwin_diff:.2f}%" if mwin_diff > 0 else f"{mwin_diff:.2f}%"
-    sys_rsq_str, bm_rsq_str = f"{r_sq:.2f}", f"{bm_r_sq:.2f}"
-    sys_mwin_str, bm_mwin_str = f"{m_win_rate:.2f} %", f"{bm_m_win_rate:.2f} %"
-
-    alpha_color = C_GREEN if alpha > 0 else C_RED
-    annual_alpha_color = C_GREEN if annual_alpha > 0 else C_RED
-    sys_ret_color = C_GREEN if sys_ret > 0 else C_RED
-    mdd_diff_color = C_GREEN if mdd_diff > 0 else C_RED
-    romd_diff_color = C_GREEN if romd_diff > 0 else C_RED
-    rsq_color = C_GREEN if rsq_diff > 0 else C_RED
-    mwin_color = C_GREEN if mwin_diff > 0 else C_RED
-    sys_worst_year_color = C_GREEN if min_full_year_return_pct > 0 else C_RED
-    worst_year_alpha_color = C_GREEN if worst_year_alpha > 0 else C_RED
-    sys_worst_month_color = C_GREEN if min_month_return_pct > 0 else C_RED
-    worst_month_alpha_color = C_GREEN if worst_month_alpha > 0 else C_RED
-    sys_worst_quarter_color = C_GREEN if min_quarter_return_pct > 0 else C_RED
-    worst_quarter_alpha_color = C_GREEN if worst_quarter_alpha > 0 else C_RED
-
-    exp_str = f" (最高 {max_exp:.2f} %)" if max_exp is not None else ""
-    normal_trades = trades if normal_trades is None else int(normal_trades)
-    extended_trades = 0 if extended_trades is None else int(extended_trades)
-    reentry_trades = 0 if reentry_trades is None else int(reentry_trades)
-    if int(normal_trades) + int(extended_trades) + int(reentry_trades) != int(trades):
-        extended_trades = max(int(trades) - int(normal_trades) - int(reentry_trades), 0)
-    trade_split_str = f"{trades} 筆 (正常:{normal_trades} | 延續:{extended_trades} | 重進:{reentry_trades})"
-
-    print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
+    print(f"{C_GRAY}------------------------------------------------------------------------------------------------------------------------{C_RESET}")
     if title:
         print(f"{C_CYAN}{title}{C_RESET}")
-    score_numerator_display = SCORE_NUMERATOR_METHOD
     print(
-        f"🎯 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | "
-        f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
-        f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | "
-        f"評分分子 [{C_YELLOW}{score_numerator_display}{C_RESET}] | "
-        f"系統得分: {C_CYAN}{format_system_score_for_display(final_score, decimals=2)}{C_RESET}"
+        f"{C_CYAN}【全域戰略】{C_RESET} {C_YELLOW}{format_global_strategy_text()}{C_RESET} | "
+        f"模式：{mode_display} | 最大持股：{max_pos} 檔"
     )
-    print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
-    print(f"總交易次數: {trade_split_str} | 年化交易次數: {annual_trades:.2f} 次/年")
-    print(f"錯失次數: 買 {missed_b} | 賣 {missed_s} | 保留後買進成交率: {reserved_buy_fill_rate:.2f}% | 最終資產: {final_eq:,.0f} 元")
-    print(f"平均資金水位: {avg_exp:.2f} %{exp_str}")
+    print(
+        f"{C_CYAN}【評分模式】{C_RESET} 評分模型：[{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | "
+        f"評分分子：[{C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}] | "
+        f"系統得分：{C_CYAN}{format_system_score_for_display(final_score, decimals=2)}{C_RESET}"
+    )
+    print(f"{C_GRAY}------------------------------------------------------------------------------------------------------------------------{C_RESET}")
+    if comparison_period_text:
+        print(f"【回測期間績效對比｜{_normalize_comparison_period_text(comparison_period_text)}】")
+        print(f"{C_GRAY}------------------------------------------------------------------------------------------------------------------------{C_RESET}")
+    print_optimizer_dashboard_metric_table(rows, benchmark_ticker=benchmark_ticker)
 
-    print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    print(_table_row("指標項目", "V16 尊爵系統", f"同期大盤 ({benchmark_ticker})", "差異 (Alpha)"))
-    print(_table_row("總資產報酬率", f"{sys_ret_color}{sys_ret_str}{C_RESET}", bm_ret_str, f"{alpha_color}{alpha_str}{C_RESET}"))
-    print(_table_row("年化報酬率", f"{sys_ret_color}{sys_ann_ret_str}{C_RESET}", bm_ann_ret_str, f"{annual_alpha_color}{annual_alpha_str}{C_RESET}"))
-    print(_table_row("年度最差報酬", f"{sys_worst_year_color}{sys_worst_year_str}{C_RESET}", bm_worst_year_str, f"{worst_year_alpha_color}{worst_year_alpha_str}{C_RESET}"))
-    print(_table_row("季度最差報酬", f"{sys_worst_quarter_color}{sys_worst_quarter_str}{C_RESET}", bm_worst_quarter_str, f"{worst_quarter_alpha_color}{worst_quarter_alpha_str}{C_RESET}"))
-    print(_table_row("月度最差報酬", f"{sys_worst_month_color}{sys_worst_month_str}{C_RESET}", bm_worst_month_str, f"{worst_month_alpha_color}{worst_month_alpha_str}{C_RESET}"))
-    print(_table_row("最大回撤 (MDD)", f"{C_YELLOW}{sys_mdd_str}{C_RESET}", bm_mdd_str, f"{mdd_diff_color}{mdd_diff_str}{C_RESET}"))
-    print(_table_row("報酬回撤比(RoMD)", f"{C_CYAN}{sys_romd_str}{C_RESET}", bm_romd_str, f"{romd_diff_color}{romd_diff_str}{C_RESET}"))
-    print(_table_row("平滑度(Log R²)", sys_rsq_str, bm_rsq_str, f"{rsq_color}{rsq_diff_str}{C_RESET}"))
-    print(_table_row("月度獲利勝率", sys_mwin_str, bm_mwin_str, f"{mwin_color}{mwin_diff_str}{C_RESET}"))
-    print(_table_row("系統實戰勝率", f"{C_CYAN}{win_rate:.2f} %{C_RESET}", "-", "-"))
-    print(_table_row("盈虧風報比", f"{payoff:.2f}", "-", "-"))
-    print(_table_row("實戰期望值(EV)", f"{ev:.2f} R", "-", "-"))
-
-    print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
+    print(f"{C_GRAY}------------------------------------------------------------------------------------------------------------------------{C_RESET}")
     for note_line in (params_note_lines or []):
         print(f"{C_GRAY}{note_line}{C_RESET}")
     _print_training_params_section(
@@ -334,27 +301,11 @@ def print_strategy_dashboard(
         params_schedule_rows=params_schedule_rows,
         params_section_title=params_section_title,
     )
-
-    print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    print("【共用硬門檻】")
-    print(
-        f"交易頻率 : "
-        f"年化交易次數 >= {MIN_ANNUAL_TRADES:>5.2f} 次/年 | "
-        f"保留後買進成交率 >= {MIN_BUY_FILL_RATE:>5.2f}% | "
-        f"完整交易勝率 >= {MIN_TRADE_WIN_RATE:>5.2f}%"
-    )
-    print(
-        f"績效風險 : "
-        f"完整年度最差報酬 >= {MIN_FULL_YEAR_RETURN_PCT:>6.2f}% | "
-        f"最大回撤(MDD) <= {MAX_PORTFOLIO_MDD_PCT:>5.2f}%"
-    )
-    print(
-        f"穩定度   : "
-        f"月度獲利勝率 >= {MIN_MONTHLY_WIN_RATE:>5.2f}% | "
-        f"權益曲線 R² >= {MIN_EQUITY_CURVE_R_SQUARED:>4.2f}"
-    )
-    print(f"{C_CYAN}================================================================================{C_RESET}\n")
-
+    print(f"{C_GRAY}------------------------------------------------------------------------------------------------------------------------{C_RESET}")
+    for idx, line in enumerate(format_hard_gate_lines()):
+        prefix = f"{C_CYAN}【共用硬門檻】{C_RESET} " if idx == 0 else "　　　　　     "
+        print(f"{prefix}{line}")
+    print(f"{C_CYAN}========================================================================================================================{C_RESET}\n")
 
 def _format_pct_plain(value: float) -> str:
     value = float(value)
@@ -400,6 +351,313 @@ def _format_value_with_delta(value: str, delta: str) -> str:
     if delta in ("", "-", None):
         return str(value)
     return f"{value} {delta}"
+
+
+def _normalize_comparison_period_text(value) -> str:
+    text = str(value or "-").strip()
+    if "~" not in text:
+        return text
+    left, right = text.split("~", 1)
+    return f"{left.strip()} ~ {right.strip()}"
+
+
+def format_global_strategy_text() -> str:
+    return f"買入排序 [{get_buy_sort_title(BUY_SORT_METHOD)}]"
+
+
+def format_hard_gate_lines() -> list[str]:
+    return [
+        f"交易頻率：年化交易次數 >= {MIN_ANNUAL_TRADES:.2f} 次/年｜保留後買進成交率 >= {MIN_BUY_FILL_RATE:.2f}%｜完整交易勝率 >= {MIN_TRADE_WIN_RATE:.2f}%",
+        f"績效風險：完整年度最差報酬 >= {MIN_FULL_YEAR_RETURN_PCT:.2f}%｜最大回撤(MDD) <= {MAX_PORTFOLIO_MDD_PCT:.2f}%  穩定度：月度獲利勝率 >= {MIN_MONTHLY_WIN_RATE:.2f}%｜權益曲線 R² >= {MIN_EQUITY_CURVE_R_SQUARED:.2f}",
+    ]
+
+
+def _colorize(text: str, color: str) -> str:
+    if not color:
+        return str(text)
+    return f"{color}{text}{C_RESET}"
+
+
+def _delta_color(value: float) -> str:
+    value = float(value)
+    if value > 0:
+        return C_GREEN
+    if value < 0:
+        return C_RED
+    return ""
+
+
+def _format_metric_pair(left_value: float, right_value: float, *, left_digits: int = 2, right_digits: int = 3, right_unit: str = "R") -> str:
+    return f"{float(left_value):.{left_digits}f}: {float(right_value):.{right_digits}f}{right_unit}"
+
+
+def _format_metric_pair_diff(left_value: float, right_value: float, *, left_digits: int = 2, right_digits: int = 3, right_unit: str = "R") -> str:
+    return f"({float(left_value):+.{left_digits}f}: {float(right_value):+.{right_digits}f}{right_unit})"
+
+
+def _format_split_bucket(total: int, left_label: str, left_value: int, right_label: str, right_value: int, *, third_label: str | None = None, third_value: int | None = None, separator: str = "｜") -> str:
+    total = int(total)
+    left_value = int(left_value)
+    right_value = int(right_value)
+    if third_label is not None and third_value is not None:
+        third_value = int(third_value)
+        if left_value + right_value + third_value != total:
+            right_value = max(total - left_value - third_value, 0)
+    text = f"{total} ({left_label}: {left_value}{separator}{right_label}: {right_value}"
+    if third_label is not None and third_value is not None:
+        text += f"{separator}{third_label}: {third_value}"
+    return text + ")"
+
+
+def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
+    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬", "季度最差報酬", "月度最差報酬"}:
+        return C_GREEN if float(numeric_value) > 0 else C_RED
+    if metric_name == "最大回撤 (MDD)":
+        return C_YELLOW if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
+    return ""
+
+
+def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: float, *, delta_text: str = "", delta_value: float | None = None, use_blue: bool = False, base_color_override: str | None = None) -> str:
+    if base_color_override:
+        rendered = _colorize(base_text, base_color_override)
+    elif use_blue:
+        rendered = _colorize(base_text, C_CYAN)
+    else:
+        rendered = _colorize(base_text, _first_zone_base_color(metric_name, numeric_value))
+    if delta_text in {"", "-", None} or delta_value is None:
+        return rendered
+    return f"{rendered} {_colorize(delta_text, _delta_color(delta_value))}"
+
+
+def _optimizer_romd_metric_label() -> str:
+    return "報酬回撤比 (RoMD)"
+
+
+def build_optimizer_dashboard_metric_rows(*, candidate_metrics: dict, reference_metrics: dict | None, benchmark_metrics: dict | None = None) -> list[dict]:
+    candidate_metrics = dict(candidate_metrics or {})
+    reference_metrics = dict(reference_metrics or {})
+    benchmark_metrics = dict(benchmark_metrics or {})
+
+    comparable_romd_key = "display_romd"
+    candidate_metrics[comparable_romd_key] = calc_plain_romd(candidate_metrics.get("pf_return", 0.0), candidate_metrics.get("pf_mdd", 0.0))
+    if reference_metrics:
+        reference_metrics[comparable_romd_key] = calc_plain_romd(reference_metrics.get("pf_return", 0.0), reference_metrics.get("pf_mdd", 0.0))
+    if benchmark_metrics:
+        benchmark_metrics[comparable_romd_key] = calc_plain_romd(benchmark_metrics.get("pf_return", 0.0), benchmark_metrics.get("pf_mdd", 0.0))
+
+    def champ_value(key, default=None):
+        return reference_metrics.get(key, default)
+
+    def bench_value(key, default=None):
+        return benchmark_metrics.get(key, default)
+
+    rows = []
+
+    def _append_row(name, candidate_text, candidate_numeric, *, reference_text="-", reference_numeric=None, reference_delta_text="", reference_delta_value=None, benchmark_text="-", benchmark_numeric=None, benchmark_delta_text="", benchmark_delta_value=None, use_blue=False, candidate_color_override=None, base_color_override=None):
+        if benchmark_numeric is not None:
+            benchmark_cell = _compose_first_zone_cell(
+                name,
+                benchmark_text,
+                float(benchmark_numeric),
+                use_blue=use_blue,
+                base_color_override=base_color_override,
+            )
+            benchmark_delta_cell = (
+                _colorize(benchmark_delta_text, _delta_color(benchmark_delta_value))
+                if benchmark_delta_text not in {"", "-", None} and benchmark_delta_value is not None
+                else "-"
+            )
+        else:
+            benchmark_cell = str(benchmark_text)
+            benchmark_delta_cell = "-"
+        row = {
+            "name": name,
+            "candidate": _compose_first_zone_cell(name, candidate_text, float(candidate_numeric), use_blue=use_blue, base_color_override=base_color_override) if candidate_numeric is not None else str(candidate_text),
+            "candidate_precolored": candidate_numeric is not None,
+            "reference": _compose_first_zone_cell(name, reference_text, float(reference_numeric), delta_text=reference_delta_text, delta_value=reference_delta_value, use_blue=use_blue, base_color_override=base_color_override) if reference_numeric is not None else str(reference_text),
+            "reference_precolored": reference_numeric is not None,
+            "benchmark": benchmark_cell,
+            "benchmark_precolored": benchmark_numeric is not None,
+            "benchmark_delta": benchmark_delta_cell,
+            "benchmark_delta_precolored": benchmark_delta_cell != "-",
+        }
+        if candidate_color_override is not None:
+            row["candidate"] = _colorize(str(candidate_text), candidate_color_override)
+            row["candidate_precolored"] = True
+        rows.append(row)
+
+    def add_row(name, key, *, kind="pct", candidate_unit=""):
+        candidate_value = candidate_metrics.get(key, 0.0)
+        reference_value_raw = champ_value(key)
+        benchmark_value_raw = bench_value(key)
+        if benchmark_value_raw is None and key.startswith("bm_"):
+            benchmark_value_raw = candidate_metrics.get(key)
+        if kind == "pct":
+            cand_plain = _format_pct_plain(candidate_value)
+            bench_plain = _format_pct_plain(benchmark_value_raw) if benchmark_value_raw is not None else "-"
+            reference_plain = _format_pct_plain(reference_value_raw) if reference_value_raw is not None else "-"
+            bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
+            reference_delta_value = float(candidate_value) - float(reference_value_raw) if reference_value_raw is not None else None
+            bench_delta_text = _format_pct_diff(bench_delta_value) if bench_delta_value is not None else ""
+            reference_delta_text = _format_pct_diff(reference_delta_value) if reference_delta_value is not None else ""
+        elif kind == "mdd":
+            cand_plain = _format_mdd_plain(candidate_value)
+            bench_plain = _format_mdd_plain(benchmark_value_raw) if benchmark_value_raw is not None else "-"
+            reference_plain = _format_mdd_plain(reference_value_raw) if reference_value_raw is not None else "-"
+            bench_delta_value = float(benchmark_value_raw) - float(candidate_value) if benchmark_value_raw is not None else None
+            reference_delta_value = float(reference_value_raw) - float(candidate_value) if reference_value_raw is not None else None
+            bench_delta_text = _format_mdd_diff(candidate_value, benchmark_value_raw) if benchmark_value_raw is not None else ""
+            reference_delta_text = _format_mdd_diff(candidate_value, reference_value_raw) if reference_value_raw is not None else ""
+        elif kind in {"float2", "float3"}:
+            digits = 2 if kind == "float2" else 3
+            cand_plain = f"{float(candidate_value):.{digits}f}{candidate_unit}"
+            bench_plain = f"{float(benchmark_value_raw):.{digits}f}{candidate_unit}" if benchmark_value_raw is not None else "-"
+            reference_plain = f"{float(reference_value_raw):.{digits}f}{candidate_unit}" if reference_value_raw is not None else "-"
+            bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
+            reference_delta_value = float(candidate_value) - float(reference_value_raw) if reference_value_raw is not None else None
+            bench_delta_text = _format_float_diff(bench_delta_value, digits, candidate_unit) if bench_delta_value is not None else ""
+            reference_delta_text = _format_float_diff(reference_delta_value, digits, candidate_unit) if reference_delta_value is not None else ""
+        elif kind == "count_split":
+            cand_plain = _format_split_bucket(
+                candidate_metrics.get("pf_trades", 0),
+                "正常",
+                candidate_metrics.get("normal_trades", 0),
+                "延續",
+                candidate_metrics.get("extended_trades", 0),
+                third_label="重進",
+                third_value=candidate_metrics.get("reentry_trades", 0),
+            )
+            reference_plain = _format_split_bucket(
+                reference_metrics.get("pf_trades", 0),
+                "正常",
+                reference_metrics.get("normal_trades", 0),
+                "延續",
+                reference_metrics.get("extended_trades", 0),
+                third_label="重進",
+                third_value=reference_metrics.get("reentry_trades", 0),
+            ) if reference_metrics else "-"
+            _append_row(name, cand_plain, None, reference_text=reference_plain, reference_numeric=None, benchmark_text="-", benchmark_numeric=None)
+            return
+        elif kind == "missed_split":
+            cand_plain = _format_split_bucket(
+                candidate_metrics.get("missed_total", 0),
+                "買",
+                candidate_metrics.get("missed_buys", 0),
+                "賣",
+                candidate_metrics.get("missed_sells", 0),
+            )
+            reference_plain = _format_split_bucket(
+                reference_metrics.get("missed_total", 0),
+                "買",
+                reference_metrics.get("missed_buys", 0),
+                "賣",
+                reference_metrics.get("missed_sells", 0),
+            ) if reference_metrics else "-"
+            _append_row(name, cand_plain, None, reference_text=reference_plain, reference_numeric=None, benchmark_text="-", benchmark_numeric=None)
+            return
+        elif kind == "float2_nodiff":
+            cand_plain = f"{float(candidate_value):.2f}{candidate_unit}"
+            reference_plain = f"{float(reference_value_raw):.2f}{candidate_unit}" if reference_value_raw is not None else "-"
+            _append_row(name, cand_plain, None, reference_text=reference_plain, reference_numeric=None, benchmark_text="-", benchmark_numeric=None)
+            return
+        elif kind == "money":
+            cand_plain = _format_money(candidate_value)
+            bench_plain = _format_money(benchmark_value_raw) if benchmark_value_raw is not None else "-"
+            reference_plain = _format_money(reference_value_raw) if reference_value_raw is not None else "-"
+            bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
+            reference_delta_value = float(candidate_value) - float(reference_value_raw) if reference_value_raw is not None else None
+            bench_delta_text = _format_money_diff(bench_delta_value) if bench_delta_value is not None else ""
+            reference_delta_text = _format_money_diff(reference_delta_value) if reference_delta_value is not None else ""
+        else:
+            cand_plain = str(candidate_value)
+            bench_plain = str(benchmark_value_raw) if benchmark_value_raw is not None else "-"
+            reference_plain = str(reference_value_raw) if reference_value_raw is not None else "-"
+            bench_delta_value = None
+            reference_delta_value = None
+            bench_delta_text = ""
+            reference_delta_text = ""
+
+        use_blue = name == _optimizer_romd_metric_label()
+        base_color_override = C_CYAN if name == "系統實戰勝率" else None
+        _append_row(
+            name,
+            cand_plain,
+            candidate_value,
+            reference_text=reference_plain,
+            reference_numeric=reference_value_raw,
+            reference_delta_text=reference_delta_text,
+            reference_delta_value=reference_delta_value,
+            benchmark_text=bench_plain,
+            benchmark_numeric=benchmark_value_raw,
+            benchmark_delta_text=bench_delta_text,
+            benchmark_delta_value=bench_delta_value,
+            use_blue=use_blue,
+            base_color_override=base_color_override,
+        )
+
+    add_row("總資產報酬率", "pf_return", kind="pct")
+    add_row("年化報酬率", "annual_return_pct", kind="pct")
+    add_row("年度最差報酬", "min_full_year_return_pct", kind="pct")
+    add_row("季度最差報酬", "min_quarter_return_pct", kind="pct")
+    add_row("月度最差報酬", "min_month_return_pct", kind="pct")
+    add_row(_optimizer_romd_metric_label(), comparable_romd_key, kind="float2")
+    add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
+    add_row("月度獲利勝率", "m_win_rate", kind="pct")
+    add_row("系統實戰勝率", "win_rate", kind="pct")
+
+    candidate_payoff = float(candidate_metrics.get("pf_payoff", 0.0))
+    candidate_ev = float(candidate_metrics.get("pf_ev", 0.0))
+    reference_payoff = champ_value("pf_payoff")
+    reference_ev = champ_value("pf_ev")
+    benchmark_payoff = bench_value("pf_payoff")
+    benchmark_ev = bench_value("pf_ev")
+
+    candidate_combo = _format_metric_pair(candidate_payoff, candidate_ev)
+    if reference_payoff is not None and reference_ev is not None:
+        reference_payoff = float(reference_payoff)
+        reference_ev = float(reference_ev)
+        payoff_diff = candidate_payoff - reference_payoff
+        ev_diff = candidate_ev - reference_ev
+        diff_text = _format_metric_pair_diff(payoff_diff, ev_diff)
+        reference_combo = f"{_format_metric_pair(reference_payoff, reference_ev)} {_colorize(diff_text, _delta_color(ev_diff))}"
+    else:
+        reference_combo = "-"
+    if benchmark_payoff is not None and benchmark_ev is not None:
+        benchmark_payoff = float(benchmark_payoff)
+        benchmark_ev = float(benchmark_ev)
+        payoff_diff = candidate_payoff - benchmark_payoff
+        ev_diff = candidate_ev - benchmark_ev
+        diff_text = _format_metric_pair_diff(payoff_diff, ev_diff)
+        benchmark_combo = f"{_format_metric_pair(benchmark_payoff, benchmark_ev)} {_colorize(diff_text, _delta_color(ev_diff))}"
+    else:
+        benchmark_combo = "-"
+    _append_row("風報比: 期望值", candidate_combo, None, reference_text=reference_combo, reference_numeric=None, benchmark_text=benchmark_combo, benchmark_numeric=None)
+
+    add_row("總交易次數", "pf_trades", kind="count_split")
+    add_row("錯失交易次數", "missed_total", kind="missed_split")
+    add_row("年化交易次數", "annual_trades", kind="float2_nodiff")
+    add_row("保留後買進成交率", "reserved_buy_fill_rate", kind="pct")
+    add_row("平均資金水位", "avg_exposure", kind="pct")
+    add_row("最終資產", "final_equity", kind="money")
+    return rows
+
+
+def print_optimizer_dashboard_metric_table(rows: list[dict], *, benchmark_ticker: str = "0050") -> None:
+    header = ("指標項目", "本輪候選", f"同期大盤{benchmark_ticker}", "差異")
+    rendered_rows = [header]
+    for row in rows:
+        rendered_rows.append(
+            (
+                row["name"],
+                _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
+                _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
+                _render_optimizer_dashboard_cell(row, "benchmark_delta", row["name"]),
+            )
+        )
+    widths = _build_table4_compact_widths(rendered_rows, min_widths=(20, 36, 14, 14))
+    print(_table_row4_compact(*header, *widths))
+    for rendered_row in rendered_rows[1:]:
+        print(_table_row4_compact(*rendered_row, *widths))
 
 
 def _table_row5(c1, c2, c3, c4, c5, w1=20, w2=19, w3=24, w4=18, w5=6):

@@ -135,15 +135,17 @@ def _load_project_module_index(project_root: Path) -> Dict[str, Path]:
 
 
 def _resolve_import_from_module(current_module: str, current_path: Path, module: str | None, level: int) -> str:
+    if level <= 0:
+        return str(module or "")
+
     if current_path.name == "__init__.py":
         package_parts = current_module.split(".") if current_module else []
     else:
         package_parts = current_module.split(".")[:-1] if current_module else []
 
-    if level > 0:
-        trim_count = max(level - 1, 0)
-        if trim_count:
-            package_parts = package_parts[:-trim_count] if trim_count <= len(package_parts) else []
+    trim_count = max(level - 1, 0)
+    if trim_count:
+        package_parts = package_parts[:-trim_count] if trim_count <= len(package_parts) else []
 
     module_parts = module.split(".") if module else []
     resolved_parts = [part for part in [*package_parts, *module_parts] if part]

@@ -27,6 +27,10 @@ from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOO
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report, write_local_regression_summary
+from tools.validate.meta_contracts import load_synthetic_registry_entries_from_source
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 from core.portfolio_fast_data import prep_stock_data_and_trades, build_trade_stats_index
 from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_reference_candidate_qty, calc_entry_price
@@ -3118,14 +3122,12 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from tools.validate import synthetic_cases as synthetic_cases_module
-
     manifest = local_common.load_manifest()
     overall_line_floor = float(manifest["coverage_line_min_percent"])
     overall_branch_floor = float(manifest["coverage_branch_min_percent"])
     critical_line_floor = float(manifest["coverage_critical_line_min_percent"])
     critical_branch_floor = float(manifest["coverage_critical_branch_min_percent"])
-    synthetic_case_count = len(synthetic_cases_module.get_synthetic_validators())
+    synthetic_case_count = len(load_synthetic_registry_entries_from_source(PROJECT_ROOT))
 
     with tempfile.TemporaryDirectory(prefix="meta_quality_reuse_cov_") as temp_dir:
         run_dir = Path(temp_dir)

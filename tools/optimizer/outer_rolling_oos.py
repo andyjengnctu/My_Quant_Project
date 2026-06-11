@@ -8190,7 +8190,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
     log_path = str((task or {}).get("log_path") or "")
 
     def _execute() -> dict:
-        from tools.optimizer.main import build_optimizer_session, configure_optuna_logging, _ensure_study_effective_policy_compatible
+        from tools.optimizer.session_factory import build_optimizer_session, configure_optuna_logging, ensure_study_effective_policy_compatible
         from tools.optimizer.prep import load_all_raw_data
         from tools.optimizer.runtime import create_optimizer_study
         from tools.optimizer.session import close_study_storage
@@ -8304,7 +8304,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             session.profile_recorder.mark_run_started()
             study_started = time.perf_counter()
             study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
-            _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
+            ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
             study_create_sec = max(0.0, time.perf_counter() - study_started)
             seed_context = _seed_progress_context_from_task(task)
             progress = _FoldLogSearchProgress(

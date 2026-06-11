@@ -2209,6 +2209,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             score_median_r=pf_profile.get("score_median_r", pf_profile.get("single_stock_median_r", 0.0)),
             params_section_title=params_section_title,
             params_schedule_rows=rolling_params_schedule_rows,
+            comparison_period_text=replay_range_label,
         )
 
         df_yearly = print_yearly_return_report(
