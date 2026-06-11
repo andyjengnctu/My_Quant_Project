@@ -1802,6 +1802,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "legacy_walk_forward_policy_symbol_rejected", True, invalid_legacy_symbol_rejected)
 
     callbacks_source = Path(optimizer_callbacks.__file__).read_text(encoding="utf-8")
+    static_ensemble_dashboard_source = (project_root / "tools" / "optimizer" / "static_ensemble_dashboard.py").read_text(encoding="utf-8")
     objective_runner_source = (project_root / "tools" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")
     add_check(results, "strategy_contract", case_id, "optimizer_callbacks_imports_pandas_for_oos_year_parsing", True, "import pandas as pd" in callbacks_source)
     add_check(results, "strategy_contract", case_id, "search_train_date_filter_reuses_core_single_source_in_callbacks", True, "from core.walk_forward_policy import filter_search_train_dates" in callbacks_source and "def _filter_search_train_dates" not in callbacks_source)
@@ -1972,10 +1973,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         results,
         "strategy_contract",
         case_id,
-        "optimizer_callbacks_system_score_display_uses_multiplier_formatter",
+        "optimizer_dashboard_system_score_display_uses_multiplier_formatter",
         True,
         "format_system_score_for_display(attrs.get('base_score'" in callbacks_source
-        and "format_system_score_for_display(candidate_train_metrics.get('pf_romd'" in callbacks_source
+        and "format_system_score_for_display(candidate_train_metrics.get('pf_romd'" in static_ensemble_dashboard_source
         and "format_system_score_for_display(trial.value" in callbacks_source,
     )
     add_check(results, "strategy_contract", case_id, "study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
