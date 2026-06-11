@@ -22,6 +22,10 @@ from core.portfolio_param_runtime import (
     build_active_param_ensemble_objects_from_payload,
     build_portfolio_params_signature,
 )
+from core.raw_universe_contract import (
+    coerce_raw_universe_required_min_rows,
+    resolve_raw_universe_required_min_rows,
+)
 from core.walk_forward_policy import load_walk_forward_policy
 from core.portfolio_stats import find_sim_start_idx
 from core.active_param_ensemble import (
@@ -49,7 +53,7 @@ from tools.optimizer.walk_forward import resolve_first_walk_forward_test_boundar
 from .runtime_common import LOAD_PROGRESS_EVERY, OUTPUT_DIR, PROJECT_ROOT, ensure_runtime_dirs, is_insufficient_data_error
 
 PORTFOLIO_DEFAULT_BENCHMARK_TICKER = "0050"
-PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 2
+PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 3
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -175,6 +179,7 @@ def _load_contexts_for_active_schedule(
     verbose=True,
     use_prepared_cache=None,
     write_prepared_cache=None,
+    raw_universe_required_min_rows=None,
 ):
     use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
     raw_context_source = None
@@ -183,6 +188,7 @@ def _load_contexts_for_active_schedule(
             data_dir,
             [record.get("params_obj") for record in schedule_records],
             verbose=verbose,
+            raw_universe_required_min_rows=raw_universe_required_min_rows,
         )
     contexts_by_signature = {}
     contexts_by_effective_date = {}
@@ -208,6 +214,7 @@ def _load_contexts_for_active_schedule(
                     verbose=verbose,
                     use_prepared_cache=use_cache,
                     write_prepared_cache=write_cache,
+                    raw_universe_required_min_rows=raw_universe_required_min_rows,
                 )
             context = dict(context)
             if not context.get("all_pit_stats_index"):
@@ -242,6 +249,7 @@ def _load_contexts_for_active_ensemble_schedule(
     keep_trade_logs=False,
     use_prepared_cache=None,
     write_prepared_cache=None,
+    raw_universe_required_min_rows=None,
 ):
     use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
     all_members = [member for record in schedule_records for member in (record.get("members") or [])]
@@ -251,6 +259,7 @@ def _load_contexts_for_active_ensemble_schedule(
             data_dir,
             [member.get("params_obj") for member in all_members],
             verbose=verbose,
+            raw_universe_required_min_rows=raw_universe_required_min_rows,
         )
     contexts_by_signature = {}
     contexts_by_effective_date = {}
@@ -282,6 +291,7 @@ def _load_contexts_for_active_ensemble_schedule(
                         use_prepared_cache=use_cache,
                         write_prepared_cache=write_cache,
                         include_trade_logs=bool(keep_trade_logs),
+                        raw_universe_required_min_rows=raw_universe_required_min_rows,
                     )
                 contexts_by_signature[signature] = _prepare_context_for_ensemble_replay(
                     context,
@@ -390,7 +400,7 @@ def _build_portfolio_data_signature(csv_inputs):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, include_trade_logs: bool = False):
+def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, include_trade_logs: bool = False, raw_universe_required_min_rows=None):
     profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
     data_sig = _build_portfolio_data_signature(csv_inputs)
     params_sig = build_portfolio_params_signature(params)
@@ -400,6 +410,7 @@ def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, inclu
         "data_signature": data_sig,
         "params_signature": params_sig,
         "include_trade_logs": bool(include_trade_logs),
+        "raw_universe_required_min_rows": coerce_raw_universe_required_min_rows(raw_universe_required_min_rows, allow_none=True),
     }
     combined = json.dumps(combined_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     cache_key = hashlib.sha256(combined.encode("utf-8")).hexdigest()[:24]
@@ -424,7 +435,7 @@ def _load_portfolio_prepared_cache(cache_paths):
     expected_meta = cache_paths["meta"]
     if int(meta.get("schema_version", 0) or 0) != PORTFOLIO_PREP_CACHE_SCHEMA_VERSION:
         return None
-    for key in ("profile_key", "data_signature", "params_signature"):
+    for key in ("profile_key", "data_signature", "params_signature", "include_trade_logs", "raw_universe_required_min_rows"):
         if str(meta.get(key, "")) != str(expected_meta.get(key, "")):
             return None
     try:
@@ -515,7 +526,7 @@ def _resolve_portfolio_prep_workers(raw_data_count: int) -> int:
     return max(1, min(os.cpu_count() or 1, 8, int(raw_data_count)))
 
 
-def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True):
+def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True, raw_universe_required_min_rows=None):
     def vprint(*args, **kwargs):
         if verbose:
             print(*args, **kwargs)
@@ -532,11 +543,14 @@ def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True)
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
     load_issue_lines.extend(duplicate_file_issue_lines)
     total_files = len(csv_inputs)
+    min_rows_needed = _resolve_required_min_rows_for_raw_universe(
+        [params],
+        raw_universe_required_min_rows=raw_universe_required_min_rows,
+    )
 
     for count, (ticker, file_path) in enumerate(csv_inputs, start=1):
         try:
             raw_df = pd.read_csv(file_path)
-            min_rows_needed = get_required_min_rows(params)
 
             if len(raw_df) < min_rows_needed:
                 total_skipped_insufficient += 1
@@ -665,11 +679,25 @@ def _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, *, ve
     }
 
 
-def _build_in_memory_raw_context_source(data_dir, params_list, *, verbose=True):
+def _resolve_required_min_rows_for_raw_universe(params_list, *, raw_universe_required_min_rows=None) -> int:
+    params_objects = [params for params in list(params_list or []) if params is not None]
+    if not params_objects:
+        raise ValueError("raw universe 至少需要一組 params")
+    params_required_min_rows = max(get_required_min_rows(params) for params in params_objects)
+    contract_min_rows = coerce_raw_universe_required_min_rows(raw_universe_required_min_rows, allow_none=True)
+    if contract_min_rows is None:
+        return int(params_required_min_rows)
+    return max(int(params_required_min_rows), int(contract_min_rows))
+
+
+def _build_in_memory_raw_context_source(data_dir, params_list, *, verbose=True, raw_universe_required_min_rows=None):
     params_objects = [params for params in list(params_list or []) if params is not None]
     if not params_objects:
         return None
-    required_min_rows = max(get_required_min_rows(params) for params in params_objects)
+    required_min_rows = _resolve_required_min_rows_for_raw_universe(
+        params_objects,
+        raw_universe_required_min_rows=raw_universe_required_min_rows,
+    )
     raw_data_cache = load_all_raw_data(data_dir, required_min_rows, OUTPUT_DIR, verbose=verbose)
     if not raw_data_cache:
         raise RuntimeError("未能成功載入任何股票資料！")
@@ -719,6 +747,7 @@ def load_portfolio_market_context(
     use_prepared_cache=None,
     write_prepared_cache=None,
     include_trade_logs=None,
+    raw_universe_required_min_rows=None,
 ):
     ensure_runtime_dirs()
     if not data_dir:
@@ -730,13 +759,24 @@ def load_portfolio_market_context(
 
     csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
     if len(csv_inputs) < 30:
-        return _load_portfolio_market_context_sequential(data_dir, params, verbose=verbose)
+        return _load_portfolio_market_context_sequential(
+            data_dir,
+            params,
+            verbose=verbose,
+            raw_universe_required_min_rows=raw_universe_required_min_rows,
+        )
 
     include_trade_logs = _resolve_optional_bool(include_trade_logs, _portfolio_prepared_cache_include_trade_logs())
     use_prepared_cache, write_prepared_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
     cache_paths = None
     if use_prepared_cache or write_prepared_cache:
-        cache_paths = _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, include_trade_logs=include_trade_logs)
+        cache_paths = _build_portfolio_prepared_cache_paths(
+            data_dir,
+            csv_inputs,
+            params,
+            include_trade_logs=include_trade_logs,
+            raw_universe_required_min_rows=raw_universe_required_min_rows,
+        )
     if use_prepared_cache and cache_paths is not None:
         cached_context = _load_portfolio_prepared_cache(cache_paths)
         if cached_context is not None:
@@ -746,7 +786,10 @@ def load_portfolio_market_context(
             cached_context["prep_mode"] = "prepared_cache"
             return cached_context
 
-    required_min_rows = get_required_min_rows(params)
+    required_min_rows = _resolve_required_min_rows_for_raw_universe(
+        [params],
+        raw_universe_required_min_rows=raw_universe_required_min_rows,
+    )
     raw_data_cache = load_all_raw_data(data_dir, required_min_rows, OUTPUT_DIR, verbose=verbose)
     if not raw_data_cache:
         raise RuntimeError("未能成功載入任何股票資料！")
@@ -856,6 +899,7 @@ def run_portfolio_simulation_with_param_schedule(
     write_prepared_cache=None,
 ):
     schedule_records = build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
+    raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(rolling_payload)
     if not schedule_records:
         raise ValueError("rolling OOS active-param schedule 為空")
 
@@ -881,6 +925,7 @@ def run_portfolio_simulation_with_param_schedule(
         verbose=verbose,
         use_prepared_cache=use_prepared_cache,
         write_prepared_cache=write_prepared_cache,
+        raw_universe_required_min_rows=raw_universe_required_min_rows,
     )
     merged_dates = _merge_context_market_dates(contexts_by_effective_date)
     resolved_sorted_dates = _filter_market_dates_by_date_range(
@@ -908,6 +953,7 @@ def run_portfolio_simulation_with_param_schedule(
 
     pf_profile = {
         "param_policy": "active_param_replay",
+        "raw_universe_required_min_rows": raw_universe_required_min_rows,
         "active_param_schedule": [
             {
                 "effective_date": str(record["effective_date_text"]),
@@ -988,6 +1034,7 @@ def run_portfolio_simulation_with_param_ensemble(
     write_prepared_cache=None,
 ):
     schedule_records = build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
+    raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(ensemble_payload)
     if not schedule_records:
         raise ValueError("active-param ensemble schedule 為空")
 
@@ -1030,6 +1077,7 @@ def run_portfolio_simulation_with_param_ensemble(
         keep_trade_logs=return_context,
         use_prepared_cache=use_prepared_cache,
         write_prepared_cache=write_prepared_cache,
+        raw_universe_required_min_rows=raw_universe_required_min_rows,
     )
     merged_dates = _merge_context_market_dates_from_ensemble(contexts_by_effective_date)
     resolved_sorted_dates = _filter_market_dates_by_date_range(
@@ -1059,6 +1107,7 @@ def run_portfolio_simulation_with_param_ensemble(
     replay_end = resolved_end_date if resolved_end_date is not None else pd.Timestamp(resolved_sorted_dates[-1]).normalize()
     pf_profile = {
         "param_policy": "active_param_ensemble_replay",
+        "raw_universe_required_min_rows": raw_universe_required_min_rows,
         "active_param_ensemble": {
             "mode": mode,
             "seed_count": int(policy["seed_count"]),

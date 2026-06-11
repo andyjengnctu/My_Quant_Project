@@ -6,6 +6,7 @@ from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
 from config.training_performance_policy import resolve_optimizer_rolling_parallel_prep_cache_max_items_default
 from tools.optimizer.trial_inputs import _build_process_pool_executor
+from core.raw_universe_contract import coerce_raw_universe_required_min_rows
 from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
 from core.signal_utils import OPTIMIZER_TRUE_RANGE_ATTR, tv_true_range
 
@@ -178,6 +179,7 @@ class OptimizerSession:
         self._full_evaluation_cache = OrderedDict()
         self._full_evaluation_cache_max_items = self._resolve_full_evaluation_cache_max_items()
         self.static_fast_cache = {}
+        self.raw_data_cache_required_min_rows = None
         self.master_dates = set()
         self.sorted_master_dates = []
 
@@ -491,11 +493,13 @@ class OptimizerSession:
         static_fast_cache=None,
         master_dates=None,
         sorted_master_dates=None,
+        required_min_rows=None,
     ):
         self.close_trial_prep_executor()
         self.raw_data_cache = dict(raw_data_cache or {})
         self._precompute_optimizer_true_range()
         self.raw_data_cache_data_dir = data_dir
+        self.raw_data_cache_required_min_rows = coerce_raw_universe_required_min_rows(required_min_rows, allow_none=True)
         if not bool(self._prepared_trial_input_cache_is_shared):
             self._prepared_trial_input_cache.clear()
         self._full_evaluation_cache.clear()
@@ -526,7 +530,7 @@ class OptimizerSession:
             output_dir=self.output_dir,
             verbose=bool(verbose),
         )
-        self.install_raw_data_cache(data_dir, raw_data_cache)
+        self.install_raw_data_cache(data_dir, raw_data_cache, required_min_rows=required_min_rows)
 
     def cache_trial_milestone_inputs(self, trial_number, *, sorted_master_dates=None, all_pit_stats_index=None, all_dfs_fast=None):
         if all_pit_stats_index is None and all_dfs_fast is None:

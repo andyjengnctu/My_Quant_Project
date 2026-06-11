@@ -56,7 +56,8 @@
             "base_score": 1.5528035256917845
         }
     ],
-    "created_at": "2026-06-11T01:04:03.251774+08:00",
+    "raw_universe_required_min_rows": 360,
+    "created_at": "2026-06-12T00:21:53.095101+08:00",
     "random_seed_ensemble": {
         "enabled": true,
         "seed_count": 1,
@@ -95,7 +96,8 @@
             "selection_start_date": "2021-01-01",
             "train_start_date": "2021-01-01",
             "search_train_end_date": "2026-03-02",
-            "latest_data_date": "2026-03-02"
+            "latest_data_date": "2026-03-02",
+            "raw_universe_required_min_rows": 360
         },
         "local_min_review_enabled": false,
         "policy": "base",

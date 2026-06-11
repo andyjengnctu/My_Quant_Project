@@ -35,6 +35,7 @@ from core.walk_forward_policy import (
     normalize_optimizer_study_scope,
 )
 from core.active_param_ensemble import build_static_active_param_ensemble_payload, is_active_param_ensemble_payload
+from core.raw_universe_contract import RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD, resolve_raw_universe_required_min_rows
 from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, generate_random_seed_ensemble, renumber_seed_ensemble_members
 from config.training_policy import (
     DEFAULT_OPTIMIZER_MODEL_MODE,
@@ -566,6 +567,9 @@ def _replay_payload_on_current_trade_window(session, payload: dict, *, selector:
 
     start_date, end_date = _trade_window_from_policy(getattr(session, "walk_forward_policy", {}) or {})
     replay_payload = _payload_for_trade_replay(dict(payload), selector=selector)
+    session_contract_min_rows = resolve_raw_universe_required_min_rows(getattr(session, "walk_forward_policy", {}) or {})
+    if session_contract_min_rows is not None and resolve_raw_universe_required_min_rows(replay_payload) is None:
+        replay_payload[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(session_contract_min_rows)
     initial_capital = _initial_capital_from_payload(replay_payload)
     metrics, _benchmark_metrics, _range_text = _run_static_ensemble_dashboard_replay(
         session,
@@ -1675,6 +1679,7 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
             source="nonrolling_random_seed_ensemble_policy_paramset",
             policy_name=str(policy_name),
         ),
+        raw_universe_required_min_rows=resolve_raw_universe_required_min_rows(walk_forward_policy),
     )
     selection_start = str(walk_forward_policy.get("train_start_date") or f"{int(walk_forward_policy.get('train_start_year', 0) or 0):04d}-01-01")
     selection_end = str(walk_forward_policy.get("search_train_end_date") or f"{int(walk_forward_policy.get('search_train_end_year', 0) or 0):04d}-12-31")
@@ -1780,6 +1785,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
             source="nonrolling_random_seed_ensemble",
             policy_name=str(candidate_selector),
         ),
+        raw_universe_required_min_rows=resolve_raw_universe_required_min_rows(walk_forward_policy),
     )
     policy_paramset_paths, policy_paramset_payloads = _write_static_seed_ensemble_policy_paramsets(
         policy_members_by_policy=dict(policy_members_by_policy or {}),
@@ -2786,6 +2792,7 @@ def main(argv=None, environ=None):
         study_scope=selected_study_scope,
     )
     optimizer_required_min_rows = get_breakout_optimizer_required_min_rows()
+    walk_forward_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
     objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
     session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
     best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
@@ -2859,6 +2866,7 @@ def main(argv=None, environ=None):
             latest_data_date=latest_data_date,
             study_scope=selected_study_scope,
         )
+        walk_forward_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
         session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         session.n_trials = int(requested_trials)

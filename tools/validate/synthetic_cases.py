@@ -238,6 +238,7 @@ from .synthetic_strategy_cases import (
 )
 from .synthetic_regression_cases import (
     validate_optimizer_raw_cache_rerun_consistency_case,
+    validate_optimizer_replay_raw_universe_contract_case,
     validate_run_all_repeatability_case,
     validate_scan_runner_repeatability_case,
     validate_scanner_worker_repeatability_case,
@@ -493,6 +494,7 @@ def get_synthetic_validator_entries():
         _entry(validate_scanner_worker_repeatability_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/scanner/stock_processor.py",)),
         _entry(validate_scan_runner_repeatability_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/scanner/scan_runner.py",)),
         _entry(validate_optimizer_raw_cache_rerun_consistency_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/optimizer/raw_cache.py",)),
+        _entry(validate_optimizer_replay_raw_universe_contract_case, layer="regression_contract", cost_class="medium", impacted_modules=("core/raw_universe_contract.py", "core/active_param_ensemble.py", "tools/portfolio_sim/simulation_runner.py", "tools/optimizer/main.py", "tools/optimizer/outer_rolling_oos.py")),
         _entry(validate_run_all_repeatability_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/local_regression/run_all.py",)),
     ]
 

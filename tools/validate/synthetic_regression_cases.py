@@ -16,8 +16,20 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from core.output_paths import output_dir_path
+from core.active_param_ensemble import build_static_active_param_ensemble_payload
+from core.data_utils import discover_unique_csv_inputs, get_required_min_rows
+from core.params_io import params_to_json_dict
+from core.raw_universe_contract import (
+    RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD,
+    resolve_raw_universe_required_min_rows,
+)
+from core.strategy_params import V16StrategyParams
 
 from tools.optimizer.raw_cache import load_all_raw_data
+from tools.portfolio_sim.simulation_runner import (
+    _build_in_memory_raw_context_source,
+    _build_portfolio_prepared_cache_paths,
+)
 from tools.scanner.stock_processor import process_single_stock
 from tools.validate.scanner_expectations import normalize_scanner_result
 
@@ -163,6 +175,96 @@ def validate_optimizer_raw_cache_rerun_consistency_case(_base_params):
     add_check(results, "synthetic_regression", case_id, "raw_cache_negative_volume_corrected", 0.0, float(second_cache["2330"].loc[pd.Timestamp("2026-01-04"), "Volume"]))
 
     summary["ticker_count"] = len(second_cache)
+    return results, summary
+
+
+def _build_raw_universe_contract_ohlcv_df(row_count: int) -> pd.DataFrame:
+    dates = pd.bdate_range("2024-01-02", periods=int(row_count))
+    rows = []
+    for idx, trade_date in enumerate(dates):
+        base = 100.0 + float(idx) * 0.1
+        rows.append({
+            "Date": trade_date.strftime("%Y-%m-%d"),
+            "Open": base,
+            "High": base + 1.0,
+            "Low": base - 1.0,
+            "Close": base + 0.5,
+            "Volume": 1000 + idx,
+        })
+    return pd.DataFrame(rows)
+
+
+def validate_optimizer_replay_raw_universe_contract_case(_base_params):
+    case_id = "OPTIMIZER_REPLAY_RAW_UNIVERSE_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    params = V16StrategyParams(
+        high_len=20,
+        use_breakout_ema_filter=False,
+        atr_len=3,
+        use_bb=False,
+        use_kc=False,
+        use_vol=False,
+    )
+    selected_required_min_rows = int(get_required_min_rows(params))
+    boundary_rows = int(selected_required_min_rows + 5)
+    contract_min_rows = int(boundary_rows + 5)
+    stable_rows = int(contract_min_rows + 5)
+
+    project_tmp_root = output_dir_path(PROJECT_ROOT, "local_regression") / "_staging" / "validate_runtime" / "_tmp_replay_raw_universe"
+    project_tmp_root.mkdir(parents=True, exist_ok=True)
+
+    with TemporaryDirectory(prefix="v16_replay_universe_", dir=str(project_tmp_root)) as tmp_dir:
+        data_dir = Path(tmp_dir) / "data"
+        output_dir = Path(tmp_dir) / "outputs"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _build_raw_universe_contract_ohlcv_df(stable_rows).to_csv(data_dir / "0050.csv", index=False)
+        _build_raw_universe_contract_ohlcv_df(boundary_rows).to_csv(data_dir / "BOUNDARY.csv", index=False)
+
+        with patch("tools.portfolio_sim.simulation_runner.OUTPUT_DIR", str(output_dir)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                legacy_source = _build_in_memory_raw_context_source(str(data_dir), [params], verbose=False)
+                contracted_source = _build_in_memory_raw_context_source(
+                    str(data_dir),
+                    [params],
+                    verbose=False,
+                    raw_universe_required_min_rows=contract_min_rows,
+                )
+
+            csv_inputs, _ = discover_unique_csv_inputs(str(data_dir))
+            cache_without_contract = _build_portfolio_prepared_cache_paths(str(data_dir), csv_inputs, params)
+            cache_with_contract = _build_portfolio_prepared_cache_paths(
+                str(data_dir),
+                csv_inputs,
+                params,
+                raw_universe_required_min_rows=contract_min_rows,
+            )
+
+    static_payload = build_static_active_param_ensemble_payload(
+        members=[{"seed": 42, "member_index": 1, "params": params_to_json_dict(params)}],
+        raw_universe_required_min_rows=contract_min_rows,
+    )
+    meta_fallback_payload = {"meta": {RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: contract_min_rows}}
+    malformed_contract_rejected = False
+    try:
+        resolve_raw_universe_required_min_rows({RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: contract_min_rows + 0.5})
+    except ValueError:
+        malformed_contract_rejected = True
+
+    add_check(results, "synthetic_regression", case_id, "selected_params_require_shorter_history_than_training_contract", True, selected_required_min_rows < contract_min_rows)
+    add_check(results, "synthetic_regression", case_id, "legacy_replay_can_include_boundary_ticker", ["0050", "BOUNDARY"], sorted(legacy_source["raw_data_cache"].keys()))
+    add_check(results, "synthetic_regression", case_id, "contracted_replay_preserves_training_raw_universe", ["0050"], sorted(contracted_source["raw_data_cache"].keys()))
+    add_check(results, "synthetic_regression", case_id, "static_ensemble_persists_raw_universe_contract", contract_min_rows, resolve_raw_universe_required_min_rows(static_payload))
+    add_check(results, "synthetic_regression", case_id, "meta_fallback_resolves_raw_universe_contract", contract_min_rows, resolve_raw_universe_required_min_rows(meta_fallback_payload))
+    add_check(results, "synthetic_regression", case_id, "prepared_cache_key_includes_raw_universe_contract", True, cache_without_contract["payload_path"] != cache_with_contract["payload_path"])
+    add_check(results, "synthetic_regression", case_id, "fractional_raw_universe_contract_rejected", True, malformed_contract_rejected)
+
+    summary.update({
+        "selected_required_min_rows": selected_required_min_rows,
+        "raw_universe_required_min_rows": contract_min_rows,
+    })
     return results, summary
 
 

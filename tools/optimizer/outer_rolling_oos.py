@@ -72,6 +72,12 @@ from core.portfolio_param_runtime import (
     build_active_param_objects_from_payload,
     build_active_param_ensemble_objects_from_payload,
 )
+from core.raw_universe_contract import (
+    RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD,
+    build_raw_universe_contract_fields as _raw_universe_contract_fields,
+    coerce_raw_universe_required_min_rows,
+    resolve_raw_universe_required_min_rows,
+)
 from core.runtime_utils import choose_inline_progress_message, get_process_pool_executor_kwargs, get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.rolling_oos_params import ROLLING_OOS_PARAM_SET_SCHEMA_TYPE, ROLLING_OOS_USAGE
 from core.seed_ensemble_policy import (
@@ -118,6 +124,7 @@ class OuterRollingConfig:
     last_oos_date: str = ""
     train_window_months: int = OUTER_ROLLING_TRAIN_WINDOW_MONTHS
     oos_horizon_months: int = OUTER_ROLLING_OOS_HORIZON_MONTHS
+    raw_universe_required_min_rows: int | None = None
 
 
 OOS_SCORE_DECIMALS = 2
@@ -3364,6 +3371,7 @@ def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name:
         effective_end=end_text,
         oos_year=int(oos_year),
         policy_name=str(policy_name),
+        raw_universe_required_min_rows=getattr(session, "raw_data_cache_required_min_rows", None),
     )
     result = run_portfolio_simulation_with_param_ensemble(
         str(data_dir),
@@ -3915,7 +3923,7 @@ def _calc_stitched_curve_metrics(stitched: dict, *, benchmark_plain_romd: bool =
     }
 
 
-def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_name: str | None = None, best_finalist: bool = False) -> dict:
+def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_name: str | None = None, best_finalist: bool = False, raw_universe_required_min_rows=None) -> dict:
     params_by_oos_year: dict[str, dict] = {}
     params_by_effective_date: dict[str, dict] = {}
     params_ensemble_by_effective_date: dict[str, list[dict]] = {}
@@ -3956,6 +3964,7 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
         })
     if has_ensemble_members:
         return {
+            **_raw_universe_contract_fields(raw_universe_required_min_rows),
             "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
             "schema_version": 1,
             "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
@@ -3969,6 +3978,7 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
             "folds": fold_entries,
         }
     return {
+        **_raw_universe_contract_fields(raw_universe_required_min_rows),
         "schema_type": ROLLING_OOS_PARAM_SET_SCHEMA_TYPE,
         "schema_version": 1,
         "usage": ROLLING_OOS_USAGE,
@@ -4089,14 +4099,19 @@ def _extract_active_replay_metrics(result) -> dict:
 def _build_active_replay_schedule_records(payload: dict) -> list[dict]:
     if not _active_replay_payload_has_params(payload):
         return []
+    raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(payload)
     if is_active_param_ensemble_payload(payload):
         policy = get_active_param_ensemble_policy(payload)
         records = list(build_active_param_ensemble_objects_from_payload(payload, fixed_risk=None))
         for record in records:
+            record[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = raw_universe_required_min_rows
             record["ensemble_min_agree"] = int(policy.get("min_agree", 1) or 1)
             record["ensemble_seed_count"] = int(policy.get("seed_count", len(record.get("members") or []) or 1) or 1)
         return records
-    return list(build_active_param_objects_from_payload(payload, fixed_risk=None))
+    records = list(build_active_param_objects_from_payload(payload, fixed_risk=None))
+    for record in records:
+        record[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = raw_universe_required_min_rows
+    return records
 
 
 def _row_oos_start_date(row: dict) -> str:
@@ -4250,7 +4265,9 @@ def _load_active_replay_contexts_by_signature(
     static_master_dates = None
     active_prep_workers = None
     if total and not (use_prepared_cache or write_prepared_cache):
-        required_min_rows = max(get_required_min_rows(record["params_obj"]) for record in records)
+        params_required_min_rows = max(get_required_min_rows(record["params_obj"]) for record in records)
+        contract_min_rows = max((int(record.get(RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD) or 0) for record in records), default=0)
+        required_min_rows = max(int(params_required_min_rows), int(contract_min_rows))
         raw_data_cache = load_all_raw_data(data_dir, required_min_rows, output_dir, verbose=False)
         static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
         static_master_dates = set()
@@ -4325,6 +4342,7 @@ def _load_active_replay_contexts_by_signature(
                 verbose=False,
                 use_prepared_cache=use_prepared_cache,
                 write_prepared_cache=write_prepared_cache,
+                raw_universe_required_min_rows=record.get(RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD),
             )
             context = dict(context)
 
@@ -4564,11 +4582,21 @@ def _build_active_replay_chained_oos_summary(
     selection_period_label = _period_label(selection_start_ts, selection_end_ts)
     oos_period_label = _period_label(first_oos_start, last_oos_end)
 
-    payloads = {"best": _build_active_param_replay_payload_from_rows(rows, best_finalist=True)}
+    payloads = {
+        "best": _build_active_param_replay_payload_from_rows(
+            rows,
+            best_finalist=True,
+            raw_universe_required_min_rows=config.raw_universe_required_min_rows,
+        )
+    }
     skipped_chain_policies: dict[str, str] = {}
     for policy_name in CHAIN_POLICY_NAMES:
         if _policy_has_complete_active_schedule(rows, policy_name):
-            payloads[policy_name] = _build_active_param_replay_payload_from_rows(rows, policy_name=policy_name)
+            payloads[policy_name] = _build_active_param_replay_payload_from_rows(
+                rows,
+                policy_name=policy_name,
+                raw_universe_required_min_rows=config.raw_universe_required_min_rows,
+            )
         else:
             skipped_chain_policies[policy_name] = "incomplete_oos_schedule"
     total_elapsed_text = ""
@@ -5547,6 +5575,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
     }
     policy_summary = dict(summary.get(policy_name) or {})
     return {
+        **_raw_universe_contract_fields(config.raw_universe_required_min_rows),
         "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
         "schema_version": 1,
         "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
@@ -7553,12 +7582,13 @@ def _build_members_from_seed_rows_for_best(seed_rows: list[dict]) -> list[dict]:
     return normalize_seed_ensemble_members(members)
 
 
-def _build_single_period_ensemble_payload(*, members: list[dict], effective_start: str, effective_end: str, oos_year: int, policy_name: str | None = None) -> dict:
+def _build_single_period_ensemble_payload(*, members: list[dict], effective_start: str, effective_end: str, oos_year: int, policy_name: str | None = None, raw_universe_required_min_rows=None) -> dict:
     normalized_members = renumber_seed_ensemble_members(members)
     if not normalized_members:
         raise ValueError("rolling seed ensemble 缺少可用 params members")
     params_ensemble_by_effective_date = {str(effective_start): normalized_members}
     return {
+        **_raw_universe_contract_fields(raw_universe_required_min_rows),
         "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
         "schema_version": 1,
         "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
@@ -7589,6 +7619,7 @@ def _evaluate_period_ensemble_members(
     oos_end_date: str,
     max_positions: int,
     enable_rotation: bool,
+    raw_universe_required_min_rows=None,
 ) -> dict:
     from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_ensemble
 
@@ -7597,6 +7628,7 @@ def _evaluate_period_ensemble_members(
         effective_start=str(oos_start_date),
         effective_end=str(oos_end_date),
         oos_year=int(oos_year),
+        raw_universe_required_min_rows=raw_universe_required_min_rows,
     )
     result = run_portfolio_simulation_with_param_ensemble(
         selected_data_dir,
@@ -7623,6 +7655,7 @@ def _build_policy_replay_context(
     oos_end_date: str,
     max_positions: int,
     enable_rotation: bool,
+    raw_universe_required_min_rows=None,
 ) -> dict:
     """Build the single replay context shared by all policies in a fold.
 
@@ -7639,6 +7672,7 @@ def _build_policy_replay_context(
         "oos_end_date": str(oos_end_date),
         "max_positions": int(max_positions),
         "enable_rotation": bool(enable_rotation),
+        RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: coerce_raw_universe_required_min_rows(raw_universe_required_min_rows, allow_none=True),
         "start_year": int(pd.Timestamp(oos_start_date).year),
         "end_year": int(pd.Timestamp(oos_end_date).year),
         "benchmark_ticker": "0050",
@@ -7657,6 +7691,7 @@ def _build_policy_replay_payload_from_members(*, members: list[dict], replay_con
         effective_end=str(replay_context["oos_end_date"]),
         oos_year=int(replay_context["oos_year"]),
         policy_name=str(policy_name or ""),
+        raw_universe_required_min_rows=replay_context.get(RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD),
     )
 
 
@@ -7857,6 +7892,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
         oos_end_date=oos_end_date,
         max_positions=chain_max_positions,
         enable_rotation=chain_enable_rotation,
+        raw_universe_required_min_rows=task.get("optimizer_required_min_rows"),
     )
 
     policy_schedules: dict[str, dict] = {}
@@ -8174,6 +8210,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             last_oos_date=str(config_payload.get("last_oos_date", "")),
             train_window_months=int(config_payload.get("train_window_months", OUTER_ROLLING_TRAIN_WINDOW_MONTHS)),
             oos_horizon_months=int(config_payload.get("oos_horizon_months", OUTER_ROLLING_OOS_HORIZON_MONTHS)),
+            raw_universe_required_min_rows=coerce_raw_universe_required_min_rows(
+                config_payload.get(RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD),
+                allow_none=True,
+            ),
         )
         output_dir = str(task["output_dir"])
         selected_data_dir = str(task["selected_data_dir"])
@@ -8222,6 +8262,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         fold_policy["oos_start_date"] = oos_start_date
         fold_policy["oos_end_date"] = oos_end_date
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
+        fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
         session = build_optimizer_session(walk_forward_policy=fold_policy)
         session.rolling_fold_workers_max = int(fold_workers)
@@ -8602,6 +8643,7 @@ def run_outer_rolling_oos(
     latest_year = None if latest_date is None else int(latest_date.year)
 
     config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, latest_date=latest_date, default_trials=default_trials, timing_mode=bool(timing_mode))
+    config.raw_universe_required_min_rows = int(optimizer_required_min_rows)
     folds = _build_rolling_folds(config)
     fold_count = int(len(folds))
     _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
@@ -8644,6 +8686,7 @@ def run_outer_rolling_oos(
     else:
         shared_load_start = time.perf_counter()
         shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
+        shared_data_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         shared_data_session = build_optimizer_session(walk_forward_policy=shared_data_policy)
         try:
             shared_data_session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
@@ -8672,6 +8715,7 @@ def run_outer_rolling_oos(
             "last_oos_date": str(config.last_oos_date),
             "train_window_months": int(config.train_window_months),
             "oos_horizon_months": int(config.oos_horizon_months),
+            RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
         }
         tasks = []
         for fold_idx, fold in enumerate(folds, start=1):
@@ -8759,6 +8803,7 @@ def run_outer_rolling_oos(
                 "last_oos_date": str(config.last_oos_date),
                 "train_window_months": int(config.train_window_months),
                 "oos_horizon_months": int(config.oos_horizon_months),
+                RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: int(config.raw_universe_required_min_rows),
             }
             task = {
                 "project_root": str(project_root),
@@ -8811,6 +8856,7 @@ def run_outer_rolling_oos(
         fold_policy["oos_start_date"] = str(fold["oos_start_date"])
         fold_policy["oos_end_date"] = str(fold["oos_end_date"])
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
+        fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
         session = build_optimizer_session(walk_forward_policy=fold_policy)
         attach_shared_executor = getattr(session, "attach_shared_trial_prep_executor_holder", None)
@@ -8852,6 +8898,7 @@ def run_outer_rolling_oos(
                 static_fast_cache=shared_raw_context["static_fast_cache"],
                 master_dates=shared_raw_context["master_dates"],
                 sorted_master_dates=shared_raw_context["sorted_master_dates"],
+                required_min_rows=optimizer_required_min_rows,
             )
             install_shared_cache_sec = max(0.0, time.perf_counter() - install_started)
             session.profile_recorder.init_output_files()

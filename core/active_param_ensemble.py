@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
+from core.raw_universe_contract import build_raw_universe_contract_fields
 
 ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE = "optimizer_active_param_ensemble"
 ACTIVE_PARAM_ENSEMBLE_SCHEMA_VERSION = 1
@@ -235,6 +236,7 @@ def build_static_active_param_ensemble_payload(
     selector: str = "static",
     meta: Mapping[str, Any] | None = None,
     created_at: str = "",
+    raw_universe_required_min_rows: int | None = None,
 ) -> dict:
     normalized_members = normalize_seed_ensemble_members(members)
     if not normalized_members:
@@ -247,6 +249,7 @@ def build_static_active_param_ensemble_payload(
         "selector": str(selector),
         "params_ensemble": normalized_members,
     }
+    payload.update(build_raw_universe_contract_fields(raw_universe_required_min_rows))
     if created_at:
         payload["created_at"] = str(created_at)
     if random_seed_ensemble is not None:
