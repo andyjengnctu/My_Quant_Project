@@ -19,6 +19,7 @@ from core.buy_sort import calc_buy_sort_value, sort_candidate_rows
 from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
 from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
+from config.training_policy import OOS_EVALUATION_END_YEAR, STUDY_FULL_END_YEAR
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
@@ -1766,12 +1767,18 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         expected_default_search_train_end_year,
         int(default_policy.get("search_train_end_year", 0)),
     )
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_study_full_end_year", 2022, int(default_policy.get("study_full_end_year", 0)))
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_oos_end_year", 2022, int(default_policy.get("oos_end_year", 0)))
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_derives_oos_end_date", "2022-12-31", str(default_policy.get("oos_end_date") or ""))
+    expected_study_full_end_year = None if STUDY_FULL_END_YEAR is None else int(STUDY_FULL_END_YEAR)
+    expected_study_full_end_date = None if expected_study_full_end_year is None else f"{expected_study_full_end_year:04d}-12-31"
+    expected_oos_end_year = None if OOS_EVALUATION_END_YEAR is None else int(OOS_EVALUATION_END_YEAR)
+    expected_oos_end_date = None if expected_oos_end_year is None else f"{expected_oos_end_year:04d}-12-31"
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_study_full_end_year", expected_study_full_end_year, default_policy.get("study_full_end_year"))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_oos_end_year", expected_oos_end_year, default_policy.get("oos_end_year"))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_derives_oos_end_date", expected_oos_end_date, default_policy.get("oos_end_date"))
 
-    study_full_policy = build_optimizer_runtime_policy(default_policy, "study", latest_data_date="2026-03-02", study_scope="full")
-    add_check(results, "strategy_contract", case_id, "study_full_runtime_respects_configured_end_year", "2022-12-31", str(study_full_policy.get("search_train_end_date") or ""))
+    latest_data_date = "2026-03-02"
+    study_full_policy = build_optimizer_runtime_policy(default_policy, "study", latest_data_date=latest_data_date, study_scope="full")
+    expected_study_full_runtime_end_date = min(value for value in (latest_data_date, expected_study_full_end_date) if value is not None)
+    add_check(results, "strategy_contract", case_id, "study_full_runtime_respects_configured_end_year", expected_study_full_runtime_end_date, study_full_policy.get("search_train_end_date"))
     add_check(results, "strategy_contract", case_id, "study_full_runtime_has_no_oos_end_date", None, study_full_policy.get("oos_end_date"))
 
     study_full_latest_clip_policy = build_optimizer_runtime_policy(
@@ -1785,8 +1792,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     oos_policy = build_optimizer_runtime_policy(default_policy, "oos")
     study_oos_policy = build_optimizer_runtime_policy(default_policy, "study", study_scope="oos")
     trade_policy = build_optimizer_runtime_policy(default_policy, "trade", latest_data_date="2026-03-02")
-    add_check(results, "strategy_contract", case_id, "oos_runtime_respects_configured_end_year", "2022-12-31", str(oos_policy.get("oos_end_date") or ""))
-    add_check(results, "strategy_contract", case_id, "study_oos_runtime_respects_configured_end_year", "2022-12-31", str(study_oos_policy.get("oos_end_date") or ""))
+    add_check(results, "strategy_contract", case_id, "oos_runtime_respects_configured_end_year", expected_oos_end_date, oos_policy.get("oos_end_date"))
+    add_check(results, "strategy_contract", case_id, "study_oos_runtime_respects_configured_end_year", expected_oos_end_date, study_oos_policy.get("oos_end_date"))
     add_check(results, "strategy_contract", case_id, "trade_runtime_drops_oos_end_year", None, trade_policy.get("oos_end_year"))
 
     from tools.optimizer.outer_rolling_oos import _resolve_config as resolve_outer_rolling_config
@@ -1800,7 +1807,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         default_trials=1,
         timing_mode=True,
     )
-    add_check(results, "strategy_contract", case_id, "rolling_oos_default_last_date_respects_configured_end_year", "2022-12-01", str(rolling_config.last_oos_date))
+    latest_oos_month = pd.Timestamp(latest_data_date).normalize().replace(day=1)
+    if expected_oos_end_date is not None:
+        latest_oos_month = min(latest_oos_month, pd.Timestamp(expected_oos_end_date).normalize().replace(day=1))
+    add_check(results, "strategy_contract", case_id, "rolling_oos_default_last_date_respects_configured_end_year", latest_oos_month.strftime("%Y-%m-%d"), str(rolling_config.last_oos_date))
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_override.py"
         tmp_path.write_text(
