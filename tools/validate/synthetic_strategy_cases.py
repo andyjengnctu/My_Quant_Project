@@ -17,7 +17,7 @@ import pandas as pd
 
 from core.buy_sort import calc_buy_sort_value, sort_candidate_rows
 from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
-from core.walk_forward_policy import load_walk_forward_policy
+from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
@@ -1766,6 +1766,41 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         expected_default_search_train_end_year,
         int(default_policy.get("search_train_end_year", 0)),
     )
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_study_full_end_year", 2022, int(default_policy.get("study_full_end_year", 0)))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_oos_end_year", 2022, int(default_policy.get("oos_end_year", 0)))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_derives_oos_end_date", "2022-12-31", str(default_policy.get("oos_end_date") or ""))
+
+    study_full_policy = build_optimizer_runtime_policy(default_policy, "study", latest_data_date="2026-03-02", study_scope="full")
+    add_check(results, "strategy_contract", case_id, "study_full_runtime_respects_configured_end_year", "2022-12-31", str(study_full_policy.get("search_train_end_date") or ""))
+    add_check(results, "strategy_contract", case_id, "study_full_runtime_has_no_oos_end_date", None, study_full_policy.get("oos_end_date"))
+
+    study_full_latest_clip_policy = build_optimizer_runtime_policy(
+        {**default_policy, "study_full_end_year": 2028},
+        "study",
+        latest_data_date="2026-03-02",
+        study_scope="full",
+    )
+    add_check(results, "strategy_contract", case_id, "study_full_runtime_clips_future_end_year_to_latest_data", "2026-03-02", str(study_full_latest_clip_policy.get("search_train_end_date") or ""))
+
+    oos_policy = build_optimizer_runtime_policy(default_policy, "oos")
+    study_oos_policy = build_optimizer_runtime_policy(default_policy, "study", study_scope="oos")
+    trade_policy = build_optimizer_runtime_policy(default_policy, "trade", latest_data_date="2026-03-02")
+    add_check(results, "strategy_contract", case_id, "oos_runtime_respects_configured_end_year", "2022-12-31", str(oos_policy.get("oos_end_date") or ""))
+    add_check(results, "strategy_contract", case_id, "study_oos_runtime_respects_configured_end_year", "2022-12-31", str(study_oos_policy.get("oos_end_date") or ""))
+    add_check(results, "strategy_contract", case_id, "trade_runtime_drops_oos_end_year", None, trade_policy.get("oos_end_year"))
+
+    from tools.optimizer.outer_rolling_oos import _resolve_config as resolve_outer_rolling_config
+
+    rolling_config = resolve_outer_rolling_config(
+        ["optimizer"],
+        {},
+        base_policy=default_policy,
+        latest_year=2026,
+        latest_date="2026-03-02",
+        default_trials=1,
+        timing_mode=True,
+    )
+    add_check(results, "strategy_contract", case_id, "rolling_oos_default_last_date_respects_configured_end_year", "2022-12-01", str(rolling_config.last_oos_date))
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_override.py"
         tmp_path.write_text(
@@ -1789,6 +1824,26 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)},
         )
     add_check(results, "strategy_contract", case_id, "json_override_policy_still_supported", 2010, int(json_override_policy.get("search_train_end_year", 0)))
+    add_check(results, "strategy_contract", case_id, "external_override_without_oos_scope_drops_default_oos_end_date", None, json_override_policy.get("oos_end_date"))
+
+    env_oos_end_policy = load_walk_forward_policy(str(project_root), environ={"V16_WF_OOS_END_YEAR": "2024"})
+    add_check(results, "strategy_contract", case_id, "inline_oos_end_year_override_is_supported", "2024-12-31", str(env_oos_end_policy.get("oos_end_date") or ""))
+    env_oos_end_date_policy = load_walk_forward_policy(str(project_root), environ={"V16_WF_OOS_END_DATE": "2024-06-30"})
+    add_check(results, "strategy_contract", case_id, "inline_oos_end_date_override_takes_precedence_over_default_year", "2024-06-30", str(env_oos_end_date_policy.get("oos_end_date") or ""))
+
+    try:
+        load_walk_forward_policy(str(project_root), environ={"V16_WF_OOS_END_YEAR": "2024", "V16_WF_OOS_END_DATE": "2025-06-30"})
+        conflicting_oos_end_override_rejected = False
+    except ValueError as exc:
+        conflicting_oos_end_override_rejected = "oos_end_year" in str(exc)
+    add_check(results, "strategy_contract", case_id, "conflicting_explicit_oos_end_year_and_date_rejected", True, conflicting_oos_end_override_rejected)
+
+    try:
+        build_optimizer_runtime_policy({**default_policy, "study_full_start_year": 2023, "study_full_end_year": 2022}, "study", latest_data_date="2026-03-02", study_scope="full")
+        invalid_study_full_range_rejected = False
+    except ValueError as exc:
+        invalid_study_full_range_rejected = "study_full_end_year" in str(exc)
+    add_check(results, "strategy_contract", case_id, "study_full_reverse_year_range_rejected", True, invalid_study_full_range_rejected)
 
 
     with TemporaryDirectory() as tmp_dir:

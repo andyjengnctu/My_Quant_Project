@@ -2,7 +2,7 @@ import os
 from core.seed_ensemble_policy import resolve_seed_ensemble_parallel_backend, resolve_seed_ensemble_parallel_workers
 
 # OPTIMIZER_ROLLING_FOLD_WORKERS:
-OPTIMIZER_ROLLING_FOLD_WORKERS = 1 # "fold_count" 使用 fold 總數; # 正整數 = 固定 rolling fold process 數
+OPTIMIZER_ROLLING_FOLD_WORKERS = 6 # "fold_count" 使用 fold 總數; # 正整數 = 固定 rolling fold process 數
 OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0 
 OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024 
 

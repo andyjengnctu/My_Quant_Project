@@ -1783,6 +1783,9 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     first_oos_date_default = pd.Timestamp(year=first_oos_year_default, month=1, day=1)
     latest_ts = pd.Timestamp(latest_date).normalize() if latest_date is not None else pd.Timestamp(year=int(latest_year or first_oos_year_default), month=1, day=1)
     last_oos_date_default = _month_start(latest_ts)
+    configured_oos_end_date = str(base_policy.get("oos_end_date") or "").strip()
+    if configured_oos_end_date:
+        last_oos_date_default = min(last_oos_date_default, _month_start(pd.Timestamp(configured_oos_end_date).normalize()))
     trials_default = int(
         default_trials
         if int(default_trials or 0) > 0

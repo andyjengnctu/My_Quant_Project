@@ -54,8 +54,8 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0 # None = 由 optimizer 搜尋 tp_percent; 0.0 =
 
 # Trade mode 實戰參數輸出與 promote 設定。selector 名稱沿用 rolling/OOS policy：
 # base / local / retention / base_retention_gt_0_0 / base_retention_gt_0_2 / base_retention_gt_0_4 / base_retention_gt_0_6 / base_retention_gt_0_8 / base_retention_gt_min
-TRADE_MODE_CANDIDATE_SELECTOR = 'base_retention_gt_0_0'
-TRADE_MODE_RUN_BEST_SELECTOR = 'base_retention_gt_0_0'
+TRADE_MODE_CANDIDATE_SELECTOR = 'base_finalists_agree'
+TRADE_MODE_RUN_BEST_SELECTOR = 'base_finalists_agree'
 TRADE_MODE_AUTO_PROMOTE_RUN_BEST = True
 TRADE_PROMOTE_MIN_SCORE_DELTA = 0.10
 TRADE_PROMOTE_ON_POLICY_MISMATCH = 'candidate_only'
@@ -63,13 +63,13 @@ TRADE_PROMOTE_ON_POLICY_MISMATCH = 'candidate_only'
 # optimizer 指標輸出開關。False 會停用該指標的表格、replay 與 paramset 輸出。
 OPTIMIZER_POLICY_INDICATOR_ENABLED = {
     "base": True,
-    "base_retention_gt_0_0": True,
-    "base_retention_gt_min": True,
+    "base_retention_gt_0_0": False,
+    "base_retention_gt_min": False,
     "base_finalists_agree": True,
-    "local": True,
-    "local_finalists_agree": True,
-    "retention_finalists_agree": True,
-    "retention": True,
+    "local": False,
+    "local_finalists_agree": False,
+    "retention_finalists_agree": False,
+    "retention": False,
 }
 
 # ============================== 區間/次數 ====================================
@@ -79,7 +79,9 @@ OPTIMIZER_POLICY_INDICATOR_ENABLED = {
 # oos = 單一 fold OOS validation。rolling OOS = 多 fold OOS validation。
 DEFAULT_OPTIMIZER_MODEL_MODE = 'trade'
 STUDY_FULL_START_YEAR = 2021
+STUDY_FULL_END_YEAR = 2022  # None = 使用最新資料日
 OOS_EVALUATION_START_YEAR = 2021
+OOS_EVALUATION_END_YEAR = 2027  # None = 使用最新資料日
 OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
 OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
 
@@ -89,7 +91,7 @@ OPTIMIZER_STUDY_STORAGE_MODE = 'memory'
 OPTIMIZER_ALLOW_PER_RUN_TEMP_DB = True
 
 # local_min review 計算開關。
-OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
+OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = False
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
@@ -97,7 +99,7 @@ OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist rev
 OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 1000
 
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = False
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = "auto" # "auto" = 過半數；整數 = 至少幾個 seed 同意。最大值永遠是 N。
 
@@ -213,7 +215,9 @@ TRAINING_SPLIT_POLICY = {
     "min_train_years": OPTIMIZER_MIN_TRAIN_YEARS,
     "search_train_end_year": OOS_EVALUATION_START_YEAR - 1,
     "oos_start_year": OOS_EVALUATION_START_YEAR,
+    "oos_end_year": OOS_EVALUATION_END_YEAR,
     "study_full_start_year": STUDY_FULL_START_YEAR,
+    "study_full_end_year": STUDY_FULL_END_YEAR,
     "objective_mode": 'split_train_romd',
 }
 
