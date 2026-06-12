@@ -194,7 +194,7 @@ def build_event_label(stock_df: pd.DataFrame, *, event_pos: int, ticker: str, at
         return LABEL_IGNORE, "invalid_risk", buy_limit, entry_price, stop_price, risk_r
 
     path = stock_df.iloc[eval_start:min(eval_end, len(stock_df))]
-    if len(path) < max(1, min(int(policy.label_horizon_bars), len(stock_df) - eval_start)):
+    if len(path) < int(policy.label_horizon_bars):
         return LABEL_IGNORE, "insufficient_future", buy_limit, entry_price, stop_price, risk_r
     label, reason, mfe_r, mae_r = _label_from_path(
         path["High"].to_numpy(dtype=np.float64, copy=False),

@@ -260,6 +260,7 @@ def try_rotate_weakest_position(
             w_close,
             get_fast_value(w_data, 'Volume', pos=w_pos),
             w_y_close,
+            ticker=weakest_ticker,
         )
 
         if sell_block_reason is not None:

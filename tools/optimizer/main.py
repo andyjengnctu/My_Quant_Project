@@ -483,8 +483,8 @@ def _load_candidate_params_payload_for_promote():
         return None
     if is_active_param_ensemble_payload(candidate_params):
         return candidate_params
-    from core.params_io import load_params_from_json
-    return load_params_from_json(CANDIDATE_BEST_PARAMS_PATH)
+    from core.params_io import load_params_from_json, params_to_json_dict
+    return params_to_json_dict(load_params_from_json(CANDIDATE_BEST_PARAMS_PATH))
 
 
 def _first_params_from_payload(payload: dict | None) -> dict:
