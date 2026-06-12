@@ -493,13 +493,18 @@ def _first_params_from_payload(payload: dict | None) -> dict:
     if is_active_param_ensemble_payload(payload):
         members = payload.get("params_ensemble")
         if isinstance(members, list) and members and isinstance(members[0], dict):
-            return dict(members[0])
+            params = members[0].get("params")
+            if isinstance(params, dict):
+                return dict(params)
         by_date = payload.get("params_ensemble_by_effective_date")
         if isinstance(by_date, dict) and by_date:
             first_key = sorted(by_date.keys())[0]
             first_members = by_date.get(first_key)
             if isinstance(first_members, list) and first_members and isinstance(first_members[0], dict):
-                return dict(first_members[0])
+                params = first_members[0].get("params")
+                if isinstance(params, dict):
+                    return dict(params)
+        return {}
     return dict(payload)
 
 
@@ -509,7 +514,7 @@ def _payload_for_trade_replay(payload: dict, *, selector: str) -> dict:
         replay_payload["selector"] = str(selector)
         return replay_payload
     return build_static_active_param_ensemble_payload(
-        members=[dict(payload)],
+        members=[{"member_index": 1, "params": dict(payload)}],
         selector=str(selector),
         created_at=get_taipei_now().isoformat(),
         meta={"source": "trade_promote_replay"},

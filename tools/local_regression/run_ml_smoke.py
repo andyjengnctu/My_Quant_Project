@@ -211,8 +211,24 @@ def _load_params_payload(params_path: Path) -> Dict[str, Any]:
     }
 
 
+VOLATILE_REPRO_DIGEST_KEYS = {"created_at", "promoted_at"}
+
+
+def _stable_payload_for_repro_digest(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _stable_payload_for_repro_digest(item)
+            for key, item in value.items()
+            if key not in VOLATILE_REPRO_DIGEST_KEYS
+        }
+    if isinstance(value, list):
+        return [_stable_payload_for_repro_digest(item) for item in value]
+    return value
+
+
 def _canonical_payload_digest(payload: Dict[str, Any]) -> str:
-    canonical_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    stable_payload = _stable_payload_for_repro_digest(payload)
+    canonical_json = json.dumps(stable_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
@@ -374,6 +390,16 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
                 db_metrics["qualified_trial_count"] = 0
                 db_metrics["best_trial_value"] = None
                 db_metrics["trial_count_source"] = "seed_ensemble_in_memory_progress"
+                db_metrics["db_count"] = 0
+            elif (
+                outcome["returncode"] == 0
+                and not profile_metrics.get("optimizer_profile_read_error")
+                and int(profile_metrics.get("optimizer_profile_trial_count", 0) or 0) > 0
+            ):
+                db_metrics["trial_count"] = int(profile_metrics["optimizer_profile_trial_count"])
+                db_metrics["qualified_trial_count"] = 1 if candidate_best_available else 0
+                db_metrics["best_trial_value"] = None
+                db_metrics["trial_count_source"] = "optimizer_profile_summary"
                 db_metrics["db_count"] = 0
             else:
                 failures.append("missing_optimizer_db")
