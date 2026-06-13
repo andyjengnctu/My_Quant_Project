@@ -40,6 +40,7 @@ from tools.optimizer.objective_runner import (
 from tools.optimizer.param_cache import build_full_evaluation_cache_key, build_prep_cache_key
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.walk_forward import evaluate_walk_forward
+from tools.optimizer.score_display import format_optimizer_score_for_display
 from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
@@ -827,7 +828,7 @@ class _FinalistProgressBoard:
         base_score = float(finalist["base_score"])
         return (
             f"{prefix} finalist {idx + 1}/{len(self.finalists)} | trial #{int(trial.number) + 1} "
-            f"| base_score={base_score:.3f} | {progress_text} | local_min_score={local_text} | {status_text}"
+            f"| base_score={format_optimizer_score_for_display(base_score, decimals=3)} | {progress_text} | local_min_score={local_text} | {status_text}"
         )
 
     def initialize(self):
@@ -889,7 +890,7 @@ class _FinalistProgressBoard:
                 status_text="RUN",
             )
             return
-        local_text = "N/A" if current_local_min is None else f"{float(current_local_min):.3f}"
+        local_text = format_optimizer_score_for_display(current_local_min, decimals=3)
         self.lines[idx] = self._format_line(
             idx,
             prefix="⏳",
@@ -922,7 +923,7 @@ class _FinalistProgressBoard:
             idx,
             prefix="ℹ️",
             progress_text=f"進度 {int(total_neighbors)}/{int(total_neighbors)}",
-            local_text=f"{float(local_min_score):.3f}",
+            local_text=format_optimizer_score_for_display(local_min_score, decimals=3),
             status_text=f"{gate_status} | 快取",
         )
         self._render()
@@ -952,7 +953,7 @@ class _FinalistProgressBoard:
             idx,
             prefix="✅",
             progress_text=f"進度 {int(evaluated_neighbors)}/{int(total_neighbors)}",
-            local_text=f"{float(local_min_score):.3f}",
+            local_text=format_optimizer_score_for_display(local_min_score, decimals=3),
             status_text=f"{gate_status}{stop_text}",
         )
         self._render()
@@ -1005,15 +1006,15 @@ class _FinalistProgressBoard:
         ctx = self.single_line_context or {}
         safe_idx = min(max(0, int(idx)), len(self.finalists) - 1)
         trial = self.finalists[safe_idx]["trial"]
-        current_text = "N/A" if local_min_score is None else f"{float(local_min_score):.3f}"
+        current_text = format_optimizer_score_for_display(local_min_score, decimals=3)
         pass_count = sum(1 for _, passed, _ in self.completed_status.values() if passed)
         fail_count = sum(1 for _, passed, _ in self.completed_status.values() if not passed)
         early_count = sum(1 for _, _, early in self.completed_status.values() if early)
         best_text = "N/A"
         if self.best_local_trial is not None and self.best_local_score != float("-inf"):
-            best_text = f"{self.best_local_score:.3f} #{int(self.best_local_trial.number) + 1}"
+            best_text = f"{format_optimizer_score_for_display(self.best_local_score, decimals=3)} #{int(self.best_local_trial.number) + 1}"
         best_base_score = ctx.get("best_base_score")
-        best_base_text = "N/A" if best_base_score is None else f"{float(best_base_score):.3f}"
+        best_base_text = format_optimizer_score_for_display(best_base_score, decimals=3)
         eta_stage = self._estimate_single_line_eta(safe_idx, int(current_neighbor), int(total_neighbors))
         eta_total = self._estimate_total_eta(eta_stage)
         elapsed = time.perf_counter() - self.stage_start
@@ -1312,7 +1313,7 @@ def compute_local_min_score(
         if on_finish is not None:
             on_finish(0, 0, float(score), False)
         elif progress_label:
-            _print_progress_line(session, f"ℹ️ {progress_label}: local_min review disabled，使用 base_score={score:.3f}")
+            _print_progress_line(session, f"ℹ️ {progress_label}: local_min review disabled，使用 base_score={format_optimizer_score_for_display(score, decimals=3)}")
         return float(score)
 
     cache = _get_local_min_score_cache(session)
@@ -1329,7 +1330,7 @@ def compute_local_min_score(
         if on_cache_hit is not None:
             on_cache_hit(float(cached_score), int(cached_total_neighbors))
         elif progress_label and show_cache_hit:
-            _print_progress_line(session, f"ℹ️ {progress_label}: 使用快取 local_min_score={cached_score:.3f}")
+            _print_progress_line(session, f"ℹ️ {progress_label}: 使用快取 local_min_score={format_optimizer_score_for_display(cached_score, decimals=3)}")
         return cached_score
 
     neighbor_payloads = _build_neighbor_candidates(session, trial)
@@ -1339,7 +1340,7 @@ def compute_local_min_score(
         if on_finish is not None:
             on_finish(0, 0, float(local_min_score), False)
         elif progress_label:
-            _print_progress_line(session, f"❌ {progress_label}: 無合法鄰點，local_min_score={float(local_min_score):.3f} | gate=FAIL")
+            _print_progress_line(session, f"❌ {progress_label}: 無合法鄰點，local_min_score={format_optimizer_score_for_display(local_min_score, decimals=3)} | gate=FAIL")
         return float(local_min_score)
 
     total_neighbors = len(neighbor_payloads)
@@ -1422,7 +1423,7 @@ def compute_local_min_score(
     elif progress_label:
         gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
         stop_text = " | early stop" if bool(early_stopped) else ""
-        _print_progress_line(session, f"✅ {progress_label}: local_min_score={float(local_min_score):.3f} | gate={gate_status}{stop_text}")
+        _print_progress_line(session, f"✅ {progress_label}: local_min_score={format_optimizer_score_for_display(local_min_score, decimals=3)} | gate={gate_status}{stop_text}")
     return float(local_min_score)
 
 
@@ -1962,8 +1963,8 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         local_rank_text = f"#{int(local_rank)}"
         line = (
             f"#{int(trial.number) + 1:<7} | "
-            f"{float(item['base_score']):>12.3f} {base_rank_text:>10} | "
-            f"{float(item['local_min_score']):>12.3f} {local_rank_text:>12} "
+            f"{format_optimizer_score_for_display(item['base_score'], decimals=3):>12} {base_rank_text:>10} | "
+            f"{format_optimizer_score_for_display(item['local_min_score'], decimals=3):>12} {local_rank_text:>12} "
             f"{local_gate_color}{local_gate_text:>12}{reset}"
         )
         if inner_validate_enabled:
@@ -1982,7 +1983,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             validate_text = 'PASS' if validate_gate else 'FAIL'
             validate_color = green if validate_gate else red
             line += (
-                f" | {validate_score:>10.3f} {validate_rank_text:>10} "
+                f" | {format_optimizer_score_for_display(validate_score, decimals=3):>10} {validate_rank_text:>10} "
                 f"{validate_color}{validate_text:>10}{reset}"
             )
         if dependency_enabled:
@@ -1997,7 +1998,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             oos_score = float(oos_diag.get('oos_score', INVALID_TRIAL_VALUE))
         except (TypeError, ValueError):
             oos_score = float(INVALID_TRIAL_VALUE)
-        oos_score_text = 'N/A' if not bool(oos_diag.get('enabled', False)) else f"{oos_score:.3f}"
+        oos_score_text = 'N/A' if not bool(oos_diag.get('enabled', False)) else format_optimizer_score_for_display(oos_score, decimals=3)
         line += f" | {result_color}{result_text:>10}{reset} {oos_score_text:>10}"
         print(line)
 
@@ -2019,13 +2020,13 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     best_local_item = finalists[0] if finalists else None
     best_local_text = '-'
     if best_local_item is not None:
-        best_local_text = f"{float(best_local_item.get('local_min_score', INVALID_TRIAL_VALUE)):.3f} (trial #{int(best_local_item['trial'].number) + 1})"
+        best_local_text = f"{format_optimizer_score_for_display(best_local_item.get('local_min_score', INVALID_TRIAL_VALUE), decimals=3)} (trial #{int(best_local_item['trial'].number) + 1})"
     best_val_text = '-'
     if inner_validate_enabled:
         val_best = select_best_finalist_by_inner_validate_score(finalists)
         if val_best is not None:
             val_diag = val_best.get('inner_validate_diagnostics') if isinstance(val_best.get('inner_validate_diagnostics'), dict) else {}
-            best_val_text = f"{float(val_diag.get('inner_validate_score', INVALID_TRIAL_VALUE)):.3f} (trial #{int(val_best['trial'].number) + 1})"
+            best_val_text = f"{format_optimizer_score_for_display(val_diag.get('inner_validate_score', INVALID_TRIAL_VALUE), decimals=3)} (trial #{int(val_best['trial'].number) + 1})"
     best_oos_item = None
     oos_enabled_items = [item for item in finalists if bool((item.get('oos_diagnostics') or {}).get('enabled', False))]
     if oos_enabled_items:
@@ -2039,7 +2040,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         )
     best_oos_text = '-'
     if best_oos_item is not None:
-        best_oos_text = f"{float((best_oos_item.get('oos_diagnostics') or {}).get('oos_score', INVALID_TRIAL_VALUE)):.3f} (trial #{int(best_oos_item['trial'].number) + 1})"
+        best_oos_text = f"{format_optimizer_score_for_display((best_oos_item.get('oos_diagnostics') or {}).get('oos_score', INVALID_TRIAL_VALUE), decimals=3)} (trial #{int(best_oos_item['trial'].number) + 1})"
     print(
         "summary: "
         f"{yellow}winner={winner_count}{reset}  "
@@ -2085,7 +2086,7 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
     if show_progress:
         _print_progress_line(
             session,
-            f"🏁 winner({'local_min' if is_optimizer_local_min_review_enabled() else 'base_equivalent'}{' + inner_val_rank' if is_inner_validate_anti_overfit_enabled(objective_mode) else ''}{' + dependency_safe' if is_dominant_year_dependency_anti_overfit_enabled() else ''}): trial #{int(trial.number) + 1} | base_score={float(best_finalist['base_score']):.3f} | local_min_score={float(best_finalist['local_min_score']):.3f} | retention={float(best_finalist['local_retention']):.3f}"
+            f"🏁 winner({'local_min' if is_optimizer_local_min_review_enabled() else 'base_equivalent'}{' + inner_val_rank' if is_inner_validate_anti_overfit_enabled(objective_mode) else ''}{' + dependency_safe' if is_dominant_year_dependency_anti_overfit_enabled() else ''}): trial #{int(trial.number) + 1} | base_score={format_optimizer_score_for_display(best_finalist['base_score'], decimals=3)} | local_min_score={format_optimizer_score_for_display(best_finalist['local_min_score'], decimals=3)} | retention={float(best_finalist['local_retention']):.3f}"
         )
     resolver_cache[cache_key] = trial
     return trial

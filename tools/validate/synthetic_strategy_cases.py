@@ -29,6 +29,7 @@ from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks, study_utils
 from tools.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
+from tools.optimizer.score_display import format_optimizer_score_for_display
 from tools.optimizer.study_utils import (
     DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE,
     INVALID_TRIAL_VALUE,
@@ -757,6 +758,7 @@ def validate_score_numerator_option_case(_base_params):
         table_title="FINALISTS AGREE RESULTS",
     )
     add_check(results, "strategy_score", case_id, "optimizer_oos_table_keeps_score_and_plain_romd_separate", True, "score" in optimizer_table and "RoMD" in optimizer_table)
+    add_check(results, "strategy_score", case_id, "optimizer_oos_table_system_score_uses_display_multiplier", True, "1946.33" in optimizer_table)
     add_check(results, "strategy_score", case_id, "optimizer_oos_table_0050_compare_uses_plain_romd", True, "7.97" in optimizer_table and "6.00 (+1.97)" in optimizer_table)
 
     single_stock_score_fields = build_score_single_stock_profile_fields({
@@ -1868,6 +1870,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
 
     callbacks_source = Path(optimizer_callbacks.__file__).read_text(encoding="utf-8")
     static_ensemble_dashboard_source = (project_root / "tools" / "optimizer" / "static_ensemble_dashboard.py").read_text(encoding="utf-8")
+    optimizer_main_source = (project_root / "tools" / "optimizer" / "main.py").read_text(encoding="utf-8")
+    optimizer_robustness_source = (project_root / "tools" / "optimizer" / "robustness.py").read_text(encoding="utf-8")
+    optimizer_outer_rolling_source = (project_root / "tools" / "optimizer" / "outer_rolling_oos.py").read_text(encoding="utf-8")
+    optimizer_walk_forward_source = (project_root / "tools" / "optimizer" / "walk_forward.py").read_text(encoding="utf-8")
     objective_runner_source = (project_root / "tools" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")
     add_check(results, "strategy_contract", case_id, "optimizer_callbacks_imports_pandas_for_oos_year_parsing", True, "import pandas as pd" in callbacks_source)
     add_check(results, "strategy_contract", case_id, "search_train_date_filter_reuses_core_single_source_in_callbacks", True, "from core.walk_forward_policy import filter_search_train_dates" in callbacks_source and "def _filter_search_train_dates" not in callbacks_source)
@@ -2029,11 +2035,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     pipe_positions = [_pipe_display_positions(line) for line in table_lines]
     add_check(results, "strategy_contract", case_id, "optimizer_console_table_keeps_pipe_alignment_for_long_first_zone_rows", True, len(pipe_positions) == 6 and len(set(pipe_positions)) == 1)
 
-    optimizer_main_source = (project_root / "tools" / "optimizer" / "main.py").read_text(encoding="utf-8")
     optimizer_study_utils_source = (project_root / "tools" / "optimizer" / "study_utils.py").read_text(encoding="utf-8")
     train_test_policy_lines = [line for line in optimizer_main_source.splitlines() if "Train/Test policy:" in line]
     add_check(results, "strategy_contract", case_id, "optimizer_start_banner_omits_raw_objective_mode_token", True, bool(train_test_policy_lines) and all("objective=" not in line for line in train_test_policy_lines))
     add_check(results, "strategy_contract", case_id, "system_score_display_formatter_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}", format_system_score_for_display(1.23, decimals=2))
+    add_check(results, "strategy_contract", case_id, "optimizer_system_score_display_helper_applies_multiplier", f"{1.23 * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.3f}", format_optimizer_score_for_display(1.23, decimals=3))
+    add_check(results, "strategy_contract", case_id, "optimizer_system_score_display_helper_preserves_invalid_sentinel", f"{INVALID_TRIAL_VALUE:.3f}", format_optimizer_score_for_display(INVALID_TRIAL_VALUE, decimals=3))
     add_check(
         results,
         "strategy_contract",
@@ -2042,7 +2049,12 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         True,
         "format_system_score_for_display(attrs.get('base_score'" in callbacks_source
         and "format_system_score_for_display(candidate_train_metrics.get('pf_romd'" in static_ensemble_dashboard_source
-        and "format_system_score_for_display(trial.value" in callbacks_source,
+        and "format_system_score_for_display(trial.value" in callbacks_source
+        and "format_optimizer_score_for_display" in optimizer_main_source
+        and "format_optimizer_score_for_display" in optimizer_robustness_source
+        and "scale_optimizer_score_for_display" in optimizer_outer_rolling_source
+        and "OOS 系統得分" in optimizer_walk_forward_source
+        and "OOS RoMD" in optimizer_walk_forward_source,
     )
     add_check(results, "strategy_contract", case_id, "study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
     add_check(results, "strategy_contract", case_id, "interactive_optimizer_menu_defaults_to_study_and_numbers_modes", True, "[Enter] Study Mode [1] OOS Mode [2] Rolling OOS Mode  [3] Trade Mode" in optimizer_study_utils_source)

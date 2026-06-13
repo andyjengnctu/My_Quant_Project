@@ -97,6 +97,7 @@ from tools.optimizer.robustness import (
     is_inner_validate_anti_overfit_enabled,
     list_local_min_score_finalists,
 )
+from tools.optimizer.score_display import format_optimizer_score_for_display, scale_optimizer_score_for_display
 from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     build_best_params_payload_from_trial,
@@ -1301,8 +1302,14 @@ def _color_numeric_text(text: str, value: float | int | None) -> str:
 
 
 def _format_score(value) -> str:
-    v = _safe_float(value, 0.0)
-    return _color_numeric_text(f"{v:.{OOS_SCORE_DECIMALS}f}", v)
+    raw_value = _safe_float(value, 0.0)
+    display_value = scale_optimizer_score_for_display(raw_value)
+    return _color_numeric_text(f"{display_value:.{OOS_SCORE_DECIMALS}f}", raw_value)
+
+
+def _format_plain_score(value) -> str:
+    raw_value = _safe_float(value, 0.0)
+    return _color_numeric_text(f"{raw_value:.{OOS_SCORE_DECIMALS}f}", raw_value)
 
 
 def _format_compare(reference_score, rank_1_score) -> str:
@@ -1315,6 +1322,12 @@ def _format_compare(reference_score, rank_1_score) -> str:
 def _format_compare_plain(reference_score, rank_1_score) -> str:
     ref = _safe_float(reference_score, 0.0)
     rank_1 = _safe_float(rank_1_score, 0.0)
+    return f"{ref:.{OOS_SCORE_DECIMALS}f} ({rank_1 - ref:+.{OOS_SCORE_DECIMALS}f})"
+
+
+def _format_system_score_compare_plain(reference_score, rank_1_score) -> str:
+    ref = scale_optimizer_score_for_display(reference_score)
+    rank_1 = scale_optimizer_score_for_display(rank_1_score)
     return f"{ref:.{OOS_SCORE_DECIMALS}f} ({rank_1 - ref:+.{OOS_SCORE_DECIMALS}f})"
 
 
@@ -2483,16 +2496,16 @@ class _SearchProgress:
             (
                 f"[{self.fold_idx}/{self.fold_count}] selection={selection_text} | OOS={oos_text} | "
                 f"OPTIMIZER_SEARCH | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
-                f"best_base_score={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
+                f"best_base_score={format_optimizer_score_for_display(best_score, decimals=3)} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
             (
                 f"[{self.fold_idx}/{self.fold_count}] selection={selection_text} | OOS={oos_text} | "
                 f"search | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
-                f"best_base={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
+                f"best_base={format_optimizer_score_for_display(best_score, decimals=3)} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
             (
                 f"[{self.fold_idx}/{self.fold_count}] {selection_text}>OOS{oos_text} | "
-                f"search {completed}/{self.total_trials} | best_base={best_score:.3f} | eta={eta_stage_text}/{eta_total_text}"
+                f"search {completed}/{self.total_trials} | best_base={format_optimizer_score_for_display(best_score, decimals=3)} | eta={eta_stage_text}/{eta_total_text}"
             ),
         ))
         self.inline_progress_width = write_inline_progress(line, previous_width=self.inline_progress_width)
@@ -5001,11 +5014,11 @@ def _policy_cell_text(policy_row: dict, *, best_score: float, benchmark_score: f
     if color:
         return (
             _format_score(rank_1_score),
-            _format_score(rank_1_romd),
+            _format_plain_score(rank_1_romd),
             _format_compare(benchmark_score, rank_1_romd),
         )
     return (
-        f"{rank_1_score:.{OOS_SCORE_DECIMALS}f}",
+        format_optimizer_score_for_display(rank_1_score, decimals=OOS_SCORE_DECIMALS),
         f"{rank_1_romd:.{OOS_SCORE_DECIMALS}f}",
         _format_compare_plain(benchmark_score, rank_1_romd),
     )
@@ -5034,7 +5047,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         "fold": 9,
         "selection": 19,
         "oos_year": 19,
-        "score": 8,
+        "score": 12,
         "romd": 8,
         "bench": 15,
         "elapsed": 8,
@@ -5096,7 +5109,7 @@ def _base_retention_comparison_score_text(policy_row: dict, *, color: bool = Tru
         return "N/A"
     if color:
         return _format_score(score)
-    return f"{score:.{OOS_SCORE_DECIMALS}f}"
+    return format_optimizer_score_for_display(score, decimals=OOS_SCORE_DECIMALS)
 
 
 def _build_base_retention_comparison_chained_row(rows: list[dict], *, chained_override: dict | None = None) -> dict | None:
@@ -6104,10 +6117,11 @@ def _fmt_score_trunc_2(value) -> str:
         number = float(value)
     except (TypeError, ValueError):
         return "N/A"
-    scaled = math.trunc(number * 100.0) / 100.0
-    if scaled == 0.0:
-        scaled = 0.0
-    return f"{scaled:.2f}"
+    display_number = scale_optimizer_score_for_display(number)
+    truncated = math.trunc(display_number * 100.0) / 100.0
+    if truncated == 0.0:
+        truncated = 0.0
+    return f"{truncated:.2f}"
 
 
 def _safe_progress_ts(progress: dict) -> float | None:
@@ -6419,11 +6433,11 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         completed = int(progress.get("completed", 0) or 0)
         total = int(progress.get("total", 0) or 0)
         best = progress.get("best_score")
-        best_text = "N/A" if best is None else f"{float(best):.3f}"
+        best_text = format_optimizer_score_for_display(best, decimals=3)
         status = str(progress.get("status") or "").strip()
         status_text = f"{status} | " if status else ""
         local_best = progress.get("best_local_min_score")
-        local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
+        local_best_text = format_optimizer_score_for_display(local_best, decimals=3)
         return (
             f"{_progress_prefix()} | "
             f"{status_text}trial {completed}/{total} | best_base={best_text} | best_local_min={local_best_text}{elapsed_text}"
@@ -6434,7 +6448,7 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         neighbor_done = int(progress.get("neighbor_done", 0) or 0)
         neighbor_total = int(progress.get("neighbor_total", 0) or 0)
         current = progress.get("current")
-        current_text = "N/A" if current is None else f"{float(current):.3f}"
+        current_text = format_optimizer_score_for_display(current, decimals=3)
         best = progress.get("best")
         best_text = _fmt_score_trunc_2(best)
         base_best = progress.get("best_base_score")
@@ -6451,8 +6465,8 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         status = str(progress.get("status") or "RUN")
         base_best = progress.get("best_base_score")
         local_best = progress.get("best_local_min_score")
-        base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
-        local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
+        base_best_text = format_optimizer_score_for_display(base_best, decimals=3)
+        local_best_text = format_optimizer_score_for_display(local_best, decimals=3)
         return f"{_progress_prefix()} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage == "ENSEMBLE_REPLAY":
         replay_done = int(progress.get("replay_done", 0) or 0)
@@ -6468,8 +6482,8 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         done_label = "DONE" if not status or status.lower() == "done" else f"DONE {status}"
         base_best = progress.get("best_base_score")
         local_best = progress.get("best_local_min_score")
-        base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
-        local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
+        base_best_text = format_optimizer_score_for_display(base_best, decimals=3)
+        local_best_text = format_optimizer_score_for_display(local_best, decimals=3)
         return f"{_progress_prefix()} | {done_label} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
         status = str(progress.get("status") or stage).replace("_", " ")
@@ -6508,11 +6522,11 @@ def _strip_redundant_member_status(raw_status: str, *, member_text: str = "") ->
 
 
 def _format_best_base_value(value) -> str:
-    return "N/A" if value is None else f"{float(value):.3f}"
+    return format_optimizer_score_for_display(value, decimals=3)
 
 
 def _format_best_local_min_value(value) -> str:
-    return "N/A" if value is None else f"{float(value):.3f}"
+    return format_optimizer_score_for_display(value, decimals=3)
 
 
 def _seed_progress_label_for_stage(*, stage: str, progress: dict, seed_text: str, log_status: str = "") -> str:
@@ -6598,7 +6612,7 @@ def _render_seed_progress_display_record(record: dict) -> str:
     parts = [" | ".join(prefix_parts), status_label]
     if stage == "LOCAL_MIN_REVIEW":
         current = record.get("current")
-        current_text = "N/A" if current is None else f"{float(current):.3f}"
+        current_text = format_optimizer_score_for_display(current, decimals=3)
         parts.append(f"current : {current_text}")
         parts.append(f"best_base : {_fmt_score_trunc_2(record.get('best_base'))}")
         parts.append(f"best_lm : {_fmt_score_trunc_2(record.get('best_local_min'))}")
@@ -8334,7 +8348,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             session.current_session_trial = int(trial_count or config.trials_per_fold)
             progress.done(int(session.current_session_trial))
             best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
-            best_base_text = "N/A" if best_base_score is None else f"{best_base_score:.3f}"
+            best_base_text = format_optimizer_score_for_display(best_base_score, decimals=3)
             print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | optimizer search DONE | best_base_score={best_base_text} | elapsed={_fmt_duration(optimize_sec)}", flush=True)
 
             local_started = time.perf_counter()
@@ -8398,7 +8412,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 delattr(session, "outer_rolling_local_progress_context")
             local_elapsed = time.perf_counter() - local_started
             best_local_min_score = max((float(item.get("local_min_score", INVALID_TRIAL_VALUE)) for item in list(finalists or [])), default=None)
-            best_local_min_text = "N/A" if best_local_min_score is None else f"{best_local_min_score:.3f}"
+            best_local_min_text = format_optimizer_score_for_display(best_local_min_score, decimals=3)
             local_stage_label = "local-min review DONE" if is_optimizer_local_min_review_enabled() else "local-min disabled (base equivalent)"
             print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | {local_stage_label} | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
             _write_parallel_fold_progress_event(
@@ -8840,11 +8854,15 @@ def run_outer_rolling_oos(
                 chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
             row = (result or {}).get("row")
             if row is not None:
-                local_oos = float((row.get("local") or {}).get("rank_1_oos", 0.0))
+                local_policy = dict(row.get("local") or {})
+                local_oos = float(local_policy.get("rank_1_oos", 0.0))
+                local_romd = _policy_plain_romd_score(local_policy)
                 print(
                     f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | DONE seed ensemble | "
-                    f"local_oos={local_oos:.{OOS_SCORE_DECIMALS}f} | best={_format_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
-                    f"0050={_format_compare_plain(row['benchmark_oos_score'], local_oos)} | elapsed={_fmt_duration(row.get('elapsed_sec'))}{C_RESET}"
+                    f"local_score={format_optimizer_score_for_display(local_oos, decimals=OOS_SCORE_DECIMALS)} | "
+                    f"local_RoMD={local_romd:.{OOS_SCORE_DECIMALS}f} | "
+                    f"best_score={_format_system_score_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
+                    f"0050_RoMD={_format_compare_plain(row['benchmark_oos_score'], local_romd)} | elapsed={_fmt_duration(row.get('elapsed_sec'))}{C_RESET}"
                 )
                 _print_completed_results(rows)
             continue
@@ -8960,7 +8978,7 @@ def run_outer_rolling_oos(
             print(
                 f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | "
                 f"{'LOCAL_MIN_REVIEW DONE' if is_optimizer_local_min_review_enabled() else 'LOCAL_MIN_DISABLED'} | "
-                f"finalists={len(finalists)} | best_local={float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0:.3f} "
+                f"finalists={len(finalists)} | best_local={format_optimizer_score_for_display(float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0, decimals=3)} "
                 f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | "
                 f"prep_cache_hit/miss/evict={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))}/{int(prep_cache_stats.get('evictions', 0))} | "
                 f"elapsed={_fmt_duration(local_elapsed)}"
@@ -9073,11 +9091,15 @@ def run_outer_rolling_oos(
                 fold_total_sec=fold_elapsed,
                 finalists_count=len(finalists),
             ))
-            local_oos = float((row.get("local") or {}).get("rank_1_oos", 0.0))
+            local_policy = dict(row.get("local") or {})
+            local_oos = float(local_policy.get("rank_1_oos", 0.0))
+            local_romd = _policy_plain_romd_score(local_policy)
             print(
                 f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | DONE | "
-                f"local_rank_1_oos={local_oos:.{OOS_SCORE_DECIMALS}f} | best={_format_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
-                f"0050={_format_compare_plain(row['benchmark_oos_score'], local_oos)} | elapsed={_fmt_duration(fold_elapsed)}{C_RESET}"
+                f"local_score={format_optimizer_score_for_display(local_oos, decimals=OOS_SCORE_DECIMALS)} | "
+                f"local_RoMD={local_romd:.{OOS_SCORE_DECIMALS}f} | "
+                f"best_score={_format_system_score_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
+                f"0050_RoMD={_format_compare_plain(row['benchmark_oos_score'], local_romd)} | elapsed={_fmt_duration(fold_elapsed)}{C_RESET}"
             )
             _print_completed_results(rows)
         finally:

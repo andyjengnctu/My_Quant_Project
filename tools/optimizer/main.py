@@ -66,6 +66,7 @@ from config.training_policy import (
 from config.training_performance_policy import resolve_optimizer_random_seed_ensemble_parallel_backend_default, resolve_optimizer_random_seed_ensemble_parallel_workers_default
 
 from tools.optimizer.study_utils import INVALID_TRIAL_VALUE
+from tools.optimizer.score_display import format_optimizer_score_for_display
 from tools.optimizer.session_factory import (
     build_optimizer_session,
     configure_optuna_logging,
@@ -462,8 +463,8 @@ def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict
         return True, "run_best selector score 無效"
     delta = float(candidate_score) - float(run_best_score)
     if delta >= float(TRADE_PROMOTE_MIN_SCORE_DELTA):
-        return True, f"candidate selector score delta={delta:.3f} 通過"
-    return False, f"candidate selector score delta={delta:.3f} 未達門檻"
+        return True, f"candidate selector score delta={format_optimizer_score_for_display(delta, decimals=3)} 通過"
+    return False, f"candidate selector score delta={format_optimizer_score_for_display(delta, decimals=3)} 未達門檻"
 
 
 def _summary_is_trade_mode(summary: dict | None) -> bool:
@@ -667,8 +668,8 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
     score_delta = float(candidate_replay_score) - float(run_best_replay_score)
     if score_delta < float(TRADE_PROMOTE_MIN_SCORE_DELTA):
         print(
-            f"{C_YELLOW}ℹ️ run_best 未進版：same-window replay delta={score_delta:.3f} "
-            f"< required={float(TRADE_PROMOTE_MIN_SCORE_DELTA):.3f}{C_RESET}"
+            f"{C_YELLOW}ℹ️ run_best 未進版：same-window replay delta={format_optimizer_score_for_display(score_delta, decimals=3)} "
+            f"< required={format_optimizer_score_for_display(TRADE_PROMOTE_MIN_SCORE_DELTA, decimals=3)}{C_RESET}"
         )
         return 0
 
@@ -944,6 +945,10 @@ def _format_nonrolling_result_number(value) -> str:
         return f"{float(value):.3f}"
     except (TypeError, ValueError):
         return "N/A"
+
+
+def _format_nonrolling_system_score(value) -> str:
+    return format_optimizer_score_for_display(value, decimals=3)
 
 
 def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> dict:
@@ -1486,7 +1491,7 @@ def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dic
     title = "SEED ENSEMBLE RESULTS"
     header = (
         f"{'member':<8} | {'seed':>10} | {'trial':>8} | "
-        f"{'base':>10} | {'local_min':>10} | {'retention':>10} | {'gate':>8} | {'result':>10}"
+        f"{'base':>12} | {'local_min':>12} | {'retention':>10} | {'gate':>8} | {'result':>10}"
     )
     separator_width = max(len(title), len(header))
     print(f"{gray}{'-' * separator_width}{reset}")
@@ -1507,8 +1512,8 @@ def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dic
             f"#{int(item.get('member_index', idx)):<7} | "
             f"{int(item.get('seed', 0)):>10} | "
             f"#{int(item.get('selected_trial', 0)):>7} | "
-            f"{_format_nonrolling_result_number(item.get('base_score')):>10} | "
-            f"{_format_nonrolling_result_number(item.get('local_min_score')):>10} | "
+            f"{_format_nonrolling_system_score(item.get('base_score')):>12} | "
+            f"{_format_nonrolling_system_score(item.get('local_min_score')):>12} | "
             f"{_format_nonrolling_result_number(item.get('retention')):>10} | "
             f"{gate_color}{gate_text:>8}{reset} | "
             f"{result_color}{result_text:>10}{reset}"
@@ -1523,8 +1528,8 @@ def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dic
     print(
         f"ENSEMBLE | N={member_count} | min_agree={min_agree} | "
         f"gate_pass={pass_count}/{member_count} | "
-        f"base_min={_format_nonrolling_result_number(min(base_scores) if base_scores else None)} | "
-        f"local_min_min={_format_nonrolling_result_number(min(local_scores) if local_scores else None)} | "
+        f"base_min={_format_nonrolling_system_score(min(base_scores) if base_scores else None)} | "
+        f"local_min_min={_format_nonrolling_system_score(min(local_scores) if local_scores else None)} | "
         f"retention_min={_format_nonrolling_result_number(min(retentions) if retentions else None)} | "
         f"result={ensemble_color}{ensemble_result}{reset}"
     )
@@ -1858,7 +1863,7 @@ def _finalize_single_seed_study_base_only_outputs(
     _write_json_file(base_path, base_payload)
     print(
         f"{C_GREEN}✅ Study-Full base 完成｜"
-        f"trial=#{int(best_trial.number) + 1}｜base={base_score:.3f}{C_RESET}"
+        f"trial=#{int(best_trial.number) + 1}｜base={format_optimizer_score_for_display(base_score, decimals=3)}{C_RESET}"
     )
 
     # AI註: Study-Full 訓練中的 milestone dashboard 來自 trial user_attrs，

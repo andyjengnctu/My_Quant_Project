@@ -10,6 +10,7 @@ import pandas as pd
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_plain_romd, calc_portfolio_score
 from core.runtime_utils import get_taipei_now
+from config.display_policy import format_system_score_for_display
 
 WF_MIN_TRAIN_YEARS = 8
 
@@ -434,7 +435,7 @@ def _format_pct(value: float) -> str:
 
 def _format_gate_actual(name: str, actual) -> str:
     if 'score' in name:
-        return f"{float(actual):.2f}"
+        return format_system_score_for_display(actual, decimals=2)
     if 'trades' in name or 'available' in name or 'count' in name:
         return str(int(actual))
     if isinstance(actual, bool):
@@ -515,7 +516,8 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
         '| 指標 | 策略 | 0050 |',
         '|---|---:|---:|',
         f"| OOS 區間 | {test_total.get('oos_start', '')} ~ {test_total.get('oos_end', '')} | {benchmark_test_total.get('oos_start', '')} ~ {benchmark_test_total.get('oos_end', '')} |",
-        f"| OOS RoMD | {float(test_total.get('test_score_romd', 0.0)):.2f} | {float(benchmark_test_total.get('test_score_romd', 0.0)):.2f} |",
+        f"| OOS 系統得分 | {format_system_score_for_display(test_total.get('test_score_romd', 0.0), decimals=2)} | - |",
+        f"| OOS RoMD | {calc_plain_romd(test_total.get('total_return_pct', 0.0), test_total.get('max_drawdown_pct', 0.0)):.2f} | {float(benchmark_test_total.get('test_score_romd', 0.0)):.2f} |",
         f"| OOS 總報酬率 | {_format_pct(test_total.get('total_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('total_return_pct', 0.0))} |",
         f"| 年化報酬率 | {_format_pct(test_total.get('annualized_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('annualized_return_pct', 0.0))} |",
         f"| 完整年度最差報酬 | {_format_pct(test_total.get('min_full_year_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('min_full_year_return_pct', 0.0))} |",
@@ -540,12 +542,12 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
         '',
         '## OOS Period Detail',
         '',
-        '| 區間 | 訓練區間 | OOS 區間 | OOS RoMD | 總報酬率 | MDD | 年化交易次數 | 買進成交率 | 0050 報酬率 |',
-        '|---|---|---|---:|---:|---:|---:|---:|---:|',
+        '| 區間 | 訓練區間 | OOS 區間 | OOS 系統得分 | OOS RoMD | 總報酬率 | MDD | 年化交易次數 | 買進成交率 | 0050 報酬率 |',
+        '|---|---|---|---:|---:|---:|---:|---:|---:|---:|',
     ])
     if period:
         lines.append(
-            f"| {period.get('label', 'TEST')} | {period.get('train_start', '')} ~ {period.get('train_end', '')} | {period.get('oos_start', '')} ~ {period.get('oos_end', '')} | {float(period.get('test_score_romd', 0.0)):.2f} | {_format_pct(period.get('ret_pct', 0.0))} | {_format_pct(period.get('mdd', 0.0))} | {float(period.get('annual_trades', 0.0)):.2f} | {_format_pct(period.get('reserved_buy_fill_rate', 0.0))} | {_format_pct(period.get('benchmark_return_pct', 0.0))} |"
+            f"| {period.get('label', 'TEST')} | {period.get('train_start', '')} ~ {period.get('train_end', '')} | {period.get('oos_start', '')} ~ {period.get('oos_end', '')} | {format_system_score_for_display(period.get('test_score_romd', 0.0), decimals=2)} | {calc_plain_romd(period.get('ret_pct', 0.0), period.get('mdd', 0.0)):.2f} | {_format_pct(period.get('ret_pct', 0.0))} | {_format_pct(period.get('mdd', 0.0))} | {float(period.get('annual_trades', 0.0)):.2f} | {_format_pct(period.get('reserved_buy_fill_rate', 0.0))} | {_format_pct(period.get('benchmark_return_pct', 0.0))} |"
         )
     with open(md_path, 'w', encoding='utf-8') as handle:
         handle.write("\n".join(lines) + "\n")
