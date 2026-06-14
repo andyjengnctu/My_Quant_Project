@@ -63,13 +63,13 @@ TRADE_PROMOTE_ON_POLICY_MISMATCH = 'candidate_only'
 # optimizer 指標輸出開關。False 會停用該指標的表格、replay 與 paramset 輸出。
 OPTIMIZER_POLICY_INDICATOR_ENABLED = {
     "base": True,
-    "base_retention_gt_0_0": False,
-    "base_retention_gt_min": False,
+    "base_retention_gt_0_0": True,
+    "base_retention_gt_min": True,
     "base_finalists_agree": True,
-    "local": False,
-    "local_finalists_agree": False,
-    "retention_finalists_agree": False,
-    "retention": False,
+    "local": True,
+    "local_finalists_agree": True,
+    "retention_finalists_agree": True,
+    "retention": True,
 }
 
 # ============================== 區間/次數 ====================================
@@ -91,7 +91,7 @@ OPTIMIZER_STUDY_STORAGE_MODE = 'memory'
 OPTIMIZER_ALLOW_PER_RUN_TEMP_DB = True
 
 # local_min review 計算開關。
-OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = False
+OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
