@@ -95,7 +95,7 @@ OPTIMIZER_ALLOW_PER_RUN_TEMP_DB = True
 
 # local_min review 計算開關。
 OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.01  # local_min_score finalist review 預設取訓練次數的比例
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
 # Rolling OOS optimizer search 預設 trial 數。

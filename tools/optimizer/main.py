@@ -1223,6 +1223,30 @@ def _resolve_study_best_base_score(session, study):
         return None
 
 
+def _score_from_policy_member(policy_members, policy_name: str, score_key: str):
+    if not isinstance(policy_members, dict):
+        return None
+    member = policy_members.get(str(policy_name))
+    if isinstance(member, list):
+        member = member[0] if member else None
+    if not isinstance(member, dict):
+        return None
+    try:
+        return float(member.get(str(score_key)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_nonrolling_seed_done_best_base_score(policy_members, fallback_score=None):
+    score = _score_from_policy_member(policy_members, "base_finalist_best", "base_score")
+    return fallback_score if score is None else score
+
+
+def _resolve_nonrolling_seed_done_best_local_min_score(policy_members, fallback_score=None):
+    score = _score_from_policy_member(policy_members, "local_finalist_best", "local_min_score")
+    return fallback_score if score is None else score
+
+
 def _make_nonrolling_local_min_progress_context(walk_forward_policy: dict, *, best_base_score=None, completed_results=None, overall_start=None) -> dict:
     context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
     context["best_base_score"] = best_base_score
@@ -1458,8 +1482,8 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 status=f"seed {member_index}/{member_count} done",
                 completed=int(requested_trials),
                 total=int(requested_trials),
-                best_base_score=member_payload.get("base_score"),
-                best_local_min_score=member_payload.get("local_min_score"),
+                best_base_score=_resolve_nonrolling_seed_done_best_base_score(policy_members, best_base_score),
+                best_local_min_score=_resolve_nonrolling_seed_done_best_local_min_score(policy_members, member_payload.get("local_min_score")),
                 elapsed_sec=max(0.0, time.perf_counter() - started_at),
             )
             return {"member": member_payload, "policy_members": policy_members}
@@ -2240,8 +2264,8 @@ def _run_nonrolling_random_seed_ensemble_training(
                     status=f"seed {member_index}/{len(seeds)} done",
                     completed=int(requested_trials),
                     total=int(requested_trials),
-                    best_base_score=member_payload.get("base_score"),
-                    best_local_min_score=member_payload.get("local_min_score"),
+                    best_base_score=_resolve_nonrolling_seed_done_best_base_score(policy_members, best_base_score),
+                    best_local_min_score=_resolve_nonrolling_seed_done_best_local_min_score(policy_members, member_payload.get("local_min_score")),
                     elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
                 )
             return {"member": member_payload, "session": member_session, "policy_members": policy_members}
