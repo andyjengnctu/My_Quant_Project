@@ -166,13 +166,12 @@ def _is_finite_number(value) -> bool:
 def _normalize_trade_selector(selector: str) -> str:
     raw = str(selector or "").strip().lower()
     aliases = {
-        "base_r_gt_0": "base_retention_gt_0_0",
-        "base_r_gt_0_0": "base_retention_gt_0_0",
-        "base_r_gt_0_2": "base_retention_gt_0_2",
-        "base_r_gt_0_4": "base_retention_gt_0_4",
-        "base_r_gt_0_6": "base_retention_gt_0_6",
-        "base_r_gt_0_8": "base_retention_gt_0_8",
-        "base_r_gt_min": "base_retention_gt_min",
+        "base_best": "base_finalist_best",
+        "base_finalist_best": "base_finalist_best",
+        "local_best": "local_finalist_best",
+        "local_finalist_best": "local_finalist_best",
+        "retention_best": "retention_finalist_best",
+        "retention_finalist_best": "retention_finalist_best",
         "base_agree": "base_finalists_agree",
         "finalists_agree": "base_finalists_agree",
         "base_finalist_agree": "base_finalists_agree",
@@ -191,9 +190,9 @@ def _selector_score_from_summary(summary: dict | None, selector: str):
     if not isinstance(summary, dict):
         return None
     normalized = _normalize_trade_selector(selector)
-    if normalized in {"retention", "retention_finalists_agree"}:
+    if normalized in {"retention", "retention_finalists_agree", "retention_finalist_best"}:
         return summary.get("retention")
-    if normalized in {"local", "local_finalists_agree"}:
+    if normalized in {"local", "local_finalists_agree", "local_finalist_best"}:
         return summary.get("local_min_score")
     return summary.get("base_score")
 
@@ -430,7 +429,7 @@ def _score_from_summary_for_promote(summary: dict | None, selector: str | None =
     if not isinstance(summary, dict):
         return None
     selector_key = _normalize_trade_selector(selector or _resolve_trade_run_best_selector())
-    if selector_key in {"retention", "retention_finalists_agree", "local", "base", "base_r0", "base_r05", "base_finalists_agree", "local_finalists_agree"}:
+    if selector_key in {"base_finalist_best", "local_finalist_best", "retention_finalist_best", "base_finalists_agree", "local_finalists_agree", "retention_finalists_agree", "base", "local", "retention"}:
         try:
             return _selector_score_from_summary(summary, selector_key)
         except (TypeError, ValueError, KeyError):
@@ -1655,6 +1654,8 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
         get_optimizer_paramset_policy_names,
         get_optimizer_nonrolling_policy_paramset_filename,
         select_finalists_agree_members,
+        select_finalist_best_members,
+        _is_finalist_best_policy,
         _remove_stale_policy_paramset_files,
     )
 
@@ -1669,7 +1670,9 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
             list((policy_members_by_policy or {}).get(str(policy_name)) or []),
             key=lambda item: int(dict(item).get("member_index", 0) or 0),
         )
-        if _is_finalists_agree_policy_name(policy_name):
+        if _is_finalist_best_policy(policy_name):
+            members = select_finalist_best_members(members, policy_name=str(policy_name))
+        elif _is_finalists_agree_policy_name(policy_name):
             members = select_finalists_agree_members(members, policy_name=str(policy_name))
         if not members:
             continue
@@ -1703,7 +1706,7 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
 
 
 def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, policy_members_by_policy: dict[str, list[dict]] | None = None, write_candidate_best: bool = True, write_policy_files: bool = True) -> tuple[dict, dict, dict[str, dict]]:
-    from tools.optimizer.outer_rolling_oos import select_finalists_agree_members
+    from tools.optimizer.outer_rolling_oos import select_finalist_best_members, select_finalists_agree_members, _is_finalist_best_policy
 
     candidate_selector = _resolve_trade_candidate_selector() if normalize_optimizer_model_mode(selected_model_mode) == "trade" else "candidate_best"
     candidate_members = list(members)
@@ -1711,7 +1714,9 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
         selector_members = list((policy_members_by_policy or {}).get(candidate_selector) or [])
         if selector_members:
             candidate_members = sorted(selector_members, key=lambda item: int(dict(item).get("member_index", 0) or 0))
-            if _is_finalists_agree_policy_name(candidate_selector):
+            if _is_finalist_best_policy(candidate_selector):
+                candidate_members = select_finalist_best_members(candidate_members, policy_name=str(candidate_selector))
+            elif _is_finalists_agree_policy_name(candidate_selector):
                 candidate_members = select_finalists_agree_members(candidate_members, policy_name=str(candidate_selector))
     candidate_members = renumber_seed_ensemble_members(candidate_members)
     policy = _resolve_nonrolling_policy_seed_ensemble_policy(

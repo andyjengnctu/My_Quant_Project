@@ -34,11 +34,11 @@ project/
 │  ├─ ARCHITECTURE.md                 # 本檔
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ models/
-│  ├─ base.json                      # static ensemble base policy 參數檔
-│  ├─ base_r0.json                   # static ensemble base retention > 0 參數檔
-│  ├─ base_r05.json                  # static ensemble base retention gate 參數檔
-│  ├─ local.json                     # static ensemble local policy 參數檔
-│  └─ retention.json                 # static ensemble retention policy 參數檔
+│  ├─ base_best.json                 # finalist best base policy 參數檔
+│  ├─ base_finalists_agree.json      # finalist agree base policy 參數檔
+│  ├─ base.json                      # seed ensemble base policy 參數檔
+│  ├─ local.json                     # seed ensemble local policy 參數檔
+│  └─ retention.json                 # seed ensemble retention policy 參數檔
 └─ tools/
    ├─ downloader/                     # 資料下載子系統
    ├─ optimizer/                      # 參數最佳化子系統

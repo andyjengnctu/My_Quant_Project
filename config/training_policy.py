@@ -53,7 +53,7 @@ SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'
 OPTIMIZER_FIXED_TP_PERCENT = 0.0 # None = 由 optimizer 搜尋 tp_percent; 0.0 = 固定關閉停利; 其他數值 = 固定停利比例
 
 # Trade mode 實戰參數輸出與 promote 設定。selector 名稱沿用 rolling/OOS policy：
-# base / local / retention / base_retention_gt_0_0 / base_retention_gt_0_2 / base_retention_gt_0_4 / base_retention_gt_0_6 / base_retention_gt_0_8 / base_retention_gt_min
+# base_finalist_best / local_finalist_best / retention_finalist_best / base_finalists_agree / local_finalists_agree / retention_finalists_agree / base / local / retention
 TRADE_MODE_CANDIDATE_SELECTOR = 'base_finalists_agree'
 TRADE_MODE_RUN_BEST_SELECTOR = 'base_finalists_agree'
 TRADE_MODE_AUTO_PROMOTE_RUN_BEST = True
@@ -62,13 +62,14 @@ TRADE_PROMOTE_ON_POLICY_MISMATCH = 'candidate_only'
 
 # optimizer 指標輸出開關。False 會停用該指標的表格、replay 與 paramset 輸出。
 OPTIMIZER_POLICY_INDICATOR_ENABLED = {
-    "base": True,
-    "base_retention_gt_0_0": True,
-    "base_retention_gt_min": True,
+    "base_finalist_best": True,
+    "local_finalist_best": True,
+    "retention_finalist_best": True,
     "base_finalists_agree": True,
-    "local": True,
     "local_finalists_agree": True,
     "retention_finalists_agree": True,
+    "base": True,
+    "local": True,
     "retention": True,
 }
 
@@ -157,7 +158,17 @@ def resolve_optimizer_policy_indicator_enabled_map() -> dict[str, bool]:
 
 def is_optimizer_policy_indicator_enabled(policy_name: str) -> bool:
     # 未列入 map 的新指標預設開啟，避免外部擴充 policy 被意外關閉。
-    return bool(resolve_optimizer_policy_indicator_enabled_map().get(str(policy_name), True))
+    name = str(policy_name)
+    if name in {
+        "local_finalist_best",
+        "retention_finalist_best",
+        "local_finalists_agree",
+        "retention_finalists_agree",
+        "local",
+        "retention",
+    } and not bool(OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED):
+        return False
+    return bool(resolve_optimizer_policy_indicator_enabled_map().get(name, True))
 
 
 def resolve_optimizer_enabled_policy_indicators(policy_names=None) -> tuple[str, ...]:

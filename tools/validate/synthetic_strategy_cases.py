@@ -757,9 +757,8 @@ def validate_score_numerator_option_case(_base_params):
         policy_names=("base_finalists_agree",),
         table_title="FINALISTS AGREE RESULTS",
     )
-    add_check(results, "strategy_score", case_id, "optimizer_oos_table_keeps_score_and_plain_romd_separate", True, "score" in optimizer_table and "RoMD" in optimizer_table)
-    add_check(results, "strategy_score", case_id, "optimizer_oos_table_system_score_uses_display_multiplier", True, "1946.33" in optimizer_table)
-    add_check(results, "strategy_score", case_id, "optimizer_oos_table_0050_compare_uses_plain_romd", True, "7.97" in optimizer_table and "6.00 (+1.97)" in optimizer_table)
+    add_check(results, "strategy_score", case_id, "optimizer_oos_table_hides_system_score_column", True, "score" not in optimizer_table and "1946.33" not in optimizer_table)
+    add_check(results, "strategy_score", case_id, "optimizer_oos_table_keeps_plain_romd_and_0050_compare", True, "RoMD" in optimizer_table and "7.97" in optimizer_table and "6.00 (+1.97)" in optimizer_table)
 
     single_stock_score_fields = build_score_single_stock_profile_fields({
         "trade_count": 2854,
