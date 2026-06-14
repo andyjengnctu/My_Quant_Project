@@ -204,7 +204,6 @@ def _normalize_source_mode(value):
         "outer_rolling_oos": "rolling_oos",
         "rolling": "rolling_oos",
         "roos": "rolling_oos",
-        "full": "trade",
     }
     return aliases.get(text, text)
 
@@ -265,7 +264,7 @@ def _resolve_source_mode_from_payload(payload, *, filename=""):
         payload.get("model_mode"),
     ):
         mode = _normalize_source_mode(raw)
-        if mode in {"study", "oos", "trade", "rolling_oos"}:
+        if mode in {"study", "full", "oos", "trade", "rolling_oos"}:
             return mode
     payload_mode = _normalize_source_mode(payload.get("mode"))
     if payload_mode == "rolling_oos":
@@ -307,6 +306,10 @@ def _resolve_optimizer_artifact_metadata(path):
         replay_start = oos_start
         replay_end = oos_end
         replay_scope = "rolling_oos_chain"
+    elif source_mode == "full":
+        replay_start = train_start or selection_start
+        replay_end = train_end or selection_end
+        replay_scope = "full_train_window"
     elif source_mode == "trade":
         replay_start = train_start or selection_start
         replay_end = train_end or selection_end
@@ -1818,16 +1821,14 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         param_source_label = self._param_source_display_var.get().strip() or DEFAULT_PARAM_SOURCE_LABEL
         params_path = self._get_selected_params_path()
         artifact_meta = _resolve_optimizer_artifact_metadata(params_path)
-        use_optimizer_range = bool(artifact_meta.get("has_optimizer_range"))
-        replay_start_date = str(artifact_meta.get("replay_start_date") or "") if use_optimizer_range else ""
-        replay_end_date = str(artifact_meta.get("replay_end_date") or "") if use_optimizer_range else ""
-        start_year = int(pd.Timestamp(replay_start_date).year) if replay_start_date else ui_start_year
-        end_year = None if replay_start_date else ui_end_year
-        if replay_end_date and not replay_start_date:
-            end_year = int(pd.Timestamp(replay_end_date).year)
+        optimizer_artifact_range = bool(artifact_meta.get("has_optimizer_range"))
+        replay_start_date = ""
+        replay_end_date = ""
+        start_year = ui_start_year
+        end_year = ui_end_year
         fixed_risk_override = self._resolve_fixed_risk_override()
         fixed_risk_source = "param_file" if fixed_risk_override is None else "override"
-        optimizer_aligned = bool(use_optimizer_range and fixed_risk_source == "param_file")
+        optimizer_aligned = False
         return {
             "params_path": params_path,
             "param_source": self._get_selected_param_source(),
@@ -1835,7 +1836,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             "param_source_mode": artifact_meta.get("source_mode") or "custom",
             "selector": artifact_meta.get("selector") or "",
             "replay_scope": artifact_meta.get("replay_scope") or "custom",
-            "use_optimizer_range": use_optimizer_range,
+            "use_optimizer_range": False,
+            "optimizer_artifact_range": optimizer_artifact_range,
             "optimizer_aligned_replay": optimizer_aligned,
             "replay_start_date": replay_start_date or None,
             "replay_end_date": replay_end_date or None,
@@ -2083,8 +2085,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 enable_rotation=options["enable_rotation"],
                 start_year=options["start_year"],
                 end_year=options["end_year"],
-                start_date=options.get("replay_start_date") or (representative_date if ensemble_first_date else None),
-                end_date=options.get("replay_end_date") or ensemble_last_date or None,
+                start_date=options.get("replay_start_date"),
+                end_date=options.get("replay_end_date"),
                 benchmark_ticker=options["benchmark_ticker"],
                 fixed_risk=options.get("fixed_risk"),
                 verbose=True,
@@ -2110,8 +2112,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 enable_rotation=options["enable_rotation"],
                 start_year=options["start_year"],
                 end_year=options["end_year"],
-                start_date=options.get("replay_start_date") or representative_date,
-                end_date=options.get("replay_end_date") or rolling_last_date,
+                start_date=options.get("replay_start_date"),
+                end_date=options.get("replay_end_date"),
                 benchmark_ticker=options["benchmark_ticker"],
                 fixed_risk=options.get("fixed_risk"),
                 verbose=True,
