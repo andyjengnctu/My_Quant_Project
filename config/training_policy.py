@@ -112,9 +112,6 @@ OPTIMIZER_RETENTION_FINALISTS_AGREE_MIN_AGREE = "auto" # "auto" = 該 seed final
 
 # ============================== Gates ====================================
 
-# base (r>門檻) 版本的 retention 門檻
-OPTIMIZER_BASE_RETENTION_GT_MIN = 0.5 # 選取邏輯：local_retention > 此值後，再依 base_rank 取第一名。
-
 # dominant-year dependency anti-overfitting 開關
 OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED = False
 DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE = 0.70 # 最大獲利年度佔比 + 該年度來源狹窄判斷。
@@ -458,7 +455,6 @@ def build_training_score_policy_snapshot():
         "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED": is_optimizer_local_min_review_enabled(),
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN,
-        "OPTIMIZER_BASE_RETENTION_GT_MIN": OPTIMIZER_BASE_RETENTION_GT_MIN,
         "OPTIMIZER_POLICY_INDICATOR_ENABLED": resolve_optimizer_policy_indicator_enabled_map(),
         "OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE": OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE,
         "OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE": OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE,

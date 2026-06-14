@@ -406,14 +406,17 @@ def _validate_architecture_models_run_best_params_file_tree_sync(_base_params):
     models_dir = PROJECT_ROOT / "models"
 
     required_tree_fragments = [
-        "│  ├─ base.json                      # static ensemble base policy 參數檔",
-        "│  ├─ local.json                     # static ensemble local policy 參數檔",
-        "│  └─ retention.json                 # static ensemble retention policy 參數檔",
+        "│  ├─ base_best.json                 # finalist best base policy 參數檔",
+        "│  ├─ base_finalists_agree.json      # finalist agree base policy 參數檔",
+        "│  ├─ base.json                      # seed ensemble base policy 參數檔",
     ]
     stale_tree_fragments = [
         "│  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄",
         "│  ├─ all_best_params (RoMD).json    # 特定評分口徑下的最佳參數紀錄",
         "models/champion_params.json",
+        "base (r > 0)",
+        "base (r > 0.5)",
+        "base_retention_gt_0_",
     ]
 
     for idx, fragment in enumerate(required_tree_fragments, start=1):
