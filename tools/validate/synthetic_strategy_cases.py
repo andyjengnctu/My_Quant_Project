@@ -19,7 +19,7 @@ from core.buy_sort import calc_buy_sort_value, sort_candidate_rows
 from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
 from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, SYSTEM_SCORE_DISPLAY_MULTIPLIER, V16StrategyParams, format_system_score_for_display, get_score_mdd_denominator_epsilon, get_score_mdd_power
-from config.training_policy import OOS_EVALUATION_END_YEAR, STUDY_FULL_END_YEAR
+from config.training_policy import FULL_END_YEAR, OOS_EVALUATION_END_YEAR
 from core.model_paths import PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.portfolio_fast_data import build_score_single_stock_profile_fields
@@ -1768,31 +1768,33 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         expected_default_search_train_end_year,
         int(default_policy.get("search_train_end_year", 0)),
     )
-    expected_study_full_end_year = None if STUDY_FULL_END_YEAR is None else int(STUDY_FULL_END_YEAR)
-    expected_study_full_end_date = None if expected_study_full_end_year is None else f"{expected_study_full_end_year:04d}-12-31"
+    expected_full_end_year = None if FULL_END_YEAR is None else int(FULL_END_YEAR)
+    expected_full_end_date = None if expected_full_end_year is None else f"{expected_full_end_year:04d}-12-31"
     expected_oos_end_year = None if OOS_EVALUATION_END_YEAR is None else int(OOS_EVALUATION_END_YEAR)
     expected_oos_end_date = None if expected_oos_end_year is None else f"{expected_oos_end_year:04d}-12-31"
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_study_full_end_year", expected_study_full_end_year, default_policy.get("study_full_end_year"))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_full_end_year", expected_full_end_year, default_policy.get("full_end_year"))
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_has_oos_end_year", expected_oos_end_year, default_policy.get("oos_end_year"))
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_derives_oos_end_date", expected_oos_end_date, default_policy.get("oos_end_date"))
 
     latest_data_date = "2026-03-02"
     study_full_policy = build_optimizer_runtime_policy(default_policy, "study", latest_data_date=latest_data_date, study_scope="full")
-    expected_study_full_runtime_end_date = min(value for value in (latest_data_date, expected_study_full_end_date) if value is not None)
-    add_check(results, "strategy_contract", case_id, "study_full_runtime_respects_configured_end_year", expected_study_full_runtime_end_date, study_full_policy.get("search_train_end_date"))
+    expected_full_runtime_end_date = min(value for value in (latest_data_date, expected_full_end_date) if value is not None)
+    add_check(results, "strategy_contract", case_id, "study_full_runtime_respects_configured_full_end_year", expected_full_runtime_end_date, study_full_policy.get("search_train_end_date"))
     add_check(results, "strategy_contract", case_id, "study_full_runtime_has_no_oos_end_date", None, study_full_policy.get("oos_end_date"))
 
     study_full_latest_clip_policy = build_optimizer_runtime_policy(
-        {**default_policy, "study_full_end_year": 2028},
+        {**default_policy, "full_end_year": 2028},
         "study",
         latest_data_date="2026-03-02",
         study_scope="full",
     )
-    add_check(results, "strategy_contract", case_id, "study_full_runtime_clips_future_end_year_to_latest_data", "2026-03-02", str(study_full_latest_clip_policy.get("search_train_end_date") or ""))
+    add_check(results, "strategy_contract", case_id, "full_runtime_clips_future_end_year_to_latest_data", "2026-03-02", str(study_full_latest_clip_policy.get("search_train_end_date") or ""))
 
     oos_policy = build_optimizer_runtime_policy(default_policy, "oos")
     study_oos_policy = build_optimizer_runtime_policy(default_policy, "study", study_scope="oos")
+    full_policy = build_optimizer_runtime_policy(default_policy, "full", latest_data_date="2026-03-02")
     trade_policy = build_optimizer_runtime_policy(default_policy, "trade", latest_data_date="2026-03-02")
+    add_check(results, "strategy_contract", case_id, "full_runtime_uses_configured_full_window_and_has_no_oos", True, full_policy.get("evaluation_scope") == "full_seed_ensemble" and full_policy.get("search_train_end_date") == expected_full_runtime_end_date and full_policy.get("oos_end_date") is None)
     add_check(results, "strategy_contract", case_id, "oos_runtime_respects_configured_end_year", expected_oos_end_date, oos_policy.get("oos_end_date"))
     add_check(results, "strategy_contract", case_id, "study_oos_runtime_respects_configured_end_year", expected_oos_end_date, study_oos_policy.get("oos_end_date"))
     add_check(results, "strategy_contract", case_id, "trade_runtime_drops_oos_end_year", None, trade_policy.get("oos_end_year"))
@@ -1850,11 +1852,11 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "conflicting_explicit_oos_end_year_and_date_rejected", True, conflicting_oos_end_override_rejected)
 
     try:
-        build_optimizer_runtime_policy({**default_policy, "study_full_start_year": 2023, "study_full_end_year": 2022}, "study", latest_data_date="2026-03-02", study_scope="full")
+        build_optimizer_runtime_policy({**default_policy, "full_start_year": 2023, "full_end_year": 2022}, "study", latest_data_date="2026-03-02", study_scope="full")
         invalid_study_full_range_rejected = False
     except ValueError as exc:
-        invalid_study_full_range_rejected = "study_full_end_year" in str(exc)
-    add_check(results, "strategy_contract", case_id, "study_full_reverse_year_range_rejected", True, invalid_study_full_range_rejected)
+        invalid_study_full_range_rejected = "full_end_year" in str(exc)
+    add_check(results, "strategy_contract", case_id, "full_reverse_year_range_rejected", True, invalid_study_full_range_rejected)
 
 
     with TemporaryDirectory() as tmp_dir:
@@ -2056,7 +2058,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         and "OOS RoMD" in optimizer_walk_forward_source,
     )
     add_check(results, "strategy_contract", case_id, "study_memory_prompt_defaults_to_resume_with_restart_on_1", True, "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_study_utils_source and "👉 Study 記憶庫：[Enter] 接續訓練  [1] 重頭開始 : " in optimizer_main_source)
-    add_check(results, "strategy_contract", case_id, "interactive_optimizer_menu_defaults_to_study_and_numbers_modes", True, "[Enter] Study Mode [1] OOS Mode [2] Rolling OOS Mode  [3] Trade Mode" in optimizer_study_utils_source)
+    add_check(results, "strategy_contract", case_id, "interactive_optimizer_menu_defaults_to_study_and_numbers_modes", True, "[Enter] Study Mode [1] Full Mode [2] OOS Mode [3] Rolling OOS Mode  [4] Trade Mode" in optimizer_study_utils_source)
+    with patch("builtins.input", side_effect=["1", "0"]):
+        interactive_full_zero_request = study_utils._resolve_interactive_optimizer_run_request()
+    add_check(results, "strategy_contract", case_id, "interactive_one_routes_to_full_mode", True, interactive_full_zero_request.get("model_mode") == "full" and interactive_full_zero_request.get("n_trials") == 0 and interactive_full_zero_request.get("action") == study_utils.OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE)
     add_check(results, "strategy_contract", case_id, "interactive_study_scope_menu_uses_one_for_oos", True, "[Enter] Study-Full [1] Study-OOS" in optimizer_study_utils_source and "[2] Study-OOS" not in optimizer_study_utils_source)
     add_check(results, "strategy_contract", case_id, "study_oos_dashboard_shows_train_period_single_stock_breakout_stats", True, "def _study_single_stock_breakout_stats_title" in callbacks_source and "Study-OOS 單股突破統計｜Train Period" in callbacks_source and "study_full_breakout_stats_title" in callbacks_source)
     add_check(results, "strategy_contract", case_id, "interactive_trial_prompt_exposes_zero_export", True, "[0] 輸出參數" in optimizer_study_utils_source and "min_value=0" in optimizer_study_utils_source)

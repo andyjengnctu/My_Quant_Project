@@ -75,12 +75,14 @@ OPTIMIZER_POLICY_INDICATOR_ENABLED = {
 
 # ============================== 區間/次數 ====================================
 
-# optimizer 提供三種資料區間語意：
+# optimizer 提供四種資料區間語意：
+# study = 單 seed 研究模式；Study-Full / Study-OOS 由互動選單決定。
+# full = seed ensemble 全期間訓練；使用 FULL_START_YEAR~FULL_END_YEAR；無 OOS。
+# oos = seed ensemble 單一 fold OOS validation。rolling OOS = 多 fold OOS validation。
 # trade = 最新實際交易參數訓練；最近 OUTER_ROLLING_TRAIN_WINDOW_MONTHS；無 OOS。
-# oos = 單一 fold OOS validation。rolling OOS = 多 fold OOS validation。
 DEFAULT_OPTIMIZER_MODEL_MODE = 'trade'
-STUDY_FULL_START_YEAR = 2021
-STUDY_FULL_END_YEAR = None  # None = 使用最新資料日
+FULL_START_YEAR = 2021
+FULL_END_YEAR = None  # None = 使用最新資料日
 OOS_EVALUATION_START_YEAR = 2021
 OOS_EVALUATION_END_YEAR = None  # None = 使用最新資料日
 OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
@@ -224,8 +226,8 @@ TRAINING_SPLIT_POLICY = {
     "search_train_end_year": OOS_EVALUATION_START_YEAR - 1,
     "oos_start_year": OOS_EVALUATION_START_YEAR,
     "oos_end_year": OOS_EVALUATION_END_YEAR,
-    "study_full_start_year": STUDY_FULL_START_YEAR,
-    "study_full_end_year": STUDY_FULL_END_YEAR,
+    "full_start_year": FULL_START_YEAR,
+    "full_end_year": FULL_END_YEAR,
     "objective_mode": 'split_train_romd',
 }
 

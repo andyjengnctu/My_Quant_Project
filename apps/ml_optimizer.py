@@ -7,15 +7,15 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整、預設 optimizer 模式為 trade；Trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；OOS 為 seed ensemble 單 fold validation；Study 為單一隨機 seed 的 OOS study；--outer-oos 執行 rolling monthly OOS test。舊 --model full/split 仍分別相容為 trade/oos。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整、預設 optimizer 模式為 trade；Full 為 seed ensemble 全期間訓練且無 OOS；Trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；OOS 為 seed ensemble 單 fold validation；Study 為單一隨機 seed study；--outer-oos 執行 rolling monthly OOS test。舊 --model split 仍相容為 oos。"
 
 
 def main(argv=None, environ=None):
     argv = sys.argv if argv is None else argv
-    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
+    validate_cli_args(argv, value_options=("--dataset", "--model", "--study-scope", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/ml_optimizer.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model trade|oos|study] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model study|full|oos|trade] [--study-scope oos|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
         print(HELP_DESCRIPTION)
         return 0
 

@@ -227,6 +227,7 @@ NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
 
 NONROLLING_PARAMSET_FILENAME_PREFIX_BY_MODE = {
     "study": "",
+    "full": "full_",
     "oos": "oos_",
     "trade": "trade_",
 }
@@ -3118,8 +3119,6 @@ def get_optimizer_nonrolling_policy_paramset_filename(policy_name: str, *, mode:
     normalized_mode = str(mode or "study").strip().lower()
     if normalized_mode == "split":
         normalized_mode = "oos"
-    elif normalized_mode == "full":
-        normalized_mode = "trade"
     prefix = str(NONROLLING_PARAMSET_FILENAME_PREFIX_BY_MODE.get(normalized_mode, ""))
     if prefix == "":
         return base_filename

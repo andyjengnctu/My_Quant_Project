@@ -93,7 +93,14 @@ def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
             "source": source_label,
             "model_mode": "study",
         }
-    if normalized_upper in {"F", "T"}:
+    if normalized_upper in {"F", "FULL"}:
+        return {
+            "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+            "model_mode": "full",
+        }
+    if normalized_upper in {"T", "TRADE"}:
         return {
             "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
             "action": OPTIMIZER_MENU_ACTION_TRAIN,
@@ -116,25 +123,31 @@ def _parse_optimizer_mode_request_raw(raw_value: str, *, source_label: str):
             "source": source_label,
             "model_mode": "study",
         }
-    if normalized in {"1", "O", "OOS"}:
+    if normalized in {"1", "F", "FULL"}:
+        return {
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+            "model_mode": "full",
+        }
+    if normalized in {"2", "O", "OOS"}:
         return {
             "action": OPTIMIZER_MENU_ACTION_TRAIN,
             "source": source_label,
             "model_mode": "oos",
         }
-    if normalized in {"2", "R", "ROOS", "ROLLING", "ROLLING OOS"}:
+    if normalized in {"3", "R", "ROOS", "ROLLING", "ROLLING OOS"}:
         return {
             "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
             "source": source_label,
             "model_mode": "oos",
         }
-    if normalized in {"3", "T", "F", "TRADE"}:
+    if normalized in {"4", "T", "TRADE"}:
         return {
             "action": OPTIMIZER_MENU_ACTION_TRAIN,
             "source": source_label,
             "model_mode": "trade",
         }
-    raise ValueError("Optimizer Mode 只接受 Enter/S、1/OOS、2/Rolling OOS 或 3/Trade。")
+    raise ValueError("Optimizer Mode 只接受 Enter/Study、1/Full、2/OOS、3/Rolling OOS 或 4/Trade。")
 
 
 def _parse_interactive_trial_count_raw(raw_value: str) -> int:
@@ -145,7 +158,7 @@ def _parse_interactive_trial_count_raw(raw_value: str) -> int:
 
 
 def _resolve_interactive_optimizer_run_request():
-    mode_prompt = "👉 Optimizer Mode：[Enter] Study Mode [1] OOS Mode [2] Rolling OOS Mode  [3] Trade Mode: "
+    mode_prompt = "👉 Optimizer Mode：[Enter] Study Mode [1] Full Mode [2] OOS Mode [3] Rolling OOS Mode  [4] Trade Mode: "
     mode_request = _parse_optimizer_mode_request_raw(input(mode_prompt), source_label="UI/MENU")
     if str(mode_request.get("model_mode", "") or "").strip().lower() == "study":
         study_scope_prompt = "👉 Study Mode：[Enter] Study-Full [1] Study-OOS: "

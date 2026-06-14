@@ -74,8 +74,8 @@ def _build_default_training_split_policy(project_root: str) -> dict:
         "search_train_end_year": None,
         "oos_start_year": None if oos_start_year is None else int(oos_start_year),
         "oos_end_year": None if oos_end_year is None else int(oos_end_year),
-        "study_full_start_year": payload.get("study_full_start_year"),
-        "study_full_end_year": payload.get("study_full_end_year"),
+        "full_start_year": payload.get("full_start_year"),
+        "full_end_year": payload.get("full_end_year"),
         "objective_mode": str(payload.get("objective_mode", "split_train_romd")),
     }
 
@@ -132,6 +132,8 @@ def build_walk_forward_policy_effective_snapshot(policy: Mapping[str, object]) -
         "study_scope": str(policy.get("study_scope", "")),
         "objective_mode": str(policy.get("objective_mode", "split_train_romd")),
         "model_mode": str(policy.get("model_mode", "oos")),
+        "full_start_year": policy.get("full_start_year"),
+        "full_end_year": policy.get("full_end_year"),
     }
 
 
@@ -264,8 +266,8 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     merged['search_train_end_year'] = _coerce_optional_int(merged, 'search_train_end_year', 1900, default_policy)
     merged['oos_start_year'] = _coerce_optional_int(merged, 'oos_start_year', 1900, default_policy)
     merged['oos_end_year'] = _coerce_optional_int(merged, 'oos_end_year', 1900, default_policy)
-    merged['study_full_start_year'] = _coerce_optional_int(merged, 'study_full_start_year', 1900, default_policy)
-    merged['study_full_end_year'] = _coerce_optional_int(merged, 'study_full_end_year', 1900, default_policy)
+    merged['full_start_year'] = _coerce_optional_int(merged, 'full_start_year', 1900, default_policy)
+    merged['full_end_year'] = _coerce_optional_int(merged, 'full_end_year', 1900, default_policy)
     if merged.get('oos_end_date'):
         oos_end_date_year = _year_from_date_text(merged['oos_end_date'])
         if has_explicit_oos_end_pair and merged['oos_end_year'] is not None and int(merged['oos_end_year']) != int(oos_end_date_year):
@@ -285,8 +287,8 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
         raise ValueError('training split policy: oos_end_year 不可早於 oos_start_year')
     if merged.get('oos_start_date') and merged.get('oos_end_date') and str(merged['oos_end_date']) < str(merged['oos_start_date']):
         raise ValueError('training split policy: oos_end_date 不可早於 oos_start_date')
-    if merged['study_full_start_year'] is not None and merged['study_full_end_year'] is not None and int(merged['study_full_end_year']) < int(merged['study_full_start_year']):
-        raise ValueError('training split policy: study_full_end_year 不可早於 study_full_start_year')
+    if merged['full_start_year'] is not None and merged['full_end_year'] is not None and int(merged['full_end_year']) < int(merged['full_start_year']):
+        raise ValueError('training split policy: full_end_year 不可早於 full_start_year')
     merged['objective_mode'] = _normalize_objective_mode(merged.get('objective_mode', default_policy['objective_mode']), default_policy['objective_mode'])
     merged['policy_path'] = path
     merged['inline_override_fields'] = sorted(inline_overrides.keys())
@@ -330,11 +332,11 @@ def normalize_optimizer_model_mode(model_mode: str) -> str:
         'split': 'oos',
         'oos': 'oos',
         'study': 'study',
-        'full': 'trade',
+        'full': 'full',
         'trade': 'trade',
     }
     if normalized not in aliases:
-        raise ValueError(f"optimizer model_mode 只接受 trade、oos 或 study，收到: {model_mode}")
+        raise ValueError(f"optimizer model_mode 只接受 full、trade、oos 或 study，收到: {model_mode}")
     return aliases[normalized]
 
 
@@ -375,6 +377,53 @@ def _resolve_trade_window_from_latest_date(latest_data_date, train_window_months
     }
 
 
+def _apply_full_window_runtime_policy(runtime_policy: dict, *, latest_data_date=None, evaluation_scope: str) -> dict:
+    runtime_policy['evaluation_scope'] = str(evaluation_scope)
+    runtime_policy['oos_start_year'] = None
+    runtime_policy['oos_end_year'] = None
+    runtime_policy['oos_start_date'] = None
+    runtime_policy['oos_end_date'] = None
+    runtime_policy['oos_horizon_months'] = 0
+    full_start_year = int(
+        runtime_policy.get('full_start_year')
+        or runtime_policy.get('train_start_year')
+        or runtime_policy.get('selection_start_year')
+        or 0
+    )
+    if full_start_year <= 0:
+        raise ValueError('training split policy: full_start_year 必須是有效西元年')
+    runtime_policy['full_start_year'] = full_start_year
+    runtime_policy['selection_start_year'] = full_start_year
+    runtime_policy['train_start_year'] = full_start_year
+    runtime_policy['selection_start_date'] = f"{full_start_year:04d}-01-01"
+    runtime_policy['train_start_date'] = f"{full_start_year:04d}-01-01"
+    full_end_year = runtime_policy.get('full_end_year')
+    if full_end_year is not None:
+        full_end_year = int(full_end_year)
+        if full_end_year < full_start_year:
+            raise ValueError('training split policy: full_end_year 不可早於 full_start_year')
+        runtime_policy['full_end_year'] = full_end_year
+    latest_text = _normalize_date_text(latest_data_date) if latest_data_date is not None else None
+    effective_end_text = _earliest_date_text(
+        latest_text,
+        _end_of_year_date_text(full_end_year),
+    )
+    if effective_end_text is None:
+        effective_end_text = _normalize_date_text(runtime_policy.get('search_train_end_date'))
+    if effective_end_text is not None:
+        runtime_policy['search_train_end_date'] = effective_end_text
+        runtime_policy['search_train_end_year'] = _year_from_date_text(effective_end_text)
+    if latest_text is not None:
+        runtime_policy['latest_data_date'] = latest_text
+    if int(runtime_policy['search_train_end_year']) < int(runtime_policy['train_start_year']):
+        raise ValueError('training split policy: full_start_year 不可晚於 search_train_end_year')
+    runtime_policy['min_train_years'] = max(
+        1,
+        int(runtime_policy['search_train_end_year']) - int(runtime_policy['train_start_year']) + 1,
+    )
+    return runtime_policy
+
+
 def build_optimizer_runtime_policy(base_policy: dict, model_mode: str, *, latest_data_date=None, study_scope: str | None = None) -> dict:
     normalized = normalize_optimizer_model_mode(model_mode)
     runtime_policy = dict(base_policy or {})
@@ -387,54 +436,22 @@ def build_optimizer_runtime_policy(base_policy: dict, model_mode: str, *, latest
             runtime_policy['search_train_end_year'] = int(runtime_policy['oos_start_year']) - 1
         return runtime_policy
 
+    if normalized == 'full':
+        return _apply_full_window_runtime_policy(
+            runtime_policy,
+            latest_data_date=latest_data_date,
+            evaluation_scope='full_seed_ensemble',
+        )
+
     if normalized == 'study':
         resolved_study_scope = normalize_optimizer_study_scope(study_scope)
         runtime_policy['study_scope'] = resolved_study_scope
         if resolved_study_scope == 'full':
-            runtime_policy['evaluation_scope'] = 'study_full_single_seed'
-            runtime_policy['oos_start_year'] = None
-            runtime_policy['oos_end_year'] = None
-            runtime_policy['oos_start_date'] = None
-            runtime_policy['oos_end_date'] = None
-            runtime_policy['oos_horizon_months'] = 0
-            study_full_start_year = int(
-                runtime_policy.get('study_full_start_year')
-                or runtime_policy.get('train_start_year')
-                or runtime_policy.get('selection_start_year')
-                or 0
+            return _apply_full_window_runtime_policy(
+                runtime_policy,
+                latest_data_date=latest_data_date,
+                evaluation_scope='study_full_single_seed',
             )
-            if study_full_start_year <= 0:
-                raise ValueError('training split policy: study_full_start_year 必須是有效西元年')
-            runtime_policy['study_full_start_year'] = study_full_start_year
-            runtime_policy['selection_start_year'] = study_full_start_year
-            runtime_policy['train_start_year'] = study_full_start_year
-            runtime_policy['selection_start_date'] = f"{study_full_start_year:04d}-01-01"
-            runtime_policy['train_start_date'] = f"{study_full_start_year:04d}-01-01"
-            study_full_end_year = runtime_policy.get('study_full_end_year')
-            if study_full_end_year is not None:
-                study_full_end_year = int(study_full_end_year)
-                if study_full_end_year < study_full_start_year:
-                    raise ValueError('training split policy: study_full_end_year 不可早於 study_full_start_year')
-                runtime_policy['study_full_end_year'] = study_full_end_year
-            latest_text = _normalize_date_text(latest_data_date) if latest_data_date is not None else None
-            effective_end_text = _earliest_date_text(
-                latest_text,
-                _end_of_year_date_text(study_full_end_year),
-            )
-            if effective_end_text is None:
-                effective_end_text = _normalize_date_text(runtime_policy.get('search_train_end_date'))
-            if effective_end_text is not None:
-                runtime_policy['search_train_end_date'] = effective_end_text
-                runtime_policy['search_train_end_year'] = _year_from_date_text(effective_end_text)
-            if latest_text is not None:
-                runtime_policy['latest_data_date'] = latest_text
-            if int(runtime_policy['search_train_end_year']) < int(runtime_policy['train_start_year']):
-                raise ValueError('training split policy: study_full_start_year 不可晚於 search_train_end_year')
-            runtime_policy['min_train_years'] = max(
-                1,
-                int(runtime_policy['search_train_end_year']) - int(runtime_policy['train_start_year']) + 1,
-            )
-            return runtime_policy
         runtime_policy['evaluation_scope'] = 'study_single_seed'
         if runtime_policy.get('oos_start_year') is not None and not runtime_policy.get('search_train_end_date'):
             runtime_policy['search_train_end_year'] = int(runtime_policy['oos_start_year']) - 1

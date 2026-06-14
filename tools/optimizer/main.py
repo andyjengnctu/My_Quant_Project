@@ -957,8 +957,8 @@ def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> d
     normalized_mode = normalize_optimizer_model_mode(policy.get("model_mode", "oos"))
     evaluation_scope = str(policy.get("evaluation_scope") or "").strip().lower()
     is_train_only_scope = (
-        normalized_mode == "trade"
-        or evaluation_scope == "trade_train_only"
+        normalized_mode in {"full", "trade"}
+        or evaluation_scope in {"full_seed_ensemble", "trade_train_only"}
         or evaluation_scope.startswith("study_full")
     )
 
@@ -982,7 +982,10 @@ def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> d
             oos_period="",
         )
         context["model_mode"] = normalized_mode
-        context["evaluation_scope"] = evaluation_scope or ("trade_train_only" if normalized_mode == "trade" else "study_full_single_seed")
+        context["evaluation_scope"] = evaluation_scope or ("full_seed_ensemble" if normalized_mode == "full" else ("trade_train_only" if normalized_mode == "trade" else "study_full_single_seed"))
+        context["oos_start_date"] = ""
+        context["oos_end_date"] = ""
+        context["oos_period"] = ""
         context["show_oos"] = False
         return context
 
@@ -2503,7 +2506,7 @@ def _has_cli_flag(argv, option_name: str) -> bool:
 
 def _mode_needs_latest_data_date(model_mode: str, study_scope: str | None = None) -> bool:
     normalized_mode = normalize_optimizer_model_mode(model_mode)
-    if normalized_mode == "trade":
+    if normalized_mode in {"full", "trade"}:
         return True
     if normalized_mode == "study" and normalize_optimizer_study_scope(study_scope) == "full":
         return True
@@ -2527,6 +2530,8 @@ def _format_optimizer_model_mode_for_display(model_mode: str, walk_forward_polic
     if normalized_mode == "study":
         study_scope = normalize_optimizer_study_scope((walk_forward_policy or {}).get("study_scope"))
         return "Study-Full" if study_scope == "full" else "Study-OOS"
+    if normalized_mode == "full":
+        return "Full"
     return normalized_mode
 
 
@@ -2659,7 +2664,7 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
     try:
         normalized = normalize_optimizer_model_mode(normalized)
     except ValueError as exc:
-        raise ValueError(f"optimizer 模式只接受 trade、oos 或 study，收到: {normalized}") from exc
+        raise ValueError(f"optimizer 模式只接受 full、trade、oos 或 study，收到: {normalized}") from exc
     return normalized, source
 
 
@@ -2670,8 +2675,8 @@ def main(argv=None, environ=None):
     validate_cli_args(argv, value_options=("--dataset", "--model", "--study-scope", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model trade|oos|study] [--study-scope oos|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
-        print("說明: 預設 trade；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為 seed ensemble 單 fold validation；study 可選 Study-OOS 或 Study-Full，且維持單一隨機 seed study 輸出；--outer-oos 執行 rolling monthly OOS test。舊 --model full/split 仍分別相容為 trade/oos。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model study|full|oos|trade] [--study-scope oos|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
+        print("說明: 預設 trade；full 為 seed ensemble 全期間訓練且無 OOS；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為 seed ensemble 單 fold validation；study 可選 Study-OOS 或 Study-Full，且維持單一隨機 seed study 輸出；--outer-oos 執行 rolling monthly OOS test。舊 --model split 仍相容為 oos。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -2796,7 +2801,7 @@ def main(argv=None, environ=None):
             requested_study_scope = normalize_optimizer_study_scope(requested_study_scope)
         except ValueError:
             requested_study_scope = ""
-    target_model_mode = requested_model_mode if requested_model_mode in {"oos", "study", "trade"} else selected_model_mode
+    target_model_mode = requested_model_mode if requested_model_mode in {"full", "oos", "study", "trade"} else selected_model_mode
     target_study_scope = ""
     if target_model_mode == "study":
         target_study_scope = requested_study_scope or selected_study_scope or normalize_optimizer_study_scope(None)
@@ -2976,7 +2981,8 @@ def main(argv=None, environ=None):
                 if study is not None:
                     close_study_storage(study)
         if selected_model_mode != "trade":
-            print(f"{C_YELLOW}ℹ️ OOS Mode 目前沒有可接續的單一 study 記憶庫輸出；請用 --trials N 重新產生 OOS 結果。{C_RESET}")
+            mode_label = _format_optimizer_model_mode_for_display(selected_model_mode, walk_forward_policy)
+            print(f"{C_YELLOW}ℹ️ {mode_label} 目前沒有可接續的單一 study 記憶庫輸出；請用 --trials N 重新產生結果。{C_RESET}")
             return 0
         if not db_file:
             print(f"{C_RED}❌ 目前預設使用 memory study，不保留長期 DB；export_candidate 不支援從硬碟接續匯出。請用 Trade mode --trials N 重新訓練產生 candidate_best。{C_RESET}", file=sys.stderr)
@@ -3325,7 +3331,7 @@ def main(argv=None, environ=None):
                         )
                         if status != 0:
                             return int(status)
-                    elif selected_model_mode == 'oos':
+                    elif selected_model_mode in {'full', 'oos'}:
                         finalize_best_trial_outputs(
                             session=session,
                             study=study,
