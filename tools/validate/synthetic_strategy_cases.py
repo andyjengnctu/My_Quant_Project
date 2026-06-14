@@ -1482,6 +1482,12 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "optimizer_full_mode_local_retention_policy_indicators_disabled_by_default", ("base_finalist_best", "base_finalists_agree", "base"), full_mode_local_policy_names)
     add_check(results, "strategy_contract", case_id, "optimizer_oos_mode_preserves_global_local_min_review_default", bool(training_policy.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED), oos_mode_local_enabled)
 
+    outer_rolling_oos = importlib.import_module("tools.optimizer.outer_rolling_oos")
+    add_check(results, "strategy_contract", case_id, "optimizer_full_seed_ensemble_base_filename_has_ensemble_dimension", "full_ensemble_base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="full"))
+    add_check(results, "strategy_contract", case_id, "optimizer_oos_seed_ensemble_base_filename_has_ensemble_dimension", "oos_ensemble_base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="oos"))
+    add_check(results, "strategy_contract", case_id, "optimizer_roos_seed_ensemble_base_filename_has_ensemble_dimension", "roos_ensemble_base.json", outer_rolling_oos.get_optimizer_policy_paramset_filename("base"))
+    add_check(results, "strategy_contract", case_id, "optimizer_study_legacy_base_filename_remains_stable", "base.json", outer_rolling_oos.get_optimizer_nonrolling_policy_paramset_filename("base", mode="study"))
+
     add_check(
         results,
         "strategy_contract",

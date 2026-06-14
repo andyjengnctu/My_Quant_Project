@@ -29,18 +29,18 @@ PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
     "trade_base_finalists_agree.json",
     "trade_local_finalists_agree.json",
     "trade_retention_finalists_agree.json",
-    "trade_base.json",
-    "trade_local.json",
-    "trade_retention.json",
+    "trade_ensemble_base.json",
+    "trade_ensemble_local.json",
+    "trade_ensemble_retention.json",
     "full_base_best.json",
     "full_local_best.json",
     "full_retention_best.json",
     "full_base_finalists_agree.json",
     "full_local_finalists_agree.json",
     "full_retention_finalists_agree.json",
-    "full_base.json",
-    "full_local.json",
-    "full_retention.json",
+    "full_ensemble_base.json",
+    "full_ensemble_local.json",
+    "full_ensemble_retention.json",
     "base_best.json",
     "local_best.json",
     "retention_best.json",
@@ -57,18 +57,18 @@ PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES = (
     "oos_base_finalists_agree.json",
     "oos_local_finalists_agree.json",
     "oos_retention_finalists_agree.json",
-    "oos_base.json",
-    "oos_local.json",
-    "oos_retention.json",
+    "oos_ensemble_base.json",
+    "oos_ensemble_local.json",
+    "oos_ensemble_retention.json",
     "roos_base_best.json",
     "roos_local_best.json",
     "roos_retention_best.json",
     "roos_base_finalists_agree.json",
     "roos_local_finalists_agree.json",
     "roos_retention_finalists_agree.json",
-    "roos_base.json",
-    "roos_local.json",
-    "roos_retention.json",
+    "roos_ensemble_base.json",
+    "roos_ensemble_local.json",
+    "roos_ensemble_retention.json",
 )
 
 
@@ -311,7 +311,8 @@ def resolve_default_primary_param_source_record(project_root: str, environ: Opti
 
     Legacy installs may still provide ``models/run_best_params.json``.  Current
     static seed-ensemble exports ship active-param ensemble files such as
-    ``models/base.json``.  This resolver is the single source used by formal
+    ``models/base.json`` or prefixed seed-ensemble files such as
+    ``models/full_ensemble_base.json``.  This resolver is the single source used by formal
     checks and non-interactive tooling so they do not keep hard-coding one
     obsolete filename.
     """

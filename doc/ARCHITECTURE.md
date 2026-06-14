@@ -34,11 +34,11 @@ project/
 │  ├─ ARCHITECTURE.md                 # 本檔
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ models/
-│  ├─ base_best.json                 # finalist best base policy 參數檔
-│  ├─ base_finalists_agree.json      # finalist agree base policy 參數檔
-│  ├─ base.json                      # seed ensemble base policy 參數檔
-│  ├─ local.json                     # seed ensemble local policy 參數檔
-│  └─ retention.json                 # seed ensemble retention policy 參數檔
+│  ├─ full_base_best.json            # Full finalist best base policy 參數檔
+│  ├─ full_base_finalists_agree.json # Full finalist agree base policy 參數檔
+│  ├─ full_ensemble_base.json        # Full seed ensemble base policy 參數檔
+│  ├─ oos_ensemble_base.json         # OOS seed ensemble base policy 參數檔
+│  └─ roos_ensemble_base.json        # ROOS seed ensemble base policy 參數檔
 └─ tools/
    ├─ downloader/                     # 資料下載子系統
    ├─ optimizer/                      # 參數最佳化子系統

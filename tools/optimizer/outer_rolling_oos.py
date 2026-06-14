@@ -208,9 +208,9 @@ PARAMSET_FILENAME_BY_POLICY = {
     BASE_FINALISTS_AGREE_POLICY_NAME: "roos_base_finalists_agree.json",
     LOCAL_FINALISTS_AGREE_POLICY_NAME: "roos_local_finalists_agree.json",
     RETENTION_FINALISTS_AGREE_POLICY_NAME: "roos_retention_finalists_agree.json",
-    "base": "roos_base.json",
-    "local": "roos_local.json",
-    "retention": "roos_retention.json",
+    "base": "roos_ensemble_base.json",
+    "local": "roos_ensemble_local.json",
+    "retention": "roos_ensemble_retention.json",
 }
 
 NONROLLING_PARAMSET_FILENAME_BY_POLICY = {
@@ -289,6 +289,18 @@ STALE_POLICY_PARAMSET_FILENAMES = (
     "retention_agree.json",
     "oos_retention_agree.json",
     "trade_retention_agree.json",
+    "full_base.json",
+    "full_local.json",
+    "full_retention.json",
+    "oos_base.json",
+    "oos_local.json",
+    "oos_retention.json",
+    "trade_base.json",
+    "trade_local.json",
+    "trade_retention.json",
+    "roos_base.json",
+    "roos_local.json",
+    "roos_retention.json",
 )
 
 
@@ -3112,13 +3124,18 @@ def get_optimizer_nonrolling_policy_paramset_filename(policy_name: str, *, mode:
     """Return the canonical JSON filename for a non-rolling optimizer policy paramset.
 
     Study mode keeps the legacy first-class filenames (base/local/retention) as
-    the single-seed study artifact.  OOS and Trade use explicit mode prefixes so
-    validation artifacts do not overwrite Study outputs or live Trade outputs.
+    the single-seed study artifact.  Prefixed modes put the aggregation dimension
+    before the policy target, e.g. ``full_ensemble_base.json`` and
+    ``oos_ensemble_base.json``, so console labels and filenames use the same
+    ``<mode>_<method>_<target>.json`` contract.
     """
-    base_filename = str(NONROLLING_PARAMSET_FILENAME_BY_POLICY.get(str(policy_name), f"{policy_name}.json"))
+    policy_key = str(policy_name)
+    base_filename = str(NONROLLING_PARAMSET_FILENAME_BY_POLICY.get(policy_key, f"{policy_key}.json"))
     normalized_mode = str(mode or "study").strip().lower()
     if normalized_mode == "split":
         normalized_mode = "oos"
+    if normalized_mode != "study" and policy_key in {"base", "local", "retention"}:
+        return f"{normalized_mode}_ensemble_{policy_key}.json"
     prefix = str(NONROLLING_PARAMSET_FILENAME_PREFIX_BY_MODE.get(normalized_mode, ""))
     if prefix == "":
         return base_filename
