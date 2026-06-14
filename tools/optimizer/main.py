@@ -51,6 +51,7 @@ from config.training_policy import (
     TRADE_PROMOTE_MIN_SCORE_DELTA,
     OPTIMIZER_PERSIST_STUDY_DB,
     is_optimizer_local_min_review_enabled,
+    set_optimizer_runtime_model_mode,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
@@ -1334,8 +1335,9 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
         from tools.optimizer.session import close_study_storage
         from tools.optimizer.study_utils import build_best_params_payload_from_trial, is_qualified_trial_value
 
-        configure_optuna_logging()
         walk_forward_policy = dict(task["walk_forward_policy"])
+        set_optimizer_runtime_model_mode(walk_forward_policy.get("model_mode"))
+        configure_optuna_logging()
         selected_data_dir = str(task["selected_data_dir"])
         optimizer_required_min_rows = int(task["optimizer_required_min_rows"])
         requested_trials = int(task["requested_trials"])
@@ -1676,8 +1678,26 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
     return payload
 
 
+def _remove_disabled_nonrolling_policy_paramset_files(*, mode: str, active_policy_names: set[str], all_policy_names: tuple[str, ...]) -> None:
+    from tools.optimizer.outer_rolling_oos import get_optimizer_nonrolling_policy_paramset_filename
+
+    normalized_mode = normalize_optimizer_model_mode(mode)
+    active = {str(name) for name in set(active_policy_names or set())}
+    for policy_name in tuple(str(name) for name in all_policy_names if str(name)):
+        if policy_name in active:
+            continue
+        filename = get_optimizer_nonrolling_policy_paramset_filename(policy_name, mode=normalized_mode)
+        path = os.path.join(MODELS_DIR, filename)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as exc:
+            print(f"{C_YELLOW}⚠️ 無法移除 disabled policy 檔：{_project_relative_path(path)}｜{type(exc).__name__}: {exc}{C_RESET}")
+
+
 def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: dict[str, list[dict]], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int, write_files: bool = True) -> tuple[dict[str, str], dict[str, dict]]:
     from tools.optimizer.outer_rolling_oos import (
+        ALL_REPORT_POLICY_NAMES,
         get_optimizer_paramset_policy_names,
         get_optimizer_nonrolling_policy_paramset_filename,
         select_finalists_agree_members,
@@ -1692,6 +1712,12 @@ def _write_static_seed_ensemble_policy_paramsets(*, policy_members_by_policy: di
     paths: dict[str, str] = {}
     payloads: dict[str, dict] = {}
     first_class_policy_set = set(first_class_policy_names)
+    if bool(write_files):
+        _remove_disabled_nonrolling_policy_paramset_files(
+            mode=selected_model_mode,
+            active_policy_names=first_class_policy_set,
+            all_policy_names=tuple(ALL_REPORT_POLICY_NAMES),
+        )
     for policy_name in replay_policy_names:
         members = sorted(
             list((policy_members_by_policy or {}).get(str(policy_name)) or []),
@@ -2700,7 +2726,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model study|full|oos|trade] [--study-scope oos|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
-        print("說明: 預設 trade；full 為 seed ensemble 全期間訓練且無 OOS；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為 seed ensemble 單 fold validation；study 可選 Study-OOS 或 Study-Full，且維持單一隨機 seed study 輸出；--outer-oos 執行 rolling monthly OOS test。舊 --model split 仍相容為 oos。")
+        print("說明: 預設 trade；full 為 seed ensemble 全期間訓練且無 OOS，且 local_min review 預設關閉；trade 以最新資料日往前固定訓練窗產生 candidate_best/run_best；oos 為 seed ensemble 單 fold validation；study 可選 Study-OOS 或 Study-Full，且維持單一隨機 seed study 輸出；--outer-oos 執行 rolling monthly OOS test。舊 --model split 仍相容為 oos。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -2747,6 +2773,8 @@ def main(argv=None, environ=None):
     except ValueError as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
+
+    set_optimizer_runtime_model_mode(selected_model_mode)
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(argv, environ, default=DEFAULT_DATASET_PROFILE)
@@ -2836,6 +2864,7 @@ def main(argv=None, environ=None):
         requested_study_db_action = str(getattr(session, "requested_study_db_action", "") or "").strip().lower()
         selected_model_mode = target_model_mode
         selected_study_scope = target_study_scope
+        set_optimizer_runtime_model_mode(selected_model_mode)
         latest_data_date = None
         if _mode_needs_latest_data_date(selected_model_mode, selected_study_scope):
             try:

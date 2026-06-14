@@ -94,7 +94,10 @@ OPTIMIZER_STUDY_STORAGE_MODE = 'memory'
 OPTIMIZER_ALLOW_PER_RUN_TEMP_DB = True
 
 # local_min review 計算開關。
+# OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED 控制一般模式預設值；Full Mode 另有獨立預設，避免全期間正式訓練預設耗費 local review。
 OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
+OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED = False
+_OPTIMIZER_RUNTIME_MODEL_MODE = None
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.01  # local_min_score finalist review 預設取訓練次數的比例
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
@@ -144,7 +147,20 @@ MIN_EQUITY_CURVE_R_SQUARED = 0.40  # 權益曲線最小 R 平方門檻
 
 #========================= Functions ===========================================
 
-def is_optimizer_local_min_review_enabled() -> bool:
+def set_optimizer_runtime_model_mode(model_mode) -> None:
+    global _OPTIMIZER_RUNTIME_MODEL_MODE
+    normalized = str(model_mode or "").strip().lower()
+    _OPTIMIZER_RUNTIME_MODEL_MODE = normalized or None
+
+
+def resolve_optimizer_runtime_model_mode() -> str:
+    return str(_OPTIMIZER_RUNTIME_MODEL_MODE or "").strip().lower()
+
+
+def is_optimizer_local_min_review_enabled(model_mode=None) -> bool:
+    normalized = str(model_mode if model_mode is not None else resolve_optimizer_runtime_model_mode()).strip().lower()
+    if normalized == "full":
+        return bool(OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED)
     return bool(OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED)
 
 
@@ -165,7 +181,7 @@ def is_optimizer_policy_indicator_enabled(policy_name: str) -> bool:
         "retention_finalists_agree",
         "local",
         "retention",
-    } and not bool(OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED):
+    } and not bool(is_optimizer_local_min_review_enabled()):
         return False
     return bool(resolve_optimizer_policy_indicator_enabled_map().get(name, True))
 
@@ -455,6 +471,9 @@ def build_training_score_policy_snapshot():
         "SCORE_MEDIAN_R_TARGET": resolve_score_median_r_target(),
         "OPTIMIZER_FIXED_TP_PERCENT": OPTIMIZER_FIXED_TP_PERCENT,
         "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED": is_optimizer_local_min_review_enabled(),
+        "OPTIMIZER_LOCAL_MIN_REVIEW_DEFAULT_ENABLED": bool(OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED),
+        "OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED": bool(OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED),
+        "OPTIMIZER_RUNTIME_MODEL_MODE": resolve_optimizer_runtime_model_mode(),
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN,
         "OPTIMIZER_POLICY_INDICATOR_ENABLED": resolve_optimizer_policy_indicator_enabled_map(),
@@ -493,6 +512,9 @@ def build_optimizer_train_test_policy_snapshot():
     payload["OPTIMIZER_STUDY_STORAGE_MODE"] = str(OPTIMIZER_STUDY_STORAGE_MODE)
     payload["OPTIMIZER_ALLOW_PER_RUN_TEMP_DB"] = bool(OPTIMIZER_ALLOW_PER_RUN_TEMP_DB)
     payload["OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED"] = is_optimizer_local_min_review_enabled()
+    payload["OPTIMIZER_LOCAL_MIN_REVIEW_DEFAULT_ENABLED"] = bool(OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED)
+    payload["OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED"] = bool(OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED)
+    payload["OPTIMIZER_RUNTIME_MODEL_MODE"] = resolve_optimizer_runtime_model_mode()
     payload["OPTIMIZER_POLICY_INDICATOR_ENABLED"] = resolve_optimizer_policy_indicator_enabled_map()
     payload["OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE"] = OPTIMIZER_BASE_FINALISTS_AGREE_MIN_AGREE
     payload["OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE"] = OPTIMIZER_LOCAL_FINALISTS_AGREE_MIN_AGREE
