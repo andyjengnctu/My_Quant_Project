@@ -470,6 +470,9 @@
 | T261 | `validate_synthetic_ensemble_reentry_consensus_watchlist_case` | B168 |
 | T262 | `validate_synthetic_inherited_entry_fill_must_be_above_stop_case` | B169 |
 | T263 | `validate_optimizer_replay_raw_universe_contract_case` | B18 |
+| T264 | `validate_breakout_quality_policy_single_source_case` | B11 |
+| T265 | `validate_breakout_quality_chronological_embargo_case` | B01 |
+| T266 | `validate_breakout_quality_runtime_artifact_contract_case` | B15 |
 
 ## G. 逐項收斂紀錄
 
@@ -1304,3 +1307,6 @@
 | 2026-06-13 | B52 | 將 optimizer 人類可讀輸出統一收斂到 display-only system-score formatter，保留內部原始 score / 排序 / Gate / JSON / CSV；同時拆開 OOS 系統得分與純 RoMD / 0050 顯示後重新收斂為 DONE | PARTIAL -> DONE | `validate_optimizer_walk_forward_policy_contract_case` |
 | 2026-06-13 | T257 | 擴充 optimizer 顯示契約，納入 OOS / Rolling OOS / Trade、seed ensemble、local-min review、OOS Markdown 與 system score / plain RoMD 分流 | DONE -> PARTIAL | `validate_optimizer_walk_forward_policy_contract_case` |
 | 2026-06-13 | T257 | 驗證所有 optimizer 人類可讀 system score 統一套用倍率，且純 RoMD / 0050 / retention 與 raw JSON / CSV 維持原始口徑後重新收斂為 DONE | PARTIAL -> DONE | `validate_optimizer_walk_forward_policy_contract_case` |
+| 2026-07-05 | T264 | 補齊 breakout quality policy 單一真理來源 synthetic case 的 DONE/T 正式索引 | NEW -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-05 | T265 | 補齊 breakout quality chronological split 與 label-end embargo synthetic case 的 DONE/T 正式索引 | NEW -> DONE | `validate_breakout_quality_chronological_embargo_case` |
+| 2026-07-05 | T266 | 補齊 breakout quality runtime artifact、canonical path 與 active threshold synthetic case 的 DONE/T 正式索引 | NEW -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
