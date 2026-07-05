@@ -134,7 +134,7 @@ def _capture_python_script_inline(
     env: Optional[Dict[str, str]] = None,
     input_text: Optional[str] = None,
 ) -> Dict[str, Any]:
-    script_path = str(args[1]).replace('\\', '/')
+    script_path = str(args[1]).replace("\\", "/")
     started = time.time()
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
@@ -184,7 +184,7 @@ def _capture_python_script_inline(
 
     return {
         'args': args,
-        'cmd': ' '.join(str(item) for item in args),
+        'cmd': " ".join(str(item) for item in args),
         'returncode': captured_returncode,
         'stdout': stdout_buffer.getvalue(),
         'stderr': stderr_buffer.getvalue(),
@@ -207,7 +207,7 @@ def _run_python_cli_probe(
     if (
         len(args) >= 2
         and str(args[0]) == sys.executable
-        and str(args[1]).replace('\\', '/') in INLINE_CLI_TARGETS
+        and str(args[1]).replace("\\", "/") in INLINE_CLI_TARGETS
     ):
         return _capture_python_script_inline(args, env=env, input_text=input_text)
     return run_command(args, timeout=timeout, env=env, input_text=input_text)
@@ -621,26 +621,46 @@ def check_local_regression_contract() -> List[Dict[str, Any]]:
 
 
 def _usage_matches(stdout: str, expected_usage: str) -> bool:
-    usage_lines = [line.strip() for line in stdout.splitlines() if "用法:" in line]
-    if not usage_lines:
+    usage_bodies: List[str] = []
+    for raw_line in stdout.splitlines():
+        normalized_line = raw_line.replace("\\", "/").strip()
+        lowered_line = normalized_line.lower()
+        if lowered_line.startswith("usage:"):
+            usage_bodies.append(normalized_line.split(":", 1)[1].strip())
+        elif "用法:" in normalized_line:
+            usage_bodies.append(normalized_line.split("用法:", 1)[1].strip())
+
+    if not usage_bodies:
         return False
 
-    expected_body = expected_usage.replace('\\', '/').strip()
+    expected_body = expected_usage.replace("\\", "/").strip()
     expected_parts = expected_body.split()
-    expected_script = expected_parts[1] if len(expected_parts) >= 2 and expected_parts[0] == 'python' else ''
-    expected_tail = ' '.join(expected_parts[2:]) if len(expected_parts) >= 3 and expected_parts[0] == 'python' else ''
+    expected_script = expected_parts[1] if len(expected_parts) >= 2 and expected_parts[0] == "python" else ""
+    expected_script_name = expected_script.rsplit("/", 1)[-1] if expected_script else ""
+    expected_tail = " ".join(expected_parts[2:]) if len(expected_parts) >= 3 and expected_parts[0] == "python" else ""
 
-    for line in usage_lines:
-        normalized_line = line.replace('\\', '/').strip()
-        if expected_body in normalized_line:
+    for body in usage_bodies:
+        normalized_body = body.replace("\\", "/").strip()
+        if expected_body in normalized_body:
             return True
-        body = normalized_line.split('用法:', 1)[1].strip() if '用法:' in normalized_line else normalized_line
-        body_parts = body.split()
-        if len(body_parts) >= 2 and body_parts[0] == 'python' and expected_script:
+
+        body_parts = normalized_body.split()
+        if not body_parts or not expected_script:
+            continue
+
+        if body_parts[0] == "python" and len(body_parts) >= 2:
             actual_script = body_parts[1]
-            actual_tail = ' '.join(body_parts[2:])
-            if actual_script.endswith(expected_script) and (not expected_tail or expected_tail in actual_tail):
-                return True
+            actual_tail = " ".join(body_parts[2:])
+        else:
+            actual_script = body_parts[0]
+            actual_tail = " ".join(body_parts[1:])
+
+        script_matches = (
+            actual_script.endswith(expected_script)
+            or actual_script.rsplit("/", 1)[-1] == expected_script_name
+        )
+        if script_matches and (not expected_tail or expected_tail in actual_tail):
+            return True
     return False
 
 
@@ -676,7 +696,7 @@ def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
             outcome = _run_python_cli_probe([sys.executable, target, *suffix_args], timeout=timeout)
             combined = f"{outcome['stdout']}\n{outcome['stderr']}"
             ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
-            results.append(summarize_result(f"dataset_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
+            results.append(summarize_result(f"dataset_cli::{Path(target).name}::{" ".join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
     return results
 
 
@@ -691,13 +711,13 @@ def check_generic_cli_errors(timeout: int) -> List[Dict[str, Any]]:
             outcome = _run_python_cli_probe([sys.executable, target, *suffix_args], timeout=timeout)
             combined = f"{outcome['stdout']}\n{outcome['stderr']}"
             ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
-            results.append(summarize_result(f"generic_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
+            results.append(summarize_result(f"generic_cli::{Path(target).name}::{" ".join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
 
     for suffix_args, expected in RUN_ALL_CLI_CASES:
         outcome = _run_python_cli_probe([sys.executable, "tools/local_regression/run_all.py", *suffix_args], timeout=timeout)
         combined = f"{outcome['stdout']}\n{outcome['stderr']}"
         ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
-        results.append(summarize_result(f"generic_cli::run_all.py::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
+        results.append(summarize_result(f"generic_cli::run_all.py::{" ".join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
     return results
 
 
