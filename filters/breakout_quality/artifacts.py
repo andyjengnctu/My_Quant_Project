@@ -18,8 +18,8 @@ from filters.breakout_quality.contract import (
     DEFAULT_SPLIT_FILENAME,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
-    INNER_SPLIT_VALUES,
     OUTER_SPLIT_VALUES,
+    SELECTION_ROLE_VALUES,
     SCORE_COLUMN,
     SCORE_COMPARISON,
     SCORE_TABLE_REQUIRED_COLUMNS,
@@ -152,21 +152,29 @@ def _validate_split_assignment_record(paths: BreakoutQualityArtifactPaths, manif
     frame = validate_split_assignment_frame(read_breakout_quality_csv(paths.split_path))
     if int(record.get("row_count", -1)) != len(frame):
         raise ValueError("breakout quality split assignment row_count 與檔案不一致")
-    outer_counts = {name: int((frame["outer_split"] == name).sum()) for name in OUTER_SPLIT_VALUES}
-    inner_counts = {name: int((frame["inner_split"] == name).sum()) for name in INNER_SPLIT_VALUES}
+    outer_counts = {
+        name: int((frame["outer_split"] == name).sum())
+        for name in OUTER_SPLIT_VALUES
+    }
+    selection_role_counts = {
+        name: int((frame["selection_role"] == name).sum())
+        for name in SELECTION_ROLE_VALUES
+    }
     expected_outer = record.get("outer_split_counts")
-    expected_inner = record.get("inner_split_counts")
+    expected_selection_roles = record.get("selection_role_counts")
     if not isinstance(expected_outer, dict) or {
         name: int(expected_outer.get(name, -1)) for name in OUTER_SPLIT_VALUES
     } != outer_counts:
         raise ValueError(
             f"breakout quality split assignment outer_split_counts 不一致: expected={expected_outer}, actual={outer_counts}"
         )
-    if not isinstance(expected_inner, dict) or {
-        name: int(expected_inner.get(name, -1)) for name in INNER_SPLIT_VALUES
-    } != inner_counts:
+    if not isinstance(expected_selection_roles, dict) or {
+        name: int(expected_selection_roles.get(name, -1))
+        for name in SELECTION_ROLE_VALUES
+    } != selection_role_counts:
         raise ValueError(
-            f"breakout quality split assignment inner_split_counts 不一致: expected={expected_inner}, actual={inner_counts}"
+            "breakout quality split assignment selection_role_counts 不一致: "
+            f"expected={expected_selection_roles}, actual={selection_role_counts}"
         )
     if str(record.get("group_key") or "").strip() != "ticker/date/high_len":
         raise ValueError("breakout quality split assignment group_key 必須是 ticker/date/high_len")
@@ -233,6 +241,39 @@ def load_model_artifact_contract(
         field_name="model",
     )
     _validate_split_assignment_record(paths, manifest)
+    if _require_nonempty_text(manifest, "training_mode") != "fixed_epoch_full_selection":
+        raise ValueError("breakout quality model 必須使用 fixed_epoch_full_selection")
+    fixed_epochs = int(manifest.get("fixed_epochs", 0))
+    completed_epochs = int(manifest.get("completed_epochs", 0))
+    if fixed_epochs < 1 or completed_epochs != fixed_epochs:
+        raise ValueError(
+            "breakout quality fixed epoch 契約不一致: "
+            f"fixed={fixed_epochs}, completed={completed_epochs}"
+        )
+    if bool(manifest.get("early_stopping_enabled", True)):
+        raise ValueError("breakout quality scheme B 禁止 early stopping")
+    if bool(manifest.get("inner_validation_used", True)):
+        raise ValueError("breakout quality scheme B 禁止 inner validation")
+    if not bool(manifest.get("training_uses_all_eligible_selection_rows", False)):
+        raise ValueError("breakout quality scheme B 必須使用全部 eligible Selection rows")
+    if bool(manifest.get("oos_predictions_used_during_training", True)):
+        raise ValueError("breakout quality OOS predictions 不可用於訓練")
+    if bool(manifest.get("oos_metrics_emitted_by_train", True)):
+        raise ValueError("breakout quality train.py 不可輸出 OOS metrics")
+    fixed_threshold = float(manifest.get("fixed_evaluation_threshold", float("nan")))
+    if not 0.0 <= fixed_threshold <= 1.0:
+        raise ValueError("breakout quality fixed_evaluation_threshold 必須介於 0 與 1")
+    threshold_policy = _require_mapping(manifest, "threshold_policy")
+    if _require_nonempty_text(threshold_policy, "mode") != "fixed_before_oos":
+        raise ValueError("breakout quality threshold_policy 必須在 OOS 前固定")
+    if float(threshold_policy.get("evaluation_threshold", float("nan"))) != fixed_threshold:
+        raise ValueError("breakout quality threshold_policy 與 fixed_evaluation_threshold 不一致")
+    if _require_nonempty_text(threshold_policy, "runtime_source") != SCORE_THRESHOLD_SOURCE:
+        raise ValueError("breakout quality threshold runtime source 與正式契約不一致")
+    if bool(threshold_policy.get("optimized_by_train", True)):
+        raise ValueError("breakout quality scheme B 不可由 train.py 最佳化 threshold")
+    if bool(threshold_policy.get("oos_tuning_allowed", True)):
+        raise ValueError("breakout quality scheme B 禁止使用 OOS 調整 threshold")
 
     return BreakoutQualityModelContract(paths=paths, manifest=manifest)
 

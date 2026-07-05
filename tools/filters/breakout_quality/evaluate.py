@@ -1,4 +1,4 @@
-"""Evaluate breakout-quality research scores on canonical inner-validation or outer-OOS rows."""
+"""Evaluate fixed-threshold breakout-quality scores on Selection train or outer OOS."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import json
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_policy import BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
 from filters.breakout_quality.artifacts import (
     compute_file_sha256,
     load_model_artifact_contract,
@@ -23,14 +22,13 @@ from filters.breakout_quality.artifacts import (
 )
 from filters.breakout_quality.contract import (
     DEFAULT_FILTER_ID,
-    INNER_SPLIT_TRAIN,
-    INNER_SPLIT_VALIDATION,
     LABEL_PASS,
     LABEL_REJECT,
     OUTER_SPLIT_OOS,
     OUTER_SPLIT_SELECTION,
     RUNTIME_SCOPE_RESEARCH,
     SCORE_COLUMN,
+    SELECTION_ROLE_TRAIN,
 )
 from filters.breakout_quality.paths import (
     resolve_filter_research_manifest_path,
@@ -44,38 +42,45 @@ from tools.filters.breakout_quality.common import (
     read_json,
 )
 
-EVALUATION_SPLIT_VALIDATION = "validation"
 EVALUATION_SPLIT_TRAIN = "train"
 EVALUATION_SPLIT_OOS = "oos"
 EVALUATION_SPLIT_ALL = "all"
-EVALUATION_SPLIT_ALIASES = {
-    "validation": EVALUATION_SPLIT_VALIDATION,
-    "inner_validation": EVALUATION_SPLIT_VALIDATION,
-    "train": EVALUATION_SPLIT_TRAIN,
-    "inner_train": EVALUATION_SPLIT_TRAIN,
-    "oos": EVALUATION_SPLIT_OOS,
-    "all": EVALUATION_SPLIT_ALL,
-}
+EVALUATION_SPLITS = (
+    EVALUATION_SPLIT_TRAIN,
+    EVALUATION_SPLIT_OOS,
+    EVALUATION_SPLIT_ALL,
+)
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="評估 breakout quality event-level 區分能力")
+    parser = argparse.ArgumentParser(
+        description=(
+            "以事前固定 threshold 評估 breakout quality；"
+            "OOS 結果不得用來回頭調整 threshold、epochs 或模型"
+        )
+    )
     parser.add_argument("--filter-id", default=DEFAULT_FILTER_ID)
-    parser.add_argument("--threshold", type=float, default=BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD)
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help=(
+            "可省略；若提供，必須與 train.py 寫入 manifest 的 fixed threshold 完全相同，"
+            "不可用 OOS 掃描 threshold"
+        ),
+    )
     parser.add_argument(
         "--split",
-        choices=tuple(EVALUATION_SPLIT_ALIASES),
-        default=EVALUATION_SPLIT_VALIDATION,
-        help=(
-            "validation/inner_validation 用於 threshold 選擇；"
-            "oos 僅在 threshold 鎖定後評估；train/all 只供診斷"
-        ),
+        choices=EVALUATION_SPLITS,
+        required=True,
+        help="train/all 只供診斷；oos 是最終泛化評估",
     )
     parser.add_argument(
         "--score-path",
         default=None,
         help=(
-            "研究 score table；省略時讀 outputs/filters/breakout_quality/<filter_id>/research_scores.csv；"
+            "研究 score table；省略時讀 "
+            "outputs/filters/breakout_quality/<filter_id>/research_scores.csv；"
             "自訂路徑需在同目錄提供 research_scores_manifest.json"
         ),
     )
@@ -155,13 +160,11 @@ def _metrics(df: pd.DataFrame, *, threshold: float, group_weighted: bool) -> dic
     }
 
 
-def _normalize_score_keys(frame: pd.DataFrame) -> pd.DataFrame:
-    normalized = normalize_split_assignment_keys(frame)
-    return normalized
-
-
 def _research_manifest_path(score_path: Path, filter_id: str) -> Path:
-    canonical_score = resolve_filter_research_score_path(PROJECT_ROOT, filter_id).resolve()
+    canonical_score = resolve_filter_research_score_path(
+        PROJECT_ROOT,
+        filter_id,
+    ).resolve()
     if score_path.resolve() == canonical_score:
         return resolve_filter_research_manifest_path(PROJECT_ROOT, filter_id)
     return score_path.parent / "research_scores_manifest.json"
@@ -183,7 +186,10 @@ def _validate_research_contract(
     if str(manifest.get("scope") or "").strip() != RUNTIME_SCOPE_RESEARCH:
         raise ValueError("evaluate 只能使用 scope=research 的 score manifest")
     source_split = manifest.get("source_split_assignments")
-    if not isinstance(source_split, dict) or source_split.get("sha256") != split_record.get("sha256"):
+    if (
+        not isinstance(source_split, dict)
+        or source_split.get("sha256") != split_record.get("sha256")
+    ):
         raise ValueError("research score manifest 與 canonical split assignment 不一致")
     score_record = manifest.get("score_table")
     if not isinstance(score_record, dict):
@@ -203,23 +209,27 @@ def _validate_research_contract(
 
 
 def _select_rows(frame: pd.DataFrame, split_name: str, outer_policy: dict) -> pd.DataFrame:
-    if split_name == EVALUATION_SPLIT_VALIDATION:
+    if split_name == EVALUATION_SPLIT_TRAIN:
         selected = frame[
             (frame["outer_split"] == OUTER_SPLIT_SELECTION)
-            & (frame["inner_split"] == INNER_SPLIT_VALIDATION)
-        ].copy()
-    elif split_name == EVALUATION_SPLIT_TRAIN:
-        selected = frame[
-            (frame["outer_split"] == OUTER_SPLIT_SELECTION)
-            & (frame["inner_split"] == INNER_SPLIT_TRAIN)
+            & (frame["selection_role"] == SELECTION_ROLE_TRAIN)
         ].copy()
     elif split_name == EVALUATION_SPLIT_OOS:
         selected = frame[frame["outer_split"] == OUTER_SPLIT_OOS].copy()
         if "label_eval_end_date" not in selected.columns:
             raise ValueError("OOS 評估需要 research score 包含 label_eval_end_date")
-        effective_end = pd.Timestamp(str(outer_policy.get("effective_oos_end_date") or "")).normalize()
+        effective_end = pd.Timestamp(
+            str(outer_policy.get("effective_oos_end_date") or "")
+        ).normalize()
         selected = selected[
-            pd.to_datetime(selected["label_eval_end_date"], errors="raise").dt.normalize() <= effective_end
+            selected["label"].isin([LABEL_PASS, LABEL_REJECT])
+            & (
+                pd.to_datetime(
+                    selected["label_eval_end_date"],
+                    errors="raise",
+                ).dt.normalize()
+                <= effective_end
+            )
         ].copy()
     else:
         selected = frame.copy()
@@ -230,10 +240,6 @@ def _select_rows(frame: pd.DataFrame, split_name: str, outer_policy: dict) -> pd
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    threshold = float(args.threshold)
-    if not np.isfinite(threshold) or threshold < 0.0 or threshold > 1.0:
-        raise ValueError("threshold 必須介於 0 與 1")
-    split_name = EVALUATION_SPLIT_ALIASES[str(args.split)]
     score_path = (
         Path(args.score_path).expanduser().resolve()
         if args.score_path
@@ -243,11 +249,29 @@ def main(argv=None) -> int:
     required = {"ticker", "date", "high_len", SCORE_COLUMN, "label"}
     missing = sorted(required - set(score_frame.columns))
     if missing:
-        raise ValueError(f"evaluate score table 缺少欄位: {missing}; path={score_path}")
+        raise ValueError(
+            f"evaluate score table 缺少欄位: {missing}; path={score_path}"
+        )
 
-    model_contract = load_model_artifact_contract(str(PROJECT_ROOT), str(args.filter_id))
-    split_frame = load_split_assignment_frame(str(PROJECT_ROOT), str(args.filter_id))
-    normalized_scores = _normalize_score_keys(score_frame)
+    model_contract = load_model_artifact_contract(
+        str(PROJECT_ROOT),
+        str(args.filter_id),
+    )
+    split_frame = load_split_assignment_frame(
+        str(PROJECT_ROOT),
+        str(args.filter_id),
+    )
+    threshold = float(model_contract.manifest["fixed_evaluation_threshold"])
+    if args.threshold is not None:
+        requested_threshold = float(args.threshold)
+        if not np.isfinite(requested_threshold) or not 0.0 <= requested_threshold <= 1.0:
+            raise ValueError("threshold 必須介於 0 與 1")
+        if not np.isclose(requested_threshold, threshold, rtol=0.0, atol=1e-12):
+            raise ValueError(
+                "scheme B 的 threshold 已在 train 前固定；"
+                f"manifest={threshold}, requested={requested_threshold}"
+            )
+    normalized_scores = normalize_split_assignment_keys(score_frame)
     merged = normalized_scores.merge(
         split_frame,
         on=list(KEY_COLUMNS),
@@ -262,7 +286,7 @@ def main(argv=None) -> int:
         )
     if len(merged) != len(split_frame):
         raise ValueError(
-            f"research score 與 canonical split assignment 必須完整一對一覆蓋: "
+            "research score 與 canonical split assignment 必須完整一對一覆蓋: "
             f"scores={len(merged)}, splits={len(split_frame)}"
         )
     split_record = model_contract.manifest.get("split_assignments")
@@ -277,21 +301,25 @@ def main(argv=None) -> int:
     outer_policy = model_contract.manifest.get("outer_oos_policy")
     if not isinstance(outer_policy, dict):
         raise ValueError("model manifest 缺少 outer_oos_policy")
-    selected = _select_rows(merged, split_name, outer_policy)
+    selected = _select_rows(merged, str(args.split), outer_policy)
     selected_dates = pd.to_datetime(selected["date"], errors="raise")
     role = {
-        EVALUATION_SPLIT_VALIDATION: "inner_validation_for_threshold_selection",
-        EVALUATION_SPLIT_TRAIN: "inner_train_diagnostic_only",
-        EVALUATION_SPLIT_OOS: "outer_oos_final_evaluation",
+        EVALUATION_SPLIT_TRAIN: "selection_train_diagnostic_only",
+        EVALUATION_SPLIT_OOS: "outer_oos_final_generalization_evaluation",
         EVALUATION_SPLIT_ALL: "mixed_research_diagnostic_only",
-    }[split_name]
+    }[str(args.split)]
     metrics = {
         "filter_id": args.filter_id,
         "score_path": str(score_path),
-        "split": split_name,
+        "split": str(args.split),
         "split_role": role,
-        "threshold_selection_allowed": bool(split_name == EVALUATION_SPLIT_VALIDATION),
-        "is_final_oos_evaluation": bool(split_name == EVALUATION_SPLIT_OOS),
+        "threshold": threshold,
+        "threshold_source": "model_manifest.fixed_evaluation_threshold",
+        "threshold_selection_allowed": False,
+        "is_final_oos_evaluation": bool(args.split == EVALUATION_SPLIT_OOS),
+        "reusing_oos_for_tuning_would_change_role_to_validation": bool(
+            args.split == EVALUATION_SPLIT_OOS
+        ),
         "outer_oos_policy": outer_policy,
         "research_scope": research_manifest.get("scope"),
         "selected_row_count": int(len(selected)),
@@ -299,12 +327,22 @@ def main(argv=None) -> int:
             "start": str(selected_dates.min().date()),
             "end": str(selected_dates.max().date()),
         },
-        "threshold": threshold,
-        "row_level": _metrics(selected, threshold=threshold, group_weighted=False),
-        "ticker_date_group_weighted": _metrics(selected, threshold=threshold, group_weighted=True),
+        "row_level": _metrics(
+            selected,
+            threshold=threshold,
+            group_weighted=False,
+        ),
+        "ticker_date_group_weighted": _metrics(
+            selected,
+            threshold=threshold,
+            group_weighted=True,
+        ),
         "event_group_summary": event_group_summary(
             selected,
-            pd.to_numeric(selected["label"], errors="raise").to_numpy(dtype=np.int64),
+            pd.to_numeric(
+                selected["label"],
+                errors="raise",
+            ).to_numpy(dtype=np.int64),
         ),
     }
     print(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True))

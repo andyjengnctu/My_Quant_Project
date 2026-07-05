@@ -30,7 +30,7 @@
 
 | ID | 優先級 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|
-| B01 | P0 | 杜絕未來函數 | DONE | 已以 prev-day-only PIT case 與 setup-index prev-day-only case 共同釘死盤前排程只能讀前一日訊號；breakout quality 另沿用 core.walk_forward_policy 的 outer selection/OOS，Selection 內才切 inner train/validation，並在 inner 與 outer 邊界套用 label-end embargo；禁止模型選擇或正式 score table 偷看 OOS 未知資訊 | `tools/validate/synthetic_history_cases.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
+| B01 | P0 | 杜絕未來函數 | DONE | 已以 prev-day-only PIT case 與 setup-index prev-day-only case 共同釘死盤前排程只能讀前一日訊號；breakout quality 另沿用 core.walk_forward_policy 的 outer Selection/OOS；方案 B 使用完整 eligible Selection 固定 epochs 訓練、禁止 inner validation / early stopping，並在 Selection/OOS 邊界套用 label-end embargo；禁止訓練或正式 score table 偷看 OOS 未知資訊 | `tools/validate/synthetic_history_cases.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
 | B02 | P1 | 同 K 棒停利/停損取最壞停損 | DONE | 已有明確 synthetic case | 既有 synthetic case |
 | B03 | P0 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 | DONE | 已新增直接手算對帳案例，逐欄位檢查 entry cash / entry equity / exit pnl / final equity / total return | `tools/validate/synthetic_take_profit_cases.py` |
 | B04 | P1 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip | DONE | 已新增直接案例，斷言半倉列不得提前帶完整 `該筆總損益`，完整 Round-Trip 僅在尾倉結算列完成 | `tools/validate/synthetic_take_profit_cases.py` |

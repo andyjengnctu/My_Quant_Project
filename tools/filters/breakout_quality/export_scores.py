@@ -196,7 +196,7 @@ def main(argv=None) -> int:
                 dataset_summary=dataset_summary,
             ),
             "reason": (
-                "research rows include outer selection and OOS; threshold may be selected only on inner validation, "
+                "research rows include outer Selection and OOS; epochs and threshold must be fixed before OOS, "
                 "and research output must never replace canonical runtime scores.csv"
             ),
         }
@@ -227,7 +227,10 @@ def main(argv=None) -> int:
         "available_from": available_from,
         "available_through": available_through,
         "model_information_cutoff": information_cutoff,
-        "reason": "score rows are inside the shared walk_forward_policy OOS window and strictly after model_information_cutoff",
+        "reason": (
+            "score rows are inside the shared walk_forward_policy OOS window, "
+            "strictly after model_information_cutoff, and were produced by a fixed-epoch model"
+        ),
     }
     manifest["score_filename"] = DEFAULT_SCORE_FILENAME
     write_json(artifact_paths.manifest_path, manifest)

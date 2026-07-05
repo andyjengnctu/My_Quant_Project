@@ -18,7 +18,7 @@ from config.breakout_policy import (
     build_breakout_optimizer_high_len_values,
 )
 from config.breakout_quality_policy import (
-    BREAKOUT_QUALITY_INNER_VALIDATION_RATIO,
+    BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     build_breakout_quality_default_high_len_values,
 )
 from filters.breakout_quality.artifacts import (
@@ -32,9 +32,10 @@ from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
-    INNER_SPLIT_NOT_APPLICABLE,
-    INNER_SPLIT_TRAIN,
-    INNER_SPLIT_VALIDATION,
+    SELECTION_ROLE_EMBARGO,
+    SELECTION_ROLE_IGNORE,
+    SELECTION_ROLE_NOT_APPLICABLE,
+    SELECTION_ROLE_TRAIN,
     OUTER_SPLIT_OOS,
     OUTER_SPLIT_OUT_OF_SCOPE,
     OUTER_SPLIT_SELECTION,
@@ -54,7 +55,7 @@ from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from filters.breakout_quality.splits import (
-    build_outer_inner_split_assignments,
+    build_selection_oos_split_assignments,
     compute_outer_policy_fingerprint,
     resolve_breakout_quality_outer_policy,
 )
@@ -107,9 +108,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "inner_validation_ratio_is_user_configured_and_legal",
+        "fixed_threshold_is_user_configured_and_legal",
         True,
-        0.0 < float(BREAKOUT_QUALITY_INNER_VALIDATION_RATIO) < 1.0,
+        0.0 <= float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD) <= 1.0,
     )
     try:
         V16StrategyParams(breakout_quality_filter_id=" ")
@@ -165,47 +166,92 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
     labels = np.asarray([0, 1] * len(date_and_end), dtype=np.int64)
     outer_policy = {
         "policy_source": "core.walk_forward_policy.synthetic_override",
-        "policy_fingerprint_sha256": "synthetic-policy-fingerprint",
         "selection_start_date": "2025-01-01",
         "selection_end_date": "2025-01-08",
         "oos_start_date": "2025-01-09",
         "configured_oos_end_date": "2025-01-12",
         "effective_oos_end_date": "2025-01-12",
     }
-    assignments, train_idx, val_idx, oos_idx, report = build_outer_inner_split_assignments(
+    outer_policy["policy_fingerprint_sha256"] = compute_outer_policy_fingerprint(
+        outer_policy
+    )
+    assignments, train_idx, oos_idx, report = build_selection_oos_split_assignments(
         events,
         labels,
         outer_policy=outer_policy,
-        inner_validation_ratio=0.5,
     )
 
-    add_check(results, "synthetic_breakout_quality", case_id, "outer_selection_start", "2025-01-01", report["selection_start_date"])
-    add_check(results, "synthetic_breakout_quality", case_id, "outer_oos_start", "2025-01-09", report["oos_start_date"])
-    add_check(results, "synthetic_breakout_quality", case_id, "inner_validation_start", "2025-01-04", report["inner_validation_start_date"])
-    add_check(results, "synthetic_breakout_quality", case_id, "safe_inner_train_rows", 4, len(train_idx))
-    add_check(results, "synthetic_breakout_quality", case_id, "inner_validation_rows", 6, len(val_idx))
-    add_check(results, "synthetic_breakout_quality", case_id, "oos_evaluable_rows", 6, len(oos_idx))
-    add_check(results, "synthetic_breakout_quality", case_id, "train_validation_embargo_rows", 2, report["train_validation_embargo_row_count"])
-    add_check(results, "synthetic_breakout_quality", case_id, "selection_oos_embargo_rows", 4, report["selection_oos_embargo_row_count"])
-    add_check(results, "synthetic_breakout_quality", case_id, "oos_label_after_end_rows", 2, report["oos_label_after_end_row_count"])
-    add_check(results, "synthetic_breakout_quality", case_id, "group_overlap_forbidden", 0, report["overlap_group_count"])
-    add_check(results, "synthetic_breakout_quality", case_id, "event_date_overlap_forbidden", 0, report["overlap_event_date_count"])
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "train_label_information_before_inner_validation",
-        True,
-        pd.to_datetime(events.iloc[train_idx]["label_eval_end_date"]).max()
-        < pd.Timestamp(report["inner_validation_start_date"]),
+        "outer_selection_start",
+        "2025-01-01",
+        report["selection_start_date"],
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "validation_label_information_before_oos",
+        "outer_oos_start",
+        "2025-01-09",
+        report["oos_start_date"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "full_selection_train_rows",
+        12,
+        len(train_idx),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_oos_embargo_rows",
+        4,
+        report["selection_oos_embargo_row_count"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "oos_evaluable_rows",
+        6,
+        len(oos_idx),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "oos_label_after_end_rows",
+        2,
+        report["oos_label_after_end_row_count"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "group_overlap_forbidden",
+        0,
+        report["overlap_group_count"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "event_date_overlap_forbidden",
+        0,
+        report["overlap_event_date_count"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_label_information_before_oos",
         True,
-        pd.to_datetime(events.iloc[val_idx]["label_eval_end_date"]).max()
+        pd.to_datetime(events.iloc[train_idx]["label_eval_end_date"]).max()
         < pd.Timestamp(report["oos_start_date"]),
     )
     add_check(
@@ -213,22 +259,39 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "outer_split_counts",
-        {OUTER_SPLIT_SELECTION: 16, OUTER_SPLIT_OOS: 8, OUTER_SPLIT_OUT_OF_SCOPE: 4},
+        {
+            OUTER_SPLIT_SELECTION: 16,
+            OUTER_SPLIT_OOS: 8,
+            OUTER_SPLIT_OUT_OF_SCOPE: 4,
+        },
         report["outer_split_counts"],
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "outside_selection_oos_has_no_inner_role",
+        "selection_role_counts",
+        {
+            SELECTION_ROLE_TRAIN: 12,
+            SELECTION_ROLE_EMBARGO: 4,
+            SELECTION_ROLE_IGNORE: 0,
+            SELECTION_ROLE_NOT_APPLICABLE: 12,
+        },
+        report["selection_role_counts"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "outside_selection_has_no_selection_role",
         True,
         bool(
             (
                 assignments.loc[
                     assignments["outer_split"] != OUTER_SPLIT_SELECTION,
-                    "inner_split",
+                    "selection_role",
                 ]
-                == INNER_SPLIT_NOT_APPLICABLE
+                == SELECTION_ROLE_NOT_APPLICABLE
             ).all()
         ),
     )
@@ -238,8 +301,26 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
         case_id,
         "split_assignment_key_unique",
         False,
-        bool(assignments.duplicated(["ticker", "date", "high_len"], keep=False).any()),
+        bool(
+            assignments.duplicated(
+                ["ticker", "date", "high_len"],
+                keep=False,
+            ).any()
+        ),
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "scheme_b_uses_full_selection_without_validation",
+        (True, False, False),
+        (
+            report["training_uses_all_eligible_selection_rows"],
+            report["inner_validation_used"],
+            report["early_stopping_used"],
+        ),
+    )
+
     project_root = Path(__file__).resolve().parents[2]
     rolling_fold_policy = resolve_breakout_quality_outer_policy(
         project_root,
@@ -377,14 +458,14 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                         "date": "2024-01-02",
                         "high_len": high_len,
                         "outer_split": OUTER_SPLIT_SELECTION,
-                        "inner_split": INNER_SPLIT_TRAIN,
+                        "selection_role": SELECTION_ROLE_TRAIN,
                     },
                     {
                         "ticker": "2330",
                         "date": "2024-12-02",
                         "high_len": high_len,
                         "outer_split": OUTER_SPLIT_SELECTION,
-                        "inner_split": INNER_SPLIT_VALIDATION,
+                        "selection_role": SELECTION_ROLE_TRAIN,
                     },
                 ]
             )
@@ -425,12 +506,11 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                         OUTER_SPLIT_OOS: 0,
                         OUTER_SPLIT_OUT_OF_SCOPE: 0,
                     },
-                    "inner_split_counts": {
-                        INNER_SPLIT_TRAIN: 1,
-                        INNER_SPLIT_VALIDATION: 1,
-                        "embargo": 0,
-                        "ignore": 0,
-                        INNER_SPLIT_NOT_APPLICABLE: 0,
+                    "selection_role_counts": {
+                        SELECTION_ROLE_TRAIN: 2,
+                        SELECTION_ROLE_EMBARGO: 0,
+                        SELECTION_ROLE_IGNORE: 0,
+                        SELECTION_ROLE_NOT_APPLICABLE: 0,
                     },
                 }
             )
@@ -457,6 +537,22 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "comparison": SCORE_COMPARISON,
                     "threshold_source": SCORE_THRESHOLD_SOURCE,
                 },
+                "fixed_evaluation_threshold": 0.50,
+                "threshold_policy": {
+                    "mode": "fixed_before_oos",
+                    "evaluation_threshold": 0.50,
+                    "runtime_source": SCORE_THRESHOLD_SOURCE,
+                    "optimized_by_train": False,
+                    "oos_tuning_allowed": False,
+                },
+                "training_mode": "fixed_epoch_full_selection",
+                "fixed_epochs": 2,
+                "completed_epochs": 2,
+                "early_stopping_enabled": False,
+                "inner_validation_used": False,
+                "training_uses_all_eligible_selection_rows": True,
+                "oos_predictions_used_during_training": False,
+                "oos_metrics_emitted_by_train": False,
                 "score_table": score_record,
                 "runtime_eligibility": {
                     "eligible": True,

@@ -1,4 +1,4 @@
-"""Canonical breakout-quality outer OOS and inner validation split rules."""
+"""Canonical breakout-quality outer Selection/OOS split for fixed-epoch training."""
 
 from __future__ import annotations
 
@@ -16,18 +16,17 @@ from core.walk_forward_policy import (
     load_walk_forward_policy,
 )
 from filters.breakout_quality.contract import (
-    INNER_SPLIT_EMBARGO,
-    INNER_SPLIT_IGNORE,
-    INNER_SPLIT_NOT_APPLICABLE,
-    INNER_SPLIT_TRAIN,
-    INNER_SPLIT_VALIDATION,
-    INNER_SPLIT_VALUES,
     LABEL_PASS,
     LABEL_REJECT,
     OUTER_SPLIT_OOS,
     OUTER_SPLIT_OUT_OF_SCOPE,
     OUTER_SPLIT_SELECTION,
     OUTER_SPLIT_VALUES,
+    SELECTION_ROLE_EMBARGO,
+    SELECTION_ROLE_IGNORE,
+    SELECTION_ROLE_NOT_APPLICABLE,
+    SELECTION_ROLE_TRAIN,
+    SELECTION_ROLE_VALUES,
     SPLIT_ASSIGNMENT_REQUIRED_COLUMNS,
 )
 
@@ -44,7 +43,13 @@ def _normalize_iso_date(value, *, field_name: str) -> str:
         raise ValueError(f"breakout quality split 日期格式錯誤: {field_name}={value!r}") from exc
 
 
-def _date_from_policy(policy: Mapping[str, object], date_key: str, year_key: str, *, end_of_year: bool) -> str | None:
+def _date_from_policy(
+    policy: Mapping[str, object],
+    date_key: str,
+    year_key: str,
+    *,
+    end_of_year: bool,
+) -> str | None:
     raw_date = str(policy.get(date_key) or "").strip()
     if raw_date:
         return _normalize_iso_date(raw_date, field_name=date_key)
@@ -62,7 +67,12 @@ def compute_outer_policy_fingerprint(payload: Mapping[str, object]) -> str:
         for key, value in dict(payload).items()
         if key != "policy_fingerprint_sha256"
     }
-    text = json.dumps(canonical_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    text = json.dumps(
+        canonical_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
@@ -74,7 +84,10 @@ def resolve_breakout_quality_outer_policy(
 ) -> dict:
     """Resolve the same single-fold OOS policy used by the optimizer."""
     root = str(Path(project_root).resolve())
-    source_end = _normalize_iso_date(source_data_end_date, field_name="source_data_end_date")
+    source_end = _normalize_iso_date(
+        source_data_end_date,
+        field_name="source_data_end_date",
+    )
     base_policy = load_walk_forward_policy(root, environ=environ)
     runtime_policy = build_optimizer_runtime_policy(
         base_policy,
@@ -109,7 +122,8 @@ def resolve_breakout_quality_outer_policy(
     )
     if selection_start is None or selection_end is None or oos_start is None:
         raise ValueError(
-            "breakout quality OOS 訓練需要既有 walk_forward_policy 提供 selection start/end 與 oos start"
+            "breakout quality OOS 訓練需要既有 walk_forward_policy 提供 "
+            "selection start/end 與 oos start"
         )
     effective_oos_end = min(configured_oos_end, source_end) if configured_oos_end else source_end
     selection_start_ts = pd.Timestamp(selection_start)
@@ -122,7 +136,8 @@ def resolve_breakout_quality_outer_policy(
         raise ValueError("breakout quality oos_start 必須晚於 selection_end")
     if oos_end_ts < oos_start_ts:
         raise ValueError(
-            f"breakout quality source data 尚未覆蓋 OOS: oos={oos_start}~{effective_oos_end}, source_end={source_end}"
+            "breakout quality source data尚未覆蓋 OOS: "
+            f"oos={oos_start}~{effective_oos_end}, source_end={source_end}"
         )
 
     payload = {
@@ -147,13 +162,19 @@ def normalize_split_assignment_keys(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"breakout quality split assignment 缺少 key 欄位: {missing}")
     normalized = frame.copy()
     normalized["ticker"] = normalized["ticker"].astype(str)
-    normalized["date"] = pd.to_datetime(normalized["date"], errors="raise").dt.strftime("%Y-%m-%d")
-    normalized["high_len"] = pd.to_numeric(normalized["high_len"], errors="raise").astype(int)
-    if normalized.duplicated(list(KEY_COLUMNS), keep=False).any():
-        duplicate_rows = int(normalized.duplicated(list(KEY_COLUMNS), keep=False).sum())
+    normalized["date"] = pd.to_datetime(
+        normalized["date"],
+        errors="raise",
+    ).dt.strftime("%Y-%m-%d")
+    normalized["high_len"] = pd.to_numeric(
+        normalized["high_len"],
+        errors="raise",
+    ).astype(int)
+    duplicated = normalized.duplicated(list(KEY_COLUMNS), keep=False)
+    if duplicated.any():
         raise ValueError(
             "breakout quality split assignment key ticker/date/high_len 必須唯一；"
-            f"duplicate_rows={duplicate_rows}"
+            f"duplicate_rows={int(duplicated.sum())}"
         )
     return normalized
 
@@ -166,19 +187,23 @@ def validate_split_assignment_frame(frame: pd.DataFrame) -> pd.DataFrame:
         )
     normalized = normalize_split_assignment_keys(frame)
     normalized["outer_split"] = normalized["outer_split"].astype(str)
-    normalized["inner_split"] = normalized["inner_split"].astype(str)
+    normalized["selection_role"] = normalized["selection_role"].astype(str)
     unknown_outer = sorted(set(normalized["outer_split"]) - set(OUTER_SPLIT_VALUES))
-    unknown_inner = sorted(set(normalized["inner_split"]) - set(INNER_SPLIT_VALUES))
+    unknown_role = sorted(set(normalized["selection_role"]) - set(SELECTION_ROLE_VALUES))
     if unknown_outer:
-        raise ValueError(f"breakout quality split assignment outer_split 含未知值: {unknown_outer}")
-    if unknown_inner:
-        raise ValueError(f"breakout quality split assignment inner_split 含未知值: {unknown_inner}")
-    invalid_inner = normalized[
+        raise ValueError(
+            f"breakout quality split assignment outer_split 含未知值: {unknown_outer}"
+        )
+    if unknown_role:
+        raise ValueError(
+            f"breakout quality split assignment selection_role 含未知值: {unknown_role}"
+        )
+    invalid_role = normalized[
         (normalized["outer_split"] != OUTER_SPLIT_SELECTION)
-        & (normalized["inner_split"] != INNER_SPLIT_NOT_APPLICABLE)
+        & (normalized["selection_role"] != SELECTION_ROLE_NOT_APPLICABLE)
     ]
-    if not invalid_inner.empty:
-        raise ValueError("selection 外的 split row，inner_split 必須為 not_applicable")
+    if not invalid_role.empty:
+        raise ValueError("Selection 外的 split row，selection_role 必須為 not_applicable")
     return normalized[list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS)]
 
 
@@ -186,17 +211,13 @@ def _event_group_keys(events: pd.DataFrame) -> pd.Series:
     return events["ticker"].astype(str) + "\x1f" + events["date"].astype(str)
 
 
-def build_outer_inner_split_assignments(
+def build_selection_oos_split_assignments(
     events: pd.DataFrame,
     labels: Iterable[int],
     *,
     outer_policy: Mapping[str, object],
-    inner_validation_ratio: float,
-) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, dict]:
-    """Create outer selection/OOS roles and inner train/validation roles once."""
-    ratio = float(inner_validation_ratio)
-    if ratio <= 0.0 or ratio >= 1.0:
-        raise ValueError(f"inner_validation_ratio 必須介於 0 與 1，收到 {inner_validation_ratio!r}")
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, dict]:
+    """Use all eligible Selection rows for fixed-epoch training and reserve OOS."""
     required = {"ticker", "date", "high_len", "label_eval_end_date"}
     missing = sorted(required - set(events.columns))
     if missing:
@@ -205,136 +226,154 @@ def build_outer_inner_split_assignments(
         )
     labels_arr = np.asarray(list(labels), dtype=np.int64)
     if labels_arr.size != len(events):
-        raise ValueError(f"breakout quality split labels/events 長度不一致: {labels_arr.size} != {len(events)}")
+        raise ValueError(
+            "breakout quality split labels/events 長度不一致: "
+            f"{labels_arr.size} != {len(events)}"
+        )
 
     keyed = normalize_split_assignment_keys(events[["ticker", "date", "high_len"]])
     event_dates = pd.to_datetime(events["date"], errors="raise").dt.normalize()
-    label_end_dates = pd.to_datetime(events["label_eval_end_date"], errors="raise").dt.normalize()
-    selection_start = pd.Timestamp(_normalize_iso_date(outer_policy.get("selection_start_date"), field_name="selection_start_date"))
-    selection_end = pd.Timestamp(_normalize_iso_date(outer_policy.get("selection_end_date"), field_name="selection_end_date"))
-    oos_start = pd.Timestamp(_normalize_iso_date(outer_policy.get("oos_start_date"), field_name="oos_start_date"))
-    oos_end = pd.Timestamp(_normalize_iso_date(outer_policy.get("effective_oos_end_date"), field_name="effective_oos_end_date"))
+    label_end_dates = pd.to_datetime(
+        events["label_eval_end_date"],
+        errors="raise",
+    ).dt.normalize()
+    selection_start = pd.Timestamp(
+        _normalize_iso_date(
+            outer_policy.get("selection_start_date"),
+            field_name="selection_start_date",
+        )
+    )
+    selection_end = pd.Timestamp(
+        _normalize_iso_date(
+            outer_policy.get("selection_end_date"),
+            field_name="selection_end_date",
+        )
+    )
+    oos_start = pd.Timestamp(
+        _normalize_iso_date(
+            outer_policy.get("oos_start_date"),
+            field_name="oos_start_date",
+        )
+    )
+    oos_end = pd.Timestamp(
+        _normalize_iso_date(
+            outer_policy.get("effective_oos_end_date"),
+            field_name="effective_oos_end_date",
+        )
+    )
     if not selection_start <= selection_end < oos_start <= oos_end:
-        raise ValueError("breakout quality outer policy 日期順序必須為 selection_start <= selection_end < oos_start <= oos_end")
+        raise ValueError(
+            "breakout quality outer policy 日期順序必須為 "
+            "selection_start <= selection_end < oos_start <= oos_end"
+        )
 
     valid_label = np.isin(labels_arr, [LABEL_REJECT, LABEL_PASS])
-    selection_mask = ((event_dates >= selection_start) & (event_dates <= selection_end)).to_numpy(dtype=bool)
-    oos_mask = ((event_dates >= oos_start) & (event_dates <= oos_end)).to_numpy(dtype=bool)
-    eligible_selection = selection_mask & valid_label & (label_end_dates < oos_start).to_numpy(dtype=bool)
-    unique_eligible_dates = np.sort(event_dates[eligible_selection].unique())
-    if len(unique_eligible_dates) < 2:
-        raise ValueError(
-            "breakout quality selection period 至少需要 2 個具有完整標籤資訊的 event dates，"
-            f"policy={dict(outer_policy)}"
-        )
-    split_position = int(round(len(unique_eligible_dates) * (1.0 - ratio)))
-    split_position = min(max(split_position, 1), len(unique_eligible_dates) - 1)
-    validation_start = pd.Timestamp(unique_eligible_dates[split_position])
-
-    before_validation = (event_dates < validation_start).to_numpy(dtype=bool)
-    at_or_after_validation = (event_dates >= validation_start).to_numpy(dtype=bool)
-    label_before_validation = (label_end_dates < validation_start).to_numpy(dtype=bool)
+    selection_mask = (
+        (event_dates >= selection_start) & (event_dates <= selection_end)
+    ).to_numpy(dtype=bool)
+    oos_mask = (
+        (event_dates >= oos_start) & (event_dates <= oos_end)
+    ).to_numpy(dtype=bool)
     label_before_oos = (label_end_dates < oos_start).to_numpy(dtype=bool)
     label_within_oos = (label_end_dates <= oos_end).to_numpy(dtype=bool)
 
-    train_mask = selection_mask & valid_label & before_validation & label_before_validation
-    train_validation_embargo = selection_mask & valid_label & before_validation & ~label_before_validation
-    validation_mask = selection_mask & valid_label & at_or_after_validation & label_before_oos
-    selection_oos_embargo = selection_mask & valid_label & at_or_after_validation & ~label_before_oos
-    selection_ignore = selection_mask & ~valid_label
+    selection_train_mask = selection_mask & valid_label & label_before_oos
+    selection_embargo_mask = selection_mask & valid_label & ~label_before_oos
+    selection_ignore_mask = selection_mask & ~valid_label
     oos_evaluable_mask = oos_mask & valid_label & label_within_oos
-    oos_label_after_end = oos_mask & valid_label & ~label_within_oos
+    oos_label_after_end_mask = oos_mask & valid_label & ~label_within_oos
 
     outer_values = np.full(len(events), OUTER_SPLIT_OUT_OF_SCOPE, dtype=object)
     outer_values[selection_mask] = OUTER_SPLIT_SELECTION
     outer_values[oos_mask] = OUTER_SPLIT_OOS
-    inner_values = np.full(len(events), INNER_SPLIT_NOT_APPLICABLE, dtype=object)
-    inner_values[selection_ignore] = INNER_SPLIT_IGNORE
-    inner_values[train_mask] = INNER_SPLIT_TRAIN
-    inner_values[validation_mask] = INNER_SPLIT_VALIDATION
-    inner_values[train_validation_embargo | selection_oos_embargo] = INNER_SPLIT_EMBARGO
+    selection_roles = np.full(
+        len(events),
+        SELECTION_ROLE_NOT_APPLICABLE,
+        dtype=object,
+    )
+    selection_roles[selection_ignore_mask] = SELECTION_ROLE_IGNORE
+    selection_roles[selection_train_mask] = SELECTION_ROLE_TRAIN
+    selection_roles[selection_embargo_mask] = SELECTION_ROLE_EMBARGO
 
     assignments = keyed.copy()
     assignments["outer_split"] = outer_values.astype(str)
-    assignments["inner_split"] = inner_values.astype(str)
-    assignments = validate_split_assignment_frame(assignments[list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS)])
+    assignments["selection_role"] = selection_roles.astype(str)
+    assignments = validate_split_assignment_frame(
+        assignments[list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS)]
+    )
 
-    train_idx = np.flatnonzero(train_mask).astype(np.int64)
-    validation_idx = np.flatnonzero(validation_mask).astype(np.int64)
+    train_idx = np.flatnonzero(selection_train_mask).astype(np.int64)
     oos_idx = np.flatnonzero(oos_evaluable_mask).astype(np.int64)
-    if train_idx.size == 0 or validation_idx.size == 0 or oos_idx.size == 0:
+    if train_idx.size == 0 or oos_idx.size == 0:
         raise ValueError(
             "breakout quality split 產生空集合: "
-            f"train={train_idx.size}, validation={validation_idx.size}, oos={oos_idx.size}"
+            f"selection_train={train_idx.size}, oos={oos_idx.size}"
         )
 
     group_keys = _event_group_keys(events)
-    group_sets = {
-        "train": set(group_keys.iloc[train_idx]),
-        "validation": set(group_keys.iloc[validation_idx]),
-        "oos": set(group_keys.iloc[oos_idx]),
-    }
-    date_sets = {
-        "train": set(event_dates.iloc[train_idx]),
-        "validation": set(event_dates.iloc[validation_idx]),
-        "oos": set(event_dates.iloc[oos_idx]),
-    }
-    overlap_groups = (
-        group_sets["train"].intersection(group_sets["validation"])
-        | group_sets["train"].intersection(group_sets["oos"])
-        | group_sets["validation"].intersection(group_sets["oos"])
-    )
-    overlap_dates = (
-        date_sets["train"].intersection(date_sets["validation"])
-        | date_sets["train"].intersection(date_sets["oos"])
-        | date_sets["validation"].intersection(date_sets["oos"])
-    )
+    train_groups = set(group_keys.iloc[train_idx])
+    oos_groups = set(group_keys.iloc[oos_idx])
+    train_dates = set(event_dates.iloc[train_idx])
+    oos_dates = set(event_dates.iloc[oos_idx])
 
     def _range(indices: np.ndarray, column: str) -> dict[str, str | None]:
         if indices.size == 0:
             return {"start": None, "end": None}
         values = pd.to_datetime(events.iloc[indices][column], errors="raise")
-        return {"start": str(values.min().date()), "end": str(values.max().date())}
+        return {
+            "start": str(values.min().date()),
+            "end": str(values.max().date()),
+        }
 
-    outer_counts = {name: int((assignments["outer_split"] == name).sum()) for name in OUTER_SPLIT_VALUES}
-    inner_counts = {name: int((assignments["inner_split"] == name).sum()) for name in INNER_SPLIT_VALUES}
+    outer_counts = {
+        name: int((assignments["outer_split"] == name).sum())
+        for name in OUTER_SPLIT_VALUES
+    }
+    selection_role_counts = {
+        name: int((assignments["selection_role"] == name).sum())
+        for name in SELECTION_ROLE_VALUES
+    }
     report = {
-        "strategy": "walk_forward_outer_selection_oos_with_inner_validation_and_label_end_embargo",
-        "policy_source": str(outer_policy.get("policy_source") or "core.walk_forward_policy"),
-        "policy_fingerprint_sha256": str(outer_policy.get("policy_fingerprint_sha256") or ""),
-        "inner_validation_ratio": ratio,
+        "strategy": "walk_forward_outer_selection_oos_fixed_epoch_full_selection",
+        "training_mode": "fixed_epoch_full_selection",
+        "policy_source": str(
+            outer_policy.get("policy_source") or "core.walk_forward_policy"
+        ),
+        "policy_fingerprint_sha256": str(
+            outer_policy.get("policy_fingerprint_sha256") or ""
+        ),
         "selection_start_date": str(selection_start.date()),
         "selection_end_date": str(selection_end.date()),
-        "inner_validation_start_date": str(validation_start.date()),
         "oos_start_date": str(oos_start.date()),
         "oos_end_date": str(oos_end.date()),
-        "train_row_count": int(train_idx.size),
-        "validation_row_count": int(validation_idx.size),
+        "selection_train_row_count": int(train_idx.size),
+        "selection_oos_embargo_row_count": int(selection_embargo_mask.sum()),
+        "embargo_dropped_row_count": int(selection_embargo_mask.sum()),
         "oos_evaluable_row_count": int(oos_idx.size),
-        "train_validation_embargo_row_count": int(train_validation_embargo.sum()),
-        "selection_oos_embargo_row_count": int(selection_oos_embargo.sum()),
-        "embargo_dropped_row_count": int((train_validation_embargo | selection_oos_embargo).sum()),
-        "oos_label_after_end_row_count": int(oos_label_after_end.sum()),
+        "oos_label_after_end_row_count": int(oos_label_after_end_mask.sum()),
         "outer_split_counts": outer_counts,
-        "inner_split_counts": inner_counts,
-        "train_group_count": int(len(group_sets["train"])),
-        "validation_group_count": int(len(group_sets["validation"])),
-        "oos_group_count": int(len(group_sets["oos"])),
-        "overlap_group_count": int(len(overlap_groups)),
-        "overlap_event_date_count": int(len(overlap_dates)),
-        "train_date_range": _range(train_idx, "date"),
-        "train_label_end_date_range": _range(train_idx, "label_eval_end_date"),
-        "validation_date_range": _range(validation_idx, "date"),
-        "validation_label_end_date_range": _range(validation_idx, "label_eval_end_date"),
+        "selection_role_counts": selection_role_counts,
+        "selection_train_group_count": int(len(train_groups)),
+        "oos_group_count": int(len(oos_groups)),
+        "overlap_group_count": int(len(train_groups.intersection(oos_groups))),
+        "overlap_event_date_count": int(len(train_dates.intersection(oos_dates))),
+        "selection_train_date_range": _range(train_idx, "date"),
+        "selection_train_label_end_date_range": _range(
+            train_idx,
+            "label_eval_end_date",
+        ),
         "oos_date_range": _range(oos_idx, "date"),
         "oos_label_end_date_range": _range(oos_idx, "label_eval_end_date"),
+        "training_uses_all_eligible_selection_rows": True,
+        "inner_validation_used": False,
+        "early_stopping_used": False,
     }
-    return assignments, train_idx, validation_idx, oos_idx, report
+    return assignments, train_idx, oos_idx, report
 
 
 __all__ = [
     "KEY_COLUMNS",
-    "build_outer_inner_split_assignments",
+    "build_selection_oos_split_assignments",
     "compute_outer_policy_fingerprint",
     "normalize_split_assignment_keys",
     "resolve_breakout_quality_outer_policy",
