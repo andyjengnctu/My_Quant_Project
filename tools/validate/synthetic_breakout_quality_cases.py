@@ -17,23 +17,35 @@ from config.breakout_policy import (
     BREAKOUT_HIGH_LEN_SEARCH_STEP,
     build_breakout_optimizer_high_len_values,
 )
-from config.breakout_quality_policy import build_breakout_quality_default_high_len_values
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_INNER_VALIDATION_RATIO,
+    build_breakout_quality_default_high_len_values,
+)
 from filters.breakout_quality.artifacts import (
     build_file_manifest,
     load_model_artifact_contract,
     load_runtime_artifact_contract,
+    load_split_assignment_frame,
 )
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
+    INNER_SPLIT_NOT_APPLICABLE,
+    INNER_SPLIT_TRAIN,
+    INNER_SPLIT_VALIDATION,
+    OUTER_SPLIT_OOS,
+    OUTER_SPLIT_OUT_OF_SCOPE,
+    OUTER_SPLIT_SELECTION,
     RUNTIME_SCOPE_FORWARD_OOS,
     SCORE_COLUMN,
     SCORE_COMPARISON,
     SCORE_TABLE_REQUIRED_COLUMNS,
     SCORE_TABLE_SCHEMA_VERSION,
     SCORE_THRESHOLD_SOURCE,
+    SPLIT_ASSIGNMENT_REQUIRED_COLUMNS,
+    SPLIT_ASSIGNMENT_SCHEMA_VERSION,
 )
 from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_research_score_path
 from filters.breakout_quality.score_store import build_pass_condition_from_score_table, load_score_table
@@ -41,7 +53,11 @@ from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
-from tools.filters.breakout_quality.common import chronological_group_split_indices
+from filters.breakout_quality.splits import (
+    build_outer_inner_split_assignments,
+    compute_outer_policy_fingerprint,
+    resolve_breakout_quality_outer_policy,
+)
 
 from .checks import add_check
 
@@ -87,6 +103,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         True,
         int(BREAKOUT_DEFAULT_HIGH_LEN) in set(quality_values),
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inner_validation_ratio_is_user_configured_and_legal",
+        True,
+        0.0 < float(BREAKOUT_QUALITY_INNER_VALIDATION_RATIO) < 1.0,
+    )
     try:
         V16StrategyParams(breakout_quality_filter_id=" ")
         empty_filter_id_rejected = False
@@ -110,13 +134,24 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    rows = []
-    for event_date, label_end_date in (
+    date_and_end = (
+        ("2024-12-31", "2025-01-01"),
         ("2025-01-01", "2025-01-02"),
         ("2025-01-02", "2025-01-03"),
-        ("2025-01-03", "2025-01-06"),
-        ("2025-01-04", "2025-01-07"),
-    ):
+        ("2025-01-03", "2025-01-05"),
+        ("2025-01-04", "2025-01-06"),
+        ("2025-01-05", "2025-01-08"),
+        ("2025-01-06", "2025-01-09"),
+        ("2025-01-07", "2025-01-08"),
+        ("2025-01-08", "2025-01-10"),
+        ("2025-01-09", "2025-01-10"),
+        ("2025-01-10", "2025-01-11"),
+        ("2025-01-11", "2025-01-13"),
+        ("2025-01-12", "2025-01-12"),
+        ("2025-01-13", "2025-01-14"),
+    )
+    rows = []
+    for event_date, label_end_date in date_and_end:
         for high_len in (100, 105):
             rows.append(
                 {
@@ -127,28 +162,108 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
                 }
             )
     events = pd.DataFrame(rows)
-    labels = np.asarray([0, 1] * 4, dtype=np.int64)
-    train_idx, val_idx, report = chronological_group_split_indices(
+    labels = np.asarray([0, 1] * len(date_and_end), dtype=np.int64)
+    outer_policy = {
+        "policy_source": "core.walk_forward_policy.synthetic_override",
+        "policy_fingerprint_sha256": "synthetic-policy-fingerprint",
+        "selection_start_date": "2025-01-01",
+        "selection_end_date": "2025-01-08",
+        "oos_start_date": "2025-01-09",
+        "configured_oos_end_date": "2025-01-12",
+        "effective_oos_end_date": "2025-01-12",
+    }
+    assignments, train_idx, val_idx, oos_idx, report = build_outer_inner_split_assignments(
         events,
         labels,
-        val_ratio=0.5,
-        label_pass=1,
-        label_reject=0,
+        outer_policy=outer_policy,
+        inner_validation_ratio=0.5,
     )
 
-    add_check(results, "synthetic_breakout_quality", case_id, "validation_start_date", "2025-01-03", report["validation_start_date"])
-    add_check(results, "synthetic_breakout_quality", case_id, "safe_train_rows_only", 2, len(train_idx))
-    add_check(results, "synthetic_breakout_quality", case_id, "embargo_rows_removed", 2, report["embargo_dropped_row_count"])
-    add_check(results, "synthetic_breakout_quality", case_id, "validation_rows", 4, len(val_idx))
+    add_check(results, "synthetic_breakout_quality", case_id, "outer_selection_start", "2025-01-01", report["selection_start_date"])
+    add_check(results, "synthetic_breakout_quality", case_id, "outer_oos_start", "2025-01-09", report["oos_start_date"])
+    add_check(results, "synthetic_breakout_quality", case_id, "inner_validation_start", "2025-01-04", report["inner_validation_start_date"])
+    add_check(results, "synthetic_breakout_quality", case_id, "safe_inner_train_rows", 4, len(train_idx))
+    add_check(results, "synthetic_breakout_quality", case_id, "inner_validation_rows", 6, len(val_idx))
+    add_check(results, "synthetic_breakout_quality", case_id, "oos_evaluable_rows", 6, len(oos_idx))
+    add_check(results, "synthetic_breakout_quality", case_id, "train_validation_embargo_rows", 2, report["train_validation_embargo_row_count"])
+    add_check(results, "synthetic_breakout_quality", case_id, "selection_oos_embargo_rows", 4, report["selection_oos_embargo_row_count"])
+    add_check(results, "synthetic_breakout_quality", case_id, "oos_label_after_end_rows", 2, report["oos_label_after_end_row_count"])
     add_check(results, "synthetic_breakout_quality", case_id, "group_overlap_forbidden", 0, report["overlap_group_count"])
     add_check(results, "synthetic_breakout_quality", case_id, "event_date_overlap_forbidden", 0, report["overlap_event_date_count"])
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "train_label_information_before_validation",
+        "train_label_information_before_inner_validation",
         True,
-        pd.to_datetime(events.iloc[train_idx]["label_eval_end_date"]).max() < pd.Timestamp(report["validation_start_date"]),
+        pd.to_datetime(events.iloc[train_idx]["label_eval_end_date"]).max()
+        < pd.Timestamp(report["inner_validation_start_date"]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "validation_label_information_before_oos",
+        True,
+        pd.to_datetime(events.iloc[val_idx]["label_eval_end_date"]).max()
+        < pd.Timestamp(report["oos_start_date"]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "outer_split_counts",
+        {OUTER_SPLIT_SELECTION: 16, OUTER_SPLIT_OOS: 8, OUTER_SPLIT_OUT_OF_SCOPE: 4},
+        report["outer_split_counts"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "outside_selection_oos_has_no_inner_role",
+        True,
+        bool(
+            (
+                assignments.loc[
+                    assignments["outer_split"] != OUTER_SPLIT_SELECTION,
+                    "inner_split",
+                ]
+                == INNER_SPLIT_NOT_APPLICABLE
+            ).all()
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "split_assignment_key_unique",
+        False,
+        bool(assignments.duplicated(["ticker", "date", "high_len"], keep=False).any()),
+    )
+    project_root = Path(__file__).resolve().parents[2]
+    rolling_fold_policy = resolve_breakout_quality_outer_policy(
+        project_root,
+        source_data_end_date="2021-12-31",
+        environ={
+            "V16_WF_SELECTION_START_DATE": "2019-01-01",
+            "V16_WF_TRAIN_START_DATE": "2019-01-01",
+            "V16_WF_SEARCH_TRAIN_END_DATE": "2020-12-31",
+            "V16_WF_OOS_START_DATE": "2021-01-01",
+            "V16_WF_OOS_END_DATE": "2021-12-31",
+        },
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rolling_fold_reuses_standard_walk_forward_overrides",
+        ("2019-01-01", "2020-12-31", "2021-01-01", "2021-12-31"),
+        (
+            rolling_fold_policy["selection_start_date"],
+            rolling_fold_policy["selection_end_date"],
+            rolling_fold_policy["oos_start_date"],
+            rolling_fold_policy["effective_oos_end_date"],
+        ),
     )
     summary["split_report"] = report
     return results, summary
@@ -157,6 +272,7 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
 def _clear_breakout_quality_caches() -> None:
     load_model_artifact_contract.cache_clear()
     load_runtime_artifact_contract.cache_clear()
+    load_split_assignment_frame.cache_clear()
     load_score_table.cache_clear()
 
 
@@ -254,6 +370,25 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             )
             paths.model_dir.mkdir(parents=True, exist_ok=True)
             paths.model_path.write_bytes(b"synthetic-model")
+            split_frame = pd.DataFrame(
+                [
+                    {
+                        "ticker": "2330",
+                        "date": "2024-01-02",
+                        "high_len": high_len,
+                        "outer_split": OUTER_SPLIT_SELECTION,
+                        "inner_split": INNER_SPLIT_TRAIN,
+                    },
+                    {
+                        "ticker": "2330",
+                        "date": "2024-12-02",
+                        "high_len": high_len,
+                        "outer_split": OUTER_SPLIT_SELECTION,
+                        "inner_split": INNER_SPLIT_VALIDATION,
+                    },
+                ]
+            )
+            split_frame.to_csv(paths.split_path, index=False, encoding="utf-8-sig")
             score_frame = pd.DataFrame(
                 [
                     {"ticker": "2330", "date": "2025-01-03", "high_len": high_len, SCORE_COLUMN: 0.60},
@@ -277,11 +412,44 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "event_date_range": {"start": "2025-01-03", "end": "2025-01-04"},
                 }
             )
+            split_record = build_file_manifest(paths.split_path)
+            split_record.update(
+                {
+                    "schema_version": SPLIT_ASSIGNMENT_SCHEMA_VERSION,
+                    "required_columns": list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS),
+                    "columns": list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS),
+                    "row_count": len(split_frame),
+                    "group_key": "ticker/date/high_len",
+                    "outer_split_counts": {
+                        OUTER_SPLIT_SELECTION: 2,
+                        OUTER_SPLIT_OOS: 0,
+                        OUTER_SPLIT_OUT_OF_SCOPE: 0,
+                    },
+                    "inner_split_counts": {
+                        INNER_SPLIT_TRAIN: 1,
+                        INNER_SPLIT_VALIDATION: 1,
+                        "embargo": 0,
+                        "ignore": 0,
+                        INNER_SPLIT_NOT_APPLICABLE: 0,
+                    },
+                }
+            )
+            outer_policy = {
+                "policy_source": "core.walk_forward_policy.synthetic_override",
+                "selection_start_date": "2024-01-01",
+                "selection_end_date": "2024-12-31",
+                "oos_start_date": "2025-01-01",
+                "configured_oos_end_date": "2025-12-31",
+                "effective_oos_end_date": "2025-12-31",
+            }
+            outer_policy["policy_fingerprint_sha256"] = compute_outer_policy_fingerprint(outer_policy)
             manifest = {
                 "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
                 "filter_family": FILTER_FAMILY,
                 "filter_id": filter_id,
                 "model": build_file_manifest(paths.model_path),
+                "split_assignments": split_record,
+                "outer_oos_policy": outer_policy,
                 "feature_columns": list(FEATURE_COLUMNS),
                 "context_columns": list(CONTEXT_COLUMNS),
                 "score_decision": {

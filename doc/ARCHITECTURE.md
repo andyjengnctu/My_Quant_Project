@@ -36,11 +36,12 @@ project/
 │  ├─ ARCHITECTURE.md                 # 本檔
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ filters/
-│  └─ breakout_quality/               # quality feature、artifact contract、正式 runtime score lookup
+│  └─ breakout_quality/               # quality feature、shared split、artifact contract、正式 runtime score lookup
 ├─ models/
 │  ├─ filters/breakout_quality/<filter_id>/
 │  │  ├─ model.pt                     # canonical model artifact
-│  │  ├─ manifest.json                # model/score/OOS eligibility 契約
+│  │  ├─ split_assignments.csv        # shared outer selection/OOS + inner train/validation assignment
+│  │  ├─ manifest.json                # model/split/score/OOS eligibility 契約
 │  │  └─ scores.csv                   # canonical event score table
 │  ├─ full_base_best.json            # Full finalist best base policy 參數檔
 │  ├─ full_base_finalists_agree.json # Full finalist agree base policy 參數檔
@@ -81,9 +82,10 @@ project/
 
 ### `filters/breakout_quality/` 與 `tools/filters/breakout_quality/`
 
-- `filters/breakout_quality/` 承接 feature/label、artifact contract、canonical path 與正式 runtime lookup；正式 runtime 不執行 CNN，只讀 canonical `scores.csv`。
+- `filters/breakout_quality/` 承接 feature/label、artifact contract、canonical path、外層 OOS / 內層 validation split 與正式 runtime lookup；正式 runtime 不執行 CNN，只讀 canonical `scores.csv`。
 - `tools/filters/breakout_quality/` 只承接 dataset、training、score export 與研究評估；不得複製 runtime 決策規則。
-- 正式工件唯一位置為 `models/filters/breakout_quality/<filter_id>/`；研究分數與 dataset 等可重建輸出只放 `outputs/filters/breakout_quality/<filter_id>/`，不得覆蓋正式 `scores.csv`。
+- 正式工件唯一位置為 `models/filters/breakout_quality/<filter_id>/`；`split_assignments.csv` 的 outer `selection/oos` 日期直接來自 `core.walk_forward_policy`，Selection 內才切 inner `train/validation/embargo`，不得另建平行 OOS 日期規則。
+- 研究分數與 dataset 等可重建輸出只放 `outputs/filters/breakout_quality/<filter_id>/`，不得覆蓋正式 `scores.csv`。
 - `dl_quality_score >= active breakout_quality_score_threshold` 是唯一通過判斷；manifest 只宣告契約與 OOS 可用日期，不預先固化另一份 `dl_pass`。
 - 正式 runtime 僅在 manifest 宣告的有效期間套用模型；有效期後只要出現未覆蓋候選事件即 fail-fast。
 

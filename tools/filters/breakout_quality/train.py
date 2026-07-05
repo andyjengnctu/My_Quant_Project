@@ -16,6 +16,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality_policy import BREAKOUT_QUALITY_INNER_VALIDATION_RATIO
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
@@ -24,6 +25,7 @@ from filters.breakout_quality.contract import (
     DEFAULT_MANIFEST_FILENAME,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_SCORE_FILENAME,
+    DEFAULT_SPLIT_FILENAME,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
     LABEL_PASS,
@@ -32,15 +34,20 @@ from filters.breakout_quality.contract import (
     SCORE_COMPARISON,
     SCORE_THRESHOLD_SOURCE,
     RUNTIME_SCOPE_NOT_EXPORTED,
+    SPLIT_ASSIGNMENT_REQUIRED_COLUMNS,
+    SPLIT_ASSIGNMENT_SCHEMA_VERSION,
 )
 from filters.breakout_quality.model import build_model, require_torch
+from filters.breakout_quality.splits import (
+    build_outer_inner_split_assignments,
+    resolve_breakout_quality_outer_policy,
+)
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
     resolve_filter_research_manifest_path,
     resolve_filter_research_score_path,
 )
 from tools.filters.breakout_quality.common import (
-    chronological_group_split_indices,
     event_group_summary,
     group_size_weights,
     label_counts,
@@ -57,7 +64,14 @@ def parse_args(argv=None):
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--val-ratio", type=float, default=0.2)
+    parser.add_argument(
+        "--inner-validation-ratio",
+        "--val-ratio",
+        dest="inner_validation_ratio",
+        type=float,
+        default=BREAKOUT_QUALITY_INNER_VALIDATION_RATIO,
+        help="Selection period 內保留給 inner validation 的 event-date 比例；--val-ratio 為相容別名",
+    )
     parser.add_argument("--min-train-samples", type=int, default=20)
     parser.add_argument(
         "--early-stopping-patience",
@@ -160,21 +174,35 @@ def main(argv=None) -> int:
             stacklevel=2,
         )
     torch.manual_seed(int(args.seed))
-    train_idx, val_idx, split_report = chronological_group_split_indices(
+    source_data_range = dataset_summary.get("source_data_date_range")
+    source_data_end = (
+        str(source_data_range.get("end") or "").strip()
+        if isinstance(source_data_range, dict)
+        else ""
+    )
+    if not source_data_end:
+        source_data_end = str(pd.to_datetime(events["label_eval_end_date"], errors="raise").max().date())
+    outer_oos_policy = resolve_breakout_quality_outer_policy(
+        PROJECT_ROOT,
+        source_data_end_date=source_data_end,
+    )
+    split_assignments, train_idx, val_idx, oos_idx, split_report = build_outer_inner_split_assignments(
         events,
         y,
-        val_ratio=float(args.val_ratio),
-        label_pass=LABEL_PASS,
-        label_reject=LABEL_REJECT,
+        outer_policy=outer_oos_policy,
+        inner_validation_ratio=float(args.inner_validation_ratio),
     )
     if int(split_report.get("overlap_group_count", 0)) != 0:
-        raise ValueError(f"train/val group overlap 不應發生: {split_report}")
+        raise ValueError(f"inner train/validation/OOS group overlap 不應發生: {split_report}")
     if int(split_report.get("overlap_event_date_count", 0)) != 0:
-        raise ValueError(f"train/val event date overlap 不應發生: {split_report}")
+        raise ValueError(f"inner train/validation/OOS event date overlap 不應發生: {split_report}")
     if len(train_idx) < int(args.min_train_samples):
         raise ValueError(f"可訓練樣本不足: train={len(train_idx)}, min={args.min_train_samples}, labels={label_counts(y)}")
-    if len(set(y[train_idx].tolist())) < 2:
-        raise ValueError(f"train split 必須同時包含 PASS/REJECT，labels={label_counts(y[train_idx])}")
+    for split_name, split_idx in (("inner train", train_idx), ("inner validation", val_idx)):
+        if len(set(y[split_idx].tolist())) < 2:
+            raise ValueError(
+                f"{split_name} 必須同時包含 PASS/REJECT，labels={label_counts(y[split_idx])}"
+            )
 
     sample_weights = np.zeros((len(y),), dtype=np.float32)
     sample_weights[train_idx] = group_size_weights(events, train_idx)
@@ -277,9 +305,26 @@ def main(argv=None) -> int:
         "feature_count": int(X.shape[2]),
         "context_count": int(C.shape[1]),
     }, artifact_paths.model_path)
+    split_assignments.to_csv(artifact_paths.split_path, index=False, encoding="utf-8-sig")
 
-    used_idx = np.concatenate([train_idx, val_idx]) if len(val_idx) else train_idx
+    used_idx = np.concatenate([train_idx, val_idx])
     model_information_cutoff = _max_iso_date(events, used_idx, "label_eval_end_date")
+    if model_information_cutoff is None or model_information_cutoff >= str(outer_oos_policy["oos_start_date"]):
+        raise ValueError(
+            "breakout quality model_information_cutoff 必須早於既有 OOS 起點: "
+            f"cutoff={model_information_cutoff}, oos_start={outer_oos_policy['oos_start_date']}"
+        )
+    split_record = {
+        **build_file_manifest(artifact_paths.split_path),
+        "schema_version": SPLIT_ASSIGNMENT_SCHEMA_VERSION,
+        "required_columns": list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS),
+        "columns": list(split_assignments.columns),
+        "row_count": int(len(split_assignments)),
+        "outer_split_counts": split_report["outer_split_counts"],
+        "inner_split_counts": split_report["inner_split_counts"],
+        "group_key": "ticker/date/high_len",
+        "source_dataset_artifacts": dataset_summary.get("dataset_artifacts"),
+    }
     manifest = {
         "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
         "filter_family": FILTER_FAMILY,
@@ -288,6 +333,9 @@ def main(argv=None) -> int:
         "model_filename": DEFAULT_MODEL_FILENAME,
         "score_filename": DEFAULT_SCORE_FILENAME,
         "model": build_file_manifest(artifact_paths.model_path),
+        "split_filename": DEFAULT_SPLIT_FILENAME,
+        "split_assignments": split_record,
+        "outer_oos_policy": outer_oos_policy,
         "feature_columns": list(FEATURE_COLUMNS),
         "context_columns": list(CONTEXT_COLUMNS),
         "score_decision": {
@@ -316,12 +364,15 @@ def main(argv=None) -> int:
             "reject": round(float(class_weights_np[LABEL_REJECT]), 6),
             "pass": round(float(class_weights_np[LABEL_PASS]), 6),
         },
-        "train_label_counts": label_counts(y[train_idx]),
-        "val_label_counts": label_counts(y[val_idx]) if len(val_idx) else {"pass": 0, "reject": 0, "ignore": 0, "total": 0},
-        "train_metrics": _evaluate(torch, model, X, C, y, train_idx, sample_weights, class_weights),
-        "val_metrics": _evaluate(torch, model, X, C, y, val_idx, sample_weights, class_weights),
+        "inner_train_label_counts": label_counts(y[train_idx]),
+        "inner_validation_label_counts": label_counts(y[val_idx]),
+        "oos_evaluable_label_counts": label_counts(y[oos_idx]),
+        "inner_train_metrics": _evaluate(torch, model, X, C, y, train_idx, sample_weights, class_weights),
+        "inner_validation_metrics": _evaluate(torch, model, X, C, y, val_idx, sample_weights, class_weights),
+        "oos_predictions_used_during_training_or_early_stopping": False,
+        "oos_metrics_emitted_by_train": False,
         "best_epoch": int(best_epoch),
-        "best_monitor": "val_loss" if len(val_idx) else "train_loss",
+        "best_monitor": "inner_validation_loss",
         "best_monitor_value": round(float(best_monitor_value), 6) if best_monitor_value is not None else None,
         "best_train_metrics": best_train_metrics,
         "best_val_metrics": best_val_metrics,
@@ -333,18 +384,22 @@ def main(argv=None) -> int:
             "triggered": bool(early_stopped),
         },
         "seed": int(args.seed),
+        "inner_validation_ratio": float(args.inner_validation_ratio),
         "epochs": int(args.epochs),
         "epochs_trained": int(epoch),
         "elapsed_sec": round(time.perf_counter() - started, 3),
         "no_lookahead_contract": (
-            "features use D0 and earlier only; train rows require label_eval_end_date before validation_start_date; "
-            "formal runtime requires separately exported OOS scores"
+            "features use D0 and earlier only; outer selection/OOS dates come from core.walk_forward_policy; "
+            "inner train rows require label_eval_end_date before inner validation start; "
+            "inner validation rows require label_eval_end_date before OOS start; "
+            "OOS predictions are not used by training or early stopping"
         ),
     }
     write_json(out_model_dir / DEFAULT_MANIFEST_FILENAME, manifest)
     print(f"split_report={split_report}")
     print(f"best_epoch={best_epoch} best_monitor_value={best_monitor_value}")
     print(f"已輸出: {artifact_paths.model_path}")
+    print(f"已輸出: {artifact_paths.split_path}")
     print(f"已輸出: {artifact_paths.manifest_path}")
     return 0
 

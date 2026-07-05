@@ -13,7 +13,11 @@ import argparse
 
 import pandas as pd
 
-from filters.breakout_quality.artifacts import build_file_manifest, load_model_artifact_contract
+from filters.breakout_quality.artifacts import (
+    build_file_manifest,
+    load_model_artifact_contract,
+    load_split_assignment_frame,
+)
 from filters.breakout_quality.contract import (
     DEFAULT_FILTER_ID,
     DEFAULT_SCORE_FILENAME,
@@ -85,6 +89,7 @@ def main(argv=None) -> int:
     model_contract = load_model_artifact_contract(str(PROJECT_ROOT), str(args.filter_id))
     artifact_paths = model_contract.paths
     manifest = model_contract.manifest
+    split_assignments = load_split_assignment_frame(str(PROJECT_ROOT), str(args.filter_id))
     model_policy = manifest.get("policy")
     if not isinstance(model_policy, dict):
         raise ValueError("model manifest 缺少 policy object")
@@ -92,6 +97,19 @@ def main(argv=None) -> int:
         args.filter_id,
         expected_policy=model_policy,
     )
+    if args.scope == RUNTIME_SCOPE_RESEARCH:
+        split_record = manifest.get("split_assignments")
+        if not isinstance(split_record, dict):
+            raise ValueError("model manifest 缺少 split_assignments")
+        if split_record.get("source_dataset_artifacts") != dataset_summary.get("dataset_artifacts"):
+            raise ValueError(
+                "research export 的 dataset 與模型 canonical split assignment 不一致；"
+                "請勿重建同一 filter_id 的 dataset 後沿用舊 model"
+            )
+        if len(split_assignments) != len(events):
+            raise ValueError(
+                f"research dataset 與 split assignment row_count 不一致: events={len(events)}, split={len(split_assignments)}"
+            )
 
     checkpoint = torch.load(artifact_paths.model_path, map_location="cpu")
     feature_count = int(checkpoint["feature_count"])
@@ -114,12 +132,31 @@ def main(argv=None) -> int:
     if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
         if not information_cutoff:
             raise ValueError("forward_oos 需要 manifest.model_information_cutoff")
-        cutoff = pd.Timestamp(information_cutoff)
-        scored = scored[pd.to_datetime(scored["date"], errors="raise") > cutoff].copy()
+        outer_policy = manifest.get("outer_oos_policy")
+        if not isinstance(outer_policy, dict):
+            raise ValueError("forward_oos 需要 manifest.outer_oos_policy")
+        oos_start = pd.Timestamp(str(outer_policy.get("oos_start_date") or "")).normalize()
+        configured_oos_end_text = str(outer_policy.get("configured_oos_end_date") or "").strip()
+        source_range = dataset_summary.get("source_data_date_range")
+        source_end_text = (
+            str(source_range.get("end") or "").strip()
+            if isinstance(source_range, dict)
+            else ""
+        )
+        if not source_end_text:
+            source_end_text = str(pd.to_datetime(scored["date"], errors="raise").max().date())
+        oos_end = pd.Timestamp(configured_oos_end_text or source_end_text).normalize()
+        event_dates = pd.to_datetime(scored["date"], errors="raise").dt.normalize()
+        cutoff = pd.Timestamp(information_cutoff).normalize()
+        scored = scored[
+            (event_dates >= oos_start)
+            & (event_dates <= oos_end)
+            & (event_dates > cutoff)
+        ].copy()
         if scored.empty:
             raise ValueError(
-                "forward_oos 沒有可匯出的事件；請保留既有 model.pt，使用更新到 cutoff 之後的資料重新 build_dataset，"
-                "不要重新 train 後再匯出同一份資料"
+                "forward_oos 沒有落在既有 walk_forward_policy OOS 區間且晚於 model_information_cutoff 的事件；"
+                f"oos={oos_start.date()}~{oos_end.date()}, cutoff={cutoff.date()}"
             )
 
     research_optional = [
@@ -148,6 +185,8 @@ def main(argv=None) -> int:
             "scope": RUNTIME_SCOPE_RESEARCH,
             "model_information_cutoff": information_cutoff,
             "runtime_eligible": False,
+            "outer_oos_policy": manifest.get("outer_oos_policy"),
+            "source_split_assignments": manifest.get("split_assignments"),
             "score_table": _build_score_record(
                 score_path,
                 out_cols=out_cols,
@@ -156,7 +195,10 @@ def main(argv=None) -> int:
                 event_range=event_range,
                 dataset_summary=dataset_summary,
             ),
-            "reason": "research rows may overlap model train/validation and must never replace canonical runtime scores.csv",
+            "reason": (
+                "research rows include outer selection and OOS; threshold may be selected only on inner validation, "
+                "and research output must never replace canonical runtime scores.csv"
+            ),
         }
         write_json(research_manifest_path, research_manifest)
         print(f"已輸出研究分數: {score_path}")
@@ -185,7 +227,7 @@ def main(argv=None) -> int:
         "available_from": available_from,
         "available_through": available_through,
         "model_information_cutoff": information_cutoff,
-        "reason": "score rows are strictly after model_information_cutoff",
+        "reason": "score rows are inside the shared walk_forward_policy OOS window and strictly after model_information_cutoff",
     }
     manifest["score_filename"] = DEFAULT_SCORE_FILENAME
     write_json(artifact_paths.manifest_path, manifest)

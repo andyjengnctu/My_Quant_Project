@@ -30,7 +30,7 @@
 
 | ID | 優先級 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|
-| B01 | P0 | 杜絕未來函數 | DONE | 已以 prev-day-only PIT case 與 setup-index prev-day-only case 共同釘死盤前排程只能讀前一日訊號；breakout quality 另以 event-date chronological split、label-end embargo 與 forward-OOS cutoff 契約，禁止 train/validation 或正式 score table 偷看標籤未來區間 | `tools/validate/synthetic_history_cases.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
+| B01 | P0 | 杜絕未來函數 | DONE | 已以 prev-day-only PIT case 與 setup-index prev-day-only case 共同釘死盤前排程只能讀前一日訊號；breakout quality 另沿用 core.walk_forward_policy 的 outer selection/OOS，Selection 內才切 inner train/validation，並在 inner 與 outer 邊界套用 label-end embargo；禁止模型選擇或正式 score table 偷看 OOS 未知資訊 | `tools/validate/synthetic_history_cases.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
 | B02 | P1 | 同 K 棒停利/停損取最壞停損 | DONE | 已有明確 synthetic case | 既有 synthetic case |
 | B03 | P0 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 | DONE | 已新增直接手算對帳案例，逐欄位檢查 entry cash / entry equity / exit pnl / final equity / total return | `tools/validate/synthetic_take_profit_cases.py` |
 | B04 | P1 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip | DONE | 已新增直接案例，斷言半倉列不得提前帶完整 `該筆總損益`，完整 Round-Trip 僅在尾倉結算列完成 | `tools/validate/synthetic_take_profit_cases.py` |
@@ -46,7 +46,7 @@
 
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|---|
-| B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | DONE | 已補 missed sell / trade log / stats 與 formal summaries 的 CSV / XLSX / JSON contract；breakout quality 另釘死策略 high_len、optimizer range、dataset coverage、canonical runtime artifact path、research output 隔離、manifest/hash/schema 與 active threshold 使用同一來源，禁止 runtime 再讀平行 `dl_pass` 或 legacy score path | `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
+| B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | DONE | 已補 missed sell / trade log / stats 與 formal summaries 的 CSV / XLSX / JSON contract；breakout quality 另釘死策略 high_len、optimizer range、dataset coverage、walk-forward outer policy、canonical split/runtime artifact path、research output 隔離、manifest/hash/schema 與 active threshold 使用同一來源，禁止 runtime 再讀平行 `dl_pass`、自建 OOS 日期或 legacy score path | `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
 | B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | DONE | 已補 `run_ml_smoke.py` fixed-seed 雙跑、`run_chain_checks.py` scanner reduced snapshot 雙跑 digest、`validate_scanner_worker_repeatability_case` 與 `validate_scan_runner_repeatability_case`，正式入口與 scanner 入口重跑一致性已收斂 | `tools/local_regression/`, `tools/validate/synthetic_regression_cases.py` |
 | B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` / `signal_utils` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸、空序列與訊號 helper 邊界 | `tools/validate/synthetic_unit_cases.py` |
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | DONE | 已新增資料清洗 expected behavior / fail-fast / `load_clean_df` 整合案例，直接釘死髒資料修正、欄位缺失、NaN、日期亂序、OHLC 異常與清洗後列數行為 | `tools/validate/synthetic_data_quality_cases.py`, `core/data_utils.py`, `tools/validate/real_case_io.py` |

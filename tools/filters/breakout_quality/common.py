@@ -284,98 +284,6 @@ def group_size_weights(events: pd.DataFrame, indices: Iterable[int]) -> np.ndarr
     return keys.map(lambda key: 1.0 / float(counts[key])).to_numpy(dtype=np.float32)
 
 
-def chronological_group_split_indices(
-    events: pd.DataFrame,
-    labels: np.ndarray,
-    *,
-    val_ratio: float,
-    label_pass: int,
-    label_reject: int,
-) -> tuple[np.ndarray, np.ndarray, dict]:
-    ratio = float(val_ratio)
-    if ratio <= 0.0 or ratio >= 1.0:
-        raise ValueError(f"val_ratio 必須介於 0 與 1，收到 {val_ratio!r}")
-
-    labels_arr = np.asarray(labels, dtype=np.int64)
-    valid_idx = np.flatnonzero((labels_arr == int(label_pass)) | (labels_arr == int(label_reject)))
-    empty_report = {
-        "strategy": "event_date_chronological_with_label_end_embargo",
-        "val_ratio": ratio,
-        "valid_row_count": int(valid_idx.size),
-        "group_count": 0,
-        "train_row_count": 0,
-        "val_row_count": 0,
-        "embargo_dropped_row_count": 0,
-        "train_group_count": 0,
-        "val_group_count": 0,
-        "overlap_group_count": 0,
-        "overlap_event_date_count": 0,
-    }
-    if valid_idx.size == 0:
-        return valid_idx, valid_idx, empty_report
-
-    required = {"ticker", "date", "label_eval_end_date"}
-    missing = sorted(required - set(events.columns))
-    if missing:
-        raise ValueError(
-            f"breakout quality chronological split 缺少欄位 {missing}；請用新版 build_dataset 重建資料，禁止無 embargo 訓練"
-        )
-
-    valid_events = events.iloc[valid_idx].copy()
-    valid_events["_row_index"] = valid_idx
-    valid_events["_group_key"] = event_group_keys(events).iloc[valid_idx].to_numpy()
-    valid_events["_event_date"] = pd.to_datetime(valid_events["date"], errors="raise").dt.normalize()
-    valid_events["_label_end_date"] = pd.to_datetime(valid_events["label_eval_end_date"], errors="raise").dt.normalize()
-
-    unique_dates = np.sort(valid_events["_event_date"].unique())
-    if len(unique_dates) <= 1:
-        train_mask = np.ones(len(valid_events), dtype=bool)
-        val_mask = np.zeros(len(valid_events), dtype=bool)
-        embargo_mask = np.zeros(len(valid_events), dtype=bool)
-        val_start = None
-    else:
-        split = int(round(len(unique_dates) * (1.0 - ratio)))
-        split = min(max(split, 1), len(unique_dates) - 1)
-        val_start = pd.Timestamp(unique_dates[split])
-        before_val = valid_events["_event_date"] < val_start
-        safe_label_end = valid_events["_label_end_date"] < val_start
-        train_mask = (before_val & safe_label_end).to_numpy(dtype=bool)
-        embargo_mask = (before_val & ~safe_label_end).to_numpy(dtype=bool)
-        val_mask = (valid_events["_event_date"] >= val_start).to_numpy(dtype=bool)
-
-    train_idx = valid_events.loc[train_mask, "_row_index"].to_numpy(dtype=np.int64)
-    val_idx = valid_events.loc[val_mask, "_row_index"].to_numpy(dtype=np.int64)
-    train_groups = set(valid_events.loc[train_mask, "_group_key"].tolist())
-    val_groups = set(valid_events.loc[val_mask, "_group_key"].tolist())
-    train_dates = set(valid_events.loc[train_mask, "_event_date"].tolist())
-    val_dates = set(valid_events.loc[val_mask, "_event_date"].tolist())
-
-    def _date_range(idx: np.ndarray, column: str = "date") -> dict[str, str | None]:
-        if idx.size == 0:
-            return {"start": None, "end": None}
-        dates = pd.to_datetime(events.iloc[idx][column], errors="raise")
-        return {"start": str(dates.min().date()), "end": str(dates.max().date())}
-
-    report = {
-        **empty_report,
-        "group_count": int(valid_events["_group_key"].nunique()),
-        "event_date_count": int(len(unique_dates)),
-        "validation_start_date": str(val_start.date()) if val_start is not None else None,
-        "train_row_count": int(train_idx.size),
-        "val_row_count": int(val_idx.size),
-        "embargo_dropped_row_count": int(np.asarray(embargo_mask, dtype=bool).sum()),
-        "train_group_count": int(len(train_groups)),
-        "val_group_count": int(len(val_groups)),
-        "overlap_group_count": int(len(train_groups.intersection(val_groups))),
-        "overlap_event_date_count": int(len(train_dates.intersection(val_dates))),
-        "train_date_range": _date_range(train_idx),
-        "train_label_end_date_range": _date_range(train_idx, "label_eval_end_date"),
-        "val_date_range": _date_range(val_idx),
-        "val_label_end_date_range": _date_range(val_idx, "label_eval_end_date"),
-    }
-    return train_idx, val_idx, report
-
-
 def event_group_summary(events: pd.DataFrame, labels: Iterable[int]) -> dict:
     if events.empty:
         return {"group_count": 0}
@@ -406,7 +314,6 @@ __all__ = [
     "PROJECT_ROOT",
     "add_policy_args",
     "build_policy_from_args",
-    "chronological_group_split_indices",
     "dataset_npz_path",
     "dataset_output_dir",
     "event_group_keys",

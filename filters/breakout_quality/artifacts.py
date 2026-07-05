@@ -15,17 +15,27 @@ from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_SCORE_FILENAME,
+    DEFAULT_SPLIT_FILENAME,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
+    INNER_SPLIT_VALUES,
+    OUTER_SPLIT_VALUES,
     SCORE_COLUMN,
     SCORE_COMPARISON,
     SCORE_TABLE_REQUIRED_COLUMNS,
     SCORE_TABLE_SCHEMA_VERSION,
     SCORE_THRESHOLD_SOURCE,
+    SPLIT_ASSIGNMENT_REQUIRED_COLUMNS,
+    SPLIT_ASSIGNMENT_SCHEMA_VERSION,
     RUNTIME_ELIGIBLE_SCOPES,
     RUNTIME_SCOPE_FORWARD_OOS,
 )
+from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.paths import BreakoutQualityArtifactPaths, resolve_filter_artifact_paths
+from filters.breakout_quality.splits import (
+    compute_outer_policy_fingerprint,
+    validate_split_assignment_frame,
+)
 
 
 @dataclass(frozen=True)
@@ -125,6 +135,60 @@ def _normalize_high_len_values(raw_values: Any) -> tuple[int, ...]:
     return values
 
 
+def _validate_split_assignment_record(paths: BreakoutQualityArtifactPaths, manifest: dict[str, Any]):
+    record = _require_mapping(manifest, "split_assignments")
+    if int(record.get("schema_version", -1)) != int(SPLIT_ASSIGNMENT_SCHEMA_VERSION):
+        raise ValueError("breakout quality split assignment schema 版本不相容")
+    if list(record.get("required_columns", [])) != list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS):
+        raise ValueError("breakout quality split assignment required_columns 與正式契約不一致")
+    if list(record.get("columns", [])) != list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS):
+        raise ValueError("breakout quality split assignment columns metadata 與正式契約不一致")
+    _validate_file_record(
+        paths.split_path,
+        record,
+        expected_filename=DEFAULT_SPLIT_FILENAME,
+        field_name="split_assignments",
+    )
+    frame = validate_split_assignment_frame(read_breakout_quality_csv(paths.split_path))
+    if int(record.get("row_count", -1)) != len(frame):
+        raise ValueError("breakout quality split assignment row_count 與檔案不一致")
+    outer_counts = {name: int((frame["outer_split"] == name).sum()) for name in OUTER_SPLIT_VALUES}
+    inner_counts = {name: int((frame["inner_split"] == name).sum()) for name in INNER_SPLIT_VALUES}
+    expected_outer = record.get("outer_split_counts")
+    expected_inner = record.get("inner_split_counts")
+    if not isinstance(expected_outer, dict) or {
+        name: int(expected_outer.get(name, -1)) for name in OUTER_SPLIT_VALUES
+    } != outer_counts:
+        raise ValueError(
+            f"breakout quality split assignment outer_split_counts 不一致: expected={expected_outer}, actual={outer_counts}"
+        )
+    if not isinstance(expected_inner, dict) or {
+        name: int(expected_inner.get(name, -1)) for name in INNER_SPLIT_VALUES
+    } != inner_counts:
+        raise ValueError(
+            f"breakout quality split assignment inner_split_counts 不一致: expected={expected_inner}, actual={inner_counts}"
+        )
+    if str(record.get("group_key") or "").strip() != "ticker/date/high_len":
+        raise ValueError("breakout quality split assignment group_key 必須是 ticker/date/high_len")
+    outer_policy = _require_mapping(manifest, "outer_oos_policy")
+    _require_nonempty_text(outer_policy, "policy_source")
+    expected_policy_fingerprint = _require_nonempty_text(outer_policy, "policy_fingerprint_sha256")
+    actual_policy_fingerprint = compute_outer_policy_fingerprint(outer_policy)
+    if expected_policy_fingerprint != actual_policy_fingerprint:
+        raise ValueError(
+            "breakout quality outer_oos_policy fingerprint 不一致: "
+            f"expected={expected_policy_fingerprint}, actual={actual_policy_fingerprint}"
+        )
+    for field_name in (
+        "selection_start_date",
+        "selection_end_date",
+        "oos_start_date",
+        "effective_oos_end_date",
+    ):
+        _parse_iso_date(outer_policy.get(field_name), field_name=f"outer_oos_policy.{field_name}")
+    return frame
+
+
 @lru_cache(maxsize=16)
 def load_model_artifact_contract(
     project_root: str,
@@ -168,8 +232,15 @@ def load_model_artifact_contract(
         expected_filename=DEFAULT_MODEL_FILENAME,
         field_name="model",
     )
+    _validate_split_assignment_record(paths, manifest)
 
     return BreakoutQualityModelContract(paths=paths, manifest=manifest)
+
+
+@lru_cache(maxsize=16)
+def load_split_assignment_frame(project_root: str, filter_id: str):
+    model_contract = load_model_artifact_contract(project_root, filter_id)
+    return _validate_split_assignment_record(model_contract.paths, model_contract.manifest)
 
 
 @lru_cache(maxsize=16)
@@ -255,6 +326,7 @@ __all__ = [
     "build_file_manifest",
     "compute_file_sha256",
     "load_model_artifact_contract",
+    "load_split_assignment_frame",
     "load_runtime_artifact_contract",
     "validate_required_high_len",
 ]

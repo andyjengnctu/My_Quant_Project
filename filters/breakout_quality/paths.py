@@ -12,6 +12,7 @@ from filters.breakout_quality.contract import (
     DEFAULT_MANIFEST_FILENAME,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_SCORE_FILENAME,
+    DEFAULT_SPLIT_FILENAME,
     FILTER_FAMILY,
 )
 
@@ -22,6 +23,7 @@ class BreakoutQualityArtifactPaths:
     model_path: Path
     manifest_path: Path
     score_path: Path
+    split_path: Path
 
 
 def normalize_filter_id(filter_id: str) -> str:
@@ -50,6 +52,7 @@ def resolve_filter_artifact_paths(
         model_path=model_dir / DEFAULT_MODEL_FILENAME,
         manifest_path=model_dir / DEFAULT_MANIFEST_FILENAME,
         score_path=model_dir / DEFAULT_SCORE_FILENAME,
+        split_path=model_dir / DEFAULT_SPLIT_FILENAME,
     )
 
 
