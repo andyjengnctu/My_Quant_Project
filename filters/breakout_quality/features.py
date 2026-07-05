@@ -249,9 +249,21 @@ def build_breakout_quality_dataset_for_frame(
         features.append(seq_features)
         contexts.append(context)
         labels.append(int(label))
+        entry_pos = pos + 1
+        eval_start_pos = entry_pos + int(policy.evaluate_from_bars_after_entry)
+        eval_end_pos = eval_start_pos + int(policy.label_horizon_bars) - 1
+
+        def _format_index_date(index_pos: int) -> str | None:
+            if index_pos < 0 or index_pos >= len(stock_df):
+                return None
+            return pd.Timestamp(stock_df.index[index_pos]).strftime("%Y-%m-%d")
+
         rows.append({
             "ticker": str(ticker),
             "date": pd.Timestamp(event["date"]).strftime("%Y-%m-%d"),
+            "entry_date": _format_index_date(entry_pos),
+            "label_eval_start_date": _format_index_date(eval_start_pos),
+            "label_eval_end_date": _format_index_date(eval_end_pos),
             "high_len": high_len,
             "breakout_level": breakout_level,
             "label": int(label),
@@ -267,7 +279,17 @@ def build_breakout_quality_dataset_for_frame(
             features=np.empty((0, int(policy.feature_window_bars), len(FEATURE_COLUMNS)), dtype=np.float32),
             context=np.empty((0, len(CONTEXT_COLUMNS)), dtype=np.float32),
             labels=np.empty((0,), dtype=np.int64),
-            events=pd.DataFrame(columns=["ticker", "date", "high_len", "breakout_level", "label", "label_reason"]),
+            events=pd.DataFrame(columns=[
+                "ticker",
+                "date",
+                "entry_date",
+                "label_eval_start_date",
+                "label_eval_end_date",
+                "high_len",
+                "breakout_level",
+                "label",
+                "label_reason",
+            ]),
         )
     return BreakoutQualityDataset(
         features=np.asarray(features, dtype=np.float32),

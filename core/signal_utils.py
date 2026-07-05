@@ -1,6 +1,10 @@
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
+)
 from core.price_utils import adjust_long_buy_limit_array
 from core.feature_bank import coerce_feature_bank
 from core.breakout_false_filter import build_breakout_false_filter_pass_condition
@@ -141,7 +145,12 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     use_breakout_return_filter = bool(getattr(params, 'use_breakout_return_filter', False))
     use_breakout_false_filter = bool(getattr(params, 'use_breakout_false_filter', False))
     use_breakout_quality_filter = bool(getattr(params, 'use_breakout_quality_filter', False))
-    breakout_quality_filter_id = str(getattr(params, 'breakout_quality_filter_id', 'breakout_quality_v1')).strip() or 'breakout_quality_v1'
+    breakout_quality_filter_id = str(
+        getattr(params, 'breakout_quality_filter_id', BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
+    ).strip()
+    breakout_quality_score_threshold = float(
+        getattr(params, 'breakout_quality_score_threshold', BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD)
+    )
     use_kc = bool(getattr(params, 'use_kc', True))
 
     def _feature(feature_name, feature_args, builder):
@@ -260,6 +269,8 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
             df,
             ticker=resolved_ticker,
             high_len=high_len,
+            score_threshold=breakout_quality_score_threshold,
+            candidate_condition=isPriceCrossover,
             filter_id=breakout_quality_filter_id,
         )
     else:

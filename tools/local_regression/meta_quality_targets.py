@@ -61,6 +61,7 @@ COVERAGE_TARGETS = list(dict.fromkeys([
     "tools/validate/synthetic_flow_cases.py",
     "tools/validate/synthetic_take_profit_cases.py",
     "tools/validate/synthetic_contract_cases.py",
+    "tools/validate/synthetic_breakout_quality_cases.py",
     "tools/validate/synthetic_guardrail_cases.py",
     "tools/validate/synthetic_display_cases.py",
     "tools/validate/synthetic_reporting_cases.py",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -21,20 +20,20 @@ def build_breakout_quality_filter_pass_condition(
     *,
     ticker: str,
     high_len: int,
+    score_threshold: float,
+    candidate_condition: np.ndarray,
     filter_id: str = DEFAULT_FILTER_ID,
     project_root: str | None = None,
-    score_path: str | None = None,
 ) -> np.ndarray:
     root = resolve_project_root_from_runtime() if project_root is None else str(project_root)
-    env_score_path = os.environ.get("V16_BREAKOUT_QUALITY_SCORE_PATH")
-    resolved_score_path = score_path if score_path not in {None, ""} else env_score_path
     return build_pass_condition_from_score_table(
         df,
         ticker=ticker,
         high_len=int(high_len),
+        score_threshold=float(score_threshold),
+        candidate_condition=candidate_condition,
         project_root=root,
         filter_id=str(filter_id),
-        score_path=resolved_score_path,
     )
 
 

@@ -37,6 +37,7 @@ PARAM_COMPAT_DEFAULT_FIELDS = {
     "breakout_false_filter_atr_pct_min",
     "use_breakout_quality_filter",
     "breakout_quality_filter_id",
+    "breakout_quality_score_threshold",
     "use_breakout_reclaim_reentry",
     "breakout_reclaim_window_bars",
     "breakout_reclaim_confirm_atr",

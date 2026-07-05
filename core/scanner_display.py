@@ -1,3 +1,8 @@
+from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
+)
 from core.buy_sort import (
     format_buy_sort_metric_value,
     get_buy_sort_metric_label,
@@ -61,12 +66,12 @@ def print_scanner_header(params):
         else "關閉"
     )
     quality_filter_str = (
-        f"啟用 ({get_p(params, 'breakout_quality_filter_id', 'breakout_quality_v1')})"
+        f"啟用 ({get_p(params, 'breakout_quality_filter_id', BREAKOUT_QUALITY_DEFAULT_FILTER_ID)}｜分數≥{get_p(params, 'breakout_quality_score_threshold', BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD):.2f})"
         if get_p(params, 'use_breakout_quality_filter', False)
         else "關閉"
     )
     breakout_str = (
-        f"啟用 ({get_p(params, 'high_len', 201)}日新高)"
+        f"啟用 ({get_p(params, 'high_len', BREAKOUT_DEFAULT_HIGH_LEN)}日新高)"
         if get_p(params, 'use_breakout_buy', True)
         else "關閉"
     )

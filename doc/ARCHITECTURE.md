@@ -15,8 +15,10 @@ project/
 │  ├─ vip_scanner.py                  # 掃描器正式入口（薄入口）
 │  └─ workbench.py                    # GUI 工作台正式入口（薄入口）
 ├─ config/
+│  ├─ breakout_policy.py              # breakout 策略預設與 optimizer high_len 範圍
+│  ├─ breakout_quality_policy.py      # breakout quality feature/label/artifact 政策
 │  ├─ training_policy.py              # 訓練政策與 selection gate
-│  ├─ display_policy.py                        # console/report 顯示政策
+│  ├─ display_policy.py               # console/report 顯示政策
 │  └─ execution_policy.py             # 資金、費用與 runtime 執行預設
 ├─ core/
 │  ├─ config.py                       # 相容 façade；穩定匯出設定常數與參數契約
@@ -33,7 +35,13 @@ project/
 │  ├─ TEST_SUITE_CHECKLIST.md         # formal test suite 主表與索引
 │  ├─ ARCHITECTURE.md                 # 本檔
 │  └─ CMD.md                          # 常用指令與操作說明
+├─ filters/
+│  └─ breakout_quality/               # quality feature、artifact contract、正式 runtime score lookup
 ├─ models/
+│  ├─ filters/breakout_quality/<filter_id>/
+│  │  ├─ model.pt                     # canonical model artifact
+│  │  ├─ manifest.json                # model/score/OOS eligibility 契約
+│  │  └─ scores.csv                   # canonical event score table
 │  ├─ full_base_best.json            # Full finalist best base policy 參數檔
 │  ├─ full_base_finalists_agree.json # Full finalist agree base policy 參數檔
 │  ├─ full_ensemble_base.json        # Full seed ensemble base policy 參數檔
@@ -41,6 +49,7 @@ project/
 │  └─ roos_ensemble_base.json        # ROOS seed ensemble base policy 參數檔
 └─ tools/
    ├─ downloader/                     # 資料下載子系統
+   ├─ filters/breakout_quality/        # quality dataset/train/export/evaluate 開發工具
    ├─ optimizer/                      # 參數最佳化子系統
    ├─ portfolio_sim/                  # 投組模擬子系統
    ├─ scanner/                        # 掃描器子系統
@@ -69,6 +78,14 @@ project/
 
 - `tools/trade_analysis/`：單股 trade-analysis 子系統；由 `apps/workbench.py` 經 `tools/workbench_ui/` 觸發，`tools/trade_analysis/trade_log.py` 提供共用 backend / 開發輔助 CLI。
 - 為維持相容性，保留 legacy `run_debug_*` API 名稱，同時提供 canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases。
+
+### `filters/breakout_quality/` 與 `tools/filters/breakout_quality/`
+
+- `filters/breakout_quality/` 承接 feature/label、artifact contract、canonical path 與正式 runtime lookup；正式 runtime 不執行 CNN，只讀 canonical `scores.csv`。
+- `tools/filters/breakout_quality/` 只承接 dataset、training、score export 與研究評估；不得複製 runtime 決策規則。
+- 正式工件唯一位置為 `models/filters/breakout_quality/<filter_id>/`；研究分數與 dataset 等可重建輸出只放 `outputs/filters/breakout_quality/<filter_id>/`，不得覆蓋正式 `scores.csv`。
+- `dl_quality_score >= active breakout_quality_score_threshold` 是唯一通過判斷；manifest 只宣告契約與 OOS 可用日期，不預先固化另一份 `dl_pass`。
+- 正式 runtime 僅在 manifest 宣告的有效期間套用模型；有效期後只要出現未覆蓋候選事件即 fail-fast。
 
 ### `tools/validate/`
 

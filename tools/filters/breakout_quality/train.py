@@ -16,28 +16,37 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import (
+    ARTIFACT_CONTRACT_VERSION,
+    CONTEXT_COLUMNS,
     DEFAULT_FILTER_ID,
     DEFAULT_MANIFEST_FILENAME,
     DEFAULT_MODEL_FILENAME,
+    DEFAULT_SCORE_FILENAME,
     FEATURE_COLUMNS,
-    CONTEXT_COLUMNS,
+    FILTER_FAMILY,
     LABEL_PASS,
     LABEL_REJECT,
+    SCORE_COLUMN,
+    SCORE_COMPARISON,
+    SCORE_THRESHOLD_SOURCE,
+    RUNTIME_SCOPE_NOT_EXPORTED,
 )
 from filters.breakout_quality.model import build_model, require_torch
+from filters.breakout_quality.paths import (
+    resolve_filter_artifact_paths,
+    resolve_filter_research_manifest_path,
+    resolve_filter_research_score_path,
+)
 from tools.filters.breakout_quality.common import (
     chronological_group_split_indices,
-    dataset_npz_path,
-    events_csv_path,
-    label_counts,
-    model_dir,
-    read_breakout_quality_csv,
-    read_json,
-    write_json,
-    dataset_output_dir,
     event_group_summary,
     group_size_weights,
+    label_counts,
+    model_dir,
+    load_validated_dataset_bundle,
+    write_json,
 )
 
 
@@ -123,9 +132,21 @@ def _evaluate(torch, model, X, C, y, indices, sample_weights, class_weights):
     }
 
 
+def _max_iso_date(events: pd.DataFrame, indices: np.ndarray, column: str) -> str | None:
+    if len(indices) == 0:
+        return None
+    values = pd.to_datetime(events.iloc[np.asarray(indices, dtype=np.int64)][column], errors="raise")
+    return str(values.max().date())
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     started = time.perf_counter()
+    if int(args.epochs) < 1 or int(args.batch_size) < 1 or float(args.lr) <= 0:
+        raise ValueError("epochs、batch-size 必須 >=1，lr 必須 >0")
+
+    dataset_summary, X, C, y, events = load_validated_dataset_bundle(args.filter_id)
+
     torch, _nn = require_torch()
     torch.set_num_threads(1)
     try:
@@ -139,14 +160,6 @@ def main(argv=None) -> int:
             stacklevel=2,
         )
     torch.manual_seed(int(args.seed))
-    data = np.load(dataset_npz_path(args.filter_id))
-    X = data["features"].astype(np.float32)
-    C = data["context"].astype(np.float32)
-    y = data["labels"].astype(np.int64)
-    events = read_breakout_quality_csv(events_csv_path(args.filter_id))
-    if len(events) != len(y):
-        raise ValueError(f"events.csv 與 dataset.npz labels 長度不一致: events={len(events)}, labels={len(y)}")
-
     train_idx, val_idx, split_report = chronological_group_split_indices(
         events,
         y,
@@ -156,6 +169,8 @@ def main(argv=None) -> int:
     )
     if int(split_report.get("overlap_group_count", 0)) != 0:
         raise ValueError(f"train/val group overlap 不應發生: {split_report}")
+    if int(split_report.get("overlap_event_date_count", 0)) != 0:
+        raise ValueError(f"train/val event date overlap 不應發生: {split_report}")
     if len(train_idx) < int(args.min_train_samples):
         raise ValueError(f"可訓練樣本不足: train={len(train_idx)}, min={args.min_train_samples}, labels={label_counts(y)}")
     if len(set(y[train_idx].tolist())) < 2:
@@ -182,6 +197,7 @@ def main(argv=None) -> int:
     min_delta = max(0.0, float(args.early_stopping_min_delta))
     patience = int(args.early_stopping_patience)
     train_idx = np.asarray(train_idx, dtype=np.int64)
+    val_idx = np.asarray(val_idx, dtype=np.int64)
     epoch = 0
     for epoch in range(1, int(args.epochs) + 1):
         model.train()
@@ -214,7 +230,7 @@ def main(argv=None) -> int:
             best_epoch = int(epoch)
             best_train_metrics = dict(train_metrics)
             best_val_metrics = dict(val_metrics)
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -246,25 +262,51 @@ def main(argv=None) -> int:
     if best_state is not None:
         model.load_state_dict(best_state)
 
+    artifact_paths = resolve_filter_artifact_paths(PROJECT_ROOT, args.filter_id)
     out_model_dir = model_dir(args.filter_id)
+    stale_score_paths = (
+        artifact_paths.score_path,
+        resolve_filter_research_score_path(PROJECT_ROOT, args.filter_id),
+        resolve_filter_research_manifest_path(PROJECT_ROOT, args.filter_id),
+    )
+    for stale_path in stale_score_paths:
+        if stale_path.exists():
+            stale_path.unlink()
     torch.save({
         "model_state_dict": model.state_dict(),
         "feature_count": int(X.shape[2]),
         "context_count": int(C.shape[1]),
-    }, out_model_dir / DEFAULT_MODEL_FILENAME)
-    summary_path = dataset_output_dir(args.filter_id) / "dataset_summary.json"
-    dataset_summary = read_json(summary_path) if summary_path.exists() else {}
+    }, artifact_paths.model_path)
+
+    used_idx = np.concatenate([train_idx, val_idx]) if len(val_idx) else train_idx
+    model_information_cutoff = _max_iso_date(events, used_idx, "label_eval_end_date")
     manifest = {
+        "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
+        "filter_family": FILTER_FAMILY,
         "filter_id": args.filter_id,
         "model_type": "tiny_cnn",
         "model_filename": DEFAULT_MODEL_FILENAME,
-        "score_filename": "scores.csv",
+        "score_filename": DEFAULT_SCORE_FILENAME,
+        "model": build_file_manifest(artifact_paths.model_path),
         "feature_columns": list(FEATURE_COLUMNS),
         "context_columns": list(CONTEXT_COLUMNS),
+        "score_decision": {
+            "score_column": SCORE_COLUMN,
+            "comparison": SCORE_COMPARISON,
+            "threshold_source": SCORE_THRESHOLD_SOURCE,
+        },
+        "policy": dataset_summary.get("policy"),
         "dataset_summary": dataset_summary,
+        "dataset_artifacts": dataset_summary.get("dataset_artifacts"),
         "event_group_summary": event_group_summary(events, y),
         "label_counts": label_counts(y),
         "split_report": split_report,
+        "model_information_cutoff": model_information_cutoff,
+        "runtime_eligibility": {
+            "eligible": False,
+            "scope": RUNTIME_SCOPE_NOT_EXPORTED,
+            "reason": "scores.csv 尚未以 forward_oos 或 rolling_oos 範圍匯出",
+        },
         "sample_weighting": {
             "enabled": True,
             "method": "1 / labeled row count per ticker/date group",
@@ -294,13 +336,16 @@ def main(argv=None) -> int:
         "epochs": int(args.epochs),
         "epochs_trained": int(epoch),
         "elapsed_sec": round(time.perf_counter() - started, 3),
-        "no_lookahead_contract": "features use D0 and earlier only; labels use future path only for supervised training",
+        "no_lookahead_contract": (
+            "features use D0 and earlier only; train rows require label_eval_end_date before validation_start_date; "
+            "formal runtime requires separately exported OOS scores"
+        ),
     }
     write_json(out_model_dir / DEFAULT_MANIFEST_FILENAME, manifest)
     print(f"split_report={split_report}")
     print(f"best_epoch={best_epoch} best_monitor_value={best_monitor_value}")
-    print(f"已輸出: {out_model_dir / DEFAULT_MODEL_FILENAME}")
-    print(f"已輸出: {out_model_dir / DEFAULT_MANIFEST_FILENAME}")
+    print(f"已輸出: {artifact_paths.model_path}")
+    print(f"已輸出: {artifact_paths.manifest_path}")
     return 0
 
 

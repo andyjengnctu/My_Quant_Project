@@ -1,4 +1,4 @@
-"""Evaluate breakout quality score table at event level."""
+"""Evaluate a breakout quality research score table at event level."""
 
 from __future__ import annotations
 
@@ -15,20 +15,22 @@ import json
 import numpy as np
 import pandas as pd
 
-from filters.breakout_quality.contract import DEFAULT_FILTER_ID, LABEL_PASS, LABEL_REJECT
-from tools.filters.breakout_quality.common import event_group_summary, group_size_weights, read_breakout_quality_csv, scores_csv_path
+from config.breakout_quality_policy import BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
+from filters.breakout_quality.contract import DEFAULT_FILTER_ID, LABEL_PASS, LABEL_REJECT, SCORE_COLUMN
+from filters.breakout_quality.paths import resolve_filter_research_score_path
+from tools.filters.breakout_quality.common import event_group_summary, group_size_weights, read_breakout_quality_csv
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="評估 breakout quality event-level 區分能力")
     parser.add_argument("--filter-id", default=DEFAULT_FILTER_ID)
+    parser.add_argument("--threshold", type=float, default=BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD)
+    parser.add_argument(
+        "--score-path",
+        default=None,
+        help="研究 score table；省略時讀 outputs/filters/breakout_quality/<filter_id>/research_scores.csv",
+    )
     return parser.parse_args(argv)
-
-
-def _safe_rate(value: float | None) -> float | None:
-    if value is None:
-        return None
-    return round(float(value), 6)
 
 
 def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float | None:
@@ -40,67 +42,92 @@ def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float | None:
     return round(float(np.average(values, weights=weights)), 6)
 
 
-def _bucket_metrics(group: pd.DataFrame, weights: np.ndarray | None) -> dict:
-    count = int(len(group))
-    if count == 0:
-        return {
-            "row_count": 0,
-            "label_pass_rate": None,
-            "avg_dl_quality_score": None,
-        }
+def _sum_weight(mask: np.ndarray, weights: np.ndarray | None) -> float:
     if weights is None:
-        return {
-            "row_count": count,
-            "label_pass_rate": _safe_rate(float((group["label"] == LABEL_PASS).mean())),
-            "avg_dl_quality_score": _safe_rate(float(group["dl_quality_score"].mean())),
-        }
-    return {
-        "row_count": count,
-        "group_weight_sum": round(float(weights.sum()), 6),
-        "label_pass_rate": _weighted_mean((group["label"].to_numpy() == LABEL_PASS).astype(np.float32), weights),
-        "avg_dl_quality_score": _weighted_mean(group["dl_quality_score"].to_numpy(dtype=np.float32), weights),
-    }
+        return float(mask.sum())
+    return float(weights[mask].sum())
 
 
-def _metrics(df: pd.DataFrame, *, group_weighted: bool) -> dict:
+def _metrics(df: pd.DataFrame, *, threshold: float, group_weighted: bool) -> dict:
     valid = df[df["label"].isin([LABEL_PASS, LABEL_REJECT])].copy()
     if valid.empty:
         return {"row_count": 0}
-    if group_weighted:
-        weights = group_size_weights(valid, range(len(valid)))
-    else:
-        weights = None
+    weights = group_size_weights(valid, range(len(valid))) if group_weighted else None
+    score = valid[SCORE_COLUMN].to_numpy(dtype=np.float64)
+    pred_pass = score >= float(threshold)
+    truth_pass = valid["label"].to_numpy(dtype=np.int64) == LABEL_PASS
+    pred_reject = ~pred_pass
+    truth_reject = ~truth_pass
 
-    pass_mask = valid["dl_pass"].astype(bool).to_numpy()
-    pred = pass_mask.astype(np.int64)
-    truth = (valid["label"].to_numpy(dtype=np.int64) == LABEL_PASS).astype(np.int64)
-    correct = (pred == truth).astype(np.float32)
+    tp = _sum_weight(pred_pass & truth_pass, weights)
+    fp = _sum_weight(pred_pass & truth_reject, weights)
+    tn = _sum_weight(pred_reject & truth_reject, weights)
+    fn = _sum_weight(pred_reject & truth_pass, weights)
+    total = tp + fp + tn + fn
+    actual_pass = tp + fn
+    accepted = tp + fp
 
+    def _ratio(numerator: float, denominator: float) -> float | None:
+        if denominator <= 0:
+            return None
+        return round(float(numerator / denominator), 6)
+
+    base_pass_rate = _ratio(actual_pass, total)
+    precision = _ratio(tp, accepted)
     payload = {
         "row_count": int(len(valid)),
         "group_count": int(valid[["ticker", "date"]].drop_duplicates().shape[0]),
-        "model_pass_rate": _safe_rate(float(pass_mask.mean())) if weights is None else _weighted_mean(pass_mask.astype(np.float32), weights),
-        "accuracy": _safe_rate(float(correct.mean())) if weights is None else _weighted_mean(correct, weights),
-        "all": _bucket_metrics(valid, weights),
+        "weight_sum": round(total, 6),
+        "threshold": float(threshold),
+        "acceptance_rate": _ratio(accepted, total),
+        "pass_precision": precision,
+        "pass_recall": _ratio(tp, actual_pass),
+        "reject_specificity": _ratio(tn, tn + fp),
+        "false_rejection_rate": _ratio(fn, actual_pass),
+        "accuracy": _ratio(tp + tn, total),
+        "base_pass_rate": base_pass_rate,
+        "all_pass_baseline_accuracy": base_pass_rate,
+        "precision_lift_vs_all_pass": (
+            round(float(precision / base_pass_rate), 6)
+            if precision is not None and base_pass_rate not in {None, 0.0}
+            else None
+        ),
+        "avg_score": (
+            _weighted_mean(score.astype(np.float32), weights)
+            if weights is not None
+            else round(float(score.mean()), 6)
+        ),
+        "confusion": {
+            "true_pass_pred_pass": round(tp, 6),
+            "true_reject_pred_pass": round(fp, 6),
+            "true_reject_pred_reject": round(tn, 6),
+            "true_pass_pred_reject": round(fn, 6),
+        },
     }
-    pass_group = valid[pass_mask]
-    reject_group = valid[~pass_mask]
-    if weights is None:
-        payload["pass_group"] = _bucket_metrics(pass_group, None)
-        payload["reject_group"] = _bucket_metrics(reject_group, None)
-    else:
-        payload["pass_group"] = _bucket_metrics(pass_group, weights[pass_mask])
-        payload["reject_group"] = _bucket_metrics(reject_group, weights[~pass_mask])
     return payload
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    df = read_breakout_quality_csv(scores_csv_path(args.filter_id))
+    threshold = float(args.threshold)
+    if not np.isfinite(threshold) or threshold < 0.0 or threshold > 1.0:
+        raise ValueError("threshold 必須介於 0 與 1")
+    score_path = (
+        Path(args.score_path).expanduser().resolve()
+        if args.score_path
+        else resolve_filter_research_score_path(PROJECT_ROOT, args.filter_id)
+    )
+    df = read_breakout_quality_csv(score_path)
+    required = {"ticker", "date", "high_len", SCORE_COLUMN, "label"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"evaluate score table 缺少欄位: {missing}; path={score_path}")
     metrics = {
         "filter_id": args.filter_id,
-        "row_level": _metrics(df, group_weighted=False),
-        "ticker_date_group_weighted": _metrics(df, group_weighted=True),
+        "score_path": str(score_path),
+        "threshold": threshold,
+        "row_level": _metrics(df, threshold=threshold, group_weighted=False),
+        "ticker_date_group_weighted": _metrics(df, threshold=threshold, group_weighted=True),
         "event_group_summary": event_group_summary(df, df["label"].to_numpy(dtype=np.int64)),
     }
     print(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True))

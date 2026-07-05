@@ -1,4 +1,4 @@
-"""Score table loading and lookup for breakout quality filter."""
+"""Canonical score table loading and runtime lookup for breakout quality filter."""
 
 from __future__ import annotations
 
@@ -8,52 +8,72 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from filters.breakout_quality.contract import DEFAULT_FILTER_ID, DEFAULT_SCORE_FILENAME
+from filters.breakout_quality.artifacts import load_runtime_artifact_contract, validate_required_high_len
+from filters.breakout_quality.contract import DEFAULT_FILTER_ID, SCORE_COLUMN, SCORE_TABLE_REQUIRED_COLUMNS
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
-from filters.breakout_quality.paths import resolve_filter_model_dir, resolve_filter_output_dir
+from filters.breakout_quality.paths import resolve_filter_artifact_paths
 
 
-def _candidate_score_paths(project_root: str, filter_id: str) -> tuple[Path, ...]:
-    model_dir = resolve_filter_model_dir(project_root, filter_id)
-    output_dir = resolve_filter_output_dir(project_root, filter_id)
-    return (
-        model_dir / DEFAULT_SCORE_FILENAME,
-        output_dir / DEFAULT_SCORE_FILENAME,
-        output_dir / f"{filter_id}_scores.csv",
-        resolve_filter_output_dir(project_root) / f"{filter_id}_scores.csv",
-    )
-
-
-def resolve_score_table_path(project_root: str, filter_id: str = DEFAULT_FILTER_ID, explicit_path: str | None = None) -> Path:
-    if explicit_path is not None and str(explicit_path).strip() != "":
-        path = Path(explicit_path).expanduser()
-        if not path.is_absolute():
-            path = Path(project_root) / path
-        return path.resolve()
-    for path in _candidate_score_paths(project_root, filter_id):
-        if path.is_file():
-            return path.resolve()
-    searched = "\n".join(str(path) for path in _candidate_score_paths(project_root, filter_id))
-    raise FileNotFoundError(f"找不到 breakout quality score table。filter_id={filter_id}\n已搜尋:\n{searched}")
+def resolve_score_table_path(project_root: str, filter_id: str = DEFAULT_FILTER_ID) -> Path:
+    path = resolve_filter_artifact_paths(project_root, filter_id).score_path
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"找不到 breakout quality 正式 score table: {path}。"
+            "正式 runtime 只接受 models/filters/breakout_quality/<filter_id>/scores.csv 單一路徑。"
+        )
+    return path.resolve()
 
 
 @lru_cache(maxsize=16)
-def load_score_table(project_root: str, filter_id: str = DEFAULT_FILTER_ID, explicit_path: str | None = None) -> pd.DataFrame:
-    path = resolve_score_table_path(project_root, filter_id=filter_id, explicit_path=explicit_path)
+def load_score_table(project_root: str, filter_id: str = DEFAULT_FILTER_ID) -> pd.DataFrame:
+    path = resolve_score_table_path(project_root, filter_id=filter_id)
     table = read_breakout_quality_csv(path)
-    required = {"ticker", "date", "high_len", "dl_pass"}
-    missing = sorted(required - set(table.columns))
+    missing = sorted(set(SCORE_TABLE_REQUIRED_COLUMNS) - set(table.columns))
     if missing:
         raise ValueError(f"breakout quality score table 缺少欄位: {missing}; path={path}")
     table = table.copy()
+    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    score_metadata = contract.manifest["score_table"]
+    expected_columns = list(score_metadata["columns"])
+    if list(table.columns) != expected_columns:
+        raise ValueError(
+            f"breakout quality score table columns 與 manifest 不一致: "
+            f"manifest={expected_columns}, actual={list(table.columns)}, path={path}"
+        )
     table["ticker"] = table["ticker"].astype(str)
     table["date"] = pd.to_datetime(table["date"], errors="raise").dt.strftime("%Y-%m-%d")
     table["high_len"] = table["high_len"].astype(int)
-    table["dl_pass"] = table["dl_pass"].astype(bool)
+    table[SCORE_COLUMN] = pd.to_numeric(table[SCORE_COLUMN], errors="raise").astype(float)
+    scores = table[SCORE_COLUMN].to_numpy(dtype=np.float64, copy=False)
+    if not np.isfinite(scores).all():
+        raise ValueError(f"breakout quality score table 含非有限分數; path={path}")
+    if ((scores < 0.0) | (scores > 1.0)).any():
+        raise ValueError(f"breakout quality score 必須介於 0 與 1; path={path}")
     if table.duplicated(["ticker", "date", "high_len"]).any():
         dup_count = int(table.duplicated(["ticker", "date", "high_len"]).sum())
         raise ValueError(f"breakout quality score table 有重複 key: {dup_count}; path={path}")
-    return table.set_index(["ticker", "date", "high_len"]).sort_index()
+    observed_start = str(table["date"].min())
+    observed_end = str(table["date"].max())
+    expected_date_range = score_metadata["event_date_range"]
+    if observed_start != str(expected_date_range["start"]) or observed_end != str(expected_date_range["end"]):
+        raise ValueError(
+            f"breakout quality score table 日期範圍與 manifest 不一致: "
+            f"manifest={expected_date_range}, actual={{'start': {observed_start!r}, 'end': {observed_end!r}}}"
+        )
+    if pd.Timestamp(observed_start).date() < contract.available_from or pd.Timestamp(observed_end).date() > contract.available_through:
+        raise ValueError("breakout quality score table 實際日期超出 runtime_eligibility 有效期間")
+
+    indexed = table.set_index(["ticker", "date", "high_len"]).sort_index()
+    expected_row_count = int(score_metadata["row_count"])
+    if expected_row_count != len(indexed):
+        raise ValueError(
+            f"breakout quality score table row_count 與 manifest 不一致: "
+            f"manifest={expected_row_count}, actual={len(indexed)}"
+        )
+    observed_high_lens = set(int(value) for value in indexed.index.get_level_values("high_len").unique())
+    if not observed_high_lens.issubset(set(contract.high_len_values)):
+        raise ValueError("breakout quality score table 含 manifest 未宣告的 high_len")
+    return indexed
 
 
 def build_pass_condition_from_score_table(
@@ -61,24 +81,66 @@ def build_pass_condition_from_score_table(
     *,
     ticker: str,
     high_len: int,
+    score_threshold: float,
+    candidate_condition: np.ndarray,
     project_root: str,
     filter_id: str = DEFAULT_FILTER_ID,
-    score_path: str | None = None,
 ) -> np.ndarray:
     if ticker is None or str(ticker).strip() == "":
         raise ValueError("啟用 breakout quality filter 時必須提供 ticker")
-    score_table = load_score_table(str(project_root), filter_id=str(filter_id), explicit_path=score_path)
-    out = np.zeros(len(df), dtype=bool)
+    threshold = float(score_threshold)
+    if not np.isfinite(threshold) or threshold < 0.0 or threshold > 1.0:
+        raise ValueError(f"breakout_quality_score_threshold 必須介於 0 與 1，收到 {score_threshold!r}")
+
+    out = np.ones(len(df), dtype=bool)
+    candidate_mask = np.asarray(candidate_condition, dtype=bool)
+    if candidate_mask.shape != (len(df),):
+        raise ValueError(
+            f"breakout quality candidate_condition shape 不一致: expected={(len(df),)}, actual={candidate_mask.shape}"
+        )
     if len(df) == 0:
         return out
-    dates = pd.to_datetime(df.index).strftime("%Y-%m-%d")
+
+    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    validate_required_high_len(contract, int(high_len))
+    score_table = load_score_table(str(project_root), filter_id=str(filter_id))
+    timestamps = pd.to_datetime(df.index, errors="raise")
+    after_coverage_mask = np.asarray(
+        [timestamp.date() > contract.available_through for timestamp in timestamps],
+        dtype=bool,
+    )
+    uncovered_candidate_mask = after_coverage_mask & candidate_mask
+    if uncovered_candidate_mask.any():
+        uncovered_dates = list(timestamps[uncovered_candidate_mask].strftime("%Y-%m-%d")[:5])
+        raise ValueError(
+            f"breakout quality score table 已過期且出現未覆蓋候選事件: "
+            f"available_through={contract.available_through}, filter_id={filter_id}, "
+            f"missing_count={int(uncovered_candidate_mask.sum())}, sample_dates={uncovered_dates}"
+        )
+
+    active_mask = np.asarray(
+        [contract.available_from <= timestamp.date() <= contract.available_through for timestamp in timestamps],
+        dtype=bool,
+    )
+    active_candidate_mask = active_mask & candidate_mask
+    if not active_candidate_mask.any():
+        return out
+
+    active_dates = timestamps[active_candidate_mask].strftime("%Y-%m-%d")
     keys = pd.MultiIndex.from_arrays(
-        [[str(ticker)] * len(df), dates, [int(high_len)] * len(df)],
+        [[str(ticker)] * len(active_dates), active_dates, [int(high_len)] * len(active_dates)],
         names=["ticker", "date", "high_len"],
     )
     matched = score_table.reindex(keys)
-    values = matched["dl_pass"].to_numpy(dtype=object, copy=False)
-    out[:] = np.asarray([False if pd.isna(value) else bool(value) for value in values], dtype=bool)
+    values = matched[SCORE_COLUMN].to_numpy(dtype=np.float64, copy=False)
+    missing_mask = ~np.isfinite(values)
+    if missing_mask.any():
+        missing_dates = list(active_dates[missing_mask][:5])
+        raise ValueError(
+            f"breakout quality score table 缺少正式候選事件: ticker={ticker}, high_len={high_len}, "
+            f"missing_count={int(missing_mask.sum())}, sample_dates={missing_dates}"
+        )
+    out[active_candidate_mask] = values >= threshold
     return out
 
 

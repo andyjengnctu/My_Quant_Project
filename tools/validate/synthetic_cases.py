@@ -128,6 +128,11 @@ from .synthetic_meta_cases import (
     validate_synthetic_registry_metadata_contract_case,
     validate_test_suite_orchestrator_coverage_targets_case,
 )
+from .synthetic_breakout_quality_cases import (
+    validate_breakout_quality_chronological_embargo_case,
+    validate_breakout_quality_policy_single_source_case,
+    validate_breakout_quality_runtime_artifact_contract_case,
+)
 from .synthetic_display_cases import validate_display_reporting_sanity_case
 from .synthetic_reporting_cases import (
     validate_issue_excel_report_schema_case,
@@ -309,6 +314,9 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_single_backtest_not_gated_by_own_history_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/backtest_core.py", "tools/scanner/stock_processor.py")),
         _entry(validate_synthetic_single_backtest_uses_compounding_capital_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/capital_policy.py", "core/backtest_core.py", "core/backtest_finalize.py", "tools/trade_analysis/backtest.py")),
         _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/strategy_params.py", "config/execution_policy.py", "tools/optimizer/objective_profiles.py")),
+        _entry(validate_breakout_quality_policy_single_source_case, layer="core_invariant", cost_class="fast", impacted_modules=("config/breakout_policy.py", "config/breakout_quality_policy.py", "strategies/breakout/schema.py", "strategies/breakout/search_space.py", "filters/breakout_quality/contract.py")),
+        _entry(validate_breakout_quality_chronological_embargo_case, layer="core_invariant", cost_class="fast", impacted_modules=("tools/filters/breakout_quality/common.py", "filters/breakout_quality/features.py", "tools/filters/breakout_quality/train.py")),
+        _entry(validate_breakout_quality_runtime_artifact_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("filters/breakout_quality/artifacts.py", "filters/breakout_quality/paths.py", "filters/breakout_quality/runtime.py", "filters/breakout_quality/score_store.py", "core/signal_utils.py")),
         _entry(validate_price_utils_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/price_utils.py",)),
         _entry(validate_signal_utils_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/signal_utils.py", "core/strategy_params.py")),
         _entry(validate_history_filters_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/history_filters.py",)),

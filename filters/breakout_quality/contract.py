@@ -1,44 +1,80 @@
-"""Breakout quality filter contract and immutable label policy."""
+"""Breakout quality filter artifact, feature, and label contracts."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, field
+
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_BENCHMARK_TICKER,
+    BREAKOUT_QUALITY_DEAD_MFE_R,
+    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    BREAKOUT_QUALITY_EVALUATE_FROM_BARS_AFTER_ENTRY,
+    BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
+    BREAKOUT_QUALITY_LABEL_ATR_BUY_TOL,
+    BREAKOUT_QUALITY_LABEL_ATR_LEN,
+    BREAKOUT_QUALITY_LABEL_ATR_TIMES_INIT,
+    BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
+    BREAKOUT_QUALITY_NEGATIVE_MAE_R,
+    BREAKOUT_QUALITY_POSITIVE_MFE_R,
+    BREAKOUT_QUALITY_REJECT_CONFIRM_MFE_R,
+    build_breakout_quality_default_high_len_values,
+)
 
 FILTER_FAMILY = "breakout_quality"
-DEFAULT_FILTER_ID = "breakout_quality_v1"
+DEFAULT_FILTER_ID = BREAKOUT_QUALITY_DEFAULT_FILTER_ID
 DEFAULT_SCORE_FILENAME = "scores.csv"
 DEFAULT_MANIFEST_FILENAME = "manifest.json"
 DEFAULT_MODEL_FILENAME = "model.pt"
-DEFAULT_FEATURE_WINDOW_BARS = 60
-DEFAULT_LABEL_HORIZON_BARS = 40
-DEFAULT_HIGH_LEN_MIN = 100
-DEFAULT_HIGH_LEN_MAX = 300
-DEFAULT_HIGH_LEN_STEP = 5
-DEFAULT_BENCHMARK_TICKER = "0050"
+DEFAULT_FEATURE_WINDOW_BARS = BREAKOUT_QUALITY_FEATURE_WINDOW_BARS
+DEFAULT_LABEL_HORIZON_BARS = BREAKOUT_QUALITY_LABEL_HORIZON_BARS
+DEFAULT_BENCHMARK_TICKER = BREAKOUT_QUALITY_BENCHMARK_TICKER
+ARTIFACT_CONTRACT_VERSION = 2
+SCORE_TABLE_SCHEMA_VERSION = 2
+SCORE_COLUMN = "dl_quality_score"
+SCORE_COMPARISON = ">="
+SCORE_THRESHOLD_SOURCE = "strategy_param.breakout_quality_score_threshold"
+RUNTIME_SCOPE_RESEARCH = "research"
+RUNTIME_SCOPE_NOT_EXPORTED = "not_exported"
+RUNTIME_SCOPE_FORWARD_OOS = "forward_oos"
+RUNTIME_SCOPE_ROLLING_OOS = "rolling_oos"
+RUNTIME_ELIGIBLE_SCOPES = frozenset({RUNTIME_SCOPE_FORWARD_OOS})
 
 
 @dataclass(frozen=True)
 class BreakoutQualityLabelPolicy:
     feature_window_bars: int = DEFAULT_FEATURE_WINDOW_BARS
     label_horizon_bars: int = DEFAULT_LABEL_HORIZON_BARS
-    high_len_min: int = DEFAULT_HIGH_LEN_MIN
-    high_len_max: int = DEFAULT_HIGH_LEN_MAX
-    high_len_step: int = DEFAULT_HIGH_LEN_STEP
-    label_atr_len: int = 14
-    label_atr_buy_tol: float = 1.5
-    label_atr_times_init: float = 2.0
-    positive_mfe_r: float = 1.5
-    negative_mae_r: float = -1.0
-    reject_confirm_mfe_r: float = 1.0
-    dead_mfe_r: float = 0.5
-    evaluate_from_bars_after_entry: int = 1
+    high_len_values: tuple[int, ...] = field(default_factory=build_breakout_quality_default_high_len_values)
+    label_atr_len: int = BREAKOUT_QUALITY_LABEL_ATR_LEN
+    label_atr_buy_tol: float = BREAKOUT_QUALITY_LABEL_ATR_BUY_TOL
+    label_atr_times_init: float = BREAKOUT_QUALITY_LABEL_ATR_TIMES_INIT
+    positive_mfe_r: float = BREAKOUT_QUALITY_POSITIVE_MFE_R
+    negative_mae_r: float = BREAKOUT_QUALITY_NEGATIVE_MAE_R
+    reject_confirm_mfe_r: float = BREAKOUT_QUALITY_REJECT_CONFIRM_MFE_R
+    dead_mfe_r: float = BREAKOUT_QUALITY_DEAD_MFE_R
+    evaluate_from_bars_after_entry: int = BREAKOUT_QUALITY_EVALUATE_FROM_BARS_AFTER_ENTRY
     benchmark_ticker: str = DEFAULT_BENCHMARK_TICKER
 
     def high_lens(self) -> tuple[int, ...]:
-        return tuple(range(int(self.high_len_min), int(self.high_len_max) + 1, int(self.high_len_step)))
+        normalized = tuple(sorted({int(value) for value in self.high_len_values}))
+        if not normalized or normalized[0] < 1:
+            raise ValueError("breakout quality high_len_values 必須包含至少一個正整數")
+        return normalized
+
+    @property
+    def high_len_min(self) -> int:
+        return int(self.high_lens()[0])
+
+    @property
+    def high_len_max(self) -> int:
+        return int(self.high_lens()[-1])
 
     def as_manifest_payload(self) -> dict:
-        return asdict(self)
+        payload = asdict(self)
+        payload["high_len_values"] = list(self.high_lens())
+        payload["high_len_min"] = self.high_len_min
+        payload["high_len_max"] = self.high_len_max
+        return payload
 
 
 DEFAULT_LABEL_POLICY = BreakoutQualityLabelPolicy()
@@ -72,8 +108,16 @@ CONTEXT_COLUMNS = (
     "high_to_breakout_level",
 )
 
+SCORE_TABLE_REQUIRED_COLUMNS = (
+    "ticker",
+    "date",
+    "high_len",
+    SCORE_COLUMN,
+)
+
 
 __all__ = [
+    "ARTIFACT_CONTRACT_VERSION",
     "CONTEXT_COLUMNS",
     "DEFAULT_FILTER_ID",
     "DEFAULT_LABEL_POLICY",
@@ -86,5 +130,15 @@ __all__ = [
     "LABEL_NAME_MAP",
     "LABEL_PASS",
     "LABEL_REJECT",
+    "SCORE_COLUMN",
+    "SCORE_COMPARISON",
+    "SCORE_THRESHOLD_SOURCE",
+    "RUNTIME_ELIGIBLE_SCOPES",
+    "RUNTIME_SCOPE_FORWARD_OOS",
+    "RUNTIME_SCOPE_NOT_EXPORTED",
+    "RUNTIME_SCOPE_RESEARCH",
+    "RUNTIME_SCOPE_ROLLING_OOS",
+    "SCORE_TABLE_REQUIRED_COLUMNS",
+    "SCORE_TABLE_SCHEMA_VERSION",
     "BreakoutQualityLabelPolicy",
 ]

@@ -1,0 +1,52 @@
+"""User-adjustable breakout quality filter policy values."""
+
+from __future__ import annotations
+
+from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN, build_breakout_optimizer_high_len_values
+
+BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"
+BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50
+BREAKOUT_QUALITY_FEATURE_WINDOW_BARS = 60
+BREAKOUT_QUALITY_LABEL_HORIZON_BARS = 40
+BREAKOUT_QUALITY_LABEL_ATR_LEN = 14
+BREAKOUT_QUALITY_LABEL_ATR_BUY_TOL = 1.5
+BREAKOUT_QUALITY_LABEL_ATR_TIMES_INIT = 2.0
+BREAKOUT_QUALITY_POSITIVE_MFE_R = 1.5
+BREAKOUT_QUALITY_NEGATIVE_MAE_R = -1.0
+BREAKOUT_QUALITY_REJECT_CONFIRM_MFE_R = 1.0
+BREAKOUT_QUALITY_DEAD_MFE_R = 0.5
+BREAKOUT_QUALITY_EVALUATE_FROM_BARS_AFTER_ENTRY = 1
+BREAKOUT_QUALITY_BENCHMARK_TICKER = "0050"
+
+# (AI註: 預設資料集覆蓋 optimizer grid 與 grid 外的有效策略預設；CLI 仍可明確指定專用 high_len 清單。)
+BREAKOUT_QUALITY_EXTRA_HIGH_LENS = (BREAKOUT_DEFAULT_HIGH_LEN,)
+
+
+
+def build_breakout_quality_default_high_len_values() -> tuple[int, ...]:
+    values = set(build_breakout_optimizer_high_len_values())
+    for value in BREAKOUT_QUALITY_EXTRA_HIGH_LENS:
+        normalized = int(value)
+        if normalized < 1:
+            raise ValueError("BREAKOUT_QUALITY_EXTRA_HIGH_LENS 只能包含正整數")
+        values.add(normalized)
+    return tuple(sorted(values))
+
+
+__all__ = [
+    "BREAKOUT_QUALITY_BENCHMARK_TICKER",
+    "BREAKOUT_QUALITY_DEAD_MFE_R",
+    "BREAKOUT_QUALITY_DEFAULT_FILTER_ID",
+    "BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD",
+    "BREAKOUT_QUALITY_EVALUATE_FROM_BARS_AFTER_ENTRY",
+    "BREAKOUT_QUALITY_EXTRA_HIGH_LENS",
+    "BREAKOUT_QUALITY_FEATURE_WINDOW_BARS",
+    "BREAKOUT_QUALITY_LABEL_ATR_BUY_TOL",
+    "BREAKOUT_QUALITY_LABEL_ATR_LEN",
+    "BREAKOUT_QUALITY_LABEL_ATR_TIMES_INIT",
+    "BREAKOUT_QUALITY_LABEL_HORIZON_BARS",
+    "BREAKOUT_QUALITY_NEGATIVE_MAE_R",
+    "BREAKOUT_QUALITY_POSITIVE_MFE_R",
+    "BREAKOUT_QUALITY_REJECT_CONFIRM_MFE_R",
+    "build_breakout_quality_default_high_len_values",
+]

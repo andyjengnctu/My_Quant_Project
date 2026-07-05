@@ -1,3 +1,8 @@
+from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
+)
 from core.buy_sort import get_buy_sort_title
 from core.config import (
     BUY_SORT_METHOD,
@@ -50,7 +55,7 @@ def _format_filter_param_text(params):
     )
     ema_filter_str = f"EMA濾網 啟用（Close > EMA{get_p(params, 'breakout_ema_len', 240)}）" if get_p(params, 'use_breakout_ema_filter', True) else "EMA濾網 關閉"
     quality_filter_str = (
-        f"品質模型 啟用（{get_p(params, 'breakout_quality_filter_id', 'breakout_quality_v1')}）"
+        f"品質模型 啟用（{get_p(params, 'breakout_quality_filter_id', BREAKOUT_QUALITY_DEFAULT_FILTER_ID)}｜分數≥{get_p(params, 'breakout_quality_score_threshold', BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD):.2f}）"
         if get_p(params, 'use_breakout_quality_filter', False)
         else "品質模型 關閉"
     )
@@ -60,7 +65,7 @@ def _format_filter_param_text(params):
 def format_training_param_lines(params, entry_trade_counts=None):
     bb_str, kc_str, vol_str, return_filter_str, false_filter_str, ema_filter_str, quality_filter_str = _format_filter_param_text(params)
     breakout_str = (
-        f"突破買進 啟用 (突破 {get_p(params, 'high_len', 201)} 日新高)"
+        f"突破買進 啟用 (突破 {get_p(params, 'high_len', BREAKOUT_DEFAULT_HIGH_LEN)} 日新高)"
         if get_p(params, 'use_breakout_buy', True)
         else "突破買進 關閉"
     )

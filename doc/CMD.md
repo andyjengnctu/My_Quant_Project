@@ -50,6 +50,38 @@ python apps/workbench.py
 - 為維持相容性，保留 legacy `run_debug_*` API 名稱。
 - 對外建議使用 canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases。
 
+
+# Breakout quality filter
+
+## 研究資料、訓練與評估
+
+```bash
+python tools/filters/breakout_quality/build_dataset.py --dataset full --filter-id breakout_quality_v1
+python tools/filters/breakout_quality/train.py --filter-id breakout_quality_v1
+python tools/filters/breakout_quality/export_scores.py --filter-id breakout_quality_v1 --scope research
+python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --threshold 0.50
+```
+
+- Dataset/tool 輸出固定在 `outputs/filters/breakout_quality/<filter_id>/`。
+- Model 與 manifest 固定在 `models/filters/breakout_quality/<filter_id>/`。
+- `research` 分數固定寫到 `outputs/filters/breakout_quality/<filter_id>/research_scores.csv`，不會改動正式 `scores.csv` 或 model manifest。
+- 正式 `models/.../scores.csv` 只能由明確的 `--scope forward_oos` 建立。
+
+## 建立正式 forward-OOS score table
+
+1. 先以歷史資料執行 `build_dataset.py` 與 `train.py`，保留產生的 `model.pt`、`manifest.json` 與 `model_information_cutoff`。
+2. 資料更新到 cutoff 之後，只重新執行 `build_dataset.py`，不可重新 train 同一模型。
+3. 執行：
+
+```bash
+python tools/filters/breakout_quality/export_scores.py --filter-id breakout_quality_v1 --scope forward_oos
+```
+
+- `forward_oos` 只匯出事件日嚴格晚於 `model_information_cutoff` 的分數；若沒有符合資料會直接失敗。
+- `available_from` 之前視為模型尚未啟用；`available_through` 之後若出現候選事件則 fail-fast，沒有候選事件時不要求不存在的分數。
+- 正式 runtime 只讀 `models/filters/breakout_quality/<filter_id>/scores.csv`，並驗證 model/score SHA256、schema、high_len coverage、OOS eligibility 與可用日期。
+- 現有舊版 `breakout_quality_v1` manifest 不符合新版 artifact contract 時，必須依上述流程重建，不得由 runtime 猜測或自動相容。
+
 # 輸出分類
 
 - `outputs/local_regression/`：test suite 歷史 bundle。
