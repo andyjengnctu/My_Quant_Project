@@ -1,4 +1,7 @@
 ## Going
+- breakout filter
+    fixed parameter: 60 days, 10 HLOC, 41 high_len, 限價: 1.5 ATR in D1, 初始停損: 2.0 ATR in D1, 40 Days forecast from D2, Pass: 1.5 ATR, Reject: 0.5 ATR
+    heigh len range 100~300, inconsist with current setting 100~350
 
 - 最差季度報酬 
 
