@@ -57,7 +57,7 @@ python apps/workbench.py
 
 正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟選單；選單提供完整研究流程、單步操作、正式 forward-OOS 匯出與工件狀態檢查。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟選單；選單提供完整研究流程、單步操作、正式 forward-OOS 匯出與工件狀態檢查。第一層選單確認操作類型後，所有已由 `config/breakout_quality_policy.py` 定義的設定都直接採用 policy，不再重複詢問，包括 Filter ID、epochs、batch size、learning rate、random seed、threshold、inner validation、validation 月數與 early stopping。選單只保留 dataset 類型、ticker coverage、是否強制重建、是否納入 OOS、評估 split 與最終確認等本次執行決策；dataset 是否需要建立／重建由 workflow 自動偵測，偵測到過期或不一致時直接重建；需要單次覆寫 policy 時改用對應 CLI 參數。
 
 ```bash
 python apps/breakout_quality.py
@@ -69,10 +69,10 @@ python apps/breakout_quality.py
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --epochs 20 --batch-size 256 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 ```
 
-- `workflow` 只有在 dataset 工件完整、profile、ticker coverage、feature/label policy、欄位契約與來源 CSV inventory 全部一致時才跳過重建；full/reduced 原始 CSV 的檔案成員、大小或修改時間有變化時會自動重建。單獨執行 `train` 時若偵測到來源已更新，會 fail-fast 並要求先重建，避免靜默使用過期 dataset。需要無條件重建時加 `--rebuild-dataset`。
+- `workflow` 只有在 dataset 工件完整、profile、ticker coverage、feature/label policy、欄位契約與來源 CSV inventory 全部一致時才跳過重建；full/reduced 原始 CSV 的檔案成員、大小或修改時間有變化時會自動重建。互動選單只有在自動偵測判定不需重建時，才詢問「是否強制重建 dataset」，預設 N；選 Y 等同 `--rebuild-dataset`。單獨執行 `train` 時若偵測到來源已更新，會 fail-fast 並要求先重建，避免靜默使用過期 dataset。
 - 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`；報表只包含 Selection 內診斷，並明確標示不能作為正式泛化結論。
 - 選單只是正式 UI orchestration；dataset、split、training、export 與 evaluation 規則仍只實作在既有子系統，不在 app 複製。
-- `epochs`、`batch size`、`learning rate`、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；CLI／選單可單次覆蓋，但不保存第二份預設值。
+- `epochs`、`batch size`、`learning rate`、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；互動選單直接採用 policy，不再逐項詢問，CLI 可單次覆蓋且不回寫 policy。
 
 也可逐步執行：
 

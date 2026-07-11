@@ -341,11 +341,6 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     return 0
 
 
-def _prompt_text(label: str, default: str) -> str:
-    raw = input(f"{label} [{default}]：").strip()
-    return str(default if raw == "" else raw).strip()
-
-
 def _prompt_choice(label: str, default: str, choices: dict[str, str]) -> str:
     normalized_choices = {str(key).strip().lower(): value for key, value in choices.items()}
     while True:
@@ -383,86 +378,48 @@ def _prompt_int(label: str, default: int, *, minimum: int | None = None) -> int:
         return value
 
 
-def _prompt_float(
-    label: str,
-    default: float,
-    *,
-    minimum: float | None = None,
-    maximum: float | None = None,
-) -> float:
-    while True:
-        raw = input(f"{label} [{float(default):g}]：").strip()
-        try:
-            value = float(default) if raw == "" else float(raw)
-        except ValueError:
-            print("輸入無效，請輸入數字。")
-            continue
-        if minimum is not None and value < minimum:
-            print(f"輸入無效，數值必須 >= {minimum}。")
-            continue
-        if maximum is not None and value > maximum:
-            print(f"輸入無效，數值必須 <= {maximum}。")
-            continue
-        return value
+def _policy_filter_id() -> str:
+    return normalize_filter_id(BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
 
 
-def _prompt_filter_id() -> str:
-    return normalize_filter_id(
-        _prompt_text("Filter ID", BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
-    )
-
-
-def _prompt_train_settings(filter_id: str) -> argparse.Namespace:
+def _policy_train_settings(filter_id: str) -> argparse.Namespace:
     defaults = _train_defaults()
-    use_inner_validation = _prompt_bool(
-        "啟用 inner validation 選 best epoch",
-        bool(defaults.use_inner_validation),
-    )
     return argparse.Namespace(
-        filter_id=filter_id,
-        epochs=_prompt_int(
-            "Epoch 上限（關閉 inner validation 時為固定 epochs）",
-            int(defaults.epochs),
-            minimum=1,
-        ),
-        batch_size=_prompt_int("Batch size", int(defaults.batch_size), minimum=1),
-        lr=_prompt_float("Learning rate", float(defaults.lr), minimum=1e-12),
-        seed=_prompt_int("Random seed", int(defaults.seed), minimum=0),
-        fixed_threshold=_prompt_float(
-            "Fixed threshold",
-            float(defaults.fixed_threshold),
-            minimum=0.0,
-            maximum=1.0,
-        ),
-        use_inner_validation=use_inner_validation,
-        inner_validation_months=(
-            _prompt_int(
-                "Inner validation 月數",
-                int(defaults.inner_validation_months),
-                minimum=1,
-            )
-            if use_inner_validation
-            else int(defaults.inner_validation_months)
-        ),
-        early_stopping_patience=(
-            _prompt_int(
-                "Early stopping patience（0 表示跑滿）",
-                int(defaults.early_stopping_patience),
-                minimum=0,
-            )
-            if use_inner_validation
-            else int(defaults.early_stopping_patience)
-        ),
-        early_stopping_min_delta=(
-            _prompt_float(
-                "Early stopping min delta",
-                float(defaults.early_stopping_min_delta),
-                minimum=0.0,
-            )
-            if use_inner_validation
-            else float(defaults.early_stopping_min_delta)
-        ),
+        filter_id=normalize_filter_id(filter_id),
+        epochs=int(defaults.epochs),
+        batch_size=int(defaults.batch_size),
+        lr=float(defaults.lr),
+        seed=int(defaults.seed),
+        fixed_threshold=float(defaults.fixed_threshold),
+        use_inner_validation=bool(defaults.use_inner_validation),
+        inner_validation_months=int(defaults.inner_validation_months),
+        early_stopping_patience=int(defaults.early_stopping_patience),
+        early_stopping_min_delta=float(defaults.early_stopping_min_delta),
     )
+
+
+def _print_policy_defaults(
+    filter_id: str,
+    train_settings: argparse.Namespace | None = None,
+) -> None:
+    print(f"使用 policy Filter ID：{normalize_filter_id(filter_id)}")
+    if train_settings is None:
+        return
+    print("使用 config/breakout_quality_policy.py 訓練預設：")
+    print(
+        f"- Epoch 上限：{int(train_settings.epochs)}\n"
+        f"- Batch Size：{int(train_settings.batch_size)}\n"
+        f"- Learning Rate：{float(train_settings.lr):g}\n"
+        f"- Random Seed：{int(train_settings.seed)}\n"
+        f"- Threshold：{float(train_settings.fixed_threshold):g}\n"
+        f"- Inner Validation：{'開啟' if bool(train_settings.use_inner_validation) else '關閉'}"
+    )
+    if bool(train_settings.use_inner_validation):
+        print(
+            f"- Inner Validation 月數：{int(train_settings.inner_validation_months)}\n"
+            f"- Early Stopping Patience：{int(train_settings.early_stopping_patience)}\n"
+            f"- Early Stopping Min Delta：{float(train_settings.early_stopping_min_delta):g}"
+        )
 
 
 def _print_artifact_status(filter_id: str) -> None:
@@ -501,7 +458,9 @@ def _print_artifact_status(filter_id: str) -> None:
 
 
 def _interactive_workflow(program_name: str) -> int:
-    filter_id = _prompt_filter_id()
+    filter_id = _policy_filter_id()
+    train_args = _policy_train_settings(filter_id)
+    _print_policy_defaults(filter_id, train_args)
     dataset = _prompt_choice(
         "Dataset：[F] Full  [R] Reduced",
         "F",
@@ -513,16 +472,17 @@ def _interactive_workflow(program_name: str) -> int:
         dataset,
         max_tickers=max_tickers,
     )
-    rebuild_default = bool(rebuild_reasons)
     if rebuild_reasons:
-        print("偵測到 dataset 需要重建：")
+        print("偵測到 dataset 需要重建，workflow 將自動重建：")
         for reason in rebuild_reasons:
             print(f"- {reason}")
-    rebuild_dataset = _prompt_bool("建立／重建 dataset", rebuild_default)
-    if not rebuild_dataset and rebuild_reasons:
-        print("既有 dataset 已過期或契約不符，無法在不重建的情況下繼續。")
-        return 0
-    train_args = _prompt_train_settings(filter_id)
+        rebuild_dataset = False
+    else:
+        print("dataset 自動偵測：目前工件與來源資料一致。")
+        rebuild_dataset = _prompt_bool(
+            "是否強制重建 dataset（即使目前不需要）",
+            False,
+        )
     evaluate_oos = _prompt_bool(
         "完成 Selection 診斷後執行 OOS（OOS 不得用於回頭調參）",
         True,
@@ -547,7 +507,8 @@ def _interactive_workflow(program_name: str) -> int:
 
 
 def _interactive_build_dataset(program_name: str) -> int:
-    filter_id = _prompt_filter_id()
+    filter_id = _policy_filter_id()
+    _print_policy_defaults(filter_id)
     dataset = _prompt_choice(
         "Dataset：[F] Full  [R] Reduced",
         "F",
@@ -564,8 +525,9 @@ def _interactive_build_dataset(program_name: str) -> int:
 
 
 def _interactive_train(program_name: str) -> int:
-    filter_id = _prompt_filter_id()
-    request = _prompt_train_settings(filter_id)
+    filter_id = _policy_filter_id()
+    request = _policy_train_settings(filter_id)
+    _print_policy_defaults(filter_id, request)
     if not _prompt_bool("確認開始訓練（既有同 filter_id 模型會更新）", False):
         print("已取消。")
         return 0
@@ -577,7 +539,8 @@ def _interactive_train(program_name: str) -> int:
 
 
 def _interactive_export_research(program_name: str) -> int:
-    filter_id = _prompt_filter_id()
+    filter_id = _policy_filter_id()
+    _print_policy_defaults(filter_id)
     return _run_command(
         "export-scores",
         ["--filter-id", filter_id, "--scope", "research"],
@@ -586,7 +549,8 @@ def _interactive_export_research(program_name: str) -> int:
 
 
 def _interactive_report(program_name: str) -> int:
-    filter_id = _prompt_filter_id()
+    filter_id = _policy_filter_id()
+    _print_policy_defaults(filter_id)
     include_oos = _prompt_bool(
         "是否讀取最終 OOS 並納入報表？注意：讀取後不得依同一段 OOS 回頭調整 "
         "threshold、epochs、learning rate、feature、label 或模型",
@@ -598,7 +562,8 @@ def _interactive_report(program_name: str) -> int:
 
 
 def _interactive_evaluate(program_name: str) -> int:
-    filter_id = _prompt_filter_id()
+    filter_id = _policy_filter_id()
+    _print_policy_defaults(filter_id)
     split = _prompt_choice(
         "Split：[T] Train [V] Validation [S] Selection [O] OOS [A] All",
         "S",
@@ -629,7 +594,8 @@ def _interactive_evaluate(program_name: str) -> int:
 
 
 def _interactive_export_forward_oos(program_name: str) -> int:
-    filter_id = _prompt_filter_id()
+    filter_id = _policy_filter_id()
+    _print_policy_defaults(filter_id)
     if not _prompt_bool("確認更新正式 canonical scores.csv", False):
         print("已取消。")
         return 0
@@ -642,9 +608,9 @@ def _interactive_export_forward_oos(program_name: str) -> int:
 
 def _print_menu() -> None:
     print("\n=== Breakout Quality ===")
-    print("[1] 完整研究流程（預設產生易讀報表）")
+    print("[1] 完整研究流程（使用 policy 預設參數）")
     print("[2] 建立／重建 dataset")
-    print("[3] 訓練模型")
+    print("[3] 訓練模型（使用 policy 預設參數）")
     print("[4] 匯出 research scores")
     print("[5] 產生易讀研究報表")
     print("[6] 輸出詳細 JSON 評估")
@@ -680,7 +646,9 @@ def _run_interactive_menu(program_name: str) -> int:
             elif choice == "7":
                 _interactive_export_forward_oos(program_name)
             elif choice == "8":
-                _print_artifact_status(_prompt_filter_id())
+                filter_id = _policy_filter_id()
+                _print_policy_defaults(filter_id)
+                _print_artifact_status(filter_id)
             else:
                 print("選項無效，請輸入 0～8。")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:

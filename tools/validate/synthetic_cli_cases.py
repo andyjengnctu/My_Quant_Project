@@ -175,6 +175,187 @@ def validate_dataset_cli_contract_case(_base_params):
         "--include-oos" in workflow_calls[-1][1],
     )
 
+    policy_filter_id = app_breakout_quality._policy_filter_id()
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_interactive_filter_id_comes_from_policy",
+        app_breakout_quality.normalize_filter_id(
+            app_breakout_quality.BREAKOUT_QUALITY_DEFAULT_FILTER_ID
+        ),
+        policy_filter_id,
+    )
+    policy_train_settings = app_breakout_quality._policy_train_settings(policy_filter_id)
+    parsed_train_defaults = app_breakout_quality._train_defaults()
+    policy_fields = (
+        "epochs",
+        "batch_size",
+        "lr",
+        "seed",
+        "fixed_threshold",
+        "use_inner_validation",
+        "inner_validation_months",
+        "early_stopping_patience",
+        "early_stopping_min_delta",
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_interactive_training_settings_come_from_policy",
+        tuple(getattr(parsed_train_defaults, name) for name in policy_fields),
+        tuple(getattr(policy_train_settings, name) for name in policy_fields),
+    )
+
+    interactive_policy_settings = SimpleNamespace(
+        filter_id="synthetic_quality",
+        epochs=7,
+        batch_size=64,
+        lr=0.002,
+        seed=17,
+        fixed_threshold=0.55,
+        use_inner_validation=True,
+        inner_validation_months=18,
+        early_stopping_patience=4,
+        early_stopping_min_delta=0.001,
+    )
+    workflow_prompt_labels = []
+    workflow_bool_answers = iter((False, True, False))
+
+    def _fake_workflow_bool(label, default):
+        workflow_prompt_labels.append((label, default))
+        return next(workflow_bool_answers)
+
+    with (
+        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
+        patch(
+            "apps.breakout_quality._policy_train_settings",
+            return_value=interactive_policy_settings,
+        ),
+        patch("apps.breakout_quality._print_policy_defaults") as mocked_policy_print,
+        patch("apps.breakout_quality._prompt_choice", return_value="full") as mocked_choice,
+        patch("apps.breakout_quality._prompt_int", return_value=0) as mocked_int,
+        patch("apps.breakout_quality._dataset_rebuild_reasons", return_value=[]),
+        patch("apps.breakout_quality._prompt_bool", side_effect=_fake_workflow_bool),
+        patch("apps.breakout_quality._run_workflow") as mocked_interactive_workflow,
+    ):
+        interactive_workflow_rc = app_breakout_quality._interactive_workflow(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_only_prompts_operational_choices",
+        (
+            0,
+            [(
+                "是否強制重建 dataset（即使目前不需要）",
+                False,
+            ), (
+                "完成 Selection 診斷後執行 OOS（OOS 不得用於回頭調參）",
+                True,
+            ), (
+                "確認開始",
+                False,
+            )],
+            1,
+            1,
+            1,
+            0,
+        ),
+        (
+            interactive_workflow_rc,
+            workflow_prompt_labels,
+            mocked_policy_print.call_count,
+            mocked_choice.call_count,
+            mocked_int.call_count,
+            mocked_interactive_workflow.call_count,
+        ),
+    )
+
+    stale_prompt_labels = []
+    stale_bool_answers = iter((True, True))
+
+    def _fake_stale_workflow_bool(label, default):
+        stale_prompt_labels.append((label, default))
+        return next(stale_bool_answers)
+
+    with (
+        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
+        patch(
+            "apps.breakout_quality._policy_train_settings",
+            return_value=interactive_policy_settings,
+        ),
+        patch("apps.breakout_quality._print_policy_defaults"),
+        patch("apps.breakout_quality._prompt_choice", return_value="full"),
+        patch("apps.breakout_quality._prompt_int", return_value=0),
+        patch(
+            "apps.breakout_quality._dataset_rebuild_reasons",
+            return_value=["來源 CSV inventory 已變更"],
+        ),
+        patch("apps.breakout_quality._prompt_bool", side_effect=_fake_stale_workflow_bool),
+        patch("apps.breakout_quality._run_workflow", return_value=0) as mocked_stale_workflow,
+    ):
+        stale_workflow_rc = app_breakout_quality._interactive_workflow(
+            "apps/breakout_quality.py"
+        )
+    stale_request = mocked_stale_workflow.call_args.args[0]
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_stale_dataset_auto_rebuilds_without_force_prompt",
+        (
+            0,
+            [(
+                "完成 Selection 診斷後執行 OOS（OOS 不得用於回頭調參）",
+                True,
+            ), (
+                "確認開始",
+                False,
+            )],
+            False,
+            1,
+        ),
+        (
+            stale_workflow_rc,
+            stale_prompt_labels,
+            bool(stale_request.rebuild_dataset),
+            mocked_stale_workflow.call_count,
+        ),
+    )
+
+
+    with (
+        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
+        patch(
+            "apps.breakout_quality._policy_train_settings",
+            return_value=interactive_policy_settings,
+        ),
+        patch("apps.breakout_quality._print_policy_defaults") as mocked_policy_print,
+        patch("apps.breakout_quality._prompt_bool", return_value=False) as mocked_confirm,
+        patch("builtins.input", side_effect=AssertionError("unexpected policy prompt")),
+        patch("apps.breakout_quality._run_command") as mocked_train_command,
+    ):
+        interactive_train_rc = app_breakout_quality._interactive_train(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_train_skips_policy_backed_questions",
+        (0, 1, 1, 0),
+        (
+            interactive_train_rc,
+            mocked_policy_print.call_count,
+            mocked_confirm.call_count,
+            mocked_train_command.call_count,
+        ),
+    )
+
     report_calls = []
 
     def _fake_report_run(command, args, *, program_name):
@@ -182,7 +363,7 @@ def validate_dataset_cli_contract_case(_base_params):
         return 0
 
     with (
-        patch("apps.breakout_quality._prompt_filter_id", return_value="synthetic_quality"),
+        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
         patch("apps.breakout_quality._prompt_bool", return_value=False) as mocked_prompt,
         patch("apps.breakout_quality._run_command", side_effect=_fake_report_run),
     ):
@@ -240,7 +421,7 @@ def validate_dataset_cli_contract_case(_base_params):
 
     report_calls.clear()
     with (
-        patch("apps.breakout_quality._prompt_filter_id", return_value="synthetic_quality"),
+        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
         patch("apps.breakout_quality._prompt_bool", return_value=True) as mocked_prompt,
         patch("apps.breakout_quality._run_command", side_effect=_fake_report_run),
     ):
