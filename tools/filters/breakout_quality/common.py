@@ -26,6 +26,7 @@ from filters.breakout_quality.paths import (
     ensure_filter_output_dir,
     resolve_filter_artifact_paths,
 )
+from filters.breakout_quality.source_inventory import build_source_data_inventory
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -171,6 +172,7 @@ def load_validated_dataset_bundle(
     filter_id: str,
     *,
     expected_policy: dict | None = None,
+    require_current_source: bool = False,
 ) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
     summary_path = dataset_output_dir(filter_id) / "dataset_summary.json"
     if not summary_path.is_file():
@@ -189,6 +191,20 @@ def load_validated_dataset_bundle(
         raise ValueError(
             "目前 dataset policy 與 model manifest policy 不一致；不可用不同 feature/label/high_len 契約匯出同一模型分數"
         )
+
+    if require_current_source:
+        dataset_profile = str(summary.get("dataset") or "").strip().lower()
+        stored_inventory = summary.get("source_data_inventory")
+        if dataset_profile not in {"reduced", "full"} or not isinstance(stored_inventory, dict):
+            raise ValueError(
+                "dataset 缺少有效 source_data_inventory；請先由 apps/breakout_quality.py workflow 重建 dataset"
+            )
+        current_inventory = build_source_data_inventory(PROJECT_ROOT, dataset_profile)
+        if stored_inventory != current_inventory:
+            raise ValueError(
+                "來源 CSV 已更新，現有 breakout quality dataset 已過期；"
+                "請先由 apps/breakout_quality.py workflow 自動重建，或執行 build-dataset --rebuild-dataset"
+            )
 
     artifact_records = summary.get("dataset_artifacts")
     if not isinstance(artifact_records, dict):

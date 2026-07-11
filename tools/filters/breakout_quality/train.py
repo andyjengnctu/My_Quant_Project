@@ -505,7 +505,10 @@ def main(argv=None) -> int:
     min_validation_samples = int(args.min_validation_samples)
     validate_training_args(args)
 
-    dataset_summary, X, C, y, events = load_validated_dataset_bundle(args.filter_id)
+    dataset_summary, X, C, y, events = load_validated_dataset_bundle(
+        args.filter_id,
+        require_current_source=True,
+    )
 
     torch, _nn = require_torch()
     torch.set_num_threads(1)

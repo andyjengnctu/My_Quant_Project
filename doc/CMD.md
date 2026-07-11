@@ -69,7 +69,7 @@ python apps/breakout_quality.py
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --epochs 20 --batch-size 256 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 ```
 
-- dataset 工件完整且 profile 與本次 `full/reduced` 相同時，`workflow` 預設跳過重建；工件缺少或 profile 不符會自動建立，需要無條件重建時加 `--rebuild-dataset`。
+- `workflow` 只有在 dataset 工件完整、profile、ticker coverage、feature/label policy、欄位契約與來源 CSV inventory 全部一致時才跳過重建；full/reduced 原始 CSV 的檔案成員、大小或修改時間有變化時會自動重建。單獨執行 `train` 時若偵測到來源已更新，會 fail-fast 並要求先重建，避免靜默使用過期 dataset。需要無條件重建時加 `--rebuild-dataset`。
 - 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`，流程會停在 Selection 診斷。
 - 選單只是正式 UI orchestration；dataset、split、training、export 與 evaluation 規則仍只實作在既有子系統，不在 app 複製。
 - `epochs`、`batch size`、`learning rate`、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；CLI／選單可單次覆蓋，但不保存第二份預設值。

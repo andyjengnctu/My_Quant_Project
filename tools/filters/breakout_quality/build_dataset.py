@@ -18,6 +18,7 @@ import pandas as pd
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_FILTER_ID, FEATURE_COLUMNS
 from filters.breakout_quality.features import build_breakout_quality_dataset_for_frame
+from filters.breakout_quality.source_inventory import build_source_data_inventory
 from tools.filters.breakout_quality.common import (
     PROJECT_ROOT,
     add_policy_args,
@@ -68,6 +69,8 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     started = time.perf_counter()
     policy = build_policy_from_args(args)
+    requested_max_tickers = max(0, int(args.max_tickers or 0))
+    source_inventory_before = build_source_data_inventory(PROJECT_ROOT, args.dataset)
     out_dir = dataset_output_dir(args.filter_id)
     min_rows = max(policy.high_len_max + 10, policy.feature_window_bars + policy.label_horizon_bars + 10)
     frames = load_dataset_frames(PROJECT_ROOT, args.dataset, min_rows=min_rows)
@@ -76,8 +79,8 @@ def main(argv=None) -> int:
         raise FileNotFoundError(f"找不到 benchmark ticker: {policy.benchmark_ticker}")
 
     tickers = [ticker for ticker in sorted(frames) if ticker != policy.benchmark_ticker]
-    if int(args.max_tickers or 0) > 0:
-        tickers = tickers[: int(args.max_tickers)]
+    if requested_max_tickers > 0:
+        tickers = tickers[:requested_max_tickers]
 
     features = []
     contexts = []
@@ -113,6 +116,10 @@ def main(argv=None) -> int:
             "label",
             "label_reason",
         ])
+
+    source_inventory_after = build_source_data_inventory(PROJECT_ROOT, args.dataset)
+    if source_inventory_after != source_inventory_before:
+        raise RuntimeError("來源 CSV 在 build_dataset 執行期間發生變更；請完成資料更新後重新執行")
 
     dataset_path = dataset_npz_path(args.filter_id)
     event_path = events_csv_path(args.filter_id)

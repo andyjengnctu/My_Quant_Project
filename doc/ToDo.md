@@ -1,6 +1,6 @@
 ## Going
 - breakout filter
-    - GUI at APP
+    - easy to read report
     - rebuilt data timing?
     - remark and train fixed parameters  
     - inconsist with strategy parameters

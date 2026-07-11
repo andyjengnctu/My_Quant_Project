@@ -40,6 +40,7 @@ from filters.breakout_quality.artifacts import (
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
+    DEFAULT_LABEL_POLICY,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
     SELECTION_ROLE_EMBARGO,
@@ -63,10 +64,12 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_research_score_path
 from filters.breakout_quality.score_store import build_pass_condition_from_score_table, load_score_table
+from filters.breakout_quality.source_inventory import build_source_data_inventory
 from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
+from tools.filters.breakout_quality import common as breakout_quality_common
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     compute_outer_policy_fingerprint,
@@ -162,6 +165,88 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         True,
         empty_filter_id_rejected,
     )
+
+    with tempfile.TemporaryDirectory(prefix="breakout_quality_source_inventory_") as temp_dir:
+        project_root = Path(temp_dir)
+        source_dir = project_root / "data" / "tw_stock_data_vip_reduced"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        first_path = source_dir / "2330.csv"
+        second_path = source_dir / "0050.csv"
+        first_path.write_text("Date,Open\n2026-01-01,100\n", encoding="utf-8")
+        second_path.write_text("Date,Open\n2026-01-01,50\n", encoding="utf-8")
+
+        inventory_before = build_source_data_inventory(project_root, "reduced")
+        inventory_repeat = build_source_data_inventory(project_root, "reduced")
+        first_path.write_text(
+            "Date,Open\n2026-01-01,100\n2026-01-02,101\n",
+            encoding="utf-8",
+        )
+        inventory_after = build_source_data_inventory(project_root, "reduced")
+
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "source_inventory_is_stable_without_changes",
+            inventory_before,
+            inventory_repeat,
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "source_inventory_detects_csv_update",
+            True,
+            inventory_before["csv_inventory_sha256"] != inventory_after["csv_inventory_sha256"],
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "source_inventory_tracks_unique_csv_count",
+            2,
+            inventory_after["csv_file_count"],
+        )
+
+        output_dir = project_root / "outputs" / "filters" / "breakout_quality" / "synthetic_quality"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stale_summary = {
+            "filter_id": "synthetic_quality",
+            "dataset": "reduced",
+            "policy": DEFAULT_LABEL_POLICY.as_manifest_payload(),
+            "feature_columns": list(FEATURE_COLUMNS),
+            "context_columns": list(CONTEXT_COLUMNS),
+            "source_data_inventory": inventory_before,
+        }
+        (output_dir / "dataset_summary.json").write_text(
+            json.dumps(stale_summary),
+            encoding="utf-8",
+        )
+        stale_source_rejected = False
+        with (
+            patch.object(breakout_quality_common, "PROJECT_ROOT", project_root),
+            patch.object(
+                breakout_quality_common,
+                "dataset_output_dir",
+                return_value=output_dir,
+            ),
+        ):
+            try:
+                breakout_quality_common.load_validated_dataset_bundle(
+                    "synthetic_quality",
+                    require_current_source=True,
+                )
+            except ValueError as exc:
+                stale_source_rejected = "來源 CSV 已更新" in str(exc)
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "standalone_training_rejects_stale_source_dataset",
+            True,
+            stale_source_rejected,
+        )
+
     summary["optimizer_high_len_count"] = len(optimizer_values)
     summary["quality_high_len_count"] = len(quality_values)
     return results, summary

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
+import json
 import importlib
 import sys
 from pathlib import Path
@@ -120,6 +121,80 @@ def validate_dataset_cli_contract_case(_base_params):
         mocked_parse.call_args.args[0],
     )
     add_check(results, "cli_contract", case_id, "breakout_quality_workflow_called", 1, mocked_workflow.call_count)
+
+    with TemporaryDirectory(prefix="breakout_quality_rebuild_detection_") as temp_dir:
+        temp_root = Path(temp_dir)
+        source_dir = temp_root / "data" / "tw_stock_data_vip_reduced"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        source_csv = source_dir / "2330.csv"
+        benchmark_csv = source_dir / "0050.csv"
+        source_csv.write_text("Date,Open\n2026-01-01,100\n", encoding="utf-8")
+        benchmark_csv.write_text("Date,Open\n2026-01-01,50\n", encoding="utf-8")
+
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", temp_root):
+            dataset_paths = app_breakout_quality._dataset_paths("synthetic_quality")
+            for path in dataset_paths.values():
+                path.parent.mkdir(parents=True, exist_ok=True)
+            dataset_paths["dataset"].write_bytes(b"npz")
+            dataset_paths["events"].write_text("ticker,date\n", encoding="utf-8")
+            inventory = app_breakout_quality.build_source_data_inventory(temp_root, "reduced")
+            summary_payload = {
+                "filter_id": "synthetic_quality",
+                "dataset": "reduced",
+                "source_data_inventory": inventory,
+                "source_selection": {"requested_max_tickers": 0},
+                "policy": app_breakout_quality.DEFAULT_LABEL_POLICY.as_manifest_payload(),
+                "feature_columns": list(app_breakout_quality.FEATURE_COLUMNS),
+                "context_columns": list(app_breakout_quality.CONTEXT_COLUMNS),
+            }
+            dataset_paths["summary"].write_text(
+                json.dumps(summary_payload),
+                encoding="utf-8",
+            )
+            unchanged_reasons = app_breakout_quality._dataset_rebuild_reasons(
+                "synthetic_quality",
+                "reduced",
+                max_tickers=0,
+            )
+            source_csv.write_text(
+                "Date,Open\n2026-01-01,100\n2026-01-02,101\n",
+                encoding="utf-8",
+            )
+            changed_reasons = app_breakout_quality._dataset_rebuild_reasons(
+                "synthetic_quality",
+                "reduced",
+                max_tickers=0,
+            )
+            coverage_reasons = app_breakout_quality._dataset_rebuild_reasons(
+                "synthetic_quality",
+                "reduced",
+                max_tickers=30,
+            )
+
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            "breakout_quality_unchanged_source_skips_rebuild",
+            [],
+            unchanged_reasons,
+        )
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            "breakout_quality_updated_source_requires_rebuild",
+            True,
+            any("來源 CSV inventory 已更新" in reason for reason in changed_reasons),
+        )
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            "breakout_quality_ticker_coverage_change_requires_rebuild",
+            True,
+            any("ticker coverage 不符" in reason for reason in coverage_reasons),
+        )
 
     command_modules = {
         "build-dataset": "tools.filters.breakout_quality.build_dataset",
