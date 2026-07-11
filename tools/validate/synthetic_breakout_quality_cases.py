@@ -823,7 +823,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "| 指標 | 公式 | 結果 | 解釋 |" in markdown
             and "| 指標 | 公式 | 結果 |" in markdown
             and "TP ÷ (TP + FP)" in markdown
-            and "PASS Precision − 原始 PASS 比例" in markdown
+            and "PASS Precision − 原始 PASS" in markdown
             and "被保留的訊號中，有多少真的 PASS" in markdown
             and "篩選行為" not in markdown
             and "篩選行為" not in console
@@ -846,9 +846,9 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         "report_sections_4_and_5_use_consistent_metric_names",
         True,
         (
-            all("模型 PASS 比例" in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
+            all("模型 PASS" in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
             and all("保留率" not in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
-            and all("原始 PASS 比例" in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
+            and all("原始 PASS" in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
             and all("PASS Precision" in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
         ),
     )
@@ -863,15 +863,15 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             all(
                 label in markdown and label in console
                 for label in (
-                    "原始 PASS 比例",
-                    "模型 PASS 比例",
+                    "原始 PASS",
+                    "模型 PASS",
                     "PASS Precision",
                     "PASS Recall",
                     "REJECT Specificity",
                     "REJECT NPV",
                     "Accuracy",
-                    "Precision 絕對提升",
-                    "Precision 相對提升",
+                    "Precision 絕對",
+                    "Precision 相對",
                     "平均 Score",
                 )
             )

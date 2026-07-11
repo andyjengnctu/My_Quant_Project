@@ -57,17 +57,17 @@ SPLIT_LABELS = {
 }
 
 REPORT_LABELS = {
-    "original_pass_rate": "原始 PASS 比例",
-    "original_reject_rate": "原始 REJECT 比例",
-    "model_pass_rate": "模型 PASS 比例",
-    "model_reject_rate": "模型 REJECT 比例",
+    "original_pass_rate": "原始 PASS",
+    "original_reject_rate": "原始 REJECT",
+    "model_pass_rate": "模型 PASS",
+    "model_reject_rate": "模型 REJECT",
     "pass_precision": "PASS Precision",
     "pass_recall": "PASS Recall",
     "reject_specificity": "REJECT Specificity",
     "reject_npv": "REJECT NPV",
     "accuracy": "Accuracy",
-    "precision_absolute_lift": "Precision 絕對提升",
-    "precision_relative_lift": "Precision 相對提升",
+    "precision_absolute_lift": "Precision 絕對",
+    "precision_relative_lift": "Precision 相對",
     "average_score": "平均 Score",
 }
 
@@ -304,7 +304,7 @@ def _oos_conclusion(summary: dict | None) -> dict:
         return {
             "status": "INCONCLUSIVE",
             "title": "OOS 無法判定",
-            "explanation": "OOS 缺少可比較的 PASS precision 或基準 PASS 比例。",
+            "explanation": "OOS 缺少可比較的 PASS precision 或基準 PASS。",
             "deployment_guidance": "先確認 score table、標籤與 split 工件完整。",
         }
     if float(delta) <= 0:
@@ -313,7 +313,7 @@ def _oos_conclusion(summary: dict | None) -> dict:
             "title": "OOS 未顯示品質提升",
             "explanation": (
                 f"PASS Precision 為 {_pct(summary.get('pass_precision'))}，"
-                f"低於原始 PASS 比例 {_pct(summary.get('base_pass_rate'))}，"
+                f"低於原始 PASS {_pct(summary.get('base_pass_rate'))}，"
                 f"差異 {_pp(delta)}。"
             ),
             "deployment_guidance": (
@@ -326,8 +326,8 @@ def _oos_conclusion(summary: dict | None) -> dict:
         "title": "OOS PASS Precision 有提升",
         "explanation": (
             f"PASS Precision 為 {_pct(summary.get('pass_precision'))}，"
-            f"高於原始 PASS 比例 {_pct(summary.get('base_pass_rate'))}，"
-            f"差異 {_pp(delta)}；仍須同時檢查模型 PASS 比例與 PASS Recall。"
+            f"高於原始 PASS {_pct(summary.get('base_pass_rate'))}，"
+            f"差異 {_pp(delta)}；仍須同時檢查模型 PASS 與 PASS Recall。"
         ),
         "deployment_guidance": (
             "可進入策略層經濟效果驗證，但在確認淨報酬、交易數與風險改善前，"
@@ -621,8 +621,8 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
         "",
         "| 指標 | 公式 | 結果 |",
         "|---|---|---:|",
-        f"| {REPORT_LABELS['precision_absolute_lift']} | PASS Precision − 原始 PASS 比例 | {_markdown_color(_pp(summary.get('precision_delta')), delta_tone)} |",
-        f"| {REPORT_LABELS['precision_relative_lift']} | PASS Precision ÷ 原始 PASS 比例 − 1 | {_markdown_color(_signed_pct(summary.get('precision_relative_change')), delta_tone)} |",
+        f"| {REPORT_LABELS['precision_absolute_lift']} | PASS Precision − 原始 PASS | {_markdown_color(_pp(summary.get('precision_delta')), delta_tone)} |",
+        f"| {REPORT_LABELS['precision_relative_lift']} | PASS Precision ÷ 原始 PASS − 1 | {_markdown_color(_signed_pct(summary.get('precision_relative_change')), delta_tone)} |",
         "",
     ]
     if label == "OOS":
@@ -641,7 +641,7 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
             lines.extend(
                 [
                     _markdown_color(
-                        "判讀：OOS PASS Precision 高於原始 PASS 比例；仍須一起檢查模型 PASS 比例、PASS Recall 與策略層經濟效果。",
+                        "判讀：OOS PASS Precision 高於原始 PASS；仍須一起檢查模型 PASS、PASS Recall 與策略層經濟效果。",
                         "green",
                     ),
                     "",
@@ -726,13 +726,13 @@ def _deployment_presentation(payload: dict) -> dict:
         oos_result = "尚未執行 OOS，不能判定正式泛化能力"
     elif oos_improved:
         oos_result = (
-            f"有提升：原始 PASS 比例 {_pct(oos.get('base_pass_rate'))}，"
+            f"有提升：原始 PASS {_pct(oos.get('base_pass_rate'))}，"
             f"PASS Precision {_pct(oos.get('pass_precision'))}，"
             f"差異 {_pp(oos.get('precision_delta'))}"
         )
     else:
         oos_result = (
-            f"未提升：原始 PASS 比例 {_pct(oos.get('base_pass_rate'))}，"
+            f"未提升：原始 PASS {_pct(oos.get('base_pass_rate'))}，"
             f"PASS Precision {_pct(oos.get('pass_precision'))}，"
             f"差異 {_pp(oos.get('precision_delta'))}"
         )
@@ -864,17 +864,17 @@ def render_markdown_report(payload: dict) -> str:
             "",
             "## 指標白話說明",
             "",
-            "- **原始 PASS 比例**：所有原始訊號中，標籤為 PASS 的比例。",
-            "- **原始 REJECT 比例**：所有原始訊號中，標籤為 REJECT 的比例。",
-            "- **模型 PASS 比例**：所有訊號中，被模型判定為 PASS 的比例。",
-            "- **拒絕率**：所有訊號中，被模型判定為 REJECT 的比例。",
+            "- **原始 PASS**：所有原始訊號中，標籤為 PASS 的比例。",
+            "- **原始 REJECT**：所有原始訊號中，標籤為 REJECT 的比例。",
+            "- **模型 PASS**：所有訊號中，被模型判定為 PASS 的比例。",
+            "- **模型 REJECT**：所有訊號中，被模型判定為 REJECT 的比例。",
             "- **PASS Precision**：所有模型 PASS 中，真正為原始 PASS 的比例。",
             "- **PASS Recall**：所有原始 PASS 中，被模型判定為 PASS 的比例。",
             "- **REJECT Specificity**：所有原始 REJECT 中，被模型判定為 REJECT 的比例。",
             "- **REJECT NPV**：所有模型 REJECT 中，真正為原始 REJECT 的比例。",
             "- **Accuracy**：所有訊號中，模型判定正確的比例。",
-            "- **Precision 絕對提升**：PASS Precision 減去原始 PASS 比例。",
-            "- **Precision 相對提升**：PASS Precision 相對於原始 PASS 比例的增減幅度。",
+            "- **Precision 絕對**：PASS Precision 減去原始 PASS。",
+            "- **Precision 相對**：PASS Precision 相對於原始 PASS 的增減幅度。",
             "",
             "## 使用限制",
             "",
@@ -1081,8 +1081,8 @@ def _console_confusion_section(summary: dict, label: str, number: int, *, color:
         )
     )
     effect_rows = [
-        [REPORT_LABELS["precision_absolute_lift"], "PASS Precision − 原始 PASS 比例", _paint(_pp(summary.get("precision_delta")), delta_tone, enabled=color, bold=True)],
-        [REPORT_LABELS["precision_relative_lift"], "PASS Precision ÷ 原始 PASS 比例 − 1", _paint(_signed_pct(summary.get("precision_relative_change")), delta_tone, enabled=color, bold=True)],
+        [REPORT_LABELS["precision_absolute_lift"], "PASS Precision − 原始 PASS", _paint(_pp(summary.get("precision_delta")), delta_tone, enabled=color, bold=True)],
+        [REPORT_LABELS["precision_relative_lift"], "PASS Precision ÷ 原始 PASS − 1", _paint(_signed_pct(summary.get("precision_relative_change")), delta_tone, enabled=color, bold=True)],
     ]
     lines.extend(["", "篩選效果"])
     lines.extend(
@@ -1097,7 +1097,7 @@ def _console_confusion_section(summary: dict, label: str, number: int, *, color:
             "模型大量判定為 REJECT，但模型 PASS 的品質未提高；"
             f"錯殺 {_pct(summary.get('false_rejection_rate'))} 的原始 PASS。"
             if float(summary.get("precision_delta") or 0.0) <= 0
-            else "OOS PASS Precision 有提升；仍須檢查模型 PASS 比例、PASS Recall 與策略層經濟效果。"
+            else "OOS PASS Precision 有提升；仍須檢查模型 PASS、PASS Recall 與策略層經濟效果。"
         )
         lines.extend(["", _paint("判讀：" + judgement, delta_tone, enabled=color, bold=True)])
     else:
