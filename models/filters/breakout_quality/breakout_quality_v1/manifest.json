@@ -15,7 +15,7 @@
   "early_stopping_enabled": true,
   "early_stopping_min_delta": 0.0,
   "early_stopping_patience": 5,
-  "elapsed_sec": 293.473,
+  "elapsed_sec": 319.55,
   "epoch_selection_source": "inner_validation_loss",
   "event_group_summary": {
     "group_count": 59079,
@@ -410,7 +410,7 @@
         "size_bytes": 206217371
       }
     },
-    "elapsed_sec": 1055.151,
+    "elapsed_sec": 1079.199,
     "event_count": 1875237,
     "event_date_range": {
       "end": "2026-03-02",
@@ -529,6 +529,20 @@
     "source_data_date_range": {
       "end": "2026-03-02",
       "start": "1992-01-04"
+    },
+    "source_data_inventory": {
+      "csv_file_count": 617,
+      "csv_inventory_sha256": "2a6b70db7802433e886061fde8d1913f26d85e2fafed40e75060e03a1f9e6812",
+      "csv_latest_mtime_ns": 1772462709532388800,
+      "csv_total_bytes": 112948536,
+      "dataset_profile": "full",
+      "fingerprint_algorithm": "sha256(ticker,relative_path,size_bytes,mtime_ns)",
+      "ignored_duplicate_count": 0,
+      "schema_version": 1
+    },
+    "source_selection": {
+      "requested_max_tickers": 0,
+      "selected_ticker_count": 555
     }
   },
   "split_assignments": {

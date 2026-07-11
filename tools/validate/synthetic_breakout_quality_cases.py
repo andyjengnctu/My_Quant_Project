@@ -746,7 +746,29 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_integrated_confusion_ratios", True, "Selection Confusion Matrix" in markdown and "OOS Confusion Matrix" in markdown and "Recall" in markdown and "錯殺率" in markdown and "誤放率" in markdown and "辨識率" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不再是 final OOS" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "Epoch 選擇結果" in console and "各資料區段比較" in console and "Inner Train" in console and "Validation*" in console and "Selection Confusion Matrix" in console and "OOS Confusion Matrix" in console and "Precision" in console)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_paths_are_under_filter_reports", True, str(resolve_filter_report_markdown_path("/project", "synthetic_quality")).endswith("outputs/filters/breakout_quality/synthetic_quality/reports/evaluation_report.md") and str(resolve_filter_report_json_path("/project", "synthetic_quality")).endswith("outputs/filters/breakout_quality/synthetic_quality/reports/evaluation_metrics.json"))
+    report_markdown_path = resolve_filter_report_markdown_path("/project", "synthetic_quality")
+    report_json_path = resolve_filter_report_json_path("/project", "synthetic_quality")
+    expected_report_dir_suffix = (
+        "outputs",
+        "filters",
+        "breakout_quality",
+        "synthetic_quality",
+        "reports",
+    )
+    report_paths_are_under_filter_reports = (
+        tuple(report_markdown_path.parts[-6:])
+        == (*expected_report_dir_suffix, "evaluation_report.md")
+        and tuple(report_json_path.parts[-6:])
+        == (*expected_report_dir_suffix, "evaluation_metrics.json")
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_paths_are_under_filter_reports",
+        True,
+        report_paths_are_under_filter_reports,
+    )
     research_only = build_report_payload(
         metrics_by_split={"selection": _metrics("selection", base=0.45, precision=0.55, acceptance=0.40, recall=0.50, false_reject=0.50)},
         context=context,
