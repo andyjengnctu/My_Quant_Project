@@ -6,8 +6,9 @@
     - inconsist with strategy parameters
     - consistance among different seeds 
 
-改成PASS Recall、REJECT Specificit
 
+
+- PASS Recall是否也要用顏色highlight?
 
 
 ## To do
