@@ -366,6 +366,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             "dataset_storage_schema_version": DATASET_STORAGE_SCHEMA_VERSION,
             "dataset_storage_format": DATASET_STORAGE_FORMAT,
             "policy": DEFAULT_LABEL_POLICY.as_manifest_payload(),
+            "label_policy": DEFAULT_LABEL_POLICY.label_manifest_payload(),
             "feature_columns": list(FEATURE_COLUMNS),
             "context_columns": list(CONTEXT_COLUMNS),
             "source_data_inventory": inventory_before,
