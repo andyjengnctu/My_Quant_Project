@@ -83,6 +83,37 @@ def resolve_filter_research_manifest_path(
 ) -> Path:
     return resolve_filter_output_dir(project_root, filter_id=filter_id) / "research_scores_manifest.json"
 
+
+
+def resolve_filter_report_dir(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+) -> Path:
+    return resolve_filter_output_dir(project_root, filter_id=filter_id) / "reports"
+
+
+def ensure_filter_report_dir(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+) -> Path:
+    report_dir = resolve_filter_report_dir(project_root, filter_id)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    return report_dir
+
+
+def resolve_filter_report_markdown_path(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+) -> Path:
+    return resolve_filter_report_dir(project_root, filter_id) / "evaluation_report.md"
+
+
+def resolve_filter_report_json_path(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+) -> Path:
+    return resolve_filter_report_dir(project_root, filter_id) / "evaluation_metrics.json"
+
 def ensure_filter_output_dir(project_root: str | os.PathLike[str], filter_id: str | None = None) -> Path:
     out_dir = resolve_filter_output_dir(project_root, filter_id=filter_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -93,10 +124,14 @@ __all__ = [
     "BreakoutQualityArtifactPaths",
     "ensure_filter_model_dir",
     "ensure_filter_output_dir",
+    "ensure_filter_report_dir",
     "normalize_filter_id",
     "resolve_filter_artifact_paths",
     "resolve_filter_model_dir",
     "resolve_filter_output_dir",
     "resolve_filter_research_manifest_path",
     "resolve_filter_research_score_path",
+    "resolve_filter_report_dir",
+    "resolve_filter_report_json_path",
+    "resolve_filter_report_markdown_path",
 ]

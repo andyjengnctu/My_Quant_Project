@@ -203,7 +203,7 @@ def load_validated_dataset_bundle(
         if stored_inventory != current_inventory:
             raise ValueError(
                 "來源 CSV 已更新，現有 breakout quality dataset 已過期；"
-                "請先由 apps/breakout_quality.py workflow 自動重建，或執行 build-dataset --rebuild-dataset"
+                "請先由 apps/breakout_quality.py workflow 自動重建，或直接重新執行 build-dataset"
             )
 
     artifact_records = summary.get("dataset_artifacts")

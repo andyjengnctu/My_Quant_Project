@@ -30,6 +30,7 @@ PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
     ([sys.executable, "apps/breakout_quality.py", "--help"], "python apps/breakout_quality.py"),
     ([sys.executable, "apps/breakout_quality.py", "workflow", "--help"], "python apps/breakout_quality.py workflow"),
+    ([sys.executable, "apps/breakout_quality.py", "report", "--help"], "python apps/breakout_quality.py report"),
     ([sys.executable, "apps/workbench.py", "--help"], "python apps/workbench.py"),
     ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
     ([sys.executable, "apps/package_zip.py", "--help"], "python apps/package_zip.py"),
@@ -42,6 +43,7 @@ HELP_TARGETS = [
     ([sys.executable, "tools/filters/breakout_quality/build_dataset.py", "--help"], "python tools/filters/breakout_quality/build_dataset.py"),
     ([sys.executable, "tools/filters/breakout_quality/evaluate.py", "--help"], "python tools/filters/breakout_quality/evaluate.py"),
     ([sys.executable, "tools/filters/breakout_quality/export_scores.py", "--help"], "python tools/filters/breakout_quality/export_scores.py"),
+    ([sys.executable, "tools/filters/breakout_quality/report.py", "--help"], "python tools/filters/breakout_quality/report.py"),
     ([sys.executable, "tools/filters/breakout_quality/train.py", "--help"], "python tools/filters/breakout_quality/train.py"),
     ([sys.executable, "tools/local_regression/run_all.py", "--help"], "python tools/local_regression/run_all.py"),
     ([sys.executable, "tools/local_regression/run_chain_checks.py", "--help"], "python tools/local_regression/run_chain_checks.py"),
@@ -84,6 +86,7 @@ INLINE_CLI_TARGETS = {
     "tools/filters/breakout_quality/build_dataset.py",
     "tools/filters/breakout_quality/evaluate.py",
     "tools/filters/breakout_quality/export_scores.py",
+    "tools/filters/breakout_quality/report.py",
     "tools/filters/breakout_quality/train.py",
     "tools/local_regression/run_all.py",
     "tools/local_regression/run_chain_checks.py",

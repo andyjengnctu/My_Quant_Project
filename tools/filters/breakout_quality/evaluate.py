@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import sys
 from pathlib import Path
+from typing import Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-import argparse
-import json
 
 import numpy as np
 import pandas as pd
@@ -260,39 +260,38 @@ def _select_rows(frame: pd.DataFrame, split_name: str, outer_policy: dict) -> pd
     return selected
 
 
-def main(argv=None) -> int:
-    args = parse_args(argv)
-    score_path = (
-        Path(args.score_path).expanduser().resolve()
-        if args.score_path
-        else resolve_filter_research_score_path(PROJECT_ROOT, args.filter_id)
+def prepare_evaluation_context(
+    *,
+    filter_id: str,
+    threshold: float | None = None,
+    score_path: str | Path | None = None,
+) -> dict:
+    resolved_score_path = (
+        Path(score_path).expanduser().resolve()
+        if score_path is not None
+        else resolve_filter_research_score_path(PROJECT_ROOT, filter_id)
     )
-    score_frame = read_breakout_quality_csv(score_path)
+    score_frame = read_breakout_quality_csv(resolved_score_path)
     required = {"ticker", "date", "high_len", SCORE_COLUMN, "label"}
     missing = sorted(required - set(score_frame.columns))
     if missing:
         raise ValueError(
-            f"evaluate score table 缺少欄位: {missing}; path={score_path}"
+            f"evaluate score table 缺少欄位: {missing}; path={resolved_score_path}"
         )
 
-    model_contract = load_model_artifact_contract(
-        str(PROJECT_ROOT),
-        str(args.filter_id),
-    )
-    split_frame = load_split_assignment_frame(
-        str(PROJECT_ROOT),
-        str(args.filter_id),
-    )
-    threshold = float(model_contract.manifest["fixed_evaluation_threshold"])
-    if args.threshold is not None:
-        requested_threshold = float(args.threshold)
+    model_contract = load_model_artifact_contract(str(PROJECT_ROOT), str(filter_id))
+    split_frame = load_split_assignment_frame(str(PROJECT_ROOT), str(filter_id))
+    fixed_threshold = float(model_contract.manifest["fixed_evaluation_threshold"])
+    if threshold is not None:
+        requested_threshold = float(threshold)
         if not np.isfinite(requested_threshold) or not 0.0 <= requested_threshold <= 1.0:
             raise ValueError("threshold 必須介於 0 與 1")
-        if not np.isclose(requested_threshold, threshold, rtol=0.0, atol=1e-12):
+        if not np.isclose(requested_threshold, fixed_threshold, rtol=0.0, atol=1e-12):
             raise ValueError(
                 "breakout quality 的 threshold 已在 train 前固定；"
-                f"manifest={threshold}, requested={requested_threshold}"
+                f"manifest={fixed_threshold}, requested={requested_threshold}"
             )
+
     normalized_scores = normalize_split_assignment_keys(score_frame)
     merged = normalized_scores.merge(
         split_frame,
@@ -311,19 +310,38 @@ def main(argv=None) -> int:
             "research score 與 canonical split assignment 必須完整一對一覆蓋: "
             f"scores={len(merged)}, splits={len(split_frame)}"
         )
+
     split_record = model_contract.manifest.get("split_assignments")
     if not isinstance(split_record, dict):
         raise ValueError("model manifest 缺少 split_assignments")
     research_manifest = _validate_research_contract(
-        score_path=score_path,
+        score_path=resolved_score_path,
         score_frame=score_frame,
-        filter_id=str(args.filter_id),
+        filter_id=str(filter_id),
         split_record=split_record,
     )
     outer_policy = model_contract.manifest.get("outer_oos_policy")
     if not isinstance(outer_policy, dict):
         raise ValueError("model manifest 缺少 outer_oos_policy")
-    selected = _select_rows(merged, str(args.split), outer_policy)
+    return {
+        "filter_id": str(filter_id),
+        "score_path": resolved_score_path,
+        "merged": merged,
+        "threshold": fixed_threshold,
+        "model_manifest": model_contract.manifest,
+        "research_manifest": research_manifest,
+        "outer_oos_policy": outer_policy,
+    }
+
+
+def evaluate_split_from_context(context: dict, split_name: str) -> dict:
+    if split_name not in EVALUATION_SPLITS:
+        raise ValueError(f"不支援的 evaluation split: {split_name}")
+    selected = _select_rows(
+        context["merged"],
+        str(split_name),
+        context["outer_oos_policy"],
+    )
     selected_dates = pd.to_datetime(selected["date"], errors="raise")
     role = {
         EVALUATION_SPLIT_TRAIN: "inner_train_diagnostic_only",
@@ -331,25 +349,27 @@ def main(argv=None) -> int:
         EVALUATION_SPLIT_SELECTION: "final_refit_selection_diagnostic_only",
         EVALUATION_SPLIT_OOS: "outer_oos_final_generalization_evaluation",
         EVALUATION_SPLIT_ALL: "mixed_research_diagnostic_only",
-    }[str(args.split)]
-    metrics = {
-        "filter_id": args.filter_id,
-        "score_path": str(score_path),
-        "split": str(args.split),
+    }[str(split_name)]
+    model_manifest = context["model_manifest"]
+    threshold = float(context["threshold"])
+    return {
+        "filter_id": context["filter_id"],
+        "score_path": str(context["score_path"]),
+        "split": str(split_name),
         "split_role": role,
         "threshold": threshold,
         "threshold_source": "model_manifest.fixed_evaluation_threshold",
         "threshold_selection_allowed": False,
         "epoch_selection_allowed": bool(
-            args.split == EVALUATION_SPLIT_VALIDATION
-            and bool(model_contract.manifest.get("inner_validation_used", False))
+            split_name == EVALUATION_SPLIT_VALIDATION
+            and bool(model_manifest.get("inner_validation_used", False))
         ),
-        "is_final_oos_evaluation": bool(args.split == EVALUATION_SPLIT_OOS),
+        "is_final_oos_evaluation": bool(split_name == EVALUATION_SPLIT_OOS),
         "reusing_oos_for_tuning_would_change_role_to_validation": bool(
-            args.split == EVALUATION_SPLIT_OOS
+            split_name == EVALUATION_SPLIT_OOS
         ),
-        "outer_oos_policy": outer_policy,
-        "research_scope": research_manifest.get("scope"),
+        "outer_oos_policy": context["outer_oos_policy"],
+        "research_scope": context["research_manifest"].get("scope"),
         "selected_row_count": int(len(selected)),
         "selected_date_range": {
             "start": str(selected_dates.min().date()),
@@ -367,14 +387,70 @@ def main(argv=None) -> int:
         ),
         "event_group_summary": event_group_summary(
             selected,
-            pd.to_numeric(
-                selected["label"],
-                errors="raise",
-            ).to_numpy(dtype=np.int64),
+            pd.to_numeric(selected["label"], errors="raise").to_numpy(dtype=np.int64),
         ),
     }
+
+
+def evaluate_splits(
+    *,
+    filter_id: str,
+    splits: Iterable[str],
+    threshold: float | None = None,
+    score_path: str | Path | None = None,
+) -> tuple[dict[str, dict], dict]:
+    context = prepare_evaluation_context(
+        filter_id=filter_id,
+        threshold=threshold,
+        score_path=score_path,
+    )
+    results = {
+        split_name: evaluate_split_from_context(context, split_name)
+        for split_name in splits
+    }
+    return results, context
+
+
+def evaluate_breakout_quality(
+    *,
+    filter_id: str,
+    split: str,
+    threshold: float | None = None,
+    score_path: str | Path | None = None,
+) -> dict:
+    results, _context = evaluate_splits(
+        filter_id=filter_id,
+        splits=[split],
+        threshold=threshold,
+        score_path=score_path,
+    )
+    return results[split]
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    metrics = evaluate_breakout_quality(
+        filter_id=str(args.filter_id),
+        split=str(args.split),
+        threshold=args.threshold,
+        score_path=args.score_path,
+    )
     print(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
+
+
+__all__ = [
+    "EVALUATION_SPLITS",
+    "EVALUATION_SPLIT_ALL",
+    "EVALUATION_SPLIT_OOS",
+    "EVALUATION_SPLIT_SELECTION",
+    "EVALUATION_SPLIT_TRAIN",
+    "EVALUATION_SPLIT_VALIDATION",
+    "evaluate_breakout_quality",
+    "evaluate_split_from_context",
+    "evaluate_splits",
+    "prepare_evaluation_context",
+]
 
 
 if __name__ == "__main__":

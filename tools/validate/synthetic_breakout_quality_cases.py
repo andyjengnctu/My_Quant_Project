@@ -62,7 +62,12 @@ from filters.breakout_quality.contract import (
     SPLIT_ASSIGNMENT_SCHEMA_VERSION,
     TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
-from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_research_score_path
+from filters.breakout_quality.paths import (
+    resolve_filter_artifact_paths,
+    resolve_filter_research_score_path,
+    resolve_filter_report_json_path,
+    resolve_filter_report_markdown_path,
+)
 from filters.breakout_quality.score_store import build_pass_condition_from_score_table, load_score_table
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from core.signal_utils import generate_signals
@@ -70,6 +75,11 @@ from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from tools.filters.breakout_quality import common as breakout_quality_common
+from tools.filters.breakout_quality.report import (
+    build_report_payload,
+    render_console_summary,
+    render_markdown_report,
+)
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     compute_outer_policy_fingerprint,
@@ -575,6 +585,84 @@ def _validate_signal_runtime_wiring(results, case_id: str) -> None:
         np.asarray(buy_condition, dtype=bool).tolist(),
     )
 
+
+def _validate_breakout_quality_report_rendering(results, case_id):
+    def _metrics(split_name, *, base, precision, acceptance, recall, false_reject):
+        return {
+            "filter_id": "synthetic_quality",
+            "split": split_name,
+            "selected_date_range": {"start": "2021-01-01", "end": "2022-12-31"},
+            "ticker_date_group_weighted": {
+                "group_count": 100,
+                "row_count": 1000,
+                "base_pass_rate": base,
+                "acceptance_rate": acceptance,
+                "pass_precision": precision,
+                "precision_lift_vs_all_pass": precision / base,
+                "pass_recall": recall,
+                "false_rejection_rate": false_reject,
+                "reject_specificity": 0.70,
+                "accuracy": 0.55,
+                "all_pass_baseline_accuracy": base,
+                "avg_score": 0.45,
+            },
+            "row_level": {"row_count": 1000},
+        }
+
+    context = {
+        "filter_id": "synthetic_quality",
+        "score_path": Path("research_scores.csv"),
+        "model_manifest": {
+            "training_mode": "inner_validation_epoch_selection_full_refit",
+            "inner_validation_used": True,
+            "max_epochs": 20,
+            "selected_epoch": 2,
+            "fixed_evaluation_threshold": 0.5,
+            "learning_rate": 0.001,
+            "batch_size": 256,
+            "seed": 42,
+            "inner_validation_epoch_selection": {
+                "completed_epochs": 7,
+                "best_validation_loss": 0.77253,
+                "best_validation_metrics": {"accuracy": 0.505773},
+            },
+        },
+    }
+    payload = build_report_payload(
+        metrics_by_split={
+            "selection": _metrics(
+                "selection",
+                base=0.456199,
+                precision=0.586467,
+                acceptance=0.387072,
+                recall=0.497601,
+                false_reject=0.502399,
+            ),
+            "oos": _metrics(
+                "oos",
+                base=0.493898,
+                precision=0.460815,
+                acceptance=0.169293,
+                recall=0.157953,
+                false_reject=0.842047,
+            ),
+        },
+        context=context,
+    )
+    markdown = render_markdown_report(payload)
+    console = render_console_summary(payload)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
+    add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
+    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_explanatory_table", True, "原始 PASS 比例" in markdown and "保留後 PASS precision" in markdown and "錯殺真正 PASS" in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不再是 final OOS" in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_console_is_short_and_excludes_confusion", True, "Selection：" in console and "OOS：" in console and "confusion" not in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_paths_are_under_filter_reports", True, str(resolve_filter_report_markdown_path("/project", "synthetic_quality")).endswith("outputs/filters/breakout_quality/synthetic_quality/reports/evaluation_report.md") and str(resolve_filter_report_json_path("/project", "synthetic_quality")).endswith("outputs/filters/breakout_quality/synthetic_quality/reports/evaluation_metrics.json"))
+    research_only = build_report_payload(
+        metrics_by_split={"selection": _metrics("selection", base=0.45, precision=0.55, acceptance=0.40, recall=0.50, false_reject=0.50)},
+        context=context,
+    )
+    add_check(results, "synthetic_breakout_quality", case_id, "report_without_oos_is_research_only", "RESEARCH_ONLY", research_only["conclusion"]["status"])
+
 def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_RUNTIME_ARTIFACT"
     results = []
@@ -873,6 +961,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
 
     _clear_breakout_quality_caches()
     _validate_signal_runtime_wiring(results, case_id)
+    _validate_breakout_quality_report_rendering(results, case_id)
     summary["filter_id"] = filter_id
     summary["high_len"] = high_len
     return results, summary

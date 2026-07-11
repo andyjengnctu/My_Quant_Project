@@ -62,7 +62,7 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         "用法: python apps/breakout_quality.py [menu|workflow|<command>] [options]" in help_text,
     )
-    for command in ("menu", "workflow", "build-dataset", "train", "export-scores", "evaluate"):
+    for command in ("menu", "workflow", "build-dataset", "train", "export-scores", "report", "evaluate"):
         add_check(
             results,
             "cli_contract",
@@ -121,6 +121,59 @@ def validate_dataset_cli_contract_case(_base_params):
         mocked_parse.call_args.args[0],
     )
     add_check(results, "cli_contract", case_id, "breakout_quality_workflow_called", 1, mocked_workflow.call_count)
+
+    workflow_args = SimpleNamespace(
+        filter_id="synthetic_quality",
+        dataset="full",
+        max_tickers=0,
+        rebuild_dataset=False,
+        epochs=3,
+        batch_size=32,
+        lr=0.001,
+        seed=42,
+        fixed_threshold=0.5,
+        inner_validation_months=24,
+        early_stopping_patience=5,
+        early_stopping_min_delta=0.0,
+        use_inner_validation=True,
+        evaluate_oos=True,
+    )
+    workflow_calls = []
+    fake_train_module = SimpleNamespace(
+        parse_args=lambda argv: SimpleNamespace(argv=list(argv)),
+        validate_training_args=lambda parsed: None,
+    )
+
+    def _fake_run_command(command, args, *, program_name):
+        workflow_calls.append((command, list(args), program_name))
+        return 0
+
+    with (
+        patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
+        patch("apps.breakout_quality._dataset_rebuild_reasons", return_value=[]),
+        patch("apps.breakout_quality._run_command", side_effect=_fake_run_command),
+    ):
+        workflow_rc = app_breakout_quality._run_workflow(
+            workflow_args,
+            program_name="apps/breakout_quality.py",
+        )
+    add_check(results, "cli_contract", case_id, "breakout_quality_workflow_report_rc", 0, workflow_rc)
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_uses_report_not_verbose_evaluate",
+        ["train", "export-scores", "report"],
+        [call[0] for call in workflow_calls],
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_report_includes_oos_flag",
+        True,
+        "--include-oos" in workflow_calls[-1][1],
+    )
 
     with TemporaryDirectory(prefix="breakout_quality_rebuild_detection_") as temp_dir:
         temp_root = Path(temp_dir)
@@ -200,6 +253,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "build-dataset": "tools.filters.breakout_quality.build_dataset",
         "train": "tools.filters.breakout_quality.train",
         "export-scores": "tools.filters.breakout_quality.export_scores",
+        "report": "tools.filters.breakout_quality.report",
         "evaluate": "tools.filters.breakout_quality.evaluate",
     }
     for command, expected_module in command_modules.items():

@@ -63,14 +63,14 @@ python apps/workbench.py
 python apps/breakout_quality.py
 ```
 
-完整研究流程會依序執行：必要時建立 dataset → train → export research scores → evaluate Selection → 可選擇 evaluate OOS。批次或需要可重現命令時使用 `workflow`：
+完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；可選擇是否把 OOS 納入報表。終端只顯示短摘要，Markdown 與完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --epochs 20 --batch-size 256 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 ```
 
 - `workflow` 只有在 dataset 工件完整、profile、ticker coverage、feature/label policy、欄位契約與來源 CSV inventory 全部一致時才跳過重建；full/reduced 原始 CSV 的檔案成員、大小或修改時間有變化時會自動重建。單獨執行 `train` 時若偵測到來源已更新，會 fail-fast 並要求先重建，避免靜默使用過期 dataset。需要無條件重建時加 `--rebuild-dataset`。
-- 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`，流程會停在 Selection 診斷。
+- 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`；報表只包含 Selection 內診斷，並明確標示不能作為正式泛化結論。
 - 選單只是正式 UI orchestration；dataset、split、training、export 與 evaluation 規則仍只實作在既有子系統，不在 app 複製。
 - `epochs`、`batch size`、`learning rate`、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；CLI／選單可單次覆蓋，但不保存第二份預設值。
 
@@ -83,15 +83,18 @@ python apps/breakout_quality.py train --filter-id breakout_quality_v1 --epochs 2
 # 開啟時：epochs 是搜尋上限；以 Selection 尾端 N 個月選 best epoch，之後完整 Selection 重訓
 python apps/breakout_quality.py train --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --scope research
-# train / validation / selection 僅供診斷；threshold 仍須在 OOS 前固定
+# 建議日常使用：終端短摘要 + Markdown 解釋報表 + 完整 metrics JSON
+python apps/breakout_quality.py report --filter-id breakout_quality_v1 --no-include-oos
+# 參數與模型已鎖定後，才把最終 OOS 納入報表
+python apps/breakout_quality.py report --filter-id breakout_quality_v1 --include-oos
+# 需要稽核單一 split 的完整原始 JSON 時才使用 evaluate
 python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --split train
 python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --split validation
 python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --split selection
-# OOS 是最終泛化評估；重複用同一段 OOS 調參後，它就不再是乾淨 OOS
 python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --split oos
 ```
 
-- Dataset/tool 輸出固定在 `outputs/filters/breakout_quality/<filter_id>/`。
+- Dataset/tool 輸出固定在 `outputs/filters/breakout_quality/<filter_id>/`；易讀報表固定為 `reports/evaluation_report.md`，完整報表數據固定為 `reports/evaluation_metrics.json`。
 - Model、manifest 與 `split_assignments.csv` 固定在 `models/filters/breakout_quality/<filter_id>/`；固定 threshold 也寫入 manifest，OOS 評估不得改用其他值；正式啟用時 active `breakout_quality_score_threshold` 應與該固定值一致。
 - 外層正式期間只有 `selection / oos`，日期直接讀 `core.walk_forward_policy`。
 - `BREAKOUT_QUALITY_USE_INNER_VALIDATION=False` 時，全部 eligible Selection 固定 epochs 訓練；開啟時，Selection 尾端 `BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS` 個月用來選 epoch，之後重新初始化模型，以全部 eligible Selection（含 validation 與 inner-embargo rows）按選定 epoch 重訓。

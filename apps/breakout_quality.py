@@ -1,4 +1,4 @@
-"""Breakout quality dataset、training、score export 與 evaluation 正式入口。"""
+"""Breakout quality dataset、training、score export、report 與 evaluation 正式入口。"""
 
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ from filters.breakout_quality.paths import (
     resolve_filter_output_dir,
     resolve_filter_research_manifest_path,
     resolve_filter_research_score_path,
+    resolve_filter_report_json_path,
+    resolve_filter_report_markdown_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 
@@ -33,16 +35,18 @@ COMMAND_MODULES = {
     "build-dataset": "tools.filters.breakout_quality.build_dataset",
     "train": "tools.filters.breakout_quality.train",
     "export-scores": "tools.filters.breakout_quality.export_scores",
+    "report": "tools.filters.breakout_quality.report",
     "evaluate": "tools.filters.breakout_quality.evaluate",
 }
 
 COMMAND_DESCRIPTIONS = {
     "menu": "開啟互動式操作選單",
-    "workflow": "依序執行 dataset、train、research score export 與評估",
+    "workflow": "依序執行 dataset、train、research score export 與易讀報表",
     "build-dataset": "建立 breakout quality event dataset",
     "train": "訓練模型；可選擇 inner validation 選 epoch 後完整 Selection 重訓",
     "export-scores": "匯出 research 或 forward-OOS score table",
-    "evaluate": "評估 train、validation、selection 或 OOS 指標",
+    "report": "產生短版中文摘要、Markdown 報表與完整 metrics JSON",
+    "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
 }
 
 
@@ -186,7 +190,7 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
         prog=f"{program_name} workflow",
         description=(
             "依序執行 breakout quality research workflow：必要時建立 dataset、訓練、"
-            "匯出 research scores、評估完整 Selection，並可選擇評估 OOS"
+            "匯出 research scores、產生 Selection 報表，並可選擇納入 OOS"
         )
     )
     parser.add_argument("--filter-id", default=BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
@@ -308,6 +312,8 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     else:
         print("[skip] dataset 工件、來源 CSV inventory、ticker coverage 與 policy 均未變更。")
 
+    report_args = ["--filter-id", filter_id]
+    report_args.append("--include-oos" if bool(args.evaluate_oos) else "--no-include-oos")
     steps.extend(
         [
             ("train", _build_train_argv(args), "訓練並產生正式模型"),
@@ -317,20 +323,12 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
                 "匯出 research scores",
             ),
             (
-                "evaluate",
-                ["--filter-id", filter_id, "--split", "selection"],
-                "完整 Selection 診斷",
+                "report",
+                report_args,
+                "產生易讀研究報表",
             ),
         ]
     )
-    if bool(args.evaluate_oos):
-        steps.append(
-            (
-                "evaluate",
-                ["--filter-id", filter_id, "--split", "oos"],
-                "最終 OOS 泛化評估",
-            )
-        )
 
     for index, (command, command_args, label) in enumerate(steps, start=1):
         print(f"\n[{index}/{len(steps)}] {label}")
@@ -478,6 +476,8 @@ def _print_artifact_status(filter_id: str) -> None:
         "split": model_paths.split_path,
         "research_scores": resolve_filter_research_score_path(PROJECT_ROOT, filter_id),
         "research_manifest": resolve_filter_research_manifest_path(PROJECT_ROOT, filter_id),
+        "readable_report": resolve_filter_report_markdown_path(PROJECT_ROOT, filter_id),
+        "report_metrics": resolve_filter_report_json_path(PROJECT_ROOT, filter_id),
         "runtime_scores": model_paths.score_path,
     }
     print(f"\n=== Artifact Status: {filter_id} ===")
@@ -537,9 +537,9 @@ def _interactive_workflow(program_name: str) -> int:
         evaluate_oos=evaluate_oos,
         **train_payload,
     )
-    print("\n即將執行：dataset（依選擇）→ train → export research scores → selection evaluation")
+    print("\n即將執行：dataset（依選擇）→ train → export research scores → 易讀研究報表")
     if evaluate_oos:
-        print("→ OOS evaluation")
+        print("報表將納入 OOS 最終泛化評估。")
     if not _prompt_bool("確認開始", False):
         print("已取消。")
         return 0
@@ -583,6 +583,23 @@ def _interactive_export_research(program_name: str) -> int:
         ["--filter-id", filter_id, "--scope", "research"],
         program_name=program_name,
     )
+
+
+def _interactive_report(program_name: str) -> int:
+    filter_id = _prompt_filter_id()
+    include_oos = _prompt_bool(
+        "報表是否納入最終 OOS（OOS 不得用於回頭調參）",
+        False,
+    )
+    if include_oos and not _prompt_bool(
+        "確認讀取最終 OOS 並寫入報表",
+        False,
+    ):
+        print("已取消。")
+        return 0
+    argv = ["--filter-id", filter_id]
+    argv.append("--include-oos" if include_oos else "--no-include-oos")
+    return _run_command("report", argv, program_name=program_name)
 
 
 def _interactive_evaluate(program_name: str) -> int:
@@ -630,13 +647,14 @@ def _interactive_export_forward_oos(program_name: str) -> int:
 
 def _print_menu() -> None:
     print("\n=== Breakout Quality ===")
-    print("[1] 完整研究流程")
+    print("[1] 完整研究流程（預設產生易讀報表）")
     print("[2] 建立／重建 dataset")
     print("[3] 訓練模型")
     print("[4] 匯出 research scores")
-    print("[5] 評估 train／validation／selection／OOS")
-    print("[6] 匯出正式 forward-OOS scores")
-    print("[7/Enter] 查看工件狀態")
+    print("[5] 產生易讀研究報表")
+    print("[6] 輸出詳細 JSON 評估")
+    print("[7] 匯出正式 forward-OOS scores")
+    print("[8/Enter] 查看工件狀態")
     print("[0] 離開")
 
 
@@ -648,7 +666,7 @@ def _run_interactive_menu(program_name: str) -> int:
         except EOFError:
             print("\n輸入已結束。")
             return 0
-        choice = "7" if raw_choice == "" else raw_choice
+        choice = "8" if raw_choice == "" else raw_choice
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         try:
@@ -661,13 +679,15 @@ def _run_interactive_menu(program_name: str) -> int:
             elif choice == "4":
                 _interactive_export_research(program_name)
             elif choice == "5":
-                _interactive_evaluate(program_name)
+                _interactive_report(program_name)
             elif choice == "6":
-                _interactive_export_forward_oos(program_name)
+                _interactive_evaluate(program_name)
             elif choice == "7":
+                _interactive_export_forward_oos(program_name)
+            elif choice == "8":
                 _print_artifact_status(_prompt_filter_id())
             else:
-                print("選項無效，請輸入 0～7。")
+                print("選項無效，請輸入 0～8。")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:

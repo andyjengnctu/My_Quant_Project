@@ -137,6 +137,11 @@ def main(argv=None) -> int:
         "event_date_range": _date_range(event_df, "date"),
         "label_information_end_date_range": _date_range(event_df, "label_eval_end_date"),
         "source_data_date_range": _frames_date_range(frames),
+        "source_data_inventory": source_inventory_after,
+        "source_selection": {
+            "requested_max_tickers": requested_max_tickers,
+            "selected_ticker_count": int(len(tickers)),
+        },
         "dataset_artifacts": {
             "dataset_npz": build_file_manifest(dataset_path),
             "events_csv": build_file_manifest(event_path),
