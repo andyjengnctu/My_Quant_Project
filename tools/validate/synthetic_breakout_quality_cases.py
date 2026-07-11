@@ -830,15 +830,15 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         ),
     )
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. Selection 與 OOS 差異" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, "Threshold       : 0.5" in console and "Learning Rate   : 0.001" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
-    markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. Selection 與 OOS 差異", 1)[0]
-    markdown_section_5 = markdown.split("## 5. Selection 與 OOS 差異", 1)[1].split("## 6. 最終部署判定", 1)[0]
-    console_section_4 = console.split("4. 各資料區段比較", 1)[1].split("5. Selection 與 OOS 差異", 1)[0]
-    console_section_5 = console.split("5. Selection 與 OOS 差異", 1)[1].split("6. 最終部署判定", 1)[0]
+    markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. OOS 綜合判定", 1)[0]
+    markdown_section_5 = markdown.split("## 5. OOS 綜合判定", 1)[1].split("## 指標白話說明", 1)[0]
+    console_section_4 = console.split("4. 各資料區段比較", 1)[1].split("5. OOS 綜合判定", 1)[0]
+    console_section_5 = console.split("5. OOS 綜合判定", 1)[1]
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -850,6 +850,19 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             and all("保留率" not in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
             and all("原始 PASS" in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
             and all("PASS Precision" in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_oos_assessment_has_three_metric_groups_and_judgements",
+        True,
+        (
+            "| 類別 | 指標 | Selection | OOS | OOS - Selection | 判讀 |" in markdown_section_5
+            and all(label in markdown_section_5 for label in ("主要成效", "過度篩選防線", "輔助診斷"))
+            and all(label in markdown_section_5 for label in ("PASS Precision", "PASS Recall", "模型 PASS", "REJECT Specificity", "REJECT NPV", "Accuracy", "平均 Score"))
+            and "綜合判定" in markdown_section_5
         ),
     )
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_selection_is_not_repeated_in_bullets", True, "- 最後選擇：" not in console and "是否選出 Best Epoch" not in console and console.count("- 最終模型：") == 1)
@@ -883,9 +896,27 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             and "保留後 Precision" not in console
         ),
     )
-    add_check(results, "synthetic_breakout_quality", case_id, "report_deployment_summary_is_concise", True, "- OOS 判定依據：" in console and "- 部署決策：" in console and "- 研究限制：" in console and "是否選出 Best Epoch" not in console and "| 判定項目" not in console)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_oos_assessment_merges_comparison_and_deployment",
+        True,
+        (
+            "5. OOS 綜合判定" in console
+            and "類別" in console
+            and "判讀" in console
+            and "主要成效" in console
+            and "過度篩選防線" in console
+            and "輔助診斷" in console
+            and "- 最終部署決策：" in console
+            and "- 研究限制：" in console
+            and "Selection 與 OOS 差異" not in console
+            and "最終部署判定" not in console
+        ),
+    )
     add_check(results, "synthetic_breakout_quality", case_id, "report_header_does_not_duplicate_final_decision", True, "最終判定" not in console.split("1. Epoch 選擇結果", 1)[0] and "部署建議" not in console.split("1. Epoch 選擇結果", 1)[0])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_without_oos_explains_missing_sections", True, "OOS             : 未納入本次報表" in no_oos_console and "不會輸出 OOS Confusion Matrix 與 Selection/OOS 差異" in no_oos_console and "--include-oos" in no_oos_console and "OOS Confusion Matrix" not in no_oos_console.split("注意：", 1)[0] and "Selection 與 OOS 差異" not in no_oos_console.split("注意：", 1)[0])
+    add_check(results, "synthetic_breakout_quality", case_id, "report_without_oos_explains_missing_sections", True, "OOS             : 未納入本次報表" in no_oos_console and "不會輸出 OOS Confusion Matrix 與 Selection/OOS 指標比較" in no_oos_console and "--include-oos" in no_oos_console and "OOS Confusion Matrix" not in no_oos_console.split("注意：", 1)[0] and "Selection 與 OOS 差異" not in no_oos_console.split("注意：", 1)[0])
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_semantic_colors", True, "color:#188038" in markdown and "color:#C62828" in markdown and "color:#42A5F5" in markdown and "color:#B06000" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_color_is_opt_in", True, "\x1b[" not in console and "\x1b[96m" in colored_console)
 

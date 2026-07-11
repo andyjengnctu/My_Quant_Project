@@ -670,60 +670,347 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
         )
     return lines
 
-def _markdown_selection_oos_difference(payload: dict, number: int) -> list[str]:
+def _comparison_value_text(value: float | None, kind: str) -> str:
+    if kind == "pct":
+        return _pct(value)
+    if kind == "pct_signed":
+        return _signed_pct(value)
+    if kind == "pp":
+        return _pp(value)
+    return _decimal(value)
+
+
+def _comparison_difference_text(
+    selection_value: float | None,
+    oos_value: float | None,
+    kind: str,
+) -> tuple[float | None, str]:
+    if selection_value is None or oos_value is None:
+        return None, "-"
+    difference = float(oos_value) - float(selection_value)
+    if kind in {"pct", "pct_signed", "pp"}:
+        return difference, _pp(difference)
+    return difference, _decimal(difference)
+
+
+def _oos_assessment_rows(payload: dict) -> list[dict]:
     selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
     oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
     if selection is None or oos is None:
         return []
-    rows = [
-        (REPORT_LABELS["original_pass_rate"], selection.get("base_pass_rate"), oos.get("base_pass_rate"), "pct"),
-        (REPORT_LABELS["model_pass_rate"], selection.get("acceptance_rate"), oos.get("acceptance_rate"), "pct"),
-        (REPORT_LABELS["pass_precision"], selection.get("pass_precision"), oos.get("pass_precision"), "pct"),
-        (REPORT_LABELS["pass_recall"], selection.get("pass_recall"), oos.get("pass_recall"), "pct"),
-        (REPORT_LABELS["reject_specificity"], selection.get("reject_specificity"), oos.get("reject_specificity"), "pct"),
-        (
-            REPORT_LABELS["reject_npv"],
-            _confusion_details(selection).get("negative_predictive_value"),
-            _confusion_details(oos).get("negative_predictive_value"),
+
+    selection_details = _confusion_details(selection)
+    oos_details = _confusion_details(oos)
+
+    def row(
+        category: str,
+        label: str,
+        selection_value: float | None,
+        oos_value: float | None,
+        kind: str,
+        judgement: str,
+        tone: str,
+    ) -> dict:
+        difference, difference_text = _comparison_difference_text(
+            selection_value,
+            oos_value,
+            kind,
+        )
+        return {
+            "category": category,
+            "label": label,
+            "selection_value": selection_value,
+            "oos_value": oos_value,
+            "kind": kind,
+            "selection_text": _comparison_value_text(selection_value, kind),
+            "oos_text": _comparison_value_text(oos_value, kind),
+            "difference": difference,
+            "difference_text": difference_text,
+            "judgement": judgement,
+            "tone": tone,
+        }
+
+    base_difference = float(oos.get("base_pass_rate") or 0.0) - float(
+        selection.get("base_pass_rate") or 0.0
+    )
+    if base_difference > 0:
+        base_judgement = f"OOS 原始基準較 Selection 高 {_pp(abs(base_difference)).lstrip('+')}"
+    elif base_difference < 0:
+        base_judgement = f"OOS 原始基準較 Selection 低 {_pp(abs(base_difference)).lstrip('+')}"
+    else:
+        base_judgement = "OOS 原始基準與 Selection 相同"
+
+    precision_delta = float(oos.get("precision_delta") or 0.0)
+    precision_tone = "green" if precision_delta > 0 else "red"
+    precision_judgement = (
+        f"通過：OOS 篩選後高於原始 PASS {_pct(oos.get('base_pass_rate'))}"
+        if precision_delta > 0
+        else f"未通過：OOS 篩選後低於原始 PASS {_pct(oos.get('base_pass_rate'))}"
+    )
+
+    selection_absolute = float(selection.get("precision_delta") or 0.0)
+    if precision_delta > 0:
+        absolute_judgement = "為正，顯示 OOS 品質提升"
+    elif selection_absolute > 0:
+        absolute_judgement = "由正轉負，沒有 OOS 品質提升"
+    else:
+        absolute_judgement = "非正值，沒有 OOS 品質提升"
+
+    oos_relative = float(oos.get("precision_relative_change") or 0.0)
+    relative_judgement = (
+        "相對效果為正"
+        if oos_relative > 0
+        else "相對效果為負，未通過"
+    )
+
+    recall_difference = float(oos.get("pass_recall") or 0.0) - float(
+        selection.get("pass_recall") or 0.0
+    )
+    recall_judgement = (
+        f"較 Selection 下降 {_pp(abs(recall_difference)).lstrip('+')}；"
+        f"錯殺 {_pct(oos.get('false_rejection_rate'))} 的原始 PASS"
+        if recall_difference < 0
+        else f"較 Selection 提高 {_pp(abs(recall_difference)).lstrip('+')}；"
+        f"錯殺 {_pct(oos.get('false_rejection_rate'))} 的原始 PASS"
+    )
+
+    model_pass_difference = float(oos.get("acceptance_rate") or 0.0) - float(
+        selection.get("acceptance_rate") or 0.0
+    )
+    model_pass_direction = "減少" if model_pass_difference < 0 else "增加"
+    model_pass_judgement = (
+        f"較 Selection {model_pass_direction} {_pp(abs(model_pass_difference)).lstrip('+')}；"
+        "是否足夠仍須換算每日可用候選數"
+    )
+
+    specificity_difference = float(oos.get("reject_specificity") or 0.0) - float(
+        selection.get("reject_specificity") or 0.0
+    )
+    specificity_judgement = (
+        f"提高 {_pp(abs(specificity_difference)).lstrip('+')}，但模型大量判定 REJECT 也會推高此值"
+        if specificity_difference >= 0
+        else f"下降 {_pp(abs(specificity_difference)).lstrip('+')}，REJECT 辨識能力轉弱"
+    )
+
+    npv_difference = float(oos_details.get("negative_predictive_value") or 0.0) - float(
+        selection_details.get("negative_predictive_value") or 0.0
+    )
+    npv_judgement = (
+        f"下降 {_pp(abs(npv_difference)).lstrip('+')}；模型 REJECT 中真正 REJECT 為 "
+        f"{_pct(oos_details.get('negative_predictive_value'))}"
+        if npv_difference < 0
+        else f"提高 {_pp(abs(npv_difference)).lstrip('+')}；模型 REJECT 中真正 REJECT 為 "
+        f"{_pct(oos_details.get('negative_predictive_value'))}"
+    )
+
+    accuracy_difference = float(oos.get("accuracy") or 0.0) - float(
+        selection.get("accuracy") or 0.0
+    )
+    accuracy_judgement = (
+        f"下降 {_pp(abs(accuracy_difference)).lstrip('+')}，整體分類能力未延續至 OOS"
+        if accuracy_difference < 0
+        else f"提高 {_pp(abs(accuracy_difference)).lstrip('+')}，仍須由主要成效確認是否有部署價值"
+    )
+
+    score_difference = float(oos.get("avg_score") or 0.0) - float(
+        selection.get("avg_score") or 0.0
+    )
+    if score_difference < 0:
+        score_judgement = f"下降 {_decimal(abs(score_difference))}，OOS 平均 Score 較低"
+    elif score_difference > 0:
+        score_judgement = f"提高 {_decimal(score_difference)}，OOS 平均 Score 較高"
+    else:
+        score_judgement = "與 Selection 相同，平均 Score 無變化"
+
+    return [
+        row(
+            "主要成效",
+            REPORT_LABELS["original_pass_rate"],
+            selection.get("base_pass_rate"),
+            oos.get("base_pass_rate"),
             "pct",
+            base_judgement,
+            "gray",
         ),
-        (REPORT_LABELS["accuracy"], selection.get("accuracy"), oos.get("accuracy"), "pct"),
-        (REPORT_LABELS["precision_absolute_lift"], selection.get("precision_delta"), oos.get("precision_delta"), "pp"),
-        (REPORT_LABELS["precision_relative_lift"], selection.get("precision_relative_change"), oos.get("precision_relative_change"), "pct_signed"),
-        (REPORT_LABELS["average_score"], selection.get("avg_score"), oos.get("avg_score"), "decimal"),
+        row(
+            "主要成效",
+            REPORT_LABELS["pass_precision"],
+            selection.get("pass_precision"),
+            oos.get("pass_precision"),
+            "pct",
+            precision_judgement,
+            precision_tone,
+        ),
+        row(
+            "主要成效",
+            REPORT_LABELS["precision_absolute_lift"],
+            selection.get("precision_delta"),
+            oos.get("precision_delta"),
+            "pp",
+            absolute_judgement,
+            precision_tone,
+        ),
+        row(
+            "主要成效",
+            REPORT_LABELS["precision_relative_lift"],
+            selection.get("precision_relative_change"),
+            oos.get("precision_relative_change"),
+            "pct_signed",
+            relative_judgement,
+            "green" if oos_relative > 0 else "red",
+        ),
+        row(
+            "過度篩選防線",
+            REPORT_LABELS["pass_recall"],
+            selection.get("pass_recall"),
+            oos.get("pass_recall"),
+            "pct",
+            recall_judgement,
+            "red" if recall_difference < 0 else "green",
+        ),
+        row(
+            "過度篩選防線",
+            REPORT_LABELS["model_pass_rate"],
+            selection.get("acceptance_rate"),
+            oos.get("acceptance_rate"),
+            "pct",
+            model_pass_judgement,
+            "yellow",
+        ),
+        row(
+            "輔助診斷",
+            REPORT_LABELS["reject_specificity"],
+            selection.get("reject_specificity"),
+            oos.get("reject_specificity"),
+            "pct",
+            specificity_judgement,
+            "yellow",
+        ),
+        row(
+            "輔助診斷",
+            REPORT_LABELS["reject_npv"],
+            selection_details.get("negative_predictive_value"),
+            oos_details.get("negative_predictive_value"),
+            "pct",
+            npv_judgement,
+            "red" if npv_difference < 0 else "green",
+        ),
+        row(
+            "輔助診斷",
+            REPORT_LABELS["accuracy"],
+            selection.get("accuracy"),
+            oos.get("accuracy"),
+            "pct",
+            accuracy_judgement,
+            "red" if accuracy_difference < 0 else "green",
+        ),
+        row(
+            "輔助診斷",
+            REPORT_LABELS["average_score"],
+            selection.get("avg_score"),
+            oos.get("avg_score"),
+            "decimal",
+            score_judgement,
+            "red" if score_difference < 0 else "green",
+        ),
     ]
-    lines = [
-        f"## {number}. Selection 與 OOS 差異",
-        "",
-        "| 指標 | Selection | OOS | OOS - Selection |",
-        "|---|---:|---:|---:|",
-    ]
-    for label, selection_value, oos_value, kind in rows:
-        difference = (
-            float(oos_value) - float(selection_value)
-            if selection_value is not None and oos_value is not None
-            else None
+
+
+def _oos_category_summary(payload: dict) -> dict:
+    selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
+    oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
+    if selection is None or oos is None:
+        return {
+            "main": "尚未納入 OOS，無法判定主要成效。",
+            "guard": "尚未納入 OOS，無法檢查過度篩選。",
+            "auxiliary": "尚未納入 OOS，無法進行輔助診斷。",
+            "main_tone": "yellow",
+            "guard_tone": "yellow",
+            "auxiliary_tone": "yellow",
+        }
+
+    oos_precision_delta = float(oos.get("precision_delta") or 0.0)
+    main_pass = oos_precision_delta > 0
+    recall_lower = float(oos.get("pass_recall") or 0.0) < float(
+        selection.get("pass_recall") or 0.0
+    )
+    model_pass_lower = float(oos.get("acceptance_rate") or 0.0) < float(
+        selection.get("acceptance_rate") or 0.0
+    )
+    overfilter_fail = recall_lower and model_pass_lower and not main_pass
+
+    selection_npv = float(_confusion_details(selection).get("negative_predictive_value") or 0.0)
+    oos_npv = float(_confusion_details(oos).get("negative_predictive_value") or 0.0)
+    auxiliary_supports = (
+        float(oos.get("accuracy") or 0.0) >= float(selection.get("accuracy") or 0.0)
+        and oos_npv >= selection_npv
+        and main_pass
+    )
+
+    return {
+        "main": (
+            f"PASS：OOS PASS Precision 高於原始 PASS，Precision 絕對為 {_pp(oos_precision_delta)}。"
+            if main_pass
+            else f"FAIL：OOS PASS Precision 低於原始 PASS，Precision 絕對為 {_pp(oos_precision_delta)}。"
+        ),
+        "guard": (
+            "FAIL：PASS Recall 與模型 PASS 同時下降，且沒有換得 Precision 提升。"
+            if overfilter_fail
+            else "REVIEW：請依每日候選數、持股缺口與交易次數確認 Recall 與模型 PASS 是否足夠。"
+        ),
+        "auxiliary": (
+            "支持部署：Accuracy 與 REJECT NPV 未惡化，且主要成效通過。"
+            if auxiliary_supports
+            else "不支持部署：輔助指標未能支持主要成效的泛化。"
+        ),
+        "main_tone": "green" if main_pass else "red",
+        "guard_tone": "red" if overfilter_fail else "yellow",
+        "auxiliary_tone": "green" if auxiliary_supports else "red",
+    }
+
+
+def _markdown_oos_comprehensive_assessment(payload: dict, number: int) -> list[str]:
+    rows = _oos_assessment_rows(payload)
+    conclusion = payload["conclusion"]
+    deployment = _deployment_presentation(payload)
+    category_summary = _oos_category_summary(payload)
+    lines = [f"## {number}. OOS 綜合判定", ""]
+
+    if rows:
+        lines.extend(
+            [
+                "| 類別 | 指標 | Selection | OOS | OOS - Selection | 判讀 |",
+                "|---|---|---:|---:|---:|---|",
+            ]
         )
-        if kind == "pct":
-            selection_text = _pct(selection_value)
-            oos_text = _pct(oos_value)
-            difference_text = _pp(difference)
-        elif kind == "pct_signed":
-            selection_text = _signed_pct(selection_value)
-            oos_text = _signed_pct(oos_value)
-            difference_text = _pp(difference)
-        elif kind == "pp":
-            selection_text = _pp(selection_value)
-            oos_text = _pp(oos_value)
-            difference_text = _pp(difference)
-        else:
-            selection_text = _decimal(selection_value)
-            oos_text = _decimal(oos_value)
-            difference_text = _decimal(difference)
-        lines.append(
-            f"| {label} | {selection_text} | {oos_text} | {difference_text} |"
-        )
-    lines.append("")
+        previous_category = None
+        for item in rows:
+            category = item["category"] if item["category"] != previous_category else ""
+            previous_category = item["category"]
+            lines.append(
+                "| {category} | {label} | {selection} | {oos} | {difference} | {judgement} |".format(
+                    category=f"**{category}**" if category else "",
+                    label=item["label"],
+                    selection=item["selection_text"],
+                    oos=_markdown_color(item["oos_text"], item["tone"]),
+                    difference=_markdown_color(item["difference_text"], item["tone"]),
+                    judgement=_markdown_color(item["judgement"], item["tone"], bold=False),
+                )
+            )
+        lines.append("")
+
+    lines.extend(
+        [
+            "### 綜合判定",
+            "",
+            f"- **主要成效**：{_markdown_color(category_summary['main'], category_summary['main_tone'])}",
+            f"- **過度篩選防線**：{_markdown_color(category_summary['guard'], category_summary['guard_tone'])}",
+            f"- **輔助診斷**：{_markdown_color(category_summary['auxiliary'], category_summary['auxiliary_tone'])}",
+            f"- **最終部署決策**：{_markdown_color(deployment['deployment_decision'], 'red' if conclusion['status'] == 'FAIL' else 'yellow')}",
+            f"- **研究限制**：{_markdown_color(deployment['retuning_limit'], 'yellow')}",
+            "",
+        ]
+    )
     return lines
 
 
@@ -803,7 +1090,7 @@ def render_markdown_report(payload: dict) -> str:
         lines.extend(
             [
                 f"- **OOS**：{_markdown_color('未納入本次報表', 'yellow')}",
-                f"- {_markdown_color('因此不會輸出 OOS Confusion Matrix 與 Selection/OOS 差異；重新執行時請納入 OOS（預設）或明確使用 --include-oos。', 'yellow')}",
+                f"- {_markdown_color('因此不會輸出 OOS Confusion Matrix 與 Selection/OOS 指標比較；重新執行時請納入 OOS（預設）或明確使用 --include-oos。', 'yellow')}",
             ]
         )
     lines.extend(
@@ -857,22 +1144,10 @@ def render_markdown_report(payload: dict) -> str:
         )
     next_number += 1
 
-    difference_lines = _markdown_selection_oos_difference(payload, next_number)
-    if difference_lines:
-        lines.extend(difference_lines)
-        next_number += 1
+    lines.extend(_markdown_oos_comprehensive_assessment(payload, next_number))
 
-    oos_tone = "green" if deployment["oos_improved"] else "red" if oos is not None else "yellow"
     lines.extend(
         [
-            f"## {next_number}. 最終部署判定",
-            "",
-            f"### {_markdown_color('[' + conclusion['status'] + '] ' + conclusion['title'], deployment['conclusion_tone'])}",
-            "",
-            f"- OOS 判定依據：{_markdown_color(deployment['oos_result'], oos_tone)}",
-            f"- 部署決策：{_markdown_color(deployment['deployment_decision'], 'red' if conclusion['status'] == 'FAIL' else 'yellow')}",
-            f"- 研究限制：{_markdown_color(deployment['retuning_limit'], 'yellow')}",
-            "",
             "## 指標白話說明",
             "",
             "- **原始 PASS**：所有原始訊號中，標籤為 PASS 的比例。",
@@ -1125,86 +1400,55 @@ def _console_confusion_section(summary: dict, label: str, number: int, *, color:
         )
     return lines
 
-def _console_difference_section(payload: dict, number: int, *, color: bool = False) -> list[str]:
-    selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
-    oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
-    if selection is None or oos is None:
-        return []
-    lines = _section(f"{number}. Selection 與 OOS 差異", color=color)
-    raw_rows = [
-        [REPORT_LABELS["original_pass_rate"], selection.get("base_pass_rate"), oos.get("base_pass_rate"), "pct"],
-        [REPORT_LABELS["model_pass_rate"], selection.get("acceptance_rate"), oos.get("acceptance_rate"), "pct"],
-        [REPORT_LABELS["pass_precision"], selection.get("pass_precision"), oos.get("pass_precision"), "pct"],
-        [REPORT_LABELS["pass_recall"], selection.get("pass_recall"), oos.get("pass_recall"), "pct"],
-        [REPORT_LABELS["reject_specificity"], selection.get("reject_specificity"), oos.get("reject_specificity"), "pct"],
-        [
-            REPORT_LABELS["reject_npv"],
-            _confusion_details(selection).get("negative_predictive_value"),
-            _confusion_details(oos).get("negative_predictive_value"),
-            "pct",
-        ],
-        [REPORT_LABELS["accuracy"], selection.get("accuracy"), oos.get("accuracy"), "pct"],
-        [REPORT_LABELS["precision_absolute_lift"], selection.get("precision_delta"), oos.get("precision_delta"), "pp"],
-        [REPORT_LABELS["precision_relative_lift"], selection.get("precision_relative_change"), oos.get("precision_relative_change"), "pct_signed"],
-        [REPORT_LABELS["average_score"], selection.get("avg_score"), oos.get("avg_score"), "decimal"],
-    ]
-    rows = []
-    for label, selection_value, oos_value, kind in raw_rows:
-        difference = float(oos_value) - float(selection_value)
-        tone = _tone_for_delta(difference)
-        if kind == "pct":
-            selection_text = _pct(selection_value)
-            oos_text = _pct(oos_value)
-            difference_text = _pp(difference)
-        elif kind == "pct_signed":
-            selection_text = _signed_pct(selection_value)
-            oos_text = _signed_pct(oos_value)
-            difference_text = _pp(difference)
-        elif kind == "pp":
-            selection_text = _pp(selection_value)
-            oos_text = _pp(oos_value)
-            difference_text = _pp(difference)
-        else:
-            selection_text = _decimal(selection_value)
-            oos_text = _decimal(oos_value)
-            difference_text = _decimal(difference)
-        rows.append(
-            [
-                label,
-                selection_text,
-                _paint(oos_text, tone, enabled=color, bold=True),
-                _paint(difference_text, tone, enabled=color, bold=True),
-            ]
-        )
-    lines.extend(
-        _render_ascii_table(
-            ["指標", "Selection", "OOS", "OOS - Selection"],
-            rows,
-            aligns=["left", "right", "right", "right"],
-        )
-    )
-    return lines
-
-def _console_deployment_section(payload: dict, number: int, *, color: bool = False) -> list[str]:
+def _console_oos_comprehensive_section(
+    payload: dict,
+    number: int,
+    *,
+    color: bool = False,
+) -> list[str]:
+    rows = _oos_assessment_rows(payload)
     conclusion = payload["conclusion"]
     deployment = _deployment_presentation(payload)
-    oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
-    oos_tone = "green" if deployment["oos_improved"] else "red" if oos is not None else "yellow"
-    lines = _section(f"{number}. 最終部署判定", color=color)
+    category_summary = _oos_category_summary(payload)
+    lines = _section(f"{number}. OOS 綜合判定", color=color)
+
+    if rows:
+        table_rows = []
+        previous_category = None
+        for item in rows:
+            category = item["category"] if item["category"] != previous_category else ""
+            previous_category = item["category"]
+            table_rows.append(
+                [
+                    category,
+                    item["label"],
+                    item["selection_text"],
+                    _paint(item["oos_text"], item["tone"], enabled=color, bold=True),
+                    _paint(item["difference_text"], item["tone"], enabled=color, bold=True),
+                    _paint(item["judgement"], item["tone"], enabled=color),
+                ]
+            )
+        lines.extend(
+            _render_ascii_table(
+                ["類別", "指標", "Selection", "OOS", "OOS - Selection", "判讀"],
+                table_rows,
+                aligns=["left", "left", "right", "right", "right", "left"],
+            )
+        )
+        lines.append("")
+
     lines.extend(
         [
-            _paint(
-                f"最終判定：[{conclusion['status']}] {conclusion['title']}",
-                deployment["conclusion_tone"],
-                enabled=color,
-                bold=True,
-            ),
-            f"- OOS 判定依據：{_paint(deployment['oos_result'], oos_tone, enabled=color, bold=True)}",
-            f"- 部署決策：{_paint(deployment['deployment_decision'], 'red' if conclusion['status'] == 'FAIL' else 'yellow', enabled=color, bold=True)}",
+            "綜合判定：",
+            f"- 主要成效：{_paint(category_summary['main'], category_summary['main_tone'], enabled=color, bold=True)}",
+            f"- 過度篩選防線：{_paint(category_summary['guard'], category_summary['guard_tone'], enabled=color, bold=True)}",
+            f"- 輔助診斷：{_paint(category_summary['auxiliary'], category_summary['auxiliary_tone'], enabled=color, bold=True)}",
+            f"- 最終部署決策：{_paint(deployment['deployment_decision'], 'red' if conclusion['status'] == 'FAIL' else 'yellow', enabled=color, bold=True)}",
             f"- 研究限制：{_paint(deployment['retuning_limit'], 'yellow', enabled=color, bold=True)}",
         ]
     )
     return lines
+
 
 def render_console_summary(payload: dict, *, color: bool = False) -> str:
     training = payload["training"]
@@ -1231,7 +1475,7 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
         )
         lines.append(
             _paint(
-                "注意：因此不會輸出 OOS Confusion Matrix 與 Selection/OOS 差異；"
+                "注意：因此不會輸出 OOS Confusion Matrix 與 Selection/OOS 指標比較；"
                 "重新執行時請納入 OOS（預設）或明確使用 --include-oos。",
                 "yellow",
                 enabled=color,
@@ -1258,11 +1502,7 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
         next_number += 1
     lines.extend(_console_split_section(payload, next_number, color=color))
     next_number += 1
-    difference = _console_difference_section(payload, next_number, color=color)
-    if difference:
-        lines.extend(difference)
-        next_number += 1
-    lines.extend(_console_deployment_section(payload, next_number, color=color))
+    lines.extend(_console_oos_comprehensive_section(payload, next_number, color=color))
     return "\n".join(lines)
 
 def generate_report(
