@@ -573,7 +573,7 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
         "|---|---:|---:|---:|",
         (
             "| **原始 PASS** | {tp_cell} | {fn_cell} | "
-            "**原始 PASS** = {actual_pass}<br>原始 PASS 比例 = {_original_pass_rate} |"
+            "**原始PASS** = {_original_pass_rate}<br>TP + FN = {actual_pass} |"
         ).format(
             tp_cell=_markdown_color(
                 f"正確保留 PASS<br>TP = {_weighted_count(details['tp'])}", "green"
@@ -581,12 +581,12 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
             fn_cell=_markdown_color(
                 f"錯殺 PASS<br>FN = {_weighted_count(details['fn'])}", "red"
             ),
-            actual_pass=_weighted_count(details["actual_pass"]),
             _original_pass_rate=_pct(details["base_pass_rate"]),
+            actual_pass=_weighted_count(details["actual_pass"]),
         ),
         (
             "| **原始 REJECT** | {fp_cell} | {tn_cell} | "
-            "**原始 REJECT** = {actual_reject}<br>原始 REJECT 比例 = {_original_reject_rate} |"
+            "**原始REJECT** = {_original_reject_rate}<br>FP + TN = {actual_reject} |"
         ).format(
             fp_cell=_markdown_color(
                 f"錯誤保留 REJECT<br>FP = {_weighted_count(details['fp'])}", "red"
@@ -594,12 +594,12 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
             tn_cell=_markdown_color(
                 f"正確拒絕 REJECT<br>TN = {_weighted_count(details['tn'])}", "green"
             ),
-            actual_reject=_weighted_count(details["actual_reject"]),
             _original_reject_rate=_pct(details["base_reject_rate"]),
+            actual_reject=_weighted_count(details["actual_reject"]),
         ),
         (
-            "| **模型合計** | **模型 PASS** = {model_pass}<br>保留率 = {model_pass_rate} | "
-            "**模型 REJECT** = {model_reject}<br>拒絕率 = {model_reject_rate} | "
+            "| **模型合計** | TP + FP = {model_pass}<br>**模型PASS** = {model_pass_rate} | "
+            "FN + TN = {model_reject}<br>**模型REJECT** = {model_reject_rate} | "
             "**全部** = {total} |"
         ).format(
             model_pass=_weighted_count(details["predicted_pass"]),
@@ -1036,7 +1036,7 @@ def _console_confusion_section(summary: dict, label: str, number: int, *, color:
                 enabled=color,
                 bold=True,
             ),
-            f"原始 PASS = {_weighted_count(details['actual_pass'])}\n原始 PASS 比例 = {_pct(details['base_pass_rate'])}",
+            f"原始PASS = {_pct(details['base_pass_rate'])}\nTP + FN = {_weighted_count(details['actual_pass'])}",
         ],
         [
             "原始 REJECT",
@@ -1052,12 +1052,12 @@ def _console_confusion_section(summary: dict, label: str, number: int, *, color:
                 enabled=color,
                 bold=True,
             ),
-            f"原始 REJECT = {_weighted_count(details['actual_reject'])}\n原始 REJECT 比例 = {_pct(details['base_reject_rate'])}",
+            f"原始REJECT = {_pct(details['base_reject_rate'])}\nFP + TN = {_weighted_count(details['actual_reject'])}",
         ],
         [
             "模型合計",
-            f"模型 PASS = {_weighted_count(details['predicted_pass'])}\n保留率 = {_pct(details['acceptance_rate'])}",
-            f"模型 REJECT = {_weighted_count(details['predicted_reject'])}\n拒絕率 = {_pct(details['rejection_rate'])}",
+            f"TP + FP = {_weighted_count(details['predicted_pass'])}\n模型PASS = {_pct(details['acceptance_rate'])}",
+            f"FN + TN = {_weighted_count(details['predicted_reject'])}\n模型REJECT = {_pct(details['rejection_rate'])}",
             f"全部 = {_weighted_count(details['total'])}",
         ],
     ]

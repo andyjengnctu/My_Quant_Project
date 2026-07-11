@@ -755,6 +755,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, "- **Threshold**：`0.5`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
     selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
+    normalized_selection_matrix = selection_matrix.replace("**", "")
     console_selection_matrix = console.split("2. Selection Confusion Matrix", 1)[1].split("分類品質", 1)[0]
     add_check(
         results,
@@ -773,11 +774,43 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "report_confusion_margins_include_all_four_rates",
+        "report_confusion_margins_use_requested_labels_and_order",
         True,
         (
-            all(token in selection_matrix for token in ("原始 PASS 比例", "原始 REJECT 比例", "保留率", "拒絕率"))
-            and all(token in console_selection_matrix for token in ("原始 PASS 比例", "原始 REJECT 比例", "保留率", "拒絕率"))
+            all(
+                token in normalized_selection_matrix
+                for token in (
+                    "原始PASS =",
+                    "TP + FN =",
+                    "原始REJECT =",
+                    "FP + TN =",
+                    "TP + FP =",
+                    "模型PASS =",
+                    "FN + TN =",
+                    "模型REJECT =",
+                )
+            )
+            and all(
+                token in console_selection_matrix
+                for token in (
+                    "原始PASS =",
+                    "TP + FN =",
+                    "原始REJECT =",
+                    "FP + TN =",
+                    "TP + FP =",
+                    "模型PASS =",
+                    "FN + TN =",
+                    "模型REJECT =",
+                )
+            )
+            and normalized_selection_matrix.index("原始PASS =") < normalized_selection_matrix.index("TP + FN =")
+            and normalized_selection_matrix.index("原始REJECT =") < normalized_selection_matrix.index("FP + TN =")
+            and normalized_selection_matrix.index("TP + FP =") < normalized_selection_matrix.index("模型PASS =")
+            and normalized_selection_matrix.index("FN + TN =") < normalized_selection_matrix.index("模型REJECT =")
+            and console_selection_matrix.index("原始PASS =") < console_selection_matrix.index("TP + FN =")
+            and console_selection_matrix.index("原始REJECT =") < console_selection_matrix.index("FP + TN =")
+            and console_selection_matrix.index("TP + FP =") < console_selection_matrix.index("模型PASS =")
+            and console_selection_matrix.index("FN + TN =") < console_selection_matrix.index("模型REJECT =")
         ),
     )
     add_check(
@@ -814,7 +847,6 @@ def _validate_breakout_quality_report_rendering(results, case_id):
                 for label in (
                     "原始 PASS 比例",
                     "保留率",
-                    "拒絕率",
                     "PASS Precision",
                     "PASS Recall",
                     "REJECT Specificity",

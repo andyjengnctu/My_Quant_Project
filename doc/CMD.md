@@ -63,7 +63,7 @@ python apps/workbench.py
 python apps/breakout_quality.py
 ```
 
-完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；報表預設納入 OOS。互動式「產生易讀研究報表」只詢問一次「是否讀取最終 OOS 並納入報表」，預設為 Y；選 N 仍產生 Selection 報表，選 Y 讀取 OOS，且讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、Selection/OOS 差異與部署判定。資料區段與日期分欄。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側直接列原始 PASS／REJECT 數量與比例，底部直接列模型 PASS／REJECT 數量與保留率／拒絕率。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對提升另以「指標、公式、結果」表呈現。終端會以淡藍、綠、黃、紅標示重點，重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/reports/`。批次或需要可重現命令時使用 `workflow`：
+完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；報表預設納入 OOS。互動式「產生易讀研究報表」只詢問一次「是否讀取最終 OOS 並納入報表」，預設為 Y；選 N 仍產生 Selection 報表，選 Y 讀取 OOS，且讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、Selection/OOS 差異與部署判定。資料區段與日期分欄。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS 比例 → TP + FN」與「原始REJECT 比例 → FP + TN」，底部依序顯示「TP + FP → 模型PASS 比例」與「FN + TN → 模型REJECT 比例」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對提升另以「指標、公式、結果」表呈現。終端會以淡藍、綠、黃、紅標示重點，重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --epochs 20 --batch-size 256 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
