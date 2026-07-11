@@ -56,6 +56,21 @@ SPLIT_LABELS = {
     EVALUATION_SPLIT_OOS: "OOS",
 }
 
+REPORT_LABELS = {
+    "original_pass_rate": "原始 PASS 比例",
+    "original_reject_rate": "原始 REJECT 比例",
+    "model_pass_rate": "模型 PASS 比例",
+    "model_reject_rate": "模型 REJECT 比例",
+    "pass_precision": "PASS Precision",
+    "pass_recall": "PASS Recall",
+    "reject_specificity": "REJECT Specificity",
+    "reject_npv": "REJECT NPV",
+    "accuracy": "Accuracy",
+    "precision_absolute_lift": "Precision 絕對提升",
+    "precision_relative_lift": "Precision 相對提升",
+    "average_score": "平均 Score",
+}
+
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -297,8 +312,8 @@ def _oos_conclusion(summary: dict | None) -> dict:
             "status": "FAIL",
             "title": "OOS 未顯示品質提升",
             "explanation": (
-                f"模型保留後 PASS precision 為 {_pct(summary.get('pass_precision'))}，"
-                f"低於全數放行基準 {_pct(summary.get('base_pass_rate'))}，"
+                f"PASS Precision 為 {_pct(summary.get('pass_precision'))}，"
+                f"低於原始 PASS 比例 {_pct(summary.get('base_pass_rate'))}，"
                 f"差異 {_pp(delta)}。"
             ),
             "deployment_guidance": (
@@ -308,11 +323,11 @@ def _oos_conclusion(summary: dict | None) -> dict:
         }
     return {
         "status": "PASS_WITH_REVIEW",
-        "title": "OOS precision 有提升",
+        "title": "OOS PASS Precision 有提升",
         "explanation": (
-            f"模型保留後 PASS precision 為 {_pct(summary.get('pass_precision'))}，"
-            f"高於全數放行基準 {_pct(summary.get('base_pass_rate'))}，"
-            f"差異 {_pp(delta)}；仍須同時檢查保留率與 PASS recall。"
+            f"PASS Precision 為 {_pct(summary.get('pass_precision'))}，"
+            f"高於原始 PASS 比例 {_pct(summary.get('base_pass_rate'))}，"
+            f"差異 {_pp(delta)}；仍須同時檢查模型 PASS 比例與 PASS Recall。"
         ),
         "deployment_guidance": (
             "可進入策略層經濟效果驗證，但在確認淨報酬、交易數與風險改善前，"
@@ -468,29 +483,43 @@ def _markdown_epoch_table(training: dict) -> list[str]:
 
 def _markdown_split_table(payload: dict) -> list[str]:
     lines = [
-        "| 區段 | 日期 | Groups | 原始 PASS | 模型保留 | Precision | 絕對提升 | 相對提升 | PASS Recall | 錯殺 PASS | REJECT 辨識率 | Accuracy | 平均 Score |",
+        (
+            f"| 區段 | 日期 | Groups | {REPORT_LABELS['original_pass_rate']} | "
+            f"{REPORT_LABELS['model_pass_rate']} | {REPORT_LABELS['pass_precision']} | "
+            f"{REPORT_LABELS['pass_recall']} | {REPORT_LABELS['reject_specificity']} | "
+            f"{REPORT_LABELS['reject_npv']} | {REPORT_LABELS['accuracy']} | "
+            f"{REPORT_LABELS['precision_absolute_lift']} | "
+            f"{REPORT_LABELS['precision_relative_lift']} | {REPORT_LABELS['average_score']} |"
+        ),
         "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for split_name in _split_order(payload):
         summary = payload["split_summaries"][split_name]
+        details = _confusion_details(summary)
         delta_tone = _tone_for_delta(summary.get("precision_delta"))
         label = SPLIT_LABELS[split_name]
         if split_name == EVALUATION_SPLIT_OOS:
             label = _markdown_color(label, delta_tone)
         lines.append(
-            "| {label} | {period} | {groups:,} | {base} | {accept} | {precision} | {delta} | {relative} | {recall} | {false_reject} | {specificity} | {accuracy} | {avg_score} |".format(
+            (
+                "| {label} | {period} | {groups:,} | {original_pass} | {model_pass} | "
+                "{precision} | {recall} | {specificity} | {npv} | {accuracy} | "
+                "{absolute_lift} | {relative_lift} | {avg_score} |"
+            ).format(
                 label=label,
                 period=f"{summary['date_start']}～{summary['date_end']}",
                 groups=int(summary.get("group_count") or 0),
-                base=_pct(summary.get("base_pass_rate")),
-                accept=_pct(summary.get("acceptance_rate")),
-                precision=_markdown_color(_pct(summary.get("pass_precision")), delta_tone),
-                delta=_markdown_color(_pp(summary.get("precision_delta")), delta_tone),
-                relative=_markdown_color(_signed_pct(summary.get("precision_relative_change")), delta_tone),
-                recall=_pct(summary.get("pass_recall")),
-                false_reject=_pct(summary.get("false_rejection_rate")),
-                specificity=_pct(summary.get("reject_specificity")),
-                accuracy=_pct(summary.get("accuracy")),
+                original_pass=_pct(details.get("base_pass_rate")),
+                model_pass=_pct(details.get("acceptance_rate")),
+                precision=_markdown_color(_pct(details.get("precision")), delta_tone),
+                recall=_pct(details.get("recall")),
+                specificity=_pct(details.get("specificity")),
+                npv=_pct(details.get("negative_predictive_value")),
+                accuracy=_pct(details.get("accuracy")),
+                absolute_lift=_markdown_color(_pp(summary.get("precision_delta")), delta_tone),
+                relative_lift=_markdown_color(
+                    _signed_pct(summary.get("precision_relative_change")), delta_tone
+                ),
                 avg_score=_decimal(summary.get("avg_score")),
             )
         )
@@ -525,6 +554,7 @@ def _confusion_details(summary: dict) -> dict:
         "false_rejection_rate": _ratio(fn, actual_pass),
         "false_positive_rate": _ratio(fp, actual_reject),
         "specificity": _ratio(tn, actual_reject),
+        "negative_predictive_value": _ratio(tn, predicted_reject),
         "acceptance_rate": _ratio(predicted_pass, total),
         "rejection_rate": _ratio(predicted_reject, total),
         "accuracy": _ratio(tp + tn, total),
@@ -537,65 +567,68 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
     lines = [
         f"## {number}. {label} Confusion Matrix",
         "",
-        "統計口徑：`ticker/date group weighted`；列為實際結果，欄為模型預測。",
+        "統計口徑：`ticker/date group weighted`；列為原始結果，欄為模型判定。",
         "",
-        "| 實際＼預測 | 預測 PASS／模型保留 | 預測 REJECT／模型拒絕 | 實際合計 |",
+        "| 原始結果＼模型判定 | 模型 PASS | 模型 REJECT | 原始合計 |",
         "|---|---:|---:|---:|",
         (
-            "| **實際 PASS**<br>Base PASS {base_pass} | "
-            "{tp_cell} | {fn_cell} | {actual_pass}<br>占全部 {base_pass} |"
+            "| **原始 PASS** | {tp_cell} | {fn_cell} | "
+            "**原始 PASS** = {actual_pass}<br>({_original_pass_rate}) |"
         ).format(
-            base_pass=_pct(details["base_pass_rate"]),
             tp_cell=_markdown_color(
-                f"正確保留 PASS<br>TP = {_weighted_count(details['tp'])}<br>Recall {_pct(details['recall'])}",
-                "green",
+                f"正確保留 PASS<br>TP = {_weighted_count(details['tp'])}", "green"
             ),
             fn_cell=_markdown_color(
-                f"錯殺真正 PASS<br>FN = {_weighted_count(details['fn'])}<br>錯殺率 {_pct(details['false_rejection_rate'])}",
-                "red",
+                f"錯殺 PASS<br>FN = {_weighted_count(details['fn'])}", "red"
             ),
             actual_pass=_weighted_count(details["actual_pass"]),
+            _original_pass_rate=_pct(details["base_pass_rate"]),
         ),
         (
-            "| **實際 REJECT**<br>Base REJECT {base_reject} | "
-            "{fp_cell} | {tn_cell} | {actual_reject}<br>占全部 {base_reject} |"
+            "| **原始 REJECT** | {fp_cell} | {tn_cell} | "
+            "**原始 REJECT** = {actual_reject}<br>({_original_reject_rate}) |"
         ).format(
-            base_reject=_pct(details["base_reject_rate"]),
             fp_cell=_markdown_color(
-                f"錯誤保留 REJECT<br>FP = {_weighted_count(details['fp'])}<br>誤放率 {_pct(details['false_positive_rate'])}",
-                "red",
+                f"錯誤保留 REJECT<br>FP = {_weighted_count(details['fp'])}", "red"
             ),
             tn_cell=_markdown_color(
-                f"正確拒絕 REJECT<br>TN = {_weighted_count(details['tn'])}<br>辨識率 {_pct(details['specificity'])}",
-                "green",
+                f"正確拒絕 REJECT<br>TN = {_weighted_count(details['tn'])}", "green"
             ),
             actual_reject=_weighted_count(details["actual_reject"]),
+            _original_reject_rate=_pct(details["base_reject_rate"]),
         ),
         (
-            "| **預測合計** | {pred_pass}<br>保留率 {acceptance}<br>Precision {precision} | "
-            "{pred_reject}<br>拒絕率 {rejection} | {total}<br>Accuracy {accuracy} |"
+            "| **模型合計** | **模型 PASS** = {model_pass}<br>({model_pass_rate}) | "
+            "**模型 REJECT** = {model_reject}<br>({model_reject_rate}) | "
+            "**全部** = {total} |"
         ).format(
-            pred_pass=_weighted_count(details["predicted_pass"]),
-            acceptance=_pct(details["acceptance_rate"]),
-            precision=_markdown_color(_pct(details["precision"]), delta_tone),
-            pred_reject=_weighted_count(details["predicted_reject"]),
-            rejection=_pct(details["rejection_rate"]),
+            model_pass=_weighted_count(details["predicted_pass"]),
+            model_pass_rate=_pct(details["acceptance_rate"]),
+            model_reject=_weighted_count(details["predicted_reject"]),
+            model_reject_rate=_pct(details["rejection_rate"]),
             total=_weighted_count(details["total"]),
-            accuracy=_pct(details["accuracy"]),
         ),
         "",
-        "### 品質變化",
+        "### 分類品質",
         "",
-        "- 原始 PASS 比例：{base}".format(base=_pct(summary.get("base_pass_rate"))),
-        "- 保留後 Precision：{precision}".format(
-            precision=_markdown_color(_pct(summary.get("pass_precision")), delta_tone)
-        ),
-        "- 絕對變化：{delta}".format(
-            delta=_markdown_color(_pp(summary.get("precision_delta")), delta_tone)
-        ),
-        "- 相對變化：{relative}".format(
-            relative=_markdown_color(_signed_pct(summary.get("precision_relative_change")), delta_tone)
-        ),
+        "| 指標 | 結果 |",
+        "|---|---:|",
+        f"| {REPORT_LABELS['pass_precision']} | {_markdown_color(_pct(details['precision']), delta_tone)} |",
+        f"| {REPORT_LABELS['pass_recall']} | {_pct(details['recall'])} |",
+        f"| {REPORT_LABELS['reject_specificity']} | {_pct(details['specificity'])} |",
+        f"| {REPORT_LABELS['reject_npv']} | {_pct(details['negative_predictive_value'])} |",
+        f"| {REPORT_LABELS['accuracy']} | {_pct(details['accuracy'])} |",
+        "",
+        "### 篩選行為",
+        "",
+        "| 指標 | 結果 |",
+        "|---|---:|",
+        f"| {REPORT_LABELS['original_pass_rate']} | {_pct(details['base_pass_rate'])} |",
+        f"| {REPORT_LABELS['original_reject_rate']} | {_pct(details['base_reject_rate'])} |",
+        f"| {REPORT_LABELS['model_pass_rate']} | {_pct(details['acceptance_rate'])} |",
+        f"| {REPORT_LABELS['model_reject_rate']} | {_pct(details['rejection_rate'])} |",
+        f"| {REPORT_LABELS['precision_absolute_lift']} | {_markdown_color(_pp(summary.get('precision_delta')), delta_tone)} |",
+        f"| {REPORT_LABELS['precision_relative_lift']} | {_markdown_color(_signed_pct(summary.get('precision_relative_change')), delta_tone)} |",
         "",
     ]
     if label == "OOS":
@@ -603,8 +636,8 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
             lines.extend(
                 [
                     _markdown_color(
-                        "判讀：模型在 OOS 中大量拒絕訊號，但保留下來的訊號品質未提高；"
-                        f"同時錯殺 {_pct(summary.get('false_rejection_rate'))} 的真正 PASS。",
+                        "判讀：模型在 OOS 中大量判定為 REJECT，但模型 PASS 的品質未提高；"
+                        f"同時錯殺 {_pct(summary.get('false_rejection_rate'))} 的原始 PASS。",
                         "red",
                     ),
                     "",
@@ -614,7 +647,7 @@ def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[s
             lines.extend(
                 [
                     _markdown_color(
-                        "判讀：OOS 保留後 precision 高於原始 PASS 比例；仍須一起檢查保留率、PASS recall 與策略層經濟效果。",
+                        "判讀：OOS PASS Precision 高於原始 PASS 比例；仍須一起檢查模型 PASS 比例、PASS Recall 與策略層經濟效果。",
                         "green",
                     ),
                     "",
@@ -638,12 +671,21 @@ def _markdown_selection_oos_difference(payload: dict, number: int) -> list[str]:
     if selection is None or oos is None:
         return []
     rows = [
-        ("原始 PASS 比例", selection.get("base_pass_rate"), oos.get("base_pass_rate"), "pct"),
-        ("保留後 Precision", selection.get("pass_precision"), oos.get("pass_precision"), "pct"),
-        ("模型保留率", selection.get("acceptance_rate"), oos.get("acceptance_rate"), "pct"),
-        ("PASS Recall", selection.get("pass_recall"), oos.get("pass_recall"), "pct"),
-        ("平均 Score", selection.get("avg_score"), oos.get("avg_score"), "decimal"),
-        ("Precision 絕對提升", selection.get("precision_delta"), oos.get("precision_delta"), "pp"),
+        (REPORT_LABELS["original_pass_rate"], selection.get("base_pass_rate"), oos.get("base_pass_rate"), "pct"),
+        (REPORT_LABELS["model_pass_rate"], selection.get("acceptance_rate"), oos.get("acceptance_rate"), "pct"),
+        (REPORT_LABELS["pass_precision"], selection.get("pass_precision"), oos.get("pass_precision"), "pct"),
+        (REPORT_LABELS["pass_recall"], selection.get("pass_recall"), oos.get("pass_recall"), "pct"),
+        (REPORT_LABELS["reject_specificity"], selection.get("reject_specificity"), oos.get("reject_specificity"), "pct"),
+        (
+            REPORT_LABELS["reject_npv"],
+            _confusion_details(selection).get("negative_predictive_value"),
+            _confusion_details(oos).get("negative_predictive_value"),
+            "pct",
+        ),
+        (REPORT_LABELS["accuracy"], selection.get("accuracy"), oos.get("accuracy"), "pct"),
+        (REPORT_LABELS["precision_absolute_lift"], selection.get("precision_delta"), oos.get("precision_delta"), "pp"),
+        (REPORT_LABELS["precision_relative_lift"], selection.get("precision_relative_change"), oos.get("precision_relative_change"), "pct_signed"),
+        (REPORT_LABELS["average_score"], selection.get("avg_score"), oos.get("avg_score"), "decimal"),
     ]
     lines = [
         f"## {number}. Selection 與 OOS 差異",
@@ -660,6 +702,10 @@ def _markdown_selection_oos_difference(payload: dict, number: int) -> list[str]:
         if kind == "pct":
             selection_text = _pct(selection_value)
             oos_text = _pct(oos_value)
+            difference_text = _pp(difference)
+        elif kind == "pct_signed":
+            selection_text = _signed_pct(selection_value)
+            oos_text = _signed_pct(oos_value)
             difference_text = _pp(difference)
         elif kind == "pp":
             selection_text = _pp(selection_value)
@@ -686,14 +732,14 @@ def _deployment_presentation(payload: dict) -> dict:
         oos_result = "尚未執行 OOS，不能判定正式泛化能力"
     elif oos_improved:
         oos_result = (
-            f"有提升：原始 PASS {_pct(oos.get('base_pass_rate'))}，"
-            f"保留後 Precision {_pct(oos.get('pass_precision'))}，"
+            f"有提升：原始 PASS 比例 {_pct(oos.get('base_pass_rate'))}，"
+            f"PASS Precision {_pct(oos.get('pass_precision'))}，"
             f"差異 {_pp(oos.get('precision_delta'))}"
         )
     else:
         oos_result = (
-            f"未提升：原始 PASS {_pct(oos.get('base_pass_rate'))}，"
-            f"保留後 Precision {_pct(oos.get('pass_precision'))}，"
+            f"未提升：原始 PASS 比例 {_pct(oos.get('base_pass_rate'))}，"
+            f"PASS Precision {_pct(oos.get('pass_precision'))}，"
             f"差異 {_pp(oos.get('precision_delta'))}"
         )
 
@@ -817,12 +863,17 @@ def render_markdown_report(payload: dict) -> str:
             "",
             "## 指標白話說明",
             "",
-            "- **原始 PASS 比例**：完全不過濾、全部放行時，真正 PASS 的比例。",
-            "- **模型保留率**：分數達固定 threshold、被模型保留下來的訊號比例。",
-            "- **Precision**：模型保留的訊號中，真正 PASS 的比例。",
-            "- **PASS Recall**：所有真正 PASS 中，被模型保留下來的比例。",
-            "- **錯殺率**：所有真正 PASS 中，被模型錯誤拒絕的比例。",
-            "- **REJECT 辨識率**：所有真正 REJECT 中，被模型正確拒絕的比例。",
+            "- **原始 PASS 比例**：所有原始訊號中，標籤為 PASS 的比例。",
+            "- **原始 REJECT 比例**：所有原始訊號中，標籤為 REJECT 的比例。",
+            "- **模型 PASS 比例**：所有訊號中，被模型判定為 PASS 的比例。",
+            "- **模型 REJECT 比例**：所有訊號中，被模型判定為 REJECT 的比例。",
+            "- **PASS Precision**：所有模型 PASS 中，真正為原始 PASS 的比例。",
+            "- **PASS Recall**：所有原始 PASS 中，被模型判定為 PASS 的比例。",
+            "- **REJECT Specificity**：所有原始 REJECT 中，被模型判定為 REJECT 的比例。",
+            "- **REJECT NPV**：所有模型 REJECT 中，真正為原始 REJECT 的比例。",
+            "- **Accuracy**：所有訊號中，模型判定正確的比例。",
+            "- **Precision 絕對提升**：PASS Precision 減去原始 PASS 比例。",
+            "- **Precision 相對提升**：PASS Precision 相對於原始 PASS 比例的增減幅度。",
             "",
             "## 使用限制",
             "",
@@ -901,20 +952,27 @@ def _console_split_section(payload: dict, *, color: bool = False) -> list[str]:
     rows = []
     for split_name in _split_order(payload):
         summary = payload["split_summaries"][split_name]
+        details = _confusion_details(summary)
         delta_tone = _tone_for_delta(summary.get("precision_delta"))
         rows.append(
             [
                 SPLIT_LABELS[split_name],
                 f"{summary['date_start']}～{summary['date_end']}",
                 _count(summary.get("group_count"), digits=0),
-                _pct(summary.get("base_pass_rate")),
-                _pct(summary.get("acceptance_rate")),
-                _paint(_pct(summary.get("pass_precision")), delta_tone, enabled=color, bold=True),
+                _pct(details.get("base_pass_rate")),
+                _pct(details.get("acceptance_rate")),
+                _paint(_pct(details.get("precision")), delta_tone, enabled=color, bold=True),
+                _pct(details.get("recall")),
+                _pct(details.get("specificity")),
+                _pct(details.get("negative_predictive_value")),
+                _pct(details.get("accuracy")),
                 _paint(_pp(summary.get("precision_delta")), delta_tone, enabled=color, bold=True),
-                _pct(summary.get("pass_recall")),
-                _pct(summary.get("false_rejection_rate")),
-                _pct(summary.get("reject_specificity")),
-                _pct(summary.get("accuracy")),
+                _paint(
+                    _signed_pct(summary.get("precision_relative_change")),
+                    delta_tone,
+                    enabled=color,
+                    bold=True,
+                ),
                 _decimal(summary.get("avg_score")),
             ]
         )
@@ -924,18 +982,22 @@ def _console_split_section(payload: dict, *, color: bool = False) -> list[str]:
                 "區段",
                 "日期",
                 "Groups",
-                "原始PASS",
-                "模型保留",
-                "Precision",
-                "絕對提升",
-                "PASS Recall",
-                "錯殺PASS",
-                "REJECT辨識",
-                "Accuracy",
-                "平均Score",
+                REPORT_LABELS["original_pass_rate"],
+                REPORT_LABELS["model_pass_rate"],
+                REPORT_LABELS["pass_precision"],
+                REPORT_LABELS["pass_recall"],
+                REPORT_LABELS["reject_specificity"],
+                REPORT_LABELS["reject_npv"],
+                REPORT_LABELS["accuracy"],
+                REPORT_LABELS["precision_absolute_lift"],
+                REPORT_LABELS["precision_relative_lift"],
+                REPORT_LABELS["average_score"],
             ],
             rows,
-            aligns=["left", "left", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right"],
+            aligns=[
+                "left", "left", "right", "right", "right", "right", "right",
+                "right", "right", "right", "right", "right", "right",
+            ],
         )
     )
     if EVALUATION_SPLIT_VALIDATION in payload["split_summaries"]:
@@ -955,77 +1017,92 @@ def _console_confusion_section(summary: dict, label: str, number: int, *, color:
     details = _confusion_details(summary)
     delta_tone = _tone_for_delta(summary.get("precision_delta"))
     lines = _section(f"{number}. {label} Confusion Matrix", color=color)
-    lines.extend(["統計口徑：Ticker/Date Group Weighted", "列 = 實際結果；欄 = 模型預測", ""])
+    lines.extend(["統計口徑：Ticker/Date Group Weighted", "列 = 原始結果；欄 = 模型判定", ""])
     rows = [
         [
-            f"實際 PASS\nBase PASS {_pct(details['base_pass_rate'])}",
+            "原始 PASS",
             _paint(
-                f"正確保留 PASS\nTP = {_weighted_count(details['tp'])}\nRecall {_pct(details['recall'])}",
+                f"正確保留 PASS\nTP = {_weighted_count(details['tp'])}",
                 "green",
                 enabled=color,
                 bold=True,
             ),
             _paint(
-                f"錯殺真正 PASS\nFN = {_weighted_count(details['fn'])}\n錯殺率 {_pct(details['false_rejection_rate'])}",
+                f"錯殺 PASS\nFN = {_weighted_count(details['fn'])}",
                 "red",
                 enabled=color,
                 bold=True,
             ),
-            f"{_weighted_count(details['actual_pass'])}\n占全部 {_pct(details['base_pass_rate'])}",
+            f"原始 PASS = {_weighted_count(details['actual_pass'])}\n({_pct(details['base_pass_rate'])})",
         ],
         [
-            f"實際 REJECT\nBase REJECT {_pct(details['base_reject_rate'])}",
+            "原始 REJECT",
             _paint(
-                f"錯誤保留 REJECT\nFP = {_weighted_count(details['fp'])}\n誤放率 {_pct(details['false_positive_rate'])}",
+                f"錯誤保留 REJECT\nFP = {_weighted_count(details['fp'])}",
                 "red",
                 enabled=color,
                 bold=True,
             ),
             _paint(
-                f"正確拒絕 REJECT\nTN = {_weighted_count(details['tn'])}\n辨識率 {_pct(details['specificity'])}",
+                f"正確拒絕 REJECT\nTN = {_weighted_count(details['tn'])}",
                 "green",
                 enabled=color,
                 bold=True,
             ),
-            f"{_weighted_count(details['actual_reject'])}\n占全部 {_pct(details['base_reject_rate'])}",
+            f"原始 REJECT = {_weighted_count(details['actual_reject'])}\n({_pct(details['base_reject_rate'])})",
         ],
         [
-            "預測合計",
-            f"{_weighted_count(details['predicted_pass'])}\n保留率 {_pct(details['acceptance_rate'])}\n"
-            + _paint(f"Precision {_pct(details['precision'])}", delta_tone, enabled=color, bold=True),
-            f"{_weighted_count(details['predicted_reject'])}\n拒絕率 {_pct(details['rejection_rate'])}",
-            f"{_weighted_count(details['total'])}\nAccuracy {_pct(details['accuracy'])}",
+            "模型合計",
+            f"模型 PASS = {_weighted_count(details['predicted_pass'])}\n({_pct(details['acceptance_rate'])})",
+            f"模型 REJECT = {_weighted_count(details['predicted_reject'])}\n({_pct(details['rejection_rate'])})",
+            f"全部 = {_weighted_count(details['total'])}",
         ],
     ]
     lines.extend(
         _render_ascii_table(
-            ["實際 \\ 預測", "預測 PASS／模型保留", "預測 REJECT／模型拒絕", "實際合計"],
+            ["原始結果 \\ 模型判定", "模型 PASS", "模型 REJECT", "原始合計"],
             rows,
             aligns=["left", "right", "right", "right"],
         )
     )
-    quality_text = (
-        f"品質變化：原始 PASS {_pct(summary.get('base_pass_rate'))} → "
-        f"保留後 Precision {_pct(summary.get('pass_precision'))} "
-        f"({_pp(summary.get('precision_delta'))}；{_signed_pct(summary.get('precision_relative_change'))})"
-    )
-    lines.extend(["", _paint(quality_text, delta_tone, enabled=color, bold=True)])
+    classification_rows = [
+        [REPORT_LABELS["pass_precision"], _paint(_pct(details["precision"]), delta_tone, enabled=color, bold=True)],
+        [REPORT_LABELS["pass_recall"], _pct(details["recall"])],
+        [REPORT_LABELS["reject_specificity"], _pct(details["specificity"])],
+        [REPORT_LABELS["reject_npv"], _pct(details["negative_predictive_value"])],
+        [REPORT_LABELS["accuracy"], _pct(details["accuracy"])],
+    ]
+    lines.extend(["", "分類品質"])
+    lines.extend(_render_ascii_table(["指標", "結果"], classification_rows, aligns=["left", "right"]))
+    behavior_rows = [
+        [REPORT_LABELS["original_pass_rate"], _pct(details["base_pass_rate"])],
+        [REPORT_LABELS["original_reject_rate"], _pct(details["base_reject_rate"])],
+        [REPORT_LABELS["model_pass_rate"], _pct(details["acceptance_rate"])],
+        [REPORT_LABELS["model_reject_rate"], _pct(details["rejection_rate"])],
+        [REPORT_LABELS["precision_absolute_lift"], _paint(_pp(summary.get("precision_delta")), delta_tone, enabled=color, bold=True)],
+        [REPORT_LABELS["precision_relative_lift"], _paint(_signed_pct(summary.get("precision_relative_change")), delta_tone, enabled=color, bold=True)],
+    ]
+    lines.extend(["", "篩選行為"])
+    lines.extend(_render_ascii_table(["指標", "結果"], behavior_rows, aligns=["left", "right"]))
     if label == "OOS":
         judgement = (
-            "模型大量拒絕訊號，但保留下來的訊號品質未提高；"
-            f"錯殺 {_pct(summary.get('false_rejection_rate'))} 的真正 PASS。"
+            "模型大量判定為 REJECT，但模型 PASS 的品質未提高；"
+            f"錯殺 {_pct(summary.get('false_rejection_rate'))} 的原始 PASS。"
             if float(summary.get("precision_delta") or 0.0) <= 0
-            else "OOS precision 有提升；仍須檢查保留率、PASS recall 與策略層經濟效果。"
+            else "OOS PASS Precision 有提升；仍須檢查模型 PASS 比例、PASS Recall 與策略層經濟效果。"
         )
-        lines.append(_paint("判讀：" + judgement, delta_tone, enabled=color, bold=True))
+        lines.extend(["", _paint("判讀：" + judgement, delta_tone, enabled=color, bold=True)])
     else:
-        lines.append(
-            _paint(
-                "判讀：Selection 內具有篩選能力；是否可部署仍由 OOS 泛化結果決定。",
-                "green",
-                enabled=color,
-                bold=True,
-            )
+        lines.extend(
+            [
+                "",
+                _paint(
+                    "判讀：Selection 內具有篩選能力；是否可部署仍由 OOS 泛化結果決定。",
+                    "green",
+                    enabled=color,
+                    bold=True,
+                ),
+            ]
         )
     return lines
 
@@ -1036,12 +1113,21 @@ def _console_difference_section(payload: dict, number: int, *, color: bool = Fal
         return []
     lines = _section(f"{number}. Selection 與 OOS 差異", color=color)
     raw_rows = [
-        ["原始 PASS 比例", selection.get("base_pass_rate"), oos.get("base_pass_rate"), "pct"],
-        ["保留後 Precision", selection.get("pass_precision"), oos.get("pass_precision"), "pct"],
-        ["模型保留率", selection.get("acceptance_rate"), oos.get("acceptance_rate"), "pct"],
-        ["PASS Recall", selection.get("pass_recall"), oos.get("pass_recall"), "pct"],
-        ["平均 Score", selection.get("avg_score"), oos.get("avg_score"), "decimal"],
-        ["Precision 絕對提升", selection.get("precision_delta"), oos.get("precision_delta"), "pp"],
+        [REPORT_LABELS["original_pass_rate"], selection.get("base_pass_rate"), oos.get("base_pass_rate"), "pct"],
+        [REPORT_LABELS["model_pass_rate"], selection.get("acceptance_rate"), oos.get("acceptance_rate"), "pct"],
+        [REPORT_LABELS["pass_precision"], selection.get("pass_precision"), oos.get("pass_precision"), "pct"],
+        [REPORT_LABELS["pass_recall"], selection.get("pass_recall"), oos.get("pass_recall"), "pct"],
+        [REPORT_LABELS["reject_specificity"], selection.get("reject_specificity"), oos.get("reject_specificity"), "pct"],
+        [
+            REPORT_LABELS["reject_npv"],
+            _confusion_details(selection).get("negative_predictive_value"),
+            _confusion_details(oos).get("negative_predictive_value"),
+            "pct",
+        ],
+        [REPORT_LABELS["accuracy"], selection.get("accuracy"), oos.get("accuracy"), "pct"],
+        [REPORT_LABELS["precision_absolute_lift"], selection.get("precision_delta"), oos.get("precision_delta"), "pp"],
+        [REPORT_LABELS["precision_relative_lift"], selection.get("precision_relative_change"), oos.get("precision_relative_change"), "pct_signed"],
+        [REPORT_LABELS["average_score"], selection.get("avg_score"), oos.get("avg_score"), "decimal"],
     ]
     rows = []
     for label, selection_value, oos_value, kind in raw_rows:
@@ -1050,6 +1136,10 @@ def _console_difference_section(payload: dict, number: int, *, color: bool = Fal
         if kind == "pct":
             selection_text = _pct(selection_value)
             oos_text = _pct(oos_value)
+            difference_text = _pp(difference)
+        elif kind == "pct_signed":
+            selection_text = _signed_pct(selection_value)
+            oos_text = _signed_pct(oos_value)
             difference_text = _pp(difference)
         elif kind == "pp":
             selection_text = _pp(selection_value)

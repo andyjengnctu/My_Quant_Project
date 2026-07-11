@@ -754,28 +754,55 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v2", 2, payload["schema_version"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, "- **Threshold**：`0.5`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_integrated_confusion_ratios", True, "Selection Confusion Matrix" in markdown and "OOS Confusion Matrix" in markdown and "Recall" in markdown and "錯殺率" in markdown and "誤放率" in markdown and "辨識率" in markdown)
+    selection_matrix = markdown.split("## 3. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
+    console_selection_matrix = console.split("3. Selection Confusion Matrix", 1)[1].split("分類品質", 1)[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_confusion_matrix_is_count_only_with_standard_margins",
+        True,
+        (
+            all(token in selection_matrix for token in ("TP =", "FN =", "FP =", "TN =", "模型 PASS", "模型 REJECT", "原始 PASS", "原始 REJECT"))
+            and all(token in console_selection_matrix for token in ("TP =", "FN =", "FP =", "TN =", "模型 PASS", "模型 REJECT", "原始 PASS", "原始 REJECT"))
+            and all(token not in selection_matrix for token in ("Precision", "Recall", "Specificity", "NPV", "Accuracy"))
+            and all(token not in console_selection_matrix for token in ("Precision", "Recall", "Specificity", "NPV", "Accuracy"))
+        ),
+    )
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. 各資料區段比較" in console and "3. Selection Confusion Matrix" in console and "4. OOS Confusion Matrix" in console and "5. Selection 與 OOS 差異" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, "Threshold       : 0.5" in console and "Learning Rate   : 0.001" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_selection_is_not_repeated_in_bullets", True, "- 最後選擇：" not in console and "是否選出 Best Epoch" not in console and console.count("- 最終模型：") == 1)
-    console_pass_label = console.find("正確保留 PASS")
-    console_tp = console.find("TP =", console_pass_label)
-    console_recall = console.find("Recall", console_tp)
-    markdown_pass_label = markdown.find("正確保留 PASS")
-    markdown_tp = markdown.find("TP =", markdown_pass_label)
-    markdown_recall = markdown.find("Recall", markdown_tp)
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "report_confusion_cell_order_is_explanation_code_rate",
+        "report_metric_labels_are_consistent_across_tables",
         True,
         (
-            -1 < console_pass_label < console_tp < console_recall
-            and -1 < markdown_pass_label < markdown_tp < markdown_recall
+            all(
+                label in markdown and label in console
+                for label in (
+                    "原始 PASS 比例",
+                    "模型 PASS 比例",
+                    "PASS Precision",
+                    "PASS Recall",
+                    "REJECT Specificity",
+                    "REJECT NPV",
+                    "Accuracy",
+                    "Precision 絕對提升",
+                    "Precision 相對提升",
+                    "平均 Score",
+                )
+            )
+            and "模型保留" not in markdown
+            and "模型保留" not in console
+            and "REJECT 辨識率" not in markdown
+            and "REJECT 辨識率" not in console
+            and "保留後 Precision" not in markdown
+            and "保留後 Precision" not in console
         ),
     )
     add_check(results, "synthetic_breakout_quality", case_id, "report_deployment_summary_is_concise", True, "- OOS 判定依據：" in console and "- 部署決策：" in console and "- 研究限制：" in console and "是否選出 Best Epoch" not in console and "| 判定項目" not in console)
