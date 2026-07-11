@@ -499,7 +499,7 @@ def _interactive_workflow(program_name: str) -> int:
     print("\n即將執行：Full dataset（全部股票）→ train → export research scores → OOS 易讀研究報表")
     if evaluate_oos:
         print("報表將納入 OOS 最終泛化評估。")
-    if not _prompt_bool("確認開始", False):
+    if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
     return _run_workflow(request, program_name=program_name)
@@ -547,14 +547,15 @@ def _interactive_export_research(program_name: str) -> int:
 def _interactive_report(program_name: str) -> int:
     filter_id = _policy_filter_id()
     _print_policy_defaults(filter_id)
-    include_oos = _prompt_bool(
-        "是否讀取最終 OOS 並納入報表？注意：讀取後不得依同一段 OOS 回頭調整 "
-        "threshold、epochs、learning rate、feature、label 或模型",
-        True,
+    print(
+        "易讀研究報表固定納入最終 OOS；不得依同一段 OOS 回頭調整 "
+        "threshold、epochs、learning rate、feature、label 或模型。"
     )
-    argv = ["--filter-id", filter_id]
-    argv.append("--include-oos" if include_oos else "--no-include-oos")
-    return _run_command("report", argv, program_name=program_name)
+    return _run_command(
+        "report",
+        ["--filter-id", filter_id, "--include-oos"],
+        program_name=program_name,
+    )
 
 
 def _interactive_evaluate(program_name: str) -> int:
@@ -608,7 +609,7 @@ def _print_menu() -> None:
     print("[2] 建立／重建 Full dataset（全部股票）")
     print("[3] 訓練模型（使用 policy 預設參數）")
     print("[4] 匯出 research scores")
-    print("[5] 產生易讀研究報表")
+    print("[5] 產生易讀研究報表（固定納入 OOS）")
     print("[6] 輸出詳細 JSON 評估")
     print("[7] 匯出正式 forward-OOS scores")
     print("[8/Enter] 查看工件狀態")

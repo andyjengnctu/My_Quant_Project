@@ -261,7 +261,7 @@ def validate_dataset_cli_contract_case(_base_params):
                 False,
             ), (
                 "確認開始",
-                False,
+                True,
             )],
             1,
             0,
@@ -320,7 +320,7 @@ def validate_dataset_cli_contract_case(_base_params):
             0,
             [(
                 "確認開始",
-                False,
+                True,
             )],
             False,
             "full",
@@ -420,65 +420,10 @@ def validate_dataset_cli_contract_case(_base_params):
 
     with (
         patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
-        patch("apps.breakout_quality._prompt_bool", return_value=False) as mocked_prompt,
-        patch("apps.breakout_quality._run_command", side_effect=_fake_report_run),
-    ):
-        report_without_oos_rc = app_breakout_quality._interactive_report(
-            "apps/breakout_quality.py"
-        )
-    prompt_text, prompt_default = mocked_prompt.call_args.args
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_report_uses_single_oos_prompt",
-        1,
-        mocked_prompt.call_count,
-    )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_report_oos_prompt_is_explicit",
-        True,
-        "是否讀取最終 OOS 並納入報表" in prompt_text
-        and "不得依同一段 OOS 回頭調整" in prompt_text,
-    )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_report_oos_prompt_defaults_to_yes",
-        True,
-        prompt_default,
-    )
-    report_module = importlib.import_module("tools.filters.breakout_quality.report")
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_report_cli_defaults_to_oos",
-        True,
-        report_module.parse_args([]).include_oos,
-    )
-
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_report_no_still_generates_selection_report",
-        (0, "report", ["--filter-id", "synthetic_quality", "--no-include-oos"]),
-        (
-            report_without_oos_rc,
-            report_calls[-1][0],
-            report_calls[-1][1],
-        ),
-    )
-
-    report_calls.clear()
-    with (
-        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
-        patch("apps.breakout_quality._prompt_bool", return_value=True) as mocked_prompt,
+        patch(
+            "apps.breakout_quality._prompt_bool",
+            side_effect=AssertionError("interactive report must not prompt for OOS"),
+        ) as mocked_prompt,
         patch("apps.breakout_quality._run_command", side_effect=_fake_report_run),
     ):
         report_with_oos_rc = app_breakout_quality._interactive_report(
@@ -488,14 +433,23 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_report_yes_includes_oos_without_second_prompt",
-        (0, 1, "report", ["--filter-id", "synthetic_quality", "--include-oos"]),
+        "breakout_quality_report_fixed_oos_without_prompt",
+        (0, 0, "report", ["--filter-id", "synthetic_quality", "--include-oos"]),
         (
             report_with_oos_rc,
             mocked_prompt.call_count,
             report_calls[-1][0],
             report_calls[-1][1],
         ),
+    )
+    report_module = importlib.import_module("tools.filters.breakout_quality.report")
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_report_cli_defaults_to_oos",
+        True,
+        report_module.parse_args([]).include_oos,
     )
 
     with TemporaryDirectory(prefix="breakout_quality_rebuild_detection_") as temp_dir:
