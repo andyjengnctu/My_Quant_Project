@@ -1,8 +1,7 @@
 ## Going
 - breakout filter
-    - easy to read report
     - test for only 1 year
-    - remark and train fixed parameters  
+    - train fixed parameters  
     - inconsist with strategy parameters
     - consistance among different seeds 
 

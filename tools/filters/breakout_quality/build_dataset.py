@@ -108,13 +108,18 @@ def main(argv=None) -> int:
         event_df = pd.DataFrame(columns=[
             "ticker",
             "date",
-            "entry_date",
             "label_eval_start_date",
             "label_eval_end_date",
             "high_len",
             "breakout_level",
             "label",
             "label_reason",
+            "anchor_price",
+            "pass_barrier_price",
+            "reject_barrier_price",
+            "max_upside_return",
+            "max_downside_return",
+            "first_hit_bar",
         ])
 
     source_inventory_after = build_source_data_inventory(PROJECT_ROOT, args.dataset)

@@ -160,11 +160,16 @@ def main(argv=None) -> int:
             )
 
     research_optional = [
-        "entry_date",
         "label_eval_start_date",
         "label_eval_end_date",
         "label",
         "label_reason",
+        "anchor_price",
+        "pass_barrier_price",
+        "reject_barrier_price",
+        "max_upside_return",
+        "max_downside_return",
+        "first_hit_bar",
     ]
     optional_columns = research_optional if args.scope == RUNTIME_SCOPE_RESEARCH else []
     out_cols = list(SCORE_TABLE_REQUIRED_COLUMNS) + [column for column in optional_columns if column in scored.columns]

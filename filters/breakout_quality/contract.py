@@ -6,17 +6,11 @@ from dataclasses import asdict, dataclass, field
 
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_BENCHMARK_TICKER,
-    BREAKOUT_QUALITY_DEAD_MFE_R,
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-    BREAKOUT_QUALITY_EVALUATE_FROM_BARS_AFTER_ENTRY,
     BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
-    BREAKOUT_QUALITY_LABEL_ATR_BUY_TOL,
-    BREAKOUT_QUALITY_LABEL_ATR_LEN,
-    BREAKOUT_QUALITY_LABEL_ATR_TIMES_INIT,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
-    BREAKOUT_QUALITY_NEGATIVE_MAE_R,
-    BREAKOUT_QUALITY_POSITIVE_MFE_R,
-    BREAKOUT_QUALITY_REJECT_CONFIRM_MFE_R,
+    BREAKOUT_QUALITY_LABEL_PASS_RETURN,
+    BREAKOUT_QUALITY_LABEL_REJECT_RETURN,
     build_breakout_quality_default_high_len_values,
 )
 
@@ -29,7 +23,7 @@ DEFAULT_SPLIT_FILENAME = "split_assignments.csv"
 DEFAULT_FEATURE_WINDOW_BARS = BREAKOUT_QUALITY_FEATURE_WINDOW_BARS
 DEFAULT_LABEL_HORIZON_BARS = BREAKOUT_QUALITY_LABEL_HORIZON_BARS
 DEFAULT_BENCHMARK_TICKER = BREAKOUT_QUALITY_BENCHMARK_TICKER
-ARTIFACT_CONTRACT_VERSION = 4
+ARTIFACT_CONTRACT_VERSION = 5
 SCORE_TABLE_SCHEMA_VERSION = 2
 SPLIT_ASSIGNMENT_SCHEMA_VERSION = 2
 SCORE_COLUMN = "dl_quality_score"
@@ -72,15 +66,20 @@ class BreakoutQualityLabelPolicy:
     feature_window_bars: int = DEFAULT_FEATURE_WINDOW_BARS
     label_horizon_bars: int = DEFAULT_LABEL_HORIZON_BARS
     high_len_values: tuple[int, ...] = field(default_factory=build_breakout_quality_default_high_len_values)
-    label_atr_len: int = BREAKOUT_QUALITY_LABEL_ATR_LEN
-    label_atr_buy_tol: float = BREAKOUT_QUALITY_LABEL_ATR_BUY_TOL
-    label_atr_times_init: float = BREAKOUT_QUALITY_LABEL_ATR_TIMES_INIT
-    positive_mfe_r: float = BREAKOUT_QUALITY_POSITIVE_MFE_R
-    negative_mae_r: float = BREAKOUT_QUALITY_NEGATIVE_MAE_R
-    reject_confirm_mfe_r: float = BREAKOUT_QUALITY_REJECT_CONFIRM_MFE_R
-    dead_mfe_r: float = BREAKOUT_QUALITY_DEAD_MFE_R
-    evaluate_from_bars_after_entry: int = BREAKOUT_QUALITY_EVALUATE_FROM_BARS_AFTER_ENTRY
+    pass_return_threshold: float = BREAKOUT_QUALITY_LABEL_PASS_RETURN
+    reject_return_threshold: float = BREAKOUT_QUALITY_LABEL_REJECT_RETURN
     benchmark_ticker: str = DEFAULT_BENCHMARK_TICKER
+
+    def __post_init__(self) -> None:
+        if int(self.feature_window_bars) < 1 or int(self.label_horizon_bars) < 1:
+            raise ValueError("feature window 與 label horizon 必須 >= 1")
+        if float(self.pass_return_threshold) <= 0.0:
+            raise ValueError("pass_return_threshold 必須 > 0")
+        if not -1.0 < float(self.reject_return_threshold) < 0.0:
+            raise ValueError("reject_return_threshold 必須介於 -1 與 0 之間")
+        if not str(self.benchmark_ticker).strip():
+            raise ValueError("benchmark_ticker 不可空白")
+        self.high_lens()
 
     def high_lens(self) -> tuple[int, ...]:
         normalized = tuple(sorted({int(value) for value in self.high_len_values}))

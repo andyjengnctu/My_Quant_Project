@@ -65,31 +65,10 @@ def build_policy_from_args(args) -> BreakoutQualityLabelPolicy:
         feature_window_bars=int(args.feature_window),
         label_horizon_bars=int(args.label_horizon),
         high_len_values=high_len_values,
-        label_atr_len=int(args.label_atr_len),
-        label_atr_buy_tol=float(args.label_atr_buy_tol),
-        label_atr_times_init=float(args.label_atr_times_init),
-        positive_mfe_r=float(args.positive_mfe_r),
-        negative_mae_r=float(args.negative_mae_r),
-        reject_confirm_mfe_r=float(args.reject_confirm_mfe_r),
-        dead_mfe_r=float(args.dead_mfe_r),
-        evaluate_from_bars_after_entry=int(args.evaluate_from_bars_after_entry),
+        pass_return_threshold=float(args.pass_return_threshold),
+        reject_return_threshold=float(args.reject_return_threshold),
         benchmark_ticker=str(args.benchmark_ticker).strip(),
     )
-    if policy.feature_window_bars < 1 or policy.label_horizon_bars < 1 or policy.label_atr_len < 1:
-        raise ValueError("feature window、label horizon 與 ATR length 必須 >= 1")
-    if policy.label_atr_buy_tol < 0 or policy.label_atr_times_init <= 0:
-        raise ValueError("label ATR buy tolerance 必須 >= 0，initial stop ATR 倍數必須 > 0")
-    if policy.positive_mfe_r <= 0 or policy.negative_mae_r >= 0:
-        raise ValueError("positive_mfe_r 必須 > 0，negative_mae_r 必須 < 0")
-    if policy.reject_confirm_mfe_r < 0 or policy.reject_confirm_mfe_r > policy.positive_mfe_r:
-        raise ValueError("reject_confirm_mfe_r 必須介於 0 與 positive_mfe_r")
-    if policy.dead_mfe_r < 0 or policy.dead_mfe_r > policy.positive_mfe_r:
-        raise ValueError("dead_mfe_r 必須介於 0 與 positive_mfe_r")
-    if policy.evaluate_from_bars_after_entry < 0:
-        raise ValueError("evaluate_from_bars_after_entry 必須 >= 0")
-    if not policy.benchmark_ticker:
-        raise ValueError("benchmark_ticker 不可空白")
-    policy.high_lens()
     return policy
 
 
@@ -105,14 +84,18 @@ def add_policy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--high-len-min", type=int, default=None, help="相容舊命令；使用時需與 max/step 同時提供")
     parser.add_argument("--high-len-max", type=int, default=None, help="相容舊命令；使用時需與 min/step 同時提供")
     parser.add_argument("--high-len-step", type=int, default=None, help="相容舊命令；使用時需與 min/max 同時提供")
-    parser.add_argument("--label-atr-len", type=int, default=p.label_atr_len)
-    parser.add_argument("--label-atr-buy-tol", type=float, default=p.label_atr_buy_tol)
-    parser.add_argument("--label-atr-times-init", type=float, default=p.label_atr_times_init)
-    parser.add_argument("--positive-mfe-r", type=float, default=p.positive_mfe_r)
-    parser.add_argument("--negative-mae-r", type=float, default=p.negative_mae_r)
-    parser.add_argument("--reject-confirm-mfe-r", type=float, default=p.reject_confirm_mfe_r)
-    parser.add_argument("--dead-mfe-r", type=float, default=p.dead_mfe_r)
-    parser.add_argument("--evaluate-from-bars-after-entry", type=int, default=p.evaluate_from_bars_after_entry)
+    parser.add_argument(
+        "--pass-return-threshold",
+        type=float,
+        default=p.pass_return_threshold,
+        help="相對突破訊號日收盤價，先到此正報酬率即標記 PASS",
+    )
+    parser.add_argument(
+        "--reject-return-threshold",
+        type=float,
+        default=p.reject_return_threshold,
+        help="相對突破訊號日收盤價，先到此負報酬率即標記 REJECT",
+    )
     parser.add_argument("--benchmark-ticker", default=p.benchmark_ticker)
 
 

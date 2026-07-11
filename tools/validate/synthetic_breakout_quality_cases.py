@@ -43,6 +43,10 @@ from filters.breakout_quality.contract import (
     DEFAULT_LABEL_POLICY,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
+    LABEL_IGNORE,
+    LABEL_PASS,
+    LABEL_REJECT,
+    BreakoutQualityLabelPolicy,
     SELECTION_ROLE_EMBARGO,
     SELECTION_ROLE_IGNORE,
     SELECTION_ROLE_INNER_EMBARGO,
@@ -70,6 +74,7 @@ from filters.breakout_quality.paths import (
 )
 from filters.breakout_quality.score_store import build_pass_condition_from_score_table, load_score_table
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.features import build_event_label
 from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
@@ -161,6 +166,60 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and int(BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE) >= 0
         and float(BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA) >= 0.0
         and int(BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES) >= 1,
+    )
+    label_policy = BreakoutQualityLabelPolicy(
+        feature_window_bars=2,
+        label_horizon_bars=3,
+        high_len_values=(2,),
+        pass_return_threshold=0.15,
+        reject_return_threshold=-0.07,
+        benchmark_ticker="0050",
+    )
+
+    def _label_case(highs, lows):
+        frame = pd.DataFrame(
+            {
+                "Open": [100.0] * 4,
+                "High": [100.0, *highs],
+                "Low": [100.0, *lows],
+                "Close": [100.0] * 4,
+                "Volume": [1000.0] * 4,
+            },
+            index=pd.date_range("2025-01-01", periods=4, freq="D"),
+        )
+        return build_event_label(frame, event_pos=0, policy=label_policy)[:2]
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pure_kline_label_passes_when_upside_barrier_hits_first",
+        (LABEL_PASS, "upside_first"),
+        _label_case([110.0, 116.0, 118.0], [96.0, 95.0, 94.0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pure_kline_label_rejects_when_downside_barrier_hits_first",
+        (LABEL_REJECT, "downside_first"),
+        _label_case([104.0, 116.0, 118.0], [92.0, 94.0, 95.0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pure_kline_label_uses_conservative_same_bar_order",
+        (LABEL_REJECT, "same_bar_adverse_first"),
+        _label_case([116.0, 118.0, 119.0], [92.0, 94.0, 95.0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pure_kline_label_ignores_when_neither_barrier_hits",
+        (LABEL_IGNORE, "no_barrier_hit"),
+        _label_case([110.0, 112.0, 114.0], [96.0, 95.0, 94.0]),
     )
     try:
         V16StrategyParams(breakout_quality_filter_id=" ")

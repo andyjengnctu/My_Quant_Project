@@ -9,8 +9,6 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from core.price_utils import adjust_long_buy_fill_price, adjust_long_buy_limit, adjust_long_stop_price, is_locked_limit_up_bar
-from core.signal_utils import tv_atr, tv_true_range
 from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
     FEATURE_COLUMNS,
@@ -133,77 +131,101 @@ def build_candidate_event_positions(stock_df: pd.DataFrame, high_lens: Iterable[
     return events
 
 
-def _label_from_path(high_values: np.ndarray, low_values: np.ndarray, *, entry_price: float, risk_r: float, policy: BreakoutQualityLabelPolicy) -> tuple[int, str, float, float]:
-    if risk_r <= 0.0 or not math.isfinite(risk_r) or not math.isfinite(entry_price) or entry_price <= 0.0:
-        return LABEL_IGNORE, "invalid_risk", np.nan, np.nan
+def _label_from_path(
+    high_values: np.ndarray,
+    low_values: np.ndarray,
+    *,
+    anchor_price: float,
+    policy: BreakoutQualityLabelPolicy,
+) -> tuple[int, str, float, float, float]:
+    if not math.isfinite(anchor_price) or anchor_price <= 0.0:
+        return LABEL_IGNORE, "invalid_anchor", np.nan, np.nan, np.nan
 
-    best_mfe = -np.inf
-    worst_mae = np.inf
-    for high_price, low_price in zip(high_values, low_values):
-        if not (math.isfinite(high_price) and math.isfinite(low_price)):
-            continue
-        day_mfe = (float(high_price) - entry_price) / risk_r
-        day_mae = (float(low_price) - entry_price) / risk_r
-        best_mfe = max(best_mfe, day_mfe)
-        worst_mae = min(worst_mae, day_mae)
+    highs = np.asarray(high_values, dtype=np.float64)
+    lows = np.asarray(low_values, dtype=np.float64)
+    if highs.shape != lows.shape or highs.size != int(policy.label_horizon_bars):
+        return LABEL_IGNORE, "insufficient_future", np.nan, np.nan, np.nan
+    valid = (
+        np.isfinite(highs)
+        & np.isfinite(lows)
+        & (highs > 0.0)
+        & (lows > 0.0)
+        & (highs >= lows)
+    )
+    if not bool(np.all(valid)):
+        return LABEL_IGNORE, "invalid_future_bar", np.nan, np.nan, np.nan
 
-        adverse_first = day_mae <= float(policy.negative_mae_r)
-        favorable_first = day_mfe >= float(policy.positive_mfe_r)
-        if adverse_first and favorable_first:
-            return LABEL_REJECT, "same_bar_adverse_first", float(best_mfe), float(worst_mae)
-        if adverse_first and best_mfe < float(policy.reject_confirm_mfe_r):
-            return LABEL_REJECT, "mae_before_confirm", float(best_mfe), float(worst_mae)
-        if favorable_first and worst_mae > float(policy.negative_mae_r):
-            return LABEL_PASS, "mfe_before_mae", float(best_mfe), float(worst_mae)
+    upside_returns = highs / anchor_price - 1.0
+    downside_returns = lows / anchor_price - 1.0
+    max_upside_return = float(np.max(upside_returns))
+    max_downside_return = float(np.min(downside_returns))
+    pass_barrier_price = anchor_price * (1.0 + float(policy.pass_return_threshold))
+    reject_barrier_price = anchor_price * (1.0 + float(policy.reject_return_threshold))
 
-    if math.isfinite(best_mfe) and best_mfe < float(policy.dead_mfe_r):
-        return LABEL_REJECT, "dead_mfe", float(best_mfe), float(worst_mae)
-    return LABEL_IGNORE, "ambiguous_path", float(best_mfe), float(worst_mae)
+    for bar_offset, (high_price, low_price) in enumerate(
+        zip(highs, lows),
+        start=1,
+    ):
+        upside_hit = float(high_price) >= pass_barrier_price
+        downside_hit = float(low_price) <= reject_barrier_price
+        if upside_hit and downside_hit:
+            return (
+                LABEL_REJECT,
+                "same_bar_adverse_first",
+                max_upside_return,
+                max_downside_return,
+                float(bar_offset),
+            )
+        if downside_hit:
+            return (
+                LABEL_REJECT,
+                "downside_first",
+                max_upside_return,
+                max_downside_return,
+                float(bar_offset),
+            )
+        if upside_hit:
+            return (
+                LABEL_PASS,
+                "upside_first",
+                max_upside_return,
+                max_downside_return,
+                float(bar_offset),
+            )
+
+    return LABEL_IGNORE, "no_barrier_hit", max_upside_return, max_downside_return, np.nan
 
 
-def build_event_label(stock_df: pd.DataFrame, *, event_pos: int, ticker: str, atr_values: np.ndarray, policy: BreakoutQualityLabelPolicy) -> tuple[int, str, float, float, float, float]:
-    entry_pos = int(event_pos) + 1
-    eval_start = entry_pos + int(policy.evaluate_from_bars_after_entry)
+def build_event_label(
+    stock_df: pd.DataFrame,
+    *,
+    event_pos: int,
+    policy: BreakoutQualityLabelPolicy,
+) -> tuple[int, str, float, float, float, float]:
+    eval_start = int(event_pos) + 1
     eval_end = eval_start + int(policy.label_horizon_bars)
-    if entry_pos >= len(stock_df) or eval_start >= len(stock_df):
+    if eval_start >= len(stock_df) or eval_end > len(stock_df):
         return LABEL_IGNORE, "insufficient_future", np.nan, np.nan, np.nan, np.nan
 
-    atr = float(atr_values[int(event_pos)]) if int(event_pos) < len(atr_values) else np.nan
-    close_d0 = float(stock_df["Close"].iloc[int(event_pos)])
-    if not (math.isfinite(atr) and atr > 0.0 and math.isfinite(close_d0) and close_d0 > 0.0):
-        return LABEL_IGNORE, "invalid_atr", np.nan, np.nan, np.nan, np.nan
+    anchor_price = float(stock_df["Close"].iloc[int(event_pos)])
+    if not math.isfinite(anchor_price) or anchor_price <= 0.0:
+        return LABEL_IGNORE, "invalid_anchor", np.nan, np.nan, np.nan, np.nan
 
-    buy_limit = adjust_long_buy_limit(close_d0 + atr * float(policy.label_atr_buy_tol), ticker=ticker)
-    open_d1 = float(stock_df["Open"].iloc[entry_pos])
-    high_d1 = float(stock_df["High"].iloc[entry_pos])
-    low_d1 = float(stock_df["Low"].iloc[entry_pos])
-    close_d1 = float(stock_df["Close"].iloc[entry_pos])
-    volume_d1 = float(stock_df["Volume"].iloc[entry_pos])
-    y_close = close_d0
-    if volume_d1 <= 0.0 or not math.isfinite(open_d1) or not math.isfinite(low_d1):
-        return LABEL_IGNORE, "unfilled", buy_limit, np.nan, np.nan, np.nan
-    if is_locked_limit_up_bar(open_d1, high_d1, low_d1, close_d1, y_close, ticker=ticker):
-        return LABEL_IGNORE, "locked_limit_up", buy_limit, np.nan, np.nan, np.nan
-    if low_d1 > buy_limit:
-        return LABEL_IGNORE, "unfilled", buy_limit, np.nan, np.nan, np.nan
-
-    entry_price = adjust_long_buy_fill_price(min(open_d1, buy_limit), ticker=ticker)
-    stop_price = adjust_long_stop_price(entry_price - atr * float(policy.label_atr_times_init), ticker=ticker)
-    risk_r = entry_price - stop_price
-    if risk_r <= 0.0:
-        return LABEL_IGNORE, "invalid_risk", buy_limit, entry_price, stop_price, risk_r
-
-    path = stock_df.iloc[eval_start:min(eval_end, len(stock_df))]
-    if len(path) < int(policy.label_horizon_bars):
-        return LABEL_IGNORE, "insufficient_future", buy_limit, entry_price, stop_price, risk_r
-    label, reason, mfe_r, mae_r = _label_from_path(
+    path = stock_df.iloc[eval_start:eval_end]
+    label, reason, max_upside_return, max_downside_return, first_hit_bar = _label_from_path(
         path["High"].to_numpy(dtype=np.float64, copy=False),
         path["Low"].to_numpy(dtype=np.float64, copy=False),
-        entry_price=entry_price,
-        risk_r=risk_r,
+        anchor_price=anchor_price,
         policy=policy,
     )
-    return label, reason, buy_limit, entry_price, stop_price, risk_r
+    return (
+        label,
+        reason,
+        anchor_price,
+        max_upside_return,
+        max_downside_return,
+        first_hit_bar,
+    )
 
 
 def build_breakout_quality_dataset_for_frame(
@@ -217,13 +239,6 @@ def build_breakout_quality_dataset_for_frame(
     contexts = []
     labels = []
     rows = []
-    atr_values = tv_atr(
-        stock_df["High"].to_numpy(dtype=np.float64, copy=False),
-        stock_df["Low"].to_numpy(dtype=np.float64, copy=False),
-        stock_df["Close"].to_numpy(dtype=np.float64, copy=False),
-        int(policy.label_atr_len),
-    )
-
     for event in build_candidate_event_positions(stock_df, policy.high_lens()):
         pos = int(event["pos"])
         high_len = int(event["high_len"])
@@ -238,19 +253,23 @@ def build_breakout_quality_dataset_for_frame(
         )
         if feature_payload is None:
             continue
-        label, reason, buy_limit, entry_price, stop_price, risk_r = build_event_label(
+        (
+            label,
+            reason,
+            anchor_price,
+            max_upside_return,
+            max_downside_return,
+            first_hit_bar,
+        ) = build_event_label(
             stock_df,
             event_pos=pos,
-            ticker=ticker,
-            atr_values=atr_values,
             policy=policy,
         )
         seq_features, context = feature_payload
         features.append(seq_features)
         contexts.append(context)
         labels.append(int(label))
-        entry_pos = pos + 1
-        eval_start_pos = entry_pos + int(policy.evaluate_from_bars_after_entry)
+        eval_start_pos = pos + 1
         eval_end_pos = eval_start_pos + int(policy.label_horizon_bars) - 1
 
         def _format_index_date(index_pos: int) -> str | None:
@@ -261,17 +280,26 @@ def build_breakout_quality_dataset_for_frame(
         rows.append({
             "ticker": str(ticker),
             "date": pd.Timestamp(event["date"]).strftime("%Y-%m-%d"),
-            "entry_date": _format_index_date(entry_pos),
             "label_eval_start_date": _format_index_date(eval_start_pos),
             "label_eval_end_date": _format_index_date(eval_end_pos),
             "high_len": high_len,
             "breakout_level": breakout_level,
             "label": int(label),
             "label_reason": reason,
-            "buy_limit": buy_limit,
-            "entry_price": entry_price,
-            "stop_price": stop_price,
-            "risk_r": risk_r,
+            "anchor_price": anchor_price,
+            "pass_barrier_price": (
+                anchor_price * (1.0 + float(policy.pass_return_threshold))
+                if math.isfinite(anchor_price)
+                else np.nan
+            ),
+            "reject_barrier_price": (
+                anchor_price * (1.0 + float(policy.reject_return_threshold))
+                if math.isfinite(anchor_price)
+                else np.nan
+            ),
+            "max_upside_return": max_upside_return,
+            "max_downside_return": max_downside_return,
+            "first_hit_bar": first_hit_bar,
         })
 
     if not features:
@@ -282,13 +310,18 @@ def build_breakout_quality_dataset_for_frame(
             events=pd.DataFrame(columns=[
                 "ticker",
                 "date",
-                "entry_date",
                 "label_eval_start_date",
                 "label_eval_end_date",
                 "high_len",
                 "breakout_level",
                 "label",
                 "label_reason",
+                "anchor_price",
+                "pass_barrier_price",
+                "reject_barrier_price",
+                "max_upside_return",
+                "max_downside_return",
+                "first_hit_bar",
             ]),
         )
     return BreakoutQualityDataset(
