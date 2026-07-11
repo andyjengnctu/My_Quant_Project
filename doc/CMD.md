@@ -55,19 +55,21 @@ python apps/workbench.py
 
 ## 研究資料、訓練與評估
 
+正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
+
 ```bash
-python tools/filters/breakout_quality/build_dataset.py --dataset full --filter-id breakout_quality_v1
+python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1
 # 預設關閉 inner validation：epochs 是完整 Selection 的正式固定訓練次數
-python tools/filters/breakout_quality/train.py --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
+python apps/breakout_quality.py train --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
 # 開啟時：epochs 是搜尋上限；以 Selection 尾端 N 個月選 best epoch，之後完整 Selection 重訓
-python tools/filters/breakout_quality/train.py --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
-python tools/filters/breakout_quality/export_scores.py --filter-id breakout_quality_v1 --scope research
+python apps/breakout_quality.py train --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --scope research
 # train / validation / selection 僅供診斷；threshold 仍須在 OOS 前固定
-python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --split train
-python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --split validation
-python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --split selection
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --split train
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --split validation
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --split selection
 # OOS 是最終泛化評估；重複用同一段 OOS 調參後，它就不再是乾淨 OOS
-python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --split oos
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --split oos
 ```
 
 - Dataset/tool 輸出固定在 `outputs/filters/breakout_quality/<filter_id>/`。
@@ -81,12 +83,12 @@ python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v
 
 ## 建立正式 forward-OOS score table
 
-1. 先以完整研究資料執行 `build_dataset.py` 與 `train.py`；`train.py` 依既有 walk-forward policy 執行固定 epoch 模式，或以 Selection 內 validation 選 epoch 後完整重訓，並保留 `model.pt`、`split_assignments.csv`、`manifest.json` 與 `model_information_cutoff`。
-2. 若目前 dataset 已包含 outer OOS，可直接匯出；若需延伸到更新資料，只重新執行 `build_dataset.py`，不可重新 train 同一模型。
+1. 先以正式 app 的 `build-dataset` 與 `train` 子命令建立完整研究資料並訓練；`train` 依既有 walk-forward policy 執行固定 epoch 模式，或以 Selection 內 validation 選 epoch 後完整重訓，並保留 `model.pt`、`split_assignments.csv`、`manifest.json` 與 `model_information_cutoff`。
+2. 若目前 dataset 已包含 outer OOS，可直接匯出；若需延伸到更新資料，只重新執行 `build-dataset`，不可重新 train 同一模型。
 3. 執行：
 
 ```bash
-python tools/filters/breakout_quality/export_scores.py --filter-id breakout_quality_v1 --scope forward_oos
+python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --scope forward_oos
 ```
 
 - `forward_oos` 只匯出落在同一份 walk-forward OOS window、且事件日嚴格晚於 `model_information_cutoff` 的固定規格模型分數；若沒有符合資料會直接失敗。

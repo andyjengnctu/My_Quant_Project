@@ -7,6 +7,7 @@
 ```text
 project/
 ├─ apps/
+│  ├─ breakout_quality.py             # Breakout quality 正式入口（薄入口／子命令分派）
 │  ├─ ml_optimizer.py                 # 參數最佳化正式入口（薄入口）
 │  ├─ portfolio_sim.py                # 投組模擬正式入口（薄入口）
 │  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
@@ -50,7 +51,7 @@ project/
 │  └─ roos_ensemble_base.json        # ROOS seed ensemble base policy 參數檔
 └─ tools/
    ├─ downloader/                     # 資料下載子系統
-   ├─ filters/breakout_quality/        # quality dataset/train/export/evaluate 開發工具
+   ├─ filters/breakout_quality/        # quality dataset/train/export/evaluate 子系統實作與開發相容入口
    ├─ optimizer/                      # 參數最佳化子系統
    ├─ portfolio_sim/                  # 投組模擬子系統
    ├─ scanner/                        # 掃描器子系統
@@ -80,10 +81,11 @@ project/
 - `tools/trade_analysis/`：單股 trade-analysis 子系統；由 `apps/workbench.py` 經 `tools/workbench_ui/` 觸發，`tools/trade_analysis/trade_log.py` 提供共用 backend / 開發輔助 CLI。
 - 為維持相容性，保留 legacy `run_debug_*` API 名稱，同時提供 canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases。
 
-### `filters/breakout_quality/` 與 `tools/filters/breakout_quality/`
+### `apps/breakout_quality.py`、`filters/breakout_quality/` 與 `tools/filters/breakout_quality/`
 
+- `apps/breakout_quality.py` 是 dataset、training、score export 與 evaluation 的單一正式使用者入口；只負責子命令分派，不複製模型或 split 規則。
 - `filters/breakout_quality/` 承接 feature/label、artifact contract、canonical path、外層 Selection/OOS split 與正式 runtime lookup；正式 runtime 不執行 CNN，只讀 canonical `scores.csv`。
-- `tools/filters/breakout_quality/` 只承接 dataset、training、score export 與研究評估；不得複製 runtime 決策規則。
+- `tools/filters/breakout_quality/` 承接 dataset、training、score export 與研究評估子系統實作；直接 CLI 僅保留開發與既有指令相容，不再作為文件建議的正式入口。
 - 正式工件唯一位置為 `models/filters/breakout_quality/<filter_id>/`；`split_assignments.csv` 的 outer `selection/oos` 日期直接來自 `core.walk_forward_policy`。
 - inner validation 為可配置模式：關閉時完整 Selection 固定 epochs；開啟時只在 Selection 內選 epoch，之後以全部 eligible Selection 重訓。OOS 永不參與 epoch、threshold 或模型選擇。
 - 研究分數與 dataset 等可重建輸出只放 `outputs/filters/breakout_quality/<filter_id>/`，不得覆蓋正式 `scores.csv`。
@@ -119,6 +121,7 @@ project/
 
 ## 正式入口
 
+- `apps/breakout_quality.py`：Breakout quality dataset、training、score export 與 evaluation 單一正式入口。
 - `apps/test_suite.py`：日常一鍵測試正式入口。
 - `apps/ml_optimizer.py`：optimizer 正式入口。
 - `apps/package_zip.py`：打包正式入口。

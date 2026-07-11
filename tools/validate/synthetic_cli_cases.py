@@ -41,11 +41,89 @@ def validate_dataset_cli_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
+    app_breakout_quality = importlib.import_module("apps.breakout_quality")
     app_ml_optimizer = importlib.import_module("apps.ml_optimizer")
     app_portfolio_sim = importlib.import_module("apps.portfolio_sim")
     app_vip_scanner = importlib.import_module("apps.vip_scanner")
     scanner_main_module = importlib.import_module("tools.scanner.main")
     validate_cli_module = importlib.import_module("tools.validate.cli")
+
+    rc, help_text = _capture_stdout(
+        app_breakout_quality.main,
+        ["apps/breakout_quality.py", "--help"],
+    )
+    add_check(results, "cli_contract", case_id, "breakout_quality_app_help_rc", 0, rc)
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_app_help_usage",
+        True,
+        "用法: python apps/breakout_quality.py <command> [options]" in help_text,
+    )
+    for command in ("build-dataset", "train", "export-scores", "evaluate"):
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            f"breakout_quality_app_help_lists_{command.replace('-', '_')}",
+            True,
+            command in help_text,
+        )
+
+    command_modules = {
+        "build-dataset": "tools.filters.breakout_quality.build_dataset",
+        "train": "tools.filters.breakout_quality.train",
+        "export-scores": "tools.filters.breakout_quality.export_scores",
+        "evaluate": "tools.filters.breakout_quality.evaluate",
+    }
+    for command, expected_module in command_modules.items():
+        received_argv = []
+
+        def _fake_command_main(argv, received_argv=received_argv):
+            received_argv.append(list(argv))
+            return 23
+
+        fake_module = SimpleNamespace(main=_fake_command_main)
+        with patch("apps.breakout_quality.importlib.import_module", return_value=fake_module) as mocked_import:
+            rc = app_breakout_quality.main(
+                ["apps/breakout_quality.py", command, "--filter-id", "synthetic_quality"]
+            )
+        metric_command = command.replace("-", "_")
+        add_check(results, "cli_contract", case_id, f"breakout_quality_app_{metric_command}_rc", 23, rc)
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            f"breakout_quality_app_{metric_command}_module",
+            expected_module,
+            mocked_import.call_args.args[0],
+        )
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            f"breakout_quality_app_{metric_command}_argv",
+            [["--filter-id", "synthetic_quality"]],
+            received_argv,
+        )
+
+    _assert_value_error(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_app_unknown_command_rejected",
+        lambda: app_breakout_quality.main(["apps/breakout_quality.py", "unknown"]),
+        "不支援的 breakout quality command",
+    )
+    _assert_value_error(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_app_unknown_top_level_flag_rejected",
+        lambda: app_breakout_quality.main(["apps/breakout_quality.py", "--bad"]),
+        "不支援的參數",
+    )
 
     wrapper_cases = [
         {

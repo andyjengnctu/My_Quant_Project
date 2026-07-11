@@ -28,6 +28,7 @@ from tools.validate.meta_contracts import summarize_synthetic_cases_import_targe
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
+    ([sys.executable, "apps/breakout_quality.py", "--help"], "python apps/breakout_quality.py"),
     ([sys.executable, "apps/workbench.py", "--help"], "python apps/workbench.py"),
     ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
     ([sys.executable, "apps/package_zip.py", "--help"], "python apps/package_zip.py"),
@@ -69,6 +70,7 @@ RUN_ALL_CLI_CASES = [
     (["--bad"], "不支援的參數"),
 ]
 INLINE_CLI_TARGETS = {
+    "apps/breakout_quality.py",
     "apps/workbench.py",
     "apps/ml_optimizer.py",
     "apps/package_zip.py",
