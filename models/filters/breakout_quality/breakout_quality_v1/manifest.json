@@ -15,7 +15,7 @@
   "early_stopping_enabled": true,
   "early_stopping_min_delta": 0.0,
   "early_stopping_patience": 5,
-  "elapsed_sec": 251.516,
+  "elapsed_sec": 248.515,
   "epoch_selection_source": "inner_validation_loss",
   "event_group_summary": {
     "group_count": 59079,
