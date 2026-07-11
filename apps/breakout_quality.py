@@ -45,7 +45,7 @@ COMMAND_DESCRIPTIONS = {
     "build-dataset": "建立 breakout quality event dataset",
     "train": "訓練模型；可選擇 inner validation 選 epoch 後完整 Selection 重訓",
     "export-scores": "匯出 research 或 forward-OOS score table",
-    "report": "產生短版中文摘要、Markdown 報表與完整 metrics JSON",
+    "report": "產生表格化終端報表、Markdown 報表與完整 metrics JSON",
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
 }
 

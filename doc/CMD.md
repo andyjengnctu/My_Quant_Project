@@ -63,7 +63,7 @@ python apps/workbench.py
 python apps/breakout_quality.py
 ```
 
-完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；可選擇是否把 OOS 納入報表。終端只顯示短摘要，Markdown 與完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/reports/`。批次或需要可重現命令時使用 `workflow`：
+完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；可選擇是否把 OOS 納入報表。終端顯示表格化比較、Epoch 選擇與 Confusion Matrix，Markdown 與完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --epochs 20 --batch-size 256 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
@@ -83,7 +83,7 @@ python apps/breakout_quality.py train --filter-id breakout_quality_v1 --epochs 2
 # 開啟時：epochs 是搜尋上限；以 Selection 尾端 N 個月選 best epoch，之後完整 Selection 重訓
 python apps/breakout_quality.py train --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --scope research
-# 建議日常使用：終端短摘要 + Markdown 解釋報表 + 完整 metrics JSON
+# 建議日常使用：終端表格報表 + Markdown 解釋報表 + 完整 metrics JSON
 python apps/breakout_quality.py report --filter-id breakout_quality_v1 --no-include-oos
 # 參數與模型已鎖定後，才把最終 OOS 納入報表
 python apps/breakout_quality.py report --filter-id breakout_quality_v1 --include-oos

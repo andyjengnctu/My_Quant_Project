@@ -588,6 +588,16 @@ def _validate_signal_runtime_wiring(results, case_id: str) -> None:
 
 def _validate_breakout_quality_report_rendering(results, case_id):
     def _metrics(split_name, *, base, precision, acceptance, recall, false_reject):
+        total = 100.0
+        actual_pass = float(base) * total
+        actual_reject = total - actual_pass
+        predicted_pass = float(acceptance) * total
+        tp = float(recall) * actual_pass
+        fn = actual_pass - tp
+        fp = predicted_pass - tp
+        tn = actual_reject - fp
+        specificity = tn / actual_reject
+        accuracy = (tp + tn) / total
         return {
             "filter_id": "synthetic_quality",
             "split": split_name,
@@ -595,16 +605,23 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "ticker_date_group_weighted": {
                 "group_count": 100,
                 "row_count": 1000,
+                "weight_sum": total,
                 "base_pass_rate": base,
                 "acceptance_rate": acceptance,
                 "pass_precision": precision,
                 "precision_lift_vs_all_pass": precision / base,
                 "pass_recall": recall,
                 "false_rejection_rate": false_reject,
-                "reject_specificity": 0.70,
-                "accuracy": 0.55,
+                "reject_specificity": specificity,
+                "accuracy": accuracy,
                 "all_pass_baseline_accuracy": base,
                 "avg_score": 0.45,
+                "confusion": {
+                    "true_pass_pred_pass": tp,
+                    "true_pass_pred_reject": fn,
+                    "true_reject_pred_pass": fp,
+                    "true_reject_pred_reject": tn,
+                },
             },
             "row_level": {"row_count": 1000},
         }
@@ -621,15 +638,86 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "learning_rate": 0.001,
             "batch_size": 256,
             "seed": 42,
+            "epoch_selection_source": "inner_validation_loss",
+            "early_stopping_enabled": True,
+            "early_stopping_patience": 5,
+            "early_stopping_min_delta": 0.0,
             "inner_validation_epoch_selection": {
-                "completed_epochs": 7,
+                "best_epoch": 2,
+                "completed_epochs": 3,
                 "best_validation_loss": 0.77253,
-                "best_validation_metrics": {"accuracy": 0.505773},
+                "best_validation_metrics": {
+                    "accuracy": 0.505773,
+                    "pass_rate": 0.344325,
+                },
+                "history": [
+                    {
+                        "epoch": 1,
+                        "batch_loss": 0.681608,
+                        "inner_train_metrics": {
+                            "loss": 0.670129,
+                            "accuracy": 0.578197,
+                            "pass_rate": 0.48634,
+                        },
+                        "inner_validation_metrics": {
+                            "loss": 0.774969,
+                            "accuracy": 0.500052,
+                            "pass_rate": 0.363297,
+                        },
+                        "is_best_epoch": True,
+                    },
+                    {
+                        "epoch": 2,
+                        "batch_loss": 0.666133,
+                        "inner_train_metrics": {
+                            "loss": 0.655166,
+                            "accuracy": 0.604912,
+                            "pass_rate": 0.553797,
+                        },
+                        "inner_validation_metrics": {
+                            "loss": 0.77253,
+                            "accuracy": 0.505773,
+                            "pass_rate": 0.344325,
+                        },
+                        "is_best_epoch": True,
+                    },
+                    {
+                        "epoch": 3,
+                        "batch_loss": 0.657169,
+                        "inner_train_metrics": {
+                            "loss": 0.651273,
+                            "accuracy": 0.615911,
+                            "pass_rate": 0.496689,
+                        },
+                        "inner_validation_metrics": {
+                            "loss": 0.793311,
+                            "accuracy": 0.519413,
+                            "pass_rate": 0.220611,
+                        },
+                        "is_best_epoch": False,
+                    },
+                ],
             },
         },
     }
     payload = build_report_payload(
         metrics_by_split={
+            "train": _metrics(
+                "train",
+                base=0.442189,
+                precision=0.569538,
+                acceptance=0.368851,
+                recall=0.475079,
+                false_reject=0.524921,
+            ),
+            "validation": _metrics(
+                "validation",
+                base=0.492563,
+                precision=0.626719,
+                acceptance=0.426307,
+                recall=0.542417,
+                false_reject=0.457583,
+            ),
             "selection": _metrics(
                 "selection",
                 base=0.456199,
@@ -653,9 +741,11 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     console = render_console_summary(payload)
     add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_explanatory_table", True, "原始 PASS 比例" in markdown and "保留後 PASS precision" in markdown and "錯殺真正 PASS" in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v2", 2, payload["schema_version"])
+    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "Epoch 訓練比較與最後選擇" in markdown and "最後選擇" in markdown and "Validation Loss" in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_integrated_confusion_ratios", True, "Selection Confusion Matrix" in markdown and "OOS Confusion Matrix" in markdown and "Recall" in markdown and "錯殺率" in markdown and "誤放率" in markdown and "辨識率" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不再是 final OOS" in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_console_is_short_and_excludes_confusion", True, "Selection：" in console and "OOS：" in console and "confusion" not in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "Epoch 選擇結果" in console and "各資料區段比較" in console and "Inner Train" in console and "Validation*" in console and "Selection Confusion Matrix" in console and "OOS Confusion Matrix" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_paths_are_under_filter_reports", True, str(resolve_filter_report_markdown_path("/project", "synthetic_quality")).endswith("outputs/filters/breakout_quality/synthetic_quality/reports/evaluation_report.md") and str(resolve_filter_report_json_path("/project", "synthetic_quality")).endswith("outputs/filters/breakout_quality/synthetic_quality/reports/evaluation_metrics.json"))
     research_only = build_report_payload(
         metrics_by_split={"selection": _metrics("selection", base=0.45, precision=0.55, acceptance=0.40, recall=0.50, false_reject=0.50)},
