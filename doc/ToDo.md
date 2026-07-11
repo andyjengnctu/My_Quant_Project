@@ -1,7 +1,7 @@
 ## Going
 - breakout filter
     - easy to read report
-    - rebuilt data timing?
+    - test for only 1 year
     - remark and train fixed parameters  
     - inconsist with strategy parameters
     - consistance among different seeds 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 import unicodedata
 from datetime import datetime, timezone
@@ -30,6 +32,23 @@ from tools.filters.breakout_quality.evaluate import (
 
 
 REPORT_SCHEMA_VERSION = 2
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+ANSI_COLORS = {
+    "reset": "\033[0m",
+    "bold": "\033[1m",
+    "blue": "\033[96m",
+    "green": "\033[92m",
+    "yellow": "\033[93m",
+    "red": "\033[91m",
+    "gray": "\033[90m",
+}
+MARKDOWN_COLORS = {
+    "blue": "#42A5F5",
+    "green": "#188038",
+    "yellow": "#B06000",
+    "red": "#C62828",
+    "gray": "#667085",
+}
 SPLIT_LABELS = {
     EVALUATION_SPLIT_TRAIN: "Inner Train",
     EVALUATION_SPLIT_VALIDATION: "Validation*",
@@ -59,6 +78,38 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
+
+
+def _console_color_enabled() -> bool:
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    if os.environ.get("TERM", "").strip().lower() == "dumb":
+        return False
+    stream = getattr(sys, "stdout", None)
+    return bool(stream is not None and hasattr(stream, "isatty") and stream.isatty())
+
+
+def _paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
+    raw = str(text)
+    if not enabled:
+        return raw
+    prefix = ANSI_COLORS.get(tone, "")
+    if bold:
+        prefix = ANSI_COLORS["bold"] + prefix
+    return f"{prefix}{raw}{ANSI_COLORS['reset']}"
+
+
+def _markdown_color(text: object, tone: str, *, bold: bool = True) -> str:
+    raw = str(text)
+    color = MARKDOWN_COLORS.get(tone, MARKDOWN_COLORS["gray"])
+    weight = "font-weight:700;" if bold else ""
+    return f'<span style="color:{color};{weight}">{raw}</span>'
+
+
+def _tone_for_delta(value: float | None) -> str:
+    if value is None:
+        return "gray"
+    return "green" if float(value) > 0 else "red" if float(value) < 0 else "yellow"
 
 def _pct(value: float | None, digits: int = 2) -> str:
     if value is None:
@@ -113,7 +164,8 @@ def _ratio(numerator: float, denominator: float) -> float | None:
 
 def _display_width(text: str) -> int:
     width = 0
-    for char in str(text):
+    visible_text = ANSI_ESCAPE_RE.sub("", str(text))
+    for char in visible_text:
         if unicodedata.combining(char):
             continue
         width += 2 if unicodedata.east_asian_width(char) in {"W", "F", "A"} else 1
@@ -178,8 +230,9 @@ def _render_ascii_table(
     return rendered
 
 
-def _section(title: str) -> list[str]:
-    return ["", "=" * 96, f" {title}", "=" * 96, ""]
+def _section(title: str, *, color: bool = False) -> list[str]:
+    rendered_title = _paint(title, "blue", enabled=color, bold=True)
+    return ["", "=" * 96, f" {rendered_title}", "=" * 96, ""]
 
 
 def _metric_summary(metrics: dict) -> dict:
@@ -393,15 +446,18 @@ def _markdown_epoch_table(training: dict) -> list[str]:
         "|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in history:
-        decision = f"**{row['decision']}**" if row["decision"] == "最後選擇" else row["decision"]
+        selected = row["decision"] == "最後選擇"
+        decision = _markdown_color("★ 最後選擇", "blue") if selected else row["decision"]
+        epoch_text = _markdown_color(row["epoch"], "blue") if selected else str(row["epoch"])
+        val_loss = _markdown_color(_loss(row.get("validation_loss")), "blue") if selected else _loss(row.get("validation_loss"))
         lines.append(
             "| {epoch} | {batch} | {train_loss} | {train_acc} | {train_pass} | {val_loss} | {val_acc} | {val_pass} | {decision} |".format(
-                epoch=row["epoch"],
+                epoch=epoch_text,
                 batch=_loss(row.get("batch_loss")),
                 train_loss=_loss(row.get("train_loss")),
                 train_acc=_pct(row.get("train_accuracy")),
                 train_pass=_pct(row.get("train_pass_rate")),
-                val_loss=_loss(row.get("validation_loss")),
+                val_loss=val_loss,
                 val_acc=_pct(row.get("validation_accuracy")),
                 val_pass=_pct(row.get("validation_pass_rate")),
                 decision=decision,
@@ -410,7 +466,6 @@ def _markdown_epoch_table(training: dict) -> list[str]:
     lines.append("")
     return lines
 
-
 def _markdown_split_table(payload: dict) -> list[str]:
     lines = [
         "| 區段 | 日期 | Groups | 原始 PASS | 模型保留 | Precision | 絕對提升 | 相對提升 | PASS Recall | 錯殺 PASS | REJECT 辨識率 | Accuracy | 平均 Score |",
@@ -418,16 +473,20 @@ def _markdown_split_table(payload: dict) -> list[str]:
     ]
     for split_name in _split_order(payload):
         summary = payload["split_summaries"][split_name]
+        delta_tone = _tone_for_delta(summary.get("precision_delta"))
+        label = SPLIT_LABELS[split_name]
+        if split_name == EVALUATION_SPLIT_OOS:
+            label = _markdown_color(label, delta_tone)
         lines.append(
             "| {label} | {period} | {groups:,} | {base} | {accept} | {precision} | {delta} | {relative} | {recall} | {false_reject} | {specificity} | {accuracy} | {avg_score} |".format(
-                label=SPLIT_LABELS[split_name],
+                label=label,
                 period=f"{summary['date_start']}～{summary['date_end']}",
                 groups=int(summary.get("group_count") or 0),
                 base=_pct(summary.get("base_pass_rate")),
                 accept=_pct(summary.get("acceptance_rate")),
-                precision=_pct(summary.get("pass_precision")),
-                delta=_pp(summary.get("precision_delta")),
-                relative=_signed_pct(summary.get("precision_relative_change")),
+                precision=_markdown_color(_pct(summary.get("pass_precision")), delta_tone),
+                delta=_markdown_color(_pp(summary.get("precision_delta")), delta_tone),
+                relative=_markdown_color(_signed_pct(summary.get("precision_relative_change")), delta_tone),
                 recall=_pct(summary.get("pass_recall")),
                 false_reject=_pct(summary.get("false_rejection_rate")),
                 specificity=_pct(summary.get("reject_specificity")),
@@ -437,7 +496,6 @@ def _markdown_split_table(payload: dict) -> list[str]:
         )
     lines.append("")
     return lines
-
 
 def _confusion_details(summary: dict) -> dict:
     confusion = summary.get("confusion") or {}
@@ -475,6 +533,7 @@ def _confusion_details(summary: dict) -> dict:
 
 def _markdown_confusion_matrix(summary: dict, label: str) -> list[str]:
     details = _confusion_details(summary)
+    delta_tone = _tone_for_delta(summary.get("precision_delta"))
     lines = [
         f"## {label} Confusion Matrix",
         "",
@@ -484,38 +543,41 @@ def _markdown_confusion_matrix(summary: dict, label: str) -> list[str]:
         "|---|---:|---:|---:|",
         (
             "| **實際 PASS**<br>Base PASS {base_pass} | "
-            "**TP = {tp}**<br>正確保留 PASS<br>Recall {recall} | "
-            "**FN = {fn}**<br>錯殺真正 PASS<br>錯殺率 {false_reject} | "
-            "{actual_pass}<br>占全部 {base_pass} |"
+            "{tp_cell} | {fn_cell} | {actual_pass}<br>占全部 {base_pass} |"
         ).format(
             base_pass=_pct(details["base_pass_rate"]),
-            tp=_weighted_count(details["tp"]),
-            recall=_pct(details["recall"]),
-            fn=_weighted_count(details["fn"]),
-            false_reject=_pct(details["false_rejection_rate"]),
+            tp_cell=_markdown_color(
+                f"正確保留 PASS<br>TP = {_weighted_count(details['tp'])}<br>Recall {_pct(details['recall'])}",
+                "green",
+            ),
+            fn_cell=_markdown_color(
+                f"錯殺真正 PASS<br>FN = {_weighted_count(details['fn'])}<br>錯殺率 {_pct(details['false_rejection_rate'])}",
+                "red",
+            ),
             actual_pass=_weighted_count(details["actual_pass"]),
         ),
         (
             "| **實際 REJECT**<br>Base REJECT {base_reject} | "
-            "**FP = {fp}**<br>錯誤保留 REJECT<br>誤放率 {false_positive} | "
-            "**TN = {tn}**<br>正確拒絕 REJECT<br>辨識率 {specificity} | "
-            "{actual_reject}<br>占全部 {base_reject} |"
+            "{fp_cell} | {tn_cell} | {actual_reject}<br>占全部 {base_reject} |"
         ).format(
             base_reject=_pct(details["base_reject_rate"]),
-            fp=_weighted_count(details["fp"]),
-            false_positive=_pct(details["false_positive_rate"]),
-            tn=_weighted_count(details["tn"]),
-            specificity=_pct(details["specificity"]),
+            fp_cell=_markdown_color(
+                f"錯誤保留 REJECT<br>FP = {_weighted_count(details['fp'])}<br>誤放率 {_pct(details['false_positive_rate'])}",
+                "red",
+            ),
+            tn_cell=_markdown_color(
+                f"正確拒絕 REJECT<br>TN = {_weighted_count(details['tn'])}<br>辨識率 {_pct(details['specificity'])}",
+                "green",
+            ),
             actual_reject=_weighted_count(details["actual_reject"]),
         ),
         (
-            "| **預測合計** | {pred_pass}<br>保留率 {acceptance}"
-            "<br>Precision {precision} | {pred_reject}<br>拒絕率 {rejection} | "
-            "{total}<br>Accuracy {accuracy} |"
+            "| **預測合計** | {pred_pass}<br>保留率 {acceptance}<br>Precision {precision} | "
+            "{pred_reject}<br>拒絕率 {rejection} | {total}<br>Accuracy {accuracy} |"
         ).format(
             pred_pass=_weighted_count(details["predicted_pass"]),
             acceptance=_pct(details["acceptance_rate"]),
-            precision=_pct(details["precision"]),
+            precision=_markdown_color(_pct(details["precision"]), delta_tone),
             pred_reject=_weighted_count(details["predicted_reject"]),
             rejection=_pct(details["rejection_rate"]),
             total=_weighted_count(details["total"]),
@@ -524,13 +586,15 @@ def _markdown_confusion_matrix(summary: dict, label: str) -> list[str]:
         "",
         "### 品質變化",
         "",
-        "| 原始 PASS 比例 | 保留後 Precision | 絕對變化 | 相對變化 |",
-        "|---:|---:|---:|---:|",
-        "| {base} | {precision} | {delta} | {relative} |".format(
-            base=_pct(summary.get("base_pass_rate")),
-            precision=_pct(summary.get("pass_precision")),
-            delta=_pp(summary.get("precision_delta")),
-            relative=_signed_pct(summary.get("precision_relative_change")),
+        "- 原始 PASS 比例：{base}".format(base=_pct(summary.get("base_pass_rate"))),
+        "- 保留後 Precision：{precision}".format(
+            precision=_markdown_color(_pct(summary.get("pass_precision")), delta_tone)
+        ),
+        "- 絕對變化：{delta}".format(
+            delta=_markdown_color(_pp(summary.get("precision_delta")), delta_tone)
+        ),
+        "- 相對變化：{relative}".format(
+            relative=_markdown_color(_signed_pct(summary.get("precision_relative_change")), delta_tone)
         ),
         "",
     ]
@@ -538,27 +602,35 @@ def _markdown_confusion_matrix(summary: dict, label: str) -> list[str]:
         if float(summary.get("precision_delta") or 0.0) <= 0:
             lines.extend(
                 [
-                    "判讀：模型在 OOS 中大量拒絕訊號，但保留下來的訊號品質未提高；"
-                    f"同時錯殺 {_pct(summary.get('false_rejection_rate'))} 的真正 PASS。",
+                    _markdown_color(
+                        "判讀：模型在 OOS 中大量拒絕訊號，但保留下來的訊號品質未提高；"
+                        f"同時錯殺 {_pct(summary.get('false_rejection_rate'))} 的真正 PASS。",
+                        "red",
+                    ),
                     "",
                 ]
             )
         else:
             lines.extend(
                 [
-                    "判讀：OOS 保留後 precision 高於原始 PASS 比例；仍須一起檢查保留率、PASS recall 與策略層經濟效果。",
+                    _markdown_color(
+                        "判讀：OOS 保留後 precision 高於原始 PASS 比例；仍須一起檢查保留率、PASS recall 與策略層經濟效果。",
+                        "green",
+                    ),
                     "",
                 ]
             )
     else:
         lines.extend(
             [
-                "判讀：此區段中模型具有篩選能力，但是否能部署仍由 OOS 泛化結果決定。",
+                _markdown_color(
+                    "判讀：此區段中模型具有篩選能力，但是否能部署仍由 OOS 泛化結果決定。",
+                    "green",
+                ),
                 "",
             ]
         )
     return lines
-
 
 def _markdown_selection_oos_difference(payload: dict) -> list[str]:
     selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
@@ -604,51 +676,109 @@ def _markdown_selection_oos_difference(payload: dict) -> list[str]:
     return lines
 
 
+def _deployment_presentation(payload: dict) -> dict:
+    conclusion = payload["conclusion"]
+    oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
+    oos_improved = (
+        oos is not None and float(oos.get("precision_delta") or 0.0) > 0
+    )
+    if oos is None:
+        oos_result = "尚未執行 OOS，不能判定正式泛化能力"
+    elif oos_improved:
+        oos_result = (
+            f"有提升：原始 PASS {_pct(oos.get('base_pass_rate'))}，"
+            f"保留後 Precision {_pct(oos.get('pass_precision'))}，"
+            f"差異 {_pp(oos.get('precision_delta'))}"
+        )
+    else:
+        oos_result = (
+            f"未提升：原始 PASS {_pct(oos.get('base_pass_rate'))}，"
+            f"保留後 Precision {_pct(oos.get('pass_precision'))}，"
+            f"差異 {_pp(oos.get('precision_delta'))}"
+        )
+
+    if conclusion["status"] == "FAIL":
+        deployment_decision = (
+            "維持 breakout quality runtime filter 關閉，且不匯出 "
+            "forward-OOS scores"
+        )
+    elif conclusion["status"] == "PASS_WITH_REVIEW":
+        deployment_decision = (
+            "先進入策略層經濟效果驗證；未確認淨報酬、交易數與風險改善前，"
+            "不直接啟用 runtime filter"
+        )
+    else:
+        deployment_decision = "尚不足以做部署決策"
+
+    return {
+        "oos_result": oos_result,
+        "oos_improved": oos_improved,
+        "deployment_decision": deployment_decision,
+        "retuning_limit": (
+            "不得使用同一段 OOS 回頭調整 threshold、epochs、learning rate、"
+            "feature、label 或模型"
+        ),
+        "conclusion_tone": (
+            "red"
+            if conclusion["status"] == "FAIL"
+            else "green"
+            if conclusion["status"] == "PASS_WITH_REVIEW"
+            else "yellow"
+        ),
+    }
+
+
 def render_markdown_report(payload: dict) -> str:
     conclusion = payload["conclusion"]
     training = payload["training"]
+    deployment = _deployment_presentation(payload)
+    selection_summary = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
+    oos_summary = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
+    selected_epoch = training.get("selected_epoch")
+
     lines = [
         "# Breakout Quality 評估報表",
         "",
-        "## 1. 最終結論",
-        "",
-        "| 項目 | 結果 |",
-        "|---|---|",
-        f"| Filter ID | `{payload['filter_id']}` |",
-        f"| 評估門檻 | `{training.get('fixed_threshold')}` |",
-        f"| Selected Epoch | `{training.get('selected_epoch')}` |",
-        f"| 最終判定 | **[{conclusion['status']}] {conclusion['title']}** |",
-        f"| 主要原因 | {conclusion['explanation']} |",
-        f"| 部署建議 | {conclusion['deployment_guidance']} |",
-        "",
-        "## 2. Epoch 訓練比較與最後選擇",
-        "",
-        "| 項目 | 結果 |",
-        "|---|---|",
-        f"| Training Mode | `{training.get('training_mode')}` |",
-        f"| Epoch 上限 | `{training.get('max_epochs')}` |",
-        f"| 實際完成 Epoch | `{training.get('completed_epoch_search')}` |",
-        f"| 選擇標準 | `{training.get('epoch_selection_source')}` |",
-        f"| 最佳 Epoch | **`{training.get('selected_epoch')}`** |",
-        f"| 最低 Validation Loss | `{_loss(training.get('best_validation_loss'))}` |",
-        f"| Best Epoch Validation Accuracy | `{_pct(training.get('best_validation_accuracy'))}` |",
-        f"| Best Epoch Validation Pass Rate | `{_pct(training.get('best_validation_pass_rate'))}` |",
-        f"| Early Stopping Patience | `{training.get('early_stopping_patience')}` |",
-        f"| Fixed Threshold | `{training.get('fixed_threshold')}` |",
-        f"| Learning Rate | `{training.get('learning_rate')}` |",
-        f"| Batch Size | `{training.get('batch_size')}` |",
-        f"| Random Seed | `{training.get('seed')}` |",
-        "",
-        *_markdown_epoch_table(training),
-        (
-            f"最後模型：選出 Epoch {training.get('selected_epoch')} 後，丟棄暫時模型，"
-            f"再用完整 eligible Selection 正式重訓 {training.get('selected_epoch')} Epochs。"
-        ),
-        "",
-        "## 3. 各資料區段比較",
-        "",
-        *_markdown_split_table(payload),
+        f"- **Filter ID**：`{payload['filter_id']}`",
+        "- **主要統計口徑**：Ticker/Date Group Weighted",
     ]
+    if selection_summary is not None:
+        lines.append(
+            f"- **Selection**：{selection_summary['date_start']}～{selection_summary['date_end']}"
+        )
+    if oos_summary is not None:
+        lines.append(f"- **OOS**：{oos_summary['date_start']}～{oos_summary['date_end']}")
+
+    lines.extend(
+        [
+            "",
+            "## 1. 固定訓練參數",
+            "",
+            f"- Threshold：`{training.get('fixed_threshold')}`",
+            f"- Learning Rate：`{training.get('learning_rate')}`",
+            f"- Batch Size：`{training.get('batch_size')}`",
+            f"- Random Seed：`{training.get('seed')}`",
+            "",
+            "## 2. Epoch 選擇結果",
+            "",
+            f"- Epoch 上限：**{training.get('max_epochs')}**",
+            f"- 實際完成 Epoch：**{training.get('completed_epoch_search')}**",
+            f"- 選擇標準：`{training.get('epoch_selection_source')}`",
+            f"- 最低 Validation Loss：{_markdown_color(_loss(training.get('best_validation_loss')), 'blue')}",
+            f"- Early Stopping Patience：**{training.get('early_stopping_patience')}**",
+            (
+                f"- 最終模型：Inner Validation 選出 "
+                f"{_markdown_color('Epoch ' + str(selected_epoch), 'blue')}；"
+                "丟棄暫時模型後，再使用完整 eligible Selection 正式重訓 "
+                f"**{selected_epoch} Epochs**。"
+            ),
+            "",
+            *_markdown_epoch_table(training),
+            "## 3. 各資料區段比較",
+            "",
+            *_markdown_split_table(payload),
+        ]
+    )
     if EVALUATION_SPLIT_VALIDATION in payload["split_summaries"]:
         lines.extend(
             [
@@ -663,19 +793,17 @@ def render_markdown_report(payload: dict) -> str:
     if oos is not None:
         lines.extend(_markdown_confusion_matrix(oos, "OOS"))
     lines.extend(_markdown_selection_oos_difference(payload))
+
+    oos_tone = "green" if deployment["oos_improved"] else "red" if oos is not None else "yellow"
     lines.extend(
         [
             "## 最終部署判定",
             "",
-            "| 判定項目 | 結果 |",
-            "|---|---|",
-            f"| Inner Validation 是否正常運作 | {'是' if training.get('inner_validation_used') else '未啟用'} |",
-            f"| 是否選出 Best Epoch | {('是，Epoch ' + str(training.get('selected_epoch'))) if training.get('inner_validation_used') and training.get('selected_epoch') is not None else ('未使用，固定 Epoch ' + str(training.get('selected_epoch')))} |",
-            f"| OOS 是否有品質提升 | {'是' if oos is not None and float(oos.get('precision_delta') or 0.0) > 0 else '否'} |",
-            f"| 是否建議啟用 Runtime Filter | {'否' if conclusion['status'] == 'FAIL' else '需進一步策略驗證'} |",
-            f"| 是否建議匯出 Forward-OOS Scores | {'否' if conclusion['status'] == 'FAIL' else '待策略層驗證'} |",
+            f"### {_markdown_color('[' + conclusion['status'] + '] ' + conclusion['title'], deployment['conclusion_tone'])}",
             "",
-            f"**最終結論：[{conclusion['status']}] {conclusion['title']}。**",
+            f"- OOS 判定依據：{_markdown_color(deployment['oos_result'], oos_tone)}",
+            f"- 部署決策：{_markdown_color(deployment['deployment_decision'], 'red' if conclusion['status'] == 'FAIL' else 'yellow')}",
+            f"- 研究限制：{_markdown_color(deployment['retuning_limit'], 'yellow')}",
             "",
             "## 指標白話說明",
             "",
@@ -688,7 +816,6 @@ def render_markdown_report(payload: dict) -> str:
             "",
             "## 使用限制",
             "",
-            f"- {payload['audit']['oos_reuse_warning']}",
             "- 本報表用於分類品質判讀，不等同於策略淨報酬、MDD、交易成本或資金容量評估。",
             "- Row-level metrics、完整政策契約與原始 confusion matrix 保存在同目錄 JSON。",
             "",
@@ -696,32 +823,56 @@ def render_markdown_report(payload: dict) -> str:
     )
     return "\n".join(lines)
 
+def _console_training_parameters_section(training: dict, *, color: bool = False) -> list[str]:
+    lines = _section("1. 固定訓練參數", color=color)
+    lines.extend(
+        [
+            f"- Threshold：{training.get('fixed_threshold')}",
+            f"- Learning Rate：{training.get('learning_rate')}",
+            f"- Batch Size：{training.get('batch_size')}",
+            f"- Random Seed：{training.get('seed')}",
+        ]
+    )
+    return lines
 
-def _console_epoch_section(training: dict) -> list[str]:
-    lines = _section("1. Epoch 選擇結果")
-    summary_rows = [
-        ["Epoch 上限", training.get("max_epochs")],
-        ["實際完成 Epoch", training.get("completed_epoch_search")],
-        ["選擇標準", training.get("epoch_selection_source")],
-        ["最後選擇", f"Epoch {training.get('selected_epoch')}"],
-        ["最低 Validation Loss", _loss(training.get("best_validation_loss"))],
-        ["Early Stopping Patience", training.get("early_stopping_patience")],
-    ]
-    lines.extend(_render_ascii_table(["項目", "結果"], summary_rows))
+
+def _console_epoch_section(training: dict, *, color: bool = False) -> list[str]:
+    lines = _section("2. Epoch 選擇結果", color=color)
+    selected_epoch = training.get("selected_epoch")
+    lines.extend(
+        [
+            f"- Epoch 上限：{training.get('max_epochs')}",
+            f"- 實際完成 Epoch：{training.get('completed_epoch_search')}",
+            f"- 選擇標準：{training.get('epoch_selection_source')}",
+            f"- 最低 Validation Loss：{_paint(_loss(training.get('best_validation_loss')), 'blue', enabled=color, bold=True)}",
+            f"- Early Stopping Patience：{training.get('early_stopping_patience')}",
+            (
+                "- 最終模型：Inner Validation 選出 "
+                f"{_paint('Epoch ' + str(selected_epoch), 'blue', enabled=color, bold=True)}；"
+                "丟棄暫時模型後，再使用完整 eligible Selection 正式重訓 "
+                f"{selected_epoch} Epochs。"
+            ),
+        ]
+    )
     history = training.get("epoch_history") or []
     if history:
         lines.append("")
         epoch_rows = []
         for row in history:
-            decision = f"★ {row['decision']}" if row["decision"] == "最後選擇" else row["decision"]
+            selected = row["decision"] == "最後選擇"
+            decision = (
+                _paint("★ 最後選擇", "blue", enabled=color, bold=True)
+                if selected
+                else row["decision"]
+            )
             epoch_rows.append(
                 [
-                    row["epoch"],
+                    _paint(row["epoch"], "blue", enabled=color, bold=True) if selected else row["epoch"],
                     _loss(row.get("batch_loss")),
                     _loss(row.get("train_loss")),
                     _pct(row.get("train_accuracy")),
                     _pct(row.get("train_pass_rate")),
-                    _loss(row.get("validation_loss")),
+                    _paint(_loss(row.get("validation_loss")), "blue", enabled=color, bold=True) if selected else _loss(row.get("validation_loss")),
                     _pct(row.get("validation_accuracy")),
                     _pct(row.get("validation_pass_rate")),
                     decision,
@@ -744,31 +895,25 @@ def _console_epoch_section(training: dict) -> list[str]:
                 aligns=["right", "right", "right", "right", "right", "right", "right", "right", "left"],
             )
         )
-        lines.extend(
-            [
-                "",
-                f"最後模型：選出 Epoch {training.get('selected_epoch')} 後，丟棄暫時模型，",
-                f"再使用完整 eligible Selection 正式重訓 {training.get('selected_epoch')} Epochs。",
-            ]
-        )
     else:
         lines.extend(["", "未啟用 inner validation；最終模型依固定 epochs 訓練。"])
     return lines
 
-
-def _console_split_section(payload: dict) -> list[str]:
-    lines = _section("2. 各資料區段比較")
+def _console_split_section(payload: dict, *, color: bool = False) -> list[str]:
+    lines = _section("3. 各資料區段比較", color=color)
     rows = []
     for split_name in _split_order(payload):
         summary = payload["split_summaries"][split_name]
+        delta_tone = _tone_for_delta(summary.get("precision_delta"))
         rows.append(
             [
-                f"{SPLIT_LABELS[split_name]}\n{summary['date_start']}～{summary['date_end']}",
+                SPLIT_LABELS[split_name],
+                f"{summary['date_start']}～{summary['date_end']}",
                 _count(summary.get("group_count"), digits=0),
                 _pct(summary.get("base_pass_rate")),
                 _pct(summary.get("acceptance_rate")),
-                _pct(summary.get("pass_precision")),
-                _pp(summary.get("precision_delta")),
+                _paint(_pct(summary.get("pass_precision")), delta_tone, enabled=color, bold=True),
+                _paint(_pp(summary.get("precision_delta")), delta_tone, enabled=color, bold=True),
                 _pct(summary.get("pass_recall")),
                 _pct(summary.get("false_rejection_rate")),
                 _pct(summary.get("reject_specificity")),
@@ -779,7 +924,8 @@ def _console_split_section(payload: dict) -> list[str]:
     lines.extend(
         _render_ascii_table(
             [
-                "區段 / 日期",
+                "區段",
+                "日期",
                 "Groups",
                 "原始PASS",
                 "模型保留",
@@ -792,39 +938,64 @@ def _console_split_section(payload: dict) -> list[str]:
                 "平均Score",
             ],
             rows,
-            aligns=["left", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right"],
+            aligns=["left", "left", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right"],
         )
     )
     if EVALUATION_SPLIT_VALIDATION in payload["split_summaries"]:
         lines.extend(
             [
                 "",
-                "* Validation 是完整 Selection 重訓後的區段診斷；真正的 Epoch 選擇結果以上方 Epoch 表為準。",
+                _paint(
+                    "* Validation 是完整 Selection 重訓後的區段診斷；真正的 Epoch 選擇結果以上方 Epoch 表為準。",
+                    "gray",
+                    enabled=color,
+                ),
             ]
         )
     return lines
 
-
-def _console_confusion_section(summary: dict, label: str, number: int) -> list[str]:
+def _console_confusion_section(summary: dict, label: str, number: int, *, color: bool = False) -> list[str]:
     details = _confusion_details(summary)
-    lines = _section(f"{number}. {label} Confusion Matrix")
+    delta_tone = _tone_for_delta(summary.get("precision_delta"))
+    lines = _section(f"{number}. {label} Confusion Matrix", color=color)
     lines.extend(["統計口徑：Ticker/Date Group Weighted", "列 = 實際結果；欄 = 模型預測", ""])
     rows = [
         [
             f"實際 PASS\nBase PASS {_pct(details['base_pass_rate'])}",
-            f"TP = {_weighted_count(details['tp'])}\n正確保留 PASS\nRecall {_pct(details['recall'])}",
-            f"FN = {_weighted_count(details['fn'])}\n錯殺真正 PASS\n錯殺率 {_pct(details['false_rejection_rate'])}",
+            _paint(
+                f"正確保留 PASS\nTP = {_weighted_count(details['tp'])}\nRecall {_pct(details['recall'])}",
+                "green",
+                enabled=color,
+                bold=True,
+            ),
+            _paint(
+                f"錯殺真正 PASS\nFN = {_weighted_count(details['fn'])}\n錯殺率 {_pct(details['false_rejection_rate'])}",
+                "red",
+                enabled=color,
+                bold=True,
+            ),
             f"{_weighted_count(details['actual_pass'])}\n占全部 {_pct(details['base_pass_rate'])}",
         ],
         [
             f"實際 REJECT\nBase REJECT {_pct(details['base_reject_rate'])}",
-            f"FP = {_weighted_count(details['fp'])}\n錯誤保留 REJECT\n誤放率 {_pct(details['false_positive_rate'])}",
-            f"TN = {_weighted_count(details['tn'])}\n正確拒絕 REJECT\n辨識率 {_pct(details['specificity'])}",
+            _paint(
+                f"錯誤保留 REJECT\nFP = {_weighted_count(details['fp'])}\n誤放率 {_pct(details['false_positive_rate'])}",
+                "red",
+                enabled=color,
+                bold=True,
+            ),
+            _paint(
+                f"正確拒絕 REJECT\nTN = {_weighted_count(details['tn'])}\n辨識率 {_pct(details['specificity'])}",
+                "green",
+                enabled=color,
+                bold=True,
+            ),
             f"{_weighted_count(details['actual_reject'])}\n占全部 {_pct(details['base_reject_rate'])}",
         ],
         [
             "預測合計",
-            f"{_weighted_count(details['predicted_pass'])}\n保留率 {_pct(details['acceptance_rate'])}\nPrecision {_pct(details['precision'])}",
+            f"{_weighted_count(details['predicted_pass'])}\n保留率 {_pct(details['acceptance_rate'])}\n"
+            + _paint(f"Precision {_pct(details['precision'])}", delta_tone, enabled=color, bold=True),
             f"{_weighted_count(details['predicted_reject'])}\n拒絕率 {_pct(details['rejection_rate'])}",
             f"{_weighted_count(details['total'])}\nAccuracy {_pct(details['accuracy'])}",
         ],
@@ -836,43 +1007,69 @@ def _console_confusion_section(summary: dict, label: str, number: int) -> list[s
             aligns=["left", "right", "right", "right"],
         )
     )
-    lines.extend(
-        [
-            "",
-            f"品質變化：原始 PASS {_pct(summary.get('base_pass_rate'))} → "
-            f"保留後 Precision {_pct(summary.get('pass_precision'))} "
-            f"({_pp(summary.get('precision_delta'))}；{_signed_pct(summary.get('precision_relative_change'))})",
-        ]
+    quality_text = (
+        f"品質變化：原始 PASS {_pct(summary.get('base_pass_rate'))} → "
+        f"保留後 Precision {_pct(summary.get('pass_precision'))} "
+        f"({_pp(summary.get('precision_delta'))}；{_signed_pct(summary.get('precision_relative_change'))})"
     )
+    lines.extend(["", _paint(quality_text, delta_tone, enabled=color, bold=True)])
     if label == "OOS":
+        judgement = (
+            "模型大量拒絕訊號，但保留下來的訊號品質未提高；"
+            f"錯殺 {_pct(summary.get('false_rejection_rate'))} 的真正 PASS。"
+            if float(summary.get("precision_delta") or 0.0) <= 0
+            else "OOS precision 有提升；仍須檢查保留率、PASS recall 與策略層經濟效果。"
+        )
+        lines.append(_paint("判讀：" + judgement, delta_tone, enabled=color, bold=True))
+    else:
         lines.append(
-            "判讀："
-            + (
-                "模型大量拒絕訊號，但保留下來的訊號品質未提高；"
-                f"錯殺 {_pct(summary.get('false_rejection_rate'))} 的真正 PASS。"
-                if float(summary.get("precision_delta") or 0.0) <= 0
-                else "OOS precision 有提升；仍須檢查保留率、PASS recall 與策略層經濟效果。"
+            _paint(
+                "判讀：Selection 內具有篩選能力；是否可部署仍由 OOS 泛化結果決定。",
+                "green",
+                enabled=color,
+                bold=True,
             )
         )
-    else:
-        lines.append("判讀：Selection 內具有篩選能力；是否可部署仍由 OOS 泛化結果決定。")
     return lines
 
-
-def _console_difference_section(payload: dict, number: int) -> list[str]:
+def _console_difference_section(payload: dict, number: int, *, color: bool = False) -> list[str]:
     selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
     oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
     if selection is None or oos is None:
         return []
-    lines = _section(f"{number}. Selection 與 OOS 差異")
-    rows = [
-        ["原始 PASS 比例", _pct(selection.get("base_pass_rate")), _pct(oos.get("base_pass_rate")), _pp(float(oos.get("base_pass_rate")) - float(selection.get("base_pass_rate")))],
-        ["保留後 Precision", _pct(selection.get("pass_precision")), _pct(oos.get("pass_precision")), _pp(float(oos.get("pass_precision")) - float(selection.get("pass_precision")))],
-        ["模型保留率", _pct(selection.get("acceptance_rate")), _pct(oos.get("acceptance_rate")), _pp(float(oos.get("acceptance_rate")) - float(selection.get("acceptance_rate")))],
-        ["PASS Recall", _pct(selection.get("pass_recall")), _pct(oos.get("pass_recall")), _pp(float(oos.get("pass_recall")) - float(selection.get("pass_recall")))],
-        ["平均 Score", _decimal(selection.get("avg_score")), _decimal(oos.get("avg_score")), _decimal(float(oos.get("avg_score")) - float(selection.get("avg_score")))],
-        ["Precision 絕對提升", _pp(selection.get("precision_delta")), _pp(oos.get("precision_delta")), _pp(float(oos.get("precision_delta")) - float(selection.get("precision_delta")))],
+    lines = _section(f"{number}. Selection 與 OOS 差異", color=color)
+    raw_rows = [
+        ["原始 PASS 比例", selection.get("base_pass_rate"), oos.get("base_pass_rate"), "pct"],
+        ["保留後 Precision", selection.get("pass_precision"), oos.get("pass_precision"), "pct"],
+        ["模型保留率", selection.get("acceptance_rate"), oos.get("acceptance_rate"), "pct"],
+        ["PASS Recall", selection.get("pass_recall"), oos.get("pass_recall"), "pct"],
+        ["平均 Score", selection.get("avg_score"), oos.get("avg_score"), "decimal"],
+        ["Precision 絕對提升", selection.get("precision_delta"), oos.get("precision_delta"), "pp"],
     ]
+    rows = []
+    for label, selection_value, oos_value, kind in raw_rows:
+        difference = float(oos_value) - float(selection_value)
+        tone = _tone_for_delta(difference)
+        if kind == "pct":
+            selection_text = _pct(selection_value)
+            oos_text = _pct(oos_value)
+            difference_text = _pp(difference)
+        elif kind == "pp":
+            selection_text = _pp(selection_value)
+            oos_text = _pp(oos_value)
+            difference_text = _pp(difference)
+        else:
+            selection_text = _decimal(selection_value)
+            oos_text = _decimal(oos_value)
+            difference_text = _decimal(difference)
+        rows.append(
+            [
+                label,
+                selection_text,
+                _paint(oos_text, tone, enabled=color, bold=True),
+                _paint(difference_text, tone, enabled=color, bold=True),
+            ]
+        )
     lines.extend(
         _render_ascii_table(
             ["指標", "Selection", "OOS", "OOS - Selection"],
@@ -882,49 +1079,35 @@ def _console_difference_section(payload: dict, number: int) -> list[str]:
     )
     return lines
 
-
-def _console_deployment_section(payload: dict, number: int) -> list[str]:
+def _console_deployment_section(payload: dict, number: int, *, color: bool = False) -> list[str]:
     conclusion = payload["conclusion"]
-    training = payload["training"]
+    deployment = _deployment_presentation(payload)
     oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
-    oos_improved = oos is not None and float(oos.get("precision_delta") or 0.0) > 0
-    lines = _section(f"{number}. 最終部署判定")
-    rows = [
-        ["Inner Validation 是否正常運作", "是" if training.get("inner_validation_used") else "未啟用"],
-        [
-            "是否選出 Best Epoch",
-            (
-                f"是，Epoch {training.get('selected_epoch')}"
-                if training.get("inner_validation_used") and training.get("selected_epoch") is not None
-                else f"未使用，固定 Epoch {training.get('selected_epoch')}"
-            ),
-        ],
-        ["OOS 是否有品質提升", "是" if oos_improved else "否"],
-        ["是否建議啟用 Runtime Filter", "否" if conclusion["status"] == "FAIL" else "需進一步策略驗證"],
-        ["是否建議匯出 Forward-OOS Scores", "否" if conclusion["status"] == "FAIL" else "待策略層驗證"],
-    ]
-    lines.extend(_render_ascii_table(["判定項目", "結果"], rows))
+    oos_tone = "green" if deployment["oos_improved"] else "red" if oos is not None else "yellow"
+    lines = _section(f"{number}. 最終部署判定", color=color)
     lines.extend(
         [
-            "",
-            f"最終結論：[{conclusion['status']}] {conclusion['title']}。",
-            conclusion["explanation"],
-            f"部署建議：{conclusion['deployment_guidance']}",
+            _paint(
+                f"最終判定：[{conclusion['status']}] {conclusion['title']}",
+                deployment["conclusion_tone"],
+                enabled=color,
+                bold=True,
+            ),
+            f"- OOS 判定依據：{_paint(deployment['oos_result'], oos_tone, enabled=color, bold=True)}",
+            f"- 部署決策：{_paint(deployment['deployment_decision'], 'red' if conclusion['status'] == 'FAIL' else 'yellow', enabled=color, bold=True)}",
+            f"- 研究限制：{_paint(deployment['retuning_limit'], 'yellow', enabled=color, bold=True)}",
         ]
     )
     return lines
 
-
-def render_console_summary(payload: dict) -> str:
-    conclusion = payload["conclusion"]
+def render_console_summary(payload: dict, *, color: bool = False) -> str:
     training = payload["training"]
     lines = [
         "",
         "=" * 96,
-        " Breakout Quality 評估報表",
+        " " + _paint("Breakout Quality 評估報表", "blue", enabled=color, bold=True),
         "=" * 96,
         f"Filter ID       : {payload['filter_id']}",
-        f"Threshold       : {training.get('fixed_threshold')}",
         "主要統計口徑    : Ticker/Date Group Weighted",
     ]
     selection_summary = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
@@ -935,30 +1118,24 @@ def render_console_summary(payload: dict) -> str:
     oos_summary = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
     if oos_summary is not None:
         lines.append(f"OOS             : {oos_summary['date_start']} ～ {oos_summary['date_end']}")
-    lines.extend(
-        [
-        f"最終判定        : [{conclusion['status']}] {conclusion['title']}",
-        f"部署建議        : {conclusion['deployment_guidance']}",
-        ]
-    )
-    lines.extend(_console_epoch_section(training))
-    lines.extend(_console_split_section(payload))
-    next_number = 3
+    lines.extend(_console_training_parameters_section(training, color=color))
+    lines.extend(_console_epoch_section(training, color=color))
+    lines.extend(_console_split_section(payload, color=color))
+    next_number = 4
     selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
     if selection is not None:
-        lines.extend(_console_confusion_section(selection, "Selection", next_number))
+        lines.extend(_console_confusion_section(selection, "Selection", next_number, color=color))
         next_number += 1
     oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
     if oos is not None:
-        lines.extend(_console_confusion_section(oos, "OOS", next_number))
+        lines.extend(_console_confusion_section(oos, "OOS", next_number, color=color))
         next_number += 1
-    difference = _console_difference_section(payload, next_number)
+    difference = _console_difference_section(payload, next_number, color=color)
     if difference:
         lines.extend(difference)
         next_number += 1
-    lines.extend(_console_deployment_section(payload, next_number))
+    lines.extend(_console_deployment_section(payload, next_number, color=color))
     return "\n".join(lines)
-
 
 def generate_report(
     *,
@@ -1000,7 +1177,7 @@ def main(argv=None) -> int:
         include_oos=bool(args.include_oos),
         score_path=args.score_path,
     )
-    print(render_console_summary(payload))
+    print(render_console_summary(payload, color=_console_color_enabled()))
     print("\n" + "=" * 96)
     print(" 報表檔案")
     print("=" * 96)

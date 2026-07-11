@@ -85,7 +85,7 @@ project/
 
 - `apps/breakout_quality.py` 是 dataset、training、score export、易讀 report 與詳細 evaluation 的單一正式使用者入口；負責互動選單、可重現 workflow orchestration、來源 CSV inventory freshness 判斷與子命令分派，但不複製 dataset、模型、split、export、metrics 或 report 規則。
 - `filters/breakout_quality/` 承接 feature/label、source-data inventory fingerprint、artifact contract、canonical path、外層 Selection/OOS split 與正式 runtime lookup；正式 runtime 不執行 CNN，只讀 canonical `scores.csv`。
-- `tools/filters/breakout_quality/` 承接 dataset、training、score export、研究 metrics 與 report rendering 子系統實作；`evaluate.py` 是完整 JSON 稽核介面，`report.py` 只重用同一份 metrics，輸出表格化終端報表、Markdown 與完整報表 JSON，不另算第二套指標。training 會驗證 source-data inventory，來源已更新時拒絕沿用過期 dataset。直接 CLI 僅保留開發與既有指令相容，不再作為文件建議的正式入口。
+- `tools/filters/breakout_quality/` 承接 dataset、training、score export、研究 metrics 與 report rendering 子系統實作；`evaluate.py` 是完整 JSON 稽核介面，`report.py` 只重用同一份 metrics，輸出表格化終端報表、Markdown 與完整報表 JSON，不另算第二套指標。報表將固定訓練參數、Epoch 選擇、區段比較與部署判定分區；區段與日期分欄，部署判定只保留 OOS 依據、部署決策與不可回調限制。終端色彩僅在互動式 TTY 自動啟用，淡藍、綠、黃、紅分別標示選擇、正向、警告與失敗重點。training 會驗證 source-data inventory，來源已更新時拒絕沿用過期 dataset。直接 CLI 僅保留開發與既有指令相容，不再作為文件建議的正式入口。
 - 正式工件唯一位置為 `models/filters/breakout_quality/<filter_id>/`；`split_assignments.csv` 的 outer `selection/oos` 日期直接來自 `core.walk_forward_policy`。
 - inner validation 為可配置模式：關閉時完整 Selection 固定 epochs；開啟時只在 Selection 內選 epoch，之後以全部 eligible Selection 重訓。OOS 永不參與 epoch、threshold 或模型選擇。
 - 研究分數、dataset 與 report 等可重建輸出只放 `outputs/filters/breakout_quality/<filter_id>/`；報表固定在 `reports/evaluation_report.md` 與 `reports/evaluation_metrics.json`，不得覆蓋正式 `scores.csv`。

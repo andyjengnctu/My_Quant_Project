@@ -63,7 +63,7 @@ python apps/workbench.py
 python apps/breakout_quality.py
 ```
 
-完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；可選擇是否把 OOS 納入報表。終端顯示表格化比較、Epoch 選擇與 Confusion Matrix，Markdown 與完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/reports/`。批次或需要可重現命令時使用 `workflow`：
+完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；可選擇是否把 OOS 納入報表。報表第 1 區獨立列出固定訓練參數，第 2 區呈現 Epoch 選擇與完整重訓結果；資料區段與日期分欄，最終部署判定只保留 OOS 依據、部署決策與不可回調同一 OOS 的限制。終端顯示表格化比較、條列式 Epoch／部署判定與整合比例的 Confusion Matrix；互動式終端會以淡藍、綠、黃、紅標示重點，重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --epochs 20 --batch-size 256 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
