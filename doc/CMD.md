@@ -57,25 +57,31 @@ python apps/workbench.py
 
 ```bash
 python tools/filters/breakout_quality/build_dataset.py --dataset full --filter-id breakout_quality_v1
-# epochs、lr、seed、threshold 必須在查看 OOS 前固定；train.py 不使用 inner validation / early stopping
-python tools/filters/breakout_quality/train.py --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50
+# 預設關閉 inner validation：epochs 是完整 Selection 的正式固定訓練次數
+python tools/filters/breakout_quality/train.py --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
+# 開啟時：epochs 是搜尋上限；以 Selection 尾端 N 個月選 best epoch，之後完整 Selection 重訓
+python tools/filters/breakout_quality/train.py --filter-id breakout_quality_v1 --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 python tools/filters/breakout_quality/export_scores.py --filter-id breakout_quality_v1 --scope research
-# train 僅供診斷，不得據此改成看過 OOS 才決定的規格
+# train / validation / selection 僅供診斷；threshold 仍須在 OOS 前固定
 python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --split train
+python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --split validation
+python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --split selection
 # OOS 是最終泛化評估；重複用同一段 OOS 調參後，它就不再是乾淨 OOS
 python tools/filters/breakout_quality/evaluate.py --filter-id breakout_quality_v1 --split oos
 ```
 
 - Dataset/tool 輸出固定在 `outputs/filters/breakout_quality/<filter_id>/`。
 - Model、manifest 與 `split_assignments.csv` 固定在 `models/filters/breakout_quality/<filter_id>/`；固定 threshold 也寫入 manifest，OOS 評估不得改用其他值；正式啟用時 active `breakout_quality_score_threshold` 應與該固定值一致。
-- 外層正式期間只有 `selection / oos`，日期直接讀 `core.walk_forward_policy`；方案 B 將全部 eligible Selection 標為 `selection_role=train`，只把標籤資訊跨進 OOS 的事件標為 `embargo`。
+- 外層正式期間只有 `selection / oos`，日期直接讀 `core.walk_forward_policy`。
+- `BREAKOUT_QUALITY_USE_INNER_VALIDATION=False` 時，全部 eligible Selection 固定 epochs 訓練；開啟時，Selection 尾端 `BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS` 個月用來選 epoch，之後重新初始化模型，以全部 eligible Selection（含 validation 與 inner-embargo rows）按選定 epoch 重訓。
+- inner validation 只可選 epoch；fixed threshold 仍在 OOS 前鎖定，不可由 validation 或 OOS 自動最佳化。
 - Rolling OOS fold 必須沿用既有 `V16_WF_SELECTION_START_DATE`、`V16_WF_SEARCH_TRAIN_END_DATE`、`V16_WF_OOS_START_DATE`、`V16_WF_OOS_END_DATE` policy override；不得另傳一套 breakout-quality 專用日期。
 - `research` 分數固定寫到 `outputs/filters/breakout_quality/<filter_id>/research_scores.csv`，不會改動正式 `scores.csv` 或 model manifest。
 - 正式 `models/.../scores.csv` 只能由明確的 `--scope forward_oos` 建立。
 
 ## 建立正式 forward-OOS score table
 
-1. 先以完整研究資料執行 `build_dataset.py` 與 `train.py`；`train.py` 依既有 walk-forward policy 使用完整 eligible Selection、固定 epochs、禁止 inner validation / early stopping，並保留 `model.pt`、`split_assignments.csv`、`manifest.json` 與 `model_information_cutoff`。
+1. 先以完整研究資料執行 `build_dataset.py` 與 `train.py`；`train.py` 依既有 walk-forward policy 執行固定 epoch 模式，或以 Selection 內 validation 選 epoch 後完整重訓，並保留 `model.pt`、`split_assignments.csv`、`manifest.json` 與 `model_information_cutoff`。
 2. 若目前 dataset 已包含 outer OOS，可直接匯出；若需延伸到更新資料，只重新執行 `build_dataset.py`，不可重新 train 同一模型。
 3. 執行：
 

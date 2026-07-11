@@ -84,7 +84,8 @@ project/
 
 - `filters/breakout_quality/` 承接 feature/label、artifact contract、canonical path、外層 Selection/OOS split 與正式 runtime lookup；正式 runtime 不執行 CNN，只讀 canonical `scores.csv`。
 - `tools/filters/breakout_quality/` 只承接 dataset、training、score export 與研究評估；不得複製 runtime 決策規則。
-- 正式工件唯一位置為 `models/filters/breakout_quality/<filter_id>/`；`split_assignments.csv` 的 outer `selection/oos` 日期直接來自 `core.walk_forward_policy`。方案 B 使用完整 eligible Selection 固定 epochs 訓練，只保留 Selection/OOS 邊界 embargo，不建立 inner validation 或 early stopping。
+- 正式工件唯一位置為 `models/filters/breakout_quality/<filter_id>/`；`split_assignments.csv` 的 outer `selection/oos` 日期直接來自 `core.walk_forward_policy`。
+- inner validation 為可配置模式：關閉時完整 Selection 固定 epochs；開啟時只在 Selection 內選 epoch，之後以全部 eligible Selection 重訓。OOS 永不參與 epoch、threshold 或模型選擇。
 - 研究分數與 dataset 等可重建輸出只放 `outputs/filters/breakout_quality/<filter_id>/`，不得覆蓋正式 `scores.csv`。
 - `dl_quality_score >= active breakout_quality_score_threshold` 是唯一通過判斷；manifest 只宣告契約與 OOS 可用日期，不預先固化另一份 `dl_pass`。
 - 正式 runtime 僅在 manifest 宣告的有效期間套用模型；有效期後只要出現未覆蓋候選事件即 fail-fast。

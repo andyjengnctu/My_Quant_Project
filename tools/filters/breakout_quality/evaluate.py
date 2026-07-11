@@ -1,4 +1,4 @@
-"""Evaluate fixed-threshold breakout-quality scores on Selection train or outer OOS."""
+"""Evaluate fixed-threshold breakout-quality scores on canonical Selection/OOS roles."""
 
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ from filters.breakout_quality.contract import (
     OUTER_SPLIT_SELECTION,
     RUNTIME_SCOPE_RESEARCH,
     SCORE_COLUMN,
+    SELECTION_ROLE_INNER_EMBARGO,
     SELECTION_ROLE_TRAIN,
+    SELECTION_ROLE_VALIDATION,
 )
 from filters.breakout_quality.paths import (
     resolve_filter_research_manifest_path,
@@ -43,10 +45,14 @@ from tools.filters.breakout_quality.common import (
 )
 
 EVALUATION_SPLIT_TRAIN = "train"
+EVALUATION_SPLIT_VALIDATION = "validation"
+EVALUATION_SPLIT_SELECTION = "selection"
 EVALUATION_SPLIT_OOS = "oos"
 EVALUATION_SPLIT_ALL = "all"
 EVALUATION_SPLITS = (
     EVALUATION_SPLIT_TRAIN,
+    EVALUATION_SPLIT_VALIDATION,
+    EVALUATION_SPLIT_SELECTION,
     EVALUATION_SPLIT_OOS,
     EVALUATION_SPLIT_ALL,
 )
@@ -73,7 +79,7 @@ def parse_args(argv=None):
         "--split",
         choices=EVALUATION_SPLITS,
         required=True,
-        help="train/all 只供診斷；oos 是最終泛化評估",
+        help=("train/validation/selection/all 只供診斷；" "oos 是最終泛化評估"),
     )
     parser.add_argument(
         "--score-path",
@@ -214,6 +220,22 @@ def _select_rows(frame: pd.DataFrame, split_name: str, outer_policy: dict) -> pd
             (frame["outer_split"] == OUTER_SPLIT_SELECTION)
             & (frame["selection_role"] == SELECTION_ROLE_TRAIN)
         ].copy()
+    elif split_name == EVALUATION_SPLIT_VALIDATION:
+        selected = frame[
+            (frame["outer_split"] == OUTER_SPLIT_SELECTION)
+            & (frame["selection_role"] == SELECTION_ROLE_VALIDATION)
+        ].copy()
+    elif split_name == EVALUATION_SPLIT_SELECTION:
+        selected = frame[
+            (frame["outer_split"] == OUTER_SPLIT_SELECTION)
+            & frame["selection_role"].isin(
+                [
+                    SELECTION_ROLE_TRAIN,
+                    SELECTION_ROLE_VALIDATION,
+                    SELECTION_ROLE_INNER_EMBARGO,
+                ]
+            )
+        ].copy()
     elif split_name == EVALUATION_SPLIT_OOS:
         selected = frame[frame["outer_split"] == OUTER_SPLIT_OOS].copy()
         if "label_eval_end_date" not in selected.columns:
@@ -268,7 +290,7 @@ def main(argv=None) -> int:
             raise ValueError("threshold 必須介於 0 與 1")
         if not np.isclose(requested_threshold, threshold, rtol=0.0, atol=1e-12):
             raise ValueError(
-                "scheme B 的 threshold 已在 train 前固定；"
+                "breakout quality 的 threshold 已在 train 前固定；"
                 f"manifest={threshold}, requested={requested_threshold}"
             )
     normalized_scores = normalize_split_assignment_keys(score_frame)
@@ -304,7 +326,9 @@ def main(argv=None) -> int:
     selected = _select_rows(merged, str(args.split), outer_policy)
     selected_dates = pd.to_datetime(selected["date"], errors="raise")
     role = {
-        EVALUATION_SPLIT_TRAIN: "selection_train_diagnostic_only",
+        EVALUATION_SPLIT_TRAIN: "inner_train_diagnostic_only",
+        EVALUATION_SPLIT_VALIDATION: "inner_validation_epoch_selection_diagnostic",
+        EVALUATION_SPLIT_SELECTION: "final_refit_selection_diagnostic_only",
         EVALUATION_SPLIT_OOS: "outer_oos_final_generalization_evaluation",
         EVALUATION_SPLIT_ALL: "mixed_research_diagnostic_only",
     }[str(args.split)]
@@ -316,6 +340,10 @@ def main(argv=None) -> int:
         "threshold": threshold,
         "threshold_source": "model_manifest.fixed_evaluation_threshold",
         "threshold_selection_allowed": False,
+        "epoch_selection_allowed": bool(
+            args.split == EVALUATION_SPLIT_VALIDATION
+            and bool(model_contract.manifest.get("inner_validation_used", False))
+        ),
         "is_final_oos_evaluation": bool(args.split == EVALUATION_SPLIT_OOS),
         "reusing_oos_for_tuning_would_change_role_to_validation": bool(
             args.split == EVALUATION_SPLIT_OOS

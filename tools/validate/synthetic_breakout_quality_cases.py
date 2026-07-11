@@ -19,6 +19,11 @@ from config.breakout_policy import (
 )
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
+    BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
+    BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
+    BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
+    BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
+    BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     build_breakout_quality_default_high_len_values,
 )
 from filters.breakout_quality.artifacts import (
@@ -34,8 +39,10 @@ from filters.breakout_quality.contract import (
     FILTER_FAMILY,
     SELECTION_ROLE_EMBARGO,
     SELECTION_ROLE_IGNORE,
+    SELECTION_ROLE_INNER_EMBARGO,
     SELECTION_ROLE_NOT_APPLICABLE,
     SELECTION_ROLE_TRAIN,
+    SELECTION_ROLE_VALIDATION,
     OUTER_SPLIT_OOS,
     OUTER_SPLIT_OUT_OF_SCOPE,
     OUTER_SPLIT_SELECTION,
@@ -47,6 +54,7 @@ from filters.breakout_quality.contract import (
     SCORE_THRESHOLD_SOURCE,
     SPLIT_ASSIGNMENT_REQUIRED_COLUMNS,
     SPLIT_ASSIGNMENT_SCHEMA_VERSION,
+    TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
 from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_research_score_path
 from filters.breakout_quality.score_store import build_pass_condition_from_score_table, load_score_table
@@ -112,6 +120,18 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         True,
         0.0 <= float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD) <= 1.0,
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inner_validation_config_has_legal_types_and_ranges",
+        True,
+        isinstance(BREAKOUT_QUALITY_USE_INNER_VALIDATION, bool)
+        and int(BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS) >= 1
+        and int(BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE) >= 0
+        and float(BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA) >= 0.0
+        and int(BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES) >= 1,
+    )
     try:
         V16StrategyParams(breakout_quality_filter_id=" ")
         empty_filter_id_rejected = False
@@ -136,20 +156,13 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     date_and_end = (
-        ("2024-12-31", "2025-01-01"),
-        ("2025-01-01", "2025-01-02"),
-        ("2025-01-02", "2025-01-03"),
-        ("2025-01-03", "2025-01-05"),
-        ("2025-01-04", "2025-01-06"),
-        ("2025-01-05", "2025-01-08"),
-        ("2025-01-06", "2025-01-09"),
-        ("2025-01-07", "2025-01-08"),
-        ("2025-01-08", "2025-01-10"),
-        ("2025-01-09", "2025-01-10"),
-        ("2025-01-10", "2025-01-11"),
-        ("2025-01-11", "2025-01-13"),
-        ("2025-01-12", "2025-01-12"),
-        ("2025-01-13", "2025-01-14"),
+        ("2024-12-31", "2025-01-02"),
+        ("2025-01-10", "2025-01-20"),
+        ("2025-02-20", "2025-03-05"),
+        ("2025-03-10", "2025-03-20"),
+        ("2025-04-20", "2025-05-05"),
+        ("2025-05-10", "2025-05-20"),
+        ("2025-06-20", "2025-07-05"),
     )
     rows = []
     for event_date, label_end_date in date_and_end:
@@ -167,117 +180,168 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
     outer_policy = {
         "policy_source": "core.walk_forward_policy.synthetic_override",
         "selection_start_date": "2025-01-01",
-        "selection_end_date": "2025-01-08",
-        "oos_start_date": "2025-01-09",
-        "configured_oos_end_date": "2025-01-12",
-        "effective_oos_end_date": "2025-01-12",
+        "selection_end_date": "2025-04-30",
+        "oos_start_date": "2025-05-01",
+        "configured_oos_end_date": "2025-06-30",
+        "effective_oos_end_date": "2025-06-30",
     }
     outer_policy["policy_fingerprint_sha256"] = compute_outer_policy_fingerprint(
         outer_policy
     )
-    assignments, train_idx, oos_idx, report = build_selection_oos_split_assignments(
+
+    (
+        assignments_off,
+        train_off,
+        validation_off,
+        refit_off,
+        oos_off,
+        report_off,
+    ) = build_selection_oos_split_assignments(
         events,
         labels,
         outer_policy=outer_policy,
+        use_inner_validation=False,
+        inner_validation_months=2,
+        early_stopping_enabled=False,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "toggle_off_uses_full_selection",
+        (6, 0, 6, False, False),
+        (
+            len(train_off),
+            len(validation_off),
+            len(refit_off),
+            report_off["inner_validation_used"],
+            report_off["early_stopping_used"],
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "toggle_off_selection_oos_embargo_rows",
+        2,
+        report_off["selection_oos_embargo_row_count"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "toggle_off_role_counts",
+        {
+            SELECTION_ROLE_TRAIN: 6,
+            SELECTION_ROLE_VALIDATION: 0,
+            SELECTION_ROLE_INNER_EMBARGO: 0,
+            SELECTION_ROLE_EMBARGO: 2,
+            SELECTION_ROLE_IGNORE: 0,
+            SELECTION_ROLE_NOT_APPLICABLE: 6,
+        },
+        report_off["selection_role_counts"],
     )
 
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "outer_selection_start",
-        "2025-01-01",
-        report["selection_start_date"],
+    (
+        assignments_on,
+        train_on,
+        validation_on,
+        refit_on,
+        oos_on,
+        report_on,
+    ) = build_selection_oos_split_assignments(
+        events,
+        labels,
+        outer_policy=outer_policy,
+        use_inner_validation=True,
+        inner_validation_months=2,
+        early_stopping_enabled=True,
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "outer_oos_start",
-        "2025-01-09",
-        report["oos_start_date"],
+        "toggle_on_period_and_roles",
+        ("2025-03-01", 2, 2, 2, 6, True, True),
+        (
+            report_on["inner_validation_start_date"],
+            len(train_on),
+            len(validation_on),
+            report_on["inner_train_validation_embargo_row_count"],
+            len(refit_on),
+            report_on["inner_validation_used"],
+            report_on["early_stopping_used"],
+        ),
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "full_selection_train_rows",
-        12,
-        len(train_idx),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "selection_oos_embargo_rows",
-        4,
-        report["selection_oos_embargo_row_count"],
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "oos_evaluable_rows",
-        6,
-        len(oos_idx),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "oos_label_after_end_rows",
-        2,
-        report["oos_label_after_end_row_count"],
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "group_overlap_forbidden",
-        0,
-        report["overlap_group_count"],
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "event_date_overlap_forbidden",
-        0,
-        report["overlap_event_date_count"],
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "selection_label_information_before_oos",
+        "toggle_on_refit_recovers_inner_embargo_rows",
         True,
-        pd.to_datetime(events.iloc[train_idx]["label_eval_end_date"]).max()
-        < pd.Timestamp(report["oos_start_date"]),
+        set(refit_on.tolist())
+        == set(train_on.tolist())
+        | set(validation_on.tolist())
+        | set(
+            np.flatnonzero(
+                assignments_on["selection_role"].to_numpy()
+                == SELECTION_ROLE_INNER_EMBARGO
+            ).tolist()
+        ),
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "outer_split_counts",
+        "toggle_on_role_counts",
         {
-            OUTER_SPLIT_SELECTION: 16,
-            OUTER_SPLIT_OOS: 8,
-            OUTER_SPLIT_OUT_OF_SCOPE: 4,
-        },
-        report["outer_split_counts"],
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "selection_role_counts",
-        {
-            SELECTION_ROLE_TRAIN: 12,
-            SELECTION_ROLE_EMBARGO: 4,
+            SELECTION_ROLE_TRAIN: 2,
+            SELECTION_ROLE_VALIDATION: 2,
+            SELECTION_ROLE_INNER_EMBARGO: 2,
+            SELECTION_ROLE_EMBARGO: 2,
             SELECTION_ROLE_IGNORE: 0,
-            SELECTION_ROLE_NOT_APPLICABLE: 12,
+            SELECTION_ROLE_NOT_APPLICABLE: 6,
         },
-        report["selection_role_counts"],
+        report_on["selection_role_counts"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inner_train_label_information_before_validation",
+        True,
+        pd.to_datetime(events.iloc[train_on]["label_eval_end_date"]).max()
+        < pd.Timestamp(report_on["inner_validation_start_date"]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "final_refit_label_information_before_oos",
+        True,
+        pd.to_datetime(events.iloc[refit_on]["label_eval_end_date"]).max()
+        < pd.Timestamp(report_on["oos_start_date"]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "oos_evaluable_and_tail_rows",
+        (2, 2),
+        (len(oos_on), report_on["oos_label_after_end_row_count"]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "outer_and_inner_overlap_forbidden",
+        (0, 0, 0, 0),
+        (
+            report_on["overlap_group_count"],
+            report_on["overlap_event_date_count"],
+            report_on["inner_train_validation_overlap_group_count"],
+            report_on["inner_train_validation_overlap_event_date_count"],
+        ),
     )
     add_check(
         results,
@@ -287,8 +351,8 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
         True,
         bool(
             (
-                assignments.loc[
-                    assignments["outer_split"] != OUTER_SPLIT_SELECTION,
+                assignments_on.loc[
+                    assignments_on["outer_split"] != OUTER_SPLIT_SELECTION,
                     "selection_role",
                 ]
                 == SELECTION_ROLE_NOT_APPLICABLE
@@ -302,22 +366,10 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
         "split_assignment_key_unique",
         False,
         bool(
-            assignments.duplicated(
+            assignments_on.duplicated(
                 ["ticker", "date", "high_len"],
                 keep=False,
             ).any()
-        ),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "scheme_b_uses_full_selection_without_validation",
-        (True, False, False),
-        (
-            report["training_uses_all_eligible_selection_rows"],
-            report["inner_validation_used"],
-            report["early_stopping_used"],
         ),
     )
 
@@ -346,7 +398,8 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
             rolling_fold_policy["effective_oos_end_date"],
         ),
     )
-    summary["split_report"] = report
+    summary["split_report_off"] = report_off
+    summary["split_report_on"] = report_on
     return results, summary
 
 
@@ -508,6 +561,8 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     },
                     "selection_role_counts": {
                         SELECTION_ROLE_TRAIN: 2,
+                        SELECTION_ROLE_VALIDATION: 0,
+                        SELECTION_ROLE_INNER_EMBARGO: 0,
                         SELECTION_ROLE_EMBARGO: 0,
                         SELECTION_ROLE_IGNORE: 0,
                         SELECTION_ROLE_NOT_APPLICABLE: 0,
@@ -587,6 +642,69 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             )
             add_check(results, "synthetic_breakout_quality", case_id, "canonical_score_path_only", [True, True, False, True], pass_at_050.tolist())
             add_check(results, "synthetic_breakout_quality", case_id, "active_threshold_controls_decision", [True, False, False, True], pass_at_070.tolist())
+
+            split_frame.loc[1, "selection_role"] = SELECTION_ROLE_VALIDATION
+            split_frame.to_csv(paths.split_path, index=False, encoding="utf-8-sig")
+            validation_split_record = build_file_manifest(paths.split_path)
+            validation_split_record.update(
+                {
+                    "schema_version": SPLIT_ASSIGNMENT_SCHEMA_VERSION,
+                    "required_columns": list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS),
+                    "columns": list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS),
+                    "row_count": len(split_frame),
+                    "group_key": "ticker/date/high_len",
+                    "outer_split_counts": {
+                        OUTER_SPLIT_SELECTION: 2,
+                        OUTER_SPLIT_OOS: 0,
+                        OUTER_SPLIT_OUT_OF_SCOPE: 0,
+                    },
+                    "selection_role_counts": {
+                        SELECTION_ROLE_TRAIN: 1,
+                        SELECTION_ROLE_VALIDATION: 1,
+                        SELECTION_ROLE_INNER_EMBARGO: 0,
+                        SELECTION_ROLE_EMBARGO: 0,
+                        SELECTION_ROLE_IGNORE: 0,
+                        SELECTION_ROLE_NOT_APPLICABLE: 0,
+                    },
+                }
+            )
+            manifest.update(
+                {
+                    "split_assignments": validation_split_record,
+                    "training_mode": TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
+                    "max_epochs": 5,
+                    "selected_epoch": 2,
+                    "fixed_epochs": 2,
+                    "completed_epochs": 2,
+                    "epoch_selection_source": "inner_validation_loss",
+                    "early_stopping_enabled": True,
+                    "early_stopping_patience": 1,
+                    "early_stopping_min_delta": 0.0,
+                    "inner_validation_used": True,
+                    "inner_validation_months": 2,
+                    "inner_validation_epoch_selection": {
+                        "best_epoch": 2,
+                        "completed_epochs": 3,
+                    },
+                }
+            )
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            validation_contract = load_model_artifact_contract(
+                str(project_root),
+                filter_id,
+            )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "inner_validation_model_contract_supported",
+                TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
+                validation_contract.manifest["training_mode"],
+            )
 
             missing_candidate = np.asarray([False, False, False, True], dtype=bool)
             try:

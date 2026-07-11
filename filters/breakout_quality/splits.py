@@ -1,4 +1,4 @@
-"""Canonical breakout-quality outer Selection/OOS split for fixed-epoch training."""
+"""Canonical breakout-quality outer Selection/OOS and optional inner-validation split."""
 
 from __future__ import annotations
 
@@ -24,9 +24,13 @@ from filters.breakout_quality.contract import (
     OUTER_SPLIT_VALUES,
     SELECTION_ROLE_EMBARGO,
     SELECTION_ROLE_IGNORE,
+    SELECTION_ROLE_INNER_EMBARGO,
     SELECTION_ROLE_NOT_APPLICABLE,
     SELECTION_ROLE_TRAIN,
+    SELECTION_ROLE_VALIDATION,
     SELECTION_ROLE_VALUES,
+    TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION,
+    TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
     SPLIT_ASSIGNMENT_REQUIRED_COLUMNS,
 )
 
@@ -211,13 +215,47 @@ def _event_group_keys(events: pd.DataFrame) -> pd.Series:
     return events["ticker"].astype(str) + "\x1f" + events["date"].astype(str)
 
 
+def _resolve_inner_validation_start(
+    *,
+    selection_start: pd.Timestamp,
+    selection_end: pd.Timestamp,
+    inner_validation_months: int,
+) -> pd.Timestamp:
+    months = int(inner_validation_months)
+    if months < 1:
+        raise ValueError("inner_validation_months 必須 >= 1")
+    validation_start = (
+        selection_end + pd.Timedelta(days=1) - pd.DateOffset(months=months)
+    ).normalize()
+    if not selection_start < validation_start <= selection_end:
+        raise ValueError(
+            "inner validation 期間必須完整落在 Selection 內，且前方仍須保留 train period: "
+            f"selection={selection_start.date()}~{selection_end.date()}, "
+            f"months={months}, validation_start={validation_start.date()}"
+        )
+    return validation_start
+
+
 def build_selection_oos_split_assignments(
     events: pd.DataFrame,
     labels: Iterable[int],
     *,
     outer_policy: Mapping[str, object],
-) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, dict]:
-    """Use all eligible Selection rows for fixed-epoch training and reserve OOS."""
+    use_inner_validation: bool = False,
+    inner_validation_months: int = 24,
+    early_stopping_enabled: bool = False,
+) -> tuple[
+    pd.DataFrame,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    dict,
+]:
+    """Build one canonical split for fixed-epoch or inner-validation/full-refit training."""
+    validation_enabled = bool(use_inner_validation)
+    if bool(early_stopping_enabled) and not validation_enabled:
+        raise ValueError("未開啟 inner validation 時不可啟用 early stopping")
     required = {"ticker", "date", "high_len", "label_eval_end_date"}
     missing = sorted(required - set(events.columns))
     if missing:
@@ -267,6 +305,14 @@ def build_selection_oos_split_assignments(
             "selection_start <= selection_end < oos_start <= oos_end"
         )
 
+    validation_start = None
+    if validation_enabled:
+        validation_start = _resolve_inner_validation_start(
+            selection_start=selection_start,
+            selection_end=selection_end,
+            inner_validation_months=int(inner_validation_months),
+        )
+
     valid_label = np.isin(labels_arr, [LABEL_REJECT, LABEL_PASS])
     selection_mask = (
         (event_dates >= selection_start) & (event_dates <= selection_end)
@@ -277,11 +323,28 @@ def build_selection_oos_split_assignments(
     label_before_oos = (label_end_dates < oos_start).to_numpy(dtype=bool)
     label_within_oos = (label_end_dates <= oos_end).to_numpy(dtype=bool)
 
-    selection_train_mask = selection_mask & valid_label & label_before_oos
-    selection_embargo_mask = selection_mask & valid_label & ~label_before_oos
+    final_refit_mask = selection_mask & valid_label & label_before_oos
+    selection_oos_embargo_mask = selection_mask & valid_label & ~label_before_oos
     selection_ignore_mask = selection_mask & ~valid_label
     oos_evaluable_mask = oos_mask & valid_label & label_within_oos
     oos_label_after_end_mask = oos_mask & valid_label & ~label_within_oos
+
+    inner_train_mask = final_refit_mask.copy()
+    inner_validation_mask = np.zeros(len(events), dtype=bool)
+    inner_embargo_mask = np.zeros(len(events), dtype=bool)
+    if validation_start is not None:
+        before_validation = (event_dates < validation_start).to_numpy(dtype=bool)
+        at_or_after_validation = (event_dates >= validation_start).to_numpy(dtype=bool)
+        label_before_validation = (
+            label_end_dates < validation_start
+        ).to_numpy(dtype=bool)
+        inner_train_mask = (
+            final_refit_mask & before_validation & label_before_validation
+        )
+        inner_embargo_mask = (
+            final_refit_mask & before_validation & ~label_before_validation
+        )
+        inner_validation_mask = final_refit_mask & at_or_after_validation
 
     outer_values = np.full(len(events), OUTER_SPLIT_OUT_OF_SCOPE, dtype=object)
     outer_values[selection_mask] = OUTER_SPLIT_SELECTION
@@ -292,8 +355,10 @@ def build_selection_oos_split_assignments(
         dtype=object,
     )
     selection_roles[selection_ignore_mask] = SELECTION_ROLE_IGNORE
-    selection_roles[selection_train_mask] = SELECTION_ROLE_TRAIN
-    selection_roles[selection_embargo_mask] = SELECTION_ROLE_EMBARGO
+    selection_roles[inner_train_mask] = SELECTION_ROLE_TRAIN
+    selection_roles[inner_validation_mask] = SELECTION_ROLE_VALIDATION
+    selection_roles[inner_embargo_mask] = SELECTION_ROLE_INNER_EMBARGO
+    selection_roles[selection_oos_embargo_mask] = SELECTION_ROLE_EMBARGO
 
     assignments = keyed.copy()
     assignments["outer_split"] = outer_values.astype(str)
@@ -302,18 +367,27 @@ def build_selection_oos_split_assignments(
         assignments[list(SPLIT_ASSIGNMENT_REQUIRED_COLUMNS)]
     )
 
-    train_idx = np.flatnonzero(selection_train_mask).astype(np.int64)
+    inner_train_idx = np.flatnonzero(inner_train_mask).astype(np.int64)
+    inner_validation_idx = np.flatnonzero(inner_validation_mask).astype(np.int64)
+    final_refit_idx = np.flatnonzero(final_refit_mask).astype(np.int64)
     oos_idx = np.flatnonzero(oos_evaluable_mask).astype(np.int64)
-    if train_idx.size == 0 or oos_idx.size == 0:
+    if inner_train_idx.size == 0 or final_refit_idx.size == 0 or oos_idx.size == 0:
         raise ValueError(
             "breakout quality split 產生空集合: "
-            f"selection_train={train_idx.size}, oos={oos_idx.size}"
+            f"inner_train={inner_train_idx.size}, final_refit={final_refit_idx.size}, "
+            f"oos={oos_idx.size}"
         )
+    if validation_enabled and inner_validation_idx.size == 0:
+        raise ValueError("已開啟 inner validation，但 validation split 為空")
 
     group_keys = _event_group_keys(events)
-    train_groups = set(group_keys.iloc[train_idx])
+    inner_train_groups = set(group_keys.iloc[inner_train_idx])
+    inner_validation_groups = set(group_keys.iloc[inner_validation_idx])
+    final_refit_groups = set(group_keys.iloc[final_refit_idx])
     oos_groups = set(group_keys.iloc[oos_idx])
-    train_dates = set(event_dates.iloc[train_idx])
+    inner_train_dates = set(event_dates.iloc[inner_train_idx])
+    inner_validation_dates = set(event_dates.iloc[inner_validation_idx])
+    final_refit_dates = set(event_dates.iloc[final_refit_idx])
     oos_dates = set(event_dates.iloc[oos_idx])
 
     def _range(indices: np.ndarray, column: str) -> dict[str, str | None]:
@@ -333,9 +407,18 @@ def build_selection_oos_split_assignments(
         name: int((assignments["selection_role"] == name).sum())
         for name in SELECTION_ROLE_VALUES
     }
+    training_mode = (
+        TRAINING_MODE_INNER_VALIDATION_FULL_REFIT
+        if validation_enabled
+        else TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION
+    )
     report = {
-        "strategy": "walk_forward_outer_selection_oos_fixed_epoch_full_selection",
-        "training_mode": "fixed_epoch_full_selection",
+        "strategy": (
+            "walk_forward_outer_selection_oos_inner_validation_full_refit"
+            if validation_enabled
+            else "walk_forward_outer_selection_oos_fixed_epoch_full_selection"
+        ),
+        "training_mode": training_mode,
         "policy_source": str(
             outer_policy.get("policy_source") or "core.walk_forward_policy"
         ),
@@ -344,31 +427,72 @@ def build_selection_oos_split_assignments(
         ),
         "selection_start_date": str(selection_start.date()),
         "selection_end_date": str(selection_end.date()),
+        "inner_validation_start_date": (
+            str(validation_start.date()) if validation_start is not None else None
+        ),
+        "inner_validation_months": (
+            int(inner_validation_months) if validation_enabled else None
+        ),
         "oos_start_date": str(oos_start.date()),
         "oos_end_date": str(oos_end.date()),
-        "selection_train_row_count": int(train_idx.size),
-        "selection_oos_embargo_row_count": int(selection_embargo_mask.sum()),
-        "embargo_dropped_row_count": int(selection_embargo_mask.sum()),
+        "selection_train_row_count": int(inner_train_idx.size),
+        "inner_validation_row_count": int(inner_validation_idx.size),
+        "inner_train_validation_embargo_row_count": int(inner_embargo_mask.sum()),
+        "final_refit_row_count": int(final_refit_idx.size),
+        "selection_oos_embargo_row_count": int(selection_oos_embargo_mask.sum()),
+        "embargo_dropped_from_final_refit_row_count": int(
+            selection_oos_embargo_mask.sum()
+        ),
         "oos_evaluable_row_count": int(oos_idx.size),
         "oos_label_after_end_row_count": int(oos_label_after_end_mask.sum()),
         "outer_split_counts": outer_counts,
         "selection_role_counts": selection_role_counts,
-        "selection_train_group_count": int(len(train_groups)),
+        "selection_train_group_count": int(len(inner_train_groups)),
+        "inner_validation_group_count": int(len(inner_validation_groups)),
+        "final_refit_group_count": int(len(final_refit_groups)),
         "oos_group_count": int(len(oos_groups)),
-        "overlap_group_count": int(len(train_groups.intersection(oos_groups))),
-        "overlap_event_date_count": int(len(train_dates.intersection(oos_dates))),
-        "selection_train_date_range": _range(train_idx, "date"),
+        "inner_train_validation_overlap_group_count": int(
+            len(inner_train_groups.intersection(inner_validation_groups))
+        ),
+        "inner_train_validation_overlap_event_date_count": int(
+            len(inner_train_dates.intersection(inner_validation_dates))
+        ),
+        "overlap_group_count": int(
+            len(final_refit_groups.intersection(oos_groups))
+        ),
+        "overlap_event_date_count": int(
+            len(final_refit_dates.intersection(oos_dates))
+        ),
+        "selection_train_date_range": _range(inner_train_idx, "date"),
         "selection_train_label_end_date_range": _range(
-            train_idx,
+            inner_train_idx,
+            "label_eval_end_date",
+        ),
+        "inner_validation_date_range": _range(inner_validation_idx, "date"),
+        "inner_validation_label_end_date_range": _range(
+            inner_validation_idx,
+            "label_eval_end_date",
+        ),
+        "final_refit_date_range": _range(final_refit_idx, "date"),
+        "final_refit_label_end_date_range": _range(
+            final_refit_idx,
             "label_eval_end_date",
         ),
         "oos_date_range": _range(oos_idx, "date"),
         "oos_label_end_date_range": _range(oos_idx, "label_eval_end_date"),
         "training_uses_all_eligible_selection_rows": True,
-        "inner_validation_used": False,
-        "early_stopping_used": False,
+        "final_refit_includes_inner_embargo_rows": bool(validation_enabled),
+        "inner_validation_used": validation_enabled,
+        "early_stopping_used": bool(early_stopping_enabled),
     }
-    return assignments, train_idx, oos_idx, report
+    return (
+        assignments,
+        inner_train_idx,
+        inner_validation_idx,
+        final_refit_idx,
+        oos_idx,
+        report,
+    )
 
 
 __all__ = [

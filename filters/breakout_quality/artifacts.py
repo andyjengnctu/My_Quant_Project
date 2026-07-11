@@ -19,6 +19,8 @@ from filters.breakout_quality.contract import (
     FEATURE_COLUMNS,
     FILTER_FAMILY,
     OUTER_SPLIT_VALUES,
+    SELECTION_ROLE_INNER_EMBARGO,
+    SELECTION_ROLE_VALIDATION,
     SELECTION_ROLE_VALUES,
     SCORE_COLUMN,
     SCORE_COMPARISON,
@@ -29,6 +31,8 @@ from filters.breakout_quality.contract import (
     SPLIT_ASSIGNMENT_SCHEMA_VERSION,
     RUNTIME_ELIGIBLE_SCOPES,
     RUNTIME_SCOPE_FORWARD_OOS,
+    TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION,
+    TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.paths import BreakoutQualityArtifactPaths, resolve_filter_artifact_paths
@@ -168,10 +172,22 @@ def _validate_split_assignment_record(paths: BreakoutQualityArtifactPaths, manif
         raise ValueError(
             f"breakout quality split assignment outer_split_counts 不一致: expected={expected_outer}, actual={outer_counts}"
         )
-    if not isinstance(expected_selection_roles, dict) or {
-        name: int(expected_selection_roles.get(name, -1))
-        for name in SELECTION_ROLE_VALUES
-    } != selection_role_counts:
+    backward_compatible_zero_roles = {
+        SELECTION_ROLE_VALIDATION,
+        SELECTION_ROLE_INNER_EMBARGO,
+    }
+    normalized_expected_roles = None
+    if isinstance(expected_selection_roles, dict):
+        normalized_expected_roles = {
+            name: int(
+                expected_selection_roles.get(
+                    name,
+                    0 if name in backward_compatible_zero_roles else -1,
+                )
+            )
+            for name in SELECTION_ROLE_VALUES
+        }
+    if normalized_expected_roles != selection_role_counts:
         raise ValueError(
             "breakout quality split assignment selection_role_counts 不一致: "
             f"expected={expected_selection_roles}, actual={selection_role_counts}"
@@ -241,21 +257,70 @@ def load_model_artifact_contract(
         field_name="model",
     )
     _validate_split_assignment_record(paths, manifest)
-    if _require_nonempty_text(manifest, "training_mode") != "fixed_epoch_full_selection":
-        raise ValueError("breakout quality model 必須使用 fixed_epoch_full_selection")
+    training_mode = _require_nonempty_text(manifest, "training_mode")
+    allowed_training_modes = {
+        TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION,
+        TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
+    }
+    if training_mode not in allowed_training_modes:
+        raise ValueError(
+            f"breakout quality training_mode 不相容: {training_mode!r}"
+        )
     fixed_epochs = int(manifest.get("fixed_epochs", 0))
     completed_epochs = int(manifest.get("completed_epochs", 0))
-    if fixed_epochs < 1 or completed_epochs != fixed_epochs:
+    selected_epoch = int(manifest.get("selected_epoch", fixed_epochs))
+    max_epochs = int(manifest.get("max_epochs", fixed_epochs))
+    if (
+        fixed_epochs < 1
+        or selected_epoch != fixed_epochs
+        or completed_epochs != fixed_epochs
+        or max_epochs < selected_epoch
+    ):
         raise ValueError(
-            "breakout quality fixed epoch 契約不一致: "
+            "breakout quality epoch 契約不一致: "
+            f"max={max_epochs}, selected={selected_epoch}, "
             f"fixed={fixed_epochs}, completed={completed_epochs}"
         )
-    if bool(manifest.get("early_stopping_enabled", True)):
-        raise ValueError("breakout quality scheme B 禁止 early stopping")
-    if bool(manifest.get("inner_validation_used", True)):
-        raise ValueError("breakout quality scheme B 禁止 inner validation")
+    inner_validation_used = bool(manifest.get("inner_validation_used", False))
+    early_stopping_enabled = bool(manifest.get("early_stopping_enabled", False))
+    if training_mode == TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION:
+        if inner_validation_used or early_stopping_enabled:
+            raise ValueError(
+                "fixed_epoch_full_selection 不可使用 inner validation / early stopping"
+            )
+        if max_epochs != fixed_epochs:
+            raise ValueError("fixed_epoch_full_selection 的 max_epochs 必須等於 fixed_epochs")
+        if str(manifest.get("epoch_selection_source") or "fixed_cli_epochs") != "fixed_cli_epochs":
+            raise ValueError("fixed_epoch_full_selection 的 epoch_selection_source 不一致")
+    else:
+        if not inner_validation_used:
+            raise ValueError("inner_validation full refit 模式必須啟用 inner validation")
+        if int(manifest.get("inner_validation_months", 0)) < 1:
+            raise ValueError("inner_validation_months 必須 >=1")
+        if str(manifest.get("epoch_selection_source") or "") != "inner_validation_loss":
+            raise ValueError("inner validation 模式必須以 validation loss 選 epoch")
+        selection_record = manifest.get("inner_validation_epoch_selection")
+        if not isinstance(selection_record, dict):
+            raise ValueError("inner validation 模式缺少 epoch selection 紀錄")
+        if int(selection_record.get("best_epoch", 0)) != selected_epoch:
+            raise ValueError("inner validation best_epoch 與 selected_epoch 不一致")
+        selection_completed_epochs = int(selection_record.get("completed_epochs", 0))
+        if not selected_epoch <= selection_completed_epochs <= max_epochs:
+            raise ValueError(
+                "inner validation completed_epochs 契約不一致: "
+                f"selected={selected_epoch}, completed={selection_completed_epochs}, "
+                f"max={max_epochs}"
+            )
+        patience = int(manifest.get("early_stopping_patience", -1))
+        min_delta = float(manifest.get("early_stopping_min_delta", -1.0))
+        if patience < 0 or min_delta < 0.0:
+            raise ValueError("inner validation early stopping 參數必須 >=0")
+        if early_stopping_enabled != (patience > 0):
+            raise ValueError(
+                "early_stopping_enabled 必須與 early_stopping_patience 是否大於 0 一致"
+            )
     if not bool(manifest.get("training_uses_all_eligible_selection_rows", False)):
-        raise ValueError("breakout quality scheme B 必須使用全部 eligible Selection rows")
+        raise ValueError("breakout quality 最終模型必須使用全部 eligible Selection rows")
     if bool(manifest.get("oos_predictions_used_during_training", True)):
         raise ValueError("breakout quality OOS predictions 不可用於訓練")
     if bool(manifest.get("oos_metrics_emitted_by_train", True)):
@@ -271,9 +336,9 @@ def load_model_artifact_contract(
     if _require_nonempty_text(threshold_policy, "runtime_source") != SCORE_THRESHOLD_SOURCE:
         raise ValueError("breakout quality threshold runtime source 與正式契約不一致")
     if bool(threshold_policy.get("optimized_by_train", True)):
-        raise ValueError("breakout quality scheme B 不可由 train.py 最佳化 threshold")
+        raise ValueError("breakout quality 不可由 train.py 最佳化 threshold")
     if bool(threshold_policy.get("oos_tuning_allowed", True)):
-        raise ValueError("breakout quality scheme B 禁止使用 OOS 調整 threshold")
+        raise ValueError("breakout quality 禁止使用 OOS 調整 threshold")
 
     return BreakoutQualityModelContract(paths=paths, manifest=manifest)
 
