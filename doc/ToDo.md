@@ -6,7 +6,9 @@
     - inconsist with strategy parameters
     - consistance among different seeds 
 
-- 最差季度報酬 
+改成PASS Recall、REJECT Specificit
+
+
 
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議
