@@ -23,7 +23,7 @@ from filters.breakout_quality.contract import (
     OUTER_SPLIT_SELECTION,
     OUTER_SPLIT_VALUES,
     SELECTION_ROLE_EMBARGO,
-    SELECTION_ROLE_IGNORE,
+    SELECTION_ROLE_INVALID,
     SELECTION_ROLE_INNER_EMBARGO,
     SELECTION_ROLE_NOT_APPLICABLE,
     SELECTION_ROLE_TRAIN,
@@ -325,7 +325,7 @@ def build_selection_oos_split_assignments(
 
     final_refit_mask = selection_mask & valid_label & label_before_oos
     selection_oos_embargo_mask = selection_mask & valid_label & ~label_before_oos
-    selection_ignore_mask = selection_mask & ~valid_label
+    selection_invalid_mask = selection_mask & ~valid_label
     oos_evaluable_mask = oos_mask & valid_label & label_within_oos
     oos_label_after_end_mask = oos_mask & valid_label & ~label_within_oos
 
@@ -354,7 +354,7 @@ def build_selection_oos_split_assignments(
         SELECTION_ROLE_NOT_APPLICABLE,
         dtype=object,
     )
-    selection_roles[selection_ignore_mask] = SELECTION_ROLE_IGNORE
+    selection_roles[selection_invalid_mask] = SELECTION_ROLE_INVALID
     selection_roles[inner_train_mask] = SELECTION_ROLE_TRAIN
     selection_roles[inner_validation_mask] = SELECTION_ROLE_VALIDATION
     selection_roles[inner_embargo_mask] = SELECTION_ROLE_INNER_EMBARGO

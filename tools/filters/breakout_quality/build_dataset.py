@@ -18,7 +18,13 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.artifacts import build_file_manifest
-from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_FILTER_ID, FEATURE_COLUMNS
+from filters.breakout_quality.contract import (
+    CONTEXT_COLUMNS,
+    DEFAULT_FILTER_ID,
+    FEATURE_COLUMNS,
+    LABEL_PASS,
+    LABEL_REJECT,
+)
 from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
     DATASET_STORAGE_SCHEMA_VERSION,
@@ -239,7 +245,7 @@ def _full_build(args, policy, *, started: float) -> int:
     valid_group_count = 0
     rows_per_group_min: int | None = None
     rows_per_group_max = 0
-    accumulated_label_counts = {"pass": 0, "reject": 0, "ignore": 0, "total": 0}
+    accumulated_label_counts = {"pass": 0, "reject": 0, "invalid": 0, "total": 0}
 
     chunk_names = (
         "feature_bank",
@@ -326,7 +332,7 @@ def _full_build(args, policy, *, started: float) -> int:
                 np.maximum.at(local_group_labels_max, dataset.event_group_index, dataset.labels)
                 if bool(np.any(local_group_labels_min != local_group_labels_max)):
                     raise RuntimeError(f"{ticker} 同一 ticker/date group 出現混合 label")
-                valid_group_count += int(np.isin(local_group_labels_min, [0, 1]).sum())
+                valid_group_count += int(np.isin(local_group_labels_min, [LABEL_REJECT, LABEL_PASS]).sum())
                 local_min = int(local_group_sizes.min())
                 local_max = int(local_group_sizes.max())
                 rows_per_group_min = local_min if rows_per_group_min is None else min(rows_per_group_min, local_min)

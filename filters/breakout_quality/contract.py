@@ -24,9 +24,10 @@ DEFAULT_SPLIT_FILENAME = "split_assignments.csv"
 DEFAULT_FEATURE_WINDOW_BARS = BREAKOUT_QUALITY_FEATURE_WINDOW_BARS
 DEFAULT_LABEL_HORIZON_BARS = BREAKOUT_QUALITY_LABEL_HORIZON_BARS
 DEFAULT_BENCHMARK_TICKER = BREAKOUT_QUALITY_BENCHMARK_TICKER
-ARTIFACT_CONTRACT_VERSION = 6
+ARTIFACT_CONTRACT_VERSION = 7
 SCORE_TABLE_SCHEMA_VERSION = 2
-SPLIT_ASSIGNMENT_SCHEMA_VERSION = 2
+SPLIT_ASSIGNMENT_SCHEMA_VERSION = 3
+LABEL_OBJECTIVE = "binary_pass_vs_not_pass_v1"
 SCORE_COLUMN = "dl_quality_score"
 SCORE_COMPARISON = ">="
 SCORE_THRESHOLD_SOURCE = "strategy_param.breakout_quality_score_threshold"
@@ -49,14 +50,14 @@ SELECTION_ROLE_TRAIN = "train"
 SELECTION_ROLE_VALIDATION = "validation"
 SELECTION_ROLE_INNER_EMBARGO = "inner_embargo"
 SELECTION_ROLE_EMBARGO = "embargo"
-SELECTION_ROLE_IGNORE = "ignore"
+SELECTION_ROLE_INVALID = "invalid"
 SELECTION_ROLE_NOT_APPLICABLE = "not_applicable"
 SELECTION_ROLE_VALUES = (
     SELECTION_ROLE_TRAIN,
     SELECTION_ROLE_VALIDATION,
     SELECTION_ROLE_INNER_EMBARGO,
     SELECTION_ROLE_EMBARGO,
-    SELECTION_ROLE_IGNORE,
+    SELECTION_ROLE_INVALID,
     SELECTION_ROLE_NOT_APPLICABLE,
 )
 
@@ -112,6 +113,7 @@ class BreakoutQualityLabelPolicy:
 
     def label_manifest_payload(self) -> dict:
         return {
+            "label_objective": LABEL_OBJECTIVE,
             "label_horizon_bars": int(self.label_horizon_bars),
             "pass_return_threshold": float(self.pass_return_threshold),
             "reject_return_threshold": float(self.reject_return_threshold),
@@ -119,6 +121,7 @@ class BreakoutQualityLabelPolicy:
 
     def as_manifest_payload(self) -> dict:
         payload = asdict(self)
+        payload["label_objective"] = LABEL_OBJECTIVE
         payload["high_len_values"] = list(self.high_lens())
         payload["high_len_min"] = self.high_len_min
         payload["high_len_max"] = self.high_len_max
@@ -129,9 +132,9 @@ DEFAULT_LABEL_POLICY = BreakoutQualityLabelPolicy()
 
 LABEL_REJECT = 0
 LABEL_PASS = 1
-LABEL_IGNORE = -1
+LABEL_INVALID = -1  # Internal sentinel only; it is not a third training label.
 LABEL_NAME_MAP = {
-    LABEL_IGNORE: "IGNORE",
+    LABEL_INVALID: "INVALID",
     LABEL_REJECT: "REJECT",
     LABEL_PASS: "PASS",
 }
@@ -183,7 +186,8 @@ __all__ = [
     "DEFAULT_SPLIT_FILENAME",
     "FEATURE_COLUMNS",
     "FILTER_FAMILY",
-    "LABEL_IGNORE",
+    "LABEL_INVALID",
+    "LABEL_OBJECTIVE",
     "LABEL_NAME_MAP",
     "LABEL_PASS",
     "LABEL_REJECT",
@@ -201,7 +205,7 @@ __all__ = [
     "RUNTIME_SCOPE_ROLLING_OOS",
     "SCORE_TABLE_REQUIRED_COLUMNS",
     "SELECTION_ROLE_EMBARGO",
-    "SELECTION_ROLE_IGNORE",
+    "SELECTION_ROLE_INVALID",
     "SELECTION_ROLE_INNER_EMBARGO",
     "SELECTION_ROLE_NOT_APPLICABLE",
     "SELECTION_ROLE_TRAIN",

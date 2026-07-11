@@ -18,6 +18,9 @@ from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
     DEFAULT_LABEL_POLICY,
     FEATURE_COLUMNS,
+    LABEL_INVALID,
+    LABEL_PASS,
+    LABEL_REJECT,
     BreakoutQualityLabelPolicy,
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
@@ -241,6 +244,14 @@ def load_validated_dataset_bundle(
     policy = summary.get("policy")
     if not isinstance(policy, dict):
         raise ValueError("dataset_summary 缺少 policy object")
+    expected_label_policy = {
+        "label_objective": policy.get("label_objective"),
+        "label_horizon_bars": policy.get("label_horizon_bars"),
+        "pass_return_threshold": policy.get("pass_return_threshold"),
+        "reject_return_threshold": policy.get("reject_return_threshold"),
+    }
+    if summary.get("label_policy") != expected_label_policy:
+        raise ValueError("dataset_summary label_policy 與正式 policy 不一致")
     if expected_policy is not None and policy != expected_policy:
         raise ValueError(
             "目前 dataset policy 與 model manifest policy 不一致；不可用不同 feature/label/high_len 契約匯出同一模型分數"
@@ -329,6 +340,9 @@ def load_validated_dataset_bundle(
     event_labels = pd.to_numeric(events["label"], errors="raise").to_numpy(dtype=np.int64)
     if not np.array_equal(event_labels, np.asarray(labels, dtype=np.int64)):
         raise ValueError("events.csv label 與 event_labels.npy 不一致")
+    observed_label_counts = label_counts(event_labels)
+    if summary.get("label_counts") != observed_label_counts:
+        raise ValueError("dataset_summary label_counts 與 event labels 不一致")
     csv_group_index = pd.to_numeric(events["group_index"], errors="raise").to_numpy(dtype=np.int64)
     if not np.array_equal(csv_group_index, np.asarray(event_group_index, dtype=np.int64)):
         raise ValueError("events.csv group_index 與 event_group_index.npy 不一致")
@@ -350,10 +364,14 @@ def load_validated_dataset_bundle(
 
 def label_counts(labels: Iterable[int]) -> dict[str, int]:
     arr = np.asarray(list(labels), dtype=np.int64)
+    allowed = np.asarray([LABEL_INVALID, LABEL_REJECT, LABEL_PASS], dtype=np.int64)
+    unexpected = np.unique(arr[~np.isin(arr, allowed)])
+    if unexpected.size:
+        raise ValueError(f"breakout quality labels 含未知值: {unexpected.tolist()}")
     return {
-        "pass": int((arr == 1).sum()),
-        "reject": int((arr == 0).sum()),
-        "ignore": int((arr == -1).sum()),
+        "pass": int((arr == LABEL_PASS).sum()),
+        "reject": int((arr == LABEL_REJECT).sum()),
+        "invalid": int((arr == LABEL_INVALID).sum()),
         "total": int(arr.size),
     }
 
@@ -385,7 +403,7 @@ def event_group_summary(events: pd.DataFrame, labels: Iterable[int]) -> dict:
     frame["_group_key"] = event_group_keys(events).to_numpy()
     group_sizes = frame.groupby("_group_key", sort=False).size()
     label_nunique = frame.groupby("_group_key", sort=False)["label"].nunique()
-    valid = frame[frame["label"].isin([0, 1])].copy()
+    valid = frame[frame["label"].isin([LABEL_REJECT, LABEL_PASS])].copy()
     valid_group_count = int(valid["_group_key"].nunique()) if not valid.empty else 0
     valid_label_nunique = (
         valid.groupby("_group_key", sort=False)["label"].nunique()

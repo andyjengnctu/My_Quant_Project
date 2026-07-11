@@ -45,12 +45,12 @@ from filters.breakout_quality.contract import (
     DEFAULT_LABEL_POLICY,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
-    LABEL_IGNORE,
+    LABEL_INVALID,
     LABEL_PASS,
     LABEL_REJECT,
     BreakoutQualityLabelPolicy,
     SELECTION_ROLE_EMBARGO,
-    SELECTION_ROLE_IGNORE,
+    SELECTION_ROLE_INVALID,
     SELECTION_ROLE_INNER_EMBARGO,
     SELECTION_ROLE_NOT_APPLICABLE,
     SELECTION_ROLE_TRAIN,
@@ -181,7 +181,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "dataset_storage_contract_uses_indexed_feature_bank",
-        (2, "indexed_feature_bank_npy_v2"),
+        (3, "indexed_feature_bank_npy_v2"),
         (DATASET_STORAGE_SCHEMA_VERSION, DATASET_STORAGE_FORMAT),
     )
     feature_bank = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
@@ -247,9 +247,35 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "pure_kline_label_ignores_when_neither_barrier_hits",
-        (LABEL_IGNORE, "no_barrier_hit"),
+        "pure_kline_label_rejects_when_upside_target_is_not_reached",
+        (LABEL_REJECT, "no_upside_target"),
         _label_case([110.0, 112.0, 114.0], [96.0, 95.0, 94.0]),
+    )
+    invalid_frame = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0, 100.0],
+            "High": [100.0, 110.0, 112.0],
+            "Low": [100.0, 96.0, 95.0],
+            "Close": [100.0, 100.0, 100.0],
+            "Volume": [1000.0, 1000.0, 1000.0],
+        },
+        index=pd.date_range("2025-02-01", periods=3, freq="D"),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "incomplete_future_path_is_invalid_not_a_third_label",
+        (LABEL_INVALID, "insufficient_future"),
+        build_event_label(invalid_frame, event_pos=0, policy=label_policy)[:2],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "label_manifest_declares_binary_pass_vs_not_pass_objective",
+        "binary_pass_vs_not_pass_v1",
+        label_policy.label_manifest_payload().get("label_objective"),
     )
     cached_result = label_from_cached_path(
         np.asarray([110.0, 116.0, 118.0, np.nan, np.nan], dtype=np.float64),
@@ -464,7 +490,7 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
             SELECTION_ROLE_VALIDATION: 0,
             SELECTION_ROLE_INNER_EMBARGO: 0,
             SELECTION_ROLE_EMBARGO: 2,
-            SELECTION_ROLE_IGNORE: 0,
+            SELECTION_ROLE_INVALID: 0,
             SELECTION_ROLE_NOT_APPLICABLE: 6,
         },
         report_off["selection_role_counts"],
@@ -527,7 +553,7 @@ def validate_breakout_quality_chronological_embargo_case(_base_params):
             SELECTION_ROLE_VALIDATION: 2,
             SELECTION_ROLE_INNER_EMBARGO: 2,
             SELECTION_ROLE_EMBARGO: 2,
-            SELECTION_ROLE_IGNORE: 0,
+            SELECTION_ROLE_INVALID: 0,
             SELECTION_ROLE_NOT_APPLICABLE: 6,
         },
         report_on["selection_role_counts"],
@@ -1226,7 +1252,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                         SELECTION_ROLE_VALIDATION: 0,
                         SELECTION_ROLE_INNER_EMBARGO: 0,
                         SELECTION_ROLE_EMBARGO: 0,
-                        SELECTION_ROLE_IGNORE: 0,
+                        SELECTION_ROLE_INVALID: 0,
                         SELECTION_ROLE_NOT_APPLICABLE: 0,
                     },
                 }
@@ -1325,7 +1351,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                         SELECTION_ROLE_VALIDATION: 1,
                         SELECTION_ROLE_INNER_EMBARGO: 0,
                         SELECTION_ROLE_EMBARGO: 0,
-                        SELECTION_ROLE_IGNORE: 0,
+                        SELECTION_ROLE_INVALID: 0,
                         SELECTION_ROLE_NOT_APPLICABLE: 0,
                     },
                 }

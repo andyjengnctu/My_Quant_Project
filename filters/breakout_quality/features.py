@@ -12,7 +12,7 @@ import pandas as pd
 from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
     FEATURE_COLUMNS,
-    LABEL_IGNORE,
+    LABEL_INVALID,
     LABEL_PASS,
     LABEL_REJECT,
     BreakoutQualityLabelPolicy,
@@ -286,17 +286,17 @@ def label_from_cached_path(
 ) -> BreakoutQualityLabelResult:
     horizon = int(policy.label_horizon_bars)
     if int(available_bars) < horizon:
-        return BreakoutQualityLabelResult(LABEL_IGNORE, "insufficient_future", np.nan, np.nan, np.nan)
+        return BreakoutQualityLabelResult(LABEL_INVALID, "insufficient_future", np.nan, np.nan, np.nan)
     if not math.isfinite(anchor_price) or anchor_price <= 0.0:
-        return BreakoutQualityLabelResult(LABEL_IGNORE, "invalid_anchor", np.nan, np.nan, np.nan)
+        return BreakoutQualityLabelResult(LABEL_INVALID, "invalid_anchor", np.nan, np.nan, np.nan)
 
     highs = np.asarray(high_prices[:horizon], dtype=np.float64)
     lows = np.asarray(low_prices[:horizon], dtype=np.float64)
     if highs.shape != lows.shape or highs.size != horizon:
-        return BreakoutQualityLabelResult(LABEL_IGNORE, "insufficient_future", np.nan, np.nan, np.nan)
+        return BreakoutQualityLabelResult(LABEL_INVALID, "insufficient_future", np.nan, np.nan, np.nan)
     valid = np.isfinite(highs) & np.isfinite(lows) & (highs > 0.0) & (lows > 0.0) & (highs >= lows)
     if not bool(np.all(valid)):
-        return BreakoutQualityLabelResult(LABEL_IGNORE, "invalid_future_bar", np.nan, np.nan, np.nan)
+        return BreakoutQualityLabelResult(LABEL_INVALID, "invalid_future_bar", np.nan, np.nan, np.nan)
 
     upside_returns = highs / anchor_price - 1.0
     downside_returns = lows / anchor_price - 1.0
@@ -334,8 +334,8 @@ def label_from_cached_path(
             )
 
     return BreakoutQualityLabelResult(
-        LABEL_IGNORE,
-        "no_barrier_hit",
+        LABEL_REJECT,
+        "no_upside_target",
         max_upside_return,
         max_downside_return,
         np.nan,
@@ -354,7 +354,7 @@ def build_event_label(
         cache_bars=int(policy.label_horizon_bars),
     )
     if not math.isfinite(anchor_price) or anchor_price <= 0.0:
-        return LABEL_IGNORE, "invalid_anchor", np.nan, np.nan, np.nan, np.nan
+        return LABEL_INVALID, "invalid_anchor", np.nan, np.nan, np.nan, np.nan
     result = label_from_cached_path(
         high_prices,
         low_prices,
@@ -456,7 +456,7 @@ def build_breakout_quality_dataset_for_frame(
         )
         if not math.isfinite(anchor_price) or anchor_price <= 0.0:
             label_result = BreakoutQualityLabelResult(
-                LABEL_IGNORE,
+                LABEL_INVALID,
                 "invalid_anchor",
                 np.nan,
                 np.nan,

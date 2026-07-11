@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-DATASET_STORAGE_SCHEMA_VERSION = 2
+DATASET_STORAGE_SCHEMA_VERSION = 3
 DATASET_STORAGE_FORMAT = "indexed_feature_bank_npy_v2"
 
 FEATURE_BANK_FILENAME = "feature_bank.npy"
