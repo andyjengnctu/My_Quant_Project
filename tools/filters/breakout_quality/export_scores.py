@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import argparse
 
+import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.artifacts import (
@@ -122,12 +123,21 @@ def main(argv=None) -> int:
     model = build_model(feature_count, context_count)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
+    pass_probabilities = np.empty((len(events),), dtype=np.float32)
+    inference_batch_size = 4096
     with torch.no_grad():
-        logits = model(torch.from_numpy(features), torch.from_numpy(context))
-        probabilities = torch.softmax(logits, dim=1).cpu().numpy()
+        for start in range(0, len(events), inference_batch_size):
+            stop = min(start + inference_batch_size, len(events))
+            logits = model(
+                torch.from_numpy(features[start:stop]),
+                torch.from_numpy(np.array(context[start:stop], dtype=np.float32, copy=True)),
+            )
+            pass_probabilities[start:stop] = (
+                torch.softmax(logits, dim=1)[:, LABEL_PASS].cpu().numpy()
+            )
 
     scored = events.copy()
-    scored[SCORE_COLUMN] = probabilities[:, LABEL_PASS]
+    scored[SCORE_COLUMN] = pass_probabilities
     information_cutoff = str(manifest.get("model_information_cutoff", "")).strip()
     if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
         if not information_cutoff:

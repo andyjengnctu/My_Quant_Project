@@ -19,6 +19,12 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
+from filters.breakout_quality.dataset_store import (
+    DATASET_STORAGE_FORMAT,
+    DATASET_STORAGE_SCHEMA_VERSION,
+    dataset_artifact_metadata_reasons,
+    resolve_dataset_paths,
+)
 from filters.breakout_quality.paths import (
     normalize_filter_id,
     resolve_filter_artifact_paths,
@@ -97,10 +103,10 @@ def _train_defaults() -> argparse.Namespace:
 
 def _dataset_paths(filter_id: str) -> dict[str, Path]:
     output_dir = resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
+    paths = resolve_dataset_paths(output_dir)
     return {
-        "dataset": output_dir / "dataset.npz",
-        "events": output_dir / "events.csv",
-        "summary": output_dir / "dataset_summary.json",
+        **paths.artifact_paths(),
+        "summary": paths.summary,
     }
 
 
@@ -123,27 +129,44 @@ def _dataset_profile(filter_id: str) -> str | None:
     return profile if profile in {"reduced", "full"} else None
 
 
-def _dataset_rebuild_reasons(
+def _dataset_refresh_plan(
     filter_id: str,
     dataset: str,
     *,
     max_tickers: int,
-) -> list[str]:
-    reasons: list[str] = []
+) -> tuple[str, list[str]]:
+    full_rebuild_reasons: list[str] = []
+    relabel_reasons: list[str] = []
     paths = _dataset_paths(filter_id)
     missing = [name for name, path in paths.items() if not path.is_file()]
     if missing:
-        reasons.append(f"dataset 工件缺少: {', '.join(missing)}")
+        full_rebuild_reasons.append(f"dataset 工件缺少: {', '.join(missing)}")
 
     summary = _read_dataset_summary(filter_id)
     if summary is None:
-        reasons.append("dataset_summary.json 缺少、損壞或不是 JSON object")
-        return reasons
+        full_rebuild_reasons.append("dataset_summary.json 缺少、損壞或不是 JSON object")
+        return "rebuild", full_rebuild_reasons
+
+    if int(summary.get("dataset_storage_schema_version", -1)) != DATASET_STORAGE_SCHEMA_VERSION:
+        full_rebuild_reasons.append("dataset storage schema 已變更")
+    if str(summary.get("dataset_storage_format") or "") != DATASET_STORAGE_FORMAT:
+        full_rebuild_reasons.append("dataset storage format 已變更")
+
+    output_dir = resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
+    storage_paths = resolve_dataset_paths(output_dir)
+    full_rebuild_reasons.extend(
+        dataset_artifact_metadata_reasons(
+            storage_paths,
+            summary.get("dataset_artifacts"),
+        )
+    )
 
     requested_profile = str(dataset).strip().lower()
     stored_profile = str(summary.get("dataset") or "").strip().lower()
     if stored_profile != requested_profile:
-        reasons.append(f"dataset profile 不符: existing={stored_profile or 'missing'}, requested={requested_profile}")
+        full_rebuild_reasons.append(
+            f"dataset profile 不符: existing={stored_profile or 'missing'}, requested={requested_profile}"
+        )
 
     source_selection = summary.get("source_selection")
     stored_max_tickers = None
@@ -154,39 +177,67 @@ def _dataset_rebuild_reasons(
             stored_max_tickers = None
     requested_max_tickers = max(0, int(max_tickers))
     if stored_max_tickers != requested_max_tickers:
-        reasons.append(
+        full_rebuild_reasons.append(
             "dataset ticker coverage 不符: "
             f"existing_max_tickers={stored_max_tickers}, requested_max_tickers={requested_max_tickers}"
         )
 
-    if summary.get("policy") != DEFAULT_LABEL_POLICY.as_manifest_payload():
-        reasons.append("feature／label policy 已變更")
+    if summary.get("feature_cache_policy") != DEFAULT_LABEL_POLICY.feature_cache_manifest_payload():
+        full_rebuild_reasons.append("feature／high_len／benchmark／path-cache policy 已變更")
     if list(summary.get("feature_columns") or []) != list(FEATURE_COLUMNS):
-        reasons.append("feature contract 已變更")
+        full_rebuild_reasons.append("feature contract 已變更")
     if list(summary.get("context_columns") or []) != list(CONTEXT_COLUMNS):
-        reasons.append("context contract 已變更")
+        full_rebuild_reasons.append("context contract 已變更")
 
     stored_inventory = summary.get("source_data_inventory")
     if not isinstance(stored_inventory, dict):
-        reasons.append("dataset 缺少 source_data_inventory；需以新版 build-dataset 重建一次")
+        full_rebuild_reasons.append("dataset 缺少 source_data_inventory；需完整重建一次")
     elif stored_profile == requested_profile:
         current_inventory = build_source_data_inventory(PROJECT_ROOT, requested_profile)
         if stored_inventory != current_inventory:
-            reasons.append(
+            full_rebuild_reasons.append(
                 "來源 CSV inventory 已更新: "
                 f"existing={stored_inventory.get('csv_inventory_sha256')}, "
                 f"current={current_inventory.get('csv_inventory_sha256')}"
             )
 
-    return reasons
+    if full_rebuild_reasons:
+        return "rebuild", full_rebuild_reasons
+
+    if summary.get("label_policy") != DEFAULT_LABEL_POLICY.label_manifest_payload():
+        relabel_reasons.append("label horizon／PASS／REJECT policy 已變更")
+    if summary.get("policy") != DEFAULT_LABEL_POLICY.as_manifest_payload():
+        if not relabel_reasons:
+            full_rebuild_reasons.append("dataset policy metadata 與目前設定不一致")
+
+    if full_rebuild_reasons:
+        return "rebuild", full_rebuild_reasons
+    if relabel_reasons:
+        return "relabel", relabel_reasons
+    return "none", []
 
 
-def _dataset_matches_request(filter_id: str, dataset: str, *, max_tickers: int) -> bool:
-    return not _dataset_rebuild_reasons(
+def _dataset_rebuild_reasons(
+    filter_id: str,
+    dataset: str,
+    *,
+    max_tickers: int,
+) -> list[str]:
+    _mode, reasons = _dataset_refresh_plan(
         filter_id,
         dataset,
         max_tickers=max_tickers,
     )
+    return reasons
+
+
+def _dataset_matches_request(filter_id: str, dataset: str, *, max_tickers: int) -> bool:
+    mode, _reasons = _dataset_refresh_plan(
+        filter_id,
+        dataset,
+        max_tickers=max_tickers,
+    )
+    return mode == "none"
 
 
 def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_quality.py") -> argparse.Namespace:
@@ -298,22 +349,28 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     )
     print("注意：OOS 只供最終泛化評估，不得依結果回頭調整 threshold、epochs 或模型。")
 
-    rebuild_reasons = _dataset_rebuild_reasons(
+    refresh_mode, refresh_reasons = _dataset_refresh_plan(
         filter_id,
         args.dataset,
         max_tickers=int(args.max_tickers),
     )
-    should_build = bool(args.rebuild_dataset) or bool(rebuild_reasons)
+    if bool(args.rebuild_dataset):
+        refresh_mode = "rebuild"
+        refresh_reasons = ["使用者要求強制完整重建 dataset"]
     steps: list[tuple[str, list[str], str]] = []
-    if should_build:
-        if bool(args.rebuild_dataset):
-            print("[rebuild] 使用者要求強制重建 dataset。")
-        for reason in rebuild_reasons:
-            print(f"[rebuild] {reason}")
+    if refresh_mode in {"rebuild", "relabel"}:
+        tag = "rebuild" if refresh_mode == "rebuild" else "relabel"
+        for reason in refresh_reasons:
+            print(f"[{tag}] {reason}")
         build_args = ["--dataset", str(args.dataset), "--filter-id", filter_id]
         if int(args.max_tickers) > 0:
             build_args.extend(["--max-tickers", str(int(args.max_tickers))])
-        steps.append(("build-dataset", build_args, "建立 dataset"))
+        if refresh_mode == "relabel":
+            build_args.append("--relabel-only")
+            label = "快速更新 labels（沿用 feature bank）"
+        else:
+            label = "完整建立 indexed feature bank dataset"
+        steps.append(("build-dataset", build_args, label))
     else:
         print("[skip] dataset 工件、來源 CSV inventory、ticker coverage 與 policy 均未變更。")
 
@@ -470,20 +527,25 @@ def _interactive_workflow(program_name: str) -> int:
     max_tickers = INTERACTIVE_MAX_TICKERS
     evaluate_oos = INTERACTIVE_EVALUATE_OOS
     print("完整研究流程固定使用 Full dataset、全部股票，並執行 OOS。")
-    rebuild_reasons = _dataset_rebuild_reasons(
+    refresh_mode, refresh_reasons = _dataset_refresh_plan(
         filter_id,
         dataset,
         max_tickers=max_tickers,
     )
-    if rebuild_reasons:
-        print("偵測到 dataset 需要重建，workflow 將自動重建：")
-        for reason in rebuild_reasons:
+    if refresh_mode == "rebuild":
+        print("偵測到 dataset 需要完整重建，workflow 將自動重建：")
+        for reason in refresh_reasons:
+            print(f"- {reason}")
+        rebuild_dataset = False
+    elif refresh_mode == "relabel":
+        print("偵測到只有 Label policy 改變，workflow 將沿用 feature bank 快速 relabel：")
+        for reason in refresh_reasons:
             print(f"- {reason}")
         rebuild_dataset = False
     else:
         print("dataset 自動偵測：目前工件與來源資料一致。")
         rebuild_dataset = _prompt_bool(
-            "是否強制重建 dataset（即使目前不需要）",
+            "是否強制完整重建 dataset（即使目前不需要）",
             False,
         )
     train_payload = dict(vars(train_args))

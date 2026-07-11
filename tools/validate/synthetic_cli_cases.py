@@ -150,7 +150,7 @@ def validate_dataset_cli_contract_case(_base_params):
 
     with (
         patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
-        patch("apps.breakout_quality._dataset_rebuild_reasons", return_value=[]),
+        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
         patch("apps.breakout_quality._run_command", side_effect=_fake_run_command),
     ):
         workflow_rc = app_breakout_quality._run_workflow(
@@ -242,7 +242,7 @@ def validate_dataset_cli_contract_case(_base_params):
             "apps.breakout_quality._prompt_int",
             side_effect=AssertionError("unexpected ticker coverage prompt"),
         ) as mocked_int,
-        patch("apps.breakout_quality._dataset_rebuild_reasons", return_value=[]),
+        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
         patch("apps.breakout_quality._prompt_bool", side_effect=_fake_workflow_bool),
         patch("apps.breakout_quality._run_workflow") as mocked_interactive_workflow,
     ):
@@ -257,7 +257,7 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             0,
             [(
-                "是否強制重建 dataset（即使目前不需要）",
+                "是否強制完整重建 dataset（即使目前不需要）",
                 False,
             ), (
                 "確認開始",
@@ -301,8 +301,8 @@ def validate_dataset_cli_contract_case(_base_params):
             side_effect=AssertionError("unexpected ticker coverage prompt"),
         ),
         patch(
-            "apps.breakout_quality._dataset_rebuild_reasons",
-            return_value=["來源 CSV inventory 已變更"],
+            "apps.breakout_quality._dataset_refresh_plan",
+            return_value=("rebuild", ["來源 CSV inventory 已變更"]),
         ),
         patch("apps.breakout_quality._prompt_bool", side_effect=_fake_stale_workflow_bool),
         patch("apps.breakout_quality._run_workflow", return_value=0) as mocked_stale_workflow,
@@ -463,19 +463,36 @@ def validate_dataset_cli_contract_case(_base_params):
 
         with patch.object(app_breakout_quality, "PROJECT_ROOT", temp_root):
             dataset_paths = app_breakout_quality._dataset_paths("synthetic_quality")
-            for path in dataset_paths.values():
+            for name, path in dataset_paths.items():
                 path.parent.mkdir(parents=True, exist_ok=True)
-            dataset_paths["dataset"].write_bytes(b"npz")
-            dataset_paths["events"].write_text("ticker,date\n", encoding="utf-8")
+                if name == "summary":
+                    continue
+                if name == "events_csv":
+                    path.write_text("ticker,date\n", encoding="utf-8")
+                else:
+                    path.write_bytes(b"npy")
             inventory = app_breakout_quality.build_source_data_inventory(temp_root, "reduced")
             summary_payload = {
                 "filter_id": "synthetic_quality",
                 "dataset": "reduced",
+                "dataset_storage_schema_version": app_breakout_quality.DATASET_STORAGE_SCHEMA_VERSION,
+                "dataset_storage_format": app_breakout_quality.DATASET_STORAGE_FORMAT,
                 "source_data_inventory": inventory,
                 "source_selection": {"requested_max_tickers": 0},
                 "policy": app_breakout_quality.DEFAULT_LABEL_POLICY.as_manifest_payload(),
+                "feature_cache_policy": app_breakout_quality.DEFAULT_LABEL_POLICY.feature_cache_manifest_payload(),
+                "label_policy": app_breakout_quality.DEFAULT_LABEL_POLICY.label_manifest_payload(),
                 "feature_columns": list(app_breakout_quality.FEATURE_COLUMNS),
                 "context_columns": list(app_breakout_quality.CONTEXT_COLUMNS),
+                "dataset_artifacts": {
+                    name: {
+                        "filename": path.name,
+                        "size_bytes": path.stat().st_size,
+                        "sha256": "synthetic-not-used-by-refresh-plan",
+                    }
+                    for name, path in dataset_paths.items()
+                    if name != "summary"
+                },
             }
             dataset_paths["summary"].write_text(
                 json.dumps(summary_payload),
@@ -485,6 +502,28 @@ def validate_dataset_cli_contract_case(_base_params):
                 "synthetic_quality",
                 "reduced",
                 max_tickers=0,
+            )
+            relabel_summary = dict(summary_payload)
+            relabel_summary["label_policy"] = {
+                **summary_payload["label_policy"],
+                "pass_return_threshold": 0.99,
+            }
+            relabel_summary["policy"] = {
+                **summary_payload["policy"],
+                "pass_return_threshold": 0.99,
+            }
+            dataset_paths["summary"].write_text(
+                json.dumps(relabel_summary),
+                encoding="utf-8",
+            )
+            relabel_plan = app_breakout_quality._dataset_refresh_plan(
+                "synthetic_quality",
+                "reduced",
+                max_tickers=0,
+            )
+            dataset_paths["summary"].write_text(
+                json.dumps(summary_payload),
+                encoding="utf-8",
             )
             source_csv.write_text(
                 "Date,Open\n2026-01-01,100\n2026-01-02,101\n",
@@ -508,6 +547,14 @@ def validate_dataset_cli_contract_case(_base_params):
             "breakout_quality_unchanged_source_skips_rebuild",
             [],
             unchanged_reasons,
+        )
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            "breakout_quality_label_policy_change_uses_fast_relabel",
+            "relabel",
+            relabel_plan[0],
         )
         add_check(
             results,

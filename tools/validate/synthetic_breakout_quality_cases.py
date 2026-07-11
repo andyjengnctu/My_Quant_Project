@@ -26,6 +26,8 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
+    BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
+    BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
@@ -74,7 +76,12 @@ from filters.breakout_quality.paths import (
 )
 from filters.breakout_quality.score_store import build_pass_condition_from_score_table, load_score_table
 from filters.breakout_quality.source_inventory import build_source_data_inventory
-from filters.breakout_quality.features import build_event_label
+from filters.breakout_quality.dataset_store import (
+    DATASET_STORAGE_FORMAT,
+    DATASET_STORAGE_SCHEMA_VERSION,
+    IndexedFeatureBank,
+)
+from filters.breakout_quality.features import build_event_label, label_from_cached_path
 from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
@@ -165,11 +172,34 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and int(BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS) >= 1
         and int(BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE) >= 0
         and float(BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA) >= 0.0
-        and int(BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES) >= 1,
+        and int(BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES) >= 1
+        and int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS) >= 1
+        and int(BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS) >= int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "dataset_storage_contract_uses_indexed_feature_bank",
+        (2, "indexed_feature_bank_npy_v2"),
+        (DATASET_STORAGE_SCHEMA_VERSION, DATASET_STORAGE_FORMAT),
+    )
+    feature_bank = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    indexed_features = IndexedFeatureBank(feature_bank, np.asarray([0, 1, 0], dtype=np.int32))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "indexed_feature_bank_reuses_ticker_date_sequence",
+        True,
+        indexed_features.shape == (3, 3, 4)
+        and np.array_equal(indexed_features[0], indexed_features[2])
+        and np.array_equal(indexed_features[1], feature_bank[1]),
     )
     label_policy = BreakoutQualityLabelPolicy(
         feature_window_bars=2,
         label_horizon_bars=3,
+        label_path_cache_bars=5,
         high_len_values=(2,),
         pass_return_threshold=0.15,
         reject_return_threshold=-0.07,
@@ -220,6 +250,31 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "pure_kline_label_ignores_when_neither_barrier_hits",
         (LABEL_IGNORE, "no_barrier_hit"),
         _label_case([110.0, 112.0, 114.0], [96.0, 95.0, 94.0]),
+    )
+    cached_result = label_from_cached_path(
+        np.asarray([110.0, 116.0, 118.0, np.nan, np.nan], dtype=np.float64),
+        np.asarray([96.0, 95.0, 94.0, np.nan, np.nan], dtype=np.float64),
+        anchor_price=100.0,
+        available_bars=3,
+        policy=label_policy,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "cached_future_path_relabel_matches_first_hit_contract",
+        (LABEL_PASS, "upside_first", 2.0),
+        (cached_result.label, cached_result.reason, cached_result.first_hit_bar),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "label_thresholds_are_separate_from_feature_cache_policy",
+        True,
+        "pass_return_threshold" not in label_policy.feature_cache_manifest_payload()
+        and "reject_return_threshold" not in label_policy.feature_cache_manifest_payload()
+        and label_policy.label_manifest_payload()["pass_return_threshold"] == 0.15,
     )
     try:
         V16StrategyParams(breakout_quality_filter_id=" ")
@@ -282,6 +337,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         stale_summary = {
             "filter_id": "synthetic_quality",
             "dataset": "reduced",
+            "dataset_storage_schema_version": DATASET_STORAGE_SCHEMA_VERSION,
+            "dataset_storage_format": DATASET_STORAGE_FORMAT,
             "policy": DEFAULT_LABEL_POLICY.as_manifest_payload(),
             "feature_columns": list(FEATURE_COLUMNS),
             "context_columns": list(CONTEXT_COLUMNS),

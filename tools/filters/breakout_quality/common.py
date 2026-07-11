@@ -21,6 +21,14 @@ from filters.breakout_quality.contract import (
     BreakoutQualityLabelPolicy,
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
+from filters.breakout_quality.dataset_store import (
+    DATASET_STORAGE_FORMAT,
+    DATASET_STORAGE_SCHEMA_VERSION,
+    IndexedFeatureBank,
+    dataset_artifact_metadata_reasons,
+    load_npy,
+    resolve_dataset_paths,
+)
 from filters.breakout_quality.paths import (
     ensure_filter_model_dir,
     ensure_filter_output_dir,
@@ -61,21 +69,27 @@ def build_policy_from_args(args) -> BreakoutQualityLabelPolicy:
     else:
         high_len_values = _parse_high_len_values(args.high_lens)
 
-    policy = BreakoutQualityLabelPolicy(
+    return BreakoutQualityLabelPolicy(
         feature_window_bars=int(args.feature_window),
         label_horizon_bars=int(args.label_horizon),
+        label_path_cache_bars=int(args.label_path_cache),
         high_len_values=high_len_values,
         pass_return_threshold=float(args.pass_return_threshold),
         reject_return_threshold=float(args.reject_return_threshold),
         benchmark_ticker=str(args.benchmark_ticker).strip(),
     )
-    return policy
 
 
 def add_policy_args(parser: argparse.ArgumentParser) -> None:
     p = DEFAULT_LABEL_POLICY
     parser.add_argument("--feature-window", type=int, default=p.feature_window_bars)
     parser.add_argument("--label-horizon", type=int, default=p.label_horizon_bars)
+    parser.add_argument(
+        "--label-path-cache",
+        type=int,
+        default=p.label_path_cache_bars,
+        help="每個 ticker/date 保存的未來 K 線路徑長度；horizon 不超過此值時可快速 relabel",
+    )
     parser.add_argument(
         "--high-lens",
         default=",".join(str(value) for value in p.high_lens()),
@@ -99,22 +113,33 @@ def add_policy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--benchmark-ticker", default=p.benchmark_ticker)
 
 
-def load_dataset_frames(project_root: Path, dataset: str, *, min_rows: int = 50) -> dict[str, pd.DataFrame]:
+def discover_dataset_csv_inputs(
+    project_root: Path,
+    dataset: str,
+) -> tuple[list[tuple[str, Path]], list[str]]:
     profile = normalize_dataset_profile_key(dataset)
     data_dir = get_dataset_dir(str(project_root), profile)
     csv_inputs, duplicate_lines = discover_unique_csv_inputs(data_dir)
-    if duplicate_lines:
-        for line in duplicate_lines:
-            print(line)
+    normalized = [(str(ticker), Path(path)) for ticker, path in csv_inputs]
+    return normalized, list(duplicate_lines or [])
+
+
+def load_dataset_frame(path: Path, ticker: str, *, min_rows: int = 50) -> pd.DataFrame:
+    raw_df = pd.read_csv(path, low_memory=False)
+    frame, _stats = sanitize_ohlcv_dataframe(raw_df, ticker=ticker, min_rows=min_rows)
+    return frame
+
+
+def load_dataset_frames(project_root: Path, dataset: str, *, min_rows: int = 50) -> dict[str, pd.DataFrame]:
+    csv_inputs, duplicate_lines = discover_dataset_csv_inputs(project_root, dataset)
+    for line in duplicate_lines:
+        print(line)
     frames: dict[str, pd.DataFrame] = {}
     for ticker, path in csv_inputs:
         try:
-            raw_df = pd.read_csv(path, low_memory=False)
-            df, _stats = sanitize_ohlcv_dataframe(raw_df, ticker=ticker, min_rows=min_rows)
+            frames[ticker] = load_dataset_frame(path, ticker, min_rows=min_rows)
         except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
             print(f"[skip] {ticker}: {exc}")
-            continue
-        frames[str(ticker)] = df
     return frames
 
 
@@ -122,12 +147,18 @@ def dataset_output_dir(filter_id: str) -> Path:
     return ensure_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
 
 
+def dataset_paths(filter_id: str):
+    return resolve_dataset_paths(dataset_output_dir(filter_id))
+
+
 def dataset_npz_path(filter_id: str) -> Path:
-    return dataset_output_dir(filter_id) / "dataset.npz"
+    """Legacy path retained only for cleanup and explicit incompatibility diagnostics."""
+
+    return dataset_paths(filter_id).legacy_dataset
 
 
 def events_csv_path(filter_id: str) -> Path:
-    return dataset_output_dir(filter_id) / "events.csv"
+    return dataset_paths(filter_id).events
 
 
 def scores_csv_path(filter_id: str) -> Path:
@@ -150,19 +181,59 @@ def read_json(path: Path) -> dict:
     return payload
 
 
+def _validate_artifact_hash(artifact_name: str, artifact_path: Path, record: dict) -> None:
+    expected_hash = str(record.get("sha256", "")).strip().lower()
+    actual_hash = compute_file_sha256(artifact_path).lower()
+    if not expected_hash or actual_hash != expected_hash:
+        raise ValueError(
+            f"dataset artifact SHA256 不一致: {artifact_name}; expected={expected_hash}, actual={actual_hash}"
+        )
+
+
+def _validate_future_paths(
+    group_anchor_prices: np.ndarray,
+    future_high_prices: np.ndarray,
+    future_low_prices: np.ndarray,
+    future_available_bars: np.ndarray,
+) -> None:
+    if np.isinf(group_anchor_prices).any() or np.isinf(future_high_prices).any() or np.isinf(future_low_prices).any():
+        raise ValueError("future price cache 含 infinite")
+    if np.any(~np.isfinite(group_anchor_prices)) or np.any(group_anchor_prices <= 0.0):
+        raise ValueError("group_anchor_prices 含無效價格")
+    path_bars = int(future_high_prices.shape[1])
+    if np.any(future_available_bars < 0) or np.any(future_available_bars > path_bars):
+        raise ValueError("future_available_bars 超出 future path cache 範圍")
+    chunk_size = 4096
+    for start in range(0, len(future_available_bars), chunk_size):
+        stop = min(start + chunk_size, len(future_available_bars))
+        for local_index, available in enumerate(future_available_bars[start:stop]):
+            group_index = start + local_index
+            count = int(available)
+            if count <= 0:
+                continue
+            highs = future_high_prices[group_index, :count]
+            lows = future_low_prices[group_index, :count]
+            finite_pair = np.isfinite(highs) & np.isfinite(lows)
+            if bool(np.any(finite_pair & (highs < lows))):
+                raise ValueError(f"future price cache 含 high < low: group_index={group_index}")
+
 
 def load_validated_dataset_bundle(
     filter_id: str,
     *,
     expected_policy: dict | None = None,
     require_current_source: bool = False,
-) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
-    summary_path = dataset_output_dir(filter_id) / "dataset_summary.json"
-    if not summary_path.is_file():
-        raise FileNotFoundError(f"找不到 dataset_summary.json: {summary_path}")
-    summary = read_json(summary_path)
+) -> tuple[dict, IndexedFeatureBank, np.ndarray, np.ndarray, pd.DataFrame]:
+    paths = dataset_paths(filter_id)
+    if not paths.summary.is_file():
+        raise FileNotFoundError(f"找不到 dataset_summary.json: {paths.summary}")
+    summary = read_json(paths.summary)
     if str(summary.get("filter_id", "")).strip() != str(filter_id).strip():
         raise ValueError("dataset_summary.filter_id 與命令不一致")
+    if int(summary.get("dataset_storage_schema_version", -1)) != DATASET_STORAGE_SCHEMA_VERSION:
+        raise ValueError("dataset storage schema 不相容；請用新版 build-dataset 重建")
+    if str(summary.get("dataset_storage_format") or "") != DATASET_STORAGE_FORMAT:
+        raise ValueError("dataset storage format 不相容；請用新版 build-dataset 重建")
     if list(summary.get("feature_columns", [])) != list(FEATURE_COLUMNS):
         raise ValueError("dataset_summary feature_columns 與正式 contract 不一致")
     if list(summary.get("context_columns", [])) != list(CONTEXT_COLUMNS):
@@ -179,73 +250,88 @@ def load_validated_dataset_bundle(
         dataset_profile = str(summary.get("dataset") or "").strip().lower()
         stored_inventory = summary.get("source_data_inventory")
         if dataset_profile not in {"reduced", "full"} or not isinstance(stored_inventory, dict):
-            raise ValueError(
-                "dataset 缺少有效 source_data_inventory；請先由 apps/breakout_quality.py workflow 重建 dataset"
-            )
+            raise ValueError("dataset 缺少有效 source_data_inventory；請先由 workflow 更新 dataset")
         current_inventory = build_source_data_inventory(PROJECT_ROOT, dataset_profile)
         if stored_inventory != current_inventory:
             raise ValueError(
-                "來源 CSV 已更新，現有 breakout quality dataset 已過期；"
-                "請先由 apps/breakout_quality.py workflow 自動重建，或直接重新執行 build-dataset"
+                "來源 CSV 已更新，現有 breakout quality dataset 已過期；請先由 workflow 自動重建"
             )
 
     artifact_records = summary.get("dataset_artifacts")
-    if not isinstance(artifact_records, dict):
-        raise ValueError("dataset_summary 缺少 dataset_artifacts；請用新版 build_dataset 重建")
-    expected_paths = {
-        "dataset_npz": dataset_npz_path(filter_id),
-        "events_csv": events_csv_path(filter_id),
-    }
-    for artifact_name, artifact_path in expected_paths.items():
-        record = artifact_records.get(artifact_name)
-        if not isinstance(record, dict):
-            raise ValueError(f"dataset_summary 缺少 artifact record: {artifact_name}")
-        if str(record.get("filename", "")).strip() != artifact_path.name:
-            raise ValueError(f"dataset artifact filename 不一致: {artifact_name}")
-        expected_size = int(record.get("size_bytes", -1))
-        actual_size = int(artifact_path.stat().st_size)
-        if expected_size != actual_size:
-            raise ValueError(
-                f"dataset artifact size 不一致: {artifact_name}; expected={expected_size}, actual={actual_size}"
-            )
-        expected_hash = str(record.get("sha256", "")).strip().lower()
-        actual_hash = compute_file_sha256(artifact_path).lower()
-        if not expected_hash or actual_hash != expected_hash:
-            raise ValueError(
-                f"dataset artifact SHA256 不一致: {artifact_name}; expected={expected_hash}, actual={actual_hash}"
-            )
+    metadata_reasons = dataset_artifact_metadata_reasons(paths, artifact_records)
+    if metadata_reasons:
+        raise ValueError("dataset artifact metadata 不一致: " + "; ".join(metadata_reasons))
+    assert isinstance(artifact_records, dict)
+    for artifact_name, artifact_path in paths.artifact_paths().items():
+        record = artifact_records[artifact_name]
+        _validate_artifact_hash(artifact_name, artifact_path, record)
 
-    with np.load(expected_paths["dataset_npz"]) as data:
-        required_arrays = {"features", "context", "labels"}
-        missing_arrays = sorted(required_arrays - set(data.files))
-        if missing_arrays:
-            raise ValueError(f"dataset.npz 缺少 arrays: {missing_arrays}")
-        features = data["features"].astype(np.float32)
-        context = data["context"].astype(np.float32)
-        labels = data["labels"].astype(np.int64)
-    events = read_breakout_quality_csv(expected_paths["events_csv"])
-    if features.ndim != 3 or context.ndim != 2 or labels.ndim != 1:
-        raise ValueError(f"dataset shape 不合法: X={features.shape}, C={context.shape}, y={labels.shape}")
-    if len(features) != len(context) or len(features) != len(labels) or len(features) != len(events):
+    feature_bank = load_npy(paths.feature_bank)
+    context = load_npy(paths.event_context)
+    labels = load_npy(paths.event_labels)
+    event_group_index = load_npy(paths.event_group_index)
+    group_anchor_prices = load_npy(paths.group_anchor_prices)
+    future_high_prices = load_npy(paths.future_high_prices)
+    future_low_prices = load_npy(paths.future_low_prices)
+    future_available_bars = load_npy(paths.future_available_bars)
+    future_date_ordinals = load_npy(paths.future_date_ordinals)
+    events = read_breakout_quality_csv(paths.events)
+
+    if feature_bank.ndim != 3 or context.ndim != 2 or labels.ndim != 1 or event_group_index.ndim != 1:
         raise ValueError(
-            f"dataset bundle 長度不一致: X={len(features)}, C={len(context)}, y={len(labels)}, events={len(events)}"
+            "dataset shape 不合法: "
+            f"bank={feature_bank.shape}, C={context.shape}, y={labels.shape}, group_index={event_group_index.shape}"
         )
-    if features.shape[2] != len(FEATURE_COLUMNS) or context.shape[1] != len(CONTEXT_COLUMNS):
+    if (
+        group_anchor_prices.ndim != 1
+        or future_high_prices.ndim != 2
+        or future_low_prices.ndim != 2
+        or future_available_bars.ndim != 1
+        or future_date_ordinals.ndim != 2
+    ):
+        raise ValueError("future path cache shape 不合法")
+    event_count = len(events)
+    group_count = len(feature_bank)
+    if len(context) != event_count or len(labels) != event_count or len(event_group_index) != event_count:
+        raise ValueError(
+            f"dataset event 長度不一致: C={len(context)}, y={len(labels)}, index={len(event_group_index)}, events={event_count}"
+        )
+    if (
+        len(group_anchor_prices) != group_count
+        or len(future_high_prices) != group_count
+        or len(future_low_prices) != group_count
+        or len(future_available_bars) != group_count
+        or len(future_date_ordinals) != group_count
+    ):
+        raise ValueError("dataset group 長度不一致")
+    if future_high_prices.shape != future_low_prices.shape or future_high_prices.shape != future_date_ordinals.shape:
+        raise ValueError("future path cache shape 不一致")
+    if group_count and (int(event_group_index.min()) < 0 or int(event_group_index.max()) >= group_count):
+        raise ValueError("event_group_index 超出 feature bank 範圍")
+    if feature_bank.shape[2] != len(FEATURE_COLUMNS) or context.shape[1] != len(CONTEXT_COLUMNS):
         raise ValueError("dataset feature/context 維度與正式 contract 不一致")
     feature_window_bars = int(policy.get("feature_window_bars", -1))
-    if feature_window_bars < 1 or features.shape[1] != feature_window_bars:
-        raise ValueError(
-            f"dataset feature window 與 policy 不一致: X={features.shape[1]}, policy={feature_window_bars}"
-        )
-    if not np.isfinite(features).all() or not np.isfinite(context).all():
-        raise ValueError("dataset features/context 含 NaN 或 infinite")
-    required_event_columns = {"ticker", "date", "high_len", "label", "label_eval_end_date"}
+    path_cache_bars = int(policy.get("label_path_cache_bars", -1))
+    if feature_window_bars < 1 or feature_bank.shape[1] != feature_window_bars:
+        raise ValueError("dataset feature window 與 policy 不一致")
+    if path_cache_bars < 1 or future_high_prices.shape[1] != path_cache_bars:
+        raise ValueError("future path cache 長度與 policy 不一致")
+    if not np.isfinite(feature_bank).all() or not np.isfinite(context).all():
+        raise ValueError("dataset feature bank/context 含 NaN 或 infinite")
+    _validate_future_paths(group_anchor_prices, future_high_prices, future_low_prices, future_available_bars)
+    if np.any(future_date_ordinals < -1):
+        raise ValueError("future_date_ordinals 含非法值")
+
+    required_event_columns = {"ticker", "date", "high_len", "group_index", "label", "label_eval_end_date"}
     missing_event_columns = sorted(required_event_columns - set(events.columns))
     if missing_event_columns:
         raise ValueError(f"events.csv 缺少必要欄位: {missing_event_columns}")
     event_labels = pd.to_numeric(events["label"], errors="raise").to_numpy(dtype=np.int64)
-    if not np.array_equal(event_labels, labels):
-        raise ValueError("events.csv label 與 dataset.npz labels 不一致")
+    if not np.array_equal(event_labels, np.asarray(labels, dtype=np.int64)):
+        raise ValueError("events.csv label 與 event_labels.npy 不一致")
+    csv_group_index = pd.to_numeric(events["group_index"], errors="raise").to_numpy(dtype=np.int64)
+    if not np.array_equal(csv_group_index, np.asarray(event_group_index, dtype=np.int64)):
+        raise ValueError("events.csv group_index 與 event_group_index.npy 不一致")
     policy_high_lens = policy.get("high_len_values")
     if not isinstance(policy_high_lens, list) or not policy_high_lens:
         raise ValueError("dataset policy.high_len_values 必須是非空 list")
@@ -253,9 +339,14 @@ def load_validated_dataset_bundle(
     observed_high_lens = set(pd.to_numeric(events["high_len"], errors="raise").astype(int).tolist())
     if not observed_high_lens.issubset(allowed_high_lens):
         raise ValueError("events.csv 含 policy 未宣告的 high_len")
-    if int(summary.get("event_count", -1)) != len(events):
+    if int(summary.get("event_count", -1)) != event_count:
         raise ValueError("dataset_summary.event_count 與 artifacts 不一致")
-    return summary, features, context, labels, events
+    if int(summary.get("feature_group_count", -1)) != group_count:
+        raise ValueError("dataset_summary.feature_group_count 與 artifacts 不一致")
+
+    indexed_features = IndexedFeatureBank(feature_bank, event_group_index)
+    return summary, indexed_features, context, labels, events
+
 
 def label_counts(labels: Iterable[int]) -> dict[str, int]:
     arr = np.asarray(list(labels), dtype=np.int64)
@@ -296,7 +387,11 @@ def event_group_summary(events: pd.DataFrame, labels: Iterable[int]) -> dict:
     label_nunique = frame.groupby("_group_key", sort=False)["label"].nunique()
     valid = frame[frame["label"].isin([0, 1])].copy()
     valid_group_count = int(valid["_group_key"].nunique()) if not valid.empty else 0
-    valid_label_nunique = valid.groupby("_group_key", sort=False)["label"].nunique() if not valid.empty else pd.Series(dtype="int64")
+    valid_label_nunique = (
+        valid.groupby("_group_key", sort=False)["label"].nunique()
+        if not valid.empty
+        else pd.Series(dtype="int64")
+    )
     return {
         "group_key": "ticker/date",
         "group_count": int(group_sizes.size),
@@ -315,11 +410,14 @@ __all__ = [
     "build_policy_from_args",
     "dataset_npz_path",
     "dataset_output_dir",
+    "dataset_paths",
+    "discover_dataset_csv_inputs",
     "event_group_keys",
     "event_group_summary",
     "events_csv_path",
     "group_size_weights",
     "label_counts",
+    "load_dataset_frame",
     "load_dataset_frames",
     "load_validated_dataset_bundle",
     "model_dir",

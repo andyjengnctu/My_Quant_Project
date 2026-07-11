@@ -9,6 +9,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
+    BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
     BREAKOUT_QUALITY_LABEL_PASS_RETURN,
     BREAKOUT_QUALITY_LABEL_REJECT_RETURN,
     build_breakout_quality_default_high_len_values,
@@ -23,7 +24,7 @@ DEFAULT_SPLIT_FILENAME = "split_assignments.csv"
 DEFAULT_FEATURE_WINDOW_BARS = BREAKOUT_QUALITY_FEATURE_WINDOW_BARS
 DEFAULT_LABEL_HORIZON_BARS = BREAKOUT_QUALITY_LABEL_HORIZON_BARS
 DEFAULT_BENCHMARK_TICKER = BREAKOUT_QUALITY_BENCHMARK_TICKER
-ARTIFACT_CONTRACT_VERSION = 5
+ARTIFACT_CONTRACT_VERSION = 6
 SCORE_TABLE_SCHEMA_VERSION = 2
 SPLIT_ASSIGNMENT_SCHEMA_VERSION = 2
 SCORE_COLUMN = "dl_quality_score"
@@ -65,6 +66,7 @@ SELECTION_ROLE_VALUES = (
 class BreakoutQualityLabelPolicy:
     feature_window_bars: int = DEFAULT_FEATURE_WINDOW_BARS
     label_horizon_bars: int = DEFAULT_LABEL_HORIZON_BARS
+    label_path_cache_bars: int = BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS
     high_len_values: tuple[int, ...] = field(default_factory=build_breakout_quality_default_high_len_values)
     pass_return_threshold: float = BREAKOUT_QUALITY_LABEL_PASS_RETURN
     reject_return_threshold: float = BREAKOUT_QUALITY_LABEL_REJECT_RETURN
@@ -73,6 +75,8 @@ class BreakoutQualityLabelPolicy:
     def __post_init__(self) -> None:
         if int(self.feature_window_bars) < 1 or int(self.label_horizon_bars) < 1:
             raise ValueError("feature window 與 label horizon 必須 >= 1")
+        if int(self.label_path_cache_bars) < int(self.label_horizon_bars):
+            raise ValueError("label_path_cache_bars 必須 >= label_horizon_bars")
         if float(self.pass_return_threshold) <= 0.0:
             raise ValueError("pass_return_threshold 必須 > 0")
         if not -1.0 < float(self.reject_return_threshold) < 0.0:
@@ -94,6 +98,24 @@ class BreakoutQualityLabelPolicy:
     @property
     def high_len_max(self) -> int:
         return int(self.high_lens()[-1])
+
+
+    def feature_cache_manifest_payload(self) -> dict:
+        return {
+            "feature_window_bars": int(self.feature_window_bars),
+            "label_path_cache_bars": int(self.label_path_cache_bars),
+            "high_len_values": list(self.high_lens()),
+            "high_len_min": self.high_len_min,
+            "high_len_max": self.high_len_max,
+            "benchmark_ticker": str(self.benchmark_ticker),
+        }
+
+    def label_manifest_payload(self) -> dict:
+        return {
+            "label_horizon_bars": int(self.label_horizon_bars),
+            "pass_return_threshold": float(self.pass_return_threshold),
+            "reject_return_threshold": float(self.reject_return_threshold),
+        }
 
     def as_manifest_payload(self) -> dict:
         payload = asdict(self)

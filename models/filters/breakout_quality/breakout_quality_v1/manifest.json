@@ -1,5 +1,5 @@
 {
-  "artifact_contract_version": 5,
+  "artifact_contract_version": 6,
   "batch_size": 256,
   "class_weights_reject_pass": [
     0.79980588,
@@ -15,7 +15,7 @@
   "early_stopping_enabled": true,
   "early_stopping_min_delta": 0.0,
   "early_stopping_patience": 5,
-  "elapsed_sec": 181.464,
+  "elapsed_sec": 169.315,
   "epoch_selection_source": "inner_validation_loss",
   "event_group_summary": {
     "group_count": 59079,
@@ -344,6 +344,7 @@
       350
     ],
     "label_horizon_bars": 40,
+    "label_path_cache_bars": 120,
     "pass_return_threshold": 0.15,
     "reject_return_threshold": -0.07
   },
@@ -362,6 +363,7 @@
   "seed": 42,
   "selected_epoch": 1,
   "source_dataset": {
+    "build_mode": "full_feature_bank_rebuild",
     "context_columns": [
       "high_len_norm",
       "breakout_level_to_close",
@@ -370,18 +372,60 @@
     ],
     "dataset": "full",
     "dataset_artifacts": {
-      "dataset_npz": {
-        "filename": "dataset.npz",
-        "sha256": "7c1882509b58e5837b8c00dc839714b745d72afca0fd20b0a9979e0aba25e951",
-        "size_bytes": 2913269337
+      "event_context": {
+        "filename": "event_context.npy",
+        "sha256": "709f50dbe0a4b57e471fd794a54fcc6999198a189e7bcf09c133058dab0fcef1",
+        "size_bytes": 30003920
+      },
+      "event_group_index": {
+        "filename": "event_group_index.npy",
+        "sha256": "f43b586b34e9c07e88d0c0cb5271be37d1ef1e757e3ebe27efc10b70624dfb68",
+        "size_bytes": 7501076
+      },
+      "event_labels": {
+        "filename": "event_labels.npy",
+        "sha256": "e8e5880cb7688203c4aa0f3622245e7f948c0417a3068e2378be7248243276b8",
+        "size_bytes": 1875365
       },
       "events_csv": {
         "filename": "events.csv",
-        "sha256": "16129480bff93d6d61253d26b0923f586dc7700233f2cdd751134ca06186c117",
-        "size_bytes": 261272362
+        "sha256": "7b2ac20f3c6c5a7d4e4e0b908c72f2347c79b541c3f8fc495bf2dc8fbca55d3b",
+        "size_bytes": 272162569
+      },
+      "feature_bank": {
+        "filename": "feature_bank.npy",
+        "sha256": "d36c8b1373357727055dec1b4821ee64af07a2a921f3754151130f44cda353e1",
+        "size_bytes": 141789728
+      },
+      "future_available_bars": {
+        "filename": "future_available_bars.npy",
+        "sha256": "481f865f547d0f25aab6d1c2bc7c0f72bfd2817a9ce99217b6da536d9ad3f77b",
+        "size_bytes": 118286
+      },
+      "future_date_ordinals": {
+        "filename": "future_date_ordinals.npy",
+        "sha256": "d9a9202812e7af8ebd4288f120ef09f18871c0afc9d09d70477e28fa66d563bf",
+        "size_bytes": 28358048
+      },
+      "future_high_prices": {
+        "filename": "future_high_prices.npy",
+        "sha256": "175460ef002b332e16f4481a5ce69e02b9c1a728aafb5f8136752fc14f55caf5",
+        "size_bytes": 56715968
+      },
+      "future_low_prices": {
+        "filename": "future_low_prices.npy",
+        "sha256": "1e8a68bdc35ba890ba8b56aaebc3b80ddb8e00c29735aa3eab5d37e8fdbb1169",
+        "size_bytes": 56715968
+      },
+      "group_anchor_prices": {
+        "filename": "group_anchor_prices.npy",
+        "sha256": "6ff519dd5563204f7b40d7104d6910ee46ad02184bdb2bdd3ab89164e77bed3d",
+        "size_bytes": 472760
       }
     },
-    "elapsed_sec": 946.846,
+    "dataset_storage_format": "indexed_feature_bank_npy_v2",
+    "dataset_storage_schema_version": 2,
+    "elapsed_sec": 196.124,
     "event_count": 1875237,
     "event_date_range": {
       "end": "2026-03-02",
@@ -397,6 +441,75 @@
       "rows_per_group_min": 1,
       "valid_group_count": 41188
     },
+    "feature_cache_policy": {
+      "benchmark_ticker": "0050",
+      "feature_window_bars": 60,
+      "high_len_max": 350,
+      "high_len_min": 60,
+      "high_len_values": [
+        60,
+        65,
+        70,
+        75,
+        80,
+        85,
+        90,
+        95,
+        100,
+        105,
+        110,
+        115,
+        120,
+        125,
+        130,
+        135,
+        140,
+        145,
+        150,
+        155,
+        160,
+        165,
+        170,
+        175,
+        180,
+        185,
+        190,
+        195,
+        200,
+        201,
+        205,
+        210,
+        215,
+        220,
+        225,
+        230,
+        235,
+        240,
+        245,
+        250,
+        255,
+        260,
+        265,
+        270,
+        275,
+        280,
+        285,
+        290,
+        295,
+        300,
+        305,
+        310,
+        315,
+        320,
+        325,
+        330,
+        335,
+        340,
+        345,
+        350
+      ],
+      "label_path_cache_bars": 120
+    },
     "feature_columns": [
       "open_norm",
       "high_norm",
@@ -409,6 +522,7 @@
       "benchmark_close_norm",
       "benchmark_volume_norm"
     ],
+    "feature_group_count": 59079,
     "filter_id": "breakout_quality_v1",
     "label_counts": {
       "ignore": 549264,
@@ -419,6 +533,11 @@
     "label_information_end_date_range": {
       "end": "2026-03-02",
       "start": "2003-11-19"
+    },
+    "label_policy": {
+      "label_horizon_bars": 40,
+      "pass_return_threshold": 0.15,
+      "reject_return_threshold": -0.07
     },
     "policy": {
       "benchmark_ticker": "0050",
@@ -488,6 +607,7 @@
         350
       ],
       "label_horizon_bars": 40,
+      "label_path_cache_bars": 120,
       "pass_return_threshold": 0.15,
       "reject_return_threshold": -0.07
     },
@@ -506,8 +626,17 @@
       "schema_version": 1
     },
     "source_selection": {
+      "processed_ticker_count": 555,
       "requested_max_tickers": 0,
-      "selected_ticker_count": 555
+      "selected_ticker_count": 616
+    },
+    "storage_summary": {
+      "event_count": 1875237,
+      "events_per_feature_group": 31.741177,
+      "expanded_event_feature_bytes": 4500568800,
+      "feature_bank_bytes": 141789600,
+      "feature_group_count": 59079,
+      "feature_storage_reduction_ratio": 31.741177
     }
   },
   "split_assignments": {
@@ -545,15 +674,55 @@
     "sha256": "399daaea65226493b0155c1397164db16ec40508693275e091b0de05cdaac32e",
     "size_bytes": 77664376,
     "source_dataset_artifacts": {
-      "dataset_npz": {
-        "filename": "dataset.npz",
-        "sha256": "7c1882509b58e5837b8c00dc839714b745d72afca0fd20b0a9979e0aba25e951",
-        "size_bytes": 2913269337
+      "event_context": {
+        "filename": "event_context.npy",
+        "sha256": "709f50dbe0a4b57e471fd794a54fcc6999198a189e7bcf09c133058dab0fcef1",
+        "size_bytes": 30003920
+      },
+      "event_group_index": {
+        "filename": "event_group_index.npy",
+        "sha256": "f43b586b34e9c07e88d0c0cb5271be37d1ef1e757e3ebe27efc10b70624dfb68",
+        "size_bytes": 7501076
+      },
+      "event_labels": {
+        "filename": "event_labels.npy",
+        "sha256": "e8e5880cb7688203c4aa0f3622245e7f948c0417a3068e2378be7248243276b8",
+        "size_bytes": 1875365
       },
       "events_csv": {
         "filename": "events.csv",
-        "sha256": "16129480bff93d6d61253d26b0923f586dc7700233f2cdd751134ca06186c117",
-        "size_bytes": 261272362
+        "sha256": "7b2ac20f3c6c5a7d4e4e0b908c72f2347c79b541c3f8fc495bf2dc8fbca55d3b",
+        "size_bytes": 272162569
+      },
+      "feature_bank": {
+        "filename": "feature_bank.npy",
+        "sha256": "d36c8b1373357727055dec1b4821ee64af07a2a921f3754151130f44cda353e1",
+        "size_bytes": 141789728
+      },
+      "future_available_bars": {
+        "filename": "future_available_bars.npy",
+        "sha256": "481f865f547d0f25aab6d1c2bc7c0f72bfd2817a9ce99217b6da536d9ad3f77b",
+        "size_bytes": 118286
+      },
+      "future_date_ordinals": {
+        "filename": "future_date_ordinals.npy",
+        "sha256": "d9a9202812e7af8ebd4288f120ef09f18871c0afc9d09d70477e28fa66d563bf",
+        "size_bytes": 28358048
+      },
+      "future_high_prices": {
+        "filename": "future_high_prices.npy",
+        "sha256": "175460ef002b332e16f4481a5ce69e02b9c1a728aafb5f8136752fc14f55caf5",
+        "size_bytes": 56715968
+      },
+      "future_low_prices": {
+        "filename": "future_low_prices.npy",
+        "sha256": "1e8a68bdc35ba890ba8b56aaebc3b80ddb8e00c29735aa3eab5d37e8fdbb1169",
+        "size_bytes": 56715968
+      },
+      "group_anchor_prices": {
+        "filename": "group_anchor_prices.npy",
+        "sha256": "6ff519dd5563204f7b40d7104d6910ee46ad02184bdb2bdd3ab89164e77bed3d",
+        "size_bytes": 472760
       }
     }
   },
