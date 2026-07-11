@@ -754,8 +754,8 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v2", 2, payload["schema_version"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, "- **Threshold**：`0.5`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
-    selection_matrix = markdown.split("## 3. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
-    console_selection_matrix = console.split("3. Selection Confusion Matrix", 1)[1].split("分類品質", 1)[0]
+    selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
+    console_selection_matrix = console.split("2. Selection Confusion Matrix", 1)[1].split("分類品質", 1)[0]
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -769,8 +769,35 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             and all(token not in console_selection_matrix for token in ("Precision", "Recall", "Specificity", "NPV", "Accuracy"))
         ),
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_confusion_margins_include_all_four_rates",
+        True,
+        (
+            all(token in selection_matrix for token in ("原始 PASS 比例", "原始 REJECT 比例", "保留率", "拒絕率"))
+            and all(token in console_selection_matrix for token in ("原始 PASS 比例", "原始 REJECT 比例", "保留率", "拒絕率"))
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_metric_tables_include_formulas_and_explanations",
+        True,
+        (
+            "| 指標 | 公式 | 結果 | 解釋 |" in markdown
+            and "| 指標 | 公式 | 結果 |" in markdown
+            and "TP ÷ (TP + FP)" in markdown
+            and "PASS Precision − 原始 PASS 比例" in markdown
+            and "被保留的訊號中，有多少真的 PASS" in markdown
+            and "篩選行為" not in markdown
+            and "篩選行為" not in console
+        ),
+    )
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. 各資料區段比較" in console and "3. Selection Confusion Matrix" in console and "4. OOS Confusion Matrix" in console and "5. Selection 與 OOS 差異" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. Selection 與 OOS 差異" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, "Threshold       : 0.5" in console and "Learning Rate   : 0.001" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
@@ -786,7 +813,8 @@ def _validate_breakout_quality_report_rendering(results, case_id):
                 label in markdown and label in console
                 for label in (
                     "原始 PASS 比例",
-                    "模型 PASS 比例",
+                    "保留率",
+                    "拒絕率",
                     "PASS Precision",
                     "PASS Recall",
                     "REJECT Specificity",
@@ -797,6 +825,10 @@ def _validate_breakout_quality_report_rendering(results, case_id):
                     "平均 Score",
                 )
             )
+            and "模型 PASS 比例" not in markdown
+            and "模型 PASS 比例" not in console
+            and "模型 REJECT 比例" not in markdown
+            and "模型 REJECT 比例" not in console
             and "模型保留" not in markdown
             and "模型保留" not in console
             and "REJECT 辨識率" not in markdown

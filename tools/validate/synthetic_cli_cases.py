@@ -211,10 +211,20 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_report_oos_prompt_defaults_to_no",
-        False,
+        "breakout_quality_report_oos_prompt_defaults_to_yes",
+        True,
         prompt_default,
     )
+    report_module = importlib.import_module("tools.filters.breakout_quality.report")
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_report_cli_defaults_to_oos",
+        True,
+        report_module.parse_args([]).include_oos,
+    )
+
     add_check(
         results,
         "cli_contract",

@@ -590,7 +590,7 @@ def _interactive_report(program_name: str) -> int:
     include_oos = _prompt_bool(
         "是否讀取最終 OOS 並納入報表？注意：讀取後不得依同一段 OOS 回頭調整 "
         "threshold、epochs、learning rate、feature、label 或模型",
-        False,
+        True,
     )
     argv = ["--filter-id", filter_id]
     argv.append("--include-oos" if include_oos else "--no-include-oos")
