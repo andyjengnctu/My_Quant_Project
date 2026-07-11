@@ -1,8 +1,10 @@
 ## Going
 - breakout filter
+    - GUI at APP
+    - rebuilt data timing?
     - remark and train fixed parameters  
     - inconsist with strategy parameters
-    - GUI at APP
+    - consistance among different seeds 
 
 - 最差季度報酬 
 

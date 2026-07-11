@@ -17,10 +17,15 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
+    BREAKOUT_QUALITY_DEFAULT_EPOCHS,
+    BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
+    BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
+    BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
 )
@@ -77,14 +82,14 @@ def parse_args(argv=None):
     parser.add_argument(
         "--epochs",
         type=int,
-        default=20,
+        default=BREAKOUT_QUALITY_DEFAULT_EPOCHS,
         help=(
             "inner validation 關閉時為正式固定 epoch 數；開啟時為 epoch 搜尋上限"
         ),
     )
-    parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--batch-size", type=int, default=BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE)
+    parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
+    parser.add_argument("--seed", type=int, default=BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED)
     parser.add_argument(
         "--fixed-threshold",
         type=float,
@@ -118,7 +123,7 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
         help="validation loss 至少改善多少才算新最佳",
     )
-    parser.add_argument("--min-train-samples", type=int, default=20)
+    parser.add_argument("--min-train-samples", type=int, default=BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES)
     parser.add_argument(
         "--min-validation-samples",
         type=int,

@@ -18,10 +18,15 @@ from config.breakout_policy import (
     build_breakout_optimizer_high_len_values,
 )
 from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
+    BREAKOUT_QUALITY_DEFAULT_EPOCHS,
+    BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
+    BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
+    BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     build_breakout_quality_default_high_len_values,
@@ -119,6 +124,18 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "fixed_threshold_is_user_configured_and_legal",
         True,
         0.0 <= float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD) <= 1.0,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "training_defaults_are_user_configured_and_legal",
+        True,
+        int(BREAKOUT_QUALITY_DEFAULT_EPOCHS) >= 1
+        and int(BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE) >= 1
+        and float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) > 0.0
+        and int(BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED) >= 0
+        and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1,
     )
     add_check(
         results,
