@@ -7,7 +7,7 @@
 ```text
 project/
 ├─ apps/
-│  ├─ breakout_quality.py             # Breakout quality 正式入口（薄入口／子命令分派）
+│  ├─ breakout_quality.py             # Breakout quality 正式入口（選單／workflow／子命令分派）
 │  ├─ ml_optimizer.py                 # 參數最佳化正式入口（薄入口）
 │  ├─ portfolio_sim.py                # 投組模擬正式入口（薄入口）
 │  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
@@ -83,7 +83,7 @@ project/
 
 ### `apps/breakout_quality.py`、`filters/breakout_quality/` 與 `tools/filters/breakout_quality/`
 
-- `apps/breakout_quality.py` 是 dataset、training、score export 與 evaluation 的單一正式使用者入口；只負責子命令分派，不複製模型或 split 規則。
+- `apps/breakout_quality.py` 是 dataset、training、score export 與 evaluation 的單一正式使用者入口；負責互動選單、可重現 workflow orchestration 與子命令分派，但不複製 dataset、模型、split、export 或 evaluation 規則。
 - `filters/breakout_quality/` 承接 feature/label、artifact contract、canonical path、外層 Selection/OOS split 與正式 runtime lookup；正式 runtime 不執行 CNN，只讀 canonical `scores.csv`。
 - `tools/filters/breakout_quality/` 承接 dataset、training、score export 與研究評估子系統實作；直接 CLI 僅保留開發與既有指令相容，不再作為文件建議的正式入口。
 - 正式工件唯一位置為 `models/filters/breakout_quality/<filter_id>/`；`split_assignments.csv` 的 outer `selection/oos` 日期直接來自 `core.walk_forward_policy`。
@@ -121,7 +121,7 @@ project/
 
 ## 正式入口
 
-- `apps/breakout_quality.py`：Breakout quality dataset、training、score export 與 evaluation 單一正式入口。
+- `apps/breakout_quality.py`：Breakout quality 互動選單、完整 research workflow、dataset、training、score export 與 evaluation 單一正式入口。
 - `apps/test_suite.py`：日常一鍵測試正式入口。
 - `apps/ml_optimizer.py`：optimizer 正式入口。
 - `apps/package_zip.py`：打包正式入口。

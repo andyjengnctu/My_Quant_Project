@@ -59,9 +59,9 @@ def validate_dataset_cli_contract_case(_base_params):
         case_id,
         "breakout_quality_app_help_usage",
         True,
-        "用法: python apps/breakout_quality.py <command> [options]" in help_text,
+        "用法: python apps/breakout_quality.py [menu|workflow|<command>] [options]" in help_text,
     )
-    for command in ("build-dataset", "train", "export-scores", "evaluate"):
+    for command in ("menu", "workflow", "build-dataset", "train", "export-scores", "evaluate"):
         add_check(
             results,
             "cli_contract",
@@ -70,6 +70,56 @@ def validate_dataset_cli_contract_case(_base_params):
             True,
             command in help_text,
         )
+
+    with patch("apps.breakout_quality.is_interactive_console", return_value=False):
+        rc, no_arg_text = _capture_stdout(
+            app_breakout_quality.main,
+            ["apps/breakout_quality.py"],
+        )
+    add_check(results, "cli_contract", case_id, "breakout_quality_noninteractive_no_arg_help_rc", 0, rc)
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_noninteractive_no_arg_help",
+        True,
+        "Breakout quality filter" in no_arg_text,
+    )
+
+    with (
+        patch("apps.breakout_quality.is_interactive_console", return_value=True),
+        patch("apps.breakout_quality._run_interactive_menu", return_value=31) as mocked_menu,
+    ):
+        rc = app_breakout_quality.main(["apps/breakout_quality.py"])
+    add_check(results, "cli_contract", case_id, "breakout_quality_interactive_no_arg_menu_rc", 31, rc)
+    add_check(results, "cli_contract", case_id, "breakout_quality_interactive_no_arg_menu_called", 1, mocked_menu.call_count)
+
+    with (
+        patch("apps.breakout_quality.is_interactive_console", return_value=True),
+        patch("apps.breakout_quality._run_interactive_menu", return_value=32) as mocked_menu,
+    ):
+        rc = app_breakout_quality.main(["apps/breakout_quality.py", "menu"])
+    add_check(results, "cli_contract", case_id, "breakout_quality_explicit_menu_rc", 32, rc)
+    add_check(results, "cli_contract", case_id, "breakout_quality_explicit_menu_called", 1, mocked_menu.call_count)
+
+    fake_workflow_args = SimpleNamespace(filter_id="synthetic_quality")
+    with (
+        patch("apps.breakout_quality._parse_workflow_args", return_value=fake_workflow_args) as mocked_parse,
+        patch("apps.breakout_quality._run_workflow", return_value=33) as mocked_workflow,
+    ):
+        rc = app_breakout_quality.main(
+            ["apps/breakout_quality.py", "workflow", "--filter-id", "synthetic_quality"]
+        )
+    add_check(results, "cli_contract", case_id, "breakout_quality_workflow_rc", 33, rc)
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_parse_argv",
+        ["--filter-id", "synthetic_quality"],
+        mocked_parse.call_args.args[0],
+    )
+    add_check(results, "cli_contract", case_id, "breakout_quality_workflow_called", 1, mocked_workflow.call_count)
 
     command_modules = {
         "build-dataset": "tools.filters.breakout_quality.build_dataset",

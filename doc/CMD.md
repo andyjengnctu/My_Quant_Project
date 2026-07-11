@@ -57,6 +57,24 @@ python apps/workbench.py
 
 正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
 
+互動式 PowerShell／Terminal 直接執行下列指令會開啟選單；選單提供完整研究流程、單步操作、正式 forward-OOS 匯出與工件狀態檢查。
+
+```bash
+python apps/breakout_quality.py
+```
+
+完整研究流程會依序執行：必要時建立 dataset → train → export research scores → evaluate Selection → 可選擇 evaluate OOS。批次或需要可重現命令時使用 `workflow`：
+
+```bash
+python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --epochs 20 --batch-size 256 --lr 0.001 --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+```
+
+- dataset 工件完整且 profile 與本次 `full/reduced` 相同時，`workflow` 預設跳過重建；工件缺少或 profile 不符會自動建立，需要無條件重建時加 `--rebuild-dataset`。
+- 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`，流程會停在 Selection 診斷。
+- 選單只是正式 UI orchestration；dataset、split、training、export 與 evaluation 規則仍只實作在既有子系統，不在 app 複製。
+
+也可逐步執行：
+
 ```bash
 python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1
 # 預設關閉 inner validation：epochs 是完整 Selection 的正式固定訓練次數

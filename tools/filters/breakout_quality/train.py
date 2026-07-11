@@ -127,6 +127,28 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def validate_training_args(args) -> None:
+    max_epochs = int(args.epochs)
+    batch_size = int(args.batch_size)
+    learning_rate = float(args.lr)
+    fixed_threshold = float(args.fixed_threshold)
+    validation_months = int(args.inner_validation_months)
+    patience = int(args.early_stopping_patience)
+    min_delta = float(args.early_stopping_min_delta)
+    min_train_samples = int(args.min_train_samples)
+    min_validation_samples = int(args.min_validation_samples)
+    if max_epochs < 1 or batch_size < 1 or learning_rate <= 0:
+        raise ValueError("epochs、batch-size 必須 >=1，lr 必須 >0")
+    if validation_months < 1:
+        raise ValueError("inner-validation-months 必須 >=1")
+    if patience < 0 or min_delta < 0:
+        raise ValueError("early-stopping-patience 與 min-delta 必須 >=0")
+    if min_train_samples < 1 or min_validation_samples < 1:
+        raise ValueError("min-train-samples 與 min-validation-samples 必須 >=1")
+    if not np.isfinite(fixed_threshold) or not 0.0 <= fixed_threshold <= 1.0:
+        raise ValueError("fixed-threshold 必須介於 0 與 1")
+
+
 def _class_weights(y_train: np.ndarray, sample_weights: np.ndarray):
     y_arr = y_train.astype(np.int64)
     w_arr = sample_weights.astype(np.float64)
@@ -476,16 +498,7 @@ def main(argv=None) -> int:
     min_delta = float(args.early_stopping_min_delta)
     min_train_samples = int(args.min_train_samples)
     min_validation_samples = int(args.min_validation_samples)
-    if max_epochs < 1 or batch_size < 1 or learning_rate <= 0:
-        raise ValueError("epochs、batch-size 必須 >=1，lr 必須 >0")
-    if validation_months < 1:
-        raise ValueError("inner-validation-months 必須 >=1")
-    if patience < 0 or min_delta < 0:
-        raise ValueError("early-stopping-patience 與 min-delta 必須 >=0")
-    if min_train_samples < 1 or min_validation_samples < 1:
-        raise ValueError("min-train-samples 與 min-validation-samples 必須 >=1")
-    if not np.isfinite(fixed_threshold) or not 0.0 <= fixed_threshold <= 1.0:
-        raise ValueError("fixed-threshold 必須介於 0 與 1")
+    validate_training_args(args)
 
     dataset_summary, X, C, y, events = load_validated_dataset_bundle(args.filter_id)
 

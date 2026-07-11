@@ -29,6 +29,7 @@ from tools.validate.meta_contracts import summarize_synthetic_cases_import_targe
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
     ([sys.executable, "apps/breakout_quality.py", "--help"], "python apps/breakout_quality.py"),
+    ([sys.executable, "apps/breakout_quality.py", "workflow", "--help"], "python apps/breakout_quality.py workflow"),
     ([sys.executable, "apps/workbench.py", "--help"], "python apps/workbench.py"),
     ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
     ([sys.executable, "apps/package_zip.py", "--help"], "python apps/package_zip.py"),
