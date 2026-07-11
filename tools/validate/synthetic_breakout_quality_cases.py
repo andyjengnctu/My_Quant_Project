@@ -852,6 +852,41 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             and all("PASS Precision" in section for section in (markdown_section_4, markdown_section_5, console_section_4, console_section_5))
         ),
     )
+    compact_section_4_headers = (
+        "區段",
+        "日期",
+        "Groups",
+        "原始 PASS",
+        "模型 PASS",
+        "PASS Precision",
+        "Precision 絕對",
+        "PASS Recall",
+        "平均 Score",
+    )
+    removed_section_4_headers = (
+        "REJECT Specificity",
+        "REJECT NPV",
+        "Accuracy",
+        "Precision 相對",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_section_4_is_compact_and_ordered",
+        True,
+        (
+            "| 區段 | 日期 | Groups | 原始 PASS | 模型 PASS | PASS Precision | Precision 絕對 | PASS Recall | 平均 Score |"
+            in markdown_section_4
+            and all(label in console_section_4 for label in compact_section_4_headers)
+            and all(label not in markdown_section_4 for label in removed_section_4_headers)
+            and all(label not in console_section_4 for label in removed_section_4_headers)
+            and all(
+                markdown_section_4.index(left) < markdown_section_4.index(right)
+                for left, right in zip(compact_section_4_headers, compact_section_4_headers[1:])
+            )
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",

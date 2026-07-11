@@ -497,12 +497,10 @@ def _markdown_split_table(payload: dict) -> list[str]:
         (
             f"| 區段 | 日期 | Groups | {REPORT_LABELS['original_pass_rate']} | "
             f"{REPORT_LABELS['model_pass_rate']} | {REPORT_LABELS['pass_precision']} | "
-            f"{REPORT_LABELS['pass_recall']} | {REPORT_LABELS['reject_specificity']} | "
-            f"{REPORT_LABELS['reject_npv']} | {REPORT_LABELS['accuracy']} | "
-            f"{REPORT_LABELS['precision_absolute_lift']} | "
-            f"{REPORT_LABELS['precision_relative_lift']} | {REPORT_LABELS['average_score']} |"
+            f"{REPORT_LABELS['precision_absolute_lift']} | {REPORT_LABELS['pass_recall']} | "
+            f"{REPORT_LABELS['average_score']} |"
         ),
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for split_name in _split_order(payload):
         summary = payload["split_summaries"][split_name]
@@ -514,8 +512,7 @@ def _markdown_split_table(payload: dict) -> list[str]:
         lines.append(
             (
                 "| {label} | {period} | {groups:,} | {original_pass} | {model_pass} | "
-                "{precision} | {recall} | {specificity} | {npv} | {accuracy} | "
-                "{absolute_lift} | {relative_lift} | {avg_score} |"
+                "{precision} | {absolute_lift} | {recall} | {avg_score} |"
             ).format(
                 label=label,
                 period=f"{summary['date_start']}～{summary['date_end']}",
@@ -523,14 +520,8 @@ def _markdown_split_table(payload: dict) -> list[str]:
                 original_pass=_pct(details.get("base_pass_rate")),
                 model_pass=_pct(details.get("acceptance_rate")),
                 precision=_markdown_color(_pct(details.get("precision")), delta_tone),
-                recall=_pct(details.get("recall")),
-                specificity=_pct(details.get("specificity")),
-                npv=_pct(details.get("negative_predictive_value")),
-                accuracy=_pct(details.get("accuracy")),
                 absolute_lift=_markdown_color(_pp(summary.get("precision_delta")), delta_tone),
-                relative_lift=_markdown_color(
-                    _signed_pct(summary.get("precision_relative_change")), delta_tone
-                ),
+                recall=_pct(details.get("recall")),
                 avg_score=_decimal(summary.get("avg_score")),
             )
         )
@@ -1249,17 +1240,8 @@ def _console_split_section(payload: dict, number: int, *, color: bool = False) -
                 _pct(details.get("base_pass_rate")),
                 _pct(details.get("acceptance_rate")),
                 _paint(_pct(details.get("precision")), delta_tone, enabled=color, bold=True),
-                _pct(details.get("recall")),
-                _pct(details.get("specificity")),
-                _pct(details.get("negative_predictive_value")),
-                _pct(details.get("accuracy")),
                 _paint(_pp(summary.get("precision_delta")), delta_tone, enabled=color, bold=True),
-                _paint(
-                    _signed_pct(summary.get("precision_relative_change")),
-                    delta_tone,
-                    enabled=color,
-                    bold=True,
-                ),
+                _pct(details.get("recall")),
                 _decimal(summary.get("avg_score")),
             ]
         )
@@ -1272,18 +1254,13 @@ def _console_split_section(payload: dict, number: int, *, color: bool = False) -
                 REPORT_LABELS["original_pass_rate"],
                 REPORT_LABELS["model_pass_rate"],
                 REPORT_LABELS["pass_precision"],
-                REPORT_LABELS["pass_recall"],
-                REPORT_LABELS["reject_specificity"],
-                REPORT_LABELS["reject_npv"],
-                REPORT_LABELS["accuracy"],
                 REPORT_LABELS["precision_absolute_lift"],
-                REPORT_LABELS["precision_relative_lift"],
+                REPORT_LABELS["pass_recall"],
                 REPORT_LABELS["average_score"],
             ],
             rows,
             aligns=[
-                "left", "left", "right", "right", "right", "right", "right",
-                "right", "right", "right", "right", "right", "right",
+                "left", "left", "right", "right", "right", "right", "right", "right", "right",
             ],
         )
     )
