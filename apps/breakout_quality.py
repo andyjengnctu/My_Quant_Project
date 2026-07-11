@@ -588,8 +588,8 @@ def _interactive_export_research(program_name: str) -> int:
 def _interactive_report(program_name: str) -> int:
     filter_id = _prompt_filter_id()
     include_oos = _prompt_bool(
-        "報表是否納入最終 OOS（OOS 不得用於回頭調參）",
-        False,
+        "報表是否納入最終 OOS（選 N 將不輸出 OOS Confusion Matrix 與 Selection/OOS 差異）",
+        True,
     )
     if include_oos and not _prompt_bool(
         "確認讀取最終 OOS 並寫入報表",

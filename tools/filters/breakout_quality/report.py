@@ -531,11 +531,11 @@ def _confusion_details(summary: dict) -> dict:
     }
 
 
-def _markdown_confusion_matrix(summary: dict, label: str) -> list[str]:
+def _markdown_confusion_matrix(summary: dict, label: str, number: int) -> list[str]:
     details = _confusion_details(summary)
     delta_tone = _tone_for_delta(summary.get("precision_delta"))
     lines = [
-        f"## {label} Confusion Matrix",
+        f"## {number}. {label} Confusion Matrix",
         "",
         "統計口徑：`ticker/date group weighted`；列為實際結果，欄為模型預測。",
         "",
@@ -632,7 +632,7 @@ def _markdown_confusion_matrix(summary: dict, label: str) -> list[str]:
         )
     return lines
 
-def _markdown_selection_oos_difference(payload: dict) -> list[str]:
+def _markdown_selection_oos_difference(payload: dict, number: int) -> list[str]:
     selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
     oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
     if selection is None or oos is None:
@@ -646,7 +646,7 @@ def _markdown_selection_oos_difference(payload: dict) -> list[str]:
         ("Precision 絕對提升", selection.get("precision_delta"), oos.get("precision_delta"), "pp"),
     ]
     lines = [
-        "## Selection 與 OOS 差異",
+        f"## {number}. Selection 與 OOS 差異",
         "",
         "| 指標 | Selection | OOS | OOS - Selection |",
         "|---|---:|---:|---:|",
@@ -748,18 +748,21 @@ def render_markdown_report(payload: dict) -> str:
         )
     if oos_summary is not None:
         lines.append(f"- **OOS**：{oos_summary['date_start']}～{oos_summary['date_end']}")
-
+    else:
+        lines.extend(
+            [
+                f"- **OOS**：{_markdown_color('未納入本次報表', 'yellow')}",
+                f"- {_markdown_color('因此不會輸出 OOS Confusion Matrix 與 Selection/OOS 差異；重新執行時請加 --include-oos。', 'yellow')}",
+            ]
+        )
     lines.extend(
         [
+            f"- **Threshold**：`{training.get('fixed_threshold')}`",
+            f"- **Learning Rate**：`{training.get('learning_rate')}`",
+            f"- **Batch Size**：`{training.get('batch_size')}`",
+            f"- **Random Seed**：`{training.get('seed')}`",
             "",
-            "## 1. 固定訓練參數",
-            "",
-            f"- Threshold：`{training.get('fixed_threshold')}`",
-            f"- Learning Rate：`{training.get('learning_rate')}`",
-            f"- Batch Size：`{training.get('batch_size')}`",
-            f"- Random Seed：`{training.get('seed')}`",
-            "",
-            "## 2. Epoch 選擇結果",
+            "## 1. Epoch 選擇結果",
             "",
             f"- Epoch 上限：**{training.get('max_epochs')}**",
             f"- 實際完成 Epoch：**{training.get('completed_epoch_search')}**",
@@ -774,7 +777,7 @@ def render_markdown_report(payload: dict) -> str:
             ),
             "",
             *_markdown_epoch_table(training),
-            "## 3. 各資料區段比較",
+            "## 2. 各資料區段比較",
             "",
             *_markdown_split_table(payload),
         ]
@@ -786,18 +789,25 @@ def render_markdown_report(payload: dict) -> str:
                 "",
             ]
         )
+
+    next_number = 3
     selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
     if selection is not None:
-        lines.extend(_markdown_confusion_matrix(selection, "Selection"))
+        lines.extend(_markdown_confusion_matrix(selection, "Selection", next_number))
+        next_number += 1
     oos = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
     if oos is not None:
-        lines.extend(_markdown_confusion_matrix(oos, "OOS"))
-    lines.extend(_markdown_selection_oos_difference(payload))
+        lines.extend(_markdown_confusion_matrix(oos, "OOS", next_number))
+        next_number += 1
+    difference_lines = _markdown_selection_oos_difference(payload, next_number)
+    if difference_lines:
+        lines.extend(difference_lines)
+        next_number += 1
 
     oos_tone = "green" if deployment["oos_improved"] else "red" if oos is not None else "yellow"
     lines.extend(
         [
-            "## 最終部署判定",
+            f"## {next_number}. 最終部署判定",
             "",
             f"### {_markdown_color('[' + conclusion['status'] + '] ' + conclusion['title'], deployment['conclusion_tone'])}",
             "",
@@ -823,21 +833,8 @@ def render_markdown_report(payload: dict) -> str:
     )
     return "\n".join(lines)
 
-def _console_training_parameters_section(training: dict, *, color: bool = False) -> list[str]:
-    lines = _section("1. 固定訓練參數", color=color)
-    lines.extend(
-        [
-            f"- Threshold：{training.get('fixed_threshold')}",
-            f"- Learning Rate：{training.get('learning_rate')}",
-            f"- Batch Size：{training.get('batch_size')}",
-            f"- Random Seed：{training.get('seed')}",
-        ]
-    )
-    return lines
-
-
 def _console_epoch_section(training: dict, *, color: bool = False) -> list[str]:
-    lines = _section("2. Epoch 選擇結果", color=color)
+    lines = _section("1. Epoch 選擇結果", color=color)
     selected_epoch = training.get("selected_epoch")
     lines.extend(
         [
@@ -900,7 +897,7 @@ def _console_epoch_section(training: dict, *, color: bool = False) -> list[str]:
     return lines
 
 def _console_split_section(payload: dict, *, color: bool = False) -> list[str]:
-    lines = _section("3. 各資料區段比較", color=color)
+    lines = _section("2. 各資料區段比較", color=color)
     rows = []
     for split_name in _split_order(payload):
         summary = payload["split_summaries"][split_name]
@@ -1118,10 +1115,31 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
     oos_summary = payload["split_summaries"].get(EVALUATION_SPLIT_OOS)
     if oos_summary is not None:
         lines.append(f"OOS             : {oos_summary['date_start']} ～ {oos_summary['date_end']}")
-    lines.extend(_console_training_parameters_section(training, color=color))
+    else:
+        lines.append(
+            "OOS             : "
+            + _paint("未納入本次報表", "yellow", enabled=color, bold=True)
+        )
+        lines.append(
+            _paint(
+                "注意：因此不會輸出 OOS Confusion Matrix 與 Selection/OOS 差異；"
+                "重新執行時請加 --include-oos。",
+                "yellow",
+                enabled=color,
+                bold=True,
+            )
+        )
+    lines.extend(
+        [
+            f"Threshold       : {training.get('fixed_threshold')}",
+            f"Learning Rate   : {training.get('learning_rate')}",
+            f"Batch Size      : {training.get('batch_size')}",
+            f"Random Seed     : {training.get('seed')}",
+        ]
+    )
     lines.extend(_console_epoch_section(training, color=color))
     lines.extend(_console_split_section(payload, color=color))
-    next_number = 4
+    next_number = 3
     selection = payload["split_summaries"].get(EVALUATION_SPLIT_SELECTION)
     if selection is not None:
         lines.extend(_console_confusion_section(selection, "Selection", next_number, color=color))
