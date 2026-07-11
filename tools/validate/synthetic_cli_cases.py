@@ -221,7 +221,7 @@ def validate_dataset_cli_contract_case(_base_params):
         early_stopping_min_delta=0.001,
     )
     workflow_prompt_labels = []
-    workflow_bool_answers = iter((False, True, False))
+    workflow_bool_answers = iter((False, False))
 
     def _fake_workflow_bool(label, default):
         workflow_prompt_labels.append((label, default))
@@ -234,8 +234,14 @@ def validate_dataset_cli_contract_case(_base_params):
             return_value=interactive_policy_settings,
         ),
         patch("apps.breakout_quality._print_policy_defaults") as mocked_policy_print,
-        patch("apps.breakout_quality._prompt_choice", return_value="full") as mocked_choice,
-        patch("apps.breakout_quality._prompt_int", return_value=0) as mocked_int,
+        patch(
+            "apps.breakout_quality._prompt_choice",
+            side_effect=AssertionError("unexpected dataset profile prompt"),
+        ) as mocked_choice,
+        patch(
+            "apps.breakout_quality._prompt_int",
+            side_effect=AssertionError("unexpected ticker coverage prompt"),
+        ) as mocked_int,
         patch("apps.breakout_quality._dataset_rebuild_reasons", return_value=[]),
         patch("apps.breakout_quality._prompt_bool", side_effect=_fake_workflow_bool),
         patch("apps.breakout_quality._run_workflow") as mocked_interactive_workflow,
@@ -247,22 +253,19 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_workflow_only_prompts_operational_choices",
+        "breakout_quality_workflow_uses_full_all_oos_without_prompts",
         (
             0,
             [(
                 "是否強制重建 dataset（即使目前不需要）",
                 False,
             ), (
-                "完成 Selection 診斷後執行 OOS（OOS 不得用於回頭調參）",
-                True,
-            ), (
                 "確認開始",
                 False,
             )],
             1,
-            1,
-            1,
+            0,
+            0,
             0,
         ),
         (
@@ -276,7 +279,7 @@ def validate_dataset_cli_contract_case(_base_params):
     )
 
     stale_prompt_labels = []
-    stale_bool_answers = iter((True, True))
+    stale_bool_answers = iter((True,))
 
     def _fake_stale_workflow_bool(label, default):
         stale_prompt_labels.append((label, default))
@@ -289,8 +292,14 @@ def validate_dataset_cli_contract_case(_base_params):
             return_value=interactive_policy_settings,
         ),
         patch("apps.breakout_quality._print_policy_defaults"),
-        patch("apps.breakout_quality._prompt_choice", return_value="full"),
-        patch("apps.breakout_quality._prompt_int", return_value=0),
+        patch(
+            "apps.breakout_quality._prompt_choice",
+            side_effect=AssertionError("unexpected dataset profile prompt"),
+        ),
+        patch(
+            "apps.breakout_quality._prompt_int",
+            side_effect=AssertionError("unexpected ticker coverage prompt"),
+        ),
         patch(
             "apps.breakout_quality._dataset_rebuild_reasons",
             return_value=["來源 CSV inventory 已變更"],
@@ -306,24 +315,71 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_stale_dataset_auto_rebuilds_without_force_prompt",
+        "breakout_quality_stale_dataset_auto_rebuilds_with_fixed_full_all_oos",
         (
             0,
             [(
-                "完成 Selection 診斷後執行 OOS（OOS 不得用於回頭調參）",
-                True,
-            ), (
                 "確認開始",
                 False,
             )],
             False,
+            "full",
+            0,
+            True,
             1,
         ),
         (
             stale_workflow_rc,
             stale_prompt_labels,
             bool(stale_request.rebuild_dataset),
+            stale_request.dataset,
+            int(stale_request.max_tickers),
+            bool(stale_request.evaluate_oos),
             mocked_stale_workflow.call_count,
+        ),
+    )
+
+    build_dataset_calls = []
+
+    def _fake_build_dataset_run(command, args, *, program_name):
+        build_dataset_calls.append((command, list(args), program_name))
+        return 0
+
+    with (
+        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
+        patch("apps.breakout_quality._print_policy_defaults"),
+        patch(
+            "apps.breakout_quality._prompt_choice",
+            side_effect=AssertionError("unexpected dataset profile prompt"),
+        ) as mocked_build_choice,
+        patch(
+            "apps.breakout_quality._prompt_int",
+            side_effect=AssertionError("unexpected ticker coverage prompt"),
+        ) as mocked_build_int,
+        patch("apps.breakout_quality._prompt_bool", return_value=True),
+        patch("apps.breakout_quality._run_command", side_effect=_fake_build_dataset_run),
+    ):
+        build_dataset_rc = app_breakout_quality._interactive_build_dataset(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_build_dataset_menu_uses_full_all_without_prompts",
+        (
+            0,
+            0,
+            0,
+            "build-dataset",
+            ["--dataset", "full", "--filter-id", "synthetic_quality"],
+        ),
+        (
+            build_dataset_rc,
+            mocked_build_choice.call_count,
+            mocked_build_int.call_count,
+            build_dataset_calls[-1][0],
+            build_dataset_calls[-1][1],
         ),
     )
 

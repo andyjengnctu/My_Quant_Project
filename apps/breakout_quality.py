@@ -39,6 +39,11 @@ COMMAND_MODULES = {
     "evaluate": "tools.filters.breakout_quality.evaluate",
 }
 
+INTERACTIVE_DATASET_PROFILE = "full"
+INTERACTIVE_MAX_TICKERS = 0
+INTERACTIVE_EVALUATE_OOS = True
+
+
 COMMAND_DESCRIPTIONS = {
     "menu": "開啟互動式操作選單",
     "workflow": "依序執行 dataset、train、research score export 與易讀報表",
@@ -461,12 +466,10 @@ def _interactive_workflow(program_name: str) -> int:
     filter_id = _policy_filter_id()
     train_args = _policy_train_settings(filter_id)
     _print_policy_defaults(filter_id, train_args)
-    dataset = _prompt_choice(
-        "Dataset：[F] Full  [R] Reduced",
-        "F",
-        {"f": "full", "full": "full", "r": "reduced", "reduced": "reduced"},
-    )
-    max_tickers = _prompt_int("最多股票數（0 表示全部）", 0, minimum=0)
+    dataset = INTERACTIVE_DATASET_PROFILE
+    max_tickers = INTERACTIVE_MAX_TICKERS
+    evaluate_oos = INTERACTIVE_EVALUATE_OOS
+    print("完整研究流程固定使用 Full dataset、全部股票，並執行 OOS。")
     rebuild_reasons = _dataset_rebuild_reasons(
         filter_id,
         dataset,
@@ -483,10 +486,6 @@ def _interactive_workflow(program_name: str) -> int:
             "是否強制重建 dataset（即使目前不需要）",
             False,
         )
-    evaluate_oos = _prompt_bool(
-        "完成 Selection 診斷後執行 OOS（OOS 不得用於回頭調參）",
-        True,
-    )
     train_payload = dict(vars(train_args))
     train_payload.pop("filter_id", None)
     request = argparse.Namespace(
@@ -497,7 +496,7 @@ def _interactive_workflow(program_name: str) -> int:
         evaluate_oos=evaluate_oos,
         **train_payload,
     )
-    print("\n即將執行：dataset（依選擇）→ train → export research scores → 易讀研究報表")
+    print("\n即將執行：Full dataset（全部股票）→ train → export research scores → OOS 易讀研究報表")
     if evaluate_oos:
         print("報表將納入 OOS 最終泛化評估。")
     if not _prompt_bool("確認開始", False):
@@ -509,12 +508,9 @@ def _interactive_workflow(program_name: str) -> int:
 def _interactive_build_dataset(program_name: str) -> int:
     filter_id = _policy_filter_id()
     _print_policy_defaults(filter_id)
-    dataset = _prompt_choice(
-        "Dataset：[F] Full  [R] Reduced",
-        "F",
-        {"f": "full", "full": "full", "r": "reduced", "reduced": "reduced"},
-    )
-    max_tickers = _prompt_int("最多股票數（0 表示全部）", 0, minimum=0)
+    dataset = INTERACTIVE_DATASET_PROFILE
+    max_tickers = INTERACTIVE_MAX_TICKERS
+    print("建立 dataset 固定使用 Full dataset 與全部股票。")
     if not _prompt_bool("確認建立／覆蓋 dataset 工件", False):
         print("已取消。")
         return 0
@@ -608,8 +604,8 @@ def _interactive_export_forward_oos(program_name: str) -> int:
 
 def _print_menu() -> None:
     print("\n=== Breakout Quality ===")
-    print("[1] 完整研究流程（使用 policy 預設參數）")
-    print("[2] 建立／重建 dataset")
+    print("[1] 完整研究流程（Full／全部股票／OOS）")
+    print("[2] 建立／重建 Full dataset（全部股票）")
     print("[3] 訓練模型（使用 policy 預設參數）")
     print("[4] 匯出 research scores")
     print("[5] 產生易讀研究報表")

@@ -57,7 +57,7 @@ python apps/workbench.py
 
 正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟選單；選單提供完整研究流程、單步操作、正式 forward-OOS 匯出與工件狀態檢查。第一層選單確認操作類型後，所有已由 `config/breakout_quality_policy.py` 定義的設定都直接採用 policy，不再重複詢問，包括 Filter ID、epochs、batch size、learning rate、random seed、threshold、inner validation、validation 月數與 early stopping。選單只保留 dataset 類型、ticker coverage、是否強制重建、是否納入 OOS、評估 split 與最終確認等本次執行決策；dataset 是否需要建立／重建由 workflow 自動偵測，偵測到過期或不一致時直接重建；需要單次覆寫 policy 時改用對應 CLI 參數。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟選單；選單提供完整研究流程、單步操作、正式 forward-OOS 匯出與工件狀態檢查。第一層選單確認操作類型後，所有已由 `config/breakout_quality_policy.py` 定義的設定都直接採用 policy，不再重複詢問，包括 Filter ID、epochs、batch size、learning rate、random seed、threshold、inner validation、validation 月數與 early stopping。互動式完整研究流程固定使用 Full dataset、全部股票並執行 OOS，不再詢問 dataset 類型、最多股票數或是否執行 OOS；互動式單獨建立 dataset 也固定使用 Full dataset 與全部股票。dataset 是否需要建立／重建由 workflow 自動偵測，偵測到過期或不一致時直接重建；只有 dataset 已最新時才詢問是否強制重建，預設 N。需要 reduced、限制股票數或略過 OOS 的開發／單次執行時，改用對應 CLI 參數。
 
 ```bash
 python apps/breakout_quality.py
