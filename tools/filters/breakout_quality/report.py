@@ -114,6 +114,17 @@ def _paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str
     return f"{prefix}{raw}{ANSI_COLORS['reset']}"
 
 
+def _paint_multiline(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
+    """Color every rendered line independently so ANSI state cannot bleed across table cells."""
+    raw = str(text)
+    if not enabled:
+        return raw
+    return "\n".join(
+        _paint(line, tone, enabled=True, bold=bold)
+        for line in raw.splitlines()
+    )
+
+
 def _markdown_color(text: object, tone: str, *, bold: bool = True) -> str:
     raw = str(text)
     color = MARKDOWN_COLORS.get(tone, MARKDOWN_COLORS["gray"])
@@ -1021,13 +1032,13 @@ def _console_confusion_section(summary: dict, label: str, number: int, *, color:
     rows = [
         [
             "原始 PASS",
-            _paint(
+            _paint_multiline(
                 f"正確保留 PASS\nTP = {_weighted_count(details['tp'])}",
                 "green",
                 enabled=color,
                 bold=True,
             ),
-            _paint(
+            _paint_multiline(
                 f"錯殺 PASS\nFN = {_weighted_count(details['fn'])}",
                 "red",
                 enabled=color,
@@ -1037,13 +1048,13 @@ def _console_confusion_section(summary: dict, label: str, number: int, *, color:
         ],
         [
             "原始 REJECT",
-            _paint(
+            _paint_multiline(
                 f"錯誤保留 REJECT\nFP = {_weighted_count(details['fp'])}",
                 "red",
                 enabled=color,
                 bold=True,
             ),
-            _paint(
+            _paint_multiline(
                 f"正確拒絕 REJECT\nTN = {_weighted_count(details['tn'])}",
                 "green",
                 enabled=color,

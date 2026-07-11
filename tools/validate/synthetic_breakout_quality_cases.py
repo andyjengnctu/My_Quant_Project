@@ -888,6 +888,42 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_without_oos_explains_missing_sections", True, "OOS             : 未納入本次報表" in no_oos_console and "不會輸出 OOS Confusion Matrix 與 Selection/OOS 差異" in no_oos_console and "--include-oos" in no_oos_console and "OOS Confusion Matrix" not in no_oos_console.split("注意：", 1)[0] and "Selection 與 OOS 差異" not in no_oos_console.split("注意：", 1)[0])
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_semantic_colors", True, "color:#188038" in markdown and "color:#C62828" in markdown and "color:#42A5F5" in markdown and "color:#B06000" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_color_is_opt_in", True, "\x1b[" not in console and "\x1b[96m" in colored_console)
+
+    colored_matrix = colored_console.split("2. Selection Confusion Matrix", 1)[1].split("分類品質", 1)[0]
+    colored_matrix_lines = [line for line in colored_matrix.splitlines() if "|" in line]
+
+    def _matrix_cell(line_token: str, column_index: int) -> str:
+        line = next(line for line in colored_matrix_lines if line_token in line)
+        return line.split("|")[column_index]
+
+    green = "\x1b[92m"
+    red = "\x1b[91m"
+    reset = "\x1b[0m"
+    tp_label_cell = _matrix_cell("正確保留 PASS", 2)
+    fn_label_cell = _matrix_cell("錯殺 PASS", 3)
+    tp_value_cell = _matrix_cell("TP =", 2)
+    fn_value_cell = _matrix_cell("FN =", 3)
+    fp_label_cell = _matrix_cell("錯誤保留 REJECT", 2)
+    tn_label_cell = _matrix_cell("正確拒絕 REJECT", 3)
+    fp_value_cell = _matrix_cell("FP =", 2)
+    tn_value_cell = _matrix_cell("TN =", 3)
+    original_pass_margin = _matrix_cell("原始PASS =", 4)
+    original_reject_margin = _matrix_cell("原始REJECT =", 4)
+    model_pass_margin = _matrix_cell("模型PASS =", 2)
+    model_reject_margin = _matrix_cell("模型REJECT =", 3)
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_console_confusion_colors_do_not_bleed",
+        True,
+        (
+            all(green in cell and reset in cell and red not in cell for cell in (tp_label_cell, tp_value_cell, tn_label_cell, tn_value_cell))
+            and all(red in cell and reset in cell and green not in cell for cell in (fn_label_cell, fn_value_cell, fp_label_cell, fp_value_cell))
+            and all(green not in cell and red not in cell for cell in (original_pass_margin, original_reject_margin, model_pass_margin, model_reject_margin))
+        ),
+    )
     report_markdown_path = resolve_filter_report_markdown_path("/project", "synthetic_quality")
     report_json_path = resolve_filter_report_json_path("/project", "synthetic_quality")
     expected_report_dir_suffix = (
