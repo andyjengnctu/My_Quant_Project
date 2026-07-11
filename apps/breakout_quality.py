@@ -588,15 +588,10 @@ def _interactive_export_research(program_name: str) -> int:
 def _interactive_report(program_name: str) -> int:
     filter_id = _prompt_filter_id()
     include_oos = _prompt_bool(
-        "報表是否納入最終 OOS（選 N 將不輸出 OOS Confusion Matrix 與 Selection/OOS 差異）",
-        True,
-    )
-    if include_oos and not _prompt_bool(
-        "確認讀取最終 OOS 並寫入報表",
+        "是否讀取最終 OOS 並納入報表？注意：讀取後不得依同一段 OOS 回頭調整 "
+        "threshold、epochs、learning rate、feature、label 或模型",
         False,
-    ):
-        print("已取消。")
-        return 0
+    )
     argv = ["--filter-id", filter_id]
     argv.append("--include-oos" if include_oos else "--no-include-oos")
     return _run_command("report", argv, program_name=program_name)

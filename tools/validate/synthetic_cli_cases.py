@@ -175,6 +175,82 @@ def validate_dataset_cli_contract_case(_base_params):
         "--include-oos" in workflow_calls[-1][1],
     )
 
+    report_calls = []
+
+    def _fake_report_run(command, args, *, program_name):
+        report_calls.append((command, list(args), program_name))
+        return 0
+
+    with (
+        patch("apps.breakout_quality._prompt_filter_id", return_value="synthetic_quality"),
+        patch("apps.breakout_quality._prompt_bool", return_value=False) as mocked_prompt,
+        patch("apps.breakout_quality._run_command", side_effect=_fake_report_run),
+    ):
+        report_without_oos_rc = app_breakout_quality._interactive_report(
+            "apps/breakout_quality.py"
+        )
+    prompt_text, prompt_default = mocked_prompt.call_args.args
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_report_uses_single_oos_prompt",
+        1,
+        mocked_prompt.call_count,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_report_oos_prompt_is_explicit",
+        True,
+        "是否讀取最終 OOS 並納入報表" in prompt_text
+        and "不得依同一段 OOS 回頭調整" in prompt_text,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_report_oos_prompt_defaults_to_no",
+        False,
+        prompt_default,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_report_no_still_generates_selection_report",
+        (0, "report", ["--filter-id", "synthetic_quality", "--no-include-oos"]),
+        (
+            report_without_oos_rc,
+            report_calls[-1][0],
+            report_calls[-1][1],
+        ),
+    )
+
+    report_calls.clear()
+    with (
+        patch("apps.breakout_quality._prompt_filter_id", return_value="synthetic_quality"),
+        patch("apps.breakout_quality._prompt_bool", return_value=True) as mocked_prompt,
+        patch("apps.breakout_quality._run_command", side_effect=_fake_report_run),
+    ):
+        report_with_oos_rc = app_breakout_quality._interactive_report(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_report_yes_includes_oos_without_second_prompt",
+        (0, 1, "report", ["--filter-id", "synthetic_quality", "--include-oos"]),
+        (
+            report_with_oos_rc,
+            mocked_prompt.call_count,
+            report_calls[-1][0],
+            report_calls[-1][1],
+        ),
+    )
+
     with TemporaryDirectory(prefix="breakout_quality_rebuild_detection_") as temp_dir:
         temp_root = Path(temp_dir)
         source_dir = temp_root / "data" / "tw_stock_data_vip_reduced"
