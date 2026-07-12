@@ -236,6 +236,9 @@ def main(argv=None) -> int:
         "reject_barrier_price",
         "max_upside_return",
         "max_downside_return",
+        "decision_mfe_return",
+        "decision_mae_return",
+        "decision_reward_risk_ratio",
         "first_hit_bar",
     ]
     optional_columns = research_optional if args.scope == RUNTIME_SCOPE_RESEARCH else []

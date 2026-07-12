@@ -22,6 +22,7 @@ from filters.breakout_quality.contract import (
     LABEL_PASS,
     LABEL_REJECT,
     BreakoutQualityLabelPolicy,
+    label_manifest_payload_from_policy_manifest,
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.dataset_store import (
@@ -77,8 +78,9 @@ def build_policy_from_args(args) -> BreakoutQualityLabelPolicy:
         label_horizon_bars=int(args.label_horizon),
         label_path_cache_bars=int(args.label_path_cache),
         high_len_values=high_len_values,
-        pass_return_threshold=float(args.pass_return_threshold),
-        reject_return_threshold=float(args.reject_return_threshold),
+        min_mfe_return=float(args.min_mfe_return),
+        min_reward_risk_ratio=float(args.min_reward_risk_ratio),
+        max_adverse_return=float(args.max_adverse_return),
         benchmark_ticker=str(args.benchmark_ticker).strip(),
     )
 
@@ -102,16 +104,26 @@ def add_policy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--high-len-max", type=int, default=None, help="相容舊命令；使用時需與 min/step 同時提供")
     parser.add_argument("--high-len-step", type=int, default=None, help="相容舊命令；使用時需與 min/max 同時提供")
     parser.add_argument(
+        "--min-mfe-return",
         "--pass-return-threshold",
+        dest="min_mfe_return",
         type=float,
-        default=p.pass_return_threshold,
-        help="相對突破訊號日收盤價，先到此正報酬率即標記 PASS",
+        default=p.min_mfe_return,
+        help="PASS 要求的最低 MFE；最大漲幅必須嚴格大於此值（舊參數名稱仍可相容使用）",
     )
     parser.add_argument(
-        "--reject-return-threshold",
+        "--min-reward-risk-ratio",
         type=float,
-        default=p.reject_return_threshold,
-        help="相對突破訊號日收盤價，先到此負報酬率即標記 REJECT",
+        default=p.min_reward_risk_ratio,
+        help="PASS 要求的最低 MFE/MAE；必須 > 1，實際 ratio 也必須嚴格大於此值",
+    )
+    parser.add_argument(
+        "--max-adverse-return",
+        "--reject-return-threshold",
+        dest="max_adverse_return",
+        type=float,
+        default=p.max_adverse_return,
+        help="最大容許不利跌幅；Low 觸及或跌破即 REJECT（舊參數名稱仍可相容使用）",
     )
     parser.add_argument("--benchmark-ticker", default=p.benchmark_ticker)
 
@@ -244,12 +256,7 @@ def load_validated_dataset_bundle(
     policy = summary.get("policy")
     if not isinstance(policy, dict):
         raise ValueError("dataset_summary 缺少 policy object")
-    expected_label_policy = {
-        "label_objective": policy.get("label_objective"),
-        "label_horizon_bars": policy.get("label_horizon_bars"),
-        "pass_return_threshold": policy.get("pass_return_threshold"),
-        "reject_return_threshold": policy.get("reject_return_threshold"),
-    }
+    expected_label_policy = label_manifest_payload_from_policy_manifest(policy)
     if summary.get("label_policy") != expected_label_policy:
         raise ValueError("dataset_summary label_policy 與正式 policy 不一致")
     if expected_policy is not None and policy != expected_policy:

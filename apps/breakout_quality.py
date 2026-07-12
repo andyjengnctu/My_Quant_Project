@@ -207,7 +207,7 @@ def _dataset_refresh_plan(
         return "rebuild", full_rebuild_reasons
 
     if summary.get("label_policy") != DEFAULT_LABEL_POLICY.label_manifest_payload():
-        relabel_reasons.append("label horizon／PASS／REJECT policy 已變更")
+        relabel_reasons.append("label horizon／MFE／MAE／reward-risk policy 已變更")
     if summary.get("policy") != DEFAULT_LABEL_POLICY.as_manifest_payload():
         if not relabel_reasons:
             full_rebuild_reasons.append("dataset policy metadata 與目前設定不一致")
@@ -533,6 +533,14 @@ def _print_policy_defaults(
     train_settings: argparse.Namespace | None = None,
 ) -> None:
     print(f"使用 policy Filter ID：{normalize_filter_id(filter_id)}")
+    print("使用 config/breakout_quality_policy.py Label 預設：")
+    print(
+        f"- Feature Window：{int(DEFAULT_LABEL_POLICY.feature_window_bars)} bars\n"
+        f"- Label Horizon：{int(DEFAULT_LABEL_POLICY.label_horizon_bars)} bars\n"
+        f"- 最低 MFE：>{float(DEFAULT_LABEL_POLICY.min_mfe_return) * 100:g}%\n"
+        f"- 最低 MFE/MAE：>{float(DEFAULT_LABEL_POLICY.min_reward_risk_ratio):g}\n"
+        f"- 最大不利跌幅：{float(DEFAULT_LABEL_POLICY.max_adverse_return) * 100:g}%（觸及即 REJECT）"
+    )
     if train_settings is None:
         return
     print("使用 config/breakout_quality_policy.py 訓練預設：")

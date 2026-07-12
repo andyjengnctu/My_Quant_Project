@@ -653,11 +653,11 @@ def validate_dataset_cli_contract_case(_base_params):
             relabel_summary = dict(summary_payload)
             relabel_summary["label_policy"] = {
                 **summary_payload["label_policy"],
-                "pass_return_threshold": 0.99,
+                "min_mfe_return": 0.99,
             }
             relabel_summary["policy"] = {
                 **summary_payload["policy"],
-                "pass_return_threshold": 0.99,
+                "min_mfe_return": 0.99,
             }
             dataset_paths["summary"].write_text(
                 json.dumps(relabel_summary),

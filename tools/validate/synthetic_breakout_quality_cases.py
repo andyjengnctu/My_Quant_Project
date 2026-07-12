@@ -32,6 +32,9 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
+    BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN,
+    BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN,
+    BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO,
     BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
@@ -51,9 +54,12 @@ from filters.breakout_quality.contract import (
     FEATURE_COLUMNS,
     FILTER_FAMILY,
     LABEL_INVALID,
+    LABEL_OBJECTIVE,
+    LEGACY_LABEL_OBJECTIVE,
     LABEL_PASS,
     LABEL_REJECT,
     BreakoutQualityLabelPolicy,
+    label_manifest_payload_from_policy_manifest,
     SELECTION_ROLE_EMBARGO,
     SELECTION_ROLE_INVALID,
     SELECTION_ROLE_INNER_EMBARGO,
@@ -204,7 +210,10 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and float(BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA) >= 0.0
         and int(BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES) >= 1
         and int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS) >= 1
-        and int(BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS) >= int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS),
+        and int(BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS) >= int(BREAKOUT_QUALITY_LABEL_HORIZON_BARS)
+        and float(BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN) > 0.0
+        and float(BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO) > 1.0
+        and -1.0 < float(BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN) < 0.0,
     )
     add_check(
         results,
@@ -231,8 +240,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         label_horizon_bars=3,
         label_path_cache_bars=5,
         high_len_values=(2,),
-        pass_return_threshold=0.15,
-        reject_return_threshold=-0.07,
+        min_mfe_return=0.05,
+        min_reward_risk_ratio=1.20,
+        max_adverse_return=-0.10,
         benchmark_ticker="0050",
     )
 
@@ -253,39 +263,79 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "pure_kline_label_passes_when_upside_barrier_hits_first",
-        (LABEL_PASS, "upside_first"),
-        _label_case([110.0, 116.0, 118.0], [96.0, 95.0, 94.0]),
+        "risk_adjusted_label_passes_low_risk_moderate_gain",
+        (LABEL_PASS, "risk_adjusted_opportunity"),
+        _label_case([104.0, 106.0, 108.0], [99.0, 98.0, 97.0]),
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "pure_kline_label_rejects_when_downside_barrier_hits_first",
+        "risk_adjusted_label_rejects_insufficient_ratio",
+        (LABEL_REJECT, "no_risk_adjusted_opportunity"),
+        _label_case([104.0, 106.0, 108.0], [96.0, 94.0, 93.0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_adjusted_label_rejects_when_downside_limit_hits_first",
         (LABEL_REJECT, "downside_first"),
-        _label_case([104.0, 116.0, 118.0], [92.0, 94.0, 95.0]),
+        _label_case([104.0, 106.0, 108.0], [90.0, 92.0, 93.0]),
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "pure_kline_label_uses_conservative_same_bar_order",
+        "risk_adjusted_label_uses_conservative_same_bar_order",
         (LABEL_REJECT, "same_bar_adverse_first"),
-        _label_case([116.0, 118.0, 119.0], [92.0, 94.0, 95.0]),
+        _label_case([113.0, 114.0, 115.0], [90.0, 92.0, 93.0]),
     )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "pure_kline_label_rejects_when_upside_target_is_not_reached",
-        (LABEL_REJECT, "no_upside_target"),
-        _label_case([110.0, 112.0, 114.0], [96.0, 95.0, 94.0]),
+        "risk_adjusted_label_rejects_below_minimum_mfe",
+        (LABEL_REJECT, "no_risk_adjusted_opportunity"),
+        _label_case([104.0, 104.5, 104.9], [99.0, 99.0, 99.0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_adjusted_label_requires_strictly_more_than_minimum_mfe",
+        (LABEL_REJECT, "no_risk_adjusted_opportunity"),
+        _label_case([105.0, 105.0, 105.0], [100.0, 100.0, 100.0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_adjusted_label_handles_zero_mae_without_division_error",
+        (LABEL_PASS, "risk_adjusted_opportunity"),
+        _label_case([106.0, 107.0, 108.0], [100.0, 100.0, 100.0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_adjusted_label_requires_strictly_more_than_ratio_threshold",
+        (LABEL_REJECT, "no_risk_adjusted_opportunity"),
+        _label_case([106.0, 106.0, 106.0], [95.0, 95.0, 95.0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "risk_adjusted_pass_is_not_reversed_by_later_drawdown",
+        (LABEL_PASS, "risk_adjusted_opportunity"),
+        _label_case([104.0, 106.0, 107.0], [99.0, 98.0, 89.0]),
     )
     invalid_frame = pd.DataFrame(
         {
             "Open": [100.0, 100.0, 100.0],
-            "High": [100.0, 110.0, 112.0],
-            "Low": [100.0, 96.0, 95.0],
+            "High": [100.0, 104.0, 106.0],
+            "Low": [100.0, 99.0, 98.0],
             "Close": [100.0, 100.0, 100.0],
             "Volume": [1000.0, 1000.0, 1000.0],
         },
@@ -303,13 +353,27 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "label_manifest_declares_binary_pass_vs_not_pass_objective",
-        "binary_pass_vs_not_pass_v1",
+        "label_manifest_declares_risk_adjusted_opportunity_objective",
+        LABEL_OBJECTIVE,
         label_policy.label_manifest_payload().get("label_objective"),
     )
+    legacy_policy_payload = {
+        "label_objective": LEGACY_LABEL_OBJECTIVE,
+        "label_horizon_bars": 40,
+        "pass_return_threshold": 0.15,
+        "reject_return_threshold": -0.07,
+    }
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "legacy_label_policy_remains_readable_for_fast_relabel",
+        legacy_policy_payload,
+        label_manifest_payload_from_policy_manifest(legacy_policy_payload),
+    )
     cached_result = label_from_cached_path(
-        np.asarray([110.0, 116.0, 118.0, np.nan, np.nan], dtype=np.float64),
-        np.asarray([96.0, 95.0, 94.0, np.nan, np.nan], dtype=np.float64),
+        np.asarray([104.0, 106.0, 108.0, np.nan, np.nan], dtype=np.float64),
+        np.asarray([99.0, 98.0, 97.0, np.nan, np.nan], dtype=np.float64),
         anchor_price=100.0,
         available_bars=3,
         policy=label_policy,
@@ -318,8 +382,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "cached_future_path_relabel_matches_first_hit_contract",
-        (LABEL_PASS, "upside_first", 2.0),
+        "cached_future_path_relabel_matches_risk_adjusted_contract",
+        (LABEL_PASS, "risk_adjusted_opportunity", 2.0),
         (cached_result.label, cached_result.reason, cached_result.first_hit_bar),
     )
     add_check(
@@ -328,9 +392,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         case_id,
         "label_thresholds_are_separate_from_feature_cache_policy",
         True,
-        "pass_return_threshold" not in label_policy.feature_cache_manifest_payload()
-        and "reject_return_threshold" not in label_policy.feature_cache_manifest_payload()
-        and label_policy.label_manifest_payload()["pass_return_threshold"] == 0.15,
+        "min_mfe_return" not in label_policy.feature_cache_manifest_payload()
+        and "min_reward_risk_ratio" not in label_policy.feature_cache_manifest_payload()
+        and "max_adverse_return" not in label_policy.feature_cache_manifest_payload()
+        and label_policy.label_manifest_payload()["min_mfe_return"] == 0.05
+        and label_policy.label_manifest_payload()["min_reward_risk_ratio"] == 1.20
+        and label_policy.label_manifest_payload()["max_adverse_return"] == -0.10,
     )
     try:
         V16StrategyParams(breakout_quality_filter_id=" ")
@@ -1518,6 +1585,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "outer_oos_policy": outer_policy,
                 "feature_columns": list(FEATURE_COLUMNS),
                 "context_columns": list(CONTEXT_COLUMNS),
+                "policy": DEFAULT_LABEL_POLICY.as_manifest_payload(),
                 "score_decision": {
                     "score_column": SCORE_COLUMN,
                     "comparison": SCORE_COMPARISON,
@@ -1636,6 +1704,35 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
                 validation_contract.manifest["training_mode"],
             )
+
+            stale_policy_manifest = dict(manifest)
+            stale_policy_manifest["policy"] = {
+                **DEFAULT_LABEL_POLICY.as_manifest_payload(),
+                "min_mfe_return": 0.99,
+            }
+            paths.manifest_path.write_text(
+                json.dumps(stale_policy_manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            try:
+                load_model_artifact_contract(str(project_root), filter_id)
+                stale_policy_rejected = False
+            except ValueError as exc:
+                stale_policy_rejected = "model policy" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "stale_model_policy_is_rejected",
+                True,
+                stale_policy_rejected,
+            )
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
 
             missing_candidate = np.asarray([False, False, False, True], dtype=bool)
             try:

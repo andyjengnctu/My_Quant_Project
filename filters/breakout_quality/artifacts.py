@@ -13,6 +13,7 @@ from typing import Any
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
+    DEFAULT_LABEL_POLICY,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_SCORE_FILENAME,
     DEFAULT_SPLIT_FILENAME,
@@ -240,6 +241,12 @@ def load_model_artifact_contract(
         raise ValueError("breakout quality manifest feature_columns 與 runtime 契約不一致")
     if list(manifest.get("context_columns", [])) != list(CONTEXT_COLUMNS):
         raise ValueError("breakout quality manifest context_columns 與 runtime 契約不一致")
+    model_policy = _require_mapping(manifest, "policy")
+    if dict(model_policy) != DEFAULT_LABEL_POLICY.as_manifest_payload():
+        raise ValueError(
+            "breakout quality model policy 與目前 config/breakout_quality_policy.py 不一致；"
+            "請重新執行 workflow 以 relabel 並重訓模型"
+        )
 
     score_decision = _require_mapping(manifest, "score_decision")
     if _require_nonempty_text(score_decision, "score_column") != SCORE_COLUMN:

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from typing import Mapping
 
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_BENCHMARK_TICKER,
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
+    BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN,
+    BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN,
+    BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO,
     BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
-    BREAKOUT_QUALITY_LABEL_PASS_RETURN,
-    BREAKOUT_QUALITY_LABEL_REJECT_RETURN,
     build_breakout_quality_default_high_len_values,
 )
 
@@ -24,10 +26,11 @@ DEFAULT_SPLIT_FILENAME = "split_assignments.csv"
 DEFAULT_FEATURE_WINDOW_BARS = BREAKOUT_QUALITY_FEATURE_WINDOW_BARS
 DEFAULT_LABEL_HORIZON_BARS = BREAKOUT_QUALITY_LABEL_HORIZON_BARS
 DEFAULT_BENCHMARK_TICKER = BREAKOUT_QUALITY_BENCHMARK_TICKER
-ARTIFACT_CONTRACT_VERSION = 7
+ARTIFACT_CONTRACT_VERSION = 8
 SCORE_TABLE_SCHEMA_VERSION = 2
 SPLIT_ASSIGNMENT_SCHEMA_VERSION = 3
-LABEL_OBJECTIVE = "binary_pass_vs_not_pass_v1"
+LABEL_OBJECTIVE = "binary_risk_adjusted_opportunity_v2"
+LEGACY_LABEL_OBJECTIVE = "binary_pass_vs_not_pass_v1"
 SCORE_COLUMN = "dl_quality_score"
 SCORE_COMPARISON = ">="
 SCORE_THRESHOLD_SOURCE = "strategy_param.breakout_quality_score_threshold"
@@ -69,8 +72,9 @@ class BreakoutQualityLabelPolicy:
     label_horizon_bars: int = DEFAULT_LABEL_HORIZON_BARS
     label_path_cache_bars: int = BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS
     high_len_values: tuple[int, ...] = field(default_factory=build_breakout_quality_default_high_len_values)
-    pass_return_threshold: float = BREAKOUT_QUALITY_LABEL_PASS_RETURN
-    reject_return_threshold: float = BREAKOUT_QUALITY_LABEL_REJECT_RETURN
+    min_mfe_return: float = BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN
+    min_reward_risk_ratio: float = BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO
+    max_adverse_return: float = BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN
     benchmark_ticker: str = DEFAULT_BENCHMARK_TICKER
 
     def __post_init__(self) -> None:
@@ -78,10 +82,12 @@ class BreakoutQualityLabelPolicy:
             raise ValueError("feature window 與 label horizon 必須 >= 1")
         if int(self.label_path_cache_bars) < int(self.label_horizon_bars):
             raise ValueError("label_path_cache_bars 必須 >= label_horizon_bars")
-        if float(self.pass_return_threshold) <= 0.0:
-            raise ValueError("pass_return_threshold 必須 > 0")
-        if not -1.0 < float(self.reject_return_threshold) < 0.0:
-            raise ValueError("reject_return_threshold 必須介於 -1 與 0 之間")
+        if float(self.min_mfe_return) <= 0.0:
+            raise ValueError("min_mfe_return 必須 > 0")
+        if float(self.min_reward_risk_ratio) <= 1.0:
+            raise ValueError("min_reward_risk_ratio 必須 > 1")
+        if not -1.0 < float(self.max_adverse_return) < 0.0:
+            raise ValueError("max_adverse_return 必須介於 -1 與 0 之間")
         if not str(self.benchmark_ticker).strip():
             raise ValueError("benchmark_ticker 不可空白")
         self.high_lens()
@@ -115,8 +121,9 @@ class BreakoutQualityLabelPolicy:
         return {
             "label_objective": LABEL_OBJECTIVE,
             "label_horizon_bars": int(self.label_horizon_bars),
-            "pass_return_threshold": float(self.pass_return_threshold),
-            "reject_return_threshold": float(self.reject_return_threshold),
+            "min_mfe_return": float(self.min_mfe_return),
+            "min_reward_risk_ratio": float(self.min_reward_risk_ratio),
+            "max_adverse_return": float(self.max_adverse_return),
         }
 
     def as_manifest_payload(self) -> dict:
@@ -126,6 +133,34 @@ class BreakoutQualityLabelPolicy:
         payload["high_len_min"] = self.high_len_min
         payload["high_len_max"] = self.high_len_max
         return payload
+
+
+def label_manifest_payload_from_policy_manifest(policy: Mapping[str, object]) -> dict:
+    """Return the label-only payload for current or legacy dataset metadata."""
+
+    objective = str(policy.get("label_objective") or "").strip()
+    if not objective:
+        if "pass_return_threshold" in policy and "reject_return_threshold" in policy:
+            objective = LEGACY_LABEL_OBJECTIVE
+        elif {"min_mfe_return", "min_reward_risk_ratio", "max_adverse_return"}.issubset(policy):
+            objective = LABEL_OBJECTIVE
+
+    if objective == LEGACY_LABEL_OBJECTIVE:
+        return {
+            "label_objective": LEGACY_LABEL_OBJECTIVE,
+            "label_horizon_bars": policy.get("label_horizon_bars"),
+            "pass_return_threshold": policy.get("pass_return_threshold"),
+            "reject_return_threshold": policy.get("reject_return_threshold"),
+        }
+    if objective == LABEL_OBJECTIVE:
+        return {
+            "label_objective": LABEL_OBJECTIVE,
+            "label_horizon_bars": policy.get("label_horizon_bars"),
+            "min_mfe_return": policy.get("min_mfe_return"),
+            "min_reward_risk_ratio": policy.get("min_reward_risk_ratio"),
+            "max_adverse_return": policy.get("max_adverse_return"),
+        }
+    raise ValueError(f"不支援的 breakout quality label_objective: {objective or 'missing'}")
 
 
 DEFAULT_LABEL_POLICY = BreakoutQualityLabelPolicy()
@@ -188,6 +223,7 @@ __all__ = [
     "FILTER_FAMILY",
     "LABEL_INVALID",
     "LABEL_OBJECTIVE",
+    "LEGACY_LABEL_OBJECTIVE",
     "LABEL_NAME_MAP",
     "LABEL_PASS",
     "LABEL_REJECT",
@@ -217,4 +253,5 @@ __all__ = [
     "TRAINING_MODE_INNER_VALIDATION_FULL_REFIT",
     "SCORE_TABLE_SCHEMA_VERSION",
     "BreakoutQualityLabelPolicy",
+    "label_manifest_payload_from_policy_manifest",
 ]

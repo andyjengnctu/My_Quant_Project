@@ -563,6 +563,9 @@ def _relabel_only(args, policy, *, started: float) -> int:
     reasons: list[str] = []
     max_upside = np.empty((group_count,), dtype=np.float64)
     max_downside = np.empty((group_count,), dtype=np.float64)
+    decision_mfe = np.empty((group_count,), dtype=np.float64)
+    decision_mae = np.empty((group_count,), dtype=np.float64)
+    decision_ratio = np.empty((group_count,), dtype=np.float64)
     first_hit = np.empty((group_count,), dtype=np.float64)
     eval_start_dates: list[str | None] = []
     eval_end_dates: list[str | None] = []
@@ -579,6 +582,9 @@ def _relabel_only(args, policy, *, started: float) -> int:
         reasons.append(result.reason)
         max_upside[group_index] = result.max_upside_return
         max_downside[group_index] = result.max_downside_return
+        decision_mfe[group_index] = result.decision_mfe_return
+        decision_mae[group_index] = result.decision_mae_return
+        decision_ratio[group_index] = result.decision_reward_risk_ratio
         first_hit[group_index] = result.first_hit_bar
         eval_start_dates.append(_iso_date_from_ordinal(date_ordinals[group_index, 0]))
         eval_end_dates.append(
@@ -597,11 +603,15 @@ def _relabel_only(args, policy, *, started: float) -> int:
     display_anchors = event_anchors.copy()
     display_anchors[event_reasons == "insufficient_future"] = np.nan
     events["anchor_price"] = display_anchors
-    events["pass_barrier_price"] = display_anchors * (1.0 + float(policy.pass_return_threshold))
-    events["reject_barrier_price"] = display_anchors * (1.0 + float(policy.reject_return_threshold))
+    events["pass_barrier_price"] = display_anchors * (1.0 + float(policy.min_mfe_return))
+    events["reject_barrier_price"] = display_anchors * (1.0 + float(policy.max_adverse_return))
     events["max_upside_return"] = max_upside[event_group_index]
     events["max_downside_return"] = max_downside[event_group_index]
+    events["decision_mfe_return"] = decision_mfe[event_group_index]
+    events["decision_mae_return"] = decision_mae[event_group_index]
+    events["decision_reward_risk_ratio"] = decision_ratio[event_group_index]
     events["first_hit_bar"] = first_hit[event_group_index]
+    events = events.reindex(columns=list(EVENT_COLUMNS))
 
     save_npy_atomic(paths.event_labels, event_labels.astype(np.int8))
     _write_events_atomic(paths.events, events)

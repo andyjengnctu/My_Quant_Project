@@ -44,6 +44,7 @@ from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
     DEFAULT_FILTER_ID,
+    DEFAULT_LABEL_POLICY,
     DEFAULT_MANIFEST_FILENAME,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_SCORE_FILENAME,
@@ -907,6 +908,7 @@ def main(argv=None) -> int:
 
     dataset_summary, X, C, y, events = load_validated_dataset_bundle(
         args.filter_id,
+        expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
         require_current_source=True,
     )
     X, C, y = _preload_training_arrays(

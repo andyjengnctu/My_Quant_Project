@@ -34,6 +34,9 @@ EVENT_COLUMNS = (
     "reject_barrier_price",
     "max_upside_return",
     "max_downside_return",
+    "decision_mfe_return",
+    "decision_mae_return",
+    "decision_reward_risk_ratio",
     "first_hit_bar",
 )
 
@@ -58,6 +61,9 @@ class BreakoutQualityLabelResult:
     reason: str
     max_upside_return: float
     max_downside_return: float
+    decision_mfe_return: float
+    decision_mae_return: float
+    decision_reward_risk_ratio: float
     first_hit_bar: float
 
 
@@ -285,59 +291,96 @@ def label_from_cached_path(
     policy: BreakoutQualityLabelPolicy,
 ) -> BreakoutQualityLabelResult:
     horizon = int(policy.label_horizon_bars)
+    invalid_metrics = (np.nan, np.nan, np.nan, np.nan, np.nan, np.nan)
     if int(available_bars) < horizon:
-        return BreakoutQualityLabelResult(LABEL_INVALID, "insufficient_future", np.nan, np.nan, np.nan)
+        return BreakoutQualityLabelResult(LABEL_INVALID, "insufficient_future", *invalid_metrics)
     if not math.isfinite(anchor_price) or anchor_price <= 0.0:
-        return BreakoutQualityLabelResult(LABEL_INVALID, "invalid_anchor", np.nan, np.nan, np.nan)
+        return BreakoutQualityLabelResult(LABEL_INVALID, "invalid_anchor", *invalid_metrics)
 
     highs = np.asarray(high_prices[:horizon], dtype=np.float64)
     lows = np.asarray(low_prices[:horizon], dtype=np.float64)
     if highs.shape != lows.shape or highs.size != horizon:
-        return BreakoutQualityLabelResult(LABEL_INVALID, "insufficient_future", np.nan, np.nan, np.nan)
+        return BreakoutQualityLabelResult(LABEL_INVALID, "insufficient_future", *invalid_metrics)
     valid = np.isfinite(highs) & np.isfinite(lows) & (highs > 0.0) & (lows > 0.0) & (highs >= lows)
     if not bool(np.all(valid)):
-        return BreakoutQualityLabelResult(LABEL_INVALID, "invalid_future_bar", np.nan, np.nan, np.nan)
+        return BreakoutQualityLabelResult(LABEL_INVALID, "invalid_future_bar", *invalid_metrics)
 
     upside_returns = highs / anchor_price - 1.0
     downside_returns = lows / anchor_price - 1.0
     max_upside_return = float(np.max(upside_returns))
     max_downside_return = float(np.min(downside_returns))
-    pass_barrier_price = anchor_price * (1.0 + float(policy.pass_return_threshold))
-    reject_barrier_price = anchor_price * (1.0 + float(policy.reject_return_threshold))
+    min_mfe_price = anchor_price * (1.0 + float(policy.min_mfe_return))
+    max_adverse_price = anchor_price * (1.0 + float(policy.max_adverse_return))
+    min_ratio = float(policy.min_reward_risk_ratio)
 
+    running_high = float(anchor_price)
+    running_low = float(anchor_price)
     for bar_offset, (high_price, low_price) in enumerate(zip(highs, lows), start=1):
-        upside_hit = float(high_price) >= pass_barrier_price
-        downside_hit = float(low_price) <= reject_barrier_price
-        if upside_hit and downside_hit:
+        candidate_high = max(running_high, float(high_price))
+        candidate_low = min(running_low, float(low_price))
+        decision_mfe = float(candidate_high / anchor_price - 1.0)
+        decision_downside = float(candidate_low / anchor_price - 1.0)
+        decision_mae = max(0.0, -decision_downside)
+        decision_ratio = math.inf if decision_mae == 0.0 else float(decision_mfe / decision_mae)
+
+        risk_hit = candidate_low <= max_adverse_price
+        mfe_hit = candidate_high > min_mfe_price
+        favorable_move = max(0.0, candidate_high - anchor_price)
+        adverse_move = max(0.0, anchor_price - candidate_low)
+        ratio_hit = adverse_move == 0.0 or favorable_move > min_ratio * adverse_move
+        opportunity_hit = mfe_hit and ratio_hit
+
+        # Daily bars do not reveal whether High or Low happened first. When the same
+        # bar can both pass and breach the risk limit, use the conservative adverse-first rule.
+        if risk_hit and opportunity_hit:
             return BreakoutQualityLabelResult(
                 LABEL_REJECT,
                 "same_bar_adverse_first",
                 max_upside_return,
                 max_downside_return,
+                decision_mfe,
+                decision_mae,
+                decision_ratio,
                 float(bar_offset),
             )
-        if downside_hit:
+        if risk_hit:
             return BreakoutQualityLabelResult(
                 LABEL_REJECT,
                 "downside_first",
                 max_upside_return,
                 max_downside_return,
+                decision_mfe,
+                decision_mae,
+                decision_ratio,
                 float(bar_offset),
             )
-        if upside_hit:
+        if opportunity_hit:
             return BreakoutQualityLabelResult(
                 LABEL_PASS,
-                "upside_first",
+                "risk_adjusted_opportunity",
                 max_upside_return,
                 max_downside_return,
+                decision_mfe,
+                decision_mae,
+                decision_ratio,
                 float(bar_offset),
             )
 
+        running_high = candidate_high
+        running_low = candidate_low
+
+    final_mfe = float(running_high / anchor_price - 1.0)
+    final_downside = float(running_low / anchor_price - 1.0)
+    final_mae = max(0.0, -final_downside)
+    final_ratio = math.inf if final_mae == 0.0 else float(final_mfe / final_mae)
     return BreakoutQualityLabelResult(
         LABEL_REJECT,
-        "no_upside_target",
+        "no_risk_adjusted_opportunity",
         max_upside_return,
         max_downside_return,
+        final_mfe,
+        final_mae,
+        final_ratio,
         np.nan,
     )
 
@@ -526,17 +569,20 @@ def build_breakout_quality_dataset_for_frame(
                 "label_reason": label_result.reason,
                 "anchor_price": event_anchor_price,
                 "pass_barrier_price": (
-                    event_anchor_price * (1.0 + float(policy.pass_return_threshold))
+                    event_anchor_price * (1.0 + float(policy.min_mfe_return))
                     if math.isfinite(event_anchor_price)
                     else np.nan
                 ),
                 "reject_barrier_price": (
-                    event_anchor_price * (1.0 + float(policy.reject_return_threshold))
+                    event_anchor_price * (1.0 + float(policy.max_adverse_return))
                     if math.isfinite(event_anchor_price)
                     else np.nan
                 ),
                 "max_upside_return": label_result.max_upside_return,
                 "max_downside_return": label_result.max_downside_return,
+                "decision_mfe_return": label_result.decision_mfe_return,
+                "decision_mae_return": label_result.decision_mae_return,
+                "decision_reward_risk_ratio": label_result.decision_reward_risk_ratio,
                 "first_hit_bar": label_result.first_hit_bar,
             }
         )
