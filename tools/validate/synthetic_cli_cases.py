@@ -180,6 +180,7 @@ def validate_dataset_cli_contract_case(_base_params):
     epoch_line = train_module._render_epoch_selection_progress(
         epoch=2,
         max_epochs=20,
+        train_loss=0.66784,
         validation_loss=0.69397,
         improved=True,
     )
@@ -188,8 +189,21 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_train_epoch_output_is_concise",
-        "  Epoch  2/20 | Val Loss 0.693970 | ★ 新最佳",
+        "  Epoch  2/20 | Train Loss 0.667840 | Val Loss 0.693970 | ★ 新最佳",
         epoch_line,
+    )
+    full_refit_line = train_module._render_full_selection_progress(
+        epoch=2,
+        epochs=2,
+        train_loss=0.674436,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_full_refit_output_labels_train_loss",
+        "  Epoch  2/2 | Train Loss 0.674436",
+        full_refit_line,
     )
     compact_summary = train_module._render_training_summary(
         split_report={

@@ -181,12 +181,14 @@ def _render_epoch_selection_progress(
     *,
     epoch: int,
     max_epochs: int,
+    train_loss: float,
     validation_loss: float,
     improved: bool,
 ) -> str:
     best_marker = " | ★ 新最佳" if improved else ""
     return (
         f"  Epoch {int(epoch):>2}/{int(max_epochs)} | "
+        f"Train Loss {float(train_loss):.6f} | "
         f"Val Loss {float(validation_loss):.6f}{best_marker}"
     )
 
@@ -212,11 +214,11 @@ def _render_full_selection_progress(
     *,
     epoch: int,
     epochs: int,
-    loss: float,
+    train_loss: float,
 ) -> str:
     return (
         f"  Epoch {int(epoch):>2}/{int(epochs)} | "
-        f"Loss {float(loss):.6f}"
+        f"Train Loss {float(train_loss):.6f}"
     )
 
 
@@ -532,6 +534,7 @@ def _select_epoch_with_inner_validation(
             _render_epoch_selection_progress(
                 epoch=epoch,
                 max_epochs=max_epochs,
+                train_loss=train_metrics["loss"],
                 validation_loss=validation_loss,
                 improved=improved,
             )
@@ -629,7 +632,7 @@ def _fit_full_selection(
             _render_full_selection_progress(
                 epoch=epoch,
                 epochs=epochs,
-                loss=metrics["loss"],
+                train_loss=metrics["loss"],
             )
         )
     if not history:

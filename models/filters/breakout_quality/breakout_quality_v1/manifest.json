@@ -1,6 +1,6 @@
 {
   "artifact_contract_version": 7,
-  "batch_size": 512,
+  "batch_size": 64,
   "class_weights_reject_pass": [
     0.74320322,
     1.52794707
@@ -15,7 +15,7 @@
   "early_stopping_enabled": true,
   "early_stopping_min_delta": 0.0,
   "early_stopping_patience": 3,
-  "elapsed_sec": 626.38,
+  "elapsed_sec": 587.758,
   "epoch_selection_source": "inner_validation_loss",
   "evaluation_batch_size": 4096,
   "evaluation_execution": {
@@ -56,13 +56,13 @@
     "total": 729654
   },
   "final_refit_metrics": {
-    "accuracy": 0.539789,
+    "accuracy": 0.527318,
     "group_weight_sum": 23072.0,
-    "loss": 0.672721,
-    "pass_rate": 0.592421,
-    "row_accuracy": 0.523292,
+    "loss": 0.666513,
+    "pass_rate": 0.641649,
+    "row_accuracy": 0.510476,
     "row_count": 729654,
-    "row_pass_rate": 0.653818
+    "row_pass_rate": 0.708678
   },
   "fixed_epochs": 1,
   "fixed_evaluation_threshold": 0.5,
@@ -74,15 +74,15 @@
   },
   "inner_validation_epoch_selection": {
     "best_epoch": 1,
-    "best_validation_loss": 0.698569,
+    "best_validation_loss": 0.712095,
     "best_validation_metrics": {
-      "accuracy": 0.567561,
+      "accuracy": 0.595201,
       "group_weight_sum": 6065.0,
-      "loss": 0.698569,
-      "pass_rate": 0.441257,
-      "row_accuracy": 0.551373,
+      "loss": 0.712095,
+      "pass_rate": 0.35076,
+      "row_accuracy": 0.585924,
       "row_count": 187316,
-      "row_pass_rate": 0.504714
+      "row_pass_rate": 0.394248
     },
     "class_weights_reject_pass": [
       0.73960805,
@@ -91,94 +91,94 @@
     "completed_epochs": 4,
     "history": [
       {
-        "batch_loss": 0.677569,
+        "batch_loss": 0.672896,
         "epoch": 1,
         "inner_train_metrics": {
-          "accuracy": 0.564132,
+          "accuracy": 0.57835,
           "group_weight_sum": 16832.0,
-          "loss": 0.670597,
-          "pass_rate": 0.535898,
-          "row_accuracy": 0.535183,
+          "loss": 0.662936,
+          "pass_rate": 0.515607,
+          "row_accuracy": 0.55144,
           "row_count": 538887,
-          "row_pass_rate": 0.638512
+          "row_pass_rate": 0.613886
         },
         "inner_validation_metrics": {
-          "accuracy": 0.567561,
+          "accuracy": 0.595201,
           "group_weight_sum": 6065.0,
-          "loss": 0.698569,
-          "pass_rate": 0.441257,
-          "row_accuracy": 0.551373,
+          "loss": 0.712095,
+          "pass_rate": 0.35076,
+          "row_accuracy": 0.585924,
           "row_count": 187316,
-          "row_pass_rate": 0.504714
+          "row_pass_rate": 0.394248
         },
         "is_best_epoch": true
       },
       {
-        "batch_loss": 0.669019,
+        "batch_loss": 0.661267,
         "epoch": 2,
         "inner_train_metrics": {
-          "accuracy": 0.553165,
+          "accuracy": 0.54736,
           "group_weight_sum": 16832.0,
-          "loss": 0.664264,
-          "pass_rate": 0.580252,
-          "row_accuracy": 0.552207,
+          "loss": 0.654873,
+          "pass_rate": 0.615073,
+          "row_accuracy": 0.57803,
           "row_count": 538887,
-          "row_pass_rate": 0.612459
+          "row_pass_rate": 0.561802
         },
         "inner_validation_metrics": {
-          "accuracy": 0.596512,
+          "accuracy": 0.592832,
           "group_weight_sum": 6065.0,
-          "loss": 0.704605,
-          "pass_rate": 0.378414,
-          "row_accuracy": 0.600536,
+          "loss": 0.718934,
+          "pass_rate": 0.383112,
+          "row_accuracy": 0.616765,
           "row_count": 187316,
-          "row_pass_rate": 0.370935
+          "row_pass_rate": 0.304993
         },
         "is_best_epoch": false
       },
       {
-        "batch_loss": 0.663376,
+        "batch_loss": 0.650965,
         "epoch": 3,
         "inner_train_metrics": {
-          "accuracy": 0.534242,
+          "accuracy": 0.632008,
           "group_weight_sum": 16832.0,
-          "loss": 0.659586,
-          "pass_rate": 0.654568,
-          "row_accuracy": 0.536012,
+          "loss": 0.63784,
+          "pass_rate": 0.416454,
+          "row_accuracy": 0.612726,
           "row_count": 538887,
-          "row_pass_rate": 0.671831
+          "row_pass_rate": 0.499684
         },
         "inner_validation_metrics": {
-          "accuracy": 0.583161,
+          "accuracy": 0.59249,
           "group_weight_sum": 6065.0,
-          "loss": 0.710418,
-          "pass_rate": 0.405281,
-          "row_accuracy": 0.587334,
+          "loss": 0.791473,
+          "pass_rate": 0.311004,
+          "row_accuracy": 0.587147,
           "row_count": 187316,
-          "row_pass_rate": 0.38293
+          "row_pass_rate": 0.311388
         },
         "is_best_epoch": false
       },
       {
-        "batch_loss": 0.658993,
+        "batch_loss": 0.643032,
         "epoch": 4,
         "inner_train_metrics": {
-          "accuracy": 0.558492,
+          "accuracy": 0.614669,
           "group_weight_sum": 16832.0,
-          "loss": 0.652952,
-          "pass_rate": 0.592415,
-          "row_accuracy": 0.55037,
+          "loss": 0.627459,
+          "pass_rate": 0.515107,
+          "row_accuracy": 0.610056,
           "row_count": 538887,
-          "row_pass_rate": 0.637904
+          "row_pass_rate": 0.548237
         },
         "inner_validation_metrics": {
-          "accuracy": 0.599643,
+          "accuracy": 0.5865,
           "group_weight_sum": 6065.0,
-          "loss": 0.724648,
-          "pass_rate": 0.364391,
-          "row_accuracy": 0.60154,
+          "loss": 0.869082,
+          "pass_rate": 0.370447,
+          "row_accuracy": 0.59201,
           "row_count": 187316,
-          "row_pass_rate": 0.367966
+          "row_pass_rate": 0.319604
         },
         "is_best_epoch": false
       }
@@ -192,12 +192,12 @@
   },
   "inner_validation_months": 24,
   "inner_validation_used": true,
-  "learning_rate": 0.0005,
+  "learning_rate": 0.001,
   "manifest_filename": "manifest.json",
   "max_epochs": 20,
   "model": {
     "filename": "model.pt",
-    "sha256": "0904e04d92fcafc17b1076410c6fe06ab14564a094d8b9dafaaf3c67dcf429af",
+    "sha256": "4e34cc742217dde497b514c7ded829ff69263054a5a8fc0c3bedbe5df38b159d",
     "size_bytes": 36029
   },
   "model_filename": "model.pt",
@@ -778,16 +778,16 @@
   },
   "training_history": [
     {
-      "batch_loss": 0.678615,
+      "batch_loss": 0.676369,
       "epoch": 1,
       "selection_metrics": {
-        "accuracy": 0.539789,
+        "accuracy": 0.527318,
         "group_weight_sum": 23072.0,
-        "loss": 0.672721,
-        "pass_rate": 0.592421,
-        "row_accuracy": 0.523292,
+        "loss": 0.666513,
+        "pass_rate": 0.641649,
+        "row_accuracy": 0.510476,
         "row_count": 729654,
-        "row_pass_rate": 0.653818
+        "row_pass_rate": 0.708678
       }
     }
   ],
