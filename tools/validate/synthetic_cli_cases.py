@@ -129,6 +129,7 @@ def validate_dataset_cli_contract_case(_base_params):
         rebuild_dataset=False,
         epochs=3,
         batch_size=32,
+        evaluation_batch_size=128,
         lr=0.001,
         seed=42,
         fixed_threshold=0.5,
@@ -191,6 +192,7 @@ def validate_dataset_cli_contract_case(_base_params):
     policy_fields = (
         "epochs",
         "batch_size",
+        "evaluation_batch_size",
         "lr",
         "seed",
         "fixed_threshold",
@@ -212,6 +214,7 @@ def validate_dataset_cli_contract_case(_base_params):
         filter_id="synthetic_quality",
         epochs=7,
         batch_size=64,
+        evaluation_batch_size=256,
         lr=0.002,
         seed=17,
         fixed_threshold=0.55,

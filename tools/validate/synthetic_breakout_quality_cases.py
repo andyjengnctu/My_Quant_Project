@@ -25,6 +25,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
+    BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
     BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
@@ -87,6 +88,7 @@ from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from tools.filters.breakout_quality import common as breakout_quality_common
+from tools.filters.breakout_quality import train as breakout_quality_train
 from tools.filters.breakout_quality.report import (
     build_report_payload,
     render_console_summary,
@@ -160,6 +162,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and int(BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE) >= 1
         and float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) > 0.0
         and int(BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED) >= 0
+        and int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE) >= 1
         and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1,
     )
     add_check(
@@ -314,6 +317,54 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "empty_filter_id_rejected_without_silent_default",
         True,
         empty_filter_id_rejected,
+    )
+
+    torch, nn = breakout_quality_train.require_torch()
+
+    class _DeterministicEvaluationModel(nn.Module):
+        def forward(self, x, context):
+            pooled = x.mean(dim=(1, 2))
+            return torch.stack(
+                [pooled + context[:, 0], -pooled + context[:, 1]],
+                dim=1,
+            )
+
+    evaluation_model = _DeterministicEvaluationModel()
+    evaluation_features = np.arange(12 * 3 * 2, dtype=np.float32).reshape(12, 3, 2) / 100.0
+    evaluation_context = np.arange(12 * 2, dtype=np.float32).reshape(12, 2) / 50.0
+    evaluation_labels = np.asarray([0, 1] * 6, dtype=np.int64)
+    evaluation_indices = np.asarray([11, 2, 8, 1, 6, 4, 9, 0, 5], dtype=np.int64)
+    evaluation_weights = np.linspace(0.5, 1.5, 12, dtype=np.float32)
+    evaluation_class_weights = torch.tensor([1.25, 0.75], dtype=torch.float32)
+    one_shot_metrics = breakout_quality_train._evaluate(
+        torch,
+        evaluation_model,
+        evaluation_features,
+        evaluation_context,
+        evaluation_labels,
+        evaluation_indices,
+        evaluation_weights,
+        evaluation_class_weights,
+        evaluation_batch_size=len(evaluation_indices),
+    )
+    chunked_metrics = breakout_quality_train._evaluate(
+        torch,
+        evaluation_model,
+        evaluation_features,
+        evaluation_context,
+        evaluation_labels,
+        evaluation_indices,
+        evaluation_weights,
+        evaluation_class_weights,
+        evaluation_batch_size=3,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "chunked_full_evaluation_preserves_one_shot_metrics",
+        one_shot_metrics,
+        chunked_metrics,
     )
 
     with tempfile.TemporaryDirectory(prefix="breakout_quality_source_inventory_") as temp_dir:

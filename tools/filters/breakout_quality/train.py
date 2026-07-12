@@ -24,6 +24,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
+    BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
@@ -88,6 +89,15 @@ def parse_args(argv=None):
         ),
     )
     parser.add_argument("--batch-size", type=int, default=BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE)
+    parser.add_argument(
+        "--evaluation-batch-size",
+        type=int,
+        default=BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
+        help=(
+            "完整 Train／Validation／Selection 評估的推論 batch size；"
+            "只影響記憶體與執行速度，不抽樣、不改模型訓練"
+        ),
+    )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument("--seed", type=int, default=BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED)
     parser.add_argument(
@@ -135,6 +145,7 @@ def parse_args(argv=None):
 def validate_training_args(args) -> None:
     max_epochs = int(args.epochs)
     batch_size = int(args.batch_size)
+    evaluation_batch_size = int(args.evaluation_batch_size)
     learning_rate = float(args.lr)
     fixed_threshold = float(args.fixed_threshold)
     validation_months = int(args.inner_validation_months)
@@ -142,8 +153,8 @@ def validate_training_args(args) -> None:
     min_delta = float(args.early_stopping_min_delta)
     min_train_samples = int(args.min_train_samples)
     min_validation_samples = int(args.min_validation_samples)
-    if max_epochs < 1 or batch_size < 1 or learning_rate <= 0:
-        raise ValueError("epochs、batch-size 必須 >=1，lr 必須 >0")
+    if max_epochs < 1 or batch_size < 1 or evaluation_batch_size < 1 or learning_rate <= 0:
+        raise ValueError("epochs、batch-size、evaluation-batch-size 必須 >=1，lr 必須 >0")
     if validation_months < 1:
         raise ValueError("inner-validation-months 必須 >=1")
     if patience < 0 or min_delta < 0:
@@ -178,7 +189,18 @@ def _weighted_average(values: np.ndarray, weights: np.ndarray) -> float:
     return float(np.average(values, weights=weights))
 
 
-def _evaluate(torch, model, X, C, y, indices, sample_weights, class_weights):
+def _evaluate(
+    torch,
+    model,
+    X,
+    C,
+    y,
+    indices,
+    sample_weights,
+    class_weights,
+    *,
+    evaluation_batch_size: int,
+):
     if len(indices) == 0:
         return {
             "loss": None,
@@ -191,23 +213,41 @@ def _evaluate(torch, model, X, C, y, indices, sample_weights, class_weights):
         }
     import torch.nn.functional as F
 
+    batch_size = int(evaluation_batch_size)
+    if batch_size < 1:
+        raise ValueError("evaluation_batch_size 必須 >=1")
+
     model.eval()
     idx = np.asarray(indices, dtype=np.int64)
+    targets_np = y[idx].astype(np.int64)
     weights_np = sample_weights[idx].astype(np.float32)
+    loss_items_np = np.empty((idx.size,), dtype=np.float32)
+    pred = np.empty((idx.size,), dtype=np.int64)
+
     with torch.no_grad():
-        logits = model(torch.from_numpy(X[idx]), torch.from_numpy(C[idx]))
-        target = torch.from_numpy(y[idx].astype(np.int64))
+        for start in range(0, int(idx.size), batch_size):
+            stop = min(start + batch_size, int(idx.size))
+            batch_idx = idx[start:stop]
+            logits = model(
+                torch.from_numpy(X[batch_idx]),
+                torch.from_numpy(C[batch_idx]),
+            )
+            target = torch.from_numpy(targets_np[start:stop])
+            loss_items = F.cross_entropy(
+                logits,
+                target,
+                weight=class_weights,
+                reduction="none",
+            )
+            loss_items_np[start:stop] = loss_items.cpu().numpy()
+            pred[start:stop] = torch.argmax(logits, dim=1).cpu().numpy()
+
         weights_t = torch.from_numpy(weights_np)
-        loss_items = F.cross_entropy(
-            logits,
-            target,
-            weight=class_weights,
-            reduction="none",
-        )
+        loss_items_t = torch.from_numpy(loss_items_np)
         denom = torch.clamp(weights_t.sum(), min=1e-12)
-        loss = ((loss_items * weights_t).sum() / denom).item()
-        pred = torch.argmax(logits, dim=1).cpu().numpy()
-    correct = (pred == y[idx]).astype(np.float32)
+        loss = ((loss_items_t * weights_t).sum() / denom).item()
+
+    correct = (pred == targets_np).astype(np.float32)
     pred_pass = (pred == LABEL_PASS).astype(np.float32)
     return {
         "loss": round(float(loss), 6),
@@ -310,6 +350,7 @@ def _select_epoch_with_inner_validation(
     seed: int,
     patience: int,
     min_delta: float,
+    evaluation_batch_size: int,
 ):
     sample_weights = _build_sample_weights(
         events,
@@ -354,6 +395,7 @@ def _select_epoch_with_inner_validation(
             train_idx,
             sample_weights,
             class_weights,
+            evaluation_batch_size=evaluation_batch_size,
         )
         validation_metrics = _evaluate(
             torch,
@@ -364,6 +406,7 @@ def _select_epoch_with_inner_validation(
             validation_idx,
             sample_weights,
             class_weights,
+            evaluation_batch_size=evaluation_batch_size,
         )
         validation_loss = float(validation_metrics["loss"])
         improved = validation_loss < (
@@ -421,6 +464,7 @@ def _fit_full_selection(
     learning_rate: float,
     seed: int,
     phase_name: str,
+    evaluation_batch_size: int,
 ):
     sample_weights = _build_sample_weights(events, len(y), train_idx)
     model, optimizer, class_weights_np, class_weights = _new_training_state(
@@ -457,6 +501,7 @@ def _fit_full_selection(
             train_idx,
             sample_weights,
             class_weights,
+            evaluation_batch_size=evaluation_batch_size,
         )
         history.append(
             {
@@ -470,16 +515,9 @@ def _fit_full_selection(
             f"loss={batch_loss:.6f} "
             f"train={metrics}"
         )
-    final_metrics = _evaluate(
-        torch,
-        model,
-        X,
-        C,
-        y,
-        train_idx,
-        sample_weights,
-        class_weights,
-    )
+    if not history:
+        raise ValueError("完整 Selection 訓練至少需要 1 個 epoch")
+    final_metrics = dict(history[-1]["selection_metrics"])
     return {
         "model": model,
         "history": history,
@@ -495,6 +533,7 @@ def main(argv=None) -> int:
     started = time.perf_counter()
     max_epochs = int(args.epochs)
     batch_size = int(args.batch_size)
+    evaluation_batch_size = int(args.evaluation_batch_size)
     learning_rate = float(args.lr)
     fixed_threshold = float(args.fixed_threshold)
     use_inner_validation = bool(args.use_inner_validation)
@@ -608,6 +647,7 @@ def main(argv=None) -> int:
             seed=int(args.seed),
             patience=patience,
             min_delta=min_delta,
+            evaluation_batch_size=evaluation_batch_size,
         )
         selected_epoch = int(epoch_selection["best_epoch"])
         training_mode = TRAINING_MODE_INNER_VALIDATION_FULL_REFIT
@@ -631,6 +671,7 @@ def main(argv=None) -> int:
         learning_rate=learning_rate,
         seed=int(args.seed),
         phase_name=phase_name,
+        evaluation_batch_size=evaluation_batch_size,
     )
     model = final_fit["model"]
     final_train_metrics = final_fit["final_metrics"]
@@ -740,6 +781,14 @@ def main(argv=None) -> int:
         "seed": int(args.seed),
         "learning_rate": learning_rate,
         "batch_size": batch_size,
+        "evaluation_batch_size": evaluation_batch_size,
+        "evaluation_execution": {
+            "mode": "chunked_full_split",
+            "uses_all_requested_rows": True,
+            "training_sampling_enabled": False,
+            "training_order_changed": False,
+            "final_metrics_reused_from_last_full_epoch_evaluation": True,
+        },
         "training_history": final_fit["history"],
         "runtime_eligibility": {
             "eligible": False,
@@ -767,6 +816,7 @@ def main(argv=None) -> int:
         f"selected_epoch={selected_epoch} "
         f"inner_validation_used={use_inner_validation} "
         f"fixed_threshold={fixed_threshold:.6f} "
+        f"evaluation_batch_size={evaluation_batch_size} "
         f"final_train_loss={final_train_metrics['loss']}"
     )
     print(f"已輸出: {artifact_paths.model_path}")

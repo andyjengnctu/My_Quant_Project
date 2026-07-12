@@ -260,6 +260,12 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
     )
     parser.add_argument("--epochs", type=int, default=int(defaults.epochs))
     parser.add_argument("--batch-size", type=int, default=int(defaults.batch_size))
+    parser.add_argument(
+        "--evaluation-batch-size",
+        type=int,
+        default=int(defaults.evaluation_batch_size),
+        help="完整 Train／Validation／Selection 評估的推論 batch size；不改模型訓練",
+    )
     parser.add_argument("--lr", type=float, default=float(defaults.lr))
     parser.add_argument("--seed", type=int, default=int(defaults.seed))
     parser.add_argument(
@@ -304,6 +310,8 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         str(int(args.epochs)),
         "--batch-size",
         str(int(args.batch_size)),
+        "--evaluation-batch-size",
+        str(int(args.evaluation_batch_size)),
         "--lr",
         str(float(args.lr)),
         "--seed",
@@ -344,6 +352,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     print(
         "train="
         f"epochs={int(args.epochs)}, batch_size={int(args.batch_size)}, "
+        f"evaluation_batch_size={int(args.evaluation_batch_size)}, "
         f"lr={float(args.lr)}, seed={int(args.seed)}, threshold={float(args.fixed_threshold):.6f}, "
         f"inner_validation={bool(args.use_inner_validation)}"
     )
@@ -450,6 +459,7 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         filter_id=normalize_filter_id(filter_id),
         epochs=int(defaults.epochs),
         batch_size=int(defaults.batch_size),
+        evaluation_batch_size=int(defaults.evaluation_batch_size),
         lr=float(defaults.lr),
         seed=int(defaults.seed),
         fixed_threshold=float(defaults.fixed_threshold),
@@ -471,6 +481,7 @@ def _print_policy_defaults(
     print(
         f"- Epoch 上限：{int(train_settings.epochs)}\n"
         f"- Batch Size：{int(train_settings.batch_size)}\n"
+        f"- Evaluation Batch Size：{int(train_settings.evaluation_batch_size)}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"
         f"- Random Seed：{int(train_settings.seed)}\n"
         f"- Threshold：{float(train_settings.fixed_threshold):g}\n"
