@@ -28,7 +28,7 @@ BREAKOUT_QUALITY_FEATURE_WINDOW_BARS = 300  # 每個事件輸入模型的歷史�
 BREAKOUT_QUALITY_LABEL_HORIZON_BARS = 40  # 自突破訊號隔日起，用來判定 PASS 或 REJECT 的未來交易日數；資料不足或無效者不產生有效 Label。
 BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS = 120  # 快取每個 ticker/date 的未來 K 線路徑長度；調整門檻或不超過此值的 horizon 時只需快速 relabel。
 BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN = 0.05  # PASS 至少要求的最大有利漲幅（MFE）；必須嚴格大於此值。
-BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO = 1.50  # PASS 的最低 MFE／MAE；必須嚴格大於 1，且實際判定也採嚴格大於。
+BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO = 1.5  # PASS 的最低 MFE／MAE；必須嚴格大於 1，且實際判定也採嚴格大於。
 BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN = -0.10  # 最大容許不利跌幅；Low 觸及或跌破此值即保守標記為 REJECT。
 BREAKOUT_QUALITY_BENCHMARK_TICKER = "0050"  # 建立相對市場特徵時使用的基準 ETF 代號。
 
