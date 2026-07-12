@@ -176,6 +176,60 @@ def validate_dataset_cli_contract_case(_base_params):
         "--include-oos" in workflow_calls[-1][1],
     )
 
+    train_module = importlib.import_module("tools.filters.breakout_quality.train")
+    epoch_line = train_module._render_epoch_selection_progress(
+        epoch=2,
+        max_epochs=20,
+        validation_loss=0.69397,
+        improved=True,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_train_epoch_output_is_concise",
+        "  Epoch  2/20 | Val Loss 0.693970 | ★ 新最佳",
+        epoch_line,
+    )
+    compact_summary = train_module._render_training_summary(
+        split_report={
+            "selection_train_row_count": 538887,
+            "selection_train_group_count": 16832,
+            "selection_train_date_range": {"start": "2011-01-03", "end": "2018-11-05"},
+            "inner_validation_row_count": 187316,
+            "inner_validation_group_count": 6065,
+            "inner_validation_date_range": {"start": "2019-01-02", "end": "2020-11-05"},
+            "final_refit_row_count": 729654,
+            "final_refit_group_count": 23072,
+            "final_refit_date_range": {"start": "2011-01-03", "end": "2020-11-05"},
+            "oos_evaluable_row_count": 591679,
+            "oos_group_count": 17346,
+            "oos_date_range": {"start": "2021-01-04", "end": "2025-12-22"},
+        },
+        use_inner_validation=True,
+        final_train_loss=0.674436,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_train_summary_keeps_key_counts",
+        True,
+        (
+            "Final Refit：729,654 rows / 23,072 groups" in compact_summary
+            and "OOS（未參與訓練）：591,679 rows / 17,346 groups" in compact_summary
+            and "Final Loss：0.674436" in compact_summary
+        ),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_train_summary_omits_raw_dict",
+        False,
+        "split_report=" in compact_summary or "{'" in compact_summary,
+    )
+
     policy_filter_id = app_breakout_quality._policy_filter_id()
     add_check(
         results,

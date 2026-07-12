@@ -72,7 +72,7 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 - `workflow` 會自動分成三種處理：工件、profile、ticker coverage、feature/high_len/benchmark/path-cache、欄位契約或來源 CSV inventory 改變時完整重建；只有 label horizon/PASS/REJECT 改變且 horizon 未超過 future path cache 時執行快速 relabel；全部一致時跳過。 完整重建採用 `ticker/date` feature bank 去重、逐檔 CSV 讀取與 per-ticker chunk 合併，正式陣列可 mmap 載入。互動選單只有在判定不需更新時，才詢問「是否強制完整重建 dataset」，預設 N；選 Y 等同 `--rebuild-dataset`。單獨執行 `train` 時若偵測到來源已更新，會 fail-fast 並要求先重建，避免靜默使用過期 dataset。
 - 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`；報表只包含 Selection 內診斷，並明確標示不能作為正式泛化結論。
 - 選單只是正式 UI orchestration；dataset、split、training、export 與 evaluation 規則仍只實作在既有子系統，不在 app 複製。
-- `epochs`、training batch size、evaluation batch size、`learning rate`、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；互動選單直接採用 policy，不再逐項詢問，CLI 可單次覆蓋且不回寫 policy。`evaluation batch size` 只控制完整 Train／Validation／Selection 的分批推論記憶體，不抽樣、不改訓練 rows、shuffle 或模型更新；Final refit 最後一輪已完成的完整指標會直接沿用，避免完全重複推論。
+- `epochs`、training batch size、evaluation batch size、`learning rate`、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；互動選單直接採用 policy，不再逐項詢問，CLI 可單次覆蓋且不回寫 policy。`evaluation batch size` 只控制完整 Train／Validation／Selection 的分批推論記憶體，不抽樣、不改訓練 rows、shuffle 或模型更新；Final refit 最後一輪已完成的完整指標會直接沿用，避免完全重複推論。 `train` 終端輸出只顯示 epoch 選擇所需的 Validation Loss、新最佳標記、Final Refit Loss、關鍵資料區段與工件路徑；完整 history、split policy、overlap 與 counts 仍保留於 `manifest.json`，不再將整包 Python dict 印到終端。
 
 也可逐步執行：
 

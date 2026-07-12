@@ -8,8 +8,8 @@ BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定�
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
 BREAKOUT_QUALITY_DEFAULT_EPOCHS = 20  # 關閉 inner validation 時為固定訓練輪數；開啟時為 epoch 搜尋上限。
-BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 512  # 每次梯度更新使用的訓練 rows 數。
-BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.0005  # Adam optimizer 的預設 learning rate。
+BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 128  # 每次梯度更新使用的訓練 rows 數。
+BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.001  # Adam optimizer 的預設 learning rate。
 BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED = 42  # 模型初始化、Dropout 與每個 epoch 資料洗牌的預設亂數種子。
 BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE = 4096  # Train／Validation／Selection 完整評估的分批大小；只降低推論記憶體，不抽樣、不改訓練資料或模型更新。
 BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES = 20  # 開始訓練前要求的最少有效 train rows。

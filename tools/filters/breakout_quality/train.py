@@ -165,6 +165,105 @@ def validate_training_args(args) -> None:
         raise ValueError("fixed-threshold 必須介於 0 與 1")
 
 
+def _format_count(value: int) -> str:
+    return f"{int(value):,}"
+
+
+def _format_date_range(value: object) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    start = str(value.get("start") or "-")
+    end = str(value.get("end") or "-")
+    return f"{start} ~ {end}"
+
+
+def _render_epoch_selection_progress(
+    *,
+    epoch: int,
+    max_epochs: int,
+    validation_loss: float,
+    improved: bool,
+) -> str:
+    best_marker = " | ★ 新最佳" if improved else ""
+    return (
+        f"  Epoch {int(epoch):>2}/{int(max_epochs)} | "
+        f"Val Loss {float(validation_loss):.6f}{best_marker}"
+    )
+
+
+def _render_epoch_selection_result(
+    *,
+    completed_epochs: int,
+    max_epochs: int,
+    best_epoch: int,
+    best_validation_loss: float,
+) -> str:
+    if int(completed_epochs) < int(max_epochs):
+        completion = f"Early stopping 於 Epoch {int(completed_epochs)}"
+    else:
+        completion = f"完成 {int(completed_epochs)} Epoch"
+    return (
+        f"  結果：{completion} | Best Epoch {int(best_epoch)} | "
+        f"最低 Val Loss {float(best_validation_loss):.6f}"
+    )
+
+
+def _render_full_selection_progress(
+    *,
+    epoch: int,
+    epochs: int,
+    loss: float,
+) -> str:
+    return (
+        f"  Epoch {int(epoch):>2}/{int(epochs)} | "
+        f"Loss {float(loss):.6f}"
+    )
+
+
+def _render_training_summary(
+    *,
+    split_report: dict,
+    use_inner_validation: bool,
+    final_train_loss: float,
+) -> str:
+    lines = ["訓練摘要"]
+    if use_inner_validation:
+        lines.extend(
+            [
+                (
+                    "  - Inner Train："
+                    f"{_format_count(split_report['selection_train_row_count'])} rows / "
+                    f"{_format_count(split_report['selection_train_group_count'])} groups；"
+                    f"{_format_date_range(split_report.get('selection_train_date_range'))}"
+                ),
+                (
+                    "  - Validation："
+                    f"{_format_count(split_report['inner_validation_row_count'])} rows / "
+                    f"{_format_count(split_report['inner_validation_group_count'])} groups；"
+                    f"{_format_date_range(split_report.get('inner_validation_date_range'))}"
+                ),
+            ]
+        )
+    lines.extend(
+        [
+            (
+                f"  - {'Final Refit' if use_inner_validation else 'Selection'}："
+                f"{_format_count(split_report['final_refit_row_count'])} rows / "
+                f"{_format_count(split_report['final_refit_group_count'])} groups；"
+                f"{_format_date_range(split_report.get('final_refit_date_range'))}"
+            ),
+            (
+                "  - OOS（未參與訓練）："
+                f"{_format_count(split_report['oos_evaluable_row_count'])} rows / "
+                f"{_format_count(split_report['oos_group_count'])} groups；"
+                f"{_format_date_range(split_report.get('oos_date_range'))}"
+            ),
+            f"  - Final Loss：{float(final_train_loss):.6f}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _class_weights(y_train: np.ndarray, sample_weights: np.ndarray):
     y_arr = y_train.astype(np.int64)
     w_arr = sample_weights.astype(np.float64)
@@ -372,6 +471,7 @@ def _select_epoch_with_inner_validation(
     best_validation_metrics = None
     epochs_without_improvement = 0
     history = []
+    print("\nEpoch 選擇（依 Validation Loss）")
     for epoch in range(1, int(max_epochs) + 1):
         batch_loss = _train_one_epoch(
             torch,
@@ -429,16 +529,25 @@ def _select_epoch_with_inner_validation(
             }
         )
         print(
-            f"model_selection_epoch={epoch}/{max_epochs} "
-            f"loss={batch_loss:.6f} "
-            f"train={train_metrics} "
-            f"validation={validation_metrics} "
-            f"best_epoch={best_epoch}"
+            _render_epoch_selection_progress(
+                epoch=epoch,
+                max_epochs=max_epochs,
+                validation_loss=validation_loss,
+                improved=improved,
+            )
         )
         if int(patience) > 0 and epochs_without_improvement >= int(patience):
             break
     if best_epoch < 1 or best_validation_metrics is None:
         raise ValueError("inner validation 無法選出合法 best_epoch")
+    print(
+        _render_epoch_selection_result(
+            completed_epochs=len(history),
+            max_epochs=max_epochs,
+            best_epoch=best_epoch,
+            best_validation_loss=best_validation_loss,
+        )
+    )
     return {
         "best_epoch": int(best_epoch),
         "best_validation_loss": round(float(best_validation_loss), 6),
@@ -478,6 +587,12 @@ def _fit_full_selection(
         seed=seed,
     )
     history = []
+    phase_title = (
+        "完整 Selection 重訓"
+        if phase_name == "full_refit"
+        else "完整 Selection 訓練"
+    )
+    print(f"\n{phase_title}（{int(epochs)} Epoch）")
     for epoch in range(1, int(epochs) + 1):
         batch_loss = _train_one_epoch(
             torch,
@@ -511,9 +626,11 @@ def _fit_full_selection(
             }
         )
         print(
-            f"{phase_name}_epoch={epoch}/{epochs} "
-            f"loss={batch_loss:.6f} "
-            f"train={metrics}"
+            _render_full_selection_progress(
+                epoch=epoch,
+                epochs=epochs,
+                loss=metrics["loss"],
+            )
         )
     if not history:
         raise ValueError("完整 Selection 訓練至少需要 1 個 epoch")
@@ -809,19 +926,18 @@ def main(argv=None) -> int:
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
     write_json(artifact_paths.manifest_path, manifest)
-    print(f"split_report={split_report}")
+    print()
     print(
-        f"training_mode={training_mode} "
-        f"max_epochs={max_epochs} "
-        f"selected_epoch={selected_epoch} "
-        f"inner_validation_used={use_inner_validation} "
-        f"fixed_threshold={fixed_threshold:.6f} "
-        f"evaluation_batch_size={evaluation_batch_size} "
-        f"final_train_loss={final_train_metrics['loss']}"
+        _render_training_summary(
+            split_report=split_report,
+            use_inner_validation=use_inner_validation,
+            final_train_loss=final_train_metrics["loss"],
+        )
     )
-    print(f"已輸出: {artifact_paths.model_path}")
-    print(f"已輸出: {artifact_paths.split_path}")
-    print(f"已輸出: {artifact_paths.manifest_path}")
+    print("\n輸出工件")
+    print(f"  - Model：{artifact_paths.model_path}")
+    print(f"  - Split：{artifact_paths.split_path}")
+    print(f"  - Manifest：{artifact_paths.manifest_path}")
     return 0
 
 
