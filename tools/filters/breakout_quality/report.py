@@ -400,12 +400,21 @@ def _training_summary(manifest: dict) -> dict:
             }
         )
 
+    model_spec = manifest.get("model_spec")
+    if not isinstance(model_spec, dict):
+        model_spec = {}
     return {
+        "model_architecture": manifest.get("model_architecture"),
+        "model_spec": model_spec,
+        "trainable_parameter_count": manifest.get("trainable_parameter_count"),
+        "sequence_length": manifest.get("sequence_length"),
         "training_mode": manifest.get("training_mode"),
         "inner_validation_used": bool(manifest.get("inner_validation_used", False)),
         "max_epochs": manifest.get("max_epochs"),
         "selected_epoch": manifest.get("selected_epoch"),
-        "completed_epoch_search": epoch_selection.get("completed_epochs"),
+        "completed_epoch_search": epoch_selection.get(
+            "completed_epochs", manifest.get("completed_epochs")
+        ),
         "best_validation_loss": epoch_selection.get("best_validation_loss"),
         "best_validation_accuracy": best_metrics.get("accuracy"),
         "best_validation_pass_rate": best_metrics.get("pass_rate"),
@@ -1086,6 +1095,10 @@ def render_markdown_report(payload: dict) -> str:
         )
     lines.extend(
         [
+            f"- **Model Architecture**：`{training.get('model_architecture')}`",
+            f"- **Trainable Parameters**：`{int(training.get('trainable_parameter_count') or 0):,}`",
+            f"- **Receptive Field**：`{(training.get('model_spec') or {}).get('receptive_field_bars')} bars`",
+            f"- **Pooling**：`{'+'.join((training.get('model_spec') or {}).get('pooling') or [])}`",
             f"- **Threshold**：`{training.get('fixed_threshold')}`",
             f"- **Learning Rate**：`{training.get('learning_rate')}`",
             f"- **Batch Size**：`{training.get('batch_size')}`",
@@ -1103,6 +1116,11 @@ def render_markdown_report(payload: dict) -> str:
                 f"{_markdown_color('Epoch ' + str(selected_epoch), 'blue')}；"
                 "丟棄暫時模型後，再使用完整 eligible Selection 正式重訓 "
                 f"**{selected_epoch} Epochs**。"
+                if training.get("inner_validation_used")
+                else (
+                    "- 最終模型：未使用 Inner Validation；使用完整 eligible Selection "
+                    f"固定訓練 **{selected_epoch} Epochs**。"
+                )
             ),
             "",
             *_markdown_epoch_table(training),
@@ -1177,6 +1195,11 @@ def _console_epoch_section(training: dict, *, color: bool = False) -> list[str]:
                 f"{_paint('Epoch ' + str(selected_epoch), 'blue', enabled=color, bold=True)}；"
                 "丟棄暫時模型後，再使用完整 eligible Selection 正式重訓 "
                 f"{selected_epoch} Epochs。"
+                if training.get("inner_validation_used")
+                else (
+                    "- 最終模型：未使用 Inner Validation；使用完整 eligible Selection "
+                    f"固定訓練 {selected_epoch} Epochs。"
+                )
             ),
         ]
     )
@@ -1461,6 +1484,10 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
         )
     lines.extend(
         [
+            f"Model           : {training.get('model_architecture')}",
+            f"Parameters      : {int(training.get('trainable_parameter_count') or 0):,}",
+            f"Receptive Field : {(training.get('model_spec') or {}).get('receptive_field_bars')} bars",
+            f"Pooling         : {'+'.join((training.get('model_spec') or {}).get('pooling') or [])}",
             f"Threshold       : {training.get('fixed_threshold')}",
             f"Learning Rate   : {training.get('learning_rate')}",
             f"Batch Size      : {training.get('batch_size')}",

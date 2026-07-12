@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN, build_breakout_optimizer_high_len_values
 
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "residual_tcn_v1"  # 模型架構；可設為 tiny_cnn_v1 或 residual_tcn_v1，切換時沿用 Dataset 但須重新訓練。
 BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
@@ -70,6 +71,7 @@ __all__ = [
     "BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO",
     "BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES",
     "BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES",
+    "BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
     "BREAKOUT_QUALITY_USE_INNER_VALIDATION",
     "build_breakout_quality_default_high_len_values",
 ]

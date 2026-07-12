@@ -41,7 +41,9 @@ from filters.breakout_quality.inference import (
     strict_parallel_batched_logits,
 )
 from filters.breakout_quality.model import build_model, require_torch
+from filters.breakout_quality.models.spec import model_spec_from_manifest
 from filters.breakout_quality.paths import (
+    ensure_filter_model_output_dir,
     ensure_filter_output_dir,
     resolve_filter_research_manifest_path,
     resolve_filter_research_score_path,
@@ -165,14 +167,35 @@ def main(argv=None) -> int:
             )
 
     checkpoint = torch.load(artifact_paths.model_path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise ValueError("breakout quality model checkpoint 根節點必須是 object")
     feature_count = int(checkpoint["feature_count"])
     context_count = int(checkpoint["context_count"])
-    if feature_count != features.shape[2] or context_count != context.shape[1]:
+    sequence_length = int(checkpoint.get("sequence_length", -1))
+    if (
+        feature_count != features.shape[2]
+        or context_count != context.shape[1]
+        or sequence_length != features.shape[1]
+    ):
         raise ValueError(
-            f"model checkpoint 與 dataset 維度不一致: model=({feature_count}, {context_count}), "
-            f"dataset=({features.shape[2]}, {context.shape[1]})"
+            "model checkpoint 與 dataset 維度不一致: "
+            f"model=({sequence_length}, {feature_count}, {context_count}), "
+            f"dataset=({features.shape[1]}, {features.shape[2]}, {context.shape[1]})"
         )
-    model = build_model(feature_count, context_count)
+    checkpoint_spec_payload = checkpoint.get("model_spec")
+    if not isinstance(checkpoint_spec_payload, dict):
+        raise ValueError("model checkpoint 缺少 model_spec")
+    checkpoint_spec = model_spec_from_manifest(checkpoint_spec_payload)
+    manifest_spec_payload = manifest.get("model_spec")
+    if checkpoint_spec_payload != manifest_spec_payload:
+        raise ValueError("model checkpoint.model_spec 與 manifest.model_spec 不一致")
+    if checkpoint_spec.architecture != artifact_paths.model_architecture:
+        raise ValueError("model checkpoint architecture 與工件路徑不一致")
+    model = build_model(
+        feature_count,
+        context_count,
+        model_spec=checkpoint_spec_payload,
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     logits_np = strict_parallel_batched_logits(
@@ -252,11 +275,14 @@ def main(argv=None) -> int:
 
     if args.scope == RUNTIME_SCOPE_RESEARCH:
         ensure_filter_output_dir(PROJECT_ROOT, filter_id=args.filter_id)
+        ensure_filter_model_output_dir(PROJECT_ROOT, args.filter_id)
         score_path = resolve_filter_research_score_path(PROJECT_ROOT, args.filter_id)
         research_manifest_path = resolve_filter_research_manifest_path(PROJECT_ROOT, args.filter_id)
         scored[out_cols].to_csv(score_path, index=False, encoding="utf-8-sig")
         research_manifest = {
             "filter_id": str(args.filter_id),
+            "model_architecture": checkpoint_spec.architecture,
+            "model_spec": checkpoint_spec.as_manifest_payload(),
             "scope": RUNTIME_SCOPE_RESEARCH,
             "model_information_cutoff": information_cutoff,
             "runtime_eligible": False,

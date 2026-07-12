@@ -86,7 +86,7 @@ def parse_args(argv=None):
         default=None,
         help=(
             "研究 score table；省略時讀 "
-            "outputs/filters/breakout_quality/<filter_id>/research_scores.csv；"
+            "outputs/filters/breakout_quality/<filter_id>/<model_architecture>/research_scores.csv；"
             "自訂路徑需在同目錄提供 research_scores_manifest.json"
         ),
     )
@@ -182,6 +182,7 @@ def _validate_research_contract(
     score_frame: pd.DataFrame,
     filter_id: str,
     split_record: dict,
+    model_manifest: dict,
 ) -> dict:
     manifest_path = _research_manifest_path(score_path, filter_id)
     if not manifest_path.is_file():
@@ -191,6 +192,10 @@ def _validate_research_contract(
         raise ValueError("research score manifest.filter_id 與命令不一致")
     if str(manifest.get("scope") or "").strip() != RUNTIME_SCOPE_RESEARCH:
         raise ValueError("evaluate 只能使用 scope=research 的 score manifest")
+    if manifest.get("model_architecture") != model_manifest.get("model_architecture"):
+        raise ValueError("research score manifest 與 model architecture 不一致")
+    if manifest.get("model_spec") != model_manifest.get("model_spec"):
+        raise ValueError("research score manifest 與 model_spec 不一致")
     source_split = manifest.get("source_split_assignments")
     if (
         not isinstance(source_split, dict)
@@ -319,6 +324,7 @@ def prepare_evaluation_context(
         score_frame=score_frame,
         filter_id=str(filter_id),
         split_record=split_record,
+        model_manifest=model_contract.manifest,
     )
     outer_policy = model_contract.manifest.get("outer_oos_policy")
     if not isinstance(outer_policy, dict):

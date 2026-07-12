@@ -1,4 +1,4 @@
-"""Train the breakout-quality Tiny CNN with optional inner validation."""
+"""Train the configured breakout-quality temporal CNN with optional inner validation."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
+    BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
 )
 from core.display_common import render_elapsed
@@ -67,7 +68,12 @@ from filters.breakout_quality.inference import (
     materialize_indexed_feature_inputs,
     strict_parallel_batched_logits,
 )
-from filters.breakout_quality.model import build_model, require_torch
+from filters.breakout_quality.model import (
+    build_model,
+    count_trainable_parameters,
+    get_model_spec,
+    require_torch,
+)
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
     resolve_filter_research_manifest_path,
@@ -90,7 +96,7 @@ from tools.filters.breakout_quality.common import (
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "訓練 breakout quality Tiny CNN；可選擇完整 Selection 固定 epochs，"
+            "訓練 config 指定的 breakout quality 時序 CNN；可選擇完整 Selection 固定 epochs，"
             "或使用 inner validation 選 epoch 後以完整 Selection 重訓"
         )
     )
@@ -1061,11 +1067,17 @@ def main(argv=None) -> int:
     ):
         stale_path.unlink(missing_ok=True)
 
+    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    trainable_parameter_count = count_trainable_parameters(model)
     torch.save(
         {
+            "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
             "model_state_dict": model.state_dict(),
             "feature_count": int(X.shape[2]),
             "context_count": int(C.shape[1]),
+            "sequence_length": int(X.shape[1]),
+            "model_spec": model_spec.as_manifest_payload(),
+            "trainable_parameter_count": int(trainable_parameter_count),
         },
         artifact_paths.model_path,
     )
@@ -1104,6 +1116,10 @@ def main(argv=None) -> int:
         "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
         "filter_family": FILTER_FAMILY,
         "filter_id": args.filter_id,
+        "model_architecture": model_spec.architecture,
+        "model_spec": model_spec.as_manifest_payload(),
+        "trainable_parameter_count": int(trainable_parameter_count),
+        "sequence_length": int(X.shape[1]),
         "model_filename": DEFAULT_MODEL_FILENAME,
         "manifest_filename": DEFAULT_MANIFEST_FILENAME,
         "score_filename": DEFAULT_SCORE_FILENAME,

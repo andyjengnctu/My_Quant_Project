@@ -38,6 +38,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
+    BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     build_breakout_quality_default_high_len_values,
 )
@@ -51,6 +52,7 @@ from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
     DEFAULT_LABEL_POLICY,
+    DEFAULT_MODEL_ARCHITECTURE,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
     LABEL_INVALID,
@@ -79,8 +81,14 @@ from filters.breakout_quality.contract import (
     SPLIT_ASSIGNMENT_SCHEMA_VERSION,
     TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
+from filters.breakout_quality.models import (
+    build_model as build_breakout_quality_model,
+    count_trainable_parameters,
+    get_model_spec,
+)
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
+    resolve_filter_output_dir,
     resolve_filter_research_score_path,
     resolve_filter_report_json_path,
     resolve_filter_report_markdown_path,
@@ -163,6 +171,56 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "fixed_threshold_is_user_configured_and_legal",
         True,
         0.0 <= float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD) <= 1.0,
+    )
+    configured_model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "model_architecture_is_versioned_and_user_configured",
+        DEFAULT_MODEL_ARCHITECTURE,
+        configured_model_spec.architecture,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "dataset_policy_does_not_include_model_architecture",
+        False,
+        "model_architecture" in DEFAULT_LABEL_POLICY.as_manifest_payload(),
+    )
+    tiny_model = build_breakout_quality_model(10, 4, architecture="tiny_cnn_v1")
+    residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "residual_tcn_has_larger_receptive_field_and_parameter_count",
+        True,
+        get_model_spec("residual_tcn_v1").receptive_field_bars
+        > get_model_spec("tiny_cnn_v1").receptive_field_bars
+        and count_trainable_parameters(residual_model) > count_trainable_parameters(tiny_model),
+    )
+    tiny_paths = resolve_filter_artifact_paths("/project", "synthetic_quality", "tiny_cnn_v1")
+    residual_paths = resolve_filter_artifact_paths("/project", "synthetic_quality", "residual_tcn_v1")
+    tiny_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "tiny_cnn_v1"
+    )
+    residual_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "residual_tcn_v1"
+    )
+    shared_dataset_dir = resolve_filter_output_dir("/project", "synthetic_quality")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "model_artifacts_are_architecture_scoped_but_dataset_is_shared",
+        True,
+        tiny_paths.model_path != residual_paths.model_path
+        and tiny_research != residual_research
+        and tiny_paths.model_dir.name == "tiny_cnn_v1"
+        and residual_paths.model_dir.name == "residual_tcn_v1"
+        and shared_dataset_dir.name == "synthetic_quality",
     )
     add_check(
         results,
@@ -485,7 +543,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
 
     torch.manual_seed(20260712)
-    actual_evaluation_model = breakout_quality_train.build_model(2, 2)
+    actual_evaluation_model = breakout_quality_train.build_model(2, 2, architecture="tiny_cnn_v1")
     state_before_evaluation = {
         key: value.detach().clone()
         for key, value in actual_evaluation_model.state_dict().items()
@@ -1082,6 +1140,10 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         "filter_id": "synthetic_quality",
         "score_path": Path("research_scores.csv"),
         "model_manifest": {
+            "model_architecture": DEFAULT_MODEL_ARCHITECTURE,
+            "model_spec": get_model_spec(DEFAULT_MODEL_ARCHITECTURE).as_manifest_payload(),
+            "trainable_parameter_count": 45026,
+            "sequence_length": int(DEFAULT_LABEL_POLICY.feature_window_bars),
             "training_mode": "inner_validation_epoch_selection_full_refit",
             "inner_validation_used": True,
             "max_epochs": 20,
@@ -1449,12 +1511,13 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         "filters",
         "breakout_quality",
         "synthetic_quality",
+        DEFAULT_MODEL_ARCHITECTURE,
         "reports",
     )
     report_paths_are_under_filter_reports = (
-        tuple(report_markdown_path.parts[-6:])
+        tuple(report_markdown_path.parts[-7:])
         == (*expected_report_dir_suffix, "evaluation_report.md")
-        and tuple(report_json_path.parts[-6:])
+        and tuple(report_json_path.parts[-7:])
         == (*expected_report_dir_suffix, "evaluation_metrics.json")
     )
     add_check(
@@ -1580,6 +1643,10 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
                 "filter_family": FILTER_FAMILY,
                 "filter_id": filter_id,
+                "model_architecture": paths.model_architecture,
+                "model_spec": get_model_spec(paths.model_architecture).as_manifest_payload(),
+                "trainable_parameter_count": 1,
+                "sequence_length": int(DEFAULT_LABEL_POLICY.feature_window_bars),
                 "model": build_file_manifest(paths.model_path),
                 "split_assignments": split_record,
                 "outer_oos_policy": outer_policy,
@@ -1704,6 +1771,42 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
                 validation_contract.manifest["training_mode"],
             )
+
+            stale_architecture_manifest = dict(manifest)
+            stale_architecture = (
+                "tiny_cnn_v1"
+                if paths.model_architecture != "tiny_cnn_v1"
+                else "residual_tcn_v1"
+            )
+            stale_architecture_manifest["model_architecture"] = stale_architecture
+            stale_architecture_manifest["model_spec"] = get_model_spec(
+                stale_architecture
+            ).as_manifest_payload()
+            paths.manifest_path.write_text(
+                json.dumps(stale_architecture_manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            try:
+                load_model_artifact_contract(str(project_root), filter_id)
+                stale_architecture_rejected = False
+            except ValueError as exc:
+                stale_architecture_rejected = (
+                    "model_architecture" in str(exc) and "工件路徑" in str(exc)
+                )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "stale_model_architecture_is_rejected",
+                True,
+                stale_architecture_rejected,
+            )
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
 
             stale_policy_manifest = dict(manifest)
             stale_policy_manifest["policy"] = {

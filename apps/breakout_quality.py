@@ -13,7 +13,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.breakout_quality_policy import BREAKOUT_QUALITY_DEFAULT_FILTER_ID
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+)
 from core.display_common import render_elapsed
 from core.runtime_utils import (
     is_interactive_console,
@@ -21,6 +24,7 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
+from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
     DATASET_STORAGE_SCHEMA_VERSION,
@@ -391,6 +395,12 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     print("\n=== Breakout Quality Research Workflow ===")
     print(f"filter_id={filter_id}")
     print(f"dataset={args.dataset}")
+    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    print(
+        "model="
+        f"{model_spec.architecture}, receptive_field={model_spec.receptive_field_bars} bars, "
+        f"pooling={'+'.join(model_spec.pooling)}"
+    )
     print(
         "train="
         f"epochs={int(args.epochs)}, batch_size={int(args.batch_size)}, "
@@ -544,7 +554,11 @@ def _print_policy_defaults(
     if train_settings is None:
         return
     print("使用 config/breakout_quality_policy.py 訓練預設：")
+    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     print(
+        f"- Model Architecture：{model_spec.architecture}\n"
+        f"- Receptive Field：約 {model_spec.receptive_field_bars} bars\n"
+        f"- Pooling：{'+'.join(model_spec.pooling)}\n"
         f"- Epoch 上限：{int(train_settings.epochs)}\n"
         f"- Batch Size：{int(train_settings.batch_size)}\n"
         f"- Evaluation Batch Size：{int(train_settings.evaluation_batch_size)}\n"
@@ -580,7 +594,10 @@ def _print_artifact_status(filter_id: str) -> None:
         "report_metrics": resolve_filter_report_json_path(PROJECT_ROOT, filter_id),
         "runtime_scores": model_paths.score_path,
     }
-    print(f"\n=== Artifact Status: {filter_id} ===")
+    print(
+        f"\n=== Artifact Status: {filter_id} / "
+        f"{model_paths.model_architecture} ==="
+    )
     for name, path in status_paths.items():
         status = "存在" if path.is_file() else "缺少"
         print(f"[{status}] {name:<18} {path}")

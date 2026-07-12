@@ -36,6 +36,7 @@ from filters.breakout_quality.contract import (
     TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
+from filters.breakout_quality.models.spec import model_spec_from_manifest
 from filters.breakout_quality.paths import BreakoutQualityArtifactPaths, resolve_filter_artifact_paths
 from filters.breakout_quality.splits import (
     compute_outer_policy_fingerprint,
@@ -241,12 +242,25 @@ def load_model_artifact_contract(
         raise ValueError("breakout quality manifest feature_columns 與 runtime 契約不一致")
     if list(manifest.get("context_columns", [])) != list(CONTEXT_COLUMNS):
         raise ValueError("breakout quality manifest context_columns 與 runtime 契約不一致")
+    manifest_architecture = _require_nonempty_text(manifest, "model_architecture")
+    if manifest_architecture != paths.model_architecture:
+        raise ValueError(
+            "breakout quality manifest model_architecture 與工件路徑不一致: "
+            f"manifest={manifest_architecture}, path={paths.model_architecture}"
+        )
+    model_spec = model_spec_from_manifest(_require_mapping(manifest, "model_spec"))
+    if model_spec.architecture != manifest_architecture:
+        raise ValueError("breakout quality model_spec.architecture 與 manifest 不一致")
+    if int(manifest.get("trainable_parameter_count", 0)) < 1:
+        raise ValueError("breakout quality trainable_parameter_count 必須 >=1")
     model_policy = _require_mapping(manifest, "policy")
     if dict(model_policy) != DEFAULT_LABEL_POLICY.as_manifest_payload():
         raise ValueError(
             "breakout quality model policy 與目前 config/breakout_quality_policy.py 不一致；"
             "請重新執行 workflow 以 relabel 並重訓模型"
         )
+    if int(manifest.get("sequence_length", -1)) != int(DEFAULT_LABEL_POLICY.feature_window_bars):
+        raise ValueError("breakout quality manifest sequence_length 與 feature window 不一致")
 
     score_decision = _require_mapping(manifest, "score_decision")
     if _require_nonempty_text(score_decision, "score_column") != SCORE_COLUMN:
