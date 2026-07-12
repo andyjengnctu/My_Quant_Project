@@ -10,9 +10,16 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import argparse
+import warnings
 
 import numpy as np
 import pandas as pd
+
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
+    BREAKOUT_QUALITY_EVALUATION_WORKERS,
+    BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
+)
 
 from filters.breakout_quality.artifacts import (
     build_file_manifest,
@@ -28,6 +35,10 @@ from filters.breakout_quality.contract import (
     SCORE_TABLE_SCHEMA_VERSION,
     RUNTIME_SCOPE_FORWARD_OOS,
     RUNTIME_SCOPE_RESEARCH,
+)
+from filters.breakout_quality.inference import (
+    materialize_indexed_feature_inputs,
+    strict_parallel_batched_logits,
 )
 from filters.breakout_quality.model import build_model, require_torch
 from filters.breakout_quality.paths import (
@@ -49,6 +60,24 @@ def parse_args(argv=None):
             "research 寫入 outputs/，不變更正式工件；"
             "forward_oos 才會把模型資訊截止日之後的事件寫入 canonical scores.csv"
         ),
+    )
+    parser.add_argument(
+        "--inference-batch-size",
+        type=int,
+        default=BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
+        help="分數匯出的固定推論 batch size；不改列序或 score 定義",
+    )
+    parser.add_argument(
+        "--inference-workers",
+        type=int,
+        default=BREAKOUT_QUALITY_EVALUATION_WORKERS,
+        help="分數匯出的平行 read-only inference workers",
+    )
+    parser.add_argument(
+        "--preload-feature-bank",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
+        help="匯出前是否將 feature bank 與 context 載入 RAM",
     )
     return parser.parse_args(argv)
 
@@ -86,7 +115,25 @@ def _build_score_record(
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    inference_batch_size = int(args.inference_batch_size)
+    inference_workers = int(args.inference_workers)
+    preload_feature_bank = bool(args.preload_feature_bank)
+    if inference_batch_size < 1 or inference_workers < 1:
+        raise ValueError("inference-batch-size 與 inference-workers 必須 >=1")
     torch, _nn = require_torch()
+    if int(torch.get_num_threads()) != 1:
+        torch.set_num_threads(1)
+    if int(torch.get_num_interop_threads()) != 1:
+        try:
+            torch.set_num_interop_threads(1)
+        except RuntimeError as exc:
+            if "cannot set number of interop threads" not in str(exc):
+                raise
+            warnings.warn(
+                f"torch.set_num_interop_threads(1) skipped: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     model_contract = load_model_artifact_contract(str(PROJECT_ROOT), str(args.filter_id))
     artifact_paths = model_contract.paths
     manifest = model_contract.manifest
@@ -97,6 +144,11 @@ def main(argv=None) -> int:
     dataset_summary, features, context, _labels, events = load_validated_dataset_bundle(
         args.filter_id,
         expected_policy=model_policy,
+    )
+    features, context = materialize_indexed_feature_inputs(
+        features,
+        context,
+        enabled=preload_feature_bank,
     )
     if args.scope == RUNTIME_SCOPE_RESEARCH:
         split_record = manifest.get("split_assignments")
@@ -123,15 +175,20 @@ def main(argv=None) -> int:
     model = build_model(feature_count, context_count)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
+    logits_np = strict_parallel_batched_logits(
+        torch,
+        model,
+        features,
+        context,
+        indices=None,
+        batch_size=inference_batch_size,
+        workers=inference_workers,
+    )
     pass_probabilities = np.empty((len(events),), dtype=np.float32)
-    inference_batch_size = 4096
     with torch.no_grad():
         for start in range(0, len(events), inference_batch_size):
             stop = min(start + inference_batch_size, len(events))
-            logits = model(
-                torch.from_numpy(features[start:stop]),
-                torch.from_numpy(np.array(context[start:stop], dtype=np.float32, copy=True)),
-            )
+            logits = torch.from_numpy(logits_np[start:stop])
             pass_probabilities[start:stop] = (
                 torch.softmax(logits, dim=1)[:, LABEL_PASS].cpu().numpy()
             )
@@ -210,6 +267,14 @@ def main(argv=None) -> int:
                 event_range=event_range,
                 dataset_summary=dataset_summary,
             ),
+            "inference_execution": {
+                "mode": "strict_parallel_fixed_batches",
+                "batch_size": inference_batch_size,
+                "workers": inference_workers,
+                "feature_bank_preloaded": preload_feature_bank,
+                "batch_boundaries_changed": False,
+                "output_row_order_changed": False,
+            },
             "reason": (
                 "research rows include outer Selection and OOS; epochs and threshold must be fixed before OOS, "
                 "and research output must never replace canonical runtime scores.csv"
@@ -236,6 +301,14 @@ def main(argv=None) -> int:
         event_range=event_range,
         dataset_summary=dataset_summary,
     )
+    manifest["score_inference_execution"] = {
+        "mode": "strict_parallel_fixed_batches",
+        "batch_size": inference_batch_size,
+        "workers": inference_workers,
+        "feature_bank_preloaded": preload_feature_bank,
+        "batch_boundaries_changed": False,
+        "output_row_order_changed": False,
+    }
     manifest["runtime_eligibility"] = {
         "eligible": True,
         "scope": RUNTIME_SCOPE_FORWARD_OOS,

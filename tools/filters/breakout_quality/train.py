@@ -30,6 +30,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_EVALUATION_WORKERS,
+    BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
     BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
@@ -61,6 +62,10 @@ from filters.breakout_quality.contract import (
     TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
+from filters.breakout_quality.inference import (
+    materialize_indexed_feature_inputs,
+    strict_parallel_batched_logits,
+)
 from filters.breakout_quality.model import build_model, require_torch
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
@@ -114,6 +119,15 @@ def parse_args(argv=None):
         help=(
             "完整 Train／Validation／Selection 評估的並行 inference worker 數；"
             "每個 worker 維持單執行緒，batch 與 reduction 順序不變"
+        ),
+    )
+    parser.add_argument(
+        "--parallel-split-evaluation",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION,
+        help=(
+            "是否同時執行 Inner Train 與 Validation 的完整評估；"
+            "只平行 read-only inference，不改模型更新或指標口徑"
         ),
     )
     parser.add_argument(
@@ -345,91 +359,13 @@ def _preload_training_arrays(
     *,
     enabled: bool,
 ) -> tuple[IndexedFeatureBank, np.ndarray, np.ndarray]:
+    materialized_features, materialized_context = materialize_indexed_feature_inputs(
+        X,
+        C,
+        enabled=enabled,
+    )
     y_memory = np.array(y, dtype=np.int64, copy=True, order="C")
-    if not enabled:
-        return X, C, y_memory
-    feature_bank_memory = np.array(
-        X.feature_bank,
-        dtype=np.float32,
-        copy=True,
-        order="C",
-    )
-    group_index_memory = np.array(
-        X.event_group_index,
-        dtype=np.int64,
-        copy=True,
-        order="C",
-    )
-    context_memory = np.array(C, dtype=np.float32, copy=True, order="C")
-    materialized = IndexedFeatureBank(feature_bank_memory, group_index_memory)
-    return materialized, context_memory, y_memory
-
-
-def _parallel_batched_logits(
-    torch,
-    model,
-    X,
-    C,
-    indices: np.ndarray,
-    *,
-    batch_size: int,
-    workers: int,
-) -> np.ndarray:
-    idx = np.asarray(indices, dtype=np.int64)
-    if idx.size == 0:
-        return np.empty((0, 2), dtype=np.float32)
-    ranges = [
-        (start, min(start + int(batch_size), int(idx.size)))
-        for start in range(0, int(idx.size), int(batch_size))
-    ]
-    worker_count = min(max(1, int(workers)), len(ranges))
-    logits_np = np.empty((idx.size, 2), dtype=np.float32)
-    model.eval()
-
-    if worker_count == 1:
-        with torch.no_grad():
-            for start, stop in ranges:
-                batch_idx = idx[start:stop]
-                logits_np[start:stop] = model(
-                    torch.from_numpy(X[batch_idx]),
-                    torch.from_numpy(C[batch_idx]),
-                ).cpu().numpy()
-        return logits_np
-
-    assignments: list[list[tuple[int, int]]] = [
-        [] for _ in range(worker_count)
-    ]
-    for job_index, item in enumerate(ranges):
-        assignments[job_index % worker_count].append(item)
-    replicas = [copy.deepcopy(model).eval() for _ in range(worker_count)]
-
-    def _worker(
-        replica,
-        assigned_ranges: list[tuple[int, int]],
-    ) -> list[tuple[int, int, np.ndarray]]:
-        outputs: list[tuple[int, int, np.ndarray]] = []
-        with torch.no_grad():
-            for start, stop in assigned_ranges:
-                batch_idx = idx[start:stop]
-                batch_logits = replica(
-                    torch.from_numpy(X[batch_idx]),
-                    torch.from_numpy(C[batch_idx]),
-                ).cpu().numpy().copy()
-                outputs.append((start, stop, batch_logits))
-        return outputs
-
-    with ThreadPoolExecutor(
-        max_workers=worker_count,
-        thread_name_prefix="breakout-quality-eval",
-    ) as executor:
-        futures = [
-            executor.submit(_worker, replicas[i], assignments[i])
-            for i in range(worker_count)
-        ]
-        for future in futures:
-            for start, stop, batch_logits in future.result():
-                logits_np[start:stop] = batch_logits
-    return logits_np
+    return materialized_features, materialized_context, y_memory
 
 
 def _materialize_training_batch(
@@ -538,12 +474,12 @@ def _evaluate(
     weights_np = sample_weights[idx].astype(np.float32)
     loss_items_np = np.empty((idx.size,), dtype=np.float32)
     pred = np.empty((idx.size,), dtype=np.int64)
-    logits_np = _parallel_batched_logits(
+    logits_np = strict_parallel_batched_logits(
         torch,
         model,
         X,
         C,
-        idx,
+        indices=idx,
         batch_size=batch_size,
         workers=evaluation_workers,
     )
@@ -578,6 +514,68 @@ def _evaluate(
         "row_count": int(idx.size),
         "group_weight_sum": round(float(weights_np.sum()), 6),
     }
+
+
+def _evaluate_inner_splits(
+    torch,
+    model,
+    X,
+    C,
+    y,
+    train_idx,
+    validation_idx,
+    sample_weights,
+    class_weights,
+    *,
+    evaluation_batch_size: int,
+    evaluation_workers: int,
+    parallel: bool,
+):
+    common_kwargs = {
+        "evaluation_batch_size": int(evaluation_batch_size),
+        "evaluation_workers": int(evaluation_workers),
+    }
+    if not parallel:
+        train_metrics = _evaluate(
+            torch, model, X, C, y, train_idx, sample_weights, class_weights,
+            **common_kwargs,
+        )
+        validation_metrics = _evaluate(
+            torch, model, X, C, y, validation_idx, sample_weights, class_weights,
+            **common_kwargs,
+        )
+        return train_metrics, validation_metrics
+
+    validation_model = copy.deepcopy(model).eval()
+    with ThreadPoolExecutor(
+        max_workers=2,
+        thread_name_prefix="breakout-quality-split-eval",
+    ) as executor:
+        train_future = executor.submit(
+            _evaluate,
+            torch,
+            model,
+            X,
+            C,
+            y,
+            train_idx,
+            sample_weights,
+            class_weights,
+            **common_kwargs,
+        )
+        validation_future = executor.submit(
+            _evaluate,
+            torch,
+            validation_model,
+            X,
+            C,
+            y,
+            validation_idx,
+            sample_weights,
+            class_weights,
+            **common_kwargs,
+        )
+        return train_future.result(), validation_future.result()
 
 
 def _max_iso_date(events: pd.DataFrame, indices: np.ndarray, column: str) -> str | None:
@@ -680,6 +678,7 @@ def _select_epoch_with_inner_validation(
     min_delta: float,
     evaluation_batch_size: int,
     evaluation_workers: int,
+    parallel_split_evaluation: bool,
     train_prefetch_batches: int,
 ):
     sample_weights = _build_sample_weights(
@@ -720,29 +719,19 @@ def _select_epoch_with_inner_validation(
             shuffle_seed=int(seed) + epoch,
             prefetch_batches=train_prefetch_batches,
         )
-        train_metrics = _evaluate(
+        train_metrics, validation_metrics = _evaluate_inner_splits(
             torch,
             model,
             X,
             C,
             y,
             train_idx,
-            sample_weights,
-            class_weights,
-            evaluation_batch_size=evaluation_batch_size,
-            evaluation_workers=evaluation_workers,
-        )
-        validation_metrics = _evaluate(
-            torch,
-            model,
-            X,
-            C,
-            y,
             validation_idx,
             sample_weights,
             class_weights,
             evaluation_batch_size=evaluation_batch_size,
             evaluation_workers=evaluation_workers,
+            parallel=parallel_split_evaluation,
         )
         validation_loss = float(validation_metrics["loss"])
         epoch_elapsed = time.perf_counter() - epoch_started
@@ -903,6 +892,7 @@ def main(argv=None) -> int:
     batch_size = int(args.batch_size)
     evaluation_batch_size = int(args.evaluation_batch_size)
     evaluation_workers = int(args.evaluation_workers)
+    parallel_split_evaluation = bool(args.parallel_split_evaluation)
     train_prefetch_batches = int(args.train_prefetch_batches)
     preload_feature_bank = bool(args.preload_feature_bank)
     learning_rate = float(args.lr)
@@ -1027,6 +1017,7 @@ def main(argv=None) -> int:
             min_delta=min_delta,
             evaluation_batch_size=evaluation_batch_size,
             evaluation_workers=evaluation_workers,
+            parallel_split_evaluation=parallel_split_evaluation,
             train_prefetch_batches=train_prefetch_batches,
         )
         selected_epoch = int(epoch_selection["best_epoch"])
@@ -1165,10 +1156,12 @@ def main(argv=None) -> int:
         "batch_size": batch_size,
         "evaluation_batch_size": evaluation_batch_size,
         "evaluation_workers": evaluation_workers,
+        "parallel_split_evaluation": parallel_split_evaluation,
         "train_prefetch_batches": train_prefetch_batches,
         "preload_feature_bank": preload_feature_bank,
         "evaluation_execution": {
             "mode": "parallel_chunked_full_split",
+            "inner_train_validation_concurrent": parallel_split_evaluation,
             "workers": evaluation_workers,
             "per_worker_torch_threads": 1,
             "batch_boundaries_changed": False,

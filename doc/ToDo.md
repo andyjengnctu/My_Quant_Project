@@ -1,8 +1,8 @@
 ## Going
 - breakout filter
     - reject with lower bound ATR len/mult as R，pass with K*R, K>1
+    - test for only 1 year (show result by years)
     - BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS = 12
-    - test for only 1 year
     - parallel with multiple seeds and chose the best validate loss
 
 

@@ -27,6 +27,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_EVALUATION_WORKERS,
+    BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
     BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
@@ -86,11 +87,13 @@ from filters.breakout_quality.dataset_store import (
     IndexedFeatureBank,
 )
 from filters.breakout_quality.features import build_event_label, label_from_cached_path
+from filters.breakout_quality.inference import strict_parallel_batched_logits
 from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from tools.filters.breakout_quality import common as breakout_quality_common
+from tools.filters.breakout_quality import export_scores as breakout_quality_export_scores
 from tools.filters.breakout_quality import train as breakout_quality_train
 from tools.filters.breakout_quality.report import (
     build_report_payload,
@@ -167,9 +170,27 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and int(BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED) >= 0
         and int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE) >= 1
         and int(BREAKOUT_QUALITY_EVALUATION_WORKERS) >= 1
+        and isinstance(BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION, bool)
         and int(BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES) >= 0
         and isinstance(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK, bool)
         and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1,
+    )
+    export_defaults = breakout_quality_export_scores.parse_args([])
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "score_export_performance_defaults_share_training_policy",
+        (
+            int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE),
+            int(BREAKOUT_QUALITY_EVALUATION_WORKERS),
+            bool(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK),
+        ),
+        (
+            int(export_defaults.inference_batch_size),
+            int(export_defaults.inference_workers),
+            bool(export_defaults.preload_feature_bank),
+        ),
     )
     add_check(
         results,
@@ -447,6 +468,45 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         ),
     )
 
+    split_train_indices = evaluation_indices[:6]
+    split_validation_indices = evaluation_indices[6:]
+    serial_split_metrics = breakout_quality_train._evaluate_inner_splits(
+        torch,
+        actual_evaluation_model,
+        evaluation_features,
+        evaluation_context,
+        evaluation_labels,
+        split_train_indices,
+        split_validation_indices,
+        evaluation_weights,
+        evaluation_class_weights,
+        evaluation_batch_size=3,
+        evaluation_workers=2,
+        parallel=False,
+    )
+    parallel_split_metrics = breakout_quality_train._evaluate_inner_splits(
+        torch,
+        actual_evaluation_model,
+        evaluation_features,
+        evaluation_context,
+        evaluation_labels,
+        split_train_indices,
+        split_validation_indices,
+        evaluation_weights,
+        evaluation_class_weights,
+        evaluation_batch_size=3,
+        evaluation_workers=2,
+        parallel=True,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "concurrent_train_validation_evaluation_preserves_serial_metrics",
+        serial_split_metrics,
+        parallel_split_metrics,
+    )
+
     indexed_features = IndexedFeatureBank(
         evaluation_features[:4],
         np.asarray([0, 1, 2, 3, 0, 2, 1, 3, 0, 1, 2, 3], dtype=np.int64),
@@ -459,6 +519,33 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             enabled=True,
         )
     )
+    serial_export_logits = strict_parallel_batched_logits(
+        torch,
+        actual_evaluation_model,
+        indexed_features,
+        evaluation_context,
+        indices=None,
+        batch_size=3,
+        workers=1,
+    )
+    parallel_export_logits = strict_parallel_batched_logits(
+        torch,
+        actual_evaluation_model,
+        preloaded_features,
+        preloaded_context,
+        indices=None,
+        batch_size=3,
+        workers=4,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strict_parallel_score_inference_preserves_serial_logits",
+        True,
+        np.array_equal(serial_export_logits, parallel_export_logits),
+    )
+
     preload_probe = np.asarray([11, 0, 7, 4, 2], dtype=np.int64)
     add_check(
         results,

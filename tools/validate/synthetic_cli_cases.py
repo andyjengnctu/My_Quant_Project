@@ -131,6 +131,7 @@ def validate_dataset_cli_contract_case(_base_params):
         batch_size=32,
         evaluation_batch_size=128,
         evaluation_workers=4,
+        parallel_split_evaluation=True,
         train_prefetch_batches=0,
         preload_feature_bank=True,
         lr=0.001,
@@ -180,6 +181,14 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_report_includes_oos_flag",
         True,
         "--include-oos" in workflow_calls[-1][1],
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_propagates_parallel_split_evaluation",
+        True,
+        "--parallel-split-evaluation" in workflow_calls[0][1],
     )
     add_check(
         results,
@@ -321,6 +330,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "batch_size",
         "evaluation_batch_size",
         "evaluation_workers",
+        "parallel_split_evaluation",
         "train_prefetch_batches",
         "preload_feature_bank",
         "lr",
@@ -346,6 +356,7 @@ def validate_dataset_cli_contract_case(_base_params):
         batch_size=64,
         evaluation_batch_size=256,
         evaluation_workers=3,
+        parallel_split_evaluation=True,
         train_prefetch_batches=0,
         preload_feature_bank=True,
         lr=0.002,

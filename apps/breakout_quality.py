@@ -275,6 +275,12 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
         help="完整評估的並行 inference workers；每個 worker 維持單執行緒",
     )
     parser.add_argument(
+        "--parallel-split-evaluation",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.parallel_split_evaluation),
+        help="是否同時執行 Inner Train 與 Validation 的完整評估",
+    )
+    parser.add_argument(
         "--train-prefetch-batches",
         type=int,
         default=int(defaults.train_prefetch_batches),
@@ -359,6 +365,11 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         if bool(args.preload_feature_bank)
         else "--no-preload-feature-bank"
     )
+    argv.append(
+        "--parallel-split-evaluation"
+        if bool(args.parallel_split_evaluation)
+        else "--no-parallel-split-evaluation"
+    )
     return argv
 
 
@@ -385,6 +396,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         f"epochs={int(args.epochs)}, batch_size={int(args.batch_size)}, "
         f"evaluation_batch_size={int(args.evaluation_batch_size)}, "
         f"evaluation_workers={int(args.evaluation_workers)}, "
+        f"parallel_split_evaluation={bool(args.parallel_split_evaluation)}, "
         f"prefetch={int(args.train_prefetch_batches)}, "
         f"preload_feature_bank={bool(args.preload_feature_bank)}, "
         f"lr={float(args.lr)}, seed={int(args.seed)}, threshold={float(args.fixed_threshold):.6f}, "
@@ -503,6 +515,7 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         batch_size=int(defaults.batch_size),
         evaluation_batch_size=int(defaults.evaluation_batch_size),
         evaluation_workers=int(defaults.evaluation_workers),
+        parallel_split_evaluation=bool(defaults.parallel_split_evaluation),
         train_prefetch_batches=int(defaults.train_prefetch_batches),
         preload_feature_bank=bool(defaults.preload_feature_bank),
         lr=float(defaults.lr),
@@ -528,6 +541,7 @@ def _print_policy_defaults(
         f"- Batch Size：{int(train_settings.batch_size)}\n"
         f"- Evaluation Batch Size：{int(train_settings.evaluation_batch_size)}\n"
         f"- Evaluation Workers：{int(train_settings.evaluation_workers)}\n"
+        f"- Parallel Split Evaluation：{'開啟' if bool(train_settings.parallel_split_evaluation) else '關閉'}\n"
         f"- Train Prefetch Batches：{int(train_settings.train_prefetch_batches)}\n"
         f"- Preload Feature Bank：{'開啟' if bool(train_settings.preload_feature_bank) else '關閉'}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"

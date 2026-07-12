@@ -11,10 +11,11 @@ BREAKOUT_QUALITY_DEFAULT_EPOCHS = 20  # 關閉 inner validation 時為固定訓�
 BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 128  # 每次梯度更新使用的訓練 rows 數。
 BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.001  # Adam optimizer 的預設 learning rate。
 BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED = 42  # 模型初始化、Dropout 與每個 epoch 資料洗牌的預設亂數種子。
-BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE = 4096  # Train／Validation／Selection 完整評估的分批大小；只降低推論記憶體，不抽樣、不改訓練資料或模型更新。
-BREAKOUT_QUALITY_EVALUATION_WORKERS = 4  # 完整評估時並行處理互相獨立的 inference batches；每個 worker 維持單執行緒，輸入 batch 與最終 reduction 順序不變。
+BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE = 4096  # Train／Validation／Selection 完整評估與分數匯出的分批大小；不抽樣、不改模型更新或輸出列序。
+BREAKOUT_QUALITY_EVALUATION_WORKERS = 4  # 每個完整資料區段評估／分數匯出的 inference workers；每個 worker 維持單執行緒，batch 與最終列序不變。
+BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION = True  # 同時評估 Inner Train 與 Validation；峰值最多使用 2 × EVALUATION_WORKERS，只做 read-only inference。
 BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES = 0  # 訓練時預先準備後續 batches 的數量；RAM preload 開啟時預設 0，慢速磁碟可自行調高；不改 batch 順序或 optimizer 更新。
-BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK = True  # 訓練前將去重 feature bank 與小型事件陣列載入 RAM，降低 mmap 隨機讀取；資料值與列順序不變。
+BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK = True  # 訓練與分數匯出前將去重 feature bank 與小型事件陣列載入 RAM；資料值與列順序不變。
 BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES = 20  # 開始訓練前要求的最少有效 train rows。
 
 BREAKOUT_QUALITY_USE_INNER_VALIDATION = True  # 是否以 Selection 尾端資料選 best epoch，再用完整 Selection 重訓。
@@ -53,6 +54,7 @@ __all__ = [
     "BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD",
     "BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE",
     "BREAKOUT_QUALITY_EVALUATION_WORKERS",
+    "BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION",
     "BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK",
     "BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES",
     "BREAKOUT_QUALITY_EXTRA_HIGH_LENS",

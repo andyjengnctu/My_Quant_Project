@@ -15,13 +15,14 @@
   "early_stopping_enabled": true,
   "early_stopping_min_delta": 0.0,
   "early_stopping_patience": 3,
-  "elapsed_sec": 745.916,
+  "elapsed_sec": 744.112,
   "epoch_selection_source": "inner_validation_loss",
   "evaluation_batch_size": 4096,
   "evaluation_execution": {
     "batch_boundaries_changed": false,
     "feature_bank_preloaded": true,
     "final_metrics_reused_from_last_full_epoch_evaluation": true,
+    "inner_train_validation_concurrent": true,
     "mode": "parallel_chunked_full_split",
     "optimizer_zero_grad_set_to_none": true,
     "per_worker_torch_threads": 1,
@@ -100,7 +101,7 @@
     "history": [
       {
         "batch_loss": 0.674877,
-        "elapsed_sec": 95.837,
+        "elapsed_sec": 95.755,
         "epoch": 1,
         "inner_train_metrics": {
           "accuracy": 0.564475,
@@ -124,7 +125,7 @@
       },
       {
         "batch_loss": 0.665676,
-        "elapsed_sec": 96.28,
+        "elapsed_sec": 95.669,
         "epoch": 2,
         "inner_train_metrics": {
           "accuracy": 0.55546,
@@ -148,7 +149,7 @@
       },
       {
         "batch_loss": 0.656722,
-        "elapsed_sec": 96.275,
+        "elapsed_sec": 95.837,
         "epoch": 3,
         "inner_train_metrics": {
           "accuracy": 0.611098,
@@ -172,7 +173,7 @@
       },
       {
         "batch_loss": 0.65102,
-        "elapsed_sec": 96.425,
+        "elapsed_sec": 95.724,
         "epoch": 4,
         "inner_train_metrics": {
           "accuracy": 0.629411,
@@ -196,7 +197,7 @@
       },
       {
         "batch_loss": 0.642176,
-        "elapsed_sec": 96.423,
+        "elapsed_sec": 95.953,
         "epoch": 5,
         "inner_train_metrics": {
           "accuracy": 0.643564,
@@ -274,6 +275,7 @@
       "train_window_months": null
     }
   },
+  "parallel_split_evaluation": true,
   "policy": {
     "benchmark_ticker": "0050",
     "feature_window_bars": 300,
@@ -363,7 +365,7 @@
   "seed": 42,
   "selected_epoch": 2,
   "source_dataset": {
-    "build_mode": "label_only_refresh",
+    "build_mode": "full_feature_bank_rebuild",
     "context_columns": [
       "high_len_norm",
       "breakout_level_to_close",
@@ -425,7 +427,7 @@
     },
     "dataset_storage_format": "indexed_feature_bank_npy_v2",
     "dataset_storage_schema_version": 3,
-    "elapsed_sec": 13.641,
+    "elapsed_sec": 180.243,
     "event_count": 1793028,
     "event_date_range": {
       "end": "2026-03-02",
@@ -613,7 +615,6 @@
       "pass_return_threshold": 0.1,
       "reject_return_threshold": -0.05
     },
-    "relabel_count": 7,
     "source_data_date_range": {
       "end": "2026-03-02",
       "start": "1992-01-04"
@@ -818,7 +819,7 @@
   "training_history": [
     {
       "batch_loss": 0.677118,
-      "elapsed_sec": 125.7,
+      "elapsed_sec": 125.899,
       "epoch": 1,
       "selection_metrics": {
         "accuracy": 0.514853,
@@ -832,7 +833,7 @@
     },
     {
       "batch_loss": 0.667266,
-      "elapsed_sec": 125.729,
+      "elapsed_sec": 126.007,
       "epoch": 2,
       "selection_metrics": {
         "accuracy": 0.480524,
