@@ -26,6 +26,9 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
+    BREAKOUT_QUALITY_EVALUATION_WORKERS,
+    BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
+    BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
     BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
@@ -163,6 +166,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) > 0.0
         and int(BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED) >= 0
         and int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE) >= 1
+        and int(BREAKOUT_QUALITY_EVALUATION_WORKERS) >= 1
+        and int(BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES) >= 0
+        and isinstance(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK, bool)
         and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1,
     )
     add_check(
@@ -346,6 +352,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         evaluation_weights,
         evaluation_class_weights,
         evaluation_batch_size=len(evaluation_indices),
+        evaluation_workers=1,
     )
     chunked_metrics = breakout_quality_train._evaluate(
         torch,
@@ -357,6 +364,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         evaluation_weights,
         evaluation_class_weights,
         evaluation_batch_size=3,
+        evaluation_workers=1,
     )
     add_check(
         results,
@@ -365,6 +373,102 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "chunked_full_evaluation_preserves_one_shot_metrics",
         one_shot_metrics,
         chunked_metrics,
+    )
+
+    parallel_metrics = breakout_quality_train._evaluate(
+        torch,
+        evaluation_model,
+        evaluation_features,
+        evaluation_context,
+        evaluation_labels,
+        evaluation_indices,
+        evaluation_weights,
+        evaluation_class_weights,
+        evaluation_batch_size=3,
+        evaluation_workers=4,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "parallel_chunked_evaluation_preserves_serial_metrics",
+        chunked_metrics,
+        parallel_metrics,
+    )
+
+    torch.manual_seed(20260712)
+    actual_evaluation_model = breakout_quality_train.build_model(2, 2)
+    state_before_evaluation = {
+        key: value.detach().clone()
+        for key, value in actual_evaluation_model.state_dict().items()
+    }
+    actual_serial_metrics = breakout_quality_train._evaluate(
+        torch,
+        actual_evaluation_model,
+        evaluation_features,
+        evaluation_context,
+        evaluation_labels,
+        evaluation_indices,
+        evaluation_weights,
+        evaluation_class_weights,
+        evaluation_batch_size=3,
+        evaluation_workers=1,
+    )
+    actual_parallel_metrics = breakout_quality_train._evaluate(
+        torch,
+        actual_evaluation_model,
+        evaluation_features,
+        evaluation_context,
+        evaluation_labels,
+        evaluation_indices,
+        evaluation_weights,
+        evaluation_class_weights,
+        evaluation_batch_size=3,
+        evaluation_workers=4,
+    )
+    state_after_evaluation = actual_evaluation_model.state_dict()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "parallel_actual_model_evaluation_preserves_serial_metrics",
+        actual_serial_metrics,
+        actual_parallel_metrics,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "parallel_evaluation_does_not_mutate_model_state",
+        True,
+        all(
+            torch.equal(state_before_evaluation[key], state_after_evaluation[key])
+            for key in state_before_evaluation
+        ),
+    )
+
+    indexed_features = IndexedFeatureBank(
+        evaluation_features[:4],
+        np.asarray([0, 1, 2, 3, 0, 2, 1, 3, 0, 1, 2, 3], dtype=np.int64),
+    )
+    preloaded_features, preloaded_context, preloaded_labels = (
+        breakout_quality_train._preload_training_arrays(
+            indexed_features,
+            evaluation_context,
+            evaluation_labels.astype(np.int8),
+            enabled=True,
+        )
+    )
+    preload_probe = np.asarray([11, 0, 7, 4, 2], dtype=np.int64)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "feature_bank_preload_preserves_values_and_row_mapping",
+        True,
+        np.array_equal(indexed_features[preload_probe], preloaded_features[preload_probe])
+        and np.array_equal(evaluation_context, preloaded_context)
+        and np.array_equal(evaluation_labels, preloaded_labels),
     )
 
     with tempfile.TemporaryDirectory(prefix="breakout_quality_source_inventory_") as temp_dir:

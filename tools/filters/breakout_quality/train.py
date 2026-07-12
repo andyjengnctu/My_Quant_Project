@@ -10,6 +10,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import argparse
+import copy
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+import gc
 import time
 import warnings
 
@@ -25,6 +29,9 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
+    BREAKOUT_QUALITY_EVALUATION_WORKERS,
+    BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
+    BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
@@ -53,6 +60,7 @@ from filters.breakout_quality.contract import (
     TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION,
     TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
+from filters.breakout_quality.dataset_store import IndexedFeatureBank
 from filters.breakout_quality.model import build_model, require_torch
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
@@ -98,6 +106,27 @@ def parse_args(argv=None):
             "完整 Train／Validation／Selection 評估的推論 batch size；"
             "只影響記憶體與執行速度，不抽樣、不改模型訓練"
         ),
+    )
+    parser.add_argument(
+        "--evaluation-workers",
+        type=int,
+        default=BREAKOUT_QUALITY_EVALUATION_WORKERS,
+        help=(
+            "完整 Train／Validation／Selection 評估的並行 inference worker 數；"
+            "每個 worker 維持單執行緒，batch 與 reduction 順序不變"
+        ),
+    )
+    parser.add_argument(
+        "--train-prefetch-batches",
+        type=int,
+        default=BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
+        help="預先準備後續訓練 batches 的數量；0 表示關閉，不改 batch 順序",
+    )
+    parser.add_argument(
+        "--preload-feature-bank",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
+        help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
     )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument("--seed", type=int, default=BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED)
@@ -147,6 +176,8 @@ def validate_training_args(args) -> None:
     max_epochs = int(args.epochs)
     batch_size = int(args.batch_size)
     evaluation_batch_size = int(args.evaluation_batch_size)
+    evaluation_workers = int(args.evaluation_workers)
+    train_prefetch_batches = int(args.train_prefetch_batches)
     learning_rate = float(args.lr)
     fixed_threshold = float(args.fixed_threshold)
     validation_months = int(args.inner_validation_months)
@@ -154,8 +185,18 @@ def validate_training_args(args) -> None:
     min_delta = float(args.early_stopping_min_delta)
     min_train_samples = int(args.min_train_samples)
     min_validation_samples = int(args.min_validation_samples)
-    if max_epochs < 1 or batch_size < 1 or evaluation_batch_size < 1 or learning_rate <= 0:
-        raise ValueError("epochs、batch-size、evaluation-batch-size 必須 >=1，lr 必須 >0")
+    if (
+        max_epochs < 1
+        or batch_size < 1
+        or evaluation_batch_size < 1
+        or evaluation_workers < 1
+        or train_prefetch_batches < 0
+        or learning_rate <= 0
+    ):
+        raise ValueError(
+            "epochs、batch-size、evaluation-batch-size、evaluation-workers 必須 >=1，"
+            "train-prefetch-batches 必須 >=0，lr 必須 >0"
+        )
     if validation_months < 1:
         raise ValueError("inner-validation-months 必須 >=1")
     if patience < 0 or min_delta < 0:
@@ -297,6 +338,171 @@ def _weighted_average(values: np.ndarray, weights: np.ndarray) -> float:
     return float(np.average(values, weights=weights))
 
 
+def _preload_training_arrays(
+    X: IndexedFeatureBank,
+    C: np.ndarray,
+    y: np.ndarray,
+    *,
+    enabled: bool,
+) -> tuple[IndexedFeatureBank, np.ndarray, np.ndarray]:
+    y_memory = np.array(y, dtype=np.int64, copy=True, order="C")
+    if not enabled:
+        return X, C, y_memory
+    feature_bank_memory = np.array(
+        X.feature_bank,
+        dtype=np.float32,
+        copy=True,
+        order="C",
+    )
+    group_index_memory = np.array(
+        X.event_group_index,
+        dtype=np.int64,
+        copy=True,
+        order="C",
+    )
+    context_memory = np.array(C, dtype=np.float32, copy=True, order="C")
+    materialized = IndexedFeatureBank(feature_bank_memory, group_index_memory)
+    return materialized, context_memory, y_memory
+
+
+def _parallel_batched_logits(
+    torch,
+    model,
+    X,
+    C,
+    indices: np.ndarray,
+    *,
+    batch_size: int,
+    workers: int,
+) -> np.ndarray:
+    idx = np.asarray(indices, dtype=np.int64)
+    if idx.size == 0:
+        return np.empty((0, 2), dtype=np.float32)
+    ranges = [
+        (start, min(start + int(batch_size), int(idx.size)))
+        for start in range(0, int(idx.size), int(batch_size))
+    ]
+    worker_count = min(max(1, int(workers)), len(ranges))
+    logits_np = np.empty((idx.size, 2), dtype=np.float32)
+    model.eval()
+
+    if worker_count == 1:
+        with torch.no_grad():
+            for start, stop in ranges:
+                batch_idx = idx[start:stop]
+                logits_np[start:stop] = model(
+                    torch.from_numpy(X[batch_idx]),
+                    torch.from_numpy(C[batch_idx]),
+                ).cpu().numpy()
+        return logits_np
+
+    assignments: list[list[tuple[int, int]]] = [
+        [] for _ in range(worker_count)
+    ]
+    for job_index, item in enumerate(ranges):
+        assignments[job_index % worker_count].append(item)
+    replicas = [copy.deepcopy(model).eval() for _ in range(worker_count)]
+
+    def _worker(
+        replica,
+        assigned_ranges: list[tuple[int, int]],
+    ) -> list[tuple[int, int, np.ndarray]]:
+        outputs: list[tuple[int, int, np.ndarray]] = []
+        with torch.no_grad():
+            for start, stop in assigned_ranges:
+                batch_idx = idx[start:stop]
+                batch_logits = replica(
+                    torch.from_numpy(X[batch_idx]),
+                    torch.from_numpy(C[batch_idx]),
+                ).cpu().numpy().copy()
+                outputs.append((start, stop, batch_logits))
+        return outputs
+
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="breakout-quality-eval",
+    ) as executor:
+        futures = [
+            executor.submit(_worker, replicas[i], assignments[i])
+            for i in range(worker_count)
+        ]
+        for future in futures:
+            for start, stop, batch_logits in future.result():
+                logits_np[start:stop] = batch_logits
+    return logits_np
+
+
+def _materialize_training_batch(
+    X,
+    C: np.ndarray,
+    y: np.ndarray,
+    sample_weights: np.ndarray,
+    batch: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    return (
+        X[batch],
+        C[batch],
+        y[batch],
+        sample_weights[batch],
+    )
+
+
+def _iter_training_batches(
+    X,
+    C: np.ndarray,
+    y: np.ndarray,
+    sample_weights: np.ndarray,
+    shuffled: np.ndarray,
+    *,
+    batch_size: int,
+    prefetch_batches: int,
+):
+    batches = [
+        shuffled[start:start + int(batch_size)]
+        for start in range(0, len(shuffled), int(batch_size))
+    ]
+    if int(prefetch_batches) <= 0 or len(batches) <= 1:
+        for batch in batches:
+            yield _materialize_training_batch(
+                X, C, y, sample_weights, batch
+            )
+        return
+
+    queue_depth = min(int(prefetch_batches), len(batches))
+    with ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="breakout-quality-prefetch",
+    ) as executor:
+        pending = deque(
+            executor.submit(
+                _materialize_training_batch,
+                X,
+                C,
+                y,
+                sample_weights,
+                batches[index],
+            )
+            for index in range(queue_depth)
+        )
+        next_index = queue_depth
+        while pending:
+            future = pending.popleft()
+            batch_arrays = future.result()
+            if next_index < len(batches):
+                pending.append(
+                    executor.submit(
+                        _materialize_training_batch,
+                        X,
+                        C,
+                        y,
+                        sample_weights,
+                        batches[next_index],
+                    )
+                )
+                next_index += 1
+            yield batch_arrays
+
+
 def _evaluate(
     torch,
     model,
@@ -308,6 +514,7 @@ def _evaluate(
     class_weights,
     *,
     evaluation_batch_size: int,
+    evaluation_workers: int,
 ):
     if len(indices) == 0:
         return {
@@ -331,15 +538,20 @@ def _evaluate(
     weights_np = sample_weights[idx].astype(np.float32)
     loss_items_np = np.empty((idx.size,), dtype=np.float32)
     pred = np.empty((idx.size,), dtype=np.int64)
+    logits_np = _parallel_batched_logits(
+        torch,
+        model,
+        X,
+        C,
+        idx,
+        batch_size=batch_size,
+        workers=evaluation_workers,
+    )
 
     with torch.no_grad():
         for start in range(0, int(idx.size), batch_size):
             stop = min(start + batch_size, int(idx.size))
-            batch_idx = idx[start:stop]
-            logits = model(
-                torch.from_numpy(X[batch_idx]),
-                torch.from_numpy(C[batch_idx]),
-            )
+            logits = torch.from_numpy(logits_np[start:stop])
             target = torch.from_numpy(targets_np[start:stop])
             loss_items = F.cross_entropy(
                 logits,
@@ -416,6 +628,7 @@ def _train_one_epoch(
     class_weights,
     batch_size: int,
     shuffle_seed: int,
+    prefetch_batches: int,
 ) -> float:
     import torch.nn.functional as F
 
@@ -423,13 +636,20 @@ def _train_one_epoch(
     rng = np.random.default_rng(int(shuffle_seed))
     shuffled = rng.permutation(train_idx)
     batch_losses = []
-    for start in range(0, len(shuffled), int(batch_size)):
-        batch = shuffled[start:start + int(batch_size)]
-        xb = torch.from_numpy(X[batch])
-        cb = torch.from_numpy(C[batch])
-        yb = torch.from_numpy(y[batch].astype(np.int64))
-        wb = torch.from_numpy(sample_weights[batch].astype(np.float32))
-        optimizer.zero_grad()
+    for xb_np, cb_np, yb_np, wb_np in _iter_training_batches(
+        X,
+        C,
+        y,
+        sample_weights,
+        shuffled,
+        batch_size=batch_size,
+        prefetch_batches=prefetch_batches,
+    ):
+        xb = torch.from_numpy(xb_np)
+        cb = torch.from_numpy(cb_np)
+        yb = torch.from_numpy(yb_np)
+        wb = torch.from_numpy(wb_np)
+        optimizer.zero_grad(set_to_none=True)
         loss_items = F.cross_entropy(
             model(xb, cb),
             yb,
@@ -459,6 +679,8 @@ def _select_epoch_with_inner_validation(
     patience: int,
     min_delta: float,
     evaluation_batch_size: int,
+    evaluation_workers: int,
+    train_prefetch_batches: int,
 ):
     sample_weights = _build_sample_weights(
         events,
@@ -496,6 +718,7 @@ def _select_epoch_with_inner_validation(
             class_weights=class_weights,
             batch_size=batch_size,
             shuffle_seed=int(seed) + epoch,
+            prefetch_batches=train_prefetch_batches,
         )
         train_metrics = _evaluate(
             torch,
@@ -507,6 +730,7 @@ def _select_epoch_with_inner_validation(
             sample_weights,
             class_weights,
             evaluation_batch_size=evaluation_batch_size,
+            evaluation_workers=evaluation_workers,
         )
         validation_metrics = _evaluate(
             torch,
@@ -518,6 +742,7 @@ def _select_epoch_with_inner_validation(
             sample_weights,
             class_weights,
             evaluation_batch_size=evaluation_batch_size,
+            evaluation_workers=evaluation_workers,
         )
         validation_loss = float(validation_metrics["loss"])
         epoch_elapsed = time.perf_counter() - epoch_started
@@ -590,6 +815,8 @@ def _fit_full_selection(
     seed: int,
     phase_name: str,
     evaluation_batch_size: int,
+    evaluation_workers: int,
+    train_prefetch_batches: int,
 ):
     sample_weights = _build_sample_weights(events, len(y), train_idx)
     model, optimizer, class_weights_np, class_weights = _new_training_state(
@@ -624,6 +851,7 @@ def _fit_full_selection(
             class_weights=class_weights,
             batch_size=batch_size,
             shuffle_seed=int(seed) + epoch,
+            prefetch_batches=train_prefetch_batches,
         )
         metrics = _evaluate(
             torch,
@@ -635,6 +863,7 @@ def _fit_full_selection(
             sample_weights,
             class_weights,
             evaluation_batch_size=evaluation_batch_size,
+            evaluation_workers=evaluation_workers,
         )
         epoch_elapsed = time.perf_counter() - epoch_started
         history.append(
@@ -673,6 +902,9 @@ def main(argv=None) -> int:
     max_epochs = int(args.epochs)
     batch_size = int(args.batch_size)
     evaluation_batch_size = int(args.evaluation_batch_size)
+    evaluation_workers = int(args.evaluation_workers)
+    train_prefetch_batches = int(args.train_prefetch_batches)
+    preload_feature_bank = bool(args.preload_feature_bank)
     learning_rate = float(args.lr)
     fixed_threshold = float(args.fixed_threshold)
     use_inner_validation = bool(args.use_inner_validation)
@@ -687,6 +919,13 @@ def main(argv=None) -> int:
         args.filter_id,
         require_current_source=True,
     )
+    X, C, y = _preload_training_arrays(
+        X,
+        C,
+        y,
+        enabled=preload_feature_bank,
+    )
+    gc.collect()
 
     torch, _nn = require_torch()
     torch.set_num_threads(1)
@@ -787,6 +1026,8 @@ def main(argv=None) -> int:
             patience=patience,
             min_delta=min_delta,
             evaluation_batch_size=evaluation_batch_size,
+            evaluation_workers=evaluation_workers,
+            train_prefetch_batches=train_prefetch_batches,
         )
         selected_epoch = int(epoch_selection["best_epoch"])
         training_mode = TRAINING_MODE_INNER_VALIDATION_FULL_REFIT
@@ -811,6 +1052,8 @@ def main(argv=None) -> int:
         seed=int(args.seed),
         phase_name=phase_name,
         evaluation_batch_size=evaluation_batch_size,
+        evaluation_workers=evaluation_workers,
+        train_prefetch_batches=train_prefetch_batches,
     )
     model = final_fit["model"]
     final_train_metrics = final_fit["final_metrics"]
@@ -921,12 +1164,22 @@ def main(argv=None) -> int:
         "learning_rate": learning_rate,
         "batch_size": batch_size,
         "evaluation_batch_size": evaluation_batch_size,
+        "evaluation_workers": evaluation_workers,
+        "train_prefetch_batches": train_prefetch_batches,
+        "preload_feature_bank": preload_feature_bank,
         "evaluation_execution": {
-            "mode": "chunked_full_split",
+            "mode": "parallel_chunked_full_split",
+            "workers": evaluation_workers,
+            "per_worker_torch_threads": 1,
+            "batch_boundaries_changed": False,
+            "reduction_order_changed": False,
             "uses_all_requested_rows": True,
             "training_sampling_enabled": False,
             "training_order_changed": False,
             "final_metrics_reused_from_last_full_epoch_evaluation": True,
+            "optimizer_zero_grad_set_to_none": True,
+            "training_batch_prefetch": train_prefetch_batches,
+            "feature_bank_preloaded": preload_feature_bank,
         },
         "training_history": final_fit["history"],
         "runtime_eligibility": {

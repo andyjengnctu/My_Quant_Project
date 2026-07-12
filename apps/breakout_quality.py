@@ -268,6 +268,24 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
         default=int(defaults.evaluation_batch_size),
         help="完整 Train／Validation／Selection 評估的推論 batch size；不改模型訓練",
     )
+    parser.add_argument(
+        "--evaluation-workers",
+        type=int,
+        default=int(defaults.evaluation_workers),
+        help="完整評估的並行 inference workers；每個 worker 維持單執行緒",
+    )
+    parser.add_argument(
+        "--train-prefetch-batches",
+        type=int,
+        default=int(defaults.train_prefetch_batches),
+        help="預先準備後續訓練 batches 的數量；0 表示關閉",
+    )
+    parser.add_argument(
+        "--preload-feature-bank",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.preload_feature_bank),
+        help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
+    )
     parser.add_argument("--lr", type=float, default=float(defaults.lr))
     parser.add_argument("--seed", type=int, default=int(defaults.seed))
     parser.add_argument(
@@ -314,6 +332,10 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         str(int(args.batch_size)),
         "--evaluation-batch-size",
         str(int(args.evaluation_batch_size)),
+        "--evaluation-workers",
+        str(int(args.evaluation_workers)),
+        "--train-prefetch-batches",
+        str(int(args.train_prefetch_batches)),
         "--lr",
         str(float(args.lr)),
         "--seed",
@@ -331,6 +353,11 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         "--use-inner-validation"
         if bool(args.use_inner_validation)
         else "--no-use-inner-validation"
+    )
+    argv.append(
+        "--preload-feature-bank"
+        if bool(args.preload_feature_bank)
+        else "--no-preload-feature-bank"
     )
     return argv
 
@@ -357,6 +384,9 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         "train="
         f"epochs={int(args.epochs)}, batch_size={int(args.batch_size)}, "
         f"evaluation_batch_size={int(args.evaluation_batch_size)}, "
+        f"evaluation_workers={int(args.evaluation_workers)}, "
+        f"prefetch={int(args.train_prefetch_batches)}, "
+        f"preload_feature_bank={bool(args.preload_feature_bank)}, "
         f"lr={float(args.lr)}, seed={int(args.seed)}, threshold={float(args.fixed_threshold):.6f}, "
         f"inner_validation={bool(args.use_inner_validation)}"
     )
@@ -472,6 +502,9 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         epochs=int(defaults.epochs),
         batch_size=int(defaults.batch_size),
         evaluation_batch_size=int(defaults.evaluation_batch_size),
+        evaluation_workers=int(defaults.evaluation_workers),
+        train_prefetch_batches=int(defaults.train_prefetch_batches),
+        preload_feature_bank=bool(defaults.preload_feature_bank),
         lr=float(defaults.lr),
         seed=int(defaults.seed),
         fixed_threshold=float(defaults.fixed_threshold),
@@ -494,6 +527,9 @@ def _print_policy_defaults(
         f"- Epoch 上限：{int(train_settings.epochs)}\n"
         f"- Batch Size：{int(train_settings.batch_size)}\n"
         f"- Evaluation Batch Size：{int(train_settings.evaluation_batch_size)}\n"
+        f"- Evaluation Workers：{int(train_settings.evaluation_workers)}\n"
+        f"- Train Prefetch Batches：{int(train_settings.train_prefetch_batches)}\n"
+        f"- Preload Feature Bank：{'開啟' if bool(train_settings.preload_feature_bank) else '關閉'}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"
         f"- Random Seed：{int(train_settings.seed)}\n"
         f"- Threshold：{float(train_settings.fixed_threshold):g}\n"
