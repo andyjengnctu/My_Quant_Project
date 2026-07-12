@@ -25,10 +25,10 @@ BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA = 0.0  # Validation loss 至少下降�
 BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES = 20  # 開啟 inner validation 時要求的最少有效 validation rows。
 
 BREAKOUT_QUALITY_FEATURE_WINDOW_BARS = 300  # 每個事件輸入模型的歷史特徵交易日數。
-BREAKOUT_QUALITY_LABEL_HORIZON_BARS = 40  # 自突破訊號隔日起，用來判定 PASS 或 REJECT 的未來交易日數；資料不足或無效者不產生有效 Label。
+BREAKOUT_QUALITY_LABEL_HORIZON_BARS = 60  # 自突破訊號隔日起，用來判定 PASS 或 REJECT 的未來交易日數；資料不足或無效者不產生有效 Label。
 BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS = 120  # 快取每個 ticker/date 的未來 K 線路徑長度；調整門檻或不超過此值的 horizon 時只需快速 relabel。
 BREAKOUT_QUALITY_LABEL_PASS_RETURN = 0.10  # 相對突破訊號日收盤價，先上漲至此報酬率即標記為 PASS。
-BREAKOUT_QUALITY_LABEL_REJECT_RETURN = -0.05  # 相對突破訊號日收盤價；若先碰此跌幅，或完整觀察期內未先達 PASS 門檻，均標記為 REJECT。
+BREAKOUT_QUALITY_LABEL_REJECT_RETURN = -0.10  # 相對突破訊號日收盤價；若先碰此跌幅，或完整觀察期內未先達 PASS 門檻，均標記為 REJECT。
 BREAKOUT_QUALITY_BENCHMARK_TICKER = "0050"  # 建立相對市場特徵時使用的基準 ETF 代號。
 
 BREAKOUT_QUALITY_EXTRA_HIGH_LENS = (BREAKOUT_DEFAULT_HIGH_LEN,)  # 除 optimizer grid 外，仍須納入 dataset 的額外有效 high_len。
