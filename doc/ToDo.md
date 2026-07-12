@@ -1,5 +1,6 @@
 ## Going
 - breakout filter
+    - BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS = 12
     - test for only 1 year
     - train fixed parameters  
     - inconsist with strategy parameters

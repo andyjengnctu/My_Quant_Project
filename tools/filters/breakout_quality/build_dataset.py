@@ -37,6 +37,7 @@ from filters.breakout_quality.features import (
     label_from_cached_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from core.display_common import InlineProgress, render_elapsed
 from tools.filters.breakout_quality.common import (
     PROJECT_ROOT,
     add_policy_args,
@@ -216,6 +217,24 @@ def _format_timestamp_range(
     }
 
 
+def _render_full_build_progress(
+    *,
+    index: int,
+    total: int,
+    ticker: str,
+    event_count: int,
+    group_count: int,
+    elapsed_sec: float,
+    color: bool = False,
+) -> str:
+    ratio = (100.0 * int(index) / int(total)) if int(total) > 0 else 100.0
+    return (
+        f"Dataset 重建 {int(index):>3}/{int(total)} ({ratio:5.1f}%) | "
+        f"{ticker} | 累計 events={int(event_count):,} groups={int(group_count):,} | "
+        f"耗時 {render_elapsed(elapsed_sec, color=color)}"
+    )
+
+
 def _full_build(args, policy, *, started: float) -> int:
     requested_max_tickers = max(0, int(args.max_tickers or 0))
     source_inventory_before = build_source_data_inventory(PROJECT_ROOT, args.dataset)
@@ -259,6 +278,8 @@ def _full_build(args, policy, *, started: float) -> int:
         "future_date_ordinals",
     )
     chunk_paths: dict[str, list[Path]] = {name: [] for name in chunk_names}
+    skipped_ticker_count = 0
+    progress = InlineProgress()
 
     with tempfile.TemporaryDirectory(prefix=".breakout_quality_build_", dir=out_dir) as temp_dir_text:
         temp_dir = Path(temp_dir_text)
@@ -269,7 +290,19 @@ def _full_build(args, policy, *, started: float) -> int:
             try:
                 stock_frame = load_dataset_frame(input_map[ticker], ticker, min_rows=min_rows)
             except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
-                print(f"[skip] {ticker}: {exc}")
+                skipped_ticker_count += 1
+                progress.print_line(f"[skip] {ticker}: {exc}")
+                progress.update(
+                    _render_full_build_progress(
+                        index=idx,
+                        total=len(tickers),
+                        ticker=ticker,
+                        event_count=event_count,
+                        group_count=group_count,
+                        elapsed_sec=time.perf_counter() - started,
+                        color=progress.inline,
+                    )
+                )
                 continue
             processed_ticker_count += 1
             source_start, source_end = _merge_date_range(source_start, source_end, stock_frame)
@@ -280,7 +313,17 @@ def _full_build(args, policy, *, started: float) -> int:
                 policy=policy,
             )
             if len(dataset.labels) == 0:
-                print(f"[{idx}/{len(tickers)}] {ticker} events=0 groups=0")
+                progress.update(
+                    _render_full_build_progress(
+                        index=idx,
+                        total=len(tickers),
+                        ticker=ticker,
+                        event_count=event_count,
+                        group_count=group_count,
+                        elapsed_sec=time.perf_counter() - started,
+                        color=progress.inline,
+                    )
+                )
                 del stock_frame, dataset
                 continue
 
@@ -346,13 +389,26 @@ def _full_build(args, policy, *, started: float) -> int:
             )
             event_count += local_event_count
             group_count += local_group_count
-            print(
-                f"[{idx}/{len(tickers)}] {ticker} "
-                f"events={local_event_count} groups={local_group_count} "
-                f"labels={local_counts}"
+            progress.update(
+                _render_full_build_progress(
+                    index=idx,
+                    total=len(tickers),
+                    ticker=ticker,
+                    event_count=event_count,
+                    group_count=group_count,
+                    elapsed_sec=time.perf_counter() - started,
+                    color=progress.inline,
+                )
             )
             del stock_frame, dataset, event_frame, arrays
 
+        progress.finish(
+            "Dataset 掃描完成 | "
+            f"股票={processed_ticker_count:,}/{len(tickers):,} | "
+            f"跳過={skipped_ticker_count:,} | "
+            f"events={event_count:,} groups={group_count:,} | "
+            f"耗時 {render_elapsed(time.perf_counter() - started, color=progress.inline)}"
+        )
         source_inventory_after = build_source_data_inventory(PROJECT_ROOT, args.dataset)
         if source_inventory_after != source_inventory_before:
             raise RuntimeError("來源 CSV 在 build_dataset 執行期間發生變更；請完成資料更新後重新執行")

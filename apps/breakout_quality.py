@@ -6,6 +6,7 @@ import argparse
 import importlib
 import json
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.breakout_quality_policy import BREAKOUT_QUALITY_DEFAULT_FILTER_ID
+from core.display_common import render_elapsed
 from core.runtime_utils import (
     is_interactive_console,
     resolve_cli_program_name,
@@ -346,6 +348,8 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         raise RuntimeError("breakout quality train command 缺少可重用參數驗證介面")
     validate_train_args(parse_train_args(_build_train_argv(args)))
 
+    workflow_started = time.perf_counter()
+    color_time = bool(sys.stdout.isatty())
     print("\n=== Breakout Quality Research Workflow ===")
     print(f"filter_id={filter_id}")
     print(f"dataset={args.dataset}")
@@ -403,12 +407,20 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
 
     for index, (command, command_args, label) in enumerate(steps, start=1):
         print(f"\n[{index}/{len(steps)}] {label}")
+        stage_started = time.perf_counter()
         rc = _run_command(command, command_args, program_name=program_name)
+        stage_elapsed = time.perf_counter() - stage_started
+        elapsed_text = render_elapsed(stage_elapsed, color=color_time)
         if rc != 0:
-            print(f"[stop] {label} 回傳非零狀態: {rc}")
+            print(f"[失敗] {label} | 耗時 {elapsed_text} | 狀態 {rc}")
             return int(rc)
+        print(f"[完成] {label} | 耗時 {elapsed_text}")
 
-    print("\n=== Workflow 完成 ===")
+    workflow_elapsed = time.perf_counter() - workflow_started
+    print(
+        "\n=== Workflow 完成 | "
+        f"總耗時 {render_elapsed(workflow_elapsed, color=color_time)} ==="
+    )
     return 0
 
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
-import json
 import importlib
+import json
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -149,15 +149,18 @@ def validate_dataset_cli_contract_case(_base_params):
         workflow_calls.append((command, list(args), program_name))
         return 0
 
+    workflow_output = StringIO()
     with (
         patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
         patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
         patch("apps.breakout_quality._run_command", side_effect=_fake_run_command),
+        redirect_stdout(workflow_output),
     ):
         workflow_rc = app_breakout_quality._run_workflow(
             workflow_args,
             program_name="apps/breakout_quality.py",
         )
+    workflow_console = workflow_output.getvalue()
     add_check(results, "cli_contract", case_id, "breakout_quality_workflow_report_rc", 0, workflow_rc)
     add_check(
         results,
@@ -175,6 +178,22 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         "--include-oos" in workflow_calls[-1][1],
     )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_shows_each_stage_elapsed",
+        3,
+        workflow_console.count("[完成]") if "總耗時" in workflow_console else -1,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_redirected_workflow_has_no_ansi",
+        False,
+        "\x1b[" in workflow_console,
+    )
 
     train_module = importlib.import_module("tools.filters.breakout_quality.train")
     epoch_line = train_module._render_epoch_selection_progress(
@@ -182,6 +201,7 @@ def validate_dataset_cli_contract_case(_base_params):
         max_epochs=20,
         train_loss=0.66784,
         validation_loss=0.69397,
+        elapsed_sec=65.4,
         improved=True,
     )
     add_check(
@@ -189,21 +209,57 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_train_epoch_output_is_concise",
-        "  Epoch  2/20 | Train Loss 0.667840 | Val Loss 0.693970 | ★ 新最佳",
+        "  Epoch  2/20 | Train Loss 0.667840 | Val Loss 0.693970 | 耗時 01:05.4 | ★ 新最佳",
         epoch_line,
     )
     full_refit_line = train_module._render_full_selection_progress(
         epoch=2,
         epochs=2,
         train_loss=0.674436,
+        elapsed_sec=3723.2,
     )
     add_check(
         results,
         "cli_contract",
         case_id,
         "breakout_quality_full_refit_output_labels_train_loss",
-        "  Epoch  2/2 | Train Loss 0.674436",
+        "  Epoch  2/2 | Train Loss 0.674436 | 耗時 01:02:03.2",
         full_refit_line,
+    )
+    colored_epoch_line = train_module._render_epoch_selection_progress(
+        epoch=1,
+        max_epochs=20,
+        train_loss=0.7,
+        validation_loss=0.8,
+        elapsed_sec=1.2,
+        improved=False,
+        color=True,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_epoch_elapsed_value_is_cyan_only",
+        True,
+        "耗時 \x1b[96m00:01.2\x1b[0m" in colored_epoch_line
+        and "Train Loss \x1b[" not in colored_epoch_line,
+    )
+    build_module = importlib.import_module("tools.filters.breakout_quality.build_dataset")
+    build_progress_line = build_module._render_full_build_progress(
+        index=12,
+        total=100,
+        ticker="2330",
+        event_count=12345,
+        group_count=678,
+        elapsed_sec=65.4,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_dataset_progress_is_single_line_summary",
+        "Dataset 重建  12/100 ( 12.0%) | 2330 | 累計 events=12,345 groups=678 | 耗時 01:05.4",
+        build_progress_line,
     )
     compact_summary = train_module._render_training_summary(
         split_report={

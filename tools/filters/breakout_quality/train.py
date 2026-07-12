@@ -30,6 +30,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
 )
+from core.display_common import render_elapsed
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
@@ -183,13 +184,16 @@ def _render_epoch_selection_progress(
     max_epochs: int,
     train_loss: float,
     validation_loss: float,
+    elapsed_sec: float,
     improved: bool,
+    color: bool = False,
 ) -> str:
     best_marker = " | ★ 新最佳" if improved else ""
     return (
         f"  Epoch {int(epoch):>2}/{int(max_epochs)} | "
         f"Train Loss {float(train_loss):.6f} | "
-        f"Val Loss {float(validation_loss):.6f}{best_marker}"
+        f"Val Loss {float(validation_loss):.6f} | "
+        f"耗時 {render_elapsed(elapsed_sec, color=color)}{best_marker}"
     )
 
 
@@ -215,10 +219,13 @@ def _render_full_selection_progress(
     epoch: int,
     epochs: int,
     train_loss: float,
+    elapsed_sec: float,
+    color: bool = False,
 ) -> str:
     return (
         f"  Epoch {int(epoch):>2}/{int(epochs)} | "
-        f"Train Loss {float(train_loss):.6f}"
+        f"Train Loss {float(train_loss):.6f} | "
+        f"耗時 {render_elapsed(elapsed_sec, color=color)}"
     )
 
 
@@ -474,7 +481,9 @@ def _select_epoch_with_inner_validation(
     epochs_without_improvement = 0
     history = []
     print("\nEpoch 選擇（依 Validation Loss）")
+    color_time = bool(sys.stdout.isatty())
     for epoch in range(1, int(max_epochs) + 1):
+        epoch_started = time.perf_counter()
         batch_loss = _train_one_epoch(
             torch,
             model=model,
@@ -511,6 +520,7 @@ def _select_epoch_with_inner_validation(
             evaluation_batch_size=evaluation_batch_size,
         )
         validation_loss = float(validation_metrics["loss"])
+        epoch_elapsed = time.perf_counter() - epoch_started
         improved = validation_loss < (
             best_validation_loss - float(min_delta)
         )
@@ -527,6 +537,7 @@ def _select_epoch_with_inner_validation(
                 "batch_loss": round(float(batch_loss), 6),
                 "inner_train_metrics": train_metrics,
                 "inner_validation_metrics": validation_metrics,
+                "elapsed_sec": round(float(epoch_elapsed), 3),
                 "is_best_epoch": bool(improved),
             }
         )
@@ -536,7 +547,9 @@ def _select_epoch_with_inner_validation(
                 max_epochs=max_epochs,
                 train_loss=train_metrics["loss"],
                 validation_loss=validation_loss,
+                elapsed_sec=epoch_elapsed,
                 improved=improved,
+                color=color_time,
             )
         )
         if int(patience) > 0 and epochs_without_improvement >= int(patience):
@@ -596,7 +609,9 @@ def _fit_full_selection(
         else "完整 Selection 訓練"
     )
     print(f"\n{phase_title}（{int(epochs)} Epoch）")
+    color_time = bool(sys.stdout.isatty())
     for epoch in range(1, int(epochs) + 1):
+        epoch_started = time.perf_counter()
         batch_loss = _train_one_epoch(
             torch,
             model=model,
@@ -621,11 +636,13 @@ def _fit_full_selection(
             class_weights,
             evaluation_batch_size=evaluation_batch_size,
         )
+        epoch_elapsed = time.perf_counter() - epoch_started
         history.append(
             {
                 "epoch": int(epoch),
                 "batch_loss": round(float(batch_loss), 6),
                 "selection_metrics": metrics,
+                "elapsed_sec": round(float(epoch_elapsed), 3),
             }
         )
         print(
@@ -633,6 +650,8 @@ def _fit_full_selection(
                 epoch=epoch,
                 epochs=epochs,
                 train_loss=metrics["loss"],
+                elapsed_sec=epoch_elapsed,
+                color=color_time,
             )
         )
     if not history:
