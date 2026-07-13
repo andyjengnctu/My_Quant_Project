@@ -135,6 +135,8 @@ def validate_dataset_cli_contract_case(_base_params):
         train_prefetch_batches=0,
         preload_feature_bank=True,
         lr=0.001,
+        weight_decay=0.0001,
+        gradient_clip_norm=1.0,
         seed=42,
         fixed_threshold=0.5,
         inner_validation_months=24,
@@ -189,6 +191,19 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_propagates_parallel_split_evaluation",
         True,
         "--parallel-split-evaluation" in workflow_calls[0][1],
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_propagates_optimizer_regularization",
+        True,
+        (
+            "--weight-decay" in workflow_calls[0][1]
+            and "0.0001" in workflow_calls[0][1]
+            and "--gradient-clip-norm" in workflow_calls[0][1]
+            and "1.0" in workflow_calls[0][1]
+        ),
     )
     add_check(
         results,
@@ -334,6 +349,8 @@ def validate_dataset_cli_contract_case(_base_params):
         "train_prefetch_batches",
         "preload_feature_bank",
         "lr",
+        "weight_decay",
+        "gradient_clip_norm",
         "seed",
         "fixed_threshold",
         "use_inner_validation",
@@ -360,6 +377,8 @@ def validate_dataset_cli_contract_case(_base_params):
         train_prefetch_batches=0,
         preload_feature_bank=True,
         lr=0.002,
+        weight_decay=0.0002,
+        gradient_clip_norm=0.8,
         seed=17,
         fixed_threshold=0.55,
         use_inner_validation=True,

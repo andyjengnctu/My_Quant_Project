@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import Mapping
 
 from config.breakout_quality_policy import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+from filters.breakout_quality.models.multiscale_cnn import build_multiscale_cnn
 from filters.breakout_quality.models.residual_tcn import build_residual_tcn
 from filters.breakout_quality.models.spec import (
+    MULTISCALE_CNN_V1,
     RESIDUAL_TCN_V1,
     TINY_CNN_V1,
     get_model_spec,
@@ -53,6 +55,14 @@ def build_model(
             torch,
             feature_count=int(feature_count),
             context_count=int(context_count),
+        )
+    if spec.architecture == MULTISCALE_CNN_V1:
+        return build_multiscale_cnn(
+            nn,
+            torch,
+            feature_count=int(feature_count),
+            context_count=int(context_count),
+            spec=spec,
         )
     if spec.architecture == RESIDUAL_TCN_V1:
         return build_residual_tcn(

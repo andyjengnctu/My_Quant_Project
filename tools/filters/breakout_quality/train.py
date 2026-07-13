@@ -23,8 +23,10 @@ import pandas as pd
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
+    BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
     BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
     BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
+    BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
@@ -150,6 +152,18 @@ def parse_args(argv=None):
         help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
     )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
+        help="Adam L2 weight decay；0 表示關閉",
+    )
+    parser.add_argument(
+        "--gradient-clip-norm",
+        type=float,
+        default=BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
+        help="每次 optimizer update 前的全域 gradient norm 上限；0 表示關閉",
+    )
     parser.add_argument("--seed", type=int, default=BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED)
     parser.add_argument(
         "--fixed-threshold",
@@ -200,6 +214,8 @@ def validate_training_args(args) -> None:
     evaluation_workers = int(args.evaluation_workers)
     train_prefetch_batches = int(args.train_prefetch_batches)
     learning_rate = float(args.lr)
+    weight_decay = float(args.weight_decay)
+    gradient_clip_norm = float(args.gradient_clip_norm)
     fixed_threshold = float(args.fixed_threshold)
     validation_months = int(args.inner_validation_months)
     patience = int(args.early_stopping_patience)
@@ -212,11 +228,16 @@ def validate_training_args(args) -> None:
         or evaluation_batch_size < 1
         or evaluation_workers < 1
         or train_prefetch_batches < 0
+        or not np.isfinite(learning_rate)
         or learning_rate <= 0
+        or not np.isfinite(weight_decay)
+        or weight_decay < 0
+        or not np.isfinite(gradient_clip_norm)
+        or gradient_clip_norm < 0
     ):
         raise ValueError(
             "epochs、batch-size、evaluation-batch-size、evaluation-workers 必須 >=1，"
-            "train-prefetch-batches 必須 >=0，lr 必須 >0"
+            "train-prefetch-batches、weight-decay、gradient-clip-norm 必須 >=0，lr 必須 >0"
         )
     if validation_months < 1:
         raise ValueError("inner-validation-months 必須 >=1")
@@ -610,11 +631,16 @@ def _new_training_state(
     train_idx: np.ndarray,
     sample_weights: np.ndarray,
     learning_rate: float,
+    weight_decay: float,
     seed: int,
 ):
     torch.manual_seed(int(seed))
     model = build_model(feature_count, context_count)
-    optimizer = torch.optim.Adam(model.parameters(), lr=float(learning_rate))
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=float(learning_rate),
+        weight_decay=float(weight_decay),
+    )
     class_weights_np = _class_weights(y[train_idx], sample_weights[train_idx])
     class_weights = torch.tensor(class_weights_np, dtype=torch.float32)
     return model, optimizer, class_weights_np, class_weights
@@ -634,6 +660,7 @@ def _train_one_epoch(
     batch_size: int,
     shuffle_seed: int,
     prefetch_batches: int,
+    gradient_clip_norm: float,
 ) -> float:
     import torch.nn.functional as F
 
@@ -663,6 +690,11 @@ def _train_one_epoch(
         )
         loss = (loss_items * wb).sum() / torch.clamp(wb.sum(), min=1e-12)
         loss.backward()
+        if float(gradient_clip_norm) > 0.0:
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=float(gradient_clip_norm),
+            )
         optimizer.step()
         batch_losses.append(float(loss.item()))
     return float(np.mean(batch_losses)) if batch_losses else float("nan")
@@ -680,6 +712,8 @@ def _select_epoch_with_inner_validation(
     max_epochs: int,
     batch_size: int,
     learning_rate: float,
+    weight_decay: float,
+    gradient_clip_norm: float,
     seed: int,
     patience: int,
     min_delta: float,
@@ -701,6 +735,7 @@ def _select_epoch_with_inner_validation(
         train_idx=train_idx,
         sample_weights=sample_weights,
         learning_rate=learning_rate,
+        weight_decay=weight_decay,
         seed=seed,
     )
     best_epoch = 0
@@ -725,6 +760,7 @@ def _select_epoch_with_inner_validation(
             batch_size=batch_size,
             shuffle_seed=int(seed) + epoch,
             prefetch_batches=train_prefetch_batches,
+            gradient_clip_norm=gradient_clip_norm,
         )
         train_metrics, validation_metrics = _evaluate_inner_splits(
             torch,
@@ -808,6 +844,8 @@ def _fit_full_selection(
     epochs: int,
     batch_size: int,
     learning_rate: float,
+    weight_decay: float,
+    gradient_clip_norm: float,
     seed: int,
     phase_name: str,
     evaluation_batch_size: int,
@@ -823,6 +861,7 @@ def _fit_full_selection(
         train_idx=train_idx,
         sample_weights=sample_weights,
         learning_rate=learning_rate,
+        weight_decay=weight_decay,
         seed=seed,
     )
     history = []
@@ -848,6 +887,7 @@ def _fit_full_selection(
             batch_size=batch_size,
             shuffle_seed=int(seed) + epoch,
             prefetch_batches=train_prefetch_batches,
+            gradient_clip_norm=gradient_clip_norm,
         )
         metrics = _evaluate(
             torch,
@@ -903,6 +943,8 @@ def main(argv=None) -> int:
     train_prefetch_batches = int(args.train_prefetch_batches)
     preload_feature_bank = bool(args.preload_feature_bank)
     learning_rate = float(args.lr)
+    weight_decay = float(args.weight_decay)
+    gradient_clip_norm = float(args.gradient_clip_norm)
     fixed_threshold = float(args.fixed_threshold)
     use_inner_validation = bool(args.use_inner_validation)
     validation_months = int(args.inner_validation_months)
@@ -1020,6 +1062,8 @@ def main(argv=None) -> int:
             max_epochs=max_epochs,
             batch_size=batch_size,
             learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            gradient_clip_norm=gradient_clip_norm,
             seed=int(args.seed),
             patience=patience,
             min_delta=min_delta,
@@ -1048,6 +1092,8 @@ def main(argv=None) -> int:
         epochs=selected_epoch,
         batch_size=batch_size,
         learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        gradient_clip_norm=gradient_clip_norm,
         seed=int(args.seed),
         phase_name=phase_name,
         evaluation_batch_size=evaluation_batch_size,
@@ -1171,6 +1217,8 @@ def main(argv=None) -> int:
         "class_weights_reject_pass": final_fit["class_weights_reject_pass"],
         "seed": int(args.seed),
         "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "gradient_clip_norm": gradient_clip_norm,
         "batch_size": batch_size,
         "evaluation_batch_size": evaluation_batch_size,
         "evaluation_workers": evaluation_workers,
@@ -1189,6 +1237,8 @@ def main(argv=None) -> int:
             "training_order_changed": False,
             "final_metrics_reused_from_last_full_epoch_evaluation": True,
             "optimizer_zero_grad_set_to_none": True,
+            "optimizer_weight_decay": weight_decay,
+            "gradient_clip_norm": gradient_clip_norm,
             "training_batch_prefetch": train_prefetch_batches,
             "feature_bank_preloaded": preload_feature_bank,
         },

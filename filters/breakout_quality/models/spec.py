@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 
 TINY_CNN_V1 = "tiny_cnn_v1"
+MULTISCALE_CNN_V1 = "multiscale_cnn_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
-SUPPORTED_MODEL_ARCHITECTURES = (TINY_CNN_V1, RESIDUAL_TCN_V1)
+SUPPORTED_MODEL_ARCHITECTURES = (
+    TINY_CNN_V1,
+    MULTISCALE_CNN_V1,
+    RESIDUAL_TCN_V1,
+)
 
 
 @dataclass(frozen=True)
@@ -22,11 +27,41 @@ class BreakoutQualityModelSpec:
     pooling: tuple[str, ...]
     dropout: float
     receptive_field_bars: int
+    normalization: str | None = None
+    normalization_groups: int | None = None
+    head_width: int | None = None
+    branch_downsample_factors: tuple[int, ...] = ()
+    branch_kernel_sizes: tuple[tuple[int, ...], ...] = ()
+    branch_summary_windows_bars: tuple[tuple[int, ...], ...] = ()
 
     def as_manifest_payload(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["dilations"] = list(self.dilations)
-        payload["pooling"] = list(self.pooling)
+        payload: dict[str, Any] = {
+            "architecture": self.architecture,
+            "family": self.family,
+            "channels": int(self.channels),
+            "kernel_size": int(self.kernel_size),
+            "dilations": list(self.dilations),
+            "convolutions_per_block": int(self.convolutions_per_block),
+            "pooling": list(self.pooling),
+            "dropout": float(self.dropout),
+            "receptive_field_bars": int(self.receptive_field_bars),
+        }
+        optional_scalars = {
+            "normalization": self.normalization,
+            "normalization_groups": self.normalization_groups,
+            "head_width": self.head_width,
+        }
+        for key, value in optional_scalars.items():
+            if value is not None:
+                payload[key] = value
+        if self.branch_downsample_factors:
+            payload["branch_downsample_factors"] = list(self.branch_downsample_factors)
+        if self.branch_kernel_sizes:
+            payload["branch_kernel_sizes"] = [list(values) for values in self.branch_kernel_sizes]
+        if self.branch_summary_windows_bars:
+            payload["branch_summary_windows_bars"] = [
+                list(values) for values in self.branch_summary_windows_bars
+            ]
         return payload
 
 
@@ -48,6 +83,21 @@ def _residual_receptive_field(
     )
 
 
+def _multiscale_receptive_field(
+    *, downsample_factors: tuple[int, ...], kernel_sizes: tuple[tuple[int, ...], ...]
+) -> int:
+    if len(downsample_factors) != len(kernel_sizes):
+        raise ValueError("multiscale branch spec 長度不一致")
+    branch_fields = []
+    for factor, kernels in zip(downsample_factors, kernel_sizes):
+        if int(factor) < 1 or not kernels:
+            raise ValueError("multiscale branch factor 與 kernels 必須有效")
+        branch_fields.append(
+            int(factor) * (1 + sum(int(kernel) - 1 for kernel in kernels))
+        )
+    return max(branch_fields)
+
+
 def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
     normalized = normalize_model_architecture(architecture)
     if normalized == TINY_CNN_V1:
@@ -61,6 +111,31 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             pooling=("average",),
             dropout=0.10,
             receptive_field_bars=11,
+        )
+
+    if normalized == MULTISCALE_CNN_V1:
+        downsample_factors = (1, 2, 4)
+        branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
+        branch_summary_windows_bars = ((0, 20), (0, 60), (120, 300))
+        return BreakoutQualityModelSpec(
+            architecture=MULTISCALE_CNN_V1,
+            family="multiscale_cnn",
+            channels=16,
+            kernel_size=31,
+            dilations=(),
+            convolutions_per_block=2,
+            pooling=("last", "window_average"),
+            dropout=0.25,
+            receptive_field_bars=_multiscale_receptive_field(
+                downsample_factors=downsample_factors,
+                kernel_sizes=branch_kernel_sizes,
+            ),
+            normalization="group_norm",
+            normalization_groups=4,
+            head_width=32,
+            branch_downsample_factors=downsample_factors,
+            branch_kernel_sizes=branch_kernel_sizes,
+            branch_summary_windows_bars=branch_summary_windows_bars,
         )
 
     kernel_size = 3
@@ -99,6 +174,7 @@ def model_spec_from_manifest(payload: Mapping[str, object]) -> BreakoutQualityMo
 
 __all__ = [
     "BreakoutQualityModelSpec",
+    "MULTISCALE_CNN_V1",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",

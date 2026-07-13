@@ -72,17 +72,19 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 模型架構只由 `config/breakout_quality_policy.py` 的下列設定切換：
 
 ```python
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "residual_tcn_v1"
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v1"
 # 或
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "tiny_cnn_v1"
+# 或
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "residual_tcn_v1"
 ```
 
-切換架構後可直接重跑 `workflow`。現有 Dataset、feature bank、future-path cache 與 labels 會沿用，不需重建；模型必須重新訓練。兩種架構的 model、manifest、scores、research scores 與 reports 分開存放，因此不會互相覆蓋。`residual_tcn_v1` 使用 6 個 residual dilated blocks、dilation 1/2/4/8/16/32、約 253 bars receptive field，以及 last/average/max pooling；`tiny_cnn_v1` 保留舊兩層 Conv1D baseline。
+切換架構後可直接重跑 `workflow`。現有 Dataset、feature bank、future-path cache 與 labels 會沿用，不需重建；模型必須重新訓練。三種架構的 model、manifest、scores、research scores 與 reports 分開存放，因此不會互相覆蓋。`multiscale_cnn_v1` 是預設中型模型，使用 16-channel 短／中／長三分支、GroupNorm、約 244 bars receptive field、20／60／120／300 bars window-average 與 last pooling，不使用 global max pooling；參數量介於 Tiny 與 Residual TCN 之間。`residual_tcn_v1` 使用 6 個 residual dilated blocks、dilation 1/2/4/8/16/32、約 253 bars receptive field，以及 last/average/max pooling；`tiny_cnn_v1` 保留舊兩層 Conv1D baseline。
 
 - `workflow` 會自動分成三種處理：工件、profile、ticker coverage、feature/high_len/benchmark/path-cache、欄位契約或來源 CSV inventory 改變時完整重建；只有 label horizon/PASS/REJECT 改變且 horizon 未超過 future path cache 時執行快速 relabel；全部一致時跳過。 完整重建採用 `ticker/date` feature bank 去重、逐檔 CSV 讀取與 per-ticker chunk 合併，正式陣列可 mmap 載入。互動選單只有在判定不需更新時，才詢問「是否強制完整重建 dataset」，預設 N；選 Y 等同 `--rebuild-dataset`。單獨執行 `train` 時若偵測到來源已更新，會 fail-fast 並要求先重建，避免靜默使用過期 dataset。 Dataset 完整重建的逐股票進度固定在同一行刷新，避免大量輸出洗版；重新導向輸出時只保留最終進度摘要與必要的 skip 訊息。
 - 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`；報表只包含 Selection 內診斷，並明確標示不能作為正式泛化結論。
 - 選單只是正式 UI orchestration；dataset、split、training、export 與 evaluation 規則仍只實作在既有子系統，不在 app 複製。
-- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE`、epochs、training batch size、evaluation batch size、evaluation workers、parallel split evaluation、training prefetch、feature-bank preload、`learning rate`、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；互動選單直接採用 policy，不再逐項詢問，CLI 可單次覆蓋且不回寫 policy。`evaluation batch size` 與 `evaluation workers` 控制完整 Train／Validation／Selection 及 score export 的 read-only 推論：原 batch boundaries、全部 requested rows、輸出列序與最終 reduction 順序都不變。開啟 `parallel split evaluation` 時，Inner Train 與 Validation 的完整評估同時執行，峰值最多使用 `2 × evaluation workers`，但各自仍使用原本的資料列、batch 與模型快照。訓練仍固定單執行緒；`zero_grad(set_to_none=True)`、RAM preload 與可選的 batch prefetch 不改訓練 rows、shuffle、optimizer 更新或模型結果。Final refit 最後一輪已完成的完整指標會直接沿用，避免完全重複推論。Research／forward-OOS score export 也使用固定 batch 的平行 model replicas，最後依原列序寫回相同 scores。GPU 或多執行緒 training 可能改變浮點結果，因此不在 strict-result 預設模式啟用。`train` 終端的 Epoch 選擇每輪顯示完整 Inner Train Loss、Validation Loss、新最佳標記與該 Epoch 總耗時；完整 Selection 重訓沒有獨立 Validation，因此每輪顯示 Train Loss 與耗時。完整研究流程會在每一階段結束後顯示階段耗時，並在最後顯示 workflow 總耗時；互動終端中的時間值使用淡藍色，重新導向或測試輸出不插入 ANSI 色碼。關鍵資料區段與工件路徑保留在終端，完整 history、split policy、overlap、counts 與 Epoch `elapsed_sec` 仍保留於 `manifest.json`，不再將整包 Python dict 印到終端。
+- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE`、epochs、training batch size、evaluation batch size、evaluation workers、parallel split evaluation、training prefetch、feature-bank preload、`learning rate`、`weight decay`、`gradient clip norm`、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；互動選單直接採用 policy，不再逐項詢問，CLI 可單次覆蓋且不回寫 policy。`evaluation batch size` 與 `evaluation workers` 控制完整 Train／Validation／Selection 及 score export 的 read-only 推論：原 batch boundaries、全部 requested rows、輸出列序與最終 reduction 順序都不變。開啟 `parallel split evaluation` 時，Inner Train 與 Validation 的完整評估同時執行，峰值最多使用 `2 × evaluation workers`，但各自仍使用原本的資料列、batch 與模型快照。訓練仍固定單執行緒；`zero_grad(set_to_none=True)`、policy 指定的 Adam weight decay、gradient clipping、RAM preload 與可選的 batch prefetch 均忠實套用並寫入 manifest；除已明確設定的 regularization 外，不改訓練 rows、shuffle 或 batch 邊界。Final refit 最後一輪已完成的完整指標會直接沿用，避免完全重複推論。Research／forward-OOS score export 也使用固定 batch 的平行 model replicas，最後依原列序寫回相同 scores。GPU 或多執行緒 training 可能改變浮點結果，因此不在 strict-result 預設模式啟用。`train` 終端的 Epoch 選擇每輪顯示完整 Inner Train Loss、Validation Loss、新最佳標記與該 Epoch 總耗時；完整 Selection 重訓沒有獨立 Validation，因此每輪顯示 Train Loss 與耗時。完整研究流程會在每一階段結束後顯示階段耗時，並在最後顯示 workflow 總耗時；互動終端中的時間值使用淡藍色，重新導向或測試輸出不插入 ANSI 色碼。關鍵資料區段與工件路徑保留在終端，完整 history、split policy、overlap、counts 與 Epoch `elapsed_sec` 仍保留於 `manifest.json`，不再將整包 Python dict 印到終端。
 
 也可逐步執行：
 

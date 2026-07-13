@@ -297,6 +297,16 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
         help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
     )
     parser.add_argument("--lr", type=float, default=float(defaults.lr))
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=float(defaults.weight_decay),
+    )
+    parser.add_argument(
+        "--gradient-clip-norm",
+        type=float,
+        default=float(defaults.gradient_clip_norm),
+    )
     parser.add_argument("--seed", type=int, default=int(defaults.seed))
     parser.add_argument(
         "--fixed-threshold",
@@ -348,6 +358,10 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         str(int(args.train_prefetch_batches)),
         "--lr",
         str(float(args.lr)),
+        "--weight-decay",
+        str(float(args.weight_decay)),
+        "--gradient-clip-norm",
+        str(float(args.gradient_clip_norm)),
         "--seed",
         str(int(args.seed)),
         "--fixed-threshold",
@@ -409,7 +423,9 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         f"parallel_split_evaluation={bool(args.parallel_split_evaluation)}, "
         f"prefetch={int(args.train_prefetch_batches)}, "
         f"preload_feature_bank={bool(args.preload_feature_bank)}, "
-        f"lr={float(args.lr)}, seed={int(args.seed)}, threshold={float(args.fixed_threshold):.6f}, "
+        f"lr={float(args.lr)}, weight_decay={float(args.weight_decay)}, "
+        f"gradient_clip_norm={float(args.gradient_clip_norm)}, seed={int(args.seed)}, "
+        f"threshold={float(args.fixed_threshold):.6f}, "
         f"inner_validation={bool(args.use_inner_validation)}"
     )
     print("注意：OOS 只供最終泛化評估，不得依結果回頭調整 threshold、epochs 或模型。")
@@ -529,6 +545,8 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         train_prefetch_batches=int(defaults.train_prefetch_batches),
         preload_feature_bank=bool(defaults.preload_feature_bank),
         lr=float(defaults.lr),
+        weight_decay=float(defaults.weight_decay),
+        gradient_clip_norm=float(defaults.gradient_clip_norm),
         seed=int(defaults.seed),
         fixed_threshold=float(defaults.fixed_threshold),
         use_inner_validation=bool(defaults.use_inner_validation),
@@ -567,6 +585,8 @@ def _print_policy_defaults(
         f"- Train Prefetch Batches：{int(train_settings.train_prefetch_batches)}\n"
         f"- Preload Feature Bank：{'開啟' if bool(train_settings.preload_feature_bank) else '關閉'}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"
+        f"- Weight Decay：{float(train_settings.weight_decay):g}\n"
+        f"- Gradient Clip Norm：{float(train_settings.gradient_clip_norm):g}\n"
         f"- Random Seed：{int(train_settings.seed)}\n"
         f"- Threshold：{float(train_settings.fixed_threshold):g}\n"
         f"- Inner Validation：{'開啟' if bool(train_settings.use_inner_validation) else '關閉'}"

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN, build_breakout_optimizer_high_len_values
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "residual_tcn_v1"  # 模型架構；可設為 tiny_cnn_v1 或 residual_tcn_v1，切換時沿用 Dataset 但須重新訓練。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v1"  # 模型架構；可設為 tiny_cnn_v1、multiscale_cnn_v1 或 residual_tcn_v1，切換時沿用 Dataset 但須重新訓練。
 BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
 BREAKOUT_QUALITY_DEFAULT_EPOCHS = 20  # 關閉 inner validation 時為固定訓練輪數；開啟時為 epoch 搜尋上限。
 BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 128  # 每次梯度更新使用的訓練 rows 數。
-BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.001  # Adam optimizer 的預設 learning rate。
+BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.0003  # Adam optimizer 的預設 learning rate；中型多尺度 CNN 使用較低 learning rate 抑制快速過度擬合。
+BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY = 0.0001  # Adam 的 L2 weight decay；0 表示關閉。
+BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM = 1.0  # 每次更新前的全域 gradient norm 上限；0 表示關閉。
 BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED = 42  # 模型初始化、Dropout 與每個 epoch 資料洗牌的預設亂數種子。
 BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE = 4096  # Train／Validation／Selection 完整評估與分數匯出的分批大小；不抽樣、不改模型更新或輸出列序。
 BREAKOUT_QUALITY_EVALUATION_WORKERS = 4  # 每個完整資料區段評估／分數匯出的 inference workers；每個 worker 維持單執行緒，batch 與最終列序不變。
@@ -29,7 +31,7 @@ BREAKOUT_QUALITY_FEATURE_WINDOW_BARS = 300  # 每個事件輸入模型的歷史�
 BREAKOUT_QUALITY_LABEL_HORIZON_BARS = 40  # 自突破訊號隔日起，用來判定 PASS 或 REJECT 的未來交易日數；資料不足或無效者不產生有效 Label。
 BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS = 120  # 快取每個 ticker/date 的未來 K 線路徑長度；調整門檻或不超過此值的 horizon 時只需快速 relabel。
 BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN = 0.05  # PASS 至少要求的最大有利漲幅（MFE）；必須嚴格大於此值。
-BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO = 1.5  # PASS 的最低 MFE／MAE；必須嚴格大於 1，且實際判定也採嚴格大於。
+BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO = 2.0  # PASS 的最低 MFE／MAE；必須嚴格大於 1，且實際判定也採嚴格大於。
 BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN = -0.10  # 最大容許不利跌幅；Low 觸及或跌破此值即保守標記為 REJECT。
 BREAKOUT_QUALITY_BENCHMARK_TICKER = "0050"  # 建立相對市場特徵時使用的基準 ETF 代號。
 
@@ -52,8 +54,10 @@ __all__ = [
     "BREAKOUT_QUALITY_DEFAULT_EPOCHS",
     "BREAKOUT_QUALITY_DEFAULT_FILTER_ID",
     "BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE",
+    "BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM",
     "BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED",
     "BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD",
+    "BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY",
     "BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE",
     "BREAKOUT_QUALITY_EVALUATION_WORKERS",
     "BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION",

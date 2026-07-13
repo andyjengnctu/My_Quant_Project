@@ -20,9 +20,11 @@ from config.breakout_policy import (
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
+    BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
     BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
     BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
+    BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
@@ -190,7 +192,25 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "model_architecture" in DEFAULT_LABEL_POLICY.as_manifest_payload(),
     )
     tiny_model = build_breakout_quality_model(10, 4, architecture="tiny_cnn_v1")
+    multiscale_model = build_breakout_quality_model(10, 4, architecture="multiscale_cnn_v1")
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
+    tiny_parameter_count = count_trainable_parameters(tiny_model)
+    multiscale_parameter_count = count_trainable_parameters(multiscale_model)
+    residual_parameter_count = count_trainable_parameters(residual_model)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_cnn_is_medium_capacity_with_long_receptive_field",
+        True,
+        (
+            tiny_parameter_count < multiscale_parameter_count < residual_parameter_count
+            and 15000 <= multiscale_parameter_count <= 25000
+            and get_model_spec("multiscale_cnn_v1").receptive_field_bars >= 240
+            and get_model_spec("multiscale_cnn_v1").normalization == "group_norm"
+            and "max" not in get_model_spec("multiscale_cnn_v1").pooling
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -199,12 +219,16 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         True,
         get_model_spec("residual_tcn_v1").receptive_field_bars
         > get_model_spec("tiny_cnn_v1").receptive_field_bars
-        and count_trainable_parameters(residual_model) > count_trainable_parameters(tiny_model),
+        and residual_parameter_count > tiny_parameter_count,
     )
     tiny_paths = resolve_filter_artifact_paths("/project", "synthetic_quality", "tiny_cnn_v1")
+    multiscale_paths = resolve_filter_artifact_paths("/project", "synthetic_quality", "multiscale_cnn_v1")
     residual_paths = resolve_filter_artifact_paths("/project", "synthetic_quality", "residual_tcn_v1")
     tiny_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "tiny_cnn_v1"
+    )
+    multiscale_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "multiscale_cnn_v1"
     )
     residual_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "residual_tcn_v1"
@@ -216,9 +240,10 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         case_id,
         "model_artifacts_are_architecture_scoped_but_dataset_is_shared",
         True,
-        tiny_paths.model_path != residual_paths.model_path
-        and tiny_research != residual_research
+        len({tiny_paths.model_path, multiscale_paths.model_path, residual_paths.model_path}) == 3
+        and len({tiny_research, multiscale_research, residual_research}) == 3
         and tiny_paths.model_dir.name == "tiny_cnn_v1"
+        and multiscale_paths.model_dir.name == "multiscale_cnn_v1"
         and residual_paths.model_dir.name == "residual_tcn_v1"
         and shared_dataset_dir.name == "synthetic_quality",
     )
@@ -231,6 +256,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         int(BREAKOUT_QUALITY_DEFAULT_EPOCHS) >= 1
         and int(BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE) >= 1
         and float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) > 0.0
+        and float(BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY) >= 0.0
+        and float(BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM) >= 0.0
         and int(BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED) >= 0
         and int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE) >= 1
         and int(BREAKOUT_QUALITY_EVALUATION_WORKERS) >= 1
@@ -1142,7 +1169,9 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         "model_manifest": {
             "model_architecture": DEFAULT_MODEL_ARCHITECTURE,
             "model_spec": get_model_spec(DEFAULT_MODEL_ARCHITECTURE).as_manifest_payload(),
-            "trainable_parameter_count": 45026,
+            "trainable_parameter_count": count_trainable_parameters(
+                build_breakout_quality_model(10, 4, architecture=DEFAULT_MODEL_ARCHITECTURE)
+            ),
             "sequence_length": int(DEFAULT_LABEL_POLICY.feature_window_bars),
             "training_mode": "inner_validation_epoch_selection_full_refit",
             "inner_validation_used": True,
@@ -1150,6 +1179,8 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "selected_epoch": 2,
             "fixed_evaluation_threshold": 0.5,
             "learning_rate": 0.001,
+            "weight_decay": 0.0001,
+            "gradient_clip_norm": 1.0,
             "batch_size": 256,
             "seed": 42,
             "epoch_selection_source": "inner_validation_loss",
@@ -1266,7 +1297,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v2", 2, payload["schema_version"])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, "- **Threshold**：`0.5`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, "- **Threshold**：`0.5`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
     selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
     normalized_selection_matrix = selection_matrix.replace("**", "")
@@ -1346,7 +1377,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, "Threshold       : 0.5" in console and "Learning Rate   : 0.001" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, "Threshold       : 0.5" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
     markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. OOS 綜合判定", 1)[0]
