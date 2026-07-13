@@ -5,6 +5,54 @@ from __future__ import annotations
 import math
 
 
+EXPECTED_OHLCV_FEATURE_COUNT = 10
+RETURN_DELTA_REPRESENTATION = "return_delta"
+LEVEL_REPRESENTATION = "level"
+SUPPORTED_BRANCH_INPUT_REPRESENTATIONS = frozenset(
+    {LEVEL_REPRESENTATION, RETURN_DELTA_REPRESENTATION}
+)
+
+
+def build_return_delta_representation(torch, sequence):
+    """Convert canonical normalized OHLCV levels into stationary one-bar changes.
+
+    Input and output both use [batch, feature, time] and preserve the canonical
+    10-column order. Price outputs are log(open/high/low/close) relative to the
+    previous close; volume outputs are first differences of the existing robust
+    log-volume normalization. The first bar is zero because its prior bar is
+    outside the stored feature window.
+    """
+
+    if int(sequence.ndim) != 3:
+        raise ValueError("return/delta representation 需要 [batch, feature, time] tensor")
+    if int(sequence.shape[1]) != EXPECTED_OHLCV_FEATURE_COUNT:
+        raise ValueError(
+            "multiscale_cnn_v2 需要 canonical 10-column OHLCV feature contract"
+        )
+
+    result = torch.zeros_like(sequence)
+    if int(sequence.shape[2]) <= 1:
+        return result
+
+    epsilon = 1e-6
+
+    def _log_price(feature_index: int):
+        normalized = torch.clamp(sequence[:, int(feature_index), :], min=-1.0 + epsilon)
+        return torch.log1p(normalized)
+
+    for base_index in (0, 5):
+        previous_close = _log_price(base_index + 3)[:, :-1]
+        for offset in (0, 1, 2, 3):
+            current_price = _log_price(base_index + offset)[:, 1:]
+            result[:, base_index + offset, 1:] = current_price - previous_close
+        volume_index = base_index + 4
+        result[:, volume_index, 1:] = (
+            sequence[:, volume_index, 1:] - sequence[:, volume_index, :-1]
+        )
+
+    return result
+
+
 def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, spec):
     branch_factors = tuple(int(value) for value in spec.branch_downsample_factors)
     branch_kernels = tuple(
@@ -15,18 +63,41 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
         tuple(int(window) for window in windows)
         for windows in spec.branch_summary_windows_bars
     )
+    branch_input_representations = tuple(
+        str(value).strip().lower()
+        for value in (
+            spec.branch_input_representations
+            or (LEVEL_REPRESENTATION,) * len(branch_factors)
+        )
+    )
     if not (
         len(branch_factors)
         == len(branch_kernels)
         == len(branch_summary_windows)
+        == len(branch_input_representations)
         == 3
     ):
-        raise ValueError("multiscale_cnn_v1 必須固定包含三個時間尺度 branch")
+        raise ValueError("multiscale CNN 必須固定包含三個時間尺度 branch")
+    invalid_representations = sorted(
+        set(branch_input_representations) - SUPPORTED_BRANCH_INPUT_REPRESENTATIONS
+    )
+    if invalid_representations:
+        raise ValueError(
+            "multiscale branch input representation 不支援: "
+            + ", ".join(invalid_representations)
+        )
+    if (
+        RETURN_DELTA_REPRESENTATION in branch_input_representations
+        and int(feature_count) != EXPECTED_OHLCV_FEATURE_COUNT
+    ):
+        raise ValueError(
+            "multiscale_cnn_v2 需要 canonical 10-column OHLCV feature contract"
+        )
 
     channels = int(spec.channels)
     group_count = int(spec.normalization_groups)
     if channels < 1 or group_count < 1 or channels % group_count != 0:
-        raise ValueError("multiscale_cnn_v1 channels 必須可被 normalization_groups 整除")
+        raise ValueError("multiscale CNN channels 必須可被 normalization_groups 整除")
 
     class CausalConv1d(nn.Module):
         def __init__(self, in_channels: int, out_channels: int, kernel_size: int):
@@ -47,7 +118,9 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             super().__init__()
             if int(downsample_factor) < 1:
                 raise ValueError("multiscale downsample factor 必須 >= 1")
-            if len(kernel_sizes) != 2 or any(int(value) < 1 or int(value) % 2 == 0 for value in kernel_sizes):
+            if len(kernel_sizes) != 2 or any(
+                int(value) < 1 or int(value) % 2 == 0 for value in kernel_sizes
+            ):
                 raise ValueError("multiscale branch 必須使用兩個正奇數 kernel")
             self.downsample_factor = int(downsample_factor)
             self.downsample = (
@@ -85,7 +158,9 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                     for factor, kernels in zip(branch_factors, branch_kernels)
                 ]
             )
-            summary_width = channels * sum(len(windows) for windows in branch_summary_windows)
+            summary_width = channels * sum(
+                len(windows) for windows in branch_summary_windows
+            )
             self.head = nn.Sequential(
                 nn.Linear(summary_width + int(context_count), int(spec.head_width)),
                 nn.ReLU(),
@@ -94,7 +169,9 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             )
 
         @staticmethod
-        def _summarize_branch(z, *, downsample_factor: int, windows_bars: tuple[int, ...]):
+        def _summarize_branch(
+            z, *, downsample_factor: int, windows_bars: tuple[int, ...]
+        ):
             summaries = []
             for window_bars in windows_bars:
                 if int(window_bars) == 0:
@@ -109,14 +186,28 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             return summaries
 
         def forward(self, x, context):
-            sequence = x.transpose(1, 2)
+            level_sequence = x.transpose(1, 2)
+            return_delta_sequence = None
+            if RETURN_DELTA_REPRESENTATION in branch_input_representations:
+                return_delta_sequence = build_return_delta_representation(
+                    torch, level_sequence
+                )
+
             summaries = []
-            for branch, factor, windows in zip(
+            for branch, factor, windows, representation in zip(
                 self.branches,
                 branch_factors,
                 branch_summary_windows,
+                branch_input_representations,
             ):
-                branch_output = branch(sequence)
+                branch_input = (
+                    level_sequence
+                    if representation == LEVEL_REPRESENTATION
+                    else return_delta_sequence
+                )
+                if branch_input is None:
+                    raise AssertionError("return/delta representation 尚未建立")
+                branch_output = branch(branch_input)
                 summaries.extend(
                     self._summarize_branch(
                         branch_output,
@@ -130,4 +221,11 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
     return MultiScaleBreakoutQualityCNN()
 
 
-__all__ = ["build_multiscale_cnn"]
+__all__ = [
+    "EXPECTED_OHLCV_FEATURE_COUNT",
+    "LEVEL_REPRESENTATION",
+    "RETURN_DELTA_REPRESENTATION",
+    "SUPPORTED_BRANCH_INPUT_REPRESENTATIONS",
+    "build_multiscale_cnn",
+    "build_return_delta_representation",
+]

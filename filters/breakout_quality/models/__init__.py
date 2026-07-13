@@ -8,6 +8,7 @@ from filters.breakout_quality.models.factory import (
 )
 from filters.breakout_quality.models.spec import (
     MULTISCALE_CNN_V1,
+    MULTISCALE_CNN_V2,
     RESIDUAL_TCN_V1,
     SUPPORTED_MODEL_ARCHITECTURES,
     TINY_CNN_V1,
@@ -20,6 +21,7 @@ from filters.breakout_quality.models.spec import (
 __all__ = [
     "BreakoutQualityModelSpec",
     "MULTISCALE_CNN_V1",
+    "MULTISCALE_CNN_V2",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",

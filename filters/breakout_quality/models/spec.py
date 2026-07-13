@@ -8,10 +8,12 @@ from typing import Any, Mapping
 
 TINY_CNN_V1 = "tiny_cnn_v1"
 MULTISCALE_CNN_V1 = "multiscale_cnn_v1"
+MULTISCALE_CNN_V2 = "multiscale_cnn_v2"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
     MULTISCALE_CNN_V1,
+    MULTISCALE_CNN_V2,
     RESIDUAL_TCN_V1,
 )
 
@@ -33,6 +35,7 @@ class BreakoutQualityModelSpec:
     branch_downsample_factors: tuple[int, ...] = ()
     branch_kernel_sizes: tuple[tuple[int, ...], ...] = ()
     branch_summary_windows_bars: tuple[tuple[int, ...], ...] = ()
+    branch_input_representations: tuple[str, ...] = ()
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -62,6 +65,8 @@ class BreakoutQualityModelSpec:
             payload["branch_summary_windows_bars"] = [
                 list(values) for values in self.branch_summary_windows_bars
             ]
+        if self.branch_input_representations:
+            payload["branch_input_representations"] = list(self.branch_input_representations)
         return payload
 
 
@@ -113,12 +118,17 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             receptive_field_bars=11,
         )
 
-    if normalized == MULTISCALE_CNN_V1:
+    if normalized in {MULTISCALE_CNN_V1, MULTISCALE_CNN_V2}:
         downsample_factors = (1, 2, 4)
         branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
         branch_summary_windows_bars = ((0, 20), (0, 60), (120, 300))
+        branch_input_representations = (
+            ()
+            if normalized == MULTISCALE_CNN_V1
+            else ("return_delta", "return_delta", "level")
+        )
         return BreakoutQualityModelSpec(
-            architecture=MULTISCALE_CNN_V1,
+            architecture=normalized,
             family="multiscale_cnn",
             channels=16,
             kernel_size=31,
@@ -136,6 +146,7 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             branch_downsample_factors=downsample_factors,
             branch_kernel_sizes=branch_kernel_sizes,
             branch_summary_windows_bars=branch_summary_windows_bars,
+            branch_input_representations=branch_input_representations,
         )
 
     kernel_size = 3
@@ -175,6 +186,7 @@ def model_spec_from_manifest(payload: Mapping[str, object]) -> BreakoutQualityMo
 __all__ = [
     "BreakoutQualityModelSpec",
     "MULTISCALE_CNN_V1",
+    "MULTISCALE_CNN_V2",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",

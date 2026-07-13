@@ -1101,6 +1101,16 @@ def render_markdown_report(payload: dict) -> str:
     lines.extend(
         [
             f"- **Model Architecture**：`{training.get('model_architecture')}`",
+            (
+                "- **Branch Inputs**：`"
+                + "+".join(
+                    (training.get("model_spec") or {}).get(
+                        "branch_input_representations"
+                    )
+                    or ["level"]
+                )
+                + "`"
+            ),
             f"- **Trainable Parameters**：`{int(training.get('trainable_parameter_count') or 0):,}`",
             f"- **Receptive Field**：`{(training.get('model_spec') or {}).get('receptive_field_bars')} bars`",
             f"- **Pooling**：`{'+'.join((training.get('model_spec') or {}).get('pooling') or [])}`",
@@ -1503,6 +1513,15 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
     lines.extend(
         [
             f"Model           : {training.get('model_architecture')}",
+            (
+                "Branch Inputs   : "
+                + "+".join(
+                    (training.get("model_spec") or {}).get(
+                        "branch_input_representations"
+                    )
+                    or ["level"]
+                )
+            ),
             f"Parameters      : {int(training.get('trainable_parameter_count') or 0):,}",
             f"Receptive Field : {(training.get('model_spec') or {}).get('receptive_field_bars')} bars",
             f"Pooling         : {'+'.join((training.get('model_spec') or {}).get('pooling') or [])}",

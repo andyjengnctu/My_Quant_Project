@@ -431,9 +431,11 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     print(f"filter_id={filter_id}")
     print(f"dataset={args.dataset}")
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
     print(
         "model="
-        f"{model_spec.architecture}, receptive_field={model_spec.receptive_field_bars} bars, "
+        f"{model_spec.architecture}, branch_inputs={branch_inputs}, "
+        f"receptive_field={model_spec.receptive_field_bars} bars, "
         f"pooling={'+'.join(model_spec.pooling)}"
     )
     print(
@@ -600,8 +602,10 @@ def _print_policy_defaults(
         return
     print("使用 config/breakout_quality_policy.py 訓練預設：")
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
     print(
         f"- Model Architecture：{model_spec.architecture}\n"
+        f"- Branch Inputs：{branch_inputs}\n"
         f"- Receptive Field：約 {model_spec.receptive_field_bars} bars\n"
         f"- Pooling：{'+'.join(model_spec.pooling)}\n"
         f"- Epoch 上限：{int(train_settings.epochs)}\n"

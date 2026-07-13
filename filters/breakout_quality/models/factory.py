@@ -9,6 +9,7 @@ from filters.breakout_quality.models.multiscale_cnn import build_multiscale_cnn
 from filters.breakout_quality.models.residual_tcn import build_residual_tcn
 from filters.breakout_quality.models.spec import (
     MULTISCALE_CNN_V1,
+    MULTISCALE_CNN_V2,
     RESIDUAL_TCN_V1,
     TINY_CNN_V1,
     get_model_spec,
@@ -56,7 +57,7 @@ def build_model(
             feature_count=int(feature_count),
             context_count=int(context_count),
         )
-    if spec.architecture == MULTISCALE_CNN_V1:
+    if spec.architecture in {MULTISCALE_CNN_V1, MULTISCALE_CNN_V2}:
         return build_multiscale_cnn(
             nn,
             torch,

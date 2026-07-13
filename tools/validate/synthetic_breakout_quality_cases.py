@@ -91,6 +91,9 @@ from filters.breakout_quality.models import (
     count_trainable_parameters,
     get_model_spec,
 )
+from filters.breakout_quality.models.multiscale_cnn import (
+    build_return_delta_representation,
+)
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
     resolve_filter_output_dir,
@@ -196,9 +199,13 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
     tiny_model = build_breakout_quality_model(10, 4, architecture="tiny_cnn_v1")
     multiscale_model = build_breakout_quality_model(10, 4, architecture="multiscale_cnn_v1")
+    multiscale_v2_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_v2"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
+    multiscale_v2_parameter_count = count_trainable_parameters(multiscale_v2_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -218,20 +225,171 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
+        "multiscale_v2_changes_representation_without_changing_capacity",
+        (
+            multiscale_parameter_count,
+            ("return_delta", "return_delta", "level"),
+        ),
+        (
+            multiscale_v2_parameter_count,
+            get_model_spec("multiscale_cnn_v2").branch_input_representations,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v1_manifest_spec_remains_backward_compatible",
+        False,
+        "branch_input_representations"
+        in get_model_spec("multiscale_cnn_v1").as_manifest_payload(),
+    )
+    torch, _nn = breakout_quality_train.require_torch()
+    level_sequence = torch.zeros((1, 10, 3), dtype=torch.float32)
+    level_sequence[0, 0:5, 1] = torch.tensor(
+        [0.01, 0.03, -0.01, 0.02, 0.50], dtype=torch.float32
+    )
+    level_sequence[0, 0:5, 2] = torch.tensor(
+        [0.03, 0.05, 0.01, 0.04, 0.20], dtype=torch.float32
+    )
+    level_sequence[0, 5:10, 1] = torch.tensor(
+        [0.005, 0.02, -0.005, 0.01, 0.25], dtype=torch.float32
+    )
+    level_sequence[0, 5:10, 2] = torch.tensor(
+        [0.02, 0.03, 0.00, 0.025, 0.40], dtype=torch.float32
+    )
+    return_delta = build_return_delta_representation(torch, level_sequence)
+    expected_second_stock = np.asarray(
+        [
+            np.log1p(0.01),
+            np.log1p(0.03),
+            np.log1p(-0.01),
+            np.log1p(0.02),
+            0.50,
+        ],
+        dtype=np.float32,
+    )
+    expected_third_stock = np.asarray(
+        [
+            np.log1p(0.03) - np.log1p(0.02),
+            np.log1p(0.05) - np.log1p(0.02),
+            np.log1p(0.01) - np.log1p(0.02),
+            np.log1p(0.04) - np.log1p(0.02),
+            -0.30,
+        ],
+        dtype=np.float32,
+    )
+    expected_second_benchmark = np.asarray(
+        [
+            np.log1p(0.005),
+            np.log1p(0.02),
+            np.log1p(-0.005),
+            np.log1p(0.01),
+            0.25,
+        ],
+        dtype=np.float32,
+    )
+    expected_third_benchmark = np.asarray(
+        [
+            np.log1p(0.02) - np.log1p(0.01),
+            np.log1p(0.03) - np.log1p(0.01),
+            np.log1p(0.00) - np.log1p(0.01),
+            np.log1p(0.025) - np.log1p(0.01),
+            0.15,
+        ],
+        dtype=np.float32,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v2_return_delta_transform_matches_canonical_ohlcv_semantics",
+        True,
+        bool(
+            np.allclose(
+                return_delta[0, :, 0].detach().cpu().numpy(),
+                np.zeros(10, dtype=np.float32),
+                atol=1e-7,
+            )
+            and np.allclose(
+                return_delta[0, 0:5, 1].detach().cpu().numpy(),
+                expected_second_stock,
+                atol=1e-6,
+            )
+            and np.allclose(
+                return_delta[0, 0:5, 2].detach().cpu().numpy(),
+                expected_third_stock,
+                atol=1e-6,
+            )
+            and np.allclose(
+                return_delta[0, 5:10, 1].detach().cpu().numpy(),
+                expected_second_benchmark,
+                atol=1e-6,
+            )
+            and np.allclose(
+                return_delta[0, 5:10, 2].detach().cpu().numpy(),
+                expected_third_benchmark,
+                atol=1e-6,
+            )
+            and np.isfinite(return_delta.detach().cpu().numpy()).all()
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v2_forward_shape_matches_existing_contract",
+        (2, 2),
+        tuple(
+            multiscale_v2_model(
+                torch.zeros((2, 300, 10), dtype=torch.float32),
+                torch.zeros((2, 4), dtype=torch.float32),
+            ).shape
+        ),
+    )
+    try:
+        build_breakout_quality_model(9, 4, architecture="multiscale_cnn_v2")
+        noncanonical_feature_contract_rejected = False
+    except ValueError as exc:
+        noncanonical_feature_contract_rejected = "canonical 10-column" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v2_rejects_noncanonical_feature_contract",
+        True,
+        noncanonical_feature_contract_rejected,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
         "residual_tcn_has_larger_receptive_field_and_parameter_count",
         True,
         get_model_spec("residual_tcn_v1").receptive_field_bars
         > get_model_spec("tiny_cnn_v1").receptive_field_bars
         and residual_parameter_count > tiny_parameter_count,
     )
-    tiny_paths = resolve_filter_artifact_paths("/project", "synthetic_quality", "tiny_cnn_v1")
-    multiscale_paths = resolve_filter_artifact_paths("/project", "synthetic_quality", "multiscale_cnn_v1")
-    residual_paths = resolve_filter_artifact_paths("/project", "synthetic_quality", "residual_tcn_v1")
+    tiny_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "tiny_cnn_v1"
+    )
+    multiscale_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "multiscale_cnn_v1"
+    )
+    multiscale_v2_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "multiscale_cnn_v2"
+    )
+    residual_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "residual_tcn_v1"
+    )
     tiny_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "tiny_cnn_v1"
     )
     multiscale_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "multiscale_cnn_v1"
+    )
+    multiscale_v2_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "multiscale_cnn_v2"
     )
     residual_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "residual_tcn_v1"
@@ -243,10 +401,27 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         case_id,
         "model_artifacts_are_architecture_scoped_but_dataset_is_shared",
         True,
-        len({tiny_paths.model_path, multiscale_paths.model_path, residual_paths.model_path}) == 3
-        and len({tiny_research, multiscale_research, residual_research}) == 3
+        len(
+            {
+                tiny_paths.model_path,
+                multiscale_paths.model_path,
+                multiscale_v2_paths.model_path,
+                residual_paths.model_path,
+            }
+        )
+        == 4
+        and len(
+            {
+                tiny_research,
+                multiscale_research,
+                multiscale_v2_research,
+                residual_research,
+            }
+        )
+        == 4
         and tiny_paths.model_dir.name == "tiny_cnn_v1"
         and multiscale_paths.model_dir.name == "multiscale_cnn_v1"
+        and multiscale_v2_paths.model_dir.name == "multiscale_cnn_v2"
         and residual_paths.model_dir.name == "residual_tcn_v1"
         and shared_dataset_dir.name == "synthetic_quality",
     )
