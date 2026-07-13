@@ -14,6 +14,7 @@ import copy
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import gc
+import math
 import time
 import warnings
 
@@ -27,6 +28,9 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
     BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
     BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
+    BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+    BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
+    BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
@@ -87,12 +91,27 @@ from filters.breakout_quality.splits import (
 )
 from tools.filters.breakout_quality.common import (
     event_group_summary,
+    event_group_keys,
     group_size_weights,
     label_counts,
     load_validated_dataset_bundle,
     model_dir,
     write_json,
 )
+
+
+FINAL_REFIT_MODE_MATCHED_OPTIMIZER_STEPS = "matched_optimizer_steps"
+FINAL_REFIT_MODE_SELECTED_EPOCHS = "selected_epochs"
+FINAL_REFIT_MODES = (
+    FINAL_REFIT_MODE_MATCHED_OPTIMIZER_STEPS,
+    FINAL_REFIT_MODE_SELECTED_EPOCHS,
+)
+CLASS_WEIGHT_MODE_NONE = "none"
+CLASS_WEIGHT_MODE_INVERSE_FREQUENCY = "inverse_frequency"
+CLASS_WEIGHT_MODES = (CLASS_WEIGHT_MODE_NONE, CLASS_WEIGHT_MODE_INVERSE_FREQUENCY)
+TIME_WEIGHT_MODE_NONE = "none"
+TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT = "year_balanced_sqrt"
+TIME_WEIGHT_MODES = (TIME_WEIGHT_MODE_NONE, TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT)
 
 
 def parse_args(argv=None):
@@ -164,6 +183,27 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
         help="每次 optimizer update 前的全域 gradient norm 上限；0 表示關閉",
     )
+    parser.add_argument(
+        "--final-refit-mode",
+        choices=FINAL_REFIT_MODES,
+        default=BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+        help=(
+            "inner validation 選出 epoch 後的完整 Selection 重訓方式；"
+            "matched_optimizer_steps 匹配 optimizer updates，selected_epochs 使用舊式相同 epoch 數"
+        ),
+    )
+    parser.add_argument(
+        "--class-weight-mode",
+        choices=CLASS_WEIGHT_MODES,
+        default=BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
+        help="Cross-entropy 類別權重模式",
+    )
+    parser.add_argument(
+        "--time-weight-mode",
+        choices=TIME_WEIGHT_MODES,
+        default=BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+        help="訓練 sample 的時間權重模式",
+    )
     parser.add_argument("--seed", type=int, default=BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED)
     parser.add_argument(
         "--fixed-threshold",
@@ -222,6 +262,9 @@ def validate_training_args(args) -> None:
     min_delta = float(args.early_stopping_min_delta)
     min_train_samples = int(args.min_train_samples)
     min_validation_samples = int(args.min_validation_samples)
+    final_refit_mode = str(args.final_refit_mode).strip().lower()
+    class_weight_mode = str(args.class_weight_mode).strip().lower()
+    time_weight_mode = str(args.time_weight_mode).strip().lower()
     if (
         max_epochs < 1
         or batch_size < 1
@@ -247,6 +290,12 @@ def validate_training_args(args) -> None:
         raise ValueError("min-train-samples 與 min-validation-samples 必須 >=1")
     if not np.isfinite(fixed_threshold) or not 0.0 <= fixed_threshold <= 1.0:
         raise ValueError("fixed-threshold 必須介於 0 與 1")
+    if final_refit_mode not in FINAL_REFIT_MODES:
+        raise ValueError(f"final-refit-mode 不合法: {final_refit_mode}")
+    if class_weight_mode not in CLASS_WEIGHT_MODES:
+        raise ValueError(f"class-weight-mode 不合法: {class_weight_mode}")
+    if time_weight_mode not in TIME_WEIGHT_MODES:
+        raise ValueError(f"time-weight-mode 不合法: {time_weight_mode}")
 
 
 def _format_count(value: int) -> str:
@@ -356,7 +405,18 @@ def _render_training_summary(
     return "\n".join(lines)
 
 
-def _class_weights(y_train: np.ndarray, sample_weights: np.ndarray):
+def _class_weights(
+    y_train: np.ndarray,
+    sample_weights: np.ndarray,
+    *,
+    mode: str,
+):
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode == CLASS_WEIGHT_MODE_NONE:
+        return np.ones((2,), dtype=np.float32)
+    if normalized_mode != CLASS_WEIGHT_MODE_INVERSE_FREQUENCY:
+        raise ValueError(f"不支援的 class weight mode: {mode!r}")
+
     y_arr = y_train.astype(np.int64)
     w_arr = sample_weights.astype(np.float64)
     counts = np.array(
@@ -369,6 +429,123 @@ def _class_weights(y_train: np.ndarray, sample_weights: np.ndarray):
     counts[counts <= 0] = 1.0
     total = float(counts.sum())
     return total / (2.0 * counts)
+
+
+def _time_weighted_group_weights(
+    events: pd.DataFrame,
+    indices: np.ndarray,
+    *,
+    mode: str,
+) -> tuple[np.ndarray, dict]:
+    idx = np.asarray(indices, dtype=np.int64)
+    if idx.size == 0:
+        return np.empty((0,), dtype=np.float32), {
+            "mode": str(mode),
+            "group_count": 0,
+            "weight_sum": 0.0,
+            "year_group_counts": {},
+            "year_weight_multipliers": {},
+        }
+
+    base_weights = group_size_weights(events, idx).astype(np.float64)
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode == TIME_WEIGHT_MODE_NONE:
+        weighted = base_weights
+        multipliers: dict[int, float] = {}
+        year_group_counts: dict[int, int] = {}
+    elif normalized_mode == TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT:
+        subset = events.iloc[idx]
+        years = pd.to_datetime(subset["date"], errors="raise").dt.year.astype(int)
+        keys = event_group_keys(events).iloc[idx].reset_index(drop=True)
+        group_frame = pd.DataFrame(
+            {
+                "group_key": keys.to_numpy(),
+                "year": years.to_numpy(),
+            }
+        ).drop_duplicates("group_key", keep="first")
+        counts_series = group_frame.groupby("year", sort=True)["group_key"].size()
+        year_group_counts = {int(year): int(count) for year, count in counts_series.items()}
+        raw_multipliers = {
+            int(year): 1.0 / math.sqrt(float(count))
+            for year, count in year_group_counts.items()
+        }
+        row_multipliers = years.map(raw_multipliers).to_numpy(dtype=np.float64)
+        weighted = base_weights * row_multipliers
+        base_sum = float(base_weights.sum())
+        weighted_sum = float(weighted.sum())
+        if weighted_sum <= 0.0:
+            raise ValueError("year-balanced sample weights 總和必須 > 0")
+        normalization = base_sum / weighted_sum
+        weighted *= normalization
+        multipliers = {
+            year: float(value * normalization)
+            for year, value in raw_multipliers.items()
+        }
+    else:
+        raise ValueError(f"不支援的 time weight mode: {mode!r}")
+
+    return weighted.astype(np.float32), {
+        "mode": normalized_mode,
+        "group_count": int(round(float(base_weights.sum()))),
+        "weight_sum": round(float(weighted.sum()), 6),
+        "year_group_counts": {str(year): count for year, count in year_group_counts.items()},
+        "year_weight_multipliers": {
+            str(year): round(value, 8) for year, value in multipliers.items()
+        },
+    }
+
+
+def _build_sample_weights(
+    events: pd.DataFrame,
+    row_count: int,
+    split_indices: dict[str, np.ndarray],
+    *,
+    time_weight_mode: str,
+) -> tuple[np.ndarray, dict[str, dict]]:
+    weights = np.zeros((int(row_count),), dtype=np.float32)
+    summaries: dict[str, dict] = {}
+    occupied = np.zeros((int(row_count),), dtype=bool)
+    for split_name, raw_indices in split_indices.items():
+        idx = np.asarray(raw_indices, dtype=np.int64)
+        if idx.size == 0:
+            summaries[str(split_name)] = {
+                "mode": str(time_weight_mode),
+                "group_count": 0,
+                "weight_sum": 0.0,
+                "year_group_counts": {},
+                "year_weight_multipliers": {},
+            }
+            continue
+        if bool(np.any(occupied[idx])):
+            raise ValueError(f"sample weight split indices 重疊: {split_name}")
+        subset_weights, summary = _time_weighted_group_weights(
+            events,
+            idx,
+            mode=time_weight_mode,
+        )
+        weights[idx] = subset_weights
+        occupied[idx] = True
+        summaries[str(split_name)] = summary
+    return weights, summaries
+
+def _resolve_final_refit_target_steps(
+    *,
+    mode: str,
+    selected_epoch: int,
+    selected_optimizer_steps: int,
+    final_batches_per_epoch: int,
+) -> tuple[int, bool]:
+    normalized_mode = str(mode).strip().lower()
+    if int(selected_epoch) < 1 or int(final_batches_per_epoch) < 1:
+        raise ValueError("selected_epoch 與 final_batches_per_epoch 必須 >=1")
+    if normalized_mode == FINAL_REFIT_MODE_MATCHED_OPTIMIZER_STEPS:
+        if int(selected_optimizer_steps) < 1:
+            raise ValueError("matched_optimizer_steps 需要 selected_optimizer_steps >=1")
+        target = max(int(selected_optimizer_steps), int(final_batches_per_epoch))
+        return target, bool(target > int(selected_optimizer_steps))
+    if normalized_mode == FINAL_REFIT_MODE_SELECTED_EPOCHS:
+        return int(selected_epoch) * int(final_batches_per_epoch), False
+    raise ValueError(f"不支援的 final refit mode: {mode!r}")
 
 
 def _weighted_average(values: np.ndarray, weights: np.ndarray) -> float:
@@ -616,12 +793,6 @@ def _max_iso_date(events: pd.DataFrame, indices: np.ndarray, column: str) -> str
     return str(values.max().date())
 
 
-def _build_sample_weights(events: pd.DataFrame, row_count: int, indices: np.ndarray):
-    weights = np.zeros((row_count,), dtype=np.float32)
-    weights[indices] = group_size_weights(events, indices)
-    return weights
-
-
 def _new_training_state(
     torch,
     *,
@@ -632,6 +803,7 @@ def _new_training_state(
     sample_weights: np.ndarray,
     learning_rate: float,
     weight_decay: float,
+    class_weight_mode: str,
     seed: int,
 ):
     torch.manual_seed(int(seed))
@@ -641,10 +813,17 @@ def _new_training_state(
         lr=float(learning_rate),
         weight_decay=float(weight_decay),
     )
-    class_weights_np = _class_weights(y[train_idx], sample_weights[train_idx])
-    class_weights = torch.tensor(class_weights_np, dtype=torch.float32)
+    class_weights_np = _class_weights(
+        y[train_idx],
+        sample_weights[train_idx],
+        mode=class_weight_mode,
+    )
+    class_weights = (
+        None
+        if str(class_weight_mode).strip().lower() == CLASS_WEIGHT_MODE_NONE
+        else torch.tensor(class_weights_np, dtype=torch.float32)
+    )
     return model, optimizer, class_weights_np, class_weights
-
 
 def _train_one_epoch(
     torch,
@@ -661,13 +840,15 @@ def _train_one_epoch(
     shuffle_seed: int,
     prefetch_batches: int,
     gradient_clip_norm: float,
-) -> float:
+    max_batches: int | None = None,
+) -> tuple[float, int]:
     import torch.nn.functional as F
 
     model.train()
     rng = np.random.default_rng(int(shuffle_seed))
     shuffled = rng.permutation(train_idx)
     batch_losses = []
+    completed_batches = 0
     for xb_np, cb_np, yb_np, wb_np in _iter_training_batches(
         X,
         C,
@@ -677,6 +858,8 @@ def _train_one_epoch(
         batch_size=batch_size,
         prefetch_batches=prefetch_batches,
     ):
+        if max_batches is not None and completed_batches >= int(max_batches):
+            break
         xb = torch.from_numpy(xb_np)
         cb = torch.from_numpy(cb_np)
         yb = torch.from_numpy(yb_np)
@@ -697,8 +880,9 @@ def _train_one_epoch(
             )
         optimizer.step()
         batch_losses.append(float(loss.item()))
-    return float(np.mean(batch_losses)) if batch_losses else float("nan")
-
+        completed_batches += 1
+    mean_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
+    return mean_loss, int(completed_batches)
 
 def _select_epoch_with_inner_validation(
     torch,
@@ -714,6 +898,8 @@ def _select_epoch_with_inner_validation(
     learning_rate: float,
     weight_decay: float,
     gradient_clip_norm: float,
+    class_weight_mode: str,
+    time_weight_mode: str,
     seed: int,
     patience: int,
     min_delta: float,
@@ -722,10 +908,20 @@ def _select_epoch_with_inner_validation(
     parallel_split_evaluation: bool,
     train_prefetch_batches: int,
 ):
-    sample_weights = _build_sample_weights(
+    training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
         len(y),
-        np.concatenate([train_idx, validation_idx]),
+        {"inner_train": train_idx},
+        time_weight_mode=time_weight_mode,
+    )
+    evaluation_sample_weights, _ = _build_sample_weights(
+        events,
+        len(y),
+        {
+            "inner_train": train_idx,
+            "inner_validation": validation_idx,
+        },
+        time_weight_mode=TIME_WEIGHT_MODE_NONE,
     )
     model, optimizer, class_weights_np, class_weights = _new_training_state(
         torch,
@@ -733,9 +929,10 @@ def _select_epoch_with_inner_validation(
         context_count=C.shape[1],
         y=y,
         train_idx=train_idx,
-        sample_weights=sample_weights,
+        sample_weights=training_sample_weights,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
+        class_weight_mode=class_weight_mode,
         seed=seed,
     )
     best_epoch = 0
@@ -747,7 +944,7 @@ def _select_epoch_with_inner_validation(
     color_time = bool(sys.stdout.isatty())
     for epoch in range(1, int(max_epochs) + 1):
         epoch_started = time.perf_counter()
-        batch_loss = _train_one_epoch(
+        batch_loss, optimizer_steps = _train_one_epoch(
             torch,
             model=model,
             optimizer=optimizer,
@@ -755,7 +952,7 @@ def _select_epoch_with_inner_validation(
             C=C,
             y=y,
             train_idx=train_idx,
-            sample_weights=sample_weights,
+            sample_weights=training_sample_weights,
             class_weights=class_weights,
             batch_size=batch_size,
             shuffle_seed=int(seed) + epoch,
@@ -770,7 +967,7 @@ def _select_epoch_with_inner_validation(
             y,
             train_idx,
             validation_idx,
-            sample_weights,
+            evaluation_sample_weights,
             class_weights,
             evaluation_batch_size=evaluation_batch_size,
             evaluation_workers=evaluation_workers,
@@ -792,6 +989,8 @@ def _select_epoch_with_inner_validation(
             {
                 "epoch": int(epoch),
                 "batch_loss": round(float(batch_loss), 6),
+                "optimizer_steps": int(optimizer_steps),
+                "cumulative_optimizer_steps": int(epoch * optimizer_steps),
                 "inner_train_metrics": train_metrics,
                 "inner_validation_metrics": validation_metrics,
                 "elapsed_sec": round(float(epoch_elapsed), 3),
@@ -826,6 +1025,11 @@ def _select_epoch_with_inner_validation(
         "best_validation_loss": round(float(best_validation_loss), 6),
         "best_validation_metrics": best_validation_metrics,
         "completed_epochs": int(len(history)),
+        "batches_per_epoch": int(math.ceil(len(train_idx) / int(batch_size))),
+        "best_optimizer_steps": int(
+            int(best_epoch) * math.ceil(len(train_idx) / int(batch_size))
+        ),
+        "sample_weight_summaries": sample_weight_summaries,
         "history": history,
         "class_weights_reject_pass": [
             round(float(value), 8) for value in class_weights_np.tolist()
@@ -842,39 +1046,77 @@ def _fit_full_selection(
     events: pd.DataFrame,
     train_idx: np.ndarray,
     epochs: int,
+    target_optimizer_steps: int | None,
     batch_size: int,
     learning_rate: float,
     weight_decay: float,
     gradient_clip_norm: float,
+    class_weight_mode: str,
+    time_weight_mode: str,
     seed: int,
     phase_name: str,
     evaluation_batch_size: int,
     evaluation_workers: int,
     train_prefetch_batches: int,
 ):
-    sample_weights = _build_sample_weights(events, len(y), train_idx)
+    training_sample_weights, sample_weight_summaries = _build_sample_weights(
+        events,
+        len(y),
+        {"final_refit": train_idx},
+        time_weight_mode=time_weight_mode,
+    )
+    evaluation_sample_weights, _ = _build_sample_weights(
+        events,
+        len(y),
+        {"final_refit": train_idx},
+        time_weight_mode=TIME_WEIGHT_MODE_NONE,
+    )
     model, optimizer, class_weights_np, class_weights = _new_training_state(
         torch,
         feature_count=X.shape[2],
         context_count=C.shape[1],
         y=y,
         train_idx=train_idx,
-        sample_weights=sample_weights,
+        sample_weights=training_sample_weights,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
+        class_weight_mode=class_weight_mode,
         seed=seed,
     )
+    batches_per_epoch = int(math.ceil(len(train_idx) / int(batch_size)))
+    requested_steps = (
+        int(target_optimizer_steps)
+        if target_optimizer_steps is not None
+        else int(epochs) * batches_per_epoch
+    )
+    if requested_steps < batches_per_epoch:
+        raise ValueError(
+            "final refit optimizer steps 不足以讓全部 eligible Selection rows 至少使用一次: "
+            f"target={requested_steps}, minimum={batches_per_epoch}"
+        )
+    planned_cycles = int(math.ceil(requested_steps / batches_per_epoch))
+    equivalent_epochs = float(requested_steps) / float(batches_per_epoch)
+
     history = []
     phase_title = (
         "完整 Selection 重訓"
         if phase_name == "full_refit"
         else "完整 Selection 訓練"
     )
-    print(f"\n{phase_title}（{int(epochs)} Epoch）")
+    if target_optimizer_steps is None:
+        print(f"\n{phase_title}（{int(epochs)} Epoch）")
+    else:
+        print(
+            f"\n{phase_title}（matched steps={requested_steps:,}；"
+            f"約 {equivalent_epochs:.3f} Epoch）"
+        )
     color_time = bool(sys.stdout.isatty())
-    for epoch in range(1, int(epochs) + 1):
+    completed_optimizer_steps = 0
+    for cycle in range(1, planned_cycles + 1):
         epoch_started = time.perf_counter()
-        batch_loss = _train_one_epoch(
+        remaining_steps = requested_steps - completed_optimizer_steps
+        max_batches = min(batches_per_epoch, remaining_steps)
+        batch_loss, optimizer_steps = _train_one_epoch(
             torch,
             model=model,
             optimizer=optimizer,
@@ -882,13 +1124,20 @@ def _fit_full_selection(
             C=C,
             y=y,
             train_idx=train_idx,
-            sample_weights=sample_weights,
+            sample_weights=training_sample_weights,
             class_weights=class_weights,
             batch_size=batch_size,
-            shuffle_seed=int(seed) + epoch,
+            shuffle_seed=int(seed) + cycle,
             prefetch_batches=train_prefetch_batches,
             gradient_clip_norm=gradient_clip_norm,
+            max_batches=max_batches,
         )
+        if optimizer_steps != max_batches:
+            raise RuntimeError(
+                "final refit 實際 optimizer steps 與計畫不一致: "
+                f"actual={optimizer_steps}, planned={max_batches}"
+            )
+        completed_optimizer_steps += optimizer_steps
         metrics = _evaluate(
             torch,
             model,
@@ -896,31 +1145,42 @@ def _fit_full_selection(
             C,
             y,
             train_idx,
-            sample_weights,
+            evaluation_sample_weights,
             class_weights,
             evaluation_batch_size=evaluation_batch_size,
             evaluation_workers=evaluation_workers,
         )
         epoch_elapsed = time.perf_counter() - epoch_started
+        cycle_fraction = float(optimizer_steps) / float(batches_per_epoch)
         history.append(
             {
-                "epoch": int(epoch),
+                "epoch": int(cycle),
+                "epoch_fraction": round(cycle_fraction, 8),
                 "batch_loss": round(float(batch_loss), 6),
+                "optimizer_steps": int(optimizer_steps),
+                "cumulative_optimizer_steps": int(completed_optimizer_steps),
+                "target_optimizer_steps": int(requested_steps),
                 "selection_metrics": metrics,
                 "elapsed_sec": round(float(epoch_elapsed), 3),
             }
         )
-        print(
-            _render_full_selection_progress(
-                epoch=epoch,
-                epochs=epochs,
-                train_loss=metrics["loss"],
-                elapsed_sec=epoch_elapsed,
-                color=color_time,
-            )
+        progress = _render_full_selection_progress(
+            epoch=cycle,
+            epochs=planned_cycles,
+            train_loss=metrics["loss"],
+            elapsed_sec=epoch_elapsed,
+            color=color_time,
         )
+        if cycle_fraction < 1.0:
+            progress += f" | Partial {cycle_fraction:.3f} Epoch"
+        print(progress)
     if not history:
-        raise ValueError("完整 Selection 訓練至少需要 1 個 epoch")
+        raise ValueError("完整 Selection 訓練至少需要 1 個 optimizer step")
+    if completed_optimizer_steps != requested_steps:
+        raise RuntimeError(
+            "final refit optimizer steps 未完成: "
+            f"actual={completed_optimizer_steps}, target={requested_steps}"
+        )
     final_metrics = dict(history[-1]["selection_metrics"])
     return {
         "model": model,
@@ -929,8 +1189,17 @@ def _fit_full_selection(
         "class_weights_reject_pass": [
             round(float(value), 8) for value in class_weights_np.tolist()
         ],
+        "sample_weight_summaries": sample_weight_summaries,
+        "batches_per_epoch": int(batches_per_epoch),
+        "target_optimizer_steps": int(requested_steps),
+        "actual_optimizer_steps": int(completed_optimizer_steps),
+        "equivalent_epochs": round(float(equivalent_epochs), 8),
+        "completed_epoch_cycles": int(planned_cycles),
+        "last_epoch_fraction": round(
+            float(history[-1]["epoch_fraction"]),
+            8,
+        ),
     }
-
 
 def main(argv=None) -> int:
     args = parse_args(argv)
@@ -952,6 +1221,9 @@ def main(argv=None) -> int:
     min_delta = float(args.early_stopping_min_delta)
     min_train_samples = int(args.min_train_samples)
     min_validation_samples = int(args.min_validation_samples)
+    final_refit_mode = str(args.final_refit_mode).strip().lower()
+    class_weight_mode = str(args.class_weight_mode).strip().lower()
+    time_weight_mode = str(args.time_weight_mode).strip().lower()
     validate_training_args(args)
 
     dataset_summary, X, C, y, events = load_validated_dataset_bundle(
@@ -1050,6 +1322,8 @@ def main(argv=None) -> int:
     final_refit_idx = np.asarray(final_refit_idx, dtype=np.int64)
 
     epoch_selection = None
+    selected_optimizer_steps = None
+    minimum_full_pass_applied = False
     if use_inner_validation:
         epoch_selection = _select_epoch_with_inner_validation(
             torch,
@@ -1064,6 +1338,8 @@ def main(argv=None) -> int:
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             gradient_clip_norm=gradient_clip_norm,
+            class_weight_mode=class_weight_mode,
+            time_weight_mode=time_weight_mode,
             seed=int(args.seed),
             patience=patience,
             min_delta=min_delta,
@@ -1073,14 +1349,33 @@ def main(argv=None) -> int:
             train_prefetch_batches=train_prefetch_batches,
         )
         selected_epoch = int(epoch_selection["best_epoch"])
+        selected_optimizer_steps = int(epoch_selection["best_optimizer_steps"])
         training_mode = TRAINING_MODE_INNER_VALIDATION_FULL_REFIT
         epoch_selection_source = "inner_validation_loss"
         phase_name = "full_refit"
+        final_batches_per_epoch = int(
+            math.ceil(len(final_refit_idx) / int(batch_size))
+        )
+        resolved_target_steps, minimum_full_pass_applied = (
+            _resolve_final_refit_target_steps(
+                mode=final_refit_mode,
+                selected_epoch=selected_epoch,
+                selected_optimizer_steps=selected_optimizer_steps,
+                final_batches_per_epoch=final_batches_per_epoch,
+            )
+        )
+        final_target_optimizer_steps = (
+            resolved_target_steps
+            if final_refit_mode == FINAL_REFIT_MODE_MATCHED_OPTIMIZER_STEPS
+            else None
+        )
     else:
         selected_epoch = max_epochs
         training_mode = TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION
         epoch_selection_source = "fixed_cli_epochs"
         phase_name = "fixed"
+        final_target_optimizer_steps = None
+        final_refit_mode = FINAL_REFIT_MODE_SELECTED_EPOCHS
 
     final_fit = _fit_full_selection(
         torch,
@@ -1090,16 +1385,43 @@ def main(argv=None) -> int:
         events=events,
         train_idx=final_refit_idx,
         epochs=selected_epoch,
+        target_optimizer_steps=final_target_optimizer_steps,
         batch_size=batch_size,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         gradient_clip_norm=gradient_clip_norm,
+        class_weight_mode=class_weight_mode,
+        time_weight_mode=time_weight_mode,
         seed=int(args.seed),
         phase_name=phase_name,
         evaluation_batch_size=evaluation_batch_size,
         evaluation_workers=evaluation_workers,
         train_prefetch_batches=train_prefetch_batches,
     )
+    final_refit_plan = {
+        "mode": final_refit_mode,
+        "inner_train_row_count": int(len(inner_train_idx)),
+        "final_refit_row_count": int(len(final_refit_idx)),
+        "batch_size": int(batch_size),
+        "inner_train_batches_per_epoch": (
+            int(epoch_selection["batches_per_epoch"])
+            if epoch_selection is not None
+            else None
+        ),
+        "selected_epoch": int(selected_epoch),
+        "selected_optimizer_steps": selected_optimizer_steps,
+        "final_refit_batches_per_epoch": int(final_fit["batches_per_epoch"]),
+        "target_optimizer_steps": int(final_fit["target_optimizer_steps"]),
+        "actual_optimizer_steps": int(final_fit["actual_optimizer_steps"]),
+        "equivalent_epochs": float(final_fit["equivalent_epochs"]),
+        "completed_epoch_cycles": int(final_fit["completed_epoch_cycles"]),
+        "last_epoch_fraction": float(final_fit["last_epoch_fraction"]),
+        "minimum_full_pass_applied": bool(minimum_full_pass_applied),
+        "all_eligible_selection_rows_seen_at_least_once": bool(
+            int(final_fit["actual_optimizer_steps"])
+            >= int(final_fit["batches_per_epoch"])
+        ),
+    }
     model = final_fit["model"]
     final_train_metrics = final_fit["final_metrics"]
 
@@ -1192,7 +1514,8 @@ def main(argv=None) -> int:
         "max_epochs": max_epochs,
         "selected_epoch": selected_epoch,
         "fixed_epochs": selected_epoch,
-        "completed_epochs": selected_epoch,
+        "completed_epochs": int(final_fit["completed_epoch_cycles"]),
+        "final_refit_plan": final_refit_plan,
         "epoch_selection_source": epoch_selection_source,
         "early_stopping_enabled": early_stopping_enabled,
         "early_stopping_patience": patience if use_inner_validation else None,
@@ -1214,7 +1537,17 @@ def main(argv=None) -> int:
         "final_refit_label_counts": label_counts(y[final_refit_idx]),
         "inner_validation_epoch_selection": epoch_selection,
         "final_refit_metrics": final_train_metrics,
+        "class_weight_mode": class_weight_mode,
         "class_weights_reject_pass": final_fit["class_weights_reject_pass"],
+        "time_weight_mode": time_weight_mode,
+        "sample_weight_summaries": {
+            "epoch_selection": (
+                epoch_selection.get("sample_weight_summaries")
+                if isinstance(epoch_selection, dict)
+                else None
+            ),
+            "final_refit": final_fit["sample_weight_summaries"]["final_refit"],
+        },
         "seed": int(args.seed),
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
@@ -1241,6 +1574,11 @@ def main(argv=None) -> int:
             "gradient_clip_norm": gradient_clip_norm,
             "training_batch_prefetch": train_prefetch_batches,
             "feature_bank_preloaded": preload_feature_bank,
+            "final_refit_mode": final_refit_mode,
+            "class_weight_mode": class_weight_mode,
+            "time_weight_mode": time_weight_mode,
+            "final_refit_target_optimizer_steps": int(final_fit["target_optimizer_steps"]),
+            "final_refit_actual_optimizer_steps": int(final_fit["actual_optimizer_steps"]),
         },
         "training_history": final_fit["history"],
         "runtime_eligibility": {
@@ -1256,7 +1594,8 @@ def main(argv=None) -> int:
             "features use D0 and earlier only; outer Selection/OOS dates come from "
             "core.walk_forward_policy; inner validation, when enabled, is confined "
             "to Selection and only selects epoch; the final model is refit on all "
-            "eligible Selection rows; fixed threshold is committed before OOS; "
+            "eligible Selection rows with the configured refit-step policy; fixed threshold "
+            "is committed before OOS; "
             "OOS predictions and metrics are not used by train.py"
         ),
         "elapsed_sec": round(time.perf_counter() - started, 3),

@@ -422,6 +422,9 @@ def _training_summary(manifest: dict) -> dict:
         "learning_rate": manifest.get("learning_rate"),
         "weight_decay": manifest.get("weight_decay"),
         "gradient_clip_norm": manifest.get("gradient_clip_norm"),
+        "final_refit_plan": manifest.get("final_refit_plan") or {},
+        "class_weight_mode": manifest.get("class_weight_mode"),
+        "time_weight_mode": manifest.get("time_weight_mode"),
         "batch_size": manifest.get("batch_size"),
         "seed": manifest.get("seed"),
         "early_stopping_enabled": early_stopping_enabled,
@@ -1105,6 +1108,9 @@ def render_markdown_report(payload: dict) -> str:
             f"- **Learning Rate**：`{training.get('learning_rate')}`",
             f"- **Weight Decay**：`{training.get('weight_decay')}`",
             f"- **Gradient Clip Norm**：`{training.get('gradient_clip_norm')}`",
+            f"- **Final Refit Mode**：`{(training.get('final_refit_plan') or {}).get('mode')}`",
+            f"- **Class Weight Mode**：`{training.get('class_weight_mode')}`",
+            f"- **Time Weight Mode**：`{training.get('time_weight_mode')}`",
             f"- **Batch Size**：`{training.get('batch_size')}`",
             f"- **Random Seed**：`{training.get('seed')}`",
             "",
@@ -1116,10 +1122,14 @@ def render_markdown_report(payload: dict) -> str:
             f"- 最低 Validation Loss：{_markdown_color(_loss(training.get('best_validation_loss')), 'blue')}",
             f"- Early Stopping Patience：**{training.get('early_stopping_patience')}**",
             (
-                f"- 最終模型：Inner Validation 選出 "
-                f"{_markdown_color('Epoch ' + str(selected_epoch), 'blue')}；"
-                "丟棄暫時模型後，再使用完整 eligible Selection 正式重訓 "
-                f"**{selected_epoch} Epochs**。"
+                (
+                    f"- 最終模型：Inner Validation 選出 "
+                    f"{_markdown_color('Epoch ' + str(selected_epoch), 'blue')}；"
+                    "丟棄暫時模型後，使用完整 eligible Selection 依 "
+                    f"`{(training.get('final_refit_plan') or {}).get('mode')}` 重訓 "
+                    f"**{(training.get('final_refit_plan') or {}).get('actual_optimizer_steps')} steps** "
+                    f"（約 **{float((training.get('final_refit_plan') or {}).get('equivalent_epochs') or 0):.3f} 個等效 Epoch**）。"
+                )
                 if training.get("inner_validation_used")
                 else (
                     "- 最終模型：未使用 Inner Validation；使用完整 eligible Selection "
@@ -1195,10 +1205,14 @@ def _console_epoch_section(training: dict, *, color: bool = False) -> list[str]:
             f"- 最低 Validation Loss：{_paint(_loss(training.get('best_validation_loss')), 'blue', enabled=color, bold=True)}",
             f"- Early Stopping Patience：{training.get('early_stopping_patience')}",
             (
-                "- 最終模型：Inner Validation 選出 "
-                f"{_paint('Epoch ' + str(selected_epoch), 'blue', enabled=color, bold=True)}；"
-                "丟棄暫時模型後，再使用完整 eligible Selection 正式重訓 "
-                f"{selected_epoch} Epochs。"
+                (
+                    "- 最終模型：Inner Validation 選出 "
+                    f"{_paint('Epoch ' + str(selected_epoch), 'blue', enabled=color, bold=True)}；"
+                    "丟棄暫時模型後，使用完整 eligible Selection 依 "
+                    f"{(training.get('final_refit_plan') or {}).get('mode')} 重訓 "
+                    f"{(training.get('final_refit_plan') or {}).get('actual_optimizer_steps')} steps "
+                    f"（約 {float((training.get('final_refit_plan') or {}).get('equivalent_epochs') or 0):.3f} 個等效 Epoch）。"
+                )
                 if training.get("inner_validation_used")
                 else (
                     "- 最終模型：未使用 Inner Validation；使用完整 eligible Selection "
@@ -1496,6 +1510,9 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
             f"Learning Rate   : {training.get('learning_rate')}",
             f"Weight Decay    : {training.get('weight_decay')}",
             f"Gradient Clip   : {training.get('gradient_clip_norm')}",
+            f"Final Refit     : {(training.get('final_refit_plan') or {}).get('mode')}",
+            f"Class Weight    : {training.get('class_weight_mode')}",
+            f"Time Weight     : {training.get('time_weight_mode')}",
             f"Batch Size      : {training.get('batch_size')}",
             f"Random Seed     : {training.get('seed')}",
         ]

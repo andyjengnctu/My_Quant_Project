@@ -13,6 +13,9 @@ BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 128  # 每次梯度更新使用的訓練 r
 BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.0003  # Adam optimizer 的預設 learning rate；中型多尺度 CNN 使用較低 learning rate 抑制快速過度擬合。
 BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY = 0.0001  # Adam 的 L2 weight decay；0 表示關閉。
 BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM = 1.0  # 每次更新前的全域 gradient norm 上限；0 表示關閉。
+BREAKOUT_QUALITY_FINAL_REFIT_MODE = "selected_epochs"  # Selection 重訓方式；matched_optimizer_steps 會匹配 best epoch 的 optimizer updates，selected_epochs 為舊式固定相同 epoch 數。
+BREAKOUT_QUALITY_CLASS_WEIGHT_MODE = "none"  # Cross-entropy 類別權重；none 不平衡補償，inverse_frequency 依訓練資料加權。PASS／REJECT 接近均衡時建議 none。
+BREAKOUT_QUALITY_TIME_WEIGHT_MODE = "none"  # 時間權重；none 僅保留 ticker/date group weighting，year_balanced_sqrt 以年份 group 數平方根反比做溫和平衡。先使用 none 建立乾淨對照。
 BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED = 42  # 模型初始化、Dropout 與每個 epoch 資料洗牌的預設亂數種子。
 BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE = 4096  # Train／Validation／Selection 完整評估與分數匯出的分批大小；不抽樣、不改模型更新或輸出列序。
 BREAKOUT_QUALITY_EVALUATION_WORKERS = 4  # 每個完整資料區段評估／分數匯出的 inference workers；每個 worker 維持單執行緒，batch 與最終列序不變。
@@ -58,6 +61,9 @@ __all__ = [
     "BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED",
     "BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD",
     "BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY",
+    "BREAKOUT_QUALITY_FINAL_REFIT_MODE",
+    "BREAKOUT_QUALITY_CLASS_WEIGHT_MODE",
+    "BREAKOUT_QUALITY_TIME_WEIGHT_MODE",
     "BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE",
     "BREAKOUT_QUALITY_EVALUATION_WORKERS",
     "BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION",

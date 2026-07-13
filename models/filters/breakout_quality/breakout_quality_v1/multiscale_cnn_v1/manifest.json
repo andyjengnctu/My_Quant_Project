@@ -1,9 +1,10 @@
 {
-  "artifact_contract_version": 9,
+  "artifact_contract_version": 10,
   "batch_size": 128,
+  "class_weight_mode": "inverse_frequency",
   "class_weights_reject_pass": [
-    1.10635853,
-    0.91229737
+    1.0966413,
+    0.91901219
   ],
   "completed_epochs": 2,
   "context_columns": [
@@ -15,13 +16,17 @@
   "early_stopping_enabled": true,
   "early_stopping_min_delta": 0.0,
   "early_stopping_patience": 3,
-  "elapsed_sec": 1409.291,
+  "elapsed_sec": 1324.849,
   "epoch_selection_source": "inner_validation_loss",
   "evaluation_batch_size": 4096,
   "evaluation_execution": {
     "batch_boundaries_changed": false,
+    "class_weight_mode": "inverse_frequency",
     "feature_bank_preloaded": true,
     "final_metrics_reused_from_last_full_epoch_evaluation": true,
+    "final_refit_actual_optimizer_steps": 11402,
+    "final_refit_mode": "selected_epochs",
+    "final_refit_target_optimizer_steps": 11402,
     "gradient_clip_norm": 1.0,
     "inner_train_validation_concurrent": false,
     "mode": "parallel_chunked_full_split",
@@ -29,6 +34,7 @@
     "optimizer_zero_grad_set_to_none": true,
     "per_worker_torch_threads": 1,
     "reduction_order_changed": false,
+    "time_weight_mode": "year_balanced_sqrt",
     "training_batch_prefetch": 0,
     "training_order_changed": false,
     "training_sampling_enabled": false,
@@ -67,13 +73,30 @@
     "total": 729654
   },
   "final_refit_metrics": {
-    "accuracy": 0.641601,
+    "accuracy": 0.6435,
     "group_weight_sum": 23072.0,
-    "loss": 0.640132,
-    "pass_rate": 0.684031,
-    "row_accuracy": 0.638388,
+    "loss": 0.636667,
+    "pass_rate": 0.680609,
+    "row_accuracy": 0.641171,
     "row_count": 729654,
-    "row_pass_rate": 0.752257
+    "row_pass_rate": 0.747735
+  },
+  "final_refit_plan": {
+    "actual_optimizer_steps": 11402,
+    "all_eligible_selection_rows_seen_at_least_once": true,
+    "batch_size": 128,
+    "completed_epoch_cycles": 2,
+    "equivalent_epochs": 2.0,
+    "final_refit_batches_per_epoch": 5701,
+    "final_refit_row_count": 729654,
+    "inner_train_batches_per_epoch": 4211,
+    "inner_train_row_count": 538887,
+    "last_epoch_fraction": 1.0,
+    "minimum_full_pass_applied": false,
+    "mode": "selected_epochs",
+    "selected_epoch": 2,
+    "selected_optimizer_steps": 8422,
+    "target_optimizer_steps": 11402
   },
   "fixed_epochs": 2,
   "fixed_evaluation_threshold": 0.5,
@@ -85,144 +108,183 @@
     "total": 538887
   },
   "inner_validation_epoch_selection": {
+    "batches_per_epoch": 4211,
     "best_epoch": 2,
-    "best_validation_loss": 0.688215,
+    "best_optimizer_steps": 8422,
+    "best_validation_loss": 0.701106,
     "best_validation_metrics": {
-      "accuracy": 0.565438,
+      "accuracy": 0.551658,
       "group_weight_sum": 6065.0,
-      "loss": 0.688215,
-      "pass_rate": 0.436673,
-      "row_accuracy": 0.54187,
+      "loss": 0.701106,
+      "pass_rate": 0.494284,
+      "row_accuracy": 0.524355,
       "row_count": 187316,
-      "row_pass_rate": 0.387858
+      "row_pass_rate": 0.432932
     },
     "class_weights_reject_pass": [
-      1.08944988,
-      0.9241243
+      1.07778239,
+      0.93268883
     ],
     "completed_epochs": 5,
     "history": [
       {
-        "batch_loss": 0.6765,
-        "elapsed_sec": 179.325,
+        "batch_loss": 0.676588,
+        "cumulative_optimizer_steps": 4211,
+        "elapsed_sec": 174.109,
         "epoch": 1,
         "inner_train_metrics": {
-          "accuracy": 0.601347,
+          "accuracy": 0.600293,
           "group_weight_sum": 16832.0,
-          "loss": 0.659358,
-          "pass_rate": 0.449404,
-          "row_accuracy": 0.615459,
+          "loss": 0.657212,
+          "pass_rate": 0.470386,
+          "row_accuracy": 0.610549,
           "row_count": 538887,
-          "row_pass_rate": 0.570704
+          "row_pass_rate": 0.596654
         },
         "inner_validation_metrics": {
-          "accuracy": 0.514727,
+          "accuracy": 0.515884,
           "group_weight_sum": 6065.0,
-          "loss": 0.717907,
-          "pass_rate": 0.247007,
-          "row_accuracy": 0.508851,
+          "loss": 0.711678,
+          "pass_rate": 0.276184,
+          "row_accuracy": 0.509262,
           "row_count": 187316,
-          "row_pass_rate": 0.270628
+          "row_pass_rate": 0.31047
         },
-        "is_best_epoch": true
+        "is_best_epoch": true,
+        "optimizer_steps": 4211
       },
       {
-        "batch_loss": 0.652166,
-        "elapsed_sec": 207.709,
+        "batch_loss": 0.649991,
+        "cumulative_optimizer_steps": 8422,
+        "elapsed_sec": 170.606,
         "epoch": 2,
         "inner_train_metrics": {
-          "accuracy": 0.649376,
+          "accuracy": 0.651254,
           "group_weight_sum": 16832.0,
-          "loss": 0.635306,
-          "pass_rate": 0.697289,
-          "row_accuracy": 0.653241,
+          "loss": 0.633517,
+          "pass_rate": 0.718362,
+          "row_accuracy": 0.659565,
           "row_count": 538887,
-          "row_pass_rate": 0.707248
+          "row_pass_rate": 0.724992
         },
         "inner_validation_metrics": {
-          "accuracy": 0.565438,
+          "accuracy": 0.551658,
           "group_weight_sum": 6065.0,
-          "loss": 0.688215,
-          "pass_rate": 0.436673,
-          "row_accuracy": 0.54187,
+          "loss": 0.701106,
+          "pass_rate": 0.494284,
+          "row_accuracy": 0.524355,
           "row_count": 187316,
-          "row_pass_rate": 0.387858
+          "row_pass_rate": 0.432932
         },
-        "is_best_epoch": true
+        "is_best_epoch": true,
+        "optimizer_steps": 4211
       },
       {
-        "batch_loss": 0.634701,
-        "elapsed_sec": 184.234,
+        "batch_loss": 0.631905,
+        "cumulative_optimizer_steps": 12633,
+        "elapsed_sec": 170.921,
         "epoch": 3,
         "inner_train_metrics": {
-          "accuracy": 0.675759,
+          "accuracy": 0.679697,
           "group_weight_sum": 16832.0,
-          "loss": 0.60503,
-          "pass_rate": 0.627657,
-          "row_accuracy": 0.678287,
+          "loss": 0.600788,
+          "pass_rate": 0.618401,
+          "row_accuracy": 0.681727,
           "row_count": 538887,
-          "row_pass_rate": 0.693463
+          "row_pass_rate": 0.677363
         },
         "inner_validation_metrics": {
-          "accuracy": 0.556601,
+          "accuracy": 0.540388,
           "group_weight_sum": 6065.0,
-          "loss": 0.711722,
-          "pass_rate": 0.379844,
-          "row_accuracy": 0.538096,
+          "loss": 0.720632,
+          "pass_rate": 0.396661,
+          "row_accuracy": 0.524056,
           "row_count": 187316,
-          "row_pass_rate": 0.375104
+          "row_pass_rate": 0.392273
         },
-        "is_best_epoch": false
+        "is_best_epoch": false,
+        "optimizer_steps": 4211
       },
       {
-        "batch_loss": 0.622544,
-        "elapsed_sec": 178.318,
+        "batch_loss": 0.61972,
+        "cumulative_optimizer_steps": 16844,
+        "elapsed_sec": 170.673,
         "epoch": 4,
         "inner_train_metrics": {
-          "accuracy": 0.687034,
+          "accuracy": 0.693104,
           "group_weight_sum": 16832.0,
-          "loss": 0.588928,
-          "pass_rate": 0.55923,
-          "row_accuracy": 0.686168,
+          "loss": 0.587589,
+          "pass_rate": 0.642863,
+          "row_accuracy": 0.696695,
           "row_count": 538887,
-          "row_pass_rate": 0.587568
+          "row_pass_rate": 0.664206
         },
         "inner_validation_metrics": {
-          "accuracy": 0.535694,
+          "accuracy": 0.526561,
           "group_weight_sum": 6065.0,
-          "loss": 0.737152,
-          "pass_rate": 0.293286,
-          "row_accuracy": 0.514318,
+          "loss": 0.732325,
+          "pass_rate": 0.344457,
+          "row_accuracy": 0.496418,
           "row_count": 187316,
-          "row_pass_rate": 0.256524
+          "row_pass_rate": 0.308206
         },
-        "is_best_epoch": false
+        "is_best_epoch": false,
+        "optimizer_steps": 4211
       },
       {
-        "batch_loss": 0.611282,
-        "elapsed_sec": 175.944,
+        "batch_loss": 0.608873,
+        "cumulative_optimizer_steps": 21055,
+        "elapsed_sec": 170.509,
         "epoch": 5,
         "inner_train_metrics": {
-          "accuracy": 0.678939,
+          "accuracy": 0.679901,
           "group_weight_sum": 16832.0,
-          "loss": 0.580892,
-          "pass_rate": 0.448984,
-          "row_accuracy": 0.678074,
+          "loss": 0.577578,
+          "pass_rate": 0.444281,
+          "row_accuracy": 0.678033,
           "row_count": 538887,
-          "row_pass_rate": 0.47864
+          "row_pass_rate": 0.4609
         },
         "inner_validation_metrics": {
-          "accuracy": 0.51838,
+          "accuracy": 0.499941,
           "group_weight_sum": 6065.0,
-          "loss": 0.789943,
-          "pass_rate": 0.228046,
-          "row_accuracy": 0.495788,
+          "loss": 0.80458,
+          "pass_rate": 0.235302,
+          "row_accuracy": 0.476649,
           "row_count": 187316,
-          "row_pass_rate": 0.199567
+          "row_pass_rate": 0.186268
         },
-        "is_best_epoch": false
+        "is_best_epoch": false,
+        "optimizer_steps": 4211
       }
-    ]
+    ],
+    "sample_weight_summaries": {
+      "inner_train": {
+        "group_count": 16832,
+        "mode": "year_balanced_sqrt",
+        "weight_sum": 16832.000479,
+        "year_group_counts": {
+          "2011": 948,
+          "2012": 2250,
+          "2013": 2487,
+          "2014": 2077,
+          "2015": 1803,
+          "2016": 2521,
+          "2017": 3068,
+          "2018": 1678
+        },
+        "year_weight_multipliers": {
+          "2011": 1.50727894,
+          "2012": 0.97837769,
+          "2013": 0.93059327,
+          "2014": 1.01830893,
+          "2015": 1.0929491,
+          "2016": 0.92429664,
+          "2017": 0.83785742,
+          "2018": 1.13292672
+        }
+      }
+    }
   },
   "inner_validation_label_counts": {
     "invalid": 0,
@@ -237,7 +299,7 @@
   "max_epochs": 20,
   "model": {
     "filename": "model.pt",
-    "sha256": "1fd09109bc14a90c540fc2c09170963aa31125982f275f4b05eea45232f958da",
+    "sha256": "e9df6f3026afa1c218ebd83ee26ec7aa2abf02a8d64f53a52d08a2e43d5277b3",
     "size_bytes": 103883
   },
   "model_architecture": "multiscale_cnn_v1",
@@ -293,7 +355,7 @@
     ],
     "receptive_field_bars": 244
   },
-  "no_lookahead_guarantee": "features use D0 and earlier only; outer Selection/OOS dates come from core.walk_forward_policy; inner validation, when enabled, is confined to Selection and only selects epoch; the final model is refit on all eligible Selection rows; fixed threshold is committed before OOS; OOS predictions and metrics are not used by train.py",
+  "no_lookahead_guarantee": "features use D0 and earlier only; outer Selection/OOS dates come from core.walk_forward_policy; inner validation, when enabled, is confined to Selection and only selects epoch; the final model is refit on all eligible Selection rows with the configured refit-step policy; fixed threshold is committed before OOS; OOS predictions and metrics are not used by train.py",
   "oos_metrics_emitted_by_train": false,
   "oos_predictions_used_during_training": false,
   "outer_oos_policy": {
@@ -411,6 +473,64 @@
     "reason": "train.py only writes model/split artifacts; formal runtime scores require export_scores.py --scope forward_oos",
     "scope": "not_exported"
   },
+  "sample_weight_summaries": {
+    "epoch_selection": {
+      "inner_train": {
+        "group_count": 16832,
+        "mode": "year_balanced_sqrt",
+        "weight_sum": 16832.000479,
+        "year_group_counts": {
+          "2011": 948,
+          "2012": 2250,
+          "2013": 2487,
+          "2014": 2077,
+          "2015": 1803,
+          "2016": 2521,
+          "2017": 3068,
+          "2018": 1678
+        },
+        "year_weight_multipliers": {
+          "2011": 1.50727894,
+          "2012": 0.97837769,
+          "2013": 0.93059327,
+          "2014": 1.01830893,
+          "2015": 1.0929491,
+          "2016": 0.92429664,
+          "2017": 0.83785742,
+          "2018": 1.13292672
+        }
+      }
+    },
+    "final_refit": {
+      "group_count": 23072,
+      "mode": "year_balanced_sqrt",
+      "weight_sum": 23072.000646,
+      "year_group_counts": {
+        "2011": 948,
+        "2012": 2250,
+        "2013": 2487,
+        "2014": 2077,
+        "2015": 1803,
+        "2016": 2521,
+        "2017": 3068,
+        "2018": 1853,
+        "2019": 3507,
+        "2020": 2558
+      },
+      "year_weight_multipliers": {
+        "2011": 1.57898966,
+        "2012": 1.02492526,
+        "2013": 0.97486743,
+        "2014": 1.06675627,
+        "2015": 1.14494755,
+        "2016": 0.96827124,
+        "2017": 0.87771956,
+        "2018": 1.1293947,
+        "2019": 0.82094785,
+        "2020": 0.96124299
+      }
+    }
+  },
   "score_decision": {
     "comparison": ">=",
     "score_column": "dl_quality_score",
@@ -483,7 +603,7 @@
     },
     "dataset_storage_format": "indexed_feature_bank_npy_v2",
     "dataset_storage_schema_version": 3,
-    "elapsed_sec": 194.1,
+    "elapsed_sec": 184.308,
     "event_count": 1793028,
     "event_date_range": {
       "end": "2026-03-02",
@@ -873,36 +993,45 @@
     "optimized_by_train": false,
     "runtime_source": "strategy_param.breakout_quality_score_threshold"
   },
+  "time_weight_mode": "year_balanced_sqrt",
   "train_prefetch_batches": 0,
   "trainable_parameter_count": 23522,
   "training_history": [
     {
-      "batch_loss": 0.674344,
-      "elapsed_sec": 232.564,
+      "batch_loss": 0.675248,
+      "cumulative_optimizer_steps": 5701,
+      "elapsed_sec": 225.69,
       "epoch": 1,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
       "selection_metrics": {
-        "accuracy": 0.612075,
+        "accuracy": 0.615969,
         "group_weight_sum": 23072.0,
-        "loss": 0.65227,
-        "pass_rate": 0.50189,
-        "row_accuracy": 0.608181,
+        "loss": 0.651668,
+        "pass_rate": 0.535309,
+        "row_accuracy": 0.610259,
         "row_count": 729654,
-        "row_pass_rate": 0.496522
-      }
+        "row_pass_rate": 0.543492
+      },
+      "target_optimizer_steps": 11402
     },
     {
-      "batch_loss": 0.654817,
-      "elapsed_sec": 236.91,
+      "batch_loss": 0.654215,
+      "cumulative_optimizer_steps": 11402,
+      "elapsed_sec": 225.937,
       "epoch": 2,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
       "selection_metrics": {
-        "accuracy": 0.641601,
+        "accuracy": 0.6435,
         "group_weight_sum": 23072.0,
-        "loss": 0.640132,
-        "pass_rate": 0.684031,
-        "row_accuracy": 0.638388,
+        "loss": 0.636667,
+        "pass_rate": 0.680609,
+        "row_accuracy": 0.641171,
         "row_count": 729654,
-        "row_pass_rate": 0.752257
-      }
+        "row_pass_rate": 0.747735
+      },
+      "target_optimizer_steps": 11402
     }
   ],
   "training_mode": "inner_validation_epoch_selection_full_refit",

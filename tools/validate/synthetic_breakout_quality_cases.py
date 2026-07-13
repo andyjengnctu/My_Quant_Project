@@ -25,6 +25,9 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
+    BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+    BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
+    BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
@@ -264,8 +267,101 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and isinstance(BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION, bool)
         and int(BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES) >= 0
         and isinstance(BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK, bool)
-        and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1,
+        and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1
+        and BREAKOUT_QUALITY_FINAL_REFIT_MODE in {"matched_optimizer_steps", "selected_epochs"}
+        and BREAKOUT_QUALITY_CLASS_WEIGHT_MODE in {"none", "inverse_frequency"}
+        and BREAKOUT_QUALITY_TIME_WEIGHT_MODE in {"none", "year_balanced_sqrt"},
     )
+    train_defaults = breakout_quality_train.parse_args([])
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "training_weight_and_refit_defaults_follow_config",
+        (
+            BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+            BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
+            BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+        ),
+        (
+            str(train_defaults.final_refit_mode),
+            str(train_defaults.class_weight_mode),
+            str(train_defaults.time_weight_mode),
+        ),
+    )
+    matched_target, minimum_pass = breakout_quality_train._resolve_final_refit_target_steps(
+        mode="matched_optimizer_steps",
+        selected_epoch=2,
+        selected_optimizer_steps=8422,
+        final_batches_per_epoch=5701,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "matched_refit_preserves_selected_optimizer_steps",
+        (8422, False),
+        (matched_target, minimum_pass),
+    )
+    minimum_target, minimum_pass = breakout_quality_train._resolve_final_refit_target_steps(
+        mode="matched_optimizer_steps",
+        selected_epoch=1,
+        selected_optimizer_steps=4211,
+        final_batches_per_epoch=5701,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "matched_refit_still_uses_all_selection_rows_once",
+        (5701, True),
+        (minimum_target, minimum_pass),
+    )
+    synthetic_weight_events = pd.DataFrame(
+        {
+            "ticker": ["A", "A", "B", "B", "C", "C", "D", "D", "E", "E"],
+            "date": [
+                "2020-01-02", "2020-01-02",
+                "2020-02-03", "2020-02-03",
+                "2020-03-04", "2020-03-04",
+                "2020-04-05", "2020-04-05",
+                "2021-01-06", "2021-01-06",
+            ],
+            "high_len": [60, 65] * 5,
+        }
+    )
+    weight_indices = np.arange(len(synthetic_weight_events), dtype=np.int64)
+    year_weights, year_summary = breakout_quality_train._time_weighted_group_weights(
+        synthetic_weight_events,
+        weight_indices,
+        mode="year_balanced_sqrt",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "year_balanced_weights_keep_group_total_and_soften_year_dominance",
+        True,
+        bool(
+            abs(float(year_weights.sum()) - 5.0) < 1e-6
+            and year_summary["year_group_counts"] == {"2020": 4, "2021": 1}
+            and year_summary["year_weight_multipliers"]["2021"]
+            > year_summary["year_weight_multipliers"]["2020"]
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "class_weight_none_is_identity",
+        [1.0, 1.0],
+        breakout_quality_train._class_weights(
+            np.asarray([0, 1], dtype=np.int64),
+            np.ones((2,), dtype=np.float32),
+            mode="none",
+        ).tolist(),
+    )
+
     export_defaults = breakout_quality_export_scores.parse_args([])
     add_check(
         results,
@@ -1181,6 +1277,13 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "learning_rate": 0.001,
             "weight_decay": 0.0001,
             "gradient_clip_norm": 1.0,
+            "final_refit_plan": {
+                "mode": "matched_optimizer_steps",
+                "actual_optimizer_steps": 200,
+                "equivalent_epochs": 1.5,
+            },
+            "class_weight_mode": "none",
+            "time_weight_mode": "none",
             "batch_size": 256,
             "seed": 42,
             "epoch_selection_source": "inner_validation_loss",
@@ -1698,8 +1801,26 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "oos_tuning_allowed": False,
                 },
                 "training_mode": "fixed_epoch_full_selection",
+                "max_epochs": 2,
+                "selected_epoch": 2,
                 "fixed_epochs": 2,
                 "completed_epochs": 2,
+                "epoch_selection_source": "fixed_cli_epochs",
+                "final_refit_plan": {
+                    "mode": "selected_epochs",
+                    "selected_optimizer_steps": None,
+                    "final_refit_batches_per_epoch": 1,
+                    "target_optimizer_steps": 2,
+                    "actual_optimizer_steps": 2,
+                    "completed_epoch_cycles": 2,
+                    "all_eligible_selection_rows_seen_at_least_once": True,
+                },
+                "class_weight_mode": BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
+                "class_weights_reject_pass": [1.0, 1.0],
+                "time_weight_mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+                "sample_weight_summaries": {
+                    "final_refit": {"mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE}
+                },
                 "early_stopping_enabled": False,
                 "inner_validation_used": False,
                 "training_uses_all_eligible_selection_rows": True,
@@ -1773,6 +1894,15 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "selected_epoch": 2,
                     "fixed_epochs": 2,
                     "completed_epochs": 2,
+                    "final_refit_plan": {
+                        "mode": BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+                        "selected_optimizer_steps": 2,
+                        "final_refit_batches_per_epoch": 1,
+                        "target_optimizer_steps": 2,
+                        "actual_optimizer_steps": 2,
+                        "completed_epoch_cycles": 2,
+                        "all_eligible_selection_rows_seen_at_least_once": True,
+                    },
                     "epoch_selection_source": "inner_validation_loss",
                     "early_stopping_enabled": True,
                     "early_stopping_patience": 1,
@@ -1782,6 +1912,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "inner_validation_epoch_selection": {
                         "best_epoch": 2,
                         "completed_epochs": 3,
+                        "best_optimizer_steps": 2,
                     },
                 }
             )

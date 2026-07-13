@@ -307,6 +307,21 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
         type=float,
         default=float(defaults.gradient_clip_norm),
     )
+    parser.add_argument(
+        "--final-refit-mode",
+        choices=("matched_optimizer_steps", "selected_epochs"),
+        default=str(defaults.final_refit_mode),
+    )
+    parser.add_argument(
+        "--class-weight-mode",
+        choices=("none", "inverse_frequency"),
+        default=str(defaults.class_weight_mode),
+    )
+    parser.add_argument(
+        "--time-weight-mode",
+        choices=("none", "year_balanced_sqrt"),
+        default=str(defaults.time_weight_mode),
+    )
     parser.add_argument("--seed", type=int, default=int(defaults.seed))
     parser.add_argument(
         "--fixed-threshold",
@@ -362,6 +377,12 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         str(float(args.weight_decay)),
         "--gradient-clip-norm",
         str(float(args.gradient_clip_norm)),
+        "--final-refit-mode",
+        str(args.final_refit_mode),
+        "--class-weight-mode",
+        str(args.class_weight_mode),
+        "--time-weight-mode",
+        str(args.time_weight_mode),
         "--seed",
         str(int(args.seed)),
         "--fixed-threshold",
@@ -424,7 +445,10 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         f"prefetch={int(args.train_prefetch_batches)}, "
         f"preload_feature_bank={bool(args.preload_feature_bank)}, "
         f"lr={float(args.lr)}, weight_decay={float(args.weight_decay)}, "
-        f"gradient_clip_norm={float(args.gradient_clip_norm)}, seed={int(args.seed)}, "
+        f"gradient_clip_norm={float(args.gradient_clip_norm)}, "
+        f"final_refit_mode={args.final_refit_mode}, "
+        f"class_weight_mode={args.class_weight_mode}, "
+        f"time_weight_mode={args.time_weight_mode}, seed={int(args.seed)}, "
         f"threshold={float(args.fixed_threshold):.6f}, "
         f"inner_validation={bool(args.use_inner_validation)}"
     )
@@ -547,6 +571,9 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         lr=float(defaults.lr),
         weight_decay=float(defaults.weight_decay),
         gradient_clip_norm=float(defaults.gradient_clip_norm),
+        final_refit_mode=str(defaults.final_refit_mode),
+        class_weight_mode=str(defaults.class_weight_mode),
+        time_weight_mode=str(defaults.time_weight_mode),
         seed=int(defaults.seed),
         fixed_threshold=float(defaults.fixed_threshold),
         use_inner_validation=bool(defaults.use_inner_validation),
@@ -587,6 +614,9 @@ def _print_policy_defaults(
         f"- Learning Rate：{float(train_settings.lr):g}\n"
         f"- Weight Decay：{float(train_settings.weight_decay):g}\n"
         f"- Gradient Clip Norm：{float(train_settings.gradient_clip_norm):g}\n"
+        f"- Final Refit Mode：{train_settings.final_refit_mode}\n"
+        f"- Class Weight Mode：{train_settings.class_weight_mode}\n"
+        f"- Time Weight Mode：{train_settings.time_weight_mode}\n"
         f"- Random Seed：{int(train_settings.seed)}\n"
         f"- Threshold：{float(train_settings.fixed_threshold):g}\n"
         f"- Inner Validation：{'開啟' if bool(train_settings.use_inner_validation) else '關閉'}"

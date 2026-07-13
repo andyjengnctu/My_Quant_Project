@@ -137,6 +137,9 @@ def validate_dataset_cli_contract_case(_base_params):
         lr=0.001,
         weight_decay=0.0001,
         gradient_clip_norm=1.0,
+        final_refit_mode="matched_optimizer_steps",
+        class_weight_mode="none",
+        time_weight_mode="none",
         seed=42,
         fixed_threshold=0.5,
         inner_validation_months=24,
@@ -203,6 +206,20 @@ def validate_dataset_cli_contract_case(_base_params):
             and "0.0001" in workflow_calls[0][1]
             and "--gradient-clip-norm" in workflow_calls[0][1]
             and "1.0" in workflow_calls[0][1]
+        ),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_propagates_refit_and_weight_modes",
+        True,
+        (
+            "--final-refit-mode" in workflow_calls[0][1]
+            and "matched_optimizer_steps" in workflow_calls[0][1]
+            and "--class-weight-mode" in workflow_calls[0][1]
+            and "none" in workflow_calls[0][1]
+            and "--time-weight-mode" in workflow_calls[0][1]
         ),
     )
     add_check(

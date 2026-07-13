@@ -10,6 +10,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
+    BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+    BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+)
+
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
@@ -291,12 +297,7 @@ def load_model_artifact_contract(
     completed_epochs = int(manifest.get("completed_epochs", 0))
     selected_epoch = int(manifest.get("selected_epoch", fixed_epochs))
     max_epochs = int(manifest.get("max_epochs", fixed_epochs))
-    if (
-        fixed_epochs < 1
-        or selected_epoch != fixed_epochs
-        or completed_epochs != fixed_epochs
-        or max_epochs < selected_epoch
-    ):
+    if fixed_epochs < 1 or selected_epoch != fixed_epochs or max_epochs < selected_epoch:
         raise ValueError(
             "breakout quality epoch 契約不一致: "
             f"max={max_epochs}, selected={selected_epoch}, "
@@ -304,15 +305,47 @@ def load_model_artifact_contract(
         )
     inner_validation_used = bool(manifest.get("inner_validation_used", False))
     early_stopping_enabled = bool(manifest.get("early_stopping_enabled", False))
+    final_refit_plan = _require_mapping(manifest, "final_refit_plan")
+    plan_mode = _require_nonempty_text(final_refit_plan, "mode")
+    if inner_validation_used and plan_mode != str(BREAKOUT_QUALITY_FINAL_REFIT_MODE):
+        raise ValueError(
+            "breakout quality final_refit_mode 與目前 config 不一致；請重新訓練: "
+            f"manifest={plan_mode}, config={BREAKOUT_QUALITY_FINAL_REFIT_MODE}"
+        )
+    actual_steps = int(final_refit_plan.get("actual_optimizer_steps", 0))
+    target_steps = int(final_refit_plan.get("target_optimizer_steps", 0))
+    final_batches_per_epoch = int(final_refit_plan.get("final_refit_batches_per_epoch", 0))
+    completed_cycles = int(final_refit_plan.get("completed_epoch_cycles", 0))
+    if (
+        actual_steps < 1
+        or actual_steps != target_steps
+        or final_batches_per_epoch < 1
+        or completed_cycles < 1
+        or completed_cycles != completed_epochs
+        or not bool(final_refit_plan.get("all_eligible_selection_rows_seen_at_least_once", False))
+        or actual_steps < final_batches_per_epoch
+    ):
+        raise ValueError(
+            "breakout quality final refit steps 契約不一致: "
+            f"actual={actual_steps}, target={target_steps}, "
+            f"batches_per_epoch={final_batches_per_epoch}, cycles={completed_cycles}, "
+            f"completed_epochs={completed_epochs}"
+        )
     if training_mode == TRAINING_MODE_FIXED_EPOCH_FULL_SELECTION:
         if inner_validation_used or early_stopping_enabled:
             raise ValueError(
                 "fixed_epoch_full_selection 不可使用 inner validation / early stopping"
             )
-        if max_epochs != fixed_epochs:
-            raise ValueError("fixed_epoch_full_selection 的 max_epochs 必須等於 fixed_epochs")
+        if max_epochs != fixed_epochs or completed_epochs != fixed_epochs:
+            raise ValueError(
+                "fixed_epoch_full_selection 的 max/fixed/completed epochs 必須一致"
+            )
         if str(manifest.get("epoch_selection_source") or "fixed_cli_epochs") != "fixed_cli_epochs":
             raise ValueError("fixed_epoch_full_selection 的 epoch_selection_source 不一致")
+        if plan_mode != "selected_epochs":
+            raise ValueError("fixed_epoch_full_selection 必須使用 selected_epochs refit mode")
+        if actual_steps != fixed_epochs * final_batches_per_epoch:
+            raise ValueError("fixed_epoch_full_selection optimizer steps 與 epochs 不一致")
     else:
         if not inner_validation_used:
             raise ValueError("inner_validation full refit 模式必須啟用 inner validation")
@@ -332,6 +365,22 @@ def load_model_artifact_contract(
                 f"selected={selected_epoch}, completed={selection_completed_epochs}, "
                 f"max={max_epochs}"
             )
+        selected_steps = int(selection_record.get("best_optimizer_steps", 0))
+        plan_selected_steps = int(final_refit_plan.get("selected_optimizer_steps", 0))
+        if selected_steps < 1 or plan_selected_steps != selected_steps:
+            raise ValueError("inner validation selected optimizer steps 與 final refit plan 不一致")
+        if plan_mode == "matched_optimizer_steps":
+            expected_target = max(selected_steps, final_batches_per_epoch)
+            if target_steps != expected_target:
+                raise ValueError(
+                    "matched_optimizer_steps target 不一致: "
+                    f"actual={target_steps}, expected={expected_target}"
+                )
+        elif plan_mode == "selected_epochs":
+            if target_steps != selected_epoch * final_batches_per_epoch:
+                raise ValueError("selected_epochs final refit steps 與 selected_epoch 不一致")
+        else:
+            raise ValueError(f"不支援的 final_refit_mode: {plan_mode}")
         patience = int(manifest.get("early_stopping_patience", -1))
         min_delta = float(manifest.get("early_stopping_min_delta", -1.0))
         if patience < 0 or min_delta < 0.0:
@@ -340,6 +389,28 @@ def load_model_artifact_contract(
             raise ValueError(
                 "early_stopping_enabled 必須與 early_stopping_patience 是否大於 0 一致"
             )
+
+    class_weight_mode = _require_nonempty_text(manifest, "class_weight_mode")
+    if class_weight_mode != str(BREAKOUT_QUALITY_CLASS_WEIGHT_MODE):
+        raise ValueError(
+            "breakout quality class_weight_mode 與目前 config 不一致；請重新訓練"
+        )
+    class_weights = manifest.get("class_weights_reject_pass")
+    if not isinstance(class_weights, list) or len(class_weights) != 2:
+        raise ValueError("class_weights_reject_pass 必須包含 REJECT/PASS 兩個值")
+    if class_weight_mode == "none" and [float(value) for value in class_weights] != [1.0, 1.0]:
+        raise ValueError("class_weight_mode=none 時 class weights 必須為 [1, 1]")
+
+    time_weight_mode = _require_nonempty_text(manifest, "time_weight_mode")
+    if time_weight_mode != str(BREAKOUT_QUALITY_TIME_WEIGHT_MODE):
+        raise ValueError(
+            "breakout quality time_weight_mode 與目前 config 不一致；請重新訓練"
+        )
+    sample_weight_summaries = _require_mapping(manifest, "sample_weight_summaries")
+    final_refit_summary = _require_mapping(sample_weight_summaries, "final_refit")
+    if _require_nonempty_text(final_refit_summary, "mode") != time_weight_mode:
+        raise ValueError("final refit sample weight mode 與 manifest 不一致")
+
     if not bool(manifest.get("training_uses_all_eligible_selection_rows", False)):
         raise ValueError("breakout quality 最終模型必須使用全部 eligible Selection rows")
     if bool(manifest.get("oos_predictions_used_during_training", True)):
