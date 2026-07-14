@@ -209,12 +209,16 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v4_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_v4"
     )
+    multiscale_v5_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_v5"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
     multiscale_v2_parameter_count = count_trainable_parameters(multiscale_v2_model)
     multiscale_v3_parameter_count = count_trainable_parameters(multiscale_v3_model)
     multiscale_v4_parameter_count = count_trainable_parameters(multiscale_v4_model)
+    multiscale_v5_parameter_count = count_trainable_parameters(multiscale_v5_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -278,6 +282,26 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             get_model_spec("multiscale_cnn_v4").branch_channels,
             get_model_spec("multiscale_cnn_v4").branch_input_representations,
             get_model_spec("multiscale_cnn_v4").receptive_field_bars,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v5_only_sets_intermediate_long_branch_channels",
+        (
+            True,
+            (16, 16, 12),
+            (),
+            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+        ),
+        (
+            multiscale_v4_parameter_count
+            < multiscale_v5_parameter_count
+            < multiscale_parameter_count,
+            get_model_spec("multiscale_cnn_v5").branch_channels,
+            get_model_spec("multiscale_cnn_v5").branch_input_representations,
+            get_model_spec("multiscale_cnn_v5").receptive_field_bars,
         ),
     )
     add_check(
@@ -534,6 +558,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v4_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "multiscale_cnn_v4"
     )
+    multiscale_v5_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "multiscale_cnn_v5"
+    )
     residual_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -552,6 +579,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v4_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "multiscale_cnn_v4"
     )
+    multiscale_v5_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "multiscale_cnn_v5"
+    )
     residual_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -569,10 +599,11 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_v2_paths.model_path,
                 multiscale_v3_paths.model_path,
                 multiscale_v4_paths.model_path,
+                multiscale_v5_paths.model_path,
                 residual_paths.model_path,
             }
         )
-        == 6
+        == 7
         and len(
             {
                 tiny_research,
@@ -580,15 +611,17 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_v2_research,
                 multiscale_v3_research,
                 multiscale_v4_research,
+                multiscale_v5_research,
                 residual_research,
             }
         )
-        == 6
+        == 7
         and tiny_paths.model_dir.name == "tiny_cnn_v1"
         and multiscale_paths.model_dir.name == "multiscale_cnn_v1"
         and multiscale_v2_paths.model_dir.name == "multiscale_cnn_v2"
         and multiscale_v3_paths.model_dir.name == "multiscale_cnn_v3"
         and multiscale_v4_paths.model_dir.name == "multiscale_cnn_v4"
+        and multiscale_v5_paths.model_dir.name == "multiscale_cnn_v5"
         and residual_paths.model_dir.name == "residual_tcn_v1"
         and shared_dataset_dir.name == "synthetic_quality",
     )

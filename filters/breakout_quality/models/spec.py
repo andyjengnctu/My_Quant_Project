@@ -11,6 +11,7 @@ MULTISCALE_CNN_V1 = "multiscale_cnn_v1"
 MULTISCALE_CNN_V2 = "multiscale_cnn_v2"
 MULTISCALE_CNN_V3 = "multiscale_cnn_v3"
 MULTISCALE_CNN_V4 = "multiscale_cnn_v4"
+MULTISCALE_CNN_V5 = "multiscale_cnn_v5"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
@@ -18,6 +19,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_V2,
     MULTISCALE_CNN_V3,
     MULTISCALE_CNN_V4,
+    MULTISCALE_CNN_V5,
     RESIDUAL_TCN_V1,
 )
 
@@ -130,6 +132,7 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         MULTISCALE_CNN_V2,
         MULTISCALE_CNN_V3,
         MULTISCALE_CNN_V4,
+        MULTISCALE_CNN_V5,
     }:
         downsample_factors = (1, 2, 4)
         branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
@@ -145,9 +148,12 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
                 "market_relative_return_delta",
                 "level",
             )
-        else:
+        elif normalized == MULTISCALE_CNN_V4:
             branch_input_representations = ()
             branch_channels = (16, 16, 8)
+        else:
+            branch_input_representations = ()
+            branch_channels = (16, 16, 12)
         return BreakoutQualityModelSpec(
             architecture=normalized,
             family="multiscale_cnn",
@@ -211,6 +217,7 @@ __all__ = [
     "MULTISCALE_CNN_V2",
     "MULTISCALE_CNN_V3",
     "MULTISCALE_CNN_V4",
+    "MULTISCALE_CNN_V5",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",
