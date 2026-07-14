@@ -118,9 +118,19 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
         )
 
     channels = int(spec.channels)
+    branch_channels = tuple(
+        int(value)
+        for value in (spec.branch_channels or (channels,) * len(branch_factors))
+    )
     group_count = int(spec.normalization_groups)
-    if channels < 1 or group_count < 1 or channels % group_count != 0:
-        raise ValueError("multiscale CNN channels 必須可被 normalization_groups 整除")
+    if len(branch_channels) != len(branch_factors):
+        raise ValueError("multiscale branch_channels 長度必須等於 branch 數")
+    if group_count < 1 or any(
+        value < 1 or value % group_count != 0 for value in branch_channels
+    ):
+        raise ValueError(
+            "multiscale CNN 每個 branch channel 數必須可被 normalization_groups 整除"
+        )
 
     class CausalConv1d(nn.Module):
         def __init__(self, in_channels: int, out_channels: int, kernel_size: int):
@@ -137,7 +147,13 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             return self.conv(torch.nn.functional.pad(x, (self.left_padding, 0)))
 
     class MultiScaleBranch(nn.Module):
-        def __init__(self, *, downsample_factor: int, kernel_sizes: tuple[int, int]):
+        def __init__(
+            self,
+            *,
+            downsample_factor: int,
+            kernel_sizes: tuple[int, int],
+            output_channels: int,
+        ):
             super().__init__()
             if int(downsample_factor) < 1:
                 raise ValueError("multiscale downsample factor 必須 >= 1")
@@ -156,12 +172,16 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                 )
             )
             self.network = nn.Sequential(
-                CausalConv1d(int(feature_count), channels, int(kernel_sizes[0])),
-                nn.GroupNorm(group_count, channels),
+                CausalConv1d(
+                    int(feature_count), int(output_channels), int(kernel_sizes[0])
+                ),
+                nn.GroupNorm(group_count, int(output_channels)),
                 nn.ReLU(),
                 nn.Dropout(float(spec.dropout)),
-                CausalConv1d(channels, channels, int(kernel_sizes[1])),
-                nn.GroupNorm(group_count, channels),
+                CausalConv1d(
+                    int(output_channels), int(output_channels), int(kernel_sizes[1])
+                ),
+                nn.GroupNorm(group_count, int(output_channels)),
                 nn.ReLU(),
                 nn.Dropout(float(spec.dropout)),
             )
@@ -177,12 +197,18 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                     MultiScaleBranch(
                         downsample_factor=factor,
                         kernel_sizes=kernels,
+                        output_channels=output_channels,
                     )
-                    for factor, kernels in zip(branch_factors, branch_kernels)
+                    for factor, kernels, output_channels in zip(
+                        branch_factors, branch_kernels, branch_channels
+                    )
                 ]
             )
-            summary_width = channels * sum(
-                len(windows) for windows in branch_summary_windows
+            summary_width = sum(
+                int(output_channels) * len(windows)
+                for output_channels, windows in zip(
+                    branch_channels, branch_summary_windows
+                )
             )
             self.head = nn.Sequential(
                 nn.Linear(summary_width + int(context_count), int(spec.head_width)),

@@ -1111,6 +1111,17 @@ def render_markdown_report(payload: dict) -> str:
                 )
                 + "`"
             ),
+            (
+                "- **Branch Channels**：`"
+                + "/".join(
+                    str(value)
+                    for value in (
+                        (training.get("model_spec") or {}).get("branch_channels")
+                        or [(training.get("model_spec") or {}).get("channels")] * 3
+                    )
+                )
+                + "`"
+            ),
             f"- **Trainable Parameters**：`{int(training.get('trainable_parameter_count') or 0):,}`",
             f"- **Receptive Field**：`{(training.get('model_spec') or {}).get('receptive_field_bars')} bars`",
             f"- **Pooling**：`{'+'.join((training.get('model_spec') or {}).get('pooling') or [])}`",
@@ -1520,6 +1531,16 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
                         "branch_input_representations"
                     )
                     or ["level"]
+                )
+            ),
+            (
+                "Branch Channels : "
+                + "/".join(
+                    str(value)
+                    for value in (
+                        (training.get("model_spec") or {}).get("branch_channels")
+                        or [(training.get("model_spec") or {}).get("channels")] * 3
+                    )
                 )
             ),
             f"Parameters      : {int(training.get('trainable_parameter_count') or 0):,}",

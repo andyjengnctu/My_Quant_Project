@@ -206,11 +206,15 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v3_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_v3"
     )
+    multiscale_v4_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_v4"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
     multiscale_v2_parameter_count = count_trainable_parameters(multiscale_v2_model)
     multiscale_v3_parameter_count = count_trainable_parameters(multiscale_v3_model)
+    multiscale_v4_parameter_count = count_trainable_parameters(multiscale_v4_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -256,6 +260,39 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         (
             multiscale_v3_parameter_count,
             get_model_spec("multiscale_cnn_v3").branch_input_representations,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v4_only_reduces_long_branch_channels",
+        (
+            True,
+            (16, 16, 8),
+            (),
+            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+        ),
+        (
+            tiny_parameter_count < multiscale_v4_parameter_count < multiscale_parameter_count,
+            get_model_spec("multiscale_cnn_v4").branch_channels,
+            get_model_spec("multiscale_cnn_v4").branch_input_representations,
+            get_model_spec("multiscale_cnn_v4").receptive_field_bars,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v1_v2_v3_manifest_specs_remain_backward_compatible",
+        False,
+        any(
+            "branch_channels" in get_model_spec(architecture).as_manifest_payload()
+            for architecture in (
+                "multiscale_cnn_v1",
+                "multiscale_cnn_v2",
+                "multiscale_cnn_v3",
+            )
         ),
     )
     add_check(
@@ -422,6 +459,30 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             ).shape
         ),
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v4_forward_shape_matches_existing_contract",
+        (2, 2),
+        tuple(
+            multiscale_v4_model(
+                torch.zeros((2, 300, 10), dtype=torch.float32),
+                torch.zeros((2, 4), dtype=torch.float32),
+            ).shape
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v4_runtime_branch_widths_match_spec",
+        (16, 16, 8),
+        tuple(
+            int(branch.network[0].conv.out_channels)
+            for branch in multiscale_v4_model.branches
+        ),
+    )
     try:
         build_breakout_quality_model(9, 4, architecture="multiscale_cnn_v2")
         noncanonical_feature_contract_rejected = False
@@ -470,6 +531,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v3_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "multiscale_cnn_v3"
     )
+    multiscale_v4_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "multiscale_cnn_v4"
+    )
     residual_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -484,6 +548,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
     multiscale_v3_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "multiscale_cnn_v3"
+    )
+    multiscale_v4_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "multiscale_cnn_v4"
     )
     residual_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "residual_tcn_v1"
@@ -501,24 +568,27 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_paths.model_path,
                 multiscale_v2_paths.model_path,
                 multiscale_v3_paths.model_path,
+                multiscale_v4_paths.model_path,
                 residual_paths.model_path,
             }
         )
-        == 5
+        == 6
         and len(
             {
                 tiny_research,
                 multiscale_research,
                 multiscale_v2_research,
                 multiscale_v3_research,
+                multiscale_v4_research,
                 residual_research,
             }
         )
-        == 5
+        == 6
         and tiny_paths.model_dir.name == "tiny_cnn_v1"
         and multiscale_paths.model_dir.name == "multiscale_cnn_v1"
         and multiscale_v2_paths.model_dir.name == "multiscale_cnn_v2"
         and multiscale_v3_paths.model_dir.name == "multiscale_cnn_v3"
+        and multiscale_v4_paths.model_dir.name == "multiscale_cnn_v4"
         and residual_paths.model_dir.name == "residual_tcn_v1"
         and shared_dataset_dir.name == "synthetic_quality",
     )
