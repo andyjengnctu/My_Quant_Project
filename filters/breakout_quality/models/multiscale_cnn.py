@@ -122,9 +122,20 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
         int(value)
         for value in (spec.branch_channels or (channels,) * len(branch_factors))
     )
+    branch_dropouts = tuple(
+        float(value)
+        for value in (
+            spec.branch_dropouts
+            or (float(spec.dropout),) * len(branch_factors)
+        )
+    )
     group_count = int(spec.normalization_groups)
     if len(branch_channels) != len(branch_factors):
         raise ValueError("multiscale branch_channels 長度必須等於 branch 數")
+    if len(branch_dropouts) != len(branch_factors):
+        raise ValueError("multiscale branch_dropouts 長度必須等於 branch 數")
+    if any(value < 0.0 or value >= 1.0 for value in branch_dropouts):
+        raise ValueError("multiscale branch dropout 必須位於 [0, 1)")
     if group_count < 1 or any(
         value < 1 or value % group_count != 0 for value in branch_channels
     ):
@@ -153,6 +164,7 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             downsample_factor: int,
             kernel_sizes: tuple[int, int],
             output_channels: int,
+            dropout: float,
         ):
             super().__init__()
             if int(downsample_factor) < 1:
@@ -177,13 +189,13 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                 ),
                 nn.GroupNorm(group_count, int(output_channels)),
                 nn.ReLU(),
-                nn.Dropout(float(spec.dropout)),
+                nn.Dropout(float(dropout)),
                 CausalConv1d(
                     int(output_channels), int(output_channels), int(kernel_sizes[1])
                 ),
                 nn.GroupNorm(group_count, int(output_channels)),
                 nn.ReLU(),
-                nn.Dropout(float(spec.dropout)),
+                nn.Dropout(float(dropout)),
             )
 
         def forward(self, x):
@@ -198,9 +210,10 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                         downsample_factor=factor,
                         kernel_sizes=kernels,
                         output_channels=output_channels,
+                        dropout=dropout,
                     )
-                    for factor, kernels, output_channels in zip(
-                        branch_factors, branch_kernels, branch_channels
+                    for factor, kernels, output_channels, dropout in zip(
+                        branch_factors, branch_kernels, branch_channels, branch_dropouts
                     )
                 ]
             )

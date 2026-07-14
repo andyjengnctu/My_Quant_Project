@@ -12,6 +12,7 @@ MULTISCALE_CNN_V2 = "multiscale_cnn_v2"
 MULTISCALE_CNN_V3 = "multiscale_cnn_v3"
 MULTISCALE_CNN_V4 = "multiscale_cnn_v4"
 MULTISCALE_CNN_V5 = "multiscale_cnn_v5"
+MULTISCALE_CNN_V6 = "multiscale_cnn_v6"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
@@ -20,6 +21,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_V3,
     MULTISCALE_CNN_V4,
     MULTISCALE_CNN_V5,
+    MULTISCALE_CNN_V6,
     RESIDUAL_TCN_V1,
 )
 
@@ -43,6 +45,7 @@ class BreakoutQualityModelSpec:
     branch_summary_windows_bars: tuple[tuple[int, ...], ...] = ()
     branch_input_representations: tuple[str, ...] = ()
     branch_channels: tuple[int, ...] = ()
+    branch_dropouts: tuple[float, ...] = ()
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -76,6 +79,8 @@ class BreakoutQualityModelSpec:
             payload["branch_input_representations"] = list(self.branch_input_representations)
         if self.branch_channels:
             payload["branch_channels"] = list(self.branch_channels)
+        if self.branch_dropouts:
+            payload["branch_dropouts"] = [float(value) for value in self.branch_dropouts]
         return payload
 
 
@@ -133,11 +138,13 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         MULTISCALE_CNN_V3,
         MULTISCALE_CNN_V4,
         MULTISCALE_CNN_V5,
+        MULTISCALE_CNN_V6,
     }:
         downsample_factors = (1, 2, 4)
         branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
         branch_summary_windows_bars = ((0, 20), (0, 60), (120, 300))
         branch_channels = ()
+        branch_dropouts = ()
         if normalized == MULTISCALE_CNN_V1:
             branch_input_representations = ()
         elif normalized == MULTISCALE_CNN_V2:
@@ -151,9 +158,12 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         elif normalized == MULTISCALE_CNN_V4:
             branch_input_representations = ()
             branch_channels = (16, 16, 8)
-        else:
+        elif normalized == MULTISCALE_CNN_V5:
             branch_input_representations = ()
             branch_channels = (16, 16, 12)
+        else:
+            branch_input_representations = ()
+            branch_dropouts = (0.25, 0.25, 0.40)
         return BreakoutQualityModelSpec(
             architecture=normalized,
             family="multiscale_cnn",
@@ -175,6 +185,7 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             branch_summary_windows_bars=branch_summary_windows_bars,
             branch_input_representations=branch_input_representations,
             branch_channels=branch_channels,
+            branch_dropouts=branch_dropouts,
         )
 
     kernel_size = 3
@@ -218,6 +229,7 @@ __all__ = [
     "MULTISCALE_CNN_V3",
     "MULTISCALE_CNN_V4",
     "MULTISCALE_CNN_V5",
+    "MULTISCALE_CNN_V6",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",

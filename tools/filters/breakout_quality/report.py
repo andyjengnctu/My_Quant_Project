@@ -1122,6 +1122,17 @@ def render_markdown_report(payload: dict) -> str:
                 )
                 + "`"
             ),
+            (
+                "- **Branch Dropouts**：`"
+                + "/".join(
+                    f"{float(value):g}"
+                    for value in (
+                        (training.get("model_spec") or {}).get("branch_dropouts")
+                        or [(training.get("model_spec") or {}).get("dropout")] * 3
+                    )
+                )
+                + "`"
+            ),
             f"- **Trainable Parameters**：`{int(training.get('trainable_parameter_count') or 0):,}`",
             f"- **Receptive Field**：`{(training.get('model_spec') or {}).get('receptive_field_bars')} bars`",
             f"- **Pooling**：`{'+'.join((training.get('model_spec') or {}).get('pooling') or [])}`",
@@ -1540,6 +1551,16 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
                     for value in (
                         (training.get("model_spec") or {}).get("branch_channels")
                         or [(training.get("model_spec") or {}).get("channels")] * 3
+                    )
+                )
+            ),
+            (
+                "Branch Dropouts : "
+                + "/".join(
+                    f"{float(value):g}"
+                    for value in (
+                        (training.get("model_spec") or {}).get("branch_dropouts")
+                        or [(training.get("model_spec") or {}).get("dropout")] * 3
                     )
                 )
             ),

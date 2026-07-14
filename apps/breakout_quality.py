@@ -433,6 +433,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
     branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
+    branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
     print(
         "model="
         f"{model_spec.architecture}, branch_inputs={branch_inputs}, "
@@ -606,10 +607,12 @@ def _print_policy_defaults(
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
     branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
+    branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
     print(
         f"- Model Architecture：{model_spec.architecture}\n"
         f"- Branch Inputs：{branch_inputs}\n"
         f"- Branch Channels：{'/'.join(str(value) for value in branch_channels)}\n"
+        f"- Branch Dropouts：{'/'.join(f'{value:g}' for value in branch_dropouts)}\n"
         f"- Receptive Field：約 {model_spec.receptive_field_bars} bars\n"
         f"- Pooling：{'+'.join(model_spec.pooling)}\n"
         f"- Epoch 上限：{int(train_settings.epochs)}\n"

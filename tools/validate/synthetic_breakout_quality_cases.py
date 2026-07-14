@@ -212,6 +212,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v5_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_v5"
     )
+    multiscale_v6_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_v6"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
@@ -219,6 +222,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v3_parameter_count = count_trainable_parameters(multiscale_v3_model)
     multiscale_v4_parameter_count = count_trainable_parameters(multiscale_v4_model)
     multiscale_v5_parameter_count = count_trainable_parameters(multiscale_v5_model)
+    multiscale_v6_parameter_count = count_trainable_parameters(multiscale_v6_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -303,6 +307,40 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             get_model_spec("multiscale_cnn_v5").branch_input_representations,
             get_model_spec("multiscale_cnn_v5").receptive_field_bars,
         ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v6_only_increases_long_branch_dropout",
+        (
+            multiscale_parameter_count,
+            (),
+            (),
+            (0.25, 0.25, 0.40),
+            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+        ),
+        (
+            multiscale_v6_parameter_count,
+            get_model_spec("multiscale_cnn_v6").branch_channels,
+            get_model_spec("multiscale_cnn_v6").branch_input_representations,
+            get_model_spec("multiscale_cnn_v6").branch_dropouts,
+            get_model_spec("multiscale_cnn_v6").receptive_field_bars,
+        ),
+    )
+    v6_branch_dropout_values = tuple(
+        float(module.p)
+        for branch in multiscale_v6_model.branches
+        for module in branch.network
+        if module.__class__.__name__ == "Dropout"
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v6_runtime_branch_dropouts_are_025_025_040",
+        (0.25, 0.25, 0.25, 0.25, 0.40, 0.40),
+        v6_branch_dropout_values,
     )
     add_check(
         results,
@@ -561,6 +599,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v5_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "multiscale_cnn_v5"
     )
+    multiscale_v6_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "multiscale_cnn_v6"
+    )
     residual_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -582,6 +623,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v5_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "multiscale_cnn_v5"
     )
+    multiscale_v6_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "multiscale_cnn_v6"
+    )
     residual_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -600,10 +644,11 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_v3_paths.model_path,
                 multiscale_v4_paths.model_path,
                 multiscale_v5_paths.model_path,
+                multiscale_v6_paths.model_path,
                 residual_paths.model_path,
             }
         )
-        == 7
+        == 8
         and len(
             {
                 tiny_research,
@@ -612,16 +657,18 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_v3_research,
                 multiscale_v4_research,
                 multiscale_v5_research,
+                multiscale_v6_research,
                 residual_research,
             }
         )
-        == 7
+        == 8
         and tiny_paths.model_dir.name == "tiny_cnn_v1"
         and multiscale_paths.model_dir.name == "multiscale_cnn_v1"
         and multiscale_v2_paths.model_dir.name == "multiscale_cnn_v2"
         and multiscale_v3_paths.model_dir.name == "multiscale_cnn_v3"
         and multiscale_v4_paths.model_dir.name == "multiscale_cnn_v4"
         and multiscale_v5_paths.model_dir.name == "multiscale_cnn_v5"
+        and multiscale_v6_paths.model_dir.name == "multiscale_cnn_v6"
         and residual_paths.model_dir.name == "residual_tcn_v1"
         and shared_dataset_dir.name == "synthetic_quality",
     )
