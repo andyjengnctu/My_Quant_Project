@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN, build_breakout_optimizer_high_len_values
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v1"  # 模型架構；可設為 tiny_cnn_v1、multiscale_cnn_v1、multiscale_cnn_v2 或 residual_tcn_v1。v2 僅在模型內新增 Return／Delta 表示，不改 Dataset。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v1"  # 模型架構；可設為 tiny_cnn_v1、multiscale_cnn_v1、multiscale_cnn_v2、multiscale_cnn_v3 或 residual_tcn_v1。v3 僅將短／中期個股價格變化改為相對 0050 Return，不改 Dataset。
 BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
-BREAKOUT_QUALITY_DEFAULT_EPOCHS = 20  # 關閉 inner validation 時為固定訓練輪數；開啟時為 epoch 搜尋上限。
+BREAKOUT_QUALITY_DEFAULT_EPOCHS = 100  # 關閉 inner validation 時為固定訓練輪數；開啟時為 epoch 搜尋上限。
 BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 128  # 每次梯度更新使用的訓練 rows 數。
 BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.0003  # Adam optimizer 的預設 learning rate；中型多尺度 CNN 使用較低 learning rate 抑制快速過度擬合。
 BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY = 0.0001  # Adam 的 L2 weight decay；0 表示關閉。
@@ -26,7 +26,7 @@ BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES = 20  # 開始訓練前要求的最少有效 
 
 BREAKOUT_QUALITY_USE_INNER_VALIDATION = True  # 是否以 Selection 尾端資料選 best epoch，再用完整 Selection 重訓。
 BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS = 24  # Inner validation 從 Selection 結尾往前保留的月份數。
-BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE = 3  # Validation loss 連續幾個 epoch 未改善後停止 epoch 搜尋；0 表示跑滿上限。
+BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE = 1  # Validation loss 連續幾個 epoch 未改善後停止 epoch 搜尋；0 表示跑滿上限。
 BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA = 0.0  # Validation loss 至少下降多少才視為新最佳 epoch。
 BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES = 20  # 開啟 inner validation 時要求的最少有效 validation rows。
 

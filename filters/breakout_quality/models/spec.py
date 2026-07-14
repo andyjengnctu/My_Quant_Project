@@ -9,11 +9,13 @@ from typing import Any, Mapping
 TINY_CNN_V1 = "tiny_cnn_v1"
 MULTISCALE_CNN_V1 = "multiscale_cnn_v1"
 MULTISCALE_CNN_V2 = "multiscale_cnn_v2"
+MULTISCALE_CNN_V3 = "multiscale_cnn_v3"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
     MULTISCALE_CNN_V1,
     MULTISCALE_CNN_V2,
+    MULTISCALE_CNN_V3,
     RESIDUAL_TCN_V1,
 )
 
@@ -118,15 +120,20 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             receptive_field_bars=11,
         )
 
-    if normalized in {MULTISCALE_CNN_V1, MULTISCALE_CNN_V2}:
+    if normalized in {MULTISCALE_CNN_V1, MULTISCALE_CNN_V2, MULTISCALE_CNN_V3}:
         downsample_factors = (1, 2, 4)
         branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
         branch_summary_windows_bars = ((0, 20), (0, 60), (120, 300))
-        branch_input_representations = (
-            ()
-            if normalized == MULTISCALE_CNN_V1
-            else ("return_delta", "return_delta", "level")
-        )
+        if normalized == MULTISCALE_CNN_V1:
+            branch_input_representations = ()
+        elif normalized == MULTISCALE_CNN_V2:
+            branch_input_representations = ("return_delta", "return_delta", "level")
+        else:
+            branch_input_representations = (
+                "market_relative_return_delta",
+                "market_relative_return_delta",
+                "level",
+            )
         return BreakoutQualityModelSpec(
             architecture=normalized,
             family="multiscale_cnn",
@@ -187,6 +194,7 @@ __all__ = [
     "BreakoutQualityModelSpec",
     "MULTISCALE_CNN_V1",
     "MULTISCALE_CNN_V2",
+    "MULTISCALE_CNN_V3",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",

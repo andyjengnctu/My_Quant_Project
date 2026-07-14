@@ -7,9 +7,14 @@ import math
 
 EXPECTED_OHLCV_FEATURE_COUNT = 10
 RETURN_DELTA_REPRESENTATION = "return_delta"
+MARKET_RELATIVE_RETURN_DELTA_REPRESENTATION = "market_relative_return_delta"
 LEVEL_REPRESENTATION = "level"
 SUPPORTED_BRANCH_INPUT_REPRESENTATIONS = frozenset(
-    {LEVEL_REPRESENTATION, RETURN_DELTA_REPRESENTATION}
+    {
+        LEVEL_REPRESENTATION,
+        RETURN_DELTA_REPRESENTATION,
+        MARKET_RELATIVE_RETURN_DELTA_REPRESENTATION,
+    }
 )
 
 
@@ -27,7 +32,7 @@ def build_return_delta_representation(torch, sequence):
         raise ValueError("return/delta representation 需要 [batch, feature, time] tensor")
     if int(sequence.shape[1]) != EXPECTED_OHLCV_FEATURE_COUNT:
         raise ValueError(
-            "multiscale_cnn_v2 需要 canonical 10-column OHLCV feature contract"
+            "multiscale Return／Delta 表示需要 canonical 10-column OHLCV feature contract"
         )
 
     result = torch.zeros_like(sequence)
@@ -51,6 +56,21 @@ def build_return_delta_representation(torch, sequence):
         )
 
     return result
+
+
+def build_market_relative_return_delta_representation(torch, sequence):
+    """Replace stock price changes with stock-minus-0050 relative changes.
+
+    The canonical 10-column output contract is preserved:
+    stock O/H/L/C price channels become their one-bar changes minus the matching
+    0050 changes; stock volume delta, all 0050 price changes, and 0050 volume
+    delta remain unchanged. Input and output both use [batch, feature, time].
+    """
+
+    result = build_return_delta_representation(torch, sequence)
+    relative = result.clone()
+    relative[:, 0:4, :] = result[:, 0:4, :] - result[:, 5:9, :]
+    return relative
 
 
 def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, spec):
@@ -87,11 +107,14 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             + ", ".join(invalid_representations)
         )
     if (
-        RETURN_DELTA_REPRESENTATION in branch_input_representations
+        any(
+            representation != LEVEL_REPRESENTATION
+            for representation in branch_input_representations
+        )
         and int(feature_count) != EXPECTED_OHLCV_FEATURE_COUNT
     ):
         raise ValueError(
-            "multiscale_cnn_v2 需要 canonical 10-column OHLCV feature contract"
+            "multiscale Return／Delta 表示需要 canonical 10-column OHLCV feature contract"
         )
 
     channels = int(spec.channels)
@@ -187,10 +210,19 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
 
         def forward(self, x, context):
             level_sequence = x.transpose(1, 2)
-            return_delta_sequence = None
+            prepared_inputs = {LEVEL_REPRESENTATION: level_sequence}
             if RETURN_DELTA_REPRESENTATION in branch_input_representations:
-                return_delta_sequence = build_return_delta_representation(
-                    torch, level_sequence
+                prepared_inputs[RETURN_DELTA_REPRESENTATION] = (
+                    build_return_delta_representation(torch, level_sequence)
+                )
+            if (
+                MARKET_RELATIVE_RETURN_DELTA_REPRESENTATION
+                in branch_input_representations
+            ):
+                prepared_inputs[MARKET_RELATIVE_RETURN_DELTA_REPRESENTATION] = (
+                    build_market_relative_return_delta_representation(
+                        torch, level_sequence
+                    )
                 )
 
             summaries = []
@@ -200,13 +232,11 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                 branch_summary_windows,
                 branch_input_representations,
             ):
-                branch_input = (
-                    level_sequence
-                    if representation == LEVEL_REPRESENTATION
-                    else return_delta_sequence
-                )
+                branch_input = prepared_inputs.get(representation)
                 if branch_input is None:
-                    raise AssertionError("return/delta representation 尚未建立")
+                    raise AssertionError(
+                        f"multiscale branch representation 尚未建立: {representation}"
+                    )
                 branch_output = branch(branch_input)
                 summaries.extend(
                     self._summarize_branch(
@@ -224,8 +254,10 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
 __all__ = [
     "EXPECTED_OHLCV_FEATURE_COUNT",
     "LEVEL_REPRESENTATION",
+    "MARKET_RELATIVE_RETURN_DELTA_REPRESENTATION",
     "RETURN_DELTA_REPRESENTATION",
     "SUPPORTED_BRANCH_INPUT_REPRESENTATIONS",
+    "build_market_relative_return_delta_representation",
     "build_multiscale_cnn",
     "build_return_delta_representation",
 ]

@@ -1,32 +1,32 @@
 {
   "artifact_contract_version": 10,
   "batch_size": 128,
-  "class_weight_mode": "inverse_frequency",
+  "class_weight_mode": "none",
   "class_weights_reject_pass": [
-    1.0966413,
-    0.91901219
+    1.0,
+    1.0
   ],
-  "completed_epochs": 2,
+  "completed_epochs": 100,
   "context_columns": [
     "high_len_norm",
     "breakout_level_to_close",
     "close_to_breakout_level",
     "high_to_breakout_level"
   ],
-  "early_stopping_enabled": true,
-  "early_stopping_min_delta": 0.0,
-  "early_stopping_patience": 3,
-  "elapsed_sec": 1324.849,
-  "epoch_selection_source": "inner_validation_loss",
+  "early_stopping_enabled": false,
+  "early_stopping_min_delta": null,
+  "early_stopping_patience": null,
+  "elapsed_sec": 22879.12,
+  "epoch_selection_source": "fixed_cli_epochs",
   "evaluation_batch_size": 4096,
   "evaluation_execution": {
     "batch_boundaries_changed": false,
-    "class_weight_mode": "inverse_frequency",
+    "class_weight_mode": "none",
     "feature_bank_preloaded": true,
     "final_metrics_reused_from_last_full_epoch_evaluation": true,
-    "final_refit_actual_optimizer_steps": 11402,
+    "final_refit_actual_optimizer_steps": 570100,
     "final_refit_mode": "selected_epochs",
-    "final_refit_target_optimizer_steps": 11402,
+    "final_refit_target_optimizer_steps": 570100,
     "gradient_clip_norm": 1.0,
     "inner_train_validation_concurrent": false,
     "mode": "parallel_chunked_full_split",
@@ -34,7 +34,7 @@
     "optimizer_zero_grad_set_to_none": true,
     "per_worker_torch_threads": 1,
     "reduction_order_changed": false,
-    "time_weight_mode": "year_balanced_sqrt",
+    "time_weight_mode": "none",
     "training_batch_prefetch": 0,
     "training_order_changed": false,
     "training_sampling_enabled": false,
@@ -73,233 +73,50 @@
     "total": 729654
   },
   "final_refit_metrics": {
-    "accuracy": 0.6435,
+    "accuracy": 0.8559,
     "group_weight_sum": 23072.0,
-    "loss": 0.636667,
-    "pass_rate": 0.680609,
-    "row_accuracy": 0.641171,
+    "loss": 0.360388,
+    "pass_rate": 0.538047,
+    "row_accuracy": 0.871819,
     "row_count": 729654,
-    "row_pass_rate": 0.747735
+    "row_pass_rate": 0.530094
   },
   "final_refit_plan": {
-    "actual_optimizer_steps": 11402,
+    "actual_optimizer_steps": 570100,
     "all_eligible_selection_rows_seen_at_least_once": true,
     "batch_size": 128,
-    "completed_epoch_cycles": 2,
-    "equivalent_epochs": 2.0,
+    "completed_epoch_cycles": 100,
+    "equivalent_epochs": 100.0,
     "final_refit_batches_per_epoch": 5701,
     "final_refit_row_count": 729654,
-    "inner_train_batches_per_epoch": 4211,
-    "inner_train_row_count": 538887,
+    "inner_train_batches_per_epoch": null,
+    "inner_train_row_count": 729654,
     "last_epoch_fraction": 1.0,
     "minimum_full_pass_applied": false,
     "mode": "selected_epochs",
-    "selected_epoch": 2,
-    "selected_optimizer_steps": 8422,
-    "target_optimizer_steps": 11402
+    "selected_epoch": 100,
+    "selected_optimizer_steps": null,
+    "target_optimizer_steps": 570100
   },
-  "fixed_epochs": 2,
+  "fixed_epochs": 100,
   "fixed_evaluation_threshold": 0.5,
   "gradient_clip_norm": 1.0,
   "inner_train_label_counts": {
     "invalid": 0,
-    "pass": 298265,
-    "reject": 240622,
-    "total": 538887
+    "pass": 405751,
+    "reject": 323903,
+    "total": 729654
   },
-  "inner_validation_epoch_selection": {
-    "batches_per_epoch": 4211,
-    "best_epoch": 2,
-    "best_optimizer_steps": 8422,
-    "best_validation_loss": 0.701106,
-    "best_validation_metrics": {
-      "accuracy": 0.551658,
-      "group_weight_sum": 6065.0,
-      "loss": 0.701106,
-      "pass_rate": 0.494284,
-      "row_accuracy": 0.524355,
-      "row_count": 187316,
-      "row_pass_rate": 0.432932
-    },
-    "class_weights_reject_pass": [
-      1.07778239,
-      0.93268883
-    ],
-    "completed_epochs": 5,
-    "history": [
-      {
-        "batch_loss": 0.676588,
-        "cumulative_optimizer_steps": 4211,
-        "elapsed_sec": 174.109,
-        "epoch": 1,
-        "inner_train_metrics": {
-          "accuracy": 0.600293,
-          "group_weight_sum": 16832.0,
-          "loss": 0.657212,
-          "pass_rate": 0.470386,
-          "row_accuracy": 0.610549,
-          "row_count": 538887,
-          "row_pass_rate": 0.596654
-        },
-        "inner_validation_metrics": {
-          "accuracy": 0.515884,
-          "group_weight_sum": 6065.0,
-          "loss": 0.711678,
-          "pass_rate": 0.276184,
-          "row_accuracy": 0.509262,
-          "row_count": 187316,
-          "row_pass_rate": 0.31047
-        },
-        "is_best_epoch": true,
-        "optimizer_steps": 4211
-      },
-      {
-        "batch_loss": 0.649991,
-        "cumulative_optimizer_steps": 8422,
-        "elapsed_sec": 170.606,
-        "epoch": 2,
-        "inner_train_metrics": {
-          "accuracy": 0.651254,
-          "group_weight_sum": 16832.0,
-          "loss": 0.633517,
-          "pass_rate": 0.718362,
-          "row_accuracy": 0.659565,
-          "row_count": 538887,
-          "row_pass_rate": 0.724992
-        },
-        "inner_validation_metrics": {
-          "accuracy": 0.551658,
-          "group_weight_sum": 6065.0,
-          "loss": 0.701106,
-          "pass_rate": 0.494284,
-          "row_accuracy": 0.524355,
-          "row_count": 187316,
-          "row_pass_rate": 0.432932
-        },
-        "is_best_epoch": true,
-        "optimizer_steps": 4211
-      },
-      {
-        "batch_loss": 0.631905,
-        "cumulative_optimizer_steps": 12633,
-        "elapsed_sec": 170.921,
-        "epoch": 3,
-        "inner_train_metrics": {
-          "accuracy": 0.679697,
-          "group_weight_sum": 16832.0,
-          "loss": 0.600788,
-          "pass_rate": 0.618401,
-          "row_accuracy": 0.681727,
-          "row_count": 538887,
-          "row_pass_rate": 0.677363
-        },
-        "inner_validation_metrics": {
-          "accuracy": 0.540388,
-          "group_weight_sum": 6065.0,
-          "loss": 0.720632,
-          "pass_rate": 0.396661,
-          "row_accuracy": 0.524056,
-          "row_count": 187316,
-          "row_pass_rate": 0.392273
-        },
-        "is_best_epoch": false,
-        "optimizer_steps": 4211
-      },
-      {
-        "batch_loss": 0.61972,
-        "cumulative_optimizer_steps": 16844,
-        "elapsed_sec": 170.673,
-        "epoch": 4,
-        "inner_train_metrics": {
-          "accuracy": 0.693104,
-          "group_weight_sum": 16832.0,
-          "loss": 0.587589,
-          "pass_rate": 0.642863,
-          "row_accuracy": 0.696695,
-          "row_count": 538887,
-          "row_pass_rate": 0.664206
-        },
-        "inner_validation_metrics": {
-          "accuracy": 0.526561,
-          "group_weight_sum": 6065.0,
-          "loss": 0.732325,
-          "pass_rate": 0.344457,
-          "row_accuracy": 0.496418,
-          "row_count": 187316,
-          "row_pass_rate": 0.308206
-        },
-        "is_best_epoch": false,
-        "optimizer_steps": 4211
-      },
-      {
-        "batch_loss": 0.608873,
-        "cumulative_optimizer_steps": 21055,
-        "elapsed_sec": 170.509,
-        "epoch": 5,
-        "inner_train_metrics": {
-          "accuracy": 0.679901,
-          "group_weight_sum": 16832.0,
-          "loss": 0.577578,
-          "pass_rate": 0.444281,
-          "row_accuracy": 0.678033,
-          "row_count": 538887,
-          "row_pass_rate": 0.4609
-        },
-        "inner_validation_metrics": {
-          "accuracy": 0.499941,
-          "group_weight_sum": 6065.0,
-          "loss": 0.80458,
-          "pass_rate": 0.235302,
-          "row_accuracy": 0.476649,
-          "row_count": 187316,
-          "row_pass_rate": 0.186268
-        },
-        "is_best_epoch": false,
-        "optimizer_steps": 4211
-      }
-    ],
-    "sample_weight_summaries": {
-      "inner_train": {
-        "group_count": 16832,
-        "mode": "year_balanced_sqrt",
-        "weight_sum": 16832.000479,
-        "year_group_counts": {
-          "2011": 948,
-          "2012": 2250,
-          "2013": 2487,
-          "2014": 2077,
-          "2015": 1803,
-          "2016": 2521,
-          "2017": 3068,
-          "2018": 1678
-        },
-        "year_weight_multipliers": {
-          "2011": 1.50727894,
-          "2012": 0.97837769,
-          "2013": 0.93059327,
-          "2014": 1.01830893,
-          "2015": 1.0929491,
-          "2016": 0.92429664,
-          "2017": 0.83785742,
-          "2018": 1.13292672
-        }
-      }
-    }
-  },
-  "inner_validation_label_counts": {
-    "invalid": 0,
-    "pass": 105743,
-    "reject": 81573,
-    "total": 187316
-  },
-  "inner_validation_months": 24,
-  "inner_validation_used": true,
+  "inner_validation_epoch_selection": null,
+  "inner_validation_label_counts": null,
+  "inner_validation_months": null,
+  "inner_validation_used": false,
   "learning_rate": 0.0003,
   "manifest_filename": "manifest.json",
-  "max_epochs": 20,
+  "max_epochs": 100,
   "model": {
     "filename": "model.pt",
-    "sha256": "e9df6f3026afa1c218ebd83ee26ec7aa2abf02a8d64f53a52d08a2e43d5277b3",
+    "sha256": "09d214311bd409fda82df3ce667548572b66b996017b061bbaae32e50b3aaccb",
     "size_bytes": 103883
   },
   "model_architecture": "multiscale_cnn_v1",
@@ -474,61 +291,13 @@
     "scope": "not_exported"
   },
   "sample_weight_summaries": {
-    "epoch_selection": {
-      "inner_train": {
-        "group_count": 16832,
-        "mode": "year_balanced_sqrt",
-        "weight_sum": 16832.000479,
-        "year_group_counts": {
-          "2011": 948,
-          "2012": 2250,
-          "2013": 2487,
-          "2014": 2077,
-          "2015": 1803,
-          "2016": 2521,
-          "2017": 3068,
-          "2018": 1678
-        },
-        "year_weight_multipliers": {
-          "2011": 1.50727894,
-          "2012": 0.97837769,
-          "2013": 0.93059327,
-          "2014": 1.01830893,
-          "2015": 1.0929491,
-          "2016": 0.92429664,
-          "2017": 0.83785742,
-          "2018": 1.13292672
-        }
-      }
-    },
+    "epoch_selection": null,
     "final_refit": {
       "group_count": 23072,
-      "mode": "year_balanced_sqrt",
+      "mode": "none",
       "weight_sum": 23072.000646,
-      "year_group_counts": {
-        "2011": 948,
-        "2012": 2250,
-        "2013": 2487,
-        "2014": 2077,
-        "2015": 1803,
-        "2016": 2521,
-        "2017": 3068,
-        "2018": 1853,
-        "2019": 3507,
-        "2020": 2558
-      },
-      "year_weight_multipliers": {
-        "2011": 1.57898966,
-        "2012": 1.02492526,
-        "2013": 0.97486743,
-        "2014": 1.06675627,
-        "2015": 1.14494755,
-        "2016": 0.96827124,
-        "2017": 0.87771956,
-        "2018": 1.1293947,
-        "2019": 0.82094785,
-        "2020": 0.96124299
-      }
+      "year_group_counts": {},
+      "year_weight_multipliers": {}
     }
   },
   "score_decision": {
@@ -538,7 +307,7 @@
   },
   "score_filename": "scores.csv",
   "seed": 42,
-  "selected_epoch": 2,
+  "selected_epoch": 100,
   "sequence_length": 300,
   "source_dataset": {
     "build_mode": "full_feature_bank_rebuild",
@@ -847,14 +616,14 @@
     "schema_version": 3,
     "selection_role_counts": {
       "embargo": 32453,
-      "inner_embargo": 3451,
+      "inner_embargo": 0,
       "invalid": 0,
       "not_applicable": 1030921,
-      "train": 538887,
-      "validation": 187316
+      "train": 729654,
+      "validation": 0
     },
-    "sha256": "8a4ba1052d43009e5a6cddd36129debf74daab125f0c74bc53d2e233049834d3",
-    "size_bytes": 73984200,
+    "sha256": "e13e0427812967997a6566b6f251ef1a152996d9e0120ba0412f0047cf59de0f",
+    "size_bytes": 73020012,
     "source_dataset_artifacts": {
       "event_context": {
         "filename": "event_context.npy",
@@ -910,35 +679,35 @@
   },
   "split_filename": "split_assignments.csv",
   "split_report": {
-    "early_stopping_used": true,
+    "early_stopping_used": false,
     "embargo_dropped_from_final_refit_row_count": 32453,
     "final_refit_date_range": {
       "end": "2020-11-05",
       "start": "2011-01-03"
     },
     "final_refit_group_count": 23072,
-    "final_refit_includes_inner_embargo_rows": true,
+    "final_refit_includes_inner_embargo_rows": false,
     "final_refit_label_end_date_range": {
       "end": "2020-12-31",
       "start": "2011-03-09"
     },
     "final_refit_row_count": 729654,
-    "inner_train_validation_embargo_row_count": 3451,
+    "inner_train_validation_embargo_row_count": 0,
     "inner_train_validation_overlap_event_date_count": 0,
     "inner_train_validation_overlap_group_count": 0,
     "inner_validation_date_range": {
-      "end": "2020-11-05",
-      "start": "2019-01-02"
+      "end": null,
+      "start": null
     },
-    "inner_validation_group_count": 6065,
+    "inner_validation_group_count": 0,
     "inner_validation_label_end_date_range": {
-      "end": "2020-12-31",
-      "start": "2019-03-12"
+      "end": null,
+      "start": null
     },
-    "inner_validation_months": 24,
-    "inner_validation_row_count": 187316,
-    "inner_validation_start_date": "2019-01-01",
-    "inner_validation_used": true,
+    "inner_validation_months": null,
+    "inner_validation_row_count": 0,
+    "inner_validation_start_date": null,
+    "inner_validation_used": false,
     "oos_date_range": {
       "end": "2025-12-22",
       "start": "2021-01-04"
@@ -965,25 +734,25 @@
     "selection_oos_embargo_row_count": 32453,
     "selection_role_counts": {
       "embargo": 32453,
-      "inner_embargo": 3451,
+      "inner_embargo": 0,
       "invalid": 0,
       "not_applicable": 1030921,
-      "train": 538887,
-      "validation": 187316
+      "train": 729654,
+      "validation": 0
     },
     "selection_start_date": "2011-01-01",
     "selection_train_date_range": {
-      "end": "2018-11-05",
+      "end": "2020-11-05",
       "start": "2011-01-03"
     },
-    "selection_train_group_count": 16832,
+    "selection_train_group_count": 23072,
     "selection_train_label_end_date_range": {
-      "end": "2018-12-28",
+      "end": "2020-12-31",
       "start": "2011-03-09"
     },
-    "selection_train_row_count": 538887,
-    "strategy": "walk_forward_outer_selection_oos_inner_validation_full_refit",
-    "training_mode": "inner_validation_epoch_selection_full_refit",
+    "selection_train_row_count": 729654,
+    "strategy": "walk_forward_outer_selection_oos_fixed_epoch_full_selection",
+    "training_mode": "fixed_epoch_full_selection",
     "training_uses_all_eligible_selection_rows": true
   },
   "threshold_policy": {
@@ -993,48 +762,1812 @@
     "optimized_by_train": false,
     "runtime_source": "strategy_param.breakout_quality_score_threshold"
   },
-  "time_weight_mode": "year_balanced_sqrt",
+  "time_weight_mode": "none",
   "train_prefetch_batches": 0,
   "trainable_parameter_count": 23522,
   "training_history": [
     {
-      "batch_loss": 0.675248,
+      "batch_loss": 0.669842,
       "cumulative_optimizer_steps": 5701,
-      "elapsed_sec": 225.69,
+      "elapsed_sec": 233.27,
       "epoch": 1,
       "epoch_fraction": 1.0,
       "optimizer_steps": 5701,
       "selection_metrics": {
-        "accuracy": 0.615969,
+        "accuracy": 0.626922,
         "group_weight_sum": 23072.0,
-        "loss": 0.651668,
-        "pass_rate": 0.535309,
-        "row_accuracy": 0.610259,
+        "loss": 0.646333,
+        "pass_rate": 0.708815,
+        "row_accuracy": 0.628545,
         "row_count": 729654,
-        "row_pass_rate": 0.543492
+        "row_pass_rate": 0.728878
       },
-      "target_optimizer_steps": 11402
+      "target_optimizer_steps": 570100
     },
     {
-      "batch_loss": 0.654215,
+      "batch_loss": 0.649662,
       "cumulative_optimizer_steps": 11402,
-      "elapsed_sec": 225.937,
+      "elapsed_sec": 225.987,
       "epoch": 2,
       "epoch_fraction": 1.0,
       "optimizer_steps": 5701,
       "selection_metrics": {
-        "accuracy": 0.6435,
+        "accuracy": 0.636522,
         "group_weight_sum": 23072.0,
-        "loss": 0.636667,
-        "pass_rate": 0.680609,
-        "row_accuracy": 0.641171,
+        "loss": 0.633923,
+        "pass_rate": 0.760504,
+        "row_accuracy": 0.635071,
         "row_count": 729654,
-        "row_pass_rate": 0.747735
+        "row_pass_rate": 0.823282
       },
-      "target_optimizer_steps": 11402
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.638274,
+      "cumulative_optimizer_steps": 17103,
+      "elapsed_sec": 225.667,
+      "epoch": 3,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.665412,
+        "group_weight_sum": 23072.0,
+        "loss": 0.608826,
+        "pass_rate": 0.630035,
+        "row_accuracy": 0.668661,
+        "row_count": 729654,
+        "row_pass_rate": 0.665606
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.62712,
+      "cumulative_optimizer_steps": 22804,
+      "elapsed_sec": 225.781,
+      "epoch": 4,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.675664,
+        "group_weight_sum": 23072.0,
+        "loss": 0.593309,
+        "pass_rate": 0.627326,
+        "row_accuracy": 0.680125,
+        "row_count": 729654,
+        "row_pass_rate": 0.65859
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.617038,
+      "cumulative_optimizer_steps": 28505,
+      "elapsed_sec": 226.06,
+      "epoch": 5,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.687212,
+        "group_weight_sum": 23072.0,
+        "loss": 0.584879,
+        "pass_rate": 0.71892,
+        "row_accuracy": 0.69313,
+        "row_count": 729654,
+        "row_pass_rate": 0.746724
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.610781,
+      "cumulative_optimizer_steps": 34206,
+      "elapsed_sec": 225.894,
+      "epoch": 6,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.70116,
+        "group_weight_sum": 23072.0,
+        "loss": 0.568365,
+        "pass_rate": 0.664964,
+        "row_accuracy": 0.707464,
+        "row_count": 729654,
+        "row_pass_rate": 0.681445
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.603699,
+      "cumulative_optimizer_steps": 39907,
+      "elapsed_sec": 225.873,
+      "epoch": 7,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.708112,
+        "group_weight_sum": 23072.0,
+        "loss": 0.560434,
+        "pass_rate": 0.638727,
+        "row_accuracy": 0.711321,
+        "row_count": 729654,
+        "row_pass_rate": 0.704639
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.595381,
+      "cumulative_optimizer_steps": 45608,
+      "elapsed_sec": 225.95,
+      "epoch": 8,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.718113,
+        "group_weight_sum": 23072.0,
+        "loss": 0.548879,
+        "pass_rate": 0.564109,
+        "row_accuracy": 0.723293,
+        "row_count": 729654,
+        "row_pass_rate": 0.580825
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.590378,
+      "cumulative_optimizer_steps": 51309,
+      "elapsed_sec": 225.887,
+      "epoch": 9,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.722624,
+        "group_weight_sum": 23072.0,
+        "loss": 0.540891,
+        "pass_rate": 0.6677,
+        "row_accuracy": 0.730157,
+        "row_count": 729654,
+        "row_pass_rate": 0.668291
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.581113,
+      "cumulative_optimizer_steps": 57010,
+      "elapsed_sec": 225.762,
+      "epoch": 10,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.73261,
+        "group_weight_sum": 23072.0,
+        "loss": 0.528706,
+        "pass_rate": 0.614081,
+        "row_accuracy": 0.742372,
+        "row_count": 729654,
+        "row_pass_rate": 0.65493
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.576483,
+      "cumulative_optimizer_steps": 62711,
+      "elapsed_sec": 225.867,
+      "epoch": 11,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.738942,
+        "group_weight_sum": 23072.0,
+        "loss": 0.521535,
+        "pass_rate": 0.643727,
+        "row_accuracy": 0.744449,
+        "row_count": 729654,
+        "row_pass_rate": 0.695928
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.572048,
+      "cumulative_optimizer_steps": 68412,
+      "elapsed_sec": 225.911,
+      "epoch": 12,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.742323,
+        "group_weight_sum": 23072.0,
+        "loss": 0.517389,
+        "pass_rate": 0.692443,
+        "row_accuracy": 0.746562,
+        "row_count": 729654,
+        "row_pass_rate": 0.721853
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.567433,
+      "cumulative_optimizer_steps": 74113,
+      "elapsed_sec": 225.946,
+      "epoch": 13,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.75089,
+        "group_weight_sum": 23072.0,
+        "loss": 0.50456,
+        "pass_rate": 0.631599,
+        "row_accuracy": 0.760943,
+        "row_count": 729654,
+        "row_pass_rate": 0.678494
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.56336,
+      "cumulative_optimizer_steps": 79814,
+      "elapsed_sec": 225.973,
+      "epoch": 14,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.75619,
+        "group_weight_sum": 23072.0,
+        "loss": 0.495344,
+        "pass_rate": 0.592715,
+        "row_accuracy": 0.766835,
+        "row_count": 729654,
+        "row_pass_rate": 0.603918
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.560193,
+      "cumulative_optimizer_steps": 85515,
+      "elapsed_sec": 226.026,
+      "epoch": 15,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.744076,
+        "group_weight_sum": 23072.0,
+        "loss": 0.505696,
+        "pass_rate": 0.724472,
+        "row_accuracy": 0.755425,
+        "row_count": 729654,
+        "row_pass_rate": 0.73093
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.553909,
+      "cumulative_optimizer_steps": 91216,
+      "elapsed_sec": 226.053,
+      "epoch": 16,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.766667,
+        "group_weight_sum": 23072.0,
+        "loss": 0.477429,
+        "pass_rate": 0.622804,
+        "row_accuracy": 0.779054,
+        "row_count": 729654,
+        "row_pass_rate": 0.623774
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.551915,
+      "cumulative_optimizer_steps": 96917,
+      "elapsed_sec": 225.799,
+      "epoch": 17,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.774647,
+        "group_weight_sum": 23072.0,
+        "loss": 0.477285,
+        "pass_rate": 0.589752,
+        "row_accuracy": 0.786345,
+        "row_count": 729654,
+        "row_pass_rate": 0.58475
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.549143,
+      "cumulative_optimizer_steps": 102618,
+      "elapsed_sec": 226.362,
+      "epoch": 18,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.775827,
+        "group_weight_sum": 23072.0,
+        "loss": 0.476053,
+        "pass_rate": 0.611544,
+        "row_accuracy": 0.790066,
+        "row_count": 729654,
+        "row_pass_rate": 0.643519
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.546264,
+      "cumulative_optimizer_steps": 108319,
+      "elapsed_sec": 226.571,
+      "epoch": 19,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.778788,
+        "group_weight_sum": 23072.0,
+        "loss": 0.466716,
+        "pass_rate": 0.637399,
+        "row_accuracy": 0.790338,
+        "row_count": 729654,
+        "row_pass_rate": 0.658175
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.542167,
+      "cumulative_optimizer_steps": 114020,
+      "elapsed_sec": 226.44,
+      "epoch": 20,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.773677,
+        "group_weight_sum": 23072.0,
+        "loss": 0.469676,
+        "pass_rate": 0.67543,
+        "row_accuracy": 0.791426,
+        "row_count": 729654,
+        "row_pass_rate": 0.670123
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.54116,
+      "cumulative_optimizer_steps": 119721,
+      "elapsed_sec": 227.006,
+      "epoch": 21,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.790253,
+        "group_weight_sum": 23072.0,
+        "loss": 0.457014,
+        "pass_rate": 0.592714,
+        "row_accuracy": 0.805093,
+        "row_count": 729654,
+        "row_pass_rate": 0.592802
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.537454,
+      "cumulative_optimizer_steps": 125422,
+      "elapsed_sec": 226.547,
+      "epoch": 22,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.785815,
+        "group_weight_sum": 23072.0,
+        "loss": 0.459756,
+        "pass_rate": 0.550234,
+        "row_accuracy": 0.802542,
+        "row_count": 729654,
+        "row_pass_rate": 0.582853
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.535698,
+      "cumulative_optimizer_steps": 131123,
+      "elapsed_sec": 226.485,
+      "epoch": 23,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.79296,
+        "group_weight_sum": 23072.0,
+        "loss": 0.447147,
+        "pass_rate": 0.604288,
+        "row_accuracy": 0.80647,
+        "row_count": 729654,
+        "row_pass_rate": 0.60633
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.532587,
+      "cumulative_optimizer_steps": 136824,
+      "elapsed_sec": 226.756,
+      "epoch": 24,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.792474,
+        "group_weight_sum": 23072.0,
+        "loss": 0.4434,
+        "pass_rate": 0.565323,
+        "row_accuracy": 0.805047,
+        "row_count": 729654,
+        "row_pass_rate": 0.584783
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.530769,
+      "cumulative_optimizer_steps": 142525,
+      "elapsed_sec": 226.625,
+      "epoch": 25,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.797482,
+        "group_weight_sum": 23072.0,
+        "loss": 0.443044,
+        "pass_rate": 0.558115,
+        "row_accuracy": 0.813211,
+        "row_count": 729654,
+        "row_pass_rate": 0.577298
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.53041,
+      "cumulative_optimizer_steps": 148226,
+      "elapsed_sec": 226.65,
+      "epoch": 26,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.80235,
+        "group_weight_sum": 23072.0,
+        "loss": 0.431594,
+        "pass_rate": 0.576923,
+        "row_accuracy": 0.816232,
+        "row_count": 729654,
+        "row_pass_rate": 0.592346
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.527574,
+      "cumulative_optimizer_steps": 153927,
+      "elapsed_sec": 226.94,
+      "epoch": 27,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.791419,
+        "group_weight_sum": 23072.0,
+        "loss": 0.438194,
+        "pass_rate": 0.649127,
+        "row_accuracy": 0.81253,
+        "row_count": 729654,
+        "row_pass_rate": 0.621636
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.525055,
+      "cumulative_optimizer_steps": 159628,
+      "elapsed_sec": 226.899,
+      "epoch": 28,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.80328,
+        "group_weight_sum": 23072.0,
+        "loss": 0.425229,
+        "pass_rate": 0.610906,
+        "row_accuracy": 0.815229,
+        "row_count": 729654,
+        "row_pass_rate": 0.626637
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.523157,
+      "cumulative_optimizer_steps": 165329,
+      "elapsed_sec": 226.527,
+      "epoch": 29,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.806877,
+        "group_weight_sum": 23072.0,
+        "loss": 0.422297,
+        "pass_rate": 0.617934,
+        "row_accuracy": 0.819345,
+        "row_count": 729654,
+        "row_pass_rate": 0.633713
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.522178,
+      "cumulative_optimizer_steps": 171030,
+      "elapsed_sec": 226.767,
+      "epoch": 30,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.804777,
+        "group_weight_sum": 23072.0,
+        "loss": 0.435389,
+        "pass_rate": 0.536031,
+        "row_accuracy": 0.821067,
+        "row_count": 729654,
+        "row_pass_rate": 0.547251
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.520574,
+      "cumulative_optimizer_steps": 176731,
+      "elapsed_sec": 226.381,
+      "epoch": 31,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.810937,
+        "group_weight_sum": 23072.0,
+        "loss": 0.41808,
+        "pass_rate": 0.630923,
+        "row_accuracy": 0.825419,
+        "row_count": 729654,
+        "row_pass_rate": 0.647248
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.518086,
+      "cumulative_optimizer_steps": 182432,
+      "elapsed_sec": 226.51,
+      "epoch": 32,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.809484,
+        "group_weight_sum": 23072.0,
+        "loss": 0.421022,
+        "pass_rate": 0.644989,
+        "row_accuracy": 0.831024,
+        "row_count": 729654,
+        "row_pass_rate": 0.635884
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.517413,
+      "cumulative_optimizer_steps": 188133,
+      "elapsed_sec": 226.473,
+      "epoch": 33,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.82007,
+        "group_weight_sum": 23072.0,
+        "loss": 0.418406,
+        "pass_rate": 0.596909,
+        "row_accuracy": 0.835663,
+        "row_count": 729654,
+        "row_pass_rate": 0.592448
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.514099,
+      "cumulative_optimizer_steps": 193834,
+      "elapsed_sec": 227.459,
+      "epoch": 34,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.818354,
+        "group_weight_sum": 23072.0,
+        "loss": 0.41061,
+        "pass_rate": 0.581457,
+        "row_accuracy": 0.832301,
+        "row_count": 729654,
+        "row_pass_rate": 0.607138
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.513395,
+      "cumulative_optimizer_steps": 199535,
+      "elapsed_sec": 227.593,
+      "epoch": 35,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.814318,
+        "group_weight_sum": 23072.0,
+        "loss": 0.417954,
+        "pass_rate": 0.521279,
+        "row_accuracy": 0.826263,
+        "row_count": 729654,
+        "row_pass_rate": 0.524269
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.514594,
+      "cumulative_optimizer_steps": 205236,
+      "elapsed_sec": 227.762,
+      "epoch": 36,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.816488,
+        "group_weight_sum": 23072.0,
+        "loss": 0.408088,
+        "pass_rate": 0.634972,
+        "row_accuracy": 0.834162,
+        "row_count": 729654,
+        "row_pass_rate": 0.634763
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.511959,
+      "cumulative_optimizer_steps": 210937,
+      "elapsed_sec": 227.435,
+      "epoch": 37,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.820929,
+        "group_weight_sum": 23072.0,
+        "loss": 0.413803,
+        "pass_rate": 0.541346,
+        "row_accuracy": 0.839751,
+        "row_count": 729654,
+        "row_pass_rate": 0.573575
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.511654,
+      "cumulative_optimizer_steps": 216638,
+      "elapsed_sec": 227.334,
+      "epoch": 38,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.821489,
+        "group_weight_sum": 23072.0,
+        "loss": 0.407552,
+        "pass_rate": 0.579305,
+        "row_accuracy": 0.83645,
+        "row_count": 729654,
+        "row_pass_rate": 0.564964
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.508218,
+      "cumulative_optimizer_steps": 222339,
+      "elapsed_sec": 227.548,
+      "epoch": 39,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.822545,
+        "group_weight_sum": 23072.0,
+        "loss": 0.399699,
+        "pass_rate": 0.592477,
+        "row_accuracy": 0.837881,
+        "row_count": 729654,
+        "row_pass_rate": 0.624129
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.508686,
+      "cumulative_optimizer_steps": 228040,
+      "elapsed_sec": 227.846,
+      "epoch": 40,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.827423,
+        "group_weight_sum": 23072.0,
+        "loss": 0.409268,
+        "pass_rate": 0.576714,
+        "row_accuracy": 0.840529,
+        "row_count": 729654,
+        "row_pass_rate": 0.603719
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.50814,
+      "cumulative_optimizer_steps": 233741,
+      "elapsed_sec": 227.452,
+      "epoch": 41,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.828838,
+        "group_weight_sum": 23072.0,
+        "loss": 0.397141,
+        "pass_rate": 0.567958,
+        "row_accuracy": 0.844748,
+        "row_count": 729654,
+        "row_pass_rate": 0.5762
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.505926,
+      "cumulative_optimizer_steps": 239442,
+      "elapsed_sec": 226.877,
+      "epoch": 42,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.827468,
+        "group_weight_sum": 23072.0,
+        "loss": 0.394043,
+        "pass_rate": 0.596079,
+        "row_accuracy": 0.842277,
+        "row_count": 729654,
+        "row_pass_rate": 0.629087
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.50405,
+      "cumulative_optimizer_steps": 245143,
+      "elapsed_sec": 227.008,
+      "epoch": 43,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.831056,
+        "group_weight_sum": 23072.0,
+        "loss": 0.395215,
+        "pass_rate": 0.604975,
+        "row_accuracy": 0.846205,
+        "row_count": 729654,
+        "row_pass_rate": 0.606504
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.503172,
+      "cumulative_optimizer_steps": 250844,
+      "elapsed_sec": 227.325,
+      "epoch": 44,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.830732,
+        "group_weight_sum": 23072.0,
+        "loss": 0.388611,
+        "pass_rate": 0.609258,
+        "row_accuracy": 0.846016,
+        "row_count": 729654,
+        "row_pass_rate": 0.628613
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.504996,
+      "cumulative_optimizer_steps": 256545,
+      "elapsed_sec": 227.24,
+      "epoch": 45,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.830666,
+        "group_weight_sum": 23072.0,
+        "loss": 0.393416,
+        "pass_rate": 0.584706,
+        "row_accuracy": 0.8489,
+        "row_count": 729654,
+        "row_pass_rate": 0.58681
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.503047,
+      "cumulative_optimizer_steps": 262246,
+      "elapsed_sec": 227.359,
+      "epoch": 46,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.83332,
+        "group_weight_sum": 23072.0,
+        "loss": 0.387143,
+        "pass_rate": 0.592768,
+        "row_accuracy": 0.847902,
+        "row_count": 729654,
+        "row_pass_rate": 0.593018
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.502165,
+      "cumulative_optimizer_steps": 267947,
+      "elapsed_sec": 227.412,
+      "epoch": 47,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.834662,
+        "group_weight_sum": 23072.0,
+        "loss": 0.391094,
+        "pass_rate": 0.574139,
+        "row_accuracy": 0.848943,
+        "row_count": 729654,
+        "row_pass_rate": 0.573277
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.501373,
+      "cumulative_optimizer_steps": 273648,
+      "elapsed_sec": 228.416,
+      "epoch": 48,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.834691,
+        "group_weight_sum": 23072.0,
+        "loss": 0.381909,
+        "pass_rate": 0.584858,
+        "row_accuracy": 0.849431,
+        "row_count": 729654,
+        "row_pass_rate": 0.611819
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.498206,
+      "cumulative_optimizer_steps": 279349,
+      "elapsed_sec": 228.199,
+      "epoch": 49,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.831541,
+        "group_weight_sum": 23072.0,
+        "loss": 0.389028,
+        "pass_rate": 0.555083,
+        "row_accuracy": 0.844184,
+        "row_count": 729654,
+        "row_pass_rate": 0.548146
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.500719,
+      "cumulative_optimizer_steps": 285050,
+      "elapsed_sec": 228.428,
+      "epoch": 50,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.842959,
+        "group_weight_sum": 23072.0,
+        "loss": 0.385401,
+        "pass_rate": 0.565178,
+        "row_accuracy": 0.860803,
+        "row_count": 729654,
+        "row_pass_rate": 0.573638
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.500246,
+      "cumulative_optimizer_steps": 290751,
+      "elapsed_sec": 228.341,
+      "epoch": 51,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.835974,
+        "group_weight_sum": 23072.0,
+        "loss": 0.385705,
+        "pass_rate": 0.584709,
+        "row_accuracy": 0.857009,
+        "row_count": 729654,
+        "row_pass_rate": 0.57486
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.498183,
+      "cumulative_optimizer_steps": 296452,
+      "elapsed_sec": 228.083,
+      "epoch": 52,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.844702,
+        "group_weight_sum": 23072.0,
+        "loss": 0.385791,
+        "pass_rate": 0.528315,
+        "row_accuracy": 0.865035,
+        "row_count": 729654,
+        "row_pass_rate": 0.526709
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.497912,
+      "cumulative_optimizer_steps": 302153,
+      "elapsed_sec": 227.992,
+      "epoch": 53,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.842781,
+        "group_weight_sum": 23072.0,
+        "loss": 0.380646,
+        "pass_rate": 0.558226,
+        "row_accuracy": 0.861903,
+        "row_count": 729654,
+        "row_pass_rate": 0.560271
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.495896,
+      "cumulative_optimizer_steps": 307854,
+      "elapsed_sec": 228.472,
+      "epoch": 54,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.837978,
+        "group_weight_sum": 23072.0,
+        "loss": 0.39021,
+        "pass_rate": 0.518719,
+        "row_accuracy": 0.852571,
+        "row_count": 729654,
+        "row_pass_rate": 0.524905
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.497503,
+      "cumulative_optimizer_steps": 313555,
+      "elapsed_sec": 227.972,
+      "epoch": 55,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.832747,
+        "group_weight_sum": 23072.0,
+        "loss": 0.394343,
+        "pass_rate": 0.530619,
+        "row_accuracy": 0.853751,
+        "row_count": 729654,
+        "row_pass_rate": 0.56487
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.493566,
+      "cumulative_optimizer_steps": 319256,
+      "elapsed_sec": 228.048,
+      "epoch": 56,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.838812,
+        "group_weight_sum": 23072.0,
+        "loss": 0.377782,
+        "pass_rate": 0.597491,
+        "row_accuracy": 0.85519,
+        "row_count": 729654,
+        "row_pass_rate": 0.607165
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.494124,
+      "cumulative_optimizer_steps": 324957,
+      "elapsed_sec": 228.154,
+      "epoch": 57,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.843169,
+        "group_weight_sum": 23072.0,
+        "loss": 0.378594,
+        "pass_rate": 0.58045,
+        "row_accuracy": 0.860708,
+        "row_count": 729654,
+        "row_pass_rate": 0.582539
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.492499,
+      "cumulative_optimizer_steps": 330658,
+      "elapsed_sec": 228.173,
+      "epoch": 58,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.843298,
+        "group_weight_sum": 23072.0,
+        "loss": 0.379343,
+        "pass_rate": 0.607362,
+        "row_accuracy": 0.861895,
+        "row_count": 729654,
+        "row_pass_rate": 0.606638
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.493695,
+      "cumulative_optimizer_steps": 336359,
+      "elapsed_sec": 228.46,
+      "epoch": 59,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.839136,
+        "group_weight_sum": 23072.0,
+        "loss": 0.374764,
+        "pass_rate": 0.620084,
+        "row_accuracy": 0.853861,
+        "row_count": 729654,
+        "row_pass_rate": 0.635318
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.49379,
+      "cumulative_optimizer_steps": 342060,
+      "elapsed_sec": 228.484,
+      "epoch": 60,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.847596,
+        "group_weight_sum": 23072.0,
+        "loss": 0.374918,
+        "pass_rate": 0.541331,
+        "row_accuracy": 0.864271,
+        "row_count": 729654,
+        "row_pass_rate": 0.550902
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.490751,
+      "cumulative_optimizer_steps": 347761,
+      "elapsed_sec": 228.189,
+      "epoch": 61,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.842499,
+        "group_weight_sum": 23072.0,
+        "loss": 0.369673,
+        "pass_rate": 0.618777,
+        "row_accuracy": 0.863755,
+        "row_count": 729654,
+        "row_pass_rate": 0.619731
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.491984,
+      "cumulative_optimizer_steps": 353462,
+      "elapsed_sec": 228.227,
+      "epoch": 62,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.843712,
+        "group_weight_sum": 23072.0,
+        "loss": 0.371864,
+        "pass_rate": 0.586585,
+        "row_accuracy": 0.863715,
+        "row_count": 729654,
+        "row_pass_rate": 0.584219
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.493782,
+      "cumulative_optimizer_steps": 359163,
+      "elapsed_sec": 227.861,
+      "epoch": 63,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.844982,
+        "group_weight_sum": 23072.0,
+        "loss": 0.370177,
+        "pass_rate": 0.590845,
+        "row_accuracy": 0.864149,
+        "row_count": 729654,
+        "row_pass_rate": 0.589448
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.493984,
+      "cumulative_optimizer_steps": 364864,
+      "elapsed_sec": 226.642,
+      "epoch": 64,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.849096,
+        "group_weight_sum": 23072.0,
+        "loss": 0.374821,
+        "pass_rate": 0.598474,
+        "row_accuracy": 0.867929,
+        "row_count": 729654,
+        "row_pass_rate": 0.59473
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.49251,
+      "cumulative_optimizer_steps": 370565,
+      "elapsed_sec": 226.909,
+      "epoch": 65,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.848953,
+        "group_weight_sum": 23072.0,
+        "loss": 0.3672,
+        "pass_rate": 0.585673,
+        "row_accuracy": 0.86773,
+        "row_count": 729654,
+        "row_pass_rate": 0.590836
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.491755,
+      "cumulative_optimizer_steps": 376266,
+      "elapsed_sec": 226.702,
+      "epoch": 66,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.849624,
+        "group_weight_sum": 23072.0,
+        "loss": 0.367309,
+        "pass_rate": 0.583734,
+        "row_accuracy": 0.870062,
+        "row_count": 729654,
+        "row_pass_rate": 0.583075
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.489756,
+      "cumulative_optimizer_steps": 381967,
+      "elapsed_sec": 226.535,
+      "epoch": 67,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.847862,
+        "group_weight_sum": 23072.0,
+        "loss": 0.375583,
+        "pass_rate": 0.609642,
+        "row_accuracy": 0.863859,
+        "row_count": 729654,
+        "row_pass_rate": 0.616792
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.492712,
+      "cumulative_optimizer_steps": 387668,
+      "elapsed_sec": 226.983,
+      "epoch": 68,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.84807,
+        "group_weight_sum": 23072.0,
+        "loss": 0.37345,
+        "pass_rate": 0.605446,
+        "row_accuracy": 0.867925,
+        "row_count": 729654,
+        "row_pass_rate": 0.607894
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.489726,
+      "cumulative_optimizer_steps": 393369,
+      "elapsed_sec": 226.835,
+      "epoch": 69,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.850249,
+        "group_weight_sum": 23072.0,
+        "loss": 0.36639,
+        "pass_rate": 0.590182,
+        "row_accuracy": 0.867739,
+        "row_count": 729654,
+        "row_pass_rate": 0.589559
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.485955,
+      "cumulative_optimizer_steps": 399070,
+      "elapsed_sec": 227.071,
+      "epoch": 70,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.850347,
+        "group_weight_sum": 23072.0,
+        "loss": 0.366644,
+        "pass_rate": 0.544216,
+        "row_accuracy": 0.869248,
+        "row_count": 729654,
+        "row_pass_rate": 0.55965
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.489183,
+      "cumulative_optimizer_steps": 404771,
+      "elapsed_sec": 226.936,
+      "epoch": 71,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.856416,
+        "group_weight_sum": 23072.0,
+        "loss": 0.362546,
+        "pass_rate": 0.554149,
+        "row_accuracy": 0.87557,
+        "row_count": 729654,
+        "row_pass_rate": 0.553232
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.489015,
+      "cumulative_optimizer_steps": 410472,
+      "elapsed_sec": 226.799,
+      "epoch": 72,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.84835,
+        "group_weight_sum": 23072.0,
+        "loss": 0.368795,
+        "pass_rate": 0.58616,
+        "row_accuracy": 0.865565,
+        "row_count": 729654,
+        "row_pass_rate": 0.598286
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.485784,
+      "cumulative_optimizer_steps": 416173,
+      "elapsed_sec": 227.04,
+      "epoch": 73,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.849839,
+        "group_weight_sum": 23072.0,
+        "loss": 0.364208,
+        "pass_rate": 0.535848,
+        "row_accuracy": 0.873511,
+        "row_count": 729654,
+        "row_pass_rate": 0.55841
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.488559,
+      "cumulative_optimizer_steps": 421874,
+      "elapsed_sec": 226.814,
+      "epoch": 74,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.856186,
+        "group_weight_sum": 23072.0,
+        "loss": 0.363793,
+        "pass_rate": 0.559946,
+        "row_accuracy": 0.877993,
+        "row_count": 729654,
+        "row_pass_rate": 0.562817
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.486729,
+      "cumulative_optimizer_steps": 427575,
+      "elapsed_sec": 226.829,
+      "epoch": 75,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.857625,
+        "group_weight_sum": 23072.0,
+        "loss": 0.359443,
+        "pass_rate": 0.554017,
+        "row_accuracy": 0.87952,
+        "row_count": 729654,
+        "row_pass_rate": 0.570783
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.486703,
+      "cumulative_optimizer_steps": 433276,
+      "elapsed_sec": 226.289,
+      "epoch": 76,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.850922,
+        "group_weight_sum": 23072.0,
+        "loss": 0.361107,
+        "pass_rate": 0.571421,
+        "row_accuracy": 0.870928,
+        "row_count": 729654,
+        "row_pass_rate": 0.597046
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.484163,
+      "cumulative_optimizer_steps": 438977,
+      "elapsed_sec": 230.687,
+      "epoch": 77,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.854077,
+        "group_weight_sum": 23072.0,
+        "loss": 0.362346,
+        "pass_rate": 0.571922,
+        "row_accuracy": 0.873917,
+        "row_count": 729654,
+        "row_pass_rate": 0.576007
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.485788,
+      "cumulative_optimizer_steps": 444678,
+      "elapsed_sec": 232.823,
+      "epoch": 78,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.850151,
+        "group_weight_sum": 23072.0,
+        "loss": 0.367905,
+        "pass_rate": 0.602531,
+        "row_accuracy": 0.873126,
+        "row_count": 729654,
+        "row_pass_rate": 0.585427
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.485175,
+      "cumulative_optimizer_steps": 450379,
+      "elapsed_sec": 233.228,
+      "epoch": 79,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.855778,
+        "group_weight_sum": 23072.0,
+        "loss": 0.361275,
+        "pass_rate": 0.54888,
+        "row_accuracy": 0.873266,
+        "row_count": 729654,
+        "row_pass_rate": 0.550136
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.485495,
+      "cumulative_optimizer_steps": 456080,
+      "elapsed_sec": 233.162,
+      "epoch": 80,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.853748,
+        "group_weight_sum": 23072.0,
+        "loss": 0.360443,
+        "pass_rate": 0.59987,
+        "row_accuracy": 0.871568,
+        "row_count": 729654,
+        "row_pass_rate": 0.6093
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.486157,
+      "cumulative_optimizer_steps": 461781,
+      "elapsed_sec": 233.027,
+      "epoch": 81,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.858031,
+        "group_weight_sum": 23072.0,
+        "loss": 0.358937,
+        "pass_rate": 0.596598,
+        "row_accuracy": 0.877828,
+        "row_count": 729654,
+        "row_pass_rate": 0.594885
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.485778,
+      "cumulative_optimizer_steps": 467482,
+      "elapsed_sec": 233.06,
+      "epoch": 82,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.854362,
+        "group_weight_sum": 23072.0,
+        "loss": 0.363264,
+        "pass_rate": 0.537861,
+        "row_accuracy": 0.876469,
+        "row_count": 729654,
+        "row_pass_rate": 0.560526
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.482891,
+      "cumulative_optimizer_steps": 473183,
+      "elapsed_sec": 232.88,
+      "epoch": 83,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.851983,
+        "group_weight_sum": 23072.0,
+        "loss": 0.362444,
+        "pass_rate": 0.526037,
+        "row_accuracy": 0.866923,
+        "row_count": 729654,
+        "row_pass_rate": 0.516065
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.483863,
+      "cumulative_optimizer_steps": 478884,
+      "elapsed_sec": 233.518,
+      "epoch": 84,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.858902,
+        "group_weight_sum": 23072.0,
+        "loss": 0.35545,
+        "pass_rate": 0.559994,
+        "row_accuracy": 0.875834,
+        "row_count": 729654,
+        "row_pass_rate": 0.556616
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.483822,
+      "cumulative_optimizer_steps": 484585,
+      "elapsed_sec": 233.124,
+      "epoch": 85,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.858811,
+        "group_weight_sum": 23072.0,
+        "loss": 0.356955,
+        "pass_rate": 0.571657,
+        "row_accuracy": 0.881004,
+        "row_count": 729654,
+        "row_pass_rate": 0.561207
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.483371,
+      "cumulative_optimizer_steps": 490286,
+      "elapsed_sec": 233.03,
+      "epoch": 86,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.852419,
+        "group_weight_sum": 23072.0,
+        "loss": 0.369209,
+        "pass_rate": 0.543142,
+        "row_accuracy": 0.870392,
+        "row_count": 729654,
+        "row_pass_rate": 0.544233
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.483854,
+      "cumulative_optimizer_steps": 495987,
+      "elapsed_sec": 233.805,
+      "epoch": 87,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.862571,
+        "group_weight_sum": 23072.0,
+        "loss": 0.351018,
+        "pass_rate": 0.575845,
+        "row_accuracy": 0.880872,
+        "row_count": 729654,
+        "row_pass_rate": 0.582066
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.482837,
+      "cumulative_optimizer_steps": 501688,
+      "elapsed_sec": 232.882,
+      "epoch": 88,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.859268,
+        "group_weight_sum": 23072.0,
+        "loss": 0.352929,
+        "pass_rate": 0.557966,
+        "row_accuracy": 0.880659,
+        "row_count": 729654,
+        "row_pass_rate": 0.565009
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.4819,
+      "cumulative_optimizer_steps": 507389,
+      "elapsed_sec": 235.06,
+      "epoch": 89,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.860901,
+        "group_weight_sum": 23072.0,
+        "loss": 0.355959,
+        "pass_rate": 0.57502,
+        "row_accuracy": 0.880648,
+        "row_count": 729654,
+        "row_pass_rate": 0.583546
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.482052,
+      "cumulative_optimizer_steps": 513090,
+      "elapsed_sec": 235.065,
+      "epoch": 90,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.862155,
+        "group_weight_sum": 23072.0,
+        "loss": 0.352136,
+        "pass_rate": 0.5889,
+        "row_accuracy": 0.882033,
+        "row_count": 729654,
+        "row_pass_rate": 0.585878
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.483136,
+      "cumulative_optimizer_steps": 518791,
+      "elapsed_sec": 234.445,
+      "epoch": 91,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.855792,
+        "group_weight_sum": 23072.0,
+        "loss": 0.357109,
+        "pass_rate": 0.532918,
+        "row_accuracy": 0.871757,
+        "row_count": 729654,
+        "row_pass_rate": 0.527042
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.481355,
+      "cumulative_optimizer_steps": 524492,
+      "elapsed_sec": 234.52,
+      "epoch": 92,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.86225,
+        "group_weight_sum": 23072.0,
+        "loss": 0.356275,
+        "pass_rate": 0.547746,
+        "row_accuracy": 0.883202,
+        "row_count": 729654,
+        "row_pass_rate": 0.560229
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.483927,
+      "cumulative_optimizer_steps": 530193,
+      "elapsed_sec": 234.502,
+      "epoch": 93,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.868602,
+        "group_weight_sum": 23072.0,
+        "loss": 0.347076,
+        "pass_rate": 0.559381,
+        "row_accuracy": 0.890903,
+        "row_count": 729654,
+        "row_pass_rate": 0.559339
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.481717,
+      "cumulative_optimizer_steps": 535894,
+      "elapsed_sec": 234.281,
+      "epoch": 94,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.863727,
+        "group_weight_sum": 23072.0,
+        "loss": 0.350681,
+        "pass_rate": 0.553702,
+        "row_accuracy": 0.883894,
+        "row_count": 729654,
+        "row_pass_rate": 0.573442
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.481265,
+      "cumulative_optimizer_steps": 541595,
+      "elapsed_sec": 234.379,
+      "epoch": 95,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.863086,
+        "group_weight_sum": 23072.0,
+        "loss": 0.350183,
+        "pass_rate": 0.545682,
+        "row_accuracy": 0.883591,
+        "row_count": 729654,
+        "row_pass_rate": 0.552458
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.478586,
+      "cumulative_optimizer_steps": 547296,
+      "elapsed_sec": 234.618,
+      "epoch": 96,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.850394,
+        "group_weight_sum": 23072.0,
+        "loss": 0.361013,
+        "pass_rate": 0.486973,
+        "row_accuracy": 0.867633,
+        "row_count": 729654,
+        "row_pass_rate": 0.4847
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.480005,
+      "cumulative_optimizer_steps": 552997,
+      "elapsed_sec": 234.267,
+      "epoch": 97,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.855052,
+        "group_weight_sum": 23072.0,
+        "loss": 0.361402,
+        "pass_rate": 0.509479,
+        "row_accuracy": 0.869146,
+        "row_count": 729654,
+        "row_pass_rate": 0.498457
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.479412,
+      "cumulative_optimizer_steps": 558698,
+      "elapsed_sec": 233.897,
+      "epoch": 98,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.861324,
+        "group_weight_sum": 23072.0,
+        "loss": 0.354886,
+        "pass_rate": 0.552807,
+        "row_accuracy": 0.880361,
+        "row_count": 729654,
+        "row_pass_rate": 0.558171
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.480719,
+      "cumulative_optimizer_steps": 564399,
+      "elapsed_sec": 233.982,
+      "epoch": 99,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.86689,
+        "group_weight_sum": 23072.0,
+        "loss": 0.341136,
+        "pass_rate": 0.560893,
+        "row_accuracy": 0.887026,
+        "row_count": 729654,
+        "row_pass_rate": 0.566204
+      },
+      "target_optimizer_steps": 570100
+    },
+    {
+      "batch_loss": 0.480204,
+      "cumulative_optimizer_steps": 570100,
+      "elapsed_sec": 233.601,
+      "epoch": 100,
+      "epoch_fraction": 1.0,
+      "optimizer_steps": 5701,
+      "selection_metrics": {
+        "accuracy": 0.8559,
+        "group_weight_sum": 23072.0,
+        "loss": 0.360388,
+        "pass_rate": 0.538047,
+        "row_accuracy": 0.871819,
+        "row_count": 729654,
+        "row_pass_rate": 0.530094
+      },
+      "target_optimizer_steps": 570100
     }
   ],
-  "training_mode": "inner_validation_epoch_selection_full_refit",
+  "training_mode": "fixed_epoch_full_selection",
   "training_uses_all_eligible_selection_rows": true,
   "weight_decay": 0.0001
 }
