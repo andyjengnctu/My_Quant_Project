@@ -218,6 +218,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v7_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_v7"
     )
+    multiscale_v8_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_v8"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
@@ -227,6 +230,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v5_parameter_count = count_trainable_parameters(multiscale_v5_model)
     multiscale_v6_parameter_count = count_trainable_parameters(multiscale_v6_model)
     multiscale_v7_parameter_count = count_trainable_parameters(multiscale_v7_model)
+    multiscale_v8_parameter_count = count_trainable_parameters(multiscale_v8_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -364,6 +368,26 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             get_model_spec("multiscale_cnn_v7").branch_channels,
             get_model_spec("multiscale_cnn_v7").branch_dropouts,
             get_model_spec("multiscale_cnn_v7").receptive_field_bars,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v8_only_changes_medium_branch_to_return_delta",
+        (
+            multiscale_parameter_count,
+            ("level", "return_delta", "level"),
+            (),
+            (),
+            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+        ),
+        (
+            multiscale_v8_parameter_count,
+            get_model_spec("multiscale_cnn_v8").branch_input_representations,
+            get_model_spec("multiscale_cnn_v8").branch_channels,
+            get_model_spec("multiscale_cnn_v8").branch_dropouts,
+            get_model_spec("multiscale_cnn_v8").receptive_field_bars,
         ),
     )
     add_check(
@@ -571,6 +595,19 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             ).shape
         ),
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v8_forward_shape_matches_existing_contract",
+        (2, 2),
+        tuple(
+            multiscale_v8_model(
+                torch.zeros((2, 300, 10), dtype=torch.float32),
+                torch.zeros((2, 4), dtype=torch.float32),
+            ).shape
+        ),
+    )
     v7_probe = torch.linspace(-0.2, 0.2, steps=2 * 300 * 10, dtype=torch.float32).reshape(2, 300, 10)
     v7_level_input = v7_probe.transpose(1, 2)
     v7_expected_return = build_return_delta_representation(torch, v7_level_input)
@@ -601,6 +638,38 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             and torch.allclose(v7_captured_inputs[0], v7_expected_return)
             and torch.allclose(v7_captured_inputs[1], v7_level_input)
             and torch.allclose(v7_captured_inputs[2], v7_level_input)
+        ),
+    )
+    v8_probe = torch.linspace(-0.2, 0.2, steps=2 * 300 * 10, dtype=torch.float32).reshape(2, 300, 10)
+    v8_level_input = v8_probe.transpose(1, 2)
+    v8_expected_return = build_return_delta_representation(torch, v8_level_input)
+    v8_captured_inputs = []
+    v8_hooks = [
+        branch.register_forward_pre_hook(
+            lambda _module, inputs, captured=v8_captured_inputs: captured.append(
+                inputs[0].detach().clone()
+            )
+        )
+        for branch in multiscale_v8_model.branches
+    ]
+    try:
+        multiscale_v8_model.eval()
+        with torch.no_grad():
+            multiscale_v8_model(v8_probe, torch.zeros((2, 4), dtype=torch.float32))
+    finally:
+        for hook in v8_hooks:
+            hook.remove()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v8_runtime_routes_return_only_to_medium_branch",
+        True,
+        bool(
+            len(v8_captured_inputs) == 3
+            and torch.allclose(v8_captured_inputs[0], v8_level_input)
+            and torch.allclose(v8_captured_inputs[1], v8_expected_return)
+            and torch.allclose(v8_captured_inputs[2], v8_level_input)
         ),
     )
     add_check(
@@ -653,6 +722,19 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         True,
         v7_noncanonical_feature_contract_rejected,
     )
+    try:
+        build_breakout_quality_model(9, 4, architecture="multiscale_cnn_v8")
+        v8_noncanonical_feature_contract_rejected = False
+    except ValueError as exc:
+        v8_noncanonical_feature_contract_rejected = "canonical 10-column" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v8_rejects_noncanonical_feature_contract",
+        True,
+        v8_noncanonical_feature_contract_rejected,
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -687,6 +769,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v7_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "multiscale_cnn_v7"
     )
+    multiscale_v8_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "multiscale_cnn_v8"
+    )
     residual_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -714,6 +799,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v7_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "multiscale_cnn_v7"
     )
+    multiscale_v8_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "multiscale_cnn_v8"
+    )
     residual_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -734,10 +822,11 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_v5_paths.model_path,
                 multiscale_v6_paths.model_path,
                 multiscale_v7_paths.model_path,
+                multiscale_v8_paths.model_path,
                 residual_paths.model_path,
             }
         )
-        == 9
+        == 10
         and len(
             {
                 tiny_research,
@@ -748,10 +837,11 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_v5_research,
                 multiscale_v6_research,
                 multiscale_v7_research,
+                multiscale_v8_research,
                 residual_research,
             }
         )
-        == 9
+        == 10
         and tiny_paths.model_dir.name == "tiny_cnn_v1"
         and multiscale_paths.model_dir.name == "multiscale_cnn_v1"
         and multiscale_v2_paths.model_dir.name == "multiscale_cnn_v2"
@@ -760,6 +850,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and multiscale_v5_paths.model_dir.name == "multiscale_cnn_v5"
         and multiscale_v6_paths.model_dir.name == "multiscale_cnn_v6"
         and multiscale_v7_paths.model_dir.name == "multiscale_cnn_v7"
+        and multiscale_v8_paths.model_dir.name == "multiscale_cnn_v8"
         and residual_paths.model_dir.name == "residual_tcn_v1"
         and shared_dataset_dir.name == "synthetic_quality",
     )

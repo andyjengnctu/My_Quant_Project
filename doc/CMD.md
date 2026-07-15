@@ -72,16 +72,21 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 模型架構只由 `config/breakout_quality_policy.py` 的下列設定切換：
 
 ```python
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v8"
+# v8：只將 Medium Branch 改為 Return／Delta
+# 或：v7 只將 Short Branch 改為 Return／Delta
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v7"
-# v5：與 v1 相同使用 Level input，只將 Long Branch channels 由 16 降為 12
-
+# 或：v6 只將 Long Branch dropout 提高為 0.40
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v6"
+# 或：v5 只將 Long Branch channels 降為 12
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v5"
+# 或：v4 只將 Long Branch channels 降為 8
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v4"
-# 或：v4 將 Long Branch channels 降為 8
-
+# 或：v3 使用相對 0050 的短／中期 Return／Delta
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v3"
-# 或
+# 或：v2 使用短／中期 Return／Delta
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v2"
-# 或
+# 或：v1 三個 Branch 均使用 Level
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v1"
 # 或
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "tiny_cnn_v1"
@@ -89,7 +94,7 @@ BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "tiny_cnn_v1"
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "residual_tcn_v1"
 ```
 
-切換架構後可直接重跑 `workflow`。現有 Dataset、feature bank、future-path cache 與 labels 會沿用，不需重建；模型必須重新訓練。九種架構的 model、manifest、scores、research scores 與 reports 分開存放，因此不會互相覆蓋。`multiscale_cnn_v1`、`multiscale_cnn_v2` 與 `multiscale_cnn_v3` 使用相同 23,522 個參數與 16/16/16 三分支容量；`multiscale_cnn_v4` 與 `multiscale_cnn_v5` 都回到 v1 的 Level input，分別使用 16/16/8 與 16/16/12 容量，參數量為 14,530 與 18,530；`multiscale_cnn_v6` 維持 v1 的 Level input、16/16/16 容量與 23,522 個參數，只將 Long Branch dropout 由 0.25 提高為 0.40；`multiscale_cnn_v7` 維持 v1 容量與 dropout，只將 Short Branch 改為 Return／Delta，Medium／Long Branch 保留 Level。七者均使用 GroupNorm、約 244 bars receptive field、20／60／120／300 bars window-average 與 last pooling。v1 三個 branch 全部使用 level；v2 只把短／中期 branch 轉成 previous-close price return／range 與 normalized log-volume delta；v3 再只把短／中期的個股 O/H/L/C 變化改為「個股變化減同欄 0050 變化」，個股量能 delta、0050 五個 delta channels 與長期 level branch 維持 v2 定義。v2／v3／v7 的 Return／Delta branch 第一個 bar 因視窗外沒有前值而固定為零。`residual_tcn_v1` 使用 6 個 residual dilated blocks、dilation 1/2/4/8/16/32、約 253 bars receptive field，以及 last/average/max pooling；`tiny_cnn_v1` 保留舊兩層 Conv1D baseline。
+切換架構後可直接重跑 `workflow`。現有 Dataset、feature bank、future-path cache 與 labels 會沿用，不需重建；模型必須重新訓練。十種架構的 model、manifest、scores、research scores 與 reports 分開存放，因此不會互相覆蓋。`multiscale_cnn_v1`、`multiscale_cnn_v2` 與 `multiscale_cnn_v3` 使用相同 23,522 個參數與 16/16/16 三分支容量；`multiscale_cnn_v4` 與 `multiscale_cnn_v5` 都回到 v1 的 Level input，分別使用 16/16/8 與 16/16/12 容量，參數量為 14,530 與 18,530；`multiscale_cnn_v6` 維持 v1 的 Level input、16/16/16 容量與 23,522 個參數，只將 Long Branch dropout 由 0.25 提高為 0.40；`multiscale_cnn_v7` 維持 v1 容量與 dropout，只將 Short Branch 改為 Return／Delta，Medium／Long Branch 保留 Level；`multiscale_cnn_v8` 同樣維持 v1 容量與 dropout，只將 Medium Branch 改為 Return／Delta，Short／Long Branch 保留 Level。八者均使用 GroupNorm、約 244 bars receptive field、20／60／120／300 bars window-average 與 last pooling。v1 三個 branch 全部使用 level；v2 只把短／中期 branch 轉成 previous-close price return／range 與 normalized log-volume delta；v3 再只把短／中期的個股 O/H/L/C 變化改為「個股變化減同欄 0050 變化」，個股量能 delta、0050 五個 delta channels 與長期 level branch 維持 v2 定義。v2／v3／v7／v8 的 Return／Delta branch 第一個 bar 因視窗外沒有前值而固定為零。`residual_tcn_v1` 使用 6 個 residual dilated blocks、dilation 1/2/4/8/16/32、約 253 bars receptive field，以及 last/average/max pooling；`tiny_cnn_v1` 保留舊兩層 Conv1D baseline。
 
 - `workflow` 會自動分成三種處理：工件、profile、ticker coverage、feature/high_len/benchmark/path-cache、欄位契約或來源 CSV inventory 改變時完整重建；只有 label horizon/PASS/REJECT 改變且 horizon 未超過 future path cache 時執行快速 relabel；全部一致時跳過。 完整重建採用 `ticker/date` feature bank 去重、逐檔 CSV 讀取與 per-ticker chunk 合併，正式陣列可 mmap 載入。互動選單只有在判定不需更新時，才詢問「是否強制完整重建 dataset」，預設 N；選 Y 等同 `--rebuild-dataset`。單獨執行 `train` 時若偵測到來源已更新，會 fail-fast 並要求先重建，避免靜默使用過期 dataset。 Dataset 完整重建的逐股票進度固定在同一行刷新，避免大量輸出洗版；重新導向輸出時只保留最終進度摘要與必要的 skip 訊息。
 - 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`；報表只包含 Selection 內診斷，並明確標示不能作為正式泛化結論。
