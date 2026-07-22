@@ -618,6 +618,10 @@ def validate_dataset_cli_contract_case(_base_params):
     with (
         patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
         patch(
+            "apps.breakout_quality.BREAKOUT_QUALITY_EXPERIMENT_PROFILE",
+            "baseline",
+        ),
+        patch(
             "apps.breakout_quality._prompt_bool",
             side_effect=AssertionError("interactive report must not prompt for OOS"),
         ) as mocked_prompt,
@@ -631,7 +635,18 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_report_fixed_oos_without_prompt",
-        (0, 0, "report", ["--filter-id", "synthetic_quality", "--include-oos"]),
+        (
+            0,
+            0,
+            "report",
+            [
+                "--filter-id",
+                "synthetic_quality",
+                "--experiment-profile",
+                "baseline",
+                "--include-oos",
+            ],
+        ),
         (
             report_with_oos_rc,
             mocked_prompt.call_count,

@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260722_115701_9cd60c8.zip` |
-| SHA256 | `366b0f1a15f6e77cbbee32f94b9275fe2a94676fb747e6fd0e4b817b06e2059c` |
+| 基準 ZIP | `test-branch-1_20260722_130420_bc854a4.zip` |
+| SHA256 | `f9b10c512168c5dae250a1c745a7a4fbe3d5132ec804c93ce32f37d48e6753ad` |
 | 程式版本範圍 | v9 連續輔助目標加入前；本輪將 model architecture 與 training experiment profile 分離，取消假版本 v10 |
 | Policy 預設 | architecture=`multiscale_cnn_v1`；experiment profile=`adamw_only` |
 | 當前最佳研究模型 | `multiscale_cnn_v1` |
@@ -164,6 +164,8 @@ Selection Precision 升至 62.61%、Lift 升至 +7.80 pp，但 OOS 全面退步�
 | 與 v1 baseline 差異 | 尚未取得 |
 | 判定 | 尚不可接受或淘汰；取得結果前維持 `IMPLEMENTED` |
 | 下一步 | 先取得 6A 結果，再決定 6B 使用 AdamW 或退回 Adam |
+
+Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失敗 1 項：互動式 report 已正確傳遞 `--experiment-profile`，但 synthetic CLI contract 仍使用重構前的舊 expected argv。已將測試 fixture 隔離覆寫為 `baseline`，並把 expected argv 同步為 `--filter-id synthetic_quality --experiment-profile baseline --include-oos`。這是 validator 契約同步修正，不改 runtime、模型、Dataset 或 6A 學習條件；6A 狀態仍為 `IMPLEMENTED`。
 
 ### 3.8 Architecture／Experiment Profile 管理規則（2026-07-22）
 
