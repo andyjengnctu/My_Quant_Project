@@ -228,6 +228,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         False,
         "model_architecture" in DEFAULT_LABEL_POLICY.as_manifest_payload(),
     )
+    torch, _nn = breakout_quality_train.require_torch()
     tiny_model = build_breakout_quality_model(10, 4, architecture="tiny_cnn_v1")
     multiscale_model = build_breakout_quality_model(10, 4, architecture="multiscale_cnn_v1")
     multiscale_v2_model = build_breakout_quality_model(
@@ -254,6 +255,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     regime_context_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_regime_context_v1"
     )
+    sequence_only_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_sequence_only_v1"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
@@ -265,6 +269,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v7_parameter_count = count_trainable_parameters(multiscale_v7_model)
     multiscale_v8_parameter_count = count_trainable_parameters(multiscale_v8_model)
     regime_context_parameter_count = count_trainable_parameters(regime_context_model)
+    sequence_only_parameter_count = count_trainable_parameters(sequence_only_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -459,6 +464,40 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             )
         ),
     )
+    sequence_only_spec = get_model_spec("multiscale_cnn_sequence_only_v1")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "sequence_only_architecture_removes_only_four_dimensional_dataset_context",
+        (
+            multiscale_parameter_count - 4 * int(sequence_only_spec.head_width),
+            False,
+            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+            get_model_spec("multiscale_cnn_v1").branch_input_representations,
+        ),
+        (
+            sequence_only_parameter_count,
+            sequence_only_spec.use_dataset_context,
+            sequence_only_spec.receptive_field_bars,
+            sequence_only_spec.branch_input_representations,
+        ),
+    )
+    sequence_only_model.eval()
+    sequence_features = torch.randn((3, 300, 10), dtype=torch.float32) * 0.02
+    sequence_context_a = torch.randn((3, 4), dtype=torch.float32)
+    sequence_context_b = torch.randn((3, 4), dtype=torch.float32)
+    with torch.no_grad():
+        sequence_logits_a = sequence_only_model(sequence_features, sequence_context_a)
+        sequence_logits_b = sequence_only_model(sequence_features, sequence_context_b)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "sequence_only_logits_are_independent_of_dataset_context_values",
+        True,
+        bool(torch.equal(sequence_logits_a, sequence_logits_b)),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -483,7 +522,6 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "branch_input_representations"
         in get_model_spec("multiscale_cnn_v1").as_manifest_payload(),
     )
-    torch, _nn = breakout_quality_train.require_torch()
     regime_sequence = torch.zeros((2, 10, 61), dtype=torch.float32)
     stock_daily_log_return = 0.002
     benchmark_daily_log_return = 0.001
@@ -903,6 +941,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "multiscale_cnn_v6",
         "multiscale_cnn_v7",
         "multiscale_cnn_v8",
+        "multiscale_cnn_regime_context_v1",
         "residual_tcn_v1",
     )
     legacy_paths = [
@@ -990,7 +1029,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
-        (("multiscale_cnn_v1", "multiscale_cnn_regime_context_v1"), set(legacy_architectures)),
+        (("multiscale_cnn_v1", "multiscale_cnn_sequence_only_v1"), set(legacy_architectures)),
         (tuple(ACTIVE_MODEL_ARCHITECTURES), set(LEGACY_MODEL_ARCHITECTURES)),
     )
     add_check(

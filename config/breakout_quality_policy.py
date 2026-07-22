@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN, build_breakout_optimizer_high_len_values
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_regime_context_v1"  # 結構性實驗：保留 v1 三分支 Level 模型，額外加入由既有序列即時計算的低維市場 regime context。
-BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "baseline"  # 本輪只測 regime context；optimizer、LR schedule 與 augmentation 全部回到 baseline。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_sequence_only_v1"  # 8A：保留 v1 三分支 Level sequence，移除原 4 維 handcrafted event context。
+BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "baseline"  # 本輪只測 sequence-only input ablation；optimizer、LR schedule 與 augmentation 維持 baseline。
 BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 

@@ -23,12 +23,12 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260722_184343_a759ee8(6).zip` |
-| SHA256 | `de8594e6b66a216867ce4b4310e31b7ec00c5047428facb2500b3c5d8b5a4a2e` |
-| 程式版本範圍 | v9 auxiliary head 前的穩定程式；architecture／experiment profile 已分離；regime-context 實驗已完成並淘汰，正式 policy 退回 v1 baseline |
-| Policy 預設 | architecture=`multiscale_cnn_v1`；experiment profile=`baseline` |
-| 當前最佳研究模型 | `multiscale_cnn_v1` |
-| Dataset | Full；維持固定百分比 Label；本輪退回 baseline 不需重建或 relabel |
+| 基準 ZIP | `test-branch-1_20260722_224156_6adeb52.zip` |
+| SHA256 | `c72b9e8c93c8d8f8280626063a4483010684443bbfdeeed89fd9f4fc2b538291` |
+| 程式版本範圍 | 以使用者最新 ZIP 為來源，已實作 8A sequence-only context ablation；regime-context 保留為 legacy read-only compatibility |
+| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`baseline` |
+| 當前最佳研究模型 | `multiscale_cnn_v1`；8A 尚未取得 Full OOS 結果，不得預先視為改善 |
+| Dataset | Full；維持固定百分比 Label；8A 沿用既有 feature bank、4 維 context arrays 與 labels，不需重建或 relabel |
 
 使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**；目前正式研究基準模型仍是結果最佳的 `multiscale_cnn_v1`，不是把 policy 預設改成 `multiscale_cnn_v8`。
 
@@ -231,12 +231,28 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ### 3.12 Architecture／Experiment Profile 管理規則（2026-07-22）
 
-- `multiscale_cnn_v1` 是目前唯一已接受的 active architecture。
-- 下一個規劃架構為 `multiscale_cnn_sequence_only_v1`；在實作完成前只標記為 `PLANNED`，不得視為 active 或有效。
+- `multiscale_cnn_v1` 是目前唯一已有 OOS 證據支持的 accepted architecture。
+- `multiscale_cnn_sequence_only_v1` 已完成 8A 實作並列為 active research architecture；在 Full OOS 結果產生前狀態只能是 `IMPLEMENTED`，不得視為有效。
 - `multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1`、`residual_tcn_v1` 均為 legacy read-only compatibility；保留程式碼只供舊 checkpoint／manifest 重建與歷史重現。
 - optimizer、LR schedule、augmentation、loss weighting 等訓練差異只可新增 experiment profile，不可再建立 v10、v11 等假模型版本。
 - `baseline`、`adamw_only`、`adam_warmup_cosine` 與 `history_masking_only` 使用相同 v1 模型圖與初始化；工件依 profile 子目錄隔離。
 - 舊 v1 baseline 工件的無 profile 歷史路徑只提供唯讀 fallback；不得用它覆寫 manifest 或匯出正式 forward-OOS scores。新訓練與正式輸出一律寫入 `<architecture>/<experiment_profile>/`。
+
+### 3.13 8A Sequence-only context ablation（2026-07-22）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；等待使用者執行 Full workflow／完整 OOS |
+| 程式基準 | 來源 ZIP `test-branch-1_20260722_224156_6adeb52.zip`；SHA256 `c72b9e8c93c8d8f8280626063a4483010684443bbfdeeed89fd9f4fc2b538291`；本輪 patch 名稱 `breakout_quality_sequence_only_v1_patch_20260722.zip`，SHA256 於交付回覆列出 |
+| Architecture | `multiscale_cnn_sequence_only_v1`；experiment profile=`baseline` |
+| 唯一模型變更 | 保留 v1 的 300×10 Level sequence、Short／Medium／Long branches、channels 16／16／16、kernel、pooling、dropout 與 32 維 head；head 第一層不再拼接 Dataset 的 4 維 event context |
+| 移除輸入 | `high_len_norm`、`breakout_level_to_close`、`close_to_breakout_level`、`high_to_breakout_level` |
+| 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、augmentation=`none`、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
+| Dataset／Label | 不重建、不 relabel；現有 context arrays 仍保留於 Dataset 以維持 storage contract，但新模型 forward 明確忽略其數值 |
+| 契約差異 | model spec 新增 `use_dataset_context=false`；trainable parameters 由 v1 的 23,522 降為 23,394，精確減少 `4 × 32 = 128` |
+| Selection／OOS | 尚未取得；不得填入推測值或提前判定 |
+| 採用規則 | Full OOS Precision Lift 必須高於 +3.66 pp、Accuracy 高於 53.34%、Recall 原則上不低於約 50%，且 Selection→OOS Precision 或 Score gap 至少一項縮小 |
+| 下一步 | 執行完整研究 workflow；取得結果後回寫 Selection／OOS 指標並判定 ACCEPTED 或 REJECTED |
 
 ---
 
@@ -327,7 +343,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `PLANNED` |
+| 狀態 | `IMPLEMENTED`；等待 Full OOS 結果 |
 | Architecture | `multiscale_cnn_sequence_only_v1` |
 | 唯一變更 | 保留 v1 三個 Level branches、pooling 與 head；head 不再拼接原 4 維 handcrafted context，只使用 300×10 sequence summary |
 | 移除欄位 | normalized high_len、breakout_level／close、close／breakout_level、high／breakout_level |
@@ -363,8 +379,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 低維市場 regime context（REJECTED）
 → ATR／波動率尺度 Label（REJECTED）
 → 退回 multiscale_cnn_v1 / baseline／固定百分比 Label
-→ 8A sequence-only context ablation（NEXT；直接比較完整 OOS）
-→ 若失敗：8B recent-decay time weighting
+→ 8A sequence-only context ablation（IMPLEMENTED；NEXT：執行完整 workflow／完整 OOS）
+→ 若完整 OOS 未改善：8B recent-decay time weighting
 → 若失敗：8C same-day cross-sectional rank context
 → 若失敗：8D classification + same-day ranking loss
 → 單模型改善後：8E multi-seed probability ensemble

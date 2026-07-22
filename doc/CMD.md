@@ -73,17 +73,17 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 
 ```python
 # config/breakout_quality_policy.py
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_regime_context_v1"
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_sequence_only_v1"
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "baseline"
 ```
 
-- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前 active architecture 包含正式基準 `multiscale_cnn_v1` 與結構性實驗 `multiscale_cnn_regime_context_v1`。後者只增加由既有 sequence 即時計算的低維市場 context，不改 Dataset storage contract。
+- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前 active architecture 包含正式基準 `multiscale_cnn_v1` 與 8A 實驗 `multiscale_cnn_sequence_only_v1`。8A 保留相同的 300×10 Level sequence、三個時間尺度 branches、pooling 與 head 寬度，只移除原本拼接至 head 的 4 維 event context。
 - `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述 optimizer、LR schedule 與 augmentation。profile 定義集中在 `config/breakout_quality_experiments.py`：`baseline` 使用 Adam 固定 LR 且無 augmentation；`adamw_only`、`adam_warmup_cosine`、`history_masking_only` 保留為已測歷史 profile。
-- `multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
-- AdamW、scheduler、augmentation 等訓練方法不再建立假模型版本。結構或輸入表示真正改變時才新增具描述性的 architecture；本輪為 `multiscale_cnn_regime_context_v1 / baseline`。
-- Dataset、feature bank、future-path cache 與 labels 不受 experiment profile 影響，不需重建；每個 profile 必須重新訓練並使用獨立工件路徑。
+- `multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
+- AdamW、scheduler、augmentation 等訓練方法不再建立假模型版本。結構或輸入表示真正改變時才新增具描述性的 architecture；本輪為 `multiscale_cnn_sequence_only_v1 / baseline`。
+- Dataset、feature bank、future-path cache、4 維 event context arrays 與 labels 都可直接沿用，不需重建或 relabel；sequence-only model 在 forward 時明確不讀取 event context，每個 architecture/profile 使用獨立工件路徑。
 
-- `multiscale_cnn_regime_context_v1` 使用 0050 20／60 日 log return、0050 20／60 日 annualized close volatility、以及個股減 0050 的 20／60 日 log return。全部只使用事件日以前的既有 sequence；新增 projection 初始為 0，因此初始 logits 與 v1 baseline 相同。
+- `multiscale_cnn_sequence_only_v1` 的 trainable parameters 比 v1 少 `4 × 32 = 128`，差異只來自 head 第一層不再接收 `high_len_norm`、`breakout_level_to_close`、`close_to_breakout_level`、`high_to_breakout_level`。
 
 工件隔離方式：
 

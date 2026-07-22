@@ -1159,6 +1159,17 @@ def render_markdown_report(payload: dict) -> str:
                 + "`"
             ),
             (
+                "- **Dataset Event Context**：`"
+                + (
+                    "enabled"
+                    if (training.get("model_spec") or {}).get(
+                        "use_dataset_context", True
+                    )
+                    else "disabled"
+                )
+                + "`"
+            ),
+            (
                 "- **Derived Regime Context**：`"
                 + (", ".join((training.get("model_spec") or {}).get("derived_context_features") or []) or "-")
                 + "`"
@@ -1598,6 +1609,16 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
                         (training.get("model_spec") or {}).get("branch_dropouts")
                         or [(training.get("model_spec") or {}).get("dropout")] * 3
                     )
+                )
+            ),
+            (
+                "Dataset Context : "
+                + (
+                    "enabled"
+                    if (training.get("model_spec") or {}).get(
+                        "use_dataset_context", True
+                    )
+                    else "disabled"
                 )
             ),
             (

@@ -134,6 +134,7 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             or (float(spec.dropout),) * len(branch_factors)
         )
     )
+    use_dataset_context = bool(spec.use_dataset_context)
     derived_context_features = tuple(str(value) for value in spec.derived_context_features)
     derived_context_lookbacks = tuple(
         int(value) for value in spec.derived_context_lookback_bars
@@ -243,7 +244,10 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                 )
             )
             self.head = nn.Sequential(
-                nn.Linear(summary_width + int(context_count), int(spec.head_width)),
+                nn.Linear(
+                    summary_width + (int(context_count) if use_dataset_context else 0),
+                    int(spec.head_width),
+                ),
                 nn.ReLU(),
                 nn.Dropout(float(spec.dropout)),
                 nn.Linear(int(spec.head_width), 2),
@@ -312,7 +316,11 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                     )
                 )
             summary = torch.cat(summaries, dim=1)
-            base_head_input = torch.cat([summary, context], dim=1)
+            base_head_input = (
+                torch.cat([summary, context], dim=1)
+                if use_dataset_context
+                else summary
+            )
             if self.derived_context_projection is None:
                 return self.head(base_head_input)
 
