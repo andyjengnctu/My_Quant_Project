@@ -21,6 +21,7 @@ from config.breakout_quality_experiments import (
     ADAMW_ONLY_EXPERIMENT_PROFILE,
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     BASELINE_EXPERIMENT_PROFILE,
+    HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES,
@@ -63,6 +64,10 @@ from filters.breakout_quality.artifacts import (
     load_model_artifact_contract,
     load_runtime_artifact_contract,
     load_split_assignment_frame,
+)
+from filters.breakout_quality.augmentation import (
+    apply_training_augmentation,
+    build_training_augmentation_plan,
 )
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
@@ -889,6 +894,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             BASELINE_EXPERIMENT_PROFILE,
             ADAMW_ONLY_EXPERIMENT_PROFILE,
             ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+            HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
         }.issubset(set(SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES))
         and LR_SCHEDULE_LINEAR_WARMUP_COSINE
         in SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES
@@ -921,6 +927,67 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             str(train_defaults.class_weight_mode),
             str(train_defaults.time_weight_mode),
         ),
+    )
+    configured_augmentation_parameters = CONFIGURED_EXPERIMENT.augmentation_parameters()
+    configured_augmentation_plan = build_training_augmentation_plan(
+        name=CONFIGURED_EXPERIMENT.augmentation_name,
+        parameters=configured_augmentation_parameters,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "configured_augmentation_profile_round_trips_parameters",
+        CONFIGURED_EXPERIMENT.as_manifest_payload().get(
+            "augmentation_parameters", {}
+        ),
+        configured_augmentation_plan.as_parameters(),
+    )
+    masking_profile = get_breakout_quality_experiment_profile(
+        HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE
+    )
+    masking_plan = build_training_augmentation_plan(
+        name=masking_profile.augmentation_name,
+        parameters=masking_profile.augmentation_parameters(),
+    )
+    augmentation_source = np.random.default_rng(1234).normal(
+        size=(4, 300, 10)
+    ).astype(np.float32)
+    augmentation_before = augmentation_source.copy()
+    augmented_a, augmentation_summary_a = apply_training_augmentation(
+        augmentation_source,
+        plan=masking_plan,
+        rng=np.random.default_rng(99),
+    )
+    augmented_b, augmentation_summary_b = apply_training_augmentation(
+        augmentation_source,
+        plan=masking_plan,
+        rng=np.random.default_rng(99),
+    )
+    changed_time_masks = np.any(augmented_a != augmentation_source, axis=2)
+    changed_lengths = [int(mask.sum()) for mask in changed_time_masks if bool(mask.any())]
+    changed_are_contiguous = all(
+        np.array_equal(
+            np.flatnonzero(mask),
+            np.arange(np.flatnonzero(mask)[0], np.flatnonzero(mask)[-1] + 1),
+        )
+        for mask in changed_time_masks
+        if bool(mask.any())
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "history_masking_is_deterministic_training_only_and_protects_recent_bars",
+        True,
+        np.array_equal(augmentation_source, augmentation_before)
+        and np.array_equal(augmented_a, augmented_b)
+        and augmentation_summary_a == augmentation_summary_b
+        and np.array_equal(augmented_a[:, -60:, :], augmentation_source[:, -60:, :])
+        and np.array_equal(augmented_a[:, 0, :], augmentation_source[:, 0, :])
+        and changed_are_contiguous
+        and all(10 <= value <= 30 for value in changed_lengths)
+        and int(augmentation_summary_a["augmented_sample_count"]) == len(changed_lengths),
     )
     torch, _nn = breakout_quality_train.require_torch()
     optimizer_probe_model = build_breakout_quality_model(
@@ -2113,7 +2180,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v2", 2, payload["schema_version"])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **LR Schedule Parameters**：`{CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-'}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **LR Schedule Parameters**：`{CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-'}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and f"- **Augmentation Parameters**：`{CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
     selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
     normalized_selection_matrix = selection_matrix.replace("**", "")
@@ -2193,7 +2260,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"LR Schedule Args: {CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-' }" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"LR Schedule Args: {CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-' }" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and f"Augmentation Args: {CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
     markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. OOS 綜合判定", 1)[0]
@@ -2603,6 +2670,31 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "optimizer_name": CONFIGURED_EXPERIMENT.optimizer_name,
                 "learning_rate": synthetic_learning_rate,
                 "lr_schedule_name": CONFIGURED_EXPERIMENT.lr_schedule_name,
+                "augmentation_name": CONFIGURED_EXPERIMENT.augmentation_name,
+                "training_augmentation": {
+                    "name": CONFIGURED_EXPERIMENT.augmentation_name,
+                    "parameters": CONFIGURED_EXPERIMENT.augmentation_parameters(),
+                    "epoch_selection": None,
+                    "final_refit": [
+                        {
+                            "name": CONFIGURED_EXPERIMENT.augmentation_name,
+                            "sample_count": 2,
+                            "augmented_sample_count": (
+                                1
+                                if CONFIGURED_EXPERIMENT.augmentation_name != "none"
+                                else 0
+                            ),
+                            "masked_bar_count": (
+                                10
+                                if CONFIGURED_EXPERIMENT.augmentation_name != "none"
+                                else 0
+                            ),
+                        }
+                        for _ in range(2)
+                    ],
+                    "validation_augmented": False,
+                    "oos_augmented": False,
+                },
                 "learning_rate_schedule": {
                     "name": CONFIGURED_EXPERIMENT.lr_schedule_name,
                     "parameters": synthetic_schedule_parameters,
@@ -2711,6 +2803,26 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                         "completed_epochs": 3,
                         "best_optimizer_steps": 2,
                         "batches_per_epoch": 1,
+                    },
+                    "training_augmentation": {
+                        **manifest["training_augmentation"],
+                        "epoch_selection": [
+                            {
+                                "name": CONFIGURED_EXPERIMENT.augmentation_name,
+                                "sample_count": 2,
+                                "augmented_sample_count": (
+                                    1
+                                    if CONFIGURED_EXPERIMENT.augmentation_name != "none"
+                                    else 0
+                                ),
+                                "masked_bar_count": (
+                                    10
+                                    if CONFIGURED_EXPERIMENT.augmentation_name != "none"
+                                    else 0
+                                ),
+                            }
+                            for _ in range(3)
+                        ],
                     },
                     "learning_rate_schedule": {
                         "name": CONFIGURED_EXPERIMENT.lr_schedule_name,

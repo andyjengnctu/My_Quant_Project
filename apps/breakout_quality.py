@@ -449,6 +449,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
     branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
     schedule_parameters = experiment.lr_schedule_parameters()
+    augmentation_parameters = experiment.augmentation_parameters()
     print(
         "model="
         f"{model_spec.architecture}, branch_inputs={branch_inputs}, "
@@ -469,6 +470,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         f"lr_schedule={experiment.lr_schedule_name}, "
         f"lr_schedule_parameters={schedule_parameters}, "
         f"augmentation={experiment.augmentation_name}, "
+        f"augmentation_parameters={augmentation_parameters}, "
         f"lr={float(args.lr)}, weight_decay={float(args.weight_decay)}, "
         f"gradient_clip_norm={float(args.gradient_clip_norm)}, "
         f"final_refit_mode={args.final_refit_mode}, "
@@ -646,6 +648,7 @@ def _print_policy_defaults(
     branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
     branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
     schedule_parameters = experiment.lr_schedule_parameters()
+    augmentation_parameters = experiment.augmentation_parameters()
     print(
         f"- Model Architecture：{model_spec.architecture}\n"
         f"- Experiment Profile：{experiment.name}\n"
@@ -665,6 +668,7 @@ def _print_policy_defaults(
         f"- LR Schedule：{experiment.lr_schedule_name}\n"
         f"- LR Schedule Parameters：{schedule_parameters or '-'}\n"
         f"- Augmentation：{experiment.augmentation_name}\n"
+        f"- Augmentation Parameters：{augmentation_parameters or '-'}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"
         f"- Weight Decay：{float(train_settings.weight_decay):g}\n"
         f"- Gradient Clip Norm：{float(train_settings.gradient_clip_norm):g}\n"

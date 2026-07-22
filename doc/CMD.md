@@ -66,7 +66,7 @@ python apps/breakout_quality.py
 完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較與 OOS 綜合判定。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
-python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile adam_warmup_cosine --epochs 20 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile history_masking_only --epochs 20 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 ```
 
 模型架構與訓練實驗分開管理：
@@ -74,16 +74,16 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 ```python
 # config/breakout_quality_policy.py
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v1"
-BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "adam_warmup_cosine"
+BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "history_masking_only"
 ```
 
 - `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前正常新訓練只允許正式基準 `multiscale_cnn_v1`。
-- `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述 optimizer、LR schedule 與 augmentation。profile 定義集中在 `config/breakout_quality_experiments.py`：`baseline` 使用 Adam 固定 LR；`adamw_only` 只改用 AdamW；`adam_warmup_cosine` 使用 Adam，並以每次 optimizer update 為單位套用前 5% linear warmup、後 95% cosine decay，最低 LR 為 base LR 的 10%。
+- `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述 optimizer、LR schedule 與 augmentation。profile 定義集中在 `config/breakout_quality_experiments.py`：`baseline` 使用 Adam 固定 LR；`adamw_only` 只改用 AdamW；`adam_warmup_cosine` 使用 Adam 與 step-based warmup/cosine；`history_masking_only` 回到 Adam 固定 LR，只在 training batches 對舊歷史套用 50% 機率、10～30 bars 的單段線性插值 masking，最近 60 bars 完全保護。
 - `multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
-- AdamW、scheduler、augmentation 等訓練方法不再建立假模型版本。已取消 `multiscale_cnn_v10`；6A 以 `multiscale_cnn_v1 / adamw_only` 表示；6B 以 `multiscale_cnn_v1 / adam_warmup_cosine` 表示。
+- AdamW、scheduler、augmentation 等訓練方法不再建立假模型版本。已取消 `multiscale_cnn_v10`；6A 以 `multiscale_cnn_v1 / adamw_only` 表示；6B 以 `multiscale_cnn_v1 / adam_warmup_cosine` 表示；7A 以 `multiscale_cnn_v1 / history_masking_only` 表示。
 - Dataset、feature bank、future-path cache 與 labels 不受 experiment profile 影響，不需重建；每個 profile 必須重新訓練並使用獨立工件路徑。
 
-- `adam_warmup_cosine` 的 Inner epoch search 與完整 Selection refit 各自依該 phase 的 optimizer step 總數重建 schedule；兩個 phase 不共用 scheduler state。每個 training epoch 的起始／結束 LR 與完整 schedule plan 均寫入 manifest。
+- `adam_warmup_cosine` 的 Inner epoch search 與完整 Selection refit 各自重建 schedule；`history_masking_only` 不啟用 scheduler。7A 的逐 epoch augmentation 次數與 masked bars 會寫入 manifest，Validation／OOS augmentation 狀態固定為 false。
 
 工件隔離方式：
 
@@ -109,17 +109,17 @@ python apps/breakout_quality.py build-dataset --dataset full --filter-id breakou
 # 預設關閉 inner validation：epochs 是完整 Selection 的正式固定訓練次數
 python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile baseline --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
 # 開啟時：epochs 是搜尋上限；以 Selection 尾端 N 個月選 best epoch，之後依 final-refit-mode 完整 Selection 重訓
-python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --epochs 20 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
-python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --scope research --inference-batch-size 4096 --inference-workers 4 --preload-feature-bank
+python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile history_masking_only --epochs 20 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile history_masking_only --scope research --inference-batch-size 4096 --inference-workers 4 --preload-feature-bank
 # 建議日常使用：終端表格報表 + Markdown 解釋報表 + 完整 metrics JSON
-python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --no-include-oos
+python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile history_masking_only --no-include-oos
 # 參數與模型已鎖定後，才把最終 OOS 納入報表
-python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --include-oos
+python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile history_masking_only --include-oos
 # 需要稽核單一 split 的完整原始 JSON 時才使用 evaluate
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --split train
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --split validation
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --split selection
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --split oos
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile history_masking_only --split train
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile history_masking_only --split validation
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile history_masking_only --split selection
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile history_masking_only --split oos
 ```
 
 - Dataset 與 future-path cache 固定在 `outputs/filters/breakout_quality/<filter_id>/`；research scores 與易讀報表依架構及實驗放在 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/`，報表固定為 `reports/evaluation_report.md`，完整報表數據固定為 `reports/evaluation_metrics.json`。
@@ -138,7 +138,7 @@ python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --exper
 3. 執行：
 
 ```bash
-python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile adam_warmup_cosine --scope forward_oos
+python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile history_masking_only --scope forward_oos
 ```
 
 - `forward_oos` 只匯出落在同一份 walk-forward OOS window、且事件日嚴格晚於 `model_information_cutoff` 的固定規格模型分數；若沒有符合資料會直接失敗。

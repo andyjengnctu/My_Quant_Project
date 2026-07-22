@@ -23,12 +23,12 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260722_131354_dc805ba.zip` |
-| SHA256 | `cf5187c01421f20c0efc48f63b48016413efc628baf2c0187b5daf669f29b0ed` |
+| 基準 ZIP | `test-branch-1_20260722_152735_403de13.zip` |
+| SHA256 | `0160f86de40465e547b3dd4dfa63ad673680242b9928da4e119f82759bfb9986` |
 | 程式版本範圍 | v9 連續輔助目標加入前；本輪將 model architecture 與 training experiment profile 分離，取消假版本 v10 |
-| Policy 預設 | architecture=`multiscale_cnn_v1`；experiment profile=`adam_warmup_cosine` |
+| Policy 預設 | architecture=`multiscale_cnn_v1`；experiment profile=`history_masking_only` |
 | 當前最佳研究模型 | `multiscale_cnn_v1` |
-| Dataset | Full；6B scheduler 變更不需重建 |
+| Dataset | Full；7A training-only masking 不需重建 |
 
 使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**；目前正式研究基準模型仍是結果最佳的 `multiscale_cnn_v1`，不是把 policy 預設改成 `multiscale_cnn_v8`。
 
@@ -43,9 +43,9 @@
 | 最大不利跌幅 | 觸及 −10% 即 REJECT |
 | Epoch 上限 | 100 |
 | Batch Size | 128 |
-| Optimizer | `adam`（6A AdamW 已淘汰；6B 回到 Adam） |
-| LR Schedule | `linear_warmup_cosine`；前 5% updates warmup、後 95% cosine、最低 LR ratio 0.1 |
-| Augmentation | `none` |
+| Optimizer | `adam`（6A AdamW、6B schedule 均已淘汰；7A 回到 baseline Adam） |
+| LR Schedule | `none`（7A 只測 augmentation） |
+| Augmentation | `old_history_contiguous_mask`；training only，50% samples，舊歷史 10～30 bars，最近 60 bars 保護 |
 | Learning Rate | 0.0003 |
 | Weight Decay | 0.0001 |
 | Gradient Clip | 1.0 |
@@ -168,24 +168,41 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待 Full workflow Selection／OOS 結果 |
-| 程式基準 | `test-branch-1_20260722_131354_dc805ba.zip`；SHA256 `cf5187c01421f20c0efc48f63b48016413efc628baf2c0187b5daf669f29b0ed` |
+| 狀態 | `REJECTED` |
+| 程式基準 | `test-branch-1_20260722_152735_403de13.zip`；SHA256 `0160f86de40465e547b3dd4dfa63ad673680242b9928da4e119f82759bfb9986` |
 | 唯一學習變更 | `baseline` 的固定 LR → `adam_warmup_cosine` 的 step-based LR schedule；optimizer 維持 Adam |
 | Experiment profile | optimizer=`adam`、schedule=`linear_warmup_cosine`、augmentation=`none` |
 | Schedule | 每個 phase 各自重建；前 5% optimizer updates 線性 warmup 至 0.0003，後 95% cosine decay 至 0.00003；每次 optimizer update 前套用 |
-| Inner／Refit | Inner epoch search 依 max epochs × batches/epoch 建立 schedule；完整 Selection refit 依實際 target optimizer steps 重新建立，不共用狀態 |
-| 固定條件 | v1、LR base 0.0003、weight decay 0.0001、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
+| 固定條件 | v1、weight decay 0.0001、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
+| Dataset／Label | 不重建、不 relabel |
+| Selection | 原始 PASS 54.81%、模型 PASS 68.62%、PASS Precision 63.07%、Lift +8.26 pp、Recall 78.97%、Accuracy 63.13%、Score 0.5594 |
+| OOS | 原始 PASS 55.63%、模型 PASS 37.87%、PASS Precision 58.41%、Lift +2.78 pp、Recall 39.76%、Accuracy 50.74%、Score 0.4459 |
+| 相較 v1 baseline | OOS Precision／Lift 各 −0.88 pp、Recall −11.73 pp、模型 PASS −10.45 pp、Accuracy −2.60 pp、Score −0.0332；Precision gap 由 −2.85 pp 惡化為 −4.66 pp，Score gap由 −0.1129 略惡化為 −0.1135 |
+| 判定 | Schedule 使模型顯著更保守，Selection Precision 上升但 OOS Precision、Recall、Accuracy 全面下降；淘汰並退回 Adam 固定 LR |
+| 下一步 | 7A 只加入舊歷史 contiguous masking augmentation |
+
+### 3.9 Augmentation 7A：舊歷史 contiguous masking（2026-07-22）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；等待 Full workflow Selection／OOS 結果 |
+| 程式基準 | `test-branch-1_20260722_152735_403de13.zip`；SHA256 `0160f86de40465e547b3dd4dfa63ad673680242b9928da4e119f82759bfb9986` |
+| 唯一學習變更 | `baseline` → `history_masking_only`；只在 training batch 即時套用一段舊歷史 masking |
+| Experiment profile | optimizer=`adam`、schedule=`none`、augmentation=`old_history_contiguous_mask` |
+| Masking | 每筆 training sample 50% 機率；300 bars 中最近 60 bars 完全保護；舊歷史隨機遮蔽 10～30 bars；10 channels 共用同一時間區段，以左右邊界逐 channel 線性插值 |
+| Validation／OOS | 完全不套用 augmentation；評估與 score export 使用原始 features |
+| 固定條件 | v1、LR 0.0003、weight decay 0.0001、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
 | Dataset／Label | 不重建、不 relabel |
 | Selection／OOS 結果 | 尚未取得 |
 | 判定 | 尚不可接受或淘汰；維持 `IMPLEMENTED` |
-| 下一步 | 取得 6B 結果後，決定是否保留 schedule，再進入 7A masking |
+| 下一步 | 取得 7A 結果後決定是否停止 augmentation 或進入條件式 7B |
 
-### 3.9 Architecture／Experiment Profile 管理規則（2026-07-22）
+### 3.10 Architecture／Experiment Profile 管理規則（2026-07-22）
 
 - `multiscale_cnn_v1` 是目前唯一 active architecture。
 - `multiscale_cnn_v2～v8`、`tiny_cnn_v1`、`residual_tcn_v1` 均為 legacy read-only compatibility；保留程式碼不代表仍是正式候選。
 - optimizer、LR schedule、augmentation、loss weighting 等訓練差異只可新增 experiment profile，不可再建立 v10、v11 等假模型版本。
-- `baseline`、`adamw_only` 與 `adam_warmup_cosine` 使用相同 v1 模型圖與初始化；工件依 profile 子目錄隔離。
+- `baseline`、`adamw_only`、`adam_warmup_cosine` 與 `history_masking_only` 使用相同 v1 模型圖與初始化；工件依 profile 子目錄隔離。
 - 舊 v1 baseline 工件的無 profile 歷史路徑只提供唯讀 fallback；不得用它覆寫 manifest 或匯出正式 forward-OOS scores。新訓練與正式輸出一律寫入 `<architecture>/<experiment_profile>/`。
 
 ---
@@ -231,7 +248,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待結果 |
+| 狀態 | `REJECTED`；OOS Precision、Recall、Accuracy 均低於 baseline |
 | 唯一變更 | 退回 baseline Adam，只加入 step-based schedule |
 | Warmup | 前 5% optimizer updates 線性 warmup |
 | Decay | 後 95% 使用 cosine decay |
@@ -247,8 +264,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `PLANNED` |
-| 唯一變更 | Training batches 加入一段舊歷史 masking |
+| 狀態 | `IMPLEMENTED`；等待 Full workflow 結果 |
+| 唯一變更 | experiment profile `baseline` → `history_masking_only`；Training batches 加入一段舊歷史 masking |
 | 適用區段 | 300 bars 中前 240 bars |
 | 保護區段 | 最近 60 bars 完全不動 |
 | Mask 長度 | 每次隨機 10～30 bars |
@@ -280,9 +297,9 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 ```text
 6A AdamW only（REJECTED）
 → 回到 Adam
-→ 6B 只加入 step-based LR schedule（IMPLEMENTED）
-→ 固定最佳 optimizer / schedule
-→ 7A 只加入舊歷史 contiguous masking
+→ 6B 只加入 step-based LR schedule（REJECTED）
+→ 回到 Adam 固定 LR
+→ 7A 只加入舊歷史 contiguous masking（IMPLEMENTED）
 → 視 7A 結果決定是否進入 7B
 → 若仍無改善，再進入 regime context 或 volatility-scaled Label
 ```

@@ -57,6 +57,12 @@ from config.breakout_quality_policy import (
 )
 from core.display_common import render_elapsed
 from filters.breakout_quality.artifacts import build_file_manifest
+from filters.breakout_quality.augmentation import (
+    TrainingAugmentationPlan,
+    apply_training_augmentation,
+    build_training_augmentation_plan,
+    validate_training_augmentation_sequence_length,
+)
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
@@ -926,19 +932,29 @@ def _train_one_epoch(
     shuffle_seed: int,
     prefetch_batches: int,
     gradient_clip_norm: float,
+    augmentation_plan: TrainingAugmentationPlan,
     lr_schedule_plan: dict[str, object],
     optimizer_step_offset: int,
     max_batches: int | None = None,
-) -> tuple[float, int, float, float]:
+) -> tuple[float, int, float, float, dict[str, int | str]]:
     import torch.nn.functional as F
 
     model.train()
     rng = np.random.default_rng(int(shuffle_seed))
+    augmentation_rng = np.random.default_rng(
+        np.random.SeedSequence([int(shuffle_seed), 0x7A01])
+    )
     shuffled = rng.permutation(train_idx)
     batch_losses = []
     completed_batches = 0
     first_learning_rate = float("nan")
     last_learning_rate = float("nan")
+    augmentation_summary: dict[str, int | str] = {
+        "name": augmentation_plan.name,
+        "sample_count": 0,
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+    }
     for xb_np, cb_np, yb_np, wb_np in _iter_training_batches(
         X,
         C,
@@ -950,6 +966,15 @@ def _train_one_epoch(
     ):
         if max_batches is not None and completed_batches >= int(max_batches):
             break
+        xb_np, batch_augmentation = apply_training_augmentation(
+            xb_np,
+            plan=augmentation_plan,
+            rng=augmentation_rng,
+        )
+        for key in ("sample_count", "augmented_sample_count", "masked_bar_count"):
+            augmentation_summary[key] = int(augmentation_summary[key]) + int(
+                batch_augmentation[key]
+            )
         current_learning_rate = _learning_rate_for_optimizer_step(
             lr_schedule_plan,
             int(optimizer_step_offset) + completed_batches,
@@ -985,6 +1010,7 @@ def _train_one_epoch(
         int(completed_batches),
         float(first_learning_rate),
         float(last_learning_rate),
+        augmentation_summary,
     )
 
 def _select_epoch_with_inner_validation(
@@ -1002,6 +1028,7 @@ def _select_epoch_with_inner_validation(
     lr_schedule_name: str,
     lr_warmup_fraction: float,
     lr_minimum_ratio: float,
+    augmentation_plan: TrainingAugmentationPlan,
     learning_rate: float,
     weight_decay: float,
     gradient_clip_norm: float,
@@ -1061,7 +1088,13 @@ def _select_epoch_with_inner_validation(
     color_time = bool(sys.stdout.isatty())
     for epoch in range(1, int(max_epochs) + 1):
         epoch_started = time.perf_counter()
-        batch_loss, optimizer_steps, lr_start, lr_end = _train_one_epoch(
+        (
+            batch_loss,
+            optimizer_steps,
+            lr_start,
+            lr_end,
+            augmentation_summary,
+        ) = _train_one_epoch(
             torch,
             model=model,
             optimizer=optimizer,
@@ -1075,6 +1108,7 @@ def _select_epoch_with_inner_validation(
             shuffle_seed=int(seed) + epoch,
             prefetch_batches=train_prefetch_batches,
             gradient_clip_norm=gradient_clip_norm,
+            augmentation_plan=augmentation_plan,
             lr_schedule_plan=schedule_plan,
             optimizer_step_offset=cumulative_optimizer_steps,
         )
@@ -1113,6 +1147,7 @@ def _select_epoch_with_inner_validation(
                 "cumulative_optimizer_steps": int(cumulative_optimizer_steps),
                 "learning_rate_start": round(float(lr_start), 12),
                 "learning_rate_end": round(float(lr_end), 12),
+                "training_augmentation": augmentation_summary,
                 "inner_train_metrics": train_metrics,
                 "inner_validation_metrics": validation_metrics,
                 "elapsed_sec": round(float(epoch_elapsed), 3),
@@ -1182,6 +1217,7 @@ def _fit_full_selection(
     lr_schedule_name: str,
     lr_warmup_fraction: float,
     lr_minimum_ratio: float,
+    augmentation_plan: TrainingAugmentationPlan,
     learning_rate: float,
     weight_decay: float,
     gradient_clip_norm: float,
@@ -1258,7 +1294,13 @@ def _fit_full_selection(
         epoch_started = time.perf_counter()
         remaining_steps = requested_steps - completed_optimizer_steps
         max_batches = min(batches_per_epoch, remaining_steps)
-        batch_loss, optimizer_steps, lr_start, lr_end = _train_one_epoch(
+        (
+            batch_loss,
+            optimizer_steps,
+            lr_start,
+            lr_end,
+            augmentation_summary,
+        ) = _train_one_epoch(
             torch,
             model=model,
             optimizer=optimizer,
@@ -1272,6 +1314,7 @@ def _fit_full_selection(
             shuffle_seed=int(seed) + cycle,
             prefetch_batches=train_prefetch_batches,
             gradient_clip_norm=gradient_clip_norm,
+            augmentation_plan=augmentation_plan,
             lr_schedule_plan=schedule_plan,
             optimizer_step_offset=completed_optimizer_steps,
             max_batches=max_batches,
@@ -1306,6 +1349,7 @@ def _fit_full_selection(
                 "target_optimizer_steps": int(requested_steps),
                 "learning_rate_start": round(float(lr_start), 12),
                 "learning_rate_end": round(float(lr_end), 12),
+                "training_augmentation": augmentation_summary,
                 "selection_metrics": metrics,
                 "elapsed_sec": round(float(epoch_elapsed), 3),
             }
@@ -1372,6 +1416,11 @@ def main(argv=None) -> int:
     lr_schedule_parameters = experiment.lr_schedule_parameters()
     lr_warmup_fraction = float(lr_schedule_parameters.get("warmup_fraction", 0.0))
     lr_minimum_ratio = float(lr_schedule_parameters.get("minimum_lr_ratio", 1.0))
+    augmentation_parameters = experiment.augmentation_parameters()
+    augmentation_plan = build_training_augmentation_plan(
+        name=experiment.augmentation_name,
+        parameters=augmentation_parameters,
+    )
     learning_rate = float(args.lr)
     weight_decay = float(args.weight_decay)
     gradient_clip_norm = float(args.gradient_clip_norm)
@@ -1397,6 +1446,10 @@ def main(argv=None) -> int:
         C,
         y,
         enabled=preload_feature_bank,
+    )
+    validate_training_augmentation_sequence_length(
+        augmentation_plan,
+        sequence_length=int(X.shape[1]),
     )
     gc.collect()
 
@@ -1500,6 +1553,7 @@ def main(argv=None) -> int:
             lr_schedule_name=lr_schedule_name,
             lr_warmup_fraction=lr_warmup_fraction,
             lr_minimum_ratio=lr_minimum_ratio,
+            augmentation_plan=augmentation_plan,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             gradient_clip_norm=gradient_clip_norm,
@@ -1556,6 +1610,7 @@ def main(argv=None) -> int:
         lr_schedule_name=lr_schedule_name,
         lr_warmup_fraction=lr_warmup_fraction,
         lr_minimum_ratio=lr_minimum_ratio,
+        augmentation_plan=augmentation_plan,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         gradient_clip_norm=gradient_clip_norm,
@@ -1730,6 +1785,25 @@ def main(argv=None) -> int:
         "seed": int(args.seed),
         "optimizer_name": optimizer_name,
         "lr_schedule_name": lr_schedule_name,
+        "augmentation_name": augmentation_plan.name,
+        "training_augmentation": {
+            "name": augmentation_plan.name,
+            "parameters": augmentation_parameters,
+            "epoch_selection": (
+                [
+                    row.get("training_augmentation")
+                    for row in epoch_selection.get("history", [])
+                ]
+                if isinstance(epoch_selection, dict)
+                else None
+            ),
+            "final_refit": [
+                row.get("training_augmentation")
+                for row in final_fit.get("history", [])
+            ],
+            "validation_augmented": False,
+            "oos_augmented": False,
+        },
         "learning_rate_schedule": {
             "name": lr_schedule_name,
             "parameters": lr_schedule_parameters,
@@ -1763,6 +1837,10 @@ def main(argv=None) -> int:
             "optimizer_name": optimizer_name,
             "lr_schedule_name": lr_schedule_name,
             "lr_schedule_parameters": lr_schedule_parameters,
+            "augmentation_name": augmentation_plan.name,
+            "augmentation_parameters": augmentation_parameters,
+            "validation_augmented": False,
+            "oos_augmented": False,
             "optimizer_zero_grad_set_to_none": True,
             "optimizer_weight_decay": weight_decay,
             "gradient_clip_norm": gradient_clip_norm,

@@ -10,20 +10,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
 BASELINE_EXPERIMENT_PROFILE = "baseline"
 ADAMW_ONLY_EXPERIMENT_PROFILE = "adamw_only"
 ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE = "adam_warmup_cosine"
+HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE = "history_masking_only"
 
 LR_SCHEDULE_NONE = "none"
 LR_SCHEDULE_LINEAR_WARMUP_COSINE = "linear_warmup_cosine"
+AUGMENTATION_NONE = "none"
+AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK = "old_history_contiguous_mask"
 
 SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS = ("adam", "adamw")
 SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES = (
     LR_SCHEDULE_NONE,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
 )
-SUPPORTED_BREAKOUT_QUALITY_AUGMENTATIONS = ("none",)
+SUPPORTED_BREAKOUT_QUALITY_AUGMENTATIONS = (
+    AUGMENTATION_NONE,
+    AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK,
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,10 @@ class BreakoutQualityExperimentProfile:
     optimizer_name: str
     lr_schedule_name: str = LR_SCHEDULE_NONE
     augmentation_name: str = "none"
+    augmentation_probability: float = 0.0
+    augmentation_protected_recent_bars: int = 0
+    augmentation_min_mask_bars: int = 0
+    augmentation_max_mask_bars: int = 0
     lr_warmup_fraction: float = 0.0
     lr_minimum_ratio: float = 1.0
 
@@ -57,6 +66,27 @@ class BreakoutQualityExperimentProfile:
                 raise ValueError("linear warmup fraction 必須介於 0 與 1 之間")
             if not 0.0 < minimum_ratio <= 1.0:
                 raise ValueError("minimum LR ratio 必須介於 0 與 1 之間")
+        augmentation_parameters = self.augmentation_parameters()
+        if self.augmentation_name == AUGMENTATION_NONE:
+            if (
+                float(self.augmentation_probability) != 0.0
+                or int(self.augmentation_protected_recent_bars) != 0
+                or int(self.augmentation_min_mask_bars) != 0
+                or int(self.augmentation_max_mask_bars) != 0
+                or augmentation_parameters
+            ):
+                raise ValueError("augmentation=none 時不可帶 augmentation 參數")
+        elif self.augmentation_name == AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK:
+            probability = float(self.augmentation_probability)
+            protected_recent_bars = int(self.augmentation_protected_recent_bars)
+            min_mask_bars = int(self.augmentation_min_mask_bars)
+            max_mask_bars = int(self.augmentation_max_mask_bars)
+            if not 0.0 < probability <= 1.0:
+                raise ValueError("masking augmentation probability 必須介於 0 與 1 之間")
+            if protected_recent_bars < 1:
+                raise ValueError("masking protected_recent_bars 必須 >=1")
+            if min_mask_bars < 1 or max_mask_bars < min_mask_bars:
+                raise ValueError("masking bars 必須滿足 1 <= min <= max")
 
     def lr_schedule_parameters(self) -> dict[str, float]:
         if self.lr_schedule_name == LR_SCHEDULE_NONE:
@@ -65,6 +95,18 @@ class BreakoutQualityExperimentProfile:
             "warmup_fraction": float(self.lr_warmup_fraction),
             "minimum_lr_ratio": float(self.lr_minimum_ratio),
         }
+
+    def augmentation_parameters(self) -> dict[str, int | float]:
+        if self.augmentation_name == AUGMENTATION_NONE:
+            return {}
+        if self.augmentation_name == AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK:
+            return {
+                "probability": float(self.augmentation_probability),
+                "protected_recent_bars": int(self.augmentation_protected_recent_bars),
+                "min_mask_bars": int(self.augmentation_min_mask_bars),
+                "max_mask_bars": int(self.augmentation_max_mask_bars),
+            }
+        raise ValueError(f"不支援的 augmentation: {self.augmentation_name!r}")
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -76,6 +118,9 @@ class BreakoutQualityExperimentProfile:
         schedule_parameters = self.lr_schedule_parameters()
         if schedule_parameters:
             payload["lr_schedule_parameters"] = schedule_parameters
+        augmentation_parameters = self.augmentation_parameters()
+        if augmentation_parameters:
+            payload["augmentation_parameters"] = augmentation_parameters
         return payload
 
 
@@ -94,6 +139,15 @@ _EXPERIMENT_PROFILES = {
         lr_schedule_name=LR_SCHEDULE_LINEAR_WARMUP_COSINE,
         lr_warmup_fraction=0.05,
         lr_minimum_ratio=0.10,
+    ),
+    HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE: BreakoutQualityExperimentProfile(
+        name=HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
+        optimizer_name="adam",
+        augmentation_name=AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK,
+        augmentation_probability=0.50,
+        augmentation_protected_recent_bars=60,
+        augmentation_min_mask_bars=10,
+        augmentation_max_mask_bars=30,
     ),
 }
 
@@ -121,7 +175,10 @@ def get_breakout_quality_experiment_profile(
 __all__ = [
     "ADAMW_ONLY_EXPERIMENT_PROFILE",
     "ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE",
+    "AUGMENTATION_NONE",
+    "AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK",
     "BASELINE_EXPERIMENT_PROFILE",
+    "HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE",
     "BreakoutQualityExperimentProfile",
     "LR_SCHEDULE_LINEAR_WARMUP_COSINE",
     "LR_SCHEDULE_NONE",

@@ -421,6 +421,9 @@ def _training_summary(manifest: dict) -> dict:
         "lr_schedule_name": experiment_settings.get("lr_schedule_name", "none"),
         "lr_schedule_parameters": experiment_settings.get("lr_schedule_parameters", {}),
         "augmentation_name": experiment_settings.get("augmentation_name", "none"),
+        "augmentation_parameters": experiment_settings.get(
+            "augmentation_parameters", {}
+        ),
         "model_spec": model_spec,
         "trainable_parameter_count": manifest.get("trainable_parameter_count"),
         "sequence_length": manifest.get("sequence_length"),
@@ -1122,6 +1125,7 @@ def render_markdown_report(payload: dict) -> str:
             f"- **LR Schedule**：`{training.get('lr_schedule_name')}`",
             f"- **LR Schedule Parameters**：`{training.get('lr_schedule_parameters') or '-'}`",
             f"- **Augmentation**：`{training.get('augmentation_name')}`",
+            f"- **Augmentation Parameters**：`{training.get('augmentation_parameters') or '-'}`",
             (
                 "- **Branch Inputs**：`"
                 + "+".join(
@@ -1561,6 +1565,7 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
             f"LR Schedule     : {training.get('lr_schedule_name')}",
             f"LR Schedule Args: {training.get('lr_schedule_parameters') or '-'}",
             f"Augmentation    : {training.get('augmentation_name')}",
+            f"Augmentation Args: {training.get('augmentation_parameters') or '-'}",
             (
                 "Branch Inputs   : "
                 + "+".join(

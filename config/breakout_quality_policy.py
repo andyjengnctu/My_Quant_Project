@@ -5,7 +5,7 @@ from __future__ import annotations
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN, build_breakout_optimizer_high_len_values
 
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v1"  # 正式研究模型；模型結構版本只描述網路／輸入差異，訓練實驗由 EXPERIMENT_PROFILE 另外選擇。
-BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "adam_warmup_cosine"  # 6B：維持 Adam，只加入 step-based 5% warmup + cosine decay；訓練實驗定義集中於 breakout_quality_experiments.py。
+BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "history_masking_only"  # 7A：維持 baseline Adam／固定 LR，只在 training batches 對舊歷史區段做單段線性插值 masking。
 BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 

@@ -115,6 +115,48 @@ def _require_nonempty_text(payload: dict[str, Any], field_name: str) -> str:
     return value
 
 
+def _validate_training_augmentation_epoch_records(
+    records: Any,
+    *,
+    augmentation_name: str,
+    augmentation_parameters: dict[str, Any],
+    field_name: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(records, list) or not records:
+        raise ValueError(f"breakout quality {field_name} 必須是非空 list")
+    validated: list[dict[str, Any]] = []
+    min_mask_bars = int(augmentation_parameters.get("min_mask_bars", 0))
+    max_mask_bars = int(augmentation_parameters.get("max_mask_bars", 0))
+    for index, raw in enumerate(records):
+        if not isinstance(raw, dict):
+            raise ValueError(f"breakout quality {field_name}[{index}] 必須是 object")
+        if str(raw.get("name") or "").strip().lower() != augmentation_name:
+            raise ValueError(f"breakout quality {field_name}[{index}].name 不一致")
+        sample_count = int(raw.get("sample_count", -1))
+        augmented_count = int(raw.get("augmented_sample_count", -1))
+        masked_bar_count = int(raw.get("masked_bar_count", -1))
+        if (
+            sample_count < 0
+            or augmented_count < 0
+            or augmented_count > sample_count
+            or masked_bar_count < 0
+        ):
+            raise ValueError(f"breakout quality {field_name}[{index}] 計數不合法")
+        if augmentation_name == "none":
+            if augmented_count != 0 or masked_bar_count != 0:
+                raise ValueError(f"breakout quality {field_name}[{index}] none 計數必須為 0")
+        elif not (
+            augmented_count * min_mask_bars
+            <= masked_bar_count
+            <= augmented_count * max_mask_bars
+        ):
+            raise ValueError(
+                f"breakout quality {field_name}[{index}] masked_bar_count 超出 profile 範圍"
+            )
+        validated.append(raw)
+    return validated
+
+
 def _parse_iso_date(raw_value: Any, *, field_name: str) -> date:
     value = str(raw_value or "").strip()
     if not value:
@@ -484,6 +526,59 @@ def load_model_artifact_contract(
             raise ValueError("未啟用 inner validation 時不可有 epoch_selection LR schedule")
     elif schedule_name != "none":
         raise ValueError("啟用 LR schedule 的 manifest 缺少 learning_rate_schedule")
+
+    augmentation_name = str(
+        manifest.get("augmentation_name")
+        or expected_experiment.augmentation_name
+    ).strip().lower()
+    if augmentation_name != expected_experiment.augmentation_name:
+        raise ValueError(
+            "breakout quality augmentation_name 與 experiment profile 不一致；請重新訓練: "
+            f"manifest={augmentation_name}, profile={manifest_profile}, "
+            f"expected={expected_experiment.augmentation_name}"
+        )
+    augmentation_parameters = expected_experiment.augmentation_parameters()
+    augmentation_record = manifest.get("training_augmentation")
+    if augmentation_record is None:
+        if augmentation_name != "none":
+            raise ValueError("啟用 augmentation 的 manifest 缺少 training_augmentation")
+    else:
+        if not isinstance(augmentation_record, dict):
+            raise ValueError("breakout quality training_augmentation 必須是 object")
+        if str(augmentation_record.get("name") or "").strip().lower() != augmentation_name:
+            raise ValueError("breakout quality training_augmentation.name 不一致")
+        if dict(augmentation_record.get("parameters") or {}) != augmentation_parameters:
+            raise ValueError("breakout quality training_augmentation.parameters 不一致")
+        if bool(augmentation_record.get("validation_augmented", True)):
+            raise ValueError("breakout quality validation 不可套用 training augmentation")
+        if bool(augmentation_record.get("oos_augmented", True)):
+            raise ValueError("breakout quality OOS 不可套用 training augmentation")
+        final_refit_augmentation = _validate_training_augmentation_epoch_records(
+            augmentation_record.get("final_refit"),
+            augmentation_name=augmentation_name,
+            augmentation_parameters=augmentation_parameters,
+            field_name="training_augmentation.final_refit",
+        )
+        if len(final_refit_augmentation) != int(manifest.get("completed_epochs", 0)):
+            raise ValueError("breakout quality final refit augmentation epoch 數不一致")
+        epoch_selection_augmentation = augmentation_record.get("epoch_selection")
+        if inner_validation_used:
+            validated_epoch_selection = _validate_training_augmentation_epoch_records(
+                epoch_selection_augmentation,
+                augmentation_name=augmentation_name,
+                augmentation_parameters=augmentation_parameters,
+                field_name="training_augmentation.epoch_selection",
+            )
+            expected_epoch_count = int(
+                _require_mapping(
+                    manifest,
+                    "inner_validation_epoch_selection",
+                ).get("completed_epochs", 0)
+            )
+            if len(validated_epoch_selection) != expected_epoch_count:
+                raise ValueError("breakout quality epoch selection augmentation epoch 數不一致")
+        elif epoch_selection_augmentation is not None:
+            raise ValueError("未啟用 inner validation 時不可有 epoch selection augmentation")
 
     class_weight_mode = _require_nonempty_text(manifest, "class_weight_mode")
     if class_weight_mode != str(BREAKOUT_QUALITY_CLASS_WEIGHT_MODE):
