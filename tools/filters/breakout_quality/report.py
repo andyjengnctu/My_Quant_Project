@@ -1158,6 +1158,11 @@ def render_markdown_report(payload: dict) -> str:
                 )
                 + "`"
             ),
+            (
+                "- **Derived Regime Context**：`"
+                + (", ".join((training.get("model_spec") or {}).get("derived_context_features") or []) or "-")
+                + "`"
+            ),
             f"- **Trainable Parameters**：`{int(training.get('trainable_parameter_count') or 0):,}`",
             f"- **Receptive Field**：`{(training.get('model_spec') or {}).get('receptive_field_bars')} bars`",
             f"- **Pooling**：`{'+'.join((training.get('model_spec') or {}).get('pooling') or [])}`",
@@ -1594,6 +1599,10 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
                         or [(training.get("model_spec") or {}).get("dropout")] * 3
                     )
                 )
+            ),
+            (
+                "Derived Context : "
+                + (", ".join((training.get("model_spec") or {}).get("derived_context_features") or []) or "-")
             ),
             f"Parameters      : {int(training.get('trainable_parameter_count') or 0):,}",
             f"Receptive Field : {(training.get('model_spec') or {}).get('receptive_field_bars')} bars",

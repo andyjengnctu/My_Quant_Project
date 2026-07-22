@@ -113,6 +113,12 @@ from filters.breakout_quality.models.multiscale_cnn import (
     build_market_relative_return_delta_representation,
     build_return_delta_representation,
 )
+from filters.breakout_quality.models.regime_context import (
+    REGIME_CONTEXT_ANNUALIZATION_BARS,
+    REGIME_CONTEXT_FEATURES,
+    REGIME_CONTEXT_LOOKBACK_BARS,
+    build_regime_context_from_level_sequence,
+)
 from filters.breakout_quality.paths import (
     resolve_existing_filter_artifact_paths,
     resolve_filter_artifact_paths,
@@ -245,6 +251,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v8_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_v8"
     )
+    regime_context_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_regime_context_v1"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
@@ -255,6 +264,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v6_parameter_count = count_trainable_parameters(multiscale_v6_model)
     multiscale_v7_parameter_count = count_trainable_parameters(multiscale_v7_model)
     multiscale_v8_parameter_count = count_trainable_parameters(multiscale_v8_model)
+    regime_context_parameter_count = count_trainable_parameters(regime_context_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -414,6 +424,41 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             get_model_spec("multiscale_cnn_v8").receptive_field_bars,
         ),
     )
+    regime_spec = get_model_spec("multiscale_cnn_regime_context_v1")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_context_architecture_only_adds_zero_initialized_projection",
+        (
+            multiscale_parameter_count + len(REGIME_CONTEXT_FEATURES) * 32,
+            REGIME_CONTEXT_FEATURES,
+            REGIME_CONTEXT_LOOKBACK_BARS,
+            REGIME_CONTEXT_ANNUALIZATION_BARS,
+            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+        ),
+        (
+            regime_context_parameter_count,
+            regime_spec.derived_context_features,
+            regime_spec.derived_context_lookback_bars,
+            regime_spec.derived_context_annualization_bars,
+            regime_spec.receptive_field_bars,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_context_projection_starts_at_zero",
+        True,
+        bool(
+            regime_context_model.derived_context_projection is not None
+            and np.allclose(
+                regime_context_model.derived_context_projection.weight.detach().cpu().numpy(),
+                0.0,
+            )
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -439,6 +484,86 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         in get_model_spec("multiscale_cnn_v1").as_manifest_payload(),
     )
     torch, _nn = breakout_quality_train.require_torch()
+    regime_sequence = torch.zeros((2, 10, 61), dtype=torch.float32)
+    stock_daily_log_return = 0.002
+    benchmark_daily_log_return = 0.001
+    stock_log_path = torch.arange(61, dtype=torch.float32) * stock_daily_log_return
+    benchmark_log_path = torch.arange(61, dtype=torch.float32) * benchmark_daily_log_return
+    regime_sequence[:, 3, :] = torch.expm1(stock_log_path)
+    regime_sequence[:, 8, :] = torch.expm1(benchmark_log_path)
+    derived_regime = build_regime_context_from_level_sequence(torch, regime_sequence)
+    expected_regime = np.asarray(
+        [
+            20 * benchmark_daily_log_return,
+            60 * benchmark_daily_log_return,
+            0.0,
+            0.0,
+            20 * (stock_daily_log_return - benchmark_daily_log_return),
+            60 * (stock_daily_log_return - benchmark_daily_log_return),
+        ],
+        dtype=np.float32,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_context_uses_only_20_60_day_returns_volatility_and_relative_strength",
+        True,
+        bool(
+            tuple(derived_regime.shape) == (2, len(REGIME_CONTEXT_FEATURES))
+            and np.allclose(
+                derived_regime.detach().cpu().numpy(),
+                np.tile(expected_regime, (2, 1)),
+                atol=1e-6,
+            )
+        ),
+    )
+    torch.manual_seed(314159)
+    baseline_initial_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_v1"
+    )
+    torch.manual_seed(314159)
+    regime_initial_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_regime_context_v1"
+    )
+    initial_features = torch.randn((3, 300, 10), dtype=torch.float32) * 0.02
+    initial_context = torch.randn((3, 4), dtype=torch.float32) * 0.05
+    baseline_initial_model.eval()
+    regime_initial_model.eval()
+    with torch.no_grad():
+        baseline_logits = baseline_initial_model(initial_features, initial_context)
+        regime_logits = regime_initial_model(initial_features, initial_context)
+    common_state_equal = all(
+        key in regime_initial_model.state_dict()
+        and tuple(value.shape) == tuple(regime_initial_model.state_dict()[key].shape)
+        and torch.equal(value, regime_initial_model.state_dict()[key])
+        for key, value in baseline_initial_model.state_dict().items()
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_context_preserves_v1_initial_common_weights_and_logits",
+        True,
+        bool(common_state_equal and torch.equal(baseline_logits, regime_logits)),
+    )
+    regime_initial_model.train()
+    regime_loss = regime_initial_model(initial_features, initial_context).sum()
+    regime_loss.backward()
+    projection_gradient = regime_initial_model.derived_context_projection.weight.grad
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_context_projection_receives_training_gradient",
+        True,
+        bool(
+            projection_gradient is not None
+            and torch.isfinite(projection_gradient).all()
+            and float(torch.sum(torch.abs(projection_gradient)).item()) > 0.0
+        ),
+    )
+
     level_sequence = torch.zeros((1, 10, 3), dtype=torch.float32)
     level_sequence[0, 0:5, 1] = torch.tensor(
         [0.01, 0.03, -0.01, 0.02, 0.50], dtype=torch.float32
@@ -864,8 +989,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "only_v1_is_active_for_new_training_and_old_architectures_are_legacy",
-        (("multiscale_cnn_v1",), set(legacy_architectures)),
+        "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
+        (("multiscale_cnn_v1", "multiscale_cnn_regime_context_v1"), set(legacy_architectures)),
         (tuple(ACTIVE_MODEL_ARCHITECTURES), set(LEGACY_MODEL_ARCHITECTURES)),
     )
     add_check(

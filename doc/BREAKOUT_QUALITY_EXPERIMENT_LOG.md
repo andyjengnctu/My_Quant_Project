@@ -23,12 +23,12 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260722_152735_403de13.zip` |
-| SHA256 | `0160f86de40465e547b3dd4dfa63ad673680242b9928da4e119f82759bfb9986` |
-| 程式版本範圍 | v9 連續輔助目標加入前；本輪將 model architecture 與 training experiment profile 分離，取消假版本 v10 |
-| Policy 預設 | architecture=`multiscale_cnn_v1`；experiment profile=`history_masking_only` |
+| 基準 ZIP | `test-branch-1_20260722_174947_5fd19d8.zip` |
+| SHA256 | `c3ebda41cceffdc5da5b88be1098aaf01f7a023ea605ecd8f6618b4a0d40fec4` |
+| 程式版本範圍 | v9 auxiliary head 前的穩定程式；已完成 architecture／experiment profile 分離，本輪新增 descriptive regime-context architecture |
+| Policy 預設 | architecture=`multiscale_cnn_regime_context_v1`；experiment profile=`baseline` |
 | 當前最佳研究模型 | `multiscale_cnn_v1` |
-| Dataset | Full；7A training-only masking 不需重建 |
+| Dataset | Full；regime context 由既有 300×10 sequence 即時計算，不需重建 |
 
 使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**；目前正式研究基準模型仍是結果最佳的 `multiscale_cnn_v1`，不是把 policy 預設改成 `multiscale_cnn_v8`。
 
@@ -43,9 +43,9 @@
 | 最大不利跌幅 | 觸及 −10% 即 REJECT |
 | Epoch 上限 | 100 |
 | Batch Size | 128 |
-| Optimizer | `adam`（6A AdamW、6B schedule 均已淘汰；7A 回到 baseline Adam） |
-| LR Schedule | `none`（7A 只測 augmentation） |
-| Augmentation | `old_history_contiguous_mask`；training only，50% samples，舊歷史 10～30 bars，最近 60 bars 保護 |
+| Optimizer | `adam`（6A AdamW 與 6B schedule 已淘汰） |
+| LR Schedule | `none` |
+| Augmentation | `none`；7A masking 已淘汰 |
 | Learning Rate | 0.0003 |
 | Weight Decay | 0.0001 |
 | Gradient Clip | 1.0 |
@@ -185,21 +185,40 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待 Full workflow Selection／OOS 結果 |
-| 程式基準 | `test-branch-1_20260722_152735_403de13.zip`；SHA256 `0160f86de40465e547b3dd4dfa63ad673680242b9928da4e119f82759bfb9986` |
+| 狀態 | `REJECTED` |
+| 程式基準 | `test-branch-1_20260722_174947_5fd19d8.zip`；SHA256 `c3ebda41cceffdc5da5b88be1098aaf01f7a023ea605ecd8f6618b4a0d40fec4` |
 | 唯一學習變更 | `baseline` → `history_masking_only`；只在 training batch 即時套用一段舊歷史 masking |
 | Experiment profile | optimizer=`adam`、schedule=`none`、augmentation=`old_history_contiguous_mask` |
 | Masking | 每筆 training sample 50% 機率；300 bars 中最近 60 bars 完全保護；舊歷史隨機遮蔽 10～30 bars；10 channels 共用同一時間區段，以左右邊界逐 channel 線性插值 |
 | Validation／OOS | 完全不套用 augmentation；評估與 score export 使用原始 features |
 | 固定條件 | v1、LR 0.0003、weight decay 0.0001、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
 | Dataset／Label | 不重建、不 relabel |
+| Selection | 原始 PASS 54.81%、模型 PASS 76.33%、PASS Precision 62.00%、Lift +7.19 pp、Recall 86.35%、Accuracy 63.51%、Score 0.5803 |
+| OOS | 原始 PASS 55.63%、模型 PASS 45.71%、PASS Precision 58.90%、Lift +3.26 pp、Recall 48.39%、Accuracy 52.50%、Score 0.4698 |
+| 相較 v1 baseline | OOS Precision／Lift 各 −0.39／−0.40 pp、Recall −3.10 pp、模型 PASS −2.61 pp、Accuracy −0.84 pp、Score −0.0093；Precision gap 由 −2.85 pp 惡化為 −3.11 pp，只有 Score gap 由 −0.1129 微幅改善為 −0.1105 |
+| 判定 | Precision Lift、Recall、Accuracy 均下降，不符合 7B 啟動條件；停止輕量 augmentation 路線 |
+| 下一步 | 結構性方向：新增由既有序列即時計算的低維市場 regime context |
+
+
+### 3.10 結構性實驗：低維市場 Regime Context（2026-07-22）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；等待 Full workflow Selection／OOS 結果 |
+| 程式基準 | `test-branch-1_20260722_174947_5fd19d8.zip`；SHA256 `c3ebda41cceffdc5da5b88be1098aaf01f7a023ea605ecd8f6618b4a0d40fec4` |
+| 唯一模型變更 | `multiscale_cnn_v1` → `multiscale_cnn_regime_context_v1`；三個 Level branches 與原 4 個 context 完全保留，只新增 6 個 deterministic regime context 經零初始化 projection 注入 head |
+| Regime context | 0050 20／60 日 log return、0050 20／60 日 annualized close volatility、個股減 0050 的 20／60 日 log return |
+| 資訊時點 | 全部由既有 300×10 sequence 截至事件日即時計算，不使用未來資料 |
+| 初始化隔離 | v1 與新架構共用參數在 seed 42 下逐值相同；新增 6→32 projection 初始為 0，因此訓練前 logits 與 v1 完全相同 |
+| 固定條件 | experiment profile=`baseline`、Adam、固定 LR 0.0003、weight decay 0.0001、augmentation=`none`、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
+| Dataset／Label | 不重建、不 relabel；feature/context storage contract 不變 |
 | Selection／OOS 結果 | 尚未取得 |
 | 判定 | 尚不可接受或淘汰；維持 `IMPLEMENTED` |
-| 下一步 | 取得 7A 結果後決定是否停止 augmentation 或進入條件式 7B |
+| 下一步 | 取得結果後；若仍無改善，進入 ATR／波動率尺度 Label |
 
-### 3.10 Architecture／Experiment Profile 管理規則（2026-07-22）
+### 3.11 Architecture／Experiment Profile 管理規則（2026-07-22）
 
-- `multiscale_cnn_v1` 是目前唯一 active architecture。
+- `multiscale_cnn_v1` 與 `multiscale_cnn_regime_context_v1` 是目前 active architectures；後者只用於本輪 regime context 實驗。
 - `multiscale_cnn_v2～v8`、`tiny_cnn_v1`、`residual_tcn_v1` 均為 legacy read-only compatibility；保留程式碼不代表仍是正式候選。
 - optimizer、LR schedule、augmentation、loss weighting 等訓練差異只可新增 experiment profile，不可再建立 v10、v11 等假模型版本。
 - `baseline`、`adamw_only`、`adam_warmup_cosine` 與 `history_masking_only` 使用相同 v1 模型圖與初始化；工件依 profile 子目錄隔離。
@@ -222,12 +241,13 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 9. 三個連續 auxiliary targets 同時加入。
 10. 只把 OOS 縮短成下一年，期待模型自然改善。
 11. 把 multi-fold validation 誤當成會直接提高 OOS 的模型改動。
+12. 舊歷史 contiguous masking 與其條件式 noise 延伸。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項，固定使用 active architecture `multiscale_cnn_v1`、seed 42、threshold 0.5、no class weight、no time weight、`selected_epochs`。每個實驗都不因訓練策略變更而重建 Dataset。
+所有實驗一次只改一項。訓練方法實驗固定使用 baseline architecture `multiscale_cnn_v1`；結構／輸入實驗使用具描述性的 active architecture。Seed 42、threshold 0.5、no class weight、no time weight、`selected_epochs` 固定不變。
 
 ### 優先 6A：AdamW only
 
@@ -264,7 +284,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待 Full workflow 結果 |
+| 狀態 | `REJECTED`；主要 OOS 指標低於 baseline |
 | 唯一變更 | experiment profile `baseline` → `history_masking_only`；Training batches 加入一段舊歷史 masking |
 | 適用區段 | 300 bars 中前 240 bars |
 | 保護區段 | 最近 60 bars 完全不動 |
@@ -280,13 +300,13 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ### 優先 7B：小幅連續值 noise（條件式）
 
-只有 7A 至少改善一項 OOS 泛化指標且未明顯傷害 Precision Lift 時才進行。第一版只對 training input 加極小幅、依 channel 尺度限制的零均值 noise；不得與 masking 在第一次 noise 實驗同時啟用。若 7A 明確失敗，先停止 augmentation 路線，不直接堆疊更多擾動。
+`CANCELLED`。7A 已明確降低 Precision Lift、Recall 與 Accuracy，不符合啟動條件；不再堆疊 noise、scaling、time warping 或其他 augmentation。
 
 ### 後續結構性方向
 
 只有 6A、6B、7A 都未改善時，才依序評估：
 
-1. **明確市場 regime context**：加入 0050 的 20／60 日報酬、波動率，以及個股相對強弱等低維 context；這不同於 v3 對既有 Return channels 做線性重組。Feature contract 改變時需要重建 feature bank／Dataset。
+1. **明確市場 regime context**：`IMPLEMENTED`。由既有 300×10 sequence 即時計算 0050 20／60 日報酬、波動率與個股相對強弱，不改 Dataset storage contract。
 2. **ATR／波動率尺度 Label**：把固定 5% MFE 與 −10% adverse barrier 改為當時可觀測的 ATR／volatility 倍數，降低不同市場 regime 的 Label 尺度漂移。應優先使用既有 future-path cache 快速 relabel，是否重建由 Dataset policy 自動判定。
 3. **基於 Selection 決定的 rank／percentile gate**：只在模型可分性尚可、但固定 0.5 明顯受 score drift 影響時測試；不得使用 OOS 回頭選 percentile。
 
@@ -299,9 +319,10 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 回到 Adam
 → 6B 只加入 step-based LR schedule（REJECTED）
 → 回到 Adam 固定 LR
-→ 7A 只加入舊歷史 contiguous masking（IMPLEMENTED）
-→ 視 7A 結果決定是否進入 7B
-→ 若仍無改善，再進入 regime context 或 volatility-scaled Label
+→ 7A 只加入舊歷史 contiguous masking（REJECTED）
+→ 7B noise（CANCELLED）
+→ 低維市場 regime context（IMPLEMENTED）
+→ 若仍無改善，再進入 volatility-scaled Label
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

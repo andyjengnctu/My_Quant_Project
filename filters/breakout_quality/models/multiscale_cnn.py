@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import math
 
+from filters.breakout_quality.models.regime_context import (
+    REGIME_CONTEXT_FEATURES,
+    build_regime_context_from_level_sequence,
+)
+
 
 EXPECTED_OHLCV_FEATURE_COUNT = 10
 RETURN_DELTA_REPRESENTATION = "return_delta"
@@ -129,6 +134,20 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             or (float(spec.dropout),) * len(branch_factors)
         )
     )
+    derived_context_features = tuple(str(value) for value in spec.derived_context_features)
+    derived_context_lookbacks = tuple(
+        int(value) for value in spec.derived_context_lookback_bars
+    )
+    derived_context_annualization = spec.derived_context_annualization_bars
+    if derived_context_features:
+        if derived_context_features != REGIME_CONTEXT_FEATURES:
+            raise ValueError("multiscale derived context 欄位與正式 regime contract 不一致")
+        if int(feature_count) != EXPECTED_OHLCV_FEATURE_COUNT:
+            raise ValueError(
+                "multiscale regime context 需要 canonical 10-column OHLCV feature contract"
+            )
+        if not derived_context_lookbacks or derived_context_annualization is None:
+            raise ValueError("multiscale regime context spec 缺少 lookback／annualization")
     group_count = int(spec.normalization_groups)
     if len(branch_channels) != len(branch_factors):
         raise ValueError("multiscale branch_channels 長度必須等於 branch 數")
@@ -229,6 +248,14 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                 nn.Dropout(float(spec.dropout)),
                 nn.Linear(int(spec.head_width), 2),
             )
+            self.derived_context_projection = None
+            if derived_context_features:
+                self.derived_context_projection = nn.Linear(
+                    len(derived_context_features),
+                    int(spec.head_width),
+                    bias=False,
+                )
+                nn.init.zeros_(self.derived_context_projection.weight)
 
         @staticmethod
         def _summarize_branch(
@@ -285,7 +312,21 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                     )
                 )
             summary = torch.cat(summaries, dim=1)
-            return self.head(torch.cat([summary, context], dim=1))
+            base_head_input = torch.cat([summary, context], dim=1)
+            if self.derived_context_projection is None:
+                return self.head(base_head_input)
+
+            derived_context = build_regime_context_from_level_sequence(
+                torch,
+                level_sequence,
+                lookback_bars=derived_context_lookbacks,
+                annualization_bars=int(derived_context_annualization),
+            )
+            hidden = self.head[0](base_head_input)
+            hidden = hidden + self.derived_context_projection(derived_context)
+            for layer in self.head[1:]:
+                hidden = layer(hidden)
+            return hidden
 
     return MultiScaleBreakoutQualityCNN()
 
