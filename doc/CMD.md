@@ -77,10 +77,10 @@ BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_sequence_only_v1"
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "baseline"
 ```
 
-- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前 active architecture 包含正式基準 `multiscale_cnn_v1` 與 8A 實驗 `multiscale_cnn_sequence_only_v1`。8A 保留相同的 300×10 Level sequence、三個時間尺度 branches、pooling 與 head 寬度，只移除原本拼接至 head 的 4 維 event context。
+- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前 active architecture 包含 accepted 基準 `multiscale_cnn_sequence_only_v1` 與歷史比較架構 `multiscale_cnn_v1`。8A 保留相同的 300×10 Level sequence、三個時間尺度 branches、pooling 與 head 寬度，只移除原本拼接至 head 的 4 維 event context。
 - `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述 optimizer、LR schedule 與 augmentation。profile 定義集中在 `config/breakout_quality_experiments.py`：`baseline` 使用 Adam 固定 LR 且無 augmentation；`adamw_only`、`adam_warmup_cosine`、`history_masking_only` 保留為已測歷史 profile。
 - `multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
-- AdamW、scheduler、augmentation 等訓練方法不再建立假模型版本。結構或輸入表示真正改變時才新增具描述性的 architecture；本輪為 `multiscale_cnn_sequence_only_v1 / baseline`。
+- AdamW、scheduler、augmentation 等訓練方法不再建立假模型版本。結構或輸入表示真正改變時才新增具描述性的 architecture；目前正式基準為 `multiscale_cnn_sequence_only_v1 / baseline / time_weight=none`，8B `recent_decay_60m` 已淘汰。
 - Dataset、feature bank、future-path cache、4 維 event context arrays 與 labels 都可直接沿用，不需重建或 relabel；sequence-only model 在 forward 時明確不讀取 event context，每個 architecture/profile 使用獨立工件路徑。
 
 - `multiscale_cnn_sequence_only_v1` 的 trainable parameters 比 v1 少 `4 × 32 = 128`，差異只來自 head 第一層不再接收 `high_len_norm`、`breakout_level_to_close`、`close_to_breakout_level`、`high_to_breakout_level`。

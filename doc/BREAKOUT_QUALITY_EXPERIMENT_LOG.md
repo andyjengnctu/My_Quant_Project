@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260722_224156_6adeb52.zip` |
-| SHA256 | `c72b9e8c93c8d8f8280626063a4483010684443bbfdeeed89fd9f4fc2b538291` |
-| 程式版本範圍 | 以使用者最新 ZIP 為來源，已實作 8A sequence-only context ablation；regime-context 保留為 legacy read-only compatibility |
-| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`baseline` |
-| 當前最佳研究模型 | `multiscale_cnn_v1`；8A 尚未取得 Full OOS 結果，不得預先視為改善 |
-| Dataset | Full；維持固定百分比 Label；8A 沿用既有 feature bank、4 維 context arrays 與 labels，不需重建或 relabel |
+| 基準 ZIP | `test-branch-1_20260722_231639_449a31e(1).zip` |
+| SHA256 | `afe427a2eeecc9565857f15362dfc1e82118f52d2eb92b65968c00e1f66aa569` |
+| 程式版本範圍 | 使用者已由失敗的 8B recent-decay 退回 8A；目前為 accepted `multiscale_cnn_sequence_only_v1 / baseline`，regime-context 保留為 legacy read-only compatibility |
+| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`baseline`；time weight=`none` |
+| 當前最佳研究模型 | `multiscale_cnn_sequence_only_v1`；相較 v1，OOS Precision 持平，Recall、Accuracy、平均 Score 與 Selection→OOS 落差小幅改善 |
+| Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays 與 labels，不需重建或 relabel；sequence-only forward 不讀取 context values |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**；目前正式研究基準模型仍是結果最佳的 `multiscale_cnn_v1`，不是把 policy 預設改成 `multiscale_cnn_v8`。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`；目前完整 OOS 正式比較基準已更新為 8A `multiscale_cnn_sequence_only_v1 / baseline`。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -55,21 +55,21 @@
 | Class Weight | `none` |
 | Time Weight | `none` |
 
-### 2.3 正式比較基準：`multiscale_cnn_v1`
+### 2.3 正式比較基準：`multiscale_cnn_sequence_only_v1 / baseline`
 
-| OOS 指標 | v1 基準 |
+| OOS 指標 | 8A sequence-only 基準 |
 |---|---:|
 | 原始 PASS | 55.63% |
-| PASS Precision | 59.29% |
+| PASS Precision | 59.30% |
 | Precision Lift | +3.66 pp |
-| PASS Recall | 51.49% |
-| 模型 PASS | 48.32% |
-| Accuracy | 53.34% |
-| 平均 Score | 0.4791 |
-| Selection→OOS Precision 差 | −2.85 pp |
-| Selection→OOS Score 差 | −0.1129 |
+| PASS Recall | 53.47% |
+| 模型 PASS | 50.17% |
+| Accuracy | 53.70% |
+| 平均 Score | 0.4886 |
+| Selection→OOS Precision 差 | −2.77 pp |
+| Selection→OOS Score 差 | −0.0978 |
 
-成功判定不能只看平均 Score 或 Recall。新實驗至少應同時檢查 Precision Lift、Recall、Accuracy、模型 PASS，以及 Selection→OOS 落差。
+成功判定不能只看 Selection Precision、平均 Score 或 Recall。新實驗至少應同時檢查 OOS Precision Lift、Recall、Accuracy、模型 PASS，以及 Selection→OOS Precision／Score 落差；不得用 Selection 變好掩蓋完整 OOS 退步。
 
 ---
 
@@ -231,28 +231,44 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ### 3.12 Architecture／Experiment Profile 管理規則（2026-07-22）
 
-- `multiscale_cnn_v1` 是目前唯一已有 OOS 證據支持的 accepted architecture。
-- `multiscale_cnn_sequence_only_v1` 已完成 8A 實作並列為 active research architecture；在 Full OOS 結果產生前狀態只能是 `IMPLEMENTED`，不得視為有效。
+- `multiscale_cnn_sequence_only_v1` 已取得完整 OOS 結果並升為目前 accepted architecture 與正式研究基準。
+- `multiscale_cnn_v1` 保留為 active historical comparator；其完整 OOS 證據仍有效，但新實驗預設固定從 sequence-only 基準延伸，除非實驗目的明確要求比較 context 有無。
 - `multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1`、`residual_tcn_v1` 均為 legacy read-only compatibility；保留程式碼只供舊 checkpoint／manifest 重建與歷史重現。
 - optimizer、LR schedule、augmentation、loss weighting 等訓練差異只可新增 experiment profile，不可再建立 v10、v11 等假模型版本。
-- `baseline`、`adamw_only`、`adam_warmup_cosine` 與 `history_masking_only` 使用相同 v1 模型圖與初始化；工件依 profile 子目錄隔離。
+- `baseline`、`adamw_only`、`adam_warmup_cosine`、`history_masking_only` 與 `recent_decay_60m` 是訓練 profile；工件依 architecture／profile 子目錄隔離。`recent_decay_60m` 已被 8B 完整 OOS 淘汰，不得再作正式新實驗入口。
 - 舊 v1 baseline 工件的無 profile 歷史路徑只提供唯讀 fallback；不得用它覆寫 manifest 或匯出正式 forward-OOS scores。新訓練與正式輸出一律寫入 `<architecture>/<experiment_profile>/`。
 
 ### 3.13 8A Sequence-only context ablation（2026-07-22）
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待使用者執行 Full workflow／完整 OOS |
-| 程式基準 | 來源 ZIP `test-branch-1_20260722_224156_6adeb52.zip`；SHA256 `c72b9e8c93c8d8f8280626063a4483010684443bbfdeeed89fd9f4fc2b538291`；本輪 patch 名稱 `breakout_quality_sequence_only_v1_patch_20260722.zip`，SHA256 於交付回覆列出 |
+| 狀態 | `ACCEPTED`；升為目前完整 OOS 比較基準 |
+| 程式基準 | 結果 ZIP `test-branch-1_20260722_231639_449a31e.zip`；SHA256 `afe427a2eeecc9565857f15362dfc1e82118f52d2eb92b65968c00e1f66aa569` |
 | Architecture | `multiscale_cnn_sequence_only_v1`；experiment profile=`baseline` |
 | 唯一模型變更 | 保留 v1 的 300×10 Level sequence、Short／Medium／Long branches、channels 16／16／16、kernel、pooling、dropout 與 32 維 head；head 第一層不再拼接 Dataset 的 4 維 event context |
 | 移除輸入 | `high_len_norm`、`breakout_level_to_close`、`close_to_breakout_level`、`high_to_breakout_level` |
 | 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、augmentation=`none`、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
-| Dataset／Label | 不重建、不 relabel；現有 context arrays 仍保留於 Dataset 以維持 storage contract，但新模型 forward 明確忽略其數值 |
-| 契約差異 | model spec 新增 `use_dataset_context=false`；trainable parameters 由 v1 的 23,522 降為 23,394，精確減少 `4 × 32 = 128` |
-| Selection／OOS | 尚未取得；不得填入推測值或提前判定 |
-| 採用規則 | Full OOS Precision Lift 必須高於 +3.66 pp、Accuracy 高於 53.34%、Recall 原則上不低於約 50%，且 Selection→OOS Precision 或 Score gap 至少一項縮小 |
-| 下一步 | 執行完整研究 workflow；取得結果後回寫 Selection／OOS 指標並判定 ACCEPTED 或 REJECTED |
+| Dataset／Label | 不重建、不 relabel；現有 context arrays 保留於 Dataset 以維持 storage contract，但模型 forward 明確忽略其數值 |
+| Selection | 原始 PASS 54.81%、模型 PASS 76.03%、PASS Precision 62.07%、Lift +7.26 pp、Recall 86.11%、Accuracy 63.55%、Score 0.5864 |
+| OOS | 原始 PASS 55.63%、模型 PASS 50.17%、PASS Precision 59.30%、Lift +3.66 pp、Recall 53.47%、Accuracy 53.70%、Score 0.4886 |
+| 相較 v1 baseline | OOS Precision 約 +0.01 pp、Lift 持平、Recall +1.98 pp、模型 PASS +1.85 pp、Accuracy +0.36 pp、Score +0.0095；Precision gap 由 −2.85 pp 縮至 −2.77 pp，Score gap 由 −0.1129 縮至 −0.0978 |
+| 判定 | Precision 未顯著提高，但在 Precision 不退步下，Recall、模型 PASS、Accuracy、Score 與兩項泛化落差一致改善；採用為較簡單的新基準，仍未解決整體 OOS drift |
+| 下一步 | 8B 只測 recent-decay time weighting；其結果已取得並淘汰，詳見 3.14 |
+
+### 3.14 8B Recent-decay time weighting（2026-07-22）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `REJECTED`；使用者已退回 8A sequence-only／baseline |
+| 程式基準 | 8B patch `breakout_quality_recent_decay_60m_patch_20260722.zip`；使用者結果完成後退回 ZIP `test-branch-1_20260722_231639_449a31e(1).zip`，SHA256 `afe427a2eeecc9565857f15362dfc1e82118f52d2eb92b65968c00e1f66aa569` |
+| 唯一學習變更 | `multiscale_cnn_sequence_only_v1 / baseline` → 同架構 `recent_decay_60m`；每個 training phase 依 group age 使用 `0.5 ** (age_months / 60)`，再正規化為總 group weight 不變 |
+| 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、augmentation=`none`、seed 42、threshold 0.5、`selected_epochs`、class weight=`none` |
+| Dataset／Label | 不重建、不 relabel；Validation、Selection 報表與 OOS 評估維持未加權 |
+| Selection | 原始 PASS 54.81%、模型 PASS 73.16%、PASS Precision 62.94%、Lift +8.14 pp、Recall 84.03%、Accuracy 64.13%、Score 0.5830 |
+| OOS | 原始 PASS 55.63%、模型 PASS 47.04%、PASS Precision 58.64%、Lift +3.01 pp、Recall 49.59%、Accuracy 52.50%、Score 0.4627 |
+| 相較 8A 基準 | OOS Precision −0.66 pp、Lift −0.65 pp、Recall −3.88 pp、模型 PASS −3.13 pp、Accuracy −1.20 pp、Score −0.0259；Precision gap 由 −2.77 pp 惡化為 −4.30 pp，Score gap 由 −0.0978 惡化為 −0.1203 |
+| 判定 | Selection Precision／Lift 上升，但完整 OOS 所有主要指標及泛化落差均惡化；較近期 Selection weighting 加深對 Selection 末期型態的擬合，未提升跨 2021–2026 的泛化 |
+| 下一步 | 維持 8A 基準，改測 8C same-day cross-sectional rank context；不再調 recent-decay 半衰期 |
 
 ---
 
@@ -275,12 +291,13 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 13. 目前的 6 維低維市場 regime context；Selection 內 validation 有改善，但 OOS Precision、Accuracy 與 Score 低於 v1。
 14. ATR／波動率尺度 Label；使用者已實測整體 OOS 沒有優於固定百分比 Label。
 15. 把分年、分季度、分 Fold 或 threshold 診斷當成會直接提升模型能力的實驗；這些只能解釋問題，不列為目前改善優先。
+16. Recent-decay time weighting；60 個月半衰期使 Selection 指標上升，但完整 OOS Precision、Recall、Accuracy、Score 與泛化落差全部惡化。不得再細調 36／48／72／84 個月半衰期。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。訓練方法實驗固定使用 baseline architecture `multiscale_cnn_v1`；結構／輸入實驗使用具描述性的 active architecture。Seed 42、threshold 0.5、no class weight、no time weight、`selected_epochs` 固定不變。
+所有實驗一次只改一項。後續訓練方法與輸入實驗預設固定使用目前 accepted baseline architecture `multiscale_cnn_sequence_only_v1`；只有明確重現歷史對照時才使用 `multiscale_cnn_v1`。Seed 42、threshold 0.5、no class weight、no time weight、`selected_epochs` 固定不變。
 
 ### 優先 6A：AdamW only
 
@@ -343,22 +360,29 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待 Full OOS 結果 |
+| 狀態 | `ACCEPTED`；目前正式比較基準 |
 | Architecture | `multiscale_cnn_sequence_only_v1` |
 | 唯一變更 | 保留 v1 三個 Level branches、pooling 與 head；head 不再拼接原 4 維 handcrafted context，只使用 300×10 sequence summary |
-| 移除欄位 | normalized high_len、breakout_level／close、close／breakout_level、high／breakout_level |
-| 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、threshold 0.5、seed 42、no class/time weight、`selected_epochs` |
-| Dataset／Label | 不需重建、不需 relabel；既有 context 可保留於 Dataset，但新架構不得讀取 |
-| 直接機制 | 同一 ticker/date group 的 sequence 與 Label 完全相同，但常有多個 high_len rows 帶不同 context；移除這些可能隨時期漂移的重複／高度相關變數，迫使模型只依價格、成交量與 0050 路徑判斷 |
-| 主要判定 | 只以完整 OOS 對 v1：Precision Lift > +3.66 pp、Accuracy > 53.34%、Recall 不低於約 50%，且 Selection→OOS Precision 或 Score gap 至少一項縮小 |
+| 完整 OOS | Precision 59.30%、Lift +3.66 pp、Recall 53.47%、模型 PASS 50.17%、Accuracy 53.70%、Score 0.4886 |
+| 判定 | Precision 持平，但 Recall、Accuracy、Score 與 Selection→OOS 落差一致改善；採用為新基準 |
 
 #### 優先 8B：Recent-decay time weighting
 
-只有 8A 未改善時才做。模型退回 `multiscale_cnn_v1`，唯一變更為對較近期 Selection groups 給較高權重；這不同於已失敗的 `year_balanced_sqrt`，後者只是平衡每年樣本數，並沒有讓近期資料更重要。權重公式與半衰期必須在查看新 OOS 結果前固定。
+`REJECTED`。60 個月半衰期使 Selection Precision／Lift 上升，但完整 OOS Precision、Recall、Accuracy、Score 與兩項泛化落差全部惡化。已退回 `multiscale_cnn_sequence_only_v1 / baseline / time_weight=none`，不再細調半衰期。
 
 #### 優先 8C：Same-day cross-sectional rank context
 
-只有 8B 未改善時才做。加入事件日可知、按同日候選計算的 percentile/rank 特徵，例如 20／60／120 日相對強弱、成交量擴張、ATR%、突破幅度。目的不是再加絕對 regime 數值，而是把輸入轉為跨年代較穩定的相對位置。
+| 項目 | 固定設計 |
+|---|---|
+| 狀態 | `PLANNED`；下一個單一實驗 |
+| 基準 | `multiscale_cnn_sequence_only_v1 / baseline`；time weight=`none` |
+| 唯一模型／輸入變更 | 新增事件日同日橫斷面 percentile context；CNN sequence、head 寬度及所有訓練條件維持 8A |
+| 第一版特徵 | 只使用由事件日前資料計算的 20／60／120 日個股相對強弱 percentile；避免同時加入 volume、ATR 與 breakout 幅度而無法歸因 |
+| 橫斷面單位 | 先以同一交易日的 unique `ticker/date` candidate groups 計算；同一 group 的多個 high_len rows 共用同一組 rank，不得重複影響排名 |
+| 無未來資訊 | 每個 return 只使用事件日及以前價格；percentile 只使用同日可知候選，不以 OOS 統計量 fit 或 normalize |
+| Dataset／Label | 需要新增／重建 rank context arrays；Label 與 300×10 feature bank 不變，不 relabel |
+| 直接機制 | 把絕對報酬尺度轉成同日相對位置，使牛熊市與不同波動年代下的訊號尺度較一致；不同於已失敗的絕對 regime context |
+| 主要判定 | 相對 8A：OOS Precision ≥59.30%、Lift ≥+3.66 pp、Recall／Accuracy不得明顯下降，且 Precision gap 或 Score gap至少一項縮小 |
 
 #### 優先 8D：Hybrid classification + same-day ranking loss
 
@@ -379,9 +403,9 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 低維市場 regime context（REJECTED）
 → ATR／波動率尺度 Label（REJECTED）
 → 退回 multiscale_cnn_v1 / baseline／固定百分比 Label
-→ 8A sequence-only context ablation（IMPLEMENTED；NEXT：執行完整 workflow／完整 OOS）
-→ 若完整 OOS 未改善：8B recent-decay time weighting
-→ 若失敗：8C same-day cross-sectional rank context
+→ 8A sequence-only context ablation（ACCEPTED；目前基準）
+→ 8B recent-decay time weighting（REJECTED；已退回 8A baseline）
+→ NEXT：8C same-day cross-sectional rank context
 → 若失敗：8D classification + same-day ranking loss
 → 單模型改善後：8E multi-seed probability ensemble
 ```
