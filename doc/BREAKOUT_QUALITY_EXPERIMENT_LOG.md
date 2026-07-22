@@ -23,10 +23,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260722_110440_6445f6d.zip` |
-| SHA256 | `4c2b11f324b6a96919a21adc2ff347e7634dbeb67716858acf4a6ac620832ce8` |
-| 程式版本範圍 | v9 連續輔助目標加入前；6A Patch 新增與 v1 模型圖相同的 `multiscale_cnn_v10` 工件版本 |
-| Policy 預設模型 | `multiscale_cnn_v10`（6A 執行版本；模型圖與 v1 相同） |
+| 基準 ZIP | `test-branch-1_20260722_115701_9cd60c8.zip` |
+| SHA256 | `366b0f1a15f6e77cbbee32f94b9275fe2a94676fb747e6fd0e4b817b06e2059c` |
+| 程式版本範圍 | v9 連續輔助目標加入前；本輪將 model architecture 與 training experiment profile 分離，取消假版本 v10 |
+| Policy 預設 | architecture=`multiscale_cnn_v1`；experiment profile=`adamw_only` |
 | 當前最佳研究模型 | `multiscale_cnn_v1` |
 | Dataset | Full；6A optimizer 變更不需重建 |
 
@@ -43,9 +43,9 @@
 | 最大不利跌幅 | 觸及 −10% 即 REJECT |
 | Epoch 上限 | 100 |
 | Batch Size | 128 |
-| Optimizer | `adamw`（6A 實驗；接受與否待 OOS 結果） |
-| LR Schedule | 無 |
-| Augmentation | 無 |
+| Optimizer | `adamw`（由 `adamw_only` profile 決定；6A 接受與否待 OOS 結果） |
+| LR Schedule | `none` |
+| Augmentation | `none` |
 | Learning Rate | 0.0003 |
 | Weight Decay | 0.0001 |
 | Gradient Clip | 1.0 |
@@ -152,16 +152,26 @@ Selection Precision 升至 62.61%、Lift 升至 +7.80 pp，但 OOS 全面退步�
 | 項目 | 紀錄 |
 |---|---|
 | 狀態 | `IMPLEMENTED`；等待使用者完成 Full workflow 並提供 Selection／OOS 報表 |
-| 程式基準 | `test-branch-1_20260722_110440_6445f6d.zip`；SHA256 `4c2b11f324b6a96919a21adc2ff347e7634dbeb67716858acf4a6ac620832ce8` |
-| Patch | `breakout_quality_6a_adamw_only_patch_20260722.zip`；封裝後 SHA256 於交付訊息提供，文件內未知 |
-| 唯一學習變更 | `torch.optim.Adam` → `torch.optim.AdamW` |
-| 工件隔離 | 新增 `multiscale_cnn_v10`；模型圖、23,522 參數、Level inputs、初始化與 v1 相同，只避免覆蓋 v1 工件 |
-| 固定條件 | LR 0.0003、weight decay 0.0001、無 LR schedule、無 augmentation、seed 42、threshold 0.5、`selected_epochs`、class/time weight 均為 `none` |
+| 程式基準 | `test-branch-1_20260722_115701_9cd60c8.zip`；SHA256 `366b0f1a15f6e77cbbee32f94b9275fe2a94676fb747e6fd0e4b817b06e2059c` |
+| 架構整理 | 原 6A 以 `multiscale_cnn_v10` 隔離 optimizer 的做法已撤回；v10 未取得結果並被本輪實作取代 |
+| 唯一學習變更 | `multiscale_cnn_v1 / baseline` 的 `torch.optim.Adam` → `multiscale_cnn_v1 / adamw_only` 的 `torch.optim.AdamW` |
+| Experiment profile | `adamw_only`：optimizer=`adamw`、LR schedule=`none`、augmentation=`none` |
+| 工件隔離 | `models/.../multiscale_cnn_v1/adamw_only/` 與 `outputs/.../multiscale_cnn_v1/adamw_only/`；不再新增模型版本 |
+| Active／Legacy | 正常新訓練只允許 v1；v2～v8、Tiny、Residual 僅保留舊工件載入與歷史重現 |
+| 固定條件 | LR 0.0003、weight decay 0.0001、seed 42、threshold 0.5、`selected_epochs`、class/time weight 均為 `none` |
 | Dataset／Label | 不重建、不 relabel |
 | Selection／OOS 結果 | 尚未取得 |
-| 與 v1 差異 | 尚未取得 |
+| 與 v1 baseline 差異 | 尚未取得 |
 | 判定 | 尚不可接受或淘汰；取得結果前維持 `IMPLEMENTED` |
 | 下一步 | 先取得 6A 結果，再決定 6B 使用 AdamW 或退回 Adam |
+
+### 3.8 Architecture／Experiment Profile 管理規則（2026-07-22）
+
+- `multiscale_cnn_v1` 是目前唯一 active architecture。
+- `multiscale_cnn_v2～v8`、`tiny_cnn_v1`、`residual_tcn_v1` 均為 legacy read-only compatibility；保留程式碼不代表仍是正式候選。
+- optimizer、LR schedule、augmentation、loss weighting 等訓練差異只可新增 experiment profile，不可再建立 v10、v11 等假模型版本。
+- `baseline` 與 `adamw_only` 使用相同 v1 模型圖與初始化；工件依 profile 子目錄隔離。
+- 舊 v1 baseline 工件的無 profile 歷史路徑只提供唯讀 fallback；不得用它覆寫 manifest 或匯出正式 forward-OOS scores。新訓練與正式輸出一律寫入 `<architecture>/<experiment_profile>/`。
 
 ---
 
@@ -185,18 +195,18 @@ Selection Precision 升至 62.61%、Lift 升至 +7.80 pp，但 OOS 全面退步�
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項，固定使用 `multiscale_cnn_v1`、seed 42、threshold 0.5、no class weight、no time weight、`selected_epochs`。每個實驗都不因訓練策略變更而重建 Dataset。
+所有實驗一次只改一項，固定使用 active architecture `multiscale_cnn_v1`、seed 42、threshold 0.5、no class weight、no time weight、`selected_epochs`。每個實驗都不因訓練策略變更而重建 Dataset。
 
 ### 優先 6A：AdamW only
 
 | 項目 | 設計 |
 |---|---|
 | 狀態 | `IMPLEMENTED`；等待結果 |
-| 唯一變更 | `Adam` → `AdamW` |
+| 唯一變更 | experiment profile `baseline` → `adamw_only`；實際學習差異只有 `Adam` → `AdamW` |
 | Learning Rate | 維持 0.0003 |
 | Weight Decay | 維持 0.0001，不同時改 regularization 強度 |
-| LR Schedule | 無 |
-| Augmentation | 無 |
+| LR Schedule | `none` |
+| Augmentation | `none` |
 | Dataset rebuild | 不需要 |
 | 目的 | 隔離檢查 decoupled weight decay 是否得到較平滑、較能泛化的解 |
 

@@ -176,12 +176,24 @@ def events_csv_path(filter_id: str) -> Path:
     return dataset_paths(filter_id).events
 
 
-def scores_csv_path(filter_id: str) -> Path:
-    return resolve_filter_artifact_paths(PROJECT_ROOT, filter_id).score_path
+def scores_csv_path(
+    filter_id: str,
+    *,
+    experiment_profile: str | None = None,
+) -> Path:
+    return resolve_filter_artifact_paths(
+        PROJECT_ROOT, filter_id, experiment_profile=experiment_profile
+    ).score_path
 
 
-def model_dir(filter_id: str) -> Path:
-    return ensure_filter_model_dir(PROJECT_ROOT, filter_id)
+def model_dir(
+    filter_id: str,
+    *,
+    experiment_profile: str | None = None,
+) -> Path:
+    return ensure_filter_model_dir(
+        PROJECT_ROOT, filter_id, experiment_profile=experiment_profile
+    )
 
 
 def write_json(path: Path, payload: dict) -> None:

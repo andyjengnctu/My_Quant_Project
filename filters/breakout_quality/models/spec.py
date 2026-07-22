@@ -15,7 +15,6 @@ MULTISCALE_CNN_V5 = "multiscale_cnn_v5"
 MULTISCALE_CNN_V6 = "multiscale_cnn_v6"
 MULTISCALE_CNN_V7 = "multiscale_cnn_v7"
 MULTISCALE_CNN_V8 = "multiscale_cnn_v8"
-MULTISCALE_CNN_V10 = "multiscale_cnn_v10"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
@@ -27,8 +26,13 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_V6,
     MULTISCALE_CNN_V7,
     MULTISCALE_CNN_V8,
-    MULTISCALE_CNN_V10,
     RESIDUAL_TCN_V1,
+)
+ACTIVE_MODEL_ARCHITECTURES = (MULTISCALE_CNN_V1,)
+LEGACY_MODEL_ARCHITECTURES = tuple(
+    architecture
+    for architecture in SUPPORTED_MODEL_ARCHITECTURES
+    if architecture not in ACTIVE_MODEL_ARCHITECTURES
 )
 
 
@@ -100,6 +104,17 @@ def normalize_model_architecture(value: str) -> str:
     return architecture
 
 
+def normalize_active_model_architecture(value: str) -> str:
+    architecture = normalize_model_architecture(value)
+    if architecture not in ACTIVE_MODEL_ARCHITECTURES:
+        allowed = ", ".join(ACTIVE_MODEL_ARCHITECTURES)
+        raise ValueError(
+            "breakout quality 正式新訓練只允許 active architecture；"
+            f"收到 {architecture!r}，可用值: {allowed}。歷史版本僅供舊工件重現。"
+        )
+    return architecture
+
+
 def _residual_receptive_field(
     *, kernel_size: int, dilations: tuple[int, ...], convolutions_per_block: int
 ) -> int:
@@ -147,7 +162,6 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         MULTISCALE_CNN_V6,
         MULTISCALE_CNN_V7,
         MULTISCALE_CNN_V8,
-        MULTISCALE_CNN_V10,
     }:
         downsample_factors = (1, 2, 4)
         branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
@@ -177,8 +191,6 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             branch_input_representations = ("return_delta", "level", "level")
         elif normalized == MULTISCALE_CNN_V8:
             branch_input_representations = ("level", "return_delta", "level")
-        elif normalized == MULTISCALE_CNN_V10:
-            branch_input_representations = ()
         else:
             raise AssertionError(f"未處理的 multiscale architecture: {normalized}")
         return BreakoutQualityModelSpec(
@@ -240,7 +252,9 @@ def model_spec_from_manifest(payload: Mapping[str, object]) -> BreakoutQualityMo
 
 
 __all__ = [
+    "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
+    "LEGACY_MODEL_ARCHITECTURES",
     "MULTISCALE_CNN_V1",
     "MULTISCALE_CNN_V2",
     "MULTISCALE_CNN_V3",
@@ -249,11 +263,11 @@ __all__ = [
     "MULTISCALE_CNN_V6",
     "MULTISCALE_CNN_V7",
     "MULTISCALE_CNN_V8",
-    "MULTISCALE_CNN_V10",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",
     "get_model_spec",
     "model_spec_from_manifest",
+    "normalize_active_model_architecture",
     "normalize_model_architecture",
 ]

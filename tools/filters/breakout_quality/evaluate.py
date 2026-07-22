@@ -15,6 +15,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+from config.breakout_quality_policy import BREAKOUT_QUALITY_EXPERIMENT_PROFILE
 from filters.breakout_quality.artifacts import (
     compute_file_sha256,
     load_model_artifact_contract,
@@ -33,8 +35,8 @@ from filters.breakout_quality.contract import (
     SELECTION_ROLE_VALIDATION,
 )
 from filters.breakout_quality.paths import (
-    resolve_filter_research_manifest_path,
-    resolve_filter_research_score_path,
+    resolve_existing_filter_research_manifest_path,
+    resolve_existing_filter_research_score_path,
 )
 from filters.breakout_quality.splits import KEY_COLUMNS, normalize_split_assignment_keys
 from tools.filters.breakout_quality.common import (
@@ -67,6 +69,12 @@ def parse_args(argv=None):
     )
     parser.add_argument("--filter-id", default=DEFAULT_FILTER_ID)
     parser.add_argument(
+        "--experiment-profile",
+        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        help="要評估的訓練實驗 profile",
+    )
+    parser.add_argument(
         "--threshold",
         type=float,
         default=None,
@@ -86,7 +94,7 @@ def parse_args(argv=None):
         default=None,
         help=(
             "研究 score table；省略時讀 "
-            "outputs/filters/breakout_quality/<filter_id>/<model_architecture>/research_scores.csv；"
+            "outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/research_scores.csv；"
             "自訂路徑需在同目錄提供 research_scores_manifest.json"
         ),
     )
@@ -166,13 +174,18 @@ def _metrics(df: pd.DataFrame, *, threshold: float, group_weighted: bool) -> dic
     }
 
 
-def _research_manifest_path(score_path: Path, filter_id: str) -> Path:
-    canonical_score = resolve_filter_research_score_path(
+def _research_manifest_path(
+    score_path: Path, filter_id: str, experiment_profile: str
+) -> Path:
+    canonical_score = resolve_existing_filter_research_score_path(
         PROJECT_ROOT,
         filter_id,
+        experiment_profile=experiment_profile,
     ).resolve()
     if score_path.resolve() == canonical_score:
-        return resolve_filter_research_manifest_path(PROJECT_ROOT, filter_id)
+        return resolve_existing_filter_research_manifest_path(
+            PROJECT_ROOT, filter_id, experiment_profile=experiment_profile
+        )
     return score_path.parent / "research_scores_manifest.json"
 
 
@@ -183,8 +196,11 @@ def _validate_research_contract(
     filter_id: str,
     split_record: dict,
     model_manifest: dict,
+    experiment_profile: str,
 ) -> dict:
-    manifest_path = _research_manifest_path(score_path, filter_id)
+    manifest_path = _research_manifest_path(
+        score_path, filter_id, experiment_profile
+    )
     if not manifest_path.is_file():
         raise FileNotFoundError(f"找不到 research score manifest: {manifest_path}")
     manifest = read_json(manifest_path)
@@ -194,6 +210,12 @@ def _validate_research_contract(
         raise ValueError("evaluate 只能使用 scope=research 的 score manifest")
     if manifest.get("model_architecture") != model_manifest.get("model_architecture"):
         raise ValueError("research score manifest 與 model architecture 不一致")
+    if str(manifest.get("experiment_profile") or "baseline") != str(
+        model_manifest.get("experiment_profile") or "baseline"
+    ):
+        raise ValueError("research score manifest 與 experiment profile 不一致")
+    if manifest.get("experiment_settings") != model_manifest.get("experiment_settings"):
+        raise ValueError("research score manifest 與 experiment settings 不一致")
     if manifest.get("model_spec") != model_manifest.get("model_spec"):
         raise ValueError("research score manifest 與 model_spec 不一致")
     source_split = manifest.get("source_split_assignments")
@@ -268,13 +290,16 @@ def _select_rows(frame: pd.DataFrame, split_name: str, outer_policy: dict) -> pd
 def prepare_evaluation_context(
     *,
     filter_id: str,
+    experiment_profile: str = BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     threshold: float | None = None,
     score_path: str | Path | None = None,
 ) -> dict:
     resolved_score_path = (
         Path(score_path).expanduser().resolve()
         if score_path is not None
-        else resolve_filter_research_score_path(PROJECT_ROOT, filter_id)
+        else resolve_existing_filter_research_score_path(
+            PROJECT_ROOT, filter_id, experiment_profile=experiment_profile
+        )
     )
     score_frame = read_breakout_quality_csv(resolved_score_path)
     required = {"ticker", "date", "high_len", SCORE_COLUMN, "label"}
@@ -284,8 +309,16 @@ def prepare_evaluation_context(
             f"evaluate score table 缺少欄位: {missing}; path={resolved_score_path}"
         )
 
-    model_contract = load_model_artifact_contract(str(PROJECT_ROOT), str(filter_id))
-    split_frame = load_split_assignment_frame(str(PROJECT_ROOT), str(filter_id))
+    model_contract = load_model_artifact_contract(
+        str(PROJECT_ROOT),
+        str(filter_id),
+        experiment_profile=experiment_profile,
+    )
+    split_frame = load_split_assignment_frame(
+        str(PROJECT_ROOT),
+        str(filter_id),
+        experiment_profile=experiment_profile,
+    )
     fixed_threshold = float(model_contract.manifest["fixed_evaluation_threshold"])
     if threshold is not None:
         requested_threshold = float(threshold)
@@ -325,12 +358,14 @@ def prepare_evaluation_context(
         filter_id=str(filter_id),
         split_record=split_record,
         model_manifest=model_contract.manifest,
+        experiment_profile=experiment_profile,
     )
     outer_policy = model_contract.manifest.get("outer_oos_policy")
     if not isinstance(outer_policy, dict):
         raise ValueError("model manifest 缺少 outer_oos_policy")
     return {
         "filter_id": str(filter_id),
+        "experiment_profile": str(experiment_profile),
         "score_path": resolved_score_path,
         "merged": merged,
         "threshold": fixed_threshold,
@@ -402,11 +437,13 @@ def evaluate_splits(
     *,
     filter_id: str,
     splits: Iterable[str],
+    experiment_profile: str = BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     threshold: float | None = None,
     score_path: str | Path | None = None,
 ) -> tuple[dict[str, dict], dict]:
     context = prepare_evaluation_context(
         filter_id=filter_id,
+        experiment_profile=experiment_profile,
         threshold=threshold,
         score_path=score_path,
     )
@@ -421,12 +458,14 @@ def evaluate_breakout_quality(
     *,
     filter_id: str,
     split: str,
+    experiment_profile: str = BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     threshold: float | None = None,
     score_path: str | Path | None = None,
 ) -> dict:
     results, _context = evaluate_splits(
         filter_id=filter_id,
         splits=[split],
+        experiment_profile=experiment_profile,
         threshold=threshold,
         score_path=score_path,
     )
@@ -438,6 +477,7 @@ def main(argv=None) -> int:
     metrics = evaluate_breakout_quality(
         filter_id=str(args.filter_id),
         split=str(args.split),
+        experiment_profile=str(args.experiment_profile),
         threshold=args.threshold,
         score_path=args.score_path,
     )

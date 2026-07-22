@@ -62,3 +62,4 @@
 3. 暫時只使用還原價，不考慮 raw。
 4. `doc/FINMIND_API_TOKEN.md` 為使用者本機私有憑證文件；其內容與是否被 `apps/package_zip.py` 收錄，暫時排除於 GPT 與 formal 最嚴格檢查及修正範圍之外。除非使用者另行要求，不得主動修改、移除、遮罩、加入 `.gitignore` 或調整打包器排除規則。
 5. 凡使用者要求分析、改善、修改、比較或測試 `breakout_quality filter`，開始任何設計或程式修改前必須先讀取 `/doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`，並以其中的目前基準、已測矩陣、排除方向與後續順序作為單一實驗真理來源；每次實驗完成後，必須在同一輪將程式基準、唯一變更、固定條件、Dataset／Label 重建需求、Selection／OOS 主要結果、與基準差異、採用判定及下一步回寫該文件。尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得預先寫成有效或無效；若使用者提供的新結果與舊紀錄衝突，須以可追溯的最新結果更新並保留差異說明。
+6. `breakout_quality filter` 的 model architecture 版本只可表示神經網路結構或輸入表示的差異；optimizer、learning-rate schedule、augmentation、loss weighting 等訓練方法必須以命名 experiment profile 管理，不得為了隔離實驗輸出而新增模型版本。正常新訓練只可使用 active architecture；已淘汰架構應保留為 legacy read-only compatibility，供舊 checkpoint／manifest 重建與歷史重現，不得再次出現在正式新實驗入口。

@@ -15,6 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+from config.breakout_quality_policy import BREAKOUT_QUALITY_EXPERIMENT_PROFILE
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID
 from filters.breakout_quality.paths import (
     ensure_filter_report_dir,
@@ -80,6 +82,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         )
     )
     parser.add_argument("--filter-id", default=DEFAULT_FILTER_ID)
+    parser.add_argument(
+        "--experiment-profile",
+        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        help="要產生報表的訓練實驗 profile",
+    )
     parser.add_argument(
         "--include-oos",
         action=argparse.BooleanOptionalAction,
@@ -403,8 +411,15 @@ def _training_summary(manifest: dict) -> dict:
     model_spec = manifest.get("model_spec")
     if not isinstance(model_spec, dict):
         model_spec = {}
+    experiment_settings = manifest.get("experiment_settings")
+    if not isinstance(experiment_settings, dict):
+        experiment_settings = {}
     return {
         "model_architecture": manifest.get("model_architecture"),
+        "experiment_profile": manifest.get("experiment_profile", "baseline"),
+        "experiment_settings": experiment_settings,
+        "lr_schedule_name": experiment_settings.get("lr_schedule_name", "none"),
+        "augmentation_name": experiment_settings.get("augmentation_name", "none"),
         "model_spec": model_spec,
         "trainable_parameter_count": manifest.get("trainable_parameter_count"),
         "sequence_length": manifest.get("sequence_length"),
@@ -1102,6 +1117,9 @@ def render_markdown_report(payload: dict) -> str:
     lines.extend(
         [
             f"- **Model Architecture**：`{training.get('model_architecture')}`",
+            f"- **Experiment Profile**：`{training.get('experiment_profile')}`",
+            f"- **LR Schedule**：`{training.get('lr_schedule_name')}`",
+            f"- **Augmentation**：`{training.get('augmentation_name')}`",
             (
                 "- **Branch Inputs**：`"
                 + "+".join(
@@ -1537,6 +1555,9 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
     lines.extend(
         [
             f"Model           : {training.get('model_architecture')}",
+            f"Experiment      : {training.get('experiment_profile')}",
+            f"LR Schedule     : {training.get('lr_schedule_name')}",
+            f"Augmentation    : {training.get('augmentation_name')}",
             (
                 "Branch Inputs   : "
                 + "+".join(
@@ -1600,10 +1621,12 @@ def generate_report(
     *,
     filter_id: str,
     include_oos: bool,
+    experiment_profile: str = BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     score_path: str | Path | None = None,
 ) -> tuple[dict, Path, Path]:
     context = prepare_evaluation_context(
         filter_id=filter_id,
+        experiment_profile=experiment_profile,
         score_path=score_path,
     )
     splits = []
@@ -1618,9 +1641,15 @@ def generate_report(
     }
 
     payload = build_report_payload(metrics_by_split=metrics_by_split, context=context)
-    ensure_filter_report_dir(PROJECT_ROOT, filter_id)
-    markdown_path = resolve_filter_report_markdown_path(PROJECT_ROOT, filter_id)
-    json_path = resolve_filter_report_json_path(PROJECT_ROOT, filter_id)
+    ensure_filter_report_dir(
+        PROJECT_ROOT, filter_id, experiment_profile=experiment_profile
+    )
+    markdown_path = resolve_filter_report_markdown_path(
+        PROJECT_ROOT, filter_id, experiment_profile=experiment_profile
+    )
+    json_path = resolve_filter_report_json_path(
+        PROJECT_ROOT, filter_id, experiment_profile=experiment_profile
+    )
     markdown_path.write_text(render_markdown_report(payload), encoding="utf-8")
     json_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
@@ -1634,6 +1663,7 @@ def main(argv=None) -> int:
     payload, markdown_path, json_path = generate_report(
         filter_id=str(args.filter_id),
         include_oos=bool(args.include_oos),
+        experiment_profile=str(args.experiment_profile),
         score_path=args.score_path,
     )
     print(render_console_summary(payload, color=_console_color_enabled()))

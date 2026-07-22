@@ -10,10 +10,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from config.breakout_quality_experiments import (
+    BASELINE_EXPERIMENT_PROFILE,
+    get_breakout_quality_experiment_profile,
+    normalize_breakout_quality_experiment_profile,
+)
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
     BREAKOUT_QUALITY_FINAL_REFIT_MODE,
-    BREAKOUT_QUALITY_OPTIMIZER_NAME,
     BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
 )
 
@@ -44,7 +48,10 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.models.spec import model_spec_from_manifest
-from filters.breakout_quality.paths import BreakoutQualityArtifactPaths, resolve_filter_artifact_paths
+from filters.breakout_quality.paths import (
+    BreakoutQualityArtifactPaths,
+    resolve_existing_filter_artifact_paths,
+)
 from filters.breakout_quality.splits import (
     compute_outer_policy_fingerprint,
     validate_split_assignment_frame,
@@ -226,8 +233,15 @@ def _validate_split_assignment_record(paths: BreakoutQualityArtifactPaths, manif
 def load_model_artifact_contract(
     project_root: str,
     filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
 ) -> BreakoutQualityModelContract:
-    paths = resolve_filter_artifact_paths(project_root, filter_id)
+    paths = resolve_existing_filter_artifact_paths(
+        project_root,
+        filter_id,
+        model_architecture,
+        experiment_profile,
+    )
     if not paths.manifest_path.is_file():
         raise FileNotFoundError(
             f"找不到 breakout quality 正式 manifest: {paths.manifest_path}。"
@@ -245,6 +259,24 @@ def load_model_artifact_contract(
         raise ValueError(f"breakout quality manifest filter_family 不一致: {paths.manifest_path}")
     if _require_nonempty_text(manifest, "filter_id") != str(filter_id).strip():
         raise ValueError(f"breakout quality manifest filter_id 不一致: {paths.manifest_path}")
+    manifest_profile = normalize_breakout_quality_experiment_profile(
+        str(manifest.get("experiment_profile") or BASELINE_EXPERIMENT_PROFILE)
+    )
+    if manifest_profile != paths.experiment_profile:
+        raise ValueError(
+            "breakout quality manifest experiment_profile 與工件路徑不一致: "
+            f"manifest={manifest_profile}, path={paths.experiment_profile}"
+        )
+    expected_experiment = get_breakout_quality_experiment_profile(manifest_profile)
+    manifest_experiment = manifest.get("experiment_settings")
+    if manifest_experiment is None and manifest_profile == BASELINE_EXPERIMENT_PROFILE:
+        manifest_experiment = expected_experiment.as_manifest_payload()
+    if manifest_experiment != expected_experiment.as_manifest_payload():
+        raise ValueError(
+            "breakout quality experiment_settings 與命名 profile 不一致: "
+            f"profile={manifest_profile}, expected={expected_experiment.as_manifest_payload()}, "
+            f"actual={manifest_experiment}"
+        )
     if list(manifest.get("feature_columns", [])) != list(FEATURE_COLUMNS):
         raise ValueError("breakout quality manifest feature_columns 與 runtime 契約不一致")
     if list(manifest.get("context_columns", [])) != list(CONTEXT_COLUMNS):
@@ -392,10 +424,11 @@ def load_model_artifact_contract(
             )
 
     optimizer_name = str(manifest.get("optimizer_name") or "adam").strip().lower()
-    if optimizer_name != str(BREAKOUT_QUALITY_OPTIMIZER_NAME).strip().lower():
+    if optimizer_name != expected_experiment.optimizer_name:
         raise ValueError(
-            "breakout quality optimizer_name 與目前 config 不一致；請重新訓練: "
-            f"manifest={optimizer_name}, config={BREAKOUT_QUALITY_OPTIMIZER_NAME}"
+            "breakout quality optimizer_name 與 experiment profile 不一致；請重新訓練: "
+            f"manifest={optimizer_name}, profile={manifest_profile}, "
+            f"expected={expected_experiment.optimizer_name}"
         )
 
     class_weight_mode = _require_nonempty_text(manifest, "class_weight_mode")
@@ -444,8 +477,15 @@ def load_model_artifact_contract(
 
 
 @lru_cache(maxsize=16)
-def load_split_assignment_frame(project_root: str, filter_id: str):
-    model_contract = load_model_artifact_contract(project_root, filter_id)
+def load_split_assignment_frame(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+):
+    model_contract = load_model_artifact_contract(
+        project_root, filter_id, model_architecture, experiment_profile
+    )
     return _validate_split_assignment_record(model_contract.paths, model_contract.manifest)
 
 
@@ -453,8 +493,12 @@ def load_split_assignment_frame(project_root: str, filter_id: str):
 def load_runtime_artifact_contract(
     project_root: str,
     filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
 ) -> BreakoutQualityRuntimeContract:
-    model_contract = load_model_artifact_contract(project_root, filter_id)
+    model_contract = load_model_artifact_contract(
+        project_root, filter_id, model_architecture, experiment_profile
+    )
     paths = model_contract.paths
     manifest = model_contract.manifest
     runtime_eligibility = _require_mapping(manifest, "runtime_eligibility")

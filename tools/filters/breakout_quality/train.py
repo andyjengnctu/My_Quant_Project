@@ -21,6 +21,12 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality_experiments import (
+    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
+    get_breakout_quality_experiment_profile,
+)
+
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
@@ -42,9 +48,8 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
+    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-    BREAKOUT_QUALITY_OPTIMIZER_NAME,
-    BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
 )
 from core.display_common import render_elapsed
@@ -116,7 +121,7 @@ TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT = "year_balanced_sqrt"
 TIME_WEIGHT_MODES = (TIME_WEIGHT_MODE_NONE, TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT)
 OPTIMIZER_ADAM = "adam"
 OPTIMIZER_ADAMW = "adamw"
-OPTIMIZER_NAMES = tuple(BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS)
+OPTIMIZER_NAMES = tuple(SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS)
 
 
 def parse_args(argv=None):
@@ -176,10 +181,13 @@ def parse_args(argv=None):
         help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
     )
     parser.add_argument(
-        "--optimizer-name",
-        choices=OPTIMIZER_NAMES,
-        default=BREAKOUT_QUALITY_OPTIMIZER_NAME,
-        help="訓練 optimizer；adam 使用 coupled L2，adamw 使用 decoupled weight decay",
+        "--experiment-profile",
+        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        help=(
+            "訓練實驗設定；模型架構固定由 policy 管理。"
+            "baseline 使用 Adam，adamw_only 只將 optimizer 改為 AdamW"
+        ),
     )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument(
@@ -255,7 +263,12 @@ def parse_args(argv=None):
         type=int,
         default=BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
+    args.optimizer_name = experiment.optimizer_name
+    args.lr_schedule_name = experiment.lr_schedule_name
+    args.augmentation_name = experiment.augmentation_name
+    return args
 
 
 def validate_training_args(args) -> None:
@@ -264,6 +277,7 @@ def validate_training_args(args) -> None:
     evaluation_batch_size = int(args.evaluation_batch_size)
     evaluation_workers = int(args.evaluation_workers)
     train_prefetch_batches = int(args.train_prefetch_batches)
+    experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
     optimizer_name = str(args.optimizer_name).strip().lower()
     learning_rate = float(args.lr)
     weight_decay = float(args.weight_decay)
@@ -295,7 +309,13 @@ def validate_training_args(args) -> None:
             "train-prefetch-batches、weight-decay、gradient-clip-norm 必須 >=0，lr 必須 >0"
         )
     if optimizer_name not in OPTIMIZER_NAMES:
-        raise ValueError(f"optimizer-name 不合法: {optimizer_name}")
+        raise ValueError(f"experiment profile optimizer 不合法: {optimizer_name}")
+    if optimizer_name != experiment.optimizer_name:
+        raise ValueError(
+            "experiment profile 與 optimizer_name 不一致: "
+            f"profile={experiment.name}, optimizer={optimizer_name}, "
+            f"expected={experiment.optimizer_name}"
+        )
     if validation_months < 1:
         raise ValueError("inner-validation-months 必須 >=1")
     if patience < 0 or min_delta < 0:
@@ -1252,7 +1272,9 @@ def main(argv=None) -> int:
     parallel_split_evaluation = bool(args.parallel_split_evaluation)
     train_prefetch_batches = int(args.train_prefetch_batches)
     preload_feature_bank = bool(args.preload_feature_bank)
-    optimizer_name = str(args.optimizer_name).strip().lower()
+    experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
+    experiment_profile = experiment.name
+    optimizer_name = experiment.optimizer_name
     learning_rate = float(args.lr)
     weight_decay = float(args.weight_decay)
     gradient_clip_norm = float(args.gradient_clip_norm)
@@ -1469,13 +1491,19 @@ def main(argv=None) -> int:
     model = final_fit["model"]
     final_train_metrics = final_fit["final_metrics"]
 
-    out_dir = model_dir(args.filter_id)
+    out_dir = model_dir(args.filter_id, experiment_profile=experiment_profile)
     out_dir.mkdir(parents=True, exist_ok=True)
-    artifact_paths = resolve_filter_artifact_paths(PROJECT_ROOT, args.filter_id)
+    artifact_paths = resolve_filter_artifact_paths(
+        PROJECT_ROOT, args.filter_id, experiment_profile=experiment_profile
+    )
     for stale_path in (
         artifact_paths.score_path,
-        resolve_filter_research_score_path(PROJECT_ROOT, args.filter_id),
-        resolve_filter_research_manifest_path(PROJECT_ROOT, args.filter_id),
+        resolve_filter_research_score_path(
+            PROJECT_ROOT, args.filter_id, experiment_profile=experiment_profile
+        ),
+        resolve_filter_research_manifest_path(
+            PROJECT_ROOT, args.filter_id, experiment_profile=experiment_profile
+        ),
     ):
         stale_path.unlink(missing_ok=True)
 
@@ -1489,6 +1517,8 @@ def main(argv=None) -> int:
             "context_count": int(C.shape[1]),
             "sequence_length": int(X.shape[1]),
             "model_spec": model_spec.as_manifest_payload(),
+            "experiment_profile": experiment_profile,
+            "experiment_settings": experiment.as_manifest_payload(),
             "trainable_parameter_count": int(trainable_parameter_count),
         },
         artifact_paths.model_path,
@@ -1529,6 +1559,8 @@ def main(argv=None) -> int:
         "filter_family": FILTER_FAMILY,
         "filter_id": args.filter_id,
         "model_architecture": model_spec.architecture,
+        "experiment_profile": experiment_profile,
+        "experiment_settings": experiment.as_manifest_payload(),
         "model_spec": model_spec.as_manifest_payload(),
         "trainable_parameter_count": int(trainable_parameter_count),
         "sequence_length": int(X.shape[1]),

@@ -11,15 +11,15 @@ import pandas as pd
 from filters.breakout_quality.artifacts import load_runtime_artifact_contract, validate_required_high_len
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID, SCORE_COLUMN, SCORE_TABLE_REQUIRED_COLUMNS
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
-from filters.breakout_quality.paths import resolve_filter_artifact_paths
 
 
 def resolve_score_table_path(project_root: str, filter_id: str = DEFAULT_FILTER_ID) -> Path:
-    path = resolve_filter_artifact_paths(project_root, filter_id).score_path
+    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    path = contract.paths.score_path
     if not path.is_file():
         raise FileNotFoundError(
             f"找不到 breakout quality 正式 score table: {path}。"
-            "正式 runtime 只接受 models/filters/breakout_quality/<filter_id>/<model_architecture>/scores.csv 單一路徑。"
+            "正式 runtime 只接受 models/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/scores.csv 單一路徑。"
         )
     return path.resolve()
 

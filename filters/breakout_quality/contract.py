@@ -5,10 +5,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Mapping
 
-from filters.breakout_quality.models.spec import normalize_model_architecture
+from config.breakout_quality_experiments import (
+    get_breakout_quality_experiment_profile,
+    normalize_breakout_quality_experiment_profile,
+)
+from filters.breakout_quality.models.spec import normalize_active_model_architecture
 
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_BENCHMARK_TICKER,
+    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
@@ -29,7 +34,13 @@ DEFAULT_SPLIT_FILENAME = "split_assignments.csv"
 DEFAULT_FEATURE_WINDOW_BARS = BREAKOUT_QUALITY_FEATURE_WINDOW_BARS
 DEFAULT_LABEL_HORIZON_BARS = BREAKOUT_QUALITY_LABEL_HORIZON_BARS
 DEFAULT_BENCHMARK_TICKER = BREAKOUT_QUALITY_BENCHMARK_TICKER
-DEFAULT_MODEL_ARCHITECTURE = normalize_model_architecture(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+DEFAULT_MODEL_ARCHITECTURE = normalize_active_model_architecture(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+DEFAULT_EXPERIMENT_PROFILE = normalize_breakout_quality_experiment_profile(
+    BREAKOUT_QUALITY_EXPERIMENT_PROFILE
+)
+DEFAULT_EXPERIMENT_SETTINGS = get_breakout_quality_experiment_profile(
+    DEFAULT_EXPERIMENT_PROFILE
+)
 ARTIFACT_CONTRACT_VERSION = 10
 SCORE_TABLE_SCHEMA_VERSION = 2
 SPLIT_ASSIGNMENT_SCHEMA_VERSION = 3
@@ -221,6 +232,8 @@ __all__ = [
     "DEFAULT_LABEL_POLICY",
     "DEFAULT_MANIFEST_FILENAME",
     "DEFAULT_MODEL_FILENAME",
+    "DEFAULT_EXPERIMENT_PROFILE",
+    "DEFAULT_EXPERIMENT_SETTINGS",
     "DEFAULT_MODEL_ARCHITECTURE",
     "DEFAULT_SCORE_FILENAME",
     "DEFAULT_SPLIT_FILENAME",

@@ -134,7 +134,7 @@ def validate_dataset_cli_contract_case(_base_params):
         parallel_split_evaluation=True,
         train_prefetch_batches=0,
         preload_feature_bank=True,
-        optimizer_name="adamw",
+        experiment_profile="adamw_only",
         lr=0.001,
         weight_decay=0.0001,
         gradient_clip_norm=1.0,
@@ -192,6 +192,17 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
+        "breakout_quality_workflow_propagates_experiment_to_all_model_stages",
+        True,
+        all(
+            "--experiment-profile" in call[1] and "adamw_only" in call[1]
+            for call in workflow_calls
+        ),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
         "breakout_quality_workflow_propagates_parallel_split_evaluation",
         True,
         "--parallel-split-evaluation" in workflow_calls[0][1],
@@ -200,11 +211,11 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_workflow_propagates_optimizer_regularization",
+        "breakout_quality_workflow_propagates_experiment_and_regularization",
         True,
         (
-            "--optimizer-name" in workflow_calls[0][1]
-            and "adamw" in workflow_calls[0][1]
+            "--experiment-profile" in workflow_calls[0][1]
+            and "adamw_only" in workflow_calls[0][1]
             and "--weight-decay" in workflow_calls[0][1]
             and "0.0001" in workflow_calls[0][1]
             and "--gradient-clip-norm" in workflow_calls[0][1]

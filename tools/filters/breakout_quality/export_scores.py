@@ -15,7 +15,9 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
 from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_EVALUATION_WORKERS,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
@@ -43,8 +45,10 @@ from filters.breakout_quality.inference import (
 from filters.breakout_quality.model import build_model, require_torch
 from filters.breakout_quality.models.spec import model_spec_from_manifest
 from filters.breakout_quality.paths import (
+    BreakoutQualityArtifactPaths,
     ensure_filter_model_output_dir,
     ensure_filter_output_dir,
+    resolve_filter_artifact_paths,
     resolve_filter_research_manifest_path,
     resolve_filter_research_score_path,
 )
@@ -54,6 +58,12 @@ from tools.filters.breakout_quality.common import load_validated_dataset_bundle,
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="匯出 breakout quality 分數表")
     parser.add_argument("--filter-id", default=DEFAULT_FILTER_ID)
+    parser.add_argument(
+        "--experiment-profile",
+        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        help="要讀取／輸出的訓練實驗 profile",
+    )
     parser.add_argument(
         "--scope",
         choices=(RUNTIME_SCOPE_RESEARCH, RUNTIME_SCOPE_FORWARD_OOS),
@@ -89,6 +99,30 @@ def _date_range(values: pd.Series) -> dict[str, str | None]:
     if dates.empty:
         return {"start": None, "end": None}
     return {"start": str(dates.min().date()), "end": str(dates.max().date())}
+
+
+def _resolve_forward_export_write_paths(
+    *,
+    filter_id: str,
+    experiment_profile: str,
+    loaded_paths: BreakoutQualityArtifactPaths,
+    project_root: str | Path = PROJECT_ROOT,
+) -> BreakoutQualityArtifactPaths:
+    """Return canonical writable paths and reject read-only legacy fallbacks."""
+
+    canonical = resolve_filter_artifact_paths(
+        project_root,
+        filter_id,
+        model_architecture=loaded_paths.model_architecture,
+        experiment_profile=experiment_profile,
+    )
+    if loaded_paths.model_dir.resolve() != canonical.model_dir.resolve():
+        raise ValueError(
+            "舊 baseline 無 experiment profile 子目錄的工件僅供唯讀相容；"
+            "請先用 baseline profile 重新訓練至 canonical profile 路徑，"
+            "再匯出正式 forward-OOS scores"
+        )
+    return canonical
 
 
 def _build_score_record(
@@ -136,10 +170,25 @@ def main(argv=None) -> int:
                 RuntimeWarning,
                 stacklevel=2,
             )
-    model_contract = load_model_artifact_contract(str(PROJECT_ROOT), str(args.filter_id))
+    model_contract = load_model_artifact_contract(
+        str(PROJECT_ROOT),
+        str(args.filter_id),
+        experiment_profile=str(args.experiment_profile),
+    )
     artifact_paths = model_contract.paths
+    writable_paths = None
+    if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
+        writable_paths = _resolve_forward_export_write_paths(
+            filter_id=str(args.filter_id),
+            experiment_profile=str(args.experiment_profile),
+            loaded_paths=artifact_paths,
+        )
     manifest = model_contract.manifest
-    split_assignments = load_split_assignment_frame(str(PROJECT_ROOT), str(args.filter_id))
+    split_assignments = load_split_assignment_frame(
+        str(PROJECT_ROOT),
+        str(args.filter_id),
+        experiment_profile=str(args.experiment_profile),
+    )
     model_policy = manifest.get("policy")
     if not isinstance(model_policy, dict):
         raise ValueError("model manifest 缺少 policy object")
@@ -191,6 +240,16 @@ def main(argv=None) -> int:
         raise ValueError("model checkpoint.model_spec 與 manifest.model_spec 不一致")
     if checkpoint_spec.architecture != artifact_paths.model_architecture:
         raise ValueError("model checkpoint architecture 與工件路徑不一致")
+    checkpoint_profile = str(
+        checkpoint.get("experiment_profile") or "baseline"
+    ).strip()
+    manifest_profile = str(
+        manifest.get("experiment_profile") or "baseline"
+    ).strip()
+    if checkpoint_profile != manifest_profile or checkpoint_profile != artifact_paths.experiment_profile:
+        raise ValueError("model checkpoint experiment profile 與 manifest／工件路徑不一致")
+    if checkpoint.get("experiment_settings") != manifest.get("experiment_settings"):
+        raise ValueError("model checkpoint experiment settings 與 manifest 不一致")
     model = build_model(
         feature_count,
         context_count,
@@ -275,13 +334,21 @@ def main(argv=None) -> int:
 
     if args.scope == RUNTIME_SCOPE_RESEARCH:
         ensure_filter_output_dir(PROJECT_ROOT, filter_id=args.filter_id)
-        ensure_filter_model_output_dir(PROJECT_ROOT, args.filter_id)
-        score_path = resolve_filter_research_score_path(PROJECT_ROOT, args.filter_id)
-        research_manifest_path = resolve_filter_research_manifest_path(PROJECT_ROOT, args.filter_id)
+        ensure_filter_model_output_dir(
+            PROJECT_ROOT, args.filter_id, experiment_profile=args.experiment_profile
+        )
+        score_path = resolve_filter_research_score_path(
+            PROJECT_ROOT, args.filter_id, experiment_profile=args.experiment_profile
+        )
+        research_manifest_path = resolve_filter_research_manifest_path(
+            PROJECT_ROOT, args.filter_id, experiment_profile=args.experiment_profile
+        )
         scored[out_cols].to_csv(score_path, index=False, encoding="utf-8-sig")
         research_manifest = {
             "filter_id": str(args.filter_id),
             "model_architecture": checkpoint_spec.architecture,
+            "experiment_profile": manifest.get("experiment_profile", "baseline"),
+            "experiment_settings": manifest.get("experiment_settings"),
             "model_spec": checkpoint_spec.as_manifest_payload(),
             "scope": RUNTIME_SCOPE_RESEARCH,
             "model_information_cutoff": information_cutoff,
@@ -315,7 +382,9 @@ def main(argv=None) -> int:
         print(f"scope={args.scope} rows={len(scored)} date_range={event_range}")
         return 0
 
-    score_path = artifact_paths.score_path
+    if writable_paths is None:
+        raise RuntimeError("forward_oos writable paths 尚未初始化")
+    score_path = writable_paths.score_path
     scored[out_cols].to_csv(score_path, index=False, encoding="utf-8-sig")
     source_data_range = dataset_summary.get("source_data_date_range")
     if not isinstance(source_data_range, dict):
@@ -350,9 +419,9 @@ def main(argv=None) -> int:
         ),
     }
     manifest["score_filename"] = DEFAULT_SCORE_FILENAME
-    write_json(artifact_paths.manifest_path, manifest)
+    write_json(writable_paths.manifest_path, manifest)
     print(f"已輸出正式單一路徑: {score_path}")
-    print(f"已更新: {artifact_paths.manifest_path}")
+    print(f"已更新: {writable_paths.manifest_path}")
     print(f"scope={args.scope} rows={len(scored)} date_range={event_range}")
     return 0
 

@@ -7,6 +7,8 @@ from filters.breakout_quality.models.factory import (
     resolve_model_spec,
 )
 from filters.breakout_quality.models.spec import (
+    ACTIVE_MODEL_ARCHITECTURES,
+    LEGACY_MODEL_ARCHITECTURES,
     MULTISCALE_CNN_V1,
     MULTISCALE_CNN_V2,
     MULTISCALE_CNN_V3,
@@ -15,17 +17,18 @@ from filters.breakout_quality.models.spec import (
     MULTISCALE_CNN_V6,
     MULTISCALE_CNN_V7,
     MULTISCALE_CNN_V8,
-    MULTISCALE_CNN_V10,
     RESIDUAL_TCN_V1,
     SUPPORTED_MODEL_ARCHITECTURES,
     TINY_CNN_V1,
     BreakoutQualityModelSpec,
     get_model_spec,
     model_spec_from_manifest,
+    normalize_active_model_architecture,
     normalize_model_architecture,
 )
 
 __all__ = [
+    "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
     "MULTISCALE_CNN_V1",
     "MULTISCALE_CNN_V2",
@@ -35,7 +38,7 @@ __all__ = [
     "MULTISCALE_CNN_V6",
     "MULTISCALE_CNN_V7",
     "MULTISCALE_CNN_V8",
-    "MULTISCALE_CNN_V10",
+    "LEGACY_MODEL_ARCHITECTURES",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",
@@ -43,6 +46,7 @@ __all__ = [
     "count_trainable_parameters",
     "get_model_spec",
     "model_spec_from_manifest",
+    "normalize_active_model_architecture",
     "normalize_model_architecture",
     "require_torch",
     "resolve_model_spec",
