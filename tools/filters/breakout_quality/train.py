@@ -43,6 +43,8 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+    BREAKOUT_QUALITY_OPTIMIZER_NAME,
+    BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
 )
 from core.display_common import render_elapsed
@@ -112,6 +114,9 @@ CLASS_WEIGHT_MODES = (CLASS_WEIGHT_MODE_NONE, CLASS_WEIGHT_MODE_INVERSE_FREQUENC
 TIME_WEIGHT_MODE_NONE = "none"
 TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT = "year_balanced_sqrt"
 TIME_WEIGHT_MODES = (TIME_WEIGHT_MODE_NONE, TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT)
+OPTIMIZER_ADAM = "adam"
+OPTIMIZER_ADAMW = "adamw"
+OPTIMIZER_NAMES = tuple(BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS)
 
 
 def parse_args(argv=None):
@@ -170,12 +175,18 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
         help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
     )
+    parser.add_argument(
+        "--optimizer-name",
+        choices=OPTIMIZER_NAMES,
+        default=BREAKOUT_QUALITY_OPTIMIZER_NAME,
+        help="訓練 optimizer；adam 使用 coupled L2，adamw 使用 decoupled weight decay",
+    )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument(
         "--weight-decay",
         type=float,
         default=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
-        help="Adam L2 weight decay；0 表示關閉",
+        help="optimizer weight decay；0 表示關閉",
     )
     parser.add_argument(
         "--gradient-clip-norm",
@@ -253,6 +264,7 @@ def validate_training_args(args) -> None:
     evaluation_batch_size = int(args.evaluation_batch_size)
     evaluation_workers = int(args.evaluation_workers)
     train_prefetch_batches = int(args.train_prefetch_batches)
+    optimizer_name = str(args.optimizer_name).strip().lower()
     learning_rate = float(args.lr)
     weight_decay = float(args.weight_decay)
     gradient_clip_norm = float(args.gradient_clip_norm)
@@ -282,6 +294,8 @@ def validate_training_args(args) -> None:
             "epochs、batch-size、evaluation-batch-size、evaluation-workers 必須 >=1，"
             "train-prefetch-batches、weight-decay、gradient-clip-norm 必須 >=0，lr 必須 >0"
         )
+    if optimizer_name not in OPTIMIZER_NAMES:
+        raise ValueError(f"optimizer-name 不合法: {optimizer_name}")
     if validation_months < 1:
         raise ValueError("inner-validation-months 必須 >=1")
     if patience < 0 or min_delta < 0:
@@ -793,6 +807,26 @@ def _max_iso_date(events: pd.DataFrame, indices: np.ndarray, column: str) -> str
     return str(values.max().date())
 
 
+def _build_optimizer(
+    torch,
+    *,
+    optimizer_name: str,
+    parameters,
+    learning_rate: float,
+    weight_decay: float,
+):
+    normalized = str(optimizer_name).strip().lower()
+    kwargs = {
+        "lr": float(learning_rate),
+        "weight_decay": float(weight_decay),
+    }
+    if normalized == OPTIMIZER_ADAM:
+        return torch.optim.Adam(parameters, **kwargs)
+    if normalized == OPTIMIZER_ADAMW:
+        return torch.optim.AdamW(parameters, **kwargs)
+    raise ValueError(f"optimizer-name 不合法: {optimizer_name}")
+
+
 def _new_training_state(
     torch,
     *,
@@ -801,6 +835,7 @@ def _new_training_state(
     y: np.ndarray,
     train_idx: np.ndarray,
     sample_weights: np.ndarray,
+    optimizer_name: str,
     learning_rate: float,
     weight_decay: float,
     class_weight_mode: str,
@@ -808,10 +843,12 @@ def _new_training_state(
 ):
     torch.manual_seed(int(seed))
     model = build_model(feature_count, context_count)
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=float(learning_rate),
-        weight_decay=float(weight_decay),
+    optimizer = _build_optimizer(
+        torch,
+        optimizer_name=optimizer_name,
+        parameters=model.parameters(),
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
     )
     class_weights_np = _class_weights(
         y[train_idx],
@@ -895,6 +932,7 @@ def _select_epoch_with_inner_validation(
     validation_idx: np.ndarray,
     max_epochs: int,
     batch_size: int,
+    optimizer_name: str,
     learning_rate: float,
     weight_decay: float,
     gradient_clip_norm: float,
@@ -930,6 +968,7 @@ def _select_epoch_with_inner_validation(
         y=y,
         train_idx=train_idx,
         sample_weights=training_sample_weights,
+        optimizer_name=optimizer_name,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         class_weight_mode=class_weight_mode,
@@ -1048,6 +1087,7 @@ def _fit_full_selection(
     epochs: int,
     target_optimizer_steps: int | None,
     batch_size: int,
+    optimizer_name: str,
     learning_rate: float,
     weight_decay: float,
     gradient_clip_norm: float,
@@ -1078,6 +1118,7 @@ def _fit_full_selection(
         y=y,
         train_idx=train_idx,
         sample_weights=training_sample_weights,
+        optimizer_name=optimizer_name,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         class_weight_mode=class_weight_mode,
@@ -1211,6 +1252,7 @@ def main(argv=None) -> int:
     parallel_split_evaluation = bool(args.parallel_split_evaluation)
     train_prefetch_batches = int(args.train_prefetch_batches)
     preload_feature_bank = bool(args.preload_feature_bank)
+    optimizer_name = str(args.optimizer_name).strip().lower()
     learning_rate = float(args.lr)
     weight_decay = float(args.weight_decay)
     gradient_clip_norm = float(args.gradient_clip_norm)
@@ -1335,6 +1377,7 @@ def main(argv=None) -> int:
             validation_idx=inner_validation_idx,
             max_epochs=max_epochs,
             batch_size=batch_size,
+            optimizer_name=optimizer_name,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             gradient_clip_norm=gradient_clip_norm,
@@ -1387,6 +1430,7 @@ def main(argv=None) -> int:
         epochs=selected_epoch,
         target_optimizer_steps=final_target_optimizer_steps,
         batch_size=batch_size,
+        optimizer_name=optimizer_name,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         gradient_clip_norm=gradient_clip_norm,
@@ -1549,6 +1593,7 @@ def main(argv=None) -> int:
             "final_refit": final_fit["sample_weight_summaries"]["final_refit"],
         },
         "seed": int(args.seed),
+        "optimizer_name": optimizer_name,
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
         "gradient_clip_norm": gradient_clip_norm,
@@ -1569,6 +1614,7 @@ def main(argv=None) -> int:
             "training_sampling_enabled": False,
             "training_order_changed": False,
             "final_metrics_reused_from_last_full_epoch_evaluation": True,
+            "optimizer_name": optimizer_name,
             "optimizer_zero_grad_set_to_none": True,
             "optimizer_weight_decay": weight_decay,
             "gradient_clip_norm": gradient_clip_norm,

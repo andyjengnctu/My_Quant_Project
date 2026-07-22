@@ -23,12 +23,12 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260715_225247_2b6df73(4).zip` |
-| SHA256 | `21ef078ce942481bf0577793ec95082e75dfac21258ee671273e7456fbf2c552` |
-| 程式版本範圍 | v9 連續輔助目標加入前；支援 `multiscale_cnn_v1`～`multiscale_cnn_v8` |
-| Policy 預設模型 | `multiscale_cnn_v1` |
+| 基準 ZIP | `test-branch-1_20260722_110440_6445f6d.zip` |
+| SHA256 | `4c2b11f324b6a96919a21adc2ff347e7634dbeb67716858acf4a6ac620832ce8` |
+| 程式版本範圍 | v9 連續輔助目標加入前；6A Patch 新增與 v1 模型圖相同的 `multiscale_cnn_v10` 工件版本 |
+| Policy 預設模型 | `multiscale_cnn_v10`（6A 執行版本；模型圖與 v1 相同） |
 | 當前最佳研究模型 | `multiscale_cnn_v1` |
-| Dataset | Full；模型／optimizer／augmentation 變更不需重建 |
+| Dataset | Full；6A optimizer 變更不需重建 |
 
 使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**；目前正式研究基準模型仍是結果最佳的 `multiscale_cnn_v1`，不是把 policy 預設改成 `multiscale_cnn_v8`。
 
@@ -43,6 +43,9 @@
 | 最大不利跌幅 | 觸及 −10% 即 REJECT |
 | Epoch 上限 | 100 |
 | Batch Size | 128 |
+| Optimizer | `adamw`（6A 實驗；接受與否待 OOS 結果） |
+| LR Schedule | 無 |
+| Augmentation | 無 |
 | Learning Rate | 0.0003 |
 | Weight Decay | 0.0001 |
 | Gradient Clip | 1.0 |
@@ -143,6 +146,23 @@ Selection Precision 升至 62.61%、Lift 升至 +7.80 pp，但 OOS 全面退步�
 | 2026-07-21 | 只預測下一年 OOS | 使用者已實測，沒有比目前整段 OOS 更好；精確報表值未保留 | `REJECTED`；不要把縮短 OOS horizon 或年度 refit 當成近期優先方向 |
 | 2026-07-21 | Multi-fold validation | 尚未作為模型改善手段；它只提高選模可靠度，不會自行改善單一 fold 的模型能力 | 不列為目前「提升整體 OOS」的直接實驗 |
 
+
+### 3.7 Optimizer 6A：AdamW only（2026-07-22）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；等待使用者完成 Full workflow 並提供 Selection／OOS 報表 |
+| 程式基準 | `test-branch-1_20260722_110440_6445f6d.zip`；SHA256 `4c2b11f324b6a96919a21adc2ff347e7634dbeb67716858acf4a6ac620832ce8` |
+| Patch | `breakout_quality_6a_adamw_only_patch_20260722.zip`；封裝後 SHA256 於交付訊息提供，文件內未知 |
+| 唯一學習變更 | `torch.optim.Adam` → `torch.optim.AdamW` |
+| 工件隔離 | 新增 `multiscale_cnn_v10`；模型圖、23,522 參數、Level inputs、初始化與 v1 相同，只避免覆蓋 v1 工件 |
+| 固定條件 | LR 0.0003、weight decay 0.0001、無 LR schedule、無 augmentation、seed 42、threshold 0.5、`selected_epochs`、class/time weight 均為 `none` |
+| Dataset／Label | 不重建、不 relabel |
+| Selection／OOS 結果 | 尚未取得 |
+| 與 v1 差異 | 尚未取得 |
+| 判定 | 尚不可接受或淘汰；取得結果前維持 `IMPLEMENTED` |
+| 下一步 | 先取得 6A 結果，再決定 6B 使用 AdamW 或退回 Adam |
+
 ---
 
 ## 4. 已排除或暫停的方向
@@ -171,7 +191,7 @@ Selection Precision 升至 62.61%、Lift 升至 +7.80 pp，但 OOS 全面退步�
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `PLANNED` |
+| 狀態 | `IMPLEMENTED`；等待結果 |
 | 唯一變更 | `Adam` → `AdamW` |
 | Learning Rate | 維持 0.0003 |
 | Weight Decay | 維持 0.0001，不同時改 regularization 強度 |

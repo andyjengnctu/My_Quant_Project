@@ -13,6 +13,7 @@ from typing import Any
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
     BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+    BREAKOUT_QUALITY_OPTIMIZER_NAME,
     BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
 )
 
@@ -389,6 +390,13 @@ def load_model_artifact_contract(
             raise ValueError(
                 "early_stopping_enabled 必須與 early_stopping_patience 是否大於 0 一致"
             )
+
+    optimizer_name = str(manifest.get("optimizer_name") or "adam").strip().lower()
+    if optimizer_name != str(BREAKOUT_QUALITY_OPTIMIZER_NAME).strip().lower():
+        raise ValueError(
+            "breakout quality optimizer_name 與目前 config 不一致；請重新訓練: "
+            f"manifest={optimizer_name}, config={BREAKOUT_QUALITY_OPTIMIZER_NAME}"
+        )
 
     class_weight_mode = _require_nonempty_text(manifest, "class_weight_mode")
     if class_weight_mode != str(BREAKOUT_QUALITY_CLASS_WEIGHT_MODE):

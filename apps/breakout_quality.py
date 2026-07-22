@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+    BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS,
 )
 from core.display_common import render_elapsed
 from core.runtime_utils import (
@@ -296,6 +297,11 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
         default=bool(defaults.preload_feature_bank),
         help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
     )
+    parser.add_argument(
+        "--optimizer-name",
+        choices=BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS,
+        default=str(defaults.optimizer_name),
+    )
     parser.add_argument("--lr", type=float, default=float(defaults.lr))
     parser.add_argument(
         "--weight-decay",
@@ -371,6 +377,8 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         str(int(args.evaluation_workers)),
         "--train-prefetch-batches",
         str(int(args.train_prefetch_batches)),
+        "--optimizer-name",
+        str(args.optimizer_name),
         "--lr",
         str(float(args.lr)),
         "--weight-decay",
@@ -449,6 +457,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         f"parallel_split_evaluation={bool(args.parallel_split_evaluation)}, "
         f"prefetch={int(args.train_prefetch_batches)}, "
         f"preload_feature_bank={bool(args.preload_feature_bank)}, "
+        f"optimizer={args.optimizer_name}, "
         f"lr={float(args.lr)}, weight_decay={float(args.weight_decay)}, "
         f"gradient_clip_norm={float(args.gradient_clip_norm)}, "
         f"final_refit_mode={args.final_refit_mode}, "
@@ -573,6 +582,7 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         parallel_split_evaluation=bool(defaults.parallel_split_evaluation),
         train_prefetch_batches=int(defaults.train_prefetch_batches),
         preload_feature_bank=bool(defaults.preload_feature_bank),
+        optimizer_name=str(defaults.optimizer_name),
         lr=float(defaults.lr),
         weight_decay=float(defaults.weight_decay),
         gradient_clip_norm=float(defaults.gradient_clip_norm),
@@ -622,6 +632,7 @@ def _print_policy_defaults(
         f"- Parallel Split Evaluation：{'開啟' if bool(train_settings.parallel_split_evaluation) else '關閉'}\n"
         f"- Train Prefetch Batches：{int(train_settings.train_prefetch_batches)}\n"
         f"- Preload Feature Bank：{'開啟' if bool(train_settings.preload_feature_bank) else '關閉'}\n"
+        f"- Optimizer：{train_settings.optimizer_name}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"
         f"- Weight Decay：{float(train_settings.weight_decay):g}\n"
         f"- Gradient Clip Norm：{float(train_settings.gradient_clip_norm):g}\n"

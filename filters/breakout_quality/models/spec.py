@@ -15,6 +15,7 @@ MULTISCALE_CNN_V5 = "multiscale_cnn_v5"
 MULTISCALE_CNN_V6 = "multiscale_cnn_v6"
 MULTISCALE_CNN_V7 = "multiscale_cnn_v7"
 MULTISCALE_CNN_V8 = "multiscale_cnn_v8"
+MULTISCALE_CNN_V10 = "multiscale_cnn_v10"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
@@ -26,6 +27,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_V6,
     MULTISCALE_CNN_V7,
     MULTISCALE_CNN_V8,
+    MULTISCALE_CNN_V10,
     RESIDUAL_TCN_V1,
 )
 
@@ -145,6 +147,7 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         MULTISCALE_CNN_V6,
         MULTISCALE_CNN_V7,
         MULTISCALE_CNN_V8,
+        MULTISCALE_CNN_V10,
     }:
         downsample_factors = (1, 2, 4)
         branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
@@ -174,6 +177,8 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             branch_input_representations = ("return_delta", "level", "level")
         elif normalized == MULTISCALE_CNN_V8:
             branch_input_representations = ("level", "return_delta", "level")
+        elif normalized == MULTISCALE_CNN_V10:
+            branch_input_representations = ()
         else:
             raise AssertionError(f"未處理的 multiscale architecture: {normalized}")
         return BreakoutQualityModelSpec(
@@ -244,6 +249,7 @@ __all__ = [
     "MULTISCALE_CNN_V6",
     "MULTISCALE_CNN_V7",
     "MULTISCALE_CNN_V8",
+    "MULTISCALE_CNN_V10",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",

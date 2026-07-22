@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN, build_breakout_optimizer_high_len_values
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v8"  # 模型架構；可設為 tiny_cnn_v1、multiscale_cnn_v1～multiscale_cnn_v8 或 residual_tcn_v1。v8 與 v1 使用相同 16/16/16 channels、dropout 與 Level 短／長期輸入，只將 Medium Branch 改為 Return／Delta。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_v10"  # 6A AdamW 實驗的獨立工件版本；模型圖、輸入與初始化均與 multiscale_cnn_v1 相同，只隔離 optimizer 實驗輸出。
 BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
 BREAKOUT_QUALITY_DEFAULT_EPOCHS = 100  # 關閉 inner validation 時為固定訓練輪數；開啟時為 epoch 搜尋上限。
 BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 128  # 每次梯度更新使用的訓練 rows 數。
-BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.0003  # Adam optimizer 的預設 learning rate；中型多尺度 CNN 使用較低 learning rate 抑制快速過度擬合。
-BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY = 0.0001  # Adam 的 L2 weight decay；0 表示關閉。
+BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS = ("adam", "adamw")  # 正式支援的 optimizer 名稱；CLI、訓練與工件檢查共用此單一來源。
+BREAKOUT_QUALITY_OPTIMIZER_NAME = "adamw"  # 訓練 optimizer；6A 實驗只將 adam 改為 adamw，其他訓練條件不變。
+BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.0003  # optimizer 的預設 learning rate；中型多尺度 CNN 使用較低 learning rate 抑制快速過度擬合。
+BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY = 0.0001  # optimizer weight decay；0 表示關閉。Adam 為 coupled L2，AdamW 為 decoupled weight decay。
 BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM = 1.0  # 每次更新前的全域 gradient norm 上限；0 表示關閉。
 BREAKOUT_QUALITY_FINAL_REFIT_MODE = "selected_epochs"  # Selection 重訓方式；matched_optimizer_steps 會匹配 best epoch 的 optimizer updates，selected_epochs 為舊式固定相同 epoch 數。
 BREAKOUT_QUALITY_CLASS_WEIGHT_MODE = "none"  # Cross-entropy 類別權重；none 不平衡補償，inverse_frequency 依訓練資料加權。PASS／REJECT 接近均衡時建議 none。
@@ -82,6 +84,8 @@ __all__ = [
     "BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES",
     "BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES",
     "BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+    "BREAKOUT_QUALITY_OPTIMIZER_NAME",
+    "BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS",
     "BREAKOUT_QUALITY_USE_INNER_VALIDATION",
     "build_breakout_quality_default_high_len_values",
 ]

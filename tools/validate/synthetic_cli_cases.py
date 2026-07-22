@@ -134,6 +134,7 @@ def validate_dataset_cli_contract_case(_base_params):
         parallel_split_evaluation=True,
         train_prefetch_batches=0,
         preload_feature_bank=True,
+        optimizer_name="adamw",
         lr=0.001,
         weight_decay=0.0001,
         gradient_clip_norm=1.0,
@@ -202,7 +203,9 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_propagates_optimizer_regularization",
         True,
         (
-            "--weight-decay" in workflow_calls[0][1]
+            "--optimizer-name" in workflow_calls[0][1]
+            and "adamw" in workflow_calls[0][1]
+            and "--weight-decay" in workflow_calls[0][1]
             and "0.0001" in workflow_calls[0][1]
             and "--gradient-clip-norm" in workflow_calls[0][1]
             and "1.0" in workflow_calls[0][1]

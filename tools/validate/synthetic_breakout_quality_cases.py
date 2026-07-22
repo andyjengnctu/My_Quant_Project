@@ -44,6 +44,8 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
     BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+    BREAKOUT_QUALITY_OPTIMIZER_NAME,
+    BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     build_breakout_quality_default_high_len_values,
 )
@@ -221,6 +223,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v8_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_v8"
     )
+    multiscale_v10_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_v10"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
@@ -231,6 +236,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v6_parameter_count = count_trainable_parameters(multiscale_v6_model)
     multiscale_v7_parameter_count = count_trainable_parameters(multiscale_v7_model)
     multiscale_v8_parameter_count = count_trainable_parameters(multiscale_v8_model)
+    multiscale_v10_parameter_count = count_trainable_parameters(multiscale_v10_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -388,6 +394,26 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             get_model_spec("multiscale_cnn_v8").branch_channels,
             get_model_spec("multiscale_cnn_v8").branch_dropouts,
             get_model_spec("multiscale_cnn_v8").receptive_field_bars,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "multiscale_v10_is_v1_graph_alias_for_adamw_experiment",
+        (
+            multiscale_parameter_count,
+            (),
+            (),
+            (),
+            get_model_spec("multiscale_cnn_v1").receptive_field_bars,
+        ),
+        (
+            multiscale_v10_parameter_count,
+            get_model_spec("multiscale_cnn_v10").branch_input_representations,
+            get_model_spec("multiscale_cnn_v10").branch_channels,
+            get_model_spec("multiscale_cnn_v10").branch_dropouts,
+            get_model_spec("multiscale_cnn_v10").receptive_field_bars,
         ),
     )
     add_check(
@@ -772,6 +798,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v8_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "multiscale_cnn_v8"
     )
+    multiscale_v10_paths = resolve_filter_artifact_paths(
+        "/project", "synthetic_quality", "multiscale_cnn_v10"
+    )
     residual_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -802,6 +831,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v8_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "multiscale_cnn_v8"
     )
+    multiscale_v10_research = resolve_filter_research_score_path(
+        "/project", "synthetic_quality", "multiscale_cnn_v10"
+    )
     residual_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "residual_tcn_v1"
     )
@@ -823,10 +855,11 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_v6_paths.model_path,
                 multiscale_v7_paths.model_path,
                 multiscale_v8_paths.model_path,
+                multiscale_v10_paths.model_path,
                 residual_paths.model_path,
             }
         )
-        == 10
+        == 11
         and len(
             {
                 tiny_research,
@@ -838,10 +871,11 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 multiscale_v6_research,
                 multiscale_v7_research,
                 multiscale_v8_research,
+                multiscale_v10_research,
                 residual_research,
             }
         )
-        == 10
+        == 11
         and tiny_paths.model_dir.name == "tiny_cnn_v1"
         and multiscale_paths.model_dir.name == "multiscale_cnn_v1"
         and multiscale_v2_paths.model_dir.name == "multiscale_cnn_v2"
@@ -851,6 +885,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and multiscale_v6_paths.model_dir.name == "multiscale_cnn_v6"
         and multiscale_v7_paths.model_dir.name == "multiscale_cnn_v7"
         and multiscale_v8_paths.model_dir.name == "multiscale_cnn_v8"
+        and multiscale_v10_paths.model_dir.name == "multiscale_cnn_v10"
         and residual_paths.model_dir.name == "residual_tcn_v1"
         and shared_dataset_dir.name == "synthetic_quality",
     )
@@ -874,7 +909,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1
         and BREAKOUT_QUALITY_FINAL_REFIT_MODE in {"matched_optimizer_steps", "selected_epochs"}
         and BREAKOUT_QUALITY_CLASS_WEIGHT_MODE in {"none", "inverse_frequency"}
-        and BREAKOUT_QUALITY_TIME_WEIGHT_MODE in {"none", "year_balanced_sqrt"},
+        and BREAKOUT_QUALITY_TIME_WEIGHT_MODE in {"none", "year_balanced_sqrt"}
+        and tuple(BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS) == ("adam", "adamw")
+        and BREAKOUT_QUALITY_OPTIMIZER_NAME in BREAKOUT_QUALITY_SUPPORTED_OPTIMIZERS,
     )
     train_defaults = breakout_quality_train.parse_args([])
     add_check(
@@ -883,16 +920,38 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         case_id,
         "training_weight_and_refit_defaults_follow_config",
         (
+            BREAKOUT_QUALITY_OPTIMIZER_NAME,
             BREAKOUT_QUALITY_FINAL_REFIT_MODE,
             BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
             BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
         ),
         (
+            str(train_defaults.optimizer_name),
             str(train_defaults.final_refit_mode),
             str(train_defaults.class_weight_mode),
             str(train_defaults.time_weight_mode),
         ),
     )
+    torch, _nn = breakout_quality_train.require_torch()
+    optimizer_probe_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_v10"
+    )
+    optimizer_probe = breakout_quality_train._build_optimizer(
+        torch,
+        optimizer_name=BREAKOUT_QUALITY_OPTIMIZER_NAME,
+        parameters=optimizer_probe_model.parameters(),
+        learning_rate=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
+        weight_decay=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "configured_optimizer_factory_uses_requested_class",
+        "AdamW" if BREAKOUT_QUALITY_OPTIMIZER_NAME == "adamw" else "Adam",
+        optimizer_probe.__class__.__name__,
+    )
+
     matched_target, minimum_pass = breakout_quality_train._resolve_final_refit_target_steps(
         mode="matched_optimizer_steps",
         selected_epoch=2,
@@ -1878,6 +1937,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "max_epochs": 20,
             "selected_epoch": 2,
             "fixed_evaluation_threshold": 0.5,
+            "optimizer_name": BREAKOUT_QUALITY_OPTIMIZER_NAME,
             "learning_rate": 0.001,
             "weight_decay": 0.0001,
             "gradient_clip_norm": 1.0,
@@ -2004,7 +2064,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v2", 2, payload["schema_version"])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, "- **Threshold**：`0.5`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{BREAKOUT_QUALITY_OPTIMIZER_NAME}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
     selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
     normalized_selection_matrix = selection_matrix.replace("**", "")
@@ -2084,7 +2144,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, "Threshold       : 0.5" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, "Threshold       : 0.5" in console and f"Optimizer       : {BREAKOUT_QUALITY_OPTIMIZER_NAME}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
     markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. OOS 綜合判定", 1)[0]
@@ -2419,6 +2479,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "completed_epoch_cycles": 2,
                     "all_eligible_selection_rows_seen_at_least_once": True,
                 },
+                "optimizer_name": BREAKOUT_QUALITY_OPTIMIZER_NAME,
                 "class_weight_mode": BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
                 "class_weights_reject_pass": [1.0, 1.0],
                 "time_weight_mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE,

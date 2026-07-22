@@ -16,6 +16,7 @@ from filters.breakout_quality.models.spec import (
     MULTISCALE_CNN_V6,
     MULTISCALE_CNN_V7,
     MULTISCALE_CNN_V8,
+    MULTISCALE_CNN_V10,
     RESIDUAL_TCN_V1,
     TINY_CNN_V1,
     get_model_spec,
@@ -72,6 +73,7 @@ def build_model(
         MULTISCALE_CNN_V6,
         MULTISCALE_CNN_V7,
         MULTISCALE_CNN_V8,
+        MULTISCALE_CNN_V10,
     }:
         return build_multiscale_cnn(
             nn,
