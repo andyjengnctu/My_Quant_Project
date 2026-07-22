@@ -16,7 +16,7 @@
   "early_stopping_enabled": true,
   "early_stopping_min_delta": 0.0,
   "early_stopping_patience": 1,
-  "elapsed_sec": 988.266,
+  "elapsed_sec": 1001.292,
   "epoch_selection_source": "inner_validation_loss",
   "evaluation_batch_size": 4096,
   "evaluation_execution": {
@@ -130,7 +130,7 @@
       {
         "batch_loss": 0.673967,
         "cumulative_optimizer_steps": 4211,
-        "elapsed_sec": 173.287,
+        "elapsed_sec": 186.37,
         "epoch": 1,
         "inner_train_metrics": {
           "accuracy": 0.607164,
@@ -156,7 +156,7 @@
       {
         "batch_loss": 0.650317,
         "cumulative_optimizer_steps": 8422,
-        "elapsed_sec": 173.681,
+        "elapsed_sec": 173.177,
         "epoch": 2,
         "inner_train_metrics": {
           "accuracy": 0.635895,
@@ -182,7 +182,7 @@
       {
         "batch_loss": 0.63386,
         "cumulative_optimizer_steps": 12633,
-        "elapsed_sec": 173.324,
+        "elapsed_sec": 170.596,
         "epoch": 3,
         "inner_train_metrics": {
           "accuracy": 0.663245,
@@ -226,7 +226,7 @@
   "inner_validation_used": true,
   "learning_rate": 0.0003,
   "manifest_filename": "manifest.json",
-  "max_epochs": 20,
+  "max_epochs": 100,
   "model": {
     "filename": "model.pt",
     "sha256": "c6e235dccbf1b98859532f4c54597c09a3b3f31967d0612ae4197c711d455dd8",
@@ -890,7 +890,7 @@
     {
       "batch_loss": 0.669842,
       "cumulative_optimizer_steps": 5701,
-      "elapsed_sec": 226.151,
+      "elapsed_sec": 225.453,
       "epoch": 1,
       "epoch_fraction": 1.0,
       "optimizer_steps": 5701,
@@ -908,7 +908,7 @@
     {
       "batch_loss": 0.649662,
       "cumulative_optimizer_steps": 11402,
-      "elapsed_sec": 225.804,
+      "elapsed_sec": 226.177,
       "epoch": 2,
       "epoch_fraction": 1.0,
       "optimizer_steps": 5701,
