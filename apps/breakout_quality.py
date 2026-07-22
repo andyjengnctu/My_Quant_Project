@@ -448,6 +448,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
     branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
     branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
+    schedule_parameters = experiment.lr_schedule_parameters()
     print(
         "model="
         f"{model_spec.architecture}, branch_inputs={branch_inputs}, "
@@ -466,6 +467,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         f"experiment_profile={experiment.name}, "
         f"optimizer={experiment.optimizer_name}, "
         f"lr_schedule={experiment.lr_schedule_name}, "
+        f"lr_schedule_parameters={schedule_parameters}, "
         f"augmentation={experiment.augmentation_name}, "
         f"lr={float(args.lr)}, weight_decay={float(args.weight_decay)}, "
         f"gradient_clip_norm={float(args.gradient_clip_norm)}, "
@@ -643,6 +645,7 @@ def _print_policy_defaults(
     branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
     branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
     branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
+    schedule_parameters = experiment.lr_schedule_parameters()
     print(
         f"- Model Architecture：{model_spec.architecture}\n"
         f"- Experiment Profile：{experiment.name}\n"
@@ -660,6 +663,7 @@ def _print_policy_defaults(
         f"- Preload Feature Bank：{'開啟' if bool(train_settings.preload_feature_bank) else '關閉'}\n"
         f"- Optimizer：{experiment.optimizer_name}\n"
         f"- LR Schedule：{experiment.lr_schedule_name}\n"
+        f"- LR Schedule Parameters：{schedule_parameters or '-'}\n"
         f"- Augmentation：{experiment.augmentation_name}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"
         f"- Weight Decay：{float(train_settings.weight_decay):g}\n"

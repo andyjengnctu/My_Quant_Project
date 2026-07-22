@@ -19,8 +19,11 @@ from config.breakout_policy import (
 )
 from config.breakout_quality_experiments import (
     ADAMW_ONLY_EXPERIMENT_PROFILE,
+    ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     BASELINE_EXPERIMENT_PROFILE,
+    LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES,
     SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
     get_breakout_quality_experiment_profile,
 )
@@ -796,11 +799,23 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     adamw_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "multiscale_cnn_v1", "adamw_only"
     )
+    schedule_paths = resolve_filter_artifact_paths(
+        "/project",
+        "synthetic_quality",
+        "multiscale_cnn_v1",
+        ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+    )
     baseline_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "multiscale_cnn_v1", "baseline"
     )
     adamw_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "multiscale_cnn_v1", "adamw_only"
+    )
+    schedule_research = resolve_filter_research_score_path(
+        "/project",
+        "synthetic_quality",
+        "multiscale_cnn_v1",
+        ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     )
     shared_dataset_dir = resolve_filter_output_dir("/project", "synthetic_quality")
     add_check(
@@ -810,18 +825,33 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "model_architecture_and_training_experiment_paths_are_separate",
         True,
         (
-            len({path.model_path for path in legacy_paths} | {baseline_paths.model_path, adamw_paths.model_path})
-            == len(legacy_paths) + 2
-            and len(set(legacy_research_paths) | {baseline_research, adamw_research})
-            == len(legacy_research_paths) + 2
+            len(
+                {path.model_path for path in legacy_paths}
+                | {
+                    baseline_paths.model_path,
+                    adamw_paths.model_path,
+                    schedule_paths.model_path,
+                }
+            )
+            == len(legacy_paths) + 3
+            and len(
+                set(legacy_research_paths)
+                | {baseline_research, adamw_research, schedule_research}
+            )
+            == len(legacy_research_paths) + 3
             and baseline_paths.model_architecture == "multiscale_cnn_v1"
             and adamw_paths.model_architecture == "multiscale_cnn_v1"
             and baseline_paths.experiment_profile == "baseline"
             and adamw_paths.experiment_profile == "adamw_only"
+            and schedule_paths.experiment_profile
+            == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
             and baseline_paths.model_dir.parent.name == "multiscale_cnn_v1"
             and adamw_paths.model_dir.parent.name == "multiscale_cnn_v1"
+            and schedule_paths.model_dir.parent.name == "multiscale_cnn_v1"
             and baseline_paths.model_dir.name == "baseline"
             and adamw_paths.model_dir.name == "adamw_only"
+            and schedule_paths.model_dir.name
+            == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
             and shared_dataset_dir.name == "synthetic_quality"
         ),
     )
@@ -855,9 +885,13 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and BREAKOUT_QUALITY_CLASS_WEIGHT_MODE in {"none", "inverse_frequency"}
         and BREAKOUT_QUALITY_TIME_WEIGHT_MODE in {"none", "year_balanced_sqrt"}
         and {"adam", "adamw"}.issubset(set(SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS))
-        and {BASELINE_EXPERIMENT_PROFILE, ADAMW_ONLY_EXPERIMENT_PROFILE}.issubset(
-            set(SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES)
-        )
+        and {
+            BASELINE_EXPERIMENT_PROFILE,
+            ADAMW_ONLY_EXPERIMENT_PROFILE,
+            ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+        }.issubset(set(SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES))
+        and LR_SCHEDULE_LINEAR_WARMUP_COSINE
+        in SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES
         and BREAKOUT_QUALITY_EXPERIMENT_PROFILE
         in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
         and CONFIGURED_EXPERIMENT.optimizer_name
@@ -872,6 +906,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         (
             BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
             CONFIGURED_EXPERIMENT.optimizer_name,
+            CONFIGURED_EXPERIMENT.lr_schedule_name,
+            CONFIGURED_EXPERIMENT.augmentation_name,
             BREAKOUT_QUALITY_FINAL_REFIT_MODE,
             BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
             BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
@@ -879,6 +915,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         (
             str(train_defaults.experiment_profile),
             str(train_defaults.optimizer_name),
+            str(train_defaults.lr_schedule_name),
+            str(train_defaults.augmentation_name),
             str(train_defaults.final_refit_mode),
             str(train_defaults.class_weight_mode),
             str(train_defaults.time_weight_mode),
@@ -902,6 +940,63 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "configured_experiment_profile_uses_requested_optimizer_class",
         "AdamW" if CONFIGURED_EXPERIMENT.optimizer_name == "adamw" else "Adam",
         optimizer_probe.__class__.__name__,
+    )
+
+    schedule_profile = get_breakout_quality_experiment_profile(
+        ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+    )
+    schedule_plan = breakout_quality_train._build_learning_rate_schedule_plan(
+        schedule_name=schedule_profile.lr_schedule_name,
+        base_learning_rate=0.0003,
+        total_optimizer_steps=100,
+        warmup_fraction=schedule_profile.lr_warmup_fraction,
+        minimum_lr_ratio=schedule_profile.lr_minimum_ratio,
+    )
+    schedule_values = [
+        breakout_quality_train._learning_rate_for_optimizer_step(schedule_plan, step)
+        for step in range(100)
+    ]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "step_lr_schedule_uses_exact_warmup_and_cosine_endpoints",
+        True,
+        (
+            schedule_plan["warmup_steps"] == 5
+            and np.isclose(schedule_values[0], 0.00006)
+            and np.isclose(schedule_values[4], 0.0003)
+            and np.isclose(schedule_values[5], 0.0003)
+            and np.isclose(schedule_values[-1], 0.00003)
+            and all(
+                schedule_values[index] >= schedule_values[index + 1]
+                for index in range(4, len(schedule_values) - 1)
+            )
+        ),
+    )
+    no_schedule_plan = breakout_quality_train._build_learning_rate_schedule_plan(
+        schedule_name="none",
+        base_learning_rate=0.0003,
+        total_optimizer_steps=100,
+        warmup_fraction=0.0,
+        minimum_lr_ratio=1.0,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "baseline_lr_schedule_remains_constant",
+        True,
+        all(
+            np.isclose(
+                breakout_quality_train._learning_rate_for_optimizer_step(
+                    no_schedule_plan,
+                    step,
+                ),
+                0.0003,
+            )
+            for step in (0, 49, 99)
+        ),
     )
 
     matched_target, minimum_pass = breakout_quality_train._resolve_final_refit_target_steps(
@@ -2018,7 +2113,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v2", 2, payload["schema_version"])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **LR Schedule Parameters**：`{CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-'}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
     selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
     normalized_selection_matrix = selection_matrix.replace("**", "")
@@ -2098,7 +2193,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"LR Schedule Args: {CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-' }" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
     markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. OOS 綜合判定", 1)[0]
@@ -2439,6 +2534,26 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "effective_oos_end_date": "2025-12-31",
             }
             outer_policy["policy_fingerprint_sha256"] = compute_outer_policy_fingerprint(outer_policy)
+            synthetic_learning_rate = 0.001
+            synthetic_schedule_parameters = CONFIGURED_EXPERIMENT.lr_schedule_parameters()
+
+            def _synthetic_schedule_record(*, total_steps: int, actual_steps: int):
+                plan = breakout_quality_train._build_learning_rate_schedule_plan(
+                    schedule_name=CONFIGURED_EXPERIMENT.lr_schedule_name,
+                    base_learning_rate=synthetic_learning_rate,
+                    total_optimizer_steps=total_steps,
+                    warmup_fraction=CONFIGURED_EXPERIMENT.lr_warmup_fraction,
+                    minimum_lr_ratio=CONFIGURED_EXPERIMENT.lr_minimum_ratio,
+                )
+                return {
+                    **plan,
+                    "actual_optimizer_steps": int(actual_steps),
+                    "last_applied_learning_rate": breakout_quality_train._learning_rate_for_optimizer_step(
+                        plan,
+                        int(actual_steps) - 1,
+                    ),
+                }
+
             manifest = {
                 "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
                 "filter_family": FILTER_FAMILY,
@@ -2486,6 +2601,17 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "all_eligible_selection_rows_seen_at_least_once": True,
                 },
                 "optimizer_name": CONFIGURED_EXPERIMENT.optimizer_name,
+                "learning_rate": synthetic_learning_rate,
+                "lr_schedule_name": CONFIGURED_EXPERIMENT.lr_schedule_name,
+                "learning_rate_schedule": {
+                    "name": CONFIGURED_EXPERIMENT.lr_schedule_name,
+                    "parameters": synthetic_schedule_parameters,
+                    "epoch_selection": None,
+                    "final_refit": _synthetic_schedule_record(
+                        total_steps=2,
+                        actual_steps=2,
+                    ),
+                },
                 "class_weight_mode": BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
                 "class_weights_reject_pass": [1.0, 1.0],
                 "time_weight_mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
@@ -2584,6 +2710,19 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                         "best_epoch": 2,
                         "completed_epochs": 3,
                         "best_optimizer_steps": 2,
+                        "batches_per_epoch": 1,
+                    },
+                    "learning_rate_schedule": {
+                        "name": CONFIGURED_EXPERIMENT.lr_schedule_name,
+                        "parameters": synthetic_schedule_parameters,
+                        "epoch_selection": _synthetic_schedule_record(
+                            total_steps=5,
+                            actual_steps=3,
+                        ),
+                        "final_refit": _synthetic_schedule_record(
+                            total_steps=2,
+                            actual_steps=2,
+                        ),
                     },
                 }
             )

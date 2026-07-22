@@ -47,6 +47,7 @@ from filters.breakout_quality.contract import (
     TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
+from filters.breakout_quality.lr_schedule import validate_learning_rate_schedule_record
 from filters.breakout_quality.models.spec import model_spec_from_manifest
 from filters.breakout_quality.paths import (
     BreakoutQualityArtifactPaths,
@@ -339,6 +340,7 @@ def load_model_artifact_contract(
     inner_validation_used = bool(manifest.get("inner_validation_used", False))
     early_stopping_enabled = bool(manifest.get("early_stopping_enabled", False))
     final_refit_plan = _require_mapping(manifest, "final_refit_plan")
+    selection_record: dict[str, Any] | None = None
     plan_mode = _require_nonempty_text(final_refit_plan, "mode")
     if inner_validation_used and plan_mode != str(BREAKOUT_QUALITY_FINAL_REFIT_MODE):
         raise ValueError(
@@ -430,6 +432,58 @@ def load_model_artifact_contract(
             f"manifest={optimizer_name}, profile={manifest_profile}, "
             f"expected={expected_experiment.optimizer_name}"
         )
+
+    schedule_name = str(manifest.get("lr_schedule_name") or "none").strip().lower()
+    if schedule_name != expected_experiment.lr_schedule_name:
+        raise ValueError(
+            "breakout quality lr_schedule_name 與 experiment profile 不一致；請重新訓練: "
+            f"manifest={schedule_name}, profile={manifest_profile}, "
+            f"expected={expected_experiment.lr_schedule_name}"
+        )
+    schedule_parameters = expected_experiment.lr_schedule_parameters()
+    learning_rate = float(manifest.get("learning_rate", 0.0))
+    schedule_record = manifest.get("learning_rate_schedule")
+    if schedule_record is not None:
+        if not isinstance(schedule_record, dict):
+            raise ValueError("breakout quality learning_rate_schedule 必須是 object")
+        if str(schedule_record.get("name") or "").strip().lower() != schedule_name:
+            raise ValueError("breakout quality learning_rate_schedule.name 不一致")
+        if dict(schedule_record.get("parameters") or {}) != schedule_parameters:
+            raise ValueError("breakout quality learning_rate_schedule.parameters 不一致")
+        validate_learning_rate_schedule_record(
+            _require_mapping(schedule_record, "final_refit"),
+            schedule_name=schedule_name,
+            schedule_parameters=schedule_parameters,
+            base_learning_rate=learning_rate,
+            expected_total_optimizer_steps=target_steps,
+            expected_actual_optimizer_steps=actual_steps,
+        )
+        epoch_schedule = schedule_record.get("epoch_selection")
+        if inner_validation_used:
+            if selection_record is None:
+                raise ValueError("inner validation 缺少 epoch selection record")
+            selection_batches_per_epoch = int(
+                selection_record.get("batches_per_epoch", 0)
+            )
+            selection_completed_epochs = int(
+                selection_record.get("completed_epochs", 0)
+            )
+            if selection_batches_per_epoch < 1:
+                raise ValueError("inner validation batches_per_epoch 必須 >=1")
+            validate_learning_rate_schedule_record(
+                epoch_schedule,
+                schedule_name=schedule_name,
+                schedule_parameters=schedule_parameters,
+                base_learning_rate=learning_rate,
+                expected_total_optimizer_steps=max_epochs * selection_batches_per_epoch,
+                expected_actual_optimizer_steps=(
+                    selection_completed_epochs * selection_batches_per_epoch
+                ),
+            )
+        elif epoch_schedule is not None:
+            raise ValueError("未啟用 inner validation 時不可有 epoch_selection LR schedule")
+    elif schedule_name != "none":
+        raise ValueError("啟用 LR schedule 的 manifest 缺少 learning_rate_schedule")
 
     class_weight_mode = _require_nonempty_text(manifest, "class_weight_mode")
     if class_weight_mode != str(BREAKOUT_QUALITY_CLASS_WEIGHT_MODE):

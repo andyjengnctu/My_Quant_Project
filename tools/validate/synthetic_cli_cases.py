@@ -11,6 +11,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import zipfile
 
+from config.breakout_quality_experiments import ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+
 from .checks import add_check
 
 
@@ -134,7 +136,7 @@ def validate_dataset_cli_contract_case(_base_params):
         parallel_split_evaluation=True,
         train_prefetch_batches=0,
         preload_feature_bank=True,
-        experiment_profile="adamw_only",
+        experiment_profile=ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
         lr=0.001,
         weight_decay=0.0001,
         gradient_clip_norm=1.0,
@@ -195,7 +197,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_propagates_experiment_to_all_model_stages",
         True,
         all(
-            "--experiment-profile" in call[1] and "adamw_only" in call[1]
+            "--experiment-profile" in call[1] and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE in call[1]
             for call in workflow_calls
         ),
     )
@@ -215,7 +217,7 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         (
             "--experiment-profile" in workflow_calls[0][1]
-            and "adamw_only" in workflow_calls[0][1]
+            and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE in workflow_calls[0][1]
             and "--weight-decay" in workflow_calls[0][1]
             and "0.0001" in workflow_calls[0][1]
             and "--gradient-clip-norm" in workflow_calls[0][1]

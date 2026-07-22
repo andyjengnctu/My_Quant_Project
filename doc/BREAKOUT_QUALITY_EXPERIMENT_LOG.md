@@ -23,12 +23,12 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260722_130420_bc854a4.zip` |
-| SHA256 | `f9b10c512168c5dae250a1c745a7a4fbe3d5132ec804c93ce32f37d48e6753ad` |
+| 基準 ZIP | `test-branch-1_20260722_131354_dc805ba.zip` |
+| SHA256 | `cf5187c01421f20c0efc48f63b48016413efc628baf2c0187b5daf669f29b0ed` |
 | 程式版本範圍 | v9 連續輔助目標加入前；本輪將 model architecture 與 training experiment profile 分離，取消假版本 v10 |
-| Policy 預設 | architecture=`multiscale_cnn_v1`；experiment profile=`adamw_only` |
+| Policy 預設 | architecture=`multiscale_cnn_v1`；experiment profile=`adam_warmup_cosine` |
 | 當前最佳研究模型 | `multiscale_cnn_v1` |
-| Dataset | Full；6A optimizer 變更不需重建 |
+| Dataset | Full；6B scheduler 變更不需重建 |
 
 使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**；目前正式研究基準模型仍是結果最佳的 `multiscale_cnn_v1`，不是把 policy 預設改成 `multiscale_cnn_v8`。
 
@@ -43,8 +43,8 @@
 | 最大不利跌幅 | 觸及 −10% 即 REJECT |
 | Epoch 上限 | 100 |
 | Batch Size | 128 |
-| Optimizer | `adamw`（由 `adamw_only` profile 決定；6A 接受與否待 OOS 結果） |
-| LR Schedule | `none` |
+| Optimizer | `adam`（6A AdamW 已淘汰；6B 回到 Adam） |
+| LR Schedule | `linear_warmup_cosine`；前 5% updates warmup、後 95% cosine、最低 LR ratio 0.1 |
 | Augmentation | `none` |
 | Learning Rate | 0.0003 |
 | Weight Decay | 0.0001 |
@@ -151,28 +151,41 @@ Selection Precision 升至 62.61%、Lift 升至 +7.80 pp，但 OOS 全面退步�
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待使用者完成 Full workflow 並提供 Selection／OOS 報表 |
-| 程式基準 | `test-branch-1_20260722_115701_9cd60c8.zip`；SHA256 `366b0f1a15f6e77cbbee32f94b9275fe2a94676fb747e6fd0e4b817b06e2059c` |
-| 架構整理 | 原 6A 以 `multiscale_cnn_v10` 隔離 optimizer 的做法已撤回；v10 未取得結果並被本輪實作取代 |
+| 狀態 | `REJECTED` |
+| 程式基準 | `test-branch-1_20260722_131354_dc805ba.zip`；SHA256 `cf5187c01421f20c0efc48f63b48016413efc628baf2c0187b5daf669f29b0ed` |
 | 唯一學習變更 | `multiscale_cnn_v1 / baseline` 的 `torch.optim.Adam` → `multiscale_cnn_v1 / adamw_only` 的 `torch.optim.AdamW` |
-| Experiment profile | `adamw_only`：optimizer=`adamw`、LR schedule=`none`、augmentation=`none` |
-| 工件隔離 | `models/.../multiscale_cnn_v1/adamw_only/` 與 `outputs/.../multiscale_cnn_v1/adamw_only/`；不再新增模型版本 |
-| Active／Legacy | 正常新訓練只允許 v1；v2～v8、Tiny、Residual 僅保留舊工件載入與歷史重現 |
-| 固定條件 | LR 0.0003、weight decay 0.0001、seed 42、threshold 0.5、`selected_epochs`、class/time weight 均為 `none` |
+| 固定條件 | LR 0.0003、weight decay 0.0001、scheduler=`none`、augmentation=`none`、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
+| Dataset／Label | 不重建、不 relabel |
+| Selection | 原始 PASS 54.81%、模型 PASS 75.69%、PASS Precision 62.27%、Lift +7.46 pp、Recall 86.00%、Accuracy 63.77%、Score 0.5824 |
+| OOS | 原始 PASS 55.63%、模型 PASS 45.80%、PASS Precision 59.02%、Lift +3.39 pp、Recall 48.60%、Accuracy 52.63%、Score 0.4693 |
+| 相較 v1 baseline | OOS Precision −0.27 pp、Lift −0.27 pp、Recall −2.89 pp、模型 PASS −2.52 pp、Accuracy −0.71 pp、Score −0.0098；Precision gap 由 −2.85 pp 惡化為 −3.25 pp；Score gap 約 −0.1130，未改善 |
+| 判定 | AdamW 沒有提升 OOS，且主要指標多數退步；退回 Adam |
+| 下一步 | 6B 使用 Adam，只加入 step-based warmup＋cosine schedule |
+
+Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失敗 1 項：互動式 report 已正確傳遞 `--experiment-profile`，但 synthetic CLI contract 仍使用重構前的舊 expected argv。已將測試 fixture 隔離覆寫為 `baseline`，並把 expected argv 同步為 `--filter-id synthetic_quality --experiment-profile baseline --include-oos`。這是 validator 契約同步修正，不改 runtime、模型、Dataset 或 6A 學習條件；其後 6A Full OOS 已完成並判定 `REJECTED`。
+
+### 3.8 LR Schedule 6B：Adam + step-based warmup／cosine（2026-07-22）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；等待 Full workflow Selection／OOS 結果 |
+| 程式基準 | `test-branch-1_20260722_131354_dc805ba.zip`；SHA256 `cf5187c01421f20c0efc48f63b48016413efc628baf2c0187b5daf669f29b0ed` |
+| 唯一學習變更 | `baseline` 的固定 LR → `adam_warmup_cosine` 的 step-based LR schedule；optimizer 維持 Adam |
+| Experiment profile | optimizer=`adam`、schedule=`linear_warmup_cosine`、augmentation=`none` |
+| Schedule | 每個 phase 各自重建；前 5% optimizer updates 線性 warmup 至 0.0003，後 95% cosine decay 至 0.00003；每次 optimizer update 前套用 |
+| Inner／Refit | Inner epoch search 依 max epochs × batches/epoch 建立 schedule；完整 Selection refit 依實際 target optimizer steps 重新建立，不共用狀態 |
+| 固定條件 | v1、LR base 0.0003、weight decay 0.0001、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
 | Dataset／Label | 不重建、不 relabel |
 | Selection／OOS 結果 | 尚未取得 |
-| 與 v1 baseline 差異 | 尚未取得 |
-| 判定 | 尚不可接受或淘汰；取得結果前維持 `IMPLEMENTED` |
-| 下一步 | 先取得 6A 結果，再決定 6B 使用 AdamW 或退回 Adam |
+| 判定 | 尚不可接受或淘汰；維持 `IMPLEMENTED` |
+| 下一步 | 取得 6B 結果後，決定是否保留 schedule，再進入 7A masking |
 
-Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失敗 1 項：互動式 report 已正確傳遞 `--experiment-profile`，但 synthetic CLI contract 仍使用重構前的舊 expected argv。已將測試 fixture 隔離覆寫為 `baseline`，並把 expected argv 同步為 `--filter-id synthetic_quality --experiment-profile baseline --include-oos`。這是 validator 契約同步修正，不改 runtime、模型、Dataset 或 6A 學習條件；6A 狀態仍為 `IMPLEMENTED`。
-
-### 3.8 Architecture／Experiment Profile 管理規則（2026-07-22）
+### 3.9 Architecture／Experiment Profile 管理規則（2026-07-22）
 
 - `multiscale_cnn_v1` 是目前唯一 active architecture。
 - `multiscale_cnn_v2～v8`、`tiny_cnn_v1`、`residual_tcn_v1` 均為 legacy read-only compatibility；保留程式碼不代表仍是正式候選。
 - optimizer、LR schedule、augmentation、loss weighting 等訓練差異只可新增 experiment profile，不可再建立 v10、v11 等假模型版本。
-- `baseline` 與 `adamw_only` 使用相同 v1 模型圖與初始化；工件依 profile 子目錄隔離。
+- `baseline`、`adamw_only` 與 `adam_warmup_cosine` 使用相同 v1 模型圖與初始化；工件依 profile 子目錄隔離。
 - 舊 v1 baseline 工件的無 profile 歷史路徑只提供唯讀 fallback；不得用它覆寫 manifest 或匯出正式 forward-OOS scores。新訓練與正式輸出一律寫入 `<architecture>/<experiment_profile>/`。
 
 ---
@@ -203,7 +216,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待結果 |
+| 狀態 | `REJECTED`；AdamW OOS 低於 baseline |
 | 唯一變更 | experiment profile `baseline` → `adamw_only`；實際學習差異只有 `Adam` → `AdamW` |
 | Learning Rate | 維持 0.0003 |
 | Weight Decay | 維持 0.0001，不同時改 regularization 強度 |
@@ -218,8 +231,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `PLANNED` |
-| 唯一變更 | 在 6A 決定後保留的正式 optimizer 上加入 step-based schedule |
+| 狀態 | `IMPLEMENTED`；等待結果 |
+| 唯一變更 | 退回 baseline Adam，只加入 step-based schedule |
 | Warmup | 前 5% optimizer updates 線性 warmup |
 | Decay | 後 95% 使用 cosine decay |
 | Minimum LR | 初始 LR 的 10%，即 0.00003 |
@@ -228,7 +241,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | Dataset rebuild | 不需要 |
 | 目的 | 降低後期 overshoot，觀察是否改善 OOS 而非只降低 Selection loss |
 
-若 6A 被接受，6B 以 AdamW 為基準；若 6A 被拒絕，6B 回到 Adam 後只加入 scheduler，確保仍是單一變更。
+6A 已被拒絕，因此 6B 固定使用 Adam，只加入 scheduler，確保仍是單一變更。
 
 ### 優先 7A：輕量舊歷史 contiguous masking augmentation
 
@@ -265,9 +278,9 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 ## 6. 實驗執行順序
 
 ```text
-6A AdamW only
-→ 依 6A 結果決定保留 Adam 或 AdamW
-→ 6B 只加入 step-based LR schedule
+6A AdamW only（REJECTED）
+→ 回到 Adam
+→ 6B 只加入 step-based LR schedule（IMPLEMENTED）
 → 固定最佳 optimizer / schedule
 → 7A 只加入舊歷史 contiguous masking
 → 視 7A 結果決定是否進入 7B

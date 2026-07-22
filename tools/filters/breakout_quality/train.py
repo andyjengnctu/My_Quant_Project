@@ -22,7 +22,10 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality_experiments import (
+    LR_SCHEDULE_LINEAR_WARMUP_COSINE,
+    LR_SCHEDULE_NONE,
     SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES,
     SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
     get_breakout_quality_experiment_profile,
 )
@@ -80,6 +83,10 @@ from filters.breakout_quality.dataset_store import IndexedFeatureBank
 from filters.breakout_quality.inference import (
     materialize_indexed_feature_inputs,
     strict_parallel_batched_logits,
+)
+from filters.breakout_quality.lr_schedule import (
+    build_learning_rate_schedule_plan as _build_learning_rate_schedule_plan,
+    learning_rate_for_optimizer_step as _learning_rate_for_optimizer_step,
 )
 from filters.breakout_quality.model import (
     build_model,
@@ -186,7 +193,7 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
         help=(
             "訓練實驗設定；模型架構固定由 policy 管理。"
-            "baseline 使用 Adam，adamw_only 只將 optimizer 改為 AdamW"
+            "profile 可獨立指定 optimizer、step-based LR schedule 與 augmentation"
         ),
     )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
@@ -279,6 +286,8 @@ def validate_training_args(args) -> None:
     train_prefetch_batches = int(args.train_prefetch_batches)
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
     optimizer_name = str(args.optimizer_name).strip().lower()
+    lr_schedule_name = str(args.lr_schedule_name).strip().lower()
+    augmentation_name = str(args.augmentation_name).strip().lower()
     learning_rate = float(args.lr)
     weight_decay = float(args.weight_decay)
     gradient_clip_norm = float(args.gradient_clip_norm)
@@ -310,11 +319,25 @@ def validate_training_args(args) -> None:
         )
     if optimizer_name not in OPTIMIZER_NAMES:
         raise ValueError(f"experiment profile optimizer 不合法: {optimizer_name}")
+    if lr_schedule_name not in SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES:
+        raise ValueError(f"experiment profile LR schedule 不合法: {lr_schedule_name}")
     if optimizer_name != experiment.optimizer_name:
         raise ValueError(
             "experiment profile 與 optimizer_name 不一致: "
             f"profile={experiment.name}, optimizer={optimizer_name}, "
             f"expected={experiment.optimizer_name}"
+        )
+    if lr_schedule_name != experiment.lr_schedule_name:
+        raise ValueError(
+            "experiment profile 與 lr_schedule_name 不一致: "
+            f"profile={experiment.name}, schedule={lr_schedule_name}, "
+            f"expected={experiment.lr_schedule_name}"
+        )
+    if augmentation_name != experiment.augmentation_name:
+        raise ValueError(
+            "experiment profile 與 augmentation_name 不一致: "
+            f"profile={experiment.name}, augmentation={augmentation_name}, "
+            f"expected={experiment.augmentation_name}"
         )
     if validation_months < 1:
         raise ValueError("inner-validation-months 必須 >=1")
@@ -847,6 +870,12 @@ def _build_optimizer(
     raise ValueError(f"optimizer-name 不合法: {optimizer_name}")
 
 
+def _set_optimizer_learning_rate(optimizer, learning_rate: float) -> None:
+    resolved = float(learning_rate)
+    for parameter_group in optimizer.param_groups:
+        parameter_group["lr"] = resolved
+
+
 def _new_training_state(
     torch,
     *,
@@ -897,8 +926,10 @@ def _train_one_epoch(
     shuffle_seed: int,
     prefetch_batches: int,
     gradient_clip_norm: float,
+    lr_schedule_plan: dict[str, object],
+    optimizer_step_offset: int,
     max_batches: int | None = None,
-) -> tuple[float, int]:
+) -> tuple[float, int, float, float]:
     import torch.nn.functional as F
 
     model.train()
@@ -906,6 +937,8 @@ def _train_one_epoch(
     shuffled = rng.permutation(train_idx)
     batch_losses = []
     completed_batches = 0
+    first_learning_rate = float("nan")
+    last_learning_rate = float("nan")
     for xb_np, cb_np, yb_np, wb_np in _iter_training_batches(
         X,
         C,
@@ -917,6 +950,14 @@ def _train_one_epoch(
     ):
         if max_batches is not None and completed_batches >= int(max_batches):
             break
+        current_learning_rate = _learning_rate_for_optimizer_step(
+            lr_schedule_plan,
+            int(optimizer_step_offset) + completed_batches,
+        )
+        _set_optimizer_learning_rate(optimizer, current_learning_rate)
+        if completed_batches == 0:
+            first_learning_rate = current_learning_rate
+        last_learning_rate = current_learning_rate
         xb = torch.from_numpy(xb_np)
         cb = torch.from_numpy(cb_np)
         yb = torch.from_numpy(yb_np)
@@ -939,7 +980,12 @@ def _train_one_epoch(
         batch_losses.append(float(loss.item()))
         completed_batches += 1
     mean_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
-    return mean_loss, int(completed_batches)
+    return (
+        mean_loss,
+        int(completed_batches),
+        float(first_learning_rate),
+        float(last_learning_rate),
+    )
 
 def _select_epoch_with_inner_validation(
     torch,
@@ -953,6 +999,9 @@ def _select_epoch_with_inner_validation(
     max_epochs: int,
     batch_size: int,
     optimizer_name: str,
+    lr_schedule_name: str,
+    lr_warmup_fraction: float,
+    lr_minimum_ratio: float,
     learning_rate: float,
     weight_decay: float,
     gradient_clip_norm: float,
@@ -994,6 +1043,15 @@ def _select_epoch_with_inner_validation(
         class_weight_mode=class_weight_mode,
         seed=seed,
     )
+    batches_per_epoch = int(math.ceil(len(train_idx) / int(batch_size)))
+    schedule_plan = _build_learning_rate_schedule_plan(
+        schedule_name=lr_schedule_name,
+        base_learning_rate=learning_rate,
+        total_optimizer_steps=int(max_epochs) * batches_per_epoch,
+        warmup_fraction=lr_warmup_fraction,
+        minimum_lr_ratio=lr_minimum_ratio,
+    )
+    cumulative_optimizer_steps = 0
     best_epoch = 0
     best_validation_loss = float("inf")
     best_validation_metrics = None
@@ -1003,7 +1061,7 @@ def _select_epoch_with_inner_validation(
     color_time = bool(sys.stdout.isatty())
     for epoch in range(1, int(max_epochs) + 1):
         epoch_started = time.perf_counter()
-        batch_loss, optimizer_steps = _train_one_epoch(
+        batch_loss, optimizer_steps, lr_start, lr_end = _train_one_epoch(
             torch,
             model=model,
             optimizer=optimizer,
@@ -1017,7 +1075,10 @@ def _select_epoch_with_inner_validation(
             shuffle_seed=int(seed) + epoch,
             prefetch_batches=train_prefetch_batches,
             gradient_clip_norm=gradient_clip_norm,
+            lr_schedule_plan=schedule_plan,
+            optimizer_step_offset=cumulative_optimizer_steps,
         )
+        cumulative_optimizer_steps += optimizer_steps
         train_metrics, validation_metrics = _evaluate_inner_splits(
             torch,
             model,
@@ -1049,7 +1110,9 @@ def _select_epoch_with_inner_validation(
                 "epoch": int(epoch),
                 "batch_loss": round(float(batch_loss), 6),
                 "optimizer_steps": int(optimizer_steps),
-                "cumulative_optimizer_steps": int(epoch * optimizer_steps),
+                "cumulative_optimizer_steps": int(cumulative_optimizer_steps),
+                "learning_rate_start": round(float(lr_start), 12),
+                "learning_rate_end": round(float(lr_end), 12),
                 "inner_train_metrics": train_metrics,
                 "inner_validation_metrics": validation_metrics,
                 "elapsed_sec": round(float(epoch_elapsed), 3),
@@ -1084,11 +1147,19 @@ def _select_epoch_with_inner_validation(
         "best_validation_loss": round(float(best_validation_loss), 6),
         "best_validation_metrics": best_validation_metrics,
         "completed_epochs": int(len(history)),
-        "batches_per_epoch": int(math.ceil(len(train_idx) / int(batch_size))),
+        "batches_per_epoch": int(batches_per_epoch),
         "best_optimizer_steps": int(
             int(best_epoch) * math.ceil(len(train_idx) / int(batch_size))
         ),
         "sample_weight_summaries": sample_weight_summaries,
+        "learning_rate_schedule": {
+            **schedule_plan,
+            "actual_optimizer_steps": int(cumulative_optimizer_steps),
+            "last_applied_learning_rate": round(
+                float(history[-1]["learning_rate_end"]),
+                12,
+            ),
+        },
         "history": history,
         "class_weights_reject_pass": [
             round(float(value), 8) for value in class_weights_np.tolist()
@@ -1108,6 +1179,9 @@ def _fit_full_selection(
     target_optimizer_steps: int | None,
     batch_size: int,
     optimizer_name: str,
+    lr_schedule_name: str,
+    lr_warmup_fraction: float,
+    lr_minimum_ratio: float,
     learning_rate: float,
     weight_decay: float,
     gradient_clip_norm: float,
@@ -1157,6 +1231,13 @@ def _fit_full_selection(
         )
     planned_cycles = int(math.ceil(requested_steps / batches_per_epoch))
     equivalent_epochs = float(requested_steps) / float(batches_per_epoch)
+    schedule_plan = _build_learning_rate_schedule_plan(
+        schedule_name=lr_schedule_name,
+        base_learning_rate=learning_rate,
+        total_optimizer_steps=requested_steps,
+        warmup_fraction=lr_warmup_fraction,
+        minimum_lr_ratio=lr_minimum_ratio,
+    )
 
     history = []
     phase_title = (
@@ -1177,7 +1258,7 @@ def _fit_full_selection(
         epoch_started = time.perf_counter()
         remaining_steps = requested_steps - completed_optimizer_steps
         max_batches = min(batches_per_epoch, remaining_steps)
-        batch_loss, optimizer_steps = _train_one_epoch(
+        batch_loss, optimizer_steps, lr_start, lr_end = _train_one_epoch(
             torch,
             model=model,
             optimizer=optimizer,
@@ -1191,6 +1272,8 @@ def _fit_full_selection(
             shuffle_seed=int(seed) + cycle,
             prefetch_batches=train_prefetch_batches,
             gradient_clip_norm=gradient_clip_norm,
+            lr_schedule_plan=schedule_plan,
+            optimizer_step_offset=completed_optimizer_steps,
             max_batches=max_batches,
         )
         if optimizer_steps != max_batches:
@@ -1221,6 +1304,8 @@ def _fit_full_selection(
                 "optimizer_steps": int(optimizer_steps),
                 "cumulative_optimizer_steps": int(completed_optimizer_steps),
                 "target_optimizer_steps": int(requested_steps),
+                "learning_rate_start": round(float(lr_start), 12),
+                "learning_rate_end": round(float(lr_end), 12),
                 "selection_metrics": metrics,
                 "elapsed_sec": round(float(epoch_elapsed), 3),
             }
@@ -1260,6 +1345,14 @@ def _fit_full_selection(
             float(history[-1]["epoch_fraction"]),
             8,
         ),
+        "learning_rate_schedule": {
+            **schedule_plan,
+            "actual_optimizer_steps": int(completed_optimizer_steps),
+            "last_applied_learning_rate": round(
+                float(history[-1]["learning_rate_end"]),
+                12,
+            ),
+        },
     }
 
 def main(argv=None) -> int:
@@ -1275,6 +1368,10 @@ def main(argv=None) -> int:
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
     experiment_profile = experiment.name
     optimizer_name = experiment.optimizer_name
+    lr_schedule_name = experiment.lr_schedule_name
+    lr_schedule_parameters = experiment.lr_schedule_parameters()
+    lr_warmup_fraction = float(lr_schedule_parameters.get("warmup_fraction", 0.0))
+    lr_minimum_ratio = float(lr_schedule_parameters.get("minimum_lr_ratio", 1.0))
     learning_rate = float(args.lr)
     weight_decay = float(args.weight_decay)
     gradient_clip_norm = float(args.gradient_clip_norm)
@@ -1400,6 +1497,9 @@ def main(argv=None) -> int:
             max_epochs=max_epochs,
             batch_size=batch_size,
             optimizer_name=optimizer_name,
+            lr_schedule_name=lr_schedule_name,
+            lr_warmup_fraction=lr_warmup_fraction,
+            lr_minimum_ratio=lr_minimum_ratio,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             gradient_clip_norm=gradient_clip_norm,
@@ -1453,6 +1553,9 @@ def main(argv=None) -> int:
         target_optimizer_steps=final_target_optimizer_steps,
         batch_size=batch_size,
         optimizer_name=optimizer_name,
+        lr_schedule_name=lr_schedule_name,
+        lr_warmup_fraction=lr_warmup_fraction,
+        lr_minimum_ratio=lr_minimum_ratio,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
         gradient_clip_norm=gradient_clip_norm,
@@ -1626,6 +1729,17 @@ def main(argv=None) -> int:
         },
         "seed": int(args.seed),
         "optimizer_name": optimizer_name,
+        "lr_schedule_name": lr_schedule_name,
+        "learning_rate_schedule": {
+            "name": lr_schedule_name,
+            "parameters": lr_schedule_parameters,
+            "epoch_selection": (
+                epoch_selection.get("learning_rate_schedule")
+                if isinstance(epoch_selection, dict)
+                else None
+            ),
+            "final_refit": final_fit["learning_rate_schedule"],
+        },
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
         "gradient_clip_norm": gradient_clip_norm,
@@ -1647,6 +1761,8 @@ def main(argv=None) -> int:
             "training_order_changed": False,
             "final_metrics_reused_from_last_full_epoch_evaluation": True,
             "optimizer_name": optimizer_name,
+            "lr_schedule_name": lr_schedule_name,
+            "lr_schedule_parameters": lr_schedule_parameters,
             "optimizer_zero_grad_set_to_none": True,
             "optimizer_weight_decay": weight_decay,
             "gradient_clip_norm": gradient_clip_norm,
