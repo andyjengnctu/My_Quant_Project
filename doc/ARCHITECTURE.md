@@ -45,11 +45,7 @@ project/
 │  │  ├─ split_assignments.csv        # outer Selection/OOS + Selection train/embargo assignment
 │  │  ├─ manifest.json                # model spec/profile/split/score/OOS eligibility 契約
 │  │  └─ scores.csv                   # architecture/profile-scoped canonical event score table
-│  ├─ full_base_best.json            # Full finalist best base policy 參數檔
-│  ├─ full_base_finalists_agree.json # Full finalist agree base policy 參數檔
-│  ├─ full_ensemble_base.json        # Full seed ensemble base policy 參數檔
-│  ├─ oos_ensemble_base.json         # OOS seed ensemble base policy 參數檔
-│  └─ roos_ensemble_base.json        # ROOS seed ensemble base policy 參數檔
+│  └─ <optimizer parameter artifacts>.json # runtime 產生或使用者保留的可選參數工件；檔名依 optimizer mode／selector 而定
 └─ tools/
    ├─ downloader/                     # 資料下載子系統
    ├─ filters/breakout_quality/        # quality dataset/train/export/evaluate 子系統實作與開發相容入口
@@ -108,6 +104,7 @@ project/
 ```
 
 - `tools/local_regression/`：reduced formal orchestrator；`formal_pipeline.py` 為正式步驟單一真理來源。
+- `run_all.py` 在每次 formal staging run 以目前 `config/` defaults 生成隔離的 `formal_primary_params.json`，並透過 `V16_RUN_BEST_PARAMS_PATH` runtime override 傳給 dataset prep、consistency、chain、quick gate、ML smoke 與 meta quality；formal regression 不依賴、也不覆寫 `models/run_best_params.json`，且不要求 repository 或交付 ZIP 內建 `models/run_best_params.json`。
 - `run_meta_quality.py`：meta quality 工具；負責 coverage / summary / baseline 與 formal step 對照。
 
 ## 子系統責任
@@ -118,7 +115,7 @@ project/
 - `core/`：核心規則、帳務、價格、統計、path 與共用 helper；不得放 UI orchestration 或 validate 腳本。
 - `tools/`：下載、最佳化、單股分析、validate、local regression 與 GUI 子系統；workbench 的交易明細與 Console 改以獨立分頁承接。
 - `config/`：共用政策與執行預設。
-- `models/`：最佳參數檔與模型相關輸入。
+- `models/`：模型工件與 runtime 產生或使用者保留的可選最佳參數輸入；沒有 path override 時，預設參數 fallback 仍解析到 `models/run_best_params.json`，但 repository／交付 ZIP 不必預先包含該可變動工件。
 - `doc/`：架構、常用指令與 formal checklist 文件。
 
 ## 正式入口
