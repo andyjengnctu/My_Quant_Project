@@ -11,7 +11,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import zipfile
 
-from config.breakout_quality_experiments import ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+from config.breakout_quality_experiments import (
+    ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+    TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+)
 
 from .checks import add_check
 
@@ -338,6 +341,15 @@ def validate_dataset_cli_contract_case(_base_params):
         },
         use_inner_validation=True,
         final_train_loss=0.674436,
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        inner_train_sampling_summary={
+            "source_row_count": 538887,
+            "sampled_row_count": 16832,
+        },
+        final_refit_sampling_summary={
+            "source_row_count": 729654,
+            "sampled_row_count": 23072,
+        },
     )
     add_check(
         results,
@@ -346,7 +358,9 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_train_summary_keeps_key_counts",
         True,
         (
-            "Final Refit：729,654 rows / 23,072 groups" in compact_summary
+            "Training Sampling：unique_ticker_date；Inner 538,887→16,832；"
+            "Final 729,654→23,072" in compact_summary
+            and "Final Refit：729,654 rows / 23,072 groups" in compact_summary
             and "OOS（未參與訓練）：591,679 rows / 17,346 groups" in compact_summary
             and "Final Loss：0.674436" in compact_summary
         ),
