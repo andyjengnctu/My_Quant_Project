@@ -10,7 +10,7 @@ BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定�
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
 BREAKOUT_QUALITY_DEFAULT_EPOCHS = 100  # 關閉 inner validation 時為固定訓練輪數；開啟時為 epoch 搜尋上限。
-BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 64  # 每次梯度更新的 training sampling units；unique_group_sampling 時代表 unique ticker/date groups。
+BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE = 128  # 8F accepted 基準；unique_group_sampling 時代表 128 個 unique ticker/date groups。8H batch 64 已淘汰。
 BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE = 0.0003  # optimizer 的預設 learning rate；中型多尺度 CNN 使用較低 learning rate 抑制快速過度擬合。
 BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY = 0.0001  # optimizer weight decay；0 表示關閉。Adam 為 coupled L2，AdamW 為 decoupled weight decay。
 BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM = 1.0  # 每次更新前的全域 gradient norm 上限；0 表示關閉。
