@@ -13,7 +13,7 @@
 5. 與當前正式基準的差異、結論、是否採用，以及下一個單一變更。
 6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-22**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-23**。
 
 ---
 
@@ -23,9 +23,9 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260722_231639_449a31e(1).zip` |
-| SHA256 | `afe427a2eeecc9565857f15362dfc1e82118f52d2eb92b65968c00e1f66aa569` |
-| 程式版本範圍 | 使用者已由失敗的 8B recent-decay 退回 8A；目前為 accepted `multiscale_cnn_sequence_only_v1 / baseline`，regime-context 保留為 legacy read-only compatibility |
+| 基準 ZIP | `test-branch-1_20260723_002452_4931f08(1).zip` |
+| SHA256 | `ee90f0712b77d2b1de6b2f97d83fa8c6b7b1550187e4907ef96385d4229d5f0c` |
+| 程式版本範圍 | 使用者已由失敗的 8C cross-sectional rank context 退回 8A；目前為 accepted `multiscale_cnn_sequence_only_v1 / baseline`，8C 程式與 rank sidecar 不在目前基準，regime-context 保留為 legacy read-only compatibility |
 | Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`baseline`；time weight=`none` |
 | 當前最佳研究模型 | `multiscale_cnn_sequence_only_v1`；相較 v1，OOS Precision 持平，Recall、Accuracy、平均 Score 與 Selection→OOS 落差小幅改善 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays 與 labels，不需重建或 relabel；sequence-only forward 不讀取 context values |
@@ -270,6 +270,21 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 判定 | Selection Precision／Lift 上升，但完整 OOS 所有主要指標及泛化落差均惡化；較近期 Selection weighting 加深對 Selection 末期型態的擬合，未提升跨 2021–2026 的泛化 |
 | 下一步 | 維持 8A 基準，改測 8C same-day cross-sectional rank context；不再調 recent-decay 半衰期 |
 
+### 3.15 8C Same-day cross-sectional rank context（2026-07-23）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `REJECTED`；使用者已退回 8A sequence-only／baseline |
+| 程式基準 | 8C patch `breakout_quality_cross_sectional_rank_v1_patch_20260723.zip`，SHA256 `85ec1dae421a289ec1152cfca53df8af4a3ba91575f3e61c186bc7f8aec2f0a4`；結果由使用者提供，完整結果工件未保留；退回 ZIP `test-branch-1_20260723_002452_4931f08(1).zip`，SHA256 `ee90f0712b77d2b1de6b2f97d83fa8c6b7b1550187e4907ef96385d4229d5f0c` |
+| 唯一模型／輸入變更 | 在 8A sequence-only CNN head 加入由事件日及以前資料計算的 20／60／120 日個股報酬同日 percentile；同一 `ticker/date` 的多個 `high_len` 共用相同 rank context |
+| 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、augmentation=`none`、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
+| Dataset／Label | 只新增 rank-context sidecar；300×10 feature bank 與 Label 不變，不 relabel |
+| Selection | 原始 PASS 54.81%、模型 PASS 73.24%、PASS Precision 62.97%、Lift +8.17 pp、Recall 84.16%、Accuracy 64.20%、Score 0.5774 |
+| OOS | 原始 PASS 55.63%、模型 PASS 47.92%、PASS Precision 58.76%、Lift +3.13 pp、Recall 50.61%、Accuracy 52.76%、Score 0.4714 |
+| 相較 8A 基準 | OOS Precision −0.54 pp、Lift −0.53 pp、Recall −2.86 pp、模型 PASS −2.25 pp、Accuracy −0.94 pp、Score −0.0172；Precision gap 由 −2.77 pp 惡化為 −4.22 pp，Score gap 由 −0.0978 惡化為 −0.1061 |
+| 判定 | 同日 percentile 使 Selection Precision／Lift 上升，但完整 OOS Precision、Recall、模型 PASS、Accuracy、Score 與兩項泛化落差全部低於 8A；新增相對強弱 context 仍形成 Selection 捷徑，未提升跨時期泛化 |
+| 下一步 | 維持 8A sequence-only／baseline，停止增加 context；下一個單一實驗改為 8D hybrid BCE + same-day pairwise ranking loss，直接改變學習目標 |
+
 ---
 
 ## 4. 已排除或暫停的方向
@@ -292,6 +307,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 14. ATR／波動率尺度 Label；使用者已實測整體 OOS 沒有優於固定百分比 Label。
 15. 把分年、分季度、分 Fold 或 threshold 診斷當成會直接提升模型能力的實驗；這些只能解釋問題，不列為目前改善優先。
 16. Recent-decay time weighting；60 個月半衰期使 Selection 指標上升，但完整 OOS Precision、Recall、Accuracy、Score 與泛化落差全部惡化。不得再細調 36／48／72／84 個月半衰期。
+17. Same-day 20／60／120 日報酬 percentile context；Selection Precision／Lift 上升，但完整 OOS 主要指標與泛化落差全部低於 8A。停止增加 handcrafted／rank／regime context。
 
 ---
 
@@ -372,21 +388,21 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 #### 優先 8C：Same-day cross-sectional rank context
 
-| 項目 | 固定設計 |
-|---|---|
-| 狀態 | `PLANNED`；下一個單一實驗 |
-| 基準 | `multiscale_cnn_sequence_only_v1 / baseline`；time weight=`none` |
-| 唯一模型／輸入變更 | 新增事件日同日橫斷面 percentile context；CNN sequence、head 寬度及所有訓練條件維持 8A |
-| 第一版特徵 | 只使用由事件日前資料計算的 20／60／120 日個股相對強弱 percentile；避免同時加入 volume、ATR 與 breakout 幅度而無法歸因 |
-| 橫斷面單位 | 先以同一交易日的 unique `ticker/date` candidate groups 計算；同一 group 的多個 high_len rows 共用同一組 rank，不得重複影響排名 |
-| 無未來資訊 | 每個 return 只使用事件日及以前價格；percentile 只使用同日可知候選，不以 OOS 統計量 fit 或 normalize |
-| Dataset／Label | 需要新增／重建 rank context arrays；Label 與 300×10 feature bank 不變，不 relabel |
-| 直接機制 | 把絕對報酬尺度轉成同日相對位置，使牛熊市與不同波動年代下的訊號尺度較一致；不同於已失敗的絕對 regime context |
-| 主要判定 | 相對 8A：OOS Precision ≥59.30%、Lift ≥+3.66 pp、Recall／Accuracy不得明顯下降，且 Precision gap 或 Score gap至少一項縮小 |
+`REJECTED`。相較 8A，完整 OOS Precision −0.54 pp、Lift −0.53 pp、Recall −2.86 pp、模型 PASS −2.25 pp、Accuracy −0.94 pp、Score −0.0172，Precision／Score gap 也都惡化。已退回 8A；不再增加 return、volume、ATR、breakout magnitude 或其他 handcrafted／rank context。
 
 #### 優先 8D：Hybrid classification + same-day ranking loss
 
-只有 8C 未改善時才做。保留 binary cross-entropy，同時加入同日 PASS 應高於 REJECT 的 pairwise ranking loss；它直接優化候選排序，而不是再增加 MFE／MAE 連續輔助目標。Loss weighting 屬 experiment profile，不新增假 architecture 版本。
+| 項目 | 固定設計 |
+|---|---|
+| 狀態 | `PLANNED`；下一個單一實驗 |
+| 基準 | `multiscale_cnn_sequence_only_v1 / baseline`；不新增任何 context；class/time weight=`none` |
+| 唯一學習變更 | 保留原 binary cross-entropy，新增同日 unique `ticker/date` groups 之 PASS／REJECT pairwise ranking loss |
+| Pair 建立 | 每個 training batch 內只配對同一交易日、Label 相反的 unique groups；同一 group 的多個 `high_len` 不得重複放大；無有效 pair 的 batch 只使用 BCE |
+| Ranking 形式 | 對 PASS score 應高於 REJECT score使用穩定 pairwise logistic loss；第一版 ranking loss weight 固定單一值，不同時搜尋 margin／weight |
+| Validation／Refit | Inner Validation 仍只用未加權完整指標選 epoch；Final Refit 使用相同已選 epoch 與同一 loss 規格 |
+| Dataset／Label | 沿用 8A Dataset 與固定百分比 Label；不重建 feature bank、不 relabel |
+| 直接機制 | 不再增加可能漂移的輸入，而是直接要求同日好候選排序高於壞候選；目標與實際 filter 的候選排序用途更一致 |
+| 主要判定 | 相對 8A：OOS Precision ≥59.30%、Lift ≥+3.66 pp，Recall／Accuracy不得明顯下降，且 Precision gap 或 Score gap至少一項縮小；Selection 單獨變好不算成功 |
 
 #### 優先 8E：Multi-seed probability ensemble
 
@@ -405,8 +421,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 退回 multiscale_cnn_v1 / baseline／固定百分比 Label
 → 8A sequence-only context ablation（ACCEPTED；目前基準）
 → 8B recent-decay time weighting（REJECTED；已退回 8A baseline）
-→ NEXT：8C same-day cross-sectional rank context
-→ 若失敗：8D classification + same-day ranking loss
+→ 8C same-day cross-sectional rank context（REJECTED；已退回 8A baseline）
+→ NEXT：8D classification + same-day ranking loss
 → 單模型改善後：8E multi-seed probability ensemble
 ```
 

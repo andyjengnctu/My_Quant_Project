@@ -17,7 +17,7 @@
   "early_stopping_enabled": true,
   "early_stopping_min_delta": 0.0,
   "early_stopping_patience": 1,
-  "elapsed_sec": 1016.538,
+  "elapsed_sec": 1007.529,
   "epoch_selection_source": "inner_validation_loss",
   "evaluation_batch_size": 4096,
   "evaluation_execution": {
@@ -145,7 +145,7 @@
       {
         "batch_loss": 0.674122,
         "cumulative_optimizer_steps": 4211,
-        "elapsed_sec": 179.006,
+        "elapsed_sec": 178.014,
         "epoch": 1,
         "inner_train_metrics": {
           "accuracy": 0.620009,
@@ -179,7 +179,7 @@
       {
         "batch_loss": 0.648833,
         "cumulative_optimizer_steps": 8422,
-        "elapsed_sec": 180.369,
+        "elapsed_sec": 179.405,
         "epoch": 2,
         "inner_train_metrics": {
           "accuracy": 0.631535,
@@ -213,7 +213,7 @@
       {
         "batch_loss": 0.631134,
         "cumulative_optimizer_steps": 12633,
-        "elapsed_sec": 177.725,
+        "elapsed_sec": 175.001,
         "epoch": 3,
         "inner_train_metrics": {
           "accuracy": 0.675261,
@@ -517,6 +517,27 @@
       "close_to_breakout_level",
       "high_to_breakout_level"
     ],
+    "cross_sectional_rank_context": {
+      "artifact": {
+        "filename": "cross_sectional_rank_context.npy",
+        "sha256": "c81897a328ec6ff92aa802a3bd768899bb7f0a6681bf03b24f8113f76f6e2cee",
+        "size_bytes": 21516464
+      },
+      "columns": [
+        "stock_return_20d_percentile",
+        "stock_return_60d_percentile",
+        "stock_return_120d_percentile"
+      ],
+      "ranking_universe": "same_date_unique_ticker_date_candidate_groups",
+      "return_lookback_bars": [
+        20,
+        60,
+        120
+      ],
+      "schema_version": 1,
+      "singleton_percentile": 0.5,
+      "tie_method": "average"
+    },
     "dataset": "full",
     "dataset_artifacts": {
       "event_context": {
@@ -761,6 +782,10 @@
       "max_adverse_return": -0.1,
       "min_mfe_return": 0.05,
       "min_reward_risk_ratio": 2.0
+    },
+    "rank_context_build": {
+      "elapsed_sec": 6.147,
+      "mode": "derived_from_existing_feature_bank_and_events"
     },
     "source_data_date_range": {
       "end": "2026-03-02",
@@ -1009,7 +1034,7 @@
     {
       "batch_loss": 0.67154,
       "cumulative_optimizer_steps": 5701,
-      "elapsed_sec": 232.023,
+      "elapsed_sec": 229.626,
       "epoch": 1,
       "epoch_fraction": 1.0,
       "learning_rate_end": 0.0003,
@@ -1035,7 +1060,7 @@
     {
       "batch_loss": 0.651137,
       "cumulative_optimizer_steps": 11402,
-      "elapsed_sec": 231.179,
+      "elapsed_sec": 229.523,
       "epoch": 2,
       "epoch_fraction": 1.0,
       "learning_rate_end": 0.0003,
