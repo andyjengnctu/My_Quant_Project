@@ -23,9 +23,9 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260723_002452_4931f08(1).zip` |
-| SHA256 | `ee90f0712b77d2b1de6b2f97d83fa8c6b7b1550187e4907ef96385d4229d5f0c` |
-| 程式版本範圍 | 使用者已由失敗的 8C cross-sectional rank context 退回 8A；目前為 accepted `multiscale_cnn_sequence_only_v1 / baseline`，8C 程式與 rank sidecar 不在目前基準，regime-context 保留為 legacy read-only compatibility |
+| 基準 ZIP | `test-branch-1_20260723_082925_cc41468(2).zip` |
+| SHA256 | `0a13a83aeb93572c9eda96999cf2079db920c0b78ecfcf2046e87c1189e32f68` |
+| 程式版本範圍 | 使用者已由失敗的 8E fixed 8-seed probability ensemble 退回 8A；目前為 accepted `multiscale_cnn_sequence_only_v1 / baseline`，8C rank context、8D ranking loss 與 8E ensemble 程式均不在目前基準，regime-context 保留為 legacy read-only compatibility |
 | Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`baseline`；time weight=`none` |
 | 當前最佳研究模型 | `multiscale_cnn_sequence_only_v1`；相較 v1，OOS Precision 持平，Recall、Accuracy、平均 Score 與 Selection→OOS 落差小幅改善 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays 與 labels，不需重建或 relabel；sequence-only forward 不讀取 context values |
@@ -285,6 +285,37 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 判定 | 同日 percentile 使 Selection Precision／Lift 上升，但完整 OOS Precision、Recall、模型 PASS、Accuracy、Score 與兩項泛化落差全部低於 8A；新增相對強弱 context 仍形成 Selection 捷徑，未提升跨時期泛化 |
 | 下一步 | 維持 8A sequence-only／baseline，停止增加 context；下一個單一實驗改為 8D hybrid BCE + same-day pairwise ranking loss，直接改變學習目標 |
 
+### 3.16 8D Hybrid BCE + same-day pairwise ranking loss（2026-07-23）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `REJECTED`；使用者已退回 8A sequence-only／baseline |
+| 程式基準 | 8D patch `breakout_quality_same_day_pairwise_rank_patch_20260723.zip`，SHA256 `1ffa0c5a028ed962ceb377e631272b152f363061e0c5809b9ae08b8c5e5c4a2b`；結果完成後退回 ZIP `test-branch-1_20260723_082925_cc41468(1).zip`，SHA256 `0a13a83aeb93572c9eda96999cf2079db920c0b78ecfcf2046e87c1189e32f68` |
+| 唯一學習變更 | 8A binary cross-entropy 加上權重 0.20 的同日 unique `ticker/date` PASS／REJECT pairwise logistic ranking loss；模型輸入與架構不變 |
+| 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、augmentation=`none`、seed 42、threshold 0.5、`selected_epochs`、class/time weight=`none` |
+| Dataset／Label | 不重建、不 relabel |
+| Selection | 原始 PASS 54.81%、模型 PASS 71.31%、PASS Precision 62.37%、Lift +7.56 pp、Recall 81.15%、Accuracy 62.83%、Score 0.5713 |
+| OOS | 原始 PASS 55.63%、模型 PASS 46.49%、PASS Precision 59.11%、Lift +3.48 pp、Recall 49.40%、Accuracy 52.84%、Score 0.4744 |
+| 相較 8A 基準 | OOS Precision −0.19 pp、Lift −0.18 pp、Recall −4.07 pp、模型 PASS −3.68 pp、Accuracy −0.86 pp、Score −0.0142；Precision gap 由 −2.77 pp 惡化為 −3.25 pp，Score gap 只由 −0.0978 微幅縮至 −0.0969 |
+| 判定 | Ranking loss 使模型更保守，Recall 與可用候選數下降，但 OOS Precision 未提高；微小 Score gap 改善不足以抵銷所有主要 OOS 指標退步 |
+| 下一步 | 停止微調 ranking weight、margin 與 pair sampling；改測固定 multi-seed probability ensemble |
+
+### 3.17 8E Fixed 8-seed probability ensemble（2026-07-23）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `REJECTED`；使用者已退回 8A sequence-only／baseline |
+| 程式基準 | 8E patch `breakout_quality_fixed_8seed_ensemble_parallel_patch_20260723.zip`，SHA256 `1cfac3a5260df77b35f0f322ce073fa25554a1534598d73f5389e06213c41843`；結果完成後退回 ZIP `test-branch-1_20260723_082925_cc41468(2).zip`，SHA256 `0a13a83aeb93572c9eda96999cf2079db920c0b78ecfcf2046e87c1189e32f68` |
+| 唯一學習變更 | 固定訓練 seeds 42～49 的八個 8A sequence-only members，最終使用八個 PASS probabilities 的算術平均；不挑 seed、不投票、threshold 維持 0.5 |
+| 執行方式 | 最多兩個 seed processes 平行；每個 member 使用獨立工件與固定訓練契約 |
+| 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、augmentation=`none`、threshold 0.5、`selected_epochs`、class/time weight=`none` |
+| Dataset／Label | 不重建、不 relabel |
+| Selection | 原始 PASS 54.81%、模型 PASS 70.92%、PASS Precision 63.29%、Lift +8.48 pp、Recall 81.89%、Accuracy 64.04%、Score 0.5564 |
+| OOS | 原始 PASS 55.63%、模型 PASS 39.68%、PASS Precision 58.23%、Lift +2.60 pp、Recall 41.53%、Accuracy 50.90%、Score 0.4476 |
+| 相較 8A 基準 | OOS Precision −1.07 pp、Lift −1.06 pp、Recall −11.94 pp、模型 PASS −10.49 pp、Accuracy −2.80 pp、Score −0.0410；Precision gap 由 −2.77 pp 惡化為 −5.06 pp，Score gap 由 −0.0978 惡化為 −0.1088 |
+| 判定 | 八員平均降低了 seed 方差，卻無法修復所有 members 共有的 OOS score drift；固定 threshold 下模型顯著更保守，完整 OOS 全面低於 8A |
+| 下一步 | 停止 ensemble seed 數、聚合方式與投票規則的細調；回到單模型，先修正 sequence-only 訓練仍以重複 event rows 作為 optimizer sampling unit 的問題 |
+
 ---
 
 ## 4. 已排除或暫停的方向
@@ -308,6 +339,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 15. 把分年、分季度、分 Fold 或 threshold 診斷當成會直接提升模型能力的實驗；這些只能解釋問題，不列為目前改善優先。
 16. Recent-decay time weighting；60 個月半衰期使 Selection 指標上升，但完整 OOS Precision、Recall、Accuracy、Score 與泛化落差全部惡化。不得再細調 36／48／72／84 個月半衰期。
 17. Same-day 20／60／120 日報酬 percentile context；Selection Precision／Lift 上升，但完整 OOS 主要指標與泛化落差全部低於 8A。停止增加 handcrafted／rank／regime context。
+18. Same-day pairwise ranking loss；使模型更保守，OOS Precision 未提高且 Recall、Accuracy、Score 下降。不得再調 ranking weight、margin 或 pair sampling。
+19. 固定 8-seed probability ensemble；OOS Precision、Recall、模型 PASS、Accuracy、Score 與泛化落差全面低於 8A。不得再細調 seed 數、平均 logits／probabilities、投票或 min-agree。
 
 ---
 
@@ -392,21 +425,27 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 #### 優先 8D：Hybrid classification + same-day ranking loss
 
+`REJECTED`。相較 8A，完整 OOS Precision −0.19 pp、Lift −0.18 pp、Recall −4.07 pp、模型 PASS −3.68 pp、Accuracy −0.86 pp、Score −0.0142；模型更保守但 Precision 未提高。停止 ranking loss 路線。
+
+#### 優先 8E：Fixed 8-seed probability ensemble
+
+`REJECTED`。相較 8A，完整 OOS Precision −1.07 pp、Lift −1.06 pp、Recall −11.94 pp、模型 PASS −10.49 pp、Accuracy −2.80 pp、Score −0.0410，Precision／Score gap 均惡化。Seed variance 不是目前主要瓶頸，不再調 ensemble 聚合。
+
+#### 優先 8F：Unique ticker/date group training
+
 | 項目 | 固定設計 |
 |---|---|
 | 狀態 | `PLANNED`；下一個單一實驗 |
-| 基準 | `multiscale_cnn_sequence_only_v1 / baseline`；不新增任何 context；class/time weight=`none` |
-| 唯一學習變更 | 保留原 binary cross-entropy，新增同日 unique `ticker/date` groups 之 PASS／REJECT pairwise ranking loss |
-| Pair 建立 | 每個 training batch 內只配對同一交易日、Label 相反的 unique groups；同一 group 的多個 `high_len` 不得重複放大；無有效 pair 的 batch 只使用 BCE |
-| Ranking 形式 | 對 PASS score 應高於 REJECT score使用穩定 pairwise logistic loss；第一版 ranking loss weight 固定單一值，不同時搜尋 margin／weight |
-| Validation／Refit | Inner Validation 仍只用未加權完整指標選 epoch；Final Refit 使用相同已選 epoch 與同一 loss 規格 |
-| Dataset／Label | 沿用 8A Dataset 與固定百分比 Label；不重建 feature bank、不 relabel |
-| 直接機制 | 不再增加可能漂移的輸入，而是直接要求同日好候選排序高於壞候選；目標與實際 filter 的候選排序用途更一致 |
-| 主要判定 | 相對 8A：OOS Precision ≥59.30%、Lift ≥+3.66 pp，Recall／Accuracy不得明顯下降，且 Precision gap 或 Score gap至少一項縮小；Selection 單獨變好不算成功 |
+| 基準 | `multiscale_cnn_sequence_only_v1 / baseline`；seed 42、threshold 0.5、class/time weight=`none` |
+| 唯一訓練變更 | Inner Train 與 Final Refit 在 shuffle／batching 前，將 training indices 壓成每個 unique `ticker/date` group 一筆；batch size 128 改為 128 個 unique groups |
+| 為何可去重 | 8A 不讀取 4 維 event context；同一 `ticker/date` 的多個 `high_len` rows 指向相同 feature-bank sequence 且 Label 一致，因此移除重複 rows 不會丟失模型可見資訊 |
+| 要修正的問題 | 現行 `1 / group_size` sample weight 只平衡加權 Loss；因每個 batch 都以自身 weight sum 正規化，重複 rows 仍可能跨多個 optimizer steps 反覆影響 Adam。改成 group-level sampling 後，每個 group 每個 epoch只進入一次 optimizer sampling |
+| Epoch／Refit | Epoch 上限、patience、LR 與 `selected_epochs` 不變；epoch 的單位自然改為完整走過一次 unique training groups，Final Refit 使用選出的 group epochs |
+| Validation／OOS | 維持既有完整 rows 與 ticker/date group-weighted 報表，不改正式評估口徑 |
+| Dataset／Label | 不重建 feature bank、不 relabel；只由既有 `event_group_index`／`ticker,date` 產生 deterministic representative indices |
+| 效率 | 每個 epoch 的 training rows 由重複 event rows 降為 unique groups；預期可大幅降低單次 epoch 時間，但實際總時間仍取決於選出的 group epochs |
+| 主要判定 | 相對 8A：OOS Precision ≥59.30%、Lift ≥+3.66 pp；Recall、Accuracy不得明顯下降，且 Precision gap 或 Score gap至少一項縮小 |
 
-#### 優先 8E：Multi-seed probability ensemble
-
-只在至少一個單模型已接近或超過 v1 後進行。多 seed 平均可降低初始化變異，但不能修復所有 seed 都共有的系統性 OOS drift，因此不列為第一步。
 
 ---
 
@@ -422,8 +461,9 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 8A sequence-only context ablation（ACCEPTED；目前基準）
 → 8B recent-decay time weighting（REJECTED；已退回 8A baseline）
 → 8C same-day cross-sectional rank context（REJECTED；已退回 8A baseline）
-→ NEXT：8D classification + same-day ranking loss
-→ 單模型改善後：8E multi-seed probability ensemble
+→ 8D classification + same-day ranking loss（REJECTED；已退回 8A baseline）
+→ 8E fixed 8-seed probability ensemble（REJECTED；已退回 8A baseline）
+→ NEXT：8F unique ticker/date group training
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
