@@ -475,6 +475,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         f"lr_schedule_parameters={schedule_parameters}, "
         f"augmentation={experiment.augmentation_name}, "
         f"augmentation_parameters={augmentation_parameters}, "
+        f"training_sampling={experiment.training_sampling_mode}, "
         f"lr={float(args.lr)}, weight_decay={float(args.weight_decay)}, "
         f"gradient_clip_norm={float(args.gradient_clip_norm)}, "
         f"final_refit_mode={args.final_refit_mode}, "
@@ -613,6 +614,9 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         preload_feature_bank=bool(defaults.preload_feature_bank),
         experiment_profile=str(defaults.experiment_profile),
         optimizer_name=str(defaults.optimizer_name),
+        lr_schedule_name=str(defaults.lr_schedule_name),
+        augmentation_name=str(defaults.augmentation_name),
+        training_sampling_mode=str(defaults.training_sampling_mode),
         lr=float(defaults.lr),
         weight_decay=float(defaults.weight_decay),
         gradient_clip_norm=float(defaults.gradient_clip_norm),
@@ -675,6 +679,7 @@ def _print_policy_defaults(
         f"- LR Schedule Parameters：{schedule_parameters or '-'}\n"
         f"- Augmentation：{experiment.augmentation_name}\n"
         f"- Augmentation Parameters：{augmentation_parameters or '-'}\n"
+        f"- Training Sampling：{experiment.training_sampling_mode}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"
         f"- Weight Decay：{float(train_settings.weight_decay):g}\n"
         f"- Gradient Clip Norm：{float(train_settings.gradient_clip_norm):g}\n"

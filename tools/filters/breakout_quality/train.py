@@ -27,6 +27,8 @@ from config.breakout_quality_experiments import (
     SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES,
     SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
+    TRAINING_SAMPLING_ALL_EVENT_ROWS,
+    TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     get_breakout_quality_experiment_profile,
 )
 
@@ -199,7 +201,8 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
         help=(
             "訓練實驗設定；模型架構固定由 policy 管理。"
-            "profile 可獨立指定 optimizer、step-based LR schedule 與 augmentation"
+            "profile 可獨立指定 optimizer、step-based LR schedule、augmentation "
+            "與 training sampling unit"
         ),
     )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
@@ -281,6 +284,7 @@ def parse_args(argv=None):
     args.optimizer_name = experiment.optimizer_name
     args.lr_schedule_name = experiment.lr_schedule_name
     args.augmentation_name = experiment.augmentation_name
+    args.training_sampling_mode = experiment.training_sampling_mode
     return args
 
 
@@ -294,6 +298,7 @@ def validate_training_args(args) -> None:
     optimizer_name = str(args.optimizer_name).strip().lower()
     lr_schedule_name = str(args.lr_schedule_name).strip().lower()
     augmentation_name = str(args.augmentation_name).strip().lower()
+    training_sampling_mode = str(args.training_sampling_mode).strip().lower()
     learning_rate = float(args.lr)
     weight_decay = float(args.weight_decay)
     gradient_clip_norm = float(args.gradient_clip_norm)
@@ -344,6 +349,12 @@ def validate_training_args(args) -> None:
             "experiment profile 與 augmentation_name 不一致: "
             f"profile={experiment.name}, augmentation={augmentation_name}, "
             f"expected={experiment.augmentation_name}"
+        )
+    if training_sampling_mode != experiment.training_sampling_mode:
+        raise ValueError(
+            "experiment profile 與 training_sampling_mode 不一致: "
+            f"profile={experiment.name}, sampling={training_sampling_mode}, "
+            f"expected={experiment.training_sampling_mode}"
         )
     if validation_months < 1:
         raise ValueError("inner-validation-months 必須 >=1")
@@ -429,8 +440,21 @@ def _render_training_summary(
     split_report: dict,
     use_inner_validation: bool,
     final_train_loss: float,
+    training_sampling_mode: str,
+    inner_train_sampling_summary: dict[str, object],
+    final_refit_sampling_summary: dict[str, object],
 ) -> str:
-    lines = ["訓練摘要"]
+    lines = [
+        "訓練摘要",
+        (
+            "  - Training Sampling："
+            f"{training_sampling_mode}；"
+            f"Inner {int(inner_train_sampling_summary['source_row_count']):,}→"
+            f"{int(inner_train_sampling_summary['sampled_row_count']):,}；"
+            f"Final {int(final_refit_sampling_summary['source_row_count']):,}→"
+            f"{int(final_refit_sampling_summary['sampled_row_count']):,}"
+        ),
+    ]
     if use_inner_validation:
         lines.extend(
             [
@@ -590,6 +614,104 @@ def _build_sample_weights(
         occupied[idx] = True
         summaries[str(split_name)] = summary
     return weights, summaries
+
+
+def _resolve_training_sampling_indices(
+    events: pd.DataFrame,
+    labels: np.ndarray,
+    indices: np.ndarray,
+    *,
+    mode: str,
+    model_spec,
+) -> tuple[np.ndarray, dict[str, object]]:
+    idx = np.asarray(indices, dtype=np.int64)
+    if idx.ndim != 1:
+        raise ValueError(f"training sampling indices 必須是 1D: {idx.shape}")
+    if idx.size == 0:
+        raise ValueError("training sampling 至少需要一筆 eligible row")
+    if np.unique(idx).size != idx.size:
+        raise ValueError("training sampling indices 不可包含重複 row index")
+    if int(idx.min()) < 0 or int(idx.max()) >= len(events):
+        raise ValueError("training sampling indices 超出 events 範圍")
+
+    normalized_mode = str(mode).strip().lower()
+    ordered_idx = np.sort(idx, kind="stable")
+    group_keys = event_group_keys(events).iloc[ordered_idx].to_numpy(dtype=object)
+    unique_group_count = int(pd.unique(group_keys).size)
+    if normalized_mode == TRAINING_SAMPLING_ALL_EVENT_ROWS:
+        return idx, {
+            "mode": normalized_mode,
+            "sampling_unit": "event_row",
+            "batch_size_unit": "event_rows",
+            "source_row_count": int(idx.size),
+            "sampled_row_count": int(idx.size),
+            "unique_group_count": unique_group_count,
+            "duplicate_rows_removed": 0,
+            "representative_rule": None,
+            "uses_all_eligible_rows": True,
+            "uses_all_eligible_groups": True,
+        }
+
+    if normalized_mode != TRAINING_SAMPLING_UNIQUE_TICKER_DATE:
+        raise ValueError(f"不支援的 training sampling mode: {mode!r}")
+    if bool(model_spec.use_dataset_context) or bool(model_spec.derived_context_features):
+        raise ValueError(
+            "unique ticker/date sampling 只允許不讀取 dataset/derived context 的 sequence-only architecture"
+        )
+    required_columns = {"ticker", "date", "group_index"}
+    missing = sorted(required_columns - set(events.columns))
+    if missing:
+        raise KeyError(f"unique group sampling 缺少 events 欄位: {missing}")
+
+    frame = pd.DataFrame(
+        {
+            "row_index": ordered_idx,
+            "group_key": group_keys,
+            "feature_group_index": pd.to_numeric(
+                events.iloc[ordered_idx]["group_index"], errors="raise"
+            ).to_numpy(dtype=np.int64),
+            "label": np.asarray(labels, dtype=np.int64)[ordered_idx],
+        }
+    )
+    grouped = frame.groupby("group_key", sort=False)
+    mixed_label = grouped["label"].nunique()
+    if bool((mixed_label != 1).any()):
+        bad = mixed_label[mixed_label != 1].index.astype(str).tolist()[:5]
+        raise ValueError(f"unique group sampling 發現 ticker/date 混合 label: {bad}")
+    mixed_feature_group = grouped["feature_group_index"].nunique()
+    if bool((mixed_feature_group != 1).any()):
+        bad = mixed_feature_group[mixed_feature_group != 1].index.astype(str).tolist()[:5]
+        raise ValueError(
+            f"unique group sampling 發現 ticker/date 對應多個 feature group: {bad}"
+        )
+
+    representatives = (
+        frame.drop_duplicates("group_key", keep="first")["row_index"]
+        .to_numpy(dtype=np.int64)
+    )
+    if representatives.size != unique_group_count:
+        raise RuntimeError(
+            "unique group sampling representative 數與 group 數不一致: "
+            f"representatives={representatives.size}, groups={unique_group_count}"
+        )
+    representative_group_keys = (
+        event_group_keys(events).iloc[representatives].to_numpy()
+    )
+    if np.unique(representative_group_keys).size != representatives.size:
+        raise RuntimeError("unique group sampling representative 仍含重複 ticker/date")
+
+    return representatives, {
+        "mode": normalized_mode,
+        "sampling_unit": "unique_ticker_date_group",
+        "batch_size_unit": "unique_ticker_date_groups",
+        "source_row_count": int(idx.size),
+        "sampled_row_count": int(representatives.size),
+        "unique_group_count": unique_group_count,
+        "duplicate_rows_removed": int(idx.size - representatives.size),
+        "representative_rule": "minimum_original_event_row_index",
+        "uses_all_eligible_rows": bool(representatives.size == idx.size),
+        "uses_all_eligible_groups": True,
+    }
 
 def _resolve_final_refit_target_steps(
     *,
@@ -1021,6 +1143,8 @@ def _select_epoch_with_inner_validation(
     y: np.ndarray,
     events: pd.DataFrame,
     train_idx: np.ndarray,
+    training_sampling_idx: np.ndarray,
+    training_sampling_summary: dict[str, object],
     validation_idx: np.ndarray,
     max_epochs: int,
     batch_size: int,
@@ -1045,7 +1169,7 @@ def _select_epoch_with_inner_validation(
     training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
         len(y),
-        {"inner_train": train_idx},
+        {"inner_train": training_sampling_idx},
         time_weight_mode=time_weight_mode,
     )
     evaluation_sample_weights, _ = _build_sample_weights(
@@ -1062,7 +1186,7 @@ def _select_epoch_with_inner_validation(
         feature_count=X.shape[2],
         context_count=C.shape[1],
         y=y,
-        train_idx=train_idx,
+        train_idx=training_sampling_idx,
         sample_weights=training_sample_weights,
         optimizer_name=optimizer_name,
         learning_rate=learning_rate,
@@ -1070,7 +1194,7 @@ def _select_epoch_with_inner_validation(
         class_weight_mode=class_weight_mode,
         seed=seed,
     )
-    batches_per_epoch = int(math.ceil(len(train_idx) / int(batch_size)))
+    batches_per_epoch = int(math.ceil(len(training_sampling_idx) / int(batch_size)))
     schedule_plan = _build_learning_rate_schedule_plan(
         schedule_name=lr_schedule_name,
         base_learning_rate=learning_rate,
@@ -1101,7 +1225,7 @@ def _select_epoch_with_inner_validation(
             X=X,
             C=C,
             y=y,
-            train_idx=train_idx,
+            train_idx=training_sampling_idx,
             sample_weights=training_sample_weights,
             class_weights=class_weights,
             batch_size=batch_size,
@@ -1184,9 +1308,10 @@ def _select_epoch_with_inner_validation(
         "completed_epochs": int(len(history)),
         "batches_per_epoch": int(batches_per_epoch),
         "best_optimizer_steps": int(
-            int(best_epoch) * math.ceil(len(train_idx) / int(batch_size))
+            int(best_epoch) * math.ceil(len(training_sampling_idx) / int(batch_size))
         ),
         "sample_weight_summaries": sample_weight_summaries,
+        "training_sampling": dict(training_sampling_summary),
         "learning_rate_schedule": {
             **schedule_plan,
             "actual_optimizer_steps": int(cumulative_optimizer_steps),
@@ -1210,6 +1335,8 @@ def _fit_full_selection(
     y: np.ndarray,
     events: pd.DataFrame,
     train_idx: np.ndarray,
+    training_sampling_idx: np.ndarray,
+    training_sampling_summary: dict[str, object],
     epochs: int,
     target_optimizer_steps: int | None,
     batch_size: int,
@@ -1232,7 +1359,7 @@ def _fit_full_selection(
     training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
         len(y),
-        {"final_refit": train_idx},
+        {"final_refit": training_sampling_idx},
         time_weight_mode=time_weight_mode,
     )
     evaluation_sample_weights, _ = _build_sample_weights(
@@ -1246,7 +1373,7 @@ def _fit_full_selection(
         feature_count=X.shape[2],
         context_count=C.shape[1],
         y=y,
-        train_idx=train_idx,
+        train_idx=training_sampling_idx,
         sample_weights=training_sample_weights,
         optimizer_name=optimizer_name,
         learning_rate=learning_rate,
@@ -1254,7 +1381,7 @@ def _fit_full_selection(
         class_weight_mode=class_weight_mode,
         seed=seed,
     )
-    batches_per_epoch = int(math.ceil(len(train_idx) / int(batch_size)))
+    batches_per_epoch = int(math.ceil(len(training_sampling_idx) / int(batch_size)))
     requested_steps = (
         int(target_optimizer_steps)
         if target_optimizer_steps is not None
@@ -1262,7 +1389,7 @@ def _fit_full_selection(
     )
     if requested_steps < batches_per_epoch:
         raise ValueError(
-            "final refit optimizer steps 不足以讓全部 eligible Selection rows 至少使用一次: "
+            "final refit optimizer steps 不足以讓全部 eligible training sampling units 至少使用一次: "
             f"target={requested_steps}, minimum={batches_per_epoch}"
         )
     planned_cycles = int(math.ceil(requested_steps / batches_per_epoch))
@@ -1307,7 +1434,7 @@ def _fit_full_selection(
             X=X,
             C=C,
             y=y,
-            train_idx=train_idx,
+            train_idx=training_sampling_idx,
             sample_weights=training_sample_weights,
             class_weights=class_weights,
             batch_size=batch_size,
@@ -1380,6 +1507,7 @@ def _fit_full_selection(
             round(float(value), 8) for value in class_weights_np.tolist()
         ],
         "sample_weight_summaries": sample_weight_summaries,
+        "training_sampling": dict(training_sampling_summary),
         "batches_per_epoch": int(batches_per_epoch),
         "target_optimizer_steps": int(requested_steps),
         "actual_optimizer_steps": int(completed_optimizer_steps),
@@ -1411,6 +1539,8 @@ def main(argv=None) -> int:
     preload_feature_bank = bool(args.preload_feature_bank)
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
     experiment_profile = experiment.name
+    training_sampling_mode = experiment.training_sampling_mode
+    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     optimizer_name = experiment.optimizer_name
     lr_schedule_name = experiment.lr_schedule_name
     lr_schedule_parameters = experiment.lr_schedule_parameters()
@@ -1534,6 +1664,35 @@ def main(argv=None) -> int:
     inner_train_idx = np.asarray(inner_train_idx, dtype=np.int64)
     inner_validation_idx = np.asarray(inner_validation_idx, dtype=np.int64)
     final_refit_idx = np.asarray(final_refit_idx, dtype=np.int64)
+    inner_train_sampling_idx, inner_train_sampling_summary = (
+        _resolve_training_sampling_indices(
+            events,
+            y,
+            inner_train_idx,
+            mode=training_sampling_mode,
+            model_spec=model_spec,
+        )
+    )
+    final_refit_sampling_idx, final_refit_sampling_summary = (
+        _resolve_training_sampling_indices(
+            events,
+            y,
+            final_refit_idx,
+            mode=training_sampling_mode,
+            model_spec=model_spec,
+        )
+    )
+    if len(inner_train_sampling_idx) < min_train_samples:
+        raise ValueError(
+            "可訓練 sampling units 不足: "
+            f"sampled={len(inner_train_sampling_idx)}, min={min_train_samples}, "
+            f"mode={training_sampling_mode}"
+        )
+    if len(set(y[inner_train_sampling_idx].tolist())) < 2:
+        raise ValueError(
+            "sampled inner train 必須同時包含 PASS/REJECT，"
+            f"mode={training_sampling_mode}, labels={label_counts(y[inner_train_sampling_idx])}"
+        )
 
     epoch_selection = None
     selected_optimizer_steps = None
@@ -1546,6 +1705,8 @@ def main(argv=None) -> int:
             y=y,
             events=events,
             train_idx=inner_train_idx,
+            training_sampling_idx=inner_train_sampling_idx,
+            training_sampling_summary=inner_train_sampling_summary,
             validation_idx=inner_validation_idx,
             max_epochs=max_epochs,
             batch_size=batch_size,
@@ -1573,7 +1734,7 @@ def main(argv=None) -> int:
         epoch_selection_source = "inner_validation_loss"
         phase_name = "full_refit"
         final_batches_per_epoch = int(
-            math.ceil(len(final_refit_idx) / int(batch_size))
+            math.ceil(len(final_refit_sampling_idx) / int(batch_size))
         )
         resolved_target_steps, minimum_full_pass_applied = (
             _resolve_final_refit_target_steps(
@@ -1603,6 +1764,8 @@ def main(argv=None) -> int:
         y=y,
         events=events,
         train_idx=final_refit_idx,
+        training_sampling_idx=final_refit_sampling_idx,
+        training_sampling_summary=final_refit_sampling_summary,
         epochs=selected_epoch,
         target_optimizer_steps=final_target_optimizer_steps,
         batch_size=batch_size,
@@ -1625,8 +1788,12 @@ def main(argv=None) -> int:
     final_refit_plan = {
         "mode": final_refit_mode,
         "inner_train_row_count": int(len(inner_train_idx)),
+        "inner_train_sampling_row_count": int(len(inner_train_sampling_idx)),
         "final_refit_row_count": int(len(final_refit_idx)),
+        "final_refit_sampling_row_count": int(len(final_refit_sampling_idx)),
+        "training_sampling_mode": training_sampling_mode,
         "batch_size": int(batch_size),
+        "batch_size_unit": final_refit_sampling_summary["batch_size_unit"],
         "inner_train_batches_per_epoch": (
             int(epoch_selection["batches_per_epoch"])
             if epoch_selection is not None
@@ -1642,7 +1809,13 @@ def main(argv=None) -> int:
         "last_epoch_fraction": float(final_fit["last_epoch_fraction"]),
         "minimum_full_pass_applied": bool(minimum_full_pass_applied),
         "all_eligible_selection_rows_seen_at_least_once": bool(
-            int(final_fit["actual_optimizer_steps"])
+            final_refit_sampling_summary["uses_all_eligible_rows"]
+            and int(final_fit["actual_optimizer_steps"])
+            >= int(final_fit["batches_per_epoch"])
+        ),
+        "all_eligible_selection_groups_seen_at_least_once": bool(
+            final_refit_sampling_summary["uses_all_eligible_groups"]
+            and int(final_fit["actual_optimizer_steps"])
             >= int(final_fit["batches_per_epoch"])
         ),
     }
@@ -1665,7 +1838,6 @@ def main(argv=None) -> int:
     ):
         stale_path.unlink(missing_ok=True)
 
-    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     trainable_parameter_count = count_trainable_parameters(model)
     torch.save(
         {
@@ -1756,7 +1928,17 @@ def main(argv=None) -> int:
         "early_stopping_min_delta": min_delta if use_inner_validation else None,
         "inner_validation_used": use_inner_validation,
         "inner_validation_months": validation_months if use_inner_validation else None,
-        "training_uses_all_eligible_selection_rows": True,
+        "training_uses_all_eligible_selection_rows": bool(
+            final_refit_sampling_summary["uses_all_eligible_rows"]
+        ),
+        "training_uses_all_eligible_selection_groups": True,
+        "training_sampling": {
+            "mode": training_sampling_mode,
+            "inner_train": inner_train_sampling_summary,
+            "final_refit": final_refit_sampling_summary,
+            "validation_sampling_enabled": False,
+            "oos_sampling_enabled": False,
+        },
         "oos_predictions_used_during_training": False,
         "oos_metrics_emitted_by_train": False,
         "model_information_cutoff": model_information_cutoff,
@@ -1831,8 +2013,17 @@ def main(argv=None) -> int:
             "batch_boundaries_changed": False,
             "reduction_order_changed": False,
             "uses_all_requested_rows": True,
-            "training_sampling_enabled": False,
-            "training_order_changed": False,
+            "training_sampling_enabled": bool(
+                training_sampling_mode != TRAINING_SAMPLING_ALL_EVENT_ROWS
+            ),
+            "training_sampling_mode": training_sampling_mode,
+            "training_sampling_unit": final_refit_sampling_summary["sampling_unit"],
+            "training_batch_boundaries_changed": bool(
+                training_sampling_mode != TRAINING_SAMPLING_ALL_EVENT_ROWS
+            ),
+            "training_order_changed": bool(
+                training_sampling_mode != TRAINING_SAMPLING_ALL_EVENT_ROWS
+            ),
             "final_metrics_reused_from_last_full_epoch_evaluation": True,
             "optimizer_name": optimizer_name,
             "lr_schedule_name": lr_schedule_name,
@@ -1866,8 +2057,9 @@ def main(argv=None) -> int:
             "features use D0 and earlier only; outer Selection/OOS dates come from "
             "core.walk_forward_policy; inner validation, when enabled, is confined "
             "to Selection and only selects epoch; the final model is refit on all "
-            "eligible Selection rows with the configured refit-step policy; fixed threshold "
+            "eligible Selection groups with the configured refit-step policy; fixed threshold "
             "is committed before OOS; "
+            "training sampling uses ticker/date and existing feature-group identity only; "
             "OOS predictions and metrics are not used by train.py"
         ),
         "elapsed_sec": round(time.perf_counter() - started, 3),
@@ -1879,6 +2071,9 @@ def main(argv=None) -> int:
             split_report=split_report,
             use_inner_validation=use_inner_validation,
             final_train_loss=final_train_metrics["loss"],
+            training_sampling_mode=training_sampling_mode,
+            inner_train_sampling_summary=inner_train_sampling_summary,
+            final_refit_sampling_summary=final_refit_sampling_summary,
         )
     )
     print("\n輸出工件")

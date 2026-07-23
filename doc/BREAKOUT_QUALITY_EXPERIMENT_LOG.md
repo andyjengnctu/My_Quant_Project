@@ -23,12 +23,12 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260723_082925_cc41468(2).zip` |
-| SHA256 | `0a13a83aeb93572c9eda96999cf2079db920c0b78ecfcf2046e87c1189e32f68` |
-| 程式版本範圍 | 使用者已由失敗的 8E fixed 8-seed probability ensemble 退回 8A；目前為 accepted `multiscale_cnn_sequence_only_v1 / baseline`，8C rank context、8D ranking loss 與 8E ensemble 程式均不在目前基準，regime-context 保留為 legacy read-only compatibility |
-| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`baseline`；time weight=`none` |
-| 當前最佳研究模型 | `multiscale_cnn_sequence_only_v1`；相較 v1，OOS Precision 持平，Recall、Accuracy、平均 Score 與 Selection→OOS 落差小幅改善 |
-| Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays 與 labels，不需重建或 relabel；sequence-only forward 不讀取 context values |
+| 基準 ZIP | `test-branch-1_20260723_222424_33327b5.zip` |
+| SHA256 | `37afba30e6df53d3ae8bdfd06740cd754d396453a2238910ed9fb8de775b5c92` |
+| 程式版本範圍 | 以使用者退回的 8A 程式為來源，已實作 8F unique ticker/date group training；模型仍為 accepted `multiscale_cnn_sequence_only_v1`，只將 experiment profile 切為 `unique_group_sampling`。8C rank context、8D ranking loss 與 8E ensemble 程式均不在目前基準，regime-context 保留為 legacy read-only compatibility |
+| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；time weight=`none` |
+| 當前最佳研究模型 | 實證最佳仍為 8A `multiscale_cnn_sequence_only_v1 / baseline`；8F 已完成程式實作但尚無 Selection／OOS 結果，不得預先判定有效 |
+| Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；8F 只在 training indices 建立 deterministic unique-group representatives，Validation／OOS 仍使用完整 rows |
 
 使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`；目前完整 OOS 正式比較基準已更新為 8A `multiscale_cnn_sequence_only_v1 / baseline`。
 
@@ -42,7 +42,7 @@
 | PASS 最低 MFE／MAE | 嚴格大於 2.0 |
 | 最大不利跌幅 | 觸及 −10% 即 REJECT |
 | Epoch 上限 | 100 |
-| Batch Size | 128 |
+| Batch Size | 128；8F 單位為 unique `ticker/date` groups |
 | Optimizer | `adam`（6A AdamW 與 6B schedule 已淘汰） |
 | LR Schedule | `none` |
 | Augmentation | `none`；7A masking 已淘汰 |
@@ -54,6 +54,7 @@
 | Final Refit | `selected_epochs` |
 | Class Weight | `none` |
 | Time Weight | `none` |
+| Training Sampling | `unique_ticker_date`（僅 8F 程式；8A 實證基準為 all event rows） |
 
 ### 2.3 正式比較基準：`multiscale_cnn_sequence_only_v1 / baseline`
 
@@ -316,6 +317,22 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 判定 | 八員平均降低了 seed 方差，卻無法修復所有 members 共有的 OOS score drift；固定 threshold 下模型顯著更保守，完整 OOS 全面低於 8A |
 | 下一步 | 停止 ensemble seed 數、聚合方式與投票規則的細調；回到單模型，先修正 sequence-only 訓練仍以重複 event rows 作為 optimizer sampling unit 的問題 |
 
+### 3.18 8F Unique ticker/date group training（2026-07-23）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；尚未取得 Selection／OOS 結果 |
+| 程式基準 | 來源 ZIP `test-branch-1_20260723_222424_33327b5.zip`，SHA256 `37afba30e6df53d3ae8bdfd06740cd754d396453a2238910ed9fb8de775b5c92`；交付 patch `breakout_quality_unique_group_sampling_patch_20260723.zip`；SHA256 以交付回覆為準 |
+| Architecture／Profile | `multiscale_cnn_sequence_only_v1 / unique_group_sampling`；model spec、參數量與輸入完全沿用 8A |
+| 唯一訓練變更 | Inner Train 與 Final Refit 在 shuffle／batching 前，依 `ticker/date` 壓成一筆 deterministic representative；規則固定為最小原始 event row index |
+| Batch／Epoch 單位 | Batch size 128 代表 128 個 unique groups；一個 epoch 代表每個 eligible training group 恰好進入一次 sampling。完整 rows 不再跨多個 Adam updates 重複出現 |
+| 權重 | unique-group training representatives 的 group weight 為 1；class/time weight 維持 `none`。完整 Train／Validation／Selection／OOS 評估仍對原始 rows 使用 `1/group_size` |
+| 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、seed 42、threshold 0.5、`selected_epochs`、augmentation=`none` |
+| Dataset／Label | 不重建 feature bank、不 relabel；只使用既有 `ticker/date`、`group_index` 與 label 產生 sampling indices |
+| 防呆 | 只允許不讀取 dataset／derived context 的 sequence-only architecture；同 group 若 label 或 feature group 不一致即 fail-fast；manifest 記錄來源 rows、sampled groups、移除重複數、代表列規則與 batch unit |
+| 驗證 | 合成端到端訓練已確認 16 個來源 rows／8 groups 只產生 8 個 training samples與每 epoch 2 個 optimizer steps；Validation 8 rows與 Final evaluation 16 rows仍完整評估 |
+| 判定 | 結果待完整 OOS；目前實證基準仍是 8A，不得因 epoch 較快或 Selection 變好直接採用 |
+
 ---
 
 ## 4. 已排除或暫停的方向
@@ -435,8 +452,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `PLANNED`；下一個單一實驗 |
-| 基準 | `multiscale_cnn_sequence_only_v1 / baseline`；seed 42、threshold 0.5、class/time weight=`none` |
+| 狀態 | `IMPLEMENTED`；等待完整 Selection／OOS 結果 |
+| 基準 | Architecture 維持 `multiscale_cnn_sequence_only_v1`；profile=`unique_group_sampling`；seed 42、threshold 0.5、class/time weight=`none` |
 | 唯一訓練變更 | Inner Train 與 Final Refit 在 shuffle／batching 前，將 training indices 壓成每個 unique `ticker/date` group 一筆；batch size 128 改為 128 個 unique groups |
 | 為何可去重 | 8A 不讀取 4 維 event context；同一 `ticker/date` 的多個 `high_len` rows 指向相同 feature-bank sequence 且 Label 一致，因此移除重複 rows 不會丟失模型可見資訊 |
 | 要修正的問題 | 現行 `1 / group_size` sample weight 只平衡加權 Loss；因每個 batch 都以自身 weight sum 正規化，重複 rows 仍可能跨多個 optimizer steps 反覆影響 Adam。改成 group-level sampling 後，每個 group 每個 epoch只進入一次 optimizer sampling |
@@ -463,7 +480,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 8C same-day cross-sectional rank context（REJECTED；已退回 8A baseline）
 → 8D classification + same-day ranking loss（REJECTED；已退回 8A baseline）
 → 8E fixed 8-seed probability ensemble（REJECTED；已退回 8A baseline）
-→ NEXT：8F unique ticker/date group training
+→ 8F unique ticker/date group training（IMPLEMENTED；等待完整 OOS 結果）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

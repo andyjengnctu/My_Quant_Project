@@ -1,8 +1,8 @@
 """Named breakout-quality training experiment profiles.
 
 Model architecture versions describe network/input changes. Training experiments such as
-optimizer, learning-rate schedule, and augmentation are selected independently here so
-experiments do not create fake model versions.
+optimizer, learning-rate schedule, augmentation, and training sampling are selected
+independently here so experiments do not create fake model versions.
 """
 
 from __future__ import annotations
@@ -14,6 +14,14 @@ BASELINE_EXPERIMENT_PROFILE = "baseline"
 ADAMW_ONLY_EXPERIMENT_PROFILE = "adamw_only"
 ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE = "adam_warmup_cosine"
 HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE = "history_masking_only"
+UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE = "unique_group_sampling"
+
+TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
+TRAINING_SAMPLING_UNIQUE_TICKER_DATE = "unique_ticker_date"
+SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES = (
+    TRAINING_SAMPLING_ALL_EVENT_ROWS,
+    TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+)
 
 LR_SCHEDULE_NONE = "none"
 LR_SCHEDULE_LINEAR_WARMUP_COSINE = "linear_warmup_cosine"
@@ -43,6 +51,7 @@ class BreakoutQualityExperimentProfile:
     augmentation_max_mask_bars: int = 0
     lr_warmup_fraction: float = 0.0
     lr_minimum_ratio: float = 1.0
+    training_sampling_mode: str = TRAINING_SAMPLING_ALL_EVENT_ROWS
 
     def __post_init__(self) -> None:
         normalized_name = str(self.name).strip().lower()
@@ -56,6 +65,10 @@ class BreakoutQualityExperimentProfile:
             raise ValueError(f"不支援的 LR schedule: {self.lr_schedule_name!r}")
         if self.augmentation_name not in SUPPORTED_BREAKOUT_QUALITY_AUGMENTATIONS:
             raise ValueError(f"不支援的 augmentation: {self.augmentation_name!r}")
+        if self.training_sampling_mode not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES:
+            raise ValueError(
+                f"不支援的 training sampling mode: {self.training_sampling_mode!r}"
+            )
         warmup_fraction = float(self.lr_warmup_fraction)
         minimum_ratio = float(self.lr_minimum_ratio)
         if self.lr_schedule_name == LR_SCHEDULE_NONE:
@@ -121,6 +134,8 @@ class BreakoutQualityExperimentProfile:
         augmentation_parameters = self.augmentation_parameters()
         if augmentation_parameters:
             payload["augmentation_parameters"] = augmentation_parameters
+        if self.training_sampling_mode != TRAINING_SAMPLING_ALL_EVENT_ROWS:
+            payload["training_sampling_mode"] = self.training_sampling_mode
         return payload
 
 
@@ -148,6 +163,11 @@ _EXPERIMENT_PROFILES = {
         augmentation_protected_recent_bars=60,
         augmentation_min_mask_bars=10,
         augmentation_max_mask_bars=30,
+    ),
+    UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE: BreakoutQualityExperimentProfile(
+        name=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     ),
 }
 
@@ -179,6 +199,7 @@ __all__ = [
     "AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK",
     "BASELINE_EXPERIMENT_PROFILE",
     "HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE",
+    "UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE",
     "BreakoutQualityExperimentProfile",
     "LR_SCHEDULE_LINEAR_WARMUP_COSINE",
     "LR_SCHEDULE_NONE",
@@ -186,6 +207,9 @@ __all__ = [
     "SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES",
     "SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES",
     "SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS",
+    "SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES",
+    "TRAINING_SAMPLING_ALL_EVENT_ROWS",
+    "TRAINING_SAMPLING_UNIQUE_TICKER_DATE",
     "get_breakout_quality_experiment_profile",
     "normalize_breakout_quality_experiment_profile",
 ]

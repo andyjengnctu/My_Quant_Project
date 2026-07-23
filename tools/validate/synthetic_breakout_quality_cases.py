@@ -22,10 +22,13 @@ from config.breakout_quality_experiments import (
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     BASELINE_EXPERIMENT_PROFILE,
     HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
+    UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES,
     SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
+    TRAINING_SAMPLING_ALL_EVENT_ROWS,
+    TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     get_breakout_quality_experiment_profile,
 )
 from config.breakout_quality_policy import (
@@ -228,6 +231,126 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         False,
         "model_architecture" in DEFAULT_LABEL_POLICY.as_manifest_payload(),
     )
+    sampling_events = pd.DataFrame(
+        {
+            "ticker": ["A", "A", "B", "C", "B"],
+            "date": [
+                "2020-01-01",
+                "2020-01-01",
+                "2020-01-01",
+                "2020-01-02",
+                "2020-01-01",
+            ],
+            "group_index": [10, 10, 11, 12, 11],
+        }
+    )
+    sampling_labels = np.asarray([LABEL_PASS, LABEL_PASS, LABEL_REJECT, LABEL_PASS, LABEL_REJECT])
+    sampling_input_idx = np.asarray([4, 3, 1, 2, 0], dtype=np.int64)
+    sampled_idx, sampling_summary = breakout_quality_train._resolve_training_sampling_indices(
+        sampling_events,
+        sampling_labels,
+        sampling_input_idx,
+        mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        model_spec=get_model_spec("multiscale_cnn_sequence_only_v1"),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "unique_group_sampling_uses_minimum_row_once_per_ticker_date",
+        ([0, 2, 3], 3, 2, "minimum_original_event_row_index"),
+        (
+            sampled_idx.tolist(),
+            int(sampling_summary["sampled_row_count"]),
+            int(sampling_summary["duplicate_rows_removed"]),
+            sampling_summary["representative_rule"],
+        ),
+    )
+    baseline_idx, baseline_sampling_summary = (
+        breakout_quality_train._resolve_training_sampling_indices(
+            sampling_events,
+            sampling_labels,
+            sampling_input_idx,
+            mode=TRAINING_SAMPLING_ALL_EVENT_ROWS,
+            model_spec=get_model_spec("multiscale_cnn_sequence_only_v1"),
+        )
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "baseline_sampling_preserves_original_rows_and_order",
+        (sampling_input_idx.tolist(), True, 0),
+        (
+            baseline_idx.tolist(),
+            bool(baseline_sampling_summary["uses_all_eligible_rows"]),
+            int(baseline_sampling_summary["duplicate_rows_removed"]),
+        ),
+    )
+    try:
+        breakout_quality_train._resolve_training_sampling_indices(
+            sampling_events,
+            sampling_labels,
+            sampling_input_idx,
+            mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+            model_spec=get_model_spec("multiscale_cnn_v1"),
+        )
+        context_sampling_rejected = False
+    except ValueError as exc:
+        context_sampling_rejected = "sequence-only" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "unique_group_sampling_rejects_context_using_architecture",
+        True,
+        context_sampling_rejected,
+    )
+
+    mixed_sampling_labels = sampling_labels.copy()
+    mixed_sampling_labels[1] = LABEL_REJECT
+    try:
+        breakout_quality_train._resolve_training_sampling_indices(
+            sampling_events,
+            mixed_sampling_labels,
+            sampling_input_idx,
+            mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+            model_spec=get_model_spec("multiscale_cnn_sequence_only_v1"),
+        )
+        mixed_label_rejected = False
+    except ValueError as exc:
+        mixed_label_rejected = "混合 label" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "unique_group_sampling_rejects_mixed_group_labels",
+        True,
+        mixed_label_rejected,
+    )
+
+    mixed_group_events = sampling_events.copy()
+    mixed_group_events.loc[1, "group_index"] = 999
+    try:
+        breakout_quality_train._resolve_training_sampling_indices(
+            mixed_group_events,
+            sampling_labels,
+            sampling_input_idx,
+            mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+            model_spec=get_model_spec("multiscale_cnn_sequence_only_v1"),
+        )
+        mixed_feature_group_rejected = False
+    except ValueError as exc:
+        mixed_feature_group_rejected = "多個 feature group" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "unique_group_sampling_rejects_mixed_feature_group_mapping",
+        True,
+        mixed_feature_group_rejected,
+    )
+
     torch, _nn = breakout_quality_train.require_torch()
     tiny_model = build_breakout_quality_model(10, 4, architecture="tiny_cnn_v1")
     multiscale_model = build_breakout_quality_model(10, 4, architecture="multiscale_cnn_v1")
@@ -1059,6 +1182,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             ADAMW_ONLY_EXPERIMENT_PROFILE,
             ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
             HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
+            UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
         }.issubset(set(SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES))
         and LR_SCHEDULE_LINEAR_WARMUP_COSINE
         in SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES
@@ -1078,6 +1202,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             CONFIGURED_EXPERIMENT.optimizer_name,
             CONFIGURED_EXPERIMENT.lr_schedule_name,
             CONFIGURED_EXPERIMENT.augmentation_name,
+            CONFIGURED_EXPERIMENT.training_sampling_mode,
             BREAKOUT_QUALITY_FINAL_REFIT_MODE,
             BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
             BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
@@ -1087,6 +1212,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             str(train_defaults.optimizer_name),
             str(train_defaults.lr_schedule_name),
             str(train_defaults.augmentation_name),
+            str(CONFIGURED_EXPERIMENT.training_sampling_mode),
             str(train_defaults.final_refit_mode),
             str(train_defaults.class_weight_mode),
             str(train_defaults.time_weight_mode),
@@ -2785,6 +2911,38 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     ),
                 }
 
+            def _synthetic_sampling_phase(source_rows: int, group_count: int):
+                mode = CONFIGURED_EXPERIMENT.training_sampling_mode
+                if mode == TRAINING_SAMPLING_UNIQUE_TICKER_DATE:
+                    sampled_rows = int(group_count)
+                    return {
+                        "mode": mode,
+                        "sampling_unit": "unique_ticker_date_group",
+                        "batch_size_unit": "unique_ticker_date_groups",
+                        "source_row_count": int(source_rows),
+                        "sampled_row_count": sampled_rows,
+                        "unique_group_count": int(group_count),
+                        "duplicate_rows_removed": int(source_rows) - sampled_rows,
+                        "representative_rule": "minimum_original_event_row_index",
+                        "uses_all_eligible_rows": sampled_rows == int(source_rows),
+                        "uses_all_eligible_groups": True,
+                    }
+                return {
+                    "mode": TRAINING_SAMPLING_ALL_EVENT_ROWS,
+                    "sampling_unit": "event_row",
+                    "batch_size_unit": "event_rows",
+                    "source_row_count": int(source_rows),
+                    "sampled_row_count": int(source_rows),
+                    "unique_group_count": int(group_count),
+                    "duplicate_rows_removed": 0,
+                    "representative_rule": None,
+                    "uses_all_eligible_rows": True,
+                    "uses_all_eligible_groups": True,
+                }
+
+            fixed_inner_sampling = _synthetic_sampling_phase(2, 2)
+            fixed_final_sampling = _synthetic_sampling_phase(2, 2)
+
             manifest = {
                 "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
                 "filter_family": FILTER_FAMILY,
@@ -2824,12 +2982,24 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "epoch_selection_source": "fixed_cli_epochs",
                 "final_refit_plan": {
                     "mode": "selected_epochs",
+                    "training_sampling_mode": CONFIGURED_EXPERIMENT.training_sampling_mode,
+                    "batch_size_unit": fixed_final_sampling["batch_size_unit"],
+                    "inner_train_sampling_row_count": int(fixed_inner_sampling["sampled_row_count"]),
+                    "final_refit_sampling_row_count": int(fixed_final_sampling["sampled_row_count"]),
                     "selected_optimizer_steps": None,
                     "final_refit_batches_per_epoch": 1,
                     "target_optimizer_steps": 2,
                     "actual_optimizer_steps": 2,
                     "completed_epoch_cycles": 2,
-                    "all_eligible_selection_rows_seen_at_least_once": True,
+                    "all_eligible_selection_rows_seen_at_least_once": bool(fixed_final_sampling["uses_all_eligible_rows"]),
+                    "all_eligible_selection_groups_seen_at_least_once": True,
+                },
+                "training_sampling": {
+                    "mode": CONFIGURED_EXPERIMENT.training_sampling_mode,
+                    "inner_train": fixed_inner_sampling,
+                    "final_refit": fixed_final_sampling,
+                    "validation_sampling_enabled": False,
+                    "oos_sampling_enabled": False,
                 },
                 "optimizer_name": CONFIGURED_EXPERIMENT.optimizer_name,
                 "learning_rate": synthetic_learning_rate,
@@ -2876,7 +3046,8 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 },
                 "early_stopping_enabled": False,
                 "inner_validation_used": False,
-                "training_uses_all_eligible_selection_rows": True,
+                "training_uses_all_eligible_selection_rows": bool(fixed_final_sampling["uses_all_eligible_rows"]),
+                "training_uses_all_eligible_selection_groups": True,
                 "oos_predictions_used_during_training": False,
                 "oos_metrics_emitted_by_train": False,
                 "score_table": score_record,
@@ -2949,12 +3120,24 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "completed_epochs": 2,
                     "final_refit_plan": {
                         "mode": BREAKOUT_QUALITY_FINAL_REFIT_MODE,
+                        "training_sampling_mode": CONFIGURED_EXPERIMENT.training_sampling_mode,
+                        "batch_size_unit": fixed_final_sampling["batch_size_unit"],
+                        "inner_train_sampling_row_count": 1,
+                        "final_refit_sampling_row_count": int(fixed_final_sampling["sampled_row_count"]),
                         "selected_optimizer_steps": 2,
                         "final_refit_batches_per_epoch": 1,
                         "target_optimizer_steps": 2,
                         "actual_optimizer_steps": 2,
                         "completed_epoch_cycles": 2,
-                        "all_eligible_selection_rows_seen_at_least_once": True,
+                        "all_eligible_selection_rows_seen_at_least_once": bool(fixed_final_sampling["uses_all_eligible_rows"]),
+                        "all_eligible_selection_groups_seen_at_least_once": True,
+                    },
+                    "training_sampling": {
+                        "mode": CONFIGURED_EXPERIMENT.training_sampling_mode,
+                        "inner_train": _synthetic_sampling_phase(1, 1),
+                        "final_refit": fixed_final_sampling,
+                        "validation_sampling_enabled": False,
+                        "oos_sampling_enabled": False,
                     },
                     "epoch_selection_source": "inner_validation_loss",
                     "early_stopping_enabled": True,
@@ -3019,6 +3202,36 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
                 validation_contract.manifest["training_mode"],
             )
+
+            stale_sampling_manifest = json.loads(
+                json.dumps(manifest, ensure_ascii=False)
+            )
+            stale_sampling_manifest["training_sampling"]["final_refit"][
+                "representative_rule"
+            ] = "unstable_first_seen_row"
+            paths.manifest_path.write_text(
+                json.dumps(stale_sampling_manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            try:
+                load_model_artifact_contract(str(project_root), filter_id)
+                stale_sampling_rejected = False
+            except ValueError as exc:
+                stale_sampling_rejected = "unique-group 契約不一致" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "training_sampling_contract_tamper_is_rejected",
+                True,
+                stale_sampling_rejected,
+            )
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
 
             stale_architecture_manifest = dict(manifest)
             stale_architecture = (

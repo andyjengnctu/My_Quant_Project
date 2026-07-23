@@ -12,6 +12,8 @@ from typing import Any
 
 from config.breakout_quality_experiments import (
     BASELINE_EXPERIMENT_PROFILE,
+    TRAINING_SAMPLING_ALL_EVENT_ROWS,
+    TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     get_breakout_quality_experiment_profile,
     normalize_breakout_quality_experiment_profile,
 )
@@ -399,7 +401,14 @@ def load_model_artifact_contract(
         or final_batches_per_epoch < 1
         or completed_cycles < 1
         or completed_cycles != completed_epochs
-        or not bool(final_refit_plan.get("all_eligible_selection_rows_seen_at_least_once", False))
+        or not bool(
+            final_refit_plan.get(
+                "all_eligible_selection_groups_seen_at_least_once",
+                final_refit_plan.get(
+                    "all_eligible_selection_rows_seen_at_least_once", False
+                ),
+            )
+        )
         or actual_steps < final_batches_per_epoch
     ):
         raise ValueError(
@@ -466,6 +475,121 @@ def load_model_artifact_contract(
             raise ValueError(
                 "early_stopping_enabled 必須與 early_stopping_patience 是否大於 0 一致"
             )
+
+    expected_sampling_mode = expected_experiment.training_sampling_mode
+    sampling_record = manifest.get("training_sampling")
+    legacy_sampling_record = (
+        sampling_record is None
+        and expected_sampling_mode == TRAINING_SAMPLING_ALL_EVENT_ROWS
+    )
+    training_uses_all_rows = bool(
+        manifest.get("training_uses_all_eligible_selection_rows", False)
+    )
+    training_uses_all_groups = bool(
+        manifest.get(
+            "training_uses_all_eligible_selection_groups",
+            training_uses_all_rows,
+        )
+    )
+    if not training_uses_all_groups:
+        raise ValueError("breakout quality 最終模型必須使用全部 eligible Selection groups")
+
+    if not legacy_sampling_record:
+        if not isinstance(sampling_record, dict):
+            raise ValueError("breakout quality training_sampling 必須是 object")
+        if _require_nonempty_text(sampling_record, "mode") != expected_sampling_mode:
+            raise ValueError(
+                "breakout quality training sampling mode 與 experiment profile 不一致"
+            )
+        if bool(sampling_record.get("validation_sampling_enabled", False)):
+            raise ValueError("breakout quality Validation 不可套用 training sampling")
+        if bool(sampling_record.get("oos_sampling_enabled", False)):
+            raise ValueError("breakout quality OOS 不可套用 training sampling")
+
+        sampling_phases: dict[str, dict[str, Any]] = {}
+        for phase_name in ("inner_train", "final_refit"):
+            raw_phase = sampling_record.get(phase_name)
+            if not isinstance(raw_phase, dict):
+                raise ValueError(
+                    f"breakout quality training_sampling.{phase_name} 必須是 object"
+                )
+            if _require_nonempty_text(raw_phase, "mode") != expected_sampling_mode:
+                raise ValueError(
+                    f"breakout quality training_sampling.{phase_name}.mode 不一致"
+                )
+            source_rows = int(raw_phase.get("source_row_count", 0))
+            sampled_rows = int(raw_phase.get("sampled_row_count", 0))
+            group_count = int(raw_phase.get("unique_group_count", 0))
+            removed_rows = int(raw_phase.get("duplicate_rows_removed", -1))
+            if (
+                source_rows < 1
+                or sampled_rows < 1
+                or group_count < 1
+                or sampled_rows > source_rows
+                or removed_rows != source_rows - sampled_rows
+                or not bool(raw_phase.get("uses_all_eligible_groups", False))
+            ):
+                raise ValueError(
+                    f"breakout quality training_sampling.{phase_name} 計數／group 契約不一致"
+                )
+            if expected_sampling_mode == TRAINING_SAMPLING_ALL_EVENT_ROWS:
+                if (
+                    sampled_rows != source_rows
+                    or removed_rows != 0
+                    or not bool(raw_phase.get("uses_all_eligible_rows", False))
+                    or str(raw_phase.get("sampling_unit") or "") != "event_row"
+                    or str(raw_phase.get("batch_size_unit") or "") != "event_rows"
+                ):
+                    raise ValueError(
+                        f"breakout quality training_sampling.{phase_name} baseline rows 契約不一致"
+                    )
+            elif expected_sampling_mode == TRAINING_SAMPLING_UNIQUE_TICKER_DATE:
+                if (
+                    bool(model_spec.use_dataset_context)
+                    or bool(model_spec.derived_context_features)
+                    or sampled_rows != group_count
+                    or str(raw_phase.get("sampling_unit") or "")
+                    != "unique_ticker_date_group"
+                    or str(raw_phase.get("batch_size_unit") or "")
+                    != "unique_ticker_date_groups"
+                    or str(raw_phase.get("representative_rule") or "")
+                    != "minimum_original_event_row_index"
+                ):
+                    raise ValueError(
+                        f"breakout quality training_sampling.{phase_name} unique-group 契約不一致"
+                    )
+            else:
+                raise ValueError(
+                    "不支援的 breakout quality training sampling mode: "
+                    f"{expected_sampling_mode}"
+                )
+            sampling_phases[phase_name] = raw_phase
+
+        if (
+            _require_nonempty_text(final_refit_plan, "training_sampling_mode")
+            != expected_sampling_mode
+        ):
+            raise ValueError("final_refit_plan training_sampling_mode 不一致")
+        if int(final_refit_plan.get("inner_train_sampling_row_count", 0)) != int(
+            sampling_phases["inner_train"].get("sampled_row_count", -1)
+        ):
+            raise ValueError("inner_train sampling row count 與 final_refit_plan 不一致")
+        if int(final_refit_plan.get("final_refit_sampling_row_count", 0)) != int(
+            sampling_phases["final_refit"].get("sampled_row_count", -1)
+        ):
+            raise ValueError("final_refit sampling row count 與 final_refit_plan 不一致")
+        if str(final_refit_plan.get("batch_size_unit") or "") != str(
+            sampling_phases["final_refit"].get("batch_size_unit") or ""
+        ):
+            raise ValueError("final_refit batch size unit 與 training sampling 不一致")
+        if training_uses_all_rows != bool(
+            sampling_phases["final_refit"].get("uses_all_eligible_rows", False)
+        ):
+            raise ValueError(
+                "training_uses_all_eligible_selection_rows 與 sampling 不一致"
+            )
+    elif not training_uses_all_rows:
+        raise ValueError("legacy baseline manifest 必須使用全部 eligible Selection rows")
 
     optimizer_name = str(manifest.get("optimizer_name") or "adam").strip().lower()
     if optimizer_name != expected_experiment.optimizer_name:
@@ -601,8 +725,6 @@ def load_model_artifact_contract(
     if _require_nonempty_text(final_refit_summary, "mode") != time_weight_mode:
         raise ValueError("final refit sample weight mode 與 manifest 不一致")
 
-    if not bool(manifest.get("training_uses_all_eligible_selection_rows", False)):
-        raise ValueError("breakout quality 最終模型必須使用全部 eligible Selection rows")
     if bool(manifest.get("oos_predictions_used_during_training", True)):
         raise ValueError("breakout quality OOS predictions 不可用於訓練")
     if bool(manifest.get("oos_metrics_emitted_by_train", True)):
