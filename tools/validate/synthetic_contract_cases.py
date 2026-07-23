@@ -17,6 +17,9 @@ from openpyxl import load_workbook
 
 from core import log_utils as log_utils_module
 from core.output_retention import RetentionRule, apply_retention_rules
+from core.model_paths import RUN_BEST_PARAMS_PATH_ENV_VAR
+from core.params_io import params_to_json_dict
+from core.strategy_params import V16StrategyParams
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from tools.local_regression import common as local_common
 from tools.local_regression import run_all as run_all_module
@@ -1117,8 +1120,10 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
             return payload
 
         summary_name_by_script = {script: summary_name for _name, script, summary_name in run_all_module.SCRIPT_ORDER}
+        child_envs = []
 
         def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total, execution_mode="serial"):
+            child_envs.append(dict(env))
             payload = {
                 "status": "PASS",
                 "failures": [],
@@ -1159,12 +1164,42 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
 
         master_summary = json.loads((run_dir / "master_summary.json").read_text(encoding="utf-8"))
         dataset_prepare_summary = json.loads((run_dir / "dataset_prepare_summary.json").read_text(encoding="utf-8"))
+        formal_param_path = run_dir / run_all_module.FORMAL_PRIMARY_PARAM_FILENAME
+        formal_param_exists = formal_param_path.is_file()
+        formal_param_payload = json.loads(formal_param_path.read_text(encoding="utf-8"))
+        child_param_paths = [env.get(RUN_BEST_PARAMS_PATH_ENV_VAR) for env in child_envs]
+
+        startup_failure_dir = Path(temp_dir) / "startup_failure"
+        startup_failure_dir.mkdir(parents=True, exist_ok=True)
+        startup_error = FileNotFoundError("synthetic missing primary params")
+        validate_main_module = importlib.import_module("tools.validate.main")
+        validate_main_module._write_startup_failure_summary(
+            str(startup_failure_dir),
+            phase="primary_param_source_load",
+            error=startup_error,
+            dataset_profile_key="reduced",
+            dataset_source="CLI",
+            data_dir=str(local_common.REDUCED_DATASET_DIR),
+            peak_traced_memory_mb=1.25,
+        )
+        startup_failure_summary = json.loads(
+            (startup_failure_dir / "validate_consistency_summary.json").read_text(encoding="utf-8")
+        )
 
     add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_pass_return_code", 0, rc)
     add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_pass_overall_status", "PASS", master_summary.get("overall_status"))
     add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_payload_status", "PASS", master_summary.get("dataset_prepare", {}).get("status"))
     add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_not_run_steps_empty", [], master_summary.get("not_run_step_names", []))
     add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_selected_steps", list(run_all_module.STEP_NAMES), master_summary.get("selected_steps"))
+    add_check(results, "output_contract", case_id, "run_all_formal_primary_param_file_exists", True, formal_param_exists)
+    add_check(results, "output_contract", case_id, "run_all_formal_primary_param_uses_current_config_defaults", params_to_json_dict(V16StrategyParams()), formal_param_payload)
+    add_check(results, "output_contract", case_id, "run_all_all_child_steps_receive_isolated_param_override", [str(formal_param_path)] * len(child_param_paths), child_param_paths)
+    add_check(results, "output_contract", case_id, "run_all_dataset_prepare_records_formal_param_source", str(formal_param_path), dataset_prepare_summary.get("formal_primary_param_source"))
+    add_check(results, "output_contract", case_id, "run_all_dataset_prepare_records_formal_param_source_kind", "generated_from_current_config_defaults", dataset_prepare_summary.get("formal_primary_param_source_kind"))
+    add_check(results, "output_contract", case_id, "consistency_startup_failure_writes_summary", "FAIL", startup_failure_summary.get("status"))
+    add_check(results, "output_contract", case_id, "consistency_startup_failure_summary_has_required_keys", True, REQUIRED_VALIDATE_SUMMARY_KEYS.issubset(startup_failure_summary))
+    add_check(results, "output_contract", case_id, "consistency_startup_failure_summary_records_phase", "primary_param_source_load", startup_failure_summary.get("startup_failure_phase"))
+    add_check(results, "output_contract", case_id, "consistency_startup_failure_summary_records_error_type", "FileNotFoundError", startup_failure_summary.get("error_type"))
     for key in local_common.DATASET_INFO_KEYS:
         if key in dataset_info:
             add_check(results, "output_contract", case_id, f"run_all_main_dataset_prepare_preserves_{key}", dataset_info[key], dataset_prepare_summary.get(key))

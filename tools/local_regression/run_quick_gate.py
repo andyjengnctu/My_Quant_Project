@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.model_paths import MODELS_DIR_ENV_VAR, resolve_default_primary_param_source_path
+from core.model_paths import MODELS_DIR_ENV_VAR, RUN_BEST_PARAMS_PATH_ENV_VAR, resolve_default_primary_param_source_path
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
@@ -751,7 +751,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
         [sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"],
         input_text="\n\n\n\n",
         timeout=timeout,
-        env={MODELS_DIR_ENV_VAR: str(params_missing_models_dir)},
+        env={MODELS_DIR_ENV_VAR: str(params_missing_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(params_missing_models_dir / "run_best_params.json")},
     )
     results.append(summarize_result("error_path::missing_run_best_params", outcome["returncode"] != 0 and "找不到參數檔" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="缺 run_best 參數檔應 fail-fast"))
 
@@ -762,7 +762,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
         [sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"],
         input_text="\n\n\n\n",
         timeout=timeout,
-        env={MODELS_DIR_ENV_VAR: str(params_broken_models_dir)},
+        env={MODELS_DIR_ENV_VAR: str(params_broken_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(params_broken_models_dir / "run_best_params.json")},
     )
     results.append(summarize_result("error_path::broken_run_best_params", outcome["returncode"] != 0 and "JSONDecodeError" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞 run_best 參數檔應 fail-fast"))
 
@@ -784,7 +784,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     outcome = _run_python_cli_probe(
         [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
         timeout=timeout,
-        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
+        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
     )
     results.append(summarize_result(
         "error_path::broken_optimizer_db",
@@ -796,7 +796,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     outcome = _run_python_cli_probe(
         [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
         timeout=timeout,
-        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
+        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
     )
     results.append(summarize_result(
         "error_path::export_only_missing_db",
@@ -810,7 +810,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     outcome = _run_python_cli_probe(
         [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
         timeout=timeout,
-        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
+        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
     )
     results.append(summarize_result(
         "error_path::export_only_empty_db",

@@ -17,8 +17,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.output_paths import output_dir_path
 from core.output_retention import RetentionRule, apply_retention_rules
-from core.model_paths import resolve_default_primary_param_source_path
+from core.model_paths import RUN_BEST_PARAMS_PATH_ENV_VAR, resolve_default_primary_param_source_path
 from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
+from core.params_io import params_to_json_dict
+from core.strategy_params import V16StrategyParams
 from core.runtime_utils import has_help_flag, resolve_cli_program_name, run_cli_entrypoint
 from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_COMMAND_ORDER, FORMAL_STEP_ORDER
 from tools.validate.preflight_env import REQUIREMENTS_PATH, format_preflight_summary, run_preflight
@@ -32,6 +34,7 @@ from tools.local_regression.common import (
     build_python_env,
     cleanup_staging_dir,
     create_staging_run_dir,
+    compute_file_sha256,
     ensure_reduced_dataset,
     gather_recent_console_tail,
     MANIFEST_DEFAULTS,
@@ -54,6 +57,23 @@ SCRIPT_TIMEOUT_GRACE_SEC = 30
 STEP_NAMES = list(FORMAL_STEP_ORDER)
 PARALLEL_STEP_NAMES = {"quick_gate", "consistency", "chain_checks", "ml_smoke"}
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
+
+
+FORMAL_PRIMARY_PARAM_FILENAME = "formal_primary_params.json"
+
+
+def _write_isolated_formal_primary_param_source(run_dir: Path) -> Path:
+    """Write the formal suite's deterministic param source inside its staging run.
+
+    Formal regression must not depend on mutable or optional user model artifacts such
+    as ``models/run_best_params.json``.  The generated payload follows the current
+    config defaults through ``V16StrategyParams`` and is injected into child steps via
+    the existing runtime path override.
+    """
+
+    param_path = run_dir / FORMAL_PRIMARY_PARAM_FILENAME
+    write_json(param_path, params_to_json_dict(V16StrategyParams()))
+    return param_path
 
 
 def _format_optional_int_detail(key: str, raw_value: Any) -> str:
@@ -883,9 +903,11 @@ def execute_all(
             progress_callback=progress_callback,
         )
     shared_prep_cache_dir = run_dir / "_shared_prep_cache"
+    formal_primary_param_path = _write_isolated_formal_primary_param_source(run_dir)
     shared_env = build_python_env({
         LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir),
         LOCAL_REGRESSION_SHARED_PREP_CACHE_ENV: str(shared_prep_cache_dir),
+        RUN_BEST_PARAMS_PATH_ENV_VAR: str(formal_primary_param_path),
     })
     major_total = _major_step_total(selected_steps=selected_step_names, include_dataset=include_dataset)
 
@@ -976,7 +998,12 @@ def execute_all(
                 cache_summary: Dict[str, Any] = {}
                 cache_error = ""
                 try:
-                    params_for_cache = load_portfolio_primary_params_from_json(resolve_default_primary_param_source_path(PROJECT_ROOT))
+                    params_for_cache = load_portfolio_primary_params_from_json(
+                        resolve_default_primary_param_source_path(
+                            PROJECT_ROOT,
+                            environ=shared_env,
+                        )
+                    )
                     cache_summary = build_shared_prep_cache(
                         PROJECT_ROOT,
                         Path(dataset_info_local["dataset_dir"]),
@@ -996,6 +1023,9 @@ def execute_all(
                         "shared_prep_cache_skipped_count": int(cache_summary.get("skipped_count", 0)),
                         "shared_prep_cache_duplicate_issue_count": int(cache_summary.get("duplicate_issue_count", 0)),
                         "shared_prep_cache_error": cache_error,
+                        "formal_primary_param_source": str(formal_primary_param_path),
+                        "formal_primary_param_source_kind": "generated_from_current_config_defaults",
+                        "formal_primary_param_source_sha256": compute_file_sha256(formal_primary_param_path),
                     },
                 )
 

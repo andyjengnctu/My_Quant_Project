@@ -15,6 +15,7 @@ python tools/validate/preflight_env.py
 - 日常一鍵入口：`python apps/test_suite.py`
 - 正式對外入口為 `apps/test_suite.py`。
 - 只有正式入口已指出失敗步驟時，才用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。
+- Formal suite 每次會在 `outputs/local_regression/_staging/<run>/formal_primary_params.json` 依目前 `config/` defaults 生成隔離參數來源，並透過 `V16_RUN_BEST_PARAMS_PATH` 傳給所有步驟；不要求本機預先存在 `models/run_best_params.json`，也不會修改使用者模型工件。
 - `python tools/validate/preflight_env.py` 只檢查環境，不自動安裝依賴。
 
 ## 打包

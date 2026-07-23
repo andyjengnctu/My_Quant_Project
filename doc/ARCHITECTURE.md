@@ -108,6 +108,7 @@ project/
 ```
 
 - `tools/local_regression/`：reduced formal orchestrator；`formal_pipeline.py` 為正式步驟單一真理來源。
+- `run_all.py` 在每次 formal staging run 以目前 `config/` defaults 生成隔離的 `formal_primary_params.json`，並透過 runtime path override 傳給 dataset prep、consistency、chain、quick gate、ML smoke 與 meta quality；formal regression 不依賴、也不覆寫 `models/run_best_params.json`。
 - `run_meta_quality.py`：meta quality 工具；負責 coverage / summary / baseline 與 formal step 對照。
 
 ## 子系統責任

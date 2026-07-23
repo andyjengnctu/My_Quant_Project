@@ -83,6 +83,41 @@ def load_params(environ=None):
     return load_portfolio_primary_params_from_json(resolve_default_primary_param_source_path(PROJECT_ROOT, environ=environ))
 
 
+def _write_startup_failure_summary(
+    suite_run_dir: str,
+    *,
+    phase: str,
+    error: BaseException,
+    dataset_profile_key: str = "",
+    dataset_source: str = "",
+    data_dir: str = "",
+    peak_traced_memory_mb: float = 0.0,
+) -> None:
+    if not str(suite_run_dir).strip():
+        return
+    summary = {
+        "status": "FAIL",
+        "dataset": str(dataset_profile_key),
+        "dataset_source": str(dataset_source),
+        "data_dir": str(data_dir),
+        "csv_path": "",
+        "xlsx_path": "",
+        "output_dir": str(suite_run_dir),
+        "elapsed_time_sec": 0.0,
+        "real_ticker_count": 0,
+        "real_data_coverage_ok": False,
+        "total_checks": 0,
+        "pass_count": 0,
+        "skip_count": 0,
+        "fail_count": 1,
+        "peak_traced_memory_mb": round(float(peak_traced_memory_mb or 0.0), 3),
+        "startup_failure_phase": str(phase),
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+    }
+    write_json(Path(suite_run_dir) / "validate_consistency_summary.json", summary)
+
+
 def discover_available_tickers():
     if not os.path.isdir(DATA_DIR):
         return []
@@ -207,12 +242,27 @@ def main(argv=None, environ=None):
             set_active_data_dir(selected_data_dir)
             dataset_label = get_dataset_profile_label(dataset_profile_key)
         except ValueError as e:
+            _write_startup_failure_summary(
+                suite_run_dir,
+                phase="dataset_profile_resolution",
+                error=e,
+                peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+            )
             print(f"❌ {e}", file=sys.stderr)
             return 1
 
         try:
             base_params = load_params(environ)
         except (FileNotFoundError, RuntimeError, ValueError) as e:
+            _write_startup_failure_summary(
+                suite_run_dir,
+                phase="primary_param_source_load",
+                error=e,
+                dataset_profile_key=dataset_profile_key,
+                dataset_source=dataset_source,
+                data_dir=DATA_DIR,
+                peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+            )
             print(f"❌ {e}", file=sys.stderr)
             return 1
 
