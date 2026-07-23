@@ -10,7 +10,11 @@ import tempfile
 from unittest.mock import patch
 
 from .checks import add_check
-from core.model_paths import resolve_default_primary_param_source_path
+from core.model_paths import (
+    RUN_BEST_PARAMS_PATH_ENV_VAR,
+    resolve_default_primary_param_source_path,
+    resolve_models_dir,
+)
 from .module_loader import build_project_absolute_path
 
 
@@ -397,55 +401,109 @@ def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
     return results, summary
 
 
-def _validate_architecture_models_run_best_params_file_tree_sync(_base_params):
-    case_id = "META_ARCHITECTURE_MODELS_REFERENCE_PARAMS_FILE_TREE_SYNC"
+def validate_model_param_source_resolution_contract_case(_base_params):
+    case_id = "META_MODEL_PARAM_SOURCE_RESOLUTION_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    models_dir = PROJECT_ROOT / "models"
+    models_dir = Path(resolve_models_dir(PROJECT_ROOT, environ={}))
 
-    required_tree_fragments = [
-        "│  ├─ full_base_best.json            # Full finalist best base policy 參數檔",
-        "│  ├─ full_base_finalists_agree.json # Full finalist agree base policy 參數檔",
-        "│  ├─ full_ensemble_base.json        # Full seed ensemble base policy 參數檔",
-        "│  ├─ oos_ensemble_base.json         # OOS seed ensemble base policy 參數檔",
-        "│  └─ roos_ensemble_base.json        # ROOS seed ensemble base policy 參數檔",
+    required_fragments = [
+        "│  └─ <optimizer parameter artifacts>.json",
+        "runtime 產生或使用者保留的可選參數工件",
+        "formal_primary_params.json",
+        "V16_RUN_BEST_PARAMS_PATH",
+        "不要求 repository 或交付 ZIP 內建 `models/run_best_params.json`",
     ]
-    stale_tree_fragments = [
-        "│  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄",
-        "│  ├─ all_best_params (RoMD).json    # 特定評分口徑下的最佳參數紀錄",
-        "models/champion_params.json",
-        "base (r > 0)",
-        "base (r > 0.5)",
-        "base_retention_gt_0_",
-        "full_base.json",
-        "oos_base.json",
-        "roos_base.json",
+    stale_exact_tree_fragments = [
+        "│  ├─ full_base_best.json",
+        "│  ├─ full_base_finalists_agree.json",
+        "│  ├─ full_ensemble_base.json",
+        "│  ├─ oos_ensemble_base.json",
+        "│  └─ roos_ensemble_base.json",
     ]
 
-    for idx, fragment in enumerate(required_tree_fragments, start=1):
-        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_lists_required_reference_params_{idx}", True, fragment in architecture_text)
-    for stale_idx, fragment in enumerate(stale_tree_fragments, start=1):
-        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_omits_stale_params_artifact_{stale_idx}", False, fragment in architecture_text)
+    for idx, fragment in enumerate(required_fragments, start=1):
+        add_check(
+            results,
+            "meta_architecture_contract",
+            case_id,
+            f"architecture_documents_param_source_contract_{idx}",
+            True,
+            fragment in architecture_text,
+        )
+    for idx, fragment in enumerate(stale_exact_tree_fragments, start=1):
+        add_check(
+            results,
+            "meta_architecture_contract",
+            case_id,
+            f"architecture_omits_optional_exact_param_artifact_{idx}",
+            False,
+            fragment in architecture_text,
+        )
 
-    default_param_source_path = Path(resolve_default_primary_param_source_path(PROJECT_ROOT))
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_default_reference_params", True, default_param_source_path.exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_default_reference_params_is_under_models", True, default_param_source_path.parent == models_dir)
+    default_param_source_path = Path(
+        resolve_default_primary_param_source_path(PROJECT_ROOT, environ={})
+    )
+    add_check(
+        results,
+        "meta_architecture_contract",
+        case_id,
+        "default_primary_param_fallback_is_under_models",
+        models_dir,
+        default_param_source_path.parent,
+    )
+    add_check(
+        results,
+        "meta_architecture_contract",
+        case_id,
+        "default_primary_param_fallback_filename",
+        "run_best_params.json",
+        default_param_source_path.name,
+    )
 
-    summary["required_tree_fragments"] = required_tree_fragments
+    with tempfile.TemporaryDirectory(prefix="formal_param_override_contract_") as temp_dir:
+        override_path = Path(temp_dir) / "formal_primary_params.json"
+        override_path.write_text("{}", encoding="utf-8")
+        override_env = {RUN_BEST_PARAMS_PATH_ENV_VAR: str(override_path)}
+        resolved_override_path = Path(
+            resolve_default_primary_param_source_path(PROJECT_ROOT, environ=override_env)
+        )
+        add_check(
+            results,
+            "meta_architecture_contract",
+            case_id,
+            "runtime_primary_param_override_resolves_exact_path",
+            override_path.resolve(),
+            resolved_override_path.resolve(),
+        )
+        add_check(
+            results,
+            "meta_architecture_contract",
+            case_id,
+            "runtime_primary_param_override_may_live_outside_models",
+            True,
+            resolved_override_path.parent != models_dir,
+        )
+        add_check(
+            results,
+            "meta_architecture_contract",
+            case_id,
+            "runtime_primary_param_override_exists",
+            True,
+            resolved_override_path.is_file(),
+        )
+
+    summary["default_fallback_path"] = str(default_param_source_path)
+    summary["models_dir"] = str(models_dir)
     summary["source_paths"] = [
         "doc/ARCHITECTURE.md",
-        str(default_param_source_path.relative_to(PROJECT_ROOT)) if default_param_source_path.exists() else str(default_param_source_path),
+        "core/model_paths.py",
+        "tools/local_regression/run_all.py",
     ]
     return results, summary
 
-
-
-
-
-def validate_architecture_models_champion_params_file_tree_sync_case(_base_params):
-    return _validate_architecture_models_run_best_params_file_tree_sync(_base_params)
 
 
 def validate_architecture_local_regression_meta_quality_file_tree_sync_case(_base_params):

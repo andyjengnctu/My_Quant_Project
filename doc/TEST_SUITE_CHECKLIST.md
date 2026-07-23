@@ -184,7 +184,7 @@
 | B158 | P1 | Meta | 正式入口 help 舊 wording / 裸用詞排除契約（已退役；改留穩定主題正向契約） | N/A | 屬 help wording / bare-term hygiene；保留 ID 只作歷史索引，正式長期 contract 改由 B157 的穩定主題正向契約承接，不再以負向 wording 排除作 formal blocker | `apps/test_suite.py`, `doc/PROJECT_SETTINGS.md` |
 | B161 | P0 | Meta / 同一事件保守可執行解讀契約 | 同一事件的判斷與執行口徑必須一致，且在不確定時一律採最保守、最不利於績效的可執行解讀；同棒停損 / 停利衝突不得先取較佳結果，前日已決定的停損也不得要求隔日再觸價一次才執行 | DONE | 已補 direct synthetic case，明確釘死同棒 stop/tp 歧義必須先取 STOP、若開盤已落到更差可成交價則以該更差 open 成交、前一日已決定的 deferred stop 必須於次一日開盤直接執行且不得要求再跌破一次 | `tools/validate/synthetic_take_profit_cases.py`, `core/position_step.py`, `core/entry_plans.py` |
 | B162 | P2 | 文件 / ARCHITECTURE apps exact file-tree 契約 | `doc/ARCHITECTURE.md` 不再以 apps exact file-tree 作為主要承載面；架構文件只保留正式入口與分層責任，不再逐列維護 GUI 入口的 file-tree 細節 | N/A | 已自 long-term formal scope 移除；`apps/workbench.py` 仍於正式入口段落承接，但不再由 exact file-tree validator 逐條釘死 | `doc/ARCHITECTURE.md` |
-| B163 | P2 | 文件 / ARCHITECTURE models exact file-tree 契約 | `doc/ARCHITECTURE.md` 不再以 models exact file-tree 與 shipped best_params 檔名作為主要承載面；架構文件只保留 models 類別責任，不再逐檔維護工件清單 | N/A | 已自 long-term formal scope 移除；best_params 類工件仍由 repo 本體與正式流程承接，不再要求 `doc/ARCHITECTURE.md` 逐檔列舉 | `doc/ARCHITECTURE.md` |
+| B163 | P1 | 模型參數來源解析與 formal override 契約 | 無 runtime override 時，預設 primary params fallback 必須位於 `models/run_best_params.json`；formal／隔離測試可透過 `V16_RUN_BEST_PARAMS_PATH` 使用 models 外的 staging 檔案，且不得要求 repository 或交付 ZIP 內建可變動最佳參數工件 | DONE | validator 以隔離環境分別驗證預設 fallback 與 models 外 override，並確認 ARCHITECTURE 只描述穩定類別責任、不逐檔釘死 optional optimizer artifacts | `core/model_paths.py`, `tools/local_regression/run_all.py`, `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md` |
 | B164 | P2 | 文件 / ARCHITECTURE internal helper exact file-tree 契約 | `doc/ARCHITECTURE.md` 不再把 internal helper 模組 exact file-tree 列舉作為長期 formal contract 主體；架構文件只保留穩定子系統、正式入口與少數關鍵 shipped 工件索引，避免高波動 helper 清單反客為主 | N/A | 已將 internal helper exact file-tree 列舉退出 long-term formal scope；是否保留個別 helper 說明改由 `doc/ARCHITECTURE.md` 自行維護，不再由 formal validator 逐條釘死 | `doc/ARCHITECTURE.md` |
 | B165 | P2 | 文件 / ARCHITECTURE internal support exact file-tree 契約 | `doc/ARCHITECTURE.md` 不再把 internal support 模組 exact file-tree 列舉作為長期 formal contract 主體；架構文件只保留穩定子系統、正式入口與少數關鍵 shipped 工件索引，避免高波動 support 清單成為主要同步面 | N/A | 已將 internal support exact file-tree 列舉退出 long-term formal scope；是否保留個別 support 模組說明改由 `doc/ARCHITECTURE.md` 自行維護，不再由 formal validator 逐條釘死 | `doc/ARCHITECTURE.md` |
 | B166 | P2 | 文件 / ARCHITECTURE local_regression meta_quality 檔案樹同步契約 | `doc/ARCHITECTURE.md` 的 Local Regression 檔案樹必須以可機械比對的乾淨 tree entry 列出 `tools/local_regression/run_meta_quality.py`；不得把說明直接拼進檔名字串，避免 shipped file path 與文件樹條目分叉 | DONE | 已補 static document-sync contract，直接釘死 Local Regression 檔案樹需列出乾淨的 `run_meta_quality.py` tree entry、排除把 helper 說明拼進檔名的 malformed line，並保留下方職責段落承接 `meta quality` 說明 | `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md`, `tools/local_regression/run_meta_quality.py` |
@@ -460,7 +460,7 @@
 | T243 | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` | B157 |
 | T248 | `validate_synthetic_conservative_executable_exit_interpretation_case` | B161 |
 | T249 | `validate_architecture_workbench_entry_file_tree_sync_case` | B162 |
-| T250 | `validate_architecture_models_champion_params_file_tree_sync_case` | B163 |
+| T250 | `validate_model_param_source_resolution_contract_case` | B163 |
 | T253 | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` | B166 |
 | T256 | `validate_validate_runtime_tmp_output_staging_contract_case` | B167 |
 | T257 | `validate_optimizer_walk_forward_policy_contract_case` | B52 |
@@ -1374,3 +1374,7 @@
 | 2026-07-22 | T266 | 驗證 baseline／regime architecture 工件隔離、checkpoint strict reconstruction、舊 v1 manifest 相容與 Dataset 共用後重新收斂為 DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-22 | T266 | 擴充 runtime artifact contract，納入 sequence-only model spec、architecture/profile-scoped path 與 regime legacy reconstruction | DONE -> PARTIAL | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-22 | T266 | 驗證 sequence-only checkpoint strict reconstruction、`use_dataset_context=false` manifest、舊 architecture 唯讀相容與 Dataset 共用後重新收斂為 DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+
+| 2026-07-24 | B163 | 將已退役的 models exact file-tree 契約重構為參數來源解析契約：預設 fallback 位於 models，formal staging override 可合法位於 models 外，且 repository／交付 ZIP 不必內建可變動 best params | N/A -> DONE | `validate_model_param_source_resolution_contract_case` |
+| 2026-07-24 | T250 | 最新 bundle 檢出舊 champion params file-tree validator 錯把 formal staging override 要求位於 models，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-07-24 | T250 | 將 validator 重構為 default fallback／formal override 雙路徑契約後重新收斂為 DONE | PARTIAL -> DONE | `validate_model_param_source_resolution_contract_case` |
