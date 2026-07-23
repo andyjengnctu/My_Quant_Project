@@ -13,7 +13,7 @@
 5. 與當前正式基準的差異、結論、是否採用，以及下一個單一變更。
 6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-23**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-24**。
 
 ---
 
@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260723_222424_33327b5.zip` |
-| SHA256 | `37afba30e6df53d3ae8bdfd06740cd754d396453a2238910ed9fb8de775b5c92` |
-| 程式版本範圍 | 以使用者退回的 8A 程式為來源，已實作 8F unique ticker/date group training；模型仍為 accepted `multiscale_cnn_sequence_only_v1`，只將 experiment profile 切為 `unique_group_sampling`。8C rank context、8D ranking loss 與 8E ensemble 程式均不在目前基準，regime-context 保留為 legacy read-only compatibility |
-| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；time weight=`none` |
-| 當前最佳研究模型 | 實證最佳仍為 8A `multiscale_cnn_sequence_only_v1 / baseline`；8F 已完成程式實作但尚無 Selection／OOS 結果，不得預先判定有效 |
-| Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；8F 只在 training indices 建立 deterministic unique-group representatives，Validation／OOS 仍使用完整 rows |
+| 基準 ZIP | `test-branch-1_20260724_002430_8f4f510.zip` |
+| SHA256 | `7c127ead794f0388386fad11e83485c66bb2735d5838783e302ffd257c1a0b87` |
+| 程式版本範圍 | 以 8F unique ticker/date group training 為正式研究基準；8G 只把 early-stopping patience 由 1 改為 5，完整 OOS 明顯惡化，因此本輪已將 policy 退回 patience 1。8C rank context、8D ranking loss 與 8E ensemble 程式均不在目前基準，regime-context 保留為 legacy read-only compatibility |
+| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；early-stopping patience=`1`；time weight=`none` |
+| 當前最佳研究模型 | 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / patience 1`。它的 OOS Precision 略低於 8A，但 Recall、Accuracy、Score 與 Selection→OOS 泛化落差大幅改善，符合使用者「先提升整體 OOS」的優先原則 |
+| Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`；目前完整 OOS 正式比較基準已更新為 8A `multiscale_cnn_sequence_only_v1 / baseline`。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前 architecture 仍為 sequence-only；正式研究基準已由 8A 更新為 8F unique-group sampling。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -42,7 +42,8 @@
 | PASS 最低 MFE／MAE | 嚴格大於 2.0 |
 | 最大不利跌幅 | 觸及 −10% 即 REJECT |
 | Epoch 上限 | 100 |
-| Batch Size | 128；8F 單位為 unique `ticker/date` groups |
+| Early-stopping patience | **1**；8G patience 5 已淘汰 |
+| Batch Size | 128 unique `ticker/date` groups |
 | Optimizer | `adam`（6A AdamW 與 6B schedule 已淘汰） |
 | LR Schedule | `none` |
 | Augmentation | `none`；7A masking 已淘汰 |
@@ -54,23 +55,24 @@
 | Final Refit | `selected_epochs` |
 | Class Weight | `none` |
 | Time Weight | `none` |
-| Training Sampling | `unique_ticker_date`（僅 8F 程式；8A 實證基準為 all event rows） |
+| Training Sampling | `unique_ticker_date`；每個 group 每個 epoch 只進入一次 optimizer sampling |
 
-### 2.3 正式比較基準：`multiscale_cnn_sequence_only_v1 / baseline`
+### 2.3 正式研究基準：8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling`
 
-| OOS 指標 | 8A sequence-only 基準 |
+| OOS 指標 | 8F 基準 |
 |---|---:|
 | 原始 PASS | 55.63% |
-| PASS Precision | 59.30% |
-| Precision Lift | +3.66 pp |
-| PASS Recall | 53.47% |
-| 模型 PASS | 50.17% |
-| Accuracy | 53.70% |
-| 平均 Score | 0.4886 |
-| Selection→OOS Precision 差 | −2.77 pp |
-| Selection→OOS Score 差 | −0.0978 |
+| PASS Precision | 58.46% |
+| Precision Lift | +2.83 pp |
+| PASS Recall | 76.96% |
+| 模型 PASS | 73.24% |
+| Accuracy | 56.76% |
+| 平均 Score | 0.5497 |
+| Selection→OOS Precision 差 | **+1.56 pp** |
+| Selection→OOS Accuracy 差 | −0.70 pp |
+| Selection→OOS Score 差 | −0.0287 |
 
-成功判定不能只看 Selection Precision、平均 Score 或 Recall。新實驗至少應同時檢查 OOS Precision Lift、Recall、Accuracy、模型 PASS，以及 Selection→OOS Precision／Score 落差；不得用 Selection 變好掩蓋完整 OOS 退步。
+8A `baseline` 仍保留為較高 Precision 的歷史參考（OOS Precision 59.30%、Lift +3.66 pp），但其 Recall、Accuracy、Score 與 Selection→OOS drift 明顯較差。後續實驗以 8F 為比較基準，不能用 Selection Precision 上升掩蓋完整 OOS Recall、Accuracy、Score 或泛化落差惡化。
 
 ---
 
@@ -321,17 +323,31 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；尚未取得 Selection／OOS 結果 |
-| 程式基準 | 來源 ZIP `test-branch-1_20260723_222424_33327b5.zip`，SHA256 `37afba30e6df53d3ae8bdfd06740cd754d396453a2238910ed9fb8de775b5c92`；交付 patch `breakout_quality_unique_group_sampling_patch_20260723.zip`；SHA256 以交付回覆為準 |
+| 狀態 | `ACCEPTED`；目前正式研究基準 |
+| 程式基準 | 來源 ZIP `test-branch-1_20260723_222424_33327b5.zip`，SHA256 `37afba30e6df53d3ae8bdfd06740cd754d396453a2238910ed9fb8de775b5c92`；交付 patch `breakout_quality_unique_group_sampling_patch_20260723.zip`，SHA256 `5c78c1fc78f5cac1fb3a56c050c568314f15eca048acbcefcdb4bb7a691ea8bc` |
 | Architecture／Profile | `multiscale_cnn_sequence_only_v1 / unique_group_sampling`；model spec、參數量與輸入完全沿用 8A |
 | 唯一訓練變更 | Inner Train 與 Final Refit 在 shuffle／batching 前，依 `ticker/date` 壓成一筆 deterministic representative；規則固定為最小原始 event row index |
-| Batch／Epoch 單位 | Batch size 128 代表 128 個 unique groups；一個 epoch 代表每個 eligible training group 恰好進入一次 sampling。完整 rows 不再跨多個 Adam updates 重複出現 |
-| 權重 | unique-group training representatives 的 group weight 為 1；class/time weight 維持 `none`。完整 Train／Validation／Selection／OOS 評估仍對原始 rows 使用 `1/group_size` |
-| 固定條件 | 固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、seed 42、threshold 0.5、`selected_epochs`、augmentation=`none` |
-| Dataset／Label | 不重建 feature bank、不 relabel；只使用既有 `ticker/date`、`group_index` 與 label 產生 sampling indices |
-| 防呆 | 只允許不讀取 dataset／derived context 的 sequence-only architecture；同 group 若 label 或 feature group 不一致即 fail-fast；manifest 記錄來源 rows、sampled groups、移除重複數、代表列規則與 batch unit |
-| 驗證 | 合成端到端訓練已確認 16 個來源 rows／8 groups 只產生 8 個 training samples與每 epoch 2 個 optimizer steps；Validation 8 rows與 Final evaluation 16 rows仍完整評估 |
-| 判定 | 結果待完整 OOS；目前實證基準仍是 8A，不得因 epoch 較快或 Selection 變好直接採用 |
+| 固定條件 | Patience 1、固定百分比 Label、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、seed 42、threshold 0.5、`selected_epochs`、augmentation/class/time weight=`none` |
+| Dataset／Label | 不重建 feature bank、不 relabel；Validation／Selection／OOS 繼續以完整 rows及 `1/group_size` 評估 |
+| Training 壓縮 | Inner Train 538,887 rows → 16,832 groups；Final Refit 729,654 rows → 23,072 groups；Best Epoch 2；Final Refit 362 optimizer steps |
+| Selection | 原始 PASS 54.81%、模型 PASS 88.90%、PASS Precision 56.90%、Lift +2.09 pp、Recall 92.29%、Accuracy 57.46%、Score 0.5784 |
+| OOS | 原始 PASS 55.63%、模型 PASS 73.24%、PASS Precision 58.46%、Lift +2.83 pp、Recall 76.96%、Accuracy 56.76%、Score 0.5497 |
+| 相較 8A | OOS Precision −0.84 pp、Lift −0.83 pp，但 Recall +23.49 pp、模型 PASS +23.07 pp、Accuracy +3.06 pp、Score +0.0611；Precision gap 由 −2.77 pp 改善為 +1.56 pp，Score gap 由 −0.0978 改善為 −0.0287 |
+| 判定 | 移除同事件多個 `high_len` rows 對不同 Adam updates 的重複影響後，Selection 指標下降但完整 OOS 延續性大幅改善；依「整體 OOS 優先」採用為新研究基準 |
+| 下一步 | 先測 8G：只把 early-stopping patience 1 改為 5，確認 unique-group training 是否只是訓練不足 |
+
+### 3.19 8G Unique-group sampling + patience 5（2026-07-24）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `REJECTED`；policy 已退回 8F patience 1 |
+| 程式基準 | 使用者 ZIP `test-branch-1_20260724_002430_8f4f510.zip`，SHA256 `7c127ead794f0388386fad11e83485c66bb2735d5838783e302ffd257c1a0b87`；結果由使用者提供，ZIP 內 policy 為 patience 5，但內附 accepted 8F model manifest 仍為 patience 1，因此本輪以使用者貼出的報表作為 8G 結果來源並將程式設定退回 1 |
+| 唯一訓練變更 | 8F 的 `BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE` 由 1 改為 5；architecture、sampling、Dataset、Label、optimizer、LR、batch size、threshold、seed 全部不變 |
+| Selection | 原始 PASS 54.81%、模型 PASS 75.20%、PASS Precision 61.42%、Lift +6.61 pp、Recall 84.27%、Accuracy 62.37%、Score 0.5799 |
+| OOS | 原始 PASS 55.63%、模型 PASS 42.12%、PASS Precision 57.55%、Lift +1.92 pp、Recall 43.58%、Accuracy 50.73%、Score 0.4789 |
+| 相較 8F | OOS Precision −0.91 pp、Lift −0.91 pp、Recall −33.38 pp、模型 PASS −31.12 pp、Accuracy −6.03 pp、Score −0.0708；Precision gap 由 +1.56 pp 惡化為 −3.87 pp，Score gap 由 −0.0287 惡化為 −0.1009 |
+| 判定 | Patience 增加讓 Selection Precision 顯著上升，但完整 OOS 恢復嚴重 score drift與過度保守；8F 不是單純訓練不足，Epoch 2 附近的早停本身就是重要 regularization |
+| 下一步 | 不再增加 patience 或直接延長 unique-group epochs。下一個單一實驗規劃為 8H：維持 patience 1，只把 batch size 128 groups 改為 64 groups，增加每個 epoch 的 optimizer updates但不重複走訪同一 group |
 
 ---
 
@@ -358,6 +374,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 17. Same-day 20／60／120 日報酬 percentile context；Selection Precision／Lift 上升，但完整 OOS 主要指標與泛化落差全部低於 8A。停止增加 handcrafted／rank／regime context。
 18. Same-day pairwise ranking loss；使模型更保守，OOS Precision 未提高且 Recall、Accuracy、Score 下降。不得再調 ranking weight、margin 或 pair sampling。
 19. 固定 8-seed probability ensemble；OOS Precision、Recall、模型 PASS、Accuracy、Score 與泛化落差全面低於 8A。不得再細調 seed 數、平均 logits／probabilities、投票或 min-agree。
+20. Unique-group training 增加 early-stopping patience／直接延長 epochs；patience 5 使 Selection 變好但完整 OOS Precision、Recall、Accuracy、Score 與 drift 全面惡化。
 
 ---
 
@@ -450,18 +467,23 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 #### 優先 8F：Unique ticker/date group training
 
+`ACCEPTED`。相較 8A，OOS Precision／Lift 分別低 0.84／0.83 pp，但 Recall +23.49 pp、模型 PASS +23.07 pp、Accuracy +3.06 pp、Score +0.0611；Precision gap 由 −2.77 pp 改善為 +1.56 pp，Score gap 由 −0.0978 改善為 −0.0287。依整體 OOS 泛化優先，升為目前正式研究基準。
+
+#### 優先 8G：Unique-group sampling + patience 5
+
+`REJECTED`。相較 8F，OOS Precision −0.91 pp、Lift −0.91 pp、Recall −33.38 pp、模型 PASS −31.12 pp、Accuracy −6.03 pp、Score −0.0708；Selection Precision 上升但完整 OOS 恢復嚴重過度擬合。已退回 patience 1，不再細調 patience 2～10 或直接增加 group epochs。
+
+#### 優先 8H：Unique-group sampling + batch size 64
+
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；等待完整 Selection／OOS 結果 |
-| 基準 | Architecture 維持 `multiscale_cnn_sequence_only_v1`；profile=`unique_group_sampling`；seed 42、threshold 0.5、class/time weight=`none` |
-| 唯一訓練變更 | Inner Train 與 Final Refit 在 shuffle／batching 前，將 training indices 壓成每個 unique `ticker/date` group 一筆；batch size 128 改為 128 個 unique groups |
-| 為何可去重 | 8A 不讀取 4 維 event context；同一 `ticker/date` 的多個 `high_len` rows 指向相同 feature-bank sequence 且 Label 一致，因此移除重複 rows 不會丟失模型可見資訊 |
-| 要修正的問題 | 現行 `1 / group_size` sample weight 只平衡加權 Loss；因每個 batch 都以自身 weight sum 正規化，重複 rows 仍可能跨多個 optimizer steps 反覆影響 Adam。改成 group-level sampling 後，每個 group 每個 epoch只進入一次 optimizer sampling |
-| Epoch／Refit | Epoch 上限、patience、LR 與 `selected_epochs` 不變；epoch 的單位自然改為完整走過一次 unique training groups，Final Refit 使用選出的 group epochs |
-| Validation／OOS | 維持既有完整 rows 與 ticker/date group-weighted 報表，不改正式評估口徑 |
-| Dataset／Label | 不重建 feature bank、不 relabel；只由既有 `event_group_index`／`ticker,date` 產生 deterministic representative indices |
-| 效率 | 每個 epoch 的 training rows 由重複 event rows 降為 unique groups；預期可大幅降低單次 epoch 時間，但實際總時間仍取決於選出的 group epochs |
-| 主要判定 | 相對 8A：OOS Precision ≥59.30%、Lift ≥+3.66 pp；Recall、Accuracy不得明顯下降，且 Precision gap 或 Score gap至少一項縮小 |
+| 狀態 | `PLANNED`；尚未實作 |
+| 基準 | 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / patience 1` |
+| 唯一變更 | Batch size 128 unique groups → 64 unique groups |
+| 目的 | 每個 epoch 仍只走訪每個 group 一次，但 optimizer updates 約增加為 2 倍；測試能否在不重複資料 epoch 的前提下，提高 Precision／Specificity並保留 8F 的 OOS穩定性 |
+| 固定條件 | Patience 1、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、seed 42、threshold 0.5、固定百分比 Label、`selected_epochs`、augmentation/class/time weight=`none` |
+| Dataset／Label | 不重建、不 relabel |
+| 採用條件 | 相較 8F，OOS Precision／Lift應提高；Recall、Accuracy、Score與 Precision／Score gap不得回到 8A／8G 的崩落型態 |
 
 
 ---
@@ -480,7 +502,9 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 8C same-day cross-sectional rank context（REJECTED；已退回 8A baseline）
 → 8D classification + same-day ranking loss（REJECTED；已退回 8A baseline）
 → 8E fixed 8-seed probability ensemble（REJECTED；已退回 8A baseline）
-→ 8F unique ticker/date group training（IMPLEMENTED；等待完整 OOS 結果）
+→ 8F unique ticker/date group training（ACCEPTED；目前研究基準）
+→ 8G unique-group patience 5（REJECTED；已退回 patience 1）
+→ 8H unique-group batch size 64（PLANNED）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
