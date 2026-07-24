@@ -12,6 +12,9 @@ from typing import Any
 
 from config.breakout_quality_experiments import (
     BASELINE_EXPERIMENT_PROFILE,
+    TIME_WEIGHT_MODE_DATE_BALANCED,
+    TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
+    TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
     TRAINING_SAMPLING_ALL_EVENT_ROWS,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     get_breakout_quality_experiment_profile,
@@ -19,6 +22,7 @@ from config.breakout_quality_experiments import (
 )
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
+    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_FINAL_REFIT_MODE,
     BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
 )
@@ -322,6 +326,16 @@ def load_model_artifact_contract(
             f"profile={manifest_profile}, expected={expected_experiment.as_manifest_payload()}, "
             f"actual={manifest_experiment}"
         )
+    training_weight_reduction = str(
+        manifest.get("training_weight_reduction")
+        or TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM
+    ).strip().lower()
+    if training_weight_reduction != expected_experiment.training_weight_reduction:
+        raise ValueError(
+            "breakout quality training_weight_reduction 與 experiment profile 不一致: "
+            f"manifest={training_weight_reduction}, "
+            f"expected={expected_experiment.training_weight_reduction}"
+        )
     if list(manifest.get("feature_columns", [])) != list(FEATURE_COLUMNS):
         raise ValueError("breakout quality manifest feature_columns 與 runtime 契約不一致")
     if list(manifest.get("context_columns", [])) != list(CONTEXT_COLUMNS):
@@ -570,6 +584,12 @@ def load_model_artifact_contract(
             != expected_sampling_mode
         ):
             raise ValueError("final_refit_plan training_sampling_mode 不一致")
+        plan_weight_reduction = str(
+            final_refit_plan.get("training_weight_reduction")
+            or TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM
+        ).strip().lower()
+        if plan_weight_reduction != training_weight_reduction:
+            raise ValueError("final_refit_plan training_weight_reduction 不一致")
         if int(final_refit_plan.get("inner_train_sampling_row_count", 0)) != int(
             sampling_phases["inner_train"].get("sampled_row_count", -1)
         ):
@@ -716,14 +736,48 @@ def load_model_artifact_contract(
         raise ValueError("class_weight_mode=none 時 class weights 必須為 [1, 1]")
 
     time_weight_mode = _require_nonempty_text(manifest, "time_weight_mode")
-    if time_weight_mode != str(BREAKOUT_QUALITY_TIME_WEIGHT_MODE):
+    if (
+        manifest_profile == str(BREAKOUT_QUALITY_EXPERIMENT_PROFILE)
+        and time_weight_mode != str(BREAKOUT_QUALITY_TIME_WEIGHT_MODE)
+    ):
         raise ValueError(
-            "breakout quality time_weight_mode 與目前 config 不一致；請重新訓練"
+            "active breakout quality time_weight_mode 與目前 config 不一致；請重新訓練"
+        )
+    if (
+        expected_experiment.time_weight_mode is not None
+        and time_weight_mode != expected_experiment.time_weight_mode
+    ):
+        raise ValueError(
+            "breakout quality time_weight_mode 與 experiment profile 不一致"
         )
     sample_weight_summaries = _require_mapping(manifest, "sample_weight_summaries")
     final_refit_summary = _require_mapping(sample_weight_summaries, "final_refit")
     if _require_nonempty_text(final_refit_summary, "mode") != time_weight_mode:
         raise ValueError("final refit sample weight mode 與 manifest 不一致")
+    if time_weight_mode == TIME_WEIGHT_MODE_DATE_BALANCED:
+        if training_weight_reduction != TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE:
+            raise ValueError("date_balanced 必須使用 fixed_batch_size reduction")
+        group_count = int(final_refit_summary.get("group_count", 0))
+        date_count = int(final_refit_summary.get("date_count", 0))
+        weight_sum = float(final_refit_summary.get("weight_sum", 0.0))
+        target = float(final_refit_summary.get("target_total_weight_per_date", 0.0))
+        actual_min = float(
+            final_refit_summary.get("actual_total_weight_per_date_min", 0.0)
+        )
+        actual_max = float(
+            final_refit_summary.get("actual_total_weight_per_date_max", 0.0)
+        )
+        tolerance = max(1e-5, abs(target) * 1e-5)
+        if (
+            group_count < 1
+            or date_count < 1
+            or abs(weight_sum - float(group_count))
+            > max(1e-3, float(group_count) * 1e-6)
+            or target <= 0.0
+            or abs(actual_min - target) > tolerance
+            or abs(actual_max - target) > tolerance
+        ):
+            raise ValueError("date_balanced sample weight summary 契約不一致")
 
     if bool(manifest.get("oos_predictions_used_during_training", True)):
         raise ValueError("breakout quality OOS predictions 不可用於訓練")

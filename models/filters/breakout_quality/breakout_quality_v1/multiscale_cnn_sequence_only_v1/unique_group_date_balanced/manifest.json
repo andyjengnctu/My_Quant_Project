@@ -1,0 +1,1884 @@
+{
+  "artifact_contract_version": 10,
+  "augmentation_name": "none",
+  "batch_size": 128,
+  "class_weight_mode": "none",
+  "class_weights_reject_pass": [
+    1.0,
+    1.0
+  ],
+  "completed_epochs": 10,
+  "context_columns": [
+    "high_len_norm",
+    "breakout_level_to_close",
+    "close_to_breakout_level",
+    "high_to_breakout_level"
+  ],
+  "early_stopping_enabled": true,
+  "early_stopping_min_delta": 0.0,
+  "early_stopping_patience": 5,
+  "elapsed_sec": 523.872,
+  "epoch_selection_source": "inner_validation_loss",
+  "evaluation_batch_size": 4096,
+  "evaluation_execution": {
+    "augmentation_name": "none",
+    "augmentation_parameters": {},
+    "batch_boundaries_changed": false,
+    "class_weight_mode": "none",
+    "feature_bank_preloaded": true,
+    "final_metrics_reused_from_last_full_epoch_evaluation": true,
+    "final_refit_actual_optimizer_steps": 1810,
+    "final_refit_mode": "selected_epochs",
+    "final_refit_target_optimizer_steps": 1810,
+    "gradient_clip_norm": 1.0,
+    "inner_train_validation_concurrent": false,
+    "lr_schedule_name": "none",
+    "lr_schedule_parameters": {},
+    "mode": "parallel_chunked_full_split",
+    "oos_augmented": false,
+    "optimizer_name": "adam",
+    "optimizer_weight_decay": 0.0001,
+    "optimizer_zero_grad_set_to_none": true,
+    "per_worker_torch_threads": 1,
+    "reduction_order_changed": false,
+    "time_weight_mode": "date_balanced",
+    "training_batch_boundaries_changed": true,
+    "training_batch_prefetch": 0,
+    "training_order_changed": true,
+    "training_sampling_enabled": true,
+    "training_sampling_mode": "unique_ticker_date",
+    "training_sampling_unit": "unique_ticker_date_group",
+    "training_weight_reduction": "fixed_batch_size",
+    "uses_all_requested_rows": true,
+    "validation_augmented": false,
+    "workers": 4
+  },
+  "evaluation_workers": 4,
+  "event_group_summary": {
+    "group_count": 55509,
+    "group_key": "ticker/date",
+    "mixed_label_group_count": 0,
+    "mixed_valid_label_group_count": 0,
+    "rows_per_group_max": 60,
+    "rows_per_group_mean": 32.301573,
+    "rows_per_group_min": 1,
+    "valid_group_count": 54419
+  },
+  "experiment_profile": "unique_group_date_balanced",
+  "experiment_settings": {
+    "augmentation_name": "none",
+    "lr_schedule_name": "none",
+    "name": "unique_group_date_balanced",
+    "optimizer_name": "adam",
+    "time_weight_mode": "date_balanced",
+    "training_sampling_mode": "unique_ticker_date",
+    "training_weight_reduction": "fixed_batch_size"
+  },
+  "feature_columns": [
+    "open_norm",
+    "high_norm",
+    "low_norm",
+    "close_norm",
+    "volume_norm",
+    "benchmark_open_norm",
+    "benchmark_high_norm",
+    "benchmark_low_norm",
+    "benchmark_close_norm",
+    "benchmark_volume_norm"
+  ],
+  "filter_family": "breakout_quality",
+  "filter_id": "breakout_quality_v1",
+  "final_refit_label_counts": {
+    "invalid": 0,
+    "pass": 405751,
+    "reject": 323903,
+    "total": 729654
+  },
+  "final_refit_metrics": {
+    "accuracy": 0.607836,
+    "group_weight_sum": 23072.0,
+    "loss": 0.662511,
+    "pass_rate": 0.715196,
+    "row_accuracy": 0.605538,
+    "row_count": 729654,
+    "row_pass_rate": 0.774649
+  },
+  "final_refit_plan": {
+    "actual_optimizer_steps": 1810,
+    "all_eligible_selection_groups_seen_at_least_once": true,
+    "all_eligible_selection_rows_seen_at_least_once": false,
+    "batch_size": 128,
+    "batch_size_unit": "unique_ticker_date_groups",
+    "completed_epoch_cycles": 10,
+    "equivalent_epochs": 10.0,
+    "final_refit_batches_per_epoch": 181,
+    "final_refit_row_count": 729654,
+    "final_refit_sampling_row_count": 23072,
+    "inner_train_batches_per_epoch": 132,
+    "inner_train_row_count": 538887,
+    "inner_train_sampling_row_count": 16832,
+    "last_epoch_fraction": 1.0,
+    "minimum_full_pass_applied": false,
+    "mode": "selected_epochs",
+    "selected_epoch": 10,
+    "selected_optimizer_steps": 1320,
+    "target_optimizer_steps": 1810,
+    "training_sampling_mode": "unique_ticker_date",
+    "training_weight_reduction": "fixed_batch_size"
+  },
+  "fixed_epochs": 10,
+  "fixed_evaluation_threshold": 0.55,
+  "gradient_clip_norm": 1.0,
+  "inner_train_label_counts": {
+    "invalid": 0,
+    "pass": 298265,
+    "reject": 240622,
+    "total": 538887
+  },
+  "inner_validation_epoch_selection": {
+    "batches_per_epoch": 132,
+    "best_epoch": 10,
+    "best_optimizer_steps": 1320,
+    "best_validation_loss": 0.671294,
+    "best_validation_metrics": {
+      "accuracy": 0.589777,
+      "group_weight_sum": 6065.0,
+      "loss": 0.671294,
+      "pass_rate": 0.589942,
+      "row_accuracy": 0.577954,
+      "row_count": 187316,
+      "row_pass_rate": 0.643132
+    },
+    "class_weights_reject_pass": [
+      1.0,
+      1.0
+    ],
+    "completed_epochs": 15,
+    "history": [
+      {
+        "batch_loss": 0.690016,
+        "cumulative_optimizer_steps": 132,
+        "elapsed_sec": 19.56,
+        "epoch": 1,
+        "inner_train_metrics": {
+          "accuracy": 0.553291,
+          "group_weight_sum": 16832.0,
+          "loss": 0.685116,
+          "pass_rate": 0.829967,
+          "row_accuracy": 0.560442,
+          "row_count": 538887,
+          "row_pass_rate": 0.927907
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.559604,
+          "group_weight_sum": 6065.0,
+          "loss": 0.688093,
+          "pass_rate": 0.766859,
+          "row_accuracy": 0.559167,
+          "row_count": 187316,
+          "row_pass_rate": 0.879978
+        },
+        "is_best_epoch": true,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.687459,
+        "cumulative_optimizer_steps": 264,
+        "elapsed_sec": 19.528,
+        "epoch": 2,
+        "inner_train_metrics": {
+          "accuracy": 0.549667,
+          "group_weight_sum": 16832.0,
+          "loss": 0.684398,
+          "pass_rate": 0.941005,
+          "row_accuracy": 0.556718,
+          "row_count": 538887,
+          "row_pass_rate": 0.983828
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.569827,
+          "group_weight_sum": 6065.0,
+          "loss": 0.681637,
+          "pass_rate": 0.906678,
+          "row_accuracy": 0.563246,
+          "row_count": 187316,
+          "row_pass_rate": 0.967093
+        },
+        "is_best_epoch": true,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.684316,
+        "cumulative_optimizer_steps": 396,
+        "elapsed_sec": 19.723,
+        "epoch": 3,
+        "inner_train_metrics": {
+          "accuracy": 0.575333,
+          "group_weight_sum": 16832.0,
+          "loss": 0.680345,
+          "pass_rate": 0.658448,
+          "row_accuracy": 0.584356,
+          "row_count": 538887,
+          "row_pass_rate": 0.792567
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.56488,
+          "group_weight_sum": 6065.0,
+          "loss": 0.681674,
+          "pass_rate": 0.502721,
+          "row_accuracy": 0.563876,
+          "row_count": 187316,
+          "row_pass_rate": 0.603376
+        },
+        "is_best_epoch": false,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.682289,
+        "cumulative_optimizer_steps": 528,
+        "elapsed_sec": 19.516,
+        "epoch": 4,
+        "inner_train_metrics": {
+          "accuracy": 0.579551,
+          "group_weight_sum": 16832.0,
+          "loss": 0.67893,
+          "pass_rate": 0.750832,
+          "row_accuracy": 0.583337,
+          "row_count": 538887,
+          "row_pass_rate": 0.844235
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.576587,
+          "group_weight_sum": 6065.0,
+          "loss": 0.681492,
+          "pass_rate": 0.540808,
+          "row_accuracy": 0.572466,
+          "row_count": 187316,
+          "row_pass_rate": 0.605634
+        },
+        "is_best_epoch": true,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.681151,
+        "cumulative_optimizer_steps": 660,
+        "elapsed_sec": 19.561,
+        "epoch": 5,
+        "inner_train_metrics": {
+          "accuracy": 0.567015,
+          "group_weight_sum": 16832.0,
+          "loss": 0.679536,
+          "pass_rate": 0.822897,
+          "row_accuracy": 0.568982,
+          "row_count": 538887,
+          "row_pass_rate": 0.92273
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.575268,
+          "group_weight_sum": 6065.0,
+          "loss": 0.676939,
+          "pass_rate": 0.694147,
+          "row_accuracy": 0.570368,
+          "row_count": 187316,
+          "row_pass_rate": 0.797689
+        },
+        "is_best_epoch": true,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.678122,
+        "cumulative_optimizer_steps": 792,
+        "elapsed_sec": 19.527,
+        "epoch": 6,
+        "inner_train_metrics": {
+          "accuracy": 0.580442,
+          "group_weight_sum": 16832.0,
+          "loss": 0.675989,
+          "pass_rate": 0.675559,
+          "row_accuracy": 0.588689,
+          "row_count": 538887,
+          "row_pass_rate": 0.786352
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.548887,
+          "group_weight_sum": 6065.0,
+          "loss": 0.685634,
+          "pass_rate": 0.42803,
+          "row_accuracy": 0.540098,
+          "row_count": 187316,
+          "row_pass_rate": 0.485266
+        },
+        "is_best_epoch": false,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.675242,
+        "cumulative_optimizer_steps": 924,
+        "elapsed_sec": 19.576,
+        "epoch": 7,
+        "inner_train_metrics": {
+          "accuracy": 0.579313,
+          "group_weight_sum": 16832.0,
+          "loss": 0.674282,
+          "pass_rate": 0.793132,
+          "row_accuracy": 0.578195,
+          "row_count": 538887,
+          "row_pass_rate": 0.895535
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.575927,
+          "group_weight_sum": 6065.0,
+          "loss": 0.676163,
+          "pass_rate": 0.631162,
+          "row_accuracy": 0.570448,
+          "row_count": 187316,
+          "row_pass_rate": 0.7284
+        },
+        "is_best_epoch": true,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.67061,
+        "cumulative_optimizer_steps": 1056,
+        "elapsed_sec": 19.55,
+        "epoch": 8,
+        "inner_train_metrics": {
+          "accuracy": 0.58371,
+          "group_weight_sum": 16832.0,
+          "loss": 0.673723,
+          "pass_rate": 0.786478,
+          "row_accuracy": 0.581465,
+          "row_count": 538887,
+          "row_pass_rate": 0.895297
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.583017,
+          "group_weight_sum": 6065.0,
+          "loss": 0.675489,
+          "pass_rate": 0.622754,
+          "row_accuracy": 0.577746,
+          "row_count": 187316,
+          "row_pass_rate": 0.721241
+        },
+        "is_best_epoch": true,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.66896,
+        "cumulative_optimizer_steps": 1188,
+        "elapsed_sec": 19.702,
+        "epoch": 9,
+        "inner_train_metrics": {
+          "accuracy": 0.596364,
+          "group_weight_sum": 16832.0,
+          "loss": 0.669513,
+          "pass_rate": 0.620188,
+          "row_accuracy": 0.604451,
+          "row_count": 538887,
+          "row_pass_rate": 0.743883
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.553009,
+          "group_weight_sum": 6065.0,
+          "loss": 0.687695,
+          "pass_rate": 0.400495,
+          "row_accuracy": 0.540445,
+          "row_count": 187316,
+          "row_pass_rate": 0.440384
+        },
+        "is_best_epoch": false,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.666165,
+        "cumulative_optimizer_steps": 1320,
+        "elapsed_sec": 19.558,
+        "epoch": 10,
+        "inner_train_metrics": {
+          "accuracy": 0.594701,
+          "group_weight_sum": 16832.0,
+          "loss": 0.667801,
+          "pass_rate": 0.747802,
+          "row_accuracy": 0.596264,
+          "row_count": 538887,
+          "row_pass_rate": 0.851338
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.589777,
+          "group_weight_sum": 6065.0,
+          "loss": 0.671294,
+          "pass_rate": 0.589942,
+          "row_accuracy": 0.577954,
+          "row_count": 187316,
+          "row_pass_rate": 0.643132
+        },
+        "is_best_epoch": true,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.665869,
+        "cumulative_optimizer_steps": 1452,
+        "elapsed_sec": 19.647,
+        "epoch": 11,
+        "inner_train_metrics": {
+          "accuracy": 0.601058,
+          "group_weight_sum": 16832.0,
+          "loss": 0.665315,
+          "pass_rate": 0.674667,
+          "row_accuracy": 0.604975,
+          "row_count": 538887,
+          "row_pass_rate": 0.775719
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.562737,
+          "group_weight_sum": 6065.0,
+          "loss": 0.685818,
+          "pass_rate": 0.448805,
+          "row_accuracy": 0.549707,
+          "row_count": 187316,
+          "row_pass_rate": 0.481187
+        },
+        "is_best_epoch": false,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.658327,
+        "cumulative_optimizer_steps": 1584,
+        "elapsed_sec": 19.638,
+        "epoch": 12,
+        "inner_train_metrics": {
+          "accuracy": 0.594463,
+          "group_weight_sum": 16832.0,
+          "loss": 0.665188,
+          "pass_rate": 0.781785,
+          "row_accuracy": 0.595758,
+          "row_count": 538887,
+          "row_pass_rate": 0.863094
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.587634,
+          "group_weight_sum": 6065.0,
+          "loss": 0.675892,
+          "pass_rate": 0.595383,
+          "row_accuracy": 0.575391,
+          "row_count": 187316,
+          "row_pass_rate": 0.634174
+        },
+        "is_best_epoch": false,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.658678,
+        "cumulative_optimizer_steps": 1716,
+        "elapsed_sec": 19.58,
+        "epoch": 13,
+        "inner_train_metrics": {
+          "accuracy": 0.601592,
+          "group_weight_sum": 16832.0,
+          "loss": 0.662085,
+          "pass_rate": 0.789865,
+          "row_accuracy": 0.605819,
+          "row_count": 538887,
+          "row_pass_rate": 0.838361
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.581039,
+          "group_weight_sum": 6065.0,
+          "loss": 0.681208,
+          "pass_rate": 0.535697,
+          "row_accuracy": 0.564501,
+          "row_count": 187316,
+          "row_pass_rate": 0.535005
+        },
+        "is_best_epoch": false,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.655346,
+        "cumulative_optimizer_steps": 1848,
+        "elapsed_sec": 19.59,
+        "epoch": 14,
+        "inner_train_metrics": {
+          "accuracy": 0.605394,
+          "group_weight_sum": 16832.0,
+          "loss": 0.661671,
+          "pass_rate": 0.540102,
+          "row_accuracy": 0.611438,
+          "row_count": 538887,
+          "row_pass_rate": 0.628288
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.525804,
+          "group_weight_sum": 6065.0,
+          "loss": 0.728943,
+          "pass_rate": 0.276999,
+          "row_accuracy": 0.515151,
+          "row_count": 187316,
+          "row_pass_rate": 0.266859
+        },
+        "is_best_epoch": false,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      },
+      {
+        "batch_loss": 0.653625,
+        "cumulative_optimizer_steps": 1980,
+        "elapsed_sec": 19.524,
+        "epoch": 15,
+        "inner_train_metrics": {
+          "accuracy": 0.612761,
+          "group_weight_sum": 16832.0,
+          "loss": 0.6557,
+          "pass_rate": 0.720116,
+          "row_accuracy": 0.613813,
+          "row_count": 538887,
+          "row_pass_rate": 0.805687
+        },
+        "inner_validation_metrics": {
+          "accuracy": 0.569662,
+          "group_weight_sum": 6065.0,
+          "loss": 0.691316,
+          "pass_rate": 0.475845,
+          "row_accuracy": 0.559205,
+          "row_count": 187316,
+          "row_pass_rate": 0.51253
+        },
+        "is_best_epoch": false,
+        "learning_rate_end": 0.0003,
+        "learning_rate_start": 0.0003,
+        "optimizer_steps": 132,
+        "training_augmentation": {
+          "augmented_sample_count": 0,
+          "masked_bar_count": 0,
+          "name": "none",
+          "sample_count": 16832
+        }
+      }
+    ],
+    "learning_rate_schedule": {
+      "actual_optimizer_steps": 1980,
+      "base_learning_rate": 0.0003,
+      "last_applied_learning_rate": 0.0003,
+      "minimum_learning_rate": 0.0003,
+      "minimum_lr_ratio": 1.0,
+      "name": "none",
+      "total_optimizer_steps": 26400,
+      "warmup_fraction": 0.0,
+      "warmup_steps": 0
+    },
+    "sample_weight_summaries": {
+      "inner_train": {
+        "actual_total_weight_per_date_max": 9.52036199,
+        "actual_total_weight_per_date_min": 9.52036199,
+        "date_count": 1768,
+        "date_group_count_max": 66,
+        "date_group_count_mean": 9.520362,
+        "date_group_count_min": 1,
+        "date_weight_multiplier_max": 9.52036199,
+        "date_weight_multiplier_min": 0.14424791,
+        "group_count": 16832,
+        "mode": "date_balanced",
+        "target_total_weight_per_date": 9.52036199,
+        "weight_sum": 16832.0,
+        "year_group_counts": {},
+        "year_weight_multipliers": {}
+      }
+    },
+    "training_sampling": {
+      "batch_size_unit": "unique_ticker_date_groups",
+      "duplicate_rows_removed": 522055,
+      "mode": "unique_ticker_date",
+      "representative_rule": "minimum_original_event_row_index",
+      "sampled_row_count": 16832,
+      "sampling_unit": "unique_ticker_date_group",
+      "source_row_count": 538887,
+      "unique_group_count": 16832,
+      "uses_all_eligible_groups": true,
+      "uses_all_eligible_rows": false
+    }
+  },
+  "inner_validation_label_counts": {
+    "invalid": 0,
+    "pass": 105743,
+    "reject": 81573,
+    "total": 187316
+  },
+  "inner_validation_months": 24,
+  "inner_validation_used": true,
+  "learning_rate": 0.0003,
+  "learning_rate_schedule": {
+    "epoch_selection": {
+      "actual_optimizer_steps": 1980,
+      "base_learning_rate": 0.0003,
+      "last_applied_learning_rate": 0.0003,
+      "minimum_learning_rate": 0.0003,
+      "minimum_lr_ratio": 1.0,
+      "name": "none",
+      "total_optimizer_steps": 26400,
+      "warmup_fraction": 0.0,
+      "warmup_steps": 0
+    },
+    "final_refit": {
+      "actual_optimizer_steps": 1810,
+      "base_learning_rate": 0.0003,
+      "last_applied_learning_rate": 0.0003,
+      "minimum_learning_rate": 0.0003,
+      "minimum_lr_ratio": 1.0,
+      "name": "none",
+      "total_optimizer_steps": 1810,
+      "warmup_fraction": 0.0,
+      "warmup_steps": 0
+    },
+    "name": "none",
+    "parameters": {}
+  },
+  "lr_schedule_name": "none",
+  "manifest_filename": "manifest.json",
+  "max_epochs": 200,
+  "model": {
+    "filename": "model.pt",
+    "sha256": "422137ca9ff8f26a7fbf09e29ab1ad65a4df7557317c4646b0b792d4e04e4446",
+    "size_bytes": 103819
+  },
+  "model_architecture": "multiscale_cnn_sequence_only_v1",
+  "model_filename": "model.pt",
+  "model_information_cutoff": "2020-12-31",
+  "model_spec": {
+    "architecture": "multiscale_cnn_sequence_only_v1",
+    "branch_downsample_factors": [
+      1,
+      2,
+      4
+    ],
+    "branch_kernel_sizes": [
+      [
+        3,
+        5
+      ],
+      [
+        9,
+        15
+      ],
+      [
+        31,
+        31
+      ]
+    ],
+    "branch_summary_windows_bars": [
+      [
+        0,
+        20
+      ],
+      [
+        0,
+        60
+      ],
+      [
+        120,
+        300
+      ]
+    ],
+    "channels": 16,
+    "convolutions_per_block": 2,
+    "dilations": [],
+    "dropout": 0.25,
+    "family": "multiscale_cnn",
+    "head_width": 32,
+    "kernel_size": 31,
+    "normalization": "group_norm",
+    "normalization_groups": 4,
+    "pooling": [
+      "last",
+      "window_average"
+    ],
+    "receptive_field_bars": 244,
+    "use_dataset_context": false
+  },
+  "no_lookahead_guarantee": "features use D0 and earlier only; outer Selection/OOS dates come from core.walk_forward_policy; inner validation, when enabled, is confined to Selection and only selects epoch; the final model is refit on all eligible Selection groups with the configured refit-step policy; fixed threshold is committed before OOS; training sampling uses ticker/date and existing feature-group identity only; OOS predictions and metrics are not used by train.py",
+  "oos_metrics_emitted_by_train": false,
+  "oos_predictions_used_during_training": false,
+  "optimizer_name": "adam",
+  "outer_oos_policy": {
+    "configured_oos_end_date": null,
+    "effective_oos_end_date": "2026-03-02",
+    "evaluation_scope": "oos_single_fold",
+    "model_mode": "oos",
+    "oos_start_date": "2021-01-01",
+    "policy_fingerprint_sha256": "92ca43330591088872151814836fb95a96ab7e5e31d6bfaf8e24e519e87fa1d7",
+    "policy_source": "core.walk_forward_policy",
+    "selection_end_date": "2020-12-31",
+    "selection_start_date": "2011-01-01",
+    "source_data_end_date": "2026-03-02",
+    "walk_forward_policy": {
+      "evaluation_scope": "oos_single_fold",
+      "full_end_year": null,
+      "full_start_year": 2021,
+      "latest_data_date": null,
+      "min_train_years": 10,
+      "model_mode": "oos",
+      "objective_mode": "split_train_romd",
+      "oos_end_date": null,
+      "oos_start_date": null,
+      "oos_start_year": 2021,
+      "search_train_end_date": null,
+      "search_train_end_year": 2020,
+      "selection_start_date": null,
+      "selection_start_year": 2011,
+      "study_scope": "",
+      "trade_train_window_months": null,
+      "train_start_date": null,
+      "train_start_year": 2011,
+      "train_window_months": null
+    }
+  },
+  "parallel_split_evaluation": false,
+  "policy": {
+    "benchmark_ticker": "0050",
+    "feature_window_bars": 300,
+    "high_len_max": 350,
+    "high_len_min": 60,
+    "high_len_values": [
+      60,
+      65,
+      70,
+      75,
+      80,
+      85,
+      90,
+      95,
+      100,
+      105,
+      110,
+      115,
+      120,
+      125,
+      130,
+      135,
+      140,
+      145,
+      150,
+      155,
+      160,
+      165,
+      170,
+      175,
+      180,
+      185,
+      190,
+      195,
+      200,
+      201,
+      205,
+      210,
+      215,
+      220,
+      225,
+      230,
+      235,
+      240,
+      245,
+      250,
+      255,
+      260,
+      265,
+      270,
+      275,
+      280,
+      285,
+      290,
+      295,
+      300,
+      305,
+      310,
+      315,
+      320,
+      325,
+      330,
+      335,
+      340,
+      345,
+      350
+    ],
+    "label_horizon_bars": 40,
+    "label_objective": "binary_risk_adjusted_opportunity_v2",
+    "label_path_cache_bars": 120,
+    "max_adverse_return": -0.1,
+    "min_mfe_return": 0.05,
+    "min_reward_risk_ratio": 2.0
+  },
+  "preload_feature_bank": true,
+  "runtime_eligibility": {
+    "eligible": false,
+    "model_information_cutoff": "2020-12-31",
+    "reason": "train.py only writes model/split artifacts; formal runtime scores require export_scores.py --scope forward_oos",
+    "scope": "not_exported"
+  },
+  "sample_weight_summaries": {
+    "epoch_selection": {
+      "inner_train": {
+        "actual_total_weight_per_date_max": 9.52036199,
+        "actual_total_weight_per_date_min": 9.52036199,
+        "date_count": 1768,
+        "date_group_count_max": 66,
+        "date_group_count_mean": 9.520362,
+        "date_group_count_min": 1,
+        "date_weight_multiplier_max": 9.52036199,
+        "date_weight_multiplier_min": 0.14424791,
+        "group_count": 16832,
+        "mode": "date_balanced",
+        "target_total_weight_per_date": 9.52036199,
+        "weight_sum": 16832.0,
+        "year_group_counts": {},
+        "year_weight_multipliers": {}
+      }
+    },
+    "final_refit": {
+      "actual_total_weight_per_date_max": 10.28622381,
+      "actual_total_weight_per_date_min": 10.28622381,
+      "date_count": 2243,
+      "date_group_count_max": 95,
+      "date_group_count_mean": 10.286224,
+      "date_group_count_min": 1,
+      "date_weight_multiplier_max": 10.28622381,
+      "date_weight_multiplier_min": 0.10827604,
+      "group_count": 23072,
+      "mode": "date_balanced",
+      "target_total_weight_per_date": 10.28622381,
+      "weight_sum": 23072.0,
+      "year_group_counts": {},
+      "year_weight_multipliers": {}
+    }
+  },
+  "score_decision": {
+    "comparison": ">=",
+    "score_column": "dl_quality_score",
+    "threshold_source": "strategy_param.breakout_quality_score_threshold"
+  },
+  "score_filename": "scores.csv",
+  "seed": 42,
+  "selected_epoch": 10,
+  "sequence_length": 300,
+  "source_dataset": {
+    "build_mode": "full_feature_bank_rebuild",
+    "context_columns": [
+      "high_len_norm",
+      "breakout_level_to_close",
+      "close_to_breakout_level",
+      "high_to_breakout_level"
+    ],
+    "dataset": "full",
+    "dataset_artifacts": {
+      "event_context": {
+        "filename": "event_context.npy",
+        "sha256": "a3ac6aa0e9fb30171c60bb263168f829f4090c652c3130f42596b6ea3700db9b",
+        "size_bytes": 28688576
+      },
+      "event_group_index": {
+        "filename": "event_group_index.npy",
+        "sha256": "39b3e7c3635e88494021ab5a2df737ea362c4695aa49915266d9cd74a1d0cfca",
+        "size_bytes": 7172240
+      },
+      "event_labels": {
+        "filename": "event_labels.npy",
+        "sha256": "77fdf283a172dec29a3a3a9b6f0afb85f73798c8e4f01f234a729124d5d69ec5",
+        "size_bytes": 1793156
+      },
+      "events_csv": {
+        "filename": "events.csv",
+        "sha256": "8ef831355c1781e228a958871e0c987b409737b1339e8aec5b8cd83defb2ec81",
+        "size_bytes": 361459413
+      },
+      "feature_bank": {
+        "filename": "feature_bank.npy",
+        "sha256": "0dee94b20f391040ae83d8c9e77bb266abe37a08143f9d43b928925de3344e64",
+        "size_bytes": 666108128
+      },
+      "future_available_bars": {
+        "filename": "future_available_bars.npy",
+        "sha256": "651e673990f1e5c1d795caf3d8e0c592b1de075326b7d6adffeba83b374bc90a",
+        "size_bytes": 111146
+      },
+      "future_date_ordinals": {
+        "filename": "future_date_ordinals.npy",
+        "sha256": "10348a880a4eb942c57692b1ea8250031813fea21a0629d31297a17573b326f8",
+        "size_bytes": 26644448
+      },
+      "future_high_prices": {
+        "filename": "future_high_prices.npy",
+        "sha256": "db3b87110fcdccd8342df26c71bea0ed9476c9bb633aa9294b18ba19f73b0def",
+        "size_bytes": 53288768
+      },
+      "future_low_prices": {
+        "filename": "future_low_prices.npy",
+        "sha256": "2c443a2f5ee9570d308b0c23027029c165599a848e35758f5d6064514318f6a4",
+        "size_bytes": 53288768
+      },
+      "group_anchor_prices": {
+        "filename": "group_anchor_prices.npy",
+        "sha256": "84f39642795be6e714a2a9c3446f2da4353bc5132effb746941ca785a80f11b3",
+        "size_bytes": 444200
+      }
+    },
+    "dataset_storage_format": "indexed_feature_bank_npy_v2",
+    "dataset_storage_schema_version": 3,
+    "elapsed_sec": 202.2,
+    "event_count": 1793028,
+    "event_date_range": {
+      "end": "2026-03-02",
+      "start": "2004-09-08"
+    },
+    "event_group_summary": {
+      "group_count": 55509,
+      "group_key": "ticker/date",
+      "mixed_label_group_count": 0,
+      "mixed_valid_label_group_count": 0,
+      "rows_per_group_max": 60,
+      "rows_per_group_mean": 32.301573,
+      "rows_per_group_min": 1,
+      "valid_group_count": 54419
+    },
+    "feature_cache_policy": {
+      "benchmark_ticker": "0050",
+      "feature_window_bars": 300,
+      "high_len_max": 350,
+      "high_len_min": 60,
+      "high_len_values": [
+        60,
+        65,
+        70,
+        75,
+        80,
+        85,
+        90,
+        95,
+        100,
+        105,
+        110,
+        115,
+        120,
+        125,
+        130,
+        135,
+        140,
+        145,
+        150,
+        155,
+        160,
+        165,
+        170,
+        175,
+        180,
+        185,
+        190,
+        195,
+        200,
+        201,
+        205,
+        210,
+        215,
+        220,
+        225,
+        230,
+        235,
+        240,
+        245,
+        250,
+        255,
+        260,
+        265,
+        270,
+        275,
+        280,
+        285,
+        290,
+        295,
+        300,
+        305,
+        310,
+        315,
+        320,
+        325,
+        330,
+        335,
+        340,
+        345,
+        350
+      ],
+      "label_path_cache_bars": 120
+    },
+    "feature_columns": [
+      "open_norm",
+      "high_norm",
+      "low_norm",
+      "close_norm",
+      "volume_norm",
+      "benchmark_open_norm",
+      "benchmark_high_norm",
+      "benchmark_low_norm",
+      "benchmark_close_norm",
+      "benchmark_volume_norm"
+    ],
+    "feature_group_count": 55509,
+    "filter_id": "breakout_quality_v1",
+    "label_counts": {
+      "invalid": 49302,
+      "pass": 1027498,
+      "reject": 716228,
+      "total": 1793028
+    },
+    "label_information_end_date_range": {
+      "end": "2026-03-02",
+      "start": "2004-11-05"
+    },
+    "label_policy": {
+      "label_horizon_bars": 40,
+      "label_objective": "binary_risk_adjusted_opportunity_v2",
+      "max_adverse_return": -0.1,
+      "min_mfe_return": 0.05,
+      "min_reward_risk_ratio": 2.0
+    },
+    "policy": {
+      "benchmark_ticker": "0050",
+      "feature_window_bars": 300,
+      "high_len_max": 350,
+      "high_len_min": 60,
+      "high_len_values": [
+        60,
+        65,
+        70,
+        75,
+        80,
+        85,
+        90,
+        95,
+        100,
+        105,
+        110,
+        115,
+        120,
+        125,
+        130,
+        135,
+        140,
+        145,
+        150,
+        155,
+        160,
+        165,
+        170,
+        175,
+        180,
+        185,
+        190,
+        195,
+        200,
+        201,
+        205,
+        210,
+        215,
+        220,
+        225,
+        230,
+        235,
+        240,
+        245,
+        250,
+        255,
+        260,
+        265,
+        270,
+        275,
+        280,
+        285,
+        290,
+        295,
+        300,
+        305,
+        310,
+        315,
+        320,
+        325,
+        330,
+        335,
+        340,
+        345,
+        350
+      ],
+      "label_horizon_bars": 40,
+      "label_objective": "binary_risk_adjusted_opportunity_v2",
+      "label_path_cache_bars": 120,
+      "max_adverse_return": -0.1,
+      "min_mfe_return": 0.05,
+      "min_reward_risk_ratio": 2.0
+    },
+    "source_data_date_range": {
+      "end": "2026-03-02",
+      "start": "1992-01-04"
+    },
+    "source_data_inventory": {
+      "csv_file_count": 617,
+      "csv_inventory_sha256": "2a6b70db7802433e886061fde8d1913f26d85e2fafed40e75060e03a1f9e6812",
+      "csv_latest_mtime_ns": 1772462709532388800,
+      "csv_total_bytes": 112948536,
+      "dataset_profile": "full",
+      "fingerprint_algorithm": "sha256(ticker,relative_path,size_bytes,mtime_ns)",
+      "ignored_duplicate_count": 0,
+      "schema_version": 1
+    },
+    "source_selection": {
+      "processed_ticker_count": 555,
+      "requested_max_tickers": 0,
+      "selected_ticker_count": 616
+    },
+    "storage_summary": {
+      "event_count": 1793028,
+      "events_per_feature_group": 32.301573,
+      "expanded_event_feature_bytes": 21516336000,
+      "feature_bank_bytes": 666108000,
+      "feature_group_count": 55509,
+      "feature_storage_reduction_ratio": 32.301573
+    }
+  },
+  "split_assignments": {
+    "columns": [
+      "ticker",
+      "date",
+      "high_len",
+      "outer_split",
+      "selection_role"
+    ],
+    "filename": "split_assignments.csv",
+    "group_key": "ticker/date/high_len",
+    "outer_split_counts": {
+      "oos": 640981,
+      "out_of_scope": 389940,
+      "selection": 762107
+    },
+    "required_columns": [
+      "ticker",
+      "date",
+      "high_len",
+      "outer_split",
+      "selection_role"
+    ],
+    "row_count": 1793028,
+    "schema_version": 3,
+    "selection_role_counts": {
+      "embargo": 32453,
+      "inner_embargo": 3451,
+      "invalid": 0,
+      "not_applicable": 1030921,
+      "train": 538887,
+      "validation": 187316
+    },
+    "sha256": "8a4ba1052d43009e5a6cddd36129debf74daab125f0c74bc53d2e233049834d3",
+    "size_bytes": 73984200,
+    "source_dataset_artifacts": {
+      "event_context": {
+        "filename": "event_context.npy",
+        "sha256": "a3ac6aa0e9fb30171c60bb263168f829f4090c652c3130f42596b6ea3700db9b",
+        "size_bytes": 28688576
+      },
+      "event_group_index": {
+        "filename": "event_group_index.npy",
+        "sha256": "39b3e7c3635e88494021ab5a2df737ea362c4695aa49915266d9cd74a1d0cfca",
+        "size_bytes": 7172240
+      },
+      "event_labels": {
+        "filename": "event_labels.npy",
+        "sha256": "77fdf283a172dec29a3a3a9b6f0afb85f73798c8e4f01f234a729124d5d69ec5",
+        "size_bytes": 1793156
+      },
+      "events_csv": {
+        "filename": "events.csv",
+        "sha256": "8ef831355c1781e228a958871e0c987b409737b1339e8aec5b8cd83defb2ec81",
+        "size_bytes": 361459413
+      },
+      "feature_bank": {
+        "filename": "feature_bank.npy",
+        "sha256": "0dee94b20f391040ae83d8c9e77bb266abe37a08143f9d43b928925de3344e64",
+        "size_bytes": 666108128
+      },
+      "future_available_bars": {
+        "filename": "future_available_bars.npy",
+        "sha256": "651e673990f1e5c1d795caf3d8e0c592b1de075326b7d6adffeba83b374bc90a",
+        "size_bytes": 111146
+      },
+      "future_date_ordinals": {
+        "filename": "future_date_ordinals.npy",
+        "sha256": "10348a880a4eb942c57692b1ea8250031813fea21a0629d31297a17573b326f8",
+        "size_bytes": 26644448
+      },
+      "future_high_prices": {
+        "filename": "future_high_prices.npy",
+        "sha256": "db3b87110fcdccd8342df26c71bea0ed9476c9bb633aa9294b18ba19f73b0def",
+        "size_bytes": 53288768
+      },
+      "future_low_prices": {
+        "filename": "future_low_prices.npy",
+        "sha256": "2c443a2f5ee9570d308b0c23027029c165599a848e35758f5d6064514318f6a4",
+        "size_bytes": 53288768
+      },
+      "group_anchor_prices": {
+        "filename": "group_anchor_prices.npy",
+        "sha256": "84f39642795be6e714a2a9c3446f2da4353bc5132effb746941ca785a80f11b3",
+        "size_bytes": 444200
+      }
+    }
+  },
+  "split_filename": "split_assignments.csv",
+  "split_report": {
+    "early_stopping_used": true,
+    "embargo_dropped_from_final_refit_row_count": 32453,
+    "final_refit_date_range": {
+      "end": "2020-11-05",
+      "start": "2011-01-03"
+    },
+    "final_refit_group_count": 23072,
+    "final_refit_includes_inner_embargo_rows": true,
+    "final_refit_label_end_date_range": {
+      "end": "2020-12-31",
+      "start": "2011-03-09"
+    },
+    "final_refit_row_count": 729654,
+    "inner_train_validation_embargo_row_count": 3451,
+    "inner_train_validation_overlap_event_date_count": 0,
+    "inner_train_validation_overlap_group_count": 0,
+    "inner_validation_date_range": {
+      "end": "2020-11-05",
+      "start": "2019-01-02"
+    },
+    "inner_validation_group_count": 6065,
+    "inner_validation_label_end_date_range": {
+      "end": "2020-12-31",
+      "start": "2019-03-12"
+    },
+    "inner_validation_months": 24,
+    "inner_validation_row_count": 187316,
+    "inner_validation_start_date": "2019-01-01",
+    "inner_validation_used": true,
+    "oos_date_range": {
+      "end": "2025-12-22",
+      "start": "2021-01-04"
+    },
+    "oos_end_date": "2026-03-02",
+    "oos_evaluable_row_count": 591679,
+    "oos_group_count": 17346,
+    "oos_label_after_end_row_count": 0,
+    "oos_label_end_date_range": {
+      "end": "2026-03-02",
+      "start": "2021-03-11"
+    },
+    "oos_start_date": "2021-01-01",
+    "outer_split_counts": {
+      "oos": 640981,
+      "out_of_scope": 389940,
+      "selection": 762107
+    },
+    "overlap_event_date_count": 0,
+    "overlap_group_count": 0,
+    "policy_fingerprint_sha256": "92ca43330591088872151814836fb95a96ab7e5e31d6bfaf8e24e519e87fa1d7",
+    "policy_source": "core.walk_forward_policy",
+    "selection_end_date": "2020-12-31",
+    "selection_oos_embargo_row_count": 32453,
+    "selection_role_counts": {
+      "embargo": 32453,
+      "inner_embargo": 3451,
+      "invalid": 0,
+      "not_applicable": 1030921,
+      "train": 538887,
+      "validation": 187316
+    },
+    "selection_start_date": "2011-01-01",
+    "selection_train_date_range": {
+      "end": "2018-11-05",
+      "start": "2011-01-03"
+    },
+    "selection_train_group_count": 16832,
+    "selection_train_label_end_date_range": {
+      "end": "2018-12-28",
+      "start": "2011-03-09"
+    },
+    "selection_train_row_count": 538887,
+    "strategy": "walk_forward_outer_selection_oos_inner_validation_full_refit",
+    "training_mode": "inner_validation_epoch_selection_full_refit",
+    "training_uses_all_eligible_selection_rows": true
+  },
+  "threshold_policy": {
+    "evaluation_threshold": 0.55,
+    "mode": "fixed_before_oos",
+    "oos_tuning_allowed": false,
+    "optimized_by_train": false,
+    "runtime_source": "strategy_param.breakout_quality_score_threshold"
+  },
+  "time_weight_mode": "date_balanced",
+  "train_prefetch_batches": 0,
+  "trainable_parameter_count": 23394,
+  "training_augmentation": {
+    "epoch_selection": [
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 16832
+      }
+    ],
+    "final_refit": [
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      },
+      {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    ],
+    "name": "none",
+    "oos_augmented": false,
+    "parameters": {},
+    "validation_augmented": false
+  },
+  "training_history": [
+    {
+      "batch_loss": 0.690272,
+      "cumulative_optimizer_steps": 181,
+      "elapsed_sec": 21.385,
+      "epoch": 1,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.548977,
+        "group_weight_sum": 23072.0,
+        "loss": 0.682985,
+        "pass_rate": 0.994756,
+        "row_accuracy": 0.556726,
+        "row_count": 729654,
+        "row_pass_rate": 0.996681
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.684948,
+      "cumulative_optimizer_steps": 362,
+      "elapsed_sec": 21.383,
+      "epoch": 2,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.549801,
+        "group_weight_sum": 23072.0,
+        "loss": 0.681558,
+        "pass_rate": 0.992112,
+        "row_accuracy": 0.556487,
+        "row_count": 729654,
+        "row_pass_rate": 0.994356
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.681792,
+      "cumulative_optimizer_steps": 543,
+      "elapsed_sec": 21.537,
+      "epoch": 3,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.566878,
+        "group_weight_sum": 23072.0,
+        "loss": 0.678477,
+        "pass_rate": 0.591279,
+        "row_accuracy": 0.575918,
+        "row_count": 729654,
+        "row_pass_rate": 0.688458
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.681928,
+      "cumulative_optimizer_steps": 724,
+      "elapsed_sec": 21.306,
+      "epoch": 4,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.573162,
+        "group_weight_sum": 23072.0,
+        "loss": 0.676569,
+        "pass_rate": 0.865161,
+        "row_accuracy": 0.57349,
+        "row_count": 729654,
+        "row_pass_rate": 0.914688
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.677526,
+      "cumulative_optimizer_steps": 905,
+      "elapsed_sec": 21.267,
+      "epoch": 5,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.584215,
+        "group_weight_sum": 23072.0,
+        "loss": 0.67521,
+        "pass_rate": 0.783547,
+        "row_accuracy": 0.585838,
+        "row_count": 729654,
+        "row_pass_rate": 0.854487
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.677875,
+      "cumulative_optimizer_steps": 1086,
+      "elapsed_sec": 21.308,
+      "epoch": 6,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.579577,
+        "group_weight_sum": 23072.0,
+        "loss": 0.674676,
+        "pass_rate": 0.871489,
+        "row_accuracy": 0.584341,
+        "row_count": 729654,
+        "row_pass_rate": 0.89594
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.67265,
+      "cumulative_optimizer_steps": 1267,
+      "elapsed_sec": 21.285,
+      "epoch": 7,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.59258,
+        "group_weight_sum": 23072.0,
+        "loss": 0.67029,
+        "pass_rate": 0.640387,
+        "row_accuracy": 0.597864,
+        "row_count": 729654,
+        "row_pass_rate": 0.686269
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.670366,
+      "cumulative_optimizer_steps": 1448,
+      "elapsed_sec": 21.416,
+      "epoch": 8,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.588636,
+        "group_weight_sum": 23072.0,
+        "loss": 0.66935,
+        "pass_rate": 0.813107,
+        "row_accuracy": 0.590204,
+        "row_count": 729654,
+        "row_pass_rate": 0.861822
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.66673,
+      "cumulative_optimizer_steps": 1629,
+      "elapsed_sec": 21.398,
+      "epoch": 9,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.595484,
+        "group_weight_sum": 23072.0,
+        "loss": 0.666974,
+        "pass_rate": 0.566141,
+        "row_accuracy": 0.600412,
+        "row_count": 729654,
+        "row_pass_rate": 0.626916
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    },
+    {
+      "batch_loss": 0.664992,
+      "cumulative_optimizer_steps": 1810,
+      "elapsed_sec": 21.411,
+      "epoch": 10,
+      "epoch_fraction": 1.0,
+      "learning_rate_end": 0.0003,
+      "learning_rate_start": 0.0003,
+      "optimizer_steps": 181,
+      "selection_metrics": {
+        "accuracy": 0.607836,
+        "group_weight_sum": 23072.0,
+        "loss": 0.662511,
+        "pass_rate": 0.715196,
+        "row_accuracy": 0.605538,
+        "row_count": 729654,
+        "row_pass_rate": 0.774649
+      },
+      "target_optimizer_steps": 1810,
+      "training_augmentation": {
+        "augmented_sample_count": 0,
+        "masked_bar_count": 0,
+        "name": "none",
+        "sample_count": 23072
+      }
+    }
+  ],
+  "training_mode": "inner_validation_epoch_selection_full_refit",
+  "training_sampling": {
+    "final_refit": {
+      "batch_size_unit": "unique_ticker_date_groups",
+      "duplicate_rows_removed": 706582,
+      "mode": "unique_ticker_date",
+      "representative_rule": "minimum_original_event_row_index",
+      "sampled_row_count": 23072,
+      "sampling_unit": "unique_ticker_date_group",
+      "source_row_count": 729654,
+      "unique_group_count": 23072,
+      "uses_all_eligible_groups": true,
+      "uses_all_eligible_rows": false
+    },
+    "inner_train": {
+      "batch_size_unit": "unique_ticker_date_groups",
+      "duplicate_rows_removed": 522055,
+      "mode": "unique_ticker_date",
+      "representative_rule": "minimum_original_event_row_index",
+      "sampled_row_count": 16832,
+      "sampling_unit": "unique_ticker_date_group",
+      "source_row_count": 538887,
+      "unique_group_count": 16832,
+      "uses_all_eligible_groups": true,
+      "uses_all_eligible_rows": false
+    },
+    "mode": "unique_ticker_date",
+    "oos_sampling_enabled": false,
+    "validation_sampling_enabled": false
+  },
+  "training_uses_all_eligible_selection_groups": true,
+  "training_uses_all_eligible_selection_rows": false,
+  "training_weight_reduction": "fixed_batch_size",
+  "weight_decay": 0.0001
+}

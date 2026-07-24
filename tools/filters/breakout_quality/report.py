@@ -449,6 +449,9 @@ def _training_summary(manifest: dict) -> dict:
         "final_refit_plan": manifest.get("final_refit_plan") or {},
         "class_weight_mode": manifest.get("class_weight_mode"),
         "time_weight_mode": manifest.get("time_weight_mode"),
+        "training_weight_reduction": manifest.get(
+            "training_weight_reduction", "batch_weight_sum"
+        ),
         "batch_size": manifest.get("batch_size"),
         "seed": manifest.get("seed"),
         "early_stopping_enabled": early_stopping_enabled,
@@ -1190,6 +1193,7 @@ def render_markdown_report(payload: dict) -> str:
             f"- **Final Refit Mode**：`{(training.get('final_refit_plan') or {}).get('mode')}`",
             f"- **Class Weight Mode**：`{training.get('class_weight_mode')}`",
             f"- **Time Weight Mode**：`{training.get('time_weight_mode')}`",
+            f"- **Training Weight Reduction**：`{training.get('training_weight_reduction')}`",
             f"- **Batch Size**：`{training.get('batch_size')}`",
             f"- **Random Seed**：`{training.get('seed')}`",
             "",
@@ -1642,6 +1646,7 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
             f"Final Refit     : {(training.get('final_refit_plan') or {}).get('mode')}",
             f"Class Weight    : {training.get('class_weight_mode')}",
             f"Time Weight     : {training.get('time_weight_mode')}",
+            f"Weight Reduce   : {training.get('training_weight_reduction')}",
             f"Batch Size      : {training.get('batch_size')}",
             f"Random Seed     : {training.get('seed')}",
         ]

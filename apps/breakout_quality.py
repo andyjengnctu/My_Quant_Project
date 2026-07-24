@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config.breakout_quality_experiments import (
     SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     get_breakout_quality_experiment_profile,
 )
 from config.breakout_quality_policy import (
@@ -330,7 +331,7 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
     )
     parser.add_argument(
         "--time-weight-mode",
-        choices=("none", "year_balanced_sqrt"),
+        choices=SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
         default=str(defaults.time_weight_mode),
     )
     parser.add_argument("--seed", type=int, default=int(defaults.seed))
@@ -617,6 +618,7 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         lr_schedule_name=str(defaults.lr_schedule_name),
         augmentation_name=str(defaults.augmentation_name),
         training_sampling_mode=str(defaults.training_sampling_mode),
+        training_weight_reduction=str(defaults.training_weight_reduction),
         lr=float(defaults.lr),
         weight_decay=float(defaults.weight_decay),
         gradient_clip_norm=float(defaults.gradient_clip_norm),
@@ -680,6 +682,7 @@ def _print_policy_defaults(
         f"- Augmentation：{experiment.augmentation_name}\n"
         f"- Augmentation Parameters：{augmentation_parameters or '-'}\n"
         f"- Training Sampling：{experiment.training_sampling_mode}\n"
+        f"- Training Weight Reduction：{experiment.training_weight_reduction}\n"
         f"- Learning Rate：{float(train_settings.lr):g}\n"
         f"- Weight Decay：{float(train_settings.weight_decay):g}\n"
         f"- Gradient Clip Norm：{float(train_settings.gradient_clip_norm):g}\n"

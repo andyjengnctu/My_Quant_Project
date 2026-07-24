@@ -15,12 +15,29 @@ ADAMW_ONLY_EXPERIMENT_PROFILE = "adamw_only"
 ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE = "adam_warmup_cosine"
 HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE = "history_masking_only"
 UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE = "unique_group_sampling"
+UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE = "unique_group_date_balanced"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
 TRAINING_SAMPLING_UNIQUE_TICKER_DATE = "unique_ticker_date"
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES = (
     TRAINING_SAMPLING_ALL_EVENT_ROWS,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+)
+
+TIME_WEIGHT_MODE_NONE = "none"
+TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT = "year_balanced_sqrt"
+TIME_WEIGHT_MODE_DATE_BALANCED = "date_balanced"
+SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES = (
+    TIME_WEIGHT_MODE_NONE,
+    TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT,
+    TIME_WEIGHT_MODE_DATE_BALANCED,
+)
+
+TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM = "batch_weight_sum"
+TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE = "fixed_batch_size"
+SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS = (
+    TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
+    TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
 )
 
 LR_SCHEDULE_NONE = "none"
@@ -52,6 +69,8 @@ class BreakoutQualityExperimentProfile:
     lr_warmup_fraction: float = 0.0
     lr_minimum_ratio: float = 1.0
     training_sampling_mode: str = TRAINING_SAMPLING_ALL_EVENT_ROWS
+    time_weight_mode: str | None = None
+    training_weight_reduction: str = TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM
 
     def __post_init__(self) -> None:
         normalized_name = str(self.name).strip().lower()
@@ -68,6 +87,22 @@ class BreakoutQualityExperimentProfile:
         if self.training_sampling_mode not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES:
             raise ValueError(
                 f"不支援的 training sampling mode: {self.training_sampling_mode!r}"
+            )
+        if (
+            self.time_weight_mode is not None
+            and self.time_weight_mode not in SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES
+        ):
+            raise ValueError(f"不支援的 time weight mode: {self.time_weight_mode!r}")
+        if self.training_weight_reduction not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS:
+            raise ValueError(
+                f"不支援的 training weight reduction: {self.training_weight_reduction!r}"
+            )
+        if (
+            self.training_weight_reduction == TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE
+            and self.time_weight_mode != TIME_WEIGHT_MODE_DATE_BALANCED
+        ):
+            raise ValueError(
+                "fixed_batch_size training weight reduction 目前只允許 date_balanced profile"
             )
         warmup_fraction = float(self.lr_warmup_fraction)
         minimum_ratio = float(self.lr_minimum_ratio)
@@ -136,6 +171,10 @@ class BreakoutQualityExperimentProfile:
             payload["augmentation_parameters"] = augmentation_parameters
         if self.training_sampling_mode != TRAINING_SAMPLING_ALL_EVENT_ROWS:
             payload["training_sampling_mode"] = self.training_sampling_mode
+        if self.time_weight_mode is not None:
+            payload["time_weight_mode"] = self.time_weight_mode
+        if self.training_weight_reduction != TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM:
+            payload["training_weight_reduction"] = self.training_weight_reduction
         return payload
 
 
@@ -169,6 +208,13 @@ _EXPERIMENT_PROFILES = {
         optimizer_name="adam",
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     ),
+    UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE: BreakoutQualityExperimentProfile(
+        name=UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        time_weight_mode=TIME_WEIGHT_MODE_DATE_BALANCED,
+        training_weight_reduction=TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -199,6 +245,7 @@ __all__ = [
     "AUGMENTATION_OLD_HISTORY_CONTIGUOUS_MASK",
     "BASELINE_EXPERIMENT_PROFILE",
     "HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE",
+    "UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE",
     "UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE",
     "BreakoutQualityExperimentProfile",
     "LR_SCHEDULE_LINEAR_WARMUP_COSINE",
@@ -210,6 +257,13 @@ __all__ = [
     "SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES",
     "TRAINING_SAMPLING_ALL_EVENT_ROWS",
     "TRAINING_SAMPLING_UNIQUE_TICKER_DATE",
+    "TIME_WEIGHT_MODE_DATE_BALANCED",
+    "TIME_WEIGHT_MODE_NONE",
+    "TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT",
+    "SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES",
+    "TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM",
+    "TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE",
+    "SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS",
     "get_breakout_quality_experiment_profile",
     "normalize_breakout_quality_experiment_profile",
 ]

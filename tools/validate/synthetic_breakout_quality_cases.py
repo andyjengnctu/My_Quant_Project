@@ -22,8 +22,11 @@ from config.breakout_quality_experiments import (
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     BASELINE_EXPERIMENT_PROFILE,
     HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
+    UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
+    TIME_WEIGHT_MODE_DATE_BALANCED,
+    TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
     SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES,
     SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
@@ -1175,7 +1178,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and int(BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES) >= 1
         and BREAKOUT_QUALITY_FINAL_REFIT_MODE in {"matched_optimizer_steps", "selected_epochs"}
         and BREAKOUT_QUALITY_CLASS_WEIGHT_MODE in {"none", "inverse_frequency"}
-        and BREAKOUT_QUALITY_TIME_WEIGHT_MODE in {"none", "year_balanced_sqrt"}
+        and BREAKOUT_QUALITY_TIME_WEIGHT_MODE
+        in {"none", "year_balanced_sqrt", TIME_WEIGHT_MODE_DATE_BALANCED}
         and {"adam", "adamw"}.issubset(set(SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS))
         and {
             BASELINE_EXPERIMENT_PROFILE,
@@ -1183,6 +1187,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
             HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
             UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+            UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE,
         }.issubset(set(SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES))
         and LR_SCHEDULE_LINEAR_WARMUP_COSINE
         in SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES
@@ -1203,6 +1208,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             CONFIGURED_EXPERIMENT.lr_schedule_name,
             CONFIGURED_EXPERIMENT.augmentation_name,
             CONFIGURED_EXPERIMENT.training_sampling_mode,
+            CONFIGURED_EXPERIMENT.training_weight_reduction,
             BREAKOUT_QUALITY_FINAL_REFIT_MODE,
             BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
             BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
@@ -1213,6 +1219,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             str(train_defaults.lr_schedule_name),
             str(train_defaults.augmentation_name),
             str(CONFIGURED_EXPERIMENT.training_sampling_mode),
+            str(train_defaults.training_weight_reduction),
             str(train_defaults.final_refit_mode),
             str(train_defaults.class_weight_mode),
             str(train_defaults.time_weight_mode),
@@ -1414,6 +1421,62 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             and year_summary["year_group_counts"] == {"2020": 4, "2021": 1}
             and year_summary["year_weight_multipliers"]["2021"]
             > year_summary["year_weight_multipliers"]["2020"]
+        ),
+    )
+    date_balance_events = pd.DataFrame(
+        {
+            "ticker": ["A", "B", "C", "D", "E", "F"],
+            "date": [
+                "2020-01-02",
+                "2020-01-02",
+                "2020-01-02",
+                "2020-01-03",
+                "2020-01-03",
+                "2020-01-04",
+            ],
+            "high_len": [60, 60, 60, 60, 60, 60],
+        }
+    )
+    date_weights, date_summary = breakout_quality_train._time_weighted_group_weights(
+        date_balance_events,
+        np.arange(len(date_balance_events), dtype=np.int64),
+        mode=TIME_WEIGHT_MODE_DATE_BALANCED,
+    )
+    date_totals = pd.Series(
+        date_weights,
+        index=date_balance_events["date"],
+    ).groupby(level=0).sum()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "date_balanced_weights_keep_group_total_and_equalize_each_training_date",
+        True,
+        bool(
+            abs(float(date_weights.sum()) - 6.0) < 1e-6
+            and date_summary["date_count"] == 3
+            and date_summary["date_group_count_min"] == 1
+            and date_summary["date_group_count_max"] == 3
+            and float(date_totals.max() - date_totals.min()) < 1e-6
+        ),
+    )
+    date_profile = get_breakout_quality_experiment_profile(
+        UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "date_balanced_profile_locks_unique_groups_fixed_denominator_and_weight_mode",
+        (
+            TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+            TIME_WEIGHT_MODE_DATE_BALANCED,
+            TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
+        ),
+        (
+            date_profile.training_sampling_mode,
+            date_profile.time_weight_mode,
+            date_profile.training_weight_reduction,
         ),
     )
     add_check(
@@ -2353,7 +2416,8 @@ def _validate_breakout_quality_report_rendering(results, case_id):
                 "equivalent_epochs": 1.5,
             },
             "class_weight_mode": "none",
-            "time_weight_mode": "none",
+            "time_weight_mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+            "training_weight_reduction": CONFIGURED_EXPERIMENT.training_weight_reduction,
             "batch_size": 256,
             "seed": 42,
             "epoch_selection_source": "inner_validation_loss",
@@ -2943,6 +3007,32 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             fixed_inner_sampling = _synthetic_sampling_phase(2, 2)
             fixed_final_sampling = _synthetic_sampling_phase(2, 2)
 
+            def _synthetic_weight_summary(group_count: int):
+                if BREAKOUT_QUALITY_TIME_WEIGHT_MODE == TIME_WEIGHT_MODE_DATE_BALANCED:
+                    return {
+                        "mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+                        "group_count": int(group_count),
+                        "weight_sum": float(group_count),
+                        "year_group_counts": {},
+                        "year_weight_multipliers": {},
+                        "date_count": int(group_count),
+                        "date_group_count_min": 1,
+                        "date_group_count_max": 1,
+                        "date_group_count_mean": 1.0,
+                        "date_weight_multiplier_min": 1.0,
+                        "date_weight_multiplier_max": 1.0,
+                        "target_total_weight_per_date": 1.0,
+                        "actual_total_weight_per_date_min": 1.0,
+                        "actual_total_weight_per_date_max": 1.0,
+                    }
+                return {
+                    "mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+                    "group_count": int(group_count),
+                    "weight_sum": float(group_count),
+                    "year_group_counts": {},
+                    "year_weight_multipliers": {},
+                }
+
             manifest = {
                 "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
                 "filter_family": FILTER_FAMILY,
@@ -2983,6 +3073,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "final_refit_plan": {
                     "mode": "selected_epochs",
                     "training_sampling_mode": CONFIGURED_EXPERIMENT.training_sampling_mode,
+                    "training_weight_reduction": CONFIGURED_EXPERIMENT.training_weight_reduction,
                     "batch_size_unit": fixed_final_sampling["batch_size_unit"],
                     "inner_train_sampling_row_count": int(fixed_inner_sampling["sampled_row_count"]),
                     "final_refit_sampling_row_count": int(fixed_final_sampling["sampled_row_count"]),
@@ -3041,8 +3132,9 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "class_weight_mode": BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
                 "class_weights_reject_pass": [1.0, 1.0],
                 "time_weight_mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
+                "training_weight_reduction": CONFIGURED_EXPERIMENT.training_weight_reduction,
                 "sample_weight_summaries": {
-                    "final_refit": {"mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE}
+                    "final_refit": _synthetic_weight_summary(2)
                 },
                 "early_stopping_enabled": False,
                 "inner_validation_used": False,

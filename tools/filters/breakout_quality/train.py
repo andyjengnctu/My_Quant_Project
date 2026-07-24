@@ -29,6 +29,13 @@ from config.breakout_quality_experiments import (
     SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
     TRAINING_SAMPLING_ALL_EVENT_ROWS,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+    SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
+    SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS,
+    TIME_WEIGHT_MODE_DATE_BALANCED,
+    TIME_WEIGHT_MODE_NONE,
+    TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT,
+    TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
+    TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
     get_breakout_quality_experiment_profile,
 )
 
@@ -131,9 +138,8 @@ FINAL_REFIT_MODES = (
 CLASS_WEIGHT_MODE_NONE = "none"
 CLASS_WEIGHT_MODE_INVERSE_FREQUENCY = "inverse_frequency"
 CLASS_WEIGHT_MODES = (CLASS_WEIGHT_MODE_NONE, CLASS_WEIGHT_MODE_INVERSE_FREQUENCY)
-TIME_WEIGHT_MODE_NONE = "none"
-TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT = "year_balanced_sqrt"
-TIME_WEIGHT_MODES = (TIME_WEIGHT_MODE_NONE, TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT)
+TIME_WEIGHT_MODES = tuple(SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES)
+TRAINING_WEIGHT_REDUCTIONS = tuple(SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS)
 OPTIMIZER_ADAM = "adam"
 OPTIMIZER_ADAMW = "adamw"
 OPTIMIZER_NAMES = tuple(SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS)
@@ -285,6 +291,7 @@ def parse_args(argv=None):
     args.lr_schedule_name = experiment.lr_schedule_name
     args.augmentation_name = experiment.augmentation_name
     args.training_sampling_mode = experiment.training_sampling_mode
+    args.training_weight_reduction = experiment.training_weight_reduction
     return args
 
 
@@ -311,6 +318,7 @@ def validate_training_args(args) -> None:
     final_refit_mode = str(args.final_refit_mode).strip().lower()
     class_weight_mode = str(args.class_weight_mode).strip().lower()
     time_weight_mode = str(args.time_weight_mode).strip().lower()
+    training_weight_reduction = str(args.training_weight_reduction).strip().lower()
     if (
         max_epochs < 1
         or batch_size < 1
@@ -370,6 +378,38 @@ def validate_training_args(args) -> None:
         raise ValueError(f"class-weight-mode 不合法: {class_weight_mode}")
     if time_weight_mode not in TIME_WEIGHT_MODES:
         raise ValueError(f"time-weight-mode 不合法: {time_weight_mode}")
+    if training_weight_reduction not in TRAINING_WEIGHT_REDUCTIONS:
+        raise ValueError(
+            f"training weight reduction 不合法: {training_weight_reduction}"
+        )
+    if training_weight_reduction != experiment.training_weight_reduction:
+        raise ValueError(
+            "experiment profile 與 training_weight_reduction 不一致: "
+            f"profile={experiment.name}, reduction={training_weight_reduction}, "
+            f"expected={experiment.training_weight_reduction}"
+        )
+    if (
+        experiment.time_weight_mode is not None
+        and time_weight_mode != experiment.time_weight_mode
+    ):
+        raise ValueError(
+            "experiment profile 與 time_weight_mode 不一致: "
+            f"profile={experiment.name}, time_weight={time_weight_mode}, "
+            f"expected={experiment.time_weight_mode}"
+        )
+    if (
+        time_weight_mode == TIME_WEIGHT_MODE_DATE_BALANCED
+        and training_weight_reduction != TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE
+    ):
+        raise ValueError(
+            "date_balanced time weight 必須由 unique_group_date_balanced profile "
+            "搭配 fixed_batch_size reduction 使用"
+        )
+    if (
+        training_weight_reduction == TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE
+        and time_weight_mode != TIME_WEIGHT_MODE_DATE_BALANCED
+    ):
+        raise ValueError("fixed_batch_size reduction 只允許 date_balanced time weight")
 
 
 def _format_count(value: int) -> str:
@@ -441,6 +481,8 @@ def _render_training_summary(
     use_inner_validation: bool,
     final_train_loss: float,
     training_sampling_mode: str,
+    time_weight_mode: str,
+    training_weight_reduction: str,
     inner_train_sampling_summary: dict[str, object],
     final_refit_sampling_summary: dict[str, object],
 ) -> str:
@@ -453,6 +495,10 @@ def _render_training_summary(
             f"{int(inner_train_sampling_summary['sampled_row_count']):,}；"
             f"Final {int(final_refit_sampling_summary['source_row_count']):,}→"
             f"{int(final_refit_sampling_summary['sampled_row_count']):,}"
+        ),
+        (
+            "  - Training Weight："
+            f"mode={time_weight_mode}；reduction={training_weight_reduction}"
         ),
     ]
     if use_inner_validation:
@@ -532,6 +578,7 @@ def _time_weighted_group_weights(
             "weight_sum": 0.0,
             "year_group_counts": {},
             "year_weight_multipliers": {},
+            "date_count": 0,
         }
 
     base_weights = group_size_weights(events, idx).astype(np.float64)
@@ -568,9 +615,59 @@ def _time_weighted_group_weights(
             year: float(value * normalization)
             for year, value in raw_multipliers.items()
         }
+        date_summary = {}
+    elif normalized_mode == TIME_WEIGHT_MODE_DATE_BALANCED:
+        subset = events.iloc[idx]
+        dates = pd.to_datetime(subset["date"], errors="raise").dt.strftime("%Y-%m-%d")
+        keys = event_group_keys(events).iloc[idx].reset_index(drop=True)
+        group_frame = pd.DataFrame(
+            {
+                "group_key": keys.to_numpy(),
+                "date": dates.to_numpy(),
+            }
+        ).drop_duplicates("group_key", keep="first")
+        mixed_date_counts = group_frame.groupby("group_key", sort=False)["date"].nunique()
+        if bool((mixed_date_counts != 1).any()):
+            raise ValueError("date-balanced sample weights 發現同 group 對應多個日期")
+        counts_series = group_frame.groupby("date", sort=True)["group_key"].size()
+        if counts_series.empty or bool((counts_series < 1).any()):
+            raise ValueError("date-balanced sample weights 缺少有效交易日 group")
+        date_group_counts = {str(date): int(count) for date, count in counts_series.items()}
+        raw_multipliers = {
+            str(date): 1.0 / float(count)
+            for date, count in date_group_counts.items()
+        }
+        row_multipliers = dates.map(raw_multipliers).to_numpy(dtype=np.float64)
+        weighted = base_weights * row_multipliers
+        base_sum = float(base_weights.sum())
+        weighted_sum = float(weighted.sum())
+        if weighted_sum <= 0.0:
+            raise ValueError("date-balanced sample weights 總和必須 > 0")
+        normalization = base_sum / weighted_sum
+        weighted *= normalization
+        normalized_row_multipliers = row_multipliers * normalization
+        weighted_by_date = pd.Series(weighted, index=dates.to_numpy()).groupby(level=0).sum()
+        target_date_weight = base_sum / float(len(date_group_counts))
+        date_totals = weighted_by_date.to_numpy(dtype=np.float64)
+        group_counts = np.asarray(list(date_group_counts.values()), dtype=np.float64)
+        date_summary = {
+            "date_count": int(len(date_group_counts)),
+            "date_group_count_min": int(group_counts.min()),
+            "date_group_count_max": int(group_counts.max()),
+            "date_group_count_mean": round(float(group_counts.mean()), 6),
+            "date_weight_multiplier_min": round(float(normalized_row_multipliers.min()), 8),
+            "date_weight_multiplier_max": round(float(normalized_row_multipliers.max()), 8),
+            "target_total_weight_per_date": round(float(target_date_weight), 8),
+            "actual_total_weight_per_date_min": round(float(date_totals.min()), 8),
+            "actual_total_weight_per_date_max": round(float(date_totals.max()), 8),
+        }
+        year_group_counts = {}
+        multipliers = {}
     else:
         raise ValueError(f"不支援的 time weight mode: {mode!r}")
 
+    if normalized_mode == TIME_WEIGHT_MODE_NONE:
+        date_summary = {}
     return weighted.astype(np.float32), {
         "mode": normalized_mode,
         "group_count": int(round(float(base_weights.sum()))),
@@ -579,6 +676,7 @@ def _time_weighted_group_weights(
         "year_weight_multipliers": {
             str(year): round(value, 8) for year, value in multipliers.items()
         },
+        **date_summary,
     }
 
 
@@ -601,6 +699,7 @@ def _build_sample_weights(
                 "weight_sum": 0.0,
                 "year_group_counts": {},
                 "year_weight_multipliers": {},
+                "date_count": 0,
             }
             continue
         if bool(np.any(occupied[idx])):
@@ -1057,6 +1156,7 @@ def _train_one_epoch(
     augmentation_plan: TrainingAugmentationPlan,
     lr_schedule_plan: dict[str, object],
     optimizer_step_offset: int,
+    training_weight_reduction: str,
     max_batches: int | None = None,
 ) -> tuple[float, int, float, float, dict[str, int | str]]:
     import torch.nn.functional as F
@@ -1116,7 +1216,19 @@ def _train_one_epoch(
             weight=class_weights,
             reduction="none",
         )
-        loss = (loss_items * wb).sum() / torch.clamp(wb.sum(), min=1e-12)
+        weighted_loss_sum = (loss_items * wb).sum()
+        if training_weight_reduction == TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM:
+            loss = weighted_loss_sum / torch.clamp(wb.sum(), min=1e-12)
+        elif training_weight_reduction == TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE:
+            # Keep globally normalized date weights intact.  Divide by the
+            # unweighted number of samples in this batch rather than by the
+            # random batch weight sum; the final partial batch uses its actual
+            # sample count so no samples are accidentally underweighted.
+            loss = weighted_loss_sum / float(loss_items.numel())
+        else:
+            raise ValueError(
+                f"不支援的 training weight reduction: {training_weight_reduction!r}"
+            )
         loss.backward()
         if float(gradient_clip_norm) > 0.0:
             torch.nn.utils.clip_grad_norm_(
@@ -1158,6 +1270,7 @@ def _select_epoch_with_inner_validation(
     gradient_clip_norm: float,
     class_weight_mode: str,
     time_weight_mode: str,
+    training_weight_reduction: str,
     seed: int,
     patience: int,
     min_delta: float,
@@ -1235,6 +1348,7 @@ def _select_epoch_with_inner_validation(
             augmentation_plan=augmentation_plan,
             lr_schedule_plan=schedule_plan,
             optimizer_step_offset=cumulative_optimizer_steps,
+            training_weight_reduction=training_weight_reduction,
         )
         cumulative_optimizer_steps += optimizer_steps
         train_metrics, validation_metrics = _evaluate_inner_splits(
@@ -1350,6 +1464,7 @@ def _fit_full_selection(
     gradient_clip_norm: float,
     class_weight_mode: str,
     time_weight_mode: str,
+    training_weight_reduction: str,
     seed: int,
     phase_name: str,
     evaluation_batch_size: int,
@@ -1444,6 +1559,7 @@ def _fit_full_selection(
             augmentation_plan=augmentation_plan,
             lr_schedule_plan=schedule_plan,
             optimizer_step_offset=completed_optimizer_steps,
+            training_weight_reduction=training_weight_reduction,
             max_batches=max_batches,
         )
         if optimizer_steps != max_batches:
@@ -1564,6 +1680,7 @@ def main(argv=None) -> int:
     final_refit_mode = str(args.final_refit_mode).strip().lower()
     class_weight_mode = str(args.class_weight_mode).strip().lower()
     time_weight_mode = str(args.time_weight_mode).strip().lower()
+    training_weight_reduction = experiment.training_weight_reduction
     validate_training_args(args)
 
     dataset_summary, X, C, y, events = load_validated_dataset_bundle(
@@ -1720,6 +1837,7 @@ def main(argv=None) -> int:
             gradient_clip_norm=gradient_clip_norm,
             class_weight_mode=class_weight_mode,
             time_weight_mode=time_weight_mode,
+            training_weight_reduction=training_weight_reduction,
             seed=int(args.seed),
             patience=patience,
             min_delta=min_delta,
@@ -1779,6 +1897,7 @@ def main(argv=None) -> int:
         gradient_clip_norm=gradient_clip_norm,
         class_weight_mode=class_weight_mode,
         time_weight_mode=time_weight_mode,
+        training_weight_reduction=training_weight_reduction,
         seed=int(args.seed),
         phase_name=phase_name,
         evaluation_batch_size=evaluation_batch_size,
@@ -1792,6 +1911,7 @@ def main(argv=None) -> int:
         "final_refit_row_count": int(len(final_refit_idx)),
         "final_refit_sampling_row_count": int(len(final_refit_sampling_idx)),
         "training_sampling_mode": training_sampling_mode,
+        "training_weight_reduction": training_weight_reduction,
         "batch_size": int(batch_size),
         "batch_size_unit": final_refit_sampling_summary["batch_size_unit"],
         "inner_train_batches_per_epoch": (
@@ -1956,6 +2076,7 @@ def main(argv=None) -> int:
         "class_weight_mode": class_weight_mode,
         "class_weights_reject_pass": final_fit["class_weights_reject_pass"],
         "time_weight_mode": time_weight_mode,
+        "training_weight_reduction": training_weight_reduction,
         "sample_weight_summaries": {
             "epoch_selection": (
                 epoch_selection.get("sample_weight_summaries")
@@ -2040,6 +2161,7 @@ def main(argv=None) -> int:
             "final_refit_mode": final_refit_mode,
             "class_weight_mode": class_weight_mode,
             "time_weight_mode": time_weight_mode,
+            "training_weight_reduction": training_weight_reduction,
             "final_refit_target_optimizer_steps": int(final_fit["target_optimizer_steps"]),
             "final_refit_actual_optimizer_steps": int(final_fit["actual_optimizer_steps"]),
         },
@@ -2072,6 +2194,8 @@ def main(argv=None) -> int:
             use_inner_validation=use_inner_validation,
             final_train_loss=final_train_metrics["loss"],
             training_sampling_mode=training_sampling_mode,
+            time_weight_mode=time_weight_mode,
+            training_weight_reduction=training_weight_reduction,
             inner_train_sampling_summary=inner_train_sampling_summary,
             final_refit_sampling_summary=final_refit_sampling_summary,
         )

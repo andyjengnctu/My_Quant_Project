@@ -66,7 +66,7 @@ python apps/breakout_quality.py
 完整研究流程會依序執行：必要時建立 dataset → train → export research scores → 產生易讀研究報表；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較與 OOS 綜合判定。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
-python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --epochs 20 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_date_balanced --epochs 20 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode date_balanced --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 ```
 
 模型架構與訓練實驗分開管理：
@@ -74,13 +74,13 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 ```python
 # config/breakout_quality_policy.py
 BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_sequence_only_v1"
-BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"
+BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_date_balanced"
 ```
 
 - `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前 active architecture 包含 accepted 基準 `multiscale_cnn_sequence_only_v1` 與歷史比較架構 `multiscale_cnn_v1`。8A 保留相同的 300×10 Level sequence、三個時間尺度 branches、pooling 與 head 寬度，只移除原本拼接至 head 的 4 維 event context。
-- `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述 optimizer、LR schedule、augmentation 與 training sampling unit。profile 定義集中在 `config/breakout_quality_experiments.py`：8F 使用 `unique_group_sampling`；目前正式預設與實證基準均為 8F `unique_group_sampling`；8J direct best inner checkpoint 已淘汰，其歷史 profile只供結果重現。下一個規劃是 8K date-density balancing，尚未實作。`baseline`、`adamw_only`、`adam_warmup_cosine`、`history_masking_only` 保留為歷史 profile。
+- `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述 optimizer、LR schedule、augmentation 與 training sampling unit。profile 定義集中在 `config/breakout_quality_experiments.py`：8F 使用 `unique_group_sampling`；8K 使用 `unique_group_date_balanced`，沿用相同 unique-group sampling並鎖定 `time_weight_mode=date_balanced` 與 `training_weight_reduction=fixed_batch_size`。目前 active policy 是 8K，完整 OOS 尚未取得；實證基準仍是 8F。8J direct best inner checkpoint 已淘汰，其歷史 profile只供結果重現。`baseline`、`adamw_only`、`adam_warmup_cosine`、`history_masking_only` 保留為歷史 profile。
 - `multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
-- AdamW、scheduler、augmentation 與 sampling 等訓練方法不再建立假模型版本。結構或輸入表示真正改變時才新增具描述性的 architecture；目前 active 與實證研究基準均為 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / batch_size=128 / time_weight=none / patience=1 / final_refit=selected_epochs`；8G patience 5、8H batch size 64、8I matched optimizer steps與 8J direct best checkpoint 均因完整 OOS整體退步而淘汰；8K date-density balancing 尚未實作。
+- AdamW、scheduler、augmentation 與 sampling 等訓練方法不再建立假模型版本。結構或輸入表示真正改變時才新增具描述性的 architecture；目前 active 實驗為 8K `multiscale_cnn_sequence_only_v1 / unique_group_date_balanced / batch_size=128 / time_weight=date_balanced / patience=1 / final_refit=selected_epochs`；實證研究基準仍是 8F `unique_group_sampling / time_weight=none`。8G patience 5、8H batch size 64、8I matched optimizer steps與 8J direct best checkpoint 均因完整 OOS整體退步而淘汰。
 - Dataset、feature bank、future-path cache、4 維 event context arrays 與 labels 都可直接沿用，不需重建或 relabel；sequence-only model 在 forward 時明確不讀取 event context。8F 在 Inner Train／Final Refit 只保留每個 `ticker/date` 的最小原始 row index，batch size 128 因而代表 128 個 unique groups；early-stopping patience 固定為 1。Validation、Selection、OOS 與報表仍使用完整 rows及既有 `1/group_size` 口徑。每個 architecture/profile 使用獨立工件路徑。
 
 - `multiscale_cnn_sequence_only_v1` 的 trainable parameters 比 v1 少 `4 × 32 = 128`，差異只來自 head 第一層不再接收 `high_len_norm`、`breakout_level_to_close`、`close_to_breakout_level`、`high_to_breakout_level`。
@@ -107,19 +107,19 @@ python apps/breakout_quality.py build-dataset --dataset full --filter-id breakou
 # 只更新 label；通常由 workflow 自動偵測，不需手動執行
 python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1 --relabel-only
 # 預設關閉 inner validation：epochs 是完整 Selection 的正式固定訓練次數
-python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --epochs 20 --lr 0.001 --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
+python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --epochs 20 --lr 0.001 --time-weight-mode date_balanced --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
 # 開啟時：epochs 是搜尋上限；以 Selection 尾端 N 個月選 best epoch，之後依 final-refit-mode 直接採用 best checkpoint 或進行完整 Selection 重訓
-python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --epochs 20 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
-python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope research --inference-batch-size 4096 --inference-workers 4 --preload-feature-bank
+python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --epochs 20 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode date_balanced --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --scope research --inference-batch-size 4096 --inference-workers 4 --preload-feature-bank
 # 建議日常使用：終端表格報表 + Markdown 解釋報表 + 完整 metrics JSON
-python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --no-include-oos
+python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --no-include-oos
 # 參數與模型已鎖定後，才把最終 OOS 納入報表
-python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --include-oos
+python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --include-oos
 # 需要稽核單一 split 的完整原始 JSON 時才使用 evaluate
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split train
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split validation
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split selection
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split oos
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --split train
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --split validation
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --split selection
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --split oos
 ```
 
 - Dataset 與 future-path cache 固定在 `outputs/filters/breakout_quality/<filter_id>/`；research scores 與易讀報表依架構及實驗放在 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/`，報表固定為 `reports/evaluation_report.md`，完整報表數據固定為 `reports/evaluation_metrics.json`。
@@ -138,7 +138,7 @@ python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --exper
 3. 執行：
 
 ```bash
-python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope forward_oos
+python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_date_balanced --scope forward_oos
 ```
 
 - `forward_oos` 只匯出落在同一份 walk-forward OOS window、且事件日嚴格晚於 `model_information_cutoff` 的固定規格模型分數；若沒有符合資料會直接失敗。
