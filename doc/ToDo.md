@@ -7,7 +7,7 @@
 
 
 - PASS Recall是否也要用顏色highlight?
-
+- 侯選股依sore排序
 
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議
