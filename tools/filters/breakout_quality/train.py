@@ -63,6 +63,11 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
+    BREAKOUT_QUALITY_TORCH_DEVICE,
+    BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+    BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+    BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+    BREAKOUT_QUALITY_ALLOW_TF32,
 )
 from core.display_common import render_elapsed
 from filters.breakout_quality.artifacts import build_file_manifest
@@ -113,6 +118,15 @@ from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
     resolve_filter_research_manifest_path,
     resolve_filter_research_score_path,
+)
+from filters.breakout_quality.torch_runtime import (
+    SUPPORTED_MIXED_PRECISION_DTYPES,
+    SUPPORTED_TORCH_DEVICES,
+    TorchExecutionPlan,
+    autocast_context,
+    build_grad_scaler,
+    resolve_torch_execution_plan,
+    seed_torch,
 )
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
@@ -279,6 +293,36 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
         help="validation loss 至少改善多少才算新最佳",
     )
+    parser.add_argument(
+        "--device",
+        choices=SUPPORTED_TORCH_DEVICES,
+        default=BREAKOUT_QUALITY_TORCH_DEVICE,
+        help="訓練裝置；auto 優先 CUDA，否則 CPU",
+    )
+    parser.add_argument(
+        "--mixed-precision",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+        help="CUDA 上是否使用 autocast mixed precision",
+    )
+    parser.add_argument(
+        "--mixed-precision-dtype",
+        choices=SUPPORTED_MIXED_PRECISION_DTYPES,
+        default=BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+        help="auto 優先 bfloat16，裝置不支援時使用 float16",
+    )
+    parser.add_argument(
+        "--deterministic-algorithms",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+        help="是否要求 PyTorch deterministic algorithms",
+    )
+    parser.add_argument(
+        "--allow-tf32",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_ALLOW_TF32,
+        help="是否允許 CUDA TF32；預設關閉以維持數值契約",
+    )
     parser.add_argument("--min-train-samples", type=int, default=BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES)
     parser.add_argument(
         "--min-validation-samples",
@@ -319,6 +363,12 @@ def validate_training_args(args) -> None:
     class_weight_mode = str(args.class_weight_mode).strip().lower()
     time_weight_mode = str(args.time_weight_mode).strip().lower()
     training_weight_reduction = str(args.training_weight_reduction).strip().lower()
+    device_request = str(args.device).strip().lower()
+    mixed_precision_dtype = str(args.mixed_precision_dtype).strip().lower()
+    if device_request not in SUPPORTED_TORCH_DEVICES:
+        raise ValueError(f"device 不合法: {device_request}")
+    if mixed_precision_dtype not in SUPPORTED_MIXED_PRECISION_DTYPES:
+        raise ValueError(f"mixed-precision-dtype 不合法: {mixed_precision_dtype}")
     if (
         max_epochs < 1
         or batch_size < 1
@@ -940,6 +990,7 @@ def _evaluate(
     *,
     evaluation_batch_size: int,
     evaluation_workers: int,
+    execution_plan: TorchExecutionPlan | None = None,
 ):
     if len(indices) == 0:
         return {
@@ -971,6 +1022,7 @@ def _evaluate(
         indices=idx,
         batch_size=batch_size,
         workers=evaluation_workers,
+        execution_plan=execution_plan,
     )
 
     with torch.no_grad():
@@ -981,7 +1033,7 @@ def _evaluate(
             loss_items = F.cross_entropy(
                 logits,
                 target,
-                weight=class_weights,
+                weight=(None if class_weights is None else class_weights.detach().cpu()),
                 reduction="none",
             )
             loss_items_np[start:stop] = loss_items.cpu().numpy()
@@ -1019,10 +1071,12 @@ def _evaluate_inner_splits(
     evaluation_batch_size: int,
     evaluation_workers: int,
     parallel: bool,
+    execution_plan: TorchExecutionPlan | None = None,
 ):
     common_kwargs = {
         "evaluation_batch_size": int(evaluation_batch_size),
         "evaluation_workers": int(evaluation_workers),
+        "execution_plan": execution_plan,
     }
     if not parallel:
         train_metrics = _evaluate(
@@ -1116,9 +1170,10 @@ def _new_training_state(
     weight_decay: float,
     class_weight_mode: str,
     seed: int,
+    execution_plan: TorchExecutionPlan,
 ):
-    torch.manual_seed(int(seed))
-    model = build_model(feature_count, context_count)
+    seed_torch(torch, seed=int(seed), plan=execution_plan)
+    model = build_model(feature_count, context_count).to(execution_plan.device)
     optimizer = _build_optimizer(
         torch,
         optimizer_name=optimizer_name,
@@ -1134,7 +1189,11 @@ def _new_training_state(
     class_weights = (
         None
         if str(class_weight_mode).strip().lower() == CLASS_WEIGHT_MODE_NONE
-        else torch.tensor(class_weights_np, dtype=torch.float32)
+        else torch.tensor(
+            class_weights_np,
+            dtype=torch.float32,
+            device=execution_plan.device,
+        )
     )
     return model, optimizer, class_weights_np, class_weights
 
@@ -1157,6 +1216,8 @@ def _train_one_epoch(
     lr_schedule_plan: dict[str, object],
     optimizer_step_offset: int,
     training_weight_reduction: str,
+    execution_plan: TorchExecutionPlan,
+    grad_scaler=None,
     max_batches: int | None = None,
 ) -> tuple[float, int, float, float, dict[str, int | str]]:
     import torch.nn.functional as F
@@ -1205,18 +1266,19 @@ def _train_one_epoch(
         if completed_batches == 0:
             first_learning_rate = current_learning_rate
         last_learning_rate = current_learning_rate
-        xb = torch.from_numpy(xb_np)
-        cb = torch.from_numpy(cb_np)
-        yb = torch.from_numpy(yb_np)
-        wb = torch.from_numpy(wb_np)
+        xb = torch.from_numpy(xb_np).to(execution_plan.device)
+        cb = torch.from_numpy(cb_np).to(execution_plan.device)
+        yb = torch.from_numpy(yb_np).to(execution_plan.device)
+        wb = torch.from_numpy(wb_np).to(execution_plan.device)
         optimizer.zero_grad(set_to_none=True)
-        loss_items = F.cross_entropy(
-            model(xb, cb),
-            yb,
-            weight=class_weights,
-            reduction="none",
-        )
-        weighted_loss_sum = (loss_items * wb).sum()
+        with autocast_context(torch, execution_plan):
+            loss_items = F.cross_entropy(
+                model(xb, cb),
+                yb,
+                weight=class_weights,
+                reduction="none",
+            )
+            weighted_loss_sum = (loss_items * wb).sum()
         if training_weight_reduction == TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM:
             loss = weighted_loss_sum / torch.clamp(wb.sum(), min=1e-12)
         elif training_weight_reduction == TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE:
@@ -1229,13 +1291,24 @@ def _train_one_epoch(
             raise ValueError(
                 f"不支援的 training weight reduction: {training_weight_reduction!r}"
             )
-        loss.backward()
-        if float(gradient_clip_norm) > 0.0:
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=float(gradient_clip_norm),
-            )
-        optimizer.step()
+        if grad_scaler is None:
+            loss.backward()
+            if float(gradient_clip_norm) > 0.0:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm=float(gradient_clip_norm),
+                )
+            optimizer.step()
+        else:
+            grad_scaler.scale(loss).backward()
+            if float(gradient_clip_norm) > 0.0:
+                grad_scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    max_norm=float(gradient_clip_norm),
+                )
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
         batch_losses.append(float(loss.item()))
         completed_batches += 1
     mean_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
@@ -1278,6 +1351,7 @@ def _select_epoch_with_inner_validation(
     evaluation_workers: int,
     parallel_split_evaluation: bool,
     train_prefetch_batches: int,
+    execution_plan: TorchExecutionPlan,
 ):
     training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
@@ -1306,7 +1380,9 @@ def _select_epoch_with_inner_validation(
         weight_decay=weight_decay,
         class_weight_mode=class_weight_mode,
         seed=seed,
+        execution_plan=execution_plan,
     )
+    grad_scaler = build_grad_scaler(torch, execution_plan)
     batches_per_epoch = int(math.ceil(len(training_sampling_idx) / int(batch_size)))
     schedule_plan = _build_learning_rate_schedule_plan(
         schedule_name=lr_schedule_name,
@@ -1349,6 +1425,8 @@ def _select_epoch_with_inner_validation(
             lr_schedule_plan=schedule_plan,
             optimizer_step_offset=cumulative_optimizer_steps,
             training_weight_reduction=training_weight_reduction,
+            execution_plan=execution_plan,
+            grad_scaler=grad_scaler,
         )
         cumulative_optimizer_steps += optimizer_steps
         train_metrics, validation_metrics = _evaluate_inner_splits(
@@ -1364,6 +1442,7 @@ def _select_epoch_with_inner_validation(
             evaluation_batch_size=evaluation_batch_size,
             evaluation_workers=evaluation_workers,
             parallel=parallel_split_evaluation,
+            execution_plan=execution_plan,
         )
         validation_loss = float(validation_metrics["loss"])
         epoch_elapsed = time.perf_counter() - epoch_started
@@ -1470,6 +1549,7 @@ def _fit_full_selection(
     evaluation_batch_size: int,
     evaluation_workers: int,
     train_prefetch_batches: int,
+    execution_plan: TorchExecutionPlan,
 ):
     training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
@@ -1495,7 +1575,9 @@ def _fit_full_selection(
         weight_decay=weight_decay,
         class_weight_mode=class_weight_mode,
         seed=seed,
+        execution_plan=execution_plan,
     )
+    grad_scaler = build_grad_scaler(torch, execution_plan)
     batches_per_epoch = int(math.ceil(len(training_sampling_idx) / int(batch_size)))
     requested_steps = (
         int(target_optimizer_steps)
@@ -1560,6 +1642,8 @@ def _fit_full_selection(
             lr_schedule_plan=schedule_plan,
             optimizer_step_offset=completed_optimizer_steps,
             training_weight_reduction=training_weight_reduction,
+            execution_plan=execution_plan,
+            grad_scaler=grad_scaler,
             max_batches=max_batches,
         )
         if optimizer_steps != max_batches:
@@ -1579,6 +1663,7 @@ def _fit_full_selection(
             class_weights,
             evaluation_batch_size=evaluation_batch_size,
             evaluation_workers=evaluation_workers,
+            execution_plan=execution_plan,
         )
         epoch_elapsed = time.perf_counter() - epoch_started
         cycle_fraction = float(optimizer_steps) / float(batches_per_epoch)
@@ -1701,17 +1786,37 @@ def main(argv=None) -> int:
     gc.collect()
 
     torch, _nn = require_torch()
-    torch.set_num_threads(1)
-    try:
-        torch.set_num_interop_threads(1)
-    except RuntimeError as exc:
-        if "cannot set number of interop threads" not in str(exc):
-            raise
-        warnings.warn(
-            f"torch.set_num_interop_threads(1) skipped: {exc}",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+    execution_plan = resolve_torch_execution_plan(
+        torch,
+        requested_device=str(args.device),
+        mixed_precision=bool(args.mixed_precision),
+        mixed_precision_dtype=str(args.mixed_precision_dtype),
+        deterministic_algorithms=bool(args.deterministic_algorithms),
+        allow_tf32=bool(args.allow_tf32),
+    )
+    if execution_plan.device_type == "cpu":
+        torch.set_num_threads(1)
+        try:
+            torch.set_num_interop_threads(1)
+        except RuntimeError as exc:
+            if "cannot set number of interop threads" not in str(exc):
+                raise
+            warnings.warn(
+                f"torch.set_num_interop_threads(1) skipped: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    if execution_plan.device_type == "cuda" and parallel_split_evaluation:
+        raise ValueError("CUDA 訓練不允許 parallel-split-evaluation；請使用單一 GPU serial evaluation")
+
+    print(
+        "torch="
+        f"device={execution_plan.device_type}, "
+        f"mixed_precision={execution_plan.mixed_precision_enabled}, "
+        f"dtype={execution_plan.autocast_dtype_name}, "
+        f"deterministic={execution_plan.deterministic_algorithms}, "
+        f"tf32={execution_plan.allow_tf32}"
+    )
 
     source_data_range = dataset_summary.get("source_data_date_range")
     source_data_end = (
@@ -1845,6 +1950,7 @@ def main(argv=None) -> int:
             evaluation_workers=evaluation_workers,
             parallel_split_evaluation=parallel_split_evaluation,
             train_prefetch_batches=train_prefetch_batches,
+            execution_plan=execution_plan,
         )
         selected_epoch = int(epoch_selection["best_epoch"])
         selected_optimizer_steps = int(epoch_selection["best_optimizer_steps"])
@@ -1903,6 +2009,7 @@ def main(argv=None) -> int:
         evaluation_batch_size=evaluation_batch_size,
         evaluation_workers=evaluation_workers,
         train_prefetch_batches=train_prefetch_batches,
+        execution_plan=execution_plan,
     )
     final_refit_plan = {
         "mode": final_refit_mode,
@@ -1962,13 +2069,17 @@ def main(argv=None) -> int:
     torch.save(
         {
             "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": {
+                key: value.detach().cpu()
+                for key, value in model.state_dict().items()
+            },
             "feature_count": int(X.shape[2]),
             "context_count": int(C.shape[1]),
             "sequence_length": int(X.shape[1]),
             "model_spec": model_spec.as_manifest_payload(),
             "experiment_profile": experiment_profile,
             "experiment_settings": experiment.as_manifest_payload(),
+            "torch_execution": execution_plan.as_manifest_payload(),
             "trainable_parameter_count": int(trainable_parameter_count),
         },
         artifact_paths.model_path,
@@ -2126,10 +2237,15 @@ def main(argv=None) -> int:
         "parallel_split_evaluation": parallel_split_evaluation,
         "train_prefetch_batches": train_prefetch_batches,
         "preload_feature_bank": preload_feature_bank,
+        "torch_execution": execution_plan.as_manifest_payload(),
         "evaluation_execution": {
-            "mode": "parallel_chunked_full_split",
+            "mode": (
+                "cuda_serial_chunked"
+                if execution_plan.device_type == "cuda"
+                else "parallel_chunked_full_split"
+            ),
             "inner_train_validation_concurrent": parallel_split_evaluation,
-            "workers": evaluation_workers,
+            "workers": (1 if execution_plan.device_type == "cuda" else evaluation_workers),
             "per_worker_torch_threads": 1,
             "batch_boundaries_changed": False,
             "reduction_order_changed": False,

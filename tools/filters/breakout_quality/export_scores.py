@@ -21,6 +21,11 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_EVALUATION_WORKERS,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
+    BREAKOUT_QUALITY_TORCH_DEVICE,
+    BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+    BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+    BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+    BREAKOUT_QUALITY_ALLOW_TF32,
 )
 
 from filters.breakout_quality.artifacts import (
@@ -44,6 +49,11 @@ from filters.breakout_quality.inference import (
 )
 from filters.breakout_quality.model import build_model, require_torch
 from filters.breakout_quality.models.spec import model_spec_from_manifest
+from filters.breakout_quality.torch_runtime import (
+    SUPPORTED_MIXED_PRECISION_DTYPES,
+    SUPPORTED_TORCH_DEVICES,
+    resolve_torch_execution_plan,
+)
 from filters.breakout_quality.paths import (
     BreakoutQualityArtifactPaths,
     ensure_filter_model_output_dir,
@@ -84,6 +94,32 @@ def parse_args(argv=None):
         type=int,
         default=BREAKOUT_QUALITY_EVALUATION_WORKERS,
         help="分數匯出的平行 read-only inference workers",
+    )
+    parser.add_argument(
+        "--device",
+        choices=SUPPORTED_TORCH_DEVICES,
+        default=BREAKOUT_QUALITY_TORCH_DEVICE,
+        help="推論裝置；auto 優先 CUDA",
+    )
+    parser.add_argument(
+        "--mixed-precision",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+    )
+    parser.add_argument(
+        "--mixed-precision-dtype",
+        choices=SUPPORTED_MIXED_PRECISION_DTYPES,
+        default=BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+    )
+    parser.add_argument(
+        "--deterministic-algorithms",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+    )
+    parser.add_argument(
+        "--allow-tf32",
+        action=argparse.BooleanOptionalAction,
+        default=BREAKOUT_QUALITY_ALLOW_TF32,
     )
     parser.add_argument(
         "--preload-feature-bank",
@@ -157,19 +193,28 @@ def main(argv=None) -> int:
     if inference_batch_size < 1 or inference_workers < 1:
         raise ValueError("inference-batch-size 與 inference-workers 必須 >=1")
     torch, _nn = require_torch()
-    if int(torch.get_num_threads()) != 1:
-        torch.set_num_threads(1)
-    if int(torch.get_num_interop_threads()) != 1:
-        try:
-            torch.set_num_interop_threads(1)
-        except RuntimeError as exc:
-            if "cannot set number of interop threads" not in str(exc):
-                raise
-            warnings.warn(
-                f"torch.set_num_interop_threads(1) skipped: {exc}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+    execution_plan = resolve_torch_execution_plan(
+        torch,
+        requested_device=str(args.device),
+        mixed_precision=bool(args.mixed_precision),
+        mixed_precision_dtype=str(args.mixed_precision_dtype),
+        deterministic_algorithms=bool(args.deterministic_algorithms),
+        allow_tf32=bool(args.allow_tf32),
+    )
+    if execution_plan.device_type == "cpu":
+        if int(torch.get_num_threads()) != 1:
+            torch.set_num_threads(1)
+        if int(torch.get_num_interop_threads()) != 1:
+            try:
+                torch.set_num_interop_threads(1)
+            except RuntimeError as exc:
+                if "cannot set number of interop threads" not in str(exc):
+                    raise
+                warnings.warn(
+                    f"torch.set_num_interop_threads(1) skipped: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
     model_contract = load_model_artifact_contract(
         str(PROJECT_ROOT),
         str(args.filter_id),
@@ -250,12 +295,18 @@ def main(argv=None) -> int:
         raise ValueError("model checkpoint experiment profile 與 manifest／工件路徑不一致")
     if checkpoint.get("experiment_settings") != manifest.get("experiment_settings"):
         raise ValueError("model checkpoint experiment settings 與 manifest 不一致")
+    checkpoint_torch_execution = checkpoint.get("torch_execution")
+    manifest_torch_execution = manifest.get("torch_execution")
+    if checkpoint_torch_execution is not None or manifest_torch_execution is not None:
+        if checkpoint_torch_execution != manifest_torch_execution:
+            raise ValueError("model checkpoint torch_execution 與 manifest 不一致")
     model = build_model(
         feature_count,
         context_count,
         model_spec=checkpoint_spec_payload,
     )
     model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(execution_plan.device)
     model.eval()
     logits_np = strict_parallel_batched_logits(
         torch,
@@ -265,6 +316,7 @@ def main(argv=None) -> int:
         indices=None,
         batch_size=inference_batch_size,
         workers=inference_workers,
+        execution_plan=execution_plan,
     )
     pass_probabilities = np.empty((len(events),), dtype=np.float32)
     with torch.no_grad():
@@ -364,9 +416,14 @@ def main(argv=None) -> int:
                 dataset_summary=dataset_summary,
             ),
             "inference_execution": {
-                "mode": "strict_parallel_fixed_batches",
+                "mode": (
+                    "cuda_serial_fixed_batches"
+                    if execution_plan.device_type == "cuda"
+                    else "strict_parallel_fixed_batches"
+                ),
                 "batch_size": inference_batch_size,
-                "workers": inference_workers,
+                "workers": (1 if execution_plan.device_type == "cuda" else inference_workers),
+                "torch_execution": execution_plan.as_manifest_payload(),
                 "feature_bank_preloaded": preload_feature_bank,
                 "batch_boundaries_changed": False,
                 "output_row_order_changed": False,

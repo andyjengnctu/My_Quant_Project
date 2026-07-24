@@ -52,6 +52,11 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
     BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
+    BREAKOUT_QUALITY_TORCH_DEVICE,
+    BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+    BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+    BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+    BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
     BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN,
@@ -66,6 +71,7 @@ from config.breakout_quality_policy import (
     build_breakout_quality_default_high_len_values,
 )
 from filters.breakout_quality.artifacts import (
+    _validate_torch_execution_record,
     build_file_manifest,
     load_model_artifact_contract,
     load_runtime_artifact_contract,
@@ -143,6 +149,7 @@ from filters.breakout_quality.dataset_store import (
 )
 from filters.breakout_quality.features import build_event_label, label_from_cached_path
 from filters.breakout_quality.inference import strict_parallel_batched_logits
+from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
@@ -388,6 +395,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     dual_path_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_sequence_only_dual_path_v1"
     )
+    inception_model = build_breakout_quality_model(
+        10, 4, architecture="inception_time_v1"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
@@ -401,7 +411,208 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     regime_context_parameter_count = count_trainable_parameters(regime_context_model)
     sequence_only_parameter_count = count_trainable_parameters(sequence_only_model)
     dual_path_parameter_count = count_trainable_parameters(dual_path_model)
+    inception_parameter_count = count_trainable_parameters(inception_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
+    inception_spec = get_model_spec("inception_time_v1")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inception_time_9a_is_single_medium_gpu_model_with_locked_spec",
+        (
+            473218,
+            "inception_time",
+            6,
+            32,
+            32,
+            (39, 19, 9),
+            3,
+            ("global_average",),
+            False,
+        ),
+        (
+            inception_parameter_count,
+            inception_spec.family,
+            inception_spec.inception_depth,
+            inception_spec.inception_filters,
+            inception_spec.inception_bottleneck_channels,
+            inception_spec.inception_kernel_sizes,
+            inception_spec.inception_residual_every,
+            inception_spec.pooling,
+            inception_spec.use_dataset_context,
+        ),
+    )
+    inception_model.eval()
+    inception_features = torch.randn((3, 300, 10), dtype=torch.float32)
+    inception_context_a = torch.randn((3, 4), dtype=torch.float32)
+    inception_context_b = torch.randn((3, 4), dtype=torch.float32)
+    with torch.no_grad():
+        inception_logits_a = inception_model(inception_features, inception_context_a)
+        inception_logits_b = inception_model(inception_features, inception_context_b)
+    inception_reload = build_breakout_quality_model(
+        10,
+        4,
+        model_spec=inception_spec.as_manifest_payload(),
+    )
+    inception_reload.load_state_dict(inception_model.state_dict(), strict=True)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inception_time_context_invariance_forward_and_strict_reload",
+        True,
+        bool(
+            torch.equal(inception_logits_a, inception_logits_b)
+            and tuple(inception_logits_a.shape) == (3, 2)
+            and torch.isfinite(inception_logits_a).all()
+        ),
+    )
+    cpu_execution = resolve_torch_execution_plan(
+        torch,
+        requested_device="cpu",
+        mixed_precision=True,
+        mixed_precision_dtype="auto",
+        deterministic_algorithms=True,
+        allow_tf32=False,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "torch_execution_policy_and_cpu_fallback_are_explicit",
+        (
+            "auto",
+            True,
+            "auto",
+            True,
+            False,
+            "cpu",
+            False,
+            "float32",
+        ),
+        (
+            BREAKOUT_QUALITY_TORCH_DEVICE,
+            BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+            BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
+            BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
+            BREAKOUT_QUALITY_ALLOW_TF32,
+            cpu_execution.device_type,
+            cpu_execution.mixed_precision_enabled,
+            cpu_execution.autocast_dtype_name,
+        ),
+    )
+    valid_execution_record = cpu_execution.as_manifest_payload()
+    valid_execution_accepted = True
+    try:
+        _validate_torch_execution_record(
+            {"torch_execution": valid_execution_record},
+            required=True,
+        )
+    except ValueError:
+        valid_execution_accepted = False
+    requested_cuda_resolved_cpu_rejected = False
+    invalid_resolution = {**valid_execution_record, "requested_device": "cuda"}
+    try:
+        _validate_torch_execution_record(
+            {"torch_execution": invalid_resolution},
+            required=True,
+        )
+    except ValueError:
+        requested_cuda_resolved_cpu_rejected = True
+    disabled_mixed_precision_dtype_rejected = False
+    invalid_dtype = {**valid_execution_record, "autocast_dtype": "bfloat16"}
+    try:
+        _validate_torch_execution_record(
+            {"torch_execution": invalid_dtype},
+            required=True,
+        )
+    except ValueError:
+        disabled_mixed_precision_dtype_rejected = True
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "torch_execution_manifest_accepts_valid_cpu_fallback",
+        True,
+        valid_execution_accepted,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "torch_execution_manifest_rejects_requested_resolved_device_mismatch",
+        True,
+        requested_cuda_resolved_cpu_rejected,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "torch_execution_manifest_rejects_dtype_when_mixed_precision_disabled",
+        True,
+        disabled_mixed_precision_dtype_rejected,
+    )
+    class _FakeCudaMatmul:
+        allow_tf32 = None
+
+    class _FakeCudaBackend:
+        matmul = _FakeCudaMatmul()
+
+    class _FakeCudnnBackend:
+        benchmark = None
+        deterministic = None
+        allow_tf32 = None
+
+    class _FakeCudaRuntime:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def is_bf16_supported():
+            return True
+
+    class _FakeBackends:
+        cudnn = _FakeCudnnBackend()
+        cuda = _FakeCudaBackend()
+
+    class _FakeTorchRuntime:
+        cuda = _FakeCudaRuntime()
+        backends = _FakeBackends()
+        deterministic = None
+
+        @staticmethod
+        def device(value):
+            return str(value)
+
+        @classmethod
+        def use_deterministic_algorithms(cls, value):
+            cls.deterministic = bool(value)
+
+    fake_cuda_execution = resolve_torch_execution_plan(
+        _FakeTorchRuntime,
+        requested_device="auto",
+        mixed_precision=True,
+        mixed_precision_dtype="auto",
+        deterministic_algorithms=True,
+        allow_tf32=False,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "torch_execution_auto_prefers_cuda_bfloat16_when_supported",
+        ("cuda", True, "bfloat16", True, False, False, False),
+        (
+            fake_cuda_execution.device_type,
+            fake_cuda_execution.mixed_precision_enabled,
+            fake_cuda_execution.autocast_dtype_name,
+            _FakeTorchRuntime.deterministic,
+            _FakeTorchRuntime.backends.cudnn.benchmark,
+            _FakeTorchRuntime.backends.cudnn.allow_tf32,
+            _FakeTorchRuntime.backends.cuda.matmul.allow_tf32,
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -1214,6 +1425,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
     legacy_architectures = (
         "tiny_cnn_v1",
+        "multiscale_cnn_v1",
         "multiscale_cnn_v2",
         "multiscale_cnn_v3",
         "multiscale_cnn_v4",
@@ -1222,6 +1434,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "multiscale_cnn_v7",
         "multiscale_cnn_v8",
         "multiscale_cnn_regime_context_v1",
+        "multiscale_cnn_sequence_only_dual_path_v1",
         "residual_tcn_v1",
     )
     legacy_paths = [
@@ -1243,27 +1456,27 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         for architecture in legacy_architectures
     ]
     baseline_paths = resolve_filter_artifact_paths(
-        "/project", "synthetic_quality", "multiscale_cnn_v1", "baseline"
+        "/project", "synthetic_quality", "inception_time_v1", "baseline"
     )
     adamw_paths = resolve_filter_artifact_paths(
-        "/project", "synthetic_quality", "multiscale_cnn_v1", "adamw_only"
+        "/project", "synthetic_quality", "inception_time_v1", "adamw_only"
     )
     schedule_paths = resolve_filter_artifact_paths(
         "/project",
         "synthetic_quality",
-        "multiscale_cnn_v1",
+        "inception_time_v1",
         ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     )
     baseline_research = resolve_filter_research_score_path(
-        "/project", "synthetic_quality", "multiscale_cnn_v1", "baseline"
+        "/project", "synthetic_quality", "inception_time_v1", "baseline"
     )
     adamw_research = resolve_filter_research_score_path(
-        "/project", "synthetic_quality", "multiscale_cnn_v1", "adamw_only"
+        "/project", "synthetic_quality", "inception_time_v1", "adamw_only"
     )
     schedule_research = resolve_filter_research_score_path(
         "/project",
         "synthetic_quality",
-        "multiscale_cnn_v1",
+        "inception_time_v1",
         ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     )
     shared_dataset_dir = resolve_filter_output_dir("/project", "synthetic_quality")
@@ -1288,15 +1501,15 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 | {baseline_research, adamw_research, schedule_research}
             )
             == len(legacy_research_paths) + 3
-            and baseline_paths.model_architecture == "multiscale_cnn_v1"
-            and adamw_paths.model_architecture == "multiscale_cnn_v1"
+            and baseline_paths.model_architecture == "inception_time_v1"
+            and adamw_paths.model_architecture == "inception_time_v1"
             and baseline_paths.experiment_profile == "baseline"
             and adamw_paths.experiment_profile == "adamw_only"
             and schedule_paths.experiment_profile
             == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
-            and baseline_paths.model_dir.parent.name == "multiscale_cnn_v1"
-            and adamw_paths.model_dir.parent.name == "multiscale_cnn_v1"
-            and schedule_paths.model_dir.parent.name == "multiscale_cnn_v1"
+            and baseline_paths.model_dir.parent.name == "inception_time_v1"
+            and adamw_paths.model_dir.parent.name == "inception_time_v1"
+            and schedule_paths.model_dir.parent.name == "inception_time_v1"
             and baseline_paths.model_dir.name == "baseline"
             and adamw_paths.model_dir.name == "adamw_only"
             and schedule_paths.model_dir.name
@@ -1311,7 +1524,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
         (
             (
-                "multiscale_cnn_v1",
+                "inception_time_v1",
                 "multiscale_cnn_sequence_only_v1",
             ),
             set(legacy_architectures),
@@ -2578,6 +2791,15 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "class_weight_mode": "none",
             "time_weight_mode": BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
             "training_weight_reduction": CONFIGURED_EXPERIMENT.training_weight_reduction,
+            "torch_execution": {
+                "requested_device": "cpu",
+                "resolved_device": "cpu",
+                "mixed_precision_requested": False,
+                "mixed_precision_enabled": False,
+                "autocast_dtype": "float32",
+                "deterministic_algorithms": True,
+                "allow_tf32": False,
+            },
             "batch_size": 256,
             "seed": 42,
             "epoch_selection_source": "inner_validation_loss",
@@ -2693,7 +2915,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     no_oos_console = render_console_summary(no_oos_payload)
     add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v2", 2, payload["schema_version"])
+    add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v3", 3, payload["schema_version"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **LR Schedule Parameters**：`{CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-'}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and f"- **Augmentation Parameters**：`{CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
     selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
@@ -2772,15 +2994,15 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         ),
     )
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. 排序與校準診斷" in console and "6. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"LR Schedule Args: {CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-' }" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and f"Augmentation Args: {CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
-    markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. OOS 綜合判定", 1)[0]
-    markdown_section_5 = markdown.split("## 5. OOS 綜合判定", 1)[1].split("## 指標白話說明", 1)[0]
-    console_section_4 = console.split("4. 各資料區段比較", 1)[1].split("5. OOS 綜合判定", 1)[0]
-    console_section_5 = console.split("5. OOS 綜合判定", 1)[1]
+    markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. 排序與校準診斷", 1)[0]
+    markdown_section_5 = markdown.split("## 6. OOS 綜合判定", 1)[1].split("## 指標白話說明", 1)[0]
+    console_section_4 = console.split("4. 各資料區段比較", 1)[1].split("5. 排序與校準診斷", 1)[0]
+    console_section_5 = console.split("6. OOS 綜合判定", 1)[1]
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -2880,7 +3102,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         "report_oos_assessment_merges_comparison_and_deployment",
         True,
         (
-            "5. OOS 綜合判定" in console
+            "5. 排序與校準診斷" in console and "6. OOS 綜合判定" in console
             and "類別" in console
             and "判讀" in console
             and "主要成效" in console
@@ -3205,6 +3427,15 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "model_spec": get_model_spec(paths.model_architecture).as_manifest_payload(),
                 "trainable_parameter_count": 1,
                 "sequence_length": int(DEFAULT_LABEL_POLICY.feature_window_bars),
+                "torch_execution": {
+                    "requested_device": "cpu",
+                    "resolved_device": "cpu",
+                    "mixed_precision_requested": False,
+                    "mixed_precision_enabled": False,
+                    "autocast_dtype": "float32",
+                    "deterministic_algorithms": True,
+                    "allow_tf32": False,
+                },
                 "model": build_file_manifest(paths.model_path),
                 "split_assignments": split_record,
                 "outer_oos_policy": outer_policy,

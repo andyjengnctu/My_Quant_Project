@@ -1374,13 +1374,14 @@
 | 2026-07-22 | T266 | 驗證 baseline／regime architecture 工件隔離、checkpoint strict reconstruction、舊 v1 manifest 相容與 Dataset 共用後重新收斂為 DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-22 | T266 | 擴充 runtime artifact contract，納入 sequence-only model spec、architecture/profile-scoped path 與 regime legacy reconstruction | DONE -> PARTIAL | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-22 | T266 | 驗證 sequence-only checkpoint strict reconstruction、`use_dataset_context=false` manifest、舊 architecture 唯讀相容與 Dataset 共用後重新收斂為 DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
-
 | 2026-07-24 | B11 | 8K 新增 `unique_group_date_balanced` profile、日期等權 training weights 與 fixed-batch-size loss reduction，訓練契約改回 PARTIAL | DONE -> PARTIAL | `config/breakout_quality_experiments.py` |
 | 2026-07-24 | B11 | 驗證 unique-group 代表列不變、各日期總 training weight 等量、總 group weight守恆、固定 denominator、正式評估不加日期權重與 Dataset 不重建後重新收斂為 DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-24 | B11 | 8P 新增 `multiscale_cnn_sequence_only_dual_path_v1`，保留 raw／level三分支並新增 window-zscore三分支與 branch-level fusion，模型／輸入契約改回 PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/multiscale_cnn.py` |
 | 2026-07-24 | B11 | 驗證逐sample／channel normalization、常數channel防護、raw-identity初始化、context invariance、normalized path gradient、參數量與Dataset不重建後重新收斂為 DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-24 | B11 | 8P完整OOS未形成Pareto improvement，dual-path轉為legacy read-only並退回8F active architecture，模型契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-24 | B11 | 驗證8F active、8P legacy strict reconstruction、policy／文件／runtime path一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-24 | B11 | 9A新增active `inception_time_v1`、GPU/mixed-precision execution、固定coverage排序與校準診斷，模型與訓練契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/inception_time.py` |
+| 2026-07-24 | B11 | 驗證單一InceptionTime spec/factory、unique-group sampling、CPU fallback、CUDA execution plan、PR-AUC/coverage metrics、8F/8P legacy重建與文件同步後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-24 | B163 | 將已退役的 models exact file-tree 契約重構為參數來源解析契約：預設 fallback 位於 models，formal staging override 可合法位於 models 外，且 repository／交付 ZIP 不必內建可變動 best params | N/A -> DONE | `validate_model_param_source_resolution_contract_case` |
 | 2026-07-24 | T250 | 最新 bundle 檢出舊 champion params file-tree validator 錯把 formal staging override 要求位於 models，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-07-24 | T250 | 將 validator 重構為 default fallback／formal override 雙路徑契約後重新收斂為 DONE | PARTIAL -> DONE | `validate_model_param_source_resolution_contract_case` |
@@ -1390,3 +1391,5 @@
 | 2026-07-24 | T266 | 驗證 8P checkpoint／manifest strict reconstruction、舊8F工件隔離與既有 architecture唯讀相容後重新收斂為 DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-24 | T266 | 8P轉為legacy read-only、active canonical path退回8F，runtime architecture契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-24 | T266 | 驗證8P舊工件仍可strict reconstruction、正式新輸出只指向8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-24 | T266 | 9A checkpoint/manifest新增Torch device、autocast dtype、determinism與TF32契約，runtime artifact contract改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/artifacts.py` |
+| 2026-07-24 | T266 | 驗證InceptionTime training execution完整、checkpoint/manifest一致、CPU舊工件相容、research export與報表schema v3後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |

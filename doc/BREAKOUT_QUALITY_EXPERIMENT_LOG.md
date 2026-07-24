@@ -23,11 +23,11 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260724_140019_f3aa36d.zip`，SHA256 `556dea38770f6f3cae5e11fd9136d3d7a0a2cfc538606e4d944176fffc98a7f3`；套用 8P 後完成 OOS，現已退回 8F policy |
-| SHA256 | 來源 ZIP：`556dea38770f6f3cae5e11fd9136d3d7a0a2cfc538606e4d944176fffc98a7f3` |
-| 程式版本範圍 | 8L、8M、8O、8P 均已淘汰；現有 multiscale CNN 家族微調正式停止，8P 保留為 legacy read-only，下一階段進入 9A InceptionTime |
-| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；early-stopping patience=`1`；final model mode=`selected_epochs`；time weight=`none`；training weight reduction=`batch_weight_sum` |
-| 當前最佳研究模型 | 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / patience 1 / selected_epochs` |
+| 基準 ZIP | `test-branch-1_20260724_145839_1fb9cb2(1).zip`，SHA256 `e3d7ae24f087c5894c531e52bc21320796b51d168a5c1120ed033a0ba7eaedc7` |
+| SHA256 | 來源 ZIP：`e3d7ae24f087c5894c531e52bc21320796b51d168a5c1120ed033a0ba7eaedc7` |
+| 程式版本範圍 | 8P失敗後停止multiscale CNN家族微調；9A單一InceptionTime已實作，8F保留為實證比較基準，8P保留為legacy read-only |
+| Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；patience=`1`；final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；TF32=`false` |
+| 當前最佳實證模型 | 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / patience 1 / selected_epochs`；9A僅為`IMPLEMENTED`，尚未取得OOS結果 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
 使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前 architecture 仍為 sequence-only；正式研究基準已由 8A 更新為 8F unique-group sampling。
@@ -519,7 +519,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。實證比較基準與目前 active architecture均已退回8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling`；Seed 42、threshold 0.5、no class weight、no time weight與 `selected_epochs`維持不變。8P失敗後停止本multiscale CNN家族微調，下一階段以9A單一InceptionTime開始。
+所有實驗一次只改一項。8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling` 維持最佳實證比較基準；目前 active architecture 已切換為9A `inception_time_v1`，並沿用相同的unique-group sampling、Seed 42、threshold 0.5、no class weight、no time weight與 `selected_epochs`，以隔離模型架構差異。
 
 ### 優先 6A：AdamW only
 
@@ -648,12 +648,13 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `PLANNED`；尚未實作 |
+| 狀態 | `IMPLEMENTED`；尚未取得Selection／OOS結果，8F仍是實證基準 |
 | 唯一變更 | 以單一InceptionTime取代手工三分支multiscale CNN；不使用ensemble，不同時改Label、threshold或training sampling |
-| 固定條件 | 8F unique-group sampling、batch size先依GPU記憶體設定但維持group語意、patience 1、selected-epochs、threshold 0.5、seed 42、class/time weight=`none` |
+| 固定條件 | 8F unique-group sampling、batch size 128 groups、patience 1、selected-epochs、threshold 0.5、seed 42、class/time weight=`none` |
 | Dataset／Label | 沿用300×10 feature bank、固定百分比Label、outer Selection/OOS與完整group-weighted評估；不重建Label |
-| GPU | 允許RTX 5080、CUDA與mixed precision；manifest必須記錄device、dtype與determinism設定，CPU strict-result路徑仍保留供對照 |
-| 比較要求 | 首輪使用單一模型；至少輸出固定threshold指標、PR-AUC與固定coverage Precision，避免把calibration差異誤判為模型能力 |
+| GPU | `device=auto`優先CUDA；mixed precision自動優先BF16、否則FP16；deterministic algorithms開啟、TF32關閉；checkpoint與manifest共同鎖定training execution |
+| Architecture | depth 6、32 filters、32-channel bottleneck、kernels 39/19/9、每3 modules一個residual、global average pooling；單一模型約473,218參數，不使用ensemble |
+| 比較要求 | 報表新增PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE；診斷threshold不得用於回調OOS |
 | 後續 | 9A未提升再測ModernTCN；其後才進入自家股票資料的TS2Vec／Series2Vec自監督預訓練 |
 
 
@@ -683,7 +684,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 8M Long Branch last-state pooling（REJECTED）
 → 8O zero-initialized gated temporal pooling（REJECTED）
 → 8P raw＋window-normalized dual-path（REJECTED；停止multiscale CNN家族微調）
-→ 9A 單一InceptionTime（PLANNED）
+→ 9A 單一InceptionTime（IMPLEMENTED；待完整OOS）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

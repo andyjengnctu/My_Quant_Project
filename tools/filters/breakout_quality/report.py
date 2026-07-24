@@ -33,7 +33,7 @@ from tools.filters.breakout_quality.evaluate import (
 )
 
 
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 ANSI_COLORS = {
     "reset": "\033[0m",
@@ -301,6 +301,7 @@ def _metric_summary(metrics: dict) -> dict:
         "accuracy": headline.get("accuracy"),
         "all_pass_baseline_accuracy": headline.get("all_pass_baseline_accuracy"),
         "avg_score": headline.get("avg_score"),
+        "ranking_and_calibration": headline.get("ranking_and_calibration") or {},
         "confusion": {
             "tp": confusion.get("true_pass_pred_pass"),
             "fn": confusion.get("true_pass_pred_reject"),
@@ -428,6 +429,7 @@ def _training_summary(manifest: dict) -> dict:
             "training_sampling_mode", "all_event_rows_group_weighted"
         ),
         "training_sampling": manifest.get("training_sampling") or {},
+        "torch_execution": manifest.get("torch_execution") or {},
         "model_spec": model_spec,
         "trainable_parameter_count": manifest.get("trainable_parameter_count"),
         "sequence_length": manifest.get("sequence_length"),
@@ -567,6 +569,53 @@ def _markdown_split_table(payload: dict) -> list[str]:
             )
         )
     lines.append("")
+    return lines
+
+
+def _ranking_summary(summary: dict | None) -> dict:
+    if not isinstance(summary, dict):
+        return {}
+    value = summary.get("ranking_and_calibration")
+    return value if isinstance(value, dict) else {}
+
+
+def _coverage_precision(ranking: dict, coverage: float) -> float | None:
+    values = ranking.get("precision_at_coverage")
+    if not isinstance(values, dict):
+        return None
+    return values.get(f"{coverage:.2f}")
+
+
+def _markdown_ranking_table(payload: dict, number: int) -> list[str]:
+    lines = [f"## {number}. 排序與校準診斷", ""]
+    lines.extend(
+        [
+            "| 區段 | PR-AUC | Precision@50% coverage | Precision@60% coverage | Precision@70% coverage | Recall@60% Precision | Brier Score | ECE（10 bins） |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for split_name in _split_order(payload):
+        summary = payload["split_summaries"][split_name]
+        ranking = _ranking_summary(summary)
+        lines.append(
+            "| {label} | {pr_auc} | {p50} | {p60} | {p70} | {r60} | {brier} | {ece} |".format(
+                label=SPLIT_LABELS[split_name],
+                pr_auc=_decimal(ranking.get("average_precision_pr_auc"), 4),
+                p50=_pct(_coverage_precision(ranking, 0.50)),
+                p60=_pct(_coverage_precision(ranking, 0.60)),
+                p70=_pct(_coverage_precision(ranking, 0.70)),
+                r60=_pct(ranking.get("recall_at_precision_60")),
+                brier=_decimal(ranking.get("brier_score"), 4),
+                ece=_decimal(ranking.get("expected_calibration_error_10_bins"), 4),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "> 固定 coverage 指標只用來比較排序能力；本報表不允許依 OOS 的診斷 threshold 回頭調整正式 threshold。",
+            "",
+        ]
+    )
     return lines
 
 def _confusion_details(summary: dict) -> dict:
@@ -1098,6 +1147,68 @@ def _deployment_presentation(payload: dict) -> dict:
     }
 
 
+def _markdown_model_detail_lines(training: dict) -> list[str]:
+    spec = training.get("model_spec") or {}
+    family = str(spec.get("family") or "")
+    if family == "inception_time":
+        return [
+            f"- **Model Family**：`{family}`",
+            f"- **Inception Depth**：`{spec.get('inception_depth')}`",
+            f"- **Filters**：`{spec.get('inception_filters')}`",
+            f"- **Bottleneck Channels**：`{spec.get('inception_bottleneck_channels')}`",
+            "- **Kernel Sizes**：`"
+            + "/".join(str(value) for value in spec.get("inception_kernel_sizes") or [])
+            + "`",
+            f"- **Residual Every**：`{spec.get('inception_residual_every')} modules`",
+        ]
+    return [
+        "- **Branch Inputs**：`"
+        + "+".join(spec.get("branch_input_representations") or ["level"])
+        + "`",
+        "- **Branch Channels**：`"
+        + "/".join(
+            str(value)
+            for value in (spec.get("branch_channels") or [spec.get("channels")] * 3)
+        )
+        + "`",
+        "- **Branch Dropouts**：`"
+        + "/".join(
+            f"{float(value):g}"
+            for value in (spec.get("branch_dropouts") or [spec.get("dropout")] * 3)
+        )
+        + "`",
+    ]
+
+
+def _console_model_detail_lines(training: dict) -> list[str]:
+    spec = training.get("model_spec") or {}
+    family = str(spec.get("family") or "")
+    if family == "inception_time":
+        return [
+            f"Model Family    : {family}",
+            f"Inception Depth: {spec.get('inception_depth')}",
+            f"Filters         : {spec.get('inception_filters')}",
+            f"Bottleneck      : {spec.get('inception_bottleneck_channels')}",
+            "Kernel Sizes    : "
+            + "/".join(str(value) for value in spec.get("inception_kernel_sizes") or []),
+            f"Residual Every  : {spec.get('inception_residual_every')} modules",
+        ]
+    return [
+        "Branch Inputs   : "
+        + "+".join(spec.get("branch_input_representations") or ["level"]),
+        "Branch Channels : "
+        + "/".join(
+            str(value)
+            for value in (spec.get("branch_channels") or [spec.get("channels")] * 3)
+        ),
+        "Branch Dropouts : "
+        + "/".join(
+            f"{float(value):g}"
+            for value in (spec.get("branch_dropouts") or [spec.get("dropout")] * 3)
+        ),
+    ]
+
+
 def render_markdown_report(payload: dict) -> str:
     conclusion = payload["conclusion"]
     training = payload["training"]
@@ -1134,38 +1245,7 @@ def render_markdown_report(payload: dict) -> str:
             f"- **Augmentation**：`{training.get('augmentation_name')}`",
             f"- **Augmentation Parameters**：`{training.get('augmentation_parameters') or '-'}`",
             f"- **Training Sampling**：`{training.get('training_sampling_mode')}`",
-            (
-                "- **Branch Inputs**：`"
-                + "+".join(
-                    (training.get("model_spec") or {}).get(
-                        "branch_input_representations"
-                    )
-                    or ["level"]
-                )
-                + "`"
-            ),
-            (
-                "- **Branch Channels**：`"
-                + "/".join(
-                    str(value)
-                    for value in (
-                        (training.get("model_spec") or {}).get("branch_channels")
-                        or [(training.get("model_spec") or {}).get("channels")] * 3
-                    )
-                )
-                + "`"
-            ),
-            (
-                "- **Branch Dropouts**：`"
-                + "/".join(
-                    f"{float(value):g}"
-                    for value in (
-                        (training.get("model_spec") or {}).get("branch_dropouts")
-                        or [(training.get("model_spec") or {}).get("dropout")] * 3
-                    )
-                )
-                + "`"
-            ),
+            *_markdown_model_detail_lines(training),
             (
                 "- **Dataset Event Context**：`"
                 + (
@@ -1196,6 +1276,11 @@ def render_markdown_report(payload: dict) -> str:
             f"- **Training Weight Reduction**：`{training.get('training_weight_reduction')}`",
             f"- **Batch Size**：`{training.get('batch_size')}`",
             f"- **Random Seed**：`{training.get('seed')}`",
+            f"- **Torch Device**：`{(training.get('torch_execution') or {}).get('resolved_device', '-')}`",
+            f"- **Mixed Precision**：`{(training.get('torch_execution') or {}).get('mixed_precision_enabled', False)}`",
+            f"- **Compute Dtype**：`{(training.get('torch_execution') or {}).get('autocast_dtype', 'float32')}`",
+            f"- **Deterministic Algorithms**：`{(training.get('torch_execution') or {}).get('deterministic_algorithms', False)}`",
+            f"- **TF32**：`{(training.get('torch_execution') or {}).get('allow_tf32', False)}`",
             "",
             "## 1. Epoch 選擇結果",
             "",
@@ -1248,6 +1333,9 @@ def render_markdown_report(payload: dict) -> str:
                 "",
             ]
         )
+    next_number += 1
+
+    lines.extend(_markdown_ranking_table(payload, next_number))
     next_number += 1
 
     lines.extend(_markdown_oos_comprehensive_assessment(payload, next_number))
@@ -1399,6 +1487,52 @@ def _console_split_section(payload: dict, number: int, *, color: bool = False) -
                 ),
             ]
         )
+    return lines
+
+
+def _console_ranking_section(payload: dict, number: int, *, color: bool = False) -> list[str]:
+    lines = _section(f"{number}. 排序與校準診斷", color=color)
+    rows = []
+    for split_name in _split_order(payload):
+        ranking = _ranking_summary(payload["split_summaries"][split_name])
+        rows.append(
+            [
+                SPLIT_LABELS[split_name],
+                _decimal(ranking.get("average_precision_pr_auc"), 4),
+                _pct(_coverage_precision(ranking, 0.50)),
+                _pct(_coverage_precision(ranking, 0.60)),
+                _pct(_coverage_precision(ranking, 0.70)),
+                _pct(ranking.get("recall_at_precision_60")),
+                _decimal(ranking.get("brier_score"), 4),
+                _decimal(ranking.get("expected_calibration_error_10_bins"), 4),
+            ]
+        )
+    lines.extend(
+        _render_ascii_table(
+            [
+                "區段",
+                "PR-AUC",
+                "P@50%",
+                "P@60%",
+                "P@70%",
+                "R@P60%",
+                "Brier",
+                "ECE",
+            ],
+            rows,
+            aligns=["left", "right", "right", "right", "right", "right", "right", "right"],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            _paint(
+                "固定 coverage 指標只用來比較排序能力；不得依 OOS 診斷 threshold 回頭調整正式 threshold。",
+                "yellow",
+                enabled=color,
+            ),
+        ]
+    )
     return lines
 
 def _console_confusion_section(summary: dict, label: str, number: int, *, color: bool = False) -> list[str]:
@@ -1592,35 +1726,7 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
             f"Augmentation    : {training.get('augmentation_name')}",
             f"Augmentation Args: {training.get('augmentation_parameters') or '-'}",
             f"Train Sampling  : {training.get('training_sampling_mode')}",
-            (
-                "Branch Inputs   : "
-                + "+".join(
-                    (training.get("model_spec") or {}).get(
-                        "branch_input_representations"
-                    )
-                    or ["level"]
-                )
-            ),
-            (
-                "Branch Channels : "
-                + "/".join(
-                    str(value)
-                    for value in (
-                        (training.get("model_spec") or {}).get("branch_channels")
-                        or [(training.get("model_spec") or {}).get("channels")] * 3
-                    )
-                )
-            ),
-            (
-                "Branch Dropouts : "
-                + "/".join(
-                    f"{float(value):g}"
-                    for value in (
-                        (training.get("model_spec") or {}).get("branch_dropouts")
-                        or [(training.get("model_spec") or {}).get("dropout")] * 3
-                    )
-                )
-            ),
+            *_console_model_detail_lines(training),
             (
                 "Dataset Context : "
                 + (
@@ -1649,6 +1755,11 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
             f"Weight Reduce   : {training.get('training_weight_reduction')}",
             f"Batch Size      : {training.get('batch_size')}",
             f"Random Seed     : {training.get('seed')}",
+            f"Torch Device    : {(training.get('torch_execution') or {}).get('resolved_device', '-')}",
+            f"Mixed Precision : {(training.get('torch_execution') or {}).get('mixed_precision_enabled', False)}",
+            f"Compute Dtype   : {(training.get('torch_execution') or {}).get('autocast_dtype', 'float32')}",
+            f"Deterministic   : {(training.get('torch_execution') or {}).get('deterministic_algorithms', False)}",
+            f"TF32            : {(training.get('torch_execution') or {}).get('allow_tf32', False)}",
         ]
     )
     lines.extend(_console_epoch_section(training, color=color))
@@ -1662,6 +1773,8 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
         lines.extend(_console_confusion_section(oos, "OOS", next_number, color=color))
         next_number += 1
     lines.extend(_console_split_section(payload, next_number, color=color))
+    next_number += 1
+    lines.extend(_console_ranking_section(payload, next_number, color=color))
     next_number += 1
     lines.extend(_console_oos_comprehensive_section(payload, next_number, color=color))
     return "\n".join(lines)

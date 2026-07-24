@@ -8,6 +8,7 @@ from filters.breakout_quality.models.factory import (
 )
 from filters.breakout_quality.models.spec import (
     ACTIVE_MODEL_ARCHITECTURES,
+    INCEPTION_TIME_V1,
     LEGACY_MODEL_ARCHITECTURES,
     MULTISCALE_CNN_V1,
     MULTISCALE_CNN_V2,
@@ -32,6 +33,7 @@ from filters.breakout_quality.models.spec import (
 __all__ = [
     "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
+    "INCEPTION_TIME_V1",
     "MULTISCALE_CNN_V1",
     "MULTISCALE_CNN_V2",
     "MULTISCALE_CNN_V3",

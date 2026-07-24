@@ -14,6 +14,11 @@ EXPECTED_OHLCV_FEATURE_COUNT = 10
 RETURN_DELTA_REPRESENTATION = "return_delta"
 MARKET_RELATIVE_RETURN_DELTA_REPRESENTATION = "market_relative_return_delta"
 LEVEL_REPRESENTATION = "level"
+RAW_LEVEL_INPUT_PATH = "raw_level"
+WINDOW_ZSCORE_INPUT_PATH = "window_zscore"
+SUPPORTED_SEQUENCE_INPUT_PATHS = frozenset(
+    {RAW_LEVEL_INPUT_PATH, WINDOW_ZSCORE_INPUT_PATH}
+)
 SUPPORTED_BRANCH_INPUT_REPRESENTATIONS = frozenset(
     {
         LEVEL_REPRESENTATION,
@@ -78,6 +83,26 @@ def build_market_relative_return_delta_representation(torch, sequence):
     return relative
 
 
+def build_window_zscore_representation(torch, sequence, *, epsilon: float):
+    """Normalize each sample/channel with statistics from its known input window.
+
+    Input and output use [batch, feature, time]. The full 300-bar event window is
+    available when the breakout decision is made, so the transform introduces no
+    bars after the event date. Constant channels become exact zeros.
+    """
+
+    if int(sequence.ndim) != 3:
+        raise ValueError("window normalization 需要 [batch, feature, time] tensor")
+    normalized_epsilon = float(epsilon)
+    if not math.isfinite(normalized_epsilon) or normalized_epsilon <= 0.0:
+        raise ValueError("window normalization epsilon 必須是有限正數")
+    mean = torch.mean(sequence, dim=2, keepdim=True)
+    centered = sequence - mean
+    variance = torch.mean(centered * centered, dim=2, keepdim=True)
+    scale = torch.sqrt(torch.clamp(variance, min=normalized_epsilon**2))
+    return centered / scale
+
+
 def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, spec):
     branch_factors = tuple(int(value) for value in spec.branch_downsample_factors)
     branch_kernels = tuple(
@@ -95,6 +120,38 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
             or (LEVEL_REPRESENTATION,) * len(branch_factors)
         )
     )
+    sequence_input_paths = tuple(
+        str(value).strip().lower()
+        for value in (spec.sequence_input_paths or (RAW_LEVEL_INPUT_PATH,))
+    )
+    invalid_input_paths = sorted(
+        set(sequence_input_paths) - SUPPORTED_SEQUENCE_INPUT_PATHS
+    )
+    if invalid_input_paths:
+        raise ValueError(
+            "multiscale sequence input path 不支援: " + ", ".join(invalid_input_paths)
+        )
+    if not sequence_input_paths or sequence_input_paths[0] != RAW_LEVEL_INPUT_PATH:
+        raise ValueError("multiscale sequence input paths 第一條必須是 raw_level")
+    if len(sequence_input_paths) != len(set(sequence_input_paths)):
+        raise ValueError("multiscale sequence input paths 不可重複")
+    use_window_zscore_path = WINDOW_ZSCORE_INPUT_PATH in sequence_input_paths
+    window_normalization_epsilon = spec.window_normalization_epsilon
+    if use_window_zscore_path:
+        if len(sequence_input_paths) != 2:
+            raise ValueError("dual-path architecture 必須固定使用 raw_level + window_zscore")
+        if window_normalization_epsilon is None:
+            raise ValueError("window_zscore path 缺少 normalization epsilon")
+        normalized_epsilon = float(window_normalization_epsilon)
+        if not math.isfinite(normalized_epsilon) or normalized_epsilon <= 0.0:
+            raise ValueError("window normalization epsilon 必須是有限正數")
+    elif window_normalization_epsilon is not None:
+        raise ValueError("未使用 window_zscore path 時不可設定 normalization epsilon")
+    if use_window_zscore_path and any(
+        representation != LEVEL_REPRESENTATION
+        for representation in branch_input_representations
+    ):
+        raise ValueError("window_zscore dual path 目前只允許三個 Level branches")
     if not (
         len(branch_factors)
         == len(branch_kernels)
@@ -252,6 +309,39 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                 nn.Dropout(float(spec.dropout)),
                 nn.Linear(int(spec.head_width), 2),
             )
+            self.normalized_branches = nn.ModuleList()
+            self.path_fusions = nn.ModuleList()
+            if use_window_zscore_path:
+                self.normalized_branches = nn.ModuleList(
+                    [
+                        MultiScaleBranch(
+                            downsample_factor=factor,
+                            kernel_sizes=kernels,
+                            output_channels=output_channels,
+                            dropout=dropout,
+                        )
+                        for factor, kernels, output_channels, dropout in zip(
+                            branch_factors,
+                            branch_kernels,
+                            branch_channels,
+                            branch_dropouts,
+                        )
+                    ]
+                )
+                for output_channels, windows in zip(
+                    branch_channels, branch_summary_windows
+                ):
+                    branch_summary_width = int(output_channels) * len(windows)
+                    fusion = nn.Linear(
+                        branch_summary_width * 2, branch_summary_width, bias=True
+                    )
+                    nn.init.zeros_(fusion.weight)
+                    nn.init.zeros_(fusion.bias)
+                    with torch.no_grad():
+                        fusion.weight[:, :branch_summary_width].copy_(
+                            torch.eye(branch_summary_width, dtype=fusion.weight.dtype)
+                        )
+                    self.path_fusions.append(fusion)
             self.derived_context_projection = None
             if derived_context_features:
                 self.derived_context_projection = nn.Linear(
@@ -295,12 +385,23 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                     )
                 )
 
+            normalized_inputs = None
+            if use_window_zscore_path:
+                normalized_level_sequence = build_window_zscore_representation(
+                    torch,
+                    level_sequence,
+                    epsilon=float(window_normalization_epsilon),
+                )
+                normalized_inputs = {LEVEL_REPRESENTATION: normalized_level_sequence}
+
             summaries = []
-            for branch, factor, windows, representation in zip(
-                self.branches,
-                branch_factors,
-                branch_summary_windows,
-                branch_input_representations,
+            for branch_index, (branch, factor, windows, representation) in enumerate(
+                zip(
+                    self.branches,
+                    branch_factors,
+                    branch_summary_windows,
+                    branch_input_representations,
+                )
             ):
                 branch_input = prepared_inputs.get(representation)
                 if branch_input is None:
@@ -308,11 +409,34 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
                         f"multiscale branch representation 尚未建立: {representation}"
                     )
                 branch_output = branch(branch_input)
-                summaries.extend(
-                    self._summarize_branch(
-                        branch_output,
-                        downsample_factor=factor,
-                        windows_bars=windows,
+                raw_summaries = self._summarize_branch(
+                    branch_output,
+                    downsample_factor=factor,
+                    windows_bars=windows,
+                )
+                if normalized_inputs is None:
+                    summaries.extend(raw_summaries)
+                    continue
+
+                normalized_branch_input = normalized_inputs.get(representation)
+                if normalized_branch_input is None:
+                    raise AssertionError(
+                        "multiscale normalized branch representation 尚未建立: "
+                        f"{representation}"
+                    )
+                normalized_output = self.normalized_branches[branch_index](
+                    normalized_branch_input
+                )
+                normalized_summaries = self._summarize_branch(
+                    normalized_output,
+                    downsample_factor=factor,
+                    windows_bars=windows,
+                )
+                raw_summary = torch.cat(raw_summaries, dim=1)
+                normalized_summary = torch.cat(normalized_summaries, dim=1)
+                summaries.append(
+                    self.path_fusions[branch_index](
+                        torch.cat([raw_summary, normalized_summary], dim=1)
                     )
                 )
             summary = torch.cat(summaries, dim=1)
@@ -342,10 +466,14 @@ def build_multiscale_cnn(nn, torch, *, feature_count: int, context_count: int, s
 __all__ = [
     "EXPECTED_OHLCV_FEATURE_COUNT",
     "LEVEL_REPRESENTATION",
+    "RAW_LEVEL_INPUT_PATH",
+    "SUPPORTED_SEQUENCE_INPUT_PATHS",
+    "WINDOW_ZSCORE_INPUT_PATH",
     "MARKET_RELATIVE_RETURN_DELTA_REPRESENTATION",
     "RETURN_DELTA_REPRESENTATION",
     "SUPPORTED_BRANCH_INPUT_REPRESENTATIONS",
     "build_market_relative_return_delta_representation",
     "build_multiscale_cnn",
     "build_return_delta_representation",
+    "build_window_zscore_representation",
 ]

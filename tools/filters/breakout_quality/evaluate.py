@@ -116,6 +116,106 @@ def _sum_weight(mask: np.ndarray, weights: np.ndarray | None) -> float:
     return float(weights[mask].sum())
 
 
+
+
+def _ranking_inputs(valid: pd.DataFrame, *, group_weighted: bool) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not group_weighted:
+        score = valid[SCORE_COLUMN].to_numpy(dtype=np.float64)
+        truth = (valid["label"].to_numpy(dtype=np.int64) == LABEL_PASS).astype(np.float64)
+        return score, truth, np.ones_like(score, dtype=np.float64)
+
+    grouped_rows = []
+    for (_ticker, _date), group in valid.groupby(["ticker", "date"], sort=False):
+        labels = group["label"].drop_duplicates().tolist()
+        if len(labels) != 1:
+            raise ValueError("同一 ticker/date 的 ranking metrics 出現混合 label")
+        scores = group[SCORE_COLUMN].to_numpy(dtype=np.float64)
+        if not np.allclose(scores, scores[0], rtol=0.0, atol=1e-7):
+            raise ValueError("同一 ticker/date 的 ranking metrics 出現不一致 score")
+        grouped_rows.append((float(scores[0]), float(int(labels[0]) == LABEL_PASS)))
+    if not grouped_rows:
+        return (
+            np.empty((0,), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+        )
+    array = np.asarray(grouped_rows, dtype=np.float64)
+    return array[:, 0], array[:, 1], np.ones((array.shape[0],), dtype=np.float64)
+
+
+def _ranking_metrics(valid: pd.DataFrame, *, group_weighted: bool) -> dict:
+    score, truth, weights = _ranking_inputs(valid, group_weighted=group_weighted)
+    if score.size == 0:
+        return {}
+    order = np.argsort(-score, kind="mergesort")
+    sorted_score = score[order]
+    sorted_truth = truth[order]
+    sorted_weights = weights[order]
+    cumulative_weight = np.cumsum(sorted_weights)
+    cumulative_tp = np.cumsum(sorted_truth * sorted_weights)
+    total_weight = float(cumulative_weight[-1])
+    total_positive = float(cumulative_tp[-1])
+    tie_ends = np.r_[np.flatnonzero(np.diff(sorted_score) != 0.0), score.size - 1]
+    precision_curve = cumulative_tp[tie_ends] / np.maximum(cumulative_weight[tie_ends], 1e-12)
+    recall_curve = (
+        cumulative_tp[tie_ends] / total_positive
+        if total_positive > 0.0
+        else np.zeros_like(precision_curve)
+    )
+    recall_delta = np.diff(np.r_[0.0, recall_curve])
+    average_precision = float(np.sum(recall_delta * precision_curve))
+
+    precision_at_coverage: dict[str, float] = {}
+    realized_coverage: dict[str, float] = {}
+    for coverage in (0.50, 0.60, 0.70):
+        target = coverage * total_weight
+        index = int(np.searchsorted(cumulative_weight, target, side="left"))
+        index = min(index, score.size - 1)
+        precision_at_coverage[f"{coverage:.2f}"] = round(
+            float(cumulative_tp[index] / max(cumulative_weight[index], 1e-12)), 6
+        )
+        realized_coverage[f"{coverage:.2f}"] = round(
+            float(cumulative_weight[index] / total_weight), 6
+        )
+
+    eligible = precision_curve >= 0.60
+    if np.any(eligible):
+        eligible_indices = np.flatnonzero(eligible)
+        best_index = int(eligible_indices[np.argmax(recall_curve[eligible_indices])])
+        recall_at_precision_60 = round(float(recall_curve[best_index]), 6)
+        coverage_at_precision_60 = round(
+            float(cumulative_weight[tie_ends[best_index]] / total_weight), 6
+        )
+        threshold_at_precision_60 = round(float(sorted_score[tie_ends[best_index]]), 8)
+    else:
+        recall_at_precision_60 = None
+        coverage_at_precision_60 = None
+        threshold_at_precision_60 = None
+
+    brier = float(np.average((score - truth) ** 2, weights=weights))
+    ece = 0.0
+    for lower in np.linspace(0.0, 0.9, 10):
+        upper = lower + 0.1
+        mask = (score >= lower) & (score < upper if upper < 1.0 else score <= upper)
+        if not np.any(mask):
+            continue
+        bin_weight = float(weights[mask].sum())
+        confidence = float(np.average(score[mask], weights=weights[mask]))
+        accuracy = float(np.average(truth[mask], weights=weights[mask]))
+        ece += (bin_weight / total_weight) * abs(confidence - accuracy)
+
+    return {
+        "average_precision_pr_auc": round(average_precision, 6),
+        "precision_at_coverage": precision_at_coverage,
+        "realized_coverage": realized_coverage,
+        "recall_at_precision_60": recall_at_precision_60,
+        "coverage_at_precision_60": coverage_at_precision_60,
+        "threshold_at_precision_60_diagnostic_only": threshold_at_precision_60,
+        "brier_score": round(brier, 6),
+        "expected_calibration_error_10_bins": round(float(ece), 6),
+        "threshold_selection_allowed": False,
+    }
+
 def _metrics(df: pd.DataFrame, *, threshold: float, group_weighted: bool) -> dict:
     valid = df[df["label"].isin([LABEL_PASS, LABEL_REJECT])].copy()
     if valid.empty:
@@ -164,6 +264,10 @@ def _metrics(df: pd.DataFrame, *, threshold: float, group_weighted: bool) -> dic
             _weighted_mean(score.astype(np.float32), weights)
             if weights is not None
             else round(float(score.mean()), 6)
+        ),
+        "ranking_and_calibration": _ranking_metrics(
+            valid,
+            group_weighted=group_weighted,
         ),
         "confusion": {
             "true_pass_pred_pass": round(tp, 6),

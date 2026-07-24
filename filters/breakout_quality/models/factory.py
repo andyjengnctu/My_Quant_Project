@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import Mapping
 
 from config.breakout_quality_policy import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+from filters.breakout_quality.models.inception_time import build_inception_time
 from filters.breakout_quality.models.multiscale_cnn import build_multiscale_cnn
 from filters.breakout_quality.models.residual_tcn import build_residual_tcn
 from filters.breakout_quality.models.spec import (
+    INCEPTION_TIME_V1,
     MULTISCALE_CNN_V1,
     MULTISCALE_CNN_V2,
     MULTISCALE_CNN_V3,
@@ -17,6 +19,7 @@ from filters.breakout_quality.models.spec import (
     MULTISCALE_CNN_V7,
     MULTISCALE_CNN_V8,
     MULTISCALE_CNN_REGIME_CONTEXT_V1,
+    MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     RESIDUAL_TCN_V1,
     TINY_CNN_V1,
@@ -58,6 +61,14 @@ def build_model(
 ):
     torch, nn = require_torch()
     spec = resolve_model_spec(architecture=architecture, model_spec=model_spec)
+    if spec.architecture == INCEPTION_TIME_V1:
+        return build_inception_time(
+            nn,
+            torch,
+            feature_count=int(feature_count),
+            context_count=int(context_count),
+            spec=spec,
+        )
     if spec.architecture == TINY_CNN_V1:
         return build_tiny_cnn(
             nn,
@@ -76,6 +87,7 @@ def build_model(
         MULTISCALE_CNN_V8,
         MULTISCALE_CNN_REGIME_CONTEXT_V1,
         MULTISCALE_CNN_SEQUENCE_ONLY_V1,
+        MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     }:
         return build_multiscale_cnn(
             nn,

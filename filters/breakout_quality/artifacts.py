@@ -54,7 +54,11 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.lr_schedule import validate_learning_rate_schedule_record
-from filters.breakout_quality.models.spec import model_spec_from_manifest
+from filters.breakout_quality.models.spec import INCEPTION_TIME_V1, model_spec_from_manifest
+from filters.breakout_quality.torch_runtime import (
+    SUPPORTED_MIXED_PRECISION_DTYPES,
+    SUPPORTED_TORCH_DEVICES,
+)
 from filters.breakout_quality.paths import (
     BreakoutQualityArtifactPaths,
     resolve_existing_filter_artifact_paths,
@@ -119,6 +123,53 @@ def _require_nonempty_text(payload: dict[str, Any], field_name: str) -> str:
     if not value:
         raise ValueError(f"breakout quality manifest 欄位不可空白: {field_name}")
     return value
+
+
+def _validate_torch_execution_record(
+    manifest: dict[str, Any],
+    *,
+    required: bool,
+) -> dict[str, Any] | None:
+    raw = manifest.get("torch_execution")
+    if raw is None and not required:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("breakout quality manifest.torch_execution 必須是 object")
+    requested = str(raw.get("requested_device") or "").strip().lower()
+    resolved = str(raw.get("resolved_device") or "").strip().lower()
+    dtype_name = str(raw.get("autocast_dtype") or "").strip().lower()
+    if requested not in SUPPORTED_TORCH_DEVICES:
+        raise ValueError("breakout quality torch_execution.requested_device 不合法")
+    if resolved not in {"cpu", "cuda"}:
+        raise ValueError("breakout quality torch_execution.resolved_device 不合法")
+    if dtype_name not in {"float32", *SUPPORTED_MIXED_PRECISION_DTYPES[1:]}:
+        raise ValueError("breakout quality torch_execution.autocast_dtype 不合法")
+    for field_name in (
+        "mixed_precision_requested",
+        "mixed_precision_enabled",
+        "deterministic_algorithms",
+        "allow_tf32",
+    ):
+        if not isinstance(raw.get(field_name), bool):
+            raise ValueError(f"breakout quality torch_execution.{field_name} 必須是 bool")
+    mixed_requested = bool(raw.get("mixed_precision_requested"))
+    mixed_enabled = bool(raw.get("mixed_precision_enabled"))
+    if requested == "cpu" and resolved != "cpu":
+        raise ValueError("requested CPU 的 torch_execution 不得解析成 CUDA")
+    if requested == "cuda" and resolved != "cuda":
+        raise ValueError("requested CUDA 的 torch_execution 不得解析成 CPU")
+    if mixed_enabled and not mixed_requested:
+        raise ValueError("torch_execution 不得在未要求 mixed precision 時宣稱已啟用")
+    if not mixed_enabled and dtype_name != "float32":
+        raise ValueError("未啟用 mixed precision 時 autocast_dtype 必須是 float32")
+    if resolved == "cpu" and mixed_enabled:
+        raise ValueError("CPU torch_execution 不得宣稱 mixed precision")
+    if resolved == "cuda" and mixed_enabled and dtype_name not in {
+        "float16",
+        "bfloat16",
+    }:
+        raise ValueError("CUDA mixed precision 的 autocast_dtype 必須是 float16 或 bfloat16")
+    return raw
 
 
 def _validate_training_augmentation_epoch_records(
@@ -349,6 +400,10 @@ def load_model_artifact_contract(
     model_spec = model_spec_from_manifest(_require_mapping(manifest, "model_spec"))
     if model_spec.architecture != manifest_architecture:
         raise ValueError("breakout quality model_spec.architecture 與 manifest 不一致")
+    _validate_torch_execution_record(
+        manifest,
+        required=manifest_architecture == INCEPTION_TIME_V1,
+    )
     if int(manifest.get("trainable_parameter_count", 0)) < 1:
         raise ValueError("breakout quality trainable_parameter_count 必須 >=1")
     model_policy = _require_mapping(manifest, "policy")

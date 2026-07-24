@@ -302,6 +302,28 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
         default=bool(defaults.preload_feature_bank),
         help="是否在訓練前將去重 feature bank 與事件小型陣列載入 RAM",
     )
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default=str(defaults.device))
+    parser.add_argument(
+        "--mixed-precision",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.mixed_precision),
+        help="CUDA 上是否啟用 mixed precision",
+    )
+    parser.add_argument(
+        "--mixed-precision-dtype",
+        choices=("auto", "float16", "bfloat16"),
+        default=str(defaults.mixed_precision_dtype),
+    )
+    parser.add_argument(
+        "--deterministic-algorithms",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.deterministic_algorithms),
+    )
+    parser.add_argument(
+        "--allow-tf32",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.allow_tf32),
+    )
     parser.add_argument(
         "--experiment-profile",
         choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
@@ -407,6 +429,10 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         str(int(args.early_stopping_patience)),
         "--early-stopping-min-delta",
         str(float(args.early_stopping_min_delta)),
+        "--device",
+        str(args.device),
+        "--mixed-precision-dtype",
+        str(args.mixed_precision_dtype),
     ]
     argv.append(
         "--use-inner-validation"
@@ -423,7 +449,39 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
         if bool(args.parallel_split_evaluation)
         else "--no-parallel-split-evaluation"
     )
+    argv.append("--mixed-precision" if bool(args.mixed_precision) else "--no-mixed-precision")
+    argv.append(
+        "--deterministic-algorithms"
+        if bool(args.deterministic_algorithms)
+        else "--no-deterministic-algorithms"
+    )
+    argv.append("--allow-tf32" if bool(args.allow_tf32) else "--no-allow-tf32")
     return argv
+
+
+def _model_runtime_description(model_spec) -> str:
+    if str(model_spec.family) == "inception_time":
+        kernels = "/".join(str(value) for value in model_spec.inception_kernel_sizes)
+        return (
+            f"family=inception_time, depth={model_spec.inception_depth}, "
+            f"filters={model_spec.inception_filters}, "
+            f"bottleneck={model_spec.inception_bottleneck_channels}, "
+            f"kernels={kernels}, residual_every={model_spec.inception_residual_every}, "
+            f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
+            f"receptive_field={model_spec.receptive_field_bars} bars, "
+            f"pooling={'+'.join(model_spec.pooling)}"
+        )
+    branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
+    branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
+    derived_context = ",".join(model_spec.derived_context_features) or "none"
+    return (
+        f"branch_inputs={branch_inputs}, "
+        f"branch_channels={'/'.join(str(value) for value in branch_channels)}, "
+        f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
+        f"derived_context={derived_context}, "
+        f"receptive_field={model_spec.receptive_field_bars} bars, "
+        f"pooling={'+'.join(model_spec.pooling)}"
+    )
 
 
 def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
@@ -446,21 +504,11 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     print(f"dataset={args.dataset}")
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
-    branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
-    branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
-    branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
     schedule_parameters = experiment.lr_schedule_parameters()
     augmentation_parameters = experiment.augmentation_parameters()
-    derived_context = ",".join(model_spec.derived_context_features) or "none"
-    dataset_context = "enabled" if model_spec.use_dataset_context else "disabled"
     print(
         "model="
-        f"{model_spec.architecture}, branch_inputs={branch_inputs}, "
-        f"branch_channels={'/'.join(str(value) for value in branch_channels)}, "
-        f"dataset_context={dataset_context}, "
-        f"derived_context={derived_context}, "
-        f"receptive_field={model_spec.receptive_field_bars} bars, "
-        f"pooling={'+'.join(model_spec.pooling)}"
+        f"{model_spec.architecture}, {_model_runtime_description(model_spec)}"
     )
     print(
         "train="
@@ -483,7 +531,11 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         f"class_weight_mode={args.class_weight_mode}, "
         f"time_weight_mode={args.time_weight_mode}, seed={int(args.seed)}, "
         f"threshold={float(args.fixed_threshold):.6f}, "
-        f"inner_validation={bool(args.use_inner_validation)}"
+        f"inner_validation={bool(args.use_inner_validation)}, "
+        f"device={args.device}, mixed_precision={bool(args.mixed_precision)}, "
+        f"mixed_precision_dtype={args.mixed_precision_dtype}, "
+        f"deterministic_algorithms={bool(args.deterministic_algorithms)}, "
+        f"allow_tf32={bool(args.allow_tf32)}"
     )
     print("注意：OOS 只供最終泛化評估，不得依結果回頭調整 threshold、epochs 或模型。")
 
@@ -531,6 +583,21 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
                     str(args.experiment_profile),
                     "--scope",
                     "research",
+                    "--device",
+                    str(args.device),
+                    "--mixed-precision-dtype",
+                    str(args.mixed_precision_dtype),
+                    (
+                        "--mixed-precision"
+                        if bool(args.mixed_precision)
+                        else "--no-mixed-precision"
+                    ),
+                    (
+                        "--deterministic-algorithms"
+                        if bool(args.deterministic_algorithms)
+                        else "--no-deterministic-algorithms"
+                    ),
+                    "--allow-tf32" if bool(args.allow_tf32) else "--no-allow-tf32",
                 ],
                 "匯出 research scores",
             ),
@@ -631,6 +698,11 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         inner_validation_months=int(defaults.inner_validation_months),
         early_stopping_patience=int(defaults.early_stopping_patience),
         early_stopping_min_delta=float(defaults.early_stopping_min_delta),
+        device=str(defaults.device),
+        mixed_precision=bool(defaults.mixed_precision),
+        mixed_precision_dtype=str(defaults.mixed_precision_dtype),
+        deterministic_algorithms=bool(defaults.deterministic_algorithms),
+        allow_tf32=bool(defaults.allow_tf32),
     )
 
 
@@ -654,17 +726,30 @@ def _print_policy_defaults(
     experiment = get_breakout_quality_experiment_profile(
         train_settings.experiment_profile
     )
-    branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
-    branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
-    branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
     schedule_parameters = experiment.lr_schedule_parameters()
     augmentation_parameters = experiment.augmentation_parameters()
+    if str(model_spec.family) == "inception_time":
+        architecture_details = (
+            f"- Model Family：InceptionTime\n"
+            f"- Depth：{model_spec.inception_depth}\n"
+            f"- Filters：{model_spec.inception_filters}\n"
+            f"- Bottleneck Channels：{model_spec.inception_bottleneck_channels}\n"
+            f"- Kernel Sizes：{'/'.join(str(value) for value in model_spec.inception_kernel_sizes)}\n"
+            f"- Residual Every：{model_spec.inception_residual_every} modules"
+        )
+    else:
+        branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
+        branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
+        branch_dropouts = model_spec.branch_dropouts or (model_spec.dropout,) * 3
+        architecture_details = (
+            f"- Branch Inputs：{branch_inputs}\n"
+            f"- Branch Channels：{'/'.join(str(value) for value in branch_channels)}\n"
+            f"- Branch Dropouts：{'/'.join(f'{value:g}' for value in branch_dropouts)}"
+        )
     print(
         f"- Model Architecture：{model_spec.architecture}\n"
         f"- Experiment Profile：{experiment.name}\n"
-        f"- Branch Inputs：{branch_inputs}\n"
-        f"- Branch Channels：{'/'.join(str(value) for value in branch_channels)}\n"
-        f"- Branch Dropouts：{'/'.join(f'{value:g}' for value in branch_dropouts)}\n"
+        f"{architecture_details}\n"
         f"- Dataset Event Context：{'使用' if model_spec.use_dataset_context else '不使用'}\n"
         f"- Derived Regime Context：{', '.join(model_spec.derived_context_features) or '-'}\n"
         f"- Receptive Field：約 {model_spec.receptive_field_bars} bars\n"
@@ -691,6 +776,11 @@ def _print_policy_defaults(
         f"- Time Weight Mode：{train_settings.time_weight_mode}\n"
         f"- Random Seed：{int(train_settings.seed)}\n"
         f"- Threshold：{float(train_settings.fixed_threshold):g}\n"
+        f"- Torch Device：{train_settings.device}\n"
+        f"- Mixed Precision：{'開啟' if bool(train_settings.mixed_precision) else '關閉'}\n"
+        f"- Mixed Precision Dtype：{train_settings.mixed_precision_dtype}\n"
+        f"- Deterministic Algorithms：{'開啟' if bool(train_settings.deterministic_algorithms) else '關閉'}\n"
+        f"- TF32：{'開啟' if bool(train_settings.allow_tf32) else '關閉'}\n"
         f"- Inner Validation：{'開啟' if bool(train_settings.use_inner_validation) else '關閉'}"
     )
     if bool(train_settings.use_inner_validation):

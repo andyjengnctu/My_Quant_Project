@@ -24,6 +24,7 @@ MULTISCALE_CNN_V8 = "multiscale_cnn_v8"
 MULTISCALE_CNN_REGIME_CONTEXT_V1 = "multiscale_cnn_regime_context_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
+INCEPTION_TIME_V1 = "inception_time_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
@@ -38,10 +39,11 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_REGIME_CONTEXT_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
+    INCEPTION_TIME_V1,
     RESIDUAL_TCN_V1,
 )
 ACTIVE_MODEL_ARCHITECTURES = (
-    MULTISCALE_CNN_V1,
+    INCEPTION_TIME_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
 )
 LEGACY_MODEL_ARCHITECTURES = tuple(
@@ -77,6 +79,11 @@ class BreakoutQualityModelSpec:
     derived_context_annualization_bars: int | None = None
     sequence_input_paths: tuple[str, ...] = ()
     window_normalization_epsilon: float | None = None
+    inception_depth: int | None = None
+    inception_filters: int | None = None
+    inception_bottleneck_channels: int | None = None
+    inception_kernel_sizes: tuple[int, ...] = ()
+    inception_residual_every: int | None = None
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -94,6 +101,10 @@ class BreakoutQualityModelSpec:
             "normalization": self.normalization,
             "normalization_groups": self.normalization_groups,
             "head_width": self.head_width,
+            "inception_depth": self.inception_depth,
+            "inception_filters": self.inception_filters,
+            "inception_bottleneck_channels": self.inception_bottleneck_channels,
+            "inception_residual_every": self.inception_residual_every,
         }
         for key, value in optional_scalars.items():
             if value is not None:
@@ -130,6 +141,10 @@ class BreakoutQualityModelSpec:
             payload["window_normalization_epsilon"] = float(
                 self.window_normalization_epsilon
             )
+        if self.inception_kernel_sizes:
+            payload["inception_kernel_sizes"] = [
+                int(value) for value in self.inception_kernel_sizes
+            ]
         return payload
 
 
@@ -284,6 +299,29 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             window_normalization_epsilon=window_normalization_epsilon,
         )
 
+    if normalized == INCEPTION_TIME_V1:
+        depth = 6
+        kernel_sizes = (39, 19, 9)
+        return BreakoutQualityModelSpec(
+            architecture=INCEPTION_TIME_V1,
+            family="inception_time",
+            channels=32,
+            kernel_size=max(kernel_sizes),
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("global_average",),
+            dropout=0.0,
+            receptive_field_bars=1 + depth * (max(kernel_sizes) - 1),
+            normalization="batch_norm",
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level",),
+            inception_depth=depth,
+            inception_filters=32,
+            inception_bottleneck_channels=32,
+            inception_kernel_sizes=kernel_sizes,
+            inception_residual_every=3,
+        )
+
     kernel_size = 3
     dilations = (1, 2, 4, 8, 16, 32)
     convolutions_per_block = 2
@@ -321,6 +359,7 @@ def model_spec_from_manifest(payload: Mapping[str, object]) -> BreakoutQualityMo
 __all__ = [
     "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
+    "INCEPTION_TIME_V1",
     "LEGACY_MODEL_ARCHITECTURES",
     "MULTISCALE_CNN_V1",
     "MULTISCALE_CNN_V2",

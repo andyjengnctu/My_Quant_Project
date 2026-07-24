@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
+from filters.breakout_quality.torch_runtime import TorchExecutionPlan, autocast_context
 
 
 def materialize_indexed_feature_inputs(
@@ -46,12 +47,13 @@ def strict_parallel_batched_logits(
     indices: np.ndarray | None,
     batch_size: int,
     workers: int,
+    execution_plan: TorchExecutionPlan | None = None,
 ) -> np.ndarray:
-    """Run fixed-boundary CPU inference while preserving row and reduction order.
+    """Run fixed-boundary inference while preserving row and reduction order.
 
-    Each batch is identical to the serial path. Independent batches may run on
-    read-only model replicas, but their logits are written back to the original
-    row positions before downstream metrics or score conversion are performed.
+    CUDA uses one model on one device; CPU may use read-only model replicas for
+    independent batches. Logits are always written back to the original row
+    positions before downstream metrics or score conversion are performed.
     """
 
     normalized_batch_size = int(batch_size)
@@ -74,7 +76,8 @@ def strict_parallel_batched_logits(
         (start, min(start + normalized_batch_size, row_count))
         for start in range(0, row_count, normalized_batch_size)
     ]
-    worker_count = min(normalized_workers, len(ranges))
+    device_type = "cpu" if execution_plan is None else execution_plan.device_type
+    worker_count = 1 if device_type == "cuda" else min(normalized_workers, len(ranges))
     logits_np = np.empty((row_count, 2), dtype=np.float32)
     model.eval()
 
@@ -88,13 +91,20 @@ def strict_parallel_batched_logits(
         return features[batch_idx], context[batch_idx]
 
     if worker_count == 1:
-        with torch.no_grad():
+        device = torch.device("cpu") if execution_plan is None else execution_plan.device
+        with torch.inference_mode():
             for start, stop in ranges:
                 batch_features, batch_context = _batch_inputs(start, stop)
-                logits_np[start:stop] = model(
-                    torch.from_numpy(batch_features),
-                    torch.from_numpy(batch_context),
-                ).cpu().numpy()
+                feature_tensor = torch.from_numpy(batch_features).to(device)
+                context_tensor = torch.from_numpy(batch_context).to(device)
+                context_manager = (
+                    autocast_context(torch, execution_plan)
+                    if execution_plan is not None
+                    else torch.autocast(device_type="cpu", enabled=False)
+                )
+                with context_manager:
+                    batch_logits = model(feature_tensor, context_tensor)
+                logits_np[start:stop] = batch_logits.float().cpu().numpy()
         return logits_np
 
     assignments: list[list[tuple[int, int]]] = [
