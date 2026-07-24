@@ -21,5 +21,4 @@ __pycache__/
 .vscode/
 # 忽略本地 Champion 歷史封存
 /models/champion_archive/
-/models/
-*.pt
+/models/filters/
