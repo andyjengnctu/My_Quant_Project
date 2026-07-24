@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260724_190552_41978fb.zip`，SHA256 `276d29d4e66b62c77c71f75c633e4362d7d8a60e1b9bdfb0150f51b2e9966457` |
-| SHA256 | 來源 ZIP：`276d29d4e66b62c77c71f75c633e4362d7d8a60e1b9bdfb0150f51b2e9966457` |
+| 基準 ZIP | `test-branch-1_20260724_173238_f8387e3.zip`，SHA256 `34c8583d4ecfe3d9d79264170832bfb08764fbeb187b78ebeb8d5cb3efac7624` |
+| SHA256 | 來源 ZIP：`34c8583d4ecfe3d9d79264170832bfb08764fbeb187b78ebeb8d5cb3efac7624` |
 | 程式版本範圍 | 9A單一InceptionTime完整OOS已完成並接受為新的排序／高品質模型基準；8F保留為高覆蓋參考，8P保留為legacy read-only |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；patience=`1`；final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -507,7 +507,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 項目 | 紀錄 |
 |---|---|
 | 狀態 | `ACCEPTED`；升為新的排序／高品質模型基準；8F保留為高覆蓋基準 |
-| 程式基準 | 結果 ZIP `test-branch-1_20260724_190552_41978fb.zip`，SHA256 `276d29d4e66b62c77c71f75c633e4362d7d8a60e1b9bdfb0150f51b2e9966457`；結果文字 SHA256 `e78623c1791fdcf647e604ff6f8ebe5277190551d2349115235975f4b81734ab` |
+| 程式基準 | 結果 ZIP `test-branch-1_20260724_173238_f8387e3.zip`，SHA256 `34c8583d4ecfe3d9d79264170832bfb08764fbeb187b78ebeb8d5cb3efac7624`；結果文字 SHA256 `e78623c1791fdcf647e604ff6f8ebe5277190551d2349115235975f4b81734ab` |
 | Architecture | `inception_time_v1`；depth 6、filters 32、bottleneck 32、kernels 39／19／9、每3 modules residual、global average pooling、473,218 parameters |
 | 固定條件 | unique-group sampling、batch 128、patience 1、selected-epochs、Adam、LR 0.0003、threshold 0.5、seed 42、class/time weight=`none`、CUDA BF16、deterministic algorithms、TF32 off |
 | Dataset／Label | 沿用300×10 feature bank與固定百分比Label；不重建、不 relabel |
@@ -518,21 +518,6 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 相較 8F | OOS Precision +4.53 pp、Lift +4.52 pp、Specificity +30.67 pp；Recall −25.52 pp、模型 PASS −27.81 pp、Accuracy −0.59 pp、Score −0.0655。近似相同 coverage 下，9A P@70%=60.25% 高於 8F 在73.24% coverage的58.46%，顯示真正排序改善 |
 | 判定 | 接受為新的高品質／排序模型基準；不依OOS回調threshold。8F保留供高覆蓋用途與策略層比較 |
 | 下一步 | 先做 `9A-GN`：只將InceptionTime的BatchNorm改為GroupNorm，測試能否改善ECE、Brier、Score／coverage drift並保留固定coverage Precision；若無改善，再進入9B ModernTCN |
-
-
-### 3.29 Ranking group-score 報表相容修正（2026-07-24）
-
-| 項目 | 紀錄 |
-|---|---|
-| 狀態 | `CORRECTED`；只修ranking報表聚合，不改模型權重、Label、split、threshold或正式score export推論單位 |
-| 程式基準 | 原始結果ZIP `test-branch-1_20260724_190552_41978fb.zip`，SHA256 `276d29d4e66b62c77c71f75c633e4362d7d8a60e1b9bdfb0150f51b2e9966457`；第一版修補 `breakout_quality_ranking_group_score_fix_20260724.zip`，SHA256 `793bbada5763902b8b3118d783d9dda3551fb3c4c5353217e4e989628eaa5eed` |
-| 原始問題 | 9A sequence-only模型對同一`ticker/date`的重複event rows使用CUDA／BF16 fixed batches推論時，可能出現極小浮點差；ranking原契約以`atol=1e-7`要求完全一致，導致報表中止 |
-| 第一版修補偏差 | 第一版把score export改成unique-group推論再廣播，雖消除同group差異，但也改變GPU batch組成與推論單位，造成同一checkpoint重新export後的Score及報表數值出現微小變化；這不符合既有9A結果可重現的要求 |
-| 最終修正 | 完全恢復原event-row fixed-batch score export；ranking metrics只將同一`ticker/date`且score span不超過`5e-4`的數值視為CUDA／BF16浮點噪音，並沿用原成功報表的第一筆event-row Score作為唯一group score；不再取mean，避免排序邊界及Brier／ECE出現末位變化 |
-| Fail-fast | 同group score span超過`5e-4`、混合Label、NaN或infinite仍直接失敗；容忍值只解除假警報，不改變原代表Score語義 |
-| 數據延續 | 若使用同一份原始`research_scores.csv`，只重跑report時，固定threshold與ranking／calibration指標均沿用原成功報表的第一row代表Score語義；數值可完全一致。若原CSV已被覆寫，程式無法從新浮點分數反推出舊檔的逐位元值 |
-| 已覆寫情況 | 若第一版group-broadcast修補已覆寫`research_scores.csv`，須套用最終修正後重新執行score export，恢復原event-row fixed-batch路徑，再重跑report；不需重訓、重建Dataset或relabel |
-| 9A判定 | 9A `ACCEPTED`與後續9A-GN順序不變；正式比較仍以原始9A execution contract與score table為準 |
 
 
 ---
