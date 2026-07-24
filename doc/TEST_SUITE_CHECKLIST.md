@@ -1382,6 +1382,12 @@
 | 2026-07-24 | B11 | 驗證8F active、8P legacy strict reconstruction、policy／文件／runtime path一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-24 | B11 | 9A新增active `inception_time_v1`、GPU/mixed-precision execution、固定coverage排序與校準診斷，模型與訓練契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/inception_time.py` |
 | 2026-07-24 | B11 | 驗證單一InceptionTime spec/factory、unique-group sampling、CPU fallback、CUDA execution plan、PR-AUC/coverage metrics、8F/8P legacy重建與文件同步後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-24 | B11 | 9A score export檢出sequence-only duplicate event rows跨CUDA/BF16 batch可能產生微小score差，ranking group單一真理契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/inference.py` |
+| 2026-07-24 | B11 | 驗證unique feature-group只推論一次、event-row精確廣播、舊CSV group-mean相容、混合Label／非有限score fail-fast後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-24 | B11 | 第一版ranking修補改變sequence-only score export推論單位，造成同checkpoint數值微幅漂移，契約改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/export_scores.py` |
+| 2026-07-24 | B11 | 恢復event-row fixed-batch export，只允許bounded group-score noise於ranking層聚合並驗證material difference fail-fast後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-24 | B11 | bounded-noise ranking前版使用group mean，造成同一原始score table的排序／校準末位數值改變，研究報表相容契約改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/evaluate.py` |
+| 2026-07-24 | B11 | 恢復原成功報表的first event-row代表Score，驗證同一CSV的ranking／Brier／ECE逐項完全一致且material difference仍fail-fast後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-24 | B163 | 將已退役的 models exact file-tree 契約重構為參數來源解析契約：預設 fallback 位於 models，formal staging override 可合法位於 models 外，且 repository／交付 ZIP 不必內建可變動 best params | N/A -> DONE | `validate_model_param_source_resolution_contract_case` |
 | 2026-07-24 | T250 | 最新 bundle 檢出舊 champion params file-tree validator 錯把 formal staging override 要求位於 models，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-07-24 | T250 | 將 validator 重構為 default fallback／formal override 雙路徑契約後重新收斂為 DONE | PARTIAL -> DONE | `validate_model_param_source_resolution_contract_case` |
@@ -1393,3 +1399,7 @@
 | 2026-07-24 | T266 | 驗證8P舊工件仍可strict reconstruction、正式新輸出只指向8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-24 | T266 | 9A checkpoint/manifest新增Torch device、autocast dtype、determinism與TF32契約，runtime artifact contract改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/artifacts.py` |
 | 2026-07-24 | T266 | 驗證InceptionTime training execution完整、checkpoint/manifest一致、CPU舊工件相容、research export與報表schema v3後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-24 | T266 | Research／forward score inference manifest新增scoring unit、實際模型輸入數與輸出row數，輸出契約改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/export_scores.py` |
+| 2026-07-24 | T266 | 驗證sequence-only group broadcast保留score table列數／列序／schema、舊工件相容與ranking diagnostics後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-24 | T266 | 撤回group-broadcast inference manifest變更，恢復既有score execution contract，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/export_scores.py` |
+| 2026-07-24 | T266 | 驗證原event-row推論、score table schema／列序／batch contract不變與ranking bounded-noise diagnostics後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |

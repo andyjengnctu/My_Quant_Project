@@ -155,6 +155,7 @@ from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from tools.filters.breakout_quality import common as breakout_quality_common
+from tools.filters.breakout_quality import evaluate as breakout_quality_evaluate
 from tools.filters.breakout_quality import export_scores as breakout_quality_export_scores
 from tools.filters.breakout_quality import train as breakout_quality_train
 from tools.filters.breakout_quality.report import (
@@ -2295,6 +2296,138 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "strict_parallel_score_inference_preserves_serial_logits",
         True,
         np.array_equal(serial_export_logits, parallel_export_logits),
+    )
+
+    ranking_frame = pd.DataFrame(
+        {
+            "ticker": ["A", "A", "B", "B"],
+            "date": ["2026-01-02"] * 4,
+            "label": [LABEL_PASS, LABEL_PASS, LABEL_REJECT, LABEL_REJECT],
+            SCORE_COLUMN: [0.6000, 0.6004, 0.4000, 0.4000],
+        }
+    )
+    ranking_score, ranking_truth, ranking_weights, ranking_diagnostics = (
+        breakout_quality_evaluate._ranking_inputs(
+            ranking_frame,
+            group_weighted=True,
+        )
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ranking_metrics_preserve_original_first_event_row_score_with_bounded_noise",
+        True,
+        bool(np.array_equal(ranking_score, np.asarray([0.6000, 0.4], dtype=np.float64))),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ranking_metrics_preserve_one_truth_and_weight_per_group",
+        ([1.0, 0.0], [1.0, 1.0]),
+        (ranking_truth.tolist(), ranking_weights.tolist()),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ranking_metrics_report_bounded_score_noise_diagnostics",
+        {
+            "ranking_unit": "ticker_date_group",
+            "group_score_reduction": "first_event_row_with_bounded_numerical_noise",
+            "group_score_numerical_noise_atol": 0.0005,
+            "multirow_group_count": 2,
+            "nonidentical_score_group_count": 1,
+            "max_within_group_score_span": 0.0004,
+        },
+        ranking_diagnostics,
+    )
+    canonical_first_score_frame = ranking_frame.copy()
+    canonical_first_score_frame.loc[1, SCORE_COLUMN] = canonical_first_score_frame.loc[0, SCORE_COLUMN]
+    canonical_first_score_frame.loc[3, SCORE_COLUMN] = canonical_first_score_frame.loc[2, SCORE_COLUMN]
+    noisy_ranking_metrics = breakout_quality_evaluate._ranking_metrics(
+        ranking_frame,
+        group_weighted=True,
+    )
+    canonical_ranking_metrics = breakout_quality_evaluate._ranking_metrics(
+        canonical_first_score_frame,
+        group_weighted=True,
+    )
+    comparable_ranking_keys = (
+        "average_precision_pr_auc",
+        "precision_at_coverage",
+        "realized_coverage",
+        "recall_at_precision_60",
+        "coverage_at_precision_60",
+        "threshold_at_precision_60_diagnostic_only",
+        "brier_score",
+        "expected_calibration_error_10_bins",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "bounded_noise_report_preserves_prefixed_ranking_numbers_exactly",
+        True,
+        all(
+            noisy_ranking_metrics[key] == canonical_ranking_metrics[key]
+            for key in comparable_ranking_keys
+        ),
+    )
+    materially_different_ranking_frame = ranking_frame.copy()
+    materially_different_ranking_frame.loc[1, SCORE_COLUMN] = 0.6010
+    try:
+        breakout_quality_evaluate._ranking_inputs(
+            materially_different_ranking_frame,
+            group_weighted=True,
+        )
+        material_group_score_difference_rejected = False
+    except ValueError as exc:
+        material_group_score_difference_rejected = "超過允許的浮點誤差" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ranking_metrics_reject_material_group_score_difference",
+        True,
+        material_group_score_difference_rejected,
+    )
+    mixed_ranking_frame = ranking_frame.copy()
+    mixed_ranking_frame.loc[1, "label"] = LABEL_REJECT
+    try:
+        breakout_quality_evaluate._ranking_inputs(
+            mixed_ranking_frame,
+            group_weighted=True,
+        )
+        mixed_ranking_label_rejected = False
+    except ValueError as exc:
+        mixed_ranking_label_rejected = "混合 label" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ranking_metrics_reject_mixed_group_labels",
+        True,
+        mixed_ranking_label_rejected,
+    )
+    nonfinite_ranking_frame = ranking_frame.copy()
+    nonfinite_ranking_frame.loc[1, SCORE_COLUMN] = np.nan
+    try:
+        breakout_quality_evaluate._ranking_inputs(
+            nonfinite_ranking_frame,
+            group_weighted=True,
+        )
+        nonfinite_ranking_score_rejected = False
+    except ValueError as exc:
+        nonfinite_ranking_score_rejected = "NaN 或 infinite score" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ranking_metrics_reject_nonfinite_group_scores",
+        True,
+        nonfinite_ranking_score_rejected,
     )
 
     preload_probe = np.asarray([11, 0, 7, 4, 2], dtype=np.int64)

@@ -59,6 +59,13 @@ EVALUATION_SPLITS = (
     EVALUATION_SPLIT_ALL,
 )
 
+# The same semantic input can differ slightly when repeated in separate
+# CUDA/BF16 batches. Differences beyond this bound are a real contract
+# violation. Within the bound, ranking keeps the first event-row score so the
+# successful pre-fix report semantics remain exactly unchanged for the same
+# research_scores.csv; the tolerance only prevents a false-positive abort.
+GROUP_SCORE_NUMERICAL_NOISE_ATOL = 5e-4
+
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
@@ -118,33 +125,77 @@ def _sum_weight(mask: np.ndarray, weights: np.ndarray | None) -> float:
 
 
 
-def _ranking_inputs(valid: pd.DataFrame, *, group_weighted: bool) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _ranking_inputs(
+    valid: pd.DataFrame,
+    *,
+    group_weighted: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, float | int | str]]:
     if not group_weighted:
         score = valid[SCORE_COLUMN].to_numpy(dtype=np.float64)
         truth = (valid["label"].to_numpy(dtype=np.int64) == LABEL_PASS).astype(np.float64)
-        return score, truth, np.ones_like(score, dtype=np.float64)
+        return score, truth, np.ones_like(score, dtype=np.float64), {
+            "ranking_unit": "event_row",
+            "group_score_reduction": "none",
+            "group_score_numerical_noise_atol": GROUP_SCORE_NUMERICAL_NOISE_ATOL,
+            "multirow_group_count": 0,
+            "nonidentical_score_group_count": 0,
+            "max_within_group_score_span": 0.0,
+        }
 
     grouped_rows = []
-    for (_ticker, _date), group in valid.groupby(["ticker", "date"], sort=False):
+    multirow_group_count = 0
+    nonidentical_score_group_count = 0
+    max_within_group_score_span = 0.0
+    for (ticker, date), group in valid.groupby(["ticker", "date"], sort=False):
         labels = group["label"].drop_duplicates().tolist()
         if len(labels) != 1:
             raise ValueError("同一 ticker/date 的 ranking metrics 出現混合 label")
         scores = group[SCORE_COLUMN].to_numpy(dtype=np.float64)
-        if not np.allclose(scores, scores[0], rtol=0.0, atol=1e-7):
-            raise ValueError("同一 ticker/date 的 ranking metrics 出現不一致 score")
+        if not np.isfinite(scores).all():
+            raise ValueError("同一 ticker/date 的 ranking metrics 含 NaN 或 infinite score")
+        score_span = float(scores.max() - scores.min())
+        if score_span > GROUP_SCORE_NUMERICAL_NOISE_ATOL:
+            raise ValueError(
+                "同一 ticker/date 的 ranking metrics score 差異超過允許的浮點誤差；"
+                f"ticker={ticker}, date={date}, span={score_span:.10f}, "
+                f"allowed={GROUP_SCORE_NUMERICAL_NOISE_ATOL:.10f}"
+            )
+        if len(scores) > 1:
+            multirow_group_count += 1
+        if score_span > 0.0:
+            nonidentical_score_group_count += 1
+            max_within_group_score_span = max(max_within_group_score_span, score_span)
         grouped_rows.append((float(scores[0]), float(int(labels[0]) == LABEL_PASS)))
     if not grouped_rows:
         return (
             np.empty((0,), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
+            {
+                "ranking_unit": "ticker_date_group",
+                "group_score_reduction": "first_event_row_with_bounded_numerical_noise",
+                "group_score_numerical_noise_atol": GROUP_SCORE_NUMERICAL_NOISE_ATOL,
+                "multirow_group_count": 0,
+                "nonidentical_score_group_count": 0,
+                "max_within_group_score_span": 0.0,
+            },
         )
     array = np.asarray(grouped_rows, dtype=np.float64)
-    return array[:, 0], array[:, 1], np.ones((array.shape[0],), dtype=np.float64)
+    return array[:, 0], array[:, 1], np.ones((array.shape[0],), dtype=np.float64), {
+        "ranking_unit": "ticker_date_group",
+        "group_score_reduction": "first_event_row_with_bounded_numerical_noise",
+        "group_score_numerical_noise_atol": GROUP_SCORE_NUMERICAL_NOISE_ATOL,
+        "multirow_group_count": int(multirow_group_count),
+        "nonidentical_score_group_count": int(nonidentical_score_group_count),
+        "max_within_group_score_span": round(float(max_within_group_score_span), 10),
+    }
 
 
 def _ranking_metrics(valid: pd.DataFrame, *, group_weighted: bool) -> dict:
-    score, truth, weights = _ranking_inputs(valid, group_weighted=group_weighted)
+    score, truth, weights, ranking_diagnostics = _ranking_inputs(
+        valid,
+        group_weighted=group_weighted,
+    )
     if score.size == 0:
         return {}
     order = np.argsort(-score, kind="mergesort")
@@ -205,6 +256,7 @@ def _ranking_metrics(valid: pd.DataFrame, *, group_weighted: bool) -> dict:
         ece += (bin_weight / total_weight) * abs(confidence - accuracy)
 
     return {
+        **ranking_diagnostics,
         "average_precision_pr_auc": round(average_precision, 6),
         "precision_at_coverage": precision_at_coverage,
         "realized_coverage": realized_coverage,
