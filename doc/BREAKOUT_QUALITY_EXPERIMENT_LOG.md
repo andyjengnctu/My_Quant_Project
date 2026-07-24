@@ -23,10 +23,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260724_093559_485edba.zip`，SHA256 `8c73380d3a3803346a6c2c55c2fa2a9e2f32e2342a988cd76854c27c3f3103ef`，加 `breakout_quality_8k_rejected_revert_to_8f_20260724.zip` |
-| SHA256 | 來源 ZIP：`8c73380d3a3803346a6c2c55c2fa2a9e2f32e2342a988cd76854c27c3f3103ef` |
-| 程式版本範圍 | 8K date-density balancing 已取得結果並淘汰；active policy 已退回 8F unique ticker/date group training。8G～8K 均不再作為正式新訓練預設 |
-| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；early-stopping patience=`1`；final model mode=`selected_epochs`；time weight=`none`；training weight reduction=`batch_weight_sum` |
+| 基準 ZIP | `test-branch-1_20260724_100522_938ba56(3).zip`，SHA256 `ce70a6db63f83d189664b5b0ed01df4d0fe85d9bacc7b27f6b7c031e63d5a21c`，本輪實作 8O learnable temporal pooling |
+| SHA256 | 來源 ZIP：`ce70a6db63f83d189664b5b0ed01df4d0fe85d9bacc7b27f6b7c031e63d5a21c` |
+| 程式版本範圍 | 8L date-diverse batches 與 8M Long last-state pooling 均已取得結果並淘汰；active policy 切至 8O gated temporal pooling，尚未取得結果 |
+| Policy 預設 | architecture=`multiscale_cnn_sequence_only_gated_pool_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；early-stopping patience=`1`；final model mode=`selected_epochs`；time weight=`none`；training weight reduction=`batch_weight_sum` |
 | 當前最佳研究模型 | 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / patience 1 / selected_epochs` |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
@@ -41,7 +41,7 @@
 | PASS 最低 MFE | 嚴格大於 5% |
 | PASS 最低 MFE／MAE | 嚴格大於 2.0 |
 | 最大不利跌幅 | 觸及 −10% 即 REJECT |
-| Epoch 上限 | 100 |
+| Epoch 上限 | 200 |
 | Early-stopping patience | **1**；8G patience 5 已淘汰 |
 | Batch Size | **128** unique `ticker/date` groups；8H batch size 64 已淘汰 |
 | Optimizer | `adam`（6A AdamW 與 6B schedule 已淘汰） |
@@ -411,9 +411,53 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | Selection→OOS | Precision +1.15 pp、Recall −1.01 pp、模型 PASS −1.57 pp、Accuracy +1.26 pp、Score −0.0166 |
 | 相較 8F | OOS Precision／Lift各 −2.38 pp，Recall +21.46 pp、模型 PASS +24.40 pp、Accuracy −0.52 pp、Score +0.0105；Precision gap由 +1.56 pp 降為 +1.15 pp，Accuracy gap改善 1.96 pp，Score gap改善 0.0121 |
 | 判定 | 日期完全等權使模型在 threshold 0.5 幾乎全部判 PASS，OOS 模型 PASS 97.64%，Precision Lift只剩 +0.45 pp；雖 score drift縮小，但已失去實際篩選能力，且 Precision／Accuracy／Score三項採用指標只有 Score改善，不符合事前採用條件 |
-| Threshold 0.55 診斷 | 同一 patience 1 模型把門檻改為 0.55後，OOS Precision 60.80%、Lift +5.17 pp、Recall 58.69%、模型 PASS 53.71%、Accuracy 55.97%；這只是操作點改變，且已查看 OOS，不能回頭作為 8K 模型改善或正式 threshold 採用證據 |
+| Threshold 0.55 診斷 | 同一 patience 1 模型把門檻改為 0.55後，OOS Precision 60.80%、Lift +5.17 pp、Recall 58.69%、模型 PASS 53.71%、Accuracy 55.97%；與 8F 同樣使用 0.55 時，8K 的 Precision、Recall、Accuracy 均較高，因此保留為固定 0.55 的 forward-validation 候選；但目前 OOS 已參與門檻判讀，不再是未污染 final OOS |
 | 過度訓練診斷 | Patience 5／Best Epoch 10／threshold 0.55：OOS Precision 61.43%、Recall 34.27%、Accuracy 51.46%、Score 0.5144；固定 200 epochs／threshold 0.5：OOS Precision 56.85%、Recall 28.55%、Accuracy 48.20%、Score 0.3604。兩者均再次證明延長訓練造成嚴重 OOS 過擬合 |
 | 下一步 | 不再使用完整日期等權或依本次 OOS調 threshold。8L 規劃改測 date-diverse batch scheduling：保留 8F 的無日期權重目標與 threshold 0.5，只改 batch 內日期組成，降低同日相關樣本集中於同一 optimizer update |
+
+
+### 3.24 8L Date-diverse batch scheduling（2026-07-24）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `REJECTED`；使用者已退回 8F random batch scheduling |
+| 程式基準 | 使用者 ZIP `test-branch-1_20260724_100522_938ba56(1).zip`，SHA256 `ce70a6db63f83d189664b5b0ed01df4d0fe85d9bacc7b27f6b7c031e63d5a21c`，疊加 8L date-diverse batch patch；結果數值由使用者報表提供 |
+| 唯一變更 | 每個 epoch 的 unique groups、sample weights、batch size 與 optimizer steps均不變，只以 date-interleaved順序讓同一 batch 優先包含不同交易日 |
+| Dataset／Label | 不重建 feature bank、不 relabel |
+| Selection | 原始 PASS 54.81%、模型 PASS 86.86%、PASS Precision 57.28%、Lift +2.47 pp、Recall 90.78%、Accuracy 57.84%、Score 0.5655 |
+| OOS | 原始 PASS 55.63%、模型 PASS 71.24%、PASS Precision 58.41%、Lift +2.78 pp、Recall 74.80%、Accuracy 56.35%、Score 0.5409 |
+| Selection→OOS | Precision +1.13 pp、Recall −15.98 pp、模型 PASS −15.62 pp、Accuracy −1.49 pp、Score −0.0246 |
+| 相較 8F | OOS Precision／Lift各 −0.05 pp，Recall −2.16 pp、模型 PASS −2.00 pp、Accuracy −0.41 pp、Score −0.0088；只有 Score gap改善 0.0041 |
+| 判定 | 主要絕對指標均未超越 8F，同日樣本集中於 batch並非主要 OOS瓶頸；停止 date／ticker interleaved scheduling細調 |
+
+### 3.25 8M Long Branch last-state pooling（2026-07-24）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `REJECTED`；使用者已退回 8F architecture |
+| 程式基準 | 使用者 ZIP `test-branch-1_20260724_100522_938ba56(2).zip`，SHA256 `ce70a6db63f83d189664b5b0ed01df4d0fe85d9bacc7b27f6b7c031e63d5a21c`，疊加 `breakout_quality_long_branch_last_pooling_8m_patch_20260724.zip`；結果數值由使用者報表提供 |
+| 唯一變更 | Long branch summary由 120-bar average＋300-bar average改為 last state＋120-bar average；參數量、head寬度與其他 branches不變 |
+| Dataset／Label | 不重建 feature bank、不 relabel |
+| Selection | 原始 PASS 54.81%、模型 PASS 84.65%、PASS Precision 57.75%、Lift +2.94 pp、Recall 89.20%、Accuracy 58.31%、Score 0.5728 |
+| OOS | 原始 PASS 55.63%、模型 PASS 66.10%、PASS Precision 57.58%、Lift +1.94 pp、Recall 68.40%、Accuracy 54.38%、Score 0.5370 |
+| Selection→OOS | Precision −0.17 pp、Recall −20.79 pp、模型 PASS −18.56 pp、Accuracy −3.93 pp、Score −0.0358 |
+| 相較 8F | OOS Precision −0.88 pp、Lift −0.89 pp、Recall −8.56 pp、模型 PASS −7.14 pp、Accuracy −2.38 pp、Score −0.0127；Precision、Accuracy、Score gaps均惡化 |
+| 判定 | 移除 Long 300-bar average並未改善泛化，反而降低所有主要 OOS指標；Long branch last-state pooling路線停止 |
+
+### 3.26 8O Zero-initialized gated temporal pooling（2026-07-24）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；尚未取得 Selection／OOS結果，不預先判定有效 |
+| 程式基準 | 使用者 ZIP `test-branch-1_20260724_100522_938ba56(3).zip`，SHA256 `ce70a6db63f83d189664b5b0ed01df4d0fe85d9bacc7b27f6b7c031e63d5a21c` |
+| Architecture | `multiscale_cnn_sequence_only_gated_pool_v1`；8F `multiscale_cnn_sequence_only_v1`仍是實證基準 |
+| 唯一變更 | 每個 branch新增一個 1×1 scalar temporal gate；window=0仍取 last state，其他既有 20／60／120／300-bar windows改以該 branch gate的 softmax weights加權，不改 summary數量或 head寬度 |
+| 初始函數 | 三個 gates的 weight／bias皆為 0，因此初始 softmax為均勻分布，模型起始行為等價於 8F fixed mean pooling；訓練後才可學習時間位置權重 |
+| 參數量 | 8F 23,394 → 8O 23,445，只增加 `3 × (16 weights + 1 bias) = 51` |
+| 固定條件 | unique-group sampling、batch 128、patience 1、selected-epochs refit、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、seed 42、threshold 0.5、固定百分比 Label、class/time weight=`none`均不變 |
+| Dataset／Label | 不重建 feature bank、不 relabel |
+| 採用條件 | 相較 8F，OOS Precision／Accuracy／Score至少兩項改善，Recall不得下降超過 3 pp，且固定 coverage排序指標後續不得顯示只是 calibration shift |
+| 下一步 | 先取得 8O完整 OOS；若仍無改善，再實作 8P raw＋window-normalized dual-path，之後停止現有 multiscale CNN微調並轉向 InceptionTime／ModernTCN |
 
 ---
 
@@ -444,7 +488,9 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 21. Unique-group batch size 由 128 降至 64，或繼續細調 32／64／96 等較小 batch；8H 已證明 optimizer updates 加倍仍未提高 OOS Precision／Lift。
 22. Unique-group matched optimizer steps final refit；8I 雖提高 OOS Precision 0.65 pp，但 Recall、Accuracy、Score與主要泛化落差均明顯低於 8F。
 23. 直接採用 best inner-validation checkpoint；8J 的 OOS Precision僅比 8F 高 0.04 pp，但 Recall、模型 PASS、Accuracy 與 Score 明顯下降。停止繼續變形 Final Refit mode。
-24. 完整日期等權 `1 / 當日 group 數`；8K 在正式 threshold 0.5 下幾乎全部判 PASS，Precision Lift只剩 +0.45 pp。不得依已查看的 OOS 改用 threshold 0.55，也不再增加 patience 或固定長 epochs。
+24. 完整日期等權 `1 / 當日 group 數` 作為 threshold 0.5正式模型；8K 在此操作點幾乎全部判 PASS。8K@0.55只保留固定門檻的 forward-validation候選，不再用既有 OOS細調門檻。
+25. Date-diverse／ticker-diverse batch scheduling；8L 所有主要 OOS絕對指標均未超越 8F。
+26. Long branch last-state pooling；8M 的 OOS Precision、Recall、Accuracy、Score及泛化 gaps均低於 8F。
 
 ---
 
@@ -561,16 +607,28 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 #### 優先 8L：Date-diverse batch scheduling
 
+`REJECTED`。相較 8F，OOS Precision／Lift各 −0.05 pp、Recall −2.16 pp、Accuracy −0.41 pp、Score −0.0088；停止 batch scheduling細調。
+
+#### 優先 8M：Long Branch last-state pooling
+
+`REJECTED`。相較 8F，OOS Precision −0.88 pp、Recall −8.56 pp、Accuracy −2.38 pp、Score −0.0127；移除 Long 300-bar average無助於泛化。
+
+#### 優先 8O：Zero-initialized gated temporal pooling
+
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `PLANNED` |
-| 基準 | 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / batch 128 / patience 1 / selected_epochs / threshold 0.5` |
-| 唯一變更 | 不改任何 sample weight；每個 epoch 仍完整使用全部 unique groups一次，但以 date-interleaved順序建立 batches，優先讓同一 batch 的 groups來自不同交易日 |
-| 目的 | 8K 顯示改變各日期總權重會扭曲 score calibration；8L 改只降低同日高度相關樣本集中於同一 optimizer update，不改整體 training objective、class prior、每 group總貢獻或 optimizer step數 |
-| 固定條件 | Architecture、training rows、unique-group representative、batch 128、patience 1、selected-epochs refit、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、seed 42、threshold 0.5、class/time weight=`none` 全部不變 |
-| Validation／OOS | 完整 rows、原 group-weighted評估，無日期權重 |
+| 狀態 | `IMPLEMENTED`；尚未取得完整 OOS |
+| Architecture | `multiscale_cnn_sequence_only_gated_pool_v1` |
+| 唯一變更 | 每個 branch新增一個零初始化 scalar temporal gate；現有非零 window averages改為同一 branch內的 gated softmax weighted pooling，last-state summaries不變 |
+| 初始等價 | Gate logits全為 0，初始輸出等價於 8F mean pooling，避免因新增模組改變起始操作點 |
+| 參數量 | 23,445，比 8F多 51 |
+| 固定條件 | 8F unique-group sampling、batch 128、patience 1、selected-epochs、Adam、LR 0.0003、threshold 0.5、seed 42全部不變 |
 | Dataset／Label | 不需重建 feature bank、不需 relabel |
-| 採用條件 | 相較 8F，OOS Precision／Accuracy／Score至少兩項改善，Recall不得下降超過 3 pp，且主要 Selection→OOS gaps不得整體惡化 |
+| 採用條件 | OOS Precision／Accuracy／Score至少兩項改善，Recall不得下降超過 3 pp，主要 gaps不得整體惡化 |
+
+#### 後續 8P：Raw＋window-normalized dual-path
+
+`PLANNED`，只有 8O完成後才實作。若 8P仍不能改善固定 coverage排序能力，停止現有 multiscale CNN微調，轉向 InceptionTime、ModernTCN與自監督時序 encoder。
 
 
 ---
@@ -594,8 +652,11 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 8H unique-group batch size 64（REJECTED；已退回 batch size 128）
 → 8I unique-group matched optimizer steps refit（REJECTED；已退回 selected_epochs）
 → 8J direct best inner-validation checkpoint（REJECTED；已退回 selected_epochs）
-→ 8K unique-group date-density balancing（REJECTED；已退回 8F）
-→ 8L date-diverse batch scheduling（PLANNED）
+→ 8K unique-group date-density balancing（threshold 0.5 REJECTED；0.55保留 forward-validation候選）
+→ 8L date-diverse batch scheduling（REJECTED）
+→ 8M Long Branch last-state pooling（REJECTED）
+→ 8O zero-initialized gated temporal pooling（IMPLEMENTED）
+→ 8P raw＋window-normalized dual-path（PLANNED）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
