@@ -23,10 +23,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260724_100522_938ba56(3).zip`，SHA256 `ce70a6db63f83d189664b5b0ed01df4d0fe85d9bacc7b27f6b7c031e63d5a21c`，本輪實作 8O learnable temporal pooling |
-| SHA256 | 來源 ZIP：`ce70a6db63f83d189664b5b0ed01df4d0fe85d9bacc7b27f6b7c031e63d5a21c` |
-| 程式版本範圍 | 8L date-diverse batches 與 8M Long last-state pooling 均已取得結果並淘汰；active policy 切至 8O gated temporal pooling，尚未取得結果 |
-| Policy 預設 | architecture=`multiscale_cnn_sequence_only_gated_pool_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；early-stopping patience=`1`；final model mode=`selected_epochs`；time weight=`none`；training weight reduction=`batch_weight_sum` |
+| 基準 ZIP | `test-branch-1_20260724_135343_4cead4c.zip`，SHA256 `a03340f1ed2abf56e4bb20dbbec378a649a19477d0f14f7c2f0d71bf2ac928b9`；8O 已取得結果並退回 8F |
+| SHA256 | 來源 ZIP：`a03340f1ed2abf56e4bb20dbbec378a649a19477d0f14f7c2f0d71bf2ac928b9` |
+| 程式版本範圍 | 8L、8M、8O 均已取得結果並淘汰；active policy 與程式已退回 8F，8O 只保留文件中的歷史結果 |
+| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；early-stopping patience=`1`；final model mode=`selected_epochs`；time weight=`none`；training weight reduction=`batch_weight_sum` |
 | 當前最佳研究模型 | 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / patience 1 / selected_epochs` |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
@@ -448,16 +448,17 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；尚未取得 Selection／OOS結果，不預先判定有效 |
-| 程式基準 | 使用者 ZIP `test-branch-1_20260724_100522_938ba56(3).zip`，SHA256 `ce70a6db63f83d189664b5b0ed01df4d0fe85d9bacc7b27f6b7c031e63d5a21c` |
-| Architecture | `multiscale_cnn_sequence_only_gated_pool_v1`；8F `multiscale_cnn_sequence_only_v1`仍是實證基準 |
-| 唯一變更 | 每個 branch新增一個 1×1 scalar temporal gate；window=0仍取 last state，其他既有 20／60／120／300-bar windows改以該 branch gate的 softmax weights加權，不改 summary數量或 head寬度 |
-| 初始函數 | 三個 gates的 weight／bias皆為 0，因此初始 softmax為均勻分布，模型起始行為等價於 8F fixed mean pooling；訓練後才可學習時間位置權重 |
-| 參數量 | 8F 23,394 → 8O 23,445，只增加 `3 × (16 weights + 1 bias) = 51` |
-| 固定條件 | unique-group sampling、batch 128、patience 1、selected-epochs refit、Adam、LR 0.0003、weight decay 0.0001、gradient clip 1.0、seed 42、threshold 0.5、固定百分比 Label、class/time weight=`none`均不變 |
+| 狀態 | `REJECTED`；active policy 已退回 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling` |
+| 程式基準 | 8O 結果 ZIP `test-branch-1_20260724_135343_4cead4c.zip`，SHA256 `a03340f1ed2abf56e4bb20dbbec378a649a19477d0f14f7c2f0d71bf2ac928b9`；使用者已退回 8F policy |
+| Architecture | `multiscale_cnn_sequence_only_gated_pool_v1`；目前退回 ZIP 未保留該架構程式，僅由本紀錄保存歷史規格與結果；正式入口為 `multiscale_cnn_sequence_only_v1` |
+| 唯一變更 | 每個 branch新增一個零初始化 1×1 scalar temporal gate；20／60／120／300-bar fixed mean pooling改為同一 branch gate的 softmax weighted pooling，last-state summaries不變 |
 | Dataset／Label | 不重建 feature bank、不 relabel |
-| 採用條件 | 相較 8F，OOS Precision／Accuracy／Score至少兩項改善，Recall不得下降超過 3 pp，且固定 coverage排序指標後續不得顯示只是 calibration shift |
-| 下一步 | 先取得 8O完整 OOS；若仍無改善，再實作 8P raw＋window-normalized dual-path，之後停止現有 multiscale CNN微調並轉向 InceptionTime／ModernTCN |
+| Selection | 原始 PASS 54.81%、模型 PASS 88.90%、PASS Precision 56.73%、Lift +1.92 pp、Recall 92.02%、Accuracy 57.16%、Score 0.5844 |
+| OOS | 原始 PASS 55.63%、模型 PASS 71.24%、PASS Precision 58.33%、Lift +2.70 pp、Recall 74.70%、Accuracy 56.24%、Score 0.5508 |
+| Selection→OOS | Precision +1.61 pp、Recall −17.32 pp、模型 PASS −17.66 pp、Accuracy −0.91 pp、Score −0.0336 |
+| 相較 8F | OOS Precision／Lift各 −0.13 pp、Recall −2.26 pp、模型 PASS −2.00 pp、Accuracy −0.52 pp、Score +0.0011；Precision gap改善 0.05 pp，但 Recall、Accuracy與 Score gaps分別惡化 1.99、0.21、0.0049 |
+| 判定 | 只有平均 Score極小幅增加，Precision、Recall、Accuracy與主要泛化 gaps均未形成 Pareto improvement；learnable pooling未突破現有 fixed pooling前緣，不再細調 gate hidden width、temperature或初始化 |
+| 下一步 | 進入現有 multiscale CNN 最後一項 8P raw＋window-normalized dual-path；若仍無固定 coverage排序改善，停止本模型家族微調並轉向 InceptionTime／ModernTCN／自監督 encoder |
 
 ---
 
@@ -491,6 +492,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 24. 完整日期等權 `1 / 當日 group 數` 作為 threshold 0.5正式模型；8K 在此操作點幾乎全部判 PASS。8K@0.55只保留固定門檻的 forward-validation候選，不再用既有 OOS細調門檻。
 25. Date-diverse／ticker-diverse batch scheduling；8L 所有主要 OOS絕對指標均未超越 8F。
 26. Long branch last-state pooling；8M 的 OOS Precision、Recall、Accuracy、Score及泛化 gaps均低於 8F。
+27. Zero-initialized gated temporal pooling；8O 的 OOS Precision、Recall、Accuracy均低於 8F，只有平均 Score增加 0.0011，主要 gaps未改善。停止 gate width、temperature、初始化與 attention pooling細調。
 
 ---
 
@@ -615,20 +617,19 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 #### 優先 8O：Zero-initialized gated temporal pooling
 
-| 項目 | 固定設計 |
-|---|---|
-| 狀態 | `IMPLEMENTED`；尚未取得完整 OOS |
-| Architecture | `multiscale_cnn_sequence_only_gated_pool_v1` |
-| 唯一變更 | 每個 branch新增一個零初始化 scalar temporal gate；現有非零 window averages改為同一 branch內的 gated softmax weighted pooling，last-state summaries不變 |
-| 初始等價 | Gate logits全為 0，初始輸出等價於 8F mean pooling，避免因新增模組改變起始操作點 |
-| 參數量 | 23,445，比 8F多 51 |
-| 固定條件 | 8F unique-group sampling、batch 128、patience 1、selected-epochs、Adam、LR 0.0003、threshold 0.5、seed 42全部不變 |
-| Dataset／Label | 不需重建 feature bank、不需 relabel |
-| 採用條件 | OOS Precision／Accuracy／Score至少兩項改善，Recall不得下降超過 3 pp，主要 gaps不得整體惡化 |
+`REJECTED`。相較 8F，OOS Precision／Lift各 −0.13 pp、Recall −2.26 pp、模型 PASS −2.00 pp、Accuracy −0.52 pp，只有平均 Score +0.0011；Precision gap僅改善 0.05 pp，但 Recall、Accuracy與 Score gaps均惡化。停止 gated／attention pooling細調。
 
 #### 後續 8P：Raw＋window-normalized dual-path
 
-`PLANNED`，只有 8O完成後才實作。若 8P仍不能改善固定 coverage排序能力，停止現有 multiscale CNN微調，轉向 InceptionTime、ModernTCN與自監督時序 encoder。
+| 項目 | 固定設計 |
+|---|---|
+| 狀態 | `PLANNED`；現有 multiscale CNN最後一項結構實驗 |
+| 唯一變更 | 保留原 10 維 raw／level sequence path，新增由同一 300-bar window產生的 normalized sequence path，再於 branch summary後融合；不加入靜態 context |
+| Normalization | 每個 sample、每個 channel只使用該 300-bar window內已知資料計算 location／scale；必須設 epsilon與常數 channel防護，不讀取未來 bars |
+| 固定條件 | 8F unique-group sampling、batch 128、patience 1、selected-epochs、Adam、LR 0.0003、threshold 0.5、seed 42不變 |
+| Dataset／Label | 優先由既有 feature bank於 batch runtime衍生 normalized path；不重建 labels，不新增未來資訊 |
+| 採用條件 | 必須在固定 coverage或事前固定 threshold下改善真正排序能力，不能只靠 score calibration移動；OOS Precision／Accuracy／Score至少兩項改善且 Recall不得明顯下降 |
+| 停止條件 | 若8P仍無明顯提升，停止 `multiscale_cnn_sequence_only_v1` 家族微調，下一階段改做單一 InceptionTime、ModernTCN與自監督時序 encoder |
 
 
 ---
@@ -655,8 +656,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 8K unique-group date-density balancing（threshold 0.5 REJECTED；0.55保留 forward-validation候選）
 → 8L date-diverse batch scheduling（REJECTED）
 → 8M Long Branch last-state pooling（REJECTED）
-→ 8O zero-initialized gated temporal pooling（IMPLEMENTED）
-→ 8P raw＋window-normalized dual-path（PLANNED）
+→ 8O zero-initialized gated temporal pooling（REJECTED）
+→ 8P raw＋window-normalized dual-path（PLANNED；現有 multiscale CNN 最後一項）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
