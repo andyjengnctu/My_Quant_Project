@@ -23,10 +23,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260724_135343_4cead4c.zip`，SHA256 `a03340f1ed2abf56e4bb20dbbec378a649a19477d0f14f7c2f0d71bf2ac928b9`；8O 已取得結果並退回 8F |
-| SHA256 | 來源 ZIP：`a03340f1ed2abf56e4bb20dbbec378a649a19477d0f14f7c2f0d71bf2ac928b9` |
-| 程式版本範圍 | 8L、8M、8O 均已取得結果並淘汰；active policy 與程式已退回 8F，8O 只保留文件中的歷史結果 |
-| Policy 預設 | architecture=`multiscale_cnn_sequence_only_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；early-stopping patience=`1`；final model mode=`selected_epochs`；time weight=`none`；training weight reduction=`batch_weight_sum` |
+| 基準 ZIP | `test-branch-1_20260724_140019_f3aa36d.zip`，SHA256 `556dea38770f6f3cae5e11fd9136d3d7a0a2cfc538606e4d944176fffc98a7f3`；在已退回 8F 的程式上實作 8P |
+| SHA256 | 來源 ZIP：`556dea38770f6f3cae5e11fd9136d3d7a0a2cfc538606e4d944176fffc98a7f3` |
+| 程式版本範圍 | 8L、8M、8O 均已淘汰；8P raw＋window-normalized dual-path 已實作並設為 active architecture，尚未取得 Selection／OOS 結果 |
+| Policy 預設 | architecture=`multiscale_cnn_sequence_only_dual_path_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；early-stopping patience=`1`；final model mode=`selected_epochs`；time weight=`none`；training weight reduction=`batch_weight_sum` |
 | 當前最佳研究模型 | 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / patience 1 / selected_epochs` |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
@@ -460,6 +460,24 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 判定 | 只有平均 Score極小幅增加，Precision、Recall、Accuracy與主要泛化 gaps均未形成 Pareto improvement；learnable pooling未突破現有 fixed pooling前緣，不再細調 gate hidden width、temperature或初始化 |
 | 下一步 | 進入現有 multiscale CNN 最後一項 8P raw＋window-normalized dual-path；若仍無固定 coverage排序改善，停止本模型家族微調並轉向 InceptionTime／ModernTCN／自監督 encoder |
 
+### 3.27 8P Raw＋window-normalized dual-path（2026-07-24）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；尚未取得 Selection／OOS 結果，目前實證最佳仍為 8F |
+| 程式基準 | `test-branch-1_20260724_140019_f3aa36d.zip`，SHA256 `556dea38770f6f3cae5e11fd9136d3d7a0a2cfc538606e4d944176fffc98a7f3` |
+| Architecture | `multiscale_cnn_sequence_only_dual_path_v1`；與 8F 使用相同 `unique_group_sampling` profile，工件依 architecture 隔離 |
+| 唯一變更 | 保留原 10 維 raw／level 三分支 CNN，新增同一 300-bar 視窗逐 sample／逐 channel z-score 的第二組三分支 CNN；每個 branch 的 raw／normalized summaries 經獨立 linear fusion後再送入原 32 維 head |
+| Normalization | 只使用該事件已知的 300 bars；`mean` 與 population standard deviation 逐 sample／channel計算，epsilon=`1e-5`，常數 channel輸出全零，不讀取事件日之後資料 |
+| 受控初始化 | Raw branches與 head依相同 seed保持 8F初始權重；三個 fusion初始化為左側 identity、normalized側全零及 bias全零，因此 eval-mode初始 logits精確等同8F；第一個 backward normalized fusion即可收到梯度，融合開啟後 normalized branches可學習 |
+| Parameters | 8F 23,394 → 8P 49,858；增加來自第二組三分支 CNN與三個 branch-level fusion，receptive field仍為244 bars，head input/output寬度不變 |
+| 固定條件 | unique `ticker/date` sampling、batch 128、patience 1、`selected_epochs`、Adam、LR 0.0003、weight decay 0.0001、threshold 0.5、seed 42、class/time weight=`none` |
+| Dataset／Label | 不重建 feature bank、不新增 sidecar、不 relabel；normalized path於 model forward由既有 feature-bank batch即時計算 |
+| 結果 | 待使用者完成完整 workflow；取得結果前不得標記為有效或無效 |
+| 採用條件 | 必須在固定 threshold或固定 coverage下改善真正排序能力；OOS Precision／Accuracy／Score至少兩項高於8F，Recall不得明顯下降，且不能只靠 score calibration移動 |
+| 下一步 | 若8P仍未形成明顯改善，停止現有 multiscale CNN家族微調，轉向單一 InceptionTime，再依序測 ModernTCN與自監督時序 encoder |
+
+
 ---
 
 ## 4. 已排除或暫停的方向
@@ -498,7 +516,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。後續訓練方法與輸入實驗預設固定使用目前 accepted baseline architecture `multiscale_cnn_sequence_only_v1`；只有明確重現歷史對照時才使用 `multiscale_cnn_v1`。Seed 42、threshold 0.5、no class weight與 no time weight 固定不變；Final Refit 正式基準維持 `selected_epochs`。8K 已淘汰；下一步只改 batch 內日期組成，不再依本次 OOS 調 threshold。
+所有實驗一次只改一項。實證比較基準固定為8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling`；目前 active architecture為8P dual-path，Seed 42、threshold 0.5、no class weight、no time weight與 `selected_epochs`均不變。8P結果未出前不得把其較大容量視為改善；若失敗即停止本 multiscale CNN家族微調。
 
 ### 優先 6A：AdamW only
 
@@ -623,7 +641,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `PLANNED`；現有 multiscale CNN最後一項結構實驗 |
+| 狀態 | `IMPLEMENTED`；active architecture 已切換，結果待完整 workflow |
 | 唯一變更 | 保留原 10 維 raw／level sequence path，新增由同一 300-bar window產生的 normalized sequence path，再於 branch summary後融合；不加入靜態 context |
 | Normalization | 每個 sample、每個 channel只使用該 300-bar window內已知資料計算 location／scale；必須設 epsilon與常數 channel防護，不讀取未來 bars |
 | 固定條件 | 8F unique-group sampling、batch 128、patience 1、selected-epochs、Adam、LR 0.0003、threshold 0.5、seed 42不變 |
@@ -657,7 +675,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 8L date-diverse batch scheduling（REJECTED）
 → 8M Long Branch last-state pooling（REJECTED）
 → 8O zero-initialized gated temporal pooling（REJECTED）
-→ 8P raw＋window-normalized dual-path（PLANNED；現有 multiscale CNN 最後一項）
+→ 8P raw＋window-normalized dual-path（IMPLEMENTED；等待完整 Selection／OOS 結果）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
