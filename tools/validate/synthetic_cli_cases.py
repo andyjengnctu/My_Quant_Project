@@ -152,6 +152,11 @@ def validate_dataset_cli_contract_case(_base_params):
         early_stopping_patience=5,
         early_stopping_min_delta=0.0,
         use_inner_validation=True,
+        device="cpu",
+        mixed_precision=False,
+        mixed_precision_dtype="float16",
+        deterministic_algorithms=True,
+        allow_tf32=False,
         evaluate_oos=True,
     )
     workflow_calls = []
@@ -211,6 +216,29 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_propagates_parallel_split_evaluation",
         True,
         "--parallel-split-evaluation" in workflow_calls[0][1],
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_propagates_torch_execution_contract",
+        True,
+        (
+            "--device" in workflow_calls[0][1]
+            and "cpu" in workflow_calls[0][1]
+            and "--no-mixed-precision" in workflow_calls[0][1]
+            and "--mixed-precision-dtype" in workflow_calls[0][1]
+            and "float16" in workflow_calls[0][1]
+            and "--deterministic-algorithms" in workflow_calls[0][1]
+            and "--no-allow-tf32" in workflow_calls[0][1]
+            and "--device" in workflow_calls[1][1]
+            and "cpu" in workflow_calls[1][1]
+            and "--no-mixed-precision" in workflow_calls[1][1]
+            and "--mixed-precision-dtype" in workflow_calls[1][1]
+            and "float16" in workflow_calls[1][1]
+            and "--deterministic-algorithms" in workflow_calls[1][1]
+            and "--no-allow-tf32" in workflow_calls[1][1]
+        ),
     )
     add_check(
         results,
@@ -342,6 +370,8 @@ def validate_dataset_cli_contract_case(_base_params):
         use_inner_validation=True,
         final_train_loss=0.674436,
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        time_weight_mode="none",
+        training_weight_reduction="batch_weight_sum",
         inner_train_sampling_summary={
             "source_row_count": 538887,
             "sampled_row_count": 16832,
@@ -432,6 +462,11 @@ def validate_dataset_cli_contract_case(_base_params):
         inner_validation_months=18,
         early_stopping_patience=4,
         early_stopping_min_delta=0.001,
+        device="cpu",
+        mixed_precision=False,
+        mixed_precision_dtype="float16",
+        deterministic_algorithms=True,
+        allow_tf32=False,
     )
     workflow_prompt_labels = []
     workflow_bool_answers = iter((False, False))
