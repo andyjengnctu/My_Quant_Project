@@ -77,10 +77,10 @@ BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "multiscale_cnn_sequence_only_v1"
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"
 ```
 
-- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前 active architecture 包含 accepted 基準 `multiscale_cnn_sequence_only_v1` 與歷史比較架構 `multiscale_cnn_v1`。8A 保留相同的 300×10 Level sequence、三個時間尺度 branches、pooling 與 head 寬度，只移除原本拼接至 head 的 4 維 event context。
+- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前 active與accepted實證基準均為8F `multiscale_cnn_sequence_only_v1`。8P `multiscale_cnn_sequence_only_dual_path_v1` 已由完整OOS淘汰，僅供舊checkpoint／manifest重建與歷史重現。
 - `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述 optimizer、LR schedule、augmentation 與 training sampling unit。profile 定義集中在 `config/breakout_quality_experiments.py`：目前 active 與實證基準均為 8F `unique_group_sampling / time_weight=none`。8K `unique_group_date_balanced` 已由完整 OOS 淘汰，只保留歷史重現；8J direct best inner checkpoint 同樣只供歷史重現。`baseline`、`adamw_only`、`adam_warmup_cosine`、`history_masking_only` 保留為歷史 profile。
-- `multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
-- AdamW、scheduler、augmentation 與 sampling 等訓練方法不再建立假模型版本。結構或輸入表示真正改變時才新增具描述性的 architecture；目前 active 與實證研究基準均為 8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / batch_size=128 / time_weight=none / patience=1 / final_refit=selected_epochs`。8G patience 5、8H batch size 64、8I matched optimizer steps、8J direct best checkpoint 與 8K date-balanced weighting 均因完整 OOS整體退步而淘汰。
+- `multiscale_cnn_sequence_only_dual_path_v1`、`multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
+- AdamW、scheduler、augmentation 與 sampling 等訓練方法不再建立假模型版本。結構或輸入表示真正改變時才新增具描述性的 architecture；目前active與實證研究基準均為8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling / batch_size=128 / time_weight=none / patience=1 / final_refit=selected_epochs`。8P dual-path與8G～8O各實驗均因完整OOS未形成整體改善而淘汰；下一模型家族為9A單一InceptionTime。
 - Dataset、feature bank、future-path cache、4 維 event context arrays 與 labels 都可直接沿用，不需重建或 relabel；sequence-only model 在 forward 時明確不讀取 event context。8F 在 Inner Train／Final Refit 只保留每個 `ticker/date` 的最小原始 row index，batch size 128 因而代表 128 個 unique groups；early-stopping patience 固定為 1。Validation、Selection、OOS 與報表仍使用完整 rows及既有 `1/group_size` 口徑。每個 architecture/profile 使用獨立工件路徑。
 
 - `multiscale_cnn_sequence_only_v1` 的 trainable parameters 比 v1 少 `4 × 32 = 128`，差異只來自 head 第一層不再接收 `high_len_norm`、`breakout_level_to_close`、`close_to_breakout_level`、`high_to_breakout_level`。

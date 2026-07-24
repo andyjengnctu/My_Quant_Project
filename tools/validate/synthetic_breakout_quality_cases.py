@@ -118,6 +118,7 @@ from filters.breakout_quality.models import (
 from filters.breakout_quality.models.multiscale_cnn import (
     build_market_relative_return_delta_representation,
     build_return_delta_representation,
+    build_window_zscore_representation,
 )
 from filters.breakout_quality.models.regime_context import (
     REGIME_CONTEXT_ANNUALIZATION_BARS,
@@ -384,6 +385,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     sequence_only_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_sequence_only_v1"
     )
+    dual_path_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_sequence_only_dual_path_v1"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
@@ -396,6 +400,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     multiscale_v8_parameter_count = count_trainable_parameters(multiscale_v8_model)
     regime_context_parameter_count = count_trainable_parameters(regime_context_model)
     sequence_only_parameter_count = count_trainable_parameters(sequence_only_model)
+    dual_path_parameter_count = count_trainable_parameters(dual_path_model)
     residual_parameter_count = count_trainable_parameters(residual_model)
     add_check(
         results,
@@ -623,6 +628,155 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "sequence_only_logits_are_independent_of_dataset_context_values",
         True,
         bool(torch.equal(sequence_logits_a, sequence_logits_b)),
+    )
+    dual_path_spec = get_model_spec(
+        "multiscale_cnn_sequence_only_dual_path_v1"
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "dual_path_architecture_adds_raw_and_window_zscore_paths_without_context",
+        (
+            True,
+            ("raw_level", "window_zscore"),
+            1e-5,
+            sequence_only_spec.receptive_field_bars,
+        ),
+        (
+            dual_path_parameter_count > sequence_only_parameter_count,
+            dual_path_spec.sequence_input_paths,
+            dual_path_spec.window_normalization_epsilon,
+            dual_path_spec.receptive_field_bars,
+        ),
+    )
+    normalization_input = torch.stack(
+        [
+            torch.arange(1, 7, dtype=torch.float32),
+            torch.arange(1, 7, dtype=torch.float32) * 2.0 + 5.0,
+            torch.ones(6, dtype=torch.float32) * 3.0,
+        ],
+        dim=0,
+    ).unsqueeze(0)
+    normalized_window = build_window_zscore_representation(
+        torch, normalization_input, epsilon=1e-5
+    )
+    normalized_mean = torch.mean(normalized_window, dim=2)
+    normalized_std = torch.std(normalized_window[:, :2, :], dim=2, unbiased=False)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "window_zscore_is_per_sample_per_channel_and_constant_safe",
+        True,
+        bool(
+            torch.allclose(normalized_mean, torch.zeros_like(normalized_mean), atol=1e-6)
+            and torch.allclose(normalized_std, torch.ones_like(normalized_std), atol=1e-6)
+            and torch.equal(
+                normalized_window[:, 2, :],
+                torch.zeros_like(normalized_window[:, 2, :]),
+            )
+        ),
+    )
+    equivalence_features = torch.randn((4, 300, 10), dtype=torch.float32) * 0.03
+    equivalence_context_a = torch.randn((4, 4), dtype=torch.float32)
+    equivalence_context_b = torch.randn((4, 4), dtype=torch.float32)
+    torch.manual_seed(271828)
+    equivalence_base_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_sequence_only_v1"
+    )
+    torch.manual_seed(271828)
+    equivalence_dual_model = build_breakout_quality_model(
+        10, 4, architecture="multiscale_cnn_sequence_only_dual_path_v1"
+    )
+    equivalence_base_model.eval()
+    equivalence_dual_model.eval()
+    with torch.no_grad():
+        equivalence_base_logits = equivalence_base_model(
+            equivalence_features, equivalence_context_a
+        )
+        equivalence_dual_logits_a = equivalence_dual_model(
+            equivalence_features, equivalence_context_a
+        )
+        equivalence_dual_logits_b = equivalence_dual_model(
+            equivalence_features, equivalence_context_b
+        )
+    shared_base_state_equal = all(
+        key in equivalence_dual_model.state_dict()
+        and tuple(value.shape)
+        == tuple(equivalence_dual_model.state_dict()[key].shape)
+        and torch.equal(value, equivalence_dual_model.state_dict()[key])
+        for key, value in equivalence_base_model.state_dict().items()
+    )
+    fusion_identity = True
+    for fusion in equivalence_dual_model.path_fusions:
+        width = int(fusion.out_features)
+        expected_weight = torch.zeros_like(fusion.weight)
+        expected_weight[:, :width] = torch.eye(
+            width, dtype=expected_weight.dtype, device=expected_weight.device
+        )
+        fusion_identity = fusion_identity and bool(
+            torch.equal(fusion.weight, expected_weight)
+            and torch.equal(fusion.bias, torch.zeros_like(fusion.bias))
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "dual_path_starts_as_exact_8f_function_and_ignores_dataset_context",
+        True,
+        bool(
+            shared_base_state_equal
+            and fusion_identity
+            and torch.equal(equivalence_base_logits, equivalence_dual_logits_a)
+            and torch.equal(equivalence_dual_logits_a, equivalence_dual_logits_b)
+        ),
+    )
+    equivalence_dual_model.train()
+    equivalence_dual_model.zero_grad(set_to_none=True)
+    first_dual_loss = equivalence_dual_model(
+        equivalence_features, equivalence_context_a
+    ).pow(2).mean()
+    first_dual_loss.backward()
+    normalized_fusion_gradient = sum(
+        float(
+            torch.sum(
+                torch.abs(
+                    fusion.weight.grad[:, int(fusion.out_features):]
+                )
+            ).item()
+        )
+        for fusion in equivalence_dual_model.path_fusions
+        if fusion.weight.grad is not None
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "dual_path_normalized_fusion_receives_first_step_gradient",
+        True,
+        normalized_fusion_gradient > 0.0,
+    )
+    with torch.no_grad():
+        for fusion in equivalence_dual_model.path_fusions:
+            fusion.weight[:, int(fusion.out_features):].fill_(0.01)
+    equivalence_dual_model.zero_grad(set_to_none=True)
+    second_dual_loss = equivalence_dual_model(
+        equivalence_features, equivalence_context_a
+    ).pow(2).mean()
+    second_dual_loss.backward()
+    normalized_branch_gradient = sum(
+        float(torch.sum(torch.abs(parameter.grad)).item())
+        for name, parameter in equivalence_dual_model.named_parameters()
+        if name.startswith("normalized_branches.") and parameter.grad is not None
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "dual_path_normalized_branches_receive_gradient_after_fusion_opens",
+        True,
+        normalized_branch_gradient > 0.0,
     )
     add_check(
         results,
@@ -1155,7 +1309,13 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
-        (("multiscale_cnn_v1", "multiscale_cnn_sequence_only_v1"), set(legacy_architectures)),
+        (
+            (
+                "multiscale_cnn_v1",
+                "multiscale_cnn_sequence_only_v1",
+            ),
+            set(legacy_architectures),
+        ),
         (tuple(ACTIVE_MODEL_ARCHITECTURES), set(LEGACY_MODEL_ARCHITECTURES)),
     )
     add_check(

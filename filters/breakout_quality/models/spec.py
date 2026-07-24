@@ -23,6 +23,7 @@ MULTISCALE_CNN_V7 = "multiscale_cnn_v7"
 MULTISCALE_CNN_V8 = "multiscale_cnn_v8"
 MULTISCALE_CNN_REGIME_CONTEXT_V1 = "multiscale_cnn_regime_context_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
+MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
@@ -36,6 +37,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_V8,
     MULTISCALE_CNN_REGIME_CONTEXT_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
+    MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     RESIDUAL_TCN_V1,
 )
 ACTIVE_MODEL_ARCHITECTURES = (
@@ -73,6 +75,8 @@ class BreakoutQualityModelSpec:
     derived_context_features: tuple[str, ...] = ()
     derived_context_lookback_bars: tuple[int, ...] = ()
     derived_context_annualization_bars: int | None = None
+    sequence_input_paths: tuple[str, ...] = ()
+    window_normalization_epsilon: float | None = None
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -119,6 +123,12 @@ class BreakoutQualityModelSpec:
         if self.derived_context_annualization_bars is not None:
             payload["derived_context_annualization_bars"] = int(
                 self.derived_context_annualization_bars
+            )
+        if self.sequence_input_paths:
+            payload["sequence_input_paths"] = list(self.sequence_input_paths)
+        if self.window_normalization_epsilon is not None:
+            payload["window_normalization_epsilon"] = float(
+                self.window_normalization_epsilon
             )
         return payload
 
@@ -193,6 +203,7 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         MULTISCALE_CNN_V8,
         MULTISCALE_CNN_REGIME_CONTEXT_V1,
         MULTISCALE_CNN_SEQUENCE_ONLY_V1,
+        MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     }:
         downsample_factors = (1, 2, 4)
         branch_kernel_sizes = ((3, 5), (9, 15), (31, 31))
@@ -203,6 +214,8 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         derived_context_features = ()
         derived_context_lookback_bars = ()
         derived_context_annualization_bars = None
+        sequence_input_paths = ()
+        window_normalization_epsilon = None
         if normalized == MULTISCALE_CNN_V1:
             branch_input_representations = ()
         elif normalized == MULTISCALE_CNN_V2:
@@ -234,6 +247,11 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
         elif normalized == MULTISCALE_CNN_SEQUENCE_ONLY_V1:
             branch_input_representations = ()
             use_dataset_context = False
+        elif normalized == MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1:
+            branch_input_representations = ()
+            use_dataset_context = False
+            sequence_input_paths = ("raw_level", "window_zscore")
+            window_normalization_epsilon = 1e-5
         else:
             raise AssertionError(f"未處理的 multiscale architecture: {normalized}")
         return BreakoutQualityModelSpec(
@@ -262,6 +280,8 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             derived_context_features=derived_context_features,
             derived_context_lookback_bars=derived_context_lookback_bars,
             derived_context_annualization_bars=derived_context_annualization_bars,
+            sequence_input_paths=sequence_input_paths,
+            window_normalization_epsilon=window_normalization_epsilon,
         )
 
     kernel_size = 3
@@ -312,6 +332,7 @@ __all__ = [
     "MULTISCALE_CNN_V8",
     "MULTISCALE_CNN_REGIME_CONTEXT_V1",
     "MULTISCALE_CNN_SEQUENCE_ONLY_V1",
+    "MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",
