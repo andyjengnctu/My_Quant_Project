@@ -872,7 +872,7 @@ def _oos_assessment_rows(payload: dict) -> list[dict]:
         selection.get("reject_specificity") or 0.0
     )
     specificity_judgement = (
-        f"提高 {_pp(abs(specificity_difference)).lstrip('+')}，但模型大量判定 REJECT 也會推高此值"
+        f"提高 {_pp(abs(specificity_difference)).lstrip('+')}；仍須搭配模型 REJECT 比例與 NPV 判讀"
         if specificity_difference >= 0
         else f"下降 {_pp(abs(specificity_difference)).lstrip('+')}，REJECT 辨識能力轉弱"
     )
