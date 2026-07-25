@@ -1419,6 +1419,8 @@
 | 2026-07-25 | B11 | 驗證300×10 Selection endpoint上限、stride與source/outer-policy fingerprint、OOS／Label拒絕、831,168 encoder參數凍結、642 head參數可更新、contrastive loss與strict reload後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | B11 | 9C將encoder optimizer／epochs／batch／LR／crop／mask／contrastive loss集中至命名pretraining profile，模型訓練治理契約改回PARTIAL | DONE -> PARTIAL | `config/breakout_quality_experiments.py` |
 | 2026-07-25 | B11 | 驗證pretraining profile名稱安全、參數範圍合法、optimizer由profile建立且正式payload與policy一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-25 | B11 | 最新bundle檢出TS2Vec pretraining dataset memory map在Windows暫存目錄清理前未釋放，synthetic suite資源生命週期契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/pretraining_store.py` |
+| 2026-07-25 | B11 | 驗證memory map可明確關閉、metadata-only驗證不保留檔案handle、失敗路徑自動釋放且pretrain以finally收斂後重新為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | T266 | 9A-GN canonical path轉為legacy唯讀，正式runtime輸出退回9A-BN architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-25 | T266 | 驗證GroupNorm舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A-BN active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-25 | T266 | 9B新增ModernTCN model spec、Torch execution與architecture-scoped canonical path，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |

@@ -507,6 +507,7 @@ def _pretraining_refresh_plan(
             expected_window_bars=int(DEFAULT_LABEL_POLICY.feature_window_bars),
             expected_max_tickers=max(0, int(max_tickers)),
             require_current_source=True,
+            load_windows=False,
         )
         rebuild_dataset = False
     except (OSError, ValueError, FileNotFoundError) as exc:

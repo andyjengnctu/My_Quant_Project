@@ -40,6 +40,16 @@ class BreakoutQualityPretrainedEncoderPaths:
     manifest: Path
 
 
+def close_pretraining_windows(windows: np.ndarray | None) -> None:
+    """Explicitly release a memory-mapped pretraining window array."""
+
+    if windows is None:
+        return
+    mmap_handle = getattr(windows, "_mmap", None)
+    if mmap_handle is not None and not mmap_handle.closed:
+        mmap_handle.close()
+
+
 def _safe_component(value: str, *, field_name: str) -> str:
     text = str(value).strip()
     if not text or text in {".", ".."} or Path(text).name != text:
@@ -158,7 +168,8 @@ def load_validated_pretraining_dataset(
     expected_window_bars: int,
     expected_max_tickers: int,
     require_current_source: bool,
-) -> tuple[dict[str, Any], np.ndarray, pd.DataFrame]:
+    load_windows: bool = True,
+) -> tuple[dict[str, Any], np.ndarray | None, pd.DataFrame]:
     paths = resolve_pretraining_dataset_paths(
         project_root,
         filter_id,
@@ -212,34 +223,40 @@ def load_validated_pretraining_dataset(
     _validate_file(paths.index, artifacts.get("index"), field_name="index")
 
     windows = np.load(paths.windows, mmap_mode="r", allow_pickle=False)
-    if windows.ndim != 3:
-        raise ValueError(f"pretraining windows 必須是 3D: {windows.shape}")
-    expected_shape = (
-        int(summary.get("window_count", -1)),
-        int(expected_window_bars),
-        len(FEATURE_COLUMNS),
-    )
-    if tuple(int(v) for v in windows.shape) != expected_shape:
-        raise ValueError(
-            f"pretraining windows shape 不一致: expected={expected_shape}, actual={windows.shape}"
+    keep_windows_open = False
+    try:
+        if windows.ndim != 3:
+            raise ValueError(f"pretraining windows 必須是 3D: {windows.shape}")
+        expected_shape = (
+            int(summary.get("window_count", -1)),
+            int(expected_window_bars),
+            len(FEATURE_COLUMNS),
         )
-    index = pd.read_csv(paths.index, dtype={"ticker": str})
-    if list(index.columns) != ["window_index", "ticker", "date"]:
-        raise ValueError("pretraining index columns 不一致")
-    if len(index) != len(windows):
-        raise ValueError("pretraining index row count 與 windows 不一致")
-    if not np.array_equal(index["window_index"].to_numpy(dtype=np.int64), np.arange(len(index))):
-        raise ValueError("pretraining index.window_index 必須連續且從 0 開始")
-    dates = pd.to_datetime(index["date"], errors="raise")
-    if dates.min().strftime("%Y-%m-%d") < str(expected_selection_start):
-        raise ValueError("pretraining dataset 含 Selection 開始日前的 window endpoint")
-    if dates.max().strftime("%Y-%m-%d") > str(expected_selection_end):
-        raise ValueError("pretraining dataset 含 Selection 結束日後的 window endpoint")
-    if require_current_source:
-        current_inventory = build_source_data_inventory(project_root, dataset_profile)
-        if summary.get("source_data_inventory") != current_inventory:
-            raise ValueError("pretraining dataset 來源 CSV inventory 已變更")
-    return summary, windows, index
+        if tuple(int(v) for v in windows.shape) != expected_shape:
+            raise ValueError(
+                f"pretraining windows shape 不一致: expected={expected_shape}, actual={windows.shape}"
+            )
+        index = pd.read_csv(paths.index, dtype={"ticker": str})
+        if list(index.columns) != ["window_index", "ticker", "date"]:
+            raise ValueError("pretraining index columns 不一致")
+        if len(index) != len(windows):
+            raise ValueError("pretraining index row count 與 windows 不一致")
+        if not np.array_equal(index["window_index"].to_numpy(dtype=np.int64), np.arange(len(index))):
+            raise ValueError("pretraining index.window_index 必須連續且從 0 開始")
+        dates = pd.to_datetime(index["date"], errors="raise")
+        if dates.min().strftime("%Y-%m-%d") < str(expected_selection_start):
+            raise ValueError("pretraining dataset 含 Selection 開始日前的 window endpoint")
+        if dates.max().strftime("%Y-%m-%d") > str(expected_selection_end):
+            raise ValueError("pretraining dataset 含 Selection 結束日後的 window endpoint")
+        if require_current_source:
+            current_inventory = build_source_data_inventory(project_root, dataset_profile)
+            if summary.get("source_data_inventory") != current_inventory:
+                raise ValueError("pretraining dataset 來源 CSV inventory 已變更")
+        keep_windows_open = bool(load_windows)
+        return summary, windows if load_windows else None, index
+    finally:
+        if not keep_windows_open:
+            close_pretraining_windows(windows)
 
 
 def load_validated_pretrained_encoder_manifest(
@@ -286,6 +303,7 @@ __all__ = [
     "PRETRAINING_WINDOWS_FILENAME",
     "TS2VEC_PRETRAINING_FAMILY",
     "build_file_record",
+    "close_pretraining_windows",
     "compute_pretraining_configuration_fingerprint",
     "load_validated_pretrained_encoder_manifest",
     "load_validated_pretraining_dataset",

@@ -1198,6 +1198,7 @@ def _load_pretrained_encoder_for_training(
         expected_window_bars=int(DEFAULT_LABEL_POLICY.feature_window_bars),
         expected_max_tickers=expected_max_tickers,
         require_current_source=True,
+        load_windows=False,
     )
     paths = resolve_pretrained_encoder_paths(
         PROJECT_ROOT,

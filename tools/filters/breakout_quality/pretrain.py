@@ -44,6 +44,7 @@ from filters.breakout_quality.models.ts2vec import (
 )
 from filters.breakout_quality.pretraining_store import (
     build_file_record,
+    close_pretraining_windows,
     load_validated_pretraining_dataset,
     resolve_pretrained_encoder_paths,
 )
@@ -237,155 +238,158 @@ def main(argv=None) -> int:
         expected_max_tickers=expected_max_tickers,
         require_current_source=True,
     )
-    torch = __import__("torch")
-    nn = __import__("torch.nn", fromlist=["nn"])
-    execution_plan = resolve_torch_execution_plan(
-        torch,
-        requested_device=str(args.device),
-        mixed_precision=bool(args.mixed_precision),
-        mixed_precision_dtype=str(args.mixed_precision_dtype),
-        deterministic_algorithms=bool(args.deterministic_algorithms),
-        allow_tf32=bool(args.allow_tf32),
-    )
-    if execution_plan.device_type == "cpu":
-        torch.set_num_threads(1)
-    seed_torch(torch, seed=int(args.seed), plan=execution_plan)
-    spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    encoder = build_ts2vec_encoder(
-        nn,
-        torch,
-        feature_count=len(FEATURE_COLUMNS),
-        spec=spec,
-    ).to(execution_plan.device)
-    optimizer = _build_pretraining_optimizer(
-        torch,
-        encoder,
-        optimizer_name=pretraining_profile.optimizer_name,
-        lr=float(args.lr),
-        weight_decay=float(args.weight_decay),
-    )
-    scaler = build_grad_scaler(torch, execution_plan)
-    rng = np.random.default_rng(int(args.seed))
-    history = []
-    print(
-        "TS2Vec pretraining | "
-        f"windows={len(windows):,}, selection={outer_policy['selection_start_date']}~{outer_policy['selection_end_date']}, "
-        f"profile={pretraining_profile.name}, optimizer={pretraining_profile.optimizer_name}, "
-        f"device={execution_plan.device_type}, dtype={execution_plan.autocast_dtype_name}"
-    )
-    for epoch in range(1, int(args.epochs) + 1):
-        epoch_started = time.perf_counter()
-        order = rng.permutation(len(windows))
-        losses = []
-        encoder.train()
-        for start in range(0, len(order), int(args.batch_size)):
-            indices = order[start:start + int(args.batch_size)]
-            if len(indices) < 2:
-                continue
-            xb_np = np.asarray(windows[indices], dtype=np.float32)
-            xb = torch.from_numpy(xb_np).to(execution_plan.device).transpose(1, 2)
-            optimizer.zero_grad(set_to_none=True)
-            with autocast_context(torch, execution_plan):
-                z1, z2 = _aligned_views(
-                    torch,
-                    encoder,
-                    xb,
-                    rng=rng,
-                    min_crop=int(args.min_crop_bars),
-                    mask_probability=float(args.mask_probability),
-                )
-                loss = hierarchical_contrastive_loss(
-                    torch,
-                    z1,
-                    z2,
-                    alpha=float(args.contrastive_alpha),
-                    temporal_unit=int(args.temporal_unit),
-                )
-            if not bool(torch.isfinite(loss).item()):
-                raise FloatingPointError("TS2Vec pretraining loss 非有限值")
-            if scaler is None:
-                loss.backward()
-                if float(args.gradient_clip_norm) > 0.0:
-                    torch.nn.utils.clip_grad_norm_(
-                        encoder.parameters(), float(args.gradient_clip_norm)
+    try:
+        torch = __import__("torch")
+        nn = __import__("torch.nn", fromlist=["nn"])
+        execution_plan = resolve_torch_execution_plan(
+            torch,
+            requested_device=str(args.device),
+            mixed_precision=bool(args.mixed_precision),
+            mixed_precision_dtype=str(args.mixed_precision_dtype),
+            deterministic_algorithms=bool(args.deterministic_algorithms),
+            allow_tf32=bool(args.allow_tf32),
+        )
+        if execution_plan.device_type == "cpu":
+            torch.set_num_threads(1)
+        seed_torch(torch, seed=int(args.seed), plan=execution_plan)
+        spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+        encoder = build_ts2vec_encoder(
+            nn,
+            torch,
+            feature_count=len(FEATURE_COLUMNS),
+            spec=spec,
+        ).to(execution_plan.device)
+        optimizer = _build_pretraining_optimizer(
+            torch,
+            encoder,
+            optimizer_name=pretraining_profile.optimizer_name,
+            lr=float(args.lr),
+            weight_decay=float(args.weight_decay),
+        )
+        scaler = build_grad_scaler(torch, execution_plan)
+        rng = np.random.default_rng(int(args.seed))
+        history = []
+        print(
+            "TS2Vec pretraining | "
+            f"windows={len(windows):,}, selection={outer_policy['selection_start_date']}~{outer_policy['selection_end_date']}, "
+            f"profile={pretraining_profile.name}, optimizer={pretraining_profile.optimizer_name}, "
+            f"device={execution_plan.device_type}, dtype={execution_plan.autocast_dtype_name}"
+        )
+        for epoch in range(1, int(args.epochs) + 1):
+            epoch_started = time.perf_counter()
+            order = rng.permutation(len(windows))
+            losses = []
+            encoder.train()
+            for start in range(0, len(order), int(args.batch_size)):
+                indices = order[start:start + int(args.batch_size)]
+                if len(indices) < 2:
+                    continue
+                xb_np = np.asarray(windows[indices], dtype=np.float32)
+                xb = torch.from_numpy(xb_np).to(execution_plan.device).transpose(1, 2)
+                optimizer.zero_grad(set_to_none=True)
+                with autocast_context(torch, execution_plan):
+                    z1, z2 = _aligned_views(
+                        torch,
+                        encoder,
+                        xb,
+                        rng=rng,
+                        min_crop=int(args.min_crop_bars),
+                        mask_probability=float(args.mask_probability),
                     )
-                optimizer.step()
-            else:
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                if float(args.gradient_clip_norm) > 0.0:
-                    torch.nn.utils.clip_grad_norm_(
-                        encoder.parameters(), float(args.gradient_clip_norm)
+                    loss = hierarchical_contrastive_loss(
+                        torch,
+                        z1,
+                        z2,
+                        alpha=float(args.contrastive_alpha),
+                        temporal_unit=int(args.temporal_unit),
                     )
-                scaler.step(optimizer)
-                scaler.update()
-            losses.append(float(loss.detach().cpu().item()))
-        mean_loss = float(np.mean(losses)) if losses else float("nan")
-        if not math.isfinite(mean_loss):
-            raise FloatingPointError("TS2Vec epoch loss 非有限值")
-        elapsed = time.perf_counter() - epoch_started
-        history.append({"epoch": epoch, "loss": round(mean_loss, 6), "elapsed_sec": round(elapsed, 3)})
-        print(f"  Epoch {epoch:>2}/{int(args.epochs)} | Loss {mean_loss:.6f} | 耗時 {elapsed:.1f}s")
+                if not bool(torch.isfinite(loss).item()):
+                    raise FloatingPointError("TS2Vec pretraining loss 非有限值")
+                if scaler is None:
+                    loss.backward()
+                    if float(args.gradient_clip_norm) > 0.0:
+                        torch.nn.utils.clip_grad_norm_(
+                            encoder.parameters(), float(args.gradient_clip_norm)
+                        )
+                    optimizer.step()
+                else:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    if float(args.gradient_clip_norm) > 0.0:
+                        torch.nn.utils.clip_grad_norm_(
+                            encoder.parameters(), float(args.gradient_clip_norm)
+                        )
+                    scaler.step(optimizer)
+                    scaler.update()
+                losses.append(float(loss.detach().cpu().item()))
+            mean_loss = float(np.mean(losses)) if losses else float("nan")
+            if not math.isfinite(mean_loss):
+                raise FloatingPointError("TS2Vec epoch loss 非有限值")
+            elapsed = time.perf_counter() - epoch_started
+            history.append({"epoch": epoch, "loss": round(mean_loss, 6), "elapsed_sec": round(elapsed, 3)})
+            print(f"  Epoch {epoch:>2}/{int(args.epochs)} | Loss {mean_loss:.6f} | 耗時 {elapsed:.1f}s")
 
-    paths = resolve_pretrained_encoder_paths(
-        PROJECT_ROOT,
-        args.filter_id,
-        model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-        experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-    )
-    paths.output_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "schema_version": 1,
-            "encoder_state_dict": {
-                key: value.detach().cpu() for key, value in encoder.state_dict().items()
+        paths = resolve_pretrained_encoder_paths(
+            PROJECT_ROOT,
+            args.filter_id,
+            model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        )
+        paths.output_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "schema_version": 1,
+                "encoder_state_dict": {
+                    key: value.detach().cpu() for key, value in encoder.state_dict().items()
+                },
+                "feature_count": len(FEATURE_COLUMNS),
+                "model_spec": spec.as_manifest_payload(),
+                "pretraining_profile": pretraining_profile_payload,
+                "pretraining_dataset_fingerprint": pretrain_summary["configuration_fingerprint"],
             },
-            "feature_count": len(FEATURE_COLUMNS),
-            "model_spec": spec.as_manifest_payload(),
+            paths.encoder,
+        )
+        manifest = {
+            "schema_version": 1,
+            "filter_id": str(args.filter_id),
+            "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
             "pretraining_profile": pretraining_profile_payload,
+            "model_spec": spec.as_manifest_payload(),
+            "encoder": build_file_record(paths.encoder),
             "pretraining_dataset_fingerprint": pretrain_summary["configuration_fingerprint"],
-        },
-        paths.encoder,
-    )
-    manifest = {
-        "schema_version": 1,
-        "filter_id": str(args.filter_id),
-        "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-        "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-        "pretraining_profile": pretraining_profile_payload,
-        "model_spec": spec.as_manifest_payload(),
-        "encoder": build_file_record(paths.encoder),
-        "pretraining_dataset_fingerprint": pretrain_summary["configuration_fingerprint"],
-        "pretraining_dataset": {
-            "family": BREAKOUT_QUALITY_PRETRAINING_FAMILY,
-            "stride": int(args.stride),
-            "window_count": int(len(windows)),
-            "selection_start_date": str(outer_policy["selection_start_date"]),
-            "selection_end_date": str(outer_policy["selection_end_date"]),
-        },
-        "training": {
-            "optimizer_name": pretraining_profile.optimizer_name,
-            "epochs": int(args.epochs),
-            "batch_size": int(args.batch_size),
-            "learning_rate": float(args.lr),
-            "weight_decay": float(args.weight_decay),
-            "gradient_clip_norm": float(args.gradient_clip_norm),
-            "min_crop_bars": int(args.min_crop_bars),
-            "mask_probability": float(args.mask_probability),
-            "contrastive_alpha": float(args.contrastive_alpha),
-            "temporal_unit": int(args.temporal_unit),
-            "seed": int(args.seed),
-            "history": history,
-        },
-        "torch_execution": execution_plan.as_manifest_payload(),
-        "oos_windows_used": False,
-        "pass_reject_labels_used": False,
-        "elapsed_sec": round(time.perf_counter() - started, 3),
-    }
-    write_json(paths.manifest, manifest)
-    print(f"已輸出 pretrained encoder: {paths.encoder}")
-    print(f"已輸出 pretraining manifest: {paths.manifest}")
-    return 0
+            "pretraining_dataset": {
+                "family": BREAKOUT_QUALITY_PRETRAINING_FAMILY,
+                "stride": int(args.stride),
+                "window_count": int(len(windows)),
+                "selection_start_date": str(outer_policy["selection_start_date"]),
+                "selection_end_date": str(outer_policy["selection_end_date"]),
+            },
+            "training": {
+                "optimizer_name": pretraining_profile.optimizer_name,
+                "epochs": int(args.epochs),
+                "batch_size": int(args.batch_size),
+                "learning_rate": float(args.lr),
+                "weight_decay": float(args.weight_decay),
+                "gradient_clip_norm": float(args.gradient_clip_norm),
+                "min_crop_bars": int(args.min_crop_bars),
+                "mask_probability": float(args.mask_probability),
+                "contrastive_alpha": float(args.contrastive_alpha),
+                "temporal_unit": int(args.temporal_unit),
+                "seed": int(args.seed),
+                "history": history,
+            },
+            "torch_execution": execution_plan.as_manifest_payload(),
+            "oos_windows_used": False,
+            "pass_reject_labels_used": False,
+            "elapsed_sec": round(time.perf_counter() - started, 3),
+        }
+        write_json(paths.manifest, manifest)
+        print(f"已輸出 pretrained encoder: {paths.encoder}")
+        print(f"已輸出 pretraining manifest: {paths.manifest}")
+        return 0
+    finally:
+        close_pretraining_windows(windows)
 
 
 if __name__ == "__main__":

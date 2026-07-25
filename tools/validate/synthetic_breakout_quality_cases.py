@@ -129,6 +129,7 @@ from filters.breakout_quality.models import (
 from filters.breakout_quality.models.ts2vec import hierarchical_contrastive_loss
 from filters.breakout_quality.pretraining_store import (
     build_file_record as build_pretraining_file_record,
+    close_pretraining_windows,
     compute_pretraining_configuration_fingerprint,
     load_validated_pretrained_encoder_manifest,
     load_validated_pretraining_dataset,
@@ -636,6 +637,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 require_current_source=False,
             )
         )
+        loaded_windows_shape = tuple(int(value) for value in loaded_windows.shape)
+        close_pretraining_windows(loaded_windows)
+        loaded_windows_released = bool(
+            getattr(loaded_windows, "_mmap", None) is None
+            or loaded_windows._mmap.closed
+        )
         encoder_paths = resolve_pretrained_encoder_paths(
             pretrain_root,
             "synthetic_quality",
@@ -773,7 +780,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             bool(
                 loaded_pretraining_summary["configuration_fingerprint"]
                 == pretraining_fingerprint
-                and tuple(loaded_windows.shape) == (4, 300, 10)
+                and loaded_windows_shape == (4, 300, 10)
+                and loaded_windows_released
                 and len(loaded_index) == 4
                 and loaded_encoder_manifest["oos_windows_used"] is False
                 and loaded_encoder_manifest["pass_reject_labels_used"] is False
