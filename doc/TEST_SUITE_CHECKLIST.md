@@ -1443,3 +1443,5 @@
 | 2026-07-25 | T266 | 驗證TS2Vec舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A／8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-25 | T266 | 最新bundle檢出active InceptionTime report／artifact fixture仍混入TS2Vec pretraining欄位，造成header與tamper契約改回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-07-25 | T266 | active fixture移除跨架構pretraining污染，另以獨立legacy TS2Vec fixture驗證報表欄位、舊工件可讀與profile竄改fail-fast後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-25 | T266 | 最新bundle檢出legacy TS2Vec fixture的split檔已改為1筆train＋1筆validation，但manifest仍沿用2筆train的舊角色統計，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-07-25 | T266 | legacy TS2Vec split manifest改用同一份validation split record，再由實際檔案更新hash與size，驗證內容與selection role統計一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |

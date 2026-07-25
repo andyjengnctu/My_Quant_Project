@@ -4551,7 +4551,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 int(parameter.numel())
                 for parameter in legacy_ts2vec_model.parameters()
             )
-            legacy_ts2vec_split_record = dict(split_record)
+            legacy_ts2vec_split_record = dict(validation_split_record)
             legacy_ts2vec_split_record.update(
                 build_file_manifest(legacy_ts2vec_paths.split_path)
             )

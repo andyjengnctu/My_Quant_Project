@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260725_231247_de8cb42.zip`，SHA256 `245fa64cd206cefad4877c3cacde1aaa027b4754a763a343f3a12b32cf4b0dae`；formal bundle `to_chatgpt_bundle_20260725_231359_33c3de86.zip`，SHA256 `5d928f5cb4cf0412d2a95d71a1ece7d836dfe19797593682825c12a471b16517`。9C完整OOS結論仍為淘汰、active policy仍為9A；本輪只閉環修正9C退役後未同步的synthetic validator fixture與legacy清單，不改模型、Dataset、Label或runtime正式語意 |
-| SHA256 | 本輪來源 ZIP：`245fa64cd206cefad4877c3cacde1aaa027b4754a763a343f3a12b32cf4b0dae` |
+| 基準 ZIP | `test-branch-1_20260725_233017_5eb7f61.zip`，SHA256 `c5791e01bb9295dd8e73f7c0a139bff7d48a067dfba7c4928acff36e606f4fbd`；formal bundle `to_chatgpt_bundle_20260725_233059_eeeb6e8f.zip`，SHA256 `18913382562d8c21b6aa529e85ef623f0af4eeab7d73aded20663fd492c1f831`。9C完整OOS結論仍為淘汰、active policy仍為9A；本輪只閉環修正legacy TS2Vec synthetic artifact的split檔與manifest角色統計不一致，不改模型、Dataset、Label或runtime正式語意 |
+| SHA256 | 本輪來源 ZIP：`c5791e01bb9295dd8e73f7c0a139bff7d48a067dfba7c4928acff36e606f4fbd` |
 | 程式版本範圍 | 9C `ts2vec_frozen_linear_v1` 已取得完整結果並淘汰，轉為legacy read-only；active policy退回9A `inception_time_v1`排序／高品質基準。8F `multiscale_cnn_sequence_only_v1`保留高覆蓋參考；9A-GN、9B與9C均只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining profile與工件契約保留為legacy重建，不再由正式workflow啟動 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -755,6 +755,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 `REJECTED`。OOS PR-AUC 0.5653，P@50／60／70%=58.16／57.85／57.33%，均顯著低於9A；模型PASS升至88.78%，但Precision只比原始PASS高0.48 pp。Frozen probe未達9C2啟動條件，已退回9A並停止TS2Vec細調。
 
 Formal bundle閉環（2026-07-25 23:13）：quick gate、chain checks與ML smoke均PASS；consistency有4項FAIL，meta quality僅因`coverage_synthetic_suite_runs_successfully`連帶FAIL。4項皆為9C轉legacy後的validator fixture同步問題：legacy expected set漏列`ts2vec_frozen_linear_v1`；active InceptionTime報表fixture仍混入並要求TS2Vec pretraining欄位；pretraining tamper案例也錯用active InceptionTime manifest。修正後active fixture只驗證9A欄位，另建立獨立legacy TS2Vec report／artifact fixture，持續驗證舊工件可讀且pretraining profile竄改必須fail-fast。此閉環不改9C結果、9A正式基準、Dataset、Label、threshold或任何模型訓練行為。
+
+Formal bundle閉環（2026-07-25 23:30）：quick gate、chain checks與ML smoke均PASS；consistency只剩1項FAIL。獨立legacy TS2Vec fixture將split檔改成1筆train＋1筆validation後，split manifest仍複製較早的2筆train統計，正式artifact validator因`selection_role_counts`不一致而正確fail-fast。修正為沿用同一份`validation_split_record`後再更新檔案hash／size，使split內容與metadata回到單一真理來源；meta quality的synthetic suite與coverage四項FAIL均屬此錯誤的連鎖結果。
 
 #### 下一階段 9D：MantisV2 frozen encoder＋linear probe
 
