@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260725_161730_49a96c6.zip`，SHA256 `6f269ed8ff7e4ee8245902ceac8a568a314e60036eac64148806af3462079209`；9C Selection-only TS2Vec frozen linear probe維持active，本輪只修正pretraining `windows.npy` memory-map生命週期，不改模型、資料、Label、split或訓練設定 |
-| SHA256 | 來源 ZIP：`6f269ed8ff7e4ee8245902ceac8a568a314e60036eac64148806af3462079209` |
+| 基準 ZIP | `test-branch-1_20260725_164626_393a7f5.zip`，SHA256 `2db259b2ecf4712680d9407ba2913803b2aa412b0e590d9a19b1d0f2aa2af6af`；已包含上一輪`windows.npy` memory-map生命週期修正。本輪只修正TS2Vec workflow／pretrain的supervised `experiment_profile`傳遞與CLI contract，不改模型、資料、Label、split或訓練超參數 |
+| SHA256 | 本輪來源 ZIP：`2db259b2ecf4712680d9407ba2913803b2aa412b0e590d9a19b1d0f2aa2af6af` |
 | 程式版本範圍 | 9C `ts2vec_frozen_linear_v1` 已實作為active研究架構；先以Selection-only未標記rolling windows預訓練encoder，再凍結encoder只訓練linear head。9A `inception_time_v1`仍是最佳排序／高品質實證基準，8F保留高覆蓋參考；9A-GN與9B維持legacy read-only |
 | Policy 預設 | architecture=`ts2vec_frozen_linear_v1`；experiment profile=`unique_group_sampling`；pretraining profile=`ts2vec_selection_only`（family=`ts2vec_v1`、AdamW、epochs=`10`、batch=`128`、LR=`0.001`、weight decay=`0`、gradient clip=`1.0`、minimum crop=`60`、mask=`0.5`、alpha=`0.5`、temporal unit=`0`）；pretraining dataset stride=`5`；下游training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -573,7 +573,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 工件契約 | Dataset manifest鎖定Selection日期、stride、window/feature schema、outer-policy fingerprint與source CSV inventory；encoder manifest鎖定dataset fingerprint、model spec、命名pretraining profile完整payload與encoder SHA256，且必須明確記錄`oos_windows_used=false`、`pass_reject_labels_used=false`；profile任何optimizer／epoch／batch／LR／gradient clip／loss參數變更都會要求重訓encoder |
 | 下游checkpoint | 正式checkpoint保存完整frozen encoder＋linear head，因此research score export與推論不依賴外部encoder檔；manifest另保存total／frozen／trainable counts與pretraining摘要 |
 | 已完成隔離驗證 | Reduced CSV smoke成功建立73個Selection windows、完成1 epoch CPU pretraining；正式`_train_one_epoch` smoke只更新`classifier.weight/bias`，encoder state逐項不變；contrastive loss、forward/backward與strict reload均為有限值並通過 |
-| Formal bundle閉環 | `to_chatgpt_bundle_20260725_161814_5c7449db.zip`顯示consistency唯一失敗為Windows無法刪除仍由NumPy memory map占用的`windows.npy`；meta quality四項失敗均為synthetic suite異常結束的連鎖結果。已新增明確關閉helper、驗證失敗自動釋放、metadata-only載入不保留memory map，並讓pretrain成功或異常皆在`finally`釋放；不需重建Dataset或relabel，研究狀態仍為`IMPLEMENTED` |
+| Formal bundle閉環 | `to_chatgpt_bundle_20260725_161814_5c7449db.zip`的Windows memory-map清理問題已由下一版bundle確認消失。`to_chatgpt_bundle_20260725_164745_77d5debd.zip`（SHA256 `772b39509432bb42cc7bb000a63f068ee871ed6ef13c5da7c4772d704690a32f`）顯示synthetic suite可正常結束，剩餘7項consistency均集中於TS2Vec workflow新增兩個stage後的舊CLI索引；進一步檢出workflow選擇非policy預設的supervised `experiment_profile`時，pretrain仍以全域預設寫encoder path／manifest。已讓workflow明確傳遞profile、pretrain CLI接受該參數並以同一值建立path與manifest，CLI contract改為依command驗證5個stage；不需重建supervised Dataset或relabel，既有錯誤profile目錄下的encoder若存在則需依正確profile重新pretrain，研究狀態仍為`IMPLEMENTED` |
 | 正式結果 | 尚未執行完整RTX 5080 pretraining與Selection／OOS評估 |
 | 主要判定 | 先比較OOS PR-AUC、P@50／60／70%、R@P60%與Selection→OOS gaps；若frozen probe接近或超過9A且泛化更穩，再另立9C2 controlled fine-tuning；否則停止此representation |
 

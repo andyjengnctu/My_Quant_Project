@@ -1421,6 +1421,8 @@
 | 2026-07-25 | B11 | 驗證pretraining profile名稱安全、參數範圍合法、optimizer由profile建立且正式payload與policy一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | B11 | 最新bundle檢出TS2Vec pretraining dataset memory map在Windows暫存目錄清理前未釋放，synthetic suite資源生命週期契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/pretraining_store.py` |
 | 2026-07-25 | B11 | 驗證memory map可明確關閉、metadata-only驗證不保留檔案handle、失敗路徑自動釋放且pretrain以finally收斂後重新為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-25 | B16 | 最新bundle確認memory-map問題已消失，但9C workflow新增pretraining stages後CLI contract仍以舊三階段索引驗證；並檢出pretrain未承接workflow選定的supervised experiment profile，CLI／工件路由契約改回PARTIAL | DONE -> PARTIAL | `apps/breakout_quality.py`, `tools/filters/breakout_quality/pretrain.py`, `tools/validate/synthetic_cli_cases.py` |
+| 2026-07-25 | B16 | workflow明確傳入experiment profile、pretrain以同一profile建立encoder path與manifest，CLI contract改為依command驗證五階段與profile／Torch參數傳遞，impacted-module registry與文件同步後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-07-25 | T266 | 9A-GN canonical path轉為legacy唯讀，正式runtime輸出退回9A-BN architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-25 | T266 | 驗證GroupNorm舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A-BN active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-25 | T266 | 9B新增ModernTCN model spec、Torch execution與architecture-scoped canonical path，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |

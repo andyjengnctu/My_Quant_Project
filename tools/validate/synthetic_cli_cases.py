@@ -67,7 +67,7 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         "用法: python apps/breakout_quality.py [menu|workflow|<command>] [options]" in help_text,
     )
-    for command in ("menu", "workflow", "build-dataset", "train", "export-scores", "report", "evaluate"):
+    for command in ("menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain", "train", "export-scores", "report", "evaluate"):
         add_check(
             results,
             "cli_contract",
@@ -173,6 +173,10 @@ def validate_dataset_cli_contract_case(_base_params):
     with (
         patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
         patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
+        patch(
+            "apps.breakout_quality._pretraining_refresh_plan",
+            return_value=(True, True, ["synthetic pretraining refresh"]),
+        ),
         patch("apps.breakout_quality._run_command", side_effect=_fake_run_command),
         redirect_stdout(workflow_output),
     ):
@@ -181,13 +185,16 @@ def validate_dataset_cli_contract_case(_base_params):
             program_name="apps/breakout_quality.py",
         )
     workflow_console = workflow_output.getvalue()
+    workflow_calls_by_command = {
+        command: argv for command, argv, _program_name in workflow_calls
+    }
     add_check(results, "cli_contract", case_id, "breakout_quality_workflow_report_rc", 0, workflow_rc)
     add_check(
         results,
         "cli_contract",
         case_id,
         "breakout_quality_workflow_uses_report_not_verbose_evaluate",
-        ["train", "export-scores", "report"],
+        ["build-pretrain-dataset", "pretrain", "train", "export-scores", "report"],
         [call[0] for call in workflow_calls],
     )
     add_check(
@@ -196,7 +203,7 @@ def validate_dataset_cli_contract_case(_base_params):
         case_id,
         "breakout_quality_workflow_report_includes_oos_flag",
         True,
-        "--include-oos" in workflow_calls[-1][1],
+        "--include-oos" in workflow_calls_by_command["report"],
     )
     add_check(
         results,
@@ -205,8 +212,10 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_propagates_experiment_to_all_model_stages",
         True,
         all(
-            "--experiment-profile" in call[1] and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE in call[1]
-            for call in workflow_calls
+            "--experiment-profile" in workflow_calls_by_command[command]
+            and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+            in workflow_calls_by_command[command]
+            for command in ("pretrain", "train", "export-scores", "report")
         ),
     )
     add_check(
@@ -215,7 +224,7 @@ def validate_dataset_cli_contract_case(_base_params):
         case_id,
         "breakout_quality_workflow_propagates_parallel_split_evaluation",
         True,
-        "--parallel-split-evaluation" in workflow_calls[0][1],
+        "--parallel-split-evaluation" in workflow_calls_by_command["train"],
     )
     add_check(
         results,
@@ -224,20 +233,16 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_propagates_torch_execution_contract",
         True,
         (
-            "--device" in workflow_calls[0][1]
-            and "cpu" in workflow_calls[0][1]
-            and "--no-mixed-precision" in workflow_calls[0][1]
-            and "--mixed-precision-dtype" in workflow_calls[0][1]
-            and "float16" in workflow_calls[0][1]
-            and "--deterministic-algorithms" in workflow_calls[0][1]
-            and "--no-allow-tf32" in workflow_calls[0][1]
-            and "--device" in workflow_calls[1][1]
-            and "cpu" in workflow_calls[1][1]
-            and "--no-mixed-precision" in workflow_calls[1][1]
-            and "--mixed-precision-dtype" in workflow_calls[1][1]
-            and "float16" in workflow_calls[1][1]
-            and "--deterministic-algorithms" in workflow_calls[1][1]
-            and "--no-allow-tf32" in workflow_calls[1][1]
+            all(
+                "--device" in workflow_calls_by_command[command]
+                and "cpu" in workflow_calls_by_command[command]
+                and "--no-mixed-precision" in workflow_calls_by_command[command]
+                and "--mixed-precision-dtype" in workflow_calls_by_command[command]
+                and "float16" in workflow_calls_by_command[command]
+                and "--deterministic-algorithms" in workflow_calls_by_command[command]
+                and "--no-allow-tf32" in workflow_calls_by_command[command]
+                for command in ("pretrain", "train", "export-scores")
+            )
         ),
     )
     add_check(
@@ -247,12 +252,13 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_propagates_experiment_and_regularization",
         True,
         (
-            "--experiment-profile" in workflow_calls[0][1]
-            and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE in workflow_calls[0][1]
-            and "--weight-decay" in workflow_calls[0][1]
-            and "0.0001" in workflow_calls[0][1]
-            and "--gradient-clip-norm" in workflow_calls[0][1]
-            and "1.0" in workflow_calls[0][1]
+            "--experiment-profile" in workflow_calls_by_command["train"]
+            and ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+            in workflow_calls_by_command["train"]
+            and "--weight-decay" in workflow_calls_by_command["train"]
+            and "0.0001" in workflow_calls_by_command["train"]
+            and "--gradient-clip-norm" in workflow_calls_by_command["train"]
+            and "1.0" in workflow_calls_by_command["train"]
         ),
     )
     add_check(
@@ -262,11 +268,11 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_workflow_propagates_refit_and_weight_modes",
         True,
         (
-            "--final-refit-mode" in workflow_calls[0][1]
-            and "matched_optimizer_steps" in workflow_calls[0][1]
-            and "--class-weight-mode" in workflow_calls[0][1]
-            and "none" in workflow_calls[0][1]
-            and "--time-weight-mode" in workflow_calls[0][1]
+            "--final-refit-mode" in workflow_calls_by_command["train"]
+            and "matched_optimizer_steps" in workflow_calls_by_command["train"]
+            and "--class-weight-mode" in workflow_calls_by_command["train"]
+            and "none" in workflow_calls_by_command["train"]
+            and "--time-weight-mode" in workflow_calls_by_command["train"]
         ),
     )
     add_check(
@@ -274,7 +280,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_workflow_shows_each_stage_elapsed",
-        3,
+        5,
         workflow_console.count("[完成]") if "總耗時" in workflow_console else -1,
     )
     add_check(
@@ -284,6 +290,31 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_redirected_workflow_has_no_ansi",
         False,
         "\x1b[" in workflow_console,
+    )
+
+    pretrain_module = importlib.import_module("tools.filters.breakout_quality.pretrain")
+    parsed_pretrain = pretrain_module.parse_args(
+        [
+            "--filter-id",
+            "synthetic_quality",
+            "--experiment-profile",
+            ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+        ]
+    )
+    resolved_pretrain_profile, resolved_pretrain_paths = (
+        pretrain_module._resolve_pretrained_encoder_output(parsed_pretrain)
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_pretrain_uses_selected_experiment_profile",
+        True,
+        (
+            resolved_pretrain_profile == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+            and resolved_pretrain_paths.output_dir.parent.name
+            == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+        ),
     )
 
     train_module = importlib.import_module("tools.filters.breakout_quality.train")

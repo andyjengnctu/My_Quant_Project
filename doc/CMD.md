@@ -108,7 +108,7 @@ python apps/breakout_quality.py build-dataset --dataset full --filter-id breakou
 # 9C：建立Selection-only未標記rolling windows；不得包含OOS endpoint
 python apps/breakout_quality.py build-pretrain-dataset --dataset full --filter-id breakout_quality_v1 --stride 5
 # 9C：訓練TS2Vec encoder；manifest明確記錄未使用OOS windows與PASS/REJECT labels
-python apps/breakout_quality.py pretrain --dataset full --filter-id breakout_quality_v1 --stride 5 --pretraining-profile ts2vec_selection_only --epochs 10 --batch-size 128 --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32
+python apps/breakout_quality.py pretrain --dataset full --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --stride 5 --pretraining-profile ts2vec_selection_only --epochs 10 --batch-size 128 --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32
 
 # 只更新 label；通常由 workflow 自動偵測，不需手動執行
 python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1 --relabel-only

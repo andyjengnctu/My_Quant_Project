@@ -715,6 +715,8 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
                 filter_id,
                 "--stride",
                 str(int(BREAKOUT_QUALITY_PRETRAINING_STRIDE)),
+                "--experiment-profile",
+                str(args.experiment_profile),
                 "--pretraining-profile",
                 str(BREAKOUT_QUALITY_PRETRAINING_PROFILE),
                 "--device",

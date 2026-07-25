@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality_experiments import (
+    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES,
     build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_pretraining_profile,
@@ -68,6 +69,12 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Selection-only TS2Vec encoder pretraining")
     parser.add_argument("--dataset", default="full")
     parser.add_argument("--filter-id", default=BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
+    parser.add_argument(
+        "--experiment-profile",
+        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        help="下游 supervised experiment profile；決定 pretrained encoder 的正式工件路徑",
+    )
     parser.add_argument(
         "--pretraining-profile",
         choices=SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES,
@@ -150,6 +157,17 @@ def _source_data_end(dataset_summary: dict, events: pd.DataFrame) -> str:
     if isinstance(date_range, dict) and str(date_range.get("end") or "").strip():
         return str(date_range["end"])
     return pd.to_datetime(events["label_eval_end_date"], errors="raise").max().strftime("%Y-%m-%d")
+
+
+def _resolve_pretrained_encoder_output(args):
+    experiment_profile = str(args.experiment_profile)
+    paths = resolve_pretrained_encoder_paths(
+        PROJECT_ROOT,
+        args.filter_id,
+        model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        experiment_profile=experiment_profile,
+    )
+    return experiment_profile, paths
 
 
 def _overlapping_crops(rng: np.random.Generator, sequence_length: int, min_crop: int) -> tuple[int, int, int]:
@@ -329,12 +347,7 @@ def main(argv=None) -> int:
             history.append({"epoch": epoch, "loss": round(mean_loss, 6), "elapsed_sec": round(elapsed, 3)})
             print(f"  Epoch {epoch:>2}/{int(args.epochs)} | Loss {mean_loss:.6f} | 耗時 {elapsed:.1f}s")
 
-        paths = resolve_pretrained_encoder_paths(
-            PROJECT_ROOT,
-            args.filter_id,
-            model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-            experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-        )
+        experiment_profile, paths = _resolve_pretrained_encoder_output(args)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
         torch.save(
             {
@@ -353,7 +366,7 @@ def main(argv=None) -> int:
             "schema_version": 1,
             "filter_id": str(args.filter_id),
             "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-            "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+            "experiment_profile": experiment_profile,
             "pretraining_profile": pretraining_profile_payload,
             "model_spec": spec.as_manifest_payload(),
             "encoder": build_file_record(paths.encoder),

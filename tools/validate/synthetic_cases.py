@@ -482,7 +482,7 @@ def get_synthetic_validator_entries():
         _entry(validate_sanitize_ohlcv_expected_behavior_case, layer="data_quality", cost_class="fast", impacted_modules=("core/data_utils.py",)),
         _entry(validate_sanitize_ohlcv_failfast_case, layer="data_quality", cost_class="fast", impacted_modules=("core/data_utils.py",)),
         _entry(validate_load_clean_df_data_quality_case, layer="data_quality", cost_class="fast", impacted_modules=("tools/validate/real_case_io.py", "core/data_utils.py")),
-        _entry(validate_dataset_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("tools/validate/cli.py",)),
+        _entry(validate_dataset_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("apps/breakout_quality.py", "tools/filters/breakout_quality/pretrain.py", "tools/validate/cli.py", "tools/validate/synthetic_cli_cases.py")),
         _entry(validate_local_regression_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py", "tools/local_regression/run_quick_gate.py")),
         _entry(validate_package_zip_runtime_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("apps/package_zip.py", "tools/validate/synthetic_cli_cases.py")),
         _entry(validate_package_zip_commit_test_suite_orchestration_case, layer="cli_contract", cost_class="fast", impacted_modules=("apps/package_zip.py", "apps/test_suite.py", "tools/validate/synthetic_cli_cases.py")),
