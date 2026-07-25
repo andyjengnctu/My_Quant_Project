@@ -171,6 +171,7 @@ def validate_dataset_cli_contract_case(_base_params):
 
     workflow_output = StringIO()
     with (
+        patch("apps.breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE", "ts2vec_frozen_linear_v1"),
         patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
         patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
         patch(

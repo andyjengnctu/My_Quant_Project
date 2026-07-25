@@ -1421,6 +1421,8 @@
 | 2026-07-25 | B11 | 驗證pretraining profile名稱安全、參數範圍合法、optimizer由profile建立且正式payload與policy一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | B11 | 最新bundle檢出TS2Vec pretraining dataset memory map在Windows暫存目錄清理前未釋放，synthetic suite資源生命週期契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/pretraining_store.py` |
 | 2026-07-25 | B11 | 驗證memory map可明確關閉、metadata-only驗證不保留檔案handle、失敗路徑自動釋放且pretrain以finally收斂後重新為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-25 | B11 | 9C完整OOS排序與校準均低於9A，active architecture退回`inception_time_v1`且TS2Vec轉為legacy，模型治理契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
+| 2026-07-25 | B11 | 驗證9A active、9C legacy strict reconstruction、policy／文件／CLI隔離與9D單一變更計畫一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | B16 | 最新bundle確認memory-map問題已消失，但9C workflow新增pretraining stages後CLI contract仍以舊三階段索引驗證；並檢出pretrain未承接workflow選定的supervised experiment profile，CLI／工件路由契約改回PARTIAL | DONE -> PARTIAL | `apps/breakout_quality.py`, `tools/filters/breakout_quality/pretrain.py`, `tools/validate/synthetic_cli_cases.py` |
 | 2026-07-25 | B16 | workflow明確傳入experiment profile、pretrain以同一profile建立encoder path與manifest，CLI contract改為依command驗證五階段與profile／Torch參數傳遞，impacted-module registry與文件同步後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-07-25 | T266 | 9A-GN canonical path轉為legacy唯讀，正式runtime輸出退回9A-BN architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
@@ -1435,3 +1437,5 @@
 | 2026-07-25 | T266 | 驗證dataset/encoder fingerprint、OOS與PASS/REJECT leakage fail-fast、checkpoint/manifest一致、research export自包含與active architecture path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-25 | T266 | pretrained encoder與正式model manifest新增命名pretraining profile payload及profile mismatch拒絕，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/pretraining_store.py` |
 | 2026-07-25 | T266 | 驗證pretraining profile任何optimizer／epoch／batch／LR／loss參數竄改均fail-fast，且正式checkpoint內嵌摘要一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-25 | T266 | 9C轉為legacy唯讀、正式runtime輸出退回9A InceptionTime architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
+| 2026-07-25 | T266 | 驗證TS2Vec舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A／8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |

@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260725_164626_393a7f5.zip`，SHA256 `2db259b2ecf4712680d9407ba2913803b2aa412b0e590d9a19b1d0f2aa2af6af`；已包含上一輪`windows.npy` memory-map生命週期修正。本輪只修正TS2Vec workflow／pretrain的supervised `experiment_profile`傳遞與CLI contract，不改模型、資料、Label、split或訓練超參數 |
-| SHA256 | 本輪來源 ZIP：`2db259b2ecf4712680d9407ba2913803b2aa412b0e590d9a19b1d0f2aa2af6af` |
-| 程式版本範圍 | 9C `ts2vec_frozen_linear_v1` 已實作為active研究架構；先以Selection-only未標記rolling windows預訓練encoder，再凍結encoder只訓練linear head。9A `inception_time_v1`仍是最佳排序／高品質實證基準，8F保留高覆蓋參考；9A-GN與9B維持legacy read-only |
-| Policy 預設 | architecture=`ts2vec_frozen_linear_v1`；experiment profile=`unique_group_sampling`；pretraining profile=`ts2vec_selection_only`（family=`ts2vec_v1`、AdamW、epochs=`10`、batch=`128`、LR=`0.001`、weight decay=`0`、gradient clip=`1.0`、minimum crop=`60`、mask=`0.5`、alpha=`0.5`、temporal unit=`0`）；pretraining dataset stride=`5`；下游training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；TF32=`false` |
+| 基準 ZIP | 9C結果來源 `test-branch-1_20260725_175013_818dfa5.zip`，SHA256 `c7b5b7bb8b6ccf3073a0a64944ba74969d7a70f528d3c26ce6ce48c8ac753ee1`；結果文字 SHA256 `a5f5d0f3cc6d2c41aaeac9272e874a837003c32142aa7cf76b33c19ea4758339`。9C完整OOS已淘汰，本輪將active policy退回9A並同步實驗紀錄／文件／legacy契約 |
+| SHA256 | 本輪來源 ZIP：`c7b5b7bb8b6ccf3073a0a64944ba74969d7a70f528d3c26ce6ce48c8ac753ee1` |
+| 程式版本範圍 | 9C `ts2vec_frozen_linear_v1` 已取得完整結果並淘汰，轉為legacy read-only；active policy退回9A `inception_time_v1`排序／高品質基準。8F `multiscale_cnn_sequence_only_v1`保留高覆蓋參考；9A-GN、9B與9C均只供舊工件重建 |
+| Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining profile與工件契約保留為legacy重建，不再由正式workflow啟動 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active研究architecture為9C `ts2vec_frozen_linear_v1`；9A `inception_time_v1`與8F sequence-only保留已接受比較基準，9B ModernTCN與9A-GN均只保留legacy read-only compatibility。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active研究architecture已退回9A `inception_time_v1`；8F sequence-only保留高覆蓋比較基準，9A-GN、9B ModernTCN與9C TS2Vec均只保留legacy read-only compatibility。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -558,24 +558,22 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ### 3.31 9C TS2Vec Selection-only自監督預訓練（2026-07-25）
 
-| 項目 | 設計／實作 |
+| 項目 | 結果 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；尚未取得完整Selection／OOS結果，不預先判定有效 |
-| 程式基準 | `test-branch-1_20260725_102725_d465a60.zip`，SHA256 `da949408c051d9af6c926976a0d8a078a0664ab0eb49ff8b86c082d2bd9da048`；全新實作工作目錄`/mnt/data/bq_9c_work` |
-| Architecture | `ts2vec_frozen_linear_v1`；8層dilated residual encoder、hidden 128、timestamp representation 320、global-max pooling、單一320→2 linear head |
-| 唯一研究變更 | 由純supervised encoder改為Selection-only TS2Vec-style hierarchical contrastive pretraining；下游encoder完全凍結，只訓練linear head。資料、Label、split、unique-group sampling與評估契約不變 |
-| Pretraining資料 | 從原始清理後股票CSV另建300×10 rolling windows；endpoint只允許位於outer Selection start/end內，預設每5個交易日取一窗且設定可調；OOS未標記資料禁止參與 |
-| Pretraining objective | 兩個重疊cropped／temporally-masked views的hierarchical instance＋temporal contrastive loss；不使用PASS／REJECT Label、不讀取OOS結果 |
-| Pretraining設定 | 命名profile=`ts2vec_selection_only`，集中於`config/breakout_quality_experiments.py`；family=`ts2vec_v1`、epochs=10、batch=128、AdamW LR=0.001、weight decay=0、gradient clip=1.0、minimum crop=60 bars、mask probability=0.5、alpha=0.5、temporal unit=0；dataset stride=5與execution seed=42仍由policy管理 |
-| 下游固定條件 | `unique_group_sampling`、batch 128 groups、patience 1、`selected_epochs`、Adam LR 0.0003、weight decay 0.0001、threshold 0.5、seed 42、class/time weight none、CUDA mixed precision與deterministic設定沿用9A |
-| 模型規模 | total 831,810 parameters；frozen encoder 831,168；trainable linear head 642。Optimizer只接收`requires_grad=true`的head參數，encoder在train mode中仍固定為eval |
-| Dataset／Label | **需要新增獨立pretraining dataset與pretrained encoder工件**；既有supervised breakout-quality feature bank、event rows、labels與future-path cache不重建、不relabel |
-| 工件契約 | Dataset manifest鎖定Selection日期、stride、window/feature schema、outer-policy fingerprint與source CSV inventory；encoder manifest鎖定dataset fingerprint、model spec、命名pretraining profile完整payload與encoder SHA256，且必須明確記錄`oos_windows_used=false`、`pass_reject_labels_used=false`；profile任何optimizer／epoch／batch／LR／gradient clip／loss參數變更都會要求重訓encoder |
-| 下游checkpoint | 正式checkpoint保存完整frozen encoder＋linear head，因此research score export與推論不依賴外部encoder檔；manifest另保存total／frozen／trainable counts與pretraining摘要 |
-| 已完成隔離驗證 | Reduced CSV smoke成功建立73個Selection windows、完成1 epoch CPU pretraining；正式`_train_one_epoch` smoke只更新`classifier.weight/bias`，encoder state逐項不變；contrastive loss、forward/backward與strict reload均為有限值並通過 |
-| Formal bundle閉環 | `to_chatgpt_bundle_20260725_161814_5c7449db.zip`的Windows memory-map清理問題已由下一版bundle確認消失。`to_chatgpt_bundle_20260725_164745_77d5debd.zip`（SHA256 `772b39509432bb42cc7bb000a63f068ee871ed6ef13c5da7c4772d704690a32f`）顯示synthetic suite可正常結束，剩餘7項consistency均集中於TS2Vec workflow新增兩個stage後的舊CLI索引；進一步檢出workflow選擇非policy預設的supervised `experiment_profile`時，pretrain仍以全域預設寫encoder path／manifest。已讓workflow明確傳遞profile、pretrain CLI接受該參數並以同一值建立path與manifest，CLI contract改為依command驗證5個stage；不需重建supervised Dataset或relabel，既有錯誤profile目錄下的encoder若存在則需依正確profile重新pretrain，研究狀態仍為`IMPLEMENTED` |
-| 正式結果 | 尚未執行完整RTX 5080 pretraining與Selection／OOS評估 |
-| 主要判定 | 先比較OOS PR-AUC、P@50／60／70%、R@P60%與Selection→OOS gaps；若frozen probe接近或超過9A且泛化更穩，再另立9C2 controlled fine-tuning；否則停止此representation |
+| 狀態 | `REJECTED`；active policy退回9A `inception_time_v1`，9C `ts2vec_frozen_linear_v1`轉為legacy read-only；不啟動9C2 fine-tuning |
+| 程式基準 | 結果 ZIP `test-branch-1_20260725_175013_818dfa5.zip`，SHA256 `c7b5b7bb8b6ccf3073a0a64944ba74969d7a70f528d3c26ce6ce48c8ac753ee1`；結果文字 SHA256 `a5f5d0f3cc6d2c41aaeac9272e874a837003c32142aa7cf76b33c19ea4758339` |
+| Architecture | `ts2vec_frozen_linear_v1`；8層dilated residual encoder、hidden 128、representation 320、global-max pooling、320→2 linear head；total 831,810、frozen 831,168、trainable 642 parameters |
+| 唯一研究變更 | 以Selection-only TS2Vec-style hierarchical contrastive pretraining取代純supervised representation；下游encoder完全凍結，只訓練linear head。資料、Label、split、unique-group sampling與評估契約不變 |
+| Pretraining | 194,173個Selection rolling windows，2011-01-01～2020-12-31，stride 5；10 epochs、batch 128、AdamW、BF16 CUDA；loss由1.828744降至0.068249，未使用OOS windows或PASS／REJECT labels |
+| 下游訓練 | Best epoch 2，最低Validation loss 0.689281；完整Selection重訓2 epochs，final loss 0.674765。loss接近隨機二元分類的0.693，顯示frozen representation對目前Label只有弱線性可分性 |
+| Dataset／Label | 新增獨立pretraining dataset與encoder工件；既有supervised feature bank、event rows、labels與future-path cache未重建、未relabel |
+| Selection | 原始PASS 54.81%、模型PASS 81.77%、Precision 57.88%、Lift +3.07 pp、Recall 86.35%、Accuracy 58.07%、Score 0.5710、PR-AUC 0.6225、P@50／60／70%=61.55／60.40／59.29%、R@P60%=70.19%、Brier 0.2409、ECE 0.0230 |
+| OOS | 原始PASS 55.63%、模型PASS 88.78%、Precision 56.11%、Lift +0.48 pp、Recall 89.53%、Accuracy 55.21%、Score 0.6149、PR-AUC 0.5653、P@50／60／70%=58.16／57.85／57.33%、R@P60%=0.10%、Brier 0.2541、ECE 0.0746 |
+| Selection→OOS | PR-AUC −0.0572；P@50／60／70%分別 −3.39／−2.55／−1.96 pp；R@P60% −70.09 pp；Precision −1.77 pp、模型PASS +7.01 pp、Score +0.0439；Brier惡化0.0132、ECE惡化0.0516 |
+| 相較9A | OOS PR-AUC −0.0604；P@50／60／70%分別 −4.61／−3.77／−2.92 pp；R@P60% −77.17 pp；Precision −6.88 pp、Lift −6.87 pp、Accuracy −0.96 pp；Recall +38.09 pp與模型PASS +43.35 pp來自score整體上移及幾乎全面放行，不是排序改善；Brier惡化0.0088、ECE惡化0.0024 |
+| 指標判讀 | `R@P60%=0.10%`與P@50%=58.16%一致：模型在50% coverage時已無法維持60% Precision，只有極小最前端tie-safe區段達標；不是靠threshold 0.5即可修正的問題 |
+| 判定 | Frozen probe未接近9A，且Selection→OOS排序與校準明顯崩落；不符合預先設定的9C2啟動條件。停止TS2Vec epochs、stride、pooling、MLP head、threshold與fine-tuning細調，避免利用同一OOS救援失敗表示 |
+| 下一步 | 9D MantisV2 frozen encoder＋linear probe；仍固定Label、split、unique-group sampling與評估口徑。先測外部預訓練表示，不同輪混入fine-tuning、ensemble或threshold調整 |
 
 ---
 
@@ -613,12 +611,13 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 28. Raw＋window-normalized dual-path；8P只讓OOS Precision增加0.06 pp，卻使Recall下降8.48 pp、Accuracy下降1.30 pp、Score下降0.0143。停止現有multiscale CNN家族微調。
 29. InceptionTime GroupNorm；9A-GN雖改善ECE與Score gap，但OOS PR-AUC下降0.0607、P@50／60／70%下降3.31／3.02／2.36 pp，固定coverage排序明顯崩落。不再搜尋GroupNorm group數、LayerNorm或其他只換normalization的細調。
 30. ModernTCN supervised architecture search；9B Selection全面變強但OOS PR-AUC、固定coverage Precision、Accuracy、Brier與ECE全面惡化。停止ModernTCN depth、kernel、channels、expansion、dropout與其他supervised CNN／TCN橫向調整。
+31. TS2Vec Selection-only frozen probe；9C OOS PR-AUC較9A低0.0604，P@50／60／70%低4.61／3.77／2.92 pp，模型PASS升至88.78%但Lift只剩+0.48 pp。Frozen representation不具穩定線性可分性，不啟動9C2，不再調pretraining epochs、stride、crop、mask、pooling、head、fine-tuning或threshold。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9B `modern_tcn_v1 / unique_group_sampling` 已由完整OOS淘汰並轉為legacy；policy退回已接受的9A `inception_time_v1 / unique_group_sampling`排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。9C Selection-only TS2Vec frozen probe已實作，等待完整結果；不得把OOS未標記資料混入pretraining，也不得同輪混入full fine-tuning。
+所有實驗一次只改一項。9C `ts2vec_frozen_linear_v1 / unique_group_sampling` 已由完整OOS淘汰並轉為legacy；policy退回已接受的9A `inception_time_v1 / unique_group_sampling`排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。下一項為9D MantisV2 frozen encoder＋linear probe；不得同輪混入fine-tuning、ensemble或threshold調整。
 
 ### 優先 6A：AdamW only
 
@@ -751,17 +750,21 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 `REJECTED`。相較9A-BN，OOS PR-AUC −0.0607，P@50／60／70%分別 −3.31／−3.02／−2.36 pp，R@P60%由77.27%降至0.50%；雖然ECE與Score gap改善，但排序能力明顯崩落。已退回`inception_time_v1`，GroupNorm版本轉為legacy read-only，不再細調normalization。
 
-#### 下一階段 9C：TS2Vec Selection-only自監督預訓練
+#### 9C：TS2Vec Selection-only自監督預訓練
+
+`REJECTED`。OOS PR-AUC 0.5653，P@50／60／70%=58.16／57.85／57.33%，均顯著低於9A；模型PASS升至88.78%，但Precision只比原始PASS高0.48 pp。Frozen probe未達9C2啟動條件，已退回9A並停止TS2Vec細調。
+
+#### 下一階段 9D：MantisV2 frozen encoder＋linear probe
 
 | 項目 | 固定設計 |
 |---|---|
 | 狀態 | `PLANNED` |
-| 唯一變更 | 在supervised head訓練前，先以Selection-era未標記rolling windows預訓練TS2Vec encoder；第一階段encoder凍結，只訓練linear head |
-| Pretraining資料 | 清理後股票資料的300×10 rolling windows；日期上限鎖定Selection結束日，預設stride 5且由config管理；不得讀取OOS未標記資料 |
-| 固定條件 | 下游labeled split、unique-group evaluation、threshold 0.5、Seed 42及所有ranking／calibration指標口徑不變 |
-| Dataset rebuild | 新增獨立pretraining dataset artifact；現有supervised feature bank與Label不重建、不relabel |
-| 主要判定 | OOS PR-AUC、P@50／60／70%及Selection→OOS gap；threshold 0.5操作點只作輔助 |
-| 後續 | Frozen probe若接近9A且泛化較穩，再另立9C2 controlled fine-tuning；否則改測其他自監督encoder，而不是回頭調ModernTCN |
+| 唯一變更 | 以外部預訓練MantisV2 encoder取代9A supervised encoder與9C自家TS2Vec encoder；encoder完全凍結，只訓練單一linear head |
+| 輸入 | 沿用300×10 sequence；必要的shape／channel adapter必須是固定、可追溯的前處理，不得同輪加入可學習adapter |
+| 固定條件 | 固定百分比Label、Selection／OOS split、unique-group sampling、batch 128、patience 1、selected_epochs、threshold 0.5、seed 42與全部ranking／calibration口徑不變 |
+| Dataset rebuild | 不重建supervised Dataset或relabel；只新增foundation encoder checkpoint／embedding cache及其manifest |
+| 主要判定 | 先看OOS PR-AUC、P@50／60／70%、R@P60%與Selection→OOS gaps；threshold 0.5只作輔助 |
+| 後續 | Frozen probe接近或超過9A且泛化穩定，才另立controlled fine-tuning；否則進入9E MOMENT frozen encoder，不在9D內調threshold、ensemble或adapter |
 
 
 ---
@@ -793,7 +796,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 9A 單一InceptionTime（ACCEPTED；新的排序／高品質模型基準）
 → 9A-GN InceptionTime GroupNorm ablation（REJECTED；已退回9A-BN）
 → 9B ModernTCN（REJECTED；已退回9A並轉為legacy）
-→ 9C TS2Vec Selection-only自監督預訓練＋frozen linear probe（IMPLEMENTED；待完整OOS）
+→ 9C TS2Vec Selection-only自監督預訓練＋frozen linear probe（REJECTED；已退回9A並轉為legacy）
+→ 9D MantisV2 frozen encoder＋linear probe（PLANNED）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
