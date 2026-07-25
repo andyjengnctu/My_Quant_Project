@@ -8,7 +8,9 @@ from filters.breakout_quality.models.factory import (
 )
 from filters.breakout_quality.models.spec import (
     ACTIVE_MODEL_ARCHITECTURES,
+    INCEPTION_TIME_GROUP_NORM_V1,
     INCEPTION_TIME_V1,
+    MODERN_TCN_V1,
     LEGACY_MODEL_ARCHITECTURES,
     MULTISCALE_CNN_V1,
     MULTISCALE_CNN_V2,
@@ -19,6 +21,7 @@ from filters.breakout_quality.models.spec import (
     MULTISCALE_CNN_V7,
     MULTISCALE_CNN_V8,
     MULTISCALE_CNN_REGIME_CONTEXT_V1,
+    MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     RESIDUAL_TCN_V1,
     SUPPORTED_MODEL_ARCHITECTURES,
@@ -33,7 +36,9 @@ from filters.breakout_quality.models.spec import (
 __all__ = [
     "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
+    "INCEPTION_TIME_GROUP_NORM_V1",
     "INCEPTION_TIME_V1",
+    "MODERN_TCN_V1",
     "MULTISCALE_CNN_V1",
     "MULTISCALE_CNN_V2",
     "MULTISCALE_CNN_V3",
@@ -43,6 +48,7 @@ __all__ = [
     "MULTISCALE_CNN_V7",
     "MULTISCALE_CNN_V8",
     "MULTISCALE_CNN_REGIME_CONTEXT_V1",
+    "MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1",
     "MULTISCALE_CNN_SEQUENCE_ONLY_V1",
     "LEGACY_MODEL_ARCHITECTURES",
     "RESIDUAL_TCN_V1",

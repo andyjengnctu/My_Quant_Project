@@ -54,7 +54,7 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.lr_schedule import validate_learning_rate_schedule_record
-from filters.breakout_quality.models.spec import INCEPTION_TIME_V1, model_spec_from_manifest
+from filters.breakout_quality.models.spec import model_spec_from_manifest
 from filters.breakout_quality.torch_runtime import (
     SUPPORTED_MIXED_PRECISION_DTYPES,
     SUPPORTED_TORCH_DEVICES,
@@ -402,7 +402,7 @@ def load_model_artifact_contract(
         raise ValueError("breakout quality model_spec.architecture 與 manifest 不一致")
     _validate_torch_execution_record(
         manifest,
-        required=manifest_architecture == INCEPTION_TIME_V1,
+        required=model_spec.family in {"inception_time", "modern_tcn"},
     )
     if int(manifest.get("trainable_parameter_count", 0)) < 1:
         raise ValueError("breakout quality trainable_parameter_count 必須 >=1")

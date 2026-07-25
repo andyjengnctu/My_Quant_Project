@@ -471,6 +471,17 @@ def _model_runtime_description(model_spec) -> str:
             f"receptive_field={model_spec.receptive_field_bars} bars, "
             f"pooling={'+'.join(model_spec.pooling)}"
         )
+    if str(model_spec.family) == "modern_tcn":
+        return (
+            f"family=modern_tcn, depth={model_spec.modern_tcn_depth}, "
+            f"channels={model_spec.modern_tcn_channels}, "
+            f"large_kernel={model_spec.modern_tcn_kernel_size}, "
+            f"expansion={model_spec.modern_tcn_expansion_ratio}x, "
+            f"normalization={model_spec.normalization}, "
+            f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
+            f"receptive_field={model_spec.receptive_field_bars} bars, "
+            f"pooling={'+'.join(model_spec.pooling)}"
+        )
     branch_inputs = "+".join(model_spec.branch_input_representations) or "level"
     branch_channels = model_spec.branch_channels or (model_spec.channels,) * 3
     derived_context = ",".join(model_spec.derived_context_features) or "none"
@@ -736,6 +747,15 @@ def _print_policy_defaults(
             f"- Bottleneck Channels：{model_spec.inception_bottleneck_channels}\n"
             f"- Kernel Sizes：{'/'.join(str(value) for value in model_spec.inception_kernel_sizes)}\n"
             f"- Residual Every：{model_spec.inception_residual_every} modules"
+        )
+    elif str(model_spec.family) == "modern_tcn":
+        architecture_details = (
+            f"- Model Family：ModernTCN\n"
+            f"- Depth：{model_spec.modern_tcn_depth}\n"
+            f"- Channels：{model_spec.modern_tcn_channels}\n"
+            f"- Large Kernel：{model_spec.modern_tcn_kernel_size}\n"
+            f"- Pointwise Expansion：{model_spec.modern_tcn_expansion_ratio}x\n"
+            f"- Normalization：{model_spec.normalization}"
         )
     else:
         branch_inputs = "+".join(model_spec.branch_input_representations) or "level"

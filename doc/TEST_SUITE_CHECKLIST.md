@@ -1413,9 +1413,13 @@
 | 2026-07-25 | B11 | 驗證475,394參數、301-bar receptive field、context invariance、backward、9A／8F active比較基準、9A-GN legacy重建與文件同步後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | B11 | 9B完整OOS固定coverage排序、Accuracy與校準全面低於9A，active architecture退回`inception_time_v1`且ModernTCN轉為legacy，模型契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-25 | B11 | 驗證9A active、9B legacy strict reconstruction、policy／文件與TS2Vec Selection-only pretraining防洩漏計畫一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-25 | B11 | 最新退回ZIP雖將policy設為9A，但遺漏ModernTCN檔案且factory無法建立9A-GN／9B legacy模型，模型相容契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/factory.py` |
+| 2026-07-25 | B11 | 恢復GroupNorm InceptionTime與ModernTCN唯讀重建鏈，驗證9A仍為policy預設、legacy不可正式新訓練後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | T266 | 9A-GN canonical path轉為legacy唯讀，正式runtime輸出退回9A-BN architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-25 | T266 | 驗證GroupNorm舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A-BN active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-25 | T266 | 9B新增ModernTCN model spec、Torch execution與architecture-scoped canonical path，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-25 | T266 | 驗證ModernTCN checkpoint／manifest strict reconstruction、9A／8F工件隔離、model spec竄改拒絕與舊GN工件相容後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-25 | T266 | 9B轉為legacy唯讀、正式runtime輸出退回9A InceptionTime architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-25 | T266 | 驗證ModernTCN舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A／8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-25 | T266 | 最新退回ZIP遺漏9A-GN／9B legacy implementation，舊checkpoint／manifest strict reconstruction契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/factory.py` |
+| 2026-07-25 | T266 | 恢復兩個legacy implementation與factory分派，驗證architecture-scoped舊工件可strict reconstruction且正式輸出仍指向9A／8F後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |

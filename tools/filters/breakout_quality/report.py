@@ -1161,6 +1161,15 @@ def _markdown_model_detail_lines(training: dict) -> list[str]:
             + "`",
             f"- **Residual Every**：`{spec.get('inception_residual_every')} modules`",
         ]
+    if family == "modern_tcn":
+        return [
+            f"- **Model Family**：`{family}`",
+            f"- **ModernTCN Depth**：`{spec.get('modern_tcn_depth')}`",
+            f"- **Channels**：`{spec.get('modern_tcn_channels')}`",
+            f"- **Large Kernel**：`{spec.get('modern_tcn_kernel_size')}`",
+            f"- **Pointwise Expansion**：`{spec.get('modern_tcn_expansion_ratio')}x`",
+            f"- **Normalization**：`{spec.get('normalization')}`",
+        ]
     return [
         "- **Branch Inputs**：`"
         + "+".join(spec.get("branch_input_representations") or ["level"])
@@ -1192,6 +1201,15 @@ def _console_model_detail_lines(training: dict) -> list[str]:
             "Kernel Sizes    : "
             + "/".join(str(value) for value in spec.get("inception_kernel_sizes") or []),
             f"Residual Every  : {spec.get('inception_residual_every')} modules",
+        ]
+    if family == "modern_tcn":
+        return [
+            f"Model Family    : {family}",
+            f"ModernTCN Depth : {spec.get('modern_tcn_depth')}",
+            f"Channels        : {spec.get('modern_tcn_channels')}",
+            f"Large Kernel    : {spec.get('modern_tcn_kernel_size')}",
+            f"Expansion       : {spec.get('modern_tcn_expansion_ratio')}x",
+            f"Normalization   : {spec.get('normalization')}",
         ]
     return [
         "Branch Inputs   : "

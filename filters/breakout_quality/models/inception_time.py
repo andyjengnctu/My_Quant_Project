@@ -16,7 +16,24 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     if not kernel_sizes or any(value < 1 or value % 2 == 0 for value in kernel_sizes):
         raise ValueError("InceptionTime kernels 必須是非空正奇數")
 
+    normalization = str(spec.normalization or "batch_norm").strip().lower()
+    normalization_groups = (
+        None if spec.normalization_groups is None else int(spec.normalization_groups)
+    )
+    if normalization not in {"batch_norm", "group_norm"}:
+        raise ValueError("InceptionTime normalization 只支援 batch_norm／group_norm")
+
     module_output_channels = filters * (len(kernel_sizes) + 1)
+    if normalization == "group_norm":
+        if normalization_groups is None or normalization_groups < 1:
+            raise ValueError("InceptionTime GroupNorm 必須指定正整數 groups")
+        if module_output_channels % normalization_groups != 0:
+            raise ValueError("InceptionTime GroupNorm groups 必須整除輸出 channels")
+
+    def build_normalization():
+        if normalization == "group_norm":
+            return nn.GroupNorm(normalization_groups, module_output_channels)
+        return nn.BatchNorm1d(module_output_channels)
 
     class InceptionModule(nn.Module):
         def __init__(self, in_channels: int):
@@ -43,7 +60,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             self.pool_projection = nn.Conv1d(
                 int(in_channels), filters, kernel_size=1, bias=False
             )
-            self.normalization = nn.BatchNorm1d(module_output_channels)
+            self.normalization = build_normalization()
             self.activation = nn.ReLU()
 
         def forward(self, x):
@@ -62,7 +79,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     kernel_size=1,
                     bias=False,
                 ),
-                nn.BatchNorm1d(module_output_channels),
+                build_normalization(),
             )
 
         def forward(self, x):
