@@ -396,8 +396,14 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     dual_path_model = build_breakout_quality_model(
         10, 4, architecture="multiscale_cnn_sequence_only_dual_path_v1"
     )
+    modern_tcn_model = build_breakout_quality_model(
+        10, 4, architecture="modern_tcn_v1"
+    )
     inception_model = build_breakout_quality_model(
         10, 4, architecture="inception_time_v1"
+    )
+    inception_group_norm_model = build_breakout_quality_model(
+        10, 4, architecture="inception_time_group_norm_v1"
     )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
@@ -412,9 +418,100 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     regime_context_parameter_count = count_trainable_parameters(regime_context_model)
     sequence_only_parameter_count = count_trainable_parameters(sequence_only_model)
     dual_path_parameter_count = count_trainable_parameters(dual_path_model)
+    modern_tcn_parameter_count = count_trainable_parameters(modern_tcn_model)
     inception_parameter_count = count_trainable_parameters(inception_model)
+    inception_group_norm_parameter_count = count_trainable_parameters(
+        inception_group_norm_model
+    )
     residual_parameter_count = count_trainable_parameters(residual_model)
+    modern_tcn_spec = get_model_spec("modern_tcn_v1")
     inception_spec = get_model_spec("inception_time_v1")
+    inception_group_norm_spec = get_model_spec("inception_time_group_norm_v1")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "modern_tcn_9b_is_capacity_matched_large_kernel_classifier",
+        (
+            475394,
+            "modern_tcn",
+            6,
+            96,
+            51,
+            4,
+            301,
+            "batch_norm",
+            ("global_average",),
+            False,
+        ),
+        (
+            modern_tcn_parameter_count,
+            modern_tcn_spec.family,
+            modern_tcn_spec.modern_tcn_depth,
+            modern_tcn_spec.modern_tcn_channels,
+            modern_tcn_spec.modern_tcn_kernel_size,
+            modern_tcn_spec.modern_tcn_expansion_ratio,
+            modern_tcn_spec.receptive_field_bars,
+            modern_tcn_spec.normalization,
+            modern_tcn_spec.pooling,
+            modern_tcn_spec.use_dataset_context,
+        ),
+    )
+    modern_depthwise_layers = [
+        module
+        for module in modern_tcn_model.modules()
+        if isinstance(module, _nn.Conv1d)
+        and tuple(module.kernel_size) == (51,)
+        and int(module.groups) == 96
+        and int(module.in_channels) == 96
+        and int(module.out_channels) == 96
+    ]
+    modern_batch_norm_layers = [
+        module for module in modern_tcn_model.modules() if isinstance(module, _nn.BatchNorm1d)
+    ]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "modern_tcn_uses_six_depthwise_large_kernel_blocks_and_thirteen_batch_norms",
+        (6, 13),
+        (len(modern_depthwise_layers), len(modern_batch_norm_layers)),
+    )
+    modern_tcn_model.eval()
+    modern_features = torch.randn((3, 300, 10), dtype=torch.float32)
+    modern_context_a = torch.randn((3, 4), dtype=torch.float32)
+    modern_context_b = torch.randn((3, 4), dtype=torch.float32)
+    with torch.no_grad():
+        modern_logits_a = modern_tcn_model(modern_features, modern_context_a)
+        modern_logits_b = modern_tcn_model(modern_features, modern_context_b)
+    modern_reload = build_breakout_quality_model(
+        10,
+        4,
+        model_spec=modern_tcn_spec.as_manifest_payload(),
+    )
+    modern_reload.load_state_dict(modern_tcn_model.state_dict(), strict=True)
+    modern_tcn_model.train()
+    modern_train_logits = modern_tcn_model(modern_features, modern_context_a)
+    modern_loss = modern_train_logits.square().mean()
+    modern_loss.backward()
+    modern_gradients_ok = all(
+        parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        for parameter in modern_tcn_model.parameters()
+        if parameter.requires_grad
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "modern_tcn_context_invariance_backward_and_strict_reload",
+        True,
+        bool(
+            torch.equal(modern_logits_a, modern_logits_b)
+            and tuple(modern_logits_a.shape) == (3, 2)
+            and torch.isfinite(modern_logits_a).all()
+            and modern_gradients_ok
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -466,6 +563,88 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             torch.equal(inception_logits_a, inception_logits_b)
             and tuple(inception_logits_a.shape) == (3, 2)
             and torch.isfinite(inception_logits_a).all()
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inception_time_group_norm_is_single_change_with_equal_parameter_count",
+        (
+            473218,
+            "group_norm",
+            8,
+            "batch_norm",
+            None,
+        ),
+        (
+            inception_group_norm_parameter_count,
+            inception_group_norm_spec.normalization,
+            inception_group_norm_spec.normalization_groups,
+            inception_spec.normalization,
+            inception_spec.normalization_groups,
+        ),
+    )
+    group_norm_layers = [
+        module
+        for module in inception_group_norm_model.modules()
+        if isinstance(module, _nn.GroupNorm)
+    ]
+    group_norm_batch_norm_layers = [
+        module
+        for module in inception_group_norm_model.modules()
+        if isinstance(module, _nn.BatchNorm1d)
+    ]
+    batch_norm_layers = [
+        module for module in inception_model.modules() if isinstance(module, _nn.BatchNorm1d)
+    ]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inception_time_group_norm_replaces_all_eight_batch_norm_layers",
+        (8, 0, 8),
+        (len(group_norm_layers), len(group_norm_batch_norm_layers), len(batch_norm_layers)),
+    )
+    inception_group_norm_model.train()
+    group_norm_features = torch.randn((2, 300, 10), dtype=torch.float32)
+    group_norm_context = torch.randn((2, 4), dtype=torch.float32)
+    with torch.no_grad():
+        group_norm_single = inception_group_norm_model(
+            group_norm_features[:1], group_norm_context[:1]
+        )
+        group_norm_with_companion = inception_group_norm_model(
+            group_norm_features, group_norm_context
+        )[:1]
+    inception_group_norm_model.eval()
+    with torch.no_grad():
+        group_norm_logits_a = inception_group_norm_model(
+            inception_features, inception_context_a
+        )
+        group_norm_logits_b = inception_group_norm_model(
+            inception_features, inception_context_b
+        )
+    inception_group_norm_reload = build_breakout_quality_model(
+        10,
+        4,
+        model_spec=inception_group_norm_spec.as_manifest_payload(),
+    )
+    inception_group_norm_reload.load_state_dict(
+        inception_group_norm_model.state_dict(), strict=True
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inception_time_group_norm_is_per_sample_context_invariant_and_strict_reloadable",
+        True,
+        bool(
+            torch.allclose(
+                group_norm_single, group_norm_with_companion, atol=1e-6, rtol=1e-6
+            )
+            and torch.equal(group_norm_logits_a, group_norm_logits_b)
+            and tuple(group_norm_logits_a.shape) == (3, 2)
+            and torch.isfinite(group_norm_logits_a).all()
         ),
     )
     cpu_execution = resolve_torch_execution_plan(
@@ -1436,6 +1615,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "multiscale_cnn_v8",
         "multiscale_cnn_regime_context_v1",
         "multiscale_cnn_sequence_only_dual_path_v1",
+        "inception_time_group_norm_v1",
+        "modern_tcn_v1",
         "residual_tcn_v1",
     )
     legacy_paths = [
@@ -1456,6 +1637,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         )
         for architecture in legacy_architectures
     ]
+    modern_paths = resolve_filter_artifact_paths(
+        "/project",
+        "synthetic_quality",
+        "modern_tcn_v1",
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    )
     baseline_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "inception_time_v1", "baseline"
     )
@@ -1467,6 +1654,18 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "synthetic_quality",
         "inception_time_v1",
         ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+    )
+    group_norm_paths = resolve_filter_artifact_paths(
+        "/project",
+        "synthetic_quality",
+        "inception_time_group_norm_v1",
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    )
+    modern_research = resolve_filter_research_score_path(
+        "/project",
+        "synthetic_quality",
+        "modern_tcn_v1",
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     )
     baseline_research = resolve_filter_research_score_path(
         "/project", "synthetic_quality", "inception_time_v1", "baseline"
@@ -1480,6 +1679,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "inception_time_v1",
         ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     )
+    group_norm_research = resolve_filter_research_score_path(
+        "/project",
+        "synthetic_quality",
+        "inception_time_group_norm_v1",
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    )
     shared_dataset_dir = resolve_filter_output_dir("/project", "synthetic_quality")
     add_check(
         results,
@@ -1491,26 +1696,46 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             len(
                 {path.model_path for path in legacy_paths}
                 | {
+                    modern_paths.model_path,
                     baseline_paths.model_path,
                     adamw_paths.model_path,
                     schedule_paths.model_path,
+                    group_norm_paths.model_path,
                 }
             )
-            == len(legacy_paths) + 3
+            == len(legacy_paths) + 5
             and len(
                 set(legacy_research_paths)
-                | {baseline_research, adamw_research, schedule_research}
+                | {
+                    modern_research,
+                    baseline_research,
+                    adamw_research,
+                    schedule_research,
+                    group_norm_research,
+                }
             )
-            == len(legacy_research_paths) + 3
+            == len(legacy_research_paths) + 5
+            and modern_paths.model_architecture == "modern_tcn_v1"
             and baseline_paths.model_architecture == "inception_time_v1"
             and adamw_paths.model_architecture == "inception_time_v1"
+            and group_norm_paths.model_architecture
+            == "inception_time_group_norm_v1"
+            and modern_paths.experiment_profile
+            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
             and baseline_paths.experiment_profile == "baseline"
             and adamw_paths.experiment_profile == "adamw_only"
             and schedule_paths.experiment_profile
             == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
+            and modern_paths.model_dir.parent.name == "modern_tcn_v1"
             and baseline_paths.model_dir.parent.name == "inception_time_v1"
             and adamw_paths.model_dir.parent.name == "inception_time_v1"
             and schedule_paths.model_dir.parent.name == "inception_time_v1"
+            and group_norm_paths.model_dir.parent.name
+            == "inception_time_group_norm_v1"
+            and group_norm_paths.model_dir.name
+            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+            and modern_paths.model_dir.name
+            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
             and baseline_paths.model_dir.name == "baseline"
             and adamw_paths.model_dir.name == "adamw_only"
             and schedule_paths.model_dir.name

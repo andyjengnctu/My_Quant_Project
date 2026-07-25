@@ -13,7 +13,7 @@
 5. 與當前正式基準的差異、結論、是否採用，以及下一個單一變更。
 6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-24**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-25**。
 
 ---
 
@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260724_173238_f8387e3.zip`，SHA256 `34c8583d4ecfe3d9d79264170832bfb08764fbeb187b78ebeb8d5cb3efac7624` |
-| SHA256 | 來源 ZIP：`34c8583d4ecfe3d9d79264170832bfb08764fbeb187b78ebeb8d5cb3efac7624` |
-| 程式版本範圍 | 9A單一InceptionTime完整OOS已完成並接受為新的排序／高品質模型基準；8F保留為高覆蓋參考，8P保留為legacy read-only |
+| 基準 ZIP | `test-branch-1_20260725_093450_7b92818(1).zip`，SHA256 `97967b2be899c5be1312bb7f600ffdbcfce439a53a32fef2aee978f4d2c45aab` |
+| SHA256 | 來源 ZIP：`97967b2be899c5be1312bb7f600ffdbcfce439a53a32fef2aee978f4d2c45aab` |
+| 程式版本範圍 | 9B `modern_tcn_v1` 完整OOS已淘汰並轉為legacy read-only；policy退回9A `inception_time_v1`排序／高品質實證基準，8F保留高覆蓋參考；下一階段9C規劃Selection-only TS2Vec自監督預訓練 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`；batch size=`128 groups`；patience=`1`；final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前 architecture 仍為 sequence-only；正式研究基準已由 8A 更新為 8F unique-group sampling。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architecture已退回9A `inception_time_v1`；8F sequence-only保留高覆蓋實證基準，9B ModernTCN與9A-GN均只保留legacy read-only compatibility。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -519,6 +519,56 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 判定 | 接受為新的高品質／排序模型基準；不依OOS回調threshold。8F保留供高覆蓋用途與策略層比較 |
 | 下一步 | 先做 `9A-GN`：只將InceptionTime的BatchNorm改為GroupNorm，測試能否改善ECE、Brier、Score／coverage drift並保留固定coverage Precision；若無改善，再進入9B ModernTCN |
 
+### 3.29 9A-GN InceptionTime GroupNorm ablation（2026-07-25）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `REJECTED`；policy已退回9A-BN `inception_time_v1`，9A-GN轉為legacy read-only |
+| 程式基準 | 來源 ZIP `test-branch-1_20260724_204125_8561814.zip`，SHA256 `23ba431eaf7c914bc2de5465f72bd74054bfb71ffa95fc9c8c0ea1983149c58c`；套用 `breakout_quality_inceptiontime_groupnorm_9a_gn_patch_20260724.zip` 後執行；本輪未提供post-run ZIP，結果以使用者提供的完整報表數值為準 |
+| Architecture | `inception_time_group_norm_v1`；只將9A的8個`BatchNorm1d(128)`改為`GroupNorm(8,128)`，其他架構、參數量與訓練條件不變 |
+| Dataset／Label | 沿用300×10 feature bank、相同outer split與固定百分比Label；未重建、未relabel |
+| Selection | 模型PASS 86.35%、Precision 57.58%、Lift +2.77 pp、Recall 90.72%、Accuracy 58.28%、Score 0.6029、PR-AUC 0.6394、P@50／60／70%=62.59／61.33／59.98%、Brier 0.2414、ECE 0.0549 |
+| OOS | 模型PASS 80.39%、Precision 57.08%、Lift +1.45 pp、Recall 82.48%、Accuracy 55.75%、Score 0.5757、PR-AUC 0.5650、P@50／60／70%=59.46／58.60／57.89%、R@P60%=0.50%、Brier 0.2497、ECE 0.0356 |
+| Selection→OOS | PR-AUC −0.0744；P@50／60／70%分別 −3.13／−2.73／−2.09 pp；Precision −0.50 pp、Recall −8.24 pp、模型PASS −5.96 pp、Accuracy −2.53 pp、Score −0.0272；Brier惡化0.0083，ECE反而改善0.0193 |
+| 相較9A-BN | OOS PR-AUC −0.0607；P@50／60／70%分別 −3.31／−3.02／−2.36 pp；R@P60% −76.77 pp；Precision −5.91 pp、Accuracy −0.42 pp、Brier惡化0.0044。Recall +31.04 pp與模型PASS +34.96 pp主要來自score整體上移與coverage放寬，不是排序能力提升；ECE改善0.0366、Score gap改善0.0070不足以抵銷排序崩落 |
+| 指標檢查 | `R@P60%=0.50%`並非報表計算錯誤：其定義是在所有precision≥60%的tie-safe cut中取最大recall；9A-GN在50% coverage時Precision已只有59.46%，因此只有極小的最前端區段能維持60% Precision |
+| 判定 | GroupNorm改善了ECE與平均Score drift，但顯著破壞跨時期排序；未達任何固定coverage採用門檻，不再搜尋GroupNorm group數或其他normalization變體 |
+| 下一步 | 進入9B ModernTCN；9A-BN維持排序／高品質正式基準，8F維持高覆蓋基準 |
+
+
+
+### 3.30 9B ModernTCN（2026-07-25）
+
+| 項目 | 內容 |
+|---|---|
+| 狀態 | `REJECTED`；policy已退回9A `inception_time_v1`，9B `modern_tcn_v1`轉為legacy read-only |
+| 程式基準 | 實作來源`test-branch-1_20260725_085352_917ceb0.zip`，SHA256 `3f2ef72e52614bc82cc935c6fb6f833b390068fca40ec1a44bafbd692c16bbaa`；post-run ZIP `test-branch-1_20260725_093450_7b92818(1).zip`，SHA256 `97967b2be899c5be1312bb7f600ffdbcfce439a53a32fef2aee978f4d2c45aab` |
+| Architecture | `modern_tcn_v1`；6個kernel-51 large-kernel depthwise residual blocks、96 channels、4× pointwise expansion、BatchNorm、global-average pooling |
+| 唯一變更 | 以容量近似的ModernTCN取代9A InceptionTime；資料、Label、split、sampling、optimizer與GPU execution均不變 |
+| 固定條件 | 300×10 raw-level sequence、Dataset context disabled、unique-group sampling、batch 128、patience 1、selected_epochs、Adam、LR 0.0003、weight decay 0.0001、threshold 0.5、seed 42、CUDA BF16、deterministic、TF32 off |
+| 模型規模 | 475,394 trainable parameters；9A為473,218；receptive field 301 bars |
+| Dataset／Label | 沿用既有feature bank與固定百分比Label；未重建Dataset、未relabel |
+| Selection | 模型PASS 63.96%、Precision 62.33%、Lift +7.52 pp、Recall 72.74%、Accuracy 60.97%、Score 0.5347、PR-AUC 0.6671、P@50／60／70%=64.05／62.95／61.32%、R@P60%=84.36%、Brier 0.2333、ECE 0.0202 |
+| OOS | 模型PASS 38.93%、Precision 57.94%、Lift +2.31 pp、Recall 40.55%、Accuracy 50.55%、Score 0.4505、PR-AUC 0.5799、P@50／60／70%=58.17／57.91／57.87%、R@P60%=15.06%、Brier 0.2664、ECE 0.1211 |
+| Selection→OOS | PR-AUC −0.0872；P@50／60／70%分別 −5.88／−5.04／−3.45 pp；R@P60% −69.30 pp；Precision −4.39 pp、Recall −32.19 pp、模型PASS −25.03 pp、Accuracy −10.42 pp、Score −0.0842；Brier惡化0.0331、ECE惡化0.1009 |
+| 相較9A | OOS PR-AUC −0.0458；P@50／60／70%分別 −4.60／−3.71／−2.38 pp；R@P60% −62.21 pp；Precision −5.05 pp、Recall −10.89 pp、模型PASS −6.50 pp、Accuracy −5.62 pp、Score −0.0337；Brier惡化0.0211、ECE惡化0.0489 |
+| 判定 | Selection全面優於9A但OOS排序、分類與校準全面崩落，屬嚴重跨時期過擬合；不是threshold或單純score calibration問題。停止supervised CNN／TCN架構橫向搜尋，不再微調ModernTCN depth、kernel、channels或dropout |
+| 下一步 | 9C Selection-only TS2Vec自監督預訓練；OOS未標記資料不得參與pretraining，先以frozen linear probe檢查representation是否跨時期穩定 |
+
+### 3.31 9C TS2Vec Selection-only自監督預訓練（PLANNED）
+
+| 項目 | 設計 |
+|---|---|
+| 狀態 | `PLANNED`；尚未實作，不預先判定有效 |
+| 研究目的 | 減少PASS／REJECT noisy label直接主導encoder，先從Selection-era大量未標記價格視窗學習跨股票、跨時間的通用representation |
+| Pretraining資料 | 只使用Selection日期上限以前的清理後股票資料；建立與正式模型相同300×10定義的rolling windows，預設每5個交易日取一窗且可由config調整；**不得使用2021年起OOS的任何未標記視窗** |
+| Pretraining objective | TS2Vec hierarchical contrastive objective；不使用PASS／REJECT Label、不讀取OOS結果 |
+| 第一階段下游模型 | Frozen encoder＋單一linear classification head；先隔離檢查representation品質，不同時做full fine-tuning |
+| Supervised資料 | Head仍只使用既有Selection labeled unique groups；Validation、Selection、OOS評估口徑與9A完全相同 |
+| Dataset／Label | 需要新增獨立self-supervised pretraining dataset artifact；既有breakout-quality feature bank與labels不重建、不relabel |
+| 工件隔離 | Pretraining encoder、pretraining manifest與下游checkpoint必須獨立保存；manifest釘死pretraining date ceiling、window stride、source inventory與encoder hash |
+| 防洩漏 | Pretraining window的最後日期不得超過Selection結束日；OOS資料即使無Label也不得用於模型選擇或representation學習 |
+| 主要判定 | 先比較OOS PR-AUC、P@50／60／70%與Selection→OOS gaps；若frozen probe接近9A且泛化更穩，再另立9C2單一實驗做controlled fine-tuning |
 
 ---
 
@@ -554,12 +604,14 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 26. Long branch last-state pooling；8M 的 OOS Precision、Recall、Accuracy、Score及泛化 gaps均低於 8F。
 27. Zero-initialized gated temporal pooling；8O 的 OOS Precision、Recall、Accuracy均低於 8F，只有平均 Score增加 0.0011，主要 gaps未改善。停止 gate width、temperature、初始化與 attention pooling細調。
 28. Raw＋window-normalized dual-path；8P只讓OOS Precision增加0.06 pp，卻使Recall下降8.48 pp、Accuracy下降1.30 pp、Score下降0.0143。停止現有multiscale CNN家族微調。
+29. InceptionTime GroupNorm；9A-GN雖改善ECE與Score gap，但OOS PR-AUC下降0.0607、P@50／60／70%下降3.31／3.02／2.36 pp，固定coverage排序明顯崩落。不再搜尋GroupNorm group數、LayerNorm或其他只換normalization的細調。
+30. ModernTCN supervised architecture search；9B Selection全面變強但OOS PR-AUC、固定coverage Precision、Accuracy、Brier與ECE全面惡化。停止ModernTCN depth、kernel、channels、expansion、dropout與其他supervised CNN／TCN橫向調整。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。8F `multiscale_cnn_sequence_only_v1 / unique_group_sampling` 維持最佳實證比較基準；目前 active architecture 已切換為9A `inception_time_v1`，並沿用相同的unique-group sampling、Seed 42、threshold 0.5、no class weight、no time weight與 `selected_epochs`，以隔離模型架構差異。
+所有實驗一次只改一項。9B `modern_tcn_v1 / unique_group_sampling` 已由完整OOS淘汰並轉為legacy；policy退回已接受的9A `inception_time_v1 / unique_group_sampling`排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。下一項固定為9C Selection-only TS2Vec自監督預訓練；不得把OOS未標記資料混入pretraining，也不得同輪混入full fine-tuning。
 
 ### 優先 6A：AdamW only
 
@@ -688,17 +740,21 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 `ACCEPTED`。OOS Precision 62.99%、Lift +7.35 pp；固定coverage P@50／60／70%分別為62.77／61.62／60.25%，且相較Selection沒有下降，證明排序能力跨時期穩定。threshold 0.5下Recall為51.44%、模型PASS為45.43%，因此定位為高品質／較低coverage模型；8F保留為高coverage基準。
 
-#### 下一階段 9A-GN：InceptionTime GroupNorm ablation
+#### 9A-GN：InceptionTime GroupNorm ablation
+
+`REJECTED`。相較9A-BN，OOS PR-AUC −0.0607，P@50／60／70%分別 −3.31／−3.02／−2.36 pp，R@P60%由77.27%降至0.50%；雖然ECE與Score gap改善，但排序能力明顯崩落。已退回`inception_time_v1`，GroupNorm版本轉為legacy read-only，不再細調normalization。
+
+#### 下一階段 9C：TS2Vec Selection-only自監督預訓練
 
 | 項目 | 固定設計 |
 |---|---|
 | 狀態 | `PLANNED` |
-| 唯一變更 | Inception modules與residual projection中的`BatchNorm1d`改為`GroupNorm`；其他架構與訓練條件完全不變 |
-| Group count | 固定8 groups；128 channels可整除，不進行group數搜尋 |
-| 固定條件 | depth 6、filters 32、bottleneck 32、kernels 39/19/9、unique-group sampling、batch 128、patience 1、selected-epochs、threshold 0.5、seed 42 |
-| 目的 | 移除依賴Selection running mean／variance的BatchNorm統計，直接處理9A的ECE與score／coverage drift |
-| 採用門檻 | 固定coverage Precision不得低於9A；OOS ECE、Brier或Score gap至少兩項改善；threshold 0.5 Precision不得下降，Recall／模型PASS應提高或至少不明顯惡化 |
-| 後續 | 9A-GN無改善後再測9B ModernTCN；其後進入TS2Vec／Series2Vec自監督預訓練 |
+| 唯一變更 | 在supervised head訓練前，先以Selection-era未標記rolling windows預訓練TS2Vec encoder；第一階段encoder凍結，只訓練linear head |
+| Pretraining資料 | 清理後股票資料的300×10 rolling windows；日期上限鎖定Selection結束日，預設stride 5且由config管理；不得讀取OOS未標記資料 |
+| 固定條件 | 下游labeled split、unique-group evaluation、threshold 0.5、Seed 42及所有ranking／calibration指標口徑不變 |
+| Dataset rebuild | 新增獨立pretraining dataset artifact；現有supervised feature bank與Label不重建、不relabel |
+| 主要判定 | OOS PR-AUC、P@50／60／70%及Selection→OOS gap；threshold 0.5操作點只作輔助 |
+| 後續 | Frozen probe若接近9A且泛化較穩，再另立9C2 controlled fine-tuning；否則改測其他自監督encoder，而不是回頭調ModernTCN |
 
 
 ---
@@ -728,8 +784,9 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 → 8O zero-initialized gated temporal pooling（REJECTED）
 → 8P raw＋window-normalized dual-path（REJECTED；停止multiscale CNN家族微調）
 → 9A 單一InceptionTime（ACCEPTED；新的排序／高品質模型基準）
-→ 9A-GN InceptionTime GroupNorm ablation（PLANNED）
-→ 9B ModernTCN（9A-GN無改善後）
+→ 9A-GN InceptionTime GroupNorm ablation（REJECTED；已退回9A-BN）
+→ 9B ModernTCN（REJECTED；已退回9A並轉為legacy）
+→ 9C TS2Vec Selection-only自監督預訓練（PLANNED）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

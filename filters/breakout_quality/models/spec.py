@@ -25,6 +25,8 @@ MULTISCALE_CNN_REGIME_CONTEXT_V1 = "multiscale_cnn_regime_context_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
 INCEPTION_TIME_V1 = "inception_time_v1"
+INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
+MODERN_TCN_V1 = "modern_tcn_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
@@ -40,6 +42,8 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     INCEPTION_TIME_V1,
+    INCEPTION_TIME_GROUP_NORM_V1,
+    MODERN_TCN_V1,
     RESIDUAL_TCN_V1,
 )
 ACTIVE_MODEL_ARCHITECTURES = (
@@ -84,6 +88,10 @@ class BreakoutQualityModelSpec:
     inception_bottleneck_channels: int | None = None
     inception_kernel_sizes: tuple[int, ...] = ()
     inception_residual_every: int | None = None
+    modern_tcn_depth: int | None = None
+    modern_tcn_channels: int | None = None
+    modern_tcn_kernel_size: int | None = None
+    modern_tcn_expansion_ratio: int | None = None
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -105,6 +113,10 @@ class BreakoutQualityModelSpec:
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,
             "inception_residual_every": self.inception_residual_every,
+            "modern_tcn_depth": self.modern_tcn_depth,
+            "modern_tcn_channels": self.modern_tcn_channels,
+            "modern_tcn_kernel_size": self.modern_tcn_kernel_size,
+            "modern_tcn_expansion_ratio": self.modern_tcn_expansion_ratio,
         }
         for key, value in optional_scalars.items():
             if value is not None:
@@ -299,11 +311,36 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             window_normalization_epsilon=window_normalization_epsilon,
         )
 
-    if normalized == INCEPTION_TIME_V1:
+    if normalized == MODERN_TCN_V1:
+        depth = 6
+        channels = 96
+        kernel_size = 51
+        expansion_ratio = 4
+        return BreakoutQualityModelSpec(
+            architecture=MODERN_TCN_V1,
+            family="modern_tcn",
+            channels=channels,
+            kernel_size=kernel_size,
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("global_average",),
+            dropout=0.10,
+            receptive_field_bars=1 + depth * (kernel_size - 1),
+            normalization="batch_norm",
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level",),
+            modern_tcn_depth=depth,
+            modern_tcn_channels=channels,
+            modern_tcn_kernel_size=kernel_size,
+            modern_tcn_expansion_ratio=expansion_ratio,
+        )
+
+    if normalized in {INCEPTION_TIME_V1, INCEPTION_TIME_GROUP_NORM_V1}:
         depth = 6
         kernel_sizes = (39, 19, 9)
+        use_group_norm = normalized == INCEPTION_TIME_GROUP_NORM_V1
         return BreakoutQualityModelSpec(
-            architecture=INCEPTION_TIME_V1,
+            architecture=normalized,
             family="inception_time",
             channels=32,
             kernel_size=max(kernel_sizes),
@@ -312,7 +349,8 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             pooling=("global_average",),
             dropout=0.0,
             receptive_field_bars=1 + depth * (max(kernel_sizes) - 1),
-            normalization="batch_norm",
+            normalization="group_norm" if use_group_norm else "batch_norm",
+            normalization_groups=8 if use_group_norm else None,
             use_dataset_context=False,
             sequence_input_paths=("raw_level",),
             inception_depth=depth,
@@ -359,6 +397,7 @@ def model_spec_from_manifest(payload: Mapping[str, object]) -> BreakoutQualityMo
 __all__ = [
     "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
+    "INCEPTION_TIME_GROUP_NORM_V1",
     "INCEPTION_TIME_V1",
     "LEGACY_MODEL_ARCHITECTURES",
     "MULTISCALE_CNN_V1",
@@ -372,6 +411,7 @@ __all__ = [
     "MULTISCALE_CNN_REGIME_CONTEXT_V1",
     "MULTISCALE_CNN_SEQUENCE_ONLY_V1",
     "MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1",
+    "MODERN_TCN_V1",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",
