@@ -2159,6 +2159,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "multiscale_cnn_sequence_only_dual_path_v1",
         "inception_time_group_norm_v1",
         "modern_tcn_v1",
+        "mantis_v2_frozen_linear_v1",
         "ts2vec_frozen_linear_v1",
         "residual_tcn_v1",
     )

@@ -782,6 +782,8 @@ Formal bundle閉環（2026-07-25 23:30）：quick gate、chain checks與ML smoke
 
 `REJECTED`。相較9A，OOS PR-AUC −0.0324、P@50／60／70%分別 −2.72／−2.23／−1.55 pp、R@P60% −22.12 pp。threshold 0.5下Recall與Accuracy較高，但模型PASS達86.11%，屬更寬鬆的高coverage操作點，未形成比9A更強排序或比8F更高Precision的新定位。MantisV2轉為legacy read-only，不啟動fine-tuning或同家族細調。
 
+Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke均PASS；consistency僅1項FAIL，meta quality也只因同一項synthetic failure連帶FAIL。9D退回9A時，runtime與model spec已正確將`mantis_v2_frozen_linear_v1`轉為legacy read-only，但`validate_breakout_quality_policy_single_source_case`的顯式legacy expected tuple漏列MantisV2，導致actual比expected多一個正確的legacy architecture。已同步fixture；此修正不改runtime、9D結果、9A／8F active集合、Dataset、Label、threshold或訓練行為。
+
 #### 下一階段 9E：MOMENT frozen encoder＋linear probe
 
 | 項目 | 固定設計 |
