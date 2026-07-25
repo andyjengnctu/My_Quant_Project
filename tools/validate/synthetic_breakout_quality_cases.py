@@ -126,6 +126,14 @@ from filters.breakout_quality.models import (
     count_trainable_parameters,
     get_model_spec,
 )
+from filters.breakout_quality.mantis_contract import (
+    MANTIS_V2_CHECKPOINT_FILENAME,
+    MANTIS_V2_CHECKPOINT_SHA256,
+    MANTIS_V2_CONFIG_FILENAME,
+    MANTIS_V2_CONFIG_SHA256,
+    MANTIS_V2_REPOSITORY,
+    MANTIS_V2_REVISION,
+)
 from filters.breakout_quality.models.ts2vec import hierarchical_contrastive_loss
 from filters.breakout_quality.pretraining_store import (
     build_file_record as build_pretraining_file_record,
@@ -456,6 +464,135 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_spec = get_model_spec("inception_time_v1")
     inception_group_norm_spec = get_model_spec("inception_time_group_norm_v1")
     ts2vec_spec = get_model_spec("ts2vec_frozen_linear_v1")
+    mantis_spec = get_model_spec("mantis_v2_frozen_linear_v1")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mantis_9d_spec_pins_frozen_external_linear_probe_contract",
+        (
+            "mantis_v2_frozen_linear",
+            "paris-noah/MantisV2",
+            "99fe0f548960e272fbfa4b82fd9b5b5956779dfd",
+            512,
+            32,
+            2,
+            "combined",
+            "independent_channel_concat",
+            False,
+        ),
+        (
+            mantis_spec.family,
+            mantis_spec.mantis_repository,
+            mantis_spec.mantis_revision,
+            mantis_spec.mantis_input_length,
+            mantis_spec.mantis_num_patches,
+            mantis_spec.mantis_return_transformer_layer,
+            mantis_spec.mantis_output_token,
+            mantis_spec.mantis_channel_aggregation,
+            mantis_spec.use_dataset_context,
+        ),
+    )
+    class _SyntheticMantisV2(torch.nn.Module):
+        forward_batch_sizes: list[int] = []
+        forward_sequence_lengths: list[int] = []
+
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.ones(1, dtype=torch.float32))
+            self.return_transf_layer = int(kwargs["return_transf_layer"])
+            self.output_token = str(kwargs["output_token"])
+            self.layers_removed = False
+
+        def remove_transf_layers(self):
+            self.layers_removed = True
+
+        def forward(self, x):
+            type(self).forward_batch_sizes.append(int(x.shape[0]))
+            type(self).forward_sequence_lengths.append(int(x.shape[2]))
+            base = x.mean(dim=(1, 2), keepdim=False).unsqueeze(1)
+            return base.repeat(1, 512) * self.scale
+
+    _SyntheticMantisV2.forward_batch_sizes = []
+    _SyntheticMantisV2.forward_sequence_lengths = []
+    with patch(
+        "filters.breakout_quality.models.mantis_v2.require_mantis_v2_class",
+        return_value=_SyntheticMantisV2,
+    ):
+        mantis_model = build_breakout_quality_model(
+            10, 4, architecture="mantis_v2_frozen_linear_v1"
+        )
+        mantis_trainable_parameter_count = count_trainable_parameters(mantis_model)
+        mantis_total_parameter_count = sum(
+            int(parameter.numel()) for parameter in mantis_model.parameters()
+        )
+        mantis_encoder_requires_grad = [
+            bool(parameter.requires_grad) for parameter in mantis_model.encoder.parameters()
+        ]
+        mantis_head_requires_grad = [
+            bool(parameter.requires_grad) for parameter in mantis_model.classifier.parameters()
+        ]
+        mantis_model.train()
+        mantis_features = torch.randn((103, 300, 10), dtype=torch.float32)
+        mantis_context_a = torch.randn((103, 4), dtype=torch.float32)
+        mantis_context_b = torch.randn((103, 4), dtype=torch.float32)
+        mantis_encoder_before = {
+            key: value.detach().clone()
+            for key, value in mantis_model.encoder.state_dict().items()
+        }
+        mantis_head_before = {
+            key: value.detach().clone()
+            for key, value in mantis_model.classifier.state_dict().items()
+        }
+        mantis_optimizer = torch.optim.Adam(
+            [parameter for parameter in mantis_model.parameters() if parameter.requires_grad],
+            lr=0.01,
+        )
+        mantis_optimizer.zero_grad(set_to_none=True)
+        mantis_logits_a = mantis_model(mantis_features, mantis_context_a)
+        mantis_logits_b = mantis_model(mantis_features, mantis_context_b)
+        mantis_loss = torch.nn.functional.cross_entropy(
+            mantis_logits_a,
+            torch.tensor(([0, 1] * 51) + [0], dtype=torch.long),
+        )
+        mantis_loss.backward()
+        mantis_optimizer.step()
+        mantis_encoder_unchanged = all(
+            torch.equal(value, mantis_encoder_before[key])
+            for key, value in mantis_model.encoder.state_dict().items()
+        )
+        mantis_head_changed = any(
+            not torch.equal(value, mantis_head_before[key])
+            for key, value in mantis_model.classifier.state_dict().items()
+        )
+        mantis_reload = build_breakout_quality_model(
+            10, 4, model_spec=mantis_spec.as_manifest_payload()
+        )
+        mantis_reload.load_state_dict(mantis_model.state_dict(), strict=True)
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mantis_9d_encoder_is_frozen_context_independent_chunked_and_reloadable",
+        True,
+        bool(
+            mantis_total_parameter_count == 10243
+            and mantis_trainable_parameter_count == 10242
+            and not any(mantis_encoder_requires_grad)
+            and all(mantis_head_requires_grad)
+            and mantis_model.encoder.training is False
+            and getattr(mantis_model.encoder, "layers_removed", False)
+            and tuple(mantis_logits_a.shape) == (103, 2)
+            and torch.equal(mantis_logits_a, mantis_logits_b)
+            and torch.isfinite(mantis_logits_a).all()
+            and mantis_encoder_unchanged
+            and mantis_head_changed
+            and _SyntheticMantisV2.forward_batch_sizes == [1024, 6, 1024, 6]
+            and _SyntheticMantisV2.forward_sequence_lengths == [512, 512, 512, 512]
+            and mantis_reload.encoder.training is False
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -2156,6 +2293,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
         (
             (
+                "mantis_v2_frozen_linear_v1",
                 "inception_time_v1",
                 "multiscale_cnn_sequence_only_v1",
             ),
@@ -3526,10 +3664,11 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "row_level": {"row_count": 1000},
         }
 
+    synthetic_report_architecture = "inception_time_v1"
     synthetic_report_model = build_breakout_quality_model(
         10,
         4,
-        architecture=DEFAULT_MODEL_ARCHITECTURE,
+        architecture=synthetic_report_architecture,
     )
     synthetic_report_trainable_parameter_count = count_trainable_parameters(
         synthetic_report_model
@@ -3541,10 +3680,10 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         "filter_id": "synthetic_quality",
         "score_path": Path("research_scores.csv"),
         "model_manifest": {
-            "model_architecture": DEFAULT_MODEL_ARCHITECTURE,
+            "model_architecture": synthetic_report_architecture,
             "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
             "experiment_settings": CONFIGURED_EXPERIMENT.as_manifest_payload(),
-            "model_spec": get_model_spec(DEFAULT_MODEL_ARCHITECTURE).as_manifest_payload(),
+            "model_spec": get_model_spec(synthetic_report_architecture).as_manifest_payload(),
             "trainable_parameter_count": synthetic_report_trainable_parameter_count,
             "total_parameter_count": synthetic_report_total_parameter_count,
             "frozen_parameter_count": (
@@ -4012,12 +4151,31 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     filter_id = "synthetic_quality"
+    runtime_fixture_architecture = "inception_time_v1"
     high_len = int(BREAKOUT_DEFAULT_HIGH_LEN)
     with tempfile.TemporaryDirectory(prefix="breakout_quality_contract_") as tmp_dir:
         project_root = Path(tmp_dir)
         models_dir = project_root / "models"
-        with patch.dict(os.environ, {"V16_MODELS_DIR": str(models_dir), "V16_BREAKOUT_QUALITY_SCORE_PATH": str(project_root / "legacy.csv")}, clear=False):
-            paths = resolve_filter_artifact_paths(project_root, filter_id)
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "V16_MODELS_DIR": str(models_dir),
+                    "V16_BREAKOUT_QUALITY_SCORE_PATH": str(project_root / "legacy.csv"),
+                },
+                clear=False,
+            ),
+            patch(
+                "filters.breakout_quality.paths.DEFAULT_MODEL_ARCHITECTURE",
+                runtime_fixture_architecture,
+            ),
+        ):
+            paths = resolve_filter_artifact_paths(
+                project_root,
+                filter_id,
+                runtime_fixture_architecture,
+                BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+            )
             research_score_path = resolve_filter_research_score_path(project_root, filter_id)
             add_check(
                 results,
@@ -4040,14 +4198,14 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 / "filters"
                 / FILTER_FAMILY
                 / filter_id
-                / DEFAULT_MODEL_ARCHITECTURE
+                / runtime_fixture_architecture
             )
             legacy_model_dir.mkdir(parents=True, exist_ok=True)
             (legacy_model_dir / "manifest.json").write_text("{}", encoding="utf-8")
             legacy_loaded_paths = resolve_existing_filter_artifact_paths(
                 project_root,
                 filter_id,
-                DEFAULT_MODEL_ARCHITECTURE,
+                runtime_fixture_architecture,
                 BASELINE_EXPERIMENT_PROFILE,
             )
             try:
@@ -4063,7 +4221,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             canonical_baseline_paths = resolve_filter_artifact_paths(
                 project_root,
                 filter_id,
-                DEFAULT_MODEL_ARCHITECTURE,
+                runtime_fixture_architecture,
                 BASELINE_EXPERIMENT_PROFILE,
             )
             canonical_forward_paths = breakout_quality_export_scores._resolve_forward_export_write_paths(
@@ -4621,6 +4779,132 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 legacy_ts2vec_architecture,
                 legacy_ts2vec_contract.manifest["model_architecture"],
             )
+
+            mantis_architecture = "mantis_v2_frozen_linear_v1"
+            mantis_paths = resolve_filter_artifact_paths(
+                project_root,
+                filter_id,
+                mantis_architecture,
+                paths.experiment_profile,
+            )
+            mantis_paths.model_dir.mkdir(parents=True, exist_ok=True)
+            mantis_paths.model_path.write_bytes(b"synthetic-mantis-model")
+            split_frame.to_csv(
+                mantis_paths.split_path,
+                index=False,
+                encoding="utf-8-sig",
+            )
+            mantis_split_record = dict(validation_split_record)
+            mantis_split_record.update(build_file_manifest(mantis_paths.split_path))
+            mantis_manifest = json.loads(json.dumps(manifest, ensure_ascii=False))
+            mantis_model_spec = get_model_spec(mantis_architecture)
+            mantis_manifest.update(
+                {
+                    "model_architecture": mantis_architecture,
+                    "model_spec": mantis_model_spec.as_manifest_payload(),
+                    "trainable_parameter_count": 10_242,
+                    "total_parameter_count": 10_243,
+                    "frozen_parameter_count": 1,
+                    "self_supervised_pretraining": None,
+                    "external_pretrained_encoder": {
+                        "source_type": "hugging_face_snapshot",
+                        "repository": MANTIS_V2_REPOSITORY,
+                        "requested_revision": MANTIS_V2_REVISION,
+                        "resolved_revision": MANTIS_V2_REVISION,
+                        "checkpoint": {
+                            "filename": MANTIS_V2_CHECKPOINT_FILENAME,
+                            "sha256": MANTIS_V2_CHECKPOINT_SHA256,
+                            "size_bytes": 16_771_648,
+                        },
+                        "config": {
+                            "filename": MANTIS_V2_CONFIG_FILENAME,
+                            "sha256": MANTIS_V2_CONFIG_SHA256,
+                            "size_bytes": 375,
+                        },
+                        "package": {
+                            "name": "mantis-tsfm",
+                            "version": "1.0.0",
+                            "expected_version": "1.0.0",
+                        },
+                        "model_architecture": mantis_architecture,
+                        "model_spec": mantis_model_spec.as_manifest_payload(),
+                        "encoder_frozen_downstream": True,
+                        "project_selection_windows_used_for_encoder_training": False,
+                        "project_oos_windows_used_for_encoder_training": False,
+                        "project_pass_reject_labels_used_for_encoder_training": False,
+                        "project_encoder_fine_tuning_used": False,
+                        "publisher_pretraining_description": (
+                            "CauKer-2M synthetic time-series pretraining"
+                        ),
+                    },
+                    "model": build_file_manifest(mantis_paths.model_path),
+                    "split_assignments": mantis_split_record,
+                }
+            )
+            mantis_paths.manifest_path.write_text(
+                json.dumps(mantis_manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            mantis_contract = load_model_artifact_contract(
+                str(project_root),
+                filter_id,
+                model_architecture=mantis_architecture,
+                experiment_profile=paths.experiment_profile,
+            )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "mantis_external_checkpoint_artifact_contract_supported",
+                (mantis_architecture, MANTIS_V2_CHECKPOINT_SHA256, True),
+                (
+                    mantis_contract.manifest["model_architecture"],
+                    mantis_contract.manifest["external_pretrained_encoder"][
+                        "checkpoint"
+                    ]["sha256"],
+                    mantis_contract.manifest["external_pretrained_encoder"][
+                        "encoder_frozen_downstream"
+                    ],
+                ),
+            )
+
+            stale_mantis_manifest = json.loads(
+                json.dumps(mantis_manifest, ensure_ascii=False)
+            )
+            stale_mantis_manifest["external_pretrained_encoder"]["checkpoint"][
+                "sha256"
+            ] = "0" * 64
+            mantis_paths.manifest_path.write_text(
+                json.dumps(stale_mantis_manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            try:
+                load_model_artifact_contract(
+                    str(project_root),
+                    filter_id,
+                    model_architecture=mantis_architecture,
+                    experiment_profile=paths.experiment_profile,
+                )
+                stale_mantis_checkpoint_rejected = False
+            except ValueError as exc:
+                stale_mantis_checkpoint_rejected = (
+                    "external checkpoint record" in str(exc)
+                )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "mantis_checkpoint_hash_tamper_is_rejected",
+                True,
+                stale_mantis_checkpoint_rejected,
+            )
+            mantis_paths.manifest_path.write_text(
+                json.dumps(mantis_manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
 
             stale_pretraining_profile_manifest = json.loads(
                 json.dumps(legacy_ts2vec_manifest, ensure_ascii=False)

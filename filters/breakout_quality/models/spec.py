@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from filters.breakout_quality.mantis_contract import (
+    MANTIS_V2_REPOSITORY,
+    MANTIS_V2_REVISION,
+)
+
 from filters.breakout_quality.models.regime_context import (
     REGIME_CONTEXT_ANNUALIZATION_BARS,
     REGIME_CONTEXT_FEATURES,
@@ -27,6 +32,7 @@ MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_p
 INCEPTION_TIME_V1 = "inception_time_v1"
 INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
 MODERN_TCN_V1 = "modern_tcn_v1"
+MANTIS_V2_FROZEN_LINEAR_V1 = "mantis_v2_frozen_linear_v1"
 TS2VEC_FROZEN_LINEAR_V1 = "ts2vec_frozen_linear_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
@@ -45,10 +51,12 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_V1,
     INCEPTION_TIME_GROUP_NORM_V1,
     MODERN_TCN_V1,
+    MANTIS_V2_FROZEN_LINEAR_V1,
     TS2VEC_FROZEN_LINEAR_V1,
     RESIDUAL_TCN_V1,
 )
 ACTIVE_MODEL_ARCHITECTURES = (
+    MANTIS_V2_FROZEN_LINEAR_V1,
     INCEPTION_TIME_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
 )
@@ -98,6 +106,21 @@ class BreakoutQualityModelSpec:
     ts2vec_output_dims: int | None = None
     ts2vec_depth: int | None = None
     ts2vec_temporal_unit: int | None = None
+    mantis_repository: str | None = None
+    mantis_revision: str | None = None
+    mantis_input_length: int | None = None
+    mantis_num_patches: int | None = None
+    mantis_hidden_dim: int | None = None
+    mantis_embedding_dim: int | None = None
+    mantis_scalar_hidden_dim: int | None = None
+    mantis_scalar_epsilon: float | None = None
+    mantis_transformer_depth: int | None = None
+    mantis_transformer_heads: int | None = None
+    mantis_transformer_mlp_dim: int | None = None
+    mantis_transformer_dim_head: int | None = None
+    mantis_return_transformer_layer: int | None = None
+    mantis_output_token: str | None = None
+    mantis_channel_aggregation: str | None = None
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -127,6 +150,21 @@ class BreakoutQualityModelSpec:
             "ts2vec_output_dims": self.ts2vec_output_dims,
             "ts2vec_depth": self.ts2vec_depth,
             "ts2vec_temporal_unit": self.ts2vec_temporal_unit,
+            "mantis_repository": self.mantis_repository,
+            "mantis_revision": self.mantis_revision,
+            "mantis_input_length": self.mantis_input_length,
+            "mantis_num_patches": self.mantis_num_patches,
+            "mantis_hidden_dim": self.mantis_hidden_dim,
+            "mantis_embedding_dim": self.mantis_embedding_dim,
+            "mantis_scalar_hidden_dim": self.mantis_scalar_hidden_dim,
+            "mantis_scalar_epsilon": self.mantis_scalar_epsilon,
+            "mantis_transformer_depth": self.mantis_transformer_depth,
+            "mantis_transformer_heads": self.mantis_transformer_heads,
+            "mantis_transformer_mlp_dim": self.mantis_transformer_mlp_dim,
+            "mantis_transformer_dim_head": self.mantis_transformer_dim_head,
+            "mantis_return_transformer_layer": self.mantis_return_transformer_layer,
+            "mantis_output_token": self.mantis_output_token,
+            "mantis_channel_aggregation": self.mantis_channel_aggregation,
         }
         for key, value in optional_scalars.items():
             if value is not None:
@@ -321,6 +359,37 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             window_normalization_epsilon=window_normalization_epsilon,
         )
 
+    if normalized == MANTIS_V2_FROZEN_LINEAR_V1:
+        return BreakoutQualityModelSpec(
+            architecture=MANTIS_V2_FROZEN_LINEAR_V1,
+            family="mantis_v2_frozen_linear",
+            channels=256,
+            kernel_size=41,
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("transformer_layer_2_cls_mean_combined", "channel_concat"),
+            dropout=0.10,
+            receptive_field_bars=300,
+            normalization="official_mantis_v2",
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level_per_channel_linear_interpolate_512",),
+            mantis_repository=MANTIS_V2_REPOSITORY,
+            mantis_revision=MANTIS_V2_REVISION,
+            mantis_input_length=512,
+            mantis_num_patches=32,
+            mantis_hidden_dim=256,
+            mantis_embedding_dim=512,
+            mantis_scalar_hidden_dim=32,
+            mantis_scalar_epsilon=1.1,
+            mantis_transformer_depth=6,
+            mantis_transformer_heads=8,
+            mantis_transformer_mlp_dim=512,
+            mantis_transformer_dim_head=32,
+            mantis_return_transformer_layer=2,
+            mantis_output_token="combined",
+            mantis_channel_aggregation="independent_channel_concat",
+        )
+
     if normalized == TS2VEC_FROZEN_LINEAR_V1:
         depth = 8
         hidden_dims = 128
@@ -446,6 +515,7 @@ __all__ = [
     "MULTISCALE_CNN_SEQUENCE_ONLY_V1",
     "MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1",
     "MODERN_TCN_V1",
+    "MANTIS_V2_FROZEN_LINEAR_V1",
     "TS2VEC_FROZEN_LINEAR_V1",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",

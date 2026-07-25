@@ -1,0 +1,4 @@
+# 先安裝此檔的相依套件，再以 --no-deps 安裝官方 Mantis 套件，避免其 pandas<3 約束降級本專案 pandas 3.x。
+einops==0.8.2
+huggingface-hub==1.16.1
+safetensors==0.7.0

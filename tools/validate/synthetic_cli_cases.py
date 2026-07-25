@@ -293,6 +293,57 @@ def validate_dataset_cli_contract_case(_base_params):
         "\x1b[" in workflow_console,
     )
 
+    mantis_workflow_calls = []
+
+    def _fake_run_mantis_command(command, args, *, program_name):
+        mantis_workflow_calls.append((command, list(args), program_name))
+        return 0
+
+    mantis_workflow_output = StringIO()
+    with (
+        patch(
+            "apps.breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+            "mantis_v2_frozen_linear_v1",
+        ),
+        patch("apps.breakout_quality.require_mantis_v2_class", return_value=object),
+        patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
+        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
+        patch("apps.breakout_quality._pretraining_refresh_plan") as mocked_mantis_pretraining_plan,
+        patch("apps.breakout_quality._run_command", side_effect=_fake_run_mantis_command),
+        redirect_stdout(mantis_workflow_output),
+    ):
+        mantis_workflow_rc = app_breakout_quality._run_workflow(
+            workflow_args,
+            program_name="apps/breakout_quality.py",
+        )
+    mantis_commands = [call[0] for call in mantis_workflow_calls]
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "mantis_workflow_skips_project_pretraining_and_runs_supervised_stages",
+        (0, ["train", "export-scores", "report"], 0, 3),
+        (
+            mantis_workflow_rc,
+            mantis_commands,
+            mocked_mantis_pretraining_plan.call_count,
+            mantis_workflow_output.getvalue().count("[完成]"),
+        ),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "mantis_workflow_prints_pinned_external_encoder_contract",
+        True,
+        (
+            "external_encoder=repository=paris-noah/MantisV2"
+            in mantis_workflow_output.getvalue()
+            and "project_pretraining=False" in mantis_workflow_output.getvalue()
+            and "encoder_fine_tuning=False" in mantis_workflow_output.getvalue()
+        ),
+    )
+
     pretrain_module = importlib.import_module("tools.filters.breakout_quality.pretrain")
     parsed_pretrain = pretrain_module.parse_args(
         [

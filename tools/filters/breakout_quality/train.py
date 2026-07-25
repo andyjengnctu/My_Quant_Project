@@ -112,7 +112,13 @@ from filters.breakout_quality.lr_schedule import (
     build_learning_rate_schedule_plan as _build_learning_rate_schedule_plan,
     learning_rate_for_optimizer_step as _learning_rate_for_optimizer_step,
 )
-from filters.breakout_quality.models.spec import TS2VEC_FROZEN_LINEAR_V1
+from filters.breakout_quality.models.spec import (
+    MANTIS_V2_FROZEN_LINEAR_V1,
+    TS2VEC_FROZEN_LINEAR_V1,
+)
+from filters.breakout_quality.mantis_pretrained import (
+    load_mantis_v2_pretrained_encoder_state,
+)
 from filters.breakout_quality.pretraining_store import (
     load_validated_pretrained_encoder_manifest,
     load_validated_pretraining_dataset,
@@ -1176,8 +1182,14 @@ def _load_pretrained_encoder_for_training(
     outer_oos_policy: dict,
     model_spec,
 ):
-    if str(model_spec.architecture) != TS2VEC_FROZEN_LINEAR_V1:
-        return None, None
+    architecture = str(model_spec.architecture)
+    if architecture == MANTIS_V2_FROZEN_LINEAR_V1:
+        state, external_record = load_mantis_v2_pretrained_encoder_state(
+            model_spec=model_spec
+        )
+        return state, None, external_record
+    if architecture != TS2VEC_FROZEN_LINEAR_V1:
+        return None, None, None
     dataset_profile = str(dataset_summary.get("dataset") or "").strip()
     if not dataset_profile:
         raise ValueError("TS2Vec training 缺少 supervised dataset profile")
@@ -1246,7 +1258,7 @@ def _load_pretrained_encoder_for_training(
             "configuration_fingerprint": pretrain_summary["configuration_fingerprint"],
         },
     }
-    return state, record
+    return state, record, None
 
 
 def _new_training_state(
@@ -1939,7 +1951,11 @@ def main(argv=None) -> int:
         PROJECT_ROOT,
         source_data_end_date=source_data_end,
     )
-    pretrained_encoder_state, pretraining_record = _load_pretrained_encoder_for_training(
+    (
+        pretrained_encoder_state,
+        pretraining_record,
+        external_pretrained_encoder_record,
+    ) = _load_pretrained_encoder_for_training(
         torch,
         filter_id=args.filter_id,
         experiment_profile=experiment_profile,
@@ -2200,6 +2216,7 @@ def main(argv=None) -> int:
             "total_parameter_count": int(total_parameter_count),
             "frozen_parameter_count": int(frozen_parameter_count),
             "self_supervised_pretraining": pretraining_record,
+            "external_pretrained_encoder": external_pretrained_encoder_record,
         },
         artifact_paths.model_path,
     )
@@ -2246,6 +2263,7 @@ def main(argv=None) -> int:
         "total_parameter_count": int(total_parameter_count),
         "frozen_parameter_count": int(frozen_parameter_count),
         "self_supervised_pretraining": pretraining_record,
+        "external_pretrained_encoder": external_pretrained_encoder_record,
         "sequence_length": int(X.shape[1]),
         "model_filename": DEFAULT_MODEL_FILENAME,
         "manifest_filename": DEFAULT_MANIFEST_FILENAME,

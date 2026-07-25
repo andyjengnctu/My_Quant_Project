@@ -300,6 +300,7 @@ def main(argv=None) -> int:
         "total_parameter_count",
         "frozen_parameter_count",
         "self_supervised_pretraining",
+        "external_pretrained_encoder",
     ):
         if checkpoint.get(field_name) != manifest.get(field_name):
             raise ValueError(f"model checkpoint {field_name} 與 manifest 不一致")

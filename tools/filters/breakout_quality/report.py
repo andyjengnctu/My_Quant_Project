@@ -435,6 +435,7 @@ def _training_summary(manifest: dict) -> dict:
         "total_parameter_count": manifest.get("total_parameter_count"),
         "frozen_parameter_count": manifest.get("frozen_parameter_count"),
         "self_supervised_pretraining": manifest.get("self_supervised_pretraining"),
+        "external_pretrained_encoder": manifest.get("external_pretrained_encoder"),
         "sequence_length": manifest.get("sequence_length"),
         "training_mode": manifest.get("training_mode"),
         "inner_validation_used": bool(manifest.get("inner_validation_used", False)),
@@ -1153,6 +1154,23 @@ def _deployment_presentation(payload: dict) -> dict:
 def _markdown_model_detail_lines(training: dict) -> list[str]:
     spec = training.get("model_spec") or {}
     family = str(spec.get("family") or "")
+    if family == "mantis_v2_frozen_linear":
+        external = training.get("external_pretrained_encoder") or {}
+        checkpoint = external.get("checkpoint") or {}
+        package = external.get("package") or {}
+        return [
+            f"- **Model Family**：`{family}`",
+            f"- **External Encoder**：`{external.get('repository', spec.get('mantis_repository', '-'))}`",
+            f"- **Pinned Revision**：`{external.get('resolved_revision', spec.get('mantis_revision', '-'))}`",
+            f"- **Checkpoint SHA256**：`{checkpoint.get('sha256', '-')}`",
+            f"- **Mantis Package**：`{package.get('name', '-')} {package.get('version', '-')}`",
+            f"- **Input Resize**：`{training.get('sequence_length', '-')} → {spec.get('mantis_input_length')} bars`",
+            f"- **Channel Aggregation**：`{spec.get('mantis_channel_aggregation')}`",
+            f"- **Transformer Output**：`layer {spec.get('mantis_return_transformer_layer')} / {spec.get('mantis_output_token')}`",
+            f"- **Per-channel Representation**：`{spec.get('mantis_embedding_dim')}`",
+            "- **Encoder Training**：`official external pretraining; frozen downstream`",
+            "- **Downstream Head**：`linear`",
+        ]
     if family == "ts2vec_frozen_linear":
         pretraining = training.get("self_supervised_pretraining") or {}
         pretraining_manifest = pretraining.get("manifest") or {}
@@ -1210,6 +1228,23 @@ def _markdown_model_detail_lines(training: dict) -> list[str]:
 def _console_model_detail_lines(training: dict) -> list[str]:
     spec = training.get("model_spec") or {}
     family = str(spec.get("family") or "")
+    if family == "mantis_v2_frozen_linear":
+        external = training.get("external_pretrained_encoder") or {}
+        checkpoint = external.get("checkpoint") or {}
+        package = external.get("package") or {}
+        return [
+            f"Model Family     : {family}",
+            f"External Encoder : {external.get('repository', spec.get('mantis_repository', '-'))}",
+            f"Pinned Revision  : {external.get('resolved_revision', spec.get('mantis_revision', '-'))}",
+            f"Checkpoint SHA   : {checkpoint.get('sha256', '-')}",
+            f"Mantis Package   : {package.get('name', '-')} {package.get('version', '-')}",
+            f"Input Resize     : {training.get('sequence_length', '-')} -> {spec.get('mantis_input_length')} bars",
+            f"Channel Mode     : {spec.get('mantis_channel_aggregation')}",
+            f"Transformer Out  : layer {spec.get('mantis_return_transformer_layer')} / {spec.get('mantis_output_token')}",
+            f"Representation   : {spec.get('mantis_embedding_dim')} per channel",
+            "Encoder Training : official external pretraining; frozen downstream",
+            "Downstream Head  : linear",
+        ]
     if family == "ts2vec_frozen_linear":
         pretraining = training.get("self_supervised_pretraining") or {}
         pretraining_manifest = pretraining.get("manifest") or {}

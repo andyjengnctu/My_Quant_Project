@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260725_233017_5eb7f61.zip`，SHA256 `c5791e01bb9295dd8e73f7c0a139bff7d48a067dfba7c4928acff36e606f4fbd`；formal bundle `to_chatgpt_bundle_20260725_233059_eeeb6e8f.zip`，SHA256 `18913382562d8c21b6aa529e85ef623f0af4eeab7d73aded20663fd492c1f831`。9C完整OOS結論仍為淘汰、active policy仍為9A；本輪只閉環修正legacy TS2Vec synthetic artifact的split檔與manifest角色統計不一致，不改模型、Dataset、Label或runtime正式語意 |
-| SHA256 | 本輪來源 ZIP：`c5791e01bb9295dd8e73f7c0a139bff7d48a067dfba7c4928acff36e606f4fbd` |
-| 程式版本範圍 | 9C `ts2vec_frozen_linear_v1` 已取得完整結果並淘汰，轉為legacy read-only；active policy退回9A `inception_time_v1`排序／高品質基準。8F `multiscale_cnn_sequence_only_v1`保留高覆蓋參考；9A-GN、9B與9C均只供舊工件重建 |
-| Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining profile與工件契約保留為legacy重建，不再由正式workflow啟動 |
+| 基準 ZIP | `test-branch-1_20260725_234243_fe0929a.zip`，SHA256 `bce9aa246d92d3d48584ea18ed1cc2078d5b6c32723f532c204fc540796e0cb1`；本輪在此基準實作9D MantisV2 frozen encoder＋linear probe，尚未取得Selection／OOS結果 |
+| SHA256 | 本輪來源 ZIP：`bce9aa246d92d3d48584ea18ed1cc2078d5b6c32723f532c204fc540796e0cb1` |
+| 程式版本範圍 | 9D `mantis_v2_frozen_linear_v1` 已實作為active research architecture，結果未定；9A `inception_time_v1`維持排序／高品質正式比較基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋參考；9A-GN、9B與9C均只供舊工件重建 |
+| Policy 預設 | architecture=`mantis_v2_frozen_linear_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9D使用外部釘死checkpoint，不建立Selection-only pretraining dataset；9C pretraining profile只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active研究architecture已退回9A `inception_time_v1`；8F sequence-only保留高覆蓋比較基準，9A-GN、9B ModernTCN與9C TS2Vec均只保留legacy read-only compatibility。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active研究architecture為已實作待跑的9D `mantis_v2_frozen_linear_v1`；9A `inception_time_v1`仍是排序／高品質比較基準，8F sequence-only保留高覆蓋比較基準，9A-GN、9B ModernTCN與9C TS2Vec均只保留legacy read-only compatibility。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -575,6 +575,22 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 判定 | Frozen probe未接近9A，且Selection→OOS排序與校準明顯崩落；不符合預先設定的9C2啟動條件。停止TS2Vec epochs、stride、pooling、MLP head、threshold與fine-tuning細調，避免利用同一OOS救援失敗表示 |
 | 下一步 | 9D MantisV2 frozen encoder＋linear probe；仍固定Label、split、unique-group sampling與評估口徑。先測外部預訓練表示，不同輪混入fine-tuning、ensemble或threshold調整 |
 
+### 3.32 9D MantisV2 frozen encoder＋linear probe（2026-07-25）
+
+| 項目 | 內容 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；尚未執行完整Selection／OOS，不預先判定有效或無效 |
+| 程式基準 | 來源ZIP `test-branch-1_20260725_234243_fe0929a.zip`，SHA256 `bce9aa246d92d3d48584ea18ed1cc2078d5b6c32723f532c204fc540796e0cb1` |
+| Architecture | `mantis_v2_frozen_linear_v1`；官方MantisV2 encoder、輸入長度512、32 patches、取Transformer第3層（index 2）的CLS＋mean combined 512維embedding；10個feature channels獨立編碼後串接，單一5120→2 linear head |
+| 唯一研究變更 | 以釘死外部預訓練MantisV2 frozen encoder取代9A supervised encoder與9C自家TS2Vec encoder；encoder完全凍結且維持eval，只訓練linear head |
+| 外部來源契約 | repository=`paris-noah/MantisV2`；revision=`99fe0f548960e272fbfa4b82fd9b5b5956779dfd`；checkpoint與config均驗證SHA256；套件固定`mantis-tsfm==1.0.0`，checkpoint／manifest保存來源、revision、hash、套件版本與project data isolation flags |
+| 輸入轉換 | 沿用300×10 supervised sequence；每個channel固定線性插值至512，不加可學習adapter；encoder forward以固定chunk分批，僅降低GPU記憶體尖峰，不改樣本、排序或loss語意 |
+| 固定條件 | 固定百分比Label、Selection／OOS split、`unique_group_sampling`、batch 128、patience 1、selected_epochs、Adam、LR 0.0003、weight decay 0.0001、threshold 0.5、seed 42、deterministic與TF32 off均不變 |
+| Dataset／Label | 不重建supervised Dataset、不relabel；不建立project Selection-only pretraining dataset，不使用project OOS windows或PASS／REJECT labels訓練encoder |
+| Selection／OOS結果 | 尚未取得 |
+| 與9A差異 | 尚未取得；完成後以9A OOS PR-AUC 0.6257、P@50／60／70%=62.77／61.62／60.25%、R@P60%=77.27%為主要比較錨點 |
+| 下一步 | 安裝固定Mantis相依套件後執行完整workflow；若frozen probe未接近9A則進入9E MOMENT，不在9D內調threshold、adapter、ensemble或encoder fine-tuning |
+
 ---
 
 ## 4. 已排除或暫停的方向
@@ -617,7 +633,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9C `ts2vec_frozen_linear_v1 / unique_group_sampling` 已由完整OOS淘汰並轉為legacy；policy退回已接受的9A `inception_time_v1 / unique_group_sampling`排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。下一項為9D MantisV2 frozen encoder＋linear probe；不得同輪混入fine-tuning、ensemble或threshold調整。
+所有實驗一次只改一項。9C `ts2vec_frozen_linear_v1 / unique_group_sampling` 已由完整OOS淘汰並轉為legacy；policy退回已接受的9A `inception_time_v1 / unique_group_sampling`排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。下一項9D MantisV2 frozen encoder＋linear probe已實作，待執行完整Selection／OOS；不得同輪混入fine-tuning、ensemble或threshold調整。
 
 ### 優先 6A：AdamW only
 
@@ -762,7 +778,7 @@ Formal bundle閉環（2026-07-25 23:30）：quick gate、chain checks與ML smoke
 
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `PLANNED` |
+| 狀態 | `IMPLEMENTED`；尚未取得Selection／OOS結果 |
 | 唯一變更 | 以外部預訓練MantisV2 encoder取代9A supervised encoder與9C自家TS2Vec encoder；encoder完全凍結，只訓練單一linear head |
 | 輸入 | 沿用300×10 sequence；必要的shape／channel adapter必須是固定、可追溯的前處理，不得同輪加入可學習adapter |
 | 固定條件 | 固定百分比Label、Selection／OOS split、unique-group sampling、batch 128、patience 1、selected_epochs、threshold 0.5、seed 42與全部ranking／calibration口徑不變 |
@@ -801,7 +817,7 @@ Formal bundle閉環（2026-07-25 23:30）：quick gate、chain checks與ML smoke
 → 9A-GN InceptionTime GroupNorm ablation（REJECTED；已退回9A-BN）
 → 9B ModernTCN（REJECTED；已退回9A並轉為legacy）
 → 9C TS2Vec Selection-only自監督預訓練＋frozen linear probe（REJECTED；已退回9A並轉為legacy）
-→ 9D MantisV2 frozen encoder＋linear probe（PLANNED）
+→ 9D MantisV2 frozen encoder＋linear probe（IMPLEMENTED；待跑完整Selection／OOS）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

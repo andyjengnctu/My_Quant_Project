@@ -57,6 +57,16 @@ from filters.breakout_quality.contract import (
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.lr_schedule import validate_learning_rate_schedule_record
 from filters.breakout_quality.models.spec import model_spec_from_manifest
+from filters.breakout_quality.mantis_contract import (
+    MANTIS_PACKAGE_NAME,
+    MANTIS_PACKAGE_VERSION,
+    MANTIS_V2_CHECKPOINT_FILENAME,
+    MANTIS_V2_CHECKPOINT_SHA256,
+    MANTIS_V2_CONFIG_FILENAME,
+    MANTIS_V2_CONFIG_SHA256,
+    MANTIS_V2_REPOSITORY,
+    MANTIS_V2_REVISION,
+)
 from filters.breakout_quality.torch_runtime import (
     SUPPORTED_MIXED_PRECISION_DTYPES,
     SUPPORTED_TORCH_DEVICES,
@@ -404,7 +414,7 @@ def load_model_artifact_contract(
         raise ValueError("breakout quality model_spec.architecture 與 manifest 不一致")
     _validate_torch_execution_record(
         manifest,
-        required=model_spec.family in {"inception_time", "modern_tcn", "ts2vec_frozen_linear"},
+        required=model_spec.family in {"inception_time", "modern_tcn", "ts2vec_frozen_linear", "mantis_v2_frozen_linear"},
     )
     if int(manifest.get("trainable_parameter_count", 0)) < 1:
         raise ValueError("breakout quality trainable_parameter_count 必須 >=1")
@@ -415,6 +425,59 @@ def load_model_artifact_contract(
         total_parameter_count - trainable_parameter_count
     ):
         raise ValueError("breakout quality total/frozen/trainable parameter count 不一致")
+    if model_spec.family == "mantis_v2_frozen_linear":
+        if frozen_parameter_count < 1:
+            raise ValueError("MantisV2 frozen probe 必須包含 frozen encoder parameters")
+        if manifest.get("self_supervised_pretraining") is not None:
+            raise ValueError("MantisV2 不得混用 Selection-only self-supervised pretraining")
+        external = _require_mapping(manifest, "external_pretrained_encoder")
+        if str(external.get("source_type") or "") != "hugging_face_snapshot":
+            raise ValueError("MantisV2 external source_type 不一致")
+        if str(external.get("repository") or "") != MANTIS_V2_REPOSITORY:
+            raise ValueError("MantisV2 external repository 不一致")
+        if str(external.get("requested_revision") or "") != MANTIS_V2_REVISION:
+            raise ValueError("MantisV2 external requested_revision 不一致")
+        if str(external.get("resolved_revision") or "") != MANTIS_V2_REVISION:
+            raise ValueError("MantisV2 external resolved_revision 不一致")
+        if str(external.get("model_architecture") or "") != model_spec.architecture:
+            raise ValueError("MantisV2 external model_architecture 不一致")
+        if external.get("model_spec") != model_spec.as_manifest_payload():
+            raise ValueError("MantisV2 external model_spec 不一致")
+        checkpoint = _require_mapping(external, "checkpoint")
+        if (
+            str(checkpoint.get("filename") or "") != MANTIS_V2_CHECKPOINT_FILENAME
+            or str(checkpoint.get("sha256") or "") != MANTIS_V2_CHECKPOINT_SHA256
+            or int(checkpoint.get("size_bytes", 0)) < 1
+        ):
+            raise ValueError("MantisV2 external checkpoint record 不一致")
+        config_record = _require_mapping(external, "config")
+        if (
+            str(config_record.get("filename") or "") != MANTIS_V2_CONFIG_FILENAME
+            or str(config_record.get("sha256") or "") != MANTIS_V2_CONFIG_SHA256
+            or int(config_record.get("size_bytes", 0)) < 1
+        ):
+            raise ValueError("MantisV2 external config record 不合法")
+        package = _require_mapping(external, "package")
+        if (
+            str(package.get("name") or "") != MANTIS_PACKAGE_NAME
+            or str(package.get("version") or "") != MANTIS_PACKAGE_VERSION
+            or str(package.get("expected_version") or "") != MANTIS_PACKAGE_VERSION
+        ):
+            raise ValueError("MantisV2 external package record 不一致")
+        required_true_fields = (
+            "encoder_frozen_downstream",
+        )
+        required_false_fields = (
+            "project_selection_windows_used_for_encoder_training",
+            "project_oos_windows_used_for_encoder_training",
+            "project_pass_reject_labels_used_for_encoder_training",
+            "project_encoder_fine_tuning_used",
+        )
+        if not all(external.get(field_name) is True for field_name in required_true_fields):
+            raise ValueError("MantisV2 frozen encoder contract 不一致")
+        if not all(external.get(field_name) is False for field_name in required_false_fields):
+            raise ValueError("MantisV2 project data isolation contract 不一致")
+
     if model_spec.family == "ts2vec_frozen_linear":
         if frozen_parameter_count < 1:
             raise ValueError("TS2Vec frozen probe 必須包含 frozen encoder parameters")

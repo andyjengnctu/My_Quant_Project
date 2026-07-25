@@ -308,6 +308,8 @@ def validate_cmd_document_contract_case(_base_params):
                 req_path = PROJECT_ROOT / parts[req_idx + 1]
                 add_check(results, "meta_cmd_contract", case_id, "cmd_requirements_lock_exists", True, req_path.exists())
             continue
+        if parts[1] == "-c":
+            continue
 
         script_rel = parts[1].replace("\\", "/")
         project_command_count += 1

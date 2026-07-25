@@ -34,6 +34,7 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
+from filters.breakout_quality.mantis_contract import require_mantis_v2_class
 from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
@@ -540,6 +541,15 @@ def _pretraining_refresh_plan(
 
 
 def _model_runtime_description(model_spec) -> str:
+    if str(model_spec.family) == "mantis_v2_frozen_linear":
+        return (
+            f"family=mantis_v2_frozen_linear, source={model_spec.mantis_repository}, "
+            f"revision={model_spec.mantis_revision}, input_resize={model_spec.mantis_input_length}, "
+            f"patches={model_spec.mantis_num_patches}, output_layer={model_spec.mantis_return_transformer_layer}, "
+            f"output_token={model_spec.mantis_output_token}, "
+            f"channel_aggregation={model_spec.mantis_channel_aggregation}, "
+            "encoder=frozen, head=linear, dataset_context=disabled"
+        )
     if str(model_spec.family) == "ts2vec_frozen_linear":
         return (
             f"family=ts2vec_frozen_linear, depth={model_spec.ts2vec_depth}, "
@@ -603,6 +613,8 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     print(f"filter_id={filter_id}")
     print(f"dataset={args.dataset}")
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    if str(model_spec.family) == "mantis_v2_frozen_linear":
+        require_mantis_v2_class()
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
     schedule_parameters = experiment.lr_schedule_parameters()
     augmentation_parameters = experiment.augmentation_parameters()
@@ -610,6 +622,13 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         "model="
         f"{model_spec.architecture}, {_model_runtime_description(model_spec)}"
     )
+    if str(model_spec.family) == "mantis_v2_frozen_linear":
+        print(
+            "external_encoder="
+            f"repository={model_spec.mantis_repository}, "
+            f"revision={model_spec.mantis_revision}, "
+            "project_pretraining=False, encoder_fine_tuning=False"
+        )
     if str(model_spec.family) == "ts2vec_frozen_linear":
         print(
             "pretrain="
@@ -905,7 +924,20 @@ def _print_policy_defaults(
     )
     schedule_parameters = experiment.lr_schedule_parameters()
     augmentation_parameters = experiment.augmentation_parameters()
-    if str(model_spec.family) == "ts2vec_frozen_linear":
+    if str(model_spec.family) == "mantis_v2_frozen_linear":
+        architecture_details = (
+            f"- Model Family：MantisV2 Frozen Linear\n"
+            f"- External Encoder：{model_spec.mantis_repository}\n"
+            f"- Pinned Revision：{model_spec.mantis_revision}\n"
+            f"- Input Resize：{DEFAULT_LABEL_POLICY.feature_window_bars} → {model_spec.mantis_input_length} bars\n"
+            f"- Patches：{model_spec.mantis_num_patches}\n"
+            f"- Transformer Output：layer {model_spec.mantis_return_transformer_layer} / {model_spec.mantis_output_token}\n"
+            f"- Channel Aggregation：{model_spec.mantis_channel_aggregation}\n"
+            f"- Per-channel Representation：{model_spec.mantis_embedding_dim}\n"
+            f"- Encoder：official pretrained and frozen\n"
+            f"- Head：Linear"
+        )
+    elif str(model_spec.family) == "ts2vec_frozen_linear":
         pretraining_settings = build_breakout_quality_pretraining_profile_payload(
             BREAKOUT_QUALITY_PRETRAINING_PROFILE
         )

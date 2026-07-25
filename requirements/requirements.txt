@@ -9,3 +9,6 @@ FinMind
 matplotlib
 plotly
 coverage
+einops
+huggingface-hub
+safetensors
