@@ -432,6 +432,9 @@ def _training_summary(manifest: dict) -> dict:
         "torch_execution": manifest.get("torch_execution") or {},
         "model_spec": model_spec,
         "trainable_parameter_count": manifest.get("trainable_parameter_count"),
+        "total_parameter_count": manifest.get("total_parameter_count"),
+        "frozen_parameter_count": manifest.get("frozen_parameter_count"),
+        "self_supervised_pretraining": manifest.get("self_supervised_pretraining"),
         "sequence_length": manifest.get("sequence_length"),
         "training_mode": manifest.get("training_mode"),
         "inner_validation_used": bool(manifest.get("inner_validation_used", False)),
@@ -1150,6 +1153,21 @@ def _deployment_presentation(payload: dict) -> dict:
 def _markdown_model_detail_lines(training: dict) -> list[str]:
     spec = training.get("model_spec") or {}
     family = str(spec.get("family") or "")
+    if family == "ts2vec_frozen_linear":
+        pretraining = training.get("self_supervised_pretraining") or {}
+        pretraining_manifest = pretraining.get("manifest") or {}
+        pretraining_profile = pretraining_manifest.get("pretraining_profile") or {}
+        return [
+            f"- **Model Family**：`{family}`",
+            f"- **Encoder Depth**：`{spec.get('ts2vec_depth')}`",
+            f"- **Hidden Dimensions**：`{spec.get('ts2vec_hidden_dims')}`",
+            f"- **Representation Dimensions**：`{spec.get('ts2vec_output_dims')}`",
+            "- **Encoder Training**：`Selection-only self-supervised; frozen downstream`",
+            "- **Downstream Head**：`linear`",
+            f"- **Pretraining Profile**：`{pretraining_profile.get('name', '-')}`",
+            f"- **Pretraining Optimizer**：`{pretraining_profile.get('optimizer_name', '-')}`",
+            f"- **Pretraining Epochs / Batch**：`{pretraining_profile.get('epochs', '-')} / {pretraining_profile.get('batch_size', '-')}`",
+        ]
     if family == "inception_time":
         return [
             f"- **Model Family**：`{family}`",
@@ -1192,6 +1210,21 @@ def _markdown_model_detail_lines(training: dict) -> list[str]:
 def _console_model_detail_lines(training: dict) -> list[str]:
     spec = training.get("model_spec") or {}
     family = str(spec.get("family") or "")
+    if family == "ts2vec_frozen_linear":
+        pretraining = training.get("self_supervised_pretraining") or {}
+        pretraining_manifest = pretraining.get("manifest") or {}
+        pretraining_profile = pretraining_manifest.get("pretraining_profile") or {}
+        return [
+            f"Model Family    : {family}",
+            f"Encoder Depth   : {spec.get('ts2vec_depth')}",
+            f"Hidden Dims     : {spec.get('ts2vec_hidden_dims')}",
+            f"Representation  : {spec.get('ts2vec_output_dims')}",
+            "Encoder Training : Selection-only SSL; frozen downstream",
+            "Downstream Head  : linear",
+            f"Pretrain Profile : {pretraining_profile.get('name', '-')}",
+            f"Pretrain Optimizer: {pretraining_profile.get('optimizer_name', '-')}",
+            f"Pretrain E/B      : {pretraining_profile.get('epochs', '-')} / {pretraining_profile.get('batch_size', '-')}",
+        ]
     if family == "inception_time":
         return [
             f"Model Family    : {family}",
@@ -1281,6 +1314,8 @@ def render_markdown_report(payload: dict) -> str:
                 + "`"
             ),
             f"- **Trainable Parameters**：`{int(training.get('trainable_parameter_count') or 0):,}`",
+            f"- **Frozen Parameters**：`{int(training.get('frozen_parameter_count') or 0):,}`",
+            f"- **Total Parameters**：`{int(training.get('total_parameter_count') or training.get('trainable_parameter_count') or 0):,}`",
             f"- **Receptive Field**：`{(training.get('model_spec') or {}).get('receptive_field_bars')} bars`",
             f"- **Pooling**：`{'+'.join((training.get('model_spec') or {}).get('pooling') or [])}`",
             f"- **Threshold**：`{training.get('fixed_threshold')}`",
@@ -1759,7 +1794,9 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
                 "Derived Context : "
                 + (", ".join((training.get("model_spec") or {}).get("derived_context_features") or []) or "-")
             ),
-            f"Parameters      : {int(training.get('trainable_parameter_count') or 0):,}",
+            f"Trainable Params: {int(training.get('trainable_parameter_count') or 0):,}",
+            f"Frozen Params   : {int(training.get('frozen_parameter_count') or 0):,}",
+            f"Total Params    : {int(training.get('total_parameter_count') or training.get('trainable_parameter_count') or 0):,}",
             f"Receptive Field : {(training.get('model_spec') or {}).get('receptive_field_bars')} bars",
             f"Pooling         : {'+'.join((training.get('model_spec') or {}).get('pooling') or [])}",
             f"Threshold       : {training.get('fixed_threshold')}",

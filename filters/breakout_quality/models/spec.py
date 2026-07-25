@@ -27,6 +27,7 @@ MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_p
 INCEPTION_TIME_V1 = "inception_time_v1"
 INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
 MODERN_TCN_V1 = "modern_tcn_v1"
+TS2VEC_FROZEN_LINEAR_V1 = "ts2vec_frozen_linear_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
     TINY_CNN_V1,
@@ -44,9 +45,11 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_V1,
     INCEPTION_TIME_GROUP_NORM_V1,
     MODERN_TCN_V1,
+    TS2VEC_FROZEN_LINEAR_V1,
     RESIDUAL_TCN_V1,
 )
 ACTIVE_MODEL_ARCHITECTURES = (
+    TS2VEC_FROZEN_LINEAR_V1,
     INCEPTION_TIME_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
 )
@@ -92,6 +95,10 @@ class BreakoutQualityModelSpec:
     modern_tcn_channels: int | None = None
     modern_tcn_kernel_size: int | None = None
     modern_tcn_expansion_ratio: int | None = None
+    ts2vec_hidden_dims: int | None = None
+    ts2vec_output_dims: int | None = None
+    ts2vec_depth: int | None = None
+    ts2vec_temporal_unit: int | None = None
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -117,6 +124,10 @@ class BreakoutQualityModelSpec:
             "modern_tcn_channels": self.modern_tcn_channels,
             "modern_tcn_kernel_size": self.modern_tcn_kernel_size,
             "modern_tcn_expansion_ratio": self.modern_tcn_expansion_ratio,
+            "ts2vec_hidden_dims": self.ts2vec_hidden_dims,
+            "ts2vec_output_dims": self.ts2vec_output_dims,
+            "ts2vec_depth": self.ts2vec_depth,
+            "ts2vec_temporal_unit": self.ts2vec_temporal_unit,
         }
         for key, value in optional_scalars.items():
             if value is not None:
@@ -311,6 +322,30 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             window_normalization_epsilon=window_normalization_epsilon,
         )
 
+    if normalized == TS2VEC_FROZEN_LINEAR_V1:
+        depth = 8
+        hidden_dims = 128
+        output_dims = 320
+        kernel_size = 3
+        return BreakoutQualityModelSpec(
+            architecture=TS2VEC_FROZEN_LINEAR_V1,
+            family="ts2vec_frozen_linear",
+            channels=hidden_dims,
+            kernel_size=kernel_size,
+            dilations=tuple(2**index for index in range(depth)),
+            convolutions_per_block=2,
+            pooling=("global_max",),
+            dropout=0.10,
+            receptive_field_bars=1 + 2 * (kernel_size - 1) * sum(2**index for index in range(depth)),
+            normalization=None,
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level",),
+            ts2vec_hidden_dims=hidden_dims,
+            ts2vec_output_dims=output_dims,
+            ts2vec_depth=depth,
+            ts2vec_temporal_unit=0,
+        )
+
     if normalized == MODERN_TCN_V1:
         depth = 6
         channels = 96
@@ -412,6 +447,7 @@ __all__ = [
     "MULTISCALE_CNN_SEQUENCE_ONLY_V1",
     "MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1",
     "MODERN_TCN_V1",
+    "TS2VEC_FROZEN_LINEAR_V1",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
     "TINY_CNN_V1",

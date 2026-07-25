@@ -1415,6 +1415,10 @@
 | 2026-07-25 | B11 | 驗證9A active、9B legacy strict reconstruction、policy／文件與TS2Vec Selection-only pretraining防洩漏計畫一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | B11 | 最新退回ZIP雖將policy設為9A，但遺漏ModernTCN檔案且factory無法建立9A-GN／9B legacy模型，模型相容契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/factory.py` |
 | 2026-07-25 | B11 | 恢復GroupNorm InceptionTime與ModernTCN唯讀重建鏈，驗證9A仍為policy預設、legacy不可正式新訓練後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-25 | B11 | 9C新增active `ts2vec_frozen_linear_v1`、Selection-only rolling-window dataset、hierarchical contrastive pretraining與frozen linear probe，模型／資料防洩漏契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/ts2vec.py` |
+| 2026-07-25 | B11 | 驗證300×10 Selection endpoint上限、stride與source/outer-policy fingerprint、OOS／Label拒絕、831,168 encoder參數凍結、642 head參數可更新、contrastive loss與strict reload後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-25 | B11 | 9C將encoder optimizer／epochs／batch／LR／crop／mask／contrastive loss集中至命名pretraining profile，模型訓練治理契約改回PARTIAL | DONE -> PARTIAL | `config/breakout_quality_experiments.py` |
+| 2026-07-25 | B11 | 驗證pretraining profile名稱安全、參數範圍合法、optimizer由profile建立且正式payload與policy一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-25 | T266 | 9A-GN canonical path轉為legacy唯讀，正式runtime輸出退回9A-BN architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-25 | T266 | 驗證GroupNorm舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A-BN active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-25 | T266 | 9B新增ModernTCN model spec、Torch execution與architecture-scoped canonical path，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
@@ -1423,3 +1427,7 @@
 | 2026-07-25 | T266 | 驗證ModernTCN舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A／8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-25 | T266 | 最新退回ZIP遺漏9A-GN／9B legacy implementation，舊checkpoint／manifest strict reconstruction契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/factory.py` |
 | 2026-07-25 | T266 | 恢復兩個legacy implementation與factory分派，驗證architecture-scoped舊工件可strict reconstruction且正式輸出仍指向9A／8F後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-25 | T266 | 9C新增pretraining dataset／encoder manifests、total/frozen/trainable counts與完整encoder＋head checkpoint，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/pretraining_store.py` |
+| 2026-07-25 | T266 | 驗證dataset/encoder fingerprint、OOS與PASS/REJECT leakage fail-fast、checkpoint/manifest一致、research export自包含與active architecture path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-25 | T266 | pretrained encoder與正式model manifest新增命名pretraining profile payload及profile mismatch拒絕，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/pretraining_store.py` |
+| 2026-07-25 | T266 | 驗證pretraining profile任何optimizer／epoch／batch／LR／loss參數竄改均fail-fast，且正式checkpoint內嵌摘要一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |

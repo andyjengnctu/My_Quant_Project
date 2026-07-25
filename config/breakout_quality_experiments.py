@@ -16,6 +16,7 @@ ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE = "adam_warmup_cosine"
 HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE = "history_masking_only"
 UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE = "unique_group_sampling"
 UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE = "unique_group_date_balanced"
+TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
 TRAINING_SAMPLING_UNIQUE_TICKER_DATE = "unique_ticker_date"
@@ -178,6 +179,156 @@ class BreakoutQualityExperimentProfile:
         return payload
 
 
+
+@dataclass(frozen=True)
+class BreakoutQualityPretrainingProfile:
+    name: str
+    family: str
+    optimizer_name: str
+    epochs: int
+    batch_size: int
+    learning_rate: float
+    weight_decay: float
+    gradient_clip_norm: float
+    min_crop_bars: int
+    mask_probability: float
+    contrastive_alpha: float
+    temporal_unit: int
+
+    def __post_init__(self) -> None:
+        normalized_name = str(self.name).strip().lower()
+        if not normalized_name or normalized_name != self.name:
+            raise ValueError("pretraining profile name 必須是非空白小寫名稱")
+        if any(token in normalized_name for token in ("/", "\\", "\x00")):
+            raise ValueError("pretraining profile name 必須是安全的單一資料夾名稱")
+        if str(self.family).strip().lower() != self.family or not self.family:
+            raise ValueError("pretraining family 必須是非空白小寫名稱")
+        if any(token in self.family for token in ("/", "\\", "\x00")):
+            raise ValueError("pretraining family 必須是安全的單一資料夾名稱")
+        if self.optimizer_name not in SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS:
+            raise ValueError(f"不支援的 pretraining optimizer: {self.optimizer_name!r}")
+        if int(self.epochs) < 1 or int(self.batch_size) < 2:
+            raise ValueError("pretraining epochs 必須 >=1 且 batch_size 必須 >=2")
+        if (
+            float(self.learning_rate) <= 0.0
+            or float(self.weight_decay) < 0.0
+            or float(self.gradient_clip_norm) < 0.0
+        ):
+            raise ValueError(
+                "pretraining learning_rate 必須 >0，weight_decay與gradient_clip_norm必須 >=0"
+            )
+        if int(self.min_crop_bars) < 2 or int(self.temporal_unit) < 0:
+            raise ValueError("pretraining min_crop_bars 必須 >=2 且 temporal_unit 必須 >=0")
+        if not 0.0 <= float(self.mask_probability) < 1.0:
+            raise ValueError("pretraining mask_probability 必須介於0（含）與1（不含）")
+        if not 0.0 <= float(self.contrastive_alpha) <= 1.0:
+            raise ValueError("pretraining contrastive_alpha 必須介於0與1")
+
+    def as_manifest_payload(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "family": self.family,
+            "optimizer_name": self.optimizer_name,
+            "epochs": int(self.epochs),
+            "batch_size": int(self.batch_size),
+            "learning_rate": float(self.learning_rate),
+            "weight_decay": float(self.weight_decay),
+            "gradient_clip_norm": float(self.gradient_clip_norm),
+            "min_crop_bars": int(self.min_crop_bars),
+            "mask_probability": float(self.mask_probability),
+            "contrastive_alpha": float(self.contrastive_alpha),
+            "temporal_unit": int(self.temporal_unit),
+        }
+
+
+_PRETRAINING_PROFILES = {
+    TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE: BreakoutQualityPretrainingProfile(
+        name=TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE,
+        family="ts2vec_v1",
+        optimizer_name="adamw",
+        epochs=10,
+        batch_size=128,
+        learning_rate=0.001,
+        weight_decay=0.0,
+        gradient_clip_norm=1.0,
+        min_crop_bars=60,
+        mask_probability=0.5,
+        contrastive_alpha=0.5,
+        temporal_unit=0,
+    ),
+}
+SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES = tuple(_PRETRAINING_PROFILES)
+
+
+def normalize_breakout_quality_pretraining_profile(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized not in _PRETRAINING_PROFILES:
+        allowed = ", ".join(SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES)
+        raise ValueError(
+            f"不支援的 breakout quality pretraining profile: {value!r}；可用值: {allowed}"
+        )
+    return normalized
+
+
+def get_breakout_quality_pretraining_profile(
+    value: str,
+) -> BreakoutQualityPretrainingProfile:
+    return _PRETRAINING_PROFILES[normalize_breakout_quality_pretraining_profile(value)]
+
+
+def build_breakout_quality_pretraining_profile_payload(
+    value: str,
+    *,
+    epochs: int | None = None,
+    batch_size: int | None = None,
+    learning_rate: float | None = None,
+    weight_decay: float | None = None,
+    gradient_clip_norm: float | None = None,
+    min_crop_bars: int | None = None,
+    mask_probability: float | None = None,
+    contrastive_alpha: float | None = None,
+    temporal_unit: int | None = None,
+) -> dict[str, Any]:
+    """Return the named profile payload with explicit CLI overrides applied.
+
+    Formal workflow runs use the profile defaults. The override path remains available for
+    isolated development experiments, while downstream canonical training can reject an
+    encoder whose stored payload differs from the active named profile.
+    """
+
+    profile = get_breakout_quality_pretraining_profile(value)
+    resolved = BreakoutQualityPretrainingProfile(
+        name=profile.name,
+        family=profile.family,
+        optimizer_name=profile.optimizer_name,
+        epochs=profile.epochs if epochs is None else int(epochs),
+        batch_size=profile.batch_size if batch_size is None else int(batch_size),
+        learning_rate=(
+            profile.learning_rate if learning_rate is None else float(learning_rate)
+        ),
+        weight_decay=profile.weight_decay if weight_decay is None else float(weight_decay),
+        gradient_clip_norm=(
+            profile.gradient_clip_norm
+            if gradient_clip_norm is None
+            else float(gradient_clip_norm)
+        ),
+        min_crop_bars=(
+            profile.min_crop_bars if min_crop_bars is None else int(min_crop_bars)
+        ),
+        mask_probability=(
+            profile.mask_probability
+            if mask_probability is None
+            else float(mask_probability)
+        ),
+        contrastive_alpha=(
+            profile.contrastive_alpha
+            if contrastive_alpha is None
+            else float(contrastive_alpha)
+        ),
+        temporal_unit=profile.temporal_unit if temporal_unit is None else int(temporal_unit),
+    )
+    return resolved.as_manifest_payload()
+
 _EXPERIMENT_PROFILES = {
     BASELINE_EXPERIMENT_PROFILE: BreakoutQualityExperimentProfile(
         name=BASELINE_EXPERIMENT_PROFILE,
@@ -247,13 +398,16 @@ __all__ = [
     "HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE",
     "UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE",
     "UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE",
+    "TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE",
     "BreakoutQualityExperimentProfile",
+    "BreakoutQualityPretrainingProfile",
     "LR_SCHEDULE_LINEAR_WARMUP_COSINE",
     "LR_SCHEDULE_NONE",
     "SUPPORTED_BREAKOUT_QUALITY_AUGMENTATIONS",
     "SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES",
     "SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES",
     "SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS",
+    "SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES",
     "SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES",
     "TRAINING_SAMPLING_ALL_EVENT_ROWS",
     "TRAINING_SAMPLING_UNIQUE_TICKER_DATE",
@@ -265,5 +419,8 @@ __all__ = [
     "TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE",
     "SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS",
     "get_breakout_quality_experiment_profile",
+    "get_breakout_quality_pretraining_profile",
+    "build_breakout_quality_pretraining_profile_payload",
     "normalize_breakout_quality_experiment_profile",
+    "normalize_breakout_quality_pretraining_profile",
 ]

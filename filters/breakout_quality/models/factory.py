@@ -26,11 +26,13 @@ from filters.breakout_quality.models.spec import (
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     RESIDUAL_TCN_V1,
     TINY_CNN_V1,
+    TS2VEC_FROZEN_LINEAR_V1,
     get_model_spec,
     model_spec_from_manifest,
     normalize_model_architecture,
 )
 from filters.breakout_quality.models.tiny_cnn import build_tiny_cnn
+from filters.breakout_quality.models.ts2vec import build_ts2vec_frozen_linear
 
 
 def require_torch():
@@ -46,6 +48,7 @@ def resolve_model_spec(
     *,
     architecture: str | None = None,
     model_spec: Mapping[str, object] | None = None,
+    pretrained_encoder_state: Mapping[str, object] | None = None,
 ):
     if model_spec is not None:
         resolved = model_spec_from_manifest(model_spec)
@@ -61,9 +64,19 @@ def build_model(
     *,
     architecture: str | None = None,
     model_spec: Mapping[str, object] | None = None,
+    pretrained_encoder_state: Mapping[str, object] | None = None,
 ):
     torch, nn = require_torch()
     spec = resolve_model_spec(architecture=architecture, model_spec=model_spec)
+    if spec.architecture == TS2VEC_FROZEN_LINEAR_V1:
+        return build_ts2vec_frozen_linear(
+            nn,
+            torch,
+            feature_count=int(feature_count),
+            context_count=int(context_count),
+            spec=spec,
+            pretrained_encoder_state=pretrained_encoder_state,
+        )
     if spec.architecture == MODERN_TCN_V1:
         return build_modern_tcn(
             nn,

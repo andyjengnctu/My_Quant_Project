@@ -295,6 +295,14 @@ def main(argv=None) -> int:
         raise ValueError("model checkpoint experiment profile 與 manifest／工件路徑不一致")
     if checkpoint.get("experiment_settings") != manifest.get("experiment_settings"):
         raise ValueError("model checkpoint experiment settings 與 manifest 不一致")
+    for field_name in (
+        "trainable_parameter_count",
+        "total_parameter_count",
+        "frozen_parameter_count",
+        "self_supervised_pretraining",
+    ):
+        if checkpoint.get(field_name) != manifest.get(field_name):
+            raise ValueError(f"model checkpoint {field_name} 與 manifest 不一致")
     checkpoint_torch_execution = checkpoint.get("torch_execution")
     manifest_torch_execution = manifest.get("torch_execution")
     if checkpoint_torch_execution is not None or manifest_torch_execution is not None:

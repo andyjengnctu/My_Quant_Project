@@ -32,7 +32,11 @@ from config.breakout_quality_experiments import (
     SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
     TRAINING_SAMPLING_ALL_EVENT_ROWS,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+    TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE,
+    SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES,
+    build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
+    get_breakout_quality_pretraining_profile,
 )
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
@@ -51,6 +55,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EVALUATION_WORKERS,
     BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
+    BREAKOUT_QUALITY_PRETRAINING_PROFILE,
     BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
@@ -121,6 +126,15 @@ from filters.breakout_quality.models import (
     count_trainable_parameters,
     get_model_spec,
 )
+from filters.breakout_quality.models.ts2vec import hierarchical_contrastive_loss
+from filters.breakout_quality.pretraining_store import (
+    build_file_record as build_pretraining_file_record,
+    compute_pretraining_configuration_fingerprint,
+    load_validated_pretrained_encoder_manifest,
+    load_validated_pretraining_dataset,
+    resolve_pretrained_encoder_paths,
+    resolve_pretraining_dataset_paths,
+)
 from filters.breakout_quality.models.multiscale_cnn import (
     build_market_relative_return_delta_representation,
     build_return_delta_representation,
@@ -174,6 +188,9 @@ from .checks import add_check
 
 CONFIGURED_EXPERIMENT = get_breakout_quality_experiment_profile(
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE
+)
+CONFIGURED_PRETRAINING = get_breakout_quality_pretraining_profile(
+    BREAKOUT_QUALITY_PRETRAINING_PROFILE
 )
 
 
@@ -405,6 +422,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_group_norm_model = build_breakout_quality_model(
         10, 4, architecture="inception_time_group_norm_v1"
     )
+    ts2vec_model = build_breakout_quality_model(
+        10, 4, architecture="ts2vec_frozen_linear_v1"
+    )
     residual_model = build_breakout_quality_model(10, 4, architecture="residual_tcn_v1")
     tiny_parameter_count = count_trainable_parameters(tiny_model)
     multiscale_parameter_count = count_trainable_parameters(multiscale_model)
@@ -423,10 +443,387 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_group_norm_parameter_count = count_trainable_parameters(
         inception_group_norm_model
     )
+    ts2vec_trainable_parameter_count = count_trainable_parameters(ts2vec_model)
+    ts2vec_total_parameter_count = sum(
+        int(parameter.numel()) for parameter in ts2vec_model.parameters()
+    )
+    ts2vec_frozen_parameter_count = (
+        ts2vec_total_parameter_count - ts2vec_trainable_parameter_count
+    )
     residual_parameter_count = count_trainable_parameters(residual_model)
     modern_tcn_spec = get_model_spec("modern_tcn_v1")
     inception_spec = get_model_spec("inception_time_v1")
     inception_group_norm_spec = get_model_spec("inception_time_group_norm_v1")
+    ts2vec_spec = get_model_spec("ts2vec_frozen_linear_v1")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ts2vec_9c_frozen_probe_has_locked_encoder_and_linear_head",
+        (
+            831810,
+            642,
+            831168,
+            "ts2vec_frozen_linear",
+            8,
+            128,
+            320,
+            1021,
+            ("global_max",),
+            False,
+        ),
+        (
+            ts2vec_total_parameter_count,
+            ts2vec_trainable_parameter_count,
+            ts2vec_frozen_parameter_count,
+            ts2vec_spec.family,
+            ts2vec_spec.ts2vec_depth,
+            ts2vec_spec.ts2vec_hidden_dims,
+            ts2vec_spec.ts2vec_output_dims,
+            ts2vec_spec.receptive_field_bars,
+            ts2vec_spec.pooling,
+            ts2vec_spec.use_dataset_context,
+        ),
+    )
+    ts2vec_encoder_requires_grad = [
+        bool(parameter.requires_grad)
+        for parameter in ts2vec_model.encoder.parameters()
+    ]
+    ts2vec_head_requires_grad = [
+        bool(parameter.requires_grad)
+        for parameter in ts2vec_model.classifier.parameters()
+    ]
+    ts2vec_model.train()
+    ts2vec_features = torch.randn((4, 300, 10), dtype=torch.float32)
+    ts2vec_context_a = torch.randn((4, 4), dtype=torch.float32)
+    ts2vec_context_b = torch.randn((4, 4), dtype=torch.float32)
+    ts2vec_encoder_before = {
+        key: value.detach().clone()
+        for key, value in ts2vec_model.encoder.state_dict().items()
+    }
+    ts2vec_head_before = {
+        key: value.detach().clone()
+        for key, value in ts2vec_model.classifier.state_dict().items()
+    }
+    ts2vec_optimizer = torch.optim.Adam(
+        [parameter for parameter in ts2vec_model.parameters() if parameter.requires_grad],
+        lr=0.01,
+    )
+    ts2vec_optimizer.zero_grad(set_to_none=True)
+    ts2vec_logits_a = ts2vec_model(ts2vec_features, ts2vec_context_a)
+    ts2vec_logits_b = ts2vec_model(ts2vec_features, ts2vec_context_b)
+    ts2vec_loss = torch.nn.functional.cross_entropy(
+        ts2vec_logits_a,
+        torch.tensor([0, 1, 0, 1], dtype=torch.long),
+    )
+    ts2vec_loss.backward()
+    ts2vec_optimizer.step()
+    ts2vec_encoder_unchanged = all(
+        torch.equal(value, ts2vec_encoder_before[key])
+        for key, value in ts2vec_model.encoder.state_dict().items()
+    )
+    ts2vec_head_changed = any(
+        not torch.equal(value, ts2vec_head_before[key])
+        for key, value in ts2vec_model.classifier.state_dict().items()
+    )
+    ts2vec_reload = build_breakout_quality_model(
+        10, 4, model_spec=ts2vec_spec.as_manifest_payload()
+    )
+    ts2vec_reload.load_state_dict(ts2vec_model.state_dict(), strict=True)
+    z1 = torch.randn((3, 64, 16), dtype=torch.float32, requires_grad=True)
+    z2 = torch.randn((3, 64, 16), dtype=torch.float32, requires_grad=True)
+    ts2vec_contrastive_loss = hierarchical_contrastive_loss(
+        torch, z1, z2, alpha=0.5, temporal_unit=0
+    )
+    ts2vec_contrastive_loss.backward()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ts2vec_encoder_is_frozen_context_independent_and_contrastive_loss_is_finite",
+        True,
+        bool(
+            not any(ts2vec_encoder_requires_grad)
+            and all(ts2vec_head_requires_grad)
+            and ts2vec_model.encoder.training is False
+            and torch.equal(ts2vec_logits_a, ts2vec_logits_b)
+            and tuple(ts2vec_logits_a.shape) == (4, 2)
+            and torch.isfinite(ts2vec_logits_a).all()
+            and ts2vec_encoder_unchanged
+            and ts2vec_head_changed
+            and torch.isfinite(ts2vec_contrastive_loss)
+            and z1.grad is not None
+            and z2.grad is not None
+            and torch.isfinite(z1.grad).all()
+            and torch.isfinite(z2.grad).all()
+        ),
+    )
+    with tempfile.TemporaryDirectory(prefix="ts2vec_contract_") as temp_dir_text:
+        pretrain_root = Path(temp_dir_text)
+        pretrain_dataset_paths = resolve_pretraining_dataset_paths(
+            pretrain_root,
+            "synthetic_quality",
+            family="ts2vec_v1",
+            stride=5,
+        )
+        pretrain_dataset_paths.output_dir.mkdir(parents=True, exist_ok=True)
+        synthetic_windows = np.random.default_rng(7).normal(
+            size=(4, 300, 10)
+        ).astype(np.float32)
+        with pretrain_dataset_paths.windows.open("wb") as handle:
+            np.save(handle, synthetic_windows, allow_pickle=False)
+        synthetic_index = pd.DataFrame(
+            {
+                "window_index": [0, 1, 2, 3],
+                "ticker": ["1101", "1101", "2330", "2330"],
+                "date": [
+                    "2024-01-05",
+                    "2024-01-12",
+                    "2024-06-07",
+                    "2024-12-27",
+                ],
+            }
+        )
+        synthetic_index.to_csv(
+            pretrain_dataset_paths.index, index=False, encoding="utf-8-sig"
+        )
+        pretraining_configuration = {
+            "family": "ts2vec_v1",
+            "dataset_profile": "full",
+            "stride": 5,
+            "window_bars": 300,
+            "feature_columns": list(FEATURE_COLUMNS),
+            "selection_start_date": "2024-01-01",
+            "selection_end_date": "2024-12-31",
+            "outer_policy_fingerprint": "b" * 64,
+            "source_inventory_sha256": "c" * 64,
+            "requested_max_tickers": 0,
+        }
+        pretraining_fingerprint = compute_pretraining_configuration_fingerprint(
+            pretraining_configuration
+        )
+        pretraining_summary = {
+            "schema_version": 1,
+            "format": "selection_rolling_windows_npy_v1",
+            **pretraining_configuration,
+            "configuration_fingerprint": pretraining_fingerprint,
+            "window_count": 4,
+            "oos_windows_used": False,
+            "source_data_inventory": {},
+            "artifacts": {
+                "windows": build_pretraining_file_record(
+                    pretrain_dataset_paths.windows
+                ),
+                "index": build_pretraining_file_record(
+                    pretrain_dataset_paths.index
+                ),
+            },
+        }
+        pretrain_dataset_paths.summary.write_text(
+            json.dumps(pretraining_summary, ensure_ascii=False), encoding="utf-8"
+        )
+        loaded_pretraining_summary, loaded_windows, loaded_index = (
+            load_validated_pretraining_dataset(
+                pretrain_root,
+                "synthetic_quality",
+                dataset_profile="full",
+                family="ts2vec_v1",
+                stride=5,
+                expected_selection_start="2024-01-01",
+                expected_selection_end="2024-12-31",
+                expected_window_bars=300,
+                expected_max_tickers=0,
+                require_current_source=False,
+            )
+        )
+        encoder_paths = resolve_pretrained_encoder_paths(
+            pretrain_root,
+            "synthetic_quality",
+            model_architecture="ts2vec_frozen_linear_v1",
+            experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+        )
+        encoder_paths.output_dir.mkdir(parents=True, exist_ok=True)
+        torch.save({"encoder_state_dict": ts2vec_model.encoder.state_dict()}, encoder_paths.encoder)
+        encoder_manifest = {
+            "schema_version": 1,
+            "model_architecture": "ts2vec_frozen_linear_v1",
+            "experiment_profile": UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+            "model_spec": ts2vec_spec.as_manifest_payload(),
+            "pretraining_profile": build_breakout_quality_pretraining_profile_payload(
+                BREAKOUT_QUALITY_PRETRAINING_PROFILE
+            ),
+            "encoder": build_pretraining_file_record(encoder_paths.encoder),
+            "pretraining_dataset_fingerprint": pretraining_fingerprint,
+            "oos_windows_used": False,
+            "pass_reject_labels_used": False,
+        }
+        encoder_paths.manifest.write_text(
+            json.dumps(encoder_manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        loaded_encoder_manifest = load_validated_pretrained_encoder_manifest(
+            encoder_paths,
+            expected_architecture="ts2vec_frozen_linear_v1",
+            expected_experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+            expected_dataset_fingerprint=pretraining_fingerprint,
+            expected_model_spec=ts2vec_spec.as_manifest_payload(),
+            expected_pretraining_profile=(
+                build_breakout_quality_pretraining_profile_payload(
+                    BREAKOUT_QUALITY_PRETRAINING_PROFILE
+                )
+            ),
+        )
+        tampered_encoder_manifest = dict(encoder_manifest)
+        tampered_encoder_manifest["pretraining_profile"] = {
+            **encoder_manifest["pretraining_profile"],
+            "learning_rate": 0.123,
+        }
+        encoder_paths.manifest.write_text(
+            json.dumps(tampered_encoder_manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        try:
+            load_validated_pretrained_encoder_manifest(
+                encoder_paths,
+                expected_architecture="ts2vec_frozen_linear_v1",
+                expected_experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+                expected_dataset_fingerprint=pretraining_fingerprint,
+                expected_model_spec=ts2vec_spec.as_manifest_payload(),
+                expected_pretraining_profile=(
+                    build_breakout_quality_pretraining_profile_payload(
+                        BREAKOUT_QUALITY_PRETRAINING_PROFILE
+                    )
+                ),
+            )
+            pretraining_profile_mismatch_rejected = False
+        except ValueError as exc:
+            pretraining_profile_mismatch_rejected = "pretraining_profile" in str(exc)
+        tampered_encoder_manifest = dict(encoder_manifest)
+        tampered_encoder_manifest["pass_reject_labels_used"] = True
+        encoder_paths.manifest.write_text(
+            json.dumps(tampered_encoder_manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        try:
+            load_validated_pretrained_encoder_manifest(
+                encoder_paths,
+                expected_architecture="ts2vec_frozen_linear_v1",
+                expected_experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+                expected_dataset_fingerprint=pretraining_fingerprint,
+                expected_model_spec=ts2vec_spec.as_manifest_payload(),
+                expected_pretraining_profile=(
+                    build_breakout_quality_pretraining_profile_payload(
+                        BREAKOUT_QUALITY_PRETRAINING_PROFILE
+                    )
+                ),
+            )
+            pretraining_label_leak_rejected = False
+        except ValueError as exc:
+            pretraining_label_leak_rejected = "PASS/REJECT labels" in str(exc)
+        tampered_encoder_manifest = dict(encoder_manifest)
+        tampered_encoder_manifest["oos_windows_used"] = True
+        encoder_paths.manifest.write_text(
+            json.dumps(tampered_encoder_manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        try:
+            load_validated_pretrained_encoder_manifest(
+                encoder_paths,
+                expected_architecture="ts2vec_frozen_linear_v1",
+                expected_experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+                expected_dataset_fingerprint=pretraining_fingerprint,
+                expected_model_spec=ts2vec_spec.as_manifest_payload(),
+                expected_pretraining_profile=(
+                    build_breakout_quality_pretraining_profile_payload(
+                        BREAKOUT_QUALITY_PRETRAINING_PROFILE
+                    )
+                ),
+            )
+            pretraining_oos_leak_rejected = False
+        except ValueError as exc:
+            pretraining_oos_leak_rejected = "OOS windows" in str(exc)
+        synthetic_index.loc[3, "date"] = "2025-01-03"
+        synthetic_index.to_csv(
+            pretrain_dataset_paths.index, index=False, encoding="utf-8-sig"
+        )
+        pretraining_summary["artifacts"]["index"] = build_pretraining_file_record(
+            pretrain_dataset_paths.index
+        )
+        pretrain_dataset_paths.summary.write_text(
+            json.dumps(pretraining_summary, ensure_ascii=False), encoding="utf-8"
+        )
+        try:
+            load_validated_pretraining_dataset(
+                pretrain_root,
+                "synthetic_quality",
+                dataset_profile="full",
+                family="ts2vec_v1",
+                stride=5,
+                expected_selection_start="2024-01-01",
+                expected_selection_end="2024-12-31",
+                expected_window_bars=300,
+                expected_max_tickers=0,
+                require_current_source=False,
+            )
+            pretraining_date_leak_rejected = False
+        except ValueError as exc:
+            pretraining_date_leak_rejected = "Selection 結束日後" in str(exc)
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "ts2vec_pretraining_contract_rejects_oos_labels_and_endpoint_leakage",
+            True,
+            bool(
+                loaded_pretraining_summary["configuration_fingerprint"]
+                == pretraining_fingerprint
+                and tuple(loaded_windows.shape) == (4, 300, 10)
+                and len(loaded_index) == 4
+                and loaded_encoder_manifest["oos_windows_used"] is False
+                and loaded_encoder_manifest["pass_reject_labels_used"] is False
+                and pretraining_profile_mismatch_rejected
+                and pretraining_label_leak_rejected
+                and pretraining_oos_leak_rejected
+                and pretraining_date_leak_rejected
+            ),
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ts2vec_pretraining_uses_named_profile_with_valid_ranges",
+        True,
+        (
+            BREAKOUT_QUALITY_PRETRAINING_PROFILE
+            in SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES
+            and CONFIGURED_PRETRAINING.name == BREAKOUT_QUALITY_PRETRAINING_PROFILE
+            and CONFIGURED_PRETRAINING.family == "ts2vec_v1"
+            and CONFIGURED_PRETRAINING.optimizer_name
+            in SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS
+            and CONFIGURED_PRETRAINING.epochs >= 1
+            and CONFIGURED_PRETRAINING.batch_size >= 2
+            and CONFIGURED_PRETRAINING.learning_rate > 0.0
+            and CONFIGURED_PRETRAINING.weight_decay >= 0.0
+            and CONFIGURED_PRETRAINING.gradient_clip_norm >= 0.0
+            and CONFIGURED_PRETRAINING.min_crop_bars >= 2
+            and 0.0 <= CONFIGURED_PRETRAINING.mask_probability < 1.0
+            and 0.0 <= CONFIGURED_PRETRAINING.contrastive_alpha <= 1.0
+            and CONFIGURED_PRETRAINING.temporal_unit >= 0
+            and build_breakout_quality_pretraining_profile_payload(
+                TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE
+            )
+            == CONFIGURED_PRETRAINING.as_manifest_payload()
+            and build_breakout_quality_pretraining_profile_payload(
+                TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE,
+                epochs=3,
+                batch_size=64,
+                learning_rate=0.002,
+                weight_decay=0.01,
+                gradient_clip_norm=0.5,
+                min_crop_bars=40,
+                mask_probability=0.25,
+                contrastive_alpha=0.75,
+                temporal_unit=1,
+            )["epochs"]
+            == 3
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -1750,6 +2147,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
         (
             (
+                "ts2vec_frozen_linear_v1",
                 "inception_time_v1",
                 "multiscale_cnn_sequence_only_v1",
             ),
@@ -3131,6 +3529,15 @@ def _validate_breakout_quality_report_rendering(results, case_id):
             "trainable_parameter_count": count_trainable_parameters(
                 build_breakout_quality_model(10, 4, architecture=DEFAULT_MODEL_ARCHITECTURE)
             ),
+            "total_parameter_count": 831810,
+            "frozen_parameter_count": 831168,
+            "self_supervised_pretraining": {
+                "manifest": {
+                    "pretraining_profile": build_breakout_quality_pretraining_profile_payload(
+                        BREAKOUT_QUALITY_PRETRAINING_PROFILE
+                    )
+                }
+            },
             "sequence_length": int(DEFAULT_LABEL_POLICY.feature_window_bars),
             "training_mode": "inner_validation_epoch_selection_full_refit",
             "inner_validation_used": True,
@@ -3274,7 +3681,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v3", 3, payload["schema_version"])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **LR Schedule Parameters**：`{CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-'}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and f"- **Augmentation Parameters**：`{CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and f"- **Pretraining Profile**：`{BREAKOUT_QUALITY_PRETRAINING_PROFILE}`" in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **LR Schedule Parameters**：`{CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-'}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and f"- **Augmentation Parameters**：`{CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
     selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
     normalized_selection_matrix = selection_matrix.replace("**", "")
@@ -3354,7 +3761,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. 排序與校準診斷" in console and "6. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"LR Schedule Args: {CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-' }" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and f"Augmentation Args: {CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and f"Pretrain Profile : {BREAKOUT_QUALITY_PRETRAINING_PROFILE}" in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"LR Schedule Args: {CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-' }" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and f"Augmentation Args: {CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
     markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. 排序與校準診斷", 1)[0]
@@ -3773,6 +4180,45 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "year_weight_multipliers": {},
                 }
 
+            synthetic_runtime_model = build_breakout_quality_model(
+                10, 4, architecture=paths.model_architecture
+            )
+            synthetic_trainable_parameter_count = count_trainable_parameters(
+                synthetic_runtime_model
+            )
+            synthetic_total_parameter_count = sum(
+                int(parameter.numel())
+                for parameter in synthetic_runtime_model.parameters()
+            )
+            synthetic_frozen_parameter_count = (
+                synthetic_total_parameter_count
+                - synthetic_trainable_parameter_count
+            )
+            synthetic_pretraining_fingerprint = "a" * 64
+            synthetic_pretraining_record = {
+                "manifest": {
+                    "schema_version": 1,
+                    "model_architecture": paths.model_architecture,
+                    "experiment_profile": paths.experiment_profile,
+                    "model_spec": get_model_spec(
+                        paths.model_architecture
+                    ).as_manifest_payload(),
+                    "pretraining_profile": build_breakout_quality_pretraining_profile_payload(
+                        BREAKOUT_QUALITY_PRETRAINING_PROFILE
+                    ),
+                    "pretraining_dataset_fingerprint": synthetic_pretraining_fingerprint,
+                    "oos_windows_used": False,
+                    "pass_reject_labels_used": False,
+                },
+                "dataset_summary": {
+                    "family": "ts2vec_v1",
+                    "stride": 5,
+                    "window_count": 100,
+                    "selection_start_date": "2024-01-01",
+                    "selection_end_date": "2024-12-31",
+                    "configuration_fingerprint": synthetic_pretraining_fingerprint,
+                },
+            }
             manifest = {
                 "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
                 "filter_family": FILTER_FAMILY,
@@ -3783,7 +4229,10 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     paths.experiment_profile
                 ).as_manifest_payload(),
                 "model_spec": get_model_spec(paths.model_architecture).as_manifest_payload(),
-                "trainable_parameter_count": 1,
+                "trainable_parameter_count": int(synthetic_trainable_parameter_count),
+                "total_parameter_count": int(synthetic_total_parameter_count),
+                "frozen_parameter_count": int(synthetic_frozen_parameter_count),
+                "self_supervised_pretraining": synthetic_pretraining_record,
                 "sequence_length": int(DEFAULT_LABEL_POLICY.feature_window_bars),
                 "torch_execution": {
                     "requested_device": "cpu",
@@ -4043,6 +4492,36 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
                 validation_contract.manifest["training_mode"],
             )
+
+            stale_pretraining_profile_manifest = json.loads(
+                json.dumps(manifest, ensure_ascii=False)
+            )
+            stale_pretraining_profile_manifest["self_supervised_pretraining"][
+                "manifest"
+            ]["pretraining_profile"]["mask_probability"] = 0.25
+            paths.manifest_path.write_text(
+                json.dumps(stale_pretraining_profile_manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            try:
+                load_model_artifact_contract(str(project_root), filter_id)
+                stale_pretraining_profile_rejected = False
+            except ValueError as exc:
+                stale_pretraining_profile_rejected = "pretraining_profile" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "pretraining_profile_tamper_is_rejected",
+                True,
+                stale_pretraining_profile_rejected,
+            )
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
 
             stale_sampling_manifest = json.loads(
                 json.dumps(manifest, ensure_ascii=False)

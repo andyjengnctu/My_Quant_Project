@@ -1,4 +1,4 @@
-"""Train the configured breakout-quality temporal CNN with optional inner validation."""
+"""Train the configured breakout-quality temporal classifier with optional inner validation."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ from config.breakout_quality_experiments import (
     TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT,
     TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
+    build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
 )
 
@@ -56,6 +57,9 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EVALUATION_WORKERS,
     BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
+    BREAKOUT_QUALITY_PRETRAINING_FAMILY,
+    BREAKOUT_QUALITY_PRETRAINING_PROFILE,
+    BREAKOUT_QUALITY_PRETRAINING_STRIDE,
     BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
@@ -107,6 +111,12 @@ from filters.breakout_quality.inference import (
 from filters.breakout_quality.lr_schedule import (
     build_learning_rate_schedule_plan as _build_learning_rate_schedule_plan,
     learning_rate_for_optimizer_step as _learning_rate_for_optimizer_step,
+)
+from filters.breakout_quality.models.spec import TS2VEC_FROZEN_LINEAR_V1
+from filters.breakout_quality.pretraining_store import (
+    load_validated_pretrained_encoder_manifest,
+    load_validated_pretraining_dataset,
+    resolve_pretrained_encoder_paths,
 )
 from filters.breakout_quality.model import (
     build_model,
@@ -1157,6 +1167,87 @@ def _set_optimizer_learning_rate(optimizer, learning_rate: float) -> None:
         parameter_group["lr"] = resolved
 
 
+def _load_pretrained_encoder_for_training(
+    torch,
+    *,
+    filter_id: str,
+    experiment_profile: str,
+    dataset_summary: dict,
+    outer_oos_policy: dict,
+    model_spec,
+):
+    if str(model_spec.architecture) != TS2VEC_FROZEN_LINEAR_V1:
+        return None, None
+    dataset_profile = str(dataset_summary.get("dataset") or "").strip()
+    if not dataset_profile:
+        raise ValueError("TS2Vec training 缺少 supervised dataset profile")
+    source_selection = dataset_summary.get("source_selection")
+    if not isinstance(source_selection, dict):
+        raise ValueError("TS2Vec training 缺少 supervised dataset source_selection")
+    expected_max_tickers = max(
+        0, int(source_selection.get("requested_max_tickers", -1))
+    )
+    pretrain_summary, _windows, _index = load_validated_pretraining_dataset(
+        PROJECT_ROOT,
+        filter_id,
+        dataset_profile=dataset_profile,
+        family=BREAKOUT_QUALITY_PRETRAINING_FAMILY,
+        stride=int(BREAKOUT_QUALITY_PRETRAINING_STRIDE),
+        expected_selection_start=str(outer_oos_policy["selection_start_date"]),
+        expected_selection_end=str(outer_oos_policy["selection_end_date"]),
+        expected_window_bars=int(DEFAULT_LABEL_POLICY.feature_window_bars),
+        expected_max_tickers=expected_max_tickers,
+        require_current_source=True,
+    )
+    paths = resolve_pretrained_encoder_paths(
+        PROJECT_ROOT,
+        filter_id,
+        model_architecture=model_spec.architecture,
+        experiment_profile=experiment_profile,
+    )
+    pretraining_manifest = load_validated_pretrained_encoder_manifest(
+        paths,
+        expected_architecture=model_spec.architecture,
+        expected_experiment_profile=experiment_profile,
+        expected_dataset_fingerprint=str(pretrain_summary["configuration_fingerprint"]),
+        expected_model_spec=model_spec.as_manifest_payload(),
+        expected_pretraining_profile=(
+            build_breakout_quality_pretraining_profile_payload(
+                BREAKOUT_QUALITY_PRETRAINING_PROFILE
+            )
+        ),
+    )
+    payload = torch.load(paths.encoder, map_location="cpu", weights_only=True)
+    if not isinstance(payload, dict):
+        raise ValueError("pretrained encoder payload 必須是 object")
+    if payload.get("model_spec") != model_spec.as_manifest_payload():
+        raise ValueError("pretrained encoder payload model_spec 不一致")
+    expected_pretraining_profile = build_breakout_quality_pretraining_profile_payload(
+        BREAKOUT_QUALITY_PRETRAINING_PROFILE
+    )
+    if payload.get("pretraining_profile") != expected_pretraining_profile:
+        raise ValueError("pretrained encoder payload pretraining_profile 不一致")
+    if str(payload.get("pretraining_dataset_fingerprint") or "") != str(
+        pretrain_summary["configuration_fingerprint"]
+    ):
+        raise ValueError("pretrained encoder payload dataset fingerprint 不一致")
+    state = payload.get("encoder_state_dict")
+    if not isinstance(state, dict) or not state:
+        raise ValueError("pretrained encoder payload 缺少 encoder_state_dict")
+    record = {
+        "manifest": pretraining_manifest,
+        "dataset_summary": {
+            "family": pretrain_summary["family"],
+            "stride": int(pretrain_summary["stride"]),
+            "window_count": int(pretrain_summary["window_count"]),
+            "selection_start_date": pretrain_summary["selection_start_date"],
+            "selection_end_date": pretrain_summary["selection_end_date"],
+            "configuration_fingerprint": pretrain_summary["configuration_fingerprint"],
+        },
+    }
+    return state, record
+
+
 def _new_training_state(
     torch,
     *,
@@ -1171,13 +1262,21 @@ def _new_training_state(
     class_weight_mode: str,
     seed: int,
     execution_plan: TorchExecutionPlan,
+    pretrained_encoder_state=None,
 ):
     seed_torch(torch, seed=int(seed), plan=execution_plan)
-    model = build_model(feature_count, context_count).to(execution_plan.device)
+    model = build_model(
+        feature_count,
+        context_count,
+        pretrained_encoder_state=pretrained_encoder_state,
+    ).to(execution_plan.device)
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    if not trainable_parameters:
+        raise ValueError("breakout quality model 沒有可訓練參數")
     optimizer = _build_optimizer(
         torch,
         optimizer_name=optimizer_name,
-        parameters=model.parameters(),
+        parameters=trainable_parameters,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
     )
@@ -1352,6 +1451,7 @@ def _select_epoch_with_inner_validation(
     parallel_split_evaluation: bool,
     train_prefetch_batches: int,
     execution_plan: TorchExecutionPlan,
+    pretrained_encoder_state=None,
 ):
     training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
@@ -1381,6 +1481,7 @@ def _select_epoch_with_inner_validation(
         class_weight_mode=class_weight_mode,
         seed=seed,
         execution_plan=execution_plan,
+        pretrained_encoder_state=pretrained_encoder_state,
     )
     grad_scaler = build_grad_scaler(torch, execution_plan)
     batches_per_epoch = int(math.ceil(len(training_sampling_idx) / int(batch_size)))
@@ -1550,6 +1651,7 @@ def _fit_full_selection(
     evaluation_workers: int,
     train_prefetch_batches: int,
     execution_plan: TorchExecutionPlan,
+    pretrained_encoder_state=None,
 ):
     training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
@@ -1576,6 +1678,7 @@ def _fit_full_selection(
         class_weight_mode=class_weight_mode,
         seed=seed,
         execution_plan=execution_plan,
+        pretrained_encoder_state=pretrained_encoder_state,
     )
     grad_scaler = build_grad_scaler(torch, execution_plan)
     batches_per_epoch = int(math.ceil(len(training_sampling_idx) / int(batch_size)))
@@ -1835,6 +1938,14 @@ def main(argv=None) -> int:
         PROJECT_ROOT,
         source_data_end_date=source_data_end,
     )
+    pretrained_encoder_state, pretraining_record = _load_pretrained_encoder_for_training(
+        torch,
+        filter_id=args.filter_id,
+        experiment_profile=experiment_profile,
+        dataset_summary=dataset_summary,
+        outer_oos_policy=outer_oos_policy,
+        model_spec=model_spec,
+    )
     early_stopping_enabled = bool(use_inner_validation and patience > 0)
     (
         split_assignments,
@@ -1951,6 +2062,7 @@ def main(argv=None) -> int:
             parallel_split_evaluation=parallel_split_evaluation,
             train_prefetch_batches=train_prefetch_batches,
             execution_plan=execution_plan,
+            pretrained_encoder_state=pretrained_encoder_state,
         )
         selected_epoch = int(epoch_selection["best_epoch"])
         selected_optimizer_steps = int(epoch_selection["best_optimizer_steps"])
@@ -2010,6 +2122,7 @@ def main(argv=None) -> int:
         evaluation_workers=evaluation_workers,
         train_prefetch_batches=train_prefetch_batches,
         execution_plan=execution_plan,
+        pretrained_encoder_state=pretrained_encoder_state,
     )
     final_refit_plan = {
         "mode": final_refit_mode,
@@ -2066,6 +2179,8 @@ def main(argv=None) -> int:
         stale_path.unlink(missing_ok=True)
 
     trainable_parameter_count = count_trainable_parameters(model)
+    total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
+    frozen_parameter_count = total_parameter_count - trainable_parameter_count
     torch.save(
         {
             "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
@@ -2081,6 +2196,9 @@ def main(argv=None) -> int:
             "experiment_settings": experiment.as_manifest_payload(),
             "torch_execution": execution_plan.as_manifest_payload(),
             "trainable_parameter_count": int(trainable_parameter_count),
+            "total_parameter_count": int(total_parameter_count),
+            "frozen_parameter_count": int(frozen_parameter_count),
+            "self_supervised_pretraining": pretraining_record,
         },
         artifact_paths.model_path,
     )
@@ -2124,6 +2242,9 @@ def main(argv=None) -> int:
         "experiment_settings": experiment.as_manifest_payload(),
         "model_spec": model_spec.as_manifest_payload(),
         "trainable_parameter_count": int(trainable_parameter_count),
+        "total_parameter_count": int(total_parameter_count),
+        "frozen_parameter_count": int(frozen_parameter_count),
+        "self_supervised_pretraining": pretraining_record,
         "sequence_length": int(X.shape[1]),
         "model_filename": DEFAULT_MODEL_FILENAME,
         "manifest_filename": DEFAULT_MANIFEST_FILENAME,
@@ -2298,6 +2419,7 @@ def main(argv=None) -> int:
             "eligible Selection groups with the configured refit-step policy; fixed threshold "
             "is committed before OOS; "
             "training sampling uses ticker/date and existing feature-group identity only; "
+            "TS2Vec pretraining, when configured, uses only rolling-window endpoints inside Selection and never OOS; "
             "OOS predictions and metrics are not used by train.py"
         ),
         "elapsed_sec": round(time.perf_counter() - started, 3),
