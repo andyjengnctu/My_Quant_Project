@@ -9,7 +9,12 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.artifacts import load_runtime_artifact_contract, validate_required_high_len
-from filters.breakout_quality.contract import DEFAULT_FILTER_ID, SCORE_COLUMN, SCORE_TABLE_REQUIRED_COLUMNS
+from filters.breakout_quality.contract import (
+    DEFAULT_FILTER_ID,
+    DEFAULT_UNAVAILABLE_SCORE_FILENAME,
+    SCORE_COLUMN,
+    SCORE_TABLE_REQUIRED_COLUMNS,
+)
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 
 
@@ -70,6 +75,50 @@ def load_score_table(project_root: str, filter_id: str = DEFAULT_FILTER_ID) -> p
             f"breakout quality score table row_count 與 manifest 不一致: "
             f"manifest={expected_row_count}, actual={len(indexed)}"
         )
+
+    unavailable_record = contract.manifest.get("conservative_unscorable_events")
+    if unavailable_record is not None:
+        unavailable_path = path.with_name(DEFAULT_UNAVAILABLE_SCORE_FILENAME)
+        unavailable = read_breakout_quality_csv(unavailable_path)
+        expected_unavailable_columns = ["ticker", "date", "high_len", "reason"]
+        if list(unavailable.columns) != expected_unavailable_columns:
+            raise ValueError(
+                "breakout quality unavailable score columns 與 manifest 不一致: "
+                f"expected={expected_unavailable_columns}, actual={list(unavailable.columns)}"
+            )
+        unavailable = unavailable.copy()
+        unavailable["ticker"] = unavailable["ticker"].astype(str)
+        unavailable["date"] = pd.to_datetime(unavailable["date"], errors="raise").dt.strftime("%Y-%m-%d")
+        unavailable["high_len"] = pd.to_numeric(unavailable["high_len"], errors="raise").astype(int)
+        unavailable["reason"] = unavailable["reason"].astype(str).str.strip()
+        if bool((unavailable["reason"] == "").any()):
+            raise ValueError("breakout quality unavailable score reason 不可為空")
+        if len(unavailable) != int(unavailable_record["row_count"]):
+            raise ValueError("breakout quality unavailable score row_count 與 manifest 不一致")
+        if unavailable.duplicated(["ticker", "date", "high_len"]).any():
+            raise ValueError("breakout quality unavailable score table 有重複 key")
+        actual_reason_counts = {
+            str(key): int(value)
+            for key, value in unavailable["reason"].value_counts().sort_index().items()
+        }
+        expected_reason_counts = {
+            str(key): int(value)
+            for key, value in dict(unavailable_record.get("reason_counts") or {}).items()
+        }
+        if actual_reason_counts != expected_reason_counts:
+            raise ValueError("breakout quality unavailable score reason_counts 與 manifest 不一致")
+        if not unavailable.empty:
+            unavailable_index = pd.MultiIndex.from_frame(
+                unavailable[["ticker", "date", "high_len"]]
+            )
+            fallback_scores = indexed.reindex(unavailable_index)[SCORE_COLUMN].to_numpy(
+                dtype=np.float64, copy=False
+            )
+            if not np.isfinite(fallback_scores).all() or not bool(np.all(fallback_scores == 0.0)):
+                raise ValueError(
+                    "breakout quality unavailable event 必須存在於正式 score table 且保守分數為 0.0"
+                )
+
     observed_high_lens = set(int(value) for value in indexed.index.get_level_values("high_len").unique())
     if not observed_high_lens.issubset(set(contract.high_len_values)):
         raise ValueError("breakout quality score table 含 manifest 未宣告的 high_len")

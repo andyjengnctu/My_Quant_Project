@@ -36,13 +36,19 @@ from filters.breakout_quality.artifacts import (
 from filters.breakout_quality.contract import (
     DEFAULT_FILTER_ID,
     DEFAULT_SCORE_FILENAME,
+    DEFAULT_UNAVAILABLE_SCORE_FILENAME,
+    BreakoutQualityLabelPolicy,
     LABEL_PASS,
+    FEATURE_COLUMNS,
+    CONTEXT_COLUMNS,
     SCORE_COLUMN,
     SCORE_TABLE_REQUIRED_COLUMNS,
     SCORE_TABLE_SCHEMA_VERSION,
     RUNTIME_SCOPE_FORWARD_OOS,
     RUNTIME_SCOPE_RESEARCH,
 )
+from filters.breakout_quality.dataset_store import IndexedFeatureBank
+from filters.breakout_quality.features import build_breakout_quality_inference_dataset_for_frame
 from filters.breakout_quality.inference import (
     materialize_indexed_feature_inputs,
     strict_parallel_batched_logits,
@@ -66,7 +72,13 @@ from filters.breakout_quality.paths import (
     resolve_filter_research_manifest_path,
     resolve_filter_research_score_path,
 )
-from tools.filters.breakout_quality.common import load_validated_dataset_bundle, write_json
+from filters.breakout_quality.source_inventory import build_source_data_inventory
+from tools.filters.breakout_quality.common import (
+    discover_dataset_csv_inputs,
+    load_dataset_frame,
+    load_validated_dataset_bundle,
+    write_json,
+)
 
 
 def parse_args(argv=None):
@@ -165,6 +177,173 @@ def _resolve_forward_export_write_paths(
     return canonical
 
 
+def _policy_from_manifest(payload: dict) -> BreakoutQualityLabelPolicy:
+    return BreakoutQualityLabelPolicy(
+        feature_window_bars=int(payload["feature_window_bars"]),
+        label_horizon_bars=int(payload["label_horizon_bars"]),
+        label_path_cache_bars=int(payload["label_path_cache_bars"]),
+        high_len_values=tuple(int(value) for value in payload["high_len_values"]),
+        min_mfe_return=float(payload["min_mfe_return"]),
+        min_reward_risk_ratio=float(payload["min_reward_risk_ratio"]),
+        max_adverse_return=float(payload["max_adverse_return"]),
+        benchmark_ticker=str(payload["benchmark_ticker"]),
+    )
+
+
+def _merge_source_range(
+    current_start: pd.Timestamp | None,
+    current_end: pd.Timestamp | None,
+    frame: pd.DataFrame,
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    if frame.empty:
+        return current_start, current_end
+    start = pd.Timestamp(frame.index.min()).normalize()
+    end = pd.Timestamp(frame.index.max()).normalize()
+    return (start if current_start is None else min(current_start, start), end if current_end is None else max(current_end, end))
+
+
+def _build_forward_runtime_inputs(
+    *,
+    dataset_summary: dict,
+    policy: BreakoutQualityLabelPolicy,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp | None,
+    require_context: bool,
+) -> tuple[IndexedFeatureBank, np.ndarray, pd.DataFrame, pd.DataFrame, dict]:
+    dataset_profile = str(dataset_summary.get("dataset") or "").strip().lower()
+    if dataset_profile not in {"full", "reduced"}:
+        raise ValueError("forward_oos dataset summary 缺少合法 dataset profile")
+    csv_inputs, duplicate_lines = discover_dataset_csv_inputs(PROJECT_ROOT, dataset_profile)
+    input_map = {str(ticker): Path(path) for ticker, path in csv_inputs}
+    benchmark_path = input_map.get(str(policy.benchmark_ticker))
+    if benchmark_path is None:
+        raise FileNotFoundError(f"找不到 benchmark ticker: {policy.benchmark_ticker}")
+    # # (AI註: forward score export 必須覆蓋 runtime 可能載入的所有股票。
+    # #        資料不足 300 bars 的股票仍可能形成較短 high_len 突破，
+    # #        因此只要求一列有效 OHLCV，再由 feature builder 明確標為不可評分。)
+    source_min_rows = 1
+    benchmark = load_dataset_frame(
+        benchmark_path,
+        str(policy.benchmark_ticker),
+        min_rows=source_min_rows,
+    )
+
+    # # (AI註: 正式 runtime score 必須覆蓋目前 Portfolio 可載入的完整 universe，
+    # #        不得沿用訓練 Dataset 的 --max-tickers 限制；benchmark ticker 本身也可能
+    # #        被正式策略視為候選，因此同樣必須有 score 或明確不可評分紀錄。)
+    tickers = sorted(input_map)
+    source_selection = dataset_summary.get("source_selection")
+    training_requested_max_tickers = 0
+    if isinstance(source_selection, dict):
+        training_requested_max_tickers = max(
+            0,
+            int(source_selection.get("requested_max_tickers") or 0),
+        )
+
+    feature_chunks: list[np.ndarray] = []
+    context_chunks: list[np.ndarray] = []
+    group_index_chunks: list[np.ndarray] = []
+    event_frames: list[pd.DataFrame] = []
+    unavailable_frames: list[pd.DataFrame] = []
+    group_offset = 0
+    skipped_tickers: list[dict[str, str]] = []
+    source_start, source_end = _merge_source_range(None, None, benchmark)
+
+    for ticker in tickers:
+        try:
+            stock = (
+                benchmark
+                if ticker == str(policy.benchmark_ticker)
+                else load_dataset_frame(
+                    input_map[ticker],
+                    ticker,
+                    min_rows=source_min_rows,
+                )
+            )
+        except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
+            skipped_tickers.append({"ticker": ticker, "reason": f"{type(exc).__name__}: {exc}"})
+            continue
+        source_start, source_end = _merge_source_range(source_start, source_end, stock)
+        inference_dataset = build_breakout_quality_inference_dataset_for_frame(
+            stock,
+            benchmark,
+            ticker=ticker,
+            policy=policy,
+            start_date=start_date,
+            end_date=end_date,
+            require_context=require_context,
+        )
+        local_group_count = int(len(inference_dataset.feature_bank))
+        if local_group_count:
+            feature_chunks.append(inference_dataset.feature_bank)
+            context_chunks.append(inference_dataset.context)
+            group_index_chunks.append(
+                inference_dataset.event_group_index.astype(np.int64) + int(group_offset)
+            )
+            event_frames.append(inference_dataset.events)
+            group_offset += local_group_count
+        if not inference_dataset.unavailable_events.empty:
+            unavailable_frames.append(inference_dataset.unavailable_events)
+
+    features = (
+        np.concatenate(feature_chunks, axis=0)
+        if feature_chunks
+        else np.empty((0, int(policy.feature_window_bars), len(FEATURE_COLUMNS)), dtype=np.float32)
+    )
+    context = (
+        np.concatenate(context_chunks, axis=0)
+        if context_chunks
+        else np.empty((0, len(CONTEXT_COLUMNS)), dtype=np.float32)
+    )
+    event_group_index = (
+        np.concatenate(group_index_chunks, axis=0).astype(np.int32, copy=False)
+        if group_index_chunks
+        else np.empty((0,), dtype=np.int32)
+    )
+    events = (
+        pd.concat(event_frames, ignore_index=True)
+        if event_frames
+        else pd.DataFrame(columns=["ticker", "date", "high_len"])
+    )
+    unavailable = (
+        pd.concat(unavailable_frames, ignore_index=True)
+        if unavailable_frames
+        else pd.DataFrame(columns=["ticker", "date", "high_len", "reason"])
+    )
+    candidate_keys = pd.concat(
+        [events[["ticker", "date", "high_len"]], unavailable[["ticker", "date", "high_len"]]],
+        ignore_index=True,
+    )
+    if candidate_keys.empty:
+        raise ValueError("forward_oos current runtime candidate universe 為空")
+    if candidate_keys.duplicated(["ticker", "date", "high_len"]).any():
+        raise ValueError("forward_oos current runtime candidate universe 出現重複 ticker/date/high_len")
+    if len(context) != len(events) or len(event_group_index) != len(events):
+        raise ValueError("forward_oos inference context/event mapping 長度不一致")
+
+    coverage_end = source_end
+    if coverage_end is not None and end_date is not None:
+        coverage_end = min(coverage_end, pd.Timestamp(end_date).normalize())
+    source_range = {
+        "start": None if source_start is None else str(source_start.date()),
+        "end": None if coverage_end is None else str(coverage_end.date()),
+    }
+    metadata = {
+        "dataset_profile": dataset_profile,
+        "source_data_inventory": build_source_data_inventory(PROJECT_ROOT, dataset_profile),
+        "source_data_date_range": source_range,
+        "training_requested_max_tickers": training_requested_max_tickers,
+        "runtime_ticker_limit": 0,
+        "processed_ticker_count": int(len(tickers) - len(skipped_tickers)),
+        "skipped_tickers": skipped_tickers,
+        "duplicate_input_messages": list(duplicate_lines),
+        "candidate_event_row_count": int(len(candidate_keys)),
+        "model_scored_event_row_count": int(len(events)),
+        "conservative_reject_event_row_count": int(len(unavailable)),
+    }
+    return IndexedFeatureBank(features, event_group_index), context, events, unavailable, metadata
+
+
 def _build_score_record(
     score_path: Path,
     *,
@@ -173,6 +352,7 @@ def _build_score_record(
     high_len_values: list[int],
     event_range: dict[str, str | None],
     dataset_summary: dict,
+    runtime_source: dict | None = None,
 ) -> dict:
     score_record = build_file_manifest(score_path)
     score_record.update(
@@ -186,6 +366,8 @@ def _build_score_record(
             "source_dataset_artifacts": dataset_summary.get("dataset_artifacts"),
         }
     )
+    if runtime_source is not None:
+        score_record["runtime_source"] = runtime_source
     return score_record
 
 
@@ -245,12 +427,12 @@ def main(argv=None) -> int:
         args.filter_id,
         expected_policy=model_policy,
     )
-    features, context = materialize_indexed_feature_inputs(
-        features,
-        context,
-        enabled=preload_feature_bank,
-    )
     if args.scope == RUNTIME_SCOPE_RESEARCH:
+        features, context = materialize_indexed_feature_inputs(
+            features,
+            context,
+            enabled=preload_feature_bank,
+        )
         split_record = manifest.get("split_assignments")
         if not isinstance(split_record, dict):
             raise ValueError("model manifest 缺少 split_assignments")
@@ -323,6 +505,48 @@ def main(argv=None) -> int:
     model.to(execution_plan.device)
     model.eval()
     shared_group_score_broadcast = not bool(checkpoint_spec.use_dataset_context)
+    unavailable_events = pd.DataFrame(columns=["ticker", "date", "high_len", "reason"])
+    runtime_source_metadata = None
+    if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
+        outer_policy = manifest.get("outer_oos_policy")
+        if not isinstance(outer_policy, dict):
+            raise ValueError("forward_oos 需要 manifest.outer_oos_policy")
+        information_cutoff = str(manifest.get("model_information_cutoff", "")).strip()
+        if not information_cutoff:
+            raise ValueError("forward_oos 需要 manifest.model_information_cutoff")
+        configured_oos_end_text = str(outer_policy.get("configured_oos_end_date") or "").strip()
+        oos_start = pd.Timestamp(str(outer_policy.get("oos_start_date") or "")).normalize()
+        oos_end = (
+            pd.Timestamp(configured_oos_end_text).normalize()
+            if configured_oos_end_text
+            else None
+        )
+        cutoff = pd.Timestamp(information_cutoff).normalize()
+        runtime_start = max(oos_start, cutoff + pd.Timedelta(days=1))
+        policy = _policy_from_manifest(model_policy)
+        features, context, events, unavailable_events, runtime_source_metadata = _build_forward_runtime_inputs(
+            dataset_summary=dataset_summary,
+            policy=policy,
+            start_date=runtime_start,
+            end_date=oos_end,
+            require_context=bool(checkpoint_spec.use_dataset_context),
+        )
+        features, context = materialize_indexed_feature_inputs(
+            features,
+            context,
+            enabled=preload_feature_bank,
+        )
+        if (
+            feature_count != features.shape[2]
+            or context_count != context.shape[1]
+            or sequence_length != features.shape[1]
+        ):
+            raise ValueError(
+                "model checkpoint 與 current runtime candidate feature 維度不一致: "
+                f"model=({sequence_length}, {feature_count}, {context_count}), "
+                f"runtime=({features.shape[1]}, {features.shape[2]}, {context.shape[1]})"
+            )
+
     if shared_group_score_broadcast:
         group_logits_np, event_to_group = strict_unique_group_batched_logits(
             torch,
@@ -368,6 +592,12 @@ def main(argv=None) -> int:
 
     scored = events.copy()
     scored[SCORE_COLUMN] = pass_probabilities
+    if args.scope == RUNTIME_SCOPE_FORWARD_OOS and not unavailable_events.empty:
+        conservative_rows = unavailable_events[["ticker", "date", "high_len"]].copy()
+        conservative_rows[SCORE_COLUMN] = np.float32(0.0)
+        scored = pd.concat([scored, conservative_rows], ignore_index=True)
+    if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
+        scored = scored.sort_values(["ticker", "date", "high_len"], kind="mergesort").reset_index(drop=True)
     information_cutoff = str(manifest.get("model_information_cutoff", "")).strip()
     if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
         if not information_cutoff:
@@ -377,7 +607,9 @@ def main(argv=None) -> int:
             raise ValueError("forward_oos 需要 manifest.outer_oos_policy")
         oos_start = pd.Timestamp(str(outer_policy.get("oos_start_date") or "")).normalize()
         configured_oos_end_text = str(outer_policy.get("configured_oos_end_date") or "").strip()
-        source_range = dataset_summary.get("source_data_date_range")
+        source_range = (runtime_source_metadata or {}).get("source_data_date_range")
+        if not isinstance(source_range, dict):
+            source_range = dataset_summary.get("source_data_date_range")
         source_end_text = (
             str(source_range.get("end") or "").strip()
             if isinstance(source_range, dict)
@@ -486,7 +718,7 @@ def main(argv=None) -> int:
                     else "event_row"
                 ),
                 "event_row_batch_boundaries_preserved": not shared_group_score_broadcast,
-                "output_row_order_changed": False,
+                "output_row_order_changed": bool(args.scope == RUNTIME_SCOPE_FORWARD_OOS),
             },
             "reason": (
                 "research rows include outer Selection and OOS; epochs and threshold must be fixed before OOS, "
@@ -503,7 +735,7 @@ def main(argv=None) -> int:
         raise RuntimeError("forward_oos writable paths 尚未初始化")
     score_path = writable_paths.score_path
     scored[out_cols].to_csv(score_path, index=False, encoding="utf-8-sig")
-    source_data_range = dataset_summary.get("source_data_date_range")
+    source_data_range = (runtime_source_metadata or {}).get("source_data_date_range")
     if not isinstance(source_data_range, dict):
         source_data_range = event_range
     available_through = str(source_data_range.get("end") or event_range["end"] or "")
@@ -515,7 +747,24 @@ def main(argv=None) -> int:
         high_len_values=[int(value) for value in high_len_values],
         event_range=event_range,
         dataset_summary=dataset_summary,
+        runtime_source=runtime_source_metadata,
     )
+    unavailable_path = score_path.with_name(DEFAULT_UNAVAILABLE_SCORE_FILENAME)
+    unavailable_events.to_csv(unavailable_path, index=False, encoding="utf-8-sig")
+    unavailable_record = build_file_manifest(unavailable_path)
+    unavailable_record.update(
+        {
+            "columns": ["ticker", "date", "high_len", "reason"],
+            "row_count": int(len(unavailable_events)),
+            "reason_counts": {
+                str(key): int(value)
+                for key, value in unavailable_events["reason"].value_counts().sort_index().items()
+            },
+            "conservative_runtime_score": 0.0,
+            "runtime_action": "reject",
+        }
+    )
+    manifest["conservative_unscorable_events"] = unavailable_record
     manifest["score_inference_execution"] = {
         "mode": (
             (
@@ -541,6 +790,8 @@ def main(argv=None) -> int:
         ),
         "inference_input_row_count": inference_input_row_count,
         "output_event_row_count": int(len(scored)),
+        "model_scored_event_row_count": int(len(events)),
+        "conservative_reject_event_row_count": int(len(unavailable_events)),
         "shared_group_score_broadcast": shared_group_score_broadcast,
         "inference_batch_boundaries_defined_over": (
             "unique_ticker_date_feature_group"
@@ -548,7 +799,7 @@ def main(argv=None) -> int:
             else "event_row"
         ),
         "event_row_batch_boundaries_preserved": not shared_group_score_broadcast,
-        "output_row_order_changed": False,
+        "output_row_order_changed": bool(args.scope == RUNTIME_SCOPE_FORWARD_OOS),
     }
     manifest["runtime_eligibility"] = {
         "eligible": True,
@@ -564,6 +815,12 @@ def main(argv=None) -> int:
     manifest["score_filename"] = DEFAULT_SCORE_FILENAME
     write_json(writable_paths.manifest_path, manifest)
     print(f"已輸出正式單一路徑: {score_path}")
+    print(f"已輸出不可評分事件稽核: {unavailable_path}")
+    print(
+        "runtime candidate coverage: "
+        f"total={len(scored):,}, model_scored={len(events):,}, "
+        f"conservative_reject={len(unavailable_events):,}"
+    )
     print(f"已更新: {writable_paths.manifest_path}")
     print(f"scope={args.scope} rows={len(scored)} date_range={event_range}")
     return 0

@@ -166,6 +166,8 @@ python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --
 - `forward_oos` 只匯出落在同一份 walk-forward OOS window、且事件日嚴格晚於 `model_information_cutoff` 的固定規格模型分數；若沒有符合資料會直接失敗。
 - `available_from` 之前視為模型尚未啟用；`available_through` 之後若出現候選事件則 fail-fast，沒有候選事件時不要求不存在的分數。
 - 正式 runtime 只讀目前 policy 架構與 experiment profile 的 `models/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/scores.csv`，並驗證 model/score SHA256、schema、high_len coverage、OOS eligibility 與可用日期。
+- `forward_oos` 會以目前原始資料重新建立 runtime 突破候選全集，不再只沿用訓練 Dataset 內可建立特徵的事件。可評分事件使用模型 score；因 benchmark 日期缺失、300-bar feature history 不足或特徵無效而不可評分的正式候選，會寫入同目錄 `unavailable_scores.csv`，並在 `scores.csv` 固定記為 `0.0`（保守 REJECT）。未知缺分仍會 fail-fast。
+- 每次原始 CSV inventory 改變或套用本契約修正後，都必須重新執行本命令；不需重訓模型或重跑 Rolling optimizer。
 - 現有舊版 `breakout_quality_v1` manifest 不符合新版 artifact contract 時，必須依上述流程重建，不得由 runtime 猜測或自動相容。
 
 ## 固定 9A 策略層經濟效果對照

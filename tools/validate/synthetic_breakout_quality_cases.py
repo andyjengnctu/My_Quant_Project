@@ -96,6 +96,7 @@ from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
     DEFAULT_LABEL_POLICY,
     DEFAULT_MODEL_ARCHITECTURE,
+    DEFAULT_UNAVAILABLE_SCORE_FILENAME,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
     LABEL_INVALID,
@@ -194,7 +195,11 @@ from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_SCHEMA_VERSION,
     IndexedFeatureBank,
 )
-from filters.breakout_quality.features import build_event_label, label_from_cached_path
+from filters.breakout_quality.features import (
+    build_breakout_quality_inference_dataset_for_frame,
+    build_event_label,
+    label_from_cached_path,
+)
 from filters.breakout_quality.inference import (
     strict_parallel_batched_logits,
     strict_unique_group_batched_logits,
@@ -286,6 +291,83 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "fixed_threshold_is_user_configured_and_legal",
         True,
         0.0 <= float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD) <= 1.0,
+    )
+
+    inference_dates = pd.bdate_range("2025-01-01", periods=8)
+    inference_close = np.asarray([9.8, 9.9, 9.9, 9.9, 10.5, 10.4, 10.3, 10.2])
+    inference_stock = pd.DataFrame(
+        {
+            "Open": inference_close - 0.1,
+            "High": np.asarray([10.0, 10.0, 10.0, 10.0, 10.6, 10.5, 10.4, 10.3]),
+            "Low": inference_close - 0.2,
+            "Close": inference_close,
+            "Volume": np.full((8,), 1000.0),
+        },
+        index=inference_dates,
+    )
+    inference_benchmark_full = pd.DataFrame(
+        {
+            "Open": np.full((8,), 20.0),
+            "High": np.full((8,), 20.2),
+            "Low": np.full((8,), 19.8),
+            "Close": np.full((8,), 20.0),
+            "Volume": np.full((8,), 2000.0),
+        },
+        index=inference_dates,
+    )
+    inference_policy = BreakoutQualityLabelPolicy(
+        feature_window_bars=5,
+        label_horizon_bars=2,
+        label_path_cache_bars=2,
+        high_len_values=(3,),
+        min_mfe_return=0.05,
+        min_reward_risk_ratio=2.0,
+        max_adverse_return=-0.10,
+        benchmark_ticker="0050",
+    )
+    event_date = inference_dates[4]
+    unavailable_inference = build_breakout_quality_inference_dataset_for_frame(
+        inference_stock,
+        inference_benchmark_full.drop(index=event_date),
+        ticker="2330",
+        policy=inference_policy,
+        start_date=event_date,
+        end_date=event_date,
+        require_context=False,
+    )
+    scoreable_inference = build_breakout_quality_inference_dataset_for_frame(
+        inference_stock,
+        inference_benchmark_full,
+        ticker="2330",
+        policy=inference_policy,
+        start_date=event_date,
+        end_date=event_date,
+        require_context=False,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "forward_candidate_without_benchmark_date_is_explicit_conservative_unavailable",
+        (0, (0, 5, len(FEATURE_COLUMNS)), 1, "benchmark_date_missing"),
+        (
+            len(unavailable_inference.events),
+            unavailable_inference.feature_bank.shape,
+            len(unavailable_inference.unavailable_events),
+            unavailable_inference.unavailable_events.iloc[0]["reason"],
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "same_forward_candidate_is_model_scoreable_when_benchmark_feature_exists",
+        (1, (1, 5, len(FEATURE_COLUMNS)), 0),
+        (
+            len(scoreable_inference.events),
+            scoreable_inference.feature_bank.shape,
+            len(scoreable_inference.unavailable_events),
+        ),
     )
     configured_model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     add_check(
@@ -5676,6 +5758,131 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             except ValueError as exc:
                 stale_rejected = "已過期" in str(exc)
             add_check(results, "synthetic_breakout_quality", case_id, "uncovered_candidate_fails_fast", True, stale_rejected)
+
+            unavailable_path = paths.score_path.with_name(
+                DEFAULT_UNAVAILABLE_SCORE_FILENAME
+            )
+            unavailable_frame = pd.DataFrame(
+                [
+                    {
+                        "ticker": "2330",
+                        "date": "2025-01-04",
+                        "high_len": high_len,
+                        "reason": "benchmark_date_missing",
+                    }
+                ]
+            )
+            unavailable_frame.to_csv(
+                unavailable_path,
+                index=False,
+                encoding="utf-8-sig",
+            )
+            unavailable_record = build_file_manifest(unavailable_path)
+            unavailable_record.update(
+                {
+                    "columns": ["ticker", "date", "high_len", "reason"],
+                    "row_count": 1,
+                    "reason_counts": {"benchmark_date_missing": 1},
+                    "conservative_runtime_score": 0.0,
+                    "runtime_action": "reject",
+                }
+            )
+            audit_score_frame = score_frame.copy()
+            audit_score_frame.loc[
+                audit_score_frame["date"] == "2025-01-04",
+                SCORE_COLUMN,
+            ] = 0.0
+            audit_score_frame.to_csv(
+                paths.score_path,
+                index=False,
+                encoding="utf-8-sig",
+            )
+            audit_score_record = build_file_manifest(paths.score_path)
+            audit_score_record.update(
+                {
+                    "schema_version": SCORE_TABLE_SCHEMA_VERSION,
+                    "required_columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
+                    "columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
+                    "row_count": len(audit_score_frame),
+                    "high_len_values": [high_len],
+                    "event_date_range": {
+                        "start": "2025-01-03",
+                        "end": "2025-01-04",
+                    },
+                }
+            )
+            manifest["score_table"] = audit_score_record
+            manifest["conservative_unscorable_events"] = unavailable_record
+            manifest["score_inference_execution"] = {
+                "inference_unit": "unique_ticker_date_feature_group",
+                "shared_group_score_broadcast": True,
+                "model_scored_event_row_count": 1,
+                "conservative_reject_event_row_count": 1,
+                "output_event_row_count": 2,
+            }
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            audited_scores = load_score_table(str(project_root), filter_id)
+            audited_reject_score = float(
+                audited_scores.loc[("2330", "2025-01-04", high_len), SCORE_COLUMN]
+            )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "unscorable_runtime_candidate_is_audited_and_rejected",
+                0.0,
+                audited_reject_score,
+            )
+
+            tampered_audit_score_frame = audit_score_frame.copy()
+            tampered_audit_score_frame.loc[
+                tampered_audit_score_frame["date"] == "2025-01-04",
+                SCORE_COLUMN,
+            ] = 0.1
+            tampered_audit_score_frame.to_csv(
+                paths.score_path,
+                index=False,
+                encoding="utf-8-sig",
+            )
+            tampered_audit_score_record = build_file_manifest(paths.score_path)
+            tampered_audit_score_record.update(
+                {
+                    **audit_score_record,
+                    **build_file_manifest(paths.score_path),
+                }
+            )
+            manifest["score_table"] = tampered_audit_score_record
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            try:
+                load_score_table(str(project_root), filter_id)
+                nonzero_unscorable_score_rejected = False
+            except ValueError as exc:
+                nonzero_unscorable_score_rejected = "保守分數為 0.0" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "unscorable_runtime_candidate_nonzero_score_is_rejected",
+                True,
+                nonzero_unscorable_score_rejected,
+            )
+
+            score_frame.to_csv(paths.score_path, index=False, encoding="utf-8-sig")
+            manifest["score_table"] = score_record
+            manifest.pop("conservative_unscorable_events", None)
+            manifest["score_inference_execution"] = {
+                "inference_unit": "unique_ticker_date_feature_group",
+                "shared_group_score_broadcast": True,
+            }
+            unavailable_path.unlink(missing_ok=True)
 
             manifest["runtime_eligibility"] = {
                 "eligible": False,

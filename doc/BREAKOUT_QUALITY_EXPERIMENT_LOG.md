@@ -918,6 +918,19 @@ Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke
 | 下一步 | 直接重跑`python apps/breakout_quality_strategy_compare.py --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off` |
 
 
+正式 runtime 候選全集閉環（2026-07-26 19:26）：套用 shared `ticker/date` lookup 後，quality-filter 仍在 `2412 / 2025-06-12 / high_len=160` 報告整個 ticker/date 不存在，證明舊 `scores.csv` 並非只有 high_len key 分叉，而是 score producer 只輸出訓練 Dataset 中成功建立 300-bar 個股＋0050 sequence 的事件；Portfolio runtime 則對所有價格突破候選要求分數。reduced 資料可重現同型案例：`2330 / 2025-06-11 / high_len=70` 為 canonical crossover，但0050缺少同日資料，舊 Dataset直接略過。正式 forward export 已改為重新掃描目前 canonical source CSV，以與 `core.signal_utils` 相同的 crossover公式建立候選全集；可評分事件走固定9A模型，不可建立模型輸入者寫入`unavailable_scores.csv`並在canonical `scores.csv`固定為0.0保守REJECT，manifest保存來源inventory、候選／評分／保守拒絕數與原因。runtime驗證audit row必須存在於score table且精確為0.0；未被audit記錄的任何缺分仍fail-fast。此修正只閉合正式score覆蓋契約，不改9A模型、threshold、Dataset／Label、Rolling active params、候選 crossover、成交或帳務。
+
+| 追溯項目 | Runtime候選全集閉環內容 |
+|---|---|
+| 程式基準 | 使用者ZIP `test-branch-1_20260726_192609_c92225a.zip`，SHA256 `9cfca2af009a6c9b2ad2a20e63fbd4fdb1c6d18131fe58b9dd14b075d90bc885` |
+| 唯一變更 | `forward_oos`由stored labeled Dataset event subset改為current canonical runtime crossover universe；不可評分候選明確audit並固定0.0保守REJECT |
+| 固定條件 | 9A architecture/profile、checkpoint、threshold 0.5、Label、research報表、Rolling OOS參數、策略candidate公式、Portfolio成交與統計口徑均不變 |
+| 重建需求 | 不需重建Dataset、Label、feature bank、9A model或Rolling參數；**必須重新匯出forward-OOS scores與manifest** |
+| Selection／OOS結果 | 無新模型或分類結果；本輪為runtime coverage契約修正，策略比較仍待完成 |
+| 判定 | `IMPLEMENTED`；不可評分事件依專案保守原則固定REJECT，不宣告9A策略有效或無效 |
+| 下一步 | 重跑`export-scores --scope forward_oos`，確認輸出`unavailable_scores.csv`及coverage counts，再重跑固定no-filter vs 9A策略比較 |
+
+
 ---
 
 ## 6. 實驗執行順序

@@ -35,6 +35,7 @@ from filters.breakout_quality.contract import (
     DEFAULT_LABEL_POLICY,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_SCORE_FILENAME,
+    DEFAULT_UNAVAILABLE_SCORE_FILENAME,
     DEFAULT_SPLIT_FILENAME,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
@@ -91,6 +92,7 @@ from filters.breakout_quality.paths import (
     BreakoutQualityArtifactPaths,
     resolve_existing_filter_artifact_paths,
 )
+from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.splits import (
     compute_outer_policy_fingerprint,
     validate_split_assignment_frame,
@@ -1110,12 +1112,99 @@ def load_runtime_artifact_contract(
     if event_end < event_start or event_end > available_through:
         raise ValueError("breakout quality score table event_date_range 與 runtime availability 不一致")
     high_len_values = _normalize_high_len_values(score_table.get("high_len_values"))
+    runtime_source = score_table.get("runtime_source")
+    if runtime_source is not None:
+        if not isinstance(runtime_source, dict):
+            raise ValueError("breakout quality score_table.runtime_source 必須是 object")
+        dataset_profile = _require_nonempty_text(runtime_source, "dataset_profile")
+        if dataset_profile not in {"full", "reduced"}:
+            raise ValueError("breakout quality runtime_source.dataset_profile 不合法")
+        stored_source_inventory = _require_mapping(runtime_source, "source_data_inventory")
+        current_source_inventory = build_source_data_inventory(project_root, dataset_profile)
+        if stored_source_inventory != current_source_inventory:
+            raise ValueError(
+                "breakout quality 正式 score table 的來源 CSV 已變更；"
+                "請重新執行 export-scores --scope forward_oos"
+            )
+        runtime_source_range = _require_mapping(runtime_source, "source_data_date_range")
+        runtime_source_start = _parse_iso_date(
+            runtime_source_range.get("start"),
+            field_name="score_table.runtime_source.source_data_date_range.start",
+        )
+        runtime_source_end = _parse_iso_date(
+            runtime_source_range.get("end"),
+            field_name="score_table.runtime_source.source_data_date_range.end",
+        )
+        if runtime_source_end < runtime_source_start:
+            raise ValueError("breakout quality runtime source date range 不合法")
+        if runtime_source_end != available_through:
+            raise ValueError("breakout quality runtime source end 與 available_through 不一致")
+        if int(runtime_source.get("runtime_ticker_limit", -1)) != 0:
+            raise ValueError("breakout quality 正式 runtime source 不得沿用 training ticker limit")
+        processed_ticker_count = int(runtime_source.get("processed_ticker_count", -1))
+        skipped_tickers = runtime_source.get("skipped_tickers")
+        if processed_ticker_count < 1 or not isinstance(skipped_tickers, list):
+            raise ValueError("breakout quality runtime source ticker coverage metadata 不合法")
+        candidate_event_count = int(runtime_source.get("candidate_event_row_count", -1))
+        runtime_model_scored_count = int(runtime_source.get("model_scored_event_row_count", -1))
+        runtime_conservative_count = int(runtime_source.get("conservative_reject_event_row_count", -1))
+        if (
+            candidate_event_count != row_count
+            or runtime_model_scored_count < 0
+            or runtime_conservative_count < 0
+            or runtime_model_scored_count + runtime_conservative_count != candidate_event_count
+        ):
+            raise ValueError("breakout quality runtime source candidate coverage counts 不一致")
+
+    unavailable_row_count = 0
+    unavailable_record = manifest.get("conservative_unscorable_events")
+    if unavailable_record is not None:
+        if not isinstance(unavailable_record, dict):
+            raise ValueError("breakout quality conservative_unscorable_events 必須是 object")
+        unavailable_path = paths.score_path.with_name(DEFAULT_UNAVAILABLE_SCORE_FILENAME)
+        _validate_file_record(
+            unavailable_path,
+            unavailable_record,
+            expected_filename=DEFAULT_UNAVAILABLE_SCORE_FILENAME,
+            field_name="conservative_unscorable_events",
+        )
+        if list(unavailable_record.get("columns", [])) != ["ticker", "date", "high_len", "reason"]:
+            raise ValueError("breakout quality unavailable score columns 契約不一致")
+        unavailable_row_count = int(unavailable_record.get("row_count", -1))
+        if unavailable_row_count < 0:
+            raise ValueError("breakout quality unavailable score row_count 必須 >= 0")
+        reason_counts = unavailable_record.get("reason_counts")
+        if not isinstance(reason_counts, dict) or sum(int(value) for value in reason_counts.values()) != unavailable_row_count:
+            raise ValueError("breakout quality unavailable score reason_counts 與 row_count 不一致")
+        if float(unavailable_record.get("conservative_runtime_score", float("nan"))) != 0.0:
+            raise ValueError("breakout quality unavailable score 必須保守映射為 0.0")
+        if str(unavailable_record.get("runtime_action") or "").strip() != "reject":
+            raise ValueError("breakout quality unavailable score runtime_action 必須是 reject")
+        if isinstance(runtime_source, dict) and int(
+            runtime_source.get("conservative_reject_event_row_count", -1)
+        ) != unavailable_row_count:
+            raise ValueError("breakout quality runtime source 與 unavailable audit row_count 不一致")
+
+    score_inference_execution = manifest.get("score_inference_execution")
+    if score_inference_execution is not None and not isinstance(score_inference_execution, dict):
+        raise ValueError("breakout quality score_inference_execution 必須是 object")
+    if isinstance(score_inference_execution, dict) and (
+        "model_scored_event_row_count" in score_inference_execution
+        or "conservative_reject_event_row_count" in score_inference_execution
+    ):
+        model_scored_count = int(score_inference_execution.get("model_scored_event_row_count", -1))
+        conservative_count = int(score_inference_execution.get("conservative_reject_event_row_count", -1))
+        output_count = int(score_inference_execution.get("output_event_row_count", -1))
+        if (
+            model_scored_count < 0
+            or conservative_count != unavailable_row_count
+            or output_count != row_count
+            or model_scored_count + conservative_count != output_count
+        ):
+            raise ValueError("breakout quality score inference row counts 契約不一致")
 
     shared_group_score_broadcast = False
-    score_inference_execution = manifest.get("score_inference_execution")
     if score_inference_execution is not None:
-        if not isinstance(score_inference_execution, dict):
-            raise ValueError("breakout quality score_inference_execution 必須是 object")
         shared_raw = score_inference_execution.get("shared_group_score_broadcast", False)
         if not isinstance(shared_raw, bool):
             raise ValueError("breakout quality shared_group_score_broadcast 必須是 bool")

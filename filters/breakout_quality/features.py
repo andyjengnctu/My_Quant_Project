@@ -42,6 +42,15 @@ EVENT_COLUMNS = (
 
 
 @dataclass(frozen=True)
+class BreakoutQualityInferenceDataset:
+    feature_bank: np.ndarray
+    context: np.ndarray
+    event_group_index: np.ndarray
+    events: pd.DataFrame
+    unavailable_events: pd.DataFrame
+
+
+@dataclass(frozen=True)
 class BreakoutQualityDataset:
     feature_bank: np.ndarray
     context: np.ndarray
@@ -99,6 +108,52 @@ def _normalize_ohlcv_window(window: pd.DataFrame, anchor_close: float) -> np.nda
     return np.column_stack([open_norm, high_norm, low_norm, close_norm, volume_norm]).astype(np.float32)
 
 
+def _build_breakout_quality_sequence_feature_with_reason(
+    stock_df: pd.DataFrame,
+    benchmark_df: pd.DataFrame,
+    *,
+    event_pos: int,
+    policy: BreakoutQualityLabelPolicy,
+) -> tuple[np.ndarray | None, str | None]:
+    """Build one shared sequence and expose why a formal candidate cannot be scored."""
+
+    feature_window = int(policy.feature_window_bars)
+    start_pos = int(event_pos) - feature_window + 1
+    if start_pos < 0:
+        return None, "insufficient_stock_history"
+
+    stock_window = stock_df.iloc[start_pos:int(event_pos) + 1]
+    if len(stock_window) != feature_window:
+        return None, "insufficient_stock_history"
+    event_date = stock_df.index[int(event_pos)]
+    if event_date not in benchmark_df.index:
+        return None, "benchmark_date_missing"
+    benchmark_location = benchmark_df.index.get_loc(event_date)
+    if not isinstance(benchmark_location, (int, np.integer)):
+        return None, "benchmark_date_ambiguous"
+    benchmark_pos = int(benchmark_location)
+    benchmark_start = benchmark_pos - feature_window + 1
+    if benchmark_start < 0:
+        return None, "insufficient_benchmark_history"
+    benchmark_window = benchmark_df.iloc[benchmark_start:benchmark_pos + 1]
+    if len(benchmark_window) != feature_window:
+        return None, "insufficient_benchmark_history"
+
+    close_d0 = float(stock_df["Close"].iloc[int(event_pos)])
+    benchmark_close_d0 = float(benchmark_df["Close"].iloc[benchmark_pos])
+    if not math.isfinite(close_d0) or close_d0 <= 0.0:
+        return None, "invalid_stock_anchor"
+    if not math.isfinite(benchmark_close_d0) or benchmark_close_d0 <= 0.0:
+        return None, "invalid_benchmark_anchor"
+
+    stock_features = _normalize_ohlcv_window(stock_window, close_d0)
+    benchmark_features = _normalize_ohlcv_window(benchmark_window, benchmark_close_d0)
+    seq_features = np.column_stack([stock_features, benchmark_features]).astype(np.float32)
+    if not np.isfinite(seq_features).all():
+        return None, "nonfinite_sequence_feature"
+    return seq_features, None
+
+
 def build_breakout_quality_sequence_feature(
     stock_df: pd.DataFrame,
     benchmark_df: pd.DataFrame,
@@ -108,41 +163,13 @@ def build_breakout_quality_sequence_feature(
 ) -> np.ndarray | None:
     """Build the ticker/date sequence once; it is shared by all high_len events on that date."""
 
-    feature_window = int(policy.feature_window_bars)
-    start_pos = int(event_pos) - feature_window + 1
-    if start_pos < 0:
-        return None
-
-    stock_window = stock_df.iloc[start_pos:int(event_pos) + 1]
-    if len(stock_window) != feature_window:
-        return None
-    event_date = stock_df.index[int(event_pos)]
-    if event_date not in benchmark_df.index:
-        return None
-    benchmark_location = benchmark_df.index.get_loc(event_date)
-    if not isinstance(benchmark_location, (int, np.integer)):
-        return None
-    benchmark_pos = int(benchmark_location)
-    benchmark_start = benchmark_pos - feature_window + 1
-    if benchmark_start < 0:
-        return None
-    benchmark_window = benchmark_df.iloc[benchmark_start:benchmark_pos + 1]
-    if len(benchmark_window) != feature_window:
-        return None
-
-    close_d0 = float(stock_df["Close"].iloc[int(event_pos)])
-    benchmark_close_d0 = float(benchmark_df["Close"].iloc[benchmark_pos])
-    if not math.isfinite(close_d0) or close_d0 <= 0.0:
-        return None
-    if not math.isfinite(benchmark_close_d0) or benchmark_close_d0 <= 0.0:
-        return None
-
-    stock_features = _normalize_ohlcv_window(stock_window, close_d0)
-    benchmark_features = _normalize_ohlcv_window(benchmark_window, benchmark_close_d0)
-    seq_features = np.column_stack([stock_features, benchmark_features]).astype(np.float32)
-    if not np.isfinite(seq_features).all():
-        return None
-    return seq_features
+    sequence, _reason = _build_breakout_quality_sequence_feature_with_reason(
+        stock_df,
+        benchmark_df,
+        event_pos=event_pos,
+        policy=policy,
+    )
+    return sequence
 
 
 def build_breakout_quality_context(
@@ -247,6 +274,134 @@ def build_candidate_event_positions(stock_df: pd.DataFrame, high_lens: Iterable[
                 )
     return events
 
+
+
+def build_breakout_quality_inference_dataset_for_frame(
+    stock_df: pd.DataFrame,
+    benchmark_df: pd.DataFrame,
+    *,
+    ticker: str,
+    policy: BreakoutQualityLabelPolicy,
+    start_date: str | pd.Timestamp | None = None,
+    end_date: str | pd.Timestamp | None = None,
+    require_context: bool = True,
+) -> BreakoutQualityInferenceDataset:
+    """Build the current runtime candidate universe without using future labels.
+
+    Every formal breakout event is represented either by a model input or by an
+    explicit unavailable row.  Exporters may conservatively map unavailable rows
+    to REJECT, while an undocumented missing score remains a contract failure.
+    """
+
+    candidate_events = build_candidate_event_positions(stock_df, policy.high_lens())
+    start_ts = None if start_date is None else pd.Timestamp(start_date).normalize()
+    end_ts = None if end_date is None else pd.Timestamp(end_date).normalize()
+    if start_ts is not None or end_ts is not None:
+        candidate_events = [
+            event
+            for event in candidate_events
+            if (start_ts is None or pd.Timestamp(event["date"]).normalize() >= start_ts)
+            and (end_ts is None or pd.Timestamp(event["date"]).normalize() <= end_ts)
+        ]
+    if not candidate_events:
+        return BreakoutQualityInferenceDataset(
+            feature_bank=np.empty(
+                (0, int(policy.feature_window_bars), len(FEATURE_COLUMNS)),
+                dtype=np.float32,
+            ),
+            context=np.empty((0, len(CONTEXT_COLUMNS)), dtype=np.float32),
+            event_group_index=np.empty((0,), dtype=np.int32),
+            events=pd.DataFrame(columns=["ticker", "date", "high_len"]),
+            unavailable_events=pd.DataFrame(
+                columns=["ticker", "date", "high_len", "reason"]
+            ),
+        )
+
+    events_by_pos: dict[int, list[dict]] = {}
+    for event in candidate_events:
+        events_by_pos.setdefault(int(event["pos"]), []).append(event)
+
+    feature_bank: list[np.ndarray] = []
+    contexts: list[np.ndarray] = []
+    event_group_index: list[int] = []
+    rows: list[dict] = []
+    unavailable_rows: list[dict] = []
+
+    for pos, grouped_events in events_by_pos.items():
+        sequence, unavailable_reason = _build_breakout_quality_sequence_feature_with_reason(
+            stock_df,
+            benchmark_df,
+            event_pos=pos,
+            policy=policy,
+        )
+        if sequence is None:
+            for event in grouped_events:
+                unavailable_rows.append(
+                    {
+                        "ticker": str(ticker),
+                        "date": pd.Timestamp(event["date"]).strftime("%Y-%m-%d"),
+                        "high_len": int(event["high_len"]),
+                        "reason": str(unavailable_reason or "sequence_feature_unavailable"),
+                    }
+                )
+            continue
+
+        local_group_index = len(feature_bank)
+        group_rows: list[tuple[dict, np.ndarray]] = []
+        for event in grouped_events:
+            context = build_breakout_quality_context(
+                stock_df,
+                event_pos=pos,
+                high_len=int(event["high_len"]),
+                breakout_level=float(event["breakout_level"]),
+                policy=policy,
+            )
+            if context is None and require_context:
+                unavailable_rows.append(
+                    {
+                        "ticker": str(ticker),
+                        "date": pd.Timestamp(event["date"]).strftime("%Y-%m-%d"),
+                        "high_len": int(event["high_len"]),
+                        "reason": "context_feature_unavailable",
+                    }
+                )
+                continue
+            if context is None:
+                context = np.zeros((len(CONTEXT_COLUMNS),), dtype=np.float32)
+            group_rows.append((event, context))
+
+        if not group_rows:
+            continue
+        feature_bank.append(sequence)
+        for event, context in group_rows:
+            contexts.append(context)
+            event_group_index.append(local_group_index)
+            rows.append(
+                {
+                    "ticker": str(ticker),
+                    "date": pd.Timestamp(event["date"]).strftime("%Y-%m-%d"),
+                    "high_len": int(event["high_len"]),
+                }
+            )
+
+    feature_array = (
+        np.asarray(feature_bank, dtype=np.float32)
+        if feature_bank
+        else np.empty(
+            (0, int(policy.feature_window_bars), len(FEATURE_COLUMNS)),
+            dtype=np.float32,
+        )
+    )
+    return BreakoutQualityInferenceDataset(
+        feature_bank=feature_array,
+        context=np.asarray(contexts, dtype=np.float32).reshape(-1, len(CONTEXT_COLUMNS)),
+        event_group_index=np.asarray(event_group_index, dtype=np.int32),
+        events=pd.DataFrame(rows, columns=["ticker", "date", "high_len"]),
+        unavailable_events=pd.DataFrame(
+            unavailable_rows,
+            columns=["ticker", "date", "high_len", "reason"],
+        ),
+    )
 
 def build_future_price_path(
     stock_df: pd.DataFrame,
@@ -604,10 +759,12 @@ def build_breakout_quality_dataset_for_frame(
 __all__ = [
     "EVENT_COLUMNS",
     "BreakoutQualityDataset",
+    "BreakoutQualityInferenceDataset",
     "BreakoutQualityLabelResult",
     "build_breakout_quality_context",
     "build_breakout_quality_dataset_for_frame",
     "build_breakout_quality_feature",
+    "build_breakout_quality_inference_dataset_for_frame",
     "build_breakout_quality_sequence_feature",
     "build_candidate_event_positions",
     "build_event_label",
