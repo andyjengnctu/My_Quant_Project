@@ -8,7 +8,7 @@ from config.breakout_quality_experiments import (
     get_breakout_quality_pretraining_profile,
 )
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "patch_transformer_v1"  # 9F IMPLEMENTED：小型 supervised Patch Transformer；待完整 Selection／OOS，9A 仍為已接受排序基準。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_v1"  # 9A accepted：固定 coverage 排序與高品質基準；9F Patch Transformer 已由完整 OOS 淘汰。
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"  # 8F accepted 基準：每個 unique ticker/date group 每個 epoch 只參與一次 optimizer sampling。
 BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。

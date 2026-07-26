@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_085957_5751826.zip`，SHA256 `c2e2ac09b72331b79abb1811a2b451b67e3a86cc23e7184e9e9e9c12a84b379e`；9F實作修補為 `breakout_quality_9f_patch_transformer_implemented_20260726.zip`，SHA256由本輪交付訊息記錄 |
-| SHA256 | 本輪來源 ZIP：`c2e2ac09b72331b79abb1811a2b451b67e3a86cc23e7184e9e9e9c12a84b379e` |
-| 程式版本範圍 | 9F `patch_transformer_v1`已實作並列為待完整OOS active architecture；9A `inception_time_v1`仍為已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準；9A-GN、9B、9C、9D與9E只供舊工件重建 |
-| Policy 預設 | architecture=`patch_transformer_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9F只做supervised from-scratch；9C pretraining profile、9D Mantis與9E MOMENT外部checkpoint契約只保留legacy重建 |
+| 基準 ZIP | `test-branch-1_20260726_092733_cdea14d.zip`，SHA256 `2da379dce8536d83b165d499a48b6e7d38d588bfc6755bcc416e3ff9431da8a6`；此ZIP包含9F完整Selection／OOS結果 |
+| SHA256 | 本輪來源 ZIP：`2da379dce8536d83b165d499a48b6e7d38d588bfc6755bcc416e3ff9431da8a6` |
+| 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
+| Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures包含待完整OOS的9F `patch_transformer_v1`、已接受的9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2與9E MOMENT只保留legacy read-only compatibility。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures只保留已接受的9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer只保留legacy read-only compatibility。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -621,16 +621,20 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；尚未取得 Selection／OOS 結果，不預先判定有效或無效 |
-| 程式基準 | 來源 ZIP `test-branch-1_20260726_085957_5751826.zip`，SHA256 `c2e2ac09b72331b79abb1811a2b451b67e3a86cc23e7184e9e9e9c12a84b379e`；修補 `breakout_quality_9f_patch_transformer_implemented_20260726.zip`，SHA256由本輪交付訊息記錄 |
-| Architecture | `patch_transformer_v1`；300×10 sequence以10 bars為一個非重疊patch，30個patch tokens；每個token保留同一時間片的10個features並投影至128維；3層Transformer、4 heads、MLP 256、pre-norm LayerNorm、GELU、dropout 0.1、sinusoidal positional encoding、patch mean pooling、411,138個可訓練參數 |
-| 唯一研究變更 | 以專案內從零監督式訓練的Patch Transformer取代9A InceptionTime；不混入外部預訓練、Selection-only masked pretraining、Dataset context、ensemble或threshold調整 |
+| 狀態 | `REJECTED`；未接近9A排序基準，policy退回9A，`patch_transformer_v1`轉為legacy read-only；不啟動9F-B masked pretraining |
+| 程式基準 | 結果 ZIP `test-branch-1_20260726_092733_cdea14d.zip`，SHA256 `2da379dce8536d83b165d499a48b6e7d38d588bfc6755bcc416e3ff9431da8a6`；結果文字SHA256 `f1e0661077ab38c07f3ae70257e60a2699af46d711c68c69c622e52bd4cebcba` |
+| Architecture | `patch_transformer_v1`；300×10 sequence以10 bars為一個非重疊patch，30個patch tokens；128維embedding、3層Transformer、4 heads、MLP 256、sinusoidal position、patch mean pooling，共411,138個可訓練參數 |
+| 唯一研究變更 | 以專案內從零監督式訓練的Patch Transformer取代9A InceptionTime；沒有外部預訓練、masked pretraining、Dataset context、ensemble或threshold調整 |
 | 固定條件 | 固定百分比Label、Selection／OOS split、`unique_group_sampling`、Adam、LR 0.0003、batch 128、patience 1、`selected_epochs`、threshold 0.5、seed 42及全部ranking／calibration口徑不變 |
-| Dataset／Label | 沿用既有300×10 supervised feature bank、context arrays與labels；不重建、不relabel；模型forward明確忽略event context |
-| 輸入契約 | sequence length必須可被patch size 10整除；目前300 bars形成30個非重疊patch。使用runtime sinusoidal位置編碼，不將目前30 patches硬編碼為可訓練位置表 |
-| Selection／OOS | 尚未執行；不得先宣稱超越9A或8F |
-| 判定標準 | 主要比較OOS PR-AUC、P@50／60／70%、R@P60%與Selection→OOS gaps；threshold 0.5 confusion metrics只作輔助 |
-| 下一步 | 本地先執行`python apps/test_suite.py`，通過後執行`python apps/breakout_quality.py`取得完整9F結果；只有9F supervised接近或超越9A，才另立9F-B Selection-only masked pretraining |
+| Dataset／Label | 沿用既有300×10 supervised feature bank與labels；沒有重建或relabel；OOS未參與訓練 |
+| Epoch | Best Epoch 1；最低Validation Loss 0.684602；完整Selection重訓1 epoch，Final Loss 0.684105 |
+| Selection | 原始PASS 54.81%、模型PASS 98.13%、Precision 55.18%、Lift +0.38 pp、Recall 98.81%、Accuracy 55.37%、Score 0.6006；PR-AUC 0.6119、P@50／60／70%=60.88／59.81／59.18%、R@P60%=63.86%、Brier 0.2455、ECE 0.0525 |
+| OOS | 原始PASS 55.63%、模型PASS 82.62%、Precision 57.73%、Lift +2.10 pp、Recall 85.74%、Accuracy 57.15%、Score 0.5692；PR-AUC 0.5707、P@50／60／70%=58.50／58.60／58.33%、R@P60%=0.17%、Brier 0.2468、ECE 0.0358 |
+| 相較9A | OOS PR-AUC −0.0550；P@50／60／70%分別 −4.27／−3.02／−1.92 pp；R@P60% −77.10 pp；threshold 0.5 Precision −5.26 pp、Lift −5.25 pp、Recall +34.30 pp、模型PASS +37.19 pp、Accuracy +0.98 pp、Score +0.0850；Brier惡化0.0015、ECE改善0.0364 |
+| 相較8F | OOS Precision／Lift各 −0.73 pp，但Recall +8.78 pp、模型PASS +9.38 pp、Accuracy +0.39 pp、Score +0.0195；更寬鬆卻沒有更高Precision，未形成新的高coverage定位 |
+| 泛化判讀 | Selection→OOS PR-AUC −0.0412，R@P60%由63.86%崩落至0.17%；threshold Precision雖上升2.55 pp，但來自score／coverage大幅漂移，不能掩蓋高分排序幾乎失效 |
+| 判定 | 9F五項主要排序指標全面低於9A，且OOS PR-AUC只比原始PASS率高1.44 pp；高Recall主要來自放行82.62%候選，不是更強篩選。停止Patch size、depth、heads、embedding、pooling、position、threshold與masked-pretraining細調 |
+| 下一步 | 停止現有300×10單模型architecture橫向搜尋。下一階段先固定9A分數與threshold 0.5，進行策略層no-filter vs 9A經濟效果驗證；不重新訓練、不依同一OOS回調門檻，主要檢查淨報酬、最大回撤、報酬／最大回撤、年化報酬、Log R²、月勝率、交易數與持股缺口 |
 
 ## 4. 已排除或暫停的方向
 
@@ -669,12 +673,13 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 31. TS2Vec Selection-only frozen probe；9C OOS PR-AUC較9A低0.0604，P@50／60／70%低4.61／3.77／2.92 pp，模型PASS升至88.78%但Lift只剩+0.48 pp。Frozen representation不具穩定線性可分性，不啟動9C2，不再調pretraining epochs、stride、crop、mask、pooling、head、fine-tuning或threshold。
 32. MantisV2 frozen probe；9D雖有穩定的threshold 0.5 coverage與較高Recall，但OOS PR-AUC較9A低0.0324，P@50／60／70%低2.72／2.23／1.55 pp，R@P60%低22.12 pp。未達fine-tuning啟動條件，不再調threshold、adapter、head、channel aggregation、output layer/token或encoder fine-tuning。
 33. MOMENT-1-base frozen probe；9E OOS PR-AUC較9A低0.0400，P@50／60／70%低4.73／4.12／3.48 pp，R@P60%低54.20 pp，且連8F高覆蓋基準也未超越。低ECE不是排序改善，不啟動fine-tuning，不再調threshold、output reduction、patch／stride、pooling、head、adapter或同checkpoint變體。
+34. 小型supervised Patch Transformer；9F OOS PR-AUC較9A低0.0550，P@50／60／70%低4.27／3.02／1.92 pp，R@P60%只剩0.17%。不啟動9F-B masked pretraining，不再調patch size、embedding、depth、heads、MLP、position、pooling或threshold；停止現有300×10單模型architecture橫向搜尋。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9E `moment_1_base_frozen_linear_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9F `patch_transformer_v1 / unique_group_sampling`已實作並成為待完整OOS的policy architecture，9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`分別保留排序／高品質及高覆蓋比較基準。9F第一輪不得混入self-supervised pretraining、ensemble、可學習adapter或threshold調整。
+所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`分別保留排序／高品質及高覆蓋基準。現有300×10單模型architecture橫向搜尋停止，不啟動9F-B；下一階段先固定9A既有score與threshold 0.5，做策略層no-filter vs 9A經濟效果驗證，不重新訓練或利用同一OOS調參。
 
 ### 優先 6A：AdamW only
 
@@ -825,17 +830,20 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 
 `REJECTED`。OOS PR-AUC 0.5857，P@50／60／70%=58.04／57.50／56.77%，R@P60%=23.07%，相較9A全面下降；threshold 0.5下模型PASS 75.31%、Recall 76.35%，但Precision只比原始PASS高0.77 pp。ECE較低不代表排序改善。MOMENT轉為legacy read-only，不啟動fine-tuning或同checkpoint細調。
 
-#### 下一階段 9F：小型Patch Transformer supervised architecture
+#### 9F：小型Patch Transformer supervised architecture
+
+`REJECTED`。OOS PR-AUC 0.5707，P@50／60／70%=58.50／58.60／58.33%，R@P60%=0.17%；相較9A分別低0.0550、4.27／3.02／1.92 pp與77.10 pp。threshold 0.5下Recall 85.74%、模型PASS 82.62%，但Precision只有57.73%，屬大量放行而非排序改善。Patch Transformer轉為legacy read-only，不啟動9F-B或同架構細調。
+
+#### 下一階段：固定9A的策略層經濟效果驗證
 
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；程式與契約已完成，尚未取得Selection／OOS結果 |
-| 唯一變更 | 以專案內從零監督式訓練的小型Patch Transformer取代9A InceptionTime；第一輪不使用外部預訓練或masked pretraining |
-| 輸入 | 沿用300×10 sequence；patch／stride固定10 bars，形成30個非重疊temporal tokens；每個patch保留10個features共同投影，不加入Dataset context |
-| 固定條件 | 固定百分比Label、Selection／OOS split、unique-group sampling、Adam、LR 0.0003、batch 128、patience 1、selected_epochs、threshold 0.5、seed 42與全部ranking／calibration口徑不變 |
-| Dataset rebuild | 不重建supervised Dataset、不relabel；只新增模型architecture與其checkpoint／manifest |
-| 主要判定 | 先看OOS PR-AUC、P@50／60／70%、R@P60%與Selection→OOS gaps；threshold 0.5只作輔助 |
-| 後續 | 只有supervised Patch Transformer本身接近或超過9A，才另立9F-B Selection-only masked pretraining；否則停止現有300×10單模型架構橫向搜尋 |
+| 狀態 | `PLANNED`；非新模型訓練 |
+| 第一個單一比較 | no-filter基準 vs 固定9A `inception_time_v1 / unique_group_sampling / threshold 0.5` |
+| 固定條件 | 不重新訓練、不重算Label、不調threshold、不加入8F或ensemble；交易邏輯、active param、資金、持股延續與0050基準全部不變 |
+| 主要指標 | 淨總報酬、最大回撤、報酬／最大回撤、年化報酬、Log R²、月勝率、交易數、候選／持股缺口與年度穩定性 |
+| 判定用途 | 驗證9A分類排序改善是否轉化成策略經濟效果；不得再以同一OOS結果回頭修改模型或門檻 |
+| 後續 | 只有9A相較no-filter形成清楚的經濟改善，才另立8F高coverage策略比較；否則先凍結模型研究並累積新的forward labeled期間 |
 
 
 ---
@@ -870,7 +878,8 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 → 9C TS2Vec Selection-only自監督預訓練＋frozen linear probe（REJECTED；已退回9A並轉為legacy）
 → 9D MantisV2 frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
 → 9E MOMENT-1-base frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
-→ 9F 小型Patch Transformer supervised architecture（IMPLEMENTED；待完整Selection／OOS）
+→ 9F 小型Patch Transformer supervised architecture（REJECTED；已退回9A並轉為legacy）
+→ 固定9A threshold 0.5的策略層no-filter對照（PLANNED；非新模型訓練）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
