@@ -67,6 +67,19 @@ from filters.breakout_quality.mantis_contract import (
     MANTIS_V2_REPOSITORY,
     MANTIS_V2_REVISION,
 )
+from filters.breakout_quality.moment_contract import (
+    MOMENT_CHECKPOINT_FILENAME,
+    MOMENT_CHECKPOINT_SHA256,
+    MOMENT_CHECKPOINT_SIZE_BYTES,
+    MOMENT_CONFIG_FILENAME,
+    MOMENT_CONFIG_SIZE_BYTES,
+    MOMENT_PACKAGE_NAME,
+    MOMENT_PACKAGE_VERSION,
+    MOMENT_REPOSITORY,
+    MOMENT_REVISION,
+    MOMENT_TRANSFORMERS_PACKAGE_NAME,
+    MOMENT_TRANSFORMERS_VERSION,
+)
 from filters.breakout_quality.torch_runtime import (
     SUPPORTED_MIXED_PRECISION_DTYPES,
     SUPPORTED_TORCH_DEVICES,
@@ -414,7 +427,7 @@ def load_model_artifact_contract(
         raise ValueError("breakout quality model_spec.architecture 與 manifest 不一致")
     _validate_torch_execution_record(
         manifest,
-        required=model_spec.family in {"inception_time", "modern_tcn", "ts2vec_frozen_linear", "mantis_v2_frozen_linear"},
+        required=model_spec.family in {"inception_time", "modern_tcn", "ts2vec_frozen_linear", "mantis_v2_frozen_linear", "moment_frozen_linear"},
     )
     if int(manifest.get("trainable_parameter_count", 0)) < 1:
         raise ValueError("breakout quality trainable_parameter_count 必須 >=1")
@@ -425,6 +438,71 @@ def load_model_artifact_contract(
         total_parameter_count - trainable_parameter_count
     ):
         raise ValueError("breakout quality total/frozen/trainable parameter count 不一致")
+    if model_spec.family == "moment_frozen_linear":
+        if frozen_parameter_count < 1:
+            raise ValueError("MOMENT frozen probe 必須包含 frozen encoder parameters")
+        if manifest.get("self_supervised_pretraining") is not None:
+            raise ValueError("MOMENT 不得混用 Selection-only self-supervised pretraining")
+        external = _require_mapping(manifest, "external_pretrained_encoder")
+        if str(external.get("source_type") or "") != "hugging_face_snapshot":
+            raise ValueError("MOMENT external source_type 不一致")
+        if str(external.get("repository") or "") != MOMENT_REPOSITORY:
+            raise ValueError("MOMENT external repository 不一致")
+        if str(external.get("requested_revision") or "") != MOMENT_REVISION:
+            raise ValueError("MOMENT external requested_revision 不一致")
+        if str(external.get("resolved_revision") or "") != MOMENT_REVISION:
+            raise ValueError("MOMENT external resolved_revision 不一致")
+        if str(external.get("model_architecture") or "") != model_spec.architecture:
+            raise ValueError("MOMENT external model_architecture 不一致")
+        if external.get("model_spec") != model_spec.as_manifest_payload():
+            raise ValueError("MOMENT external model_spec 不一致")
+        checkpoint = _require_mapping(external, "checkpoint")
+        if (
+            str(checkpoint.get("filename") or "") != MOMENT_CHECKPOINT_FILENAME
+            or str(checkpoint.get("sha256") or "") != MOMENT_CHECKPOINT_SHA256
+            or int(checkpoint.get("size_bytes", 0)) != MOMENT_CHECKPOINT_SIZE_BYTES
+        ):
+            raise ValueError("MOMENT external checkpoint record 不一致")
+        config_record = _require_mapping(external, "config")
+        config_sha256 = str(config_record.get("sha256") or "")
+        if (
+            str(config_record.get("filename") or "") != MOMENT_CONFIG_FILENAME
+            or int(config_record.get("size_bytes", 0)) != MOMENT_CONFIG_SIZE_BYTES
+            or str(config_record.get("semantic_validation") or "") != "exact_pinned_config"
+            or len(config_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in config_sha256)
+        ):
+            raise ValueError("MOMENT external config record 不合法")
+        package = _require_mapping(external, "package")
+        if (
+            str(package.get("name") or "") != MOMENT_PACKAGE_NAME
+            or str(package.get("version") or "") != MOMENT_PACKAGE_VERSION
+            or str(package.get("expected_version") or "") != MOMENT_PACKAGE_VERSION
+        ):
+            raise ValueError("MOMENT external package record 不一致")
+        runtime_dependencies = _require_mapping(external, "runtime_dependencies")
+        transformers_record = _require_mapping(
+            runtime_dependencies,
+            MOMENT_TRANSFORMERS_PACKAGE_NAME,
+        )
+        if (
+            str(transformers_record.get("version") or "")
+            != MOMENT_TRANSFORMERS_VERSION
+            or str(transformers_record.get("expected_version") or "")
+            != MOMENT_TRANSFORMERS_VERSION
+        ):
+            raise ValueError("MOMENT transformers runtime dependency record 不一致")
+        if external.get("encoder_frozen_downstream") is not True:
+            raise ValueError("MOMENT frozen encoder contract 不一致")
+        required_false_fields = (
+            "project_selection_windows_used_for_encoder_training",
+            "project_oos_windows_used_for_encoder_training",
+            "project_pass_reject_labels_used_for_encoder_training",
+            "project_encoder_fine_tuning_used",
+        )
+        if not all(external.get(field_name) is False for field_name in required_false_fields):
+            raise ValueError("MOMENT project data isolation contract 不一致")
+
     if model_spec.family == "mantis_v2_frozen_linear":
         if frozen_parameter_count < 1:
             raise ValueError("MantisV2 frozen probe 必須包含 frozen encoder parameters")

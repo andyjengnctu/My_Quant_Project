@@ -35,6 +35,13 @@ from core.runtime_utils import (
 )
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
 from filters.breakout_quality.mantis_contract import require_mantis_v2_class
+from filters.breakout_quality.moment_contract import (
+    MOMENT_PACKAGE_NAME,
+    MOMENT_PACKAGE_VERSION,
+    MOMENT_TRANSFORMERS_PACKAGE_NAME,
+    MOMENT_TRANSFORMERS_VERSION,
+    require_moment_pipeline_class,
+)
 from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
@@ -541,6 +548,20 @@ def _pretraining_refresh_plan(
 
 
 def _model_runtime_description(model_spec) -> str:
+    if str(model_spec.family) == "moment_frozen_linear":
+        return (
+            f"family=moment_frozen_linear, source={model_spec.moment_repository}, "
+            f"revision={model_spec.moment_revision}, "
+            f"runtime={MOMENT_PACKAGE_NAME}-{MOMENT_PACKAGE_VERSION}/"
+            f"{MOMENT_TRANSFORMERS_PACKAGE_NAME}-{MOMENT_TRANSFORMERS_VERSION}, "
+            f"input_resize={model_spec.moment_input_length}, "
+            f"patch={model_spec.moment_patch_length}/{model_spec.moment_patch_stride}, "
+            f"embedding={model_spec.moment_embedding_dim}, "
+            f"layers={model_spec.moment_transformer_layers}, heads={model_spec.moment_transformer_heads}, "
+            f"channel_aggregation={model_spec.moment_channel_aggregation}, "
+            f"patch_reduction={model_spec.moment_patch_reduction}, "
+            "encoder=frozen, head=linear, dataset_context=disabled"
+        )
     if str(model_spec.family) == "mantis_v2_frozen_linear":
         return (
             f"family=mantis_v2_frozen_linear, source={model_spec.mantis_repository}, "
@@ -613,6 +634,8 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     print(f"filter_id={filter_id}")
     print(f"dataset={args.dataset}")
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    if str(model_spec.family) == "moment_frozen_linear":
+        require_moment_pipeline_class()
     if str(model_spec.family) == "mantis_v2_frozen_linear":
         require_mantis_v2_class()
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
@@ -622,6 +645,15 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
         "model="
         f"{model_spec.architecture}, {_model_runtime_description(model_spec)}"
     )
+    if str(model_spec.family) == "moment_frozen_linear":
+        print(
+            "external_encoder="
+            f"repository={model_spec.moment_repository}, "
+            f"revision={model_spec.moment_revision}, "
+            f"runtime={MOMENT_PACKAGE_NAME}-{MOMENT_PACKAGE_VERSION}/"
+            f"{MOMENT_TRANSFORMERS_PACKAGE_NAME}-{MOMENT_TRANSFORMERS_VERSION}, "
+            "project_pretraining=False, encoder_fine_tuning=False"
+        )
     if str(model_spec.family) == "mantis_v2_frozen_linear":
         print(
             "external_encoder="
@@ -924,7 +956,23 @@ def _print_policy_defaults(
     )
     schedule_parameters = experiment.lr_schedule_parameters()
     augmentation_parameters = experiment.augmentation_parameters()
-    if str(model_spec.family) == "mantis_v2_frozen_linear":
+    if str(model_spec.family) == "moment_frozen_linear":
+        architecture_details = (
+            f"- Model Family：MOMENT-1-base Frozen Linear\n"
+            f"- External Encoder：{model_spec.moment_repository}\n"
+            f"- Pinned Revision：{model_spec.moment_revision}\n"
+            f"- Runtime：{MOMENT_PACKAGE_NAME} {MOMENT_PACKAGE_VERSION} / "
+            f"{MOMENT_TRANSFORMERS_PACKAGE_NAME} {MOMENT_TRANSFORMERS_VERSION}\n"
+            f"- Input Resize：{DEFAULT_LABEL_POLICY.feature_window_bars} → {model_spec.moment_input_length} bars\n"
+            f"- Patch：{model_spec.moment_patch_length} / stride {model_spec.moment_patch_stride}\n"
+            f"- Transformer：{model_spec.moment_transformer_layers} layers / {model_spec.moment_transformer_heads} heads\n"
+            f"- Channel Aggregation：{model_spec.moment_channel_aggregation}\n"
+            f"- Patch Reduction：{model_spec.moment_patch_reduction}\n"
+            f"- Per-channel Representation：{model_spec.moment_embedding_dim}\n"
+            f"- Encoder：official pretrained and frozen\n"
+            f"- Head：Linear"
+        )
+    elif str(model_spec.family) == "mantis_v2_frozen_linear":
         architecture_details = (
             f"- Model Family：MantisV2 Frozen Linear\n"
             f"- External Encoder：{model_spec.mantis_repository}\n"

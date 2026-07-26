@@ -1154,6 +1154,28 @@ def _deployment_presentation(payload: dict) -> dict:
 def _markdown_model_detail_lines(training: dict) -> list[str]:
     spec = training.get("model_spec") or {}
     family = str(spec.get("family") or "")
+    if family == "moment_frozen_linear":
+        external = training.get("external_pretrained_encoder") or {}
+        checkpoint = external.get("checkpoint") or {}
+        package = external.get("package") or {}
+        dependencies = external.get("runtime_dependencies") or {}
+        transformers_record = dependencies.get("transformers") or {}
+        return [
+            f"- **Model Family**：`{family}`",
+            f"- **External Encoder**：`{external.get('repository', spec.get('moment_repository', '-'))}`",
+            f"- **Pinned Revision**：`{external.get('resolved_revision', spec.get('moment_revision', '-'))}`",
+            f"- **Checkpoint SHA256**：`{checkpoint.get('sha256', '-')}`",
+            f"- **MOMENT Package**：`{package.get('name', '-')} {package.get('version', '-')}`",
+            f"- **Transformers**：`{transformers_record.get('version', '-')}`",
+            f"- **Input Resize**：`{training.get('sequence_length', '-')} → {spec.get('moment_input_length')} bars`",
+            f"- **Patch / Stride**：`{spec.get('moment_patch_length')} / {spec.get('moment_patch_stride')}`",
+            f"- **Transformer**：`{spec.get('moment_transformer_layers')} layers / {spec.get('moment_transformer_heads')} heads`",
+            f"- **Channel Aggregation**：`{spec.get('moment_channel_aggregation')}`",
+            f"- **Patch Reduction**：`{spec.get('moment_patch_reduction')}`",
+            f"- **Per-channel Representation**：`{spec.get('moment_embedding_dim')}`",
+            "- **Encoder Training**：`official external pretraining; frozen downstream`",
+            "- **Downstream Head**：`linear`",
+        ]
     if family == "mantis_v2_frozen_linear":
         external = training.get("external_pretrained_encoder") or {}
         checkpoint = external.get("checkpoint") or {}
@@ -1228,6 +1250,28 @@ def _markdown_model_detail_lines(training: dict) -> list[str]:
 def _console_model_detail_lines(training: dict) -> list[str]:
     spec = training.get("model_spec") or {}
     family = str(spec.get("family") or "")
+    if family == "moment_frozen_linear":
+        external = training.get("external_pretrained_encoder") or {}
+        checkpoint = external.get("checkpoint") or {}
+        package = external.get("package") or {}
+        dependencies = external.get("runtime_dependencies") or {}
+        transformers_record = dependencies.get("transformers") or {}
+        return [
+            f"Model Family     : {family}",
+            f"External Encoder : {external.get('repository', spec.get('moment_repository', '-'))}",
+            f"Pinned Revision  : {external.get('resolved_revision', spec.get('moment_revision', '-'))}",
+            f"Checkpoint SHA   : {checkpoint.get('sha256', '-')}",
+            f"MOMENT Package   : {package.get('name', '-')} {package.get('version', '-')}",
+            f"Transformers     : {transformers_record.get('version', '-')}",
+            f"Input Resize     : {training.get('sequence_length', '-')} -> {spec.get('moment_input_length')} bars",
+            f"Patch / Stride   : {spec.get('moment_patch_length')} / {spec.get('moment_patch_stride')}",
+            f"Transformer      : {spec.get('moment_transformer_layers')} layers / {spec.get('moment_transformer_heads')} heads",
+            f"Channel Mode     : {spec.get('moment_channel_aggregation')}",
+            f"Patch Reduction  : {spec.get('moment_patch_reduction')}",
+            f"Representation   : {spec.get('moment_embedding_dim')} per channel",
+            "Encoder Training : official external pretraining; frozen downstream",
+            "Downstream Head  : linear",
+        ]
     if family == "mantis_v2_frozen_linear":
         external = training.get("external_pretrained_encoder") or {}
         checkpoint = external.get("checkpoint") or {}

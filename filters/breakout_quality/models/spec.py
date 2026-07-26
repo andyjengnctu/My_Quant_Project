@@ -9,6 +9,16 @@ from filters.breakout_quality.mantis_contract import (
     MANTIS_V2_REPOSITORY,
     MANTIS_V2_REVISION,
 )
+from filters.breakout_quality.moment_contract import (
+    MOMENT_EMBEDDING_DIM,
+    MOMENT_INPUT_LENGTH,
+    MOMENT_PATCH_LENGTH,
+    MOMENT_PATCH_STRIDE,
+    MOMENT_REPOSITORY,
+    MOMENT_REVISION,
+    MOMENT_TRANSFORMER_HEADS,
+    MOMENT_TRANSFORMER_LAYERS,
+)
 
 from filters.breakout_quality.models.regime_context import (
     REGIME_CONTEXT_ANNUALIZATION_BARS,
@@ -33,6 +43,7 @@ INCEPTION_TIME_V1 = "inception_time_v1"
 INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
 MODERN_TCN_V1 = "modern_tcn_v1"
 MANTIS_V2_FROZEN_LINEAR_V1 = "mantis_v2_frozen_linear_v1"
+MOMENT_1_BASE_FROZEN_LINEAR_V1 = "moment_1_base_frozen_linear_v1"
 TS2VEC_FROZEN_LINEAR_V1 = "ts2vec_frozen_linear_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
@@ -52,12 +63,14 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_GROUP_NORM_V1,
     MODERN_TCN_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
+    MOMENT_1_BASE_FROZEN_LINEAR_V1,
     TS2VEC_FROZEN_LINEAR_V1,
     RESIDUAL_TCN_V1,
 )
 ACTIVE_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
+    MOMENT_1_BASE_FROZEN_LINEAR_V1,
 )
 LEGACY_MODEL_ARCHITECTURES = tuple(
     architecture
@@ -120,6 +133,16 @@ class BreakoutQualityModelSpec:
     mantis_return_transformer_layer: int | None = None
     mantis_output_token: str | None = None
     mantis_channel_aggregation: str | None = None
+    moment_repository: str | None = None
+    moment_revision: str | None = None
+    moment_input_length: int | None = None
+    moment_patch_length: int | None = None
+    moment_patch_stride: int | None = None
+    moment_embedding_dim: int | None = None
+    moment_transformer_layers: int | None = None
+    moment_transformer_heads: int | None = None
+    moment_channel_aggregation: str | None = None
+    moment_patch_reduction: str | None = None
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -164,6 +187,16 @@ class BreakoutQualityModelSpec:
             "mantis_return_transformer_layer": self.mantis_return_transformer_layer,
             "mantis_output_token": self.mantis_output_token,
             "mantis_channel_aggregation": self.mantis_channel_aggregation,
+            "moment_repository": self.moment_repository,
+            "moment_revision": self.moment_revision,
+            "moment_input_length": self.moment_input_length,
+            "moment_patch_length": self.moment_patch_length,
+            "moment_patch_stride": self.moment_patch_stride,
+            "moment_embedding_dim": self.moment_embedding_dim,
+            "moment_transformer_layers": self.moment_transformer_layers,
+            "moment_transformer_heads": self.moment_transformer_heads,
+            "moment_channel_aggregation": self.moment_channel_aggregation,
+            "moment_patch_reduction": self.moment_patch_reduction,
         }
         for key, value in optional_scalars.items():
             if value is not None:
@@ -358,6 +391,32 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             window_normalization_epsilon=window_normalization_epsilon,
         )
 
+    if normalized == MOMENT_1_BASE_FROZEN_LINEAR_V1:
+        return BreakoutQualityModelSpec(
+            architecture=MOMENT_1_BASE_FROZEN_LINEAR_V1,
+            family="moment_frozen_linear",
+            channels=MOMENT_EMBEDDING_DIM,
+            kernel_size=MOMENT_PATCH_LENGTH,
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("patch_mean", "channel_concat"),
+            dropout=0.10,
+            receptive_field_bars=300,
+            normalization="official_moment_revin",
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level_multichannel_linear_interpolate_512",),
+            moment_repository=MOMENT_REPOSITORY,
+            moment_revision=MOMENT_REVISION,
+            moment_input_length=MOMENT_INPUT_LENGTH,
+            moment_patch_length=MOMENT_PATCH_LENGTH,
+            moment_patch_stride=MOMENT_PATCH_STRIDE,
+            moment_embedding_dim=MOMENT_EMBEDDING_DIM,
+            moment_transformer_layers=MOMENT_TRANSFORMER_LAYERS,
+            moment_transformer_heads=MOMENT_TRANSFORMER_HEADS,
+            moment_channel_aggregation="independent_channel_concat",
+            moment_patch_reduction="mean",
+        )
+
     if normalized == MANTIS_V2_FROZEN_LINEAR_V1:
         return BreakoutQualityModelSpec(
             architecture=MANTIS_V2_FROZEN_LINEAR_V1,
@@ -515,6 +574,7 @@ __all__ = [
     "MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1",
     "MODERN_TCN_V1",
     "MANTIS_V2_FROZEN_LINEAR_V1",
+    "MOMENT_1_BASE_FROZEN_LINEAR_V1",
     "TS2VEC_FROZEN_LINEAR_V1",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",

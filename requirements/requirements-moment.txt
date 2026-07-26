@@ -1,0 +1,4 @@
+# 9E MOMENT frozen probe 的選配相依套件。
+# momentfm==0.1.4 的 PyPI metadata 釘死舊版 NumPy／Hub／Transformers；
+# 為避免降級專案主環境，先安裝此檔，再以 --no-deps 安裝 momentfm。
+transformers==5.5.0

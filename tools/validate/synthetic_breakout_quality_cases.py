@@ -134,6 +134,19 @@ from filters.breakout_quality.mantis_contract import (
     MANTIS_V2_REPOSITORY,
     MANTIS_V2_REVISION,
 )
+from filters.breakout_quality.moment_contract import (
+    MOMENT_CHECKPOINT_FILENAME,
+    MOMENT_CHECKPOINT_SHA256,
+    MOMENT_CHECKPOINT_SIZE_BYTES,
+    MOMENT_CONFIG_FILENAME,
+    MOMENT_CONFIG_SIZE_BYTES,
+    MOMENT_PACKAGE_NAME,
+    MOMENT_PACKAGE_VERSION,
+    MOMENT_REPOSITORY,
+    MOMENT_REVISION,
+    MOMENT_TRANSFORMERS_PACKAGE_NAME,
+    MOMENT_TRANSFORMERS_VERSION,
+)
 from filters.breakout_quality.models.ts2vec import hierarchical_contrastive_loss
 from filters.breakout_quality.pretraining_store import (
     build_file_record as build_pretraining_file_record,
@@ -464,6 +477,146 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_spec = get_model_spec("inception_time_v1")
     inception_group_norm_spec = get_model_spec("inception_time_group_norm_v1")
     ts2vec_spec = get_model_spec("ts2vec_frozen_linear_v1")
+    moment_spec = get_model_spec("moment_1_base_frozen_linear_v1")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "moment_9e_spec_pins_frozen_external_linear_probe_contract",
+        (
+            "moment_frozen_linear",
+            MOMENT_REPOSITORY,
+            MOMENT_REVISION,
+            512,
+            8,
+            8,
+            768,
+            12,
+            12,
+            "independent_channel_concat",
+            "mean",
+            False,
+        ),
+        (
+            moment_spec.family,
+            moment_spec.moment_repository,
+            moment_spec.moment_revision,
+            moment_spec.moment_input_length,
+            moment_spec.moment_patch_length,
+            moment_spec.moment_patch_stride,
+            moment_spec.moment_embedding_dim,
+            moment_spec.moment_transformer_layers,
+            moment_spec.moment_transformer_heads,
+            moment_spec.moment_channel_aggregation,
+            moment_spec.moment_patch_reduction,
+            moment_spec.use_dataset_context,
+        ),
+    )
+
+    class _SyntheticMomentPipeline(torch.nn.Module):
+        forward_batch_sizes: list[int] = []
+        forward_sequence_lengths: list[int] = []
+
+        def __init__(self, config, **kwargs):
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.ones(1, dtype=torch.float32))
+            self.config = config
+            self.model_kwargs = kwargs.get("model_kwargs") or {}
+            self.initialized = False
+
+        def init(self):
+            self.initialized = True
+
+        def embed(self, *, x_enc, reduction="mean"):
+            if reduction != "none":
+                raise ValueError("synthetic MOMENT 僅接受 reduction=none")
+            type(self).forward_batch_sizes.append(int(x_enc.shape[0]))
+            type(self).forward_sequence_lengths.append(int(x_enc.shape[2]))
+            base = x_enc.mean(dim=2, keepdim=True).unsqueeze(-1)
+            embeddings = base.expand(-1, -1, 64, 768)
+            return SimpleNamespace(embeddings=embeddings)
+
+    _SyntheticMomentPipeline.forward_batch_sizes = []
+    _SyntheticMomentPipeline.forward_sequence_lengths = []
+    with patch(
+        "filters.breakout_quality.models.moment.require_moment_pipeline_class",
+        return_value=_SyntheticMomentPipeline,
+    ):
+        moment_model = build_breakout_quality_model(
+            10, 4, architecture="moment_1_base_frozen_linear_v1"
+        )
+        moment_trainable_parameter_count = count_trainable_parameters(moment_model)
+        moment_total_parameter_count = sum(
+            int(parameter.numel()) for parameter in moment_model.parameters()
+        )
+        moment_encoder_requires_grad = [
+            bool(parameter.requires_grad) for parameter in moment_model.encoder.parameters()
+        ]
+        moment_head_requires_grad = [
+            bool(parameter.requires_grad) for parameter in moment_model.classifier.parameters()
+        ]
+        moment_model.train()
+        moment_features = torch.randn((33, 300, 10), dtype=torch.float32)
+        moment_context_a = torch.randn((33, 4), dtype=torch.float32)
+        moment_context_b = torch.randn((33, 4), dtype=torch.float32)
+        moment_encoder_before = {
+            key: value.detach().clone()
+            for key, value in moment_model.encoder.state_dict().items()
+        }
+        moment_head_before = {
+            key: value.detach().clone()
+            for key, value in moment_model.classifier.state_dict().items()
+        }
+        moment_optimizer = torch.optim.Adam(
+            [parameter for parameter in moment_model.parameters() if parameter.requires_grad],
+            lr=0.01,
+        )
+        moment_optimizer.zero_grad(set_to_none=True)
+        moment_logits_a = moment_model(moment_features, moment_context_a)
+        moment_logits_b = moment_model(moment_features, moment_context_b)
+        moment_loss = torch.nn.functional.cross_entropy(
+            moment_logits_a,
+            torch.tensor(([0, 1] * 16) + [0], dtype=torch.long),
+        )
+        moment_loss.backward()
+        moment_optimizer.step()
+        moment_encoder_unchanged = all(
+            torch.equal(value, moment_encoder_before[key])
+            for key, value in moment_model.encoder.state_dict().items()
+        )
+        moment_head_changed = any(
+            not torch.equal(value, moment_head_before[key])
+            for key, value in moment_model.classifier.state_dict().items()
+        )
+        moment_reload = build_breakout_quality_model(
+            10, 4, model_spec=moment_spec.as_manifest_payload()
+        )
+        moment_reload.load_state_dict(moment_model.state_dict(), strict=True)
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "moment_9e_encoder_is_frozen_context_independent_chunked_and_reloadable",
+        True,
+        bool(
+            moment_total_parameter_count == 15363
+            and moment_trainable_parameter_count == 15362
+            and not any(moment_encoder_requires_grad)
+            and all(moment_head_requires_grad)
+            and moment_model.encoder.training is False
+            and getattr(moment_model.encoder, "initialized", False)
+            and tuple(moment_logits_a.shape) == (33, 2)
+            and torch.equal(moment_logits_a, moment_logits_b)
+            and torch.isfinite(moment_logits_a).all()
+            and moment_encoder_unchanged
+            and moment_head_changed
+            and _SyntheticMomentPipeline.forward_batch_sizes == [32, 1, 32, 1]
+            and _SyntheticMomentPipeline.forward_sequence_lengths == [512, 512, 512, 512]
+            and moment_reload.encoder.training is False
+        ),
+    )
+
     mantis_spec = get_model_spec("mantis_v2_frozen_linear_v1")
     add_check(
         results,
@@ -2296,6 +2449,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             (
                 "inception_time_v1",
                 "multiscale_cnn_sequence_only_v1",
+                "moment_1_base_frozen_linear_v1",
             ),
             set(legacy_architectures),
         ),
@@ -4779,6 +4933,121 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 legacy_ts2vec_architecture,
                 legacy_ts2vec_contract.manifest["model_architecture"],
             )
+
+            moment_architecture = "moment_1_base_frozen_linear_v1"
+            moment_paths = resolve_filter_artifact_paths(
+                project_root,
+                filter_id,
+                moment_architecture,
+                paths.experiment_profile,
+            )
+            moment_paths.model_dir.mkdir(parents=True, exist_ok=True)
+            moment_paths.model_path.write_bytes(b"synthetic-moment-model")
+            split_frame.to_csv(moment_paths.split_path, index=False, encoding="utf-8-sig")
+            moment_split_record = dict(validation_split_record)
+            moment_split_record.update(build_file_manifest(moment_paths.split_path))
+            moment_manifest = json.loads(json.dumps(manifest, ensure_ascii=False))
+            moment_model_spec = get_model_spec(moment_architecture)
+            moment_manifest.update(
+                {
+                    "model_architecture": moment_architecture,
+                    "model_spec": moment_model_spec.as_manifest_payload(),
+                    "trainable_parameter_count": 15_362,
+                    "total_parameter_count": 15_363,
+                    "frozen_parameter_count": 1,
+                    "self_supervised_pretraining": None,
+                    "external_pretrained_encoder": {
+                        "source_type": "hugging_face_snapshot",
+                        "repository": MOMENT_REPOSITORY,
+                        "requested_revision": MOMENT_REVISION,
+                        "resolved_revision": MOMENT_REVISION,
+                        "checkpoint": {
+                            "filename": MOMENT_CHECKPOINT_FILENAME,
+                            "sha256": MOMENT_CHECKPOINT_SHA256,
+                            "size_bytes": MOMENT_CHECKPOINT_SIZE_BYTES,
+                        },
+                        "config": {
+                            "filename": MOMENT_CONFIG_FILENAME,
+                            "sha256": "a" * 64,
+                            "size_bytes": MOMENT_CONFIG_SIZE_BYTES,
+                            "semantic_validation": "exact_pinned_config",
+                        },
+                        "package": {
+                            "name": MOMENT_PACKAGE_NAME,
+                            "version": MOMENT_PACKAGE_VERSION,
+                            "expected_version": MOMENT_PACKAGE_VERSION,
+                        },
+                        "runtime_dependencies": {
+                            MOMENT_TRANSFORMERS_PACKAGE_NAME: {
+                                "version": MOMENT_TRANSFORMERS_VERSION,
+                                "expected_version": MOMENT_TRANSFORMERS_VERSION,
+                            }
+                        },
+                        "model_architecture": moment_architecture,
+                        "model_spec": moment_model_spec.as_manifest_payload(),
+                        "encoder_frozen_downstream": True,
+                        "project_selection_windows_used_for_encoder_training": False,
+                        "project_oos_windows_used_for_encoder_training": False,
+                        "project_pass_reject_labels_used_for_encoder_training": False,
+                        "project_encoder_fine_tuning_used": False,
+                        "publisher_pretraining_description": (
+                            "Timeseries-PILE masked patch reconstruction pretraining"
+                        ),
+                    },
+                    "model": build_file_manifest(moment_paths.model_path),
+                    "split_assignments": moment_split_record,
+                }
+            )
+            moment_paths.manifest_path.write_text(
+                json.dumps(moment_manifest, ensure_ascii=False), encoding="utf-8"
+            )
+            _clear_breakout_quality_caches()
+            moment_contract = load_model_artifact_contract(
+                str(project_root),
+                filter_id,
+                model_architecture=moment_architecture,
+                experiment_profile=paths.experiment_profile,
+            )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "moment_external_checkpoint_artifact_contract_supported",
+                (moment_architecture, MOMENT_CHECKPOINT_SHA256, True),
+                (
+                    moment_contract.manifest["model_architecture"],
+                    moment_contract.manifest["external_pretrained_encoder"]["checkpoint"]["sha256"],
+                    moment_contract.manifest["external_pretrained_encoder"]["encoder_frozen_downstream"],
+                ),
+            )
+            stale_moment_manifest = json.loads(json.dumps(moment_manifest, ensure_ascii=False))
+            stale_moment_manifest["external_pretrained_encoder"]["checkpoint"]["sha256"] = "0" * 64
+            moment_paths.manifest_path.write_text(
+                json.dumps(stale_moment_manifest, ensure_ascii=False), encoding="utf-8"
+            )
+            _clear_breakout_quality_caches()
+            try:
+                load_model_artifact_contract(
+                    str(project_root),
+                    filter_id,
+                    model_architecture=moment_architecture,
+                    experiment_profile=paths.experiment_profile,
+                )
+                stale_moment_checkpoint_rejected = False
+            except ValueError as exc:
+                stale_moment_checkpoint_rejected = "external checkpoint record" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "moment_checkpoint_hash_tamper_is_rejected",
+                True,
+                stale_moment_checkpoint_rejected,
+            )
+            moment_paths.manifest_path.write_text(
+                json.dumps(moment_manifest, ensure_ascii=False), encoding="utf-8"
+            )
+            _clear_breakout_quality_caches()
 
             mantis_architecture = "mantis_v2_frozen_linear_v1"
             mantis_paths = resolve_filter_artifact_paths(

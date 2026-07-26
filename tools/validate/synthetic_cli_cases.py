@@ -48,6 +48,9 @@ def validate_dataset_cli_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     app_breakout_quality = importlib.import_module("apps.breakout_quality")
+    moment_contract_module = importlib.import_module(
+        "filters.breakout_quality.moment_contract"
+    )
     app_ml_optimizer = importlib.import_module("apps.ml_optimizer")
     app_portfolio_sim = importlib.import_module("apps.portfolio_sim")
     app_vip_scanner = importlib.import_module("apps.vip_scanner")
@@ -342,6 +345,122 @@ def validate_dataset_cli_contract_case(_base_params):
             and "project_pretraining=False" in mantis_workflow_output.getvalue()
             and "encoder_fine_tuning=False" in mantis_workflow_output.getvalue()
         ),
+    )
+
+    moment_workflow_calls = []
+
+    def _fake_run_moment_command(command, args, *, program_name):
+        moment_workflow_calls.append((command, list(args), program_name))
+        return 0
+
+    moment_workflow_output = StringIO()
+    with (
+        patch(
+            "apps.breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+            "moment_1_base_frozen_linear_v1",
+        ),
+        patch("apps.breakout_quality.require_moment_pipeline_class", return_value=object),
+        patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
+        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
+        patch("apps.breakout_quality._pretraining_refresh_plan") as mocked_moment_pretraining_plan,
+        patch("apps.breakout_quality._run_command", side_effect=_fake_run_moment_command),
+        redirect_stdout(moment_workflow_output),
+    ):
+        moment_workflow_rc = app_breakout_quality._run_workflow(
+            workflow_args,
+            program_name="apps/breakout_quality.py",
+        )
+    moment_commands = [call[0] for call in moment_workflow_calls]
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "moment_workflow_skips_project_pretraining_and_runs_supervised_stages",
+        (0, ["train", "export-scores", "report"], 0, 3),
+        (
+            moment_workflow_rc,
+            moment_commands,
+            mocked_moment_pretraining_plan.call_count,
+            moment_workflow_output.getvalue().count("[完成]"),
+        ),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "moment_workflow_prints_pinned_external_encoder_contract",
+        True,
+        (
+            "external_encoder=repository=AutonLab/MOMENT-1-base"
+            in moment_workflow_output.getvalue()
+            and "runtime=momentfm-0.1.4/transformers-5.5.0"
+            in moment_workflow_output.getvalue()
+            and "project_pretraining=False" in moment_workflow_output.getvalue()
+            and "encoder_fine_tuning=False" in moment_workflow_output.getvalue()
+        ),
+    )
+
+    def _valid_moment_runtime_version(package_name):
+        return {
+            "momentfm": "0.1.4",
+            "transformers": "5.5.0",
+        }[package_name]
+
+    with (
+        patch.object(
+            moment_contract_module,
+            "version",
+            side_effect=_valid_moment_runtime_version,
+        ),
+        patch.dict(
+            sys.modules,
+            {"momentfm": SimpleNamespace(MOMENTPipeline=object)},
+        ),
+    ):
+        valid_moment_pipeline = moment_contract_module.require_moment_pipeline_class()
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "moment_runtime_accepts_exact_package_versions",
+        object,
+        valid_moment_pipeline,
+    )
+
+    def _stale_transformers_version(package_name):
+        return {
+            "momentfm": "0.1.4",
+            "transformers": "5.4.0",
+        }[package_name]
+
+    try:
+        with (
+            patch.object(
+                moment_contract_module,
+                "version",
+                side_effect=_stale_transformers_version,
+            ),
+            patch.dict(
+                sys.modules,
+                {"momentfm": SimpleNamespace(MOMENTPipeline=object)},
+            ),
+        ):
+            moment_contract_module.require_moment_pipeline_class()
+    except RuntimeError as exc:
+        stale_transformers_rejected = (
+            "package=transformers" in str(exc)
+            and "expected=5.5.0" in str(exc)
+            and "actual=5.4.0" in str(exc)
+        )
+    else:
+        stale_transformers_rejected = False
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "moment_runtime_rejects_stale_transformers",
+        True,
+        stale_transformers_rejected,
     )
 
     pretrain_module = importlib.import_module("tools.filters.breakout_quality.pretrain")

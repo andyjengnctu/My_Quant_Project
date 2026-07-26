@@ -114,10 +114,14 @@ from filters.breakout_quality.lr_schedule import (
 )
 from filters.breakout_quality.models.spec import (
     MANTIS_V2_FROZEN_LINEAR_V1,
+    MOMENT_1_BASE_FROZEN_LINEAR_V1,
     TS2VEC_FROZEN_LINEAR_V1,
 )
 from filters.breakout_quality.mantis_pretrained import (
     load_mantis_v2_pretrained_encoder_state,
+)
+from filters.breakout_quality.moment_pretrained import (
+    load_moment_pretrained_encoder_state,
 )
 from filters.breakout_quality.pretraining_store import (
     load_validated_pretrained_encoder_manifest,
@@ -1183,6 +1187,11 @@ def _load_pretrained_encoder_for_training(
     model_spec,
 ):
     architecture = str(model_spec.architecture)
+    if architecture == MOMENT_1_BASE_FROZEN_LINEAR_V1:
+        state, external_record = load_moment_pretrained_encoder_state(
+            model_spec=model_spec
+        )
+        return state, None, external_record
     if architecture == MANTIS_V2_FROZEN_LINEAR_V1:
         state, external_record = load_mantis_v2_pretrained_encoder_state(
             model_spec=model_spec
