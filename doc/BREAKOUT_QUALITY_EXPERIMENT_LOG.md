@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_123557_2b7b48f.zip`，SHA256 `48029b98e0bc53ae03920a6b6fc07405462b001b9d8f3633f43d9c7aa908893f`；此ZIP已退回9A active policy，並作為本輪前置修正的來源基準 |
-| SHA256 | 本輪來源 ZIP：`48029b98e0bc53ae03920a6b6fc07405462b001b9d8f3633f43d9c7aa908893f` |
+| 基準 ZIP | `test-branch-1_20260726_132542_f054eb2.zip`，SHA256 `59be5c15356b681461ca78cd0fb5164d4d9d232b8cf816ca6ede13ac13c92b8c`；包含unique-group score單一真理與逐年OOS診斷實作，本輪依formal bundle閉環修正primary-param預設來源解析 |
+| SHA256 | 本輪來源 ZIP：`59be5c15356b681461ca78cd0fb5164d4d9d232b8cf816ca6ede13ac13c92b8c` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -650,6 +650,8 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 既有結果 | 9A／8F與9B～9F歷史Selection／OOS數值不因本次實作預先改寫；必須重新匯出9A research scores後才產生新報表 |
 | 歷史契約銜接 | 2026-07-24曾為保留舊event-row batch下的同checkpoint末位數值而退回unique-group export；本次在策略層驗證前正式改以「同ticker/date只有一個canonical score」為優先契約。重新匯出的9A score可能因推論batch單位改變而與舊表有微小差異，屬明確execution contract變更，不可混用新舊score或要求末位數值完全相同 |
 | 下一步 | 重新匯出修正後9A score並確認同ticker/date完全一致，之後以固定策略參數執行no-filter vs 9A threshold 0.5經濟效果比較 |
+
+Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260726_132542_f054eb2.zip`，SHA256 `59be5c15356b681461ca78cd0fb5164d4d9d232b8cf816ca6ede13ac13c92b8c`；bundle `to_chatgpt_bundle_20260726_132656_a0fd8473.zip`，SHA256 `5f3431e922780847ccecdeb68cb90f2237da38f052e27404ef265bfc851176f7`。quick gate、chain checks與ML smoke均PASS；consistency僅`default_primary_param_fallback_filename`失敗，meta quality也只因同一synthetic case連帶FAIL。根因是`resolve_default_primary_param_source_record()`在缺少optional `models/run_best_params.json`時，錯把第一個現存的`base_best.json`當成預設runtime來源，違反既有ARCHITECTURE與B163契約。已修正為：只有`V16_RUN_BEST_PARAMS_PATH`可覆寫；沒有override時永遠解析至`models/run_best_params.json`，其他現存工件只可由`discover_model_param_sources()`供互動選擇，不得靜默改變預設來源。此閉環不改9A模型、score inference、Dataset、Label、threshold、年度指標或策略邏輯。
 
 
 ## 4. 已排除或暫停的方向

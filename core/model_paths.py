@@ -307,14 +307,14 @@ def _model_record_for_path(path: str, *, key: str, label: Optional[str] = None) 
 
 
 def resolve_default_primary_param_source_record(project_root: str, environ: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """Return the default executable parameter source shipped with the project.
+    """Return the canonical primary parameter source record.
 
-    Legacy installs may still provide ``models/run_best_params.json``.  Current
-    static seed-ensemble exports ship active-param ensemble files such as
-    ``models/base.json`` or prefixed seed-ensemble files such as
-    ``models/full_ensemble_base.json``.  This resolver is the single source used by formal
-    checks and non-interactive tooling so they do not keep hard-coding one
-    obsolete filename.
+    ``V16_RUN_BEST_PARAMS_PATH`` is the only supported runtime override.  Without
+    that override, the canonical source always resolves to
+    ``models/run_best_params.json`` even when the optional artifact has not been
+    created yet.  Discovery of other existing parameter artifacts belongs to
+    ``discover_model_param_sources()`` and must not silently change the default
+    runtime source.
     """
     env = os.environ if environ is None else environ
     override = str(env.get(RUN_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
@@ -322,23 +322,8 @@ def resolve_default_primary_param_source_record(project_root: str, environ: Opti
         path = _resolve_override_path(project_root, override)
         return _model_record_for_path(path, key="run_best_override", label=os.path.basename(path))
 
-    models_dir = resolve_models_dir(project_root, environ=env)
-    for filename in PREFERRED_PRIMARY_PARAM_SOURCE_FILENAMES:
-        path = os.path.abspath(os.path.join(models_dir, filename))
-        if os.path.isfile(path):
-            return _model_record_for_path(path, key=_param_source_key_from_filename(filename), label=filename)
-
-    records = discover_model_param_sources(
-        project_root,
-        environ=env,
-        include_active_param_ensemble=True,
-        include_rolling_oos=False,
-    )
-    if records:
-        return dict(records[0])
-
     return _model_record_for_path(
-        os.path.join(models_dir, "run_best_params.json"),
+        resolve_run_best_params_path(project_root, environ=env),
         key="run_best",
         label="run_best_params.json",
     )
