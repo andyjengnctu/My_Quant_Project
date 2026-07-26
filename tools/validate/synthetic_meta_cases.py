@@ -294,6 +294,7 @@ def validate_cmd_document_contract_case(_base_params):
     unique_commands = list(dict.fromkeys(commands))
     help_script_paths = {str(cmd[1]).replace("\\", "/") for cmd, _ in HELP_TARGETS if len(cmd) >= 2 and str(cmd[1]).endswith(".py")}
     project_command_count = 0
+    checked_script_paths = set()
 
     add_check(results, "meta_cmd_contract", case_id, "cmd_python_commands_nonempty", True, bool(unique_commands))
 
@@ -315,8 +316,10 @@ def validate_cmd_document_contract_case(_base_params):
         project_command_count += 1
         script_path = PROJECT_ROOT / script_rel
         metric_prefix = script_rel.replace("/", "_").replace(".", "_")
-        add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_script_exists", True, script_path.is_file())
-        add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_covered_by_help_target", True, script_rel in help_script_paths)
+        if script_rel not in checked_script_paths:
+            checked_script_paths.add(script_rel)
+            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_script_exists", True, script_path.is_file())
+            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_covered_by_help_target", True, script_rel in help_script_paths)
 
         if "--dataset" in parts:
             dataset_value = parts[parts.index("--dataset") + 1]

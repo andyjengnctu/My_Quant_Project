@@ -892,6 +892,19 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 | 判定 | `IMPLEMENTED`；修正研究設計與格式相容性，不宣告策略有效或無效 |
 | 下一步 | 本機先產生`models/roos_base_finalists_agree.json`，再以同一歷史daily active-param ensemble執行固定threshold策略比較 |
 
+Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke均PASS；consistency回報2項FAIL，但兩列其實是同一份`doc/CMD.md`內兩種策略比較命令重複觸發相同契約：新正式入口`apps/breakout_quality_strategy_compare.py`已存在且`--help`正常，卻未加入quick-gate的集中`HELP_TARGETS`，所以文件契約判為「CMD有正式指令、help探針未覆蓋」。meta quality僅因synthetic suite非零退出而連帶FAIL，coverage本身68.42%並非本輪根因。已將該入口加入`HELP_TARGETS`與`INLINE_CLI_TARGETS`，使文件、正式CLI與快速help探針回到單一真理來源；同時將script存在／help覆蓋改為每個script只產生一組檢查，保留每條命令各自的參數契約，避免同一根因膨脹成多個FAIL。此修正不改策略比較邏輯、Rolling active-param契約、9A模型、Dataset、Label、score、threshold、optimizer、portfolio成交或帳務。
+
+| 追溯項目 | Formal bundle閉環內容 |
+|---|---|
+| 程式基準 | 使用者ZIP `test-branch-1_20260726_151145_4f4d491.zip`，SHA256 `04407165f9c025a03fcc13b1cea6279267e72b5b63cf04daa63088fed4008a3d` |
+| Bundle | `to_chatgpt_bundle_20260726_151302_4314b7e2.zip`，SHA256 `087f27e62bfb2e15615b1f896e54ec03d6c4d9aeb612e27636f2dc12e43491e2` |
+| 唯一變更 | quick-gate help registry加入`apps/breakout_quality_strategy_compare.py`並納入inline CLI probe；CMD文件契約的script-level存在／help檢查改為每個script去重一次 |
+| 固定條件 | 9A architecture/profile、threshold 0.5、Rolling參數來源、forward-OOS score、交易與統計口徑全部不變 |
+| 重建需求 | 不需重建Dataset、Label、feature bank、模型、score或Rolling參數；只需重跑本地formal suite確認閉環 |
+| Selection／OOS結果 | 無新模型、分類或投組結果 |
+| 判定 | `IMPLEMENTED`；修正formal help coverage漏登，非模型或策略實驗 |
+| 下一步 | 套用修補後重跑`python apps/test_suite.py`；通過後再進行Rolling OOS參數產生與固定9A策略比較 |
+
 
 ---
 
