@@ -1459,6 +1459,8 @@
 | 2026-07-26 | B11 | 驗證9E model spec、context isolation、encoder frozen eval、chunked forward、head-only backward、strict reload、9A／8F比較基準與9D legacy分區後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-26 | B11 | 9E完整OOS固定coverage排序全面低於9A且未超越8F，active architecture退回`inception_time_v1`、MOMENT轉為legacy，模型治理契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py`, `config/breakout_quality_policy.py` |
 | 2026-07-26 | B11 | 驗證9A／8F active、9E legacy strict reconstruction、9E結果紀錄與9F單一變更計畫一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-26 | B11 | 9E退回後runtime已正確將MOMENT列為legacy，但synthetic policy fixture的顯式expected tuple漏列該architecture，formal consistency與synthetic coverage回到PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-07-26 | B11 | 同步legacy expected tuple納入`moment_1_base_frozen_linear_v1`，驗證9A／8F active與全部淘汰架構legacy分區一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-26 | B16 | active workflow由9D外部checkpoint分流退回9A supervised三階段，CLI／文件契約改回PARTIAL | DONE -> PARTIAL | `config/breakout_quality_policy.py`, `doc/CMD.md` |
 | 2026-07-26 | B16 | 驗證正式workflow不再要求Mantis套件或下載checkpoint、legacy重建指令仍可定位且報表流程不變後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-07-26 | B16 | 9E workflow新增MOMENT套件preflight、釘死checkpoint下載驗證與三階段分流，CLI／依賴文件契約改回PARTIAL | DONE -> PARTIAL | `apps/breakout_quality.py`, `requirements/requirements-moment.txt`, `doc/CMD.md` |

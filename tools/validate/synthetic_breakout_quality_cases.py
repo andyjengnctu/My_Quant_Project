@@ -2313,6 +2313,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "inception_time_group_norm_v1",
         "modern_tcn_v1",
         "mantis_v2_frozen_linear_v1",
+        "moment_1_base_frozen_linear_v1",
         "ts2vec_frozen_linear_v1",
         "residual_tcn_v1",
     )
