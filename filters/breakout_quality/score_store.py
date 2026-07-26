@@ -220,8 +220,11 @@ def _lookup_breakout_quality_candidate_score_cached(
     event_date = pd.Timestamp(date_text).date()
     if event_date < contract.available_from or event_date > contract.available_through:
         raise ValueError(
-            "breakout quality ranking 候選日期超出正式 runtime coverage: "
-            f"ticker={ticker_text}, date={date_text}, coverage={contract.available_from}~{contract.available_through}"
+            "breakout quality ranking 候選日期超出正式 signal score coverage: "
+            f"ticker={ticker_text}, date={date_text}, "
+            f"signal_coverage={contract.available_from}~{contract.available_through}, "
+            f"required_signal_start={contract.required_signal_start}, "
+            f"execution_start={contract.execution_start}"
         )
 
     score_table = (

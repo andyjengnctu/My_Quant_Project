@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -1094,13 +1094,17 @@ def load_runtime_artifact_contract(
             runtime_eligibility.get("execution_start"),
             field_name="runtime_eligibility.execution_start",
         )
-        if required_signal_start != information_cutoff + timedelta(days=1):
+        # (AI註: model_information_cutoff 是訓練資訊最後可用的交易日。模型可於該日
+        # 收盤後完成，並以該日收盤訊號建立下一交易日盤前訂單；因此同日 signal
+        # anchor 合法，只有早於 cutoff 的事件才不可進入正式 forward-OOS score。)
+        if required_signal_start != information_cutoff:
             raise ValueError(
-                "breakout quality required_signal_start 必須為 model_information_cutoff 的下一個日曆日"
+                "breakout quality required_signal_start 必須等於 model_information_cutoff，"
+                "供下一交易日盤前決策使用 cutoff 當日收盤訊號"
             )
         if available_from < required_signal_start:
             raise ValueError(
-                "breakout quality forward_oos score table 不得包含 model_information_cutoff 當日或更早事件"
+                "breakout quality forward_oos score table 不得包含 model_information_cutoff 之前事件"
             )
         outer_policy = _require_mapping(manifest, "outer_oos_policy")
         outer_execution_start = _parse_iso_date(

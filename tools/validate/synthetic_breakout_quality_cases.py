@@ -4950,7 +4950,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "available_through": "2025-01-05",
                     "required_signal_start": "2025-01-02",
                     "execution_start": "2025-01-03",
-                    "model_information_cutoff": "2025-01-01",
+                    "model_information_cutoff": "2025-01-02",
                 },
             }
             paths.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")

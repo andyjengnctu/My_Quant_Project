@@ -163,8 +163,8 @@ python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --exper
 python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope forward_oos
 ```
 
-- `forward_oos` 的策略執行期仍使用同一份 walk-forward OOS window；但盤前下單使用前一交易日訊號，因此 Score 匯出會從 `model_information_cutoff` 下一日開始建立訊號 coverage，包含 OOS 首個執行日前必要的 signal anchor。這些前置 Score 只供首日盤前排序／過濾，不會把策略回放或 OOS 評估提前。
-- Manifest 會分別記錄 `required_signal_start`、`execution_start`、實際第一個 Score 事件日 `available_from` 與 `available_through`。`required_signal_start` 前不得使用模型；`available_through` 後若出現候選事件則 fail-fast。
+- `forward_oos` 的策略執行期仍使用同一份 walk-forward OOS window；但盤前下單使用前一交易日訊號，因此 Score 匯出會從 `model_information_cutoff` 當日開始建立訊號 coverage，包含 OOS 首個執行日前必要的 signal anchor。這些前置 Score 只供首日盤前排序／過濾，不會把策略回放或 OOS 評估提前。
+- Manifest 會分別記錄 `required_signal_start`、`execution_start`、實際第一個 Score 事件日 `available_from` 與 `available_through`。`required_signal_start` 等於 `model_information_cutoff`；cutoff 當日 Score 只可供下一交易日盤前訂單使用，早於該日不得使用模型；`available_through` 後若出現候選事件則 fail-fast。
 - 正式 runtime 只讀目前 policy 架構與 experiment profile 的 `models/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/scores.csv`，並驗證 model/score SHA256、schema、high_len coverage、OOS eligibility 與可用日期。
 - `forward_oos` 會以目前原始資料重新建立 runtime 突破候選全集，不再只沿用訓練 Dataset 內可建立特徵的事件。可評分事件使用模型 score；因 benchmark 日期缺失、300-bar feature history 不足或特徵無效而不可評分的正式候選，會寫入同目錄 `unavailable_scores.csv`，並在 `scores.csv` 固定記為 `0.0`（保守 REJECT）。未知缺分仍會 fail-fast。
 - 每次原始 CSV inventory 改變或套用本契約修正後，都必須重新執行本命令；不需重訓模型或重跑 Rolling optimizer。

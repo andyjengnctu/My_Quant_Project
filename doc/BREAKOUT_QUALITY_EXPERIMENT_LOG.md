@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_214442_75770f0.zip`，SHA256 `28fb45e6400a0241e6ee3e229f896c4541e203e96dcd9e5e8cc645f971812fcd`；已包含完整runtime候選coverage、Rolling active-param策略比較、9A固定threshold結果與交易歸因，本輪新增Quality Score候選排序探索性比較 |
-| SHA256 | 本輪來源 ZIP：`28fb45e6400a0241e6ee3e229f896c4541e203e96dcd9e5e8cc645f971812fcd`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
+| 基準 ZIP | `test-branch-1_20260726_231300_1defd9e.zip`，SHA256 `e9f6324a42316c5481ad4b93083d2ea5ca254cfc1a20ef1b26eaffc22951ec5c`；已包含Quality Score候選排序與雙期間runtime契約，本輪更正cutoff當日next-session signal anchor語意 |
+| SHA256 | 本輪來源 ZIP：`e9f6324a42316c5481ad4b93083d2ea5ca254cfc1a20ef1b26eaffc22951ec5c`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -970,7 +970,7 @@ Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke
 | 研究限制 | 此機制是在已查看2021～2026舊OOS後提出，只能作探索性診斷；即使改善，也不得直接作部署證據，必須等待全新forward period驗證 |
 | 下一步 | 重新匯出含pre-execution signal anchor的正式scores後，再執行`python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off`，取得真實結果後再將本節更新為`RESULT_AVAILABLE` |
 
-Score-ranking OOS邊界閉環（2026-07-26 22:45）：第一次執行時，策略回放正確從2021-01-04開始，但候選`00633L`使用前一交易日2020-12-31的原始breakout signal Score；舊forward-OOS工件的`available_from=2021-01-04`，將Score事件涵蓋期誤與策略執行期綁定，因而fail-fast。修正後正式Score從`model_information_cutoff`下一日開始建立，manifest分別保存`required_signal_start`與`execution_start`；strategy compare只使用`execution_start`作回放起日，前置Score不會使回測提前，也不得以執行日資料替代。此修正不改模型、Label、Score公式、候選、排序、Rolling active params、成交或帳務；必須重新匯出forward-OOS scores，無須重訓或重跑optimizer。
+Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執行時，策略回放正確從2021-01-04開始，但候選`00633L`使用前一交易日2020-12-31的原始breakout signal Score；舊forward-OOS工件的`available_from=2021-01-04`，將Score事件涵蓋期誤與策略執行期綁定，因而fail-fast。22:45版曾將正式Score起點設為`model_information_cutoff`下一日，但`model_information_cutoff`實際是訓練標籤資訊最後使用到的交易日；模型可於該日收盤後完成，並使用同日收盤訊號建立下一交易日盤前訂單，因此下一日規則仍會漏掉2020-12-31。23:13版更正為`required_signal_start = model_information_cutoff`，正式Score包含cutoff當日事件，但strategy compare仍只從`execution_start`回放，不會把策略執行提前，也不得用執行日收盤資料替代前一日訊號。此修正不改模型、Label、Score公式、候選、排序、Rolling active params、成交或帳務；狀態為`IMPLEMENTED`，必須重新匯出forward-OOS scores，無須重訓或重跑optimizer。
 
 | 追溯項目 | Score-ranking OOS邊界閉環內容 |
 |---|---|

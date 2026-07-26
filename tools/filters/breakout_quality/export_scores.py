@@ -204,7 +204,9 @@ def _resolve_forward_runtime_dates(manifest: dict) -> dict[str, pd.Timestamp | N
     execution_start = pd.Timestamp(str(outer_policy.get("oos_start_date") or "")).normalize()
     configured_end_text = str(outer_policy.get("configured_oos_end_date") or "").strip()
     execution_end = pd.Timestamp(configured_end_text).normalize() if configured_end_text else None
-    score_signal_start = cutoff + pd.Timedelta(days=1)
+    # (AI註: cutoff 當日收盤後模型資訊已完整，可用該日 breakout signal
+    # 建立下一交易日盤前訂單；正式 score 因此從 cutoff 當日開始。)
+    score_signal_start = cutoff
     if score_signal_start > execution_start:
         raise ValueError(
             "forward_oos model_information_cutoff 必須早於策略 OOS 執行起日: "
@@ -641,11 +643,11 @@ def main(argv=None) -> int:
         scored = scored[
             (event_dates >= forward_runtime_dates["score_signal_start"])
             & (event_dates <= score_end)
-            & (event_dates > forward_runtime_dates["model_information_cutoff"])
+            & (event_dates >= forward_runtime_dates["model_information_cutoff"])
         ].copy()
         if scored.empty:
             raise ValueError(
-                "forward_oos 沒有晚於 model_information_cutoff 且可供 OOS 盤前決策使用的訊號事件；"
+                "forward_oos 沒有位於 model_information_cutoff 當日或之後、且可供 OOS 盤前決策使用的訊號事件；"
                 f"signal_start={forward_runtime_dates['score_signal_start'].date()}~{score_end.date()}, "
                 f"execution_start={forward_runtime_dates['execution_start'].date()}, "
                 f"cutoff={forward_runtime_dates['model_information_cutoff'].date()}"
@@ -832,7 +834,7 @@ def main(argv=None) -> int:
         "execution_start": str(forward_runtime_dates["execution_start"].date()),
         "model_information_cutoff": information_cutoff,
         "reason": (
-            "score rows begin after model_information_cutoff and include the pre-execution signal anchor "
+            "score rows begin at model_information_cutoff close and include the pre-execution signal anchor "
             "required by next-session OOS orders; strategy execution still begins at outer_oos_policy.oos_start_date"
         ),
     }
