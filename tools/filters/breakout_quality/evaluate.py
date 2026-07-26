@@ -129,6 +129,7 @@ def _ranking_inputs(
     valid: pd.DataFrame,
     *,
     group_weighted: bool,
+    require_identical_group_scores: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, float | int | str]]:
     if not group_weighted:
         score = valid[SCORE_COLUMN].to_numpy(dtype=np.float64)
@@ -146,6 +147,14 @@ def _ranking_inputs(
     multirow_group_count = 0
     nonidentical_score_group_count = 0
     max_within_group_score_span = 0.0
+    allowed_score_span = (
+        0.0 if require_identical_group_scores else GROUP_SCORE_NUMERICAL_NOISE_ATOL
+    )
+    group_score_reduction = (
+        "single_unique_group_inference_broadcast"
+        if require_identical_group_scores
+        else "first_event_row_with_bounded_numerical_noise"
+    )
     for (ticker, date), group in valid.groupby(["ticker", "date"], sort=False):
         labels = group["label"].drop_duplicates().tolist()
         if len(labels) != 1:
@@ -154,11 +163,16 @@ def _ranking_inputs(
         if not np.isfinite(scores).all():
             raise ValueError("同一 ticker/date 的 ranking metrics 含 NaN 或 infinite score")
         score_span = float(scores.max() - scores.min())
-        if score_span > GROUP_SCORE_NUMERICAL_NOISE_ATOL:
+        if score_span > allowed_score_span:
+            contract_text = (
+                "sequence-only model 必須由 unique-group inference 精確廣播相同分數"
+                if require_identical_group_scores
+                else "score 差異超過允許的浮點誤差"
+            )
             raise ValueError(
-                "同一 ticker/date 的 ranking metrics score 差異超過允許的浮點誤差；"
-                f"ticker={ticker}, date={date}, span={score_span:.10f}, "
-                f"allowed={GROUP_SCORE_NUMERICAL_NOISE_ATOL:.10f}"
+                "同一 ticker/date 的 ranking metrics 違反 score 單一真理契約；"
+                f"{contract_text}; ticker={ticker}, date={date}, "
+                f"span={score_span:.10f}, allowed={allowed_score_span:.10f}"
             )
         if len(scores) > 1:
             multirow_group_count += 1
@@ -173,8 +187,8 @@ def _ranking_inputs(
             np.empty((0,), dtype=np.float64),
             {
                 "ranking_unit": "ticker_date_group",
-                "group_score_reduction": "first_event_row_with_bounded_numerical_noise",
-                "group_score_numerical_noise_atol": GROUP_SCORE_NUMERICAL_NOISE_ATOL,
+                "group_score_reduction": group_score_reduction,
+                "group_score_numerical_noise_atol": allowed_score_span,
                 "multirow_group_count": 0,
                 "nonidentical_score_group_count": 0,
                 "max_within_group_score_span": 0.0,
@@ -183,18 +197,24 @@ def _ranking_inputs(
     array = np.asarray(grouped_rows, dtype=np.float64)
     return array[:, 0], array[:, 1], np.ones((array.shape[0],), dtype=np.float64), {
         "ranking_unit": "ticker_date_group",
-        "group_score_reduction": "first_event_row_with_bounded_numerical_noise",
-        "group_score_numerical_noise_atol": GROUP_SCORE_NUMERICAL_NOISE_ATOL,
+        "group_score_reduction": group_score_reduction,
+        "group_score_numerical_noise_atol": allowed_score_span,
         "multirow_group_count": int(multirow_group_count),
         "nonidentical_score_group_count": int(nonidentical_score_group_count),
         "max_within_group_score_span": round(float(max_within_group_score_span), 10),
     }
 
 
-def _ranking_metrics(valid: pd.DataFrame, *, group_weighted: bool) -> dict:
+def _ranking_metrics(
+    valid: pd.DataFrame,
+    *,
+    group_weighted: bool,
+    require_identical_group_scores: bool = False,
+) -> dict:
     score, truth, weights, ranking_diagnostics = _ranking_inputs(
         valid,
         group_weighted=group_weighted,
+        require_identical_group_scores=require_identical_group_scores,
     )
     if score.size == 0:
         return {}
@@ -268,7 +288,13 @@ def _ranking_metrics(valid: pd.DataFrame, *, group_weighted: bool) -> dict:
         "threshold_selection_allowed": False,
     }
 
-def _metrics(df: pd.DataFrame, *, threshold: float, group_weighted: bool) -> dict:
+def _metrics(
+    df: pd.DataFrame,
+    *,
+    threshold: float,
+    group_weighted: bool,
+    require_identical_group_scores: bool = False,
+) -> dict:
     valid = df[df["label"].isin([LABEL_PASS, LABEL_REJECT])].copy()
     if valid.empty:
         return {"row_count": 0}
@@ -320,6 +346,7 @@ def _metrics(df: pd.DataFrame, *, threshold: float, group_weighted: bool) -> dic
         "ranking_and_calibration": _ranking_metrics(
             valid,
             group_weighted=group_weighted,
+            require_identical_group_scores=require_identical_group_scores,
         ),
         "confusion": {
             "true_pass_pred_pass": round(tp, 6),
@@ -531,6 +558,54 @@ def prepare_evaluation_context(
     }
 
 
+def _yearly_group_metrics(
+    selected: pd.DataFrame,
+    *,
+    threshold: float,
+    require_identical_group_scores: bool,
+    outer_policy: dict,
+) -> list[dict]:
+    dates = pd.to_datetime(selected["date"], errors="raise").dt.normalize()
+    selected_with_year = selected.copy()
+    selected_with_year["_evaluation_year"] = dates.dt.year.astype(int)
+    oos_start = pd.Timestamp(str(outer_policy.get("oos_start_date") or "")).normalize()
+    effective_end = pd.Timestamp(
+        str(outer_policy.get("effective_oos_end_date") or "")
+    ).normalize()
+    rows: list[dict] = []
+    for year, frame in selected_with_year.groupby("_evaluation_year", sort=True):
+        year_int = int(year)
+        frame = frame.drop(columns=["_evaluation_year"])
+        frame_dates = pd.to_datetime(frame["date"], errors="raise").dt.normalize()
+        calendar_start = pd.Timestamp(year=year_int, month=1, day=1)
+        calendar_end = pd.Timestamp(year=year_int, month=12, day=31)
+        policy_start = max(calendar_start, oos_start)
+        policy_end = min(calendar_end, effective_end)
+        rows.append(
+            {
+                "year": year_int,
+                "date_range": {
+                    "start": str(frame_dates.min().date()),
+                    "end": str(frame_dates.max().date()),
+                },
+                "policy_window": {
+                    "start": str(policy_start.date()),
+                    "end": str(policy_end.date()),
+                },
+                "is_partial_calendar_year": bool(
+                    policy_start > calendar_start or policy_end < calendar_end
+                ),
+                "metrics": _metrics(
+                    frame,
+                    threshold=threshold,
+                    group_weighted=True,
+                    require_identical_group_scores=require_identical_group_scores,
+                ),
+            }
+        )
+    return rows
+
+
 def evaluate_split_from_context(context: dict, split_name: str) -> dict:
     if split_name not in EVALUATION_SPLITS:
         raise ValueError(f"不支援的 evaluation split: {split_name}")
@@ -549,7 +624,13 @@ def evaluate_split_from_context(context: dict, split_name: str) -> dict:
     }[str(split_name)]
     model_manifest = context["model_manifest"]
     threshold = float(context["threshold"])
-    return {
+    model_spec = model_manifest.get("model_spec")
+    if not isinstance(model_spec, dict):
+        raise ValueError("model manifest 缺少 model_spec")
+    require_identical_group_scores = not bool(
+        model_spec.get("use_dataset_context", True)
+    )
+    result = {
         "filter_id": context["filter_id"],
         "score_path": str(context["score_path"]),
         "split": str(split_name),
@@ -576,17 +657,31 @@ def evaluate_split_from_context(context: dict, split_name: str) -> dict:
             selected,
             threshold=threshold,
             group_weighted=False,
+            require_identical_group_scores=False,
         ),
         "ticker_date_group_weighted": _metrics(
             selected,
             threshold=threshold,
             group_weighted=True,
+            require_identical_group_scores=require_identical_group_scores,
         ),
         "event_group_summary": event_group_summary(
             selected,
             pd.to_numeric(selected["label"], errors="raise").to_numpy(dtype=np.int64),
         ),
+        "score_group_contract": {
+            "use_dataset_context": bool(model_spec.get("use_dataset_context", True)),
+            "identical_ticker_date_score_required": require_identical_group_scores,
+        },
     }
+    if split_name == EVALUATION_SPLIT_OOS:
+        result["yearly_ticker_date_group_weighted"] = _yearly_group_metrics(
+            selected,
+            threshold=threshold,
+            require_identical_group_scores=require_identical_group_scores,
+            outer_policy=context["outer_oos_policy"],
+        )
+    return result
 
 
 def evaluate_splits(

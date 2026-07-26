@@ -33,7 +33,7 @@ from tools.filters.breakout_quality.evaluate import (
 )
 
 
-REPORT_SCHEMA_VERSION = 3
+REPORT_SCHEMA_VERSION = 4
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 ANSI_COLORS = {
     "reset": "\033[0m",
@@ -468,12 +468,52 @@ def _training_summary(manifest: dict) -> dict:
     }
 
 
+def _yearly_metric_summary(item: dict) -> dict:
+    metrics = item.get("metrics")
+    if not isinstance(metrics, dict):
+        raise ValueError("yearly OOS metrics 缺少 metrics object")
+    ranking = metrics.get("ranking_and_calibration")
+    if not isinstance(ranking, dict):
+        ranking = {}
+    base = metrics.get("base_pass_rate")
+    precision = metrics.get("pass_precision")
+    return {
+        "year": int(item["year"]),
+        "date_start": item["date_range"]["start"],
+        "date_end": item["date_range"]["end"],
+        "policy_window": item.get("policy_window") or {},
+        "is_partial_calendar_year": bool(item.get("is_partial_calendar_year", False)),
+        "group_count": metrics.get("group_count"),
+        "row_count": metrics.get("row_count"),
+        "base_pass_rate": base,
+        "acceptance_rate": metrics.get("acceptance_rate"),
+        "pass_precision": precision,
+        "precision_delta": (
+            float(precision) - float(base)
+            if precision is not None and base is not None
+            else None
+        ),
+        "pass_recall": metrics.get("pass_recall"),
+        "avg_score": metrics.get("avg_score"),
+        "ranking_and_calibration": ranking,
+    }
+
+
 def build_report_payload(*, metrics_by_split: dict[str, dict], context: dict) -> dict:
     summaries = {
         split_name: _metric_summary(metrics)
         for split_name, metrics in metrics_by_split.items()
     }
     conclusion = _oos_conclusion(summaries.get(EVALUATION_SPLIT_OOS))
+    oos_metrics = metrics_by_split.get(EVALUATION_SPLIT_OOS)
+    yearly_items = (
+        oos_metrics.get("yearly_ticker_date_group_weighted", [])
+        if isinstance(oos_metrics, dict)
+        else []
+    )
+    if not isinstance(yearly_items, list):
+        raise ValueError("yearly_ticker_date_group_weighted 必須是 list")
+    yearly_summaries = [_yearly_metric_summary(item) for item in yearly_items]
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -482,6 +522,7 @@ def build_report_payload(*, metrics_by_split: dict[str, dict], context: dict) ->
         "conclusion": conclusion,
         "training": _training_summary(context["model_manifest"]),
         "split_summaries": summaries,
+        "oos_yearly_summaries": yearly_summaries,
         "full_metrics": metrics_by_split,
         "audit": {
             "score_path": str(context["score_path"]),
@@ -621,6 +662,66 @@ def _markdown_ranking_table(payload: dict, number: int) -> list[str]:
         ]
     )
     return lines
+
+def _markdown_oos_yearly_tables(payload: dict, number: int) -> list[str]:
+    rows = payload.get("oos_yearly_summaries") or []
+    if not rows:
+        return []
+    lines = [f"## {number}. OOS 年度診斷", ""]
+    lines.extend(
+        [
+            "| 年度 | 日期 | Groups | 原始 PASS | 模型 PASS | PASS Precision | Precision 絕對 | PASS Recall | 平均 Score |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in rows:
+        year_label = f"{row['year']}{'*' if row['is_partial_calendar_year'] else ''}"
+        lines.append(
+            "| {year} | {period} | {groups} | {base} | {acceptance} | {precision} | {lift} | {recall} | {score} |".format(
+                year=year_label,
+                period=f"{row['date_start']}～{row['date_end']}",
+                groups=_count(row.get("group_count"), digits=0),
+                base=_pct(row.get("base_pass_rate")),
+                acceptance=_pct(row.get("acceptance_rate")),
+                precision=_pct(row.get("pass_precision")),
+                lift=_pp(row.get("precision_delta")),
+                recall=_pct(row.get("pass_recall")),
+                score=_decimal(row.get("avg_score")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "| 年度 | PR-AUC | P@50% | P@60% | P@70% | R@P60% | Brier | ECE |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in rows:
+        ranking = _ranking_summary(row)
+        year_label = f"{row['year']}{'*' if row['is_partial_calendar_year'] else ''}"
+        lines.append(
+            "| {year} | {pr_auc} | {p50} | {p60} | {p70} | {r60} | {brier} | {ece} |".format(
+                year=year_label,
+                pr_auc=_decimal(ranking.get("average_precision_pr_auc"), 4),
+                p50=_pct(_coverage_precision(ranking, 0.50)),
+                p60=_pct(_coverage_precision(ranking, 0.60)),
+                p70=_pct(_coverage_precision(ranking, 0.70)),
+                r60=_pct(ranking.get("recall_at_precision_60")),
+                brier=_decimal(ranking.get("brier_score"), 4),
+                ece=_decimal(ranking.get("expected_calibration_error_10_bins"), 4),
+            )
+        )
+    if any(bool(row.get("is_partial_calendar_year")) for row in rows):
+        lines.extend(["", "\\* 星號表示 OOS policy 僅涵蓋該年度的一部分，不可與完整年度直接等量比較。"] )
+    lines.extend(
+        [
+            "",
+            "> 年度表只切分同一份已固定 OOS score 作診斷，不得用來選 threshold、epochs 或模型。",
+            "",
+        ]
+    )
+    return lines
+
 
 def _confusion_details(summary: dict) -> dict:
     confusion = summary.get("confusion") or {}
@@ -1492,6 +1593,11 @@ def render_markdown_report(payload: dict) -> str:
     lines.extend(_markdown_ranking_table(payload, next_number))
     next_number += 1
 
+    yearly_lines = _markdown_oos_yearly_tables(payload, next_number)
+    if yearly_lines:
+        lines.extend(yearly_lines)
+        next_number += 1
+
     lines.extend(_markdown_oos_comprehensive_assessment(payload, next_number))
 
     lines.extend(
@@ -1688,6 +1794,79 @@ def _console_ranking_section(payload: dict, number: int, *, color: bool = False)
         ]
     )
     return lines
+
+def _console_oos_yearly_section(
+    payload: dict,
+    number: int,
+    *,
+    color: bool = False,
+) -> list[str]:
+    yearly = payload.get("oos_yearly_summaries") or []
+    if not yearly:
+        return []
+    lines = _section(f"{number}. OOS 年度診斷", color=color)
+    classification_rows = []
+    ranking_rows = []
+    for row in yearly:
+        year_label = f"{row['year']}{'*' if row['is_partial_calendar_year'] else ''}"
+        classification_rows.append(
+            [
+                year_label,
+                f"{row['date_start']}～{row['date_end']}",
+                _count(row.get("group_count"), digits=0),
+                _pct(row.get("base_pass_rate")),
+                _pct(row.get("acceptance_rate")),
+                _pct(row.get("pass_precision")),
+                _pp(row.get("precision_delta")),
+                _pct(row.get("pass_recall")),
+                _decimal(row.get("avg_score")),
+            ]
+        )
+        ranking = _ranking_summary(row)
+        ranking_rows.append(
+            [
+                year_label,
+                _decimal(ranking.get("average_precision_pr_auc"), 4),
+                _pct(_coverage_precision(ranking, 0.50)),
+                _pct(_coverage_precision(ranking, 0.60)),
+                _pct(_coverage_precision(ranking, 0.70)),
+                _pct(ranking.get("recall_at_precision_60")),
+                _decimal(ranking.get("brier_score"), 4),
+                _decimal(ranking.get("expected_calibration_error_10_bins"), 4),
+            ]
+        )
+    lines.extend(
+        _render_ascii_table(
+            [
+                "年度", "日期", "Groups", "原始 PASS", "模型 PASS",
+                "PASS Precision", "Precision 絕對", "PASS Recall", "平均 Score",
+            ],
+            classification_rows,
+            aligns=["left", "left", "right", "right", "right", "right", "right", "right", "right"],
+        )
+    )
+    lines.extend(["", "排序與校準"])
+    lines.extend(
+        _render_ascii_table(
+            ["年度", "PR-AUC", "P@50%", "P@60%", "P@70%", "R@P60%", "Brier", "ECE"],
+            ranking_rows,
+            aligns=["left", "right", "right", "right", "right", "right", "right", "right"],
+        )
+    )
+    if any(bool(row.get("is_partial_calendar_year")) for row in yearly):
+        lines.extend(["", "* 星號表示 OOS policy 僅涵蓋該年度的一部分。"])
+    lines.extend(
+        [
+            "",
+            _paint(
+                "年度表只切分同一份固定 OOS score；不得依年度結果回頭調整 threshold、epochs 或模型。",
+                "yellow",
+                enabled=color,
+            ),
+        ]
+    )
+    return lines
+
 
 def _console_confusion_section(summary: dict, label: str, number: int, *, color: bool = False) -> list[str]:
     details = _confusion_details(summary)
@@ -1932,6 +2111,10 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
     next_number += 1
     lines.extend(_console_ranking_section(payload, next_number, color=color))
     next_number += 1
+    yearly_lines = _console_oos_yearly_section(payload, next_number, color=color)
+    if yearly_lines:
+        lines.extend(yearly_lines)
+        next_number += 1
     lines.extend(_console_oos_comprehensive_section(payload, next_number, color=color))
     return "\n".join(lines)
 

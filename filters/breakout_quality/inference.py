@@ -143,7 +143,72 @@ def strict_parallel_batched_logits(
     return logits_np
 
 
+def strict_unique_group_batched_logits(
+    torch: Any,
+    model: Any,
+    features: IndexedFeatureBank,
+    context: np.ndarray,
+    *,
+    batch_size: int,
+    workers: int,
+    execution_plan: TorchExecutionPlan | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Infer each shared feature group once and return event-row broadcast indices.
+
+    This path is only valid for model specs with ``use_dataset_context=False``.
+    The returned logits contain one row per used feature group; ``event_to_group``
+    maps every original event row to that unique-logit row. Converting logits to
+    probabilities before applying this mapping guarantees bit-identical scores
+    for every event that shares the same ticker/date feature group.
+    """
+
+    if not isinstance(features, IndexedFeatureBank):
+        raise TypeError("unique-group inference 需要 IndexedFeatureBank")
+    event_group_index = np.asarray(features.event_group_index, dtype=np.int64)
+    if event_group_index.ndim != 1:
+        raise ValueError("event_group_index 必須是 1D")
+    if int(context.shape[0]) != int(event_group_index.size):
+        raise ValueError(
+            "unique-group inference 的 context/event row_count 不一致: "
+            f"context={context.shape[0]}, events={event_group_index.size}"
+        )
+    if event_group_index.size == 0:
+        return np.empty((0, 2), dtype=np.float32), np.empty((0,), dtype=np.int64)
+
+    unique_group_indices, first_event_positions, event_to_group = np.unique(
+        event_group_index,
+        return_index=True,
+        return_inverse=True,
+    )
+    feature_group_count = int(features.feature_bank.shape[0])
+    if int(unique_group_indices[0]) < 0 or int(unique_group_indices[-1]) >= feature_group_count:
+        raise ValueError("event_group_index 超出 feature bank 範圍")
+
+    group_features = np.asarray(
+        features.feature_bank[unique_group_indices],
+        dtype=np.float32,
+    )
+    # # (AI註: Active sequence-only model 會忽略 context；每個 group 沿用一筆真實代表列，
+    # #        只維持 tensor shape 契約，不建立虛構資料。)
+    group_context = np.asarray(
+        context[first_event_positions],
+        dtype=np.float32,
+    )
+    group_logits = strict_parallel_batched_logits(
+        torch,
+        model,
+        group_features,
+        group_context,
+        indices=None,
+        batch_size=batch_size,
+        workers=workers,
+        execution_plan=execution_plan,
+    )
+    return group_logits, np.asarray(event_to_group, dtype=np.int64)
+
+
 __all__ = [
     "materialize_indexed_feature_inputs",
     "strict_parallel_batched_logits",
+    "strict_unique_group_batched_logits",
 ]

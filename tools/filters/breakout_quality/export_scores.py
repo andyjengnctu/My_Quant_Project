@@ -46,6 +46,7 @@ from filters.breakout_quality.contract import (
 from filters.breakout_quality.inference import (
     materialize_indexed_feature_inputs,
     strict_parallel_batched_logits,
+    strict_unique_group_batched_logits,
 )
 from filters.breakout_quality.model import build_model, require_torch
 from filters.breakout_quality.models.spec import (
@@ -321,24 +322,49 @@ def main(argv=None) -> int:
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(execution_plan.device)
     model.eval()
-    logits_np = strict_parallel_batched_logits(
-        torch,
-        model,
-        features,
-        context,
-        indices=None,
-        batch_size=inference_batch_size,
-        workers=inference_workers,
-        execution_plan=execution_plan,
-    )
-    pass_probabilities = np.empty((len(events),), dtype=np.float32)
-    with torch.no_grad():
-        for start in range(0, len(events), inference_batch_size):
-            stop = min(start + inference_batch_size, len(events))
-            logits = torch.from_numpy(logits_np[start:stop])
-            pass_probabilities[start:stop] = (
-                torch.softmax(logits, dim=1)[:, LABEL_PASS].cpu().numpy()
+    shared_group_score_broadcast = not bool(checkpoint_spec.use_dataset_context)
+    if shared_group_score_broadcast:
+        group_logits_np, event_to_group = strict_unique_group_batched_logits(
+            torch,
+            model,
+            features,
+            context,
+            batch_size=inference_batch_size,
+            workers=inference_workers,
+            execution_plan=execution_plan,
+        )
+        with torch.no_grad():
+            group_pass_probabilities = (
+                torch.softmax(torch.from_numpy(group_logits_np), dim=1)[:, LABEL_PASS]
+                .cpu()
+                .numpy()
+                .astype(np.float32, copy=False)
             )
+        pass_probabilities = np.asarray(
+            group_pass_probabilities[event_to_group],
+            dtype=np.float32,
+        )
+        inference_input_row_count = int(group_logits_np.shape[0])
+    else:
+        logits_np = strict_parallel_batched_logits(
+            torch,
+            model,
+            features,
+            context,
+            indices=None,
+            batch_size=inference_batch_size,
+            workers=inference_workers,
+            execution_plan=execution_plan,
+        )
+        pass_probabilities = np.empty((len(events),), dtype=np.float32)
+        with torch.no_grad():
+            for start in range(0, len(events), inference_batch_size):
+                stop = min(start + inference_batch_size, len(events))
+                logits = torch.from_numpy(logits_np[start:stop])
+                pass_probabilities[start:stop] = (
+                    torch.softmax(logits, dim=1)[:, LABEL_PASS].cpu().numpy()
+                )
+        inference_input_row_count = int(len(events))
 
     scored = events.copy()
     scored[SCORE_COLUMN] = pass_probabilities
@@ -430,15 +456,36 @@ def main(argv=None) -> int:
             ),
             "inference_execution": {
                 "mode": (
-                    "cuda_serial_fixed_batches"
-                    if execution_plan.device_type == "cuda"
-                    else "strict_parallel_fixed_batches"
+                    (
+                        "cuda_serial_unique_group_fixed_batches"
+                        if execution_plan.device_type == "cuda"
+                        else "strict_parallel_unique_group_fixed_batches"
+                    )
+                    if shared_group_score_broadcast
+                    else (
+                        "cuda_serial_fixed_batches"
+                        if execution_plan.device_type == "cuda"
+                        else "strict_parallel_fixed_batches"
+                    )
                 ),
                 "batch_size": inference_batch_size,
                 "workers": (1 if execution_plan.device_type == "cuda" else inference_workers),
                 "torch_execution": execution_plan.as_manifest_payload(),
                 "feature_bank_preloaded": preload_feature_bank,
-                "batch_boundaries_changed": False,
+                "inference_unit": (
+                    "unique_ticker_date_feature_group"
+                    if shared_group_score_broadcast
+                    else "event_row"
+                ),
+                "inference_input_row_count": inference_input_row_count,
+                "output_event_row_count": int(len(scored)),
+                "shared_group_score_broadcast": shared_group_score_broadcast,
+                "inference_batch_boundaries_defined_over": (
+                    "unique_ticker_date_feature_group"
+                    if shared_group_score_broadcast
+                    else "event_row"
+                ),
+                "event_row_batch_boundaries_preserved": not shared_group_score_broadcast,
                 "output_row_order_changed": False,
             },
             "reason": (
@@ -470,11 +517,37 @@ def main(argv=None) -> int:
         dataset_summary=dataset_summary,
     )
     manifest["score_inference_execution"] = {
-        "mode": "strict_parallel_fixed_batches",
+        "mode": (
+            (
+                "cuda_serial_unique_group_fixed_batches"
+                if execution_plan.device_type == "cuda"
+                else "strict_parallel_unique_group_fixed_batches"
+            )
+            if shared_group_score_broadcast
+            else (
+                "cuda_serial_fixed_batches"
+                if execution_plan.device_type == "cuda"
+                else "strict_parallel_fixed_batches"
+            )
+        ),
         "batch_size": inference_batch_size,
-        "workers": inference_workers,
+        "workers": (1 if execution_plan.device_type == "cuda" else inference_workers),
+        "torch_execution": execution_plan.as_manifest_payload(),
         "feature_bank_preloaded": preload_feature_bank,
-        "batch_boundaries_changed": False,
+        "inference_unit": (
+            "unique_ticker_date_feature_group"
+            if shared_group_score_broadcast
+            else "event_row"
+        ),
+        "inference_input_row_count": inference_input_row_count,
+        "output_event_row_count": int(len(scored)),
+        "shared_group_score_broadcast": shared_group_score_broadcast,
+        "inference_batch_boundaries_defined_over": (
+            "unique_ticker_date_feature_group"
+            if shared_group_score_broadcast
+            else "event_row"
+        ),
+        "event_row_batch_boundaries_preserved": not shared_group_score_broadcast,
         "output_row_order_changed": False,
     }
     manifest["runtime_eligibility"] = {

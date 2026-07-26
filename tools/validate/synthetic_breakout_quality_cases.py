@@ -186,7 +186,10 @@ from filters.breakout_quality.dataset_store import (
     IndexedFeatureBank,
 )
 from filters.breakout_quality.features import build_event_label, label_from_cached_path
-from filters.breakout_quality.inference import strict_parallel_batched_logits
+from filters.breakout_quality.inference import (
+    strict_parallel_batched_logits,
+    strict_unique_group_batched_logits,
+)
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
@@ -3269,6 +3272,36 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         True,
         np.array_equal(serial_export_logits, parallel_export_logits),
     )
+    unique_group_logits, event_to_group = strict_unique_group_batched_logits(
+        torch,
+        actual_evaluation_model,
+        preloaded_features,
+        preloaded_context,
+        batch_size=3,
+        workers=4,
+    )
+    broadcast_logits = unique_group_logits[event_to_group]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "sequence_only_score_export_infers_each_feature_group_once",
+        4,
+        int(unique_group_logits.shape[0]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "sequence_only_score_export_broadcasts_bit_identical_group_logits",
+        True,
+        bool(
+            np.array_equal(broadcast_logits[0], broadcast_logits[4])
+            and np.array_equal(broadcast_logits[0], broadcast_logits[8])
+            and np.array_equal(broadcast_logits[1], broadcast_logits[6])
+            and np.array_equal(broadcast_logits[1], broadcast_logits[9])
+        ),
+    )
 
     ranking_frame = pd.DataFrame(
         {
@@ -3314,6 +3347,25 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             "max_within_group_score_span": 0.0004,
         },
         ranking_diagnostics,
+    )
+    try:
+        breakout_quality_evaluate._ranking_inputs(
+            ranking_frame,
+            group_weighted=True,
+            require_identical_group_scores=True,
+        )
+        sequence_only_noise_rejected = False
+    except ValueError as exc:
+        sequence_only_noise_rejected = (
+            "unique-group inference 精確廣播相同分數" in str(exc)
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "sequence_only_ranking_rejects_any_within_group_score_difference",
+        True,
+        sequence_only_noise_rejected,
     )
     canonical_first_score_frame = ranking_frame.copy()
     canonical_first_score_frame.loc[1, SCORE_COLUMN] = canonical_first_score_frame.loc[0, SCORE_COLUMN]
@@ -3839,33 +3891,63 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         tn = actual_reject - fp
         specificity = tn / actual_reject
         accuracy = (tp + tn) / total
-        return {
+        group_metrics = {
+            "group_count": 100,
+            "row_count": 1000,
+            "weight_sum": total,
+            "base_pass_rate": base,
+            "acceptance_rate": acceptance,
+            "pass_precision": precision,
+            "precision_lift_vs_all_pass": precision / base,
+            "pass_recall": recall,
+            "false_rejection_rate": false_reject,
+            "reject_specificity": specificity,
+            "accuracy": accuracy,
+            "all_pass_baseline_accuracy": base,
+            "avg_score": 0.45,
+            "ranking_and_calibration": {
+                "average_precision_pr_auc": 0.61,
+                "precision_at_coverage": {
+                    "0.50": 0.62,
+                    "0.60": 0.60,
+                    "0.70": 0.58,
+                },
+                "recall_at_precision_60": 0.55,
+                "brier_score": 0.24,
+                "expected_calibration_error_10_bins": 0.03,
+            },
+            "confusion": {
+                "true_pass_pred_pass": tp,
+                "true_pass_pred_reject": fn,
+                "true_reject_pred_pass": fp,
+                "true_reject_pred_reject": tn,
+            },
+        }
+        result = {
             "filter_id": "synthetic_quality",
             "split": split_name,
             "selected_date_range": {"start": "2021-01-01", "end": "2022-12-31"},
-            "ticker_date_group_weighted": {
-                "group_count": 100,
-                "row_count": 1000,
-                "weight_sum": total,
-                "base_pass_rate": base,
-                "acceptance_rate": acceptance,
-                "pass_precision": precision,
-                "precision_lift_vs_all_pass": precision / base,
-                "pass_recall": recall,
-                "false_rejection_rate": false_reject,
-                "reject_specificity": specificity,
-                "accuracy": accuracy,
-                "all_pass_baseline_accuracy": base,
-                "avg_score": 0.45,
-                "confusion": {
-                    "true_pass_pred_pass": tp,
-                    "true_pass_pred_reject": fn,
-                    "true_reject_pred_pass": fp,
-                    "true_reject_pred_reject": tn,
-                },
-            },
+            "ticker_date_group_weighted": group_metrics,
             "row_level": {"row_count": 1000},
         }
+        if split_name == "oos":
+            result["yearly_ticker_date_group_weighted"] = [
+                {
+                    "year": 2021,
+                    "date_range": {"start": "2021-01-04", "end": "2021-12-30"},
+                    "policy_window": {"start": "2021-01-01", "end": "2021-12-31"},
+                    "is_partial_calendar_year": False,
+                    "metrics": dict(group_metrics),
+                },
+                {
+                    "year": 2022,
+                    "date_range": {"start": "2022-01-03", "end": "2022-06-30"},
+                    "policy_window": {"start": "2022-01-01", "end": "2022-06-30"},
+                    "is_partial_calendar_year": True,
+                    "metrics": {**group_metrics, "group_count": 45, "row_count": 450},
+                },
+            ]
+        return result
 
     synthetic_report_architecture = "inception_time_v1"
     synthetic_report_model = build_breakout_quality_model(
@@ -4076,7 +4158,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     no_oos_console = render_console_summary(no_oos_payload)
     add_check(results, "synthetic_breakout_quality", case_id, "report_oos_fail_status", "FAIL", payload["conclusion"]["status"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
-    add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v3", 3, payload["schema_version"])
+    add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v4", 4, payload["schema_version"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and "- **Pretraining Profile**" not in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **LR Schedule Parameters**：`{CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-'}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and f"- **Augmentation Parameters**：`{CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_legacy_ts2vec_markdown_header_includes_pretraining_parameters", True, f"- **Pretraining Profile**：`{BREAKOUT_QUALITY_PRETRAINING_PROFILE}`" in legacy_ts2vec_markdown and "- **Encoder Training**：`Selection-only self-supervised; frozen downstream`" in legacy_ts2vec_markdown and "- **Downstream Head**：`linear`" in legacy_ts2vec_markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
@@ -4156,16 +4238,16 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         ),
     )
     add_check(results, "synthetic_breakout_quality", case_id, "report_marks_oos_not_for_retuning", True, "不得使用同一段 OOS 回頭調整" in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. 排序與校準診斷" in console and "6. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
+    add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. 排序與校準診斷" in console and "6. OOS 年度診斷" in console and "7. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and "Pretrain Profile :" not in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"LR Schedule Args: {CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-' }" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and f"Augmentation Args: {CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_legacy_ts2vec_header_includes_pretraining_parameters", True, f"Pretrain Profile : {BREAKOUT_QUALITY_PRETRAINING_PROFILE}" in legacy_ts2vec_console and "Encoder Training : Selection-only SSL; frozen downstream" in legacy_ts2vec_console and "Downstream Head  : linear" in legacy_ts2vec_console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
     markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. 排序與校準診斷", 1)[0]
-    markdown_section_5 = markdown.split("## 6. OOS 綜合判定", 1)[1].split("## 指標白話說明", 1)[0]
+    markdown_section_5 = markdown.split("## 7. OOS 綜合判定", 1)[1].split("## 指標白話說明", 1)[0]
     console_section_4 = console.split("4. 各資料區段比較", 1)[1].split("5. 排序與校準診斷", 1)[0]
-    console_section_5 = console.split("6. OOS 綜合判定", 1)[1]
+    console_section_5 = console.split("7. OOS 綜合判定", 1)[1]
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -4265,7 +4347,7 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         "report_oos_assessment_merges_comparison_and_deployment",
         True,
         (
-            "5. 排序與校準診斷" in console and "6. OOS 綜合判定" in console
+            "5. 排序與校準診斷" in console and "6. OOS 年度診斷" in console and "7. OOS 綜合判定" in console
             and "類別" in console
             and "判讀" in console
             and "主要成效" in console
@@ -4278,6 +4360,21 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         ),
     )
     add_check(results, "synthetic_breakout_quality", case_id, "report_header_does_not_duplicate_final_decision", True, "最終判定" not in console.split("1. Epoch 選擇結果", 1)[0] and "部署建議" not in console.split("1. Epoch 選擇結果", 1)[0])
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "report_includes_yearly_oos_classification_ranking_and_partial_marker",
+        True,
+        (
+            "## 6. OOS 年度診斷" in markdown
+            and "| 年度 | 日期 | Groups | 原始 PASS | 模型 PASS | PASS Precision | Precision 絕對 | PASS Recall | 平均 Score |" in markdown
+            and "| 年度 | PR-AUC | P@50% | P@60% | P@70% | R@P60% | Brier | ECE |" in markdown
+            and "2022*" in markdown
+            and "6. OOS 年度診斷" in console
+            and "年度表只切分同一份固定 OOS score" in console
+        ),
+    )
     add_check(results, "synthetic_breakout_quality", case_id, "report_without_oos_explains_missing_sections", True, "OOS             : 未納入本次報表" in no_oos_console and "不會輸出 OOS Confusion Matrix 與 Selection/OOS 指標比較" in no_oos_console and "--include-oos" in no_oos_console and "OOS Confusion Matrix" not in no_oos_console.split("注意：", 1)[0] and "Selection 與 OOS 差異" not in no_oos_console.split("注意：", 1)[0])
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_semantic_colors", True, "color:#188038" in markdown and "color:#C62828" in markdown and "color:#42A5F5" in markdown and "color:#B06000" in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_color_is_opt_in", True, "\x1b[" not in console and "\x1b[96m" in colored_console)

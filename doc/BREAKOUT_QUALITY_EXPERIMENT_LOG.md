@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_092733_cdea14d.zip`，SHA256 `2da379dce8536d83b165d499a48b6e7d38d588bfc6755bcc416e3ff9431da8a6`；此ZIP包含9F完整Selection／OOS結果 |
-| SHA256 | 本輪來源 ZIP：`2da379dce8536d83b165d499a48b6e7d38d588bfc6755bcc416e3ff9431da8a6` |
+| 基準 ZIP | `test-branch-1_20260726_123557_2b7b48f.zip`，SHA256 `48029b98e0bc53ae03920a6b6fc07405462b001b9d8f3633f43d9c7aa908893f`；此ZIP已退回9A active policy，並作為本輪前置修正的來源基準 |
+| SHA256 | 本輪來源 ZIP：`48029b98e0bc53ae03920a6b6fc07405462b001b9d8f3633f43d9c7aa908893f` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -636,6 +636,22 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 判定 | 9F五項主要排序指標全面低於9A，且OOS PR-AUC只比原始PASS率高1.44 pp；高Recall主要來自放行82.62%候選，不是更強篩選。停止Patch size、depth、heads、embedding、pooling、position、threshold與masked-pretraining細調 |
 | 下一步 | 停止現有300×10單模型architecture橫向搜尋。下一階段先固定9A分數與threshold 0.5，進行策略層no-filter vs 9A經濟效果驗證；不重新訓練、不依同一OOS回調門檻，主要檢查淨報酬、最大回撤、報酬／最大回撤、年化報酬、Log R²、月勝率、交易數與持股缺口 |
 
+
+### 策略層驗證前置修正：unique-group score 單一真理與逐年 OOS 診斷
+
+| 項目 | 內容 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；尚未重新匯出9A分數或取得新的策略結果 |
+| 程式基準 | 來源`test-branch-1_20260726_123557_2b7b48f.zip`，SHA256 `48029b98e0bc53ae03920a6b6fc07405462b001b9d8f3633f43d9c7aa908893f`；active仍為`inception_time_v1 / unique_group_sampling / threshold 0.5`；沒有新增model architecture或experiment profile |
+| 唯一行為修正 | 對`use_dataset_context=false`模型，每個canonical ticker/date feature group只推論一次並在probability層精確broadcast至全部high_len event rows；evaluate對此類模型要求同group score完全相同，不再以`5e-4`容忍差異 |
+| Legacy相容 | 使用Dataset event context的legacy architecture仍保留逐event-row inference與既有bounded-noise診斷，不改舊checkpoint／manifest重建語意 |
+| Dataset／Label | 不需重建Dataset或relabel；沿用既有`feature_bank.npy`、`event_group_index.npy`與固定百分比Label；新增ticker/date↔group_index一對一完整覆蓋驗證 |
+| 報表 | 完整OOS新增逐年度分類、PR-AUC、P@50／60／70%、R@P60%、Brier與ECE；部分calendar year明確標記。年度表只作同一份固定OOS score診斷，不允許調參 |
+| 既有結果 | 9A／8F與9B～9F歷史Selection／OOS數值不因本次實作預先改寫；必須重新匯出9A research scores後才產生新報表 |
+| 歷史契約銜接 | 2026-07-24曾為保留舊event-row batch下的同checkpoint末位數值而退回unique-group export；本次在策略層驗證前正式改以「同ticker/date只有一個canonical score」為優先契約。重新匯出的9A score可能因推論batch單位改變而與舊表有微小差異，屬明確execution contract變更，不可混用新舊score或要求末位數值完全相同 |
+| 下一步 | 重新匯出修正後9A score並確認同ticker/date完全一致，之後以固定策略參數執行no-filter vs 9A threshold 0.5經濟效果比較 |
+
+
 ## 4. 已排除或暫停的方向
 
 下列方向已有足夠證據，不應在沒有新機制或新資料證據時重複測試：
@@ -679,7 +695,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`分別保留排序／高品質及高覆蓋基準。現有300×10單模型architecture橫向搜尋停止，不啟動9F-B；下一階段先固定9A既有score與threshold 0.5，做策略層no-filter vs 9A經濟效果驗證，不重新訓練或利用同一OOS調參。
+所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`分別保留排序／高品質及高覆蓋基準。現有300×10單模型architecture橫向搜尋停止，不啟動9F-B；unique-group score單一真理與逐年OOS診斷已實作，下一步先重新匯出9A score，再固定threshold 0.5做策略層no-filter vs 9A經濟效果驗證，不重新訓練或利用同一OOS調參。
 
 ### 優先 6A：AdamW only
 
@@ -879,6 +895,7 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 → 9D MantisV2 frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
 → 9E MOMENT-1-base frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
 → 9F 小型Patch Transformer supervised architecture（REJECTED；已退回9A並轉為legacy）
+→ unique-group score單一真理＋逐年OOS診斷（IMPLEMENTED；待重新匯出9A score）
 → 固定9A threshold 0.5的策略層no-filter對照（PLANNED；非新模型訓練）
 ```
 

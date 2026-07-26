@@ -365,6 +365,23 @@ def load_validated_dataset_bundle(
     csv_group_index = pd.to_numeric(events["group_index"], errors="raise").to_numpy(dtype=np.int64)
     if not np.array_equal(csv_group_index, np.asarray(event_group_index, dtype=np.int64)):
         raise ValueError("events.csv group_index 與 event_group_index.npy 不一致")
+    observed_group_indices = np.unique(csv_group_index)
+    expected_group_indices = np.arange(group_count, dtype=np.int64)
+    if not np.array_equal(observed_group_indices, expected_group_indices):
+        raise ValueError(
+            "events.csv 必須完整覆蓋連續 feature group indices；"
+            f"observed={observed_group_indices.size}, expected={group_count}"
+        )
+    group_key_frame = events[["ticker", "date", "group_index"]].drop_duplicates()
+    if group_key_frame.duplicated(["ticker", "date"], keep=False).any():
+        raise ValueError("同一 ticker/date 不得對應多個 feature group_index")
+    if group_key_frame.duplicated(["group_index"], keep=False).any():
+        raise ValueError("同一 feature group_index 不得混用多個 ticker/date")
+    if len(group_key_frame) != group_count:
+        raise ValueError(
+            "ticker/date 與 feature group_index 必須一對一完整覆蓋: "
+            f"keys={len(group_key_frame)}, groups={group_count}"
+        )
     policy_high_lens = policy.get("high_len_values")
     if not isinstance(policy_high_lens, list) or not policy_high_lens:
         raise ValueError("dataset policy.high_len_values 必須是非空 list")
