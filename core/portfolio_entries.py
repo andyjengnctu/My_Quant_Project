@@ -190,6 +190,10 @@ def execute_reserved_entries_for_day(
                 entry_result['position']['_ensemble_member_params_by_key'] = dict(ensemble_member_params_by_key)
             if candidate_context:
                 entry_result['position']['_entry_context'] = candidate_context
+            # # (AI註: 保存本次實際進場對應的訊號／候選日期，只供 round-trip 歸因與稽核，不介入交易決策。)
+            entry_result['position']['signal_date'] = signal_date_text
+            entry_result['position']['candidate_date'] = candidate_date_text
+            entry_result['position']['candidate_type'] = candidate_kind_label
             portfolio[cand['ticker']] = entry_result['position']
             if entry_stats is not None:
                 entry_stats['filled_buy_count'] = int(entry_stats.get('filled_buy_count', 0) or 0) + 1

@@ -291,7 +291,13 @@ def build_full_year_return_stats(sorted_dates, year_start_equity, year_end_equit
             continue
 
         year_return_pct = (end_equity / start_equity - 1.0) * 100.0
-        is_full_year = (first_sim_date == market_bounds["first"]) and (last_sim_date == market_bounds["last"])
+        # # (AI註: clipped replay 的最後可用日不等於完整曆年；完整年度必須同時涵蓋一月與十二月。)
+        is_full_year = (
+            (first_sim_date == market_bounds["first"])
+            and (last_sim_date == market_bounds["last"])
+            and (int(first_sim_date.month) == 1)
+            and (int(last_sim_date.month) == 12)
+        )
 
         yearly_return_rows.append({
             "year": int(year),

@@ -38,6 +38,10 @@ from core.rolling_oos_params import (
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from filters.breakout_quality.artifacts import load_runtime_artifact_contract
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
+from tools.filters.breakout_quality.trade_attribution import (
+    ATTRIBUTION_SCHEMA_VERSION,
+    write_trade_attribution_outputs,
+)
 from tools.portfolio_sim.simulation_runner import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
     load_portfolio_market_context,
@@ -47,7 +51,7 @@ from tools.portfolio_sim.simulation_runner import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _RESULT_FIELDS = (
     "equity_curve", "trade_history", "total_return_pct", "max_drawdown_pct",
@@ -82,6 +86,11 @@ def _parse_args(argv=None):
         "--allow-static-diagnostic",
         action="store_true",
         help="允許以單一／static run_best 做非 OOS 診斷；不得視為無前視部署證據。",
+    )
+    parser.add_argument(
+        "--attribution-only",
+        action="store_true",
+        help="只讀取既有 strategy_compare CSV/JSON 產生交易歸因，不重新執行 portfolio replay。",
     )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
@@ -429,8 +438,24 @@ def _assert_shared_benchmark(no_filter: dict[str, Any], quality: dict[str, Any])
         raise ValueError("兩組回測交易日期不一致")
 
 
+def _normalize_yearly_completeness(frame: pd.DataFrame) -> pd.DataFrame:
+    """A clipped final year is not complete merely because it reaches the last available replay date."""
+
+    out = pd.DataFrame(frame).copy()
+    if out.empty:
+        return out
+    required = {"is_full_year", "start_date", "end_date"}
+    if not required.issubset(out.columns):
+        return out
+    start_dates = pd.to_datetime(out["start_date"], errors="raise")
+    end_dates = pd.to_datetime(out["end_date"], errors="raise")
+    calendar_covered = (start_dates.dt.month == 1) & (end_dates.dt.month == 12)
+    out["is_full_year"] = out["is_full_year"].astype(bool) & calendar_covered
+    return out
+
+
 def _yearly_frame(profile: dict[str, Any], scenario: str) -> pd.DataFrame:
-    frame = pd.DataFrame(profile.get("yearly_return_rows") or [])
+    frame = _normalize_yearly_completeness(pd.DataFrame(profile.get("yearly_return_rows") or []))
     if frame.empty:
         return pd.DataFrame(columns=["year", f"{scenario}_return_pct", "is_full_year", "start_date", "end_date"])
     return frame.rename(columns={"year_return_pct": f"{scenario}_return_pct"})
@@ -443,6 +468,23 @@ def _build_yearly_comparison(no_filter_profile: dict[str, Any], quality_profile:
     merged = left.merge(right, on=keys, how="outer", validate="one_to_one")
     merged["delta_pct"] = merged["quality_filter_return_pct"] - merged["no_filter_return_pct"]
     return merged.sort_values("year").reset_index(drop=True)
+
+
+def _refresh_yearly_summary(summary: dict[str, Any], yearly: pd.DataFrame, *, return_column: str) -> None:
+    full = yearly[yearly["is_full_year"].astype(bool)] if not yearly.empty else yearly
+    summary["full_year_count"] = int(len(full))
+    summary["min_full_year_return_pct"] = float(full[return_column].min()) if not full.empty else 0.0
+
+
+def _load_existing_comparison_payload(output_dir: Path) -> dict[str, Any]:
+    path = output_dir / "strategy_comparison.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"讀取既有策略比較 JSON 失敗: {path}｜{type(exc).__name__}: {exc}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("metadata"), dict):
+        raise ValueError(f"既有策略比較 JSON schema 無效: {path}")
+    return payload
 
 
 def _format_metric(value: Any, *, digits: int, unit: str = "", signed: bool = False) -> str:
@@ -549,6 +591,74 @@ def _run_scenario(*, name, data_dir, param_source_kind, params, start_date, end_
     else:
         raise ValueError(f"不支援的參數來源類型: {param_source_kind}")
     return _unpack_result(result)
+
+
+def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    filter_id = BREAKOUT_QUALITY_DEFAULT_FILTER_ID
+    contract = load_runtime_artifact_contract(str(root), filter_id)
+    architecture = str(contract.manifest.get("model_architecture") or "")
+    experiment_profile = str(contract.manifest.get("experiment_profile") or "")
+    output_dir = resolve_filter_model_output_dir(
+        str(root), filter_id, architecture, experiment_profile
+    ) / "strategy_compare"
+    payload = _load_existing_comparison_payload(output_dir)
+    metadata = dict(payload["metadata"] or {})
+    if str(metadata.get("filter_id") or "") != filter_id:
+        raise ValueError("既有策略比較結果的 filter_id 與目前 active filter 不一致")
+    if str(metadata.get("model_architecture") or "") != architecture:
+        raise ValueError("既有策略比較結果的 architecture 與目前 runtime artifact 不一致")
+    if str(metadata.get("experiment_profile") or "") != experiment_profile:
+        raise ValueError("既有策略比較結果的 experiment profile 與目前 runtime artifact 不一致")
+
+    no_filter_trades_path = output_dir / "no_filter_trades.csv"
+    quality_trades_path = output_dir / "quality_filter_trades.csv"
+    if not no_filter_trades_path.is_file() or not quality_trades_path.is_file():
+        raise FileNotFoundError(
+            "attribution-only 需要既有 no_filter_trades.csv 與 quality_filter_trades.csv；"
+            "請先完成一次正式 strategy compare。"
+        )
+    no_filter_history = pd.read_csv(no_filter_trades_path, encoding="utf-8-sig")
+    quality_history = pd.read_csv(quality_trades_path, encoding="utf-8-sig")
+
+    yearly = _normalize_yearly_completeness(pd.DataFrame(payload.get("yearly") or []))
+    baseline = dict(payload.get("no_filter") or {})
+    quality = dict(payload.get("quality_filter") or {})
+    if not yearly.empty:
+        _refresh_yearly_summary(baseline, yearly, return_column="no_filter_return_pct")
+        _refresh_yearly_summary(quality, yearly, return_column="quality_filter_return_pct")
+    deltas = _delta(quality, baseline)
+    metadata["schema_version"] = SCHEMA_VERSION
+    metadata["trade_attribution_schema_version"] = ATTRIBUTION_SCHEMA_VERSION
+    refreshed = _to_json_native({
+        "metadata": metadata,
+        "no_filter": baseline,
+        "quality_filter": quality,
+        "quality_minus_no_filter": deltas,
+        "yearly": yearly.to_dict("records"),
+    })
+    (output_dir / "strategy_comparison.json").write_text(
+        json.dumps(refreshed, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "strategy_comparison.md").write_text(
+        _markdown_report(metadata, baseline, quality, deltas, yearly),
+        encoding="utf-8",
+    )
+    yearly.to_csv(output_dir / "yearly_returns_comparison.csv", index=False, encoding="utf-8-sig")
+    attribution = write_trade_attribution_outputs(
+        project_root=root,
+        output_dir=output_dir,
+        filter_id=filter_id,
+        threshold=float(metadata.get("threshold", BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD)),
+        metadata=metadata,
+        no_filter_trade_history=no_filter_history,
+        quality_filter_trade_history=quality_history,
+        no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
+        quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
+    )
+    print(f"完成：{output_dir / 'trade_attribution.md'}")
+    return attribution
 
 
 def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=None, max_positions=10, enable_rotation=False, fixed_risk=None, allow_static_diagnostic=False, quiet=False):
@@ -671,6 +781,7 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         "runtime_eligibility": dict(contract.manifest.get("runtime_eligibility") or {}),
         "score_table": dict(contract.manifest.get("score_table") or {}),
         "controlled_param_difference": ["use_breakout_quality_filter"],
+        "trade_attribution_schema_version": ATTRIBUTION_SCHEMA_VERSION,
     }
     json_payload = _to_json_native({
         "metadata": metadata,
@@ -691,12 +802,29 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
     pd.DataFrame(baseline_payload["profile"].get("portfolio_capacity_rows") or []).to_csv(output_dir / "no_filter_daily_capacity.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(quality_payload["profile"].get("portfolio_capacity_rows") or []).to_csv(output_dir / "quality_filter_daily_capacity.csv", index=False, encoding="utf-8-sig")
     yearly.to_csv(output_dir / "yearly_returns_comparison.csv", index=False, encoding="utf-8-sig")
+    write_trade_attribution_outputs(
+        project_root=root,
+        output_dir=output_dir,
+        filter_id=filter_id,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        metadata=metadata,
+        no_filter_trade_history=baseline_payload["trade_history"],
+        quality_filter_trade_history=quality_payload["trade_history"],
+        no_filter_closed_trade_rows=(baseline_payload["profile"] or {}).get("closed_trade_rows"),
+        quality_filter_closed_trade_rows=(quality_payload["profile"] or {}).get("closed_trade_rows"),
+        no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
+        quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
+    )
     print(f"\n完成：{output_dir / 'strategy_comparison.md'}")
+    print(f"交易歸因：{output_dir / 'trade_attribution.md'}")
     return json_payload
 
 
 def main(argv=None):
     args = _parse_args(argv)
+    if args.attribution_only:
+        run_existing_attribution()
+        return 0
     if args.max_positions < 1:
         raise ValueError("max_positions 必須 >= 1")
     run_comparison(
@@ -711,4 +839,10 @@ def main(argv=None):
     return 0
 
 
-__all__ = ["main", "run_comparison", "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair", "_assert_controlled_payload_pair", "_build_controlled_param_source_pair", "_load_param_source", "_capacity_summary", "_to_json_native"]
+__all__ = [
+    "main", "run_comparison", "run_existing_attribution",
+    "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair",
+    "_assert_controlled_payload_pair", "_build_controlled_param_source_pair",
+    "_load_param_source", "_capacity_summary", "_normalize_yearly_completeness",
+    "_to_json_native",
+]

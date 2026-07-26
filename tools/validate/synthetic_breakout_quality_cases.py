@@ -224,8 +224,10 @@ from tools.filters.breakout_quality.strategy_compare import (
     _build_controlled_param_source_pair,
     _load_param_source,
     _capacity_summary,
+    _normalize_yearly_completeness,
     _to_json_native,
 )
+from tools.filters.breakout_quality.trade_attribution import build_trade_attribution
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     compute_outer_policy_fingerprint,
@@ -6145,6 +6147,95 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             capacity["end_position_gap_slot_days"],
             capacity["avg_end_positions"],
             capacity["full_position_days"],
+        ),
+    )
+
+    normalized_years = _normalize_yearly_completeness(pd.DataFrame([
+        {
+            "year": 2025,
+            "is_full_year": True,
+            "start_date": "2025-01-02",
+            "end_date": "2025-12-31",
+        },
+        {
+            "year": 2026,
+            "is_full_year": True,
+            "start_date": "2026-01-02",
+            "end_date": "2026-03-02",
+        },
+    ]))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "comparison_partial_final_year_is_not_marked_full",
+        [True, False],
+        list(normalized_years["is_full_year"]),
+    )
+
+    no_filter_history = pd.DataFrame([
+        {"Date": "2025-01-03", "Ticker": "A", "Type": "買進 (新訊號, EV:1.00R)", "買訊日": "2025-01-02", "候選日": "2025-01-03", "進場類型": "normal", "成交價": 10.0},
+        {"Date": "2025-01-10", "Ticker": "A", "Type": "全倉結算(指標)", "成交價": 13.0, "該筆總損益": 3000.0, "R_Multiple": 3.0},
+        {"Date": "2025-02-03", "Ticker": "B", "Type": "買進 (新訊號, EV:1.00R)", "買訊日": "2025-01-31", "候選日": "2025-02-03", "進場類型": "normal", "成交價": 10.0},
+        {"Date": "2025-02-10", "Ticker": "B", "Type": "全倉結算(停損)", "成交價": 9.0, "該筆總損益": -1000.0, "R_Multiple": -1.0},
+        {"Date": "2025-03-03", "Ticker": "C", "Type": "買進 (新訊號, EV:1.00R)", "買訊日": "2025-02-28", "候選日": "2025-03-03", "進場類型": "normal", "成交價": 10.0},
+        {"Date": "2025-03-10", "Ticker": "C", "Type": "期末強制結算", "成交價": 11.0, "該筆總損益": 1000.0, "R_Multiple": 1.0},
+    ])
+    quality_history = pd.DataFrame([
+        {"Date": "2025-03-03", "Ticker": "C", "Type": "買進 (新訊號, EV:1.00R)", "買訊日": "2025-02-28", "候選日": "2025-03-03", "進場類型": "normal", "成交價": 10.0},
+        {"Date": "2025-03-10", "Ticker": "C", "Type": "期末強制結算", "成交價": 11.0, "該筆總損益": 1000.0, "R_Multiple": 1.0},
+        {"Date": "2025-04-03", "Ticker": "D", "Type": "買進 (新訊號, EV:1.00R)", "買訊日": "2025-04-02", "候選日": "2025-04-03", "進場類型": "normal", "成交價": 10.0},
+        {"Date": "2025-04-10", "Ticker": "D", "Type": "期末強制結算", "成交價": 9.5, "該筆總損益": -500.0, "R_Multiple": -0.5},
+    ])
+    shared_scores = pd.DataFrame({
+        "ticker": ["A", "B", "C", "D"],
+        "date": ["2025-01-02", "2025-01-31", "2025-02-28", "2025-04-02"],
+        SCORE_COLUMN: [0.40, 0.30, 0.80, 0.90],
+    }).set_index(["ticker", "date"])[[SCORE_COLUMN]]
+    attribution = build_trade_attribution(
+        no_filter_trade_history=no_filter_history,
+        quality_filter_trade_history=quality_history,
+        shared_score_table=shared_scores,
+        threshold=0.50,
+        no_filter_portfolio_total_r=3.0,
+        quality_filter_portfolio_total_r=0.5,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_attribution_partitions_common_and_exclusive_round_trips",
+        (1, 2, 1, 3, 2),
+        tuple(attribution["trade_partition"][key] for key in (
+            "common_count", "no_filter_only_count", "quality_filter_only_count",
+            "no_filter_total_count", "quality_filter_total_count",
+        )),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_attribution_reconciles_portfolio_total_r",
+        (3.0, 1.0, 0.5, -2.5, 0.0),
+        (
+            attribution["r_attribution"]["excluded_winner_r"],
+            attribution["r_attribution"]["avoided_loser_r_abs"],
+            attribution["r_attribution"]["replacement_loser_r_abs"],
+            attribution["r_attribution"]["exclusive_selection_delta_r"],
+            attribution["r_attribution"]["reconciliation_error_r"],
+        ),
+        tol=1e-12,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_attribution_distinguishes_direct_filter_rejects",
+        (2, 0, 0),
+        (
+            attribution["r_attribution"]["direct_filter_reject_count"],
+            attribution["r_attribution"]["portfolio_path_displacement_count"],
+            attribution["r_attribution"]["score_lookup_unavailable_count"],
         ),
     )
 

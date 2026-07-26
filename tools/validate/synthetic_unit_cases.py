@@ -207,6 +207,19 @@ def validate_portfolio_stats_unit_case(_base_params):
         year_first_sim_date={2024: sorted_dates[1], 2025: sorted_dates[2]},
         year_last_sim_date={2024: sorted_dates[1], 2025: sorted_dates[3]},
     )
+    clipped_year_dates = list(pd.to_datetime([
+        "2025-01-02",
+        "2025-12-31",
+        "2026-01-02",
+        "2026-03-02",
+    ]))
+    clipped_year_stats = build_full_year_return_stats(
+        clipped_year_dates,
+        year_start_equity={2025: 100.0, 2026: 120.0},
+        year_end_equity={2025: 110.0, 2026: 126.0},
+        year_first_sim_date={2025: clipped_year_dates[0], 2026: clipped_year_dates[2]},
+        year_last_sim_date={2025: clipped_year_dates[1], 2026: clipped_year_dates[3]},
+    )
     month_sorted_dates = list(pd.to_datetime([
         "2024-01-02",
         "2024-01-31",
@@ -241,6 +254,14 @@ def validate_portfolio_stats_unit_case(_base_params):
     add_check(results, "unit_portfolio_stats", case_id, "growth_curve_monthly_win_rate", 100.0, growth_monthly_win, tol=1e-9)
     add_check(results, "unit_portfolio_stats", case_id, "partial_year_excluded_from_full_year_count", 1, full_year_stats["full_year_count"])
     add_check(results, "unit_portfolio_stats", case_id, "partial_year_still_kept_in_rows", 2, len(full_year_stats["yearly_return_rows"]))
+    add_check(
+        results,
+        "unit_portfolio_stats",
+        case_id,
+        "clipped_final_year_does_not_become_full_year",
+        [True, False],
+        [row["is_full_year"] for row in clipped_year_stats["yearly_return_rows"]],
+    )
     add_check(results, "unit_portfolio_stats", case_id, "full_year_min_return_uses_only_complete_years", -25.0, full_year_stats["min_full_year_return_pct"], tol=1e-9)
     add_check(results, "unit_portfolio_stats", case_id, "partial_month_excluded_from_full_month_count", 1, full_month_stats["full_month_count"])
     add_check(results, "unit_portfolio_stats", case_id, "partial_month_still_kept_in_rows", 2, len(full_month_stats["monthly_return_rows"]))

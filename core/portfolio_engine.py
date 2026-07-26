@@ -1357,6 +1357,9 @@ def run_portfolio_timeline(
         profile_stats['portfolio_total_r'] = float(portfolio_r_stats.get('total_r', 0.0))
         profile_stats['portfolio_median_r'] = float(portfolio_r_stats.get('median_r', 0.0))
         profile_stats['portfolio_avg_r'] = float(portfolio_r_stats.get('avg_r', 0.0))
+        if not is_training:
+            # # (AI註: 一筆一列的扣費後 round-trip 稽核資料；只供報表歸因，不改交易或統計口徑。)
+            profile_stats['closed_trade_rows'] = [dict(row) for row in closed_trades_stats]
         profile_stats['breakout_trades'] = int(breakout_trade_count)
         profile_stats['reentry_trades'] = int(reentry_trade_count)
         profile_stats['normal_trades'] = int(normal_trade_count)

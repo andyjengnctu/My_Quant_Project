@@ -65,15 +65,21 @@ def _resolve_year_or_none(raw_date):
     return year if year > 0 else None
 
 
-def _build_closed_trade_stat(position, *, ticker, pnl, r_mult, exit_date):
+def _build_closed_trade_stat(position, *, ticker, pnl, r_mult, exit_date, exit_price=None, exit_type=None):
     entry_trade_date = position.get('entry_trade_date')
     return {
         'pnl': pnl,
         'r_mult': r_mult,
         'entry_type': position.get('entry_type', 'normal'),
+        'candidate_type': position.get('candidate_type'),
         'ticker': str(ticker or position.get('ticker') or ''),
         'entry_trade_date': _format_date_or_none(entry_trade_date),
         'entry_year': _resolve_year_or_none(entry_trade_date),
+        'signal_date': _format_date_or_none(position.get('signal_date')),
+        'candidate_date': _format_date_or_none(position.get('candidate_date')),
+        'entry_price': position.get('pure_buy_price'),
+        'exit_price': exit_price,
+        'exit_type': exit_type,
         'exit_date': _format_date_or_none(exit_date),
     }
 
@@ -286,7 +292,10 @@ def try_rotate_weakest_position(
         display_tail_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
         total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))
         closed_trades_stats.append(
-            _build_closed_trade_stat(pos, ticker=weakest_ticker, pnl=total_pnl, r_mult=total_r, exit_date=today)
+            _build_closed_trade_stat(
+                pos, ticker=weakest_ticker, pnl=total_pnl, r_mult=total_r, exit_date=today,
+                exit_price=est_sell_px, exit_type='汰弱賣出(Open, T+1再評估買進)',
+            )
         )
         if is_extended_entry_type(pos.get('entry_type', 'normal')):
             extended_trade_count += 1
@@ -397,8 +406,14 @@ def settle_portfolio_positions(
             total_pnl_milli = int(pos.get('realized_pnl_milli', 0) or 0)
             total_pnl = milli_to_money(total_pnl_milli) if is_training else pos['realized_pnl']
             total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))
+            t_type = '全倉結算(停損)' if 'STOP' in events else '全倉結算(指標)'
+            exit_context = stop_context if 'STOP' in events else ind_sell_context
             closed_trades_stats.append(
-                _build_closed_trade_stat(pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=today)
+                _build_closed_trade_stat(
+                    pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=today,
+                    exit_price=None if exit_context is None else exit_context.get('exec_price'),
+                    exit_type=t_type,
+                )
             )
             if 'STOP' in events:
                 for member_key, watch_params in _iter_reentry_watch_targets(pos, pos_params, active_reentry_watchlists_by_member):
@@ -421,8 +436,6 @@ def settle_portfolio_positions(
                 normal_trade_count += 1
 
             if not is_training:
-                t_type = '全倉結算(停損)' if 'STOP' in events else '全倉結算(指標)'
-                exit_context = stop_context if 'STOP' in events else ind_sell_context
                 display_exit_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
                 exit_trigger_price = None
                 if 'STOP' in events and exit_context is not None:
@@ -533,7 +546,10 @@ def closeout_open_positions(
         display_tail_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
         total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))
         closed_trades_stats.append(
-            _build_closed_trade_stat(pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=last_date)
+            _build_closed_trade_stat(
+                pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=last_date,
+                exit_price=exec_price, exit_type='期末強制結算',
+            )
         )
         if is_extended_entry_type(pos.get('entry_type', 'normal')):
             extended_trade_count += 1

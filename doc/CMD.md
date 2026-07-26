@@ -197,7 +197,15 @@ python apps/breakout_quality_strategy_compare.py --dataset full --params models/
 - 工具與 Portfolio Simulator 共用 `core.portfolio_engine`、正式 signal generation、成交／費用／資金／持股延續及 `core.portfolio_stats`；Optimizer 也共用相同核心，但 Optimizer 是參數搜尋流程，策略對照是固定參數 OOS replay，兩者不是相同工作流。
 - 兩組完整參數／每個 ensemble member 只能有 `use_breakout_quality_filter=False/True` 一項差異；filter ID 與 threshold 均固定為 active policy／manifest 值，不重新最佳化任何策略參數。
 - `Candidate_Supply_Gap` 是「盤前可用持股格數 − 當日可掛單候選數」的非負值，只表示候選供給是否足夠；`End_Position_Gap` 才是成交執行後仍未滿倉的格數。
-- 輸出固定在 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/strategy_compare/`，包含 Markdown／JSON 主報表、兩組 equity／trade／daily-capacity CSV 與年度報酬比較。
+- 輸出固定在 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/strategy_compare/`，包含 Markdown／JSON 主報表、兩組 equity／trade／daily-capacity CSV、年度報酬比較，以及一筆一列的 round-trip 交易歸因報表。
+- 正常策略比較完成後會自動產生 `trade_attribution.md/.json`、`trade_attribution_trades.csv`、`trade_attribution_yearly.csv` 與兩組 `*_round_trips.csv`。配對鍵固定為 ticker＋實際進場日＋進場類型；R、PnL、費稅與結算沿用 Portfolio Engine 的 closed-trade 真理來源。
+- 若策略比較已經跑完，只需重建歸因與修正部分年度標記，不必再次執行 replay：
+
+```bash
+python apps/breakout_quality_strategy_compare.py --attribution-only
+```
+
+- `--attribution-only` 只讀取既有 `strategy_comparison.json`、`no_filter_trades.csv`、`quality_filter_trades.csv` 與正式 runtime score；它會把只到 2026-03-02 的 2026 年標為非完整年度，再輸出交易歸因。
 - 此對照只判斷固定 9A 是否改善淨報酬、回撤、穩定性及資金使用；不得依結果回頭調整 threshold、epochs、feature、Label 或模型。
 
 ### `run_best_params.json` 的用途與產生方式
