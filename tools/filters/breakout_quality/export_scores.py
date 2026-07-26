@@ -48,7 +48,10 @@ from filters.breakout_quality.inference import (
     strict_parallel_batched_logits,
 )
 from filters.breakout_quality.model import build_model, require_torch
-from filters.breakout_quality.models.spec import model_spec_from_manifest
+from filters.breakout_quality.models.spec import (
+    model_spec_from_manifest,
+    validate_model_sequence_length,
+)
 from filters.breakout_quality.torch_runtime import (
     SUPPORTED_MIXED_PRECISION_DTYPES,
     SUPPORTED_TORCH_DEVICES,
@@ -280,6 +283,7 @@ def main(argv=None) -> int:
     if not isinstance(checkpoint_spec_payload, dict):
         raise ValueError("model checkpoint 缺少 model_spec")
     checkpoint_spec = model_spec_from_manifest(checkpoint_spec_payload)
+    validate_model_sequence_length(checkpoint_spec, sequence_length)
     manifest_spec_payload = manifest.get("model_spec")
     if checkpoint_spec_payload != manifest_spec_payload:
         raise ValueError("model checkpoint.model_spec 與 manifest.model_spec 不一致")

@@ -1208,6 +1208,17 @@ def _markdown_model_detail_lines(training: dict) -> list[str]:
             f"- **Pretraining Optimizer**：`{pretraining_profile.get('optimizer_name', '-')}`",
             f"- **Pretraining Epochs / Batch**：`{pretraining_profile.get('epochs', '-')} / {pretraining_profile.get('batch_size', '-')}`",
         ]
+    if family == "patch_transformer":
+        return [
+            f"- **Model Family**：`{family}`",
+            f"- **Patch / Stride**：`{spec.get('patch_transformer_patch_size')} / {spec.get('patch_transformer_patch_stride')}`",
+            f"- **Embedding Dimensions**：`{spec.get('patch_transformer_embedding_dim')}`",
+            f"- **Transformer Depth / Heads**：`{spec.get('patch_transformer_depth')} / {spec.get('patch_transformer_heads')}`",
+            f"- **MLP Dimensions**：`{spec.get('patch_transformer_mlp_dim')}`",
+            f"- **Positional Encoding**：`{spec.get('patch_transformer_positional_encoding')}`",
+            f"- **Patch Pooling**：`{spec.get('patch_transformer_pooling')}`",
+            "- **Encoder Training**：`supervised from scratch`",
+        ]
     if family == "inception_time":
         return [
             f"- **Model Family**：`{family}`",
@@ -1303,6 +1314,17 @@ def _console_model_detail_lines(training: dict) -> list[str]:
             f"Pretrain Profile : {pretraining_profile.get('name', '-')}",
             f"Pretrain Optimizer: {pretraining_profile.get('optimizer_name', '-')}",
             f"Pretrain E/B      : {pretraining_profile.get('epochs', '-')} / {pretraining_profile.get('batch_size', '-')}",
+        ]
+    if family == "patch_transformer":
+        return [
+            f"Model Family    : {family}",
+            f"Patch / Stride  : {spec.get('patch_transformer_patch_size')} / {spec.get('patch_transformer_patch_stride')}",
+            f"Embedding       : {spec.get('patch_transformer_embedding_dim')}",
+            f"Depth / Heads   : {spec.get('patch_transformer_depth')} / {spec.get('patch_transformer_heads')}",
+            f"MLP Dimensions  : {spec.get('patch_transformer_mlp_dim')}",
+            f"Position        : {spec.get('patch_transformer_positional_encoding')}",
+            f"Patch Pooling   : {spec.get('patch_transformer_pooling')}",
+            "Encoder Training : supervised from scratch",
         ]
     if family == "inception_time":
         return [

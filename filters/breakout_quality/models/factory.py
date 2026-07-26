@@ -9,6 +9,7 @@ from filters.breakout_quality.models.inception_time import build_inception_time
 from filters.breakout_quality.models.mantis_v2 import build_mantis_v2_frozen_linear
 from filters.breakout_quality.models.moment import build_moment_frozen_linear
 from filters.breakout_quality.models.modern_tcn import build_modern_tcn
+from filters.breakout_quality.models.patch_transformer import build_patch_transformer
 from filters.breakout_quality.models.multiscale_cnn import build_multiscale_cnn
 from filters.breakout_quality.models.residual_tcn import build_residual_tcn
 from filters.breakout_quality.models.spec import (
@@ -17,6 +18,7 @@ from filters.breakout_quality.models.spec import (
     MANTIS_V2_FROZEN_LINEAR_V1,
     MOMENT_1_BASE_FROZEN_LINEAR_V1,
     MODERN_TCN_V1,
+    PATCH_TRANSFORMER_V1,
     MULTISCALE_CNN_V1,
     MULTISCALE_CNN_V2,
     MULTISCALE_CNN_V3,
@@ -98,6 +100,14 @@ def build_model(
             context_count=int(context_count),
             spec=spec,
             pretrained_encoder_state=pretrained_encoder_state,
+        )
+    if spec.architecture == PATCH_TRANSFORMER_V1:
+        return build_patch_transformer(
+            nn,
+            torch,
+            feature_count=int(feature_count),
+            context_count=int(context_count),
+            spec=spec,
         )
     if spec.architecture == MODERN_TCN_V1:
         return build_modern_tcn(

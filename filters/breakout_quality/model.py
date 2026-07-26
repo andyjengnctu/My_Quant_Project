@@ -8,6 +8,7 @@ from filters.breakout_quality.models import (
     get_model_spec,
     require_torch,
     resolve_model_spec,
+    validate_model_sequence_length,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "get_model_spec",
     "require_torch",
     "resolve_model_spec",
+    "validate_model_sequence_length",
 ]

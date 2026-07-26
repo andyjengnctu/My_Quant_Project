@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_083239_00c2f57.zip`，SHA256 `1a27923eb85ebc014b9616fba4962428b248c162754cf1a90f2af9cb33fd424e`；此基準已包含9E完整Selection／OOS結果，退回9A與legacy閉環由本輪修補完成 |
-| SHA256 | 本輪來源 ZIP：`1a27923eb85ebc014b9616fba4962428b248c162754cf1a90f2af9cb33fd424e` |
-| 程式版本範圍 | 9A `inception_time_v1`恢復為排序／高品質active基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋active基準；9A-GN、9B、9C、9D與9E只供舊工件重建；下一項為9F小型Patch Transformer |
-| Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining profile、9D Mantis與9E MOMENT外部checkpoint契約只保留legacy重建 |
+| 基準 ZIP | `test-branch-1_20260726_085957_5751826.zip`，SHA256 `c2e2ac09b72331b79abb1811a2b451b67e3a86cc23e7184e9e9e9c12a84b379e`；9F實作修補為 `breakout_quality_9f_patch_transformer_implemented_20260726.zip`，SHA256由本輪交付訊息記錄 |
+| SHA256 | 本輪來源 ZIP：`c2e2ac09b72331b79abb1811a2b451b67e3a86cc23e7184e9e9e9c12a84b379e` |
+| 程式版本範圍 | 9F `patch_transformer_v1`已實作並列為待完整OOS active architecture；9A `inception_time_v1`仍為已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準；9A-GN、9B、9C、9D與9E只供舊工件重建 |
+| Policy 預設 | architecture=`patch_transformer_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9F只做supervised from-scratch；9C pretraining profile、9D Mantis與9E MOMENT外部checkpoint契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures只保留9A `inception_time_v1`排序／高品質實證基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2與9E MOMENT只保留legacy read-only compatibility。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures包含待完整OOS的9F `patch_transformer_v1`、已接受的9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2與9E MOMENT只保留legacy read-only compatibility。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -613,9 +613,24 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 相較8F | OOS Precision／Lift各 −2.06 pp、Recall −0.61 pp、模型PASS +2.07 pp、Accuracy −2.75 pp、Score −0.0119；連高覆蓋基準也未超越 |
 | 相較9D | OOS PR-AUC −0.0076；P@50／60／70%分別 −2.01／−1.89／−1.93 pp；R@P60% −32.08 pp；Precision −1.73 pp、Recall −13.63 pp、Accuracy −4.36 pp、Score −0.0665；只有ECE改善0.0209，且計算成本大幅增加 |
 | 判定 | 9E的低ECE只代表分數尺度較穩，無法抵消OOS ranking全面退步；固定coverage排序與R@P60%皆遠低於9A，Selection→OOS drift也明顯。Frozen representation不具足夠跨期線性可分性，不啟動MOMENT fine-tuning，停止threshold、output reduction、patch／stride、pooling、MLP head、adapter與同checkpoint細調 |
-| 下一步 | 進入9F小型Patch Transformer supervised architecture；仍固定Label、split、unique-group sampling、optimizer與評估口徑，不同輪混入self-supervised pretraining、ensemble或threshold調整 |
+| 下一步 | 9F小型Patch Transformer已實作；執行本地formal suite與完整Selection／OOS。仍固定Label、split、unique-group sampling、optimizer與評估口徑，不混入self-supervised pretraining、ensemble或threshold調整 |
 
 ---
+
+### 3.34 9F：小型 Patch Transformer supervised architecture（2026-07-26）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；尚未取得 Selection／OOS 結果，不預先判定有效或無效 |
+| 程式基準 | 來源 ZIP `test-branch-1_20260726_085957_5751826.zip`，SHA256 `c2e2ac09b72331b79abb1811a2b451b67e3a86cc23e7184e9e9e9c12a84b379e`；修補 `breakout_quality_9f_patch_transformer_implemented_20260726.zip`，SHA256由本輪交付訊息記錄 |
+| Architecture | `patch_transformer_v1`；300×10 sequence以10 bars為一個非重疊patch，30個patch tokens；每個token保留同一時間片的10個features並投影至128維；3層Transformer、4 heads、MLP 256、pre-norm LayerNorm、GELU、dropout 0.1、sinusoidal positional encoding、patch mean pooling、411,138個可訓練參數 |
+| 唯一研究變更 | 以專案內從零監督式訓練的Patch Transformer取代9A InceptionTime；不混入外部預訓練、Selection-only masked pretraining、Dataset context、ensemble或threshold調整 |
+| 固定條件 | 固定百分比Label、Selection／OOS split、`unique_group_sampling`、Adam、LR 0.0003、batch 128、patience 1、`selected_epochs`、threshold 0.5、seed 42及全部ranking／calibration口徑不變 |
+| Dataset／Label | 沿用既有300×10 supervised feature bank、context arrays與labels；不重建、不relabel；模型forward明確忽略event context |
+| 輸入契約 | sequence length必須可被patch size 10整除；目前300 bars形成30個非重疊patch。使用runtime sinusoidal位置編碼，不將目前30 patches硬編碼為可訓練位置表 |
+| Selection／OOS | 尚未執行；不得先宣稱超越9A或8F |
+| 判定標準 | 主要比較OOS PR-AUC、P@50／60／70%、R@P60%與Selection→OOS gaps；threshold 0.5 confusion metrics只作輔助 |
+| 下一步 | 本地先執行`python apps/test_suite.py`，通過後執行`python apps/breakout_quality.py`取得完整9F結果；只有9F supervised接近或超越9A，才另立9F-B Selection-only masked pretraining |
 
 ## 4. 已排除或暫停的方向
 
@@ -659,7 +674,7 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9E `moment_1_base_frozen_linear_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy，policy退回9A `inception_time_v1 / unique_group_sampling`排序／高品質基準；8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。下一項為9F小型Patch Transformer supervised architecture，不同輪混入self-supervised pretraining、ensemble、可學習adapter或threshold調整。
+所有實驗一次只改一項。9E `moment_1_base_frozen_linear_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9F `patch_transformer_v1 / unique_group_sampling`已實作並成為待完整OOS的policy architecture，9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`分別保留排序／高品質及高覆蓋比較基準。9F第一輪不得混入self-supervised pretraining、ensemble、可學習adapter或threshold調整。
 
 ### 優先 6A：AdamW only
 
@@ -814,9 +829,9 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `PLANNED`；尚未實作或取得Selection／OOS結果 |
+| 狀態 | `IMPLEMENTED`；程式與契約已完成，尚未取得Selection／OOS結果 |
 | 唯一變更 | 以專案內從零監督式訓練的小型Patch Transformer取代9A InceptionTime；第一輪不使用外部預訓練或masked pretraining |
-| 輸入 | 沿用300×10 sequence；以固定、可追溯的非重疊temporal patches形成tokens，保留10個features共同構成每個patch token，不加入Dataset context |
+| 輸入 | 沿用300×10 sequence；patch／stride固定10 bars，形成30個非重疊temporal tokens；每個patch保留10個features共同投影，不加入Dataset context |
 | 固定條件 | 固定百分比Label、Selection／OOS split、unique-group sampling、Adam、LR 0.0003、batch 128、patience 1、selected_epochs、threshold 0.5、seed 42與全部ranking／calibration口徑不變 |
 | Dataset rebuild | 不重建supervised Dataset、不relabel；只新增模型architecture與其checkpoint／manifest |
 | 主要判定 | 先看OOS PR-AUC、P@50／60／70%、R@P60%與Selection→OOS gaps；threshold 0.5只作輔助 |
@@ -855,7 +870,7 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 → 9C TS2Vec Selection-only自監督預訓練＋frozen linear probe（REJECTED；已退回9A並轉為legacy）
 → 9D MantisV2 frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
 → 9E MOMENT-1-base frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
-→ 9F 小型Patch Transformer supervised architecture（PLANNED；下一項）
+→ 9F 小型Patch Transformer supervised architecture（IMPLEMENTED；待完整Selection／OOS）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

@@ -132,6 +132,7 @@ from filters.breakout_quality.model import (
     build_model,
     count_trainable_parameters,
     get_model_spec,
+    validate_model_sequence_length,
     require_torch,
 )
 from filters.breakout_quality.paths import (
@@ -1908,6 +1909,7 @@ def main(argv=None) -> int:
         augmentation_plan,
         sequence_length=int(X.shape[1]),
     )
+    validate_model_sequence_length(model_spec, int(X.shape[1]))
     gc.collect()
 
     torch, _nn = require_torch()

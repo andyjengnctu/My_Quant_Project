@@ -121,10 +121,12 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.models import (
     ACTIVE_MODEL_ARCHITECTURES,
+    PATCH_TRANSFORMER_V1,
     LEGACY_MODEL_ARCHITECTURES,
     build_model as build_breakout_quality_model,
     count_trainable_parameters,
     get_model_spec,
+    validate_model_sequence_length,
 )
 from filters.breakout_quality.mantis_contract import (
     MANTIS_V2_CHECKPOINT_FILENAME,
@@ -444,6 +446,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_group_norm_model = build_breakout_quality_model(
         10, 4, architecture="inception_time_group_norm_v1"
     )
+    patch_transformer_model = build_breakout_quality_model(
+        10, 4, architecture=PATCH_TRANSFORMER_V1
+    )
     ts2vec_model = build_breakout_quality_model(
         10, 4, architecture="ts2vec_frozen_linear_v1"
     )
@@ -465,6 +470,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_group_norm_parameter_count = count_trainable_parameters(
         inception_group_norm_model
     )
+    patch_transformer_parameter_count = count_trainable_parameters(
+        patch_transformer_model
+    )
     ts2vec_trainable_parameter_count = count_trainable_parameters(ts2vec_model)
     ts2vec_total_parameter_count = sum(
         int(parameter.numel()) for parameter in ts2vec_model.parameters()
@@ -476,8 +484,48 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     modern_tcn_spec = get_model_spec("modern_tcn_v1")
     inception_spec = get_model_spec("inception_time_v1")
     inception_group_norm_spec = get_model_spec("inception_time_group_norm_v1")
+    patch_transformer_spec = get_model_spec(PATCH_TRANSFORMER_V1)
     ts2vec_spec = get_model_spec("ts2vec_frozen_linear_v1")
     moment_spec = get_model_spec("moment_1_base_frozen_linear_v1")
+    patch_input = torch.randn(5, 300, 10)
+    patch_context_a = torch.randn(5, 4)
+    patch_context_b = torch.randn(5, 4)
+    patch_transformer_model.eval()
+    with torch.no_grad():
+        patch_logits_a = patch_transformer_model(patch_input, patch_context_a)
+        patch_logits_b = patch_transformer_model(patch_input, patch_context_b)
+    try:
+        validate_model_sequence_length(patch_transformer_spec, 301)
+        invalid_patch_length_rejected = False
+    except ValueError as exc:
+        invalid_patch_length_rejected = "patch size" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "patch_transformer_9f_contract_is_small_supervised_sequence_only",
+        (
+            "patch_transformer", 10, 10, 128, 3, 4, 256,
+            "mean", "sinusoidal", False, (5, 2), True, True, 411138,
+        ),
+        (
+            patch_transformer_spec.family,
+            patch_transformer_spec.patch_transformer_patch_size,
+            patch_transformer_spec.patch_transformer_patch_stride,
+            patch_transformer_spec.patch_transformer_embedding_dim,
+            patch_transformer_spec.patch_transformer_depth,
+            patch_transformer_spec.patch_transformer_heads,
+            patch_transformer_spec.patch_transformer_mlp_dim,
+            patch_transformer_spec.patch_transformer_pooling,
+            patch_transformer_spec.patch_transformer_positional_encoding,
+            patch_transformer_spec.use_dataset_context,
+            tuple(patch_logits_a.shape),
+            bool(torch.equal(patch_logits_a, patch_logits_b)),
+            invalid_patch_length_rejected,
+            patch_transformer_parameter_count,
+        ),
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -2450,6 +2498,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             (
                 "inception_time_v1",
                 "multiscale_cnn_sequence_only_v1",
+                "patch_transformer_v1",
             ),
             set(legacy_architectures),
         ),

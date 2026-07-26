@@ -296,6 +296,73 @@ def validate_dataset_cli_contract_case(_base_params):
         "\x1b[" in workflow_console,
     )
 
+    patch_workflow_calls = []
+
+    def _fake_run_patch_command(command, args, *, program_name):
+        patch_workflow_calls.append((command, list(args), program_name))
+        return 0
+
+    patch_workflow_output = StringIO()
+    with (
+        patch(
+            "apps.breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+            "patch_transformer_v1",
+        ),
+        patch(
+            "apps.breakout_quality.require_mantis_v2_class",
+            side_effect=AssertionError("9F 不得載入 Mantis"),
+        ),
+        patch(
+            "apps.breakout_quality.require_moment_pipeline_class",
+            side_effect=AssertionError("9F 不得載入 MOMENT"),
+        ),
+        patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
+        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
+        patch("apps.breakout_quality._pretraining_refresh_plan") as mocked_patch_pretraining_plan,
+        patch("apps.breakout_quality._run_command", side_effect=_fake_run_patch_command),
+        redirect_stdout(patch_workflow_output),
+    ):
+        patch_workflow_rc = app_breakout_quality._run_workflow(
+            workflow_args,
+            program_name="apps/breakout_quality.py",
+        )
+    patch_commands = [call[0] for call in patch_workflow_calls]
+    patch_console = patch_workflow_output.getvalue()
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "patch_transformer_workflow_runs_supervised_stages_only",
+        (0, ["train", "export-scores", "report"], 0, 3),
+        (
+            patch_workflow_rc,
+            patch_commands,
+            mocked_patch_pretraining_plan.call_count,
+            patch_console.count("[完成]"),
+        ),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "patch_transformer_workflow_prints_fixed_model_contract",
+        True,
+        (
+            "model=patch_transformer_v1" in patch_console
+            and "family=patch_transformer" in patch_console
+            and "patch=10/10" in patch_console
+            and "embedding=128" in patch_console
+            and "depth=3" in patch_console
+            and "heads=4" in patch_console
+            and "mlp=256" in patch_console
+            and "position=sinusoidal" in patch_console
+            and "dataset_context=disabled" in patch_console
+            and "pooling=mean" in patch_console
+            and "external_encoder=" not in patch_console
+            and "pretrain=" not in patch_console
+        ),
+    )
+
     mantis_workflow_calls = []
 
     def _fake_run_mantis_command(command, args, *, program_name):

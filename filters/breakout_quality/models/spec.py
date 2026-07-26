@@ -44,6 +44,7 @@ INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
 MODERN_TCN_V1 = "modern_tcn_v1"
 MANTIS_V2_FROZEN_LINEAR_V1 = "mantis_v2_frozen_linear_v1"
 MOMENT_1_BASE_FROZEN_LINEAR_V1 = "moment_1_base_frozen_linear_v1"
+PATCH_TRANSFORMER_V1 = "patch_transformer_v1"
 TS2VEC_FROZEN_LINEAR_V1 = "ts2vec_frozen_linear_v1"
 RESIDUAL_TCN_V1 = "residual_tcn_v1"
 SUPPORTED_MODEL_ARCHITECTURES = (
@@ -64,12 +65,14 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MODERN_TCN_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
     MOMENT_1_BASE_FROZEN_LINEAR_V1,
+    PATCH_TRANSFORMER_V1,
     TS2VEC_FROZEN_LINEAR_V1,
     RESIDUAL_TCN_V1,
 )
 ACTIVE_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
+    PATCH_TRANSFORMER_V1,
 )
 LEGACY_MODEL_ARCHITECTURES = tuple(
     architecture
@@ -142,6 +145,14 @@ class BreakoutQualityModelSpec:
     moment_transformer_heads: int | None = None
     moment_channel_aggregation: str | None = None
     moment_patch_reduction: str | None = None
+    patch_transformer_patch_size: int | None = None
+    patch_transformer_patch_stride: int | None = None
+    patch_transformer_embedding_dim: int | None = None
+    patch_transformer_depth: int | None = None
+    patch_transformer_heads: int | None = None
+    patch_transformer_mlp_dim: int | None = None
+    patch_transformer_pooling: str | None = None
+    patch_transformer_positional_encoding: str | None = None
 
     def as_manifest_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -196,6 +207,14 @@ class BreakoutQualityModelSpec:
             "moment_transformer_heads": self.moment_transformer_heads,
             "moment_channel_aggregation": self.moment_channel_aggregation,
             "moment_patch_reduction": self.moment_patch_reduction,
+            "patch_transformer_patch_size": self.patch_transformer_patch_size,
+            "patch_transformer_patch_stride": self.patch_transformer_patch_stride,
+            "patch_transformer_embedding_dim": self.patch_transformer_embedding_dim,
+            "patch_transformer_depth": self.patch_transformer_depth,
+            "patch_transformer_heads": self.patch_transformer_heads,
+            "patch_transformer_mlp_dim": self.patch_transformer_mlp_dim,
+            "patch_transformer_pooling": self.patch_transformer_pooling,
+            "patch_transformer_positional_encoding": self.patch_transformer_positional_encoding,
         }
         for key, value in optional_scalars.items():
             if value is not None:
@@ -390,6 +409,36 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             window_normalization_epsilon=window_normalization_epsilon,
         )
 
+
+    if normalized == PATCH_TRANSFORMER_V1:
+        patch_size = 10
+        embedding_dim = 128
+        depth = 3
+        heads = 4
+        mlp_dim = 256
+        return BreakoutQualityModelSpec(
+            architecture=PATCH_TRANSFORMER_V1,
+            family="patch_transformer",
+            channels=embedding_dim,
+            kernel_size=patch_size,
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("patch_mean",),
+            dropout=0.10,
+            receptive_field_bars=300,
+            normalization="layer_norm",
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level_temporal_nonoverlap_patches",),
+            patch_transformer_patch_size=patch_size,
+            patch_transformer_patch_stride=patch_size,
+            patch_transformer_embedding_dim=embedding_dim,
+            patch_transformer_depth=depth,
+            patch_transformer_heads=heads,
+            patch_transformer_mlp_dim=mlp_dim,
+            patch_transformer_pooling="mean",
+            patch_transformer_positional_encoding="sinusoidal",
+        )
+
     if normalized == MOMENT_1_BASE_FROZEN_LINEAR_V1:
         return BreakoutQualityModelSpec(
             architecture=MOMENT_1_BASE_FROZEN_LINEAR_V1,
@@ -540,6 +589,26 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
     )
 
 
+def validate_model_sequence_length(
+    model_spec: BreakoutQualityModelSpec, sequence_length: int
+) -> None:
+    if model_spec.family != "patch_transformer":
+        return
+    normalized_length = int(sequence_length)
+    if normalized_length < 1:
+        raise ValueError("Patch Transformer sequence_length 必須 >= 1")
+    if model_spec.family == "patch_transformer":
+        patch_size = int(model_spec.patch_transformer_patch_size or 0)
+        patch_stride = int(model_spec.patch_transformer_patch_stride or 0)
+        if patch_size < 1 or patch_stride != patch_size:
+            raise ValueError("Patch Transformer 必須使用有效的非重疊 patch spec")
+        if normalized_length < patch_size or normalized_length % patch_size != 0:
+            raise ValueError(
+                "Patch Transformer sequence_length 必須可被 patch size 整除: "
+                f"sequence_length={normalized_length}, patch_size={patch_size}"
+            )
+
+
 def model_spec_from_manifest(payload: Mapping[str, object]) -> BreakoutQualityModelSpec:
     if not isinstance(payload, Mapping):
         raise ValueError("breakout quality model_spec 必須是 object")
@@ -574,6 +643,7 @@ __all__ = [
     "MODERN_TCN_V1",
     "MANTIS_V2_FROZEN_LINEAR_V1",
     "MOMENT_1_BASE_FROZEN_LINEAR_V1",
+    "PATCH_TRANSFORMER_V1",
     "TS2VEC_FROZEN_LINEAR_V1",
     "RESIDUAL_TCN_V1",
     "SUPPORTED_MODEL_ARCHITECTURES",
@@ -582,4 +652,5 @@ __all__ = [
     "model_spec_from_manifest",
     "normalize_active_model_architecture",
     "normalize_model_architecture",
+    "validate_model_sequence_length",
 ]

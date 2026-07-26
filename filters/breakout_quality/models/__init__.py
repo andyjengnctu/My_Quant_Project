@@ -13,6 +13,7 @@ from filters.breakout_quality.models.spec import (
     MANTIS_V2_FROZEN_LINEAR_V1,
     MOMENT_1_BASE_FROZEN_LINEAR_V1,
     MODERN_TCN_V1,
+    PATCH_TRANSFORMER_V1,
     TS2VEC_FROZEN_LINEAR_V1,
     LEGACY_MODEL_ARCHITECTURES,
     MULTISCALE_CNN_V1,
@@ -34,6 +35,7 @@ from filters.breakout_quality.models.spec import (
     model_spec_from_manifest,
     normalize_active_model_architecture,
     normalize_model_architecture,
+    validate_model_sequence_length,
 )
 
 __all__ = [
@@ -44,6 +46,7 @@ __all__ = [
     "MANTIS_V2_FROZEN_LINEAR_V1",
     "MOMENT_1_BASE_FROZEN_LINEAR_V1",
     "MODERN_TCN_V1",
+    "PATCH_TRANSFORMER_V1",
     "TS2VEC_FROZEN_LINEAR_V1",
     "MULTISCALE_CNN_V1",
     "MULTISCALE_CNN_V2",
@@ -68,4 +71,5 @@ __all__ = [
     "normalize_model_architecture",
     "require_torch",
     "resolve_model_spec",
+    "validate_model_sequence_length",
 ]

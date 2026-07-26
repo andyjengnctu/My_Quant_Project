@@ -580,6 +580,17 @@ def _model_runtime_description(model_spec) -> str:
             f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
             f"pooling={'+'.join(model_spec.pooling)}"
         )
+    if str(model_spec.family) == "patch_transformer":
+        return (
+            f"family=patch_transformer, patch={model_spec.patch_transformer_patch_size}/"
+            f"{model_spec.patch_transformer_patch_stride}, "
+            f"embedding={model_spec.patch_transformer_embedding_dim}, "
+            f"depth={model_spec.patch_transformer_depth}, heads={model_spec.patch_transformer_heads}, "
+            f"mlp={model_spec.patch_transformer_mlp_dim}, "
+            f"position={model_spec.patch_transformer_positional_encoding}, "
+            f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
+            f"pooling={model_spec.patch_transformer_pooling}"
+        )
     if str(model_spec.family) == "inception_time":
         kernels = "/".join(str(value) for value in model_spec.inception_kernel_sizes)
         return (
@@ -999,6 +1010,17 @@ def _print_policy_defaults(
             f"- Pretraining Profile：{BREAKOUT_QUALITY_PRETRAINING_PROFILE}\n"
             f"- Pretraining Settings：{pretraining_settings}\n"
             f"- Pretraining Dataset Stride：{int(BREAKOUT_QUALITY_PRETRAINING_STRIDE)}"
+        )
+    elif str(model_spec.family) == "patch_transformer":
+        architecture_details = (
+            f"- Model Family：Small Patch Transformer\n"
+            f"- Patch / Stride：{model_spec.patch_transformer_patch_size} / {model_spec.patch_transformer_patch_stride}\n"
+            f"- Embedding Dimensions：{model_spec.patch_transformer_embedding_dim}\n"
+            f"- Transformer Depth：{model_spec.patch_transformer_depth}\n"
+            f"- Attention Heads：{model_spec.patch_transformer_heads}\n"
+            f"- MLP Dimensions：{model_spec.patch_transformer_mlp_dim}\n"
+            f"- Positional Encoding：{model_spec.patch_transformer_positional_encoding}\n"
+            f"- Patch Pooling：{model_spec.patch_transformer_pooling}"
         )
     elif str(model_spec.family) == "inception_time":
         architecture_details = (

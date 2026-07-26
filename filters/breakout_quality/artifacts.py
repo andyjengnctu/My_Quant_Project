@@ -56,7 +56,10 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.lr_schedule import validate_learning_rate_schedule_record
-from filters.breakout_quality.models.spec import model_spec_from_manifest
+from filters.breakout_quality.models.spec import (
+    model_spec_from_manifest,
+    validate_model_sequence_length,
+)
 from filters.breakout_quality.mantis_contract import (
     MANTIS_PACKAGE_NAME,
     MANTIS_PACKAGE_VERSION,
@@ -425,9 +428,10 @@ def load_model_artifact_contract(
     model_spec = model_spec_from_manifest(_require_mapping(manifest, "model_spec"))
     if model_spec.architecture != manifest_architecture:
         raise ValueError("breakout quality model_spec.architecture 與 manifest 不一致")
+    validate_model_sequence_length(model_spec, int(manifest.get("sequence_length", 0)))
     _validate_torch_execution_record(
         manifest,
-        required=model_spec.family in {"inception_time", "modern_tcn", "ts2vec_frozen_linear", "mantis_v2_frozen_linear", "moment_frozen_linear"},
+        required=model_spec.family in {"inception_time", "modern_tcn", "patch_transformer", "ts2vec_frozen_linear", "mantis_v2_frozen_linear", "moment_frozen_linear"},
     )
     if int(manifest.get("trainable_parameter_count", 0)) < 1:
         raise ValueError("breakout quality trainable_parameter_count 必須 >=1")
