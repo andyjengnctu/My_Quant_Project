@@ -24,7 +24,7 @@
 | 項目 | 目前狀態 |
 |---|---|
 | 基準 ZIP | `test-branch-1_20260726_201327_1836e7d.zip`，SHA256 `6f4491d1ae2e20aab2ee4fa39d7e77ae14ef1f741e9afc4ef10f47cf39abc335`；已包含完整runtime候選coverage、Rolling active-param策略比較與9A固定threshold真實結果，本輪新增交易層歸因與部分年度修正 |
-| SHA256 | 本輪來源 ZIP：`6f4491d1ae2e20aab2ee4fa39d7e77ae14ef1f741e9afc4ef10f47cf39abc335`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e` |
+| SHA256 | 本輪來源 ZIP：`6f4491d1ae2e20aab2ee4fa39d7e77ae14ef1f741e9afc4ef10f47cf39abc335`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -94,7 +94,7 @@
 | Brier | 0.2453 |
 | ECE | 0.0722 |
 
-9A 在 threshold 0.5 下相較 8F 提高 OOS Precision 4.53 pp，但 Recall 下降 25.52 pp，屬較高品質、較低 coverage 的分類操作點。Selection→OOS 的固定 coverage Precision 幾乎沒有下降：P@50%、P@60%、P@70% 分別變化 +0.07、+0.28、+0.25 pp，因此仍保留為研究排序基準；但固定 threshold 0.5 的無前視策略對照已證明淨報酬、MDD、RoMD、Payoff、EV與曝險全面惡化，故不得作正式 runtime gate。8F只保留歷史高覆蓋分類基準，不因9A策略失敗而自動升格部署。
+9A 在 threshold 0.5 下相較 8F 提高 OOS Precision 4.53 pp，但 Recall 下降 25.52 pp，屬較高品質、較低 coverage 的分類操作點。Selection→OOS 的固定 coverage Precision 幾乎沒有下降：P@50%、P@60%、P@70% 分別變化 +0.07、+0.28、+0.25 pp，因此仍保留為研究排序基準；但固定 threshold 0.5 的無前視策略對照已證明淨報酬、MDD、RoMD、Payoff、EV與曝險全面惡化，故不得作正式 runtime gate。8F只保留歷史高覆蓋分類基準，不因9A策略失敗而自動升格部署。 交易歸因進一步確認總 R 差異為 −46.62R，其中共同交易只貢獻 +0.15R，獨有交易選擇效果為 −46.77R；No-filter only 的 286 筆交易合計 187.49R、平均 0.66R、Payoff 3.21，Filter only 的 276 筆替代交易僅 140.72R、平均 0.51R、Payoff 2.76。失效主因是篩掉與路徑擠出的大贏家高於所避開的輸家，並非共同交易執行或帳務差異。
 
 ---
 
@@ -709,12 +709,13 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 33. MOMENT-1-base frozen probe；9E OOS PR-AUC較9A低0.0400，P@50／60／70%低4.73／4.12／3.48 pp，R@P60%低54.20 pp，且連8F高覆蓋基準也未超越。低ECE不是排序改善，不啟動fine-tuning，不再調threshold、output reduction、patch／stride、pooling、head、adapter或同checkpoint變體。
 34. 小型supervised Patch Transformer；9F OOS PR-AUC較9A低0.0550，P@50／60／70%低4.27／3.02／1.92 pp，R@P60%只剩0.17%。不啟動9F-B masked pretraining，不再調patch size、embedding、depth、heads、MLP、position、pooling或threshold；停止現有300×10單模型architecture橫向搜尋。
 35. 9A固定threshold 0.5 runtime gate；無前視Rolling active-param OOS中淨總報酬147.71%降至121.14%、MDD由16.42%惡化至20.75%、RoMD由9.00降至5.84，Payoff、EV、曝險與最差完整年度亦全面惡化。不得依同一OOS調threshold、年度門檻、calibration或regime開關；9A只保留研究排序基準。
+36. 9A交易層歸因；共同交易R差異只有+0.15R，全部−46.62R落差幾乎全由獨有交易選擇效果−46.77R造成。被排除贏家326.25R大於避開輸家138.76R，替代交易平均R與Payoff亦低於被取代交易；停止以現有固定百分比Label／score作硬式進場gate，也不得依既有OOS設年度或regime開關。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`只保留研究排序／高覆蓋分類基準。9A固定threshold 0.5策略層對照已完成並淘汰runtime gate，現有300×10單模型architecture橫向搜尋與同一OOS門檻調整全部停止。當前唯一工作是以既有交易CSV完成歸因，解釋被排除贏家、避開輸家與投組路徑替代效果；歸因完成後凍結模型研究，等待新的forward labeled期間。
+所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`只保留研究排序／高覆蓋分類基準。9A固定threshold 0.5策略層對照與交易歸因均已完成：經濟效果與交易選擇效果皆為負，runtime gate正式淘汰。現有300×10單模型architecture橫向搜尋、8F策略比較、同一OOS門檻／calibration／regime調整全部停止。模型研究凍結，等待2026-03-03之後累積足夠且完成40交易日Label horizon的新forward labeled期間。
 
 ### 優先 6A：AdamW only
 
@@ -936,19 +937,21 @@ Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | 固定9A策略操作點：`RESULT_AVAILABLE / REJECTED_FOR_RUNTIME_DEPLOYMENT`；交易歸因工具：`IMPLEMENTED`，待本機既有CSV產生真實歸因結果 |
+| 狀態 | 固定9A策略操作點：`RESULT_AVAILABLE / REJECTED_FOR_RUNTIME_DEPLOYMENT`；交易歸因：`RESULT_AVAILABLE` |
 | 程式基準 | `test-branch-1_20260726_201327_1836e7d.zip`，SHA256 `6f4491d1ae2e20aab2ee4fa39d7e77ae14ef1f741e9afc4ef10f47cf39abc335` |
-| 結果來源 | `strategy_comparison.md`，SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e` |
+| 結果來源 | `strategy_comparison.md`，SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；`trade_attribution.md`，SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
 | 比較設計 | 2021-01-04～2026-03-02；同一`roos_base_finalists_agree.json` Rolling active-param ensemble、相同資金／持股／rotation／0050／交易日期，只切換`use_breakout_quality_filter`；lookahead-safe=`True` |
 | No-filter | 淨總報酬147.71%、MDD16.42%、RoMD9.00、年化19.23%、Log R²0.9180、月勝率63.49%、交易353、Payoff3.38、EV0.78R、平均曝險81.24% |
 | 9A threshold 0.5 | 淨總報酬121.14%、MDD20.75%、RoMD5.84、年化16.63%、Log R²0.8474、月勝率66.67%、交易343、Payoff2.92、EV0.67R、平均曝險70.35% |
 | 與基準差異 | 淨總報酬−26.56pp、MDD惡化+4.33pp、RoMD−3.16、年化−2.59pp、Payoff−0.45、EV−0.11R、平均曝險−10.89pp；候選供給不足日+128、持股缺口+280格日 |
 | 年度結果 | 2021 −7.98pp、2022 −10.58pp、2023 +19.90pp、2024 +3.94pp、2025 −9.16pp、2026截至03-02 −0.89pp；2026為partial year，不得標示完整年度 |
+| 交易歸因 | 共同交易67筆、No-filter only 286筆、Filter only 276筆；No-filter總R 275.42、Filter總R 228.79、差異−46.62R。共同交易R差異僅+0.15R，獨有交易選擇效果−46.77R；被排除贏家326.25R、避開輸家138.76R、替代贏家281.00R、替代輸家140.28R |
+| 歸因判讀 | 9A失效主要來自交易選擇與投組路徑：No-filter only平均0.66R／Payoff3.21，Filter only平均0.51R／Payoff2.76，勝率與持有日幾乎相同，表示filter未改善命中率，反而削弱右尾大贏家。211筆No-filter only為threshold直接拒絕、75筆為路徑擠出，無score漏配為0 |
 | 採用判定 | 9A分類Precision提升未轉化為策略效益；報酬、回撤、Payoff、EV、曝險、最差完整年度與曲線穩定性均惡化。保留9A作研究排序基準，但`threshold=0.5`不得啟用runtime gate |
 | 本輪唯一實作變更 | 新增`trade_attribution.py`與既有比較入口的`--attribution-only`；以ticker＋實際進場日＋進場類型精確配對共同／no-filter only／filter only round trips，拆分被排除贏家、避開輸家、替代交易、直接門檻拒絕與投組路徑擠出；同時修正被回測終點截短的2026年度完整性 |
 | 固定條件 | 不重訓、不relabel、不調threshold、不改9A checkpoint／score／Rolling參數／候選／成交／費稅／帳務；R與PnL沿用Portfolio Engine closed-trade真理來源 |
 | 重建需求 | 不需重建Dataset、Label、feature bank、model、score或Rolling params；既有策略比較輸出仍在時只執行`python apps/breakout_quality_strategy_compare.py --attribution-only` |
-| 下一步 | 取得`trade_attribution.md/.json`後，只用來解釋9A為何失效；不得依同一OOS調門檻或regime開關。模型研究凍結，等待新的forward labeled期間 |
+| 下一步 | 歸因已完成；不得依同一OOS調門檻、calibration或regime開關，也不另跑8F策略比較。模型研究正式凍結；保留9A作排序研究基準，等待2026-03-03之後累積足夠且完成40交易日Label horizon的新forward labeled期間 |
 
 
 ---
@@ -986,8 +989,8 @@ Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke
 → 9F 小型Patch Transformer supervised architecture（REJECTED；已退回9A並轉為legacy）
 → unique-group score單一真理＋逐年OOS診斷（RESULT_AVAILABLE；9A重跑確認）
 → 固定9A threshold 0.5的策略層no-filter對照（REJECTED_FOR_RUNTIME_DEPLOYMENT）
-→ 既有OOS交易層歸因與partial-year修正（IMPLEMENTED；只解釋結果，不調參）
-→ 凍結模型研究，等待新的forward labeled期間
+→ 既有OOS交易層歸因與partial-year修正（RESULT_AVAILABLE；獨有交易選擇效果−46.77R）
+→ 凍結模型研究，等待2026-03-03之後的新forward labeled期間
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
