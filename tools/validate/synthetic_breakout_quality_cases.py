@@ -183,7 +183,11 @@ from filters.breakout_quality.paths import (
     resolve_filter_report_json_path,
     resolve_filter_report_markdown_path,
 )
-from filters.breakout_quality.score_store import build_pass_condition_from_score_table, load_score_table
+from filters.breakout_quality.score_store import (
+    build_pass_condition_from_score_table,
+    load_score_table,
+    load_shared_group_score_table,
+)
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
@@ -3826,6 +3830,7 @@ def _clear_breakout_quality_caches() -> None:
     load_runtime_artifact_contract.cache_clear()
     load_split_assignment_frame.cache_clear()
     load_score_table.cache_clear()
+    load_shared_group_score_table.cache_clear()
 
 
 
@@ -4844,6 +4849,10 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "oos_predictions_used_during_training": False,
                 "oos_metrics_emitted_by_train": False,
                 "score_table": score_record,
+                "score_inference_execution": {
+                    "inference_unit": "unique_ticker_date_feature_group",
+                    "shared_group_score_broadcast": True,
+                },
                 "runtime_eligibility": {
                     "eligible": True,
                     "scope": RUNTIME_SCOPE_FORWARD_OOS,
@@ -4877,6 +4886,161 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             )
             add_check(results, "synthetic_breakout_quality", case_id, "canonical_score_path_only", [True, True, False, True], pass_at_050.tolist())
             add_check(results, "synthetic_breakout_quality", case_id, "active_threshold_controls_decision", [True, False, False, True], pass_at_070.tolist())
+
+            alternate_high_len = int(high_len) + 5
+            shared_only_frame = pd.DataFrame(
+                [
+                    {
+                        "ticker": "2330",
+                        "date": "2025-01-03",
+                        "high_len": alternate_high_len,
+                        SCORE_COLUMN: 0.60,
+                    },
+                    {
+                        "ticker": "2330",
+                        "date": "2025-01-04",
+                        "high_len": high_len,
+                        SCORE_COLUMN: 0.40,
+                    },
+                ]
+            )
+            shared_only_frame.to_csv(paths.score_path, index=False, encoding="utf-8-sig")
+            shared_score_record = build_file_manifest(paths.score_path)
+            shared_score_record.update(
+                {
+                    "schema_version": SCORE_TABLE_SCHEMA_VERSION,
+                    "required_columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
+                    "columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
+                    "row_count": len(shared_only_frame),
+                    "high_len_values": [high_len, alternate_high_len],
+                    "event_date_range": {"start": "2025-01-03", "end": "2025-01-04"},
+                }
+            )
+            manifest["score_table"] = shared_score_record
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            shared_lookup = build_pass_condition_from_score_table(
+                frame,
+                ticker="2330",
+                high_len=high_len,
+                score_threshold=0.50,
+                candidate_condition=candidates,
+                project_root=str(project_root),
+                filter_id=filter_id,
+            )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "sequence_only_runtime_uses_ticker_date_shared_score",
+                [True, True, False, True],
+                shared_lookup.tolist(),
+            )
+
+            inconsistent_shared_frame = pd.concat(
+                [
+                    shared_only_frame,
+                    pd.DataFrame(
+                        [
+                            {
+                                "ticker": "2330",
+                                "date": "2025-01-03",
+                                "high_len": alternate_high_len + 5,
+                                SCORE_COLUMN: 0.61,
+                            }
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
+            inconsistent_shared_frame.to_csv(
+                paths.score_path,
+                index=False,
+                encoding="utf-8-sig",
+            )
+            inconsistent_record = build_file_manifest(paths.score_path)
+            inconsistent_record.update(
+                {
+                    "schema_version": SCORE_TABLE_SCHEMA_VERSION,
+                    "required_columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
+                    "columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
+                    "row_count": len(inconsistent_shared_frame),
+                    "high_len_values": [high_len, alternate_high_len, alternate_high_len + 5],
+                    "event_date_range": {"start": "2025-01-03", "end": "2025-01-04"},
+                }
+            )
+            manifest["score_table"] = inconsistent_record
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            try:
+                build_pass_condition_from_score_table(
+                    frame,
+                    ticker="2330",
+                    high_len=high_len,
+                    score_threshold=0.50,
+                    candidate_condition=candidates,
+                    project_root=str(project_root),
+                    filter_id=filter_id,
+                )
+                inconsistent_shared_rejected = False
+            except ValueError as exc:
+                inconsistent_shared_rejected = "同一 ticker/date 出現不一致分數" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "shared_group_score_inconsistency_fails_fast",
+                True,
+                inconsistent_shared_rejected,
+            )
+
+            shared_only_frame.to_csv(paths.score_path, index=False, encoding="utf-8-sig")
+            manifest["score_table"] = shared_score_record
+            manifest.pop("score_inference_execution", None)
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
+            try:
+                build_pass_condition_from_score_table(
+                    frame,
+                    ticker="2330",
+                    high_len=high_len,
+                    score_threshold=0.50,
+                    candidate_condition=candidates,
+                    project_root=str(project_root),
+                    filter_id=filter_id,
+                )
+                legacy_exact_key_rejected = False
+            except ValueError as exc:
+                legacy_exact_key_rejected = "ticker/date/high_len event" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "legacy_runtime_keeps_exact_ticker_date_high_len_lookup",
+                True,
+                legacy_exact_key_rejected,
+            )
+            manifest["score_inference_execution"] = {
+                "inference_unit": "unique_ticker_date_feature_group",
+                "shared_group_score_broadcast": True,
+            }
+
+            score_frame.to_csv(paths.score_path, index=False, encoding="utf-8-sig")
+            manifest["score_table"] = score_record
+            paths.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _clear_breakout_quality_caches()
 
             split_frame.loc[1, "selection_role"] = SELECTION_ROLE_VALIDATION
             split_frame.to_csv(paths.split_path, index=False, encoding="utf-8-sig")

@@ -76,6 +76,43 @@ def load_score_table(project_root: str, filter_id: str = DEFAULT_FILTER_ID) -> p
     return indexed
 
 
+@lru_cache(maxsize=16)
+def load_shared_group_score_table(
+    project_root: str,
+    filter_id: str = DEFAULT_FILTER_ID,
+) -> pd.DataFrame:
+    """Return the canonical ticker/date score table for sequence-only runtime models."""
+
+    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    if not contract.shared_group_score_broadcast:
+        raise ValueError(
+            "breakout quality artifact 未宣告 shared_group_score_broadcast，"
+            "不可改用 ticker/date lookup"
+        )
+
+    event_table = load_score_table(str(project_root), str(filter_id)).reset_index()
+    score_counts = event_table.groupby(["ticker", "date"], sort=False)[SCORE_COLUMN].nunique(
+        dropna=False
+    )
+    inconsistent = score_counts[score_counts != 1]
+    if not inconsistent.empty:
+        sample_keys = [
+            f"{ticker}/{event_date}"
+            for ticker, event_date in list(inconsistent.index[:5])
+        ]
+        raise ValueError(
+            "breakout quality shared group score 同一 ticker/date 出現不一致分數: "
+            f"group_count={len(inconsistent)}, sample={sample_keys}"
+        )
+
+    shared = (
+        event_table.drop_duplicates(["ticker", "date"], keep="first")
+        .set_index(["ticker", "date"])[[SCORE_COLUMN]]
+        .sort_index()
+    )
+    return shared
+
+
 def build_pass_condition_from_score_table(
     df: pd.DataFrame,
     *,
@@ -103,7 +140,11 @@ def build_pass_condition_from_score_table(
 
     contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
     validate_required_high_len(contract, int(high_len))
-    score_table = load_score_table(str(project_root), filter_id=str(filter_id))
+    score_table = (
+        load_shared_group_score_table(str(project_root), filter_id=str(filter_id))
+        if contract.shared_group_score_broadcast
+        else load_score_table(str(project_root), filter_id=str(filter_id))
+    )
     timestamps = pd.to_datetime(df.index, errors="raise")
     after_coverage_mask = np.asarray(
         [timestamp.date() > contract.available_through for timestamp in timestamps],
@@ -127,21 +168,38 @@ def build_pass_condition_from_score_table(
         return out
 
     active_dates = timestamps[active_candidate_mask].strftime("%Y-%m-%d")
-    keys = pd.MultiIndex.from_arrays(
-        [[str(ticker)] * len(active_dates), active_dates, [int(high_len)] * len(active_dates)],
-        names=["ticker", "date", "high_len"],
-    )
+    if contract.shared_group_score_broadcast:
+        keys = pd.MultiIndex.from_arrays(
+            [[str(ticker)] * len(active_dates), active_dates],
+            names=["ticker", "date"],
+        )
+    else:
+        keys = pd.MultiIndex.from_arrays(
+            [[str(ticker)] * len(active_dates), active_dates, [int(high_len)] * len(active_dates)],
+            names=["ticker", "date", "high_len"],
+        )
     matched = score_table.reindex(keys)
     values = matched[SCORE_COLUMN].to_numpy(dtype=np.float64, copy=False)
     missing_mask = ~np.isfinite(values)
     if missing_mask.any():
         missing_dates = list(active_dates[missing_mask][:5])
+        lookup_key = (
+            "ticker/date shared group"
+            if contract.shared_group_score_broadcast
+            else "ticker/date/high_len event"
+        )
         raise ValueError(
             f"breakout quality score table 缺少正式候選事件: ticker={ticker}, high_len={high_len}, "
-            f"missing_count={int(missing_mask.sum())}, sample_dates={missing_dates}"
+            f"lookup_key={lookup_key}, missing_count={int(missing_mask.sum())}, "
+            f"sample_dates={missing_dates}"
         )
     out[active_candidate_mask] = values >= threshold
     return out
 
 
-__all__ = ["build_pass_condition_from_score_table", "load_score_table", "resolve_score_table_path"]
+__all__ = [
+    "build_pass_condition_from_score_table",
+    "load_score_table",
+    "load_shared_group_score_table",
+    "resolve_score_table_path",
+]

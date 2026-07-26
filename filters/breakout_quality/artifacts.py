@@ -110,6 +110,7 @@ class BreakoutQualityRuntimeContract:
     high_len_values: tuple[int, ...]
     available_from: date
     available_through: date
+    shared_group_score_broadcast: bool
 
 
 def compute_file_sha256(path: str | Path) -> str:
@@ -1109,12 +1110,37 @@ def load_runtime_artifact_contract(
     if event_end < event_start or event_end > available_through:
         raise ValueError("breakout quality score table event_date_range 與 runtime availability 不一致")
     high_len_values = _normalize_high_len_values(score_table.get("high_len_values"))
+
+    shared_group_score_broadcast = False
+    score_inference_execution = manifest.get("score_inference_execution")
+    if score_inference_execution is not None:
+        if not isinstance(score_inference_execution, dict):
+            raise ValueError("breakout quality score_inference_execution 必須是 object")
+        shared_raw = score_inference_execution.get("shared_group_score_broadcast", False)
+        if not isinstance(shared_raw, bool):
+            raise ValueError("breakout quality shared_group_score_broadcast 必須是 bool")
+        shared_group_score_broadcast = bool(shared_raw)
+        if shared_group_score_broadcast:
+            model_spec = model_spec_from_manifest(_require_mapping(manifest, "model_spec"))
+            if bool(model_spec.use_dataset_context):
+                raise ValueError(
+                    "breakout quality shared group score 只適用於 use_dataset_context=false 模型"
+                )
+            if str(score_inference_execution.get("inference_unit") or "").strip() != (
+                "unique_ticker_date_feature_group"
+            ):
+                raise ValueError(
+                    "breakout quality shared group score 的 inference_unit 必須是 "
+                    "unique_ticker_date_feature_group"
+                )
+
     return BreakoutQualityRuntimeContract(
         paths=paths,
         manifest=manifest,
         high_len_values=high_len_values,
         available_from=available_from,
         available_through=available_through,
+        shared_group_score_broadcast=shared_group_score_broadcast,
     )
 
 

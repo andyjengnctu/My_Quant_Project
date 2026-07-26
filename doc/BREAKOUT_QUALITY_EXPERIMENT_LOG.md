@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_133801_f785df1.zip`，SHA256 `aecf6f4e5f19fd6785f209339be388fb2632b0a7ca9b11bdb4fb2c08af9dfcd6`；已包含unique-group score單一真理、逐年OOS診斷及其本地重跑結果 |
-| SHA256 | 本輪來源 ZIP：`aecf6f4e5f19fd6785f209339be388fb2632b0a7ca9b11bdb4fb2c08af9dfcd6`；使用者結果文字：`b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | `test-branch-1_20260726_190737_6b7c70d.zip`，SHA256 `179a8dc5ae2a5636faea27c22f25e11b1437ba268595148210a7663fdd8a0cca`；已包含unique-group score、逐年OOS診斷、Rolling active-param策略比較及help-contract閉環，本輪再修正sequence-only runtime score lookup key |
+| SHA256 | 本輪來源 ZIP：`179a8dc5ae2a5636faea27c22f25e11b1437ba268595148210a7663fdd8a0cca`；最新9A研究結果仍沿用先前已追溯文字 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -904,6 +904,18 @@ Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke
 | Selection／OOS結果 | 無新模型、分類或投組結果 |
 | 判定 | `IMPLEMENTED`；修正formal help coverage漏登，非模型或策略實驗 |
 | 下一步 | 套用修補後重跑`python apps/test_suite.py`；通過後再進行Rolling OOS參數產生與固定9A策略比較 |
+
+策略比較 runtime score lookup 閉環（2026-07-26 19:07）：正式 `forward_oos` score 已成功輸出640,981列，日期2021-01-04～2026-03-02；no-filter Rolling ensemble replay可完成，但quality-filter在建立2021～2026 active-param快取時，於ticker=2412、high_len=160、2025-06-12因精確`ticker/date/high_len`列不存在而中止。根因是9A `use_dataset_context=false` score export已按unique `ticker/date`只推論一次並精確broadcast到event rows，manifest也宣告`shared_group_score_broadcast=true`，但runtime仍沿用legacy event-context模型的三欄lookup key；因此score產生與score消費沒有完成同一group語意。已將runtime contract讀取該宣告：sequence-only工件先驗證同一`ticker/date`所有event-row分數完全一致，再建立唯一`ticker/date` index；active `high_len`仍必須落在artifact宣告coverage內，但不再要求該日期必須剛好保留同一high_len event row。使用Dataset context的legacy模型仍維持精確三欄lookup並fail-fast。此修正不改score值、threshold、模型、Dataset、Label、Rolling參數、候選定義、成交或帳務；既有`scores.csv`與manifest可直接重用。
+
+| 追溯項目 | Runtime score lookup閉環內容 |
+|---|---|
+| 程式基準 | 使用者ZIP `test-branch-1_20260726_190737_6b7c70d.zip`，SHA256 `179a8dc5ae2a5636faea27c22f25e11b1437ba268595148210a7663fdd8a0cca` |
+| 唯一變更 | sequence-only正式runtime lookup由`ticker/date/high_len`改為manifest宣告的`ticker/date` shared-group key；legacy context-dependent工件不變 |
+| 固定條件 | 9A architecture/profile、threshold 0.5、forward-OOS score values、Rolling active-param ensemble、portfolio交易與統計口徑全部不變 |
+| 重建需求 | 不需重建Dataset、Label、feature bank、模型、score或Rolling參數；套用patch後直接重跑strategy compare |
+| Selection／OOS結果 | 無新分類或投組結果；本輪只完成runtime契約閉環，策略比較仍待完成 |
+| 判定 | `IMPLEMENTED`；修正key語意分叉，不預判9A策略有效或無效 |
+| 下一步 | 直接重跑`python apps/breakout_quality_strategy_compare.py --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off` |
 
 
 ---
