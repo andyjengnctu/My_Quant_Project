@@ -2,16 +2,16 @@ import os
 from core.seed_ensemble_policy import resolve_seed_ensemble_parallel_backend, resolve_seed_ensemble_parallel_workers
 
 # OPTIMIZER_ROLLING_FOLD_WORKERS:
-OPTIMIZER_ROLLING_FOLD_WORKERS = 6 # "fold_count" 使用 fold 總數; # 正整數 = 固定 rolling fold process 數
+OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count" # "fold_count" 使用 fold 總數; # 正整數 = 固定 rolling fold process 數
 OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0 
 OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024 
 
 # OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS:
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = 8 # - "auto" =  random seed ensemble 的 N
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS = "auto" # - "auto" =  random seed ensemble 的 N
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND = "process"
 
 # 單一 optimizer search unit 內加速參數區
-OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 1
+OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 8
 OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH = False
 OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 4
 OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS = 0
