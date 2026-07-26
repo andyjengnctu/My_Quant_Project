@@ -1457,15 +1457,21 @@
 | 2026-07-26 | B11 | 同步legacy expected tuple納入`mantis_v2_frozen_linear_v1`，驗證9A／8F active與全部淘汰架構legacy分區一致後重新收斂為DONE | PARTIAL -> DONE | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-07-26 | B11 | 9E新增active `moment_1_base_frozen_linear_v1`，以釘死官方MOMENT-1-base frozen encoder、固定300→512 multichannel插值、patch-mean＋channel-concat representation與單一linear probe取代9A supervised encoder，模型／外部來源契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/moment_contract.py`, `filters/breakout_quality/moment_pretrained.py`, `filters/breakout_quality/models/moment.py` |
 | 2026-07-26 | B11 | 驗證9E model spec、context isolation、encoder frozen eval、chunked forward、head-only backward、strict reload、9A／8F比較基準與9D legacy分區後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-26 | B11 | 9E完整OOS固定coverage排序全面低於9A且未超越8F，active architecture退回`inception_time_v1`、MOMENT轉為legacy，模型治理契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py`, `config/breakout_quality_policy.py` |
+| 2026-07-26 | B11 | 驗證9A／8F active、9E legacy strict reconstruction、9E結果紀錄與9F單一變更計畫一致後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-07-26 | B16 | active workflow由9D外部checkpoint分流退回9A supervised三階段，CLI／文件契約改回PARTIAL | DONE -> PARTIAL | `config/breakout_quality_policy.py`, `doc/CMD.md` |
 | 2026-07-26 | B16 | 驗證正式workflow不再要求Mantis套件或下載checkpoint、legacy重建指令仍可定位且報表流程不變後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-07-26 | B16 | 9E workflow新增MOMENT套件preflight、釘死checkpoint下載驗證與三階段分流，CLI／依賴文件契約改回PARTIAL | DONE -> PARTIAL | `apps/breakout_quality.py`, `requirements/requirements-moment.txt`, `doc/CMD.md` |
 | 2026-07-26 | B16 | 驗證9E不觸發TS2Vec pretraining stages、缺套件訊息可定位、外部來源資訊可見且既有workflow參數不變後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-07-26 | B16 | 檢出`momentfm==0.1.4` PyPI metadata釘死舊版NumPy／Hub／Transformers，若直接安裝可能降級主環境，9E依賴與CLI安裝契約改回PARTIAL | DONE -> PARTIAL | `requirements/requirements-moment.txt`, `filters/breakout_quality/moment_contract.py`, `doc/CMD.md` |
 | 2026-07-26 | B16 | 固定`transformers==5.5.0`並要求`momentfm==0.1.4 --no-deps`隔離安裝，CLI顯示兩個runtime版本且缺少／錯版均fail-fast後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
+| 2026-07-26 | B16 | active workflow由9E外部checkpoint分流退回9A supervised三階段，CLI／依賴文件契約改回PARTIAL | DONE -> PARTIAL | `config/breakout_quality_policy.py`, `doc/CMD.md` |
+| 2026-07-26 | B16 | 驗證正式workflow不再要求MOMENT／Transformers選配套件或下載checkpoint、legacy重建指令仍可定位且報表流程不變後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-07-26 | T266 | 9D轉為legacy唯讀、正式runtime輸出退回9A InceptionTime architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-26 | T266 | 驗證Mantis舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A／8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-26 | T266 | 9E checkpoint／manifest新增MOMENT repository、revision、checkpoint hash／size、package、config語意與project-data isolation欄位，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/moment_contract.py`, `filters/breakout_quality/artifacts.py` |
 | 2026-07-26 | T266 | 驗證MOMENT external provenance、完整frozen encoder＋head checkpoint、hash竄改fail-fast與全部legacy架構strict reconstruction後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-26 | T266 | 9E external provenance新增精確Transformers runtime dependency版本，避免只有MOMENT package版本而無法重建實際載入環境，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/moment_pretrained.py`, `filters/breakout_quality/artifacts.py` |
 | 2026-07-26 | T266 | 驗證checkpoint／manifest保存`momentfm==0.1.4`與`transformers==5.5.0`、任一版本竄改均fail-fast後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-26 | T266 | 9E轉為legacy唯讀、正式runtime輸出退回9A InceptionTime architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
+| 2026-07-26 | T266 | 驗證MOMENT舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A／8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |

@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_014531_d948104.zip`，SHA256 `a09358b19910a5dea8c621a5658667a87fbf21bb37aeb59d78e74e7e56230406`；此基準已包含9D淘汰、退回9A與legacy閉環 |
-| SHA256 | 本輪來源 ZIP：`a09358b19910a5dea8c621a5658667a87fbf21bb37aeb59d78e74e7e56230406` |
-| 程式版本範圍 | 9E `moment_1_base_frozen_linear_v1`已實作為active研究架構，等待完整Selection／OOS；9A `inception_time_v1`仍是排序／高品質實證基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準；9A-GN、9B、9C與9D只供舊工件重建 |
-| Policy 預設 | architecture=`moment_1_base_frozen_linear_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9E只訓練linear head；9C pretraining profile與9D外部checkpoint契約保留legacy重建 |
+| 基準 ZIP | `test-branch-1_20260726_083239_00c2f57.zip`，SHA256 `1a27923eb85ebc014b9616fba4962428b248c162754cf1a90f2af9cb33fd424e`；此基準已包含9E完整Selection／OOS結果，退回9A與legacy閉環由本輪修補完成 |
+| SHA256 | 本輪來源 ZIP：`1a27923eb85ebc014b9616fba4962428b248c162754cf1a90f2af9cb33fd424e` |
+| 程式版本範圍 | 9A `inception_time_v1`恢復為排序／高品質active基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋active基準；9A-GN、9B、9C、9D與9E只供舊工件重建；下一項為9F小型Patch Transformer |
+| Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining profile、9D Mantis與9E MOMENT外部checkpoint契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures為9A `inception_time_v1`排序／高品質實證基準、8F `multiscale_cnn_sequence_only_v1`高覆蓋基準，以及等待結果的9E `moment_1_base_frozen_linear_v1`；9A-GN、9B ModernTCN、9C TS2Vec與9D MantisV2只保留legacy read-only compatibility。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures只保留9A `inception_time_v1`排序／高品質實證基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2與9E MOMENT只保留legacy read-only compatibility。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -594,6 +594,27 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 判定 | 9D明顯優於9C且threshold 0.5的coverage／score跨期穩定，但主要預設判定是固定coverage排序；五項排序指標全部低於9A，R@P60%落後22.12 pp，因此不符合controlled fine-tuning啟動條件。停止9D threshold、adapter、head、channel aggregation、output layer/token與encoder fine-tuning細調，避免用同一OOS救援 |
 | 下一步 | 進入9E MOMENT frozen encoder＋linear probe；仍固定Label、split、unique-group sampling與評估口徑，不同輪混入fine-tuning、ensemble或threshold調整 |
 
+
+### 3.33 9E MOMENT-1-base frozen encoder＋linear probe（2026-07-26）
+
+| 項目 | 內容 |
+|---|---|
+| 狀態 | `REJECTED`；未達9A frozen-probe比較門檻，policy退回9A，MOMENT轉為legacy read-only；不啟動encoder fine-tuning |
+| 程式基準 | 結果ZIP `test-branch-1_20260726_083239_00c2f57.zip`，SHA256 `1a27923eb85ebc014b9616fba4962428b248c162754cf1a90f2af9cb33fd424e`；結果文字SHA256 `fc874856bef08998ee37ca02bb4902db2df465fb847cc42bbd239b8a38638122` |
+| Architecture | `moment_1_base_frozen_linear_v1`；官方MOMENT-1-base encoder、300→512 bars、patch／stride 8、12層T5-base、每channel對64 patches取mean後串接為7680維，單一7680→2 linear head；frozen 109,635,456、trainable 15,362 parameters |
+| 唯一研究變更 | 以釘死外部預訓練MOMENT frozen encoder取代9A supervised encoder與9D MantisV2 encoder；patch embedder與encoder完全凍結、固定eval，只訓練linear head |
+| 外部來源契約 | repository=`AutonLab/MOMENT-1-base`；revision=`b0ae5751d8ef43d72ad48fb5128e2ddc93c94b53`；checkpoint SHA256=`1a436826ffe618273ec62b9656dc4cab8edc470364f104e90542a4ebc14fb825`；runtime=`momentfm==0.1.4 / transformers==5.5.0`；未使用project pretraining、OOS windows或PASS／REJECT labels訓練encoder |
+| 下游訓練 | Best epoch 2，最低Validation loss 0.684556；完整Selection重訓2 epochs，final loss 0.676872；train耗時4:04:24.7、score export耗時1:56:42.4、總耗時6:01:21.5 |
+| Dataset／Label | 沿用既有300×10 supervised feature bank、固定百分比Label、Selection／OOS split與unique-group sampling；不重建、不relabel |
+| Selection | 原始PASS 54.81%、模型PASS 70.18%、Precision 59.46%、Lift +4.65 pp、Recall 76.14%、Accuracy 58.47%、Score 0.5258、PR-AUC 0.6301、P@50／60／70%=61.58／60.58／59.49%、R@P60%=71.87%、Brier 0.2419、ECE 0.0379 |
+| OOS | 原始PASS 55.63%、模型PASS 75.31%、Precision 56.40%、Lift +0.77 pp、Recall 76.35%、Accuracy 54.01%、Score 0.5378、PR-AUC 0.5857、P@50／60／70%=58.04／57.50／56.77%、R@P60%=23.07%、Brier 0.2476、ECE 0.0271 |
+| Selection→OOS | PR-AUC −0.0444；P@50／60／70%分別 −3.54／−3.08／−2.72 pp；R@P60% −48.80 pp；threshold 0.5 Precision −3.06 pp、Recall +0.21 pp、模型PASS +5.13 pp、Accuracy −4.46 pp、Score +0.0120；Brier惡化0.0057、ECE改善0.0108 |
+| 相較9A | OOS PR-AUC −0.0400；P@50／60／70%分別 −4.73／−4.12／−3.48 pp；R@P60% −54.20 pp；threshold 0.5 Precision −6.59 pp、Lift −6.58 pp、Recall +24.91 pp、模型PASS +29.88 pp、Accuracy −2.16 pp、Score +0.0536；Brier惡化0.0023、ECE改善0.0451 |
+| 相較8F | OOS Precision／Lift各 −2.06 pp、Recall −0.61 pp、模型PASS +2.07 pp、Accuracy −2.75 pp、Score −0.0119；連高覆蓋基準也未超越 |
+| 相較9D | OOS PR-AUC −0.0076；P@50／60／70%分別 −2.01／−1.89／−1.93 pp；R@P60% −32.08 pp；Precision −1.73 pp、Recall −13.63 pp、Accuracy −4.36 pp、Score −0.0665；只有ECE改善0.0209，且計算成本大幅增加 |
+| 判定 | 9E的低ECE只代表分數尺度較穩，無法抵消OOS ranking全面退步；固定coverage排序與R@P60%皆遠低於9A，Selection→OOS drift也明顯。Frozen representation不具足夠跨期線性可分性，不啟動MOMENT fine-tuning，停止threshold、output reduction、patch／stride、pooling、MLP head、adapter與同checkpoint細調 |
+| 下一步 | 進入9F小型Patch Transformer supervised architecture；仍固定Label、split、unique-group sampling、optimizer與評估口徑，不同輪混入self-supervised pretraining、ensemble或threshold調整 |
+
 ---
 
 ## 4. 已排除或暫停的方向
@@ -632,12 +653,13 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 30. ModernTCN supervised architecture search；9B Selection全面變強但OOS PR-AUC、固定coverage Precision、Accuracy、Brier與ECE全面惡化。停止ModernTCN depth、kernel、channels、expansion、dropout與其他supervised CNN／TCN橫向調整。
 31. TS2Vec Selection-only frozen probe；9C OOS PR-AUC較9A低0.0604，P@50／60／70%低4.61／3.77／2.92 pp，模型PASS升至88.78%但Lift只剩+0.48 pp。Frozen representation不具穩定線性可分性，不啟動9C2，不再調pretraining epochs、stride、crop、mask、pooling、head、fine-tuning或threshold。
 32. MantisV2 frozen probe；9D雖有穩定的threshold 0.5 coverage與較高Recall，但OOS PR-AUC較9A低0.0324，P@50／60／70%低2.72／2.23／1.55 pp，R@P60%低22.12 pp。未達fine-tuning啟動條件，不再調threshold、adapter、head、channel aggregation、output layer/token或encoder fine-tuning。
+33. MOMENT-1-base frozen probe；9E OOS PR-AUC較9A低0.0400，P@50／60／70%低4.73／4.12／3.48 pp，R@P60%低54.20 pp，且連8F高覆蓋基準也未超越。低ECE不是排序改善，不啟動fine-tuning，不再調threshold、output reduction、patch／stride、pooling、head、adapter或同checkpoint變體。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9E `moment_1_base_frozen_linear_v1 / unique_group_sampling`已實作並設為本輪研究policy，等待完整Selection／OOS；9A `inception_time_v1 / unique_group_sampling`仍是排序／高品質實證基準，8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。9E不得同輪混入fine-tuning、ensemble、可學習adapter或threshold調整。
+所有實驗一次只改一項。9E `moment_1_base_frozen_linear_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy，policy退回9A `inception_time_v1 / unique_group_sampling`排序／高品質基準；8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。下一項為9F小型Patch Transformer supervised architecture，不同輪混入self-supervised pretraining、ensemble、可學習adapter或threshold調整。
 
 ### 優先 6A：AdamW only
 
@@ -784,21 +806,21 @@ Formal bundle閉環（2026-07-25 23:30）：quick gate、chain checks與ML smoke
 
 Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke均PASS；consistency僅1項FAIL，meta quality也只因同一項synthetic failure連帶FAIL。9D退回9A時，runtime與model spec已正確將`mantis_v2_frozen_linear_v1`轉為legacy read-only，但`validate_breakout_quality_policy_single_source_case`的顯式legacy expected tuple漏列MantisV2，導致actual比expected多一個正確的legacy architecture。已同步fixture；此修正不改runtime、9D結果、9A／8F active集合、Dataset、Label、threshold或訓練行為。
 
-#### 下一階段 9E：MOMENT-1-base frozen encoder＋linear probe
+#### 9E：MOMENT-1-base frozen encoder＋linear probe
+
+`REJECTED`。OOS PR-AUC 0.5857，P@50／60／70%=58.04／57.50／56.77%，R@P60%=23.07%，相較9A全面下降；threshold 0.5下模型PASS 75.31%、Recall 76.35%，但Precision只比原始PASS高0.77 pp。ECE較低不代表排序改善。MOMENT轉為legacy read-only，不啟動fine-tuning或同checkpoint細調。
+
+#### 下一階段 9F：小型Patch Transformer supervised architecture
 
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；尚未取得Selection／OOS結果，不預先判定有效或無效 |
-| 程式基準 | `test-branch-1_20260726_014531_d948104.zip`，SHA256 `a09358b19910a5dea8c621a5658667a87fbf21bb37aeb59d78e74e7e56230406`；本輪9E修補ZIP名稱／SHA256於交付訊息記錄 |
-| Architecture | `moment_1_base_frozen_linear_v1`；官方`AutonLab/MOMENT-1-base`，釘死revision `b0ae5751d8ef43d72ad48fb5128e2ddc93c94b53`與checkpoint SHA256；512 bars、patch 8／stride 8、12-layer T5-base encoder、每channel 768維representation |
-| 唯一變更 | 以外部預訓練MOMENT encoder取代9A supervised encoder與9D MantisV2 encoder；encoder與patch embedder完全凍結、固定eval，只訓練單一linear head |
-| 輸入 | 沿用300×10 sequence；10 channels保留獨立語意並以固定linear interpolation轉為512 bars。使用官方embedding mode的`reduction=none`，各channel先對64個patch取mean，再串接為7680維；adapter不可學習 |
-| 外部來源契約 | package=`momentfm==0.1.4`、runtime=`transformers==5.5.0`；因MOMENT的PyPI metadata釘死舊版NumPy／Hub／Transformers，必須先安裝專案runtime，再以`--no-deps`安裝MOMENT，禁止降級主環境；repository／revision／checkpoint filename、SHA256、size與config完整語意必須一致；首次訓練下載後，完整encoder state內嵌正式`model.pt`供後續離線重建 |
-| 固定條件 | 固定百分比Label、Selection／OOS split、unique-group sampling、batch 128、patience 1、selected_epochs、threshold 0.5、seed 42與全部ranking／calibration口徑不變；不使用Dataset context、project pretraining、OOS或PASS／REJECT labels訓練encoder |
-| Dataset rebuild | 不重建supervised Dataset、不relabel、不建立Selection-only pretraining dataset；只新增外部encoder checkpoint provenance與正式模型工件 |
-| Selection／OOS結果 | 尚未執行；必須標示未知，不得由程式實作或官方模型表現推定 |
+| 狀態 | `PLANNED`；尚未實作或取得Selection／OOS結果 |
+| 唯一變更 | 以專案內從零監督式訓練的小型Patch Transformer取代9A InceptionTime；第一輪不使用外部預訓練或masked pretraining |
+| 輸入 | 沿用300×10 sequence；以固定、可追溯的非重疊temporal patches形成tokens，保留10個features共同構成每個patch token，不加入Dataset context |
+| 固定條件 | 固定百分比Label、Selection／OOS split、unique-group sampling、Adam、LR 0.0003、batch 128、patience 1、selected_epochs、threshold 0.5、seed 42與全部ranking／calibration口徑不變 |
+| Dataset rebuild | 不重建supervised Dataset、不relabel；只新增模型architecture與其checkpoint／manifest |
 | 主要判定 | 先看OOS PR-AUC、P@50／60／70%、R@P60%與Selection→OOS gaps；threshold 0.5只作輔助 |
-| 後續 | Frozen probe接近或超過9A且泛化穩定，才另立controlled fine-tuning；否則進入9F小型Patch Transformer，不在9E內調threshold、ensemble、output reduction或可學習adapter |
+| 後續 | 只有supervised Patch Transformer本身接近或超過9A，才另立9F-B Selection-only masked pretraining；否則停止現有300×10單模型架構橫向搜尋 |
 
 
 ---
@@ -832,8 +854,8 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 → 9B ModernTCN（REJECTED；已退回9A並轉為legacy）
 → 9C TS2Vec Selection-only自監督預訓練＋frozen linear probe（REJECTED；已退回9A並轉為legacy）
 → 9D MantisV2 frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
-→ 9E MOMENT-1-base frozen encoder＋linear probe（IMPLEMENTED；待完整Selection／OOS）
-→ 9F 小型Patch Transformer（僅在9E未達標後實作）
+→ 9E MOMENT-1-base frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
+→ 9F 小型Patch Transformer supervised architecture（PLANNED；下一項）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

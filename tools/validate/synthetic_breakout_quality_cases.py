@@ -2449,7 +2449,6 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             (
                 "inception_time_v1",
                 "multiscale_cnn_sequence_only_v1",
-                "moment_1_base_frozen_linear_v1",
             ),
             set(legacy_architectures),
         ),

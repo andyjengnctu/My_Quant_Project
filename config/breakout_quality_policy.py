@@ -8,7 +8,7 @@ from config.breakout_quality_experiments import (
     get_breakout_quality_pretraining_profile,
 )
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "moment_1_base_frozen_linear_v1"  # 9E IMPLEMENTED：官方 MOMENT-1-base frozen encoder＋linear probe；結果未知，9A 仍是實證排序基準。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_v1"  # 9A accepted 排序／高品質基準；9E MOMENT frozen probe 已由完整 OOS 淘汰並轉為 legacy。
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"  # 8F accepted 基準：每個 unique ticker/date group 每個 epoch 只參與一次 optimizer sampling。
 BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
