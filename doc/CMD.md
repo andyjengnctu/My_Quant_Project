@@ -1,7 +1,7 @@
 # 常用指令
 
 python apps/ml_optimizer.py --dataset full --timing --trials 10 `效能驗證`
-python apps\ml_optimizer.py --dataset full --outer-oos --timing --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 60 --outer-oos-months 12 --yes `rolling效能驗證`
+python apps\ml_optimizer.py --dataset full --outer-oos --timing --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes `rolling效能驗證`
 
 ## 環境 / 測試
 
@@ -167,6 +167,52 @@ python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --
 - `available_from` 之前視為模型尚未啟用；`available_through` 之後若出現候選事件則 fail-fast，沒有候選事件時不要求不存在的分數。
 - 正式 runtime 只讀目前 policy 架構與 experiment profile 的 `models/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/scores.csv`，並驗證 model/score SHA256、schema、high_len coverage、OOS eligibility 與可用日期。
 - 現有舊版 `breakout_quality_v1` manifest 不符合新版 artifact contract 時，必須依上述流程重建，不得由 runtime 猜測或自動相容。
+
+## 固定 9A 策略層經濟效果對照
+
+### 正式無前視 OOS 對照
+
+正式比較不能拿「今天才訓練完成」的單一 `models/run_best_params.json` 回放整段 2021～2025；該參數已看過後期資料，不符合歷史交易日使用當時已生效 active param 的原則。應先由 Rolling OOS Optimizer 產生按生效日切換的參數組。不要加 `--timing`，因 timing mode 不寫出正式 `roos_*.json`：
+
+```bash
+python apps/ml_optimizer.py --dataset full --outer-oos --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes
+```
+
+目前 Trade selector 對應的正式參數組為：
+
+```text
+models/roos_base_finalists_agree.json
+```
+
+完成上方 `forward_oos` score 匯出與 Rolling OOS 參數組後執行：
+
+```bash
+python apps/breakout_quality_strategy_compare.py --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off
+```
+
+- 比較期間固定為 active runtime artifact 的 `available_from` ～ `available_through`，且 rolling active-param 生效期間必須完整覆蓋該期間。
+- 每個歷史交易日都使用 Rolling OOS 檔內當日已生效的單一參數或 seed ensemble；兩組交易日期與 0050 benchmark 必須完全一致。
+- 工具與 Portfolio Simulator 共用 `core.portfolio_engine`、正式 signal generation、成交／費用／資金／持股延續及 `core.portfolio_stats`；Optimizer 也共用相同核心，但 Optimizer 是參數搜尋流程，策略對照是固定參數 OOS replay，兩者不是相同工作流。
+- 兩組完整參數／每個 ensemble member 只能有 `use_breakout_quality_filter=False/True` 一項差異；filter ID 與 threshold 均固定為 active policy／manifest 值，不重新最佳化任何策略參數。
+- `Candidate_Supply_Gap` 是「盤前可用持股格數 − 當日可掛單候選數」的非負值，只表示候選供給是否足夠；`End_Position_Gap` 才是成交執行後仍未滿倉的格數。
+- 輸出固定在 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/strategy_compare/`，包含 Markdown／JSON 主報表、兩組 equity／trade／daily-capacity CSV 與年度報酬比較。
+- 此對照只判斷固定 9A 是否改善淨報酬、回撤、穩定性及資金使用；不得依結果回頭調整 threshold、epochs、feature、Label 或模型。
+
+### `run_best_params.json` 的用途與產生方式
+
+Trade Mode 會先輸出 `models/candidate_best_params.json`；目前 `TRADE_MODE_AUTO_PROMOTE_RUN_BEST=True`，候選通過正式 promotion 契約時才建立或更新 `models/run_best_params.json`：
+
+```bash
+python apps/ml_optimizer.py --dataset full --model trade --trials 10
+```
+
+目前 random-seed ensemble 已啟用，因此 `run_best_params.json` 可能是 static active-param ensemble，而不是單一參數 JSON；策略對照工具支援此格式，但僅可明確標記為非 OOS 敏感度診斷：
+
+```bash
+python apps/breakout_quality_strategy_compare.py --dataset full --params models/run_best_params.json --allow-static-diagnostic --max-positions 10 --rotation off
+```
+
+不指定 `--params` 時，也只有加上 `--allow-static-diagnostic` 才會使用正式 primary param source。此結果不可作為 2021～2025 無前視 OOS 部署證據。
 
 # 輸出分類
 

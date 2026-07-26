@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import os
 import tempfile
@@ -9,6 +10,9 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
+
+from core.active_param_ensemble import build_static_active_param_ensemble_payload
+from core.params_io import params_to_json_dict
 
 from config.breakout_policy import (
     BREAKOUT_DEFAULT_HIGH_LEN,
@@ -39,6 +43,7 @@ from config.breakout_quality_experiments import (
     get_breakout_quality_pretraining_profile,
 )
 from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
@@ -203,6 +208,14 @@ from tools.filters.breakout_quality.report import (
     build_report_payload,
     render_console_summary,
     render_markdown_report,
+)
+from tools.filters.breakout_quality.strategy_compare import (
+    _assert_controlled_ensemble_pair,
+    _assert_controlled_param_pair,
+    _build_controlled_param_source_pair,
+    _load_param_source,
+    _capacity_summary,
+    _to_json_native,
 )
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
@@ -5522,8 +5535,277 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     return results, summary
 
 
+def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_STRATEGY_COMPARISON"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    base = V16StrategyParams()
+    common = {
+        "breakout_quality_filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        "breakout_quality_score_threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+    }
+    no_filter = replace(base, use_breakout_quality_filter=False, **common)
+    quality_filter = replace(base, use_breakout_quality_filter=True, **common)
+    try:
+        _assert_controlled_param_pair(no_filter, quality_filter)
+        single_switch_only = True
+    except ValueError:
+        single_switch_only = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "controlled_pair_only_toggles_quality_filter",
+        True,
+        single_switch_only,
+    )
+
+    try:
+        _assert_controlled_param_pair(
+            no_filter,
+            replace(quality_filter, high_len=int(quality_filter.high_len) + 1),
+        )
+        extra_difference_rejected = False
+    except ValueError as exc:
+        extra_difference_rejected = "high_len" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "additional_param_difference_is_rejected",
+        True,
+        extra_difference_rejected,
+    )
+
+    ensemble_source = build_static_active_param_ensemble_payload(
+        members=[
+            {"member_index": 1, "seed": 101, "params": params_to_json_dict(base)},
+            {"member_index": 2, "seed": 202, "params": params_to_json_dict(replace(base, high_len=205))},
+        ],
+        random_seed_ensemble={"enabled": True, "seed_count": 2, "min_agree": 2},
+        selector="base_finalists_agree",
+    )
+    (
+        ensemble_kind,
+        ensemble_no_filter,
+        ensemble_quality,
+        _ensemble_no_payload,
+        _ensemble_quality_payload,
+        ensemble_policy,
+    ) = _build_controlled_param_source_pair(
+        {"kind": "static_active_param_ensemble", "payload": ensemble_source},
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        fixed_risk=0.01,
+    )
+    ensemble_switches = [
+        (
+            bool(left_member["params"]["use_breakout_quality_filter"]),
+            bool(right_member["params"]["use_breakout_quality_filter"]),
+            int(left_member["params"]["high_len"]),
+            int(right_member["params"]["high_len"]),
+            float(left_member["params"]["fixed_risk"]),
+            float(right_member["params"]["fixed_risk"]),
+        )
+        for left_member, right_member in zip(
+            ensemble_no_filter["params_ensemble"], ensemble_quality["params_ensemble"]
+        )
+    ]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "static_trade_ensemble_preserves_members_and_only_toggles_filter",
+        (
+            "static_active_param_ensemble",
+            [(False, True, 201, 201, 0.01, 0.01), (False, True, 205, 205, 0.01, 0.01)],
+            (2, 2),
+        ),
+        (
+            ensemble_kind,
+            ensemble_switches,
+            (ensemble_policy["seed_count"], ensemble_policy["min_agree"]),
+        ),
+    )
+
+    broken_ensemble = json.loads(json.dumps(ensemble_quality))
+    broken_ensemble["params_ensemble"][1]["params"]["high_len"] += 1
+    try:
+        _assert_controlled_ensemble_pair(ensemble_no_filter, broken_ensemble)
+        ensemble_extra_difference_rejected = False
+    except ValueError as exc:
+        ensemble_extra_difference_rejected = "high_len" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ensemble_additional_member_difference_is_rejected",
+        True,
+        ensemble_extra_difference_rejected,
+    )
+
+    rolling_single_payload = {
+        "schema_type": "rolling_oos_param_set",
+        "schema_version": 1,
+        "usage": "validation_only",
+        "summary": {"oos_end_date": "2022-12-31"},
+        "params_by_effective_date": {
+            "2021-01-01": params_to_json_dict(base),
+            "2022-01-01": params_to_json_dict(replace(base, high_len=205)),
+        },
+        "params_by_oos_year": {
+            "2021": params_to_json_dict(base),
+            "2022": params_to_json_dict(replace(base, high_len=205)),
+        },
+        "folds": [
+            {"effective_start": "2021-01-01", "effective_end": "2021-12-31"},
+            {"effective_start": "2022-01-01", "effective_end": "2022-12-31"},
+        ],
+    }
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        rolling_single_path = Path(tmp_dir) / "roos_base_best.json"
+        rolling_single_path.write_text(json.dumps(rolling_single_payload), encoding="utf-8")
+        rolling_single_source = _load_param_source(rolling_single_path)
+        rolling_single_pair = _build_controlled_param_source_pair(
+            rolling_single_source,
+            filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+            fixed_risk=None,
+        )
+    rolling_single_left = rolling_single_pair[1]["params_by_effective_date"]["2022-01-01"]
+    rolling_single_right = rolling_single_pair[2]["params_by_effective_date"]["2022-01-01"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rolling_oos_single_param_schedule_is_supported_without_changing_effective_dates",
+        ("rolling_oos_param_schedule", False, True, 205, 205),
+        (
+            rolling_single_pair[0],
+            rolling_single_left["use_breakout_quality_filter"],
+            rolling_single_right["use_breakout_quality_filter"],
+            rolling_single_left["high_len"],
+            rolling_single_right["high_len"],
+        ),
+    )
+
+    rolling_payload = {
+        "schema_type": "optimizer_active_param_ensemble",
+        "schema_version": 1,
+        "mode": "rolling",
+        "usage": "validation_only",
+        "type": "outer_rolling_oos_param_set",
+        "random_seed_ensemble": {"enabled": True, "seed_count": 2, "min_agree": 2},
+        "summary": {"oos_end_date": "2022-12-31"},
+        "params_by_effective_date": {"2021-01-01": params_to_json_dict(base), "2022-01-01": params_to_json_dict(base)},
+        "params_by_oos_year": {"2021": params_to_json_dict(base), "2022": params_to_json_dict(base)},
+        "params_ensemble_by_effective_date": {
+            "2021-01-01": [
+                {"member_index": 1, "params": params_to_json_dict(base)},
+                {"member_index": 2, "params": params_to_json_dict(replace(base, high_len=205))},
+            ],
+            "2022-01-01": [
+                {"member_index": 1, "params": params_to_json_dict(base)},
+                {"member_index": 2, "params": params_to_json_dict(replace(base, high_len=205))},
+            ],
+        },
+        "folds": [
+            {"effective_start": "2021-01-01", "effective_end": "2021-12-31"},
+            {"effective_start": "2022-01-01", "effective_end": "2022-12-31"},
+        ],
+    }
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        rolling_path = Path(tmp_dir) / "roos_base_finalists_agree.json"
+        rolling_path.write_text(json.dumps(rolling_payload), encoding="utf-8")
+        rolling_source = _load_param_source(rolling_path)
+        rolling_pair = _build_controlled_param_source_pair(
+            rolling_source,
+            filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+            fixed_risk=None,
+        )
+    rolling_left = rolling_pair[1]["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]
+    rolling_right = rolling_pair[2]["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rolling_oos_active_param_ensemble_is_supported_without_changing_schedule",
+        ("rolling_active_param_ensemble", False, True, 2, 2),
+        (
+            rolling_pair[0],
+            rolling_left["use_breakout_quality_filter"],
+            rolling_right["use_breakout_quality_filter"],
+            rolling_pair[5]["seed_count"],
+            rolling_pair[5]["min_agree"],
+        ),
+    )
+
+    capacity = _capacity_summary({
+        "portfolio_capacity_rows": [
+            {
+                "Orderable_Candidates": 3,
+                "Candidate_Supply_Gap": 7,
+                "End_Position_Gap": 8,
+                "Post_Execution_Positions": 2,
+            },
+            {
+                "Orderable_Candidates": 0,
+                "Candidate_Supply_Gap": 8,
+                "End_Position_Gap": 8,
+                "Post_Execution_Positions": 2,
+            },
+        ]
+    })
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_candidate_and_position_gap_summary",
+        (2, 1.5, 1, 2, 15, 2, 16, 2.0, 0),
+        (
+            capacity["sim_day_count"],
+            capacity["avg_orderable_candidates"],
+            capacity["zero_orderable_candidate_days"],
+            capacity["candidate_supply_gap_days"],
+            capacity["candidate_supply_gap_slot_days"],
+            capacity["underfilled_end_days"],
+            capacity["end_position_gap_slot_days"],
+            capacity["avg_end_positions"],
+            capacity["full_position_days"],
+        ),
+    )
+
+    native_payload = _to_json_native({
+        "number": np.float64(1.25),
+        "date": pd.Timestamp("2026-07-26"),
+        "non_finite": np.float64(np.nan),
+    })
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "comparison_json_payload_is_native_and_strict",
+        {"number": 1.25, "date": "2026-07-26T00:00:00", "non_finite": None},
+        native_payload,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "comparison_json_number_is_builtin_float",
+        True,
+        type(native_payload["number"]) is float,
+    )
+
+    summary["controlled_param_difference"] = ["use_breakout_quality_filter"]
+    return results, summary
+
+
 __all__ = [
     "validate_breakout_quality_chronological_embargo_case",
     "validate_breakout_quality_policy_single_source_case",
     "validate_breakout_quality_runtime_artifact_contract_case",
+    "validate_breakout_quality_strategy_comparison_contract_case",
 ]

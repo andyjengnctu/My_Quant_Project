@@ -192,6 +192,7 @@
 
 | B168 | P0 | 交易規格 / Ensemble Re-entry 共識契約 | ensemble 共識成交後的持倉必須保存所有投票 member 的各自參數；STOP 後必須為每個原始投票 member 建立 reclaim watch state，讓後續 Re-entry 仍能依 `min_agree` 重新形成共識；不得只保留代表 member，否則 `min_agree > 1` 時 Re-entry 會永久失效。Re-entry shadow level 輸出也必須保留 `reentry` 類型，不得誤標成一般 `extended` | DONE | 已補 direct synthetic case，逐層驗證 ensemble candidate aggregation 保存全部 member params、成交持倉承接該 mapping、STOP 後為全部原始投票 member 建立含各自 confirm ATR 的 watch state、reclaim 後可再次聚合成符合 `min_agree` 的 Re-entry 共識，以及 shadow level 輸出維持 `reentry` 類型 | `tools/validate/synthetic_flow_cases.py`, `core/portfolio_engine.py`, `core/portfolio_entries.py`, `core/portfolio_exits.py` |
 | B169 | P0 | 交易規格 / 繼承停損進場契約 | 正常進場的 `candidate_plan.init_sl` 只作盤前 worst-case sizing，不得作成交否決下限；但延續候選與 Re-entry 若攜帶 `shadow_position_state` 繼承既有部位管理狀態，實際成交價必須嚴格高於繼承後的有效停損，否則不得進場，也不得誤計為一般 miss buy。成交成立時必須沿用 parent stop，不得重新向下建立新停損 | DONE | 已補 direct synthetic case，分別驗證 inherited fill 小於或等於既有 stop 時拒絕成交且不計 miss buy、inherited fill 高於 stop 時允許成交並保留 parent stop，以及 normal fill 低於 limit-based sizing stop 時仍可正常成交；避免 B121 的正常進場語意誤套到延續 / Re-entry 繼承狀態 | `tools/validate/synthetic_flow_cases.py`, `core/entry_plans.py`, `core/extended_signals.py`, `core/portfolio_entries.py` |
+| B170 | P1 | Breakout quality固定策略經濟對照契約 | no-filter與active quality-filter策略回放必須使用同一歷史active-param來源、資金／持股／rotation、forward-OOS可用期間與0050 benchmark；正式OOS只接受完整覆蓋期間的Rolling OOS單一schedule或Rolling seed ensemble，逐日使用當日已生效參數。兩組與每個member只能有`use_breakout_quality_filter`一項差異；單一或static run_best只可顯式標記為非OOS診斷，不得把filter開關放回optimizer重新搜尋。報表必須保留報酬／回撤／穩定性、交易結構、每日候選供給缺口與執行後持股缺口，且research-only score不得冒充正式runtime score | DONE | 專用薄入口重用Portfolio Simulator canonical runner與core engine／stats；direct synthetic contract驗證single、static ensemble、rolling schedule與rolling ensemble只切filter、額外member差異fail-fast、active threshold／architecture／profile及runtime artifact一致、rolling期間完整覆蓋、兩組benchmark／交易日期相同、daily capacity與strict JSON。無`--params`的正式模式fail-fast；static run_best須顯式`--allow-static-diagnostic`且報表標示非無前視 | `apps/breakout_quality_strategy_compare.py`, `tools/filters/breakout_quality/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -473,6 +474,7 @@
 | T264 | `validate_breakout_quality_policy_single_source_case` | B11 |
 | T265 | `validate_breakout_quality_chronological_embargo_case` | B01 |
 | T266 | `validate_breakout_quality_runtime_artifact_contract_case` | B15 |
+| T267 | `validate_breakout_quality_strategy_comparison_contract_case` | B170 |
 
 ## G. 逐項收斂紀錄
 
@@ -1481,6 +1483,10 @@
 | 2026-07-26 | B16 | 驗證正式workflow不再以Patch Transformer作新訓練、仍只執行train／export／report且legacy重建可定位後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-07-26 | B16 | 完整OOS易讀報表新增逐年分類、固定coverage排序與校準診斷，report／文件契約改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/evaluate.py`, `tools/filters/breakout_quality/report.py`, `doc/CMD.md` |
 | 2026-07-26 | B16 | 驗證年度切片沿用固定threshold與同一份OOS score、部分年度標記、JSON／Markdown／console一致且不得調參後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-07-26 | B170 | 新增固定參數no-filter vs active 9A策略經濟效果入口與每日capacity診斷，策略比較契約改為PARTIAL | NEW -> PARTIAL | `apps/breakout_quality_strategy_compare.py`, `tools/filters/breakout_quality/strategy_compare.py`, `core/portfolio_engine.py` |
+| 2026-07-26 | B170 | 驗證只有filter開關可不同、額外參數差異fail-fast、candidate／position gap彙總與strict JSON後收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
+| 2026-07-26 | B170 | 檢查正式呼叫鏈後發現第一版只支援單一參數且預設最新run_best跨歷史回放，無法處理Trade static ensemble並可能形成參數前視，策略比較契約改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_compare.py` |
+| 2026-07-26 | B170 | 正式模式改用完整覆蓋期間的Rolling OOS schedule／ensemble、逐日active-param resolver與no-lookahead guard；static run_best只供顯式診斷後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
 | 2026-07-26 | T266 | 9D轉為legacy唯讀、正式runtime輸出退回9A InceptionTime architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-26 | T266 | 驗證Mantis舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A／8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-26 | T266 | 9E checkpoint／manifest新增MOMENT repository、revision、checkpoint hash／size、package、config語意與project-data isolation欄位，runtime artifact契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/moment_contract.py`, `filters/breakout_quality/artifacts.py` |
@@ -1493,3 +1499,7 @@
 | 2026-07-26 | T266 | 驗證9F checkpoint／manifest strict reconstruction、model spec竄改與不整除sequence length拒絕、9A／8F與全部legacy工件隔離後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
 | 2026-07-26 | T266 | 9F轉為legacy唯讀、正式runtime輸出退回9A InceptionTime architecture-scoped path，工件契約改回PARTIAL | DONE -> PARTIAL | `filters/breakout_quality/models/spec.py` |
 | 2026-07-26 | T266 | 驗證Patch Transformer舊checkpoint／manifest仍可strict reconstruction且正式新輸出只允許9A／8F active path後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_runtime_artifact_contract_case` |
+| 2026-07-26 | T267 | 新增策略經濟對照direct synthetic validator並註冊正式registry | NEW -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py`, `tools/validate/synthetic_cases.py` |
+| 2026-07-26 | T267 | direct執行五項controlled-pair／capacity／JSON檢查全數通過後收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
+| 2026-07-26 | T267 | 策略比較validator擴充static ensemble member一致性、rolling active-param ensemble與schedule保持檢查，測試契約改回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-07-26 | T267 | direct執行九項single／static ensemble／rolling schedule／rolling ensemble／capacity／JSON檢查全數通過後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |

@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_132542_f054eb2.zip`，SHA256 `59be5c15356b681461ca78cd0fb5164d4d9d232b8cf816ca6ede13ac13c92b8c`；包含unique-group score單一真理與逐年OOS診斷實作，本輪依formal bundle閉環修正primary-param預設來源解析 |
-| SHA256 | 本輪來源 ZIP：`59be5c15356b681461ca78cd0fb5164d4d9d232b8cf816ca6ede13ac13c92b8c` |
+| 基準 ZIP | `test-branch-1_20260726_133801_f785df1.zip`，SHA256 `aecf6f4e5f19fd6785f209339be388fb2632b0a7ca9b11bdb4fb2c08af9dfcd6`；已包含unique-group score單一真理、逐年OOS診斷及其本地重跑結果 |
+| SHA256 | 本輪來源 ZIP：`aecf6f4e5f19fd6785f209339be388fb2632b0a7ca9b11bdb4fb2c08af9dfcd6`；使用者結果文字：`b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -654,6 +654,22 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260726_132542_f054eb2.zip`，SHA256 `59be5c15356b681461ca78cd0fb5164d4d9d232b8cf816ca6ede13ac13c92b8c`；bundle `to_chatgpt_bundle_20260726_132656_a0fd8473.zip`，SHA256 `5f3431e922780847ccecdeb68cb90f2237da38f052e27404ef265bfc851176f7`。quick gate、chain checks與ML smoke均PASS；consistency僅`default_primary_param_fallback_filename`失敗，meta quality也只因同一synthetic case連帶FAIL。根因是`resolve_default_primary_param_source_record()`在缺少optional `models/run_best_params.json`時，錯把第一個現存的`base_best.json`當成預設runtime來源，違反既有ARCHITECTURE與B163契約。已修正為：只有`V16_RUN_BEST_PARAMS_PATH`可覆寫；沒有override時永遠解析至`models/run_best_params.json`，其他現存工件只可由`discover_model_param_sources()`供互動選擇，不得靜默改變預設來源。此閉環不改9A模型、score inference、Dataset、Label、threshold、年度指標或策略邏輯。
 
 
+### 3.35 Unique-group重跑確認與固定9A策略對照入口（2026-07-26）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | unique-group score與逐年OOS：`RESULT_AVAILABLE`；固定9A策略對照工具：`IMPLEMENTED`，尚未取得真實投組結果 |
+| 程式基準 | `test-branch-1_20260726_133801_f785df1.zip`；SHA256 `aecf6f4e5f19fd6785f209339be388fb2632b0a7ca9b11bdb4fb2c08af9dfcd6` |
+| 結果來源 | `已貼上文字 (1)(14).txt`；SHA256 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 重跑確認 | active 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 正常完成訓練、unique-group research score export與年度報表；OOS Precision 62.99%、Lift +7.35 pp、Recall 51.44%、模型PASS 45.43%、PR-AUC 0.6257，與第2.4節正式值一致 |
+| 年度診斷 | 2021／2023／2024／2025 的 PR-AUC 分別為0.6158／0.6545／0.6612／0.6878；2022為0.4582且P@50%只有42.96%，顯示該年度排序失效。2024 threshold 0.5模型PASS僅22.55%，但P@50%仍66.46%，顯示主要是score尺度／coverage收縮而非排序崩落 |
+| 唯一實作變更 | 新增固定參數策略比較入口；同一參數檔、資金、持股上限、rotation、回測日期與0050基準下，只允許切換`use_breakout_quality_filter=False/True`。另在非訓練portfolio profile附加每日候選供給與持股缺口診斷，不改交易執行 |
+| 固定條件 | 不重新訓練、不重算Label、不調threshold、不改search space、不加入8F／ensemble；策略比較必須先建立active 9A canonical `forward_oos` scores並使用其available期間 |
+| 輸出 | `strategy_comparison.md/.json`、no-filter與quality-filter的equity／trades／daily-capacity CSV、年度報酬比較CSV |
+| Dataset／Label | 不需重建或relabel；若目前只有research scores，需額外執行既有`export-scores --scope forward_oos`，不是重訓 |
+| 判定 | 年度表證明單一threshold coverage具有明顯regime差異，因此不得只靠分類表決定部署；下一步直接執行固定9A策略經濟效果對照 |
+| 下一步 | 取得真實`strategy_comparison.md/.json`後比較淨總報酬、最大回撤、RoMD、年化、Log R²、月勝率、交易數、候選／持股缺口與年度穩定性；結果只決定是否部署／是否再比較8F，不得回頭調9A |
+
 ## 4. 已排除或暫停的方向
 
 下列方向已有足夠證據，不應在沒有新機制或新資料證據時重複測試：
@@ -856,12 +872,25 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 
 | 項目 | 固定設計 |
 |---|---|
-| 狀態 | `PLANNED`；非新模型訓練 |
+| 狀態 | `IMPLEMENTED`；非新模型訓練，待本地真實策略結果 |
 | 第一個單一比較 | no-filter基準 vs 固定9A `inception_time_v1 / unique_group_sampling / threshold 0.5` |
-| 固定條件 | 不重新訓練、不重算Label、不調threshold、不加入8F或ensemble；交易邏輯、active param、資金、持股延續與0050基準全部不變 |
+| 固定條件 | 不重新訓練、不重算Label、不調threshold、不加入8F；正式歷史OOS使用同一份Rolling OOS active-param schedule／seed ensemble，逐交易日套用當日已生效參數，交易邏輯、資金、持股延續與0050基準全部不變；兩組及每個ensemble member只切換filter開關 |
 | 主要指標 | 淨總報酬、最大回撤、報酬／最大回撤、年化報酬、Log R²、月勝率、交易數、候選／持股缺口與年度穩定性 |
 | 判定用途 | 驗證9A分類排序改善是否轉化成策略經濟效果；不得再以同一OOS結果回頭修改模型或門檻 |
+| 參數來源契約 | 正式OOS指定`models/roos_base_finalists_agree.json`或其他完整覆蓋期間的rolling paramset；最新`models/run_best_params.json`可能是static seed ensemble且看過後期資料，只能加`--allow-static-diagnostic`作非OOS敏感度診斷 |
 | 後續 | 只有9A相較no-filter形成清楚的經濟改善，才另立8F高coverage策略比較；否則先凍結模型研究並累積新的forward labeled期間 |
+
+實作契約修正（2026-07-26）：檢查正式呼叫鏈時發現第一版工具預設以`models/run_best_params.json`作歷史比較，一方面無法讀取目前Trade Mode可能產生的static active-param ensemble格式，另一方面最新run_best若回放2021～2025會把後期資訊帶回較早年度，不符合歷史active param無前視原則。工具已改為：正式模式要求明確指定Rolling OOS paramset並驗證完整覆蓋filter forward-OOS；支援rolling單一schedule及rolling seed ensemble，逐日沿用Portfolio Simulator既有active-param resolver；single／static run_best只在`--allow-static-diagnostic`下允許並明確標記。此修正只處理策略比較參數來源與研究設計，不改9A模型、Dataset、Label、score、threshold、optimizer objective、portfolio成交或帳務語意，真實投組結果仍為待執行。
+
+| 追溯項目 | 本輪內容 |
+|---|---|
+| 程式基準 | 使用者ZIP `test-branch-1_20260726_133801_f785df1.zip`，SHA256 `aecf6f4e5f19fd6785f209339be388fb2632b0a7ca9b11bdb4fb2c08af9dfcd6`，再套用前一輪策略比較patch，SHA256 `b0485da5be9ff788ef04779386243c1c01fb83b8d24dffa97b2ec4b8ecb4ba02` |
+| 唯一變更 | 策略比較的active-param來源契約：新增single／static ensemble／rolling schedule／rolling ensemble辨識，正式OOS強制rolling來源與期間覆蓋，static來源改為顯式diagnostic |
+| 固定條件 | 9A architecture/profile、threshold 0.5、forward-OOS scores、Dataset、Label、交易核心、費稅、資金、持股、rotation與0050 benchmark均不變 |
+| 重建需求 | Dataset、Label、feature bank、9A model與research scores皆不需重建；正式比較需先有canonical forward-OOS `scores.csv`與Rolling OOS `roos_*.json` |
+| Selection／OOS結果 | 無新模型或分類結果；上一輪9A結果維持，真實no-filter vs quality-filter投組結果尚未執行 |
+| 判定 | `IMPLEMENTED`；修正研究設計與格式相容性，不宣告策略有效或無效 |
+| 下一步 | 本機先產生`models/roos_base_finalists_agree.json`，再以同一歷史daily active-param ensemble執行固定threshold策略比較 |
 
 
 ---
@@ -897,8 +926,8 @@ Formal bundle閉環（2026-07-26 01:37）：quick gate、chain checks與ML smoke
 → 9D MantisV2 frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
 → 9E MOMENT-1-base frozen encoder＋linear probe（REJECTED；已退回9A並轉為legacy）
 → 9F 小型Patch Transformer supervised architecture（REJECTED；已退回9A並轉為legacy）
-→ unique-group score單一真理＋逐年OOS診斷（IMPLEMENTED；待重新匯出9A score）
-→ 固定9A threshold 0.5的策略層no-filter對照（PLANNED；非新模型訓練）
+→ unique-group score單一真理＋逐年OOS診斷（RESULT_AVAILABLE；9A重跑確認）
+→ 固定9A threshold 0.5的策略層no-filter對照（IMPLEMENTED；待真實投組結果）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

@@ -665,6 +665,7 @@ def run_portfolio_timeline(
     normal_trade_count, extended_trade_count = 0, 0
     portfolio_entry_stats = {'filled_buy_count': 0}
     active_level_rows = [] if (profile_stats is not None and not is_training) else None
+    capacity_rows = [] if (profile_stats is not None and not is_training) else None
     peak_equity, max_drawdown, current_equity = initial_capital_milli, 0.0, initial_capital_milli
     total_exposure, sim_days, total_missed_buys, total_missed_sells, max_exp = 0.0, 0, 0, 0, 0.0
     monthly_equities, bm_monthly_equities = [initial_capital], []
@@ -767,6 +768,11 @@ def run_portfolio_timeline(
             quarter_first_sim_date[quarter_key] = pd.Timestamp(today)
 
         sold_today = set()
+        pre_market_position_count = len(portfolio)
+        daily_filled_buy_count_before = int(portfolio_entry_stats.get('filled_buy_count', 0) or 0)
+        daily_missed_buy_count_before = int(total_missed_buys)
+        candidate_sources_today = False
+        orderable_candidates_today = []
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
             has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
@@ -843,7 +849,6 @@ def run_portfolio_timeline(
                 candidate_sources_today = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts) or any(bool(member_signals) for member_signals in active_extended_signals_by_member.values())
             else:
                 candidate_sources_today = bool(normal_setup_entries_today) or bool(active_extended_signals)
-            orderable_candidates_today = []
             no_entry_capacity_today = (
                 bool(is_training)
                 and replay_counts is None
@@ -1071,6 +1076,24 @@ def run_portfolio_timeline(
                 _append_portfolio_extended_shadow_level_rows(active_level_rows, _flatten_ensemble_extended_signals(active_extended_signals_by_member), portfolio, today)
             else:
                 _append_portfolio_extended_shadow_level_rows(active_level_rows, active_extended_signals, portfolio, today)
+
+        if capacity_rows is not None:
+            pre_market_free_slots = max(0, int(max_positions) - int(pre_market_position_count))
+            orderable_candidate_count = int(len(orderable_candidates_today))
+            post_execution_position_count = int(len(portfolio))
+            capacity_rows.append({
+                'Date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
+                'Max_Positions': int(max_positions),
+                'Pre_Market_Positions': int(pre_market_position_count),
+                'Pre_Market_Free_Slots': int(pre_market_free_slots),
+                'Candidate_Source_Active': bool(candidate_sources_today),
+                'Orderable_Candidates': orderable_candidate_count,
+                'Candidate_Supply_Gap': max(0, pre_market_free_slots - orderable_candidate_count),
+                'Post_Execution_Positions': post_execution_position_count,
+                'End_Position_Gap': max(0, int(max_positions) - post_execution_position_count),
+                'Filled_Buys_Today': max(0, int(portfolio_entry_stats.get('filled_buy_count', 0) or 0) - daily_filled_buy_count_before),
+                'Missed_Buys_Today': max(0, int(total_missed_buys) - daily_missed_buy_count_before),
+            })
 
         current_equity = today_equity
         current_equity_money = today_equity_money
@@ -1343,6 +1366,8 @@ def run_portfolio_timeline(
         profile_stats['filled_buy_count'] = filled_buy_count
         if active_level_rows is not None:
             profile_stats['portfolio_active_level_rows'] = list(active_level_rows)
+        if capacity_rows is not None:
+            profile_stats['portfolio_capacity_rows'] = list(capacity_rows)
         if capture_equity_curve:
             profile_stats['equity_curve'] = list(equity_curve)
         profile_stats.update(yearly_stats)
