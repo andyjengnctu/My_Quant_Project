@@ -190,6 +190,34 @@ def _policy_from_manifest(payload: dict) -> BreakoutQualityLabelPolicy:
     )
 
 
+def _resolve_forward_runtime_dates(manifest: dict) -> dict[str, pd.Timestamp | None]:
+    """Resolve signal-score coverage separately from the OOS execution window."""
+
+    outer_policy = manifest.get("outer_oos_policy")
+    if not isinstance(outer_policy, dict):
+        raise ValueError("forward_oos 需要 manifest.outer_oos_policy")
+    information_cutoff_text = str(manifest.get("model_information_cutoff", "")).strip()
+    if not information_cutoff_text:
+        raise ValueError("forward_oos 需要 manifest.model_information_cutoff")
+
+    cutoff = pd.Timestamp(information_cutoff_text).normalize()
+    execution_start = pd.Timestamp(str(outer_policy.get("oos_start_date") or "")).normalize()
+    configured_end_text = str(outer_policy.get("configured_oos_end_date") or "").strip()
+    execution_end = pd.Timestamp(configured_end_text).normalize() if configured_end_text else None
+    score_signal_start = cutoff + pd.Timedelta(days=1)
+    if score_signal_start > execution_start:
+        raise ValueError(
+            "forward_oos model_information_cutoff 必須早於策略 OOS 執行起日: "
+            f"cutoff={cutoff.date()}, execution_start={execution_start.date()}"
+        )
+    return {
+        "model_information_cutoff": cutoff,
+        "score_signal_start": score_signal_start,
+        "execution_start": execution_start,
+        "execution_end": execution_end,
+    }
+
+
 def _merge_source_range(
     current_start: pd.Timestamp | None,
     current_end: pd.Timestamp | None,
@@ -507,29 +535,23 @@ def main(argv=None) -> int:
     shared_group_score_broadcast = not bool(checkpoint_spec.use_dataset_context)
     unavailable_events = pd.DataFrame(columns=["ticker", "date", "high_len", "reason"])
     runtime_source_metadata = None
+    forward_runtime_dates = None
     if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
-        outer_policy = manifest.get("outer_oos_policy")
-        if not isinstance(outer_policy, dict):
-            raise ValueError("forward_oos 需要 manifest.outer_oos_policy")
+        forward_runtime_dates = _resolve_forward_runtime_dates(manifest)
         information_cutoff = str(manifest.get("model_information_cutoff", "")).strip()
-        if not information_cutoff:
-            raise ValueError("forward_oos 需要 manifest.model_information_cutoff")
-        configured_oos_end_text = str(outer_policy.get("configured_oos_end_date") or "").strip()
-        oos_start = pd.Timestamp(str(outer_policy.get("oos_start_date") or "")).normalize()
-        oos_end = (
-            pd.Timestamp(configured_oos_end_text).normalize()
-            if configured_oos_end_text
-            else None
-        )
-        cutoff = pd.Timestamp(information_cutoff).normalize()
-        runtime_start = max(oos_start, cutoff + pd.Timedelta(days=1))
         policy = _policy_from_manifest(model_policy)
         features, context, events, unavailable_events, runtime_source_metadata = _build_forward_runtime_inputs(
             dataset_summary=dataset_summary,
             policy=policy,
-            start_date=runtime_start,
-            end_date=oos_end,
+            start_date=forward_runtime_dates["score_signal_start"],
+            end_date=forward_runtime_dates["execution_end"],
             require_context=bool(checkpoint_spec.use_dataset_context),
+        )
+        runtime_source_metadata.update(
+            {
+                "score_signal_start_date": str(forward_runtime_dates["score_signal_start"].date()),
+                "strategy_execution_start_date": str(forward_runtime_dates["execution_start"].date()),
+            }
         )
         features, context = materialize_indexed_feature_inputs(
             features,
@@ -600,13 +622,8 @@ def main(argv=None) -> int:
         scored = scored.sort_values(["ticker", "date", "high_len"], kind="mergesort").reset_index(drop=True)
     information_cutoff = str(manifest.get("model_information_cutoff", "")).strip()
     if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
-        if not information_cutoff:
-            raise ValueError("forward_oos 需要 manifest.model_information_cutoff")
-        outer_policy = manifest.get("outer_oos_policy")
-        if not isinstance(outer_policy, dict):
-            raise ValueError("forward_oos 需要 manifest.outer_oos_policy")
-        oos_start = pd.Timestamp(str(outer_policy.get("oos_start_date") or "")).normalize()
-        configured_oos_end_text = str(outer_policy.get("configured_oos_end_date") or "").strip()
+        if forward_runtime_dates is None:
+            raise RuntimeError("forward_oos runtime dates 尚未初始化")
         source_range = (runtime_source_metadata or {}).get("source_data_date_range")
         if not isinstance(source_range, dict):
             source_range = dataset_summary.get("source_data_date_range")
@@ -617,18 +634,21 @@ def main(argv=None) -> int:
         )
         if not source_end_text:
             source_end_text = str(pd.to_datetime(scored["date"], errors="raise").max().date())
-        oos_end = pd.Timestamp(configured_oos_end_text or source_end_text).normalize()
+        score_end = pd.Timestamp(
+            forward_runtime_dates["execution_end"] or pd.Timestamp(source_end_text)
+        ).normalize()
         event_dates = pd.to_datetime(scored["date"], errors="raise").dt.normalize()
-        cutoff = pd.Timestamp(information_cutoff).normalize()
         scored = scored[
-            (event_dates >= oos_start)
-            & (event_dates <= oos_end)
-            & (event_dates > cutoff)
+            (event_dates >= forward_runtime_dates["score_signal_start"])
+            & (event_dates <= score_end)
+            & (event_dates > forward_runtime_dates["model_information_cutoff"])
         ].copy()
         if scored.empty:
             raise ValueError(
-                "forward_oos 沒有落在既有 walk_forward_policy OOS 區間且晚於 model_information_cutoff 的事件；"
-                f"oos={oos_start.date()}~{oos_end.date()}, cutoff={cutoff.date()}"
+                "forward_oos 沒有晚於 model_information_cutoff 且可供 OOS 盤前決策使用的訊號事件；"
+                f"signal_start={forward_runtime_dates['score_signal_start'].date()}~{score_end.date()}, "
+                f"execution_start={forward_runtime_dates['execution_start'].date()}, "
+                f"cutoff={forward_runtime_dates['model_information_cutoff'].date()}"
             )
 
     research_optional = [
@@ -801,15 +821,19 @@ def main(argv=None) -> int:
         "event_row_batch_boundaries_preserved": not shared_group_score_broadcast,
         "output_row_order_changed": bool(args.scope == RUNTIME_SCOPE_FORWARD_OOS),
     }
+    if forward_runtime_dates is None:
+        raise RuntimeError("forward_oos runtime dates 尚未初始化")
     manifest["runtime_eligibility"] = {
         "eligible": True,
         "scope": RUNTIME_SCOPE_FORWARD_OOS,
         "available_from": available_from,
         "available_through": available_through,
+        "required_signal_start": str(forward_runtime_dates["score_signal_start"].date()),
+        "execution_start": str(forward_runtime_dates["execution_start"].date()),
         "model_information_cutoff": information_cutoff,
         "reason": (
-            "score rows are inside the shared walk_forward_policy OOS window, "
-            "strictly after model_information_cutoff, and were produced by a fixed-epoch model"
+            "score rows begin after model_information_cutoff and include the pre-execution signal anchor "
+            "required by next-session OOS orders; strategy execution still begins at outer_oos_policy.oos_start_date"
         ),
     }
     manifest["score_filename"] = DEFAULT_SCORE_FILENAME

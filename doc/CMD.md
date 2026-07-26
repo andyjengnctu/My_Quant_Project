@@ -163,8 +163,8 @@ python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --exper
 python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope forward_oos
 ```
 
-- `forward_oos` 只匯出落在同一份 walk-forward OOS window、且事件日嚴格晚於 `model_information_cutoff` 的固定規格模型分數；若沒有符合資料會直接失敗。
-- `available_from` 之前視為模型尚未啟用；`available_through` 之後若出現候選事件則 fail-fast，沒有候選事件時不要求不存在的分數。
+- `forward_oos` 的策略執行期仍使用同一份 walk-forward OOS window；但盤前下單使用前一交易日訊號，因此 Score 匯出會從 `model_information_cutoff` 下一日開始建立訊號 coverage，包含 OOS 首個執行日前必要的 signal anchor。這些前置 Score 只供首日盤前排序／過濾，不會把策略回放或 OOS 評估提前。
+- Manifest 會分別記錄 `required_signal_start`、`execution_start`、實際第一個 Score 事件日 `available_from` 與 `available_through`。`required_signal_start` 前不得使用模型；`available_through` 後若出現候選事件則 fail-fast。
 - 正式 runtime 只讀目前 policy 架構與 experiment profile 的 `models/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/scores.csv`，並驗證 model/score SHA256、schema、high_len coverage、OOS eligibility 與可用日期。
 - `forward_oos` 會以目前原始資料重新建立 runtime 突破候選全集，不再只沿用訓練 Dataset 內可建立特徵的事件。可評分事件使用模型 score；因 benchmark 日期缺失、300-bar feature history 不足或特徵無效而不可評分的正式候選，會寫入同目錄 `unavailable_scores.csv`，並在 `scores.csv` 固定記為 `0.0`（保守 REJECT）。未知缺分仍會 fail-fast。
 - 每次原始 CSV inventory 改變或套用本契約修正後，都必須重新執行本命令；不需重訓模型或重跑 Rolling optimizer。
@@ -192,7 +192,7 @@ models/roos_base_finalists_agree.json
 python apps/breakout_quality_strategy_compare.py --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off
 ```
 
-- 比較期間固定為 active runtime artifact 的 `available_from` ～ `available_through`，且 rolling active-param 生效期間必須完整覆蓋該期間。
+- 比較期間固定為 runtime manifest 的 `execution_start` ～ `available_through`；Score table 可從更早的 `required_signal_start` 開始，只用來供應首個執行日前的原始 breakout signal Score。Rolling active-param 生效期間只需完整覆蓋實際策略執行期，不需覆蓋前置 Score anchor。
 - 每個歷史交易日都使用 Rolling OOS 檔內當日已生效的單一參數或 seed ensemble；兩組交易日期與 0050 benchmark 必須完全一致。
 - 工具與 Portfolio Simulator 共用 `core.portfolio_engine`、正式 signal generation、成交／費用／資金／持股延續及 `core.portfolio_stats`；Optimizer 也共用相同核心，但 Optimizer 是參數搜尋流程，策略對照是固定參數 OOS replay，兩者不是相同工作流。
 - 兩組完整參數／每個 ensemble member 只能有 `use_breakout_quality_filter=False/True` 一項差異；filter ID 與 threshold 均固定為 active policy／manifest 值，不重新最佳化任何策略參數。

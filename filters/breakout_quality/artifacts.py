@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -112,6 +112,8 @@ class BreakoutQualityRuntimeContract:
     high_len_values: tuple[int, ...]
     available_from: date
     available_through: date
+    required_signal_start: date
+    execution_start: date
     shared_group_score_broadcast: bool
 
 
@@ -1077,15 +1079,42 @@ def load_runtime_artifact_contract(
     )
     if available_through < available_from:
         raise ValueError("breakout quality runtime available_through 不可早於 available_from")
+    required_signal_start = available_from
+    execution_start = available_from
     if scope == RUNTIME_SCOPE_FORWARD_OOS:
         information_cutoff = _parse_iso_date(
             runtime_eligibility.get("model_information_cutoff"),
             field_name="runtime_eligibility.model_information_cutoff",
         )
-        if available_from <= information_cutoff:
+        required_signal_start = _parse_iso_date(
+            runtime_eligibility.get("required_signal_start"),
+            field_name="runtime_eligibility.required_signal_start",
+        )
+        execution_start = _parse_iso_date(
+            runtime_eligibility.get("execution_start"),
+            field_name="runtime_eligibility.execution_start",
+        )
+        if required_signal_start != information_cutoff + timedelta(days=1):
             raise ValueError(
-                "breakout quality forward_oos available_from 必須嚴格晚於 model_information_cutoff"
+                "breakout quality required_signal_start 必須為 model_information_cutoff 的下一個日曆日"
             )
+        if available_from < required_signal_start:
+            raise ValueError(
+                "breakout quality forward_oos score table 不得包含 model_information_cutoff 當日或更早事件"
+            )
+        outer_policy = _require_mapping(manifest, "outer_oos_policy")
+        outer_execution_start = _parse_iso_date(
+            outer_policy.get("oos_start_date"),
+            field_name="outer_oos_policy.oos_start_date",
+        )
+        if execution_start != outer_execution_start:
+            raise ValueError(
+                "breakout quality runtime execution_start 必須等於 outer_oos_policy.oos_start_date"
+            )
+        if required_signal_start > execution_start:
+            raise ValueError("breakout quality required_signal_start 不可晚於 execution_start")
+        if available_through < execution_start:
+            raise ValueError("breakout quality available_through 不可早於 execution_start")
 
     score_table = _require_mapping(manifest, "score_table")
     if int(score_table.get("schema_version", -1)) != int(SCORE_TABLE_SCHEMA_VERSION):
@@ -1229,6 +1258,8 @@ def load_runtime_artifact_contract(
         high_len_values=high_len_values,
         available_from=available_from,
         available_through=available_through,
+        required_signal_start=required_signal_start,
+        execution_start=execution_start,
         shared_group_score_broadcast=shared_group_score_broadcast,
     )
 

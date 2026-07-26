@@ -968,7 +968,19 @@ Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke
 | 重建需求 | 不需重訓、relabel、重建Dataset／feature bank、重新匯出score或重跑optimizer；套用程式後直接執行隔離比較 |
 | 輸出 | `strategy_compare_score_ranking/strategy_comparison.md/.json`及兩組equity／trades／daily-capacity／年度報酬；成交紀錄另保存進場Quality Score、Score日期及ensemble同意數供歸因 |
 | 研究限制 | 此機制是在已查看2021～2026舊OOS後提出，只能作探索性診斷；即使改善，也不得直接作部署證據，必須等待全新forward period驗證 |
-| 下一步 | 執行`python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off`，取得真實結果後再將本節更新為`RESULT_AVAILABLE` |
+| 下一步 | 重新匯出含pre-execution signal anchor的正式scores後，再執行`python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off`，取得真實結果後再將本節更新為`RESULT_AVAILABLE` |
+
+Score-ranking OOS邊界閉環（2026-07-26 22:45）：第一次執行時，策略回放正確從2021-01-04開始，但候選`00633L`使用前一交易日2020-12-31的原始breakout signal Score；舊forward-OOS工件的`available_from=2021-01-04`，將Score事件涵蓋期誤與策略執行期綁定，因而fail-fast。修正後正式Score從`model_information_cutoff`下一日開始建立，manifest分別保存`required_signal_start`與`execution_start`；strategy compare只使用`execution_start`作回放起日，前置Score不會使回測提前，也不得以執行日資料替代。此修正不改模型、Label、Score公式、候選、排序、Rolling active params、成交或帳務；必須重新匯出forward-OOS scores，無須重訓或重跑optimizer。
+
+| 追溯項目 | Score-ranking OOS邊界閉環內容 |
+|---|---|
+| 程式基準 | 使用者ZIP `test-branch-1_20260726_224528_e4be18f.zip`，SHA256 `6f4c066003ef6a7d0d44e00767c323fcb56d90045f01fc936c82ae1fcbd26d9b` |
+| 唯一變更 | forward score signal coverage由outer OOS起日提前至model cutoff下一日；strategy compare仍固定由outer OOS execution start開始 |
+| 固定條件 | 9A checkpoint／score定義、hard filter關閉、同票Score排序、Rolling ensemble、資金、持股、交易成本與0050不變 |
+| 重建需求 | 不需重建Dataset、Label、feature bank、model或Rolling params；必須重新執行`export-scores --scope forward_oos` |
+| Selection／OOS結果 | 無新結果；本輪只完成日期邊界契約閉環 |
+| 判定 | `IMPLEMENTED`；不得預判Score ranking有效或無效 |
+| 下一步 | 重匯scores後重跑score-ranking策略比較 |
 
 
 ---

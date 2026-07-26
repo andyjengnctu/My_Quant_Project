@@ -188,6 +188,7 @@ from filters.breakout_quality.score_store import (
     build_pass_condition_from_score_table,
     load_score_table,
     load_shared_group_score_table,
+    lookup_breakout_quality_candidate_score,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.dataset_store import (
@@ -228,6 +229,7 @@ from tools.filters.breakout_quality.strategy_compare import (
     _load_param_source,
     _capacity_summary,
     _normalize_yearly_completeness,
+    _resolve_comparison_period,
     _to_json_native,
 )
 from tools.filters.breakout_quality.trade_attribution import build_trade_attribution
@@ -4668,6 +4670,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             split_frame.to_csv(paths.split_path, index=False, encoding="utf-8-sig")
             score_frame = pd.DataFrame(
                 [
+                    {"ticker": "2330", "date": "2025-01-02", "high_len": high_len, SCORE_COLUMN: 0.55},
                     {"ticker": "2330", "date": "2025-01-03", "high_len": high_len, SCORE_COLUMN: 0.60},
                     {"ticker": "2330", "date": "2025-01-04", "high_len": high_len, SCORE_COLUMN: 0.40},
                 ]
@@ -4686,7 +4689,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
                     "row_count": len(score_frame),
                     "high_len_values": [high_len],
-                    "event_date_range": {"start": "2025-01-03", "end": "2025-01-04"},
+                    "event_date_range": {"start": "2025-01-02", "end": "2025-01-04"},
                 }
             )
             split_record = build_file_manifest(paths.split_path)
@@ -4716,7 +4719,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "policy_source": "core.walk_forward_policy.synthetic_override",
                 "selection_start_date": "2024-01-01",
                 "selection_end_date": "2024-12-31",
-                "oos_start_date": "2025-01-01",
+                "oos_start_date": "2025-01-03",
                 "configured_oos_end_date": "2025-12-31",
                 "effective_oos_end_date": "2025-12-31",
             }
@@ -4943,11 +4946,85 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 "runtime_eligibility": {
                     "eligible": True,
                     "scope": RUNTIME_SCOPE_FORWARD_OOS,
-                    "available_from": "2025-01-03",
+                    "available_from": "2025-01-02",
                     "available_through": "2025-01-05",
-                    "model_information_cutoff": "2025-01-02",
+                    "required_signal_start": "2025-01-02",
+                    "execution_start": "2025-01-03",
+                    "model_information_cutoff": "2025-01-01",
                 },
             }
+            paths.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            _clear_breakout_quality_caches()
+
+            runtime_contract = load_runtime_artifact_contract(str(project_root), filter_id)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "runtime_score_signal_anchor_precedes_oos_execution_start",
+                ("2025-01-02", "2025-01-03"),
+                (
+                    runtime_contract.required_signal_start.isoformat(),
+                    runtime_contract.execution_start.isoformat(),
+                ),
+            )
+            anchor_score = lookup_breakout_quality_candidate_score(
+                project_root=str(project_root),
+                ticker="2330",
+                signal_date="2025-01-02",
+                high_len=high_len,
+                filter_id=filter_id,
+            )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "pre_execution_signal_anchor_score_is_runtime_available",
+                (True, 0.55),
+                (bool(anchor_score["available"]), round(float(anchor_score["score"]), 2)),
+            )
+
+            original_runtime_eligibility = dict(manifest["runtime_eligibility"])
+            manifest["runtime_eligibility"] = {
+                **original_runtime_eligibility,
+                "required_signal_start": "2025-01-03",
+            }
+            paths.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            _clear_breakout_quality_caches()
+            try:
+                load_runtime_artifact_contract(str(project_root), filter_id)
+                bad_signal_start_rejected = False
+            except ValueError as exc:
+                bad_signal_start_rejected = "required_signal_start" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "required_signal_start_tamper_fails_fast",
+                True,
+                bad_signal_start_rejected,
+            )
+
+            manifest["runtime_eligibility"] = {
+                **original_runtime_eligibility,
+                "execution_start": "2025-01-04",
+            }
+            paths.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            _clear_breakout_quality_caches()
+            try:
+                load_runtime_artifact_contract(str(project_root), filter_id)
+                bad_execution_start_rejected = False
+            except ValueError as exc:
+                bad_execution_start_rejected = "execution_start" in str(exc)
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                "execution_start_tamper_fails_fast",
+                True,
+                bad_execution_start_rejected,
+            )
+            manifest["runtime_eligibility"] = original_runtime_eligibility
             paths.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
             _clear_breakout_quality_caches()
 
@@ -4979,6 +5056,12 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                 [
                     {
                         "ticker": "2330",
+                        "date": "2025-01-02",
+                        "high_len": high_len,
+                        SCORE_COLUMN: 0.55,
+                    },
+                    {
+                        "ticker": "2330",
                         "date": "2025-01-03",
                         "high_len": alternate_high_len,
                         SCORE_COLUMN: 0.60,
@@ -5000,7 +5083,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
                     "row_count": len(shared_only_frame),
                     "high_len_values": [high_len, alternate_high_len],
-                    "event_date_range": {"start": "2025-01-03", "end": "2025-01-04"},
+                    "event_date_range": {"start": "2025-01-02", "end": "2025-01-04"},
                 }
             )
             manifest["score_table"] = shared_score_record
@@ -5056,7 +5139,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "columns": list(SCORE_TABLE_REQUIRED_COLUMNS),
                     "row_count": len(inconsistent_shared_frame),
                     "high_len_values": [high_len, alternate_high_len, alternate_high_len + 5],
-                    "event_date_range": {"start": "2025-01-03", "end": "2025-01-04"},
+                    "event_date_range": {"start": "2025-01-02", "end": "2025-01-04"},
                 }
             )
             manifest["score_table"] = inconsistent_record
@@ -5811,7 +5894,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
                     "row_count": len(audit_score_frame),
                     "high_len_values": [high_len],
                     "event_date_range": {
-                        "start": "2025-01-03",
+                        "start": "2025-01-02",
                         "end": "2025-01-04",
                     },
                 }
@@ -5821,9 +5904,9 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             manifest["score_inference_execution"] = {
                 "inference_unit": "unique_ticker_date_feature_group",
                 "shared_group_score_broadcast": True,
-                "model_scored_event_row_count": 1,
+                "model_scored_event_row_count": 2,
                 "conservative_reject_event_row_count": 1,
-                "output_event_row_count": 2,
+                "output_event_row_count": 3,
             }
             paths.manifest_path.write_text(
                 json.dumps(manifest, ensure_ascii=False),
@@ -5952,6 +6035,21 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         "additional_param_difference_is_rejected",
         True,
         extra_difference_rejected,
+    )
+
+    synthetic_period_contract = SimpleNamespace(
+        execution_start=pd.Timestamp("2025-01-03").date(),
+        required_signal_start=pd.Timestamp("2025-01-02").date(),
+        available_from=pd.Timestamp("2025-01-02").date(),
+        available_through=pd.Timestamp("2025-12-31").date(),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_comparison_starts_at_execution_window_not_signal_score_anchor",
+        ("2025-01-03", "2025-12-31"),
+        _resolve_comparison_period(synthetic_period_contract),
     )
 
     ranking_pair = _build_controlled_param_source_pair(

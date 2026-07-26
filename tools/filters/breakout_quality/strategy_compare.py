@@ -725,6 +725,17 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
     return attribution
 
 
+def _resolve_comparison_period(contract) -> tuple[str, str]:
+    start = contract.execution_start
+    end = contract.available_through
+    if end < start:
+        raise ValueError(
+            "breakout quality 策略執行期間不合法: "
+            f"execution_start={start}, available_through={end}"
+        )
+    return start.isoformat(), end.isoformat()
+
+
 def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=None, max_positions=10, enable_rotation=False, fixed_risk=None, allow_static_diagnostic=False, comparison_mode=COMPARISON_MODE_HARD_FILTER, quiet=False):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -797,8 +808,8 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         )
 
     data_dir = Path(get_dataset_dir(str(root), dataset)).resolve()
-    start_date = contract.available_from.isoformat()
-    end_date = contract.available_through.isoformat()
+    # (AI註: Score 工件需涵蓋首個 OOS 執行日前的訊號 anchor；策略回放本身仍從正式 OOS 執行起日開始。)
+    start_date, end_date = _resolve_comparison_period(contract)
     if param_source_kind == "rolling_oos_param_schedule":
         param_start, param_end = get_active_param_date_range(param_source["payload"])
     elif param_source_kind == "rolling_active_param_ensemble":
@@ -852,6 +863,11 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         "enable_rotation": bool(enable_rotation),
         "fixed_risk_override": None if fixed_risk is None else float(fixed_risk),
         "comparison_period": {"start": start_date, "end": end_date},
+        "score_signal_coverage": {
+            "required_start": contract.required_signal_start.isoformat(),
+            "first_scored_event": contract.available_from.isoformat(),
+            "available_through": contract.available_through.isoformat(),
+        },
         "benchmark_ticker": PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
         "runtime_manifest_path": str(contract.paths.manifest_path),
         "runtime_score_path": str(contract.paths.score_path),
@@ -926,6 +942,6 @@ __all__ = [
     "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair",
     "_assert_controlled_payload_pair", "_build_controlled_param_source_pair",
     "_load_param_source", "_capacity_summary", "_normalize_yearly_completeness",
-    "_to_json_native",
+    "_to_json_native", "_resolve_comparison_period",
     "COMPARISON_MODE_HARD_FILTER", "COMPARISON_MODE_SCORE_RANKING",
 ]
