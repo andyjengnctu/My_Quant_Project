@@ -1,6 +1,8 @@
 from core.buy_sort import calc_buy_sort_value, sort_candidate_rows
 from core.config import get_buy_sort_method
 from core.exact_accounting import build_buy_ledger_from_price, milli_to_money
+from filters.breakout_quality.runtime import resolve_breakout_quality_candidate_rank
+
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
     clone_shadow_position,
@@ -17,6 +19,22 @@ from core.portfolio_fast_data import (
     get_fast_value,
     get_pit_stats_from_index,
 )
+
+
+def _resolve_candidate_quality_ranking(*, params, ticker, signal_date):
+    enabled = bool(getattr(params, "use_breakout_quality_ranking", False))
+    if not enabled:
+        return None
+    if signal_date is None:
+        raise ValueError(f"breakout quality ranking 候選缺少原始 signal_date: ticker={ticker}")
+    return resolve_breakout_quality_candidate_rank(
+        ticker=str(ticker),
+        signal_date=signal_date,
+        high_len=int(getattr(params, "high_len")),
+        filter_id=str(getattr(params, "breakout_quality_filter_id")),
+    )
+
+
 def _make_candidate_row(
     *,
     buy_sort_method,
@@ -48,6 +66,7 @@ def _make_candidate_row(
     shadow_position_state=None,
     max_qty=None,
     prev_close=None,
+    quality_rank=None,
 ):
     if est_qty > 0:
         est_ledger = build_buy_ledger_from_price(est_limit_px, est_qty, params)
@@ -111,6 +130,9 @@ def _make_candidate_row(
         'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
         'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
         'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
+        'use_breakout_quality_ranking': bool(quality_rank is not None),
+        'breakout_quality_score': None if quality_rank is None else float(quality_rank['score']),
+        'breakout_quality_score_date': '' if quality_rank is None else str(quality_rank['score_date']),
     }
     if signal_state is not None:
         row['signal_state'] = signal_state
@@ -176,6 +198,12 @@ def _collect_normal_candidates(
         if candidate_plan is None:
             continue
 
+        quality_rank = _resolve_candidate_quality_ranking(
+            params=params, ticker=ticker, signal_date=signal_date
+        )
+        if quality_rank is not None and not bool(quality_rank["available"]):
+            continue
+
         signal_state = create_signal_tracking_state(
             y_buy_limit,
             y_atr,
@@ -214,6 +242,7 @@ def _collect_normal_candidates(
             signal_date=signal_date,
             sizing_capital=candidate_plan.get('sizing_capital'),
             prev_close=y_close,
+            quality_rank=quality_rank,
         )
         if candidates_today is not None:
             candidates_today.append(candidate_row)
@@ -257,6 +286,12 @@ def track_normal_setup_signals_for_day(
             pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
         )
         if not is_candidate:
+            continue
+
+        quality_rank = _resolve_candidate_quality_ranking(
+            params=params, ticker=ticker, signal_date=signal_date
+        )
+        if quality_rank is not None and not bool(quality_rank["available"]):
             continue
 
         signal_state = create_signal_tracking_state(
@@ -324,6 +359,15 @@ def _collect_extended_candidates(
         if candidate_plan is None:
             continue
 
+        quality_rank = _resolve_candidate_quality_ranking(
+            params=candidate_params,
+            ticker=ticker,
+            signal_date=candidate_plan.get("signal_date"),
+        )
+        if quality_rank is not None and not bool(quality_rank["available"]):
+            active_extended_signals.pop(ticker, None)
+            continue
+
         today_orderable = is_extended_signal_orderable_for_day(
             signal_state,
             candidate_plan,
@@ -364,6 +408,7 @@ def _collect_extended_candidates(
             shadow_position_state=candidate_plan.get('shadow_position_state'),
             max_qty=candidate_plan.get('max_qty'),
             prev_close=y_close,
+            quality_rank=quality_rank,
         )
         if candidates_today is not None:
             candidates_today.append(candidate_row)

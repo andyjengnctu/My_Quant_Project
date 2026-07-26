@@ -31,6 +31,7 @@ BREAKOUT_PARAM_SPECS = {
     "use_breakout_false_filter": {"type": bool, "default": False},  # (AI註: 是否啟用假突破濾網，預設 False 以相容舊模型)
     "breakout_false_filter_atr_pct_min": {"type": float, "default": 0.045, "min_value": 0.0, "strict_gt": True},  # (AI註: 假突破濾網個股 ATR/Close 下限)
     "use_breakout_quality_filter": {"type": bool, "default": False},  # (AI註: 是否啟用 breakout quality pass/reject score table 濾網，預設 False 以相容舊模型)
+    "use_breakout_quality_ranking": {"type": bool, "default": False},  # (AI註: 是否只以 quality score 輔助候選排序；低分不淘汰，不可評分事件仍保守排除)
     "breakout_quality_filter_id": {"type": str, "default": BREAKOUT_QUALITY_DEFAULT_FILTER_ID},  # (AI註: breakout quality filter 模型/score table ID)
     "breakout_quality_score_threshold": {"type": float, "default": BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD, "min_value": 0.0, "max_value": 1.0},  # (AI註: 正式 runtime 以 dl_quality_score >= threshold 作為唯一通過判斷)
     "use_breakout_reclaim_reentry": {"type": bool, "default": False},  # (AI註: 是否啟用突破停損後 reclaim re-entry，預設 False 以相容舊模型)
@@ -41,6 +42,8 @@ BREAKOUT_PARAM_SPECS = {
 
 def validate_breakout_param_ranges(param_values, *, build_rule_text):
     filter_id = str(param_values["breakout_quality_filter_id"]).strip()
+    if bool(param_values["use_breakout_quality_filter"]) and bool(param_values["use_breakout_quality_ranking"]):
+        raise ValueError("use_breakout_quality_filter 與 use_breakout_quality_ranking 不可同時啟用")
     if not filter_id:
         raise ValueError("參數 breakout_quality_filter_id 不可為空白")
 

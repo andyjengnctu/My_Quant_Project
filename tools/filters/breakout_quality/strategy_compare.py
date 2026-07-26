@@ -51,7 +51,10 @@ from tools.portfolio_sim.simulation_runner import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+COMPARISON_MODE_HARD_FILTER = "hard-filter"
+COMPARISON_MODE_SCORE_RANKING = "score-ranking"
+COMPARISON_MODES = (COMPARISON_MODE_HARD_FILTER, COMPARISON_MODE_SCORE_RANKING)
 
 _RESULT_FIELDS = (
     "equity_curve", "trade_history", "total_return_pct", "max_drawdown_pct",
@@ -75,9 +78,10 @@ def _sha256_file(path: Path) -> str:
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="固定參數比較 no-filter 與目前 active breakout-quality filter 的策略經濟效果。"
+        description="固定參數比較 baseline 與 breakout-quality hard filter／score ranking 的策略經濟效果。"
     )
     parser.add_argument("--dataset", choices=("reduced", "full"), default=DEFAULT_DATASET_PROFILE)
+    parser.add_argument("--comparison-mode", choices=COMPARISON_MODES, default=COMPARISON_MODE_HARD_FILTER)
     parser.add_argument("--params", default=None, help="正式 OOS 建議指定 rolling OOS active-param JSON；static 診斷才使用 run_best。")
     parser.add_argument("--max-positions", type=int, default=10)
     parser.add_argument("--rotation", choices=("off", "on"), default="off")
@@ -96,14 +100,46 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _assert_controlled_param_pair(no_filter_params, quality_params) -> None:
+def _comparison_switch_spec(comparison_mode: str) -> tuple[str, bool, bool]:
+    mode = str(comparison_mode)
+    if mode == COMPARISON_MODE_HARD_FILTER:
+        return "use_breakout_quality_filter", False, True
+    if mode == COMPARISON_MODE_SCORE_RANKING:
+        return "use_breakout_quality_ranking", False, True
+    raise ValueError(f"不支援的 comparison_mode: {comparison_mode}")
+
+
+def _comparison_labels(comparison_mode: str) -> dict[str, str]:
+    if comparison_mode == COMPARISON_MODE_HARD_FILTER:
+        return {
+            "active_name": "quality_filter",
+            "active_title": "Active quality filter",
+            "output_dir": "strategy_compare",
+            "difference_text": "use_breakout_quality_filter=False vs True",
+        }
+    if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
+        return {
+            "active_name": "score_ranking",
+            "active_title": "Quality score ranking",
+            "output_dir": "strategy_compare_score_ranking",
+            "difference_text": "use_breakout_quality_ranking=False vs True（hard filter 兩組皆 False）",
+        }
+    raise ValueError(f"不支援的 comparison_mode: {comparison_mode}")
+
+
+def _assert_controlled_param_pair(no_filter_params, quality_params, *, comparison_mode=COMPARISON_MODE_HARD_FILTER) -> None:
     left = params_to_json_dict(no_filter_params)
     right = params_to_json_dict(quality_params)
+    switch_field, left_expected, right_expected = _comparison_switch_spec(comparison_mode)
     differing = sorted(key for key in set(left) | set(right) if left.get(key) != right.get(key))
-    if differing != ["use_breakout_quality_filter"]:
-        raise ValueError(f"策略對照只允許 use_breakout_quality_filter 不同，實際差異={differing}")
-    if left["use_breakout_quality_filter"] is not False or right["use_breakout_quality_filter"] is not True:
-        raise ValueError("策略對照的 no-filter／quality-filter 開關方向不正確")
+    if differing != [switch_field]:
+        raise ValueError(f"策略對照只允許 {switch_field} 不同，實際差異={differing}")
+    if left[switch_field] is not left_expected or right[switch_field] is not right_expected:
+        raise ValueError(f"策略對照的 {switch_field} 開關方向不正確")
+    if bool(left.get("use_breakout_quality_filter")) and bool(left.get("use_breakout_quality_ranking")):
+        raise ValueError("baseline 不可同時啟用 hard filter 與 score ranking")
+    if bool(right.get("use_breakout_quality_filter")) and bool(right.get("use_breakout_quality_ranking")):
+        raise ValueError("active scenario 不可同時啟用 hard filter 與 score ranking")
 
 
 def _collect_payload_differences(left: Any, right: Any, path: tuple[Any, ...] = ()) -> list[tuple[tuple[Any, ...], Any, Any]]:
@@ -125,17 +161,18 @@ def _collect_payload_differences(left: Any, right: Any, path: tuple[Any, ...] = 
     return [] if left == right else [(path, left, right)]
 
 
-def _assert_controlled_payload_pair(no_filter_payload: dict, quality_payload: dict) -> None:
+def _assert_controlled_payload_pair(no_filter_payload: dict, quality_payload: dict, *, comparison_mode=COMPARISON_MODE_HARD_FILTER) -> None:
     differences = _collect_payload_differences(no_filter_payload, quality_payload)
+    switch_field, left_expected, right_expected = _comparison_switch_spec(comparison_mode)
     if not differences:
-        raise ValueError("策略對照 payload 沒有切換 use_breakout_quality_filter")
+        raise ValueError(f"策略對照 payload 沒有切換 {switch_field}")
     invalid = [
         ("/".join(map(str, path)), left, right)
         for path, left, right in differences
-        if not path or path[-1] != "use_breakout_quality_filter" or left is not False or right is not True
+        if not path or path[-1] != switch_field or left is not left_expected or right is not right_expected
     ]
     if invalid:
-        raise ValueError(f"策略對照只允許 use_breakout_quality_filter 由 False 切為 True，實際額外差異={invalid}")
+        raise ValueError(f"策略對照只允許 {switch_field} 由 {left_expected} 切為 {right_expected}，實際額外差異={invalid}")
 
 
 def _load_param_source(path: Path) -> dict[str, Any]:
@@ -162,9 +199,11 @@ def _load_param_source(path: Path) -> dict[str, Any]:
     return {"kind": "single_param", "params": load_params_from_json(str(path))}
 
 
-def _apply_scenario_overrides(params, *, enabled: bool, filter_id: str, threshold: float, fixed_risk: float | None):
+def _apply_scenario_overrides(params, *, active: bool, comparison_mode: str, filter_id: str, threshold: float, fixed_risk: float | None):
+    _comparison_switch_spec(comparison_mode)
     overrides = {
-        "use_breakout_quality_filter": bool(enabled),
+        "use_breakout_quality_filter": bool(active and comparison_mode == COMPARISON_MODE_HARD_FILTER),
+        "use_breakout_quality_ranking": bool(active and comparison_mode == COMPARISON_MODE_SCORE_RANKING),
         "breakout_quality_filter_id": str(filter_id),
         "breakout_quality_score_threshold": float(threshold),
     }
@@ -173,10 +212,10 @@ def _apply_scenario_overrides(params, *, enabled: bool, filter_id: str, threshol
     return replace(params, **overrides)
 
 
-def _assert_controlled_ensemble_pair(no_filter_payload: dict, quality_payload: dict) -> None:
+def _assert_controlled_ensemble_pair(no_filter_payload: dict, quality_payload: dict, *, comparison_mode=COMPARISON_MODE_HARD_FILTER) -> None:
     if resolve_active_param_ensemble_mode(no_filter_payload) != resolve_active_param_ensemble_mode(quality_payload):
         raise ValueError("策略對照的 ensemble mode 不一致")
-    _assert_controlled_payload_pair(no_filter_payload, quality_payload)
+    _assert_controlled_payload_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
     left_mode = resolve_active_param_ensemble_mode(no_filter_payload)
     if left_mode == ACTIVE_PARAM_ENSEMBLE_MODE_STATIC:
         left_members = normalize_seed_ensemble_members(no_filter_payload.get("params_ensemble"))
@@ -191,7 +230,8 @@ def _assert_controlled_ensemble_pair(no_filter_payload: dict, quality_payload: d
 def _rewrite_param_mapping(
     mapping: dict,
     *,
-    enabled: bool,
+    active: bool,
+    comparison_mode: str,
     filter_id: str,
     threshold: float,
     fixed_risk: float | None,
@@ -201,7 +241,8 @@ def _rewrite_param_mapping(
         base_params = build_params_from_mapping(raw_params)
         rewritten[str(key)] = params_to_json_dict(_apply_scenario_overrides(
             base_params,
-            enabled=enabled,
+            active=active,
+            comparison_mode=comparison_mode,
             filter_id=filter_id,
             threshold=threshold,
             fixed_risk=fixed_risk,
@@ -212,7 +253,8 @@ def _rewrite_param_mapping(
 def _rewrite_ensemble_mapping(
     mapping: dict,
     *,
-    enabled: bool,
+    active: bool,
+    comparison_mode: str,
     filter_id: str,
     threshold: float,
     fixed_risk: float | None,
@@ -228,7 +270,8 @@ def _rewrite_ensemble_mapping(
             output_member = copy.deepcopy(member)
             output_member["params"] = params_to_json_dict(_apply_scenario_overrides(
                 base_params,
-                enabled=enabled,
+                active=active,
+                comparison_mode=comparison_mode,
                 filter_id=filter_id,
                 threshold=threshold,
                 fixed_risk=fixed_risk,
@@ -244,17 +287,18 @@ def _build_controlled_param_source_pair(
     filter_id: str,
     threshold: float,
     fixed_risk: float | None,
+    comparison_mode: str = COMPARISON_MODE_HARD_FILTER,
 ) -> tuple[str, Any, Any, Any, Any, dict[str, Any] | None]:
     kind = str(source["kind"])
     if kind == "single_param":
         base_params = source["params"]
         no_filter_params = _apply_scenario_overrides(
-            base_params, enabled=False, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            base_params, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
         )
         quality_params = _apply_scenario_overrides(
-            base_params, enabled=True, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            base_params, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
         )
-        _assert_controlled_param_pair(no_filter_params, quality_params)
+        _assert_controlled_param_pair(no_filter_params, quality_params, comparison_mode=comparison_mode)
         return (
             kind,
             no_filter_params,
@@ -278,33 +322,33 @@ def _build_controlled_param_source_pair(
     if kind == "static_active_param_ensemble":
         base_mapping = {"static": base_payload.get("params_ensemble")}
         no_filter_payload["params_ensemble"] = _rewrite_ensemble_mapping(
-            base_mapping, enabled=False, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            base_mapping, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
         )["static"]
         quality_payload["params_ensemble"] = _rewrite_ensemble_mapping(
-            base_mapping, enabled=True, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            base_mapping, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
         )["static"]
-        _assert_controlled_ensemble_pair(no_filter_payload, quality_payload)
+        _assert_controlled_ensemble_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = get_active_param_ensemble_policy(base_payload)
     elif kind == "rolling_active_param_ensemble":
         for field in ("params_by_effective_date", "params_by_oos_year"):
             raw_mapping = base_payload.get(field)
             if isinstance(raw_mapping, dict) and raw_mapping:
                 no_filter_payload[field] = _rewrite_param_mapping(
-                    raw_mapping, enabled=False, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+                    raw_mapping, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
                 )
                 quality_payload[field] = _rewrite_param_mapping(
-                    raw_mapping, enabled=True, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+                    raw_mapping, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
                 )
         ensemble_mapping = base_payload.get("params_ensemble_by_effective_date")
         if not isinstance(ensemble_mapping, dict) or not ensemble_mapping:
             raise ValueError("rolling active-param ensemble 缺少 params_ensemble_by_effective_date")
         no_filter_payload["params_ensemble_by_effective_date"] = _rewrite_ensemble_mapping(
-            ensemble_mapping, enabled=False, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            ensemble_mapping, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
         )
         quality_payload["params_ensemble_by_effective_date"] = _rewrite_ensemble_mapping(
-            ensemble_mapping, enabled=True, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            ensemble_mapping, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
         )
-        _assert_controlled_ensemble_pair(no_filter_payload, quality_payload)
+        _assert_controlled_ensemble_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = get_active_param_ensemble_policy(base_payload)
     else:
         updated_any = False
@@ -313,16 +357,16 @@ def _build_controlled_param_source_pair(
             if isinstance(raw_mapping, dict) and raw_mapping:
                 updated_any = True
                 no_filter_payload[field] = _rewrite_param_mapping(
-                    raw_mapping, enabled=False, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+                    raw_mapping, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
                 )
                 quality_payload[field] = _rewrite_param_mapping(
-                    raw_mapping, enabled=True, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+                    raw_mapping, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
                 )
         if not updated_any:
             raise ValueError("rolling OOS param schedule 缺少 params_by_effective_date / params_by_oos_year")
         build_active_param_schedule(no_filter_payload)
         build_active_param_schedule(quality_payload)
-        _assert_controlled_payload_pair(no_filter_payload, quality_payload)
+        _assert_controlled_payload_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = None
 
     return (
@@ -501,6 +545,8 @@ def _format_metric(value: Any, *, digits: int, unit: str = "", signed: bool = Fa
 
 
 def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
+    labels = _comparison_labels(str(metadata["comparison_mode"]))
+    active_yearly_column = f"{labels['active_name']}_return_pct"
     rows = [
         ("淨總報酬", "total_return_pct", "%"),
         ("最大回撤", "max_drawdown_pct", "%"),
@@ -520,7 +566,7 @@ def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
         ("期末持股缺口總和", "end_position_gap_slot_days", " 格日"),
     ]
     lines = [
-        "# Breakout Quality 策略經濟效果對照", "",
+        ("# Breakout Quality Score 排序策略經濟效果對照" if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING else "# Breakout Quality 策略經濟效果對照"), "",
         f"- 期間：`{metadata['comparison_period']['start']}` ～ `{metadata['comparison_period']['end']}`",
         f"- 參數檔：`{metadata['params_path']}`",
         f"- 參數型態：`{metadata['param_source_kind']}`",
@@ -528,9 +574,19 @@ def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
         f"- 歷史 active-param 無前視：`{metadata['lookahead_safe_active_param_schedule']}`",
         f"- Dataset：`{metadata['dataset']}`",
         f"- Benchmark：`{metadata['benchmark_ticker']}`",
-        f"- 唯一差異：`use_breakout_quality_filter=False` vs `True`",
-        f"- Filter：`{metadata['filter_id']}` / `{metadata['model_architecture']}` / `{metadata['experiment_profile']}` / threshold `{metadata['threshold']}`",
-        "", "## 主要結果", "", "| 指標 | No filter | Active quality filter | 差異 |", "|---|---:|---:|---:|",
+        f"- 唯一差異：`{labels['difference_text']}`",
+        (
+            f"- Ranking model：`{metadata['filter_id']}` / `{metadata['model_architecture']}` / `{metadata['experiment_profile']}`；"
+            "threshold 不作 gate"
+            if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+            else f"- Filter：`{metadata['filter_id']}` / `{metadata['model_architecture']}` / `{metadata['experiment_profile']}` / threshold `{metadata['threshold']}`"
+        ),
+        *(
+            [f"- 排序鍵：`{' → '.join(metadata.get('score_ranking_order') or [])}`"]
+            if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+            else []
+        ),
+        "", "## 主要結果", "", f"| 指標 | No filter | {labels['active_title']} | 差異 |", "|---|---:|---:|---:|",
     ]
     for label, key, unit in rows:
         digits = 0 if key in {"trade_count", "candidate_supply_gap_days", "underfilled_end_days", "end_position_gap_slot_days"} else 4 if key == "log_r_squared" else 2
@@ -543,18 +599,23 @@ def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
     if yearly.empty:
         lines.append("無年度資料。")
     else:
-        lines += ["| 年度 | No filter | Active quality filter | 差異 | 完整年度 |", "|---:|---:|---:|---:|:---:|"]
+        lines += [f"| 年度 | No filter | {labels['active_title']} | 差異 | 完整年度 |", "|---:|---:|---:|---:|:---:|"]
         for row in yearly.to_dict("records"):
             lines.append(
                 f"| {int(row['year'])} "
                 f"| {_format_metric(row.get('no_filter_return_pct'), digits=2, unit='%')} "
-                f"| {_format_metric(row.get('quality_filter_return_pct'), digits=2, unit='%')} "
+                f"| {_format_metric(row.get(active_yearly_column), digits=2, unit='%')} "
                 f"| {_format_metric(row.get('delta_pct'), digits=2, unit='%', signed=True)} "
                 f"| {'是' if row.get('is_full_year') else '否'} |"
             )
     if not metadata["lookahead_safe_active_param_schedule"]:
         lines += ["", "> 警告：本次使用單一／static 參數，只能視為敏感度診斷，不是無前視 OOS 部署證據。"]
-    lines += ["", "> 本報表只驗證目前固定 active 操作點能否改善策略經濟效果；不得依結果回頭調整 threshold、模型或訓練條件。", ""]
+    limitation = (
+        "> 本報表是已查看舊 OOS 後的探索性 score-ranking 機制比較；即使改善，也不得直接視為部署證據，需由全新 forward period 驗證。"
+        if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+        else "> 本報表只驗證目前固定 active 操作點能否改善策略經濟效果；不得依結果回頭調整 threshold、模型或訓練條件。"
+    )
+    lines += ["", limitation, ""]
     return "\n".join(lines)
 
 
@@ -595,6 +656,8 @@ def _run_scenario(*, name, data_dir, param_source_kind, params, start_date, end_
 
 def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
     root = Path(project_root).resolve()
+    comparison_mode = COMPARISON_MODE_HARD_FILTER
+    labels = _comparison_labels(comparison_mode)
     filter_id = BREAKOUT_QUALITY_DEFAULT_FILTER_ID
     contract = load_runtime_artifact_contract(str(root), filter_id)
     architecture = str(contract.manifest.get("model_architecture") or "")
@@ -604,6 +667,7 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
     ) / "strategy_compare"
     payload = _load_existing_comparison_payload(output_dir)
     metadata = dict(payload["metadata"] or {})
+    metadata.setdefault("comparison_mode", COMPARISON_MODE_HARD_FILTER)
     if str(metadata.get("filter_id") or "") != filter_id:
         raise ValueError("既有策略比較結果的 filter_id 與目前 active filter 不一致")
     if str(metadata.get("model_architecture") or "") != architecture:
@@ -633,8 +697,8 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
     refreshed = _to_json_native({
         "metadata": metadata,
         "no_filter": baseline,
-        "quality_filter": quality,
-        "quality_minus_no_filter": deltas,
+        labels["active_name"]: quality,
+        f"{labels['active_name']}_minus_no_filter": deltas,
         "yearly": yearly.to_dict("records"),
     })
     (output_dir / "strategy_comparison.json").write_text(
@@ -661,8 +725,10 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
     return attribution
 
 
-def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=None, max_positions=10, enable_rotation=False, fixed_risk=None, allow_static_diagnostic=False, quiet=False):
+def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=None, max_positions=10, enable_rotation=False, fixed_risk=None, allow_static_diagnostic=False, comparison_mode=COMPARISON_MODE_HARD_FILTER, quiet=False):
     root = Path(project_root).resolve()
+    comparison_mode = str(comparison_mode)
+    labels = _comparison_labels(comparison_mode)
     filter_id = BREAKOUT_QUALITY_DEFAULT_FILTER_ID
     try:
         contract = load_runtime_artifact_contract(str(root), filter_id)
@@ -720,6 +786,7 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         filter_id=filter_id,
         threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
         fixed_risk=None if fixed_risk is None else float(fixed_risk),
+        comparison_mode=comparison_mode,
     )
 
     is_rolling_source = param_source_kind in {"rolling_oos_param_schedule", "rolling_active_param_ensemble"}
@@ -744,18 +811,21 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
             f"params={param_start}~{param_end}, filter={start_date}~{end_date}"
         )
     baseline_payload = _run_scenario(name="no_filter", data_dir=data_dir, param_source_kind=param_source_kind, params=no_filter_params, start_date=start_date, end_date=end_date, max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet)
-    quality_payload = _run_scenario(name="quality_filter", data_dir=data_dir, param_source_kind=param_source_kind, params=quality_params, start_date=start_date, end_date=end_date, max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet)
+    quality_payload = _run_scenario(name=labels["active_name"], data_dir=data_dir, param_source_kind=param_source_kind, params=quality_params, start_date=start_date, end_date=end_date, max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet)
     _assert_shared_benchmark(baseline_payload, quality_payload)
 
     baseline = _scenario_summary(baseline_payload)
     quality = _scenario_summary(quality_payload)
     deltas = _delta(quality, baseline)
     yearly = _build_yearly_comparison(baseline_payload["profile"], quality_payload["profile"])
+    if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
+        yearly = yearly.rename(columns={"quality_filter_return_pct": "score_ranking_return_pct"})
 
-    output_dir = resolve_filter_model_output_dir(str(root), filter_id, manifest_architecture, manifest_profile) / "strategy_compare"
+    output_dir = resolve_filter_model_output_dir(str(root), filter_id, manifest_architecture, manifest_profile) / labels["output_dir"]
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "schema_version": SCHEMA_VERSION,
+        "comparison_mode": comparison_mode,
         "dataset": dataset,
         "data_dir": str(data_dir),
         "params_path": str(resolved_params_path),
@@ -766,11 +836,18 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         "active_param_period": {"start": param_start, "end": param_end} if is_rolling_source else None,
         "active_param_ensemble_policy": ensemble_policy,
         "no_filter_params": no_filter_param_payload,
-        "quality_filter_params": quality_param_payload,
+        f"{labels['active_name']}_params": quality_param_payload,
         "filter_id": filter_id,
         "model_architecture": manifest_architecture,
         "experiment_profile": manifest_profile,
         "threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        "threshold_used_as_gate": bool(comparison_mode == COMPARISON_MODE_HARD_FILTER),
+        "score_ranking_order": (
+            ["ensemble_vote_count_desc", "breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"]
+            if comparison_mode == COMPARISON_MODE_SCORE_RANKING
+            else None
+        ),
+        "unscorable_candidate_policy": "conservative_exclude",
         "max_positions": int(max_positions),
         "enable_rotation": bool(enable_rotation),
         "fixed_risk_override": None if fixed_risk is None else float(fixed_risk),
@@ -780,14 +857,14 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         "runtime_score_path": str(contract.paths.score_path),
         "runtime_eligibility": dict(contract.manifest.get("runtime_eligibility") or {}),
         "score_table": dict(contract.manifest.get("score_table") or {}),
-        "controlled_param_difference": ["use_breakout_quality_filter"],
+        "controlled_param_difference": [_comparison_switch_spec(comparison_mode)[0]],
         "trade_attribution_schema_version": ATTRIBUTION_SCHEMA_VERSION,
     }
     json_payload = _to_json_native({
         "metadata": metadata,
         "no_filter": baseline,
-        "quality_filter": quality,
-        "quality_minus_no_filter": deltas,
+        labels["active_name"]: quality,
+        f"{labels['active_name']}_minus_no_filter": deltas,
         "yearly": yearly.to_dict("records"),
     })
     (output_dir / "strategy_comparison.json").write_text(
@@ -796,33 +873,37 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
     )
     (output_dir / "strategy_comparison.md").write_text(_markdown_report(metadata, baseline, quality, deltas, yearly), encoding="utf-8")
     baseline_payload["equity_curve"].to_csv(output_dir / "no_filter_equity.csv", index=False, encoding="utf-8-sig")
-    quality_payload["equity_curve"].to_csv(output_dir / "quality_filter_equity.csv", index=False, encoding="utf-8-sig")
+    quality_payload["equity_curve"].to_csv(output_dir / f"{labels['active_name']}_equity.csv", index=False, encoding="utf-8-sig")
     baseline_payload["trade_history"].to_csv(output_dir / "no_filter_trades.csv", index=False, encoding="utf-8-sig")
-    quality_payload["trade_history"].to_csv(output_dir / "quality_filter_trades.csv", index=False, encoding="utf-8-sig")
+    quality_payload["trade_history"].to_csv(output_dir / f"{labels['active_name']}_trades.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(baseline_payload["profile"].get("portfolio_capacity_rows") or []).to_csv(output_dir / "no_filter_daily_capacity.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(quality_payload["profile"].get("portfolio_capacity_rows") or []).to_csv(output_dir / "quality_filter_daily_capacity.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(quality_payload["profile"].get("portfolio_capacity_rows") or []).to_csv(output_dir / f"{labels['active_name']}_daily_capacity.csv", index=False, encoding="utf-8-sig")
     yearly.to_csv(output_dir / "yearly_returns_comparison.csv", index=False, encoding="utf-8-sig")
-    write_trade_attribution_outputs(
-        project_root=root,
-        output_dir=output_dir,
-        filter_id=filter_id,
-        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
-        metadata=metadata,
-        no_filter_trade_history=baseline_payload["trade_history"],
-        quality_filter_trade_history=quality_payload["trade_history"],
-        no_filter_closed_trade_rows=(baseline_payload["profile"] or {}).get("closed_trade_rows"),
-        quality_filter_closed_trade_rows=(quality_payload["profile"] or {}).get("closed_trade_rows"),
-        no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
-        quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
-    )
+    if comparison_mode == COMPARISON_MODE_HARD_FILTER:
+        write_trade_attribution_outputs(
+            project_root=root,
+            output_dir=output_dir,
+            filter_id=filter_id,
+            threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+            metadata=metadata,
+            no_filter_trade_history=baseline_payload["trade_history"],
+            quality_filter_trade_history=quality_payload["trade_history"],
+            no_filter_closed_trade_rows=(baseline_payload["profile"] or {}).get("closed_trade_rows"),
+            quality_filter_closed_trade_rows=(quality_payload["profile"] or {}).get("closed_trade_rows"),
+            no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
+            quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
+        )
     print(f"\n完成：{output_dir / 'strategy_comparison.md'}")
-    print(f"交易歸因：{output_dir / 'trade_attribution.md'}")
+    if comparison_mode == COMPARISON_MODE_HARD_FILTER:
+        print(f"交易歸因：{output_dir / 'trade_attribution.md'}")
     return json_payload
 
 
 def main(argv=None):
     args = _parse_args(argv)
     if args.attribution_only:
+        if args.comparison_mode != COMPARISON_MODE_HARD_FILTER:
+            raise ValueError("--attribution-only 目前只支援 hard-filter 既有歸因")
         run_existing_attribution()
         return 0
     if args.max_positions < 1:
@@ -834,6 +915,7 @@ def main(argv=None):
         enable_rotation=args.rotation == "on",
         fixed_risk=args.fixed_risk,
         allow_static_diagnostic=args.allow_static_diagnostic,
+        comparison_mode=args.comparison_mode,
         quiet=args.quiet,
     )
     return 0
@@ -845,4 +927,5 @@ __all__ = [
     "_assert_controlled_payload_pair", "_build_controlled_param_source_pair",
     "_load_param_source", "_capacity_summary", "_normalize_yearly_completeness",
     "_to_json_native",
+    "COMPARISON_MODE_HARD_FILTER", "COMPARISON_MODE_SCORE_RANKING",
 ]

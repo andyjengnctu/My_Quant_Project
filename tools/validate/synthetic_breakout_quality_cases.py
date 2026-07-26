@@ -206,6 +206,8 @@ from filters.breakout_quality.inference import (
 )
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from core.signal_utils import generate_signals
+from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD, sort_candidate_rows
+from core.portfolio_engine import _aggregate_ensemble_candidate_rows
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
@@ -219,6 +221,7 @@ from tools.filters.breakout_quality.report import (
     render_markdown_report,
 )
 from tools.filters.breakout_quality.strategy_compare import (
+    COMPARISON_MODE_SCORE_RANKING,
     _assert_controlled_ensemble_pair,
     _assert_controlled_param_pair,
     _build_controlled_param_source_pair,
@@ -5949,6 +5952,71 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         "additional_param_difference_is_rejected",
         True,
         extra_difference_rejected,
+    )
+
+    ranking_pair = _build_controlled_param_source_pair(
+        {"kind": "single_param", "params": base},
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        fixed_risk=None,
+        comparison_mode=COMPARISON_MODE_SCORE_RANKING,
+    )
+    ranking_left = params_to_json_dict(ranking_pair[1])
+    ranking_right = params_to_json_dict(ranking_pair[2])
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "score_ranking_pair_only_toggles_ranking_and_keeps_hard_filter_off",
+        (False, False, False, True),
+        (
+            ranking_left["use_breakout_quality_filter"],
+            ranking_right["use_breakout_quality_filter"],
+            ranking_left["use_breakout_quality_ranking"],
+            ranking_right["use_breakout_quality_ranking"],
+        ),
+    )
+
+    baseline_sort_rows = [
+        {"ticker": "A", "sort_value": 0.20, "proj_cost": 100.0, "use_breakout_quality_ranking": False},
+        {"ticker": "B", "sort_value": 0.10, "proj_cost": 80.0, "use_breakout_quality_ranking": False},
+    ]
+    ranking_sort_rows = [
+        {"ticker": "A", "sort_value": 0.20, "proj_cost": 100.0, "use_breakout_quality_ranking": True, "breakout_quality_score": 0.90},
+        {"ticker": "B", "sort_value": 0.10, "proj_cost": 80.0, "use_breakout_quality_ranking": True, "breakout_quality_score": 0.40},
+    ]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_param_score_ranking_precedes_existing_overage_sort",
+        (["B", "A"], ["A", "B"]),
+        (
+            [row["ticker"] for row in sort_candidate_rows(baseline_sort_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)],
+            [row["ticker"] for row in sort_candidate_rows(ranking_sort_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)],
+        ),
+    )
+
+    ensemble_rank_rows = []
+    for ticker, votes, score, overage in (("A", 6, 0.20, 0.0), ("B", 5, 0.99, 0.0), ("C", 6, 0.80, 1.0)):
+        for member_idx in range(votes):
+            ensemble_rank_rows.append({
+                "ticker": ticker,
+                "ensemble_member_key": f"m{member_idx}",
+                "params_obj": base,
+                "sort_value": overage,
+                "proj_cost": 100.0,
+                "use_breakout_quality_ranking": True,
+                "breakout_quality_score": score,
+            })
+    ensemble_ranked = _aggregate_ensemble_candidate_rows(ensemble_rank_rows, min_agree=3)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ensemble_votes_remain_first_and_score_only_reorders_equal_vote_candidates",
+        [("C", 6), ("A", 6), ("B", 5)],
+        [(row["ticker"], row["ensemble_vote_count"]) for row in ensemble_ranked],
     )
 
     ensemble_source = build_static_active_param_ensemble_payload(

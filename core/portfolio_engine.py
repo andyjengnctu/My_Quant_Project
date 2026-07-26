@@ -1,5 +1,6 @@
 import pandas as pd
 import time
+import math
 import threading
 from collections import OrderedDict
 from core.exact_accounting import milli_to_money, money_to_milli
@@ -396,14 +397,49 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         representative["ensemble_median_sort_value"] = float(median_sort)
         representative["sort_value"] = float(median_sort)
         representative["ensemble_member_keys"] = sorted(member_keys)
+        ranking_flags = {bool(row.get("use_breakout_quality_ranking", False)) for row in group_rows}
+        if len(ranking_flags) > 1:
+            raise ValueError(f"同一 ticker 的 ensemble members quality ranking 設定不一致: ticker={ticker}")
+        quality_ranking = bool(ranking_flags and True in ranking_flags)
+        representative["use_breakout_quality_ranking"] = quality_ranking
+        if quality_ranking:
+            quality_rows = sorted(
+                (
+                    float(row.get("breakout_quality_score")),
+                    str(row.get("breakout_quality_score_date") or ""),
+                )
+                for row in group_rows
+            )
+            quality_scores = [item[0] for item in quality_rows]
+            if not quality_scores or not all(math.isfinite(value) for value in quality_scores):
+                raise ValueError(f"啟用 quality ranking 的 ensemble 候選缺少有效分數: ticker={ticker}")
+            median_score, median_score_date = quality_rows[(len(quality_rows) - 1) // 2]
+            representative["ensemble_median_quality_score"] = float(median_score)
+            representative["ensemble_median_quality_score_date"] = median_score_date
+            representative["ensemble_quality_score_dates"] = sorted({item[1] for item in quality_rows if item[1]})
+            representative["breakout_quality_score"] = float(median_score)
+            representative["breakout_quality_score_date"] = median_score_date
         # # (AI註: STOP 後 Re-entry 必須保留原始共識 member 的各自參數；只保存代表 member 會讓 min_agree>1 永遠無法重新形成共識。)
         representative["ensemble_member_params_by_key"] = member_params_by_key
         aggregated.append(representative)
     active_sort_method = get_buy_sort_method()
+    quality_ranking = bool(aggregated and aggregated[0].get("use_breakout_quality_ranking", False))
+    if any(bool(item.get("use_breakout_quality_ranking", False)) != quality_ranking for item in aggregated):
+        raise ValueError("同日 aggregated candidates 的 quality ranking 設定不一致")
+
+    def _quality_key(item):
+        if not quality_ranking:
+            return 0.0
+        value = float(item.get("ensemble_median_quality_score", item.get("breakout_quality_score", float("nan"))))
+        if not math.isfinite(value):
+            raise ValueError(f"啟用 quality ranking 的 aggregated candidate 缺少分數: ticker={item.get('ticker')}")
+        return -value
+
     if active_sort_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         aggregated.sort(
             key=lambda item: (
                 -int(item.get("ensemble_vote_count", 0) or 0),
+                _quality_key(item),
                 float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0),
                 -float(item.get("proj_cost", 0.0) or 0.0),
                 str(item.get("ticker") or ""),
@@ -413,13 +449,21 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         aggregated.sort(
             key=lambda item: (
                 -int(item.get("ensemble_vote_count", 0) or 0),
+                _quality_key(item),
                 calc_entry_type_priority_from_row(item),
                 calc_buy_limit_overage_pct_from_row(item),
                 str(item.get("ticker") or ""),
             )
         )
     else:
-        aggregated.sort(key=lambda item: (int(item.get("ensemble_vote_count", 0) or 0), float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0), str(item.get("ticker") or "")), reverse=True)
+        aggregated.sort(
+            key=lambda item: (
+                -int(item.get("ensemble_vote_count", 0) or 0),
+                _quality_key(item),
+                -float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0),
+                str(item.get("ticker") or ""),
+            )
+        )
     return aggregated
 
 

@@ -194,6 +194,10 @@ def execute_reserved_entries_for_day(
             entry_result['position']['signal_date'] = signal_date_text
             entry_result['position']['candidate_date'] = candidate_date_text
             entry_result['position']['candidate_type'] = candidate_kind_label
+            # (AI註: 保存進場時的 quality ranking 診斷欄位；只供事後歸因，不介入持倉管理。)
+            entry_result['position']['breakout_quality_score'] = cand.get('breakout_quality_score')
+            entry_result['position']['breakout_quality_score_date'] = cand.get('breakout_quality_score_date')
+            entry_result['position']['use_breakout_quality_ranking'] = bool(cand.get('use_breakout_quality_ranking', False))
             portfolio[cand['ticker']] = entry_result['position']
             if entry_stats is not None:
                 entry_stats['filled_buy_count'] = int(entry_stats.get('filled_buy_count', 0) or 0) + 1
@@ -227,6 +231,10 @@ def execute_reserved_entries_for_day(
                         '該筆總損益': 0.0,
                         'R_Multiple': 0.0,
                         'Risk': candidate_params.fixed_risk,
+                        'Quality Score': cand.get('breakout_quality_score'),
+                        'Quality Score Date': cand.get('breakout_quality_score_date'),
+                        'Quality Ranking': bool(cand.get('use_breakout_quality_ranking', False)),
+                        'Ensemble Vote Count': cand.get('ensemble_vote_count'),
                     }
                 )
         elif entry_result['count_as_missed_buy']:
@@ -252,6 +260,10 @@ def execute_reserved_entries_for_day(
                         '股數': chosen_entry_plan['qty'],
                         '預留總金額': milli_to_money(reserved_cost_milli),
                         '投入總金額': 0.0,
+                        'Quality Score': cand.get('breakout_quality_score'),
+                        'Quality Score Date': cand.get('breakout_quality_score_date'),
+                        'Quality Ranking': bool(cand.get('use_breakout_quality_ranking', False)),
+                        'Ensemble Vote Count': cand.get('ensemble_vote_count'),
                         '備註': f"預掛限價 {chosen_entry_plan['limit_price']:.2f} 未成交",
                     }
                 )

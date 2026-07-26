@@ -208,6 +208,20 @@ python apps/breakout_quality_strategy_compare.py --attribution-only
 - `--attribution-only` 只讀取既有 `strategy_comparison.json`、`no_filter_trades.csv`、`quality_filter_trades.csv` 與正式 runtime score；它會把只到 2026-03-02 的 2026 年標為非完整年度，再輸出交易歸因。
 - 此對照只判斷固定 9A 是否改善淨報酬、回撤、穩定性及資金使用；不得依結果回頭調整 threshold、epochs、feature、Label 或模型。
 
+### Breakout Quality Score 候選排序探索性比較
+
+固定 threshold 0.5 hard filter 已由策略 OOS 淘汰；若要測試 9A 的相對排序能力，只使用下列隔離模式：
+
+```bash
+python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off
+```
+
+- Baseline 與 score-ranking 兩組都固定 `use_breakout_quality_filter=False`；唯一差異為 `use_breakout_quality_ranking=False/True`。
+- 候選先通過既有 ensemble `min_agree`；排序固定為「同意票數由高到低 → Quality Score 由高到低 → 既有買入排序 → deterministic ticker」。Score 只重排同票數候選，不可凌駕較高同意票數。
+- 可正常評分但低 Score 的候選仍保留，只是順位靠後；`unavailable_scores.csv` 中因資料不足而不可評分的候選維持保守排除。Continuation／Re-entry 沿用原始 breakout signal date 的 Score。
+- Optimizer search space 固定 ranking=`False`，不得把此機制放入參數搜尋。輸出位於 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/strategy_compare_score_ranking/`。
+- 此實驗是在已查看舊 OOS 後進行的探索性機制比較；即使改善，也必須由全新 forward period 驗證後才可考慮部署。
+
 ### `run_best_params.json` 的用途與產生方式
 
 Trade Mode 會先輸出 `models/candidate_best_params.json`；目前 `TRADE_MODE_AUTO_PROMOTE_RUN_BEST=True`，候選通過正式 promotion 契約時才建立或更新 `models/run_best_params.json`：

@@ -17,7 +17,8 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_breakout_return_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破日漲幅濾網開關搜尋)
     "use_breakout_false_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 假突破濾網開關搜尋)
     "use_breakout_ema_filter": {"kind": "categorical", "choices": [True, False]},  # (AI註: 突破 EMA 濾網開關搜尋)
-    "use_breakout_quality_filter": {"kind": "categorical", "choices": [False]},  # (AI註: breakout quality filter 開關；score table 建好後可手動改成 [True, False])
+    "use_breakout_quality_filter": {"kind": "categorical", "choices": [False]},  # (AI註: hard gate 已由策略 OOS 淘汰，optimizer 固定 False)
+    "use_breakout_quality_ranking": {"kind": "categorical", "choices": [False]},  # (AI註: score ranking 只由隔離策略比較工具啟用，不納入 optimizer 搜尋)
     "use_history_threshold": {"kind": "categorical", "choices": [False]},  # (AI註: 歷史門檻開關搜尋)
     "high_len": {"kind": "int", "low": BREAKOUT_HIGH_LEN_SEARCH_MIN, "high": BREAKOUT_HIGH_LEN_SEARCH_MAX, "step": BREAKOUT_HIGH_LEN_SEARCH_STEP},  # (AI註: 突破新高觀察窗長搜尋；範圍由 config.breakout_policy 單一提供)
     "breakout_ema_len": {"kind": "int", "low": 60, "high": 350, "step": 5, "enabled_by": "use_breakout_ema_filter"},  # (AI註: 突破 EMA 濾網長度搜尋)
@@ -84,6 +85,7 @@ def build_trial_params(session, trial):
     ai_use_breakout_ema_filter = _suggest_optimizer_switch(trial, "use_breakout_ema_filter")
     ai_use_breakout_false_filter = _suggest_optimizer_switch(trial, "use_breakout_false_filter")
     ai_use_breakout_quality_filter = _suggest_optimizer_switch(trial, "use_breakout_quality_filter")
+    ai_use_breakout_quality_ranking = _suggest_optimizer_switch(trial, "use_breakout_quality_ranking")
     ai_use_breakout_reclaim_reentry = _suggest_optimizer_switch(trial, "use_breakout_reclaim_reentry")
     ai_use_history_threshold = _suggest_optimizer_switch(trial, "use_history_threshold")
 
@@ -142,6 +144,7 @@ def build_trial_params(session, trial):
         use_breakout_false_filter=ai_use_breakout_false_filter,
         breakout_false_filter_atr_pct_min=breakout_false_filter_atr_pct_min,
         use_breakout_quality_filter=ai_use_breakout_quality_filter,
+        use_breakout_quality_ranking=ai_use_breakout_quality_ranking,
         breakout_quality_filter_id=BREAKOUT_PARAM_SPECS["breakout_quality_filter_id"]["default"],
         breakout_quality_score_threshold=BREAKOUT_PARAM_SPECS["breakout_quality_score_threshold"]["default"],
         use_breakout_reclaim_reentry=ai_use_breakout_reclaim_reentry,

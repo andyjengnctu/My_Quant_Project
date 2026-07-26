@@ -8,7 +8,10 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID
-from filters.breakout_quality.score_store import build_pass_condition_from_score_table
+from filters.breakout_quality.score_store import (
+    build_pass_condition_from_score_table,
+    lookup_breakout_quality_candidate_score,
+)
 
 
 def resolve_project_root_from_runtime() -> str:
@@ -37,4 +40,26 @@ def build_breakout_quality_filter_pass_condition(
     )
 
 
-__all__ = ["build_breakout_quality_filter_pass_condition", "resolve_project_root_from_runtime"]
+def resolve_breakout_quality_candidate_rank(
+    *,
+    ticker: str,
+    signal_date,
+    high_len: int,
+    filter_id: str = DEFAULT_FILTER_ID,
+    project_root: str | None = None,
+) -> dict:
+    root = resolve_project_root_from_runtime() if project_root is None else str(project_root)
+    return lookup_breakout_quality_candidate_score(
+        project_root=root,
+        ticker=str(ticker),
+        signal_date=signal_date,
+        high_len=int(high_len),
+        filter_id=str(filter_id),
+    )
+
+
+__all__ = [
+    "build_breakout_quality_filter_pass_condition",
+    "resolve_breakout_quality_candidate_rank",
+    "resolve_project_root_from_runtime",
+]

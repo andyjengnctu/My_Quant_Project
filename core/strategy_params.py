@@ -135,6 +135,7 @@ class V16StrategyParams:
     use_breakout_false_filter: bool = BREAKOUT_PARAM_SPECS["use_breakout_false_filter"]["default"]
     breakout_false_filter_atr_pct_min: float = BREAKOUT_PARAM_SPECS["breakout_false_filter_atr_pct_min"]["default"]
     use_breakout_quality_filter: bool = BREAKOUT_PARAM_SPECS["use_breakout_quality_filter"]["default"]
+    use_breakout_quality_ranking: bool = BREAKOUT_PARAM_SPECS["use_breakout_quality_ranking"]["default"]
     breakout_quality_filter_id: str = BREAKOUT_PARAM_SPECS["breakout_quality_filter_id"]["default"]
     breakout_quality_score_threshold: float = BREAKOUT_PARAM_SPECS["breakout_quality_score_threshold"]["default"]
     use_breakout_reclaim_reentry: bool = BREAKOUT_PARAM_SPECS["use_breakout_reclaim_reentry"]["default"]

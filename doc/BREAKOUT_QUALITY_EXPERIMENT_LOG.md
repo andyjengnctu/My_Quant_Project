@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_201327_1836e7d.zip`，SHA256 `6f4491d1ae2e20aab2ee4fa39d7e77ae14ef1f741e9afc4ef10f47cf39abc335`；已包含完整runtime候選coverage、Rolling active-param策略比較與9A固定threshold真實結果，本輪新增交易層歸因與部分年度修正 |
-| SHA256 | 本輪來源 ZIP：`6f4491d1ae2e20aab2ee4fa39d7e77ae14ef1f741e9afc4ef10f47cf39abc335`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
+| 基準 ZIP | `test-branch-1_20260726_214442_75770f0.zip`，SHA256 `28fb45e6400a0241e6ee3e229f896c4541e203e96dcd9e5e8cc645f971812fcd`；已包含完整runtime候選coverage、Rolling active-param策略比較、9A固定threshold結果與交易歸因，本輪新增Quality Score候選排序探索性比較 |
+| SHA256 | 本輪來源 ZIP：`28fb45e6400a0241e6ee3e229f896c4541e203e96dcd9e5e8cc645f971812fcd`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -954,6 +954,23 @@ Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke
 | 下一步 | 歸因已完成；不得依同一OOS調門檻、calibration或regime開關，也不另跑8F策略比較。模型研究正式凍結；保留9A作排序研究基準，等待2026-03-03之後累積足夠且完成40交易日Label horizon的新forward labeled期間 |
 
 
+### 3.37 9A Quality Score 候選排序探索性機制（2026-07-26）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；尚無真實策略結果，不得預先判定有效或無效 |
+| 程式基準 | `test-branch-1_20260726_214442_75770f0.zip`，SHA256 `28fb45e6400a0241e6ee3e229f896c4541e203e96dcd9e5e8cc645f971812fcd` |
+| 背景 | 9A threshold 0.5 hard gate 已由Rolling OOS策略結果淘汰，但9A固定coverage排序跨Selection／OOS相對穩定；使用者要求測試Score只作候選優先順序、不作生殺門檻 |
+| 唯一變更 | Baseline固定`use_breakout_quality_filter=False / use_breakout_quality_ranking=False`；探索組固定hard filter=False，只將`use_breakout_quality_ranking=True`。Optimizer search space將ranking固定False，不參與參數搜尋 |
+| 排序契約 | 先以既有`min_agree`決定候選資格；active-param ensemble排序固定為vote count由高到低、同票候選的median Quality Score由高到低、既有buy-sort、ticker deterministic。Score不得讓較少票候選超越較多票候選 |
+| Score語意 | 正常、Continuation及STOP後Re-entry均使用原始breakout signal date的canonical runtime Score；正常可評分低分候選仍保留並往後排；`unavailable_scores.csv`中的不可評分事件維持保守排除，未知缺分fail-fast |
+| 固定條件 | 9A checkpoint／scores、threshold欄位、Rolling active params、members／min_agree、資金、持股、rotation、交易成本、成交、停損／停利／trailing、0050與比較期間全部不變；threshold不作gate |
+| 重建需求 | 不需重訓、relabel、重建Dataset／feature bank、重新匯出score或重跑optimizer；套用程式後直接執行隔離比較 |
+| 輸出 | `strategy_compare_score_ranking/strategy_comparison.md/.json`及兩組equity／trades／daily-capacity／年度報酬；成交紀錄另保存進場Quality Score、Score日期及ensemble同意數供歸因 |
+| 研究限制 | 此機制是在已查看2021～2026舊OOS後提出，只能作探索性診斷；即使改善，也不得直接作部署證據，必須等待全新forward period驗證 |
+| 下一步 | 執行`python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off`，取得真實結果後再將本節更新為`RESULT_AVAILABLE` |
+
+
 ---
 
 ## 6. 實驗執行順序
@@ -990,6 +1007,7 @@ Formal bundle閉環（2026-07-26 15:13）：quick gate、chain checks與ML smoke
 → unique-group score單一真理＋逐年OOS診斷（RESULT_AVAILABLE；9A重跑確認）
 → 固定9A threshold 0.5的策略層no-filter對照（REJECTED_FOR_RUNTIME_DEPLOYMENT）
 → 既有OOS交易層歸因與partial-year修正（RESULT_AVAILABLE；獨有交易選擇效果−46.77R）
+→ 9A Quality Score只作同票候選排序的探索性機制（IMPLEMENTED；尚待結果，不作部署證據）
 → 凍結模型研究，等待2026-03-03之後的新forward labeled期間
 ```
 

@@ -151,33 +151,78 @@ def format_buy_sort_metric_value(value, method=None):
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
+
+def _ranking_enabled_for_rows(rows):
+    flags = {bool(item.get("use_breakout_quality_ranking", False)) for item in rows}
+    if len(flags) > 1:
+        raise ValueError("同一候選集合的 use_breakout_quality_ranking 不一致")
+    return bool(flags and True in flags)
+
+
+def _quality_score_desc_key(item):
+    score = _as_finite_float(item.get("breakout_quality_score"), default=math.nan)
+    if not math.isfinite(score):
+        raise ValueError(f"啟用 quality score ranking 的候選缺少有效分數: ticker={item.get('ticker')}")
+    return -score
+
+
 def sort_candidate_rows(rows, method=None):
     active_method = get_buy_sort_method() if method is None else method
+    quality_ranking = _ranking_enabled_for_rows(rows) if rows else False
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
-        rows.sort(
-            key=lambda item: (
-                _as_finite_float(item.get('sort_value'), default=math.inf),
-                -_as_finite_float(item.get('proj_cost'), default=0.0),
-                _descending_text_key(item.get('ticker')),
+        if quality_ranking:
+            rows.sort(
+                key=lambda item: (
+                    _quality_score_desc_key(item),
+                    _as_finite_float(item.get('sort_value'), default=math.inf),
+                    -_as_finite_float(item.get('proj_cost'), default=0.0),
+                    _descending_text_key(item.get('ticker')),
+                )
             )
-        )
+        else:
+            rows.sort(
+                key=lambda item: (
+                    _as_finite_float(item.get('sort_value'), default=math.inf),
+                    -_as_finite_float(item.get('proj_cost'), default=0.0),
+                    _descending_text_key(item.get('ticker')),
+                )
+            )
         return rows
     if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
+        if quality_ranking:
+            rows.sort(
+                key=lambda item: (
+                    _quality_score_desc_key(item),
+                    calc_entry_type_priority_from_row(item),
+                    calc_buy_limit_overage_pct_from_row(item),
+                    str(item.get('ticker') or ''),
+                )
+            )
+        else:
+            rows.sort(
+                key=lambda item: (
+                    calc_entry_type_priority_from_row(item),
+                    calc_buy_limit_overage_pct_from_row(item),
+                    str(item.get('ticker') or ''),
+                )
+            )
+        return rows
+    if quality_ranking:
         rows.sort(
             key=lambda item: (
-                calc_entry_type_priority_from_row(item),
-                calc_buy_limit_overage_pct_from_row(item),
+                _quality_score_desc_key(item),
+                -_as_finite_float(item.get('sort_value'), default=-math.inf),
                 str(item.get('ticker') or ''),
             )
         )
-        return rows
-    rows.sort(
-        key=lambda item: (
-            _as_finite_float(item.get('sort_value'), default=-math.inf),
-            str(item.get('ticker') or ''),
-        ),
-        reverse=True,
-    )
+    else:
+        rows.sort(
+            key=lambda item: (
+                _as_finite_float(item.get('sort_value'), default=-math.inf),
+                str(item.get('ticker') or ''),
+            ),
+            reverse=True,
+        )
     return rows
 
 

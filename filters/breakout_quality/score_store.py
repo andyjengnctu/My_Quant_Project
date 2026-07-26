@@ -162,6 +162,102 @@ def load_shared_group_score_table(
     return shared
 
 
+
+@lru_cache(maxsize=16)
+def load_unavailable_score_table(
+    project_root: str,
+    filter_id: str = DEFAULT_FILTER_ID,
+) -> pd.DataFrame:
+    """Return validated unscorable runtime events indexed by ticker/date/high_len."""
+
+    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    load_score_table(str(project_root), str(filter_id))
+    unavailable_record = contract.manifest.get("conservative_unscorable_events")
+    if unavailable_record is None:
+        return pd.DataFrame(columns=["reason"], index=pd.MultiIndex.from_arrays([[], [], []], names=["ticker", "date", "high_len"]))
+    path = contract.paths.score_path.with_name(DEFAULT_UNAVAILABLE_SCORE_FILENAME)
+    unavailable = read_breakout_quality_csv(path).copy()
+    unavailable["ticker"] = unavailable["ticker"].astype(str)
+    unavailable["date"] = pd.to_datetime(unavailable["date"], errors="raise").dt.strftime("%Y-%m-%d")
+    unavailable["high_len"] = pd.to_numeric(unavailable["high_len"], errors="raise").astype(int)
+    return unavailable.set_index(["ticker", "date", "high_len"])[["reason"]].sort_index()
+
+
+def lookup_breakout_quality_candidate_score(
+    *,
+    project_root: str,
+    ticker: str,
+    signal_date,
+    high_len: int,
+    filter_id: str = DEFAULT_FILTER_ID,
+) -> dict:
+    """Resolve one candidate score and distinguish model-scored from conservative-unscorable events."""
+
+    ticker_text = str(ticker or "").strip()
+    if not ticker_text:
+        raise ValueError("breakout quality ranking lookup 必須提供 ticker")
+    date_text = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+    return dict(_lookup_breakout_quality_candidate_score_cached(
+        str(project_root),
+        str(filter_id),
+        ticker_text,
+        date_text,
+        int(high_len),
+    ))
+
+
+@lru_cache(maxsize=262144)
+def _lookup_breakout_quality_candidate_score_cached(
+    project_root: str,
+    filter_id: str,
+    ticker_text: str,
+    date_text: str,
+    high_len: int,
+) -> dict:
+    # (AI註: continuation／re-entry 會反覆查同一原始 breakout event；快取可避免重複 DataFrame lookup。)
+    contract = load_runtime_artifact_contract(str(project_root), str(filter_id))
+    validate_required_high_len(contract, int(high_len))
+    event_date = pd.Timestamp(date_text).date()
+    if event_date < contract.available_from or event_date > contract.available_through:
+        raise ValueError(
+            "breakout quality ranking 候選日期超出正式 runtime coverage: "
+            f"ticker={ticker_text}, date={date_text}, coverage={contract.available_from}~{contract.available_through}"
+        )
+
+    score_table = (
+        load_shared_group_score_table(str(project_root), str(filter_id))
+        if contract.shared_group_score_broadcast
+        else load_score_table(str(project_root), str(filter_id))
+    )
+    lookup_key = (ticker_text, date_text) if contract.shared_group_score_broadcast else (ticker_text, date_text, int(high_len))
+    try:
+        score = float(score_table.loc[lookup_key, SCORE_COLUMN])
+    except KeyError as exc:
+        raise ValueError(
+            "breakout quality ranking score table 缺少正式候選事件: "
+            f"ticker={ticker_text}, date={date_text}, high_len={int(high_len)}"
+        ) from exc
+    if not np.isfinite(score):
+        raise ValueError(
+            "breakout quality ranking score 非有限值: "
+            f"ticker={ticker_text}, date={date_text}, high_len={int(high_len)}"
+        )
+
+    unavailable = load_unavailable_score_table(str(project_root), str(filter_id))
+    unavailable_key = (ticker_text, date_text, int(high_len))
+    reason = ""
+    if unavailable_key in unavailable.index:
+        reason_value = unavailable.loc[unavailable_key, "reason"]
+        reason = str(reason_value.iloc[0] if hasattr(reason_value, "iloc") else reason_value)
+    return {
+        "score": score,
+        "available": not bool(reason),
+        "unavailable_reason": reason,
+        "score_date": date_text,
+        "shared_group_score": bool(contract.shared_group_score_broadcast),
+    }
+
+
 def build_pass_condition_from_score_table(
     df: pd.DataFrame,
     *,
@@ -250,5 +346,7 @@ __all__ = [
     "build_pass_condition_from_score_table",
     "load_score_table",
     "load_shared_group_score_table",
+    "load_unavailable_score_table",
+    "lookup_breakout_quality_candidate_score",
     "resolve_score_table_path",
 ]
