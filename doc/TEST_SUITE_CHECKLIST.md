@@ -1521,9 +1521,9 @@
 | 2026-07-26 | T267 | 驗證首日前signal Score可用且策略比較起日不跟隨較早Score coverage後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
 | 2026-07-27 | B170 | score-ranking執行至STOP後Re-entry時以重新站回確認日查Score，違反原始breakout Score繼承契約，策略比較契約改回PARTIAL | DONE -> PARTIAL | `core/portfolio_candidates.py`, `core/breakout_reentry.py`, `core/portfolio_entries.py`, `core/portfolio_exits.py`, `core/portfolio_engine.py` |
 | 2026-07-27 | B170 | normal／continuation／成交持倉／逐member watch／Re-entry完整保存原始rank payload，確認日不再查score table後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
-| 2026-07-27 | T267 | 新增Re-entry確認日與原始score_date分離、禁止確認日runtime lookup、ensemble逐member rank mapping及不完整mapping fail-fast案例，測試契約改回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
-| 2026-07-27 | T267 | direct執行21項策略比較契約全數通過後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
 | 2026-07-27 | B170 | 新增base-finalist-best單一member Score Ranking隔離需求，策略比較契約改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_compare.py`, `doc/CMD.md`, `doc/ARCHITECTURE.md` |
 | 2026-07-27 | B170 | param-policy自動解析與selector/member/min_agree fail-fast、獨立輸出及有效排序metadata完成後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
+| 2026-07-27 | T267 | 新增Re-entry確認日與原始score_date分離、禁止確認日runtime lookup、ensemble逐member rank mapping及不完整mapping fail-fast案例，測試契約改回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-07-27 | T267 | direct執行21項策略比較契約全數通過後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
 | 2026-07-27 | T267 | 新增finalist-best／finalists-agree canonical path、selector錯配、單member與獨立輸出direct cases，測試契約改回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-07-27 | T267 | direct執行25項策略比較契約全數通過後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
