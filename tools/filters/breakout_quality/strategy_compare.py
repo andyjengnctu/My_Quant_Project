@@ -51,10 +51,31 @@ from tools.portfolio_sim.simulation_runner import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 COMPARISON_MODE_HARD_FILTER = "hard-filter"
 COMPARISON_MODE_SCORE_RANKING = "score-ranking"
 COMPARISON_MODES = (COMPARISON_MODE_HARD_FILTER, COMPARISON_MODE_SCORE_RANKING)
+
+PARAM_POLICY_AUTO = "auto"
+PARAM_POLICY_BASE_FINALIST_BEST = "base-finalist-best"
+PARAM_POLICY_BASE_FINALISTS_AGREE = "base-finalists-agree"
+PARAM_POLICY_SPECS = {
+    PARAM_POLICY_BASE_FINALIST_BEST: {
+        "selector": "base_finalist_best",
+        "filename": "roos_base_best.json",
+        "output_suffix": "base_finalist_best",
+        "expected_member_count": 1,
+        "expected_min_agree": 1,
+    },
+    PARAM_POLICY_BASE_FINALISTS_AGREE: {
+        "selector": "base_finalists_agree",
+        "filename": "roos_base_finalists_agree.json",
+        "output_suffix": "base_finalists_agree",
+        "expected_member_count": None,
+        "expected_min_agree": None,
+    },
+}
+PARAM_POLICIES = (PARAM_POLICY_AUTO, *PARAM_POLICY_SPECS.keys())
 
 _RESULT_FIELDS = (
     "equity_curve", "trade_history", "total_return_pct", "max_drawdown_pct",
@@ -82,7 +103,11 @@ def _parse_args(argv=None):
     )
     parser.add_argument("--dataset", choices=("reduced", "full"), default=DEFAULT_DATASET_PROFILE)
     parser.add_argument("--comparison-mode", choices=COMPARISON_MODES, default=COMPARISON_MODE_HARD_FILTER)
-    parser.add_argument("--params", default=None, help="正式 OOS 建議指定 rolling OOS active-param JSON；static 診斷才使用 run_best。")
+    parser.add_argument("--params", default=None, help="正式 OOS 可明確指定 rolling OOS active-param JSON；亦可用 --param-policy 自動解析。")
+    parser.add_argument(
+        "--param-policy", choices=PARAM_POLICIES, default=PARAM_POLICY_AUTO,
+        help="score-ranking 隔離比較可指定 base-finalist-best 或 base-finalists-agree；auto 沿用 --params。",
+    )
     parser.add_argument("--max-positions", type=int, default=10)
     parser.add_argument("--rotation", choices=("off", "on"), default="off")
     parser.add_argument("--fixed-risk", type=float, default=None, help="選填；兩組同時覆寫 fixed_risk。")
@@ -174,6 +199,100 @@ def _assert_controlled_payload_pair(no_filter_payload: dict, quality_payload: di
     if invalid:
         raise ValueError(f"策略對照只允許 {switch_field} 由 {left_expected} 切為 {right_expected}，實際額外差異={invalid}")
 
+
+def _resolve_param_selector(source: dict[str, Any]) -> str:
+    payload = source.get("payload")
+    if isinstance(payload, dict):
+        selector = str(payload.get("selector") or "").strip()
+        if selector:
+            return selector
+        policy = get_active_param_ensemble_policy(payload)
+        selector = str((policy or {}).get("policy_name") or "").strip()
+        if selector:
+            return selector
+    return "single_param" if source.get("kind") == "single_param" else "unknown"
+
+
+def _rolling_member_counts(source: dict[str, Any]) -> list[int]:
+    payload = source.get("payload")
+    if not isinstance(payload, dict):
+        return []
+    mapping = payload.get("params_ensemble_by_effective_date")
+    if not isinstance(mapping, dict):
+        return []
+    counts = []
+    for effective_date, raw_members in mapping.items():
+        members = normalize_seed_ensemble_members(raw_members)
+        if not members or len(members) != len(list(raw_members or [])):
+            raise ValueError(f"生效日 {effective_date} 的 active-param members 無效")
+        counts.append(len(members))
+    return counts
+
+
+def _validate_requested_param_policy(source: dict[str, Any], requested_policy: str) -> dict[str, Any]:
+    selector = _resolve_param_selector(source)
+    member_counts = _rolling_member_counts(source)
+    policy = get_active_param_ensemble_policy(source.get("payload") or {}) if isinstance(source.get("payload"), dict) else None
+    actual_min_agree = int((policy or {}).get("min_agree", 0) or 0) if policy else None
+    if requested_policy == PARAM_POLICY_AUTO:
+        return {
+            "requested_policy": requested_policy,
+            "selector": selector,
+            "member_count_min": min(member_counts) if member_counts else None,
+            "member_count_max": max(member_counts) if member_counts else None,
+            "min_agree": actual_min_agree,
+        }
+
+    spec = PARAM_POLICY_SPECS[requested_policy]
+    if source.get("kind") != "rolling_active_param_ensemble":
+        raise ValueError(
+            f"--param-policy {requested_policy} 只接受 rolling active-param ensemble JSON，"
+            f"實際={source.get('kind')}"
+        )
+    if selector != spec["selector"]:
+        raise ValueError(
+            f"--param-policy {requested_policy} 與參數檔 selector 不一致: "
+            f"expected={spec['selector']}, actual={selector}"
+        )
+    expected_member_count = spec.get("expected_member_count")
+    if expected_member_count is not None and (not member_counts or any(count != expected_member_count for count in member_counts)):
+        raise ValueError(
+            f"{spec['selector']} 必須每個生效日恰有 {expected_member_count} 個 runtime member，"
+            f"實際範圍={min(member_counts) if member_counts else 0}~{max(member_counts) if member_counts else 0}"
+        )
+    expected_min_agree = spec.get("expected_min_agree")
+    if expected_min_agree is not None and actual_min_agree != expected_min_agree:
+        raise ValueError(
+            f"{spec['selector']} 的 min_agree 必須為 {expected_min_agree}，實際={actual_min_agree}"
+        )
+    return {
+        "requested_policy": requested_policy,
+        "selector": selector,
+        "member_count_min": min(member_counts) if member_counts else None,
+        "member_count_max": max(member_counts) if member_counts else None,
+        "min_agree": actual_min_agree,
+    }
+
+
+def _resolve_params_path(*, root: Path, params_path: str | None, param_policy: str, allow_static_diagnostic: bool) -> Path:
+    if params_path:
+        requested = Path(params_path)
+        return requested.resolve() if requested.is_absolute() else (root / requested).resolve()
+    if param_policy != PARAM_POLICY_AUTO:
+        return (root / "models" / PARAM_POLICY_SPECS[param_policy]["filename"]).resolve()
+    if allow_static_diagnostic:
+        return Path(resolve_default_primary_param_source_record(str(root))["path"]).resolve()
+    raise ValueError(
+        "正式 OOS 策略對照必須以 --params 指定 rolling OOS JSON，或用 "
+        "--param-policy base-finalist-best / base-finalists-agree 自動解析；"
+        "只有非 OOS 敏感度診斷才可加 --allow-static-diagnostic 使用 run_best_params.json。"
+    )
+
+
+def _comparison_output_dir_name(comparison_mode: str, labels: dict[str, str], *, param_policy: str) -> str:
+    if comparison_mode == COMPARISON_MODE_SCORE_RANKING and param_policy != PARAM_POLICY_AUTO:
+        return f"{labels['output_dir']}_{PARAM_POLICY_SPECS[param_policy]['output_suffix']}"
+    return labels["output_dir"]
 
 def _load_param_source(path: Path) -> dict[str, Any]:
     try:
@@ -570,6 +689,8 @@ def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
         f"- 期間：`{metadata['comparison_period']['start']}` ～ `{metadata['comparison_period']['end']}`",
         f"- 參數檔：`{metadata['params_path']}`",
         f"- 參數型態：`{metadata['param_source_kind']}`",
+        f"- 參數 selector：`{metadata.get('param_selector')}`",
+        f"- Runtime members：`{metadata.get('runtime_member_count_min')}`～`{metadata.get('runtime_member_count_max')}`；min_agree=`{metadata.get('runtime_min_agree')}`",
         f"- 比較設計：`{metadata['comparison_design']}`",
         f"- 歷史 active-param 無前視：`{metadata['lookahead_safe_active_param_schedule']}`",
         f"- Dataset：`{metadata['dataset']}`",
@@ -582,7 +703,7 @@ def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
             else f"- Filter：`{metadata['filter_id']}` / `{metadata['model_architecture']}` / `{metadata['experiment_profile']}` / threshold `{metadata['threshold']}`"
         ),
         *(
-            [f"- 排序鍵：`{' → '.join(metadata.get('score_ranking_order') or [])}`"]
+            [f"- 排序鍵：`{' → '.join(metadata.get('score_ranking_order') or [])}`", f"- Ranking 範圍：`{metadata.get('ranking_scope')}`"]
             if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             else []
         ),
@@ -736,7 +857,7 @@ def _resolve_comparison_period(contract) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=None, max_positions=10, enable_rotation=False, fixed_risk=None, allow_static_diagnostic=False, comparison_mode=COMPARISON_MODE_HARD_FILTER, quiet=False):
+def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=None, param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False, fixed_risk=None, allow_static_diagnostic=False, comparison_mode=COMPARISON_MODE_HARD_FILTER, quiet=False):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
     labels = _comparison_labels(comparison_mode)
@@ -765,26 +886,19 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
             "active threshold 與模型 OOS 前固定 threshold 不一致: "
             f"artifact={artifact_threshold}, policy={configured_threshold}"
         )
-    if params_path:
-        requested_params_path = Path(params_path)
-        resolved_params_path = (
-            requested_params_path.resolve()
-            if requested_params_path.is_absolute()
-            else (root / requested_params_path).resolve()
-        )
-    elif allow_static_diagnostic:
-        resolved_params_path = Path(
-            resolve_default_primary_param_source_record(str(root))["path"]
-        ).resolve()
-    else:
-        raise ValueError(
-            "正式 OOS 策略對照必須以 --params 明確指定 rolling OOS active-param JSON，"
-            "例如 models/roos_base_finalists_agree.json；"
-            "只有非 OOS 敏感度診斷才可加 --allow-static-diagnostic 使用 run_best_params.json。"
-        )
+    param_policy = str(param_policy)
+    if comparison_mode != COMPARISON_MODE_SCORE_RANKING and param_policy != PARAM_POLICY_AUTO:
+        raise ValueError("--param-policy 目前只用於 score-ranking 隔離比較")
+    resolved_params_path = _resolve_params_path(
+        root=root, params_path=params_path, param_policy=param_policy,
+        allow_static_diagnostic=allow_static_diagnostic,
+    )
+    if not resolved_params_path.is_file():
+        raise FileNotFoundError(f"找不到策略比較參數檔: {resolved_params_path}")
     if fixed_risk is not None and not (0.0 < float(fixed_risk) <= 1.0):
         raise ValueError("fixed_risk 必須介於 0 與 1")
     param_source = _load_param_source(resolved_params_path)
+    param_policy_contract = _validate_requested_param_policy(param_source, param_policy)
     (
         param_source_kind,
         no_filter_params,
@@ -832,7 +946,8 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
     if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
         yearly = yearly.rename(columns={"quality_filter_return_pct": "score_ranking_return_pct"})
 
-    output_dir = resolve_filter_model_output_dir(str(root), filter_id, manifest_architecture, manifest_profile) / labels["output_dir"]
+    output_dir_name = _comparison_output_dir_name(comparison_mode, labels, param_policy=param_policy)
+    output_dir = resolve_filter_model_output_dir(str(root), filter_id, manifest_architecture, manifest_profile) / output_dir_name
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "schema_version": SCHEMA_VERSION,
@@ -842,6 +957,16 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         "params_path": str(resolved_params_path),
         "params_file_sha256": _sha256_file(resolved_params_path),
         "param_source_kind": param_source_kind,
+        "requested_param_policy": param_policy,
+        "param_selector": param_policy_contract["selector"],
+        "runtime_member_count_min": param_policy_contract["member_count_min"],
+        "runtime_member_count_max": param_policy_contract["member_count_max"],
+        "runtime_min_agree": param_policy_contract["min_agree"],
+        "ranking_scope": (
+            "all_candidates_after_single_member_qualification"
+            if comparison_mode == COMPARISON_MODE_SCORE_RANKING and param_policy_contract["selector"] == "base_finalist_best"
+            else "same_runtime_vote_bucket_only" if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+        ),
         "comparison_design": "historical_active_param_oos" if is_rolling_source else "static_param_diagnostic",
         "lookahead_safe_active_param_schedule": bool(is_rolling_source),
         "active_param_period": {"start": param_start, "end": param_end} if is_rolling_source else None,
@@ -854,7 +979,9 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         "threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
         "threshold_used_as_gate": bool(comparison_mode == COMPARISON_MODE_HARD_FILTER),
         "score_ranking_order": (
-            ["ensemble_vote_count_desc", "breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"]
+            (["breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"]
+             if param_policy_contract["selector"] == "base_finalist_best"
+             else ["runtime_member_vote_count_desc", "breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"])
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING
             else None
         ),
@@ -927,6 +1054,7 @@ def main(argv=None):
     run_comparison(
         dataset=args.dataset,
         params_path=args.params,
+        param_policy=args.param_policy,
         max_positions=args.max_positions,
         enable_rotation=args.rotation == "on",
         fixed_risk=args.fixed_risk,
@@ -944,4 +1072,6 @@ __all__ = [
     "_load_param_source", "_capacity_summary", "_normalize_yearly_completeness",
     "_to_json_native", "_resolve_comparison_period",
     "COMPARISON_MODE_HARD_FILTER", "COMPARISON_MODE_SCORE_RANKING",
+    "PARAM_POLICY_AUTO", "PARAM_POLICY_BASE_FINALIST_BEST", "PARAM_POLICY_BASE_FINALISTS_AGREE",
+    "_resolve_params_path", "_resolve_param_selector", "_validate_requested_param_policy",
 ]

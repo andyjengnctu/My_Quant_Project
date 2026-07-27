@@ -212,14 +212,25 @@ python apps/breakout_quality_strategy_compare.py --attribution-only
 
 固定 threshold 0.5 hard filter 已由策略 OOS 淘汰；若要測試 9A 的相對排序能力，只使用下列隔離模式：
 
+以 `base_finalist_best` 單一 runtime member 做較純的 Score Ranking ablation：
+
 ```bash
-python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off
+python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --param-policy base-finalist-best --dataset full --max-positions 10 --rotation off
 ```
 
-- Baseline 與 score-ranking 兩組都固定 `use_breakout_quality_filter=False`；唯一差異為 `use_breakout_quality_ranking=False/True`。
-- 候選先通過既有 ensemble `min_agree`；排序固定為「同意票數由高到低 → Quality Score 由高到低 → 既有買入排序 → deterministic ticker」。Score 只重排同票數候選，不可凌駕較高同意票數。
-- 可正常評分但低 Score 的候選仍保留，只是順位靠後；`unavailable_scores.csv` 中因資料不足而不可評分的候選維持保守排除。Continuation 沿用原始 breakout Score；STOP 後 Re-entry 的重新站回確認日只作新交易訊號日，ranking 必須沿用原始 breakout `score_date`，不得以確認日重新查 score table。Ensemble 逐 member 保存並繼承各自原始 Score。
-- Optimizer search space 固定 ranking=`False`，不得把此機制放入參數搜尋。輸出位於 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/strategy_compare_score_ranking/`。
+工具會自動使用 `models/roos_base_best.json`，並驗證每個生效日恰有 1 個 member、`min_agree=1`。Baseline 與 score-ranking 兩組都固定 `use_breakout_quality_filter=False`；唯一差異為 `use_breakout_quality_ranking=False/True`。因所有候選票數皆為 1，實際有效排序為「Quality Score 由高到低 → 既有買入排序 → deterministic ticker」。輸出位於 `strategy_compare_score_ranking_base_finalist_best/`。
+
+保留 `base_finalists_agree` 的既有探索性比較時使用：
+
+```bash
+python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --param-policy base-finalists-agree --dataset full --max-positions 10 --rotation off
+```
+
+此模式自動使用 `models/roos_base_finalists_agree.json`；候選先通過 `min_agree`，再依「finalist同意數由高到低 → 同票Quality Score由高到低 → 既有買入排序 → deterministic ticker」，輸出位於 `strategy_compare_score_ranking_base_finalists_agree/`。
+
+- `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。
+- 可正常評分但低 Score 的候選仍保留，只是順位靠後；`unavailable_scores.csv` 中不可評分候選維持保守排除。Continuation 與 STOP 後 Re-entry 沿用原始 breakout Score。
+- Optimizer search space 固定 ranking=`False`，不得把此機制放入參數搜尋。
 - 此實驗是在已查看舊 OOS 後進行的探索性機制比較；即使改善，也必須由全新 forward period 驗證後才可考慮部署。
 
 ### `run_best_params.json` 的用途與產生方式

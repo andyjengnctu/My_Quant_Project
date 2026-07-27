@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260727_003139_6a2bb9b.zip`，SHA256 `ebae1e008354e2757291f30665644d519e896ae4bd9bf6eaf3689cf8be73197b`；已包含Quality Score候選排序與cutoff當日signal anchor，本輪修正STOP後Re-entry錯以重新站回確認日查Score的狀態傳遞分叉 |
-| SHA256 | 本輪來源 ZIP：`ebae1e008354e2757291f30665644d519e896ae4bd9bf6eaf3689cf8be73197b`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
+| 基準 ZIP | `test-branch-1_20260727_081157_61ad01f(1).zip`，SHA256 `7470c810c5c9a6a6547449b1f98d24d449293af9a94272fea405bb4a7bb3d023`；已包含Quality Score候選排序、cutoff signal anchor與Re-entry原始Score繼承；本輪新增finalist-best單一member的Score Ranking隔離比較契約 |
+| SHA256 | 本輪來源 ZIP：`7470c810c5c9a6a6547449b1f98d24d449293af9a94272fea405bb4a7bb3d023`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -998,6 +998,33 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 判定 | `IMPLEMENTED`；不得預判Score ranking有效或無效 |
 | 下一步 | 不需重匯scores；直接重跑`python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off` |
 
+### 3.39 `base_finalists_agree` Quality Score 排序結果（2026-07-27）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `RESULT_AVAILABLE / EXPLORATORY_POSITIVE / NOT_ACCEPTED_FOR_DEPLOYMENT` |
+| 結果來源 | 使用者提供策略比較報表；期間2021-01-01～2026-03-02，參數為`roos_base_finalists_agree.json`，歷史active-param無前視=True |
+| 唯一差異 | 兩組hard filter皆False，只切換`use_breakout_quality_ranking=False/True`；排序為finalist同意數第一、同票Score第二 |
+| 主要結果 | 淨總報酬147.71%→152.58%（+4.88pp）、MDD16.42%→16.61%（惡化0.19pp）、RoMD9.00→9.18、年化19.23%→19.68%；但Log R²−0.0537、月勝率−4.76pp、勝率−2.31pp、EV−0.13R、平均曝險−23.90pp、最差完整年度惡化7.47pp |
+| 年度結果 | 2021 −10.19pp、2022 −7.47pp、2023 +42.51pp、2024 −4.12pp、2025 −3.59pp、2026 partial −1.25pp；只有2023改善 |
+| 判定 | 總報酬小幅正向但高度集中單一regime，跨年穩定性與一般交易品質惡化；不得部署，也不得依舊OOS繼續調整票數／Score混合權重 |
+| 下一步 | 僅作一次較純的`base_finalist_best`單一member Score Ranking ablation，以移除finalist票數排序干擾；結果仍只屬探索性診斷 |
+
+### 3.40 `base_finalist_best` 單一 member Score Ranking 隔離比較（2026-07-27）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；尚無真實策略結果，不得預判有效或無效 |
+| 程式基準 | `test-branch-1_20260727_081157_61ad01f(1).zip`，SHA256 `7470c810c5c9a6a6547449b1f98d24d449293af9a94272fea405bb4a7bb3d023` |
+| 研究目的 | 移除`finalists_agree`的同意數第一順位，直接驗證9A Score是否能在同一套單一Rolling active param下改善候選全域排序 |
+| 唯一變更 | 同一`roos_base_best.json`建立baseline與ranking兩組；hard filter皆False，只切換`use_breakout_quality_ranking=False/True` |
+| 新契約 | CLI新增`--param-policy base-finalist-best`，自動解析canonical參數檔並驗證selector=`base_finalist_best`、每個生效日恰有1 member、`min_agree=1`。有效排序固定為Score降冪→既有buy-sort→ticker；不同param policy輸出目錄隔離 |
+| 固定條件 | 9A model／scores、Rolling年度排程、單一finalist參數、資金、max positions、rotation、候選資格、成交、停損／停利／trailing、費稅、帳務與0050全部不變 |
+| Dataset／Label／工件需求 | 不需重建Dataset、Label、feature bank、model、scores或optimizer；必須已有`models/roos_base_best.json` |
+| 輸出 | `strategy_compare_score_ranking_base_finalist_best/`；metadata保存selector、member count、min_agree、ranking scope與唯一參數差異 |
+| 研究限制 | 此實驗已在看過舊OOS與finalists-agree ranking結果後提出，只能解釋機制，不可直接作部署證據 |
+| 下一步 | 執行`python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --param-policy base-finalist-best --dataset full --max-positions 10 --rotation off`並回寫結果；其後凍結舊OOS排序研究 |
+
 ---
 
 ## 6. 實驗執行順序
@@ -1034,7 +1061,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → unique-group score單一真理＋逐年OOS診斷（RESULT_AVAILABLE；9A重跑確認）
 → 固定9A threshold 0.5的策略層no-filter對照（REJECTED_FOR_RUNTIME_DEPLOYMENT）
 → 既有OOS交易層歸因與partial-year修正（RESULT_AVAILABLE；獨有交易選擇效果−46.77R）
-→ 9A Quality Score只作同票候選排序的探索性機制（IMPLEMENTED；尚待結果，不作部署證據）
+→ 9A Quality Score只作finalists-agree同票候選排序（RESULT_AVAILABLE；總報酬小幅正向但僅2023改善，不部署）
+→ base-finalist-best單一member Score Ranking隔離比較（IMPLEMENTED；尚待結果）
 → 凍結模型研究，等待2026-03-03之後的新forward labeled期間
 ```
 

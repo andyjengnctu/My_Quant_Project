@@ -230,13 +230,19 @@ from tools.filters.breakout_quality.report import (
 )
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_SCORE_RANKING,
+    PARAM_POLICY_BASE_FINALIST_BEST,
+    PARAM_POLICY_BASE_FINALISTS_AGREE,
     _assert_controlled_ensemble_pair,
     _assert_controlled_param_pair,
     _build_controlled_param_source_pair,
     _load_param_source,
     _capacity_summary,
+    _comparison_labels,
+    _comparison_output_dir_name,
     _normalize_yearly_completeness,
     _resolve_comparison_period,
+    _resolve_params_path,
+    _validate_requested_param_policy,
     _to_json_native,
 )
 from tools.filters.breakout_quality.trade_attribution import build_trade_attribution
@@ -6385,6 +6391,93 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
             fixed_risk=None,
         )
+    finalist_best_payload = json.loads(json.dumps(rolling_payload))
+    finalist_best_payload["selector"] = "base_finalist_best"
+    finalist_best_payload["random_seed_ensemble"] = {
+        "enabled": False, "seed_count": 1, "min_agree": 1, "policy_name": "base_finalist_best"
+    }
+    for effective_date in list(finalist_best_payload["params_ensemble_by_effective_date"]):
+        member = finalist_best_payload["params_ensemble_by_effective_date"][effective_date][0]
+        member["policy"] = "base_finalist_best"
+        finalist_best_payload["params_ensemble_by_effective_date"][effective_date] = [member]
+    finalist_best_source = {"kind": "rolling_active_param_ensemble", "payload": finalist_best_payload}
+    finalist_best_contract = _validate_requested_param_policy(
+        finalist_best_source, PARAM_POLICY_BASE_FINALIST_BEST
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "finalist_best_score_ranking_policy_requires_single_runtime_member",
+        ("base_finalist_best", 1, 1, 1),
+        (
+            finalist_best_contract["selector"],
+            finalist_best_contract["member_count_min"],
+            finalist_best_contract["member_count_max"],
+            finalist_best_contract["min_agree"],
+        ),
+    )
+
+    try:
+        _validate_requested_param_policy(
+            {"kind": "rolling_active_param_ensemble", "payload": rolling_payload},
+            PARAM_POLICY_BASE_FINALIST_BEST,
+        )
+        wrong_selector_rejected = False
+    except ValueError as exc:
+        wrong_selector_rejected = "selector" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "finalist_best_policy_rejects_finalists_agree_source",
+        True,
+        wrong_selector_rejected,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        root_path = Path(tmp_dir)
+        (root_path / "models").mkdir()
+        resolved_best = _resolve_params_path(
+            root=root_path, params_path=None,
+            param_policy=PARAM_POLICY_BASE_FINALIST_BEST, allow_static_diagnostic=False,
+        )
+        resolved_agree = _resolve_params_path(
+            root=root_path, params_path=None,
+            param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE, allow_static_diagnostic=False,
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "score_ranking_param_policy_resolves_canonical_roos_filenames",
+        ("roos_base_best.json", "roos_base_finalists_agree.json"),
+        (resolved_best.name, resolved_agree.name),
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "score_ranking_param_policies_use_isolated_output_directories",
+        (
+            "strategy_compare_score_ranking_base_finalist_best",
+            "strategy_compare_score_ranking_base_finalists_agree",
+        ),
+        (
+            _comparison_output_dir_name(
+                COMPARISON_MODE_SCORE_RANKING,
+                _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+            ),
+            _comparison_output_dir_name(
+                COMPARISON_MODE_SCORE_RANKING,
+                _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+                param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
+            ),
+        ),
+    )
+
     rolling_left = rolling_pair[1]["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]
     rolling_right = rolling_pair[2]["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]
     add_check(
