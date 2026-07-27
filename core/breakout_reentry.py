@@ -3,7 +3,13 @@ import math
 import pandas as pd
 
 from core.exact_accounting import milli_to_price
-from core.extended_signals import clone_shadow_position, create_signal_tracking_state, resolve_signal_tracking_params
+from core.extended_signals import (
+    attach_breakout_quality_rank,
+    clone_shadow_position,
+    create_signal_tracking_state,
+    resolve_breakout_quality_rank,
+    resolve_signal_tracking_params,
+)
 from core.price_utils import adjust_long_buy_limit
 
 
@@ -115,7 +121,15 @@ def _resolve_confirm_atr(params):
     return float(getattr(params, "breakout_reclaim_confirm_atr", getattr(params, "breakout_reclaim_confirm_r", 0.75)))
 
 
-def create_breakout_reentry_watch_state(position, *, exit_date, params, exit_atr=None, exit_qty=None):
+def create_breakout_reentry_watch_state(
+    position,
+    *,
+    exit_date,
+    params,
+    exit_atr=None,
+    exit_qty=None,
+    quality_rank=None,
+):
     if position is None or not is_breakout_reentry_enabled(params):
         return None
 
@@ -142,7 +156,7 @@ def create_breakout_reentry_watch_state(position, *, exit_date, params, exit_atr
     parent_exit_qty = _resolve_reentry_exit_qty(position, exit_qty)
     parent_shadow_position = _build_parent_management_shadow(position, parent_exit_qty=parent_exit_qty)
 
-    return {
+    watch_state = {
         "source": BREAKOUT_REENTRY_SOURCE,
         "ticker": str(position.get("ticker") or ""),
         "security_profile": position.get("security_profile"),
@@ -164,6 +178,22 @@ def create_breakout_reentry_watch_state(position, *, exit_date, params, exit_atr
         "parent_shadow_position": parent_shadow_position,
         "_params_obj": params,
     }
+
+    inherited_rank = quality_rank
+    if inherited_rank is None:
+        inherited_rank = position.get("breakout_quality_rank")
+    if inherited_rank is None and bool(position.get("use_breakout_quality_ranking", False)):
+        inherited_rank = {
+            "score": position.get("breakout_quality_score"),
+            "available": True,
+            "unavailable_reason": "",
+            "score_date": position.get("breakout_quality_score_date"),
+            "shared_group_score": True,
+            "filter_id": str(getattr(params, "breakout_quality_filter_id", "") or ""),
+        }
+    if inherited_rank is not None:
+        attach_breakout_quality_rank(watch_state, inherited_rank)
+    return watch_state
 
 
 def _resolve_reentry_watch_params(state, fallback_params):
@@ -205,6 +235,9 @@ def _copy_reentry_watch_metadata(signal_state, state):
     parent_shadow_position = state.get("parent_shadow_position")
     if parent_shadow_position is not None:
         signal_state["shadow_position"] = clone_shadow_position(parent_shadow_position)
+    inherited_rank = resolve_breakout_quality_rank(state)
+    if inherited_rank is not None:
+        attach_breakout_quality_rank(signal_state, inherited_rank)
     return signal_state
 
 

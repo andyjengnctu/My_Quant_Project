@@ -208,7 +208,14 @@ from filters.breakout_quality.inference import (
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from core.signal_utils import generate_signals
 from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD, sort_candidate_rows
+from core.breakout_reentry import (
+    create_breakout_reentry_signal_state,
+    create_breakout_reentry_watch_state,
+)
+from core.extended_signals import resolve_breakout_quality_rank
+from core.portfolio_candidates import _resolve_candidate_quality_ranking
 from core.portfolio_engine import _aggregate_ensemble_candidate_rows
+from core.portfolio_exits import _iter_reentry_watch_targets
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
@@ -6106,6 +6113,15 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 "proj_cost": 100.0,
                 "use_breakout_quality_ranking": True,
                 "breakout_quality_score": score,
+                "breakout_quality_score_date": f"2025-01-{member_idx + 2:02d}",
+                "breakout_quality_rank": {
+                    "score": score,
+                    "available": True,
+                    "unavailable_reason": "",
+                    "score_date": f"2025-01-{member_idx + 2:02d}",
+                    "shared_group_score": True,
+                    "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                },
             })
     ensemble_ranked = _aggregate_ensemble_candidate_rows(ensemble_rank_rows, min_agree=3)
     add_check(
@@ -6115,6 +6131,111 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         "ensemble_votes_remain_first_and_score_only_reorders_equal_vote_candidates",
         [("C", 6), ("A", 6), ("B", 5)],
         [(row["ticker"], row["ensemble_vote_count"]) for row in ensemble_ranked],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ensemble_candidate_preserves_member_specific_original_quality_ranks",
+        [f"m{idx}" for idx in range(6)],
+        sorted(ensemble_ranked[0]["ensemble_member_quality_rank_by_key"]),
+    )
+
+    reentry_params = replace(
+        base,
+        use_breakout_reclaim_reentry=True,
+        use_breakout_quality_ranking=True,
+        breakout_quality_filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    )
+    original_rank = {
+        "score": 0.731,
+        "available": True,
+        "unavailable_reason": "",
+        "score_date": "2021-12-30",
+        "shared_group_score": True,
+        "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    }
+    reentry_position = {
+        "ticker": "3706",
+        "entry_type": "normal",
+        "entry_fill_price": 100.0,
+        "pure_buy_price": 100.0,
+        "initial_stop": 90.0,
+        "sl": 90.0,
+        "qty": 10,
+        "initial_qty": 10,
+        "breakout_quality_score": original_rank["score"],
+        "breakout_quality_score_date": original_rank["score_date"],
+        "breakout_quality_rank": dict(original_rank),
+        "use_breakout_quality_ranking": True,
+    }
+    reentry_watch = create_breakout_reentry_watch_state(
+        reentry_position,
+        exit_date=pd.Timestamp("2022-01-05"),
+        params=reentry_params,
+        exit_atr=2.0,
+        exit_qty=10,
+    )
+    reentry_trigger_date = pd.Timestamp("2022-01-17")
+    reentry_signal = create_breakout_reentry_signal_state(
+        reentry_watch,
+        close_price=float(reentry_watch["confirm_price"]),
+        atr=2.0,
+        params=reentry_params,
+        ticker="3706",
+        signal_date=reentry_trigger_date,
+    )
+    inherited_rank = resolve_breakout_quality_rank(reentry_signal)
+    with patch(
+        "core.portfolio_candidates.resolve_breakout_quality_candidate_rank",
+        side_effect=AssertionError("re-entry 不得以確認日重新查 score table"),
+    ):
+        resolved_reentry_rank = _resolve_candidate_quality_ranking(
+            params=reentry_params,
+            ticker="3706",
+            signal_date=reentry_trigger_date,
+            signal_state=reentry_signal,
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "reentry_keeps_trigger_date_but_inherits_original_breakout_score_date",
+        ("2022-01-17", "2021-12-30", 0.731),
+        (
+            pd.Timestamp(reentry_signal["signal_date"]).strftime("%Y-%m-%d"),
+            inherited_rank["score_date"],
+            inherited_rank["score"],
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "reentry_ranking_uses_inherited_score_without_runtime_lookup_on_trigger_date",
+        ("2021-12-30", 0.731),
+        (resolved_reentry_rank["score_date"], resolved_reentry_rank["score"]),
+    )
+
+    incomplete_member_rank_position = {
+        "ticker": "3706",
+        "use_breakout_quality_ranking": True,
+        "breakout_quality_rank": dict(original_rank),
+        "_ensemble_member_params_by_key": {"m0": reentry_params, "m1": reentry_params},
+        "_ensemble_member_quality_rank_by_key": {"m0": dict(original_rank)},
+    }
+    try:
+        list(_iter_reentry_watch_targets(incomplete_member_rank_position, reentry_params, {}))
+        missing_member_rank_rejected = False
+    except ValueError as exc:
+        missing_member_rank_rejected = "member=m1" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ensemble_reentry_rejects_partial_member_quality_rank_mapping",
+        True,
+        missing_member_rank_rejected,
     )
 
     ensemble_source = build_static_active_param_ensemble_payload(

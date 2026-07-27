@@ -403,23 +403,41 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         quality_ranking = bool(ranking_flags and True in ranking_flags)
         representative["use_breakout_quality_ranking"] = quality_ranking
         if quality_ranking:
-            quality_rows = sorted(
-                (
-                    float(row.get("breakout_quality_score")),
-                    str(row.get("breakout_quality_score_date") or ""),
-                )
-                for row in group_rows
-            )
-            quality_scores = [item[0] for item in quality_rows]
-            if not quality_scores or not all(math.isfinite(value) for value in quality_scores):
-                raise ValueError(f"啟用 quality ranking 的 ensemble 候選缺少有效分數: ticker={ticker}")
-            median_score, median_score_date = quality_rows[(len(quality_rows) - 1) // 2]
+            quality_rows = []
+            member_quality_rank_by_key = {}
+            for row in group_rows:
+                member_key = str(row.get("ensemble_member_key") or "").strip()
+                rank_payload = row.get("breakout_quality_rank")
+                if not isinstance(rank_payload, dict):
+                    rank_payload = {
+                        "score": row.get("breakout_quality_score"),
+                        "available": True,
+                        "unavailable_reason": "",
+                        "score_date": row.get("breakout_quality_score_date"),
+                        "shared_group_score": True,
+                        "filter_id": str(getattr(row.get("params_obj"), "breakout_quality_filter_id", "") or ""),
+                    }
+                score = float(rank_payload.get("score", float("nan")))
+                score_date = str(rank_payload.get("score_date") or "").strip()
+                if not math.isfinite(score) or not score_date or not bool(rank_payload.get("available", False)):
+                    raise ValueError(f"啟用 quality ranking 的 ensemble 候選缺少有效原始事件分數: ticker={ticker}")
+                normalized_rank = dict(rank_payload)
+                normalized_rank.update({"score": score, "score_date": score_date, "available": True})
+                quality_rows.append((score, score_date, normalized_rank))
+                if member_key:
+                    member_quality_rank_by_key[member_key] = dict(normalized_rank)
+
+            quality_rows.sort(key=lambda item: (item[0], item[1]))
+            median_score, median_score_date, median_rank = quality_rows[(len(quality_rows) - 1) // 2]
             representative["ensemble_median_quality_score"] = float(median_score)
             representative["ensemble_median_quality_score_date"] = median_score_date
             representative["ensemble_quality_score_dates"] = sorted({item[1] for item in quality_rows if item[1]})
             representative["breakout_quality_score"] = float(median_score)
             representative["breakout_quality_score_date"] = median_score_date
-        # # (AI註: STOP 後 Re-entry 必須保留原始共識 member 的各自參數；只保存代表 member 會讓 min_agree>1 永遠無法重新形成共識。)
+            representative["breakout_quality_rank"] = dict(median_rank)
+            representative["ensemble_member_quality_rank_by_key"] = member_quality_rank_by_key
+        # # (AI註: STOP 後 Re-entry 必須保留原始共識 member 的各自參數與原始 breakout score；
+        # #        只保存代表 member 會讓 min_agree>1 的 re-entry 共識或 score 語意分叉。)
         representative["ensemble_member_params_by_key"] = member_params_by_key
         aggregated.append(representative)
     active_sort_method = get_buy_sort_method()

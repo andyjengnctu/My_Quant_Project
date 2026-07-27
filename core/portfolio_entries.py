@@ -188,6 +188,13 @@ def execute_reserved_entries_for_day(
             if isinstance(ensemble_member_params_by_key, dict):
                 # # (AI註: 持倉需承接本次共識的全部 member 參數，讓 STOP 後各 member 能獨立進入 reclaim watchlist。)
                 entry_result['position']['_ensemble_member_params_by_key'] = dict(ensemble_member_params_by_key)
+            ensemble_member_quality_rank_by_key = cand.get('ensemble_member_quality_rank_by_key')
+            if isinstance(ensemble_member_quality_rank_by_key, dict):
+                entry_result['position']['_ensemble_member_quality_rank_by_key'] = {
+                    str(key): dict(value)
+                    for key, value in ensemble_member_quality_rank_by_key.items()
+                    if str(key).strip() and isinstance(value, dict)
+                }
             if candidate_context:
                 entry_result['position']['_entry_context'] = candidate_context
             # # (AI註: 保存本次實際進場對應的訊號／候選日期，只供 round-trip 歸因與稽核，不介入交易決策。)
@@ -198,6 +205,9 @@ def execute_reserved_entries_for_day(
             entry_result['position']['breakout_quality_score'] = cand.get('breakout_quality_score')
             entry_result['position']['breakout_quality_score_date'] = cand.get('breakout_quality_score_date')
             entry_result['position']['use_breakout_quality_ranking'] = bool(cand.get('use_breakout_quality_ranking', False))
+            quality_rank_payload = cand.get('breakout_quality_rank')
+            if isinstance(quality_rank_payload, dict):
+                entry_result['position']['breakout_quality_rank'] = dict(quality_rank_payload)
             portfolio[cand['ticker']] = entry_result['position']
             if entry_stats is not None:
                 entry_stats['filled_buy_count'] = int(entry_stats.get('filled_buy_count', 0) or 0) + 1

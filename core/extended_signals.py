@@ -64,6 +64,51 @@ def resolve_signal_tracking_params(signal_state, fallback_params):
     return fallback_params
 
 
+def attach_breakout_quality_rank(signal_state, quality_rank):
+    """Attach one canonical breakout-event score to continuation/re-entry state."""
+
+    if signal_state is None:
+        return None
+    if quality_rank is None:
+        signal_state.pop("breakout_quality_rank", None)
+        return signal_state
+    if not isinstance(quality_rank, dict):
+        raise TypeError("breakout quality rank 必須是 dict")
+
+    score = float(quality_rank.get("score", np.nan))
+    score_date = str(quality_rank.get("score_date") or "").strip()
+    available = bool(quality_rank.get("available", False))
+    if not np.isfinite(score) or score < 0.0 or score > 1.0:
+        raise ValueError("breakout quality rank score 必須是 0~1 有限值")
+    if not score_date:
+        raise ValueError("breakout quality rank 必須保存原始 breakout score_date")
+    if not available:
+        raise ValueError("不可評分 breakout event 不可進入 continuation／re-entry state")
+
+    signal_state["breakout_quality_rank"] = {
+        "score": score,
+        "available": True,
+        "unavailable_reason": "",
+        "score_date": score_date,
+        "shared_group_score": bool(quality_rank.get("shared_group_score", False)),
+        "filter_id": str(quality_rank.get("filter_id") or "").strip(),
+    }
+    return signal_state
+
+
+def resolve_breakout_quality_rank(signal_state):
+    if not isinstance(signal_state, dict):
+        return None
+    rank = signal_state.get("breakout_quality_rank")
+    if rank is None:
+        return None
+    if not isinstance(rank, dict):
+        raise TypeError("signal_state.breakout_quality_rank 必須是 dict")
+    holder = {}
+    attach_breakout_quality_rank(holder, rank)
+    return dict(holder["breakout_quality_rank"])
+
+
 def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
     if signal_state is None:
         return False

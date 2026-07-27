@@ -11,6 +11,7 @@ from core.trade_plans import (
     is_extended_signal_orderable_for_day,
     resolve_signal_tracking_params,
 )
+from core.extended_signals import attach_breakout_quality_rank, resolve_breakout_quality_rank
 from core.portfolio_fast_data import (
     get_fast_close,
     get_fast_dates,
@@ -21,17 +22,30 @@ from core.portfolio_fast_data import (
 )
 
 
-def _resolve_candidate_quality_ranking(*, params, ticker, signal_date):
+def _resolve_candidate_quality_ranking(*, params, ticker, signal_date, signal_state=None):
     enabled = bool(getattr(params, "use_breakout_quality_ranking", False))
     if not enabled:
         return None
+
+    filter_id = str(getattr(params, "breakout_quality_filter_id"))
+    inherited_rank = resolve_breakout_quality_rank(signal_state)
+    if inherited_rank is not None:
+        inherited_filter_id = str(inherited_rank.get("filter_id") or "").strip()
+        if inherited_filter_id and inherited_filter_id != filter_id:
+            raise ValueError(
+                "continuation／re-entry breakout quality filter_id 與當前參數不一致: "
+                f"ticker={ticker}, inherited={inherited_filter_id}, current={filter_id}"
+            )
+        inherited_rank["filter_id"] = filter_id
+        return inherited_rank
+
     if signal_date is None:
         raise ValueError(f"breakout quality ranking 候選缺少原始 signal_date: ticker={ticker}")
     return resolve_breakout_quality_candidate_rank(
         ticker=str(ticker),
         signal_date=signal_date,
         high_len=int(getattr(params, "high_len")),
-        filter_id=str(getattr(params, "breakout_quality_filter_id")),
+        filter_id=filter_id,
     )
 
 
@@ -133,6 +147,7 @@ def _make_candidate_row(
         'use_breakout_quality_ranking': bool(quality_rank is not None),
         'breakout_quality_score': None if quality_rank is None else float(quality_rank['score']),
         'breakout_quality_score_date': '' if quality_rank is None else str(quality_rank['score_date']),
+        'breakout_quality_rank': None if quality_rank is None else dict(quality_rank),
     }
     if signal_state is not None:
         row['signal_state'] = signal_state
@@ -213,6 +228,7 @@ def _collect_normal_candidates(
             signal_date=signal_date,
         )
         if signal_state is not None:
+            attach_breakout_quality_rank(signal_state, quality_rank)
             active_extended_signals[ticker] = signal_state
 
         if (not collect_all_candidates) and (not bool(candidate_plan['is_orderable'])):
@@ -303,6 +319,7 @@ def track_normal_setup_signals_for_day(
             signal_date=signal_date,
         )
         if signal_state is not None:
+            attach_breakout_quality_rank(signal_state, quality_rank)
             active_extended_signals[ticker] = signal_state
     return normal_setup_tickers_today
 
@@ -363,6 +380,7 @@ def _collect_extended_candidates(
             params=candidate_params,
             ticker=ticker,
             signal_date=candidate_plan.get("signal_date"),
+            signal_state=signal_state,
         )
         if quality_rank is not None and not bool(quality_rank["available"]):
             active_extended_signals.pop(ticker, None)

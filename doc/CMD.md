@@ -218,7 +218,7 @@ python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking
 
 - Baseline 與 score-ranking 兩組都固定 `use_breakout_quality_filter=False`；唯一差異為 `use_breakout_quality_ranking=False/True`。
 - 候選先通過既有 ensemble `min_agree`；排序固定為「同意票數由高到低 → Quality Score 由高到低 → 既有買入排序 → deterministic ticker」。Score 只重排同票數候選，不可凌駕較高同意票數。
-- 可正常評分但低 Score 的候選仍保留，只是順位靠後；`unavailable_scores.csv` 中因資料不足而不可評分的候選維持保守排除。Continuation／Re-entry 沿用原始 breakout signal date 的 Score。
+- 可正常評分但低 Score 的候選仍保留，只是順位靠後；`unavailable_scores.csv` 中因資料不足而不可評分的候選維持保守排除。Continuation 沿用原始 breakout Score；STOP 後 Re-entry 的重新站回確認日只作新交易訊號日，ranking 必須沿用原始 breakout `score_date`，不得以確認日重新查 score table。Ensemble 逐 member 保存並繼承各自原始 Score。
 - Optimizer search space 固定 ranking=`False`，不得把此機制放入參數搜尋。輸出位於 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/strategy_compare_score_ranking/`。
 - 此實驗是在已查看舊 OOS 後進行的探索性機制比較；即使改善，也必須由全新 forward period 驗證後才可考慮部署。
 

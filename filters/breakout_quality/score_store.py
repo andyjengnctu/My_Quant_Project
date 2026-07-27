@@ -258,6 +258,7 @@ def _lookup_breakout_quality_candidate_score_cached(
         "unavailable_reason": reason,
         "score_date": date_text,
         "shared_group_score": bool(contract.shared_group_score_broadcast),
+        "filter_id": str(filter_id),
     }
 
 

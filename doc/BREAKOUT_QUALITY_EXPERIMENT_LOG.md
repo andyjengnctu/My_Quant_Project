@@ -13,7 +13,7 @@
 5. 與當前正式基準的差異、結論、是否採用，以及下一個單一變更。
 6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-26**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-27**。
 
 ---
 
@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260726_231300_1defd9e.zip`，SHA256 `e9f6324a42316c5481ad4b93083d2ea5ca254cfc1a20ef1b26eaffc22951ec5c`；已包含Quality Score候選排序與雙期間runtime契約，本輪更正cutoff當日next-session signal anchor語意 |
-| SHA256 | 本輪來源 ZIP：`e9f6324a42316c5481ad4b93083d2ea5ca254cfc1a20ef1b26eaffc22951ec5c`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
+| 基準 ZIP | `test-branch-1_20260727_003139_6a2bb9b.zip`，SHA256 `ebae1e008354e2757291f30665644d519e896ae4bd9bf6eaf3689cf8be73197b`；已包含Quality Score候選排序與cutoff當日signal anchor，本輪修正STOP後Re-entry錯以重新站回確認日查Score的狀態傳遞分叉 |
+| SHA256 | 本輪來源 ZIP：`ebae1e008354e2757291f30665644d519e896ae4bd9bf6eaf3689cf8be73197b`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -975,13 +975,28 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 追溯項目 | Score-ranking OOS邊界閉環內容 |
 |---|---|
 | 程式基準 | 使用者ZIP `test-branch-1_20260726_224528_e4be18f.zip`，SHA256 `6f4c066003ef6a7d0d44e00767c323fcb56d90045f01fc936c82ae1fcbd26d9b` |
-| 唯一變更 | forward score signal coverage由outer OOS起日提前至model cutoff下一日；strategy compare仍固定由outer OOS execution start開始 |
+| 唯一變更 | forward score signal coverage最終更正為由model cutoff當日開始；strategy compare仍固定由outer OOS execution start開始 |
 | 固定條件 | 9A checkpoint／score定義、hard filter關閉、同票Score排序、Rolling ensemble、資金、持股、交易成本與0050不變 |
 | 重建需求 | 不需重建Dataset、Label、feature bank、model或Rolling params；必須重新執行`export-scores --scope forward_oos` |
 | Selection／OOS結果 | 無新結果；本輪只完成日期邊界契約閉環 |
 | 判定 | `IMPLEMENTED`；不得預判Score ranking有效或無效 |
 | 下一步 | 重匯scores後重跑score-ranking策略比較 |
 
+### 3.38 Score-ranking Re-entry 原始事件 Score 繼承閉環（2026-07-27）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；修正 runtime 狀態傳遞，尚無新的策略比較結果 |
+| 程式基準 | `test-branch-1_20260727_003139_6a2bb9b.zip`，SHA256 `ebae1e008354e2757291f30665644d519e896ae4bd9bf6eaf3689cf8be73197b` |
+| 觸發案例 | Score-ranking replay 於 `2022-01-18` 建立候選時，對 `3706 / 2022-01-17 / high_len=150` 報「score table 缺少正式候選事件」 |
+| 根因 | 該日期是STOP後Re-entry的重新站回確認日，不是原始breakout event。舊流程在建立Re-entry extended candidate時使用確認日 `signal_date`重新查正式score table，違反3.37既定的「Re-entry沿用原始breakout Score」契約；正式score table正確地不包含非breakout確認日 |
+| 唯一變更 | 正常breakout查到的canonical rank payload會寫入continuation state與成交持倉；ensemble逐member保存各自原始rank；STOP後各member watch state、Re-entry signal state與再次聚合候選完整繼承原始`score/score_date/filter_id`。Re-entry確認日仍保存為新的交易`signal_date`，但ranking不得再用它查score table |
+| 固定條件 | 9A model／Score公式與既有scores、hard filter關閉、vote count第一、同票Score排序、Rolling active params、members／min_agree、候選資格、成交、停損／停利／trailing、費稅、帳務與0050全部不變 |
+| Dataset／Label／工件需求 | 不需重建Dataset、Label、feature bank、model、scores或Rolling params；套用程式後直接重新執行score-ranking策略比較 |
+| 驗證 | Direct synthetic case證明Re-entry交易訊號日可為`2022-01-17`，但rank仍保留原始`score_date=2021-12-30`；並以mock禁止runtime lookup，確認Re-entry不再查確認日。另驗證ensemble candidate逐member保存原始rank mapping |
+| Selection／OOS結果 | 無新模型或策略結果；本輪只修正已確認的runtime語意分叉 |
+| 判定 | `IMPLEMENTED`；不得預判Score ranking有效或無效 |
+| 下一步 | 不需重匯scores；直接重跑`python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off` |
 
 ---
 

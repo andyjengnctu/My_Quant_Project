@@ -98,23 +98,35 @@ def _resolve_position_params(position, fallback_params):
 
 
 def _iter_reentry_watch_targets(position, fallback_params, active_reentry_watchlists_by_member):
+    position_rank = position.get('breakout_quality_rank')
     if active_reentry_watchlists_by_member is None:
-        yield None, fallback_params
+        yield None, fallback_params, position_rank
         return
 
     member_params_by_key = position.get('_ensemble_member_params_by_key')
+    member_quality_rank_by_key = position.get('_ensemble_member_quality_rank_by_key')
     if isinstance(member_params_by_key, dict) and member_params_by_key:
         for raw_member_key in sorted(member_params_by_key, key=lambda value: str(value)):
             member_key = str(raw_member_key or '').strip()
             if not member_key:
                 continue
-            yield member_key, member_params_by_key.get(raw_member_key) or fallback_params
+            member_rank = None
+            if isinstance(member_quality_rank_by_key, dict):
+                member_rank = member_quality_rank_by_key.get(raw_member_key)
+                if member_rank is None:
+                    member_rank = member_quality_rank_by_key.get(member_key)
+                if member_rank is None and bool(position.get("use_breakout_quality_ranking", False)):
+                    raise ValueError(
+                        "ensemble re-entry 持倉缺少 member 原始 breakout quality rank: "
+                        f"ticker={position.get('ticker')}, member={member_key}"
+                    )
+            yield member_key, member_params_by_key.get(raw_member_key) or fallback_params, member_rank or position_rank
         return
 
-    # # (AI註: 舊持倉相容路徑；新版 ensemble 成交會保存全部 member 參數。)
+    # # (AI註: 舊持倉相容路徑；新版 ensemble 成交會保存全部 member 參數與原始 breakout score。)
     member_key = str(position.get('_ensemble_member_key') or '').strip()
     if member_key:
-        yield member_key, fallback_params
+        yield member_key, fallback_params, position_rank
 
 
 def _resolve_position_all_dfs_fast(position, fallback_all_dfs_fast):
@@ -419,13 +431,18 @@ def settle_portfolio_positions(
                 )
             )
             if 'STOP' in events:
-                for member_key, watch_params in _iter_reentry_watch_targets(pos, pos_params, active_reentry_watchlists_by_member):
+                for member_key, watch_params, watch_quality_rank in _iter_reentry_watch_targets(
+                    pos,
+                    pos_params,
+                    active_reentry_watchlists_by_member,
+                ):
                     watch_state = create_breakout_reentry_watch_state(
                         pos,
                         exit_date=today,
                         params=watch_params,
                         exit_atr=get_fast_value(fast_df, 'ATR', pos=y_pos),
                         exit_qty=pre_step_qty,
+                        quality_rank=watch_quality_rank,
                     )
                     if watch_state is None:
                         continue
