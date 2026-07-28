@@ -75,6 +75,7 @@ COMMAND_MODULES = {
     "export-scores": "tools.filters.breakout_quality.export_scores",
     "report": "tools.filters.breakout_quality.report",
     "evaluate": "tools.filters.breakout_quality.evaluate",
+    "regime-audit": "tools.filters.breakout_quality.regime_audit",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -92,6 +93,7 @@ COMMAND_DESCRIPTIONS = {
     "export-scores": "匯出 research 或 forward-OOS score table",
     "report": "產生表格化終端報表、Markdown 報表與完整 metrics JSON",
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
+    "regime-audit": "稽核 Selection／OOS 的市場狀態與 breakout event 覆蓋",
 }
 
 

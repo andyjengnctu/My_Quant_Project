@@ -357,6 +357,23 @@ def _metrics(
     }
 
 
+def evaluate_frame_metrics(
+    df: pd.DataFrame,
+    *,
+    threshold: float,
+    group_weighted: bool,
+    require_identical_group_scores: bool = False,
+) -> dict:
+    """Evaluate an already-contract-validated score frame with canonical metrics."""
+
+    return _metrics(
+        df,
+        threshold=threshold,
+        group_weighted=group_weighted,
+        require_identical_group_scores=require_identical_group_scores,
+    )
+
+
 def _research_manifest_path(
     score_path: Path, filter_id: str, experiment_profile: str
 ) -> Path:
@@ -744,6 +761,7 @@ __all__ = [
     "EVALUATION_SPLIT_TRAIN",
     "EVALUATION_SPLIT_VALIDATION",
     "evaluate_breakout_quality",
+    "evaluate_frame_metrics",
     "evaluate_split_from_context",
     "evaluate_splits",
     "prepare_evaluation_context",

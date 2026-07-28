@@ -228,6 +228,12 @@ from tools.filters.breakout_quality.report import (
     render_console_summary,
     render_markdown_report,
 )
+from tools.filters.breakout_quality.regime_audit import (
+    assign_market_regimes,
+    build_regime_audit_payload,
+    derive_benchmark_regime_features,
+    render_regime_audit_markdown,
+)
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_SCORE_RANKING,
     PARAM_POLICY_BASE_FINALIST_BEST,
@@ -4564,6 +4570,90 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         context=context,
     )
     add_check(results, "synthetic_breakout_quality", case_id, "report_without_oos_is_research_only", "RESEARCH_ONLY", research_only["conclusion"]["status"])
+
+    regime_bank = np.zeros((12, 300, len(FEATURE_COLUMNS)), dtype=np.float32)
+    benchmark_close_index = FEATURE_COLUMNS.index("benchmark_close_norm")
+    for group_index in range(12):
+        relative_close = (
+            np.linspace(0.70, 1.0, 300)
+            if group_index < 6
+            else np.linspace(1.30, 1.0, 300)
+        )
+        relative_close = relative_close * (
+            1.0
+            + 0.002
+            * (group_index % 3)
+            * np.sin(np.linspace(0.0, 20.0, 300))
+        )
+        relative_close = relative_close / relative_close[-1]
+        regime_bank[group_index, :, benchmark_close_index] = relative_close - 1.0
+    regime_features = derive_benchmark_regime_features(
+        regime_bank, np.arange(12, dtype=np.int64)
+    )
+    regime_groups = pd.DataFrame(
+        {
+            "ticker": [f"R{index}" for index in range(12)],
+            "date": pd.date_range("2018-01-01", periods=12, freq="YS"),
+            "group_index": np.arange(12, dtype=np.int64),
+            "outer_split": [OUTER_SPLIT_SELECTION] * 6 + [OUTER_SPLIT_OOS] * 6,
+            "selection_role": [SELECTION_ROLE_TRAIN] * 6
+            + [SELECTION_ROLE_NOT_APPLICABLE] * 6,
+            "label": [1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0],
+            SCORE_COLUMN: [0.8, 0.2, 0.7, 0.3, 0.6, 0.4, 0.7, 0.6, 0.8, 0.55, 0.75, 0.65],
+        }
+    ).merge(regime_features, on="group_index", validate="one_to_one")
+    regime_groups, regime_thresholds = assign_market_regimes(regime_groups)
+    regime_payload, regime_cells, enriched_regime_groups = build_regime_audit_payload(
+        regime_groups,
+        threshold=0.5,
+        min_selection_groups=2,
+        min_support_share_ratio=0.5,
+        regime_thresholds=regime_thresholds,
+        score_group_diagnostics={"group_score_reduction": "synthetic"},
+        metadata={
+            "filter_id": "synthetic_quality",
+            "model_architecture": "inception_time_v1",
+            "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        },
+    )
+    regime_markdown = render_regime_audit_markdown(regime_payload)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_audit_uses_selection_only_volatility_quantiles",
+        "selection_only",
+        regime_payload["regime_feature_contract"]["thresholds"][
+            "volatility_quantile_source"
+        ],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_audit_preserves_one_row_per_ticker_date_group",
+        12,
+        len(enriched_regime_groups),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_audit_emits_all_dimensions_and_support_fields",
+        True,
+        (
+            set(regime_cells["dimension"])
+            == {
+                "trend_state",
+                "drawdown_state",
+                "volatility_state",
+                "combined_regime",
+            }
+            and enriched_regime_groups["selection_support_groups"].notna().all()
+            and "Selection低代表性" in regime_markdown
+            and "不得依 OOS 結果回頭調整" in regime_markdown
+        ),
+    )
 
 def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_RUNTIME_ARTIFACT"

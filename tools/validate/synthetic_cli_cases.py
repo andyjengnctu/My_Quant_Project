@@ -70,7 +70,7 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         "用法: python apps/breakout_quality.py [menu|workflow|<command>] [options]" in help_text,
     )
-    for command in ("menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain", "train", "export-scores", "report", "evaluate"):
+    for command in ("menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain", "train", "export-scores", "report", "evaluate", "regime-audit"):
         add_check(
             results,
             "cli_contract",
@@ -1111,6 +1111,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "export-scores": "tools.filters.breakout_quality.export_scores",
         "report": "tools.filters.breakout_quality.report",
         "evaluate": "tools.filters.breakout_quality.evaluate",
+        "regime-audit": "tools.filters.breakout_quality.regime_audit",
     }
     for command, expected_module in command_modules.items():
         received_argv = []

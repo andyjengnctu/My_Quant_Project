@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260727_104312_94c6a3a.zip`，SHA256 `be17cf6e15e6fecaaffb4d3fd96ae8d7f2c85bc02bec4858d4b1479920247937`；已包含Quality Score候選排序、cutoff signal anchor、Re-entry原始Score繼承與finalist-best單一member隔離比較契約；本輪取得finalist-best真實策略結果 |
-| SHA256 | 本輪來源 ZIP：`be17cf6e15e6fecaaffb4d3fd96ae8d7f2c85bc02bec4858d4b1479920247937`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；threshold gate策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967`；本輪finalist-best Score Ranking結果由使用者直接提供 |
+| 基準 ZIP | `test-branch-1_20260728_232004_77fa495.zip`，SHA256 `ee3c13f0c5cb238f836ab90dded37a405343d25be8a16de7bdb6d842f1a9e296`；沿用9A與既有策略比較結果，本輪新增只讀Regime Coverage Audit，不改模型、Label、Score或runtime交易行為 |
+| SHA256 | 本輪來源 ZIP：`ee3c13f0c5cb238f836ab90dded37a405343d25be8a16de7bdb6d842f1a9e296`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；threshold gate策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967`；finalist-best Score Ranking結果由使用者直接提供 |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1028,6 +1028,23 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Dataset／Label／工件需求 | 不需重建Dataset、Label、feature bank、model、scores或optimizer；本結果只更新實驗紀錄 |
 | 下一步 | 舊OOS的hard gate、同票Score tie-break與全域Score第一排序研究全部凍結；等待2026-03-03之後累積足夠且完成40交易日Label horizon的新forward labeled期間再作一次預先固定設計的驗證 |
 
+### 3.41 Breakout Event Regime Coverage Audit（2026-07-28）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；只讀診斷工具，尚未取得本機完整Dataset結果，不得預先判定2022根因 |
+| 程式基準 | `test-branch-1_20260728_232004_77fa495.zip`，SHA256 `ee3c13f0c5cb238f836ab90dded37a405343d25be8a16de7bdb6d842f1a9e296` |
+| 研究目的 | 驗證Selection中的熊市／深回撤breakout事件是否不足，並區分2022的排序失效是regime支撐缺口或相同regime下的關係漂移 |
+| 唯一變更 | 新增`apps/breakout_quality.py regime-audit`；從既有去重feature bank的0050 300-bar序列推導事件日regime，合併固定research scores與canonical split，輸出Selection／OOS覆蓋及模型品質 |
+| Regime契約 | Trend由0050相對200日均線與60日報酬決定；Drawdown由距252日高點決定；20日年化波動率low／medium／high切點只由Selection三分位數決定，OOS不參與分箱 |
+| 統計單位 | 每個`ticker/date`只計一次；sequence-only模型要求同group score精確一致；沿用evaluate.py固定threshold、PASS／REJECT與PR-AUC口徑 |
+| 支撐診斷 | combined regime同時輸出Selection groups、Selection/OOS event share ratio；預設Selection少於100 groups標記low support，share ratio低於0.5標記Selection低代表性，兩者皆可由CLI覆寫且只作診斷 |
+| 固定條件 | 9A architecture/profile、checkpoint、research score、threshold 0.5、Dataset、Label、split、optimizer、runtime候選與交易帳務全部不變 |
+| 重建需求 | 不需重建Dataset／Label／feature bank、不需重訓或重匯score；需既有完整research score與其model/split contract |
+| 輸出 | `reports/regime_coverage_audit.md/.json`、`regime_coverage_cells.csv`、`regime_event_groups.csv` |
+| 驗證 | CLI routing/help、Selection-only volatility quantiles、每個ticker/date單一row、四種regime維度、support欄位與OOS禁止調參說明均有獨立synthetic檢查 |
+| 下一步 | 使用者本機執行regime-audit並提供四個輸出；只有當2022高比例落在Selection低支撐combined regimes，且該區PR-AUC同步失效時，才支持「熊市breakout事件覆蓋不足」假說 |
+
 ---
 
 ## 6. 實驗執行順序
@@ -1066,6 +1083,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 既有OOS交易層歸因與partial-year修正（RESULT_AVAILABLE；獨有交易選擇效果−46.77R）
 → 9A Quality Score只作finalists-agree同票候選排序（RESULT_AVAILABLE；總報酬小幅正向但僅2023改善，不部署）
 → base-finalist-best單一member Score Ranking隔離比較（REJECTED；全域Score第一使總報酬−32.12pp，僅2023改善）
+→ Breakout Event Regime Coverage Audit（IMPLEMENTED；只讀診斷，待本機結果）
 → 凍結模型與舊OOS排序研究，等待2026-03-03之後的新forward labeled期間
 ```
 
