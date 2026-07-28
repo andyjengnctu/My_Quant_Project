@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260727_081157_61ad01f(1).zip`，SHA256 `7470c810c5c9a6a6547449b1f98d24d449293af9a94272fea405bb4a7bb3d023`；已包含Quality Score候選排序、cutoff signal anchor與Re-entry原始Score繼承；本輪新增finalist-best單一member的Score Ranking隔離比較契約 |
-| SHA256 | 本輪來源 ZIP：`7470c810c5c9a6a6547449b1f98d24d449293af9a94272fea405bb4a7bb3d023`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967` |
+| 基準 ZIP | `test-branch-1_20260727_104312_94c6a3a.zip`，SHA256 `be17cf6e15e6fecaaffb4d3fd96ae8d7f2c85bc02bec4858d4b1479920247937`；已包含Quality Score候選排序、cutoff signal anchor、Re-entry原始Score繼承與finalist-best單一member隔離比較契約；本輪取得finalist-best真實策略結果 |
+| SHA256 | 本輪來源 ZIP：`be17cf6e15e6fecaaffb4d3fd96ae8d7f2c85bc02bec4858d4b1479920247937`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；threshold gate策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967`；本輪finalist-best Score Ranking結果由使用者直接提供 |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -94,7 +94,7 @@
 | Brier | 0.2453 |
 | ECE | 0.0722 |
 
-9A 在 threshold 0.5 下相較 8F 提高 OOS Precision 4.53 pp，但 Recall 下降 25.52 pp，屬較高品質、較低 coverage 的分類操作點。Selection→OOS 的固定 coverage Precision 幾乎沒有下降：P@50%、P@60%、P@70% 分別變化 +0.07、+0.28、+0.25 pp，因此仍保留為研究排序基準；但固定 threshold 0.5 的無前視策略對照已證明淨報酬、MDD、RoMD、Payoff、EV與曝險全面惡化，故不得作正式 runtime gate。8F只保留歷史高覆蓋分類基準，不因9A策略失敗而自動升格部署。 交易歸因進一步確認總 R 差異為 −46.62R，其中共同交易只貢獻 +0.15R，獨有交易選擇效果為 −46.77R；No-filter only 的 286 筆交易合計 187.49R、平均 0.66R、Payoff 3.21，Filter only 的 276 筆替代交易僅 140.72R、平均 0.51R、Payoff 2.76。失效主因是篩掉與路徑擠出的大贏家高於所避開的輸家，並非共同交易執行或帳務差異。
+9A 在 threshold 0.5 下相較 8F 提高 OOS Precision 4.53 pp，但 Recall 下降 25.52 pp，屬較高品質、較低 coverage 的分類操作點。Selection→OOS 的固定 coverage Precision 幾乎沒有下降：P@50%、P@60%、P@70% 分別變化 +0.07、+0.28、+0.25 pp，因此仍保留為研究排序基準；但固定 threshold 0.5 的無前視策略對照已證明淨報酬、MDD、RoMD、Payoff、EV與曝險全面惡化，故不得作正式 runtime gate。8F只保留歷史高覆蓋分類基準，不因9A策略失敗而自動升格部署。 交易歸因進一步確認總 R 差異為 −46.62R，其中共同交易只貢獻 +0.15R，獨有交易選擇效果為 −46.77R；No-filter only 的 286 筆交易合計 187.49R、平均 0.66R、Payoff 3.21，Filter only 的 276 筆替代交易僅 140.72R、平均 0.51R、Payoff 2.76。失效主因是篩掉與路徑擠出的大贏家高於所避開的輸家，並非共同交易執行或帳務差異。 後續Score Ranking也未形成可部署證據：`base_finalists_agree`只在同票時使用Score，總報酬雖+4.88pp但只有2023改善；更純的`base_finalist_best`全域Score第一排序使總報酬129.08%降至96.96%（−32.12pp）、RoMD 7.42降至5.32，且除2023外所有年度均落後。故9A Score不得作全域第一順位，也不得再用既有OOS調整Score／票數混合權重。
 
 ---
 
@@ -710,12 +710,14 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 34. 小型supervised Patch Transformer；9F OOS PR-AUC較9A低0.0550，P@50／60／70%低4.27／3.02／1.92 pp，R@P60%只剩0.17%。不啟動9F-B masked pretraining，不再調patch size、embedding、depth、heads、MLP、position、pooling或threshold；停止現有300×10單模型architecture橫向搜尋。
 35. 9A固定threshold 0.5 runtime gate；無前視Rolling active-param OOS中淨總報酬147.71%降至121.14%、MDD由16.42%惡化至20.75%、RoMD由9.00降至5.84，Payoff、EV、曝險與最差完整年度亦全面惡化。不得依同一OOS調threshold、年度門檻、calibration或regime開關；9A只保留研究排序基準。
 36. 9A交易層歸因；共同交易R差異只有+0.15R，全部−46.62R落差幾乎全由獨有交易選擇效果−46.77R造成。被排除贏家326.25R大於避開輸家138.76R，替代交易平均R與Payoff亦低於被取代交易；停止以現有固定百分比Label／score作硬式進場gate，也不得依既有OOS設年度或regime開關。
+37. 9A Quality Score作候選全域第一排序；`base_finalist_best`單一member隔離比較使淨總報酬下降32.12pp、RoMD下降2.10、平均曝險下降27.96pp，且只有2023改善。不得再調Score權重、票數／Score混合公式、top-k、年度門檻或regime開關；`base_finalists_agree`同票Score tie-break的+4.88pp也只屬單一regime探索結果，不得部署。
+38. 為了讓Score實驗較單純而切換正式selector至`base_finalist_best`；其no-filter baseline相較`base_finalists_agree` baseline的總報酬低18.63pp、MDD較高0.99pp、RoMD低1.58。此跨selector比較只作描述性診斷，但已沒有支持正式切換的經濟證據。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`只保留研究排序／高覆蓋分類基準。9A固定threshold 0.5策略層對照與交易歸因均已完成：經濟效果與交易選擇效果皆為負，runtime gate正式淘汰。現有300×10單模型architecture橫向搜尋、8F策略比較、同一OOS門檻／calibration／regime調整全部停止。模型研究凍結，等待2026-03-03之後累積足夠且完成40交易日Label horizon的新forward labeled期間。
+所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`只保留研究排序／高覆蓋分類基準。9A固定threshold 0.5策略層對照、交易歸因、`base_finalists_agree`同票Score tie-break與`base_finalist_best`全域Score第一排序均已完成：hard gate與全域Score排序明確為負，同票tie-break僅由2023單一regime支撐，全部不得部署。正式runtime維持`base_finalists_agree`既有排序且Quality Ranking關閉。現有300×10單模型architecture橫向搜尋、8F策略比較、同一OOS門檻／calibration／Score權重／票數混合／regime調整全部停止。模型與舊OOS排序研究凍結，等待2026-03-03之後累積足夠且完成40交易日Label horizon的新forward labeled期間。
 
 ### 優先 6A：AdamW only
 
@@ -1014,16 +1016,17 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；尚無真實策略結果，不得預判有效或無效 |
-| 程式基準 | `test-branch-1_20260727_081157_61ad01f(1).zip`，SHA256 `7470c810c5c9a6a6547449b1f98d24d449293af9a94272fea405bb4a7bb3d023` |
+| 狀態 | `RESULT_AVAILABLE / REJECTED / NOT_ACCEPTED_FOR_DEPLOYMENT` |
+| 程式基準 | 結果基準`test-branch-1_20260727_104312_94c6a3a.zip`，SHA256 `be17cf6e15e6fecaaffb4d3fd96ae8d7f2c85bc02bec4858d4b1479920247937`；比較契約最初實作於`test-branch-1_20260727_081157_61ad01f(1).zip` |
 | 研究目的 | 移除`finalists_agree`的同意數第一順位，直接驗證9A Score是否能在同一套單一Rolling active param下改善候選全域排序 |
-| 唯一變更 | 同一`roos_base_best.json`建立baseline與ranking兩組；hard filter皆False，只切換`use_breakout_quality_ranking=False/True` |
-| 新契約 | CLI新增`--param-policy base-finalist-best`，自動解析canonical參數檔並驗證selector=`base_finalist_best`、每個生效日恰有1 member、`min_agree=1`。有效排序固定為Score降冪→既有buy-sort→ticker；不同param policy輸出目錄隔離 |
-| 固定條件 | 9A model／scores、Rolling年度排程、單一finalist參數、資金、max positions、rotation、候選資格、成交、停損／停利／trailing、費稅、帳務與0050全部不變 |
-| Dataset／Label／工件需求 | 不需重建Dataset、Label、feature bank、model、scores或optimizer；必須已有`models/roos_base_best.json` |
-| 輸出 | `strategy_compare_score_ranking_base_finalist_best/`；metadata保存selector、member count、min_agree、ranking scope與唯一參數差異 |
-| 研究限制 | 此實驗已在看過舊OOS與finalists-agree ranking結果後提出，只能解釋機制，不可直接作部署證據 |
-| 下一步 | 執行`python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --param-policy base-finalist-best --dataset full --max-positions 10 --rotation off`並回寫結果；其後凍結舊OOS排序研究 |
+| 唯一變更 | 同一`roos_base_best.json`建立baseline與ranking兩組；hard filter皆False，只切換`use_breakout_quality_ranking=False/True`；selector=`base_finalist_best`、每期1 member、`min_agree=1` |
+| 主要結果 | 淨總報酬129.08%→96.96%（−32.12pp）、MDD17.41%→18.23%（惡化0.83pp）、RoMD7.42→5.32、年化17.43%→14.04%、Log R² 0.9436→0.8283、月勝率63.49%→58.73%、勝率41.52%→37.91%、Payoff2.95→2.86；EV雖0.53R→0.64R，但平均曝險84.02%→56.07%（−27.96pp） |
+| 年度結果 | 2021 −19.37pp、2022 −10.13pp、2023 +28.88pp、2024 −0.34pp、2025 −6.36pp、2026 partial −1.11pp；只有2023改善。移除2023後，以年度報酬描述性連乘，baseline約+70.71%，ranking約+20.79% |
+| 容量診斷 | 平均每日可掛單候選50.55→46.39、候選供給不足日+26；但期末未滿倉日745→445、持股缺口−643格日，同時平均曝險大降。持股檔數與資金曝險口徑不同：ranking更常持有較多檔，但依既有風險sizing配置的單檔金額較小。每日可掛單候選也會受既有持倉、當日賣出、Continuation／Re-entry狀態影響，屬投組路徑結果，不是純原始signal數 |
+| 與3.39合併判讀 | Score作`finalists_agree`同票tie-break僅呈現2023集中型小幅正報酬；當移除票數保護、改成所有候選全域Score第一時，經濟效果顯著惡化。這表示9A分類Score不能直接解讀為最終Round-trip R或資本效率的單調排序；3.39的+4.88pp不能歸因為穩定Score優勢 |
+| 採用判定 | `REJECTED`。不得切換正式selector至`base_finalist_best`，不得啟用Quality Score全域第一排序，也不得依既有OOS繼續調整Score權重、票數／Score混合公式、年度或regime開關。正式runtime維持`base_finalists_agree`既有排序且`use_breakout_quality_ranking=False` |
+| Dataset／Label／工件需求 | 不需重建Dataset、Label、feature bank、model、scores或optimizer；本結果只更新實驗紀錄 |
+| 下一步 | 舊OOS的hard gate、同票Score tie-break與全域Score第一排序研究全部凍結；等待2026-03-03之後累積足夠且完成40交易日Label horizon的新forward labeled期間再作一次預先固定設計的驗證 |
 
 ---
 
@@ -1062,8 +1065,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 固定9A threshold 0.5的策略層no-filter對照（REJECTED_FOR_RUNTIME_DEPLOYMENT）
 → 既有OOS交易層歸因與partial-year修正（RESULT_AVAILABLE；獨有交易選擇效果−46.77R）
 → 9A Quality Score只作finalists-agree同票候選排序（RESULT_AVAILABLE；總報酬小幅正向但僅2023改善，不部署）
-→ base-finalist-best單一member Score Ranking隔離比較（IMPLEMENTED；尚待結果）
-→ 凍結模型研究，等待2026-03-03之後的新forward labeled期間
+→ base-finalist-best單一member Score Ranking隔離比較（REJECTED；全域Score第一使總報酬−32.12pp，僅2023改善）
+→ 凍結模型與舊OOS排序研究，等待2026-03-03之後的新forward labeled期間
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
