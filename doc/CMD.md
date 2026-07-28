@@ -142,13 +142,13 @@ python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --exper
 python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split validation
 python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split selection
 python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split oos
-# 稽核 Selection 是否涵蓋 OOS 的市場狀態；不重建 Dataset、不重訓、不改 Label
-python apps/breakout_quality.py regime-audit --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --min-selection-groups 100 --min-support-share-ratio 0.5
+# 稽核 Selection 是否涵蓋 OOS 的市場狀態，並歸因指定年度；不重建 Dataset、不重訓、不改 Label
+python apps/breakout_quality.py regime-audit --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --focus-year 2022 --min-selection-groups 100 --min-support-share-ratio 0.5
 ```
 
-`regime-audit` 以 canonical 300-bar feature bank 中的0050序列，在每個 `ticker/date` breakout group只計算一次事件日可觀測市場狀態。Trend使用0050相對200日均線與60日報酬；Drawdown使用距252日高點；Volatility只以Selection的20日年化波動率三分位數定義low／medium／high，OOS不得參與分箱。輸出固定包含年度覆蓋、各regime的Selection/OOS event share、PASS率、Precision、Recall、PR-AUC、combined-regime支撐數與低代表性標記。結果只用於確認2022等年度是否落在訓練低支撐區，不得回頭建立年度／regime gate或調整threshold。
+`regime-audit` 也可由 `python apps/breakout_quality.py` 的互動選單執行。它以 canonical 300-bar feature bank 中的0050序列，在每個 `ticker/date` breakout group只計算一次事件日可觀測市場狀態。Trend使用0050相對200日均線與60日報酬；Drawdown使用距252日高點；Volatility只以Selection的20日年化波動率三分位數定義low／medium／high，OOS不得參與分箱。輸出固定包含年度覆蓋、各regime的Selection/OOS event share、PASS率、Precision、Recall、PR-AUC、combined-regime支撐數與低代表性標記；`--focus-year` 另輸出該年度各combined regime的TP／FP／TN／FN、年度錯誤貢獻，以及描述性排除low-support事件後的指標。排除比較只作歸因，不得回頭建立年度／regime gate或調整threshold。
 
-- Dataset 與 future-path cache 固定在 `outputs/filters/breakout_quality/<filter_id>/`；research scores 與易讀報表依架構及實驗放在 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/`。一般評估固定輸出 `reports/evaluation_report.md` 與 `reports/evaluation_metrics.json`；regime稽核固定輸出 `reports/regime_coverage_audit.md`、`reports/regime_coverage_audit.json`、`reports/regime_coverage_cells.csv` 與 `reports/regime_event_groups.csv`。
+- Dataset 與 future-path cache 固定在 `outputs/filters/breakout_quality/<filter_id>/`；research scores 與易讀報表依架構及實驗放在 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/`。一般評估固定輸出 `reports/evaluation_report.md` 與 `reports/evaluation_metrics.json`；regime稽核固定輸出 `reports/regime_coverage_audit.md`、`reports/regime_coverage_audit.json`、`reports/regime_coverage_cells.csv`、`reports/regime_focus_year_cells.csv` 與 `reports/regime_event_groups.csv`。
 - Model、manifest 與 `split_assignments.csv` 依架構及實驗固定在 `models/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/`；固定 threshold 也寫入 manifest，OOS 評估不得改用其他值；正式啟用時 active `breakout_quality_score_threshold` 應與該固定值一致。
 - 外層正式期間只有 `selection / oos`，日期直接讀 `core.walk_forward_policy`。
 - `BREAKOUT_QUALITY_USE_INNER_VALIDATION=False` 時，全部 eligible Selection 固定 epochs 訓練；開啟時，Selection 尾端 `BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS` 個月用來選 epoch。正式預設為 8F `BREAKOUT_QUALITY_FINAL_REFIT_MODE="selected_epochs"`；8I matched optimizer steps與 8J best inner checkpoint 均只保留歷史重現。

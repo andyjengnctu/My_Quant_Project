@@ -1527,3 +1527,7 @@
 | 2026-07-27 | T267 | direct執行21項策略比較契約全數通過後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
 | 2026-07-27 | T267 | 新增finalist-best／finalists-agree canonical path、selector錯配、單member與獨立輸出direct cases，測試契約改回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-07-27 | T267 | direct執行25項策略比較契約全數通過後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
+| 2026-07-28 | B16 | regime-audit新增focus-year歸因參數、互動選單入口與第五份年度明細CSV，CLI／文件契約改回PARTIAL | DONE -> PARTIAL | `apps/breakout_quality.py`, `tools/filters/breakout_quality/regime_audit.py`, `doc/CMD.md` |
+| 2026-07-28 | B16 | 驗證focus-year help可定位、選單使用固定診斷預設、既有命令不變且五份輸出文件一致後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
+| 2026-07-28 | T265 | regime coverage synthetic case新增指定年度combined-regime TP／FP／TN／FN與low-support排除歸因，測試契約改回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-07-28 | T265 | 驗證Selection-only volatility切點、focus-year事件完整覆蓋、support exclusion三組比較及OOS禁止建gate說明後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_chronological_embargo_case` |

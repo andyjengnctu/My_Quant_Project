@@ -15,6 +15,15 @@ from config.breakout_quality_experiments import (
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
 )
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+)
+from tools.filters.breakout_quality.regime_audit import (
+    DEFAULT_FOCUS_YEAR,
+    DEFAULT_MIN_SELECTION_GROUPS,
+    DEFAULT_MIN_SUPPORT_SHARE_RATIO,
+)
 
 from .checks import add_check
 
@@ -110,6 +119,68 @@ def validate_dataset_cli_contract_case(_base_params):
         rc = app_breakout_quality.main(["apps/breakout_quality.py", "menu"])
     add_check(results, "cli_contract", case_id, "breakout_quality_explicit_menu_rc", 32, rc)
     add_check(results, "cli_contract", case_id, "breakout_quality_explicit_menu_called", 1, mocked_menu.call_count)
+
+    interactive_commands = []
+
+    def _record_interactive_command(command, args, *, program_name):
+        interactive_commands.append(
+            {
+                "command": str(command),
+                "args": list(args),
+                "program_name": str(program_name),
+            }
+        )
+        return 0
+
+    with (
+        patch(
+            "builtins.input",
+            side_effect=["8", str(int(DEFAULT_FOCUS_YEAR)), "0"],
+        ),
+        patch("apps.breakout_quality._print_policy_defaults"),
+        patch(
+            "apps.breakout_quality._run_command",
+            side_effect=_record_interactive_command,
+        ),
+    ):
+        rc, interactive_text = _capture_stdout(
+            app_breakout_quality._run_interactive_menu,
+            "apps/breakout_quality.py",
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_regime_audit_menu_rc",
+        0,
+        rc,
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_regime_audit_menu_route",
+        True,
+        (
+            len(interactive_commands) == 1
+            and interactive_commands[0]["command"] == "regime-audit"
+            and interactive_commands[0]["args"]
+            == [
+                "--filter-id",
+                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                "--experiment-profile",
+                BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+                "--focus-year",
+                str(int(DEFAULT_FOCUS_YEAR)),
+                "--min-selection-groups",
+                str(int(DEFAULT_MIN_SELECTION_GROUPS)),
+                "--min-support-share-ratio",
+                str(float(DEFAULT_MIN_SUPPORT_SHARE_RATIO)),
+            ]
+            and "市場狀態覆蓋與年度歸因稽核" in interactive_text
+            and "[9/Enter] 查看工件狀態" in interactive_text
+        ),
+    )
 
     fake_workflow_args = SimpleNamespace(filter_id="synthetic_quality")
     with (

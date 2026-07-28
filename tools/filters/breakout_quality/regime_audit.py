@@ -36,7 +36,10 @@ from tools.filters.breakout_quality.evaluate import (
     prepare_evaluation_context,
 )
 
-REGIME_AUDIT_SCHEMA_VERSION = 1
+REGIME_AUDIT_SCHEMA_VERSION = 2
+DEFAULT_FOCUS_YEAR = 2022
+DEFAULT_MIN_SELECTION_GROUPS = 100
+DEFAULT_MIN_SUPPORT_SHARE_RATIO = 0.5
 ANNUALIZATION_BARS = 252
 VOLATILITY_QUANTILES = (1.0 / 3.0, 2.0 / 3.0)
 TREND_STATES = ("bull", "transition", "bear")
@@ -62,14 +65,20 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--min-selection-groups",
         type=int,
-        default=100,
+        default=DEFAULT_MIN_SELECTION_GROUPS,
         help="combined regime 在 Selection 少於此 group 數時標記為 low support",
     )
     parser.add_argument(
         "--min-support-share-ratio",
         type=float,
-        default=0.5,
+        default=DEFAULT_MIN_SUPPORT_SHARE_RATIO,
         help="Selection share / OOS share 低於此值時標記為 underrepresented",
+    )
+    parser.add_argument(
+        "--focus-year",
+        type=int,
+        default=DEFAULT_FOCUS_YEAR,
+        help="輸出指定 OOS 年度的 combined-regime 歸因與 low-support 排除診斷",
     )
     return parser.parse_args(argv)
 
@@ -80,6 +89,11 @@ def _validate_audit_args(*, min_selection_groups: int, min_support_share_ratio: 
     ratio = float(min_support_share_ratio)
     if not math.isfinite(ratio) or ratio <= 0.0:
         raise ValueError("min_support_share_ratio 必須是有限正數")
+
+
+def _validate_focus_year(focus_year: int) -> None:
+    if int(focus_year) < 1900 or int(focus_year) > 2200:
+        raise ValueError("focus_year 必須是合理的四位數年份")
 
 
 def derive_benchmark_regime_features(
@@ -295,6 +309,12 @@ def _metric_subset(frame: pd.DataFrame, threshold: float) -> dict:
         require_identical_group_scores=False,
     )
     ranking = metrics.get("ranking_and_calibration") or {}
+    confusion = metrics.get("confusion") or {}
+
+    def _count(name: str) -> int:
+        value = confusion.get(name, 0.0)
+        return int(round(float(value)))
+
     return {
         "group_count": int(metrics.get("group_count", 0)),
         "base_pass_rate": metrics.get("base_pass_rate"),
@@ -307,6 +327,10 @@ def _metric_subset(frame: pd.DataFrame, threshold: float) -> dict:
         "precision_at_50pct_coverage": (ranking.get("precision_at_coverage") or {}).get("0.50"),
         "precision_at_60pct_coverage": (ranking.get("precision_at_coverage") or {}).get("0.60"),
         "precision_at_70pct_coverage": (ranking.get("precision_at_coverage") or {}).get("0.70"),
+        "true_pass_pred_pass": _count("true_pass_pred_pass"),
+        "true_reject_pred_pass": _count("true_reject_pred_pass"),
+        "true_reject_pred_reject": _count("true_reject_pred_reject"),
+        "true_pass_pred_reject": _count("true_pass_pred_reject"),
     }
 
 
@@ -316,14 +340,16 @@ def build_regime_audit_payload(
     threshold: float,
     min_selection_groups: int,
     min_support_share_ratio: float,
+    focus_year: int,
     regime_thresholds: dict,
     score_group_diagnostics: dict,
     metadata: dict,
-) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
+) -> tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     _validate_audit_args(
         min_selection_groups=min_selection_groups,
         min_support_share_ratio=min_support_share_ratio,
     )
+    _validate_focus_year(focus_year)
     frame = group_frame.copy()
     selection = frame[frame["outer_split"] == OUTER_SPLIT_SELECTION].copy()
     oos = frame[frame["outer_split"] == OUTER_SPLIT_OOS].copy()
@@ -390,6 +416,14 @@ def build_regime_audit_payload(
         ratio_values < float(min_support_share_ratio)
     ).fillna(False)
 
+    available_oos_years = sorted(
+        int(value) for value in pd.unique(oos["date"].dt.year)
+    )
+    if int(focus_year) not in available_oos_years:
+        raise ValueError(
+            f"focus_year={int(focus_year)} 不在 OOS 年度中；可用值={available_oos_years}"
+        )
+
     yearly: list[dict] = []
     for year, year_frame in oos.groupby(oos["date"].dt.year, sort=True):
         year_enriched = frame.loc[year_frame.index]
@@ -416,6 +450,96 @@ def build_regime_audit_payload(
         )
         yearly.append(metrics)
 
+    focus_frame = frame[
+        (frame["outer_split"] == OUTER_SPLIT_OOS)
+        & (frame["date"].dt.year == int(focus_year))
+    ].copy()
+    focus_metrics = _metric_subset(focus_frame, threshold)
+    focus_fp_total = int(focus_metrics.get("true_reject_pred_pass", 0))
+    focus_fn_total = int(focus_metrics.get("true_pass_pred_reject", 0))
+    focus_records: list[dict] = []
+    focus_rows: list[dict] = []
+    for state, state_frame in focus_frame.groupby("combined_regime", sort=False):
+        state_text = str(state)
+        metrics = _metric_subset(state_frame, threshold)
+        support = support_by_regime[state_text]
+        selection_groups = int(support["selection_groups"])
+        share_ratio = support["selection_to_oos_share_ratio"]
+        low_support = selection_groups < int(min_selection_groups)
+        underrepresented = (
+            share_ratio is not None
+            and float(share_ratio) < float(min_support_share_ratio)
+        )
+        fp_count = int(metrics.get("true_reject_pred_pass", 0))
+        fn_count = int(metrics.get("true_pass_pred_reject", 0))
+        record = {
+            "combined_regime": state_text,
+            "focus_year_share": round(float(len(state_frame) / len(focus_frame)), 6),
+            "selection_support_groups": selection_groups,
+            "selection_to_oos_share_ratio": share_ratio,
+            "low_selection_support": bool(low_support),
+            "underrepresented_in_selection": bool(underrepresented),
+            "false_positive_share_of_focus_year": (
+                round(float(fp_count / focus_fp_total), 6)
+                if focus_fp_total > 0
+                else None
+            ),
+            "false_negative_share_of_focus_year": (
+                round(float(fn_count / focus_fn_total), 6)
+                if focus_fn_total > 0
+                else None
+            ),
+            "metrics": metrics,
+        }
+        focus_records.append(record)
+        flat = {
+            key: value
+            for key, value in record.items()
+            if key != "metrics"
+        }
+        flat["focus_year"] = int(focus_year)
+        for key, value in metrics.items():
+            flat[key] = value
+        focus_rows.append(flat)
+
+    focus_records.sort(
+        key=lambda row: int(row["metrics"].get("group_count", 0)),
+        reverse=True,
+    )
+    focus_rows.sort(key=lambda row: int(row.get("group_count", 0)), reverse=True)
+
+    low_support_frame = focus_frame[focus_frame["low_selection_support"]].copy()
+    supported_frame = focus_frame[~focus_frame["low_selection_support"]].copy()
+
+    def _comparison_row(name: str, subset: pd.DataFrame) -> dict:
+        metrics = _metric_subset(subset, threshold)
+        metrics["subset"] = str(name)
+        metrics["focus_year_share"] = round(float(len(subset) / len(focus_frame)), 6)
+        return metrics
+
+    support_exclusion = {
+        "all_focus_year_events": _comparison_row("all_focus_year_events", focus_frame),
+        "low_support_only": _comparison_row("low_support_only", low_support_frame),
+        "supported_only": _comparison_row("supported_only", supported_frame),
+    }
+
+    def _delta(metric_name: str) -> float | None:
+        full_value = support_exclusion["all_focus_year_events"].get(metric_name)
+        supported_value = support_exclusion["supported_only"].get(metric_name)
+        if full_value is None or supported_value is None:
+            return None
+        return round(float(supported_value) - float(full_value), 6)
+
+    support_exclusion["supported_only_delta_vs_all"] = {
+        "base_pass_rate": _delta("base_pass_rate"),
+        "model_pass_rate": _delta("model_pass_rate"),
+        "pass_precision": _delta("pass_precision"),
+        "pass_recall": _delta("pass_recall"),
+        "accuracy": _delta("accuracy"),
+        "average_score": _delta("average_score"),
+        "pr_auc": _delta("pr_auc"),
+    }
+
     payload = {
         "schema_version": REGIME_AUDIT_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -434,6 +558,7 @@ def build_regime_audit_payload(
             "min_support_share_ratio": float(min_support_share_ratio),
             "share_ratio_formula": "selection regime share / OOS regime share",
         },
+        "focus_year": int(focus_year),
         "score_group_contract": score_group_diagnostics,
         "overall": {
             "selection": _metric_subset(selection, threshold),
@@ -441,9 +566,17 @@ def build_regime_audit_payload(
         },
         "dimensions": dimension_payload,
         "oos_yearly": yearly,
+        "focus_year_analysis": {
+            "combined_regimes": focus_records,
+            "support_exclusion_diagnostic": support_exclusion,
+            "interpretation_contract": (
+                "descriptive attribution only; excluding low-support regimes is not a deployable gate"
+            ),
+        },
     }
     dimension_frame = pd.DataFrame(dimension_rows)
-    return payload, dimension_frame, frame
+    focus_year_frame = pd.DataFrame(focus_rows)
+    return payload, dimension_frame, focus_year_frame, frame
 
 
 def _pct(value: object) -> str:
@@ -456,6 +589,10 @@ def _decimal(value: object, digits: int = 4) -> str:
     if value is None or pd.isna(value):
         return "-"
     return f"{float(value):.{digits}f}"
+
+
+def _markdown_state(value: object) -> str:
+    return str(value).replace("|", " / ")
 
 
 def render_regime_audit_markdown(payload: dict) -> str:
@@ -524,7 +661,7 @@ def render_regime_audit_markdown(payload: dict) -> str:
         for row in records:
             lines.append(
                 "| {state} | {sg:,} | {og:,} | {ss} | {os} | {ratio} | {sp} | {op} | {precision} | {recall} | {pr_auc} |".format(
-                    state=row["state"],
+                    state=_markdown_state(row["state"]),
                     sg=int(row["selection"].get("group_count", 0)),
                     og=int(row["oos"].get("group_count", 0)),
                     ss=_pct(row.get("selection_share")),
@@ -539,6 +676,92 @@ def render_regime_audit_markdown(payload: dict) -> str:
             )
         section_number += 1
 
+    focus_year = int(payload["focus_year"])
+    focus_analysis = payload["focus_year_analysis"]
+    lines.extend(
+        [
+            "",
+            f"## {section_number}. {focus_year} Combined regime 歸因",
+            "",
+            "| State | Groups | 年內占比 | Selection支撐 | Sel/OOS Share | Low support | 低代表性 | 原始 PASS | 模型 PASS | Precision | Recall | PR-AUC | TP | FP | TN | FN | 年度FP占比 | 年度FN占比 |",
+            "|---|---:|---:|---:|---:|:---:|:---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in focus_analysis["combined_regimes"]:
+        metrics = row["metrics"]
+        lines.append(
+            "| {state} | {groups:,} | {share} | {support:,} | {ratio} | {low} | {under} | {base} | {model} | {precision} | {recall} | {pr_auc} | {tp:,} | {fp:,} | {tn:,} | {fn:,} | {fp_share} | {fn_share} |".format(
+                state=_markdown_state(row["combined_regime"]),
+                groups=int(metrics.get("group_count", 0)),
+                share=_pct(row.get("focus_year_share")),
+                support=int(row.get("selection_support_groups", 0)),
+                ratio=_decimal(row.get("selection_to_oos_share_ratio"), 3),
+                low="Y" if bool(row.get("low_selection_support")) else "N",
+                under="Y" if bool(row.get("underrepresented_in_selection")) else "N",
+                base=_pct(metrics.get("base_pass_rate")),
+                model=_pct(metrics.get("model_pass_rate")),
+                precision=_pct(metrics.get("pass_precision")),
+                recall=_pct(metrics.get("pass_recall")),
+                pr_auc=_decimal(metrics.get("pr_auc")),
+                tp=int(metrics.get("true_pass_pred_pass", 0)),
+                fp=int(metrics.get("true_reject_pred_pass", 0)),
+                tn=int(metrics.get("true_reject_pred_reject", 0)),
+                fn=int(metrics.get("true_pass_pred_reject", 0)),
+                fp_share=_pct(row.get("false_positive_share_of_focus_year")),
+                fn_share=_pct(row.get("false_negative_share_of_focus_year")),
+            )
+        )
+    section_number += 1
+
+    exclusion = focus_analysis["support_exclusion_diagnostic"]
+    lines.extend(
+        [
+            "",
+            f"## {section_number}. {focus_year} Low-support 排除診斷",
+            "",
+            "此表只作歸因：比較完整年度、low-support事件本身，以及描述性排除low-support後的剩餘事件；不得據此建立runtime regime gate。",
+            "",
+            "| 範圍 | Groups | 年內占比 | 原始 PASS | 模型 PASS | Precision | Recall | Accuracy | 平均 Score | PR-AUC | TP | FP | TN | FN |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    comparison_labels = {
+        "all_focus_year_events": "完整年度",
+        "low_support_only": "Low-support only",
+        "supported_only": "排除 Low-support 後",
+    }
+    for key in ("all_focus_year_events", "low_support_only", "supported_only"):
+        row = exclusion[key]
+        lines.append(
+            "| {label} | {groups:,} | {share} | {base} | {model} | {precision} | {recall} | {accuracy} | {score} | {pr_auc} | {tp:,} | {fp:,} | {tn:,} | {fn:,} |".format(
+                label=comparison_labels[key],
+                groups=int(row.get("group_count", 0)),
+                share=_pct(row.get("focus_year_share")),
+                base=_pct(row.get("base_pass_rate")),
+                model=_pct(row.get("model_pass_rate")),
+                precision=_pct(row.get("pass_precision")),
+                recall=_pct(row.get("pass_recall")),
+                accuracy=_pct(row.get("accuracy")),
+                score=_decimal(row.get("average_score")),
+                pr_auc=_decimal(row.get("pr_auc")),
+                tp=int(row.get("true_pass_pred_pass", 0)),
+                fp=int(row.get("true_reject_pred_pass", 0)),
+                tn=int(row.get("true_reject_pred_reject", 0)),
+                fn=int(row.get("true_pass_pred_reject", 0)),
+            )
+        )
+    delta = exclusion["supported_only_delta_vs_all"]
+    lines.extend(
+        [
+            "",
+            "排除 Low-support 後相對完整年度的描述性變化："
+            f"Precision `{_pct(delta.get('pass_precision'))}`、"
+            f"Recall `{_pct(delta.get('pass_recall'))}`、"
+            f"PR-AUC `{_decimal(delta.get('pr_auc'))}`、"
+            f"平均 Score `{_decimal(delta.get('average_score'))}`。",
+        ]
+    )
+
     lines.extend(
         [
             "",
@@ -546,7 +769,8 @@ def render_regime_audit_markdown(payload: dict) -> str:
             "",
             "- `low support` 只表示同一 combined regime 的 Selection group 數低於命令列門檻，不等於該年度必然失效。",
             "- `Selection低代表性` 表示該 regime 在 Selection 的占比，相對 OOS 占比低於指定比例；它是支撐缺口證據，不是可部署的年度／regime gate。",
-            "- 若 2022 同時呈現高 bear／deep-drawdown 占比、高 low-support，以及低 PR-AUC，才支持『熊市 breakout 訓練支撐不足』的假說。",
+            f"- 若 {focus_year} 同時呈現高 bear／deep-drawdown 占比、高 low-support，以及低 PR-AUC，才支持『熊市 breakout 訓練支撐不足』的假說。",
+            f"- 若排除 low-support 後的 {focus_year} PR-AUC 仍明顯偏低，表示除支撐缺口外，尚有相同regime下的conditional／concept shift。",
             "",
         ]
     )
@@ -558,13 +782,15 @@ def run_regime_audit(
     filter_id: str,
     experiment_profile: str,
     score_path: str | Path | None = None,
-    min_selection_groups: int = 100,
-    min_support_share_ratio: float = 0.5,
+    min_selection_groups: int = DEFAULT_MIN_SELECTION_GROUPS,
+    min_support_share_ratio: float = DEFAULT_MIN_SUPPORT_SHARE_RATIO,
+    focus_year: int = DEFAULT_FOCUS_YEAR,
 ) -> tuple[dict, dict[str, Path]]:
     _validate_audit_args(
         min_selection_groups=min_selection_groups,
         min_support_share_ratio=min_support_share_ratio,
     )
+    _validate_focus_year(focus_year)
     evaluation_context = prepare_evaluation_context(
         filter_id=str(filter_id),
         experiment_profile=str(experiment_profile),
@@ -626,11 +852,12 @@ def run_regime_audit(
         "dataset_feature_group_count": int(dataset_summary.get("feature_group_count", 0)),
         "audited_group_count": int(len(group_frame)),
     }
-    payload, dimension_frame, enriched_groups = build_regime_audit_payload(
+    payload, dimension_frame, focus_year_frame, enriched_groups = build_regime_audit_payload(
         group_frame,
         threshold=float(evaluation_context["threshold"]),
         min_selection_groups=int(min_selection_groups),
         min_support_share_ratio=float(min_support_share_ratio),
+        focus_year=int(focus_year),
         regime_thresholds=regime_thresholds,
         score_group_diagnostics=score_group_diagnostics,
         metadata=metadata,
@@ -645,6 +872,7 @@ def run_regime_audit(
         "markdown": report_dir / "regime_coverage_audit.md",
         "json": report_dir / "regime_coverage_audit.json",
         "cells_csv": report_dir / "regime_coverage_cells.csv",
+        "focus_year_cells_csv": report_dir / "regime_focus_year_cells.csv",
         "groups_csv": report_dir / "regime_event_groups.csv",
     }
     paths["markdown"].write_text(render_regime_audit_markdown(payload), encoding="utf-8")
@@ -653,6 +881,9 @@ def run_regime_audit(
         encoding="utf-8",
     )
     dimension_frame.to_csv(paths["cells_csv"], index=False, encoding="utf-8-sig")
+    focus_year_frame.to_csv(
+        paths["focus_year_cells_csv"], index=False, encoding="utf-8-sig"
+    )
     output_columns = [
         "ticker",
         "date",
@@ -691,6 +922,7 @@ def main(argv=None) -> int:
         score_path=args.score_path,
         min_selection_groups=int(args.min_selection_groups),
         min_support_share_ratio=float(args.min_support_share_ratio),
+        focus_year=int(args.focus_year),
     )
     print(render_regime_audit_markdown(payload))
     print("已輸出：")
@@ -701,6 +933,9 @@ def main(argv=None) -> int:
 
 __all__ = [
     "REGIME_AUDIT_SCHEMA_VERSION",
+    "DEFAULT_FOCUS_YEAR",
+    "DEFAULT_MIN_SELECTION_GROUPS",
+    "DEFAULT_MIN_SUPPORT_SHARE_RATIO",
     "assign_market_regimes",
     "build_regime_audit_payload",
     "derive_benchmark_regime_features",

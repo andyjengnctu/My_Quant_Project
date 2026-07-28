@@ -4593,7 +4593,8 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     regime_groups = pd.DataFrame(
         {
             "ticker": [f"R{index}" for index in range(12)],
-            "date": pd.date_range("2018-01-01", periods=12, freq="YS"),
+            "date": list(pd.date_range("2018-01-01", periods=6, freq="YS"))
+            + list(pd.date_range("2024-01-02", periods=6, freq="MS")),
             "group_index": np.arange(12, dtype=np.int64),
             "outer_split": [OUTER_SPLIT_SELECTION] * 6 + [OUTER_SPLIT_OOS] * 6,
             "selection_role": [SELECTION_ROLE_TRAIN] * 6
@@ -4603,11 +4604,17 @@ def _validate_breakout_quality_report_rendering(results, case_id):
         }
     ).merge(regime_features, on="group_index", validate="one_to_one")
     regime_groups, regime_thresholds = assign_market_regimes(regime_groups)
-    regime_payload, regime_cells, enriched_regime_groups = build_regime_audit_payload(
+    (
+        regime_payload,
+        regime_cells,
+        regime_focus_year_cells,
+        enriched_regime_groups,
+    ) = build_regime_audit_payload(
         regime_groups,
         threshold=0.5,
         min_selection_groups=2,
         min_support_share_ratio=0.5,
+        focus_year=2024,
         regime_thresholds=regime_thresholds,
         score_group_diagnostics={"group_score_reduction": "synthetic"},
         metadata={
@@ -4650,8 +4657,33 @@ def _validate_breakout_quality_report_rendering(results, case_id):
                 "combined_regime",
             }
             and enriched_regime_groups["selection_support_groups"].notna().all()
+            and not regime_focus_year_cells.empty
             and "Selection低代表性" in regime_markdown
+            and "2024 Combined regime 歸因" in regime_markdown
+            and "Low-support 排除診斷" in regime_markdown
             and "不得依 OOS 結果回頭調整" in regime_markdown
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "regime_audit_emits_focus_year_attribution_and_support_exclusion",
+        True,
+        (
+            regime_payload["focus_year"] == 2024
+            and set(
+                regime_payload["focus_year_analysis"][
+                    "support_exclusion_diagnostic"
+                ]
+            )
+            == {
+                "all_focus_year_events",
+                "low_support_only",
+                "supported_only",
+                "supported_only_delta_vs_all",
+            }
+            and int(regime_focus_year_cells["group_count"].sum()) == 6
         ),
     )
 

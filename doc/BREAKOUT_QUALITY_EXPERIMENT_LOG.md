@@ -13,7 +13,7 @@
 5. 與當前正式基準的差異、結論、是否採用，以及下一個單一變更。
 6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-27**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-28**。
 
 ---
 
@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260728_232004_77fa495.zip`，SHA256 `ee3c13f0c5cb238f836ab90dded37a405343d25be8a16de7bdb6d842f1a9e296`；沿用9A與既有策略比較結果，本輪新增只讀Regime Coverage Audit，不改模型、Label、Score或runtime交易行為 |
-| SHA256 | 本輪來源 ZIP：`ee3c13f0c5cb238f836ab90dded37a405343d25be8a16de7bdb6d842f1a9e296`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；threshold gate策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967`；finalist-best Score Ranking結果由使用者直接提供 |
+| 基準 ZIP | `test-branch-1_20260728_235533_ee053dd.zip`，SHA256 `c2ec6c713ab4693cd54a1d26497aa01cb11f48b58f807a7b38b56d1dfe2cf29b`，再套用 `breakout_quality_focus_year_regime_attribution_patch_20260728.zip`，SHA256 `5fe3ca1e0db8c21df5575e3dcd635739b3de7fa8edd8a5a5509099459b05c53f`；2022 focus-year歸因結果已取得，只更新研究紀錄，不改模型、Label、Score或runtime交易行為 |
+| SHA256 | 本輪來源 ZIP：`c2ec6c713ab4693cd54a1d26497aa01cb11f48b58f807a7b38b56d1dfe2cf29b`；focus-year patch：`5fe3ca1e0db8c21df5575e3dcd635739b3de7fa8edd8a5a5509099459b05c53f`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；threshold gate策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967`；finalist-best Score Ranking結果由使用者直接提供 |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -712,12 +712,24 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 36. 9A交易層歸因；共同交易R差異只有+0.15R，全部−46.62R落差幾乎全由獨有交易選擇效果−46.77R造成。被排除贏家326.25R大於避開輸家138.76R，替代交易平均R與Payoff亦低於被取代交易；停止以現有固定百分比Label／score作硬式進場gate，也不得依既有OOS設年度或regime開關。
 37. 9A Quality Score作候選全域第一排序；`base_finalist_best`單一member隔離比較使淨總報酬下降32.12pp、RoMD下降2.10、平均曝險下降27.96pp，且只有2023改善。不得再調Score權重、票數／Score混合公式、top-k、年度門檻或regime開關；`base_finalists_agree`同票Score tie-break的+4.88pp也只屬單一regime探索結果，不得部署。
 38. 為了讓Score實驗較單純而切換正式selector至`base_finalist_best`；其no-filter baseline相較`base_finalists_agree` baseline的總報酬低18.63pp、MDD較高0.99pp、RoMD低1.58。此跨selector比較只作描述性診斷，但已沒有支持正式切換的經濟證據。
+39. 把2022排序失效主要歸因於combined-regime low-support，或只靠oversampling／重複少量deep-drawdown事件修復；排除36.01%的low-support事件後PR-AUC只由0.4582升至0.4722，已見regime仍廣泛失效。
 
 ---
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`只保留研究排序／高覆蓋分類基準。9A固定threshold 0.5策略層對照、交易歸因、`base_finalists_agree`同票Score tie-break與`base_finalist_best`全域Score第一排序均已完成：hard gate與全域Score排序明確為負，同票tie-break僅由2023單一regime支撐，全部不得部署。正式runtime維持`base_finalists_agree`既有排序且Quality Ranking關閉。現有300×10單模型architecture橫向搜尋、8F策略比較、同一OOS門檻／calibration／Score權重／票數混合／regime調整全部停止。模型與舊OOS排序研究凍結，等待2026-03-03之後累積足夠且完成40交易日Label horizon的新forward labeled期間。
+所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`只保留研究排序／高覆蓋分類基準。9A固定threshold 0.5策略層對照、交易歸因、`base_finalists_agree`同票Score tie-break與`base_finalist_best`全域Score第一排序均已完成：hard gate與全域Score排序明確為負，同票tie-break僅由2023單一regime支撐，全部不得部署。2022 focus-year歸因進一步確認排除low-support後PR-AUC仍只有0.4722，因此不得以oversampling或regime gate處理。正式runtime維持`base_finalists_agree`既有排序且Quality Ranking關閉。模型重訓與舊OOS調參維持凍結；唯一新增的只讀研究優先是Market Breadth／Breakout Density Coverage Audit，用來判斷0050序列是否缺少可泛化的橫斷面市場狀態資訊。
+
+### 目前新增優先：Market Breadth／Breakout Density Coverage Audit
+
+| 項目 | 設計 |
+|---|---|
+| 狀態 | `PLANNED`；只讀診斷，不重訓、不改Score、threshold或runtime |
+| 唯一新增資訊 | 每個breakout事件日以前的全市場橫斷面breadth與breakout density，不改現有9A模型輸入 |
+| 建議指標 | 全市場站上50／200日均線比例、20／60日正報酬比例、近20日新高／breakout事件密度、產業站上長期均線比例或產業相對強勢廣度 |
+| 主要檢查區 | 2022 `bear / correction / high`、`transition / correction / high`、`bear / near_high / high`；這些regime已有Selection支撐但PR-AUC仍低 |
+| 判定條件 | 在相同0050 combined regime內，breadth分箱需同時具足夠Selection樣本、Selection→OOS方向一致的PASS率差異，以及OOS固定coverage排序改善證據；否則不進入模型實驗 |
+| 後續 | Audit通過後才做一次只加入breadth context的9A單一變更；若Audit不通過，維持模型凍結並等待新forward labeled period |
 
 ### 優先 6A：AdamW only
 
@@ -1032,18 +1044,35 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；只讀診斷工具，尚未取得本機完整Dataset結果，不得預先判定2022根因 |
-| 程式基準 | `test-branch-1_20260728_232004_77fa495.zip`，SHA256 `ee3c13f0c5cb238f836ab90dded37a405343d25be8a16de7bdb6d842f1a9e296` |
+| 狀態 | `RESULT_AVAILABLE`；2022同時存在深度回撤regime支撐缺口與已見regime下的關係漂移，只作根因診斷，不形成runtime gate |
+| 程式基準 | 工具基準`test-branch-1_20260728_232004_77fa495.zip`，SHA256 `ee3c13f0c5cb238f836ab90dded37a405343d25be8a16de7bdb6d842f1a9e296`；結果由使用者在完整本機Dataset執行提供 |
 | 研究目的 | 驗證Selection中的熊市／深回撤breakout事件是否不足，並區分2022的排序失效是regime支撐缺口或相同regime下的關係漂移 |
-| 唯一變更 | 新增`apps/breakout_quality.py regime-audit`；從既有去重feature bank的0050 300-bar序列推導事件日regime，合併固定research scores與canonical split，輸出Selection／OOS覆蓋及模型品質 |
-| Regime契約 | Trend由0050相對200日均線與60日報酬決定；Drawdown由距252日高點決定；20日年化波動率low／medium／high切點只由Selection三分位數決定，OOS不參與分箱 |
-| 統計單位 | 每個`ticker/date`只計一次；sequence-only模型要求同group score精確一致；沿用evaluate.py固定threshold、PASS／REJECT與PR-AUC口徑 |
-| 支撐診斷 | combined regime同時輸出Selection groups、Selection/OOS event share ratio；預設Selection少於100 groups標記low support，share ratio低於0.5標記Selection低代表性，兩者皆可由CLI覆寫且只作診斷 |
-| 固定條件 | 9A architecture/profile、checkpoint、research score、threshold 0.5、Dataset、Label、split、optimizer、runtime候選與交易帳務全部不變 |
-| 重建需求 | 不需重建Dataset／Label／feature bank、不需重訓或重匯score；需既有完整research score與其model/split contract |
-| 輸出 | `reports/regime_coverage_audit.md/.json`、`regime_coverage_cells.csv`、`regime_event_groups.csv` |
-| 驗證 | CLI routing/help、Selection-only volatility quantiles、每個ticker/date單一row、四種regime維度、support欄位與OOS禁止調參說明均有獨立synthetic檢查 |
-| 下一步 | 使用者本機執行regime-audit並提供四個輸出；只有當2022高比例落在Selection低支撐combined regimes，且該區PR-AUC同步失效時，才支持「熊市breakout事件覆蓋不足」假說 |
+| 固定條件 | 9A `inception_time_v1 / unique_group_sampling`、固定threshold 0.5、既有research score、Dataset、Label、split與模型全部不變；regime只使用事件日收盤及以前的0050 300-bar sequence |
+| 年度結果 | 2022 Groups 2,016、原始PASS 40.13%、模型PASS 55.31%、Precision 43.68%、Recall 60.20%、PR-AUC 0.4582；Bear事件63.74%、深回撤事件36.01%、low-support 36.01%、Selection低代表性53.52% |
+| 支撐缺口 | Deep drawdown在Selection僅24 groups、OOS有906 groups，Selection/OOS share ratio 0.019；Bear／deep-drawdown／high-volatility在Selection僅24 groups、OOS有618 groups，OOS PASS 38.67%、Precision 40.62%、PR-AUC 0.4755 |
+| 關係漂移 | 一般Bear事件在Selection/OOS占比相近（9.16%／9.37%），但PASS由62.52%降至39.94%、OOS PR-AUC僅0.4986；Bear／correction／high-volatility在Selection已有1,467 groups，OOS仍只有40.73% PASS與0.5287 PR-AUC，證明不能只歸因於樣本數不足 |
+| 高波動判讀 | High-volatility占比由Selection 33.32%升至OOS 64.63%，但整體OOS PR-AUC仍有0.6130；真正嚴重的是高波動與Bear／deep-drawdown條件疊加，而非高波動單獨必然失效 |
+| 判定 | 支持「2022部分失效源於深度回撤Breakout訓練支撐不足」；同時存在conditional／concept shift。不得把所有Bear樣本粗略加權、依regime調threshold或直接建立熊市關閉開關 |
+| 重建需求 | 無；此結果只更新研究判讀，不重建Dataset／Label／feature bank、不重訓或重匯score |
+| 下一步 | 對2022輸出combined-regime的TP／FP／TN／FN與年度錯誤貢獻，並描述性比較排除low-support後的PR-AUC；若仍低，確認2022失效不只由支撐缺口造成 |
+
+### 3.42 Focus-year Regime Attribution（2026-07-28）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `RESULT_AVAILABLE`；2022排序失效不能主要歸因於low-support，已確認更廣泛的conditional／concept shift |
+| 程式基準 | `test-branch-1_20260728_235533_ee053dd.zip`，SHA256 `c2ec6c713ab4693cd54a1d26497aa01cb11f48b58f807a7b38b56d1dfe2cf29b`，套用 `breakout_quality_focus_year_regime_attribution_patch_20260728.zip`，SHA256 `5fe3ca1e0db8c21df5575e3dcd635739b3de7fa8edd8a5a5509099459b05c53f`；結果由使用者本機完整Dataset執行提供 |
+| 唯一變更 | `regime-audit`新增`--focus-year`；輸出指定年度每個combined regime的Groups、Selection支撐、年內占比、TP／FP／TN／FN、年度FP／FN貢獻，以及完整年度、low-support only、排除low-support後三組描述性比較 |
+| 介面 | 互動選單新增「市場狀態覆蓋與年度歸因稽核」；預設focus year為2022、min-selection-groups為100、min-support-share-ratio為0.5 |
+| 固定條件 | 9A architecture/profile、checkpoint、research score、threshold 0.5、Dataset、Label、split、optimizer、runtime候選與交易帳務全部不變；排除比較只作歸因，不形成runtime gate |
+| 完整2022 | Groups 2,016、原始PASS 40.13%、模型PASS 55.31%、Precision 43.68%、Recall 60.20%、Accuracy 52.88%、平均Score 0.4992、PR-AUC 0.4582；TP／FP／TN／FN＝487／628／579／322 |
+| Low-support only | Groups 726（36.01%）、原始PASS 37.88%、模型PASS 64.74%、Precision 39.79%、Recall 68.00%、平均Score 0.5241、PR-AUC 0.4626；TP／FP／TN／FN＝187／283／168／88。此區只占36.01%事件，卻貢獻45.06%年度FP，屬明顯高風險區 |
+| 排除Low-support後 | Groups 1,290、原始PASS 41.40%、模型PASS 50.00%、Precision 46.51%、Recall 56.18%、Accuracy 55.12%、平均Score 0.4852、PR-AUC 0.4722；相較完整年度Precision僅+2.83 pp、Recall−4.02 pp、PR-AUC僅+0.0140，排序仍接近失效 |
+| 主要FP來源 | `bear / deep_drawdown / high`占29.07%事件、34.71% FP；`bear / correction / high`占26.44%事件、25.96% FP；`transition / deep_drawdown / high`占6.94%事件、10.35% FP。三者合計62.45%事件、71.02%年度FP |
+| 已見regime失效 | `bear / correction / high`在Selection已有1,467 groups，2022仍只有38.09%原始PASS、42.40% Precision與0.4962 PR-AUC；`transition / correction / high`有535 Selection groups但PR-AUC 0.4267；`bear / near_high / high`有146 Selection groups但PR-AUC 0.4097。證明問題不只絕對樣本不足 |
+| 判定 | Deep-drawdown low-support會放大2022錯誤放行，但不是主因；排除後PR-AUC仍只有0.4722，確認同一粗略regime內的K線結構→Label關係在2022發生廣泛漂移。不得以oversampling、年度／regime threshold、熊市關閉開關或只補少量deep-drawdown案例作為下一步 |
+| 重建需求 | 無；此結果只更新研究判讀，不重建Dataset／Label／feature bank、不重訓或重匯score |
+| 下一步 | 先做只讀的Market Breadth／Breakout Density Coverage Audit：在事件日以前計算全市場站上50／200日均線比例、20／60日正報酬比例、新高／breakout密度與產業廣度，優先檢查`bear / correction / high`等已有Selection支撐卻失效的regime。若同一0050 regime可被breadth再分出穩定Label差異，才進入單一breadth-context模型實驗；否則維持模型凍結並等待新forward period |
 
 ---
 
@@ -1083,8 +1112,10 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 既有OOS交易層歸因與partial-year修正（RESULT_AVAILABLE；獨有交易選擇效果−46.77R）
 → 9A Quality Score只作finalists-agree同票候選排序（RESULT_AVAILABLE；總報酬小幅正向但僅2023改善，不部署）
 → base-finalist-best單一member Score Ranking隔離比較（REJECTED；全域Score第一使總報酬−32.12pp，僅2023改善）
-→ Breakout Event Regime Coverage Audit（IMPLEMENTED；只讀診斷，待本機結果）
-→ 凍結模型與舊OOS排序研究，等待2026-03-03之後的新forward labeled期間
+→ Breakout Event Regime Coverage Audit（RESULT_AVAILABLE；確認深度回撤支撐缺口＋熊市關係漂移）
+→ 2022 Focus-year Regime Attribution（RESULT_AVAILABLE；排除low-support後PR-AUC仍僅0.4722，確認廣泛concept shift）
+→ Market Breadth／Breakout Density Coverage Audit（PLANNED；只讀診斷）
+→ 模型重訓與舊OOS調參維持凍結，等待2026-03-03之後的新forward labeled期間
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

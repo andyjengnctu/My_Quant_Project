@@ -1323,6 +1323,40 @@ def _interactive_export_forward_oos(program_name: str) -> int:
     )
 
 
+def _interactive_regime_audit(program_name: str) -> int:
+    from tools.filters.breakout_quality.regime_audit import (
+        DEFAULT_FOCUS_YEAR,
+        DEFAULT_MIN_SELECTION_GROUPS,
+        DEFAULT_MIN_SUPPORT_SHARE_RATIO,
+    )
+
+    filter_id = _policy_filter_id()
+    _print_policy_defaults(filter_id)
+    focus_year = _prompt_int("歸因年度", DEFAULT_FOCUS_YEAR, minimum=1900)
+    print(
+        "使用診斷預設："
+        f"min_selection_groups={int(DEFAULT_MIN_SELECTION_GROUPS)}、"
+        f"min_support_share_ratio={float(DEFAULT_MIN_SUPPORT_SHARE_RATIO):g}；"
+        "只作研究歸因，不建立runtime regime gate。"
+    )
+    return _run_command(
+        "regime-audit",
+        [
+            "--filter-id",
+            filter_id,
+            "--experiment-profile",
+            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+            "--focus-year",
+            str(int(focus_year)),
+            "--min-selection-groups",
+            str(int(DEFAULT_MIN_SELECTION_GROUPS)),
+            "--min-support-share-ratio",
+            str(float(DEFAULT_MIN_SUPPORT_SHARE_RATIO)),
+        ],
+        program_name=program_name,
+    )
+
+
 def _print_menu() -> None:
     print("\n=== Breakout Quality ===")
     print("[1] 完整研究流程（Full／全部股票／OOS）")
@@ -1332,7 +1366,8 @@ def _print_menu() -> None:
     print("[5] 產生易讀研究報表（固定納入 OOS）")
     print("[6] 輸出詳細 JSON 評估")
     print("[7] 匯出正式 forward-OOS scores")
-    print("[8/Enter] 查看工件狀態")
+    print("[8] 市場狀態覆蓋與年度歸因稽核")
+    print("[9/Enter] 查看工件狀態")
     print("[0] 離開")
 
 
@@ -1344,7 +1379,7 @@ def _run_interactive_menu(program_name: str) -> int:
         except EOFError:
             print("\n輸入已結束。")
             return 0
-        choice = "8" if raw_choice == "" else raw_choice
+        choice = "9" if raw_choice == "" else raw_choice
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         try:
@@ -1363,11 +1398,13 @@ def _run_interactive_menu(program_name: str) -> int:
             elif choice == "7":
                 _interactive_export_forward_oos(program_name)
             elif choice == "8":
+                _interactive_regime_audit(program_name)
+            elif choice == "9":
                 filter_id = _policy_filter_id()
                 _print_policy_defaults(filter_id)
                 _print_artifact_status(filter_id)
             else:
-                print("選項無效，請輸入 0～8。")
+                print("選項無效，請輸入 0～9。")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:
