@@ -44,10 +44,12 @@ from filters.breakout_quality.moment_contract import (
     require_moment_pipeline_class,
 )
 from filters.breakout_quality.models.spec import get_model_spec
+from filters.breakout_quality.market_set import market_set_contract_payload
 from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
     DATASET_STORAGE_SCHEMA_VERSION,
     dataset_artifact_metadata_reasons,
+    market_set_artifact_metadata_reasons,
     resolve_dataset_paths,
 )
 from filters.breakout_quality.pretraining_store import (
@@ -197,6 +199,16 @@ def _dataset_refresh_plan(
             summary.get("dataset_artifacts"),
         )
     )
+    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    if bool(model_spec.requires_market_set):
+        if summary.get("market_set_contract") != market_set_contract_payload():
+            full_rebuild_reasons.append("market-set input contract 已變更或缺少")
+        full_rebuild_reasons.extend(
+            market_set_artifact_metadata_reasons(
+                storage_paths,
+                summary.get("market_set_artifacts"),
+            )
+        )
 
     requested_profile = str(dataset).strip().lower()
     stored_profile = str(summary.get("dataset") or "").strip().lower()
@@ -593,6 +605,18 @@ def _model_runtime_description(model_spec) -> str:
             f"position={model_spec.patch_transformer_positional_encoding}, "
             f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
             f"pooling={model_spec.patch_transformer_pooling}"
+        )
+    if str(model_spec.family) == "inception_time_market_set":
+        kernels = "/".join(str(value) for value in model_spec.inception_kernel_sizes)
+        return (
+            f"family=inception_time_market_set, candidate_depth={model_spec.inception_depth}, "
+            f"candidate_kernels={kernels}, candidate_rf={model_spec.receptive_field_bars} bars, "
+            f"market_history={model_spec.market_set_history_bars} bars, "
+            f"stock_embedding={model_spec.market_set_stock_embedding_dim}, "
+            f"market_norm={model_spec.market_set_temporal_normalization}/"
+            f"{model_spec.market_set_temporal_normalization_groups}, "
+            f"queries={model_spec.market_set_query_count}, heads={model_spec.market_set_attention_heads}, "
+            f"market_embedding={model_spec.market_set_embedding_dim}, dataset_context=disabled"
         )
     if str(model_spec.family) == "inception_time":
         kernels = "/".join(str(value) for value in model_spec.inception_kernel_sizes)
@@ -1030,6 +1054,20 @@ def _print_policy_defaults(
             f"- MLP Dimensions：{model_spec.patch_transformer_mlp_dim}\n"
             f"- Positional Encoding：{model_spec.patch_transformer_positional_encoding}\n"
             f"- Patch Pooling：{model_spec.patch_transformer_pooling}"
+        )
+    elif str(model_spec.family) == "inception_time_market_set":
+        architecture_details = (
+            f"- Model Family：InceptionTime + Learned Market Set\n"
+            f"- Candidate Depth：{model_spec.inception_depth}\n"
+            f"- Candidate Kernel Sizes：{'/'.join(str(value) for value in model_spec.inception_kernel_sizes)}\n"
+            f"- Candidate Receptive Field：{model_spec.receptive_field_bars} bars\n"
+            f"- Market History：{model_spec.market_set_history_bars} bars\n"
+            f"- Market Base Features：{'/'.join(model_spec.market_set_base_features)}\n"
+            f"- Shared Stock Embedding：{model_spec.market_set_stock_embedding_dim}\n"
+            f"- Market Temporal Normalization：{model_spec.market_set_temporal_normalization} / groups {model_spec.market_set_temporal_normalization_groups}\n"
+            f"- Global Learned Queries：{model_spec.market_set_query_count} / heads {model_spec.market_set_attention_heads}\n"
+            f"- Market Embedding：{model_spec.market_set_embedding_dim}\n"
+            f"- Runtime Eligibility：research only"
         )
     elif str(model_spec.family) == "inception_time":
         target_line = (

@@ -106,8 +106,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
             self.dropout = nn.Dropout(float(spec.dropout))
             self.classifier = nn.Linear(module_output_channels, 2)
 
-        def forward(self, x, context):
-            del context
+        def encode(self, x):
             z = x.transpose(1, 2)
             residual = z
             shortcut_index = 0
@@ -119,8 +118,11 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     )
                     residual = z
                     shortcut_index += 1
-            pooled = torch.mean(z, dim=2)
-            return self.classifier(self.dropout(pooled))
+            return torch.mean(z, dim=2)
+
+        def forward(self, x, context):
+            del context
+            return self.classifier(self.dropout(self.encode(x)))
 
     return InceptionTimeClassifier()
 

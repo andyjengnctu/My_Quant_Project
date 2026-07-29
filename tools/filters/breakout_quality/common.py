@@ -30,8 +30,14 @@ from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_SCHEMA_VERSION,
     IndexedFeatureBank,
     dataset_artifact_metadata_reasons,
+    market_set_artifact_metadata_reasons,
     load_npy,
     resolve_dataset_paths,
+)
+from filters.breakout_quality.market_set import (
+    IndexedMarketSetBank,
+    MARKET_SET_FEATURE_COLUMNS,
+    market_set_contract_payload,
 )
 from filters.breakout_quality.paths import (
     ensure_filter_model_dir,
@@ -398,6 +404,71 @@ def load_validated_dataset_bundle(
     return summary, indexed_features, context, labels, events
 
 
+def load_validated_market_set_bank(
+    filter_id: str,
+    *,
+    dataset_summary: dict | None = None,
+    expected_model_spec=None,
+) -> IndexedMarketSetBank:
+    paths = dataset_paths(filter_id)
+    summary = dataset_summary if dataset_summary is not None else read_json(paths.summary)
+    if not isinstance(summary, dict):
+        raise ValueError("market set dataset summary 必須是 object")
+    expected_contract = market_set_contract_payload()
+    if summary.get("market_set_contract") != expected_contract:
+        raise ValueError(
+            "dataset market_set_contract 與目前設定不一致；請完整重建 Dataset"
+        )
+    if expected_model_spec is not None:
+        if not bool(getattr(expected_model_spec, "requires_market_set", False)):
+            raise ValueError("只有 requires_market_set architecture 可載入 market set bank")
+        if int(getattr(expected_model_spec, "market_set_history_bars", 0) or 0) != int(
+            expected_contract["history_bars"]
+        ):
+            raise ValueError("model spec 與 dataset market history bars 不一致")
+        if list(getattr(expected_model_spec, "market_set_base_features", ())) != list(
+            MARKET_SET_FEATURE_COLUMNS
+        ):
+            raise ValueError("model spec 與 dataset market feature columns 不一致")
+    artifact_records = summary.get("market_set_artifacts")
+    metadata_reasons = market_set_artifact_metadata_reasons(paths, artifact_records)
+    if metadata_reasons:
+        raise ValueError("market set artifact metadata 不一致: " + "; ".join(metadata_reasons))
+    assert isinstance(artifact_records, dict)
+    for artifact_name, artifact_path in paths.market_set_artifact_paths().items():
+        _validate_artifact_hash(artifact_name, artifact_path, artifact_records[artifact_name])
+
+    daily_features = load_npy(paths.market_daily_features)
+    daily_valid_mask = load_npy(paths.market_daily_valid_mask)
+    market_date_ordinals = load_npy(paths.market_date_ordinals)
+    group_market_date_index = load_npy(paths.group_market_date_index)
+    tickers = read_breakout_quality_csv(paths.market_tickers)
+    if list(tickers.columns) != ["market_ticker_index", "ticker"]:
+        raise ValueError("market_tickers.csv 欄位契約不一致")
+    expected_ticker_indices = np.arange(len(tickers), dtype=np.int64)
+    observed_ticker_indices = pd.to_numeric(
+        tickers["market_ticker_index"], errors="raise"
+    ).to_numpy(dtype=np.int64)
+    if not np.array_equal(observed_ticker_indices, expected_ticker_indices):
+        raise ValueError("market_tickers.csv index 必須連續且從 0 開始")
+    if daily_features.shape[1] != len(tickers):
+        raise ValueError("market daily feature ticker count 與 market_tickers.csv 不一致")
+    if len(group_market_date_index) != int(summary.get("feature_group_count", -1)):
+        raise ValueError("group_market_date_index 與 feature_group_count 不一致")
+    return IndexedMarketSetBank(
+        daily_features,
+        daily_valid_mask,
+        market_date_ordinals,
+        group_market_date_index,
+        history_bars=int(expected_contract["history_bars"]),
+        min_valid_history_ratio=float(expected_contract["min_valid_history_ratio"]),
+        max_stocks=int(expected_contract["max_stocks"]),
+        max_dates_per_batch=int(
+            getattr(expected_model_spec, "market_set_max_dates_per_batch", 0) or 4
+        ),
+    )
+
+
 def label_counts(labels: Iterable[int]) -> dict[str, int]:
     arr = np.asarray(list(labels), dtype=np.int64)
     allowed = np.asarray([LABEL_INVALID, LABEL_REJECT, LABEL_PASS], dtype=np.int64)
@@ -474,6 +545,7 @@ __all__ = [
     "load_dataset_frame",
     "load_dataset_frames",
     "load_validated_dataset_bundle",
+    "load_validated_market_set_bank",
     "model_dir",
     "read_breakout_quality_csv",
     "read_json",

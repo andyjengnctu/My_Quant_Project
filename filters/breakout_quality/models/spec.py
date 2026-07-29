@@ -8,6 +8,22 @@ from typing import Any, Mapping
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_INCEPTION_DEPTH,
     BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY,
+    BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS,
+    BREAKOUT_QUALITY_MARKET_SET_BASE_FEATURES,
+    BREAKOUT_QUALITY_MARKET_SET_EMBEDDING_DIM,
+    BREAKOUT_QUALITY_MARKET_SET_FUSION_HIDDEN_DIM,
+    BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS,
+    BREAKOUT_QUALITY_MARKET_SET_MAX_STOCKS,
+    BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH,
+    BREAKOUT_QUALITY_MARKET_SET_MIN_VALID_HISTORY_RATIO,
+    BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT,
+    BREAKOUT_QUALITY_MARKET_SET_STOCK_EMBEDDING_DIM,
+    BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_CHANNELS,
+    BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_DILATIONS,
+    BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_KERNEL_SIZE,
+    BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION,
+    BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION_GROUPS,
+    BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_STRIDE,
     build_breakout_quality_inception_kernel_sizes,
     resolve_breakout_quality_inception_receptive_field_bars,
 )
@@ -47,6 +63,7 @@ MULTISCALE_CNN_REGIME_CONTEXT_V1 = "multiscale_cnn_regime_context_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
 INCEPTION_TIME_V1 = "inception_time_v1"
+INCEPTION_TIME_MARKET_SET_V1 = "inception_time_market_set_v1"
 INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
 MODERN_TCN_V1 = "modern_tcn_v1"
 MANTIS_V2_FROZEN_LINEAR_V1 = "mantis_v2_frozen_linear_v1"
@@ -68,6 +85,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     INCEPTION_TIME_V1,
+    INCEPTION_TIME_MARKET_SET_V1,
     INCEPTION_TIME_GROUP_NORM_V1,
     MODERN_TCN_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
@@ -78,6 +96,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
 )
 ACTIVE_MODEL_ARCHITECTURES = (
     INCEPTION_TIME_V1,
+    INCEPTION_TIME_MARKET_SET_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
 )
 LEGACY_MODEL_ARCHITECTURES = tuple(
@@ -118,6 +137,23 @@ class BreakoutQualityModelSpec:
     inception_bottleneck_channels: int | None = None
     inception_kernel_sizes: tuple[int, ...] = ()
     inception_residual_every: int | None = None
+    requires_market_set: bool = False
+    market_set_history_bars: int | None = None
+    market_set_base_features: tuple[str, ...] = ()
+    market_set_stock_embedding_dim: int | None = None
+    market_set_temporal_channels: int | None = None
+    market_set_temporal_kernel_size: int | None = None
+    market_set_temporal_stride: int | None = None
+    market_set_temporal_dilations: tuple[int, ...] = ()
+    market_set_temporal_normalization: str | None = None
+    market_set_temporal_normalization_groups: int | None = None
+    market_set_query_count: int | None = None
+    market_set_attention_heads: int | None = None
+    market_set_embedding_dim: int | None = None
+    market_set_fusion_hidden_dim: int | None = None
+    market_set_min_valid_history_ratio: float | None = None
+    market_set_max_stocks: int | None = None
+    market_set_max_dates_per_batch: int | None = None
     modern_tcn_depth: int | None = None
     modern_tcn_channels: int | None = None
     modern_tcn_kernel_size: int | None = None
@@ -180,6 +216,20 @@ class BreakoutQualityModelSpec:
             "inception_filters": self.inception_filters,
             "inception_bottleneck_channels": self.inception_bottleneck_channels,
             "inception_residual_every": self.inception_residual_every,
+            "market_set_history_bars": self.market_set_history_bars,
+            "market_set_stock_embedding_dim": self.market_set_stock_embedding_dim,
+            "market_set_temporal_channels": self.market_set_temporal_channels,
+            "market_set_temporal_kernel_size": self.market_set_temporal_kernel_size,
+            "market_set_temporal_stride": self.market_set_temporal_stride,
+            "market_set_temporal_normalization": self.market_set_temporal_normalization,
+            "market_set_temporal_normalization_groups": self.market_set_temporal_normalization_groups,
+            "market_set_query_count": self.market_set_query_count,
+            "market_set_attention_heads": self.market_set_attention_heads,
+            "market_set_embedding_dim": self.market_set_embedding_dim,
+            "market_set_fusion_hidden_dim": self.market_set_fusion_hidden_dim,
+            "market_set_min_valid_history_ratio": self.market_set_min_valid_history_ratio,
+            "market_set_max_stocks": self.market_set_max_stocks,
+            "market_set_max_dates_per_batch": self.market_set_max_dates_per_batch,
             "modern_tcn_depth": self.modern_tcn_depth,
             "modern_tcn_channels": self.modern_tcn_channels,
             "modern_tcn_kernel_size": self.modern_tcn_kernel_size,
@@ -241,6 +291,8 @@ class BreakoutQualityModelSpec:
             payload["branch_dropouts"] = [float(value) for value in self.branch_dropouts]
         if not self.use_dataset_context:
             payload["use_dataset_context"] = False
+        if self.requires_market_set:
+            payload["requires_market_set"] = True
         if self.derived_context_features:
             payload["derived_context_features"] = list(self.derived_context_features)
         if self.derived_context_lookback_bars:
@@ -260,6 +312,12 @@ class BreakoutQualityModelSpec:
         if self.inception_kernel_sizes:
             payload["inception_kernel_sizes"] = [
                 int(value) for value in self.inception_kernel_sizes
+            ]
+        if self.market_set_base_features:
+            payload["market_set_base_features"] = list(self.market_set_base_features)
+        if self.market_set_temporal_dilations:
+            payload["market_set_temporal_dilations"] = [
+                int(value) for value in self.market_set_temporal_dilations
             ]
         return payload
 
@@ -550,6 +608,80 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             modern_tcn_expansion_ratio=expansion_ratio,
         )
 
+    if normalized == INCEPTION_TIME_MARKET_SET_V1:
+        depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
+        kernel_sizes = build_breakout_quality_inception_kernel_sizes()
+        if int(BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS) < 2:
+            raise ValueError("MARKET_SET_HISTORY_BARS 必須 >= 2")
+        if int(BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_KERNEL_SIZE) < 1:
+            raise ValueError("MARKET_SET_TEMPORAL_KERNEL_SIZE 必須 >= 1")
+        if int(BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_STRIDE) < 1:
+            raise ValueError("MARKET_SET_TEMPORAL_STRIDE 必須 >= 1")
+        if not BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_DILATIONS or any(
+            int(value) < 1 for value in BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_DILATIONS
+        ):
+            raise ValueError("MARKET_SET_TEMPORAL_DILATIONS 必須是非空正整數")
+        if int(BREAKOUT_QUALITY_MARKET_SET_STOCK_EMBEDDING_DIM) % int(
+            BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS
+        ) != 0:
+            raise ValueError("market stock embedding dim 必須可被 attention heads 整除")
+        if str(BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION) != "group_norm":
+            raise ValueError("market temporal normalization 第一版固定為 group_norm")
+        if int(BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_CHANNELS) % int(
+            BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION_GROUPS
+        ) != 0:
+            raise ValueError("market temporal channels 必須可被 normalization groups 整除")
+        if not 0.0 < float(BREAKOUT_QUALITY_MARKET_SET_MIN_VALID_HISTORY_RATIO) <= 1.0:
+            raise ValueError("market min valid history ratio 必須介於 0 與 1")
+        if int(BREAKOUT_QUALITY_MARKET_SET_MAX_STOCKS) < 0:
+            raise ValueError("market max stocks 必須 >= 0")
+        if int(BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH) < 1:
+            raise ValueError("market max dates per batch 必須 >= 1")
+        return BreakoutQualityModelSpec(
+            architecture=normalized,
+            family="inception_time_market_set",
+            channels=32,
+            kernel_size=max(kernel_sizes),
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("candidate_global_average", "learned_query_attention_pooling"),
+            dropout=0.0,
+            receptive_field_bars=resolve_breakout_quality_inception_receptive_field_bars(),
+            normalization="batch_norm",
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level", "point_in_time_market_set"),
+            inception_depth=depth,
+            inception_filters=32,
+            inception_bottleneck_channels=32,
+            inception_kernel_sizes=kernel_sizes,
+            inception_residual_every=int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),
+            requires_market_set=True,
+            market_set_history_bars=int(BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS),
+            market_set_base_features=tuple(BREAKOUT_QUALITY_MARKET_SET_BASE_FEATURES),
+            market_set_stock_embedding_dim=int(BREAKOUT_QUALITY_MARKET_SET_STOCK_EMBEDDING_DIM),
+            market_set_temporal_channels=int(BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_CHANNELS),
+            market_set_temporal_kernel_size=int(BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_KERNEL_SIZE),
+            market_set_temporal_stride=int(BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_STRIDE),
+            market_set_temporal_dilations=tuple(
+                int(value) for value in BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_DILATIONS
+            ),
+            market_set_temporal_normalization=str(
+                BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION
+            ),
+            market_set_temporal_normalization_groups=int(
+                BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION_GROUPS
+            ),
+            market_set_query_count=int(BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT),
+            market_set_attention_heads=int(BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS),
+            market_set_embedding_dim=int(BREAKOUT_QUALITY_MARKET_SET_EMBEDDING_DIM),
+            market_set_fusion_hidden_dim=int(BREAKOUT_QUALITY_MARKET_SET_FUSION_HIDDEN_DIM),
+            market_set_min_valid_history_ratio=float(
+                BREAKOUT_QUALITY_MARKET_SET_MIN_VALID_HISTORY_RATIO
+            ),
+            market_set_max_stocks=int(BREAKOUT_QUALITY_MARKET_SET_MAX_STOCKS),
+            market_set_max_dates_per_batch=int(BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH),
+        )
+
     if normalized == INCEPTION_TIME_V1:
         depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
         kernel_sizes = build_breakout_quality_inception_kernel_sizes()
@@ -622,9 +754,18 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
 def validate_model_sequence_length(
     model_spec: BreakoutQualityModelSpec, sequence_length: int
 ) -> None:
+    normalized_length = int(sequence_length)
+    if normalized_length < 1:
+        raise ValueError("model sequence_length 必須 >= 1")
+    if bool(model_spec.requires_market_set):
+        market_history = int(model_spec.market_set_history_bars or 0)
+        if market_history != normalized_length:
+            raise ValueError(
+                "Market Set 第一版要求 candidate sequence_length 與 market history 一致: "
+                f"candidate={normalized_length}, market={market_history}"
+            )
     if model_spec.family != "patch_transformer":
         return
-    normalized_length = int(sequence_length)
     if normalized_length < 1:
         raise ValueError("Patch Transformer sequence_length 必須 >= 1")
     if model_spec.family == "patch_transformer":
@@ -657,6 +798,7 @@ __all__ = [
     "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
     "INCEPTION_TIME_GROUP_NORM_V1",
+    "INCEPTION_TIME_MARKET_SET_V1",
     "INCEPTION_TIME_V1",
     "LEGACY_MODEL_ARCHITECTURES",
     "MULTISCALE_CNN_V1",

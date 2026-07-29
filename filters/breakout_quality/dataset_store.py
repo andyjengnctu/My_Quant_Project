@@ -23,7 +23,11 @@ FUTURE_DATE_ORDINALS_FILENAME = "future_date_ordinals.npy"
 EVENTS_FILENAME = "events.csv"
 SUMMARY_FILENAME = "dataset_summary.json"
 LEGACY_DATASET_FILENAME = "dataset.npz"
-
+MARKET_DAILY_FEATURES_FILENAME = "market_daily_features.npy"
+MARKET_DAILY_VALID_MASK_FILENAME = "market_daily_valid_mask.npy"
+MARKET_DATE_ORDINALS_FILENAME = "market_date_ordinals.npy"
+MARKET_TICKERS_FILENAME = "market_tickers.csv"
+GROUP_MARKET_DATE_INDEX_FILENAME = "group_market_date_index.npy"
 
 @dataclass(frozen=True)
 class BreakoutQualityDatasetPaths:
@@ -40,6 +44,11 @@ class BreakoutQualityDatasetPaths:
     events: Path
     summary: Path
     legacy_dataset: Path
+    market_daily_features: Path
+    market_daily_valid_mask: Path
+    market_date_ordinals: Path
+    market_tickers: Path
+    group_market_date_index: Path
 
     def array_paths(self) -> dict[str, Path]:
         return {
@@ -57,6 +66,14 @@ class BreakoutQualityDatasetPaths:
     def artifact_paths(self) -> dict[str, Path]:
         return {**self.array_paths(), "events_csv": self.events}
 
+    def market_set_artifact_paths(self) -> dict[str, Path]:
+        return {
+            "market_daily_features": self.market_daily_features,
+            "market_daily_valid_mask": self.market_daily_valid_mask,
+            "market_date_ordinals": self.market_date_ordinals,
+            "market_tickers_csv": self.market_tickers,
+            "group_market_date_index": self.group_market_date_index,
+        }
 
 class IndexedFeatureBank:
     """Event-row view over a de-duplicated ticker/date feature bank."""
@@ -96,7 +113,6 @@ class IndexedFeatureBank:
         group_indices = self._event_group_index[item]
         return np.asarray(self._feature_bank[group_indices], dtype=np.float32)
 
-
 def resolve_dataset_paths(output_dir: str | Path) -> BreakoutQualityDatasetPaths:
     base = Path(output_dir)
     return BreakoutQualityDatasetPaths(
@@ -113,8 +129,12 @@ def resolve_dataset_paths(output_dir: str | Path) -> BreakoutQualityDatasetPaths
         events=base / EVENTS_FILENAME,
         summary=base / SUMMARY_FILENAME,
         legacy_dataset=base / LEGACY_DATASET_FILENAME,
+        market_daily_features=base / MARKET_DAILY_FEATURES_FILENAME,
+        market_daily_valid_mask=base / MARKET_DAILY_VALID_MASK_FILENAME,
+        market_date_ordinals=base / MARKET_DATE_ORDINALS_FILENAME,
+        market_tickers=base / MARKET_TICKERS_FILENAME,
+        group_market_date_index=base / GROUP_MARKET_DATE_INDEX_FILENAME,
     )
-
 
 def dataset_artifact_metadata_reasons(
     paths: BreakoutQualityDatasetPaths,
@@ -145,6 +165,34 @@ def dataset_artifact_metadata_reasons(
             )
     return reasons
 
+def market_set_artifact_metadata_reasons(
+    paths: BreakoutQualityDatasetPaths,
+    artifact_records: object,
+) -> list[str]:
+    reasons: list[str] = []
+    if not isinstance(artifact_records, dict):
+        return ["dataset_summary 缺少 market_set_artifacts"]
+    for artifact_name, artifact_path in paths.market_set_artifact_paths().items():
+        record = artifact_records.get(artifact_name)
+        if not isinstance(record, dict):
+            reasons.append(f"market_set_artifacts 缺少 {artifact_name}")
+            continue
+        if str(record.get("filename", "")).strip() != artifact_path.name:
+            reasons.append(f"{artifact_name} filename 與 summary 不一致")
+            continue
+        if not artifact_path.is_file():
+            reasons.append(f"{artifact_name} 檔案不存在")
+            continue
+        try:
+            expected_size = int(record.get("size_bytes", -1))
+        except (TypeError, ValueError):
+            expected_size = -1
+        actual_size = int(artifact_path.stat().st_size)
+        if expected_size != actual_size:
+            reasons.append(
+                f"{artifact_name} size 與 summary 不一致: expected={expected_size}, actual={actual_size}"
+            )
+    return reasons
 
 def save_npy_atomic(path: str | Path, array: np.ndarray) -> None:
     destination = Path(path)
@@ -154,10 +202,8 @@ def save_npy_atomic(path: str | Path, array: np.ndarray) -> None:
         np.save(handle, array, allow_pickle=False)
     temp_path.replace(destination)
 
-
 def load_npy(path: str | Path, *, mmap_mode: str | None = "r") -> np.ndarray:
     return np.load(Path(path), mmap_mode=mmap_mode, allow_pickle=False)
-
 
 __all__ = [
     "DATASET_STORAGE_FORMAT",
@@ -169,6 +215,7 @@ __all__ = [
     "LEGACY_DATASET_FILENAME",
     "SUMMARY_FILENAME",
     "dataset_artifact_metadata_reasons",
+    "market_set_artifact_metadata_reasons",
     "load_npy",
     "resolve_dataset_paths",
     "save_npy_atomic",

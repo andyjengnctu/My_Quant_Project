@@ -1320,6 +1320,21 @@ def _markdown_model_detail_lines(training: dict) -> list[str]:
             f"- **Patch Pooling**：`{spec.get('patch_transformer_pooling')}`",
             "- **Encoder Training**：`supervised from scratch`",
         ]
+    if family == "inception_time_market_set":
+        return [
+            f"- **Model Family**：`{family}`",
+            f"- **Candidate Inception Depth**：`{spec.get('inception_depth')}`",
+            "- **Candidate Kernel Sizes**：`"
+            + "/".join(str(value) for value in spec.get("inception_kernel_sizes") or [])
+            + "`",
+            f"- **Market History**：`{spec.get('market_set_history_bars')} bars`",
+            f"- **Market Base Features**：`{'/'.join(spec.get('market_set_base_features') or [])}`",
+            f"- **Shared Stock Embedding**：`{spec.get('market_set_stock_embedding_dim')}`",
+            f"- **Market Temporal Normalization**：`{spec.get('market_set_temporal_normalization')} / groups {spec.get('market_set_temporal_normalization_groups')}`",
+            f"- **Learned Queries / Heads**：`{spec.get('market_set_query_count')} / {spec.get('market_set_attention_heads')}`",
+            f"- **Market Embedding**：`{spec.get('market_set_embedding_dim')}`",
+            "- **Runtime Eligibility**：`research only`",
+        ]
     if family == "inception_time":
         return [
             f"- **Model Family**：`{family}`",
@@ -1426,6 +1441,19 @@ def _console_model_detail_lines(training: dict) -> list[str]:
             f"Position        : {spec.get('patch_transformer_positional_encoding')}",
             f"Patch Pooling   : {spec.get('patch_transformer_pooling')}",
             "Encoder Training : supervised from scratch",
+        ]
+    if family == "inception_time_market_set":
+        return [
+            f"Model Family    : {family}",
+            f"Candidate Depth : {spec.get('inception_depth')}",
+            "Candidate Kernels: "
+            + "/".join(str(value) for value in spec.get("inception_kernel_sizes") or []),
+            f"Market History  : {spec.get('market_set_history_bars')} bars",
+            f"Market Features : {'/'.join(spec.get('market_set_base_features') or [])}",
+            f"Stock Embedding : {spec.get('market_set_stock_embedding_dim')}",
+            f"Queries / Heads : {spec.get('market_set_query_count')} / {spec.get('market_set_attention_heads')}",
+            f"Market Embedding: {spec.get('market_set_embedding_dim')}",
+            "Runtime          : research only",
         ]
     if family == "inception_time":
         return [

@@ -97,13 +97,38 @@ BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"
 BREAKOUT_QUALITY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 ```
 
-- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前policy為已接受排序／高品質基準9A-BN `inception_time_v1`；8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。9F `patch_transformer_v1`完整OOS排序低於9A，已轉為legacy read-only；其10-bar非重疊patch、128維embedding、3層／4-head Transformer、256維MLP、sinusoidal position與patch-mean pooling規格只供舊工件重建。9E MOMENT、9D MantisV2、9C TS2Vec、9B ModernTCN、9A-GN及8P亦為legacy read-only。
+- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前policy預設為已接受排序／高品質基準9A-BN `inception_time_v1`；8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準；`inception_time_market_set_v1`為尚待完整Selection／OOS驗證的active research architecture，Stage 0／1只允許研究鏈，不具正式forward runtime資格。9F `patch_transformer_v1`完整OOS排序低於9A，已轉為legacy read-only；其10-bar非重疊patch、128維embedding、3層／4-head Transformer、256維MLP、sinusoidal position與patch-mean pooling規格只供舊工件重建。9E MOMENT、9D MantisV2、9C TS2Vec、9B ModernTCN、9A-GN及8P亦為legacy read-only。
 - `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述下游supervised optimizer、LR schedule、augmentation與training sampling unit；`BREAKOUT_QUALITY_PRETRAINING_PROFILE`只保留9C legacy TS2Vec encoder的optimizer、epochs、batch、LR、weight decay、gradient clip、crop、mask與contrastive loss；active 9A／8F及legacy 9D／9E／9F均不讀取此profile。profile定義集中在`config/breakout_quality_experiments.py`：已接受的9A-BN與高覆蓋基準8F均沿用`unique_group_sampling / time_weight=none`；9B ModernTCN雖沿用相同profile，但完整OOS固定coverage排序全面低於9A，已轉為legacy。8K `unique_group_date_balanced` 已由完整 OOS 淘汰，只保留歷史重現；8J direct best inner checkpoint 同樣只供歷史重現。`baseline`、`adamw_only`、`adam_warmup_cosine`、`history_masking_only` 保留為歷史 profile。
 - `multiscale_cnn_sequence_only_dual_path_v1`、`multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
 - AdamW、scheduler、augmentation與sampling等訓練方法不建立假模型版本。9A-GN屬正規化結構變更，因此使用獨立architecture `inception_time_group_norm_v1`；唯一差異是8個`BatchNorm1d(128)`改為`GroupNorm(8, 128)`。完整OOS顯示固定coverage排序明顯低於9A-BN，因此已轉為legacy，不再允許正式新訓練；9A-BN與8F保留為accepted比較基準。
 - 既有supervised Dataset、feature bank、future-path cache、4維event context arrays與labels可直接沿用，不需重建或relabel。9D legacy工件固定把每個300-bar feature channel獨立線性插值至512，送入釘死 `paris-noah/MantisV2` revision的frozen encoder，取第3層（index 2）CLS＋mean combined embedding，再串接10個channel embedding並只訓練單一linear head；encoder內部以固定chunk切分，避免evaluation batch 4096一次展開40,960條單變量序列造成GPU記憶體尖峰。9C獨立Selection-only rolling-window dataset與pretrained encoder工件同樣只保留歷史重建；9E MOMENT checkpoint下載、凍結encoder與linear head鏈也只供legacy重建。正式9F workflow不執行project pretraining或任何外部checkpoint下載；既有supervised Dataset不需重建。9C、9D與9E鏈只供legacy重建。MantisV2、TS2Vec frozen probe與sequence-only models在forward時明確不讀取event context。8F 在 Inner Train／Final Refit 只保留每個 `ticker/date` 的最小原始 row index，batch size 128 因而代表 128 個 unique groups；early-stopping patience 固定為 1。Validation、Selection、OOS 與報表仍使用完整 rows及既有 `1/group_size` 口徑。每個 architecture/profile 使用獨立工件路徑。
 
 - `multiscale_cnn_sequence_only_v1` 的 trainable parameters 比 v1 少 `4 × 32 = 128`，差異只來自 head 第一層不再接收 `high_len_norm`、`breakout_level_to_close`、`close_to_breakout_level`、`high_to_breakout_level`。
+
+
+### Stage 0／1 Learned Global Market Set 研究流程
+
+此實驗不改Label、候選300-bar window、RF229或9A候選encoder，只新增全市場point-in-time learned set branch。先使用獨立filter id並修改：
+
+```python
+# config/breakout_quality_policy.py
+BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1_market_set_v1"
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_market_set_v1"
+BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"
+```
+
+執行完整研究流程：
+
+```bash
+python apps/breakout_quality.py workflow --filter-id breakout_quality_v1_market_set_v1 --dataset full --experiment-profile unique_group_sampling --evaluate-oos
+```
+
+- 切換此architecture後必須完整重建Dataset；除了既有candidate feature bank，還會建立共用的`market_daily_features.npy`、`market_daily_valid_mask.npy`、`market_date_ordinals.npy`、`market_tickers.csv`與`group_market_date_index.npy`。
+- 市場股票每日日輸入只含close-to-close、overnight、intraday、high-low range與log-volume change，加上明確history／stock mask；不預先加入MA50、MA200、RSI或ticker identity。
+- 同一天多個breakout只計算一次市場表示。`BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH`預設4，限制每個實體訓練／推論batch最多展開4個不同市場日期；這是資源邊界，不是Label或sampling權重。
+- 第一版只有4個Global Learned Queries；沒有candidate-conditioned attention、sector tokens或learned lag。這些功能必須等Stage 1顯示穩定增量後再獨立導入。
+- 此架構目前只能匯出`research` scores。`export-scores --scope forward_oos`會明確拒絕，直到正式scanner具備每日point-in-time market bank、版本hash與coverage契約。
+
 
 工件隔離方式：
 

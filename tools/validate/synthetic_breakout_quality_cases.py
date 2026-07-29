@@ -122,6 +122,7 @@ from filters.breakout_quality.contract import (
     OUTER_SPLIT_OUT_OF_SCOPE,
     OUTER_SPLIT_SELECTION,
     RUNTIME_SCOPE_FORWARD_OOS,
+    RUNTIME_SCOPE_RESEARCH,
     SCORE_COLUMN,
     SCORE_COMPARISON,
     SCORE_TABLE_REQUIRED_COLUMNS,
@@ -133,6 +134,7 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.models import (
     ACTIVE_MODEL_ARCHITECTURES,
+    INCEPTION_TIME_MARKET_SET_V1,
     PATCH_TRANSFORMER_V1,
     LEGACY_MODEL_ARCHITECTURES,
     build_model as build_breakout_quality_model,
@@ -210,6 +212,10 @@ from filters.breakout_quality.features import (
 from filters.breakout_quality.inference import (
     strict_parallel_batched_logits,
     strict_unique_group_batched_logits,
+)
+from filters.breakout_quality.market_set import (
+    IndexedMarketSetBank,
+    build_market_daily_base_features,
 )
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from core.signal_utils import generate_signals
@@ -603,6 +609,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_group_norm_model = build_breakout_quality_model(
         10, 4, architecture="inception_time_group_norm_v1"
     )
+    inception_market_set_model = build_breakout_quality_model(
+        10, 4, architecture=INCEPTION_TIME_MARKET_SET_V1
+    )
     patch_transformer_model = build_breakout_quality_model(
         10, 4, architecture=PATCH_TRANSFORMER_V1
     )
@@ -627,6 +636,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_group_norm_parameter_count = count_trainable_parameters(
         inception_group_norm_model
     )
+    inception_market_set_parameter_count = count_trainable_parameters(
+        inception_market_set_model
+    )
     patch_transformer_parameter_count = count_trainable_parameters(
         patch_transformer_model
     )
@@ -641,6 +653,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     modern_tcn_spec = get_model_spec("modern_tcn_v1")
     inception_spec = get_model_spec("inception_time_v1")
     inception_group_norm_spec = get_model_spec("inception_time_group_norm_v1")
+    inception_market_set_spec = get_model_spec(INCEPTION_TIME_MARKET_SET_V1)
     patch_transformer_spec = get_model_spec(PATCH_TRANSFORMER_V1)
     ts2vec_spec = get_model_spec("ts2vec_frozen_linear_v1")
     moment_spec = get_model_spec("moment_1_base_frozen_linear_v1")
@@ -1469,6 +1482,213 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             and torch.isfinite(inception_logits_a).all()
         ),
     )
+    inception_market_set_model.eval()
+    market_sequences = torch.randn((2, 7, int(BREAKOUT_QUALITY_FEATURE_WINDOW_BARS), 5))
+    market_history_mask = torch.ones(
+        (2, 7, int(BREAKOUT_QUALITY_FEATURE_WINDOW_BARS)), dtype=torch.bool
+    )
+    market_valid_stock_mask = torch.ones((2, 7), dtype=torch.bool)
+    event_to_market = torch.tensor([0, 1, 0], dtype=torch.long)
+    market_inputs = (
+        market_sequences,
+        market_history_mask,
+        market_valid_stock_mask,
+        event_to_market,
+    )
+    with torch.no_grad():
+        market_logits = inception_market_set_model(
+            inception_features, inception_context_a, market_inputs
+        )
+        permutation = torch.tensor([3, 1, 6, 0, 5, 2, 4], dtype=torch.long)
+        permuted_logits = inception_market_set_model(
+            inception_features,
+            inception_context_a,
+            (
+                market_sequences[:, permutation],
+                market_history_mask[:, permutation],
+                market_valid_stock_mask[:, permutation],
+                event_to_market,
+            ),
+        )
+    inception_market_set_reload = build_breakout_quality_model(
+        10, 4, model_spec=inception_market_set_spec.as_manifest_payload()
+    )
+    inception_market_set_reload.load_state_dict(
+        inception_market_set_model.state_dict(), strict=True
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "market_set_stage1_is_set_invariant_research_only_and_strict_reloadable",
+        True,
+        bool(
+            inception_market_set_parameter_count > inception_parameter_count
+            and inception_market_set_spec.family == "inception_time_market_set"
+            and inception_market_set_spec.requires_market_set
+            and inception_market_set_spec.market_set_temporal_normalization == "group_norm"
+            and inception_market_set_spec.market_set_temporal_normalization_groups == 8
+            and not inception_market_set_spec.use_dataset_context
+            and tuple(market_logits.shape) == (3, 2)
+            and torch.isfinite(market_logits).all()
+            and torch.allclose(market_logits, permuted_logits, atol=1e-6, rtol=1e-6)
+        ),
+    )
+
+    missing_market_rejected = False
+    try:
+        inception_market_set_model(inception_features, inception_context_a, None)
+    except ValueError as exc:
+        missing_market_rejected = "Market Set model" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "market_set_stage1_requires_explicit_market_inputs",
+        True,
+        missing_market_rejected,
+    )
+
+    market_forward_scope_rejected = False
+    try:
+        breakout_quality_export_scores._validate_export_scope_model_support(
+            RUNTIME_SCOPE_FORWARD_OOS, inception_market_set_spec
+        )
+    except ValueError as exc:
+        market_forward_scope_rejected = "research score export" in str(exc)
+    breakout_quality_export_scores._validate_export_scope_model_support(
+        RUNTIME_SCOPE_RESEARCH, inception_market_set_spec
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "market_set_stage1_is_research_only_until_forward_market_bank_exists",
+        True,
+        market_forward_scope_rejected,
+    )
+
+    market_dates = pd.date_range("2024-01-01", periods=305, freq="B")
+    market_frame = pd.DataFrame(
+        {
+            "Open": np.linspace(100.0, 130.0, len(market_dates)),
+            "High": np.linspace(101.0, 131.0, len(market_dates)),
+            "Low": np.linspace(99.0, 129.0, len(market_dates)),
+            "Close": np.linspace(100.5, 130.5, len(market_dates)),
+            "Volume": np.linspace(1000.0, 3000.0, len(market_dates)),
+        },
+        index=market_dates,
+    )
+    original_daily, original_valid = build_market_daily_base_features(
+        market_frame, market_dates
+    )
+    future_changed = market_frame.copy()
+    future_changed.iloc[-1, future_changed.columns.get_loc("Close")] *= 1.5
+    changed_daily, changed_valid = build_market_daily_base_features(
+        future_changed, market_dates
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "market_set_daily_features_are_point_in_time_and_future_changes_do_not_rewrite_history",
+        True,
+        bool(
+            np.array_equal(original_daily[:-1], changed_daily[:-1])
+            and np.array_equal(original_valid[:-1], changed_valid[:-1])
+            and not np.array_equal(original_daily[-1], changed_daily[-1])
+        ),
+    )
+
+    synthetic_daily_features = np.stack(
+        [original_daily, original_daily * 0.5, original_daily * -0.25], axis=1
+    ).astype(np.float32)
+    synthetic_daily_mask = np.stack(
+        [original_valid, original_valid, original_valid], axis=1
+    ).astype(np.bool_)
+    synthetic_group_dates = np.asarray([299, 299, 300, 301, 302], dtype=np.int64)
+    synthetic_market_bank = IndexedMarketSetBank(
+        synthetic_daily_features,
+        synthetic_daily_mask,
+        market_dates.values.astype("datetime64[D]").astype(np.int64),
+        synthetic_group_dates,
+        history_bars=300,
+        min_valid_history_ratio=0.80,
+        max_stocks=0,
+        max_dates_per_batch=2,
+    )
+    shared_market_batch = synthetic_market_bank.materialize_for_group_indices(
+        np.asarray([0, 1, 2, 4], dtype=np.int64)
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "market_set_bank_reuses_unique_dates_and_preserves_masks",
+        ((3, 3, 300, 5), (3, 3, 300), (3, 3), [0, 0, 1, 2]),
+        (
+            tuple(shared_market_batch.sequences.shape),
+            tuple(shared_market_batch.history_mask.shape),
+            tuple(shared_market_batch.valid_stock_mask.shape),
+            shared_market_batch.event_to_market.tolist(),
+        ),
+    )
+
+    batch_feature_bank = np.random.default_rng(20260729).normal(
+        size=(5, 300, 10)
+    ).astype(np.float32)
+    batch_event_groups = np.asarray([0, 1, 2, 3, 4, 0, 2, 4], dtype=np.int64)
+    market_indexed_features = IndexedFeatureBank(
+        batch_feature_bank, batch_event_groups
+    )
+    shuffled_rows = np.asarray([7, 0, 5, 2, 1, 4, 3, 6], dtype=np.int64)
+    market_training_batches = breakout_quality_train._build_training_batch_rows(
+        market_indexed_features,
+        shuffled_rows,
+        batch_size=3,
+        market_set_bank=synthetic_market_bank,
+    )
+    max_dates_seen = 0
+    for batch_rows in market_training_batches:
+        group_rows = batch_event_groups[np.asarray(batch_rows, dtype=np.int64)]
+        date_rows = synthetic_market_bank.market_date_indices_for_group_indices(group_rows)
+        max_dates_seen = max(max_dates_seen, int(np.unique(date_rows).size))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "market_set_training_batches_cover_rows_once_and_cap_distinct_dates",
+        (sorted(shuffled_rows.tolist()), 2),
+        (
+            sorted(np.concatenate(market_training_batches).tolist()),
+            max_dates_seen,
+        ),
+    )
+
+    market_context = np.zeros((len(batch_event_groups), 4), dtype=np.float32)
+    market_group_logits, market_event_to_group = strict_unique_group_batched_logits(
+        torch,
+        inception_market_set_model,
+        market_indexed_features,
+        market_context,
+        batch_size=2,
+        workers=1,
+        market_set_bank=synthetic_market_bank,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "market_set_unique_group_inference_preserves_event_mapping_and_finite_logits",
+        True,
+        bool(
+            tuple(market_group_logits.shape) == (5, 2)
+            and tuple(market_event_to_group.shape) == (len(batch_event_groups),)
+            and np.isfinite(market_group_logits).all()
+            and market_event_to_group.tolist() == batch_event_groups.tolist()
+        ),
+    )
+
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -2659,6 +2879,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         (
             (
                 "inception_time_v1",
+                "inception_time_market_set_v1",
                 "multiscale_cnn_sequence_only_v1",
             ),
             set(legacy_architectures),

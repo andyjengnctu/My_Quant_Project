@@ -77,6 +77,7 @@ from tools.filters.breakout_quality.common import (
     discover_dataset_csv_inputs,
     load_dataset_frame,
     load_validated_dataset_bundle,
+    load_validated_market_set_bank,
     write_json,
 )
 
@@ -151,6 +152,14 @@ def _date_range(values: pd.Series) -> dict[str, str | None]:
     if dates.empty:
         return {"start": None, "end": None}
     return {"start": str(dates.min().date()), "end": str(dates.max().date())}
+
+
+def _validate_export_scope_model_support(scope: str, model_spec) -> None:
+    if str(scope) == RUNTIME_SCOPE_FORWARD_OOS and bool(model_spec.requires_market_set):
+        raise ValueError(
+            "inception_time_market_set_v1 目前只允許 research score export；"
+            "Stage 0/1 尚未建立正式 scanner forward market-bank 契約"
+        )
 
 
 def _resolve_forward_export_write_paths(
@@ -497,6 +506,30 @@ def main(argv=None) -> int:
         raise ValueError("model checkpoint 缺少 model_spec")
     checkpoint_spec = model_spec_from_manifest(checkpoint_spec_payload)
     validate_model_sequence_length(checkpoint_spec, sequence_length)
+    _validate_export_scope_model_support(args.scope, checkpoint_spec)
+    market_set_bank = (
+        load_validated_market_set_bank(
+            args.filter_id,
+            dataset_summary=dataset_summary,
+            expected_model_spec=checkpoint_spec,
+        )
+        if bool(checkpoint_spec.requires_market_set)
+        else None
+    )
+    if args.scope == RUNTIME_SCOPE_RESEARCH:
+        split_record = manifest.get("split_assignments")
+        if not isinstance(split_record, dict):
+            raise ValueError("model manifest 缺少 split_assignments")
+        expected_market_artifacts = (
+            dataset_summary.get("market_set_artifacts")
+            if bool(checkpoint_spec.requires_market_set)
+            else None
+        )
+        if split_record.get("source_market_set_artifacts") != expected_market_artifacts:
+            raise ValueError(
+                "research export 的 market-set dataset 與模型 split assignment 不一致；"
+                "請完整重建並重新訓練該 filter_id"
+            )
     manifest_spec_payload = manifest.get("model_spec")
     if checkpoint_spec_payload != manifest_spec_payload:
         raise ValueError("model checkpoint.model_spec 與 manifest.model_spec 不一致")
@@ -518,6 +551,8 @@ def main(argv=None) -> int:
         "frozen_parameter_count",
         "self_supervised_pretraining",
         "external_pretrained_encoder",
+        "market_set_contract",
+        "market_set_artifacts",
     ):
         if checkpoint.get(field_name) != manifest.get(field_name):
             raise ValueError(f"model checkpoint {field_name} 與 manifest 不一致")
@@ -580,6 +615,7 @@ def main(argv=None) -> int:
             batch_size=inference_batch_size,
             workers=inference_workers,
             execution_plan=execution_plan,
+            market_set_bank=market_set_bank,
         )
         with torch.no_grad():
             group_pass_probabilities = (
@@ -603,6 +639,7 @@ def main(argv=None) -> int:
             batch_size=inference_batch_size,
             workers=inference_workers,
             execution_plan=execution_plan,
+            market_set_bank=market_set_bank,
         )
         pass_probabilities = np.empty((len(events),), dtype=np.float32)
         with torch.no_grad():
@@ -726,6 +763,11 @@ def main(argv=None) -> int:
                 "workers": (1 if execution_plan.device_type == "cuda" else inference_workers),
                 "torch_execution": execution_plan.as_manifest_payload(),
                 "feature_bank_preloaded": preload_feature_bank,
+                "market_set_input": (
+                    dataset_summary.get("market_set_contract")
+                    if bool(checkpoint_spec.requires_market_set)
+                    else None
+                ),
                 "inference_unit": (
                     "unique_ticker_date_feature_group"
                     if shared_group_score_broadcast

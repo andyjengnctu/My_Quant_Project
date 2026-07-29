@@ -13,7 +13,7 @@
 5. 與當前正式基準的差異、結論、是否採用，以及下一個單一變更。
 6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-28**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-29**。
 
 ---
 
@@ -23,14 +23,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260729_002155_31e9709.zip`，SHA256 `eeceee667c98932ab4b0b1ca0e1e4da9734a2bff3d061c5eca0d513ed686500f`；本輪新增 active InceptionTime 可設定目標 receptive field 的結構契約，預設值仍完整還原9A，尚未取得新訓練結果 |
-| SHA256 | 本輪來源 ZIP：`eeceee667c98932ab4b0b1ca0e1e4da9734a2bff3d061c5eca0d513ed686500f`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；既有策略與歸因結果來源維持原紀錄 |
-| 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
+| 基準 ZIP | `test-branch-1_20260729_155326_44f3825.zip`，SHA256 `090c08a219177188c462a60ef562fba5184d326949cd46eddb3efea8dcd44ac9`；本輪新增研究中 `inception_time_market_set_v1` 的Stage 0 point-in-time市場資料庫與Stage 1 Global Market Set Encoder。policy預設仍維持9A `inception_time_v1`，新架構尚未取得Selection／OOS結果 |
+| SHA256 | 本輪來源 ZIP：`090c08a219177188c462a60ef562fba5184d326949cd46eddb3efea8dcd44ac9`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；既有策略與歸因結果來源維持原紀錄 |
+| 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；研究中active architecture新增 `inception_time_market_set_v1`，只允許建立新research工件，Stage 0／1尚未具正式scanner forward market-bank契約；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`；Inception depth=`6`、minimum target receptive field=`228 bars`、自動kernels=`39/19/9`、actual receptive field=`229 bars`、residual every=`3`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
-| Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
+| Dataset | 9A預設仍沿用既有Full feature bank、4維context、`event_group_index`與labels；切換至 `inception_time_market_set_v1` 時必須完整重建Dataset，額外建立按benchmark日期與point-in-time ticker universe共用的market-set artifacts；Label不變且不需另行relabel |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures只保留已接受的9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer只保留legacy read-only compatibility。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures包含已接受的9A `inception_time_v1`排序／高品質基準、8F `multiscale_cnn_sequence_only_v1`高覆蓋基準，以及尚待驗證的研究架構 `inception_time_market_set_v1`；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer只保留legacy read-only compatibility。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -1078,8 +1078,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；只完成可設定結構與契約，尚未取得新的Selection／OOS結果 |
-| 程式基準 | `test-branch-1_20260729_002155_31e9709.zip`，SHA256 `eeceee667c98932ab4b0b1ca0e1e4da9734a2bff3d061c5eca0d513ed686500f`，再套用本輪receptive-field patch |
+| 狀態 | `RESULT_AVAILABLE / REJECTED`；使用者回報600-window／RF600與300-window／RF251效果均不好，精確Selection／OOS數值未提供；policy退回300-window／RF229 |
+| 程式基準 | `test-branch-1_20260729_002155_31e9709.zip`，SHA256 `eeceee667c98932ab4b0b1ca0e1e4da9734a2bff3d061c5eca0d513ed686500f`，再套用可設定receptive-field patch；結果為使用者定性回報，完整報表未提供 |
 | 研究目的 | 讓active `inception_time_v1`可在較長feature window內建立足以覆蓋長期趨勢的有效receptive field，不再固定為229 bars |
 | 唯一程式變更 | `config/breakout_quality_policy.py`新增`BREAKOUT_QUALITY_INCEPTION_DEPTH`、`BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS`、`BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY`；依target與depth自動生成三尺度正奇數kernels，model manifest保存實際kernels與receptive field |
 | 預設相容性 | 預設depth=6、minimum target=228、residual_every=3，精確還原kernels 39／19／9與實際RF 229，故未調設定時模型結構不變 |
@@ -1088,8 +1088,27 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 600-bars候選 | 設定`FEATURE_WINDOW_BARS=600`、`INCEPTION_TARGET_RECEPTIVE_FIELD_BARS=600`、depth=6時，自動產生kernels 101／51／25與實際RF 601 |
 | 固定條件 | Label、horizon、optimizer、experiment profile、batch、patience、threshold、seed、normalization、filters、bottleneck、pooling全部不變 |
 | 重建需求 | 只改target／depth但feature window不變：Dataset與Label可沿用，但必須重新訓練、重新匯出score與報表；若feature window由300改為600：必須完整重建feature bank／Dataset並重新訓練與匯出score |
-| Selection／OOS結果 | 尚無；不得預判長期RF有效 |
-| 下一步 | 使用獨立filter id做單一變更實驗；第一輪建議300-window內先測target=300，或若目標是完整兩年趨勢，固定window=600與target=600並完整重建，兩者不要與Selection起始日擴充同時變更 |
+| Selection／OOS結果 | 使用者回報RF600與RF251均不佳；因未提供完整報表，Precision／Recall／PR-AUC等精確值不得補寫 |
+| 下一步 | 停止RF微調並維持300-window／RF229；下一個單一架構實驗改為加入全市場point-in-time learned set representation，不加入人工MA breadth、候選專屬query、sector或lag |
+
+
+### 3.44 Stage 0／1 Learned Global Market Set Architecture（2026-07-29）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；已完成資料、模型、訓練、research inference與工件契約，尚未取得Selection／OOS結果 |
+| 程式基準 | 來源ZIP `test-branch-1_20260729_155326_44f3825.zip`，SHA256 `090c08a219177188c462a60ef562fba5184d326949cd46eddb3efea8dcd44ac9`；交付patch `breakout_quality_global_market_set_stage01_patch_20260729.zip`，SHA256以本輪交付訊息為準 |
+| 研究目的 | 在不使用MA50／MA200等人工breadth週期的前提下，讓模型由全市場股票過去300日的基礎OHLCV變化自行學習市場廣度、領漲群、弱勢尾部與分化，補足只看突破股＋0050無法觀察的橫斷面資訊 |
+| Stage 0資料契約 | 新增共用point-in-time market bank：`date × ticker × 5 base features`與明確valid mask；特徵為close-to-close、overnight、intraday、high-low range與log-volume change，只使用當日及以前資料；同一天全部breakout事件共用同一份市場資料，不在每個event重複儲存 |
+| Stage 1模型 | 新architecture `inception_time_market_set_v1`：候選主分支完整沿用9A 300-window／RF229 InceptionTime encoder；每檔市場股票通過同一套小型Shared Stock Temporal Encoder（GroupNorm，避免不同market batch／無效股票比例污染其他股票的正規化統計）形成32維embedding；4個Global Learned Queries以4-head attention做排列不變的set pooling，形成128維market embedding，再與候選128維表示融合分類 |
+| 資源控制 | Training／evaluation／research export按unique market date重用market representation；每個實體batch最多包含`BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH=4`個不同日期，避免隨機event batch一次展開數百個全市場300日tensor |
+| 未加入項目 | 不加入candidate-conditioned attention、sector tokens、ticker identity、learned lag relation、股票兩兩self-attention或人工MA／RSI／MACD；這些只能在Stage 1確認有穩定增量後逐項研究 |
+| 固定條件 | Label、300-bar候選window、RF229、9A候選encoder、unique-group sampling、optimizer、LR、batch policy、patience、final refit、threshold 0.5與seed全部不變；唯一新增資訊為全市場learned set branch |
+| Dataset／工件需求 | 切換architecture後必須完整重建Dataset以建立market-set artifacts，之後重新訓練、匯出research scores與報表；checkpoint、manifest與split assignment保存market-set contract與artifact hashes，避免沿用不一致工件 |
+| Runtime邊界 | 目前只允許research workflow；`--scope forward_oos`對此architecture明確fail-fast，因Stage 0／1尚未建立scanner每日market-bank建置、版本與coverage契約，不得誤宣稱可部署 |
+| Selection／OOS結果 | 尚無；不得預判全市場set encoder有效 |
+| 下一步 | 使用獨立filter id與architecture執行完整Full workflow；先比較9A與Stage 1的Selection／OOS PR-AUC、P@50／60／70、Recall、模型PASS與年度穩定性。未確認Global Market Set有一致增量前，不進入candidate query、sector或lag |
+
 
 ---
 
@@ -1131,9 +1150,10 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → base-finalist-best單一member Score Ranking隔離比較（REJECTED；全域Score第一使總報酬−32.12pp，僅2023改善）
 → Breakout Event Regime Coverage Audit（RESULT_AVAILABLE；確認深度回撤支撐缺口＋熊市關係漂移）
 → 2022 Focus-year Regime Attribution（RESULT_AVAILABLE；排除low-support後PR-AUC仍僅0.4722，確認廣泛concept shift）
-→ Active InceptionTime可設定Receptive Field（IMPLEMENTED；預設仍為229，尚無新結果）
-→ 長期RF單一變更實驗（PLANNED；不得同時變更Selection起始日）
-→ 模型重訓與舊OOS調參維持凍結，等待2026-03-03之後的新forward labeled期間
+→ Active InceptionTime可設定Receptive Field（REJECTED；RF600與RF251定性結果均不好，退回RF229）
+→ Stage 0 point-in-time Market Set Bank＋Stage 1 Global Market Set Encoder（IMPLEMENTED；research-only，尚無結果）
+→ 以獨立filter id執行單一全市場set-input實驗；未確認Stage 1增量前不加入candidate query／sector／lag
+→ 舊9A runtime仍維持凍結，部署判斷等待全新forward labeled期間
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

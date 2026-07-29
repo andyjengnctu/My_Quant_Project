@@ -17,6 +17,7 @@ import time
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality_policy import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
@@ -36,6 +37,12 @@ from filters.breakout_quality.features import (
     build_breakout_quality_dataset_for_frame,
     label_from_cached_path,
 )
+from filters.breakout_quality.market_set import (
+    MARKET_SET_FEATURE_COLUMNS,
+    build_market_daily_base_features,
+    market_set_contract_payload,
+)
+from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from core.display_common import InlineProgress, render_elapsed
 from tools.filters.breakout_quality.common import (
@@ -241,6 +248,15 @@ def _full_build(args, policy, *, started: float) -> int:
     out_dir = dataset_output_dir(args.filter_id)
     paths = dataset_paths(args.filter_id)
     min_rows = max(policy.high_len_max + 10, policy.feature_window_bars + 10)
+    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    market_set_required = bool(model_spec.requires_market_set)
+    if market_set_required and int(model_spec.market_set_history_bars or 0) != int(
+        policy.feature_window_bars
+    ):
+        raise ValueError(
+            "inception_time_market_set_v1 第一版要求 market history bars 與 feature window 一致: "
+            f"market={model_spec.market_set_history_bars}, feature={policy.feature_window_bars}"
+        )
 
     csv_inputs, duplicate_lines = discover_dataset_csv_inputs(PROJECT_ROOT, args.dataset)
     for line in duplicate_lines:
@@ -280,11 +296,34 @@ def _full_build(args, policy, *, started: float) -> int:
     chunk_paths: dict[str, list[Path]] = {name: [] for name in chunk_names}
     skipped_ticker_count = 0
     progress = InlineProgress()
+    market_group_date_chunks: list[np.ndarray] = []
+    market_valid_ticker_count = 0
 
     with tempfile.TemporaryDirectory(prefix=".breakout_quality_build_", dir=out_dir) as temp_dir_text:
         temp_dir = Path(temp_dir_text)
         temp_events_path = temp_dir / "events.csv"
         wrote_events_header = False
+        market_features_memmap = None
+        market_valid_memmap = None
+        market_dates = pd.DatetimeIndex(benchmark.index)
+        market_date_to_index = {pd.Timestamp(value): index for index, value in enumerate(market_dates)}
+        if market_set_required:
+            market_features_temp = temp_dir / "market_daily_features.npy"
+            market_valid_temp = temp_dir / "market_daily_valid_mask.npy"
+            market_features_memmap = np.lib.format.open_memmap(
+                market_features_temp,
+                mode="w+",
+                dtype=np.float32,
+                shape=(len(market_dates), len(tickers), len(MARKET_SET_FEATURE_COLUMNS)),
+            )
+            market_valid_memmap = np.lib.format.open_memmap(
+                market_valid_temp,
+                mode="w+",
+                dtype=np.bool_,
+                shape=(len(market_dates), len(tickers)),
+            )
+            market_features_memmap[:] = 0.0
+            market_valid_memmap[:] = False
 
         for idx, ticker in enumerate(tickers, start=1):
             try:
@@ -306,6 +345,16 @@ def _full_build(args, policy, *, started: float) -> int:
                 continue
             processed_ticker_count += 1
             source_start, source_end = _merge_date_range(source_start, source_end, stock_frame)
+            if market_set_required:
+                assert market_features_memmap is not None and market_valid_memmap is not None
+                market_values, market_valid = build_market_daily_base_features(
+                    stock_frame,
+                    market_dates,
+                )
+                market_features_memmap[:, idx - 1, :] = market_values
+                market_valid_memmap[:, idx - 1] = market_valid
+                if bool(market_valid.any()):
+                    market_valid_ticker_count += 1
             dataset = build_breakout_quality_dataset_for_frame(
                 stock_frame,
                 benchmark,
@@ -332,6 +381,24 @@ def _full_build(args, policy, *, started: float) -> int:
             adjusted_group_index = dataset.event_group_index.astype(np.int64) + int(group_count)
             event_frame = dataset.events.copy()
             event_frame["group_index"] = adjusted_group_index.astype(np.int32)
+            if market_set_required:
+                group_dates = (
+                    event_frame[["group_index", "date"]]
+                    .drop_duplicates("group_index")
+                    .sort_values("group_index")
+                )
+                if len(group_dates) != local_group_count:
+                    raise RuntimeError(f"{ticker} market group/date mapping 不完整")
+                mapped_dates = np.asarray(
+                    [
+                        market_date_to_index.get(pd.Timestamp(value), -1)
+                        for value in pd.to_datetime(group_dates["date"], errors="raise")
+                    ],
+                    dtype=np.int32,
+                )
+                if np.any(mapped_dates < int(model_spec.market_set_history_bars or 0) - 1):
+                    raise RuntimeError(f"{ticker} market group date 無法提供完整歷史視窗")
+                market_group_date_chunks.append(mapped_dates)
 
             arrays = {
                 "feature_bank": dataset.feature_bank,
@@ -409,6 +476,11 @@ def _full_build(args, policy, *, started: float) -> int:
             f"events={event_count:,} groups={group_count:,} | "
             f"耗時 {render_elapsed(time.perf_counter() - started, color=progress.inline)}"
         )
+        if market_set_required:
+            assert market_features_memmap is not None and market_valid_memmap is not None
+            market_features_memmap.flush()
+            market_valid_memmap.flush()
+            del market_features_memmap, market_valid_memmap
         source_inventory_after = build_source_data_inventory(PROJECT_ROOT, args.dataset)
         if source_inventory_after != source_inventory_before:
             raise RuntimeError("來源 CSV 在 build_dataset 執行期間發生變更；請完成資料更新後重新執行")
@@ -470,6 +542,31 @@ def _full_build(args, policy, *, started: float) -> int:
         else:
             _write_events_atomic(paths.events, pd.DataFrame(columns=list(EVENT_COLUMNS)))
 
+        if market_set_required:
+            if len(market_group_date_chunks) == 0 and group_count > 0:
+                raise RuntimeError("market group date mapping 缺失")
+            group_market_date_index = (
+                np.concatenate(market_group_date_chunks).astype(np.int32, copy=False)
+                if market_group_date_chunks
+                else np.empty((0,), dtype=np.int32)
+            )
+            if len(group_market_date_index) != group_count:
+                raise RuntimeError(
+                    "market group date mapping 長度不一致: "
+                    f"actual={len(group_market_date_index)}, expected={group_count}"
+                )
+            _copy_file_atomic(temp_dir / "market_daily_features.npy", paths.market_daily_features)
+            _copy_file_atomic(temp_dir / "market_daily_valid_mask.npy", paths.market_daily_valid_mask)
+            save_npy_atomic(
+                paths.market_date_ordinals,
+                market_dates.to_numpy(dtype="datetime64[D]").astype(np.int32),
+            )
+            save_npy_atomic(paths.group_market_date_index, group_market_date_index)
+            ticker_frame = pd.DataFrame(
+                {"market_ticker_index": np.arange(len(tickers), dtype=np.int32), "ticker": tickers}
+            )
+            _write_events_atomic(paths.market_tickers, ticker_frame)
+
     paths.legacy_dataset.unlink(missing_ok=True)
     storage_summary = _build_storage_summary(
         feature_group_count=group_count,
@@ -512,6 +609,27 @@ def _full_build(args, policy, *, started: float) -> int:
             "processed_ticker_count": int(processed_ticker_count),
         },
         "dataset_artifacts": _build_artifact_records(paths),
+        "market_set_contract": (market_set_contract_payload() if market_set_required else None),
+        "market_set_artifacts": (
+            {
+                artifact_name: build_file_manifest(artifact_path)
+                for artifact_name, artifact_path in paths.market_set_artifact_paths().items()
+            }
+            if market_set_required
+            else None
+        ),
+        "market_set_summary": (
+            {
+                "market_date_count": int(len(benchmark.index)),
+                "market_ticker_count": int(len(tickers)),
+                "market_valid_ticker_count": int(market_valid_ticker_count),
+                "feature_count": int(len(MARKET_SET_FEATURE_COLUMNS)),
+                "feature_columns": list(MARKET_SET_FEATURE_COLUMNS),
+                "group_market_date_count": int(group_count),
+            }
+            if market_set_required
+            else None
+        ),
         "build_mode": "full_feature_bank_rebuild",
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
