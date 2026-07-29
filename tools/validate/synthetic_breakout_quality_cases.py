@@ -3017,7 +3017,6 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
         (
             (
-                INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
                 "inception_time_v1",
                 "multiscale_cnn_sequence_only_v1",
             ),

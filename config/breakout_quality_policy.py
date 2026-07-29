@@ -20,9 +20,9 @@ from config.breakout_quality_experiments import (
 # 1. Active model identity and runtime decision defaults
 # =============================================================================
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_market_set_candidate_v1"  # 10A IMPLEMENTED：9A候選分支＋Candidate-conditioned全市場查詢；尚待完整Selection／OOS結果。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_v1"  # 9A accepted：目前排序／高品質研究基準；10A Candidate-conditioned Market Set 已由完整 OOS 淘汰。
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"  # 8F accepted 基準：每個 unique ticker/date group 每個 epoch 只參與一次 optimizer sampling。
-BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1_market_set_v1"  # 沿用Stage 0 point-in-time Market Set Dataset；模型工件由architecture路徑隔離。
+BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 9A正式Dataset與模型工件根路徑；Market Set實驗工件保留於獨立legacy filter id。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
 
@@ -57,8 +57,8 @@ BREAKOUT_QUALITY_INCEPTION_DEPTH = 6
 BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS = 228
 BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY = 3
 
-# Stage 0／1 learned market-set branch settings. Global-query v1只供legacy重建；
-# Candidate-conditioned v1沿用相同Market Bank與Shared Stock Encoder資料契約。
+# Stage 0／1 learned market-set branch settings。Global-query v1與10A Candidate-conditioned v1
+# 均已由完整 OOS 淘汰，只保留legacy checkpoint／manifest嚴格重建與歷史研究重現。
 BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS = 300
 BREAKOUT_QUALITY_MARKET_SET_BASE_FEATURES = (
     "close_return",

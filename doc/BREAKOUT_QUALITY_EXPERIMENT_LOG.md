@@ -32,14 +32,14 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入 `test-branch-1_20260729_204021_e9b7ec7(1).zip`，SHA256 `54449357202296cb50c869b70ac00e7d55b4833003d0e4f74b0c1a892cc7cc8c`；10A已實作 `inception_time_market_set_candidate_v1`，policy暫時啟用該research-only architecture與既有Market Set Dataset filter id `breakout_quality_v1_market_set_v1`，尚未取得Selection／OOS結果 |
-| SHA256 | 本輪來源 ZIP：`54449357202296cb50c869b70ac00e7d55b4833003d0e4f74b0c1a892cc7cc8c`；上一輪OOS治理基準 `test-branch-1_20260729_201632_cad0d3b.zip`：`7c0e1b0926b52bccd7dd75da81d5f4e42888903516f31853ad3e9553d5a2c7ba`；修正後Stage 1結果來源為使用者提供的完整workflow log `已貼上文字 (1)(20).txt`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
-| 程式版本範圍 | Active architectures為10A `inception_time_market_set_candidate_v1`（IMPLEMENTED、待結果）、9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；Global Stage 1 `inception_time_market_set_v1`維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
-| Policy 預設 | architecture=`inception_time_market_set_candidate_v1`、filter id=`breakout_quality_v1_market_set_v1`；9A候選encoder維持depth=`6`、kernels=`39/19/9`、RF=`229 bars`；Shared Stock Encoder與Stage 1相同，market query改為candidate-conditioned、query count=`1`、heads=`4`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
+| 基準 ZIP | 本輪結果ZIP `test-branch-1_20260729_211214_690584f.zip`，SHA256 `639bcd20d1cab58015cabd5fe92ed9cd180b65528a281f24763cfb057233fab9`；10A `inception_time_market_set_candidate_v1` 已取得完整Selection／OOS並淘汰，policy正式退回9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`639bcd20d1cab58015cabd5fe92ed9cd180b65528a281f24763cfb057233fab9`；10A完整workflow結果來源為 `已貼上文字 (1)(21).txt`；10A實作前基準 `test-branch-1_20260729_204021_e9b7ec7(1).zip`：`54449357202296cb50c869b70ac00e7d55b4833003d0e4f74b0c1a892cc7cc8c`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
+| Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
-| Dataset | 10A沿用既有 `breakout_quality_v1_market_set_v1` point-in-time Market Set Bank、event feature bank與labels；不需重建Dataset或relabel。新architecture checkpoint、training manifest、research scores與report必須在獨立architecture路徑重建 |
+| Dataset | 正式policy退回既有 `breakout_quality_v1` 300×10 feature bank與固定百分比Label；不需重建Dataset、relabel、9A checkpoint或9A scores。10A Market Bank、checkpoint、manifest與research scores保留於獨立legacy路徑供歷史重現 |
 
-使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures包含待驗證的10A `inception_time_market_set_candidate_v1`、已接受的9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；Stage 1 `inception_time_market_set_v1`已淘汰並轉為legacy read-only；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer只保留legacy read-only compatibility。
+使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures為已接受的9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A Candidate-conditioned Market Set與Stage 1 Global Market Set均已淘汰並轉為legacy read-only；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer只保留legacy read-only compatibility。
 
 ### 2.2 固定 Label 與訓練條件
 
@@ -722,6 +722,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 37. 9A Quality Score作候選全域第一排序；`base_finalist_best`單一member隔離比較使淨總報酬下降32.12pp、RoMD下降2.10、平均曝險下降27.96pp，且只有2023改善。不得再調Score權重、票數／Score混合公式、top-k、年度門檻或regime開關；`base_finalists_agree`同票Score tie-break的+4.88pp也只屬單一regime探索結果，不得部署。
 38. 為了讓Score實驗較單純而切換正式selector至`base_finalist_best`；其no-filter baseline相較`base_finalists_agree` baseline的總報酬低18.63pp、MDD較高0.99pp、RoMD低1.58。此跨selector比較只作描述性診斷，但已沒有支持正式切換的經濟證據。
 39. 把2022排序失效主要歸因於combined-regime low-support，或只靠oversampling／重複少量deep-drawdown事件修復；排除36.01%的low-support事件後PR-AUC只由0.4582升至0.4722，已見regime仍廣泛失效。
+40. Candidate-conditioned Market Set與其learned-lag延伸；10A OOS PR-AUC較9A低0.0248，P@50／60／70%低0.75／0.41／0.47 pp，R@P60%低2.69 pp。Recall增加7.30 pp只因模型PASS增加7.34 pp，不是排序改善；不啟動10B learned lag、query數／heads／embedding或Market Set微調。
 
 ---
 
@@ -729,19 +730,19 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 所有實驗一次只改一項。既有 OOS 可持續作為固定比較集；每次模型的訓練、Validation、early stopping 與 epoch 選擇必須完全限制在 Selection 內，完整 OOS 只能在模型凍結後執行。OOS 結果可以用來接受、淘汰或形成下一個實驗，不再以「OOS 已被查看」作為停止研究的理由。正式 runtime 仍維持 `base_finalists_agree` 既有排序且 Quality Ranking 關閉，除非新實驗同時通過模型指標與策略經濟效果。
 
-### 目前新增優先：Candidate-conditioned Query
+### 目前新增優先：11A Strategy-aligned Continuous Outcome Target
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；獨立於已淘汰的 Global Market Set v1，尚未取得Selection／OOS結果 |
-| 研究假設 | 全市場共用摘要無效，不代表「對目前候選而言哪些股票最有參考價值」無效；由候選 embedding 動態產生 query，對全市場 stock embeddings 做 cross-attention |
-| 唯一模型變更 | 9A candidate encoder保留；沿用point-in-time Market Bank與Shared Stock Encoder；移除4個Global Queries，改為1個Candidate-conditioned Query與candidate-specific market embedding |
-| 不加入項目 | 不加入sector tokens、ticker embedding、learned lag、股票兩兩self-attention、人工MA breadth或Global Query |
-| Train／Validation邊界 | Inner Train、Validation loss、early stopping、Best Epoch與Final Refit全部只使用Selection；OOS不得進入任何擬合或選epoch流程 |
-| OOS用途 | 模型凍結後，以既有2021～2025固定OOS比較9A的PR-AUC、P@50／60／70、Recall、模型PASS、年度穩定性與策略經濟效果；可依結果接受或淘汰本架構 |
-| Dataset rebuild | Market Set Bank若與legacy工件契約一致可沿用；新architecture checkpoint、manifest、research scores必須獨立重建 |
-| 採用條件 | Selection／Validation不崩落，且OOS至少在PR-AUC或固定coverage Precision形成清楚增量；若只靠放行更多候選提高Recall，不採用 |
-| 下一步 | 本機執行formal suite後，沿用既有Market Set Dataset完成Full workflow；先核對啟動摘要、logical batch與Best Epoch，再以固定9A報表比較 |
+| 狀態 | `PLANNED`；10A未達採用門檻後的下一個本質不同單一變更 |
+| 研究假設 | 9A能辨識固定百分比PASS／REJECT，但其Score無法單調代表最終Round-trip R、Payoff或資本效率；下一步應改變學習目標，而不是繼續增加市場輸入或調整排序公式 |
+| 唯一變更 | 保留9A 300×10 InceptionTime encoder、RF229、split、unique-group sampling與訓練執行契約；將單一二元分類目標改為由既有future-path cache產生的連續風險調整機會值，模型直接學習事件相對經濟品質 |
+| 第一版邊界 | 不加入Market Set、sector、ticker identity、learned lag、runtime gate、threshold調整或策略參數搜尋；不與二元分類auxiliary loss同輪混合 |
+| 無前視邊界 | 目標只由每個事件之後固定40交易日future path建立；Train／Validation與epoch選擇只使用Selection，OOS只在模型凍結後比較 |
+| 先行資料稽核 | 實作前先輸出Selection／Validation的target分布、tie比例、極端值與同日candidate可排序比例，確認連續target不是近乎常數或被少數極端值支配 |
+| 採用條件 | OOS連續target rank correlation與同日排序品質形成增量，且固定策略比較不再重現「排除右尾大贏家、曝險大降」；模型指標改善但策略經濟效果未改善仍不採用 |
+| Dataset rebuild | 300×10 feature bank不重建；沿用future-path cache新增獨立continuous-target arrays與contract。9A二元Label及既有工件維持不變 |
+| 下一步 | 先完成11A target定義與分布稽核，不先訓練；確認target可學且與實際交易R方向一致後，再建立獨立architecture／objective工件 |
 
 ### 優先 6A：AdamW only
 
@@ -1175,20 +1176,23 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 下一步 | Candidate-conditioned Query列為下一個獨立單一變更實驗；只用Selection完成訓練／Validation，模型凍結後用固定OOS比較9A |
 
 
-### 3.48 10A Candidate-conditioned Query 實作（2026-07-29）
+### 3.48 10A Candidate-conditioned Query 完整結果（2026-07-29）
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED`；尚無Selection／OOS結果，不預先判定有效或無效 |
-| 程式基準 | 輸入ZIP `test-branch-1_20260729_204021_e9b7ec7(1).zip`，SHA256 `54449357202296cb50c869b70ac00e7d55b4833003d0e4f74b0c1a892cc7cc8c`；本輪patch ZIP名稱為 `patch_10a_candidate_conditioned_query_20260729.zip`，因ZIP內文件不可穩定自指涉自身SHA256，交付SHA256於回覆列示 |
-| 唯一模型變更 | 保留9A Candidate InceptionTime與Stage 1 Shared Stock Encoder；移除與候選無關的4個Global Learned Queries，改由每個candidate embedding投影出1個query，對該事件日期的全市場stock embeddings做masked multi-head cross-attention，產生candidate-specific market embedding |
-| 固定條件 | 300 bars、RF229、固定百分比Label、Selection內Inner Train／Validation、Adam 0.0003、batch 128 unique groups、patience 1、selected_epochs、threshold 0.5、seed 42、class/time weight none、Market Bank特徵與mask契約不變 |
-| Logical batch契約 | 候選encoder仍對完整logical batch只forward一次；Market Bank依日期microbatch物化；每個microbatch只計算該批日期stock embeddings，再用對應candidate slice動態查詢；loss、gradient clip與optimizer.step仍以最多128 events的一個logical batch為單位 |
-| Dataset／Label | 沿用 `breakout_quality_v1_market_set_v1` Dataset與Market Bank；不重建、不relabel。新architecture checkpoint、manifest、research scores與report必須重建 |
-| Runtime | research-only；`forward_oos`與scanner仍fail-fast，直到另有正式forward market-bank契約 |
-| GPT獨立驗證 | candidate query參數與Shared Stock Encoder均可反向傳播；同候選＋同市場得到bit-identical market embedding，不同候選＋同市場得到不同market embedding；股票排列置換後輸出在1e-6容差內不變；legacy Global Market Set舊manifest／state_dict仍可strict reload |
-| Selection／OOS | 尚未執行，精確值待使用者本機Full workflow |
-| 下一步 | 執行 `python apps/test_suite.py`；通過後執行Full workflow。啟動摘要必須顯示architecture=`inception_time_market_set_candidate_v1`、filter id=`breakout_quality_v1_market_set_v1`、query_mode=`candidate_conditioned`、queries=`1` |
+| 狀態 | `RESULT_AVAILABLE / REJECTED`；policy已退回9A `inception_time_v1`，10A轉為legacy read-only，不啟動10B learned lag |
+| 程式基準 | 結果ZIP `test-branch-1_20260729_211214_690584f.zip`，SHA256 `639bcd20d1cab58015cabd5fe92ed9cd180b65528a281f24763cfb057233fab9`；完整workflow結果 `已貼上文字 (1)(21).txt`；本輪closure patch為`patch_10a_result_revert_9a_20260729.zip`，因ZIP內文件不可自指涉自身穩定SHA256，交付SHA256於回覆列示 |
+| 唯一模型變更 | 保留9A Candidate InceptionTime與Stage 1 Shared Stock Encoder；由每個candidate embedding產生1個query，對同日全市場stock embeddings做masked cross-attention，形成candidate-specific market embedding |
+| 固定條件 | 300 bars、RF229、固定百分比Label、Selection內Inner Train／Validation、Adam 0.0003、batch 128 unique groups、patience 1、selected_epochs、threshold 0.5、seed 42、class/time weight none；OOS未參與訓練或epoch選擇 |
+| 訓練 | Best Epoch 3，最低Validation loss 0.681544；完整Selection重訓3 epochs，Final loss 0.678506；527,074個可訓練參數 |
+| Selection | 原始PASS 54.81%、模型PASS 60.22%、Precision 61.08%、Lift +6.27 pp、Recall 67.12%、Accuracy 58.54%、Score 0.5092、PR-AUC 0.6191；P@50／60／70%=62.11／61.12／59.81%，R@P60%=75.17% |
+| OOS | 原始PASS 55.63%、模型PASS 52.77%、Precision 61.92%、Lift +6.29 pp、Recall 58.74%、Accuracy 56.95%、Score 0.4974、PR-AUC 0.6009；P@50／60／70%=62.02／61.21／59.78%，R@P60%=74.58%、Brier 0.2458、ECE 0.0622 |
+| 相較9A | OOS PR-AUC −0.0248；P@50／60／70%分別 −0.75／−0.41／−0.47 pp；R@P60% −2.69 pp；threshold 0.5 Precision −1.07 pp、Lift −1.06 pp，但Recall +7.30 pp、模型PASS +7.34 pp、Accuracy +0.78 pp、Score +0.0132。較高coverage沒有換得更強排序 |
+| 年度診斷 | 2022 PR-AUC 0.4531、Precision 43.05%，仍未修復既有熊市／深回撤concept shift；2023～2025較高Precision不能抵銷完整OOS排序低於9A |
+| 校準判讀 | ECE由9A 0.0722改善至0.0622，但Brier略惡化0.0005，且PR-AUC與全部固定coverage Precision下降；校準改善不足以構成採用理由 |
+| 採用判定 | `REJECTED`。Candidate-conditioned Query未證明全市場股票關係提供增量；不得以Recall上升解讀為成功，不做策略回測，不調query數、heads、embedding、LR或Market Set pooling |
+| Dataset／Label／工件 | 不需重建或刪除任何Dataset、Label、Market Bank或10A工件；它們保留於`breakout_quality_v1_market_set_v1/inception_time_market_set_candidate_v1/unique_group_sampling`供歷史重現。正式policy退回既有9A，不需重訓或重匯9A scores |
+| 下一步 | 不啟動10B Candidate-conditioned Learned Lag；進入11A Strategy-aligned Continuous Outcome Target，先以既有future-path cache建立連續target分布與同日排序可學性稽核，再決定正式訓練contract |
 
 
 ---
@@ -1234,7 +1238,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → Active InceptionTime可設定Receptive Field（REJECTED；RF600與RF251定性結果均不好，退回RF229）
 → Stage 0 point-in-time Market Set Bank＋Stage 1 Global Market Set Encoder（REJECTED；logical-batch修正後OOS PR-AUC 0.6092，低於9A 0.6257；已轉legacy）
 → Market Set formal double-check閉環（FIXED；synthetic legacy預期集合補列`inception_time_market_set_v1`）
-→ 10A Candidate-conditioned Query獨立實驗（IMPLEMENTED；待本機formal suite與完整Selection／OOS）
+→ 10A Candidate-conditioned Query獨立實驗（REJECTED；OOS排序低於9A，轉legacy）
+→ 11A Strategy-aligned Continuous Outcome Target資料與可學性稽核（PLANNED）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
