@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from config.breakout_quality_policy import (
+    BREAKOUT_QUALITY_INCEPTION_DEPTH,
+    BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY,
+    build_breakout_quality_inception_kernel_sizes,
+    resolve_breakout_quality_inception_receptive_field_bars,
+)
+
 from filters.breakout_quality.mantis_contract import (
     MANTIS_V2_REPOSITORY,
     MANTIS_V2_REVISION,
@@ -543,10 +550,34 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             modern_tcn_expansion_ratio=expansion_ratio,
         )
 
-    if normalized in {INCEPTION_TIME_V1, INCEPTION_TIME_GROUP_NORM_V1}:
+    if normalized == INCEPTION_TIME_V1:
+        depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
+        kernel_sizes = build_breakout_quality_inception_kernel_sizes()
+        return BreakoutQualityModelSpec(
+            architecture=normalized,
+            family="inception_time",
+            channels=32,
+            kernel_size=max(kernel_sizes),
+            dilations=(),
+            convolutions_per_block=1,
+            pooling=("global_average",),
+            dropout=0.0,
+            receptive_field_bars=resolve_breakout_quality_inception_receptive_field_bars(),
+            normalization="batch_norm",
+            normalization_groups=None,
+            use_dataset_context=False,
+            sequence_input_paths=("raw_level",),
+            inception_depth=depth,
+            inception_filters=32,
+            inception_bottleneck_channels=32,
+            inception_kernel_sizes=kernel_sizes,
+            inception_residual_every=int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),
+        )
+
+    if normalized == INCEPTION_TIME_GROUP_NORM_V1:
+        # Legacy 9A-GN 必須維持原始固定結構，確保舊 checkpoint／manifest 可重建。
         depth = 6
         kernel_sizes = (39, 19, 9)
-        use_group_norm = normalized == INCEPTION_TIME_GROUP_NORM_V1
         return BreakoutQualityModelSpec(
             architecture=normalized,
             family="inception_time",
@@ -557,8 +588,8 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             pooling=("global_average",),
             dropout=0.0,
             receptive_field_bars=1 + depth * (max(kernel_sizes) - 1),
-            normalization="group_norm" if use_group_norm else "batch_norm",
-            normalization_groups=8 if use_group_norm else None,
+            normalization="group_norm",
+            normalization_groups=8,
             use_dataset_context=False,
             sequence_input_paths=("raw_level",),
             inception_depth=depth,

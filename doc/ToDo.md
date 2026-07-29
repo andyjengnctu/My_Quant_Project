@@ -1,13 +1,8 @@
 ## Going
-- breakout filter
-    - test for only 1 year (show result by years)
-    - BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS = 12
-    - parallel with multiple seeds and chose the best validate loss
-
-
-
-- PASS Recall是否也要用顏色highlight?
+breakout filter
+- 相對強弱
 - 侯選股依sore排序
+- parallel with multiple seeds and chose the best validate loss
 
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議

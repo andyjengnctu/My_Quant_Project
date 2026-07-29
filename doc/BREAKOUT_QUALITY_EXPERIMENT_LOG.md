@@ -23,10 +23,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260728_235533_ee053dd.zip`，SHA256 `c2ec6c713ab4693cd54a1d26497aa01cb11f48b58f807a7b38b56d1dfe2cf29b`，再套用 `breakout_quality_focus_year_regime_attribution_patch_20260728.zip`，SHA256 `5fe3ca1e0db8c21df5575e3dcd635739b3de7fa8edd8a5a5509099459b05c53f`；2022 focus-year歸因結果已取得，只更新研究紀錄，不改模型、Label、Score或runtime交易行為 |
-| SHA256 | 本輪來源 ZIP：`c2ec6c713ab4693cd54a1d26497aa01cb11f48b58f807a7b38b56d1dfe2cf29b`；focus-year patch：`5fe3ca1e0db8c21df5575e3dcd635739b3de7fa8edd8a5a5509099459b05c53f`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；threshold gate策略結果來源 `strategy_comparison.md` SHA256 `85550be389c7a33463192b49c3311ba35f4ff796083c845cec7adc83a8e9669e`；交易歸因來源 `trade_attribution.md` SHA256 `a524719c726bf4f746febe4ae0f88efdb9c0730ae8deb6dd7215252ae8ca2967`；finalist-best Score Ranking結果由使用者直接提供 |
+| 基準 ZIP | `test-branch-1_20260729_002155_31e9709.zip`，SHA256 `eeceee667c98932ab4b0b1ca0e1e4da9734a2bff3d061c5eca0d513ed686500f`；本輪新增 active InceptionTime 可設定目標 receptive field 的結構契約，預設值仍完整還原9A，尚未取得新訓練結果 |
+| SHA256 | 本輪來源 ZIP：`eeceee667c98932ab4b0b1ca0e1e4da9734a2bff3d061c5eca0d513ed686500f`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；既有策略與歸因結果來源維持原紀錄 |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
-| Policy 預設 | architecture=`inception_time_v1`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
+| Policy 預設 | architecture=`inception_time_v1`；Inception depth=`6`、target receptive field=`229 bars`、自動kernels=`39/19/9`、residual every=`3`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9C pretraining、9D Mantis、9E MOMENT與9F Patch Transformer契約只保留legacy重建 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | Full；維持固定百分比 Label；沿用既有 feature bank、4 維 context arrays、`event_group_index` 與 labels，不需重建或 relabel；Training 只使用 deterministic unique-group representatives，Validation／Selection／OOS 仍使用完整 rows |
 
@@ -1074,6 +1074,23 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 重建需求 | 無；此結果只更新研究判讀，不重建Dataset／Label／feature bank、不重訓或重匯score |
 | 下一步 | 先做只讀的Market Breadth／Breakout Density Coverage Audit：在事件日以前計算全市場站上50／200日均線比例、20／60日正報酬比例、新高／breakout密度與產業廣度，優先檢查`bear / correction / high`等已有Selection支撐卻失效的regime。若同一0050 regime可被breadth再分出穩定Label差異，才進入單一breadth-context模型實驗；否則維持模型凍結並等待新forward period |
 
+### 3.43 Active InceptionTime 可設定 Receptive Field（2026-07-29）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED`；只完成可設定結構與契約，尚未取得新的Selection／OOS結果 |
+| 程式基準 | `test-branch-1_20260729_002155_31e9709.zip`，SHA256 `eeceee667c98932ab4b0b1ca0e1e4da9734a2bff3d061c5eca0d513ed686500f`，再套用本輪receptive-field patch |
+| 研究目的 | 讓active `inception_time_v1`可在較長feature window內建立足以覆蓋長期趨勢的有效receptive field，不再固定為229 bars |
+| 唯一程式變更 | `config/breakout_quality_policy.py`新增`BREAKOUT_QUALITY_INCEPTION_DEPTH`、`BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS`、`BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY`；依target與depth自動生成三尺度正奇數kernels，model manifest保存實際kernels與receptive field |
+| 預設相容性 | 預設depth=6、target=229、residual_every=3，精確還原kernels 39／19／9與實際RF 229，故未調設定時模型結構不變 |
+| Legacy相容性 | `inception_time_group_norm_v1`維持固定6層、39／19／9與RF 229，不受active設定影響，確保舊checkpoint／manifest重建 |
+| 合法性限制 | target不得大於`BREAKOUT_QUALITY_FEATURE_WINDOW_BARS`；depth必須為正整數；residual interval必須整除depth；實際RF因奇數kernel向上取整可略高於target |
+| 600-bars候選 | 設定`FEATURE_WINDOW_BARS=600`、`INCEPTION_TARGET_RECEPTIVE_FIELD_BARS=600`、depth=6時，自動產生kernels 101／51／25與實際RF 601 |
+| 固定條件 | Label、horizon、optimizer、experiment profile、batch、patience、threshold、seed、normalization、filters、bottleneck、pooling全部不變 |
+| 重建需求 | 只改target／depth但feature window不變：Dataset與Label可沿用，但必須重新訓練、重新匯出score與報表；若feature window由300改為600：必須完整重建feature bank／Dataset並重新訓練與匯出score |
+| Selection／OOS結果 | 尚無；不得預判長期RF有效 |
+| 下一步 | 使用獨立filter id做單一變更實驗；第一輪建議300-window內先測target=300，或若目標是完整兩年趨勢，固定window=600與target=600並完整重建，兩者不要與Selection起始日擴充同時變更 |
+
 ---
 
 ## 6. 實驗執行順序
@@ -1114,7 +1131,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → base-finalist-best單一member Score Ranking隔離比較（REJECTED；全域Score第一使總報酬−32.12pp，僅2023改善）
 → Breakout Event Regime Coverage Audit（RESULT_AVAILABLE；確認深度回撤支撐缺口＋熊市關係漂移）
 → 2022 Focus-year Regime Attribution（RESULT_AVAILABLE；排除low-support後PR-AUC仍僅0.4722，確認廣泛concept shift）
-→ Market Breadth／Breakout Density Coverage Audit（PLANNED；只讀診斷）
+→ Active InceptionTime可設定Receptive Field（IMPLEMENTED；預設仍為229，尚無新結果）
+→ 長期RF單一變更實驗（PLANNED；不得同時變更Selection起始日）
 → 模型重訓與舊OOS調參維持凍結，等待2026-03-03之後的新forward labeled期間
 ```
 

@@ -68,6 +68,10 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
     BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
+    BREAKOUT_QUALITY_INCEPTION_DEPTH,
+    BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
+    BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY,
+    BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
     BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN,
     BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN,
@@ -79,6 +83,8 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     build_breakout_quality_default_high_len_values,
+    build_breakout_quality_inception_kernel_sizes,
+    resolve_breakout_quality_inception_receptive_field_bars,
 )
 from filters.breakout_quality.artifacts import (
     _validate_torch_execution_record,
@@ -317,6 +323,29 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "fixed_threshold_is_user_configured_and_legal",
         True,
         0.0 <= float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD) <= 1.0,
+    )
+    inception_kernels = build_breakout_quality_inception_kernel_sizes()
+    inception_receptive_field = resolve_breakout_quality_inception_receptive_field_bars()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "inception_receptive_field_policy_is_legal_and_derived_from_config",
+        True,
+        bool(
+            int(BREAKOUT_QUALITY_INCEPTION_DEPTH) >= 1
+            and int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY) >= 1
+            and int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
+            % int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY)
+            == 0
+            and int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)
+            <= int(BREAKOUT_QUALITY_FEATURE_WINDOW_BARS)
+            and len(inception_kernels) == 3
+            and all(value >= 3 and value % 2 == 1 for value in inception_kernels)
+            and inception_kernels[0] > inception_kernels[1] > inception_kernels[2]
+            and inception_receptive_field
+            >= int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)
+        ),
     )
 
     inference_dates = pd.bdate_range("2025-01-01", periods=8)
@@ -1387,32 +1416,36 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "inception_time_9a_is_single_medium_gpu_model_with_locked_spec",
+        "inception_time_9a_uses_configured_receptive_field_contract",
         (
-            473218,
+            True,
             "inception_time",
-            6,
+            int(BREAKOUT_QUALITY_INCEPTION_DEPTH),
             32,
             32,
-            (39, 19, 9),
-            3,
+            build_breakout_quality_inception_kernel_sizes(),
+            int(BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY),
+            resolve_breakout_quality_inception_receptive_field_bars(),
             ("global_average",),
             False,
         ),
         (
-            inception_parameter_count,
+            inception_parameter_count > 0,
             inception_spec.family,
             inception_spec.inception_depth,
             inception_spec.inception_filters,
             inception_spec.inception_bottleneck_channels,
             inception_spec.inception_kernel_sizes,
             inception_spec.inception_residual_every,
+            inception_spec.receptive_field_bars,
             inception_spec.pooling,
             inception_spec.use_dataset_context,
         ),
     )
     inception_model.eval()
-    inception_features = torch.randn((3, 300, 10), dtype=torch.float32)
+    inception_features = torch.randn(
+        (3, int(BREAKOUT_QUALITY_FEATURE_WINDOW_BARS), 10), dtype=torch.float32
+    )
     inception_context_a = torch.randn((3, 4), dtype=torch.float32)
     inception_context_b = torch.randn((3, 4), dtype=torch.float32)
     with torch.no_grad():

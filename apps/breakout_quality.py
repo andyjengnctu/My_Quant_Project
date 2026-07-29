@@ -26,6 +26,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_PRETRAINING_STRIDE,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+    BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
 )
 from core.display_common import render_elapsed
 from core.runtime_utils import (
@@ -595,11 +596,17 @@ def _model_runtime_description(model_spec) -> str:
         )
     if str(model_spec.family) == "inception_time":
         kernels = "/".join(str(value) for value in model_spec.inception_kernel_sizes)
+        target_fragment = (
+            f"target_receptive_field={int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)} bars, "
+            if str(model_spec.architecture) == "inception_time_v1"
+            else ""
+        )
         return (
             f"family=inception_time, depth={model_spec.inception_depth}, "
             f"filters={model_spec.inception_filters}, "
             f"bottleneck={model_spec.inception_bottleneck_channels}, "
             f"kernels={kernels}, residual_every={model_spec.inception_residual_every}, "
+            f"{target_fragment}"
             f"dataset_context={'enabled' if model_spec.use_dataset_context else 'disabled'}, "
             f"receptive_field={model_spec.receptive_field_bars} bars, "
             f"pooling={'+'.join(model_spec.pooling)}"
@@ -1025,12 +1032,18 @@ def _print_policy_defaults(
             f"- Patch Pooling：{model_spec.patch_transformer_pooling}"
         )
     elif str(model_spec.family) == "inception_time":
+        target_line = (
+            f"- Configured Receptive Field Target：{int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)} bars\n"
+            if str(model_spec.architecture) == "inception_time_v1"
+            else ""
+        )
         architecture_details = (
             f"- Model Family：InceptionTime\n"
             f"- Depth：{model_spec.inception_depth}\n"
             f"- Filters：{model_spec.inception_filters}\n"
             f"- Bottleneck Channels：{model_spec.inception_bottleneck_channels}\n"
             f"- Kernel Sizes：{'/'.join(str(value) for value in model_spec.inception_kernel_sizes)}\n"
+            f"{target_line}"
             f"- Residual Every：{model_spec.inception_residual_every} modules"
         )
     elif str(model_spec.family) == "modern_tcn":
