@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260729_172053_962ea84.zip`，SHA256 `dae36ca1e219c3c1717bf4005cd2a438b1f3c958764fa7a811484809ce108335`；修正Stage 0／1交付未啟用問題：policy預設正式切換至研究架構 `inception_time_market_set_v1` 與獨立filter id `breakout_quality_v1_market_set_v1`。新架構尚未取得Selection／OOS結果 |
-| SHA256 | 本輪來源 ZIP：`dae36ca1e219c3c1717bf4005cd2a438b1f3c958764fa7a811484809ce108335`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；既有策略與歸因結果來源維持原紀錄 |
+| 基準 ZIP | `test-branch-1_20260729_174337_e9a9834(1).zip`，SHA256 `00a09176e52ae108d86d3925a2f3f7b4c566d657f4d8919a158ea7f4f20a98ae`；policy已正式切換至研究架構 `inception_time_market_set_v1` 與獨立filter id `breakout_quality_v1_market_set_v1`。本輪另修正 formal synthetic CLI fixture 未依 active architecture 建立 market-set artifacts 的測試契約問題；新架構尚未取得Selection／OOS結果 |
+| SHA256 | 本輪來源 ZIP：`00a09176e52ae108d86d3925a2f3f7b4c566d657f4d8919a158ea7f4f20a98ae`；formal bundle：`to_chatgpt_bundle_20260729_174454_f539e7ea(1).zip`，SHA256 `57f339a1d2da957b0d7f8a4d6f026be79577d8b19a309894c59f51c74e44d64c`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；既有策略與歸因結果來源維持原紀錄 |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；研究中active architecture新增 `inception_time_market_set_v1`，只允許建立新research工件，Stage 0／1尚未具正式scanner forward market-bank契約；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_market_set_v1`、filter id=`breakout_quality_v1_market_set_v1`；候選分支維持Inception depth=`6`、minimum target receptive field=`228 bars`、自動kernels=`39/19/9`、actual receptive field=`229 bars`、residual every=`3`；全市場分支使用300 bars、5個基礎特徵、32維stock embedding、4個global learned queries與128維market embedding；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9A `inception_time_v1`仍是已接受比較基準，不因policy暫時切換而改變其實證判定 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1097,7 +1097,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 項目 | 紀錄 |
 |---|---|
 | 狀態 | `IMPLEMENTED`；已完成資料、模型、訓練、research inference與工件契約，尚未取得Selection／OOS結果 |
-| 程式基準 | 初始來源ZIP `test-branch-1_20260729_155326_44f3825.zip`，SHA256 `090c08a219177188c462a60ef562fba5184d326949cd46eddb3efea8dcd44ac9`；使用者回報首輪交付只加入架構但policy仍指向9A，實際完整流程重現原9A結果。最新修正基準為 `test-branch-1_20260729_172053_962ea84.zip`，SHA256 `dae36ca1e219c3c1717bf4005cd2a438b1f3c958764fa7a811484809ce108335`，policy已切換至market-set架構與獨立filter id |
+| 程式基準 | 初始來源ZIP `test-branch-1_20260729_155326_44f3825.zip`，SHA256 `090c08a219177188c462a60ef562fba5184d326949cd46eddb3efea8dcd44ac9`；使用者回報首輪交付只加入架構但policy仍指向9A，實際完整流程重現原9A結果。policy啟用後最新來源為 `test-branch-1_20260729_174337_e9a9834(1).zip`，SHA256 `00a09176e52ae108d86d3925a2f3f7b4c566d657f4d8919a158ea7f4f20a98ae`；本輪再修正 active market-set policy 下 synthetic CLI Dataset fixture 未建立 market-set artifacts 的 formal 測試契約問題 |
 | 研究目的 | 在不使用MA50／MA200等人工breadth週期的前提下，讓模型由全市場股票過去300日的基礎OHLCV變化自行學習市場廣度、領漲群、弱勢尾部與分化，補足只看突破股＋0050無法觀察的橫斷面資訊 |
 | Stage 0資料契約 | 新增共用point-in-time market bank：`date × ticker × 5 base features`與明確valid mask；特徵為close-to-close、overnight、intraday、high-low range與log-volume change，只使用當日及以前資料；同一天全部breakout事件共用同一份市場資料，不在每個event重複儲存 |
 | Stage 1模型 | 新architecture `inception_time_market_set_v1`：候選主分支完整沿用9A 300-window／RF229 InceptionTime encoder；每檔市場股票通過同一套小型Shared Stock Temporal Encoder（GroupNorm，避免不同market batch／無效股票比例污染其他股票的正規化統計）形成32維embedding；4個Global Learned Queries以4-head attention做排列不變的set pooling，形成128維market embedding，再與候選128維表示融合分類 |
@@ -1106,6 +1106,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 固定條件 | Label、300-bar候選window、RF229、9A候選encoder、unique-group sampling、optimizer、LR、batch policy、patience、final refit、threshold 0.5與seed全部不變；唯一新增資訊為全市場learned set branch |
 | Dataset／工件需求 | 切換architecture後必須完整重建Dataset以建立market-set artifacts，之後重新訓練、匯出research scores與報表；checkpoint、manifest與split assignment保存market-set contract與artifact hashes，避免沿用不一致工件 |
 | Runtime邊界 | 目前只允許research workflow；`--scope forward_oos`對此architecture明確fail-fast，因Stage 0／1尚未建立scanner每日market-bank建置、版本與coverage契約，不得誤宣稱可部署 |
+| Formal double-check閉環 | 使用者bundle顯示quick gate、chain checks、ML smoke均PASS；consistency兩項FAIL均來自generic Dataset refresh synthetic fixture仍只建立舊式Dataset，active architecture要求market-set artifacts後使unchanged／fast-relabel案例被誤判為rebuild，並連帶造成meta quality的`coverage_synthetic_suite_runs_successfully`失敗。正式runtime rebuild／relabel邏輯未發現分叉；fixture已改為依active model spec動態建立必要market-set contract與artifacts，不硬編碼policy值 |
 | Selection／OOS結果 | 尚無有效market-set結果；使用者先前得到與9A完全相同的數值，是因policy未啟用新架構，該次結果只證明9A deterministic重現，不列為Stage 1結果 |
 | 下一步 | 直接以目前policy執行完整Full workflow；啟動前必須看到filter id=`breakout_quality_v1_market_set_v1`、architecture=`inception_time_market_set_v1`與Market Set架構摘要。完成後比較9A與Stage 1的Selection／OOS PR-AUC、P@50／60／70、Recall、模型PASS與年度穩定性；未確認Global Market Set有一致增量前，不進入candidate query、sector或lag |
 

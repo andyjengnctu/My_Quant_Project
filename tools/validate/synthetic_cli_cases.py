@@ -1074,6 +1074,35 @@ def validate_dataset_cli_contract_case(_base_params):
                     path.write_text("ticker,date\n", encoding="utf-8")
                 else:
                     path.write_bytes(b"npy")
+
+            model_spec = app_breakout_quality.get_model_spec(
+                app_breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+            )
+            market_set_artifacts = None
+            market_set_contract = None
+            if bool(model_spec.requires_market_set):
+                output_dir = app_breakout_quality.resolve_filter_output_dir(
+                    temp_root,
+                    filter_id="synthetic_quality",
+                )
+                storage_paths = app_breakout_quality.resolve_dataset_paths(output_dir)
+                market_set_paths = storage_paths.market_set_artifact_paths()
+                for name, path in market_set_paths.items():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    if name == "market_tickers_csv":
+                        path.write_text("ticker\n2330\n", encoding="utf-8")
+                    else:
+                        path.write_bytes(b"npy")
+                market_set_contract = app_breakout_quality.market_set_contract_payload()
+                market_set_artifacts = {
+                    name: {
+                        "filename": path.name,
+                        "size_bytes": path.stat().st_size,
+                        "sha256": "synthetic-not-used-by-refresh-plan",
+                    }
+                    for name, path in market_set_paths.items()
+                }
+
             inventory = app_breakout_quality.build_source_data_inventory(temp_root, "reduced")
             summary_payload = {
                 "filter_id": "synthetic_quality",
@@ -1097,6 +1126,9 @@ def validate_dataset_cli_contract_case(_base_params):
                     if name != "summary"
                 },
             }
+            if market_set_contract is not None and market_set_artifacts is not None:
+                summary_payload["market_set_contract"] = market_set_contract
+                summary_payload["market_set_artifacts"] = market_set_artifacts
             dataset_paths["summary"].write_text(
                 json.dumps(summary_payload),
                 encoding="utf-8",
