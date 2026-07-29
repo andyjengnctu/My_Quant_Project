@@ -20,9 +20,9 @@ from config.breakout_quality_experiments import (
 # 1. Active model identity and runtime decision defaults
 # =============================================================================
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_v1"  # 9A accepted：固定 coverage 排序與高品質基準；9F Patch Transformer 已由完整 OOS 淘汰。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_market_set_v1"  # Stage 0/1 研究架構：9A 候選分支加全市場 learned set branch；尚未取得 Selection/OOS 結果。
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"  # 8F accepted 基準：每個 unique ticker/date group 每個 epoch 只參與一次 optimizer sampling。
-BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 未由 CLI 指定時使用的模型、資料集與輸出識別碼。
+BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1_market_set_v1"  # Stage 0/1 使用獨立研究工件，避免覆蓋 9A breakout_quality_v1。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
 
@@ -58,7 +58,7 @@ BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS = 228
 BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY = 3
 
 # Stage 1 learned market-set branch. These settings are used only by
-# `inception_time_market_set_v1`; the accepted 9A architecture is unchanged.
+# `inception_time_market_set_v1`; 9A remains the accepted comparison baseline.
 BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS = 300
 BREAKOUT_QUALITY_MARKET_SET_BASE_FEATURES = (
     "close_return",
