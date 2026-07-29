@@ -13,6 +13,15 @@
 5. 與當前正式基準的差異、結論、是否採用，以及下一個單一變更。
 6. 尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得先寫成有效或無效。
 
+### OOS 使用規則（2026-07-29 起）
+
+- OOS 可持續用於模型／架構結果比較、錯誤歸因、年度與 regime 診斷、策略經濟效果評估，以及決定下一個單一變更。
+- Train／Validation、loss、gradient、early stopping、epoch 選擇、threshold／calibration 擬合、normalization、feature／label 建立、sample weighting 與 hyperparameter optimization，不得讀取或使用 OOS rows、labels、scores 或其統計量。
+- 每個新實驗仍以 Selection 內的 Inner Train／Validation 完成訓練與選 epoch；完整 OOS 只在模型凍結後執行，並可用來接受、淘汰或形成下一個實驗。
+- 同一 OOS 經多次比較後，結果標記為「迭代研究 OOS 證據」，不宣稱是 untouched holdout；但這不構成停止研究或等待新資料的理由。
+- 後續建議必須優先提供可立即執行的實驗、實作、診斷或修正；不得把等待新的 forward labeled period 當成主要下一步。
+- 本規則取代文件中所有「因 OOS 已查看而不得再研究」或「只能等待新資料」的概括性限制；個別已淘汰方向仍維持淘汰，除非提出本質不同的新機制。
+
 本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-29**。
 
 ---
@@ -23,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260729_200853_e924511.zip`，SHA256 `55f2bf661d8e22a5abc5e59f4178e5e11c0e35af25663fb6d23ef4710812f6b1`；修正logical-batch後的Stage 1 Market Set完整結果已取得並淘汰，policy維持9A `inception_time_v1`與canonical filter id `breakout_quality_v1`；本輪閉環修正synthetic legacy預期集合漏列Market Set的formal測試問題 |
-| SHA256 | 本輪來源 ZIP：`55f2bf661d8e22a5abc5e59f4178e5e11c0e35af25663fb6d23ef4710812f6b1`；formal bundle：`to_chatgpt_bundle_20260729_201018_881a4304.zip`，SHA256 `dd02c044c61d27d93e57e092ce31b3f9e7b2aef6f4672c3990c398ad278aff90`；修正後Stage 1結果來源為使用者提供的完整workflow log `已貼上文字 (1)(20).txt`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | `test-branch-1_20260729_201632_cad0d3b.zip`，SHA256 `7c0e1b0926b52bccd7dd75da81d5f4e42888903516f31853ad3e9553d5a2c7ba`；policy維持9A `inception_time_v1`與canonical filter id `breakout_quality_v1`；本輪只更新研究治理：OOS可持續用於比較與改進，但Train／Validation與所有擬合流程不得使用OOS，且後續不得以等待新資料作為主要建議 |
+| SHA256 | 本輪來源 ZIP：`7c0e1b0926b52bccd7dd75da81d5f4e42888903516f31853ad3e9553d5a2c7ba`；上一輪formal bundle：`to_chatgpt_bundle_20260729_201018_881a4304.zip`，SHA256 `dd02c044c61d27d93e57e092ce31b3f9e7b2aef6f4672c3990c398ad278aff90`；修正後Stage 1結果來源為使用者提供的完整workflow log `已貼上文字 (1)(20).txt`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architecture只保留9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；Stage 1 `inception_time_market_set_v1`修正logical-batch後完整OOS仍低於9A，已轉為legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；Inception depth=`6`、minimum target receptive field=`228 bars`、自動kernels=`39/19/9`、actual receptive field=`229 bars`、residual every=`3`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。Market Set設定只供legacy工件重建，不再是新訓練入口 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -718,18 +727,21 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 ## 5. 接下來要嘗試的列表
 
-所有實驗一次只改一項。9F `patch_transformer_v1 / unique_group_sampling`已由完整OOS淘汰並轉為legacy；9A `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`只保留研究排序／高覆蓋分類基準。9A固定threshold 0.5策略層對照、交易歸因、`base_finalists_agree`同票Score tie-break與`base_finalist_best`全域Score第一排序均已完成：hard gate與全域Score排序明確為負，同票tie-break僅由2023單一regime支撐，全部不得部署。2022 focus-year歸因進一步確認排除low-support後PR-AUC仍只有0.4722，因此不得以oversampling或regime gate處理。正式runtime維持`base_finalists_agree`既有排序且Quality Ranking關閉。模型重訓與舊OOS調參維持凍結；唯一新增的只讀研究優先是Market Breadth／Breakout Density Coverage Audit，用來判斷0050序列是否缺少可泛化的橫斷面市場狀態資訊。
+所有實驗一次只改一項。既有 OOS 可持續作為固定比較集；每次模型的訓練、Validation、early stopping 與 epoch 選擇必須完全限制在 Selection 內，完整 OOS 只能在模型凍結後執行。OOS 結果可以用來接受、淘汰或形成下一個實驗，不再以「OOS 已被查看」作為停止研究的理由。正式 runtime 仍維持 `base_finalists_agree` 既有排序且 Quality Ranking 關閉，除非新實驗同時通過模型指標與策略經濟效果。
 
-### 目前新增優先：Market Breadth／Breakout Density Coverage Audit
+### 目前新增優先：Candidate-conditioned Query
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `PLANNED`；只讀診斷，不重訓、不改Score、threshold或runtime |
-| 唯一新增資訊 | 每個breakout事件日以前的全市場橫斷面breadth與breakout density，不改現有9A模型輸入 |
-| 建議指標 | 全市場站上50／200日均線比例、20／60日正報酬比例、近20日新高／breakout事件密度、產業站上長期均線比例或產業相對強勢廣度 |
-| 主要檢查區 | 2022 `bear / correction / high`、`transition / correction / high`、`bear / near_high / high`；這些regime已有Selection支撐但PR-AUC仍低 |
-| 判定條件 | 在相同0050 combined regime內，breadth分箱需同時具足夠Selection樣本、Selection→OOS方向一致的PASS率差異，以及OOS固定coverage排序改善證據；否則不進入模型實驗 |
-| 後續 | Audit通過後才做一次只加入breadth context的9A單一變更；若Audit不通過，維持模型凍結並等待新forward labeled period |
+| 狀態 | `PLANNED`；獨立於已淘汰的 Global Market Set v1 |
+| 研究假設 | 全市場共用摘要無效，不代表「對目前候選而言哪些股票最有參考價值」無效；由候選 embedding 動態產生 query，對全市場 stock embeddings 做 cross-attention |
+| 唯一模型變更 | 9A candidate encoder保留；沿用point-in-time Market Bank與Shared Stock Encoder；移除4個Global Queries，改為1個Candidate-conditioned Query與candidate-specific market embedding |
+| 不加入項目 | 不加入sector tokens、ticker embedding、learned lag、股票兩兩self-attention、人工MA breadth或Global Query |
+| Train／Validation邊界 | Inner Train、Validation loss、early stopping、Best Epoch與Final Refit全部只使用Selection；OOS不得進入任何擬合或選epoch流程 |
+| OOS用途 | 模型凍結後，以既有2021～2025固定OOS比較9A的PR-AUC、P@50／60／70、Recall、模型PASS、年度穩定性與策略經濟效果；可依結果接受或淘汰本架構 |
+| Dataset rebuild | Market Set Bank若與legacy工件契約一致可沿用；新architecture checkpoint、manifest、research scores必須獨立重建 |
+| 採用條件 | Selection／Validation不崩落，且OOS至少在PR-AUC或固定coverage Precision形成清楚增量；若只靠放行更多候選提高Recall，不採用 |
+| 下一步 | 直接實作 `inception_time_market_set_candidate_v1` 的research-only資料／模型／訓練／報表鏈，完成後執行一次固定9A對照 |
 
 ### 優先 6A：AdamW only
 
@@ -1146,7 +1158,21 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 判定 | 修正後單一變更仍明顯低於9A Selection／Validation／OOS排序；全域市場摘要沒有提供可泛化增量，且較高Recall來自放行更多候選。依預先固定規則直接淘汰，不調LR、query數、heads、embedding或fusion容量 |
 | 採用／退回 | policy退回`inception_time_v1 / breakout_quality_v1`；`inception_time_market_set_v1`移至legacy read-only，只供舊Dataset、checkpoint、manifest與research result重現；不刪除既有market-set工件 |
 | Formal double-check閉環 | 使用者於退回9A／Market Set轉legacy後執行formal suite：quick gate、chain checks與ML smoke均PASS；consistency唯一FAIL為synthetic policy SSOT的預期legacy集合漏列`inception_time_market_set_v1`，正式`ACTIVE_MODEL_ARCHITECTURES`／`LEGACY_MODEL_ARCHITECTURES`實作正確。測試fixture已補入該legacy architecture，並連帶解除meta quality的`coverage_synthetic_suite_runs_successfully`失敗 |
-| 下一步 | 停止Global Market Set、candidate query、sector與lag整條架構擴充。舊2021～2025 OOS不再作模型選型；9A模型與runtime部署維持凍結，等待更新行情形成全新forward labeled期間，或另立預先固定、具有新holdout的Label／資料實驗 |
+| 下一步 | Global Market Set v1維持淘汰，但Candidate-conditioned Query可視為本質不同的獨立架構實驗；若執行，Train／Validation與epoch選擇只用Selection，模型凍結後再用既有2021～2025 OOS與9A固定比較。不得因OOS已被查看而停止研究，也不得把等待新forward資料列為主要下一步 |
+
+
+### 3.47 OOS研究治理與行動原則更新（2026-07-29）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `ACCEPTED`；專案長期研究規則更新 |
+| 程式基準 | `test-branch-1_20260729_201632_cad0d3b.zip`，SHA256 `7c0e1b0926b52bccd7dd75da81d5f4e42888903516f31853ad3e9553d5a2c7ba` |
+| 唯一變更 | 只更新 `doc/PROJECT_SETTINGS.md` 與本實驗紀錄，不改模型、Dataset、Label、score、runtime或測試程式 |
+| OOS規則 | OOS可持續用於比較、診斷、接受／淘汰與形成下一個實驗；Train／Validation、loss、gradient、early stopping、epoch、threshold／calibration、normalization、feature／label、sample weighting與hyperparameter optimization不得使用OOS |
+| 證據標記 | 同一OOS多次使用時標記為「迭代研究OOS證據」，不宣稱untouched holdout，但不因此停止研究 |
+| 行動規則 | 後續必須提出可立即執行的實驗、實作、診斷或修正；不得再以等待新forward資料、凍結研究或無所作為作為主要建議 |
+| Dataset／Label／重訓 | 不需要 |
+| 下一步 | Candidate-conditioned Query列為下一個獨立單一變更實驗；只用Selection完成訓練／Validation，模型凍結後用固定OOS比較9A |
 
 
 ---
@@ -1192,7 +1218,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → Active InceptionTime可設定Receptive Field（REJECTED；RF600與RF251定性結果均不好，退回RF229）
 → Stage 0 point-in-time Market Set Bank＋Stage 1 Global Market Set Encoder（REJECTED；logical-batch修正後OOS PR-AUC 0.6092，低於9A 0.6257；已轉legacy）
 → Market Set formal double-check閉環（FIXED；synthetic legacy預期集合補列`inception_time_market_set_v1`）
-→ 舊9A runtime仍維持凍結，部署判斷等待全新forward labeled期間
+→ Candidate-conditioned Query獨立實驗（PLANNED；Selection-only Train／Validation，凍結後用固定OOS比較9A）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

@@ -29,6 +29,7 @@
 8. `outputs/` 根目錄只放工具分類資料夾；各工具輸出必須落到各自資料夾，禁止再把檔案散落到 `outputs/` 根目錄。
 9. 交付前必須完成 GPT 端自檢；只核對 blocker、正式輸出、正式契約、必要文件同步與本輪修改涉及的同鏈項；不得把 validator 寫法 hygiene、單次 wording 或事故級 patch 規則再疊成第二層檢查。
 10. 凡修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械排序區塊，必須維持既有排序 guard 可通過；交付前須整表核對排序、摘要、最新狀態與 transition 連續性；若插回既有日期區塊或補寫 `DONE -> N/A` / `DONE -> PARTIAL`，必須重排整個受影響同日區塊；若修改 markdown table 列內容，須逐列核對欄數符合 header，且表格 cell 內不得保留未轉寫的裸 `|` 字元。
+11. 對研究、改善與除錯問題，回覆與實驗計畫必須以可立即執行的分析、實作或測試為主；除非使用者明確要求，不得把等待未來資料、等待市場自然累積、凍結研究或暫停行動當成主要下一步。資料有限時，應優先在既有資料下設計無前視、Train／Validation 隔離、消融、Rolling、錯誤歸因或其他可執行方案。
 
 
 ## C. Coding 與架構原則
@@ -63,3 +64,4 @@
 4. `doc/FINMIND_API_TOKEN.md` 為使用者本機私有憑證文件；其內容與是否被 `apps/package_zip.py` 收錄，暫時排除於 GPT 與 formal 最嚴格檢查及修正範圍之外。除非使用者另行要求，不得主動修改、移除、遮罩、加入 `.gitignore` 或調整打包器排除規則。
 5. 凡使用者要求分析、改善、修改、比較或測試 `breakout_quality filter`，開始任何設計或程式修改前必須先讀取 `/doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`，並以其中的目前基準、已測矩陣、排除方向與後續順序作為單一實驗真理來源；每次實驗完成後，必須在同一輪將程式基準、唯一變更、固定條件、Dataset／Label 重建需求、Selection／OOS 主要結果、與基準差異、採用判定及下一步回寫該文件。尚未取得結果的實作只能標記為 `IMPLEMENTED`，不得預先寫成有效或無效；若使用者提供的新結果與舊紀錄衝突，須以可追溯的最新結果更新並保留差異說明。
 6. `breakout_quality filter` 的 model architecture 版本只可表示神經網路結構或輸入表示的差異；optimizer、learning-rate schedule、augmentation、loss weighting 等訓練方法必須以命名 experiment profile 管理，不得為了隔離實驗輸出而新增模型版本。正常新訓練只可使用 active architecture；已淘汰架構應保留為 legacy read-only compatibility，供舊 checkpoint／manifest 重建與歷史重現，不得再次出現在正式新實驗入口。
+7. `breakout_quality filter` 的 OOS 可持續用於實驗結果比較、錯誤歸因、年度／regime 診斷、策略經濟效果評估，以及形成下一個實驗假設；不得因 OOS 已被查看而禁止後續研究。每個實驗的 Train／Validation、loss、gradient、early stopping、epoch 選擇、threshold／calibration 擬合、normalization、feature／label 建立、sample weighting 與 hyperparameter optimization，均不得讀取或使用 OOS rows、labels、scores 或其統計量。模型是否優於基準可由固定 OOS 結果判定；若同一 OOS 被反覆使用，僅需明確標記為「迭代研究 OOS 證據」，不得宣稱是 untouched holdout，但不得把等待新資料當成唯一或主要下一步。
