@@ -254,7 +254,7 @@ def _full_build(args, policy, *, started: float) -> int:
         policy.feature_window_bars
     ):
         raise ValueError(
-            "inception_time_market_set_v1 第一版要求 market history bars 與 feature window 一致: "
+            "Market Set architecture 要求 market history bars 與 feature window 一致: "
             f"market={model_spec.market_set_history_bars}, feature={policy.feature_window_bars}"
         )
 

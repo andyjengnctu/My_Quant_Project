@@ -20,9 +20,9 @@ from config.breakout_quality_experiments import (
 # 1. Active model identity and runtime decision defaults
 # =============================================================================
 
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_v1"  # 9A accepted 排序／高品質研究基準；已淘汰架構只供舊工件重建。
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_market_set_candidate_v1"  # 10A IMPLEMENTED：9A候選分支＋Candidate-conditioned全市場查詢；尚待完整Selection／OOS結果。
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"  # 8F accepted 基準：每個 unique ticker/date group 每個 epoch 只參與一次 optimizer sampling。
-BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"  # 9A canonical 研究工件；正式 runtime filter／ranking 仍維持關閉。
+BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1_market_set_v1"  # 沿用Stage 0 point-in-time Market Set Dataset；模型工件由architecture路徑隔離。
 BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD = 0.50  # 在查看 OOS 前鎖定的 PASS 分數門檻；不由 OOS 自動調整。
 
 
@@ -57,8 +57,8 @@ BREAKOUT_QUALITY_INCEPTION_DEPTH = 6
 BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS = 228
 BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY = 3
 
-# Legacy Stage 1 learned market-set branch settings. These values are retained only for
-# strict reconstruction of old `inception_time_market_set_v1` checkpoints／manifests.
+# Stage 0／1 learned market-set branch settings. Global-query v1只供legacy重建；
+# Candidate-conditioned v1沿用相同Market Bank與Shared Stock Encoder資料契約。
 BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS = 300
 BREAKOUT_QUALITY_MARKET_SET_BASE_FEATURES = (
     "close_return",
@@ -74,7 +74,8 @@ BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_STRIDE = 10
 BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_DILATIONS = (1, 2, 4)
 BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION = "group_norm"
 BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION_GROUPS = 8
-BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT = 4
+BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT = 4  # Legacy Global Market Set v1 learned queries。
+BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT = 1  # 10A每個候選事件產生一個動態query。
 BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS = 4
 BREAKOUT_QUALITY_MARKET_SET_EMBEDDING_DIM = 128
 BREAKOUT_QUALITY_MARKET_SET_FUSION_HIDDEN_DIM = 128
@@ -278,6 +279,7 @@ __all__ = [
     "BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION",
     "BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION_GROUPS",
     "BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT",
+    "BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT",
     "BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS",
     "BREAKOUT_QUALITY_MARKET_SET_EMBEDDING_DIM",
     "BREAKOUT_QUALITY_MARKET_SET_FUSION_HIDDEN_DIM",

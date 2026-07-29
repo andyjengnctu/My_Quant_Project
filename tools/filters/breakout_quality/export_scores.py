@@ -157,7 +157,7 @@ def _date_range(values: pd.Series) -> dict[str, str | None]:
 def _validate_export_scope_model_support(scope: str, model_spec) -> None:
     if str(scope) == RUNTIME_SCOPE_FORWARD_OOS and bool(model_spec.requires_market_set):
         raise ValueError(
-            "inception_time_market_set_v1 目前只允許 research score export；"
+            "Market Set architecture 目前只允許 research score export；"
             "Stage 0/1 尚未建立正式 scanner forward market-bank 契約"
         )
 

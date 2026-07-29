@@ -82,22 +82,22 @@ python -c "from importlib.metadata import version; from momentfm import MOMENTPi
 
 9E legacy runtime 契約固定為 `momentfm==0.1.4` 與 `transformers==5.5.0`。不要直接執行 `pip install momentfm==0.1.4`，否則 pip 可能嘗試把本專案的 NumPy／Hub／Transformers 降到該套件 metadata 所列的舊版本。由於採刻意隔離安裝，`pip check` 仍會依舊 metadata 報告版本不相容，不能用它取代上方版本檢查與正式 `apps/test_suite.py`。
 
-完整研究流程會依active architecture分流：必要時建立 supervised dataset；目前policy已退回9A InceptionTime，依序執行train → export research scores → 產生易讀研究報表；9A維持已接受排序／高品質基準，8F sequence-only保留高覆蓋基準。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
+完整研究流程會依active architecture分流：必要時建立 supervised dataset；目前policy暫時啟用10A Candidate-conditioned Market Set，依序執行train → export research scores → 產生易讀研究報表；9A維持已接受排序／高品質基準，8F sequence-only保留高覆蓋基準。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
-python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --epochs 200 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/breakout_quality.py workflow --filter-id breakout_quality_v1_market_set_v1 --dataset full --experiment-profile unique_group_sampling --epochs 200 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 ```
 
 模型架構與訓練實驗分開管理：
 
 ```python
 # config/breakout_quality_policy.py
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_v1"
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_market_set_candidate_v1"
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"
 BREAKOUT_QUALITY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 ```
 
-- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前policy預設為已接受的9A-BN `inception_time_v1`與canonical filter id `breakout_quality_v1`；8F `multiscale_cnn_sequence_only_v1`保留高覆蓋基準。Stage 1 `inception_time_market_set_v1`修正logical-batch後完整OOS仍低於9A，已轉為legacy read-only，且不具正式forward runtime資格。9F `patch_transformer_v1`完整OOS排序低於9A，已轉為legacy read-only；其10-bar非重疊patch、128維embedding、3層／4-head Transformer、256維MLP、sinusoidal position與patch-mean pooling規格只供舊工件重建。9E MOMENT、9D MantisV2、9C TS2Vec、9B ModernTCN、9A-GN及8P亦為legacy read-only。
+- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE` 只描述網路與輸入結構。目前policy暫時啟用10A `inception_time_market_set_candidate_v1`與既有Market Set Dataset filter id `breakout_quality_v1_market_set_v1`；9A-BN `inception_time_v1`與8F `multiscale_cnn_sequence_only_v1`分別保留排序／高品質及高覆蓋基準。Stage 1 `inception_time_market_set_v1`修正logical-batch後完整OOS仍低於9A，已轉為legacy read-only，且不具正式forward runtime資格。9F `patch_transformer_v1`完整OOS排序低於9A，已轉為legacy read-only；其10-bar非重疊patch、128維embedding、3層／4-head Transformer、256維MLP、sinusoidal position與patch-mean pooling規格只供舊工件重建。9E MOMENT、9D MantisV2、9C TS2Vec、9B ModernTCN、9A-GN及8P亦為legacy read-only。
 - `BREAKOUT_QUALITY_EXPERIMENT_PROFILE` 描述下游supervised optimizer、LR schedule、augmentation與training sampling unit；`BREAKOUT_QUALITY_PRETRAINING_PROFILE`只保留9C legacy TS2Vec encoder的optimizer、epochs、batch、LR、weight decay、gradient clip、crop、mask與contrastive loss；active 9A／8F及legacy 9D／9E／9F均不讀取此profile。profile定義集中在`config/breakout_quality_experiments.py`：已接受的9A-BN與高覆蓋基準8F均沿用`unique_group_sampling / time_weight=none`；9B ModernTCN雖沿用相同profile，但完整OOS固定coverage排序全面低於9A，已轉為legacy。8K `unique_group_date_balanced` 已由完整 OOS 淘汰，只保留歷史重現；8J direct best inner checkpoint 同樣只供歷史重現。`baseline`、`adamw_only`、`adam_warmup_cosine`、`history_masking_only` 保留為歷史 profile。
 - `multiscale_cnn_sequence_only_dual_path_v1`、`multiscale_cnn_regime_context_v1`、`multiscale_cnn_v2～v8`、`tiny_cnn_v1` 與 `residual_tcn_v1` 保留為 legacy architecture，只供讀取舊 checkpoint、重現既有實驗與稽核歷史 manifest；正常 workflow 不再用它們建立新實驗。
 - AdamW、scheduler、augmentation與sampling等訓練方法不建立假模型版本。9A-GN屬正規化結構變更，因此使用獨立architecture `inception_time_group_norm_v1`；唯一差異是8個`BatchNorm1d(128)`改為`GroupNorm(8, 128)`。完整OOS顯示固定coverage排序明顯低於9A-BN，因此已轉為legacy，不再允許正式新訓練；9A-BN與8F保留為accepted比較基準。
@@ -106,28 +106,34 @@ BREAKOUT_QUALITY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 - `multiscale_cnn_sequence_only_v1` 的 trainable parameters 比 v1 少 `4 × 32 = 128`，差異只來自 head 第一層不再接收 `high_len_norm`、`breakout_level_to_close`、`close_to_breakout_level`、`high_to_breakout_level`。
 
 
-### Stage 0／1 Learned Global Market Set 研究流程
+### 10A Candidate-conditioned Market Set 研究流程
 
-此實驗不改Label、候選300-bar window、RF229或9A候選encoder，只新增全市場point-in-time learned set branch。先使用獨立filter id並修改：
+10A執行時啟動摘要必須顯示：`architecture=inception_time_market_set_candidate_v1`、`filter id=breakout_quality_v1_market_set_v1`、`query_mode=candidate_conditioned`、`queries=1`。若既有Stage 0 Market Set Dataset契約與artifact hashes有效，workflow應直接沿用Dataset並只重建新architecture的checkpoint、manifest、research scores與report；不需relabel。
+
+
+此實驗不改Label、候選300-bar window、RF229或9A候選encoder；它沿用既有Stage 0 Market Set Bank與Shared Stock Temporal Encoder，只把與候選無關的Global Learned Queries替換為candidate-conditioned cross-attention。
 
 ```python
 # config/breakout_quality_policy.py
-BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1"
-BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_v1"
+BREAKOUT_QUALITY_DEFAULT_FILTER_ID = "breakout_quality_v1_market_set_v1"
+BREAKOUT_QUALITY_MODEL_ARCHITECTURE = "inception_time_market_set_candidate_v1"
 BREAKOUT_QUALITY_EXPERIMENT_PROFILE = "unique_group_sampling"
+BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT = 1
 ```
 
 執行完整研究流程：
 
 ```bash
-python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --evaluate-oos
+python apps/breakout_quality.py workflow --filter-id breakout_quality_v1_market_set_v1 --dataset full --experiment-profile unique_group_sampling --evaluate-oos
 ```
 
-- 切換此architecture後必須完整重建Dataset；除了既有candidate feature bank，還會建立共用的`market_daily_features.npy`、`market_daily_valid_mask.npy`、`market_date_ordinals.npy`、`market_tickers.csv`與`group_market_date_index.npy`。
-- 市場股票每日日輸入只含close-to-close、overnight、intraday、high-low range與log-volume change，加上明確history／stock mask；不預先加入MA50、MA200、RSI或ticker identity。
-- 同一天多個breakout只計算一次市場表示。`BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH`預設4，只限制 market microbatch 最多展開4個不同市場日期；訓練的 optimizer logical batch 仍由 `BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE` 決定，不得因資源切片增加 optimizer updates。此設定是資源邊界，不是Label、sampling權重或batch-size替代品。
-- 第一版只有4個Global Learned Queries；沒有candidate-conditioned attention、sector tokens或learned lag。這些功能必須等Stage 1顯示穩定增量後再獨立導入。
-- 此架構目前只能匯出`research` scores。`export-scores --scope forward_oos`會明確拒絕，直到正式scanner具備每日point-in-time market bank、版本hash與coverage契約。
+- 若既有Market Set Dataset的schema、source inventory、feature/label policy與artifact hashes全部一致，workflow直接沿用Dataset，不重建Market Bank、不relabel；只重建10A專屬checkpoint、manifest、research scores與report。
+- 若Dataset不存在或契約不一致，完整重建後會包含既有candidate feature bank，以及共用的`market_daily_features.npy`、`market_daily_valid_mask.npy`、`market_date_ordinals.npy`、`market_tickers.csv`與`group_market_date_index.npy`。
+- 市場股票每日日輸入只含close-to-close、overnight、intraday、high-low range與log-volume change，加上明確history／stock mask；不預先加入MA50、MA200、RSI、sector或ticker identity。
+- 同一天多個breakout共用一次Shared Stock Encoder輸出，但每個候選會以自己的128維candidate embedding產生query，因此得到不同的candidate-specific market embedding。
+- `BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH`預設4，只限制market microbatch最多展開4個不同市場日期；optimizer logical batch仍由`BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE=128`決定。候選encoder對完整logical batch只forward一次，microbatch不得增加optimizer steps或改變loss denominator。
+- 第一版固定1個candidate-conditioned query，不加入sector token、ticker identity、learned lag或股票兩兩self-attention；後續只能在10A完整OOS顯示增量後逐項導入。
+- 此架構目前只能匯出`research` scores。`export-scores --scope forward_oos`會明確拒絕，直到scanner具備每日point-in-time Market Bank、版本hash與coverage契約。
 
 
 工件隔離方式：
@@ -142,33 +148,33 @@ outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_pr
 - `workflow` 會自動分成三種處理：工件、profile、ticker coverage、feature/high_len/benchmark/path-cache、欄位契約或來源 CSV inventory 改變時完整重建；只有 label horizon/PASS/REJECT 改變且 horizon 未超過 future path cache 時執行快速 relabel；全部一致時跳過。 完整重建採用 `ticker/date` feature bank 去重、逐檔 CSV 讀取與 per-ticker chunk 合併，正式陣列可 mmap 載入。互動選單只有在判定不需更新時，才詢問「是否強制完整重建 dataset」，預設 N；選 Y 等同 `--rebuild-dataset`。單獨執行 `train` 時若偵測到來源已更新，會 fail-fast 並要求先重建，避免靜默使用過期 dataset。 Dataset 完整重建的逐股票進度固定在同一行刷新，避免大量輸出洗版；重新導向輸出時只保留最終進度摘要與必要的 skip 訊息。
 - 尚未準備最終 OOS 評估時，可加 `--no-evaluate-oos`；報表只包含 Selection 內診斷，並明確標示不能作為正式泛化結論。
 - 選單只是正式 UI orchestration；dataset、split、training、export 與 evaluation 規則仍只實作在既有子系統，不在 app 複製。
-- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE`、`BREAKOUT_QUALITY_EXPERIMENT_PROFILE`、`BREAKOUT_QUALITY_PRETRAINING_PROFILE`、epochs、training batch size、evaluation batch size、evaluation workers、parallel split evaluation、training prefetch、feature-bank preload、`learning rate`、`weight decay`、`gradient clip norm`、final refit mode、class weight mode、time weight mode、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；互動選單直接採用 policy，不再逐項詢問，CLI 可單次覆蓋且不回寫 policy。Inner Validation 開啟時，正式模型模式依 policy 選擇：`selected_epochs` 在完整 eligible Selection重訓相同 epoch；`matched_optimizer_steps` 匹配更新量；`best_inner_checkpoint` 則直接恢復 best epoch state，不重新初始化、不執行 Final Refit。`class_weight_mode=none` 不對約 55/45 的 Label 額外做 inverse-frequency balancing；`time_weight_mode=none` 是第一階段基準，後續可單獨改為 `year_balanced_sqrt`，以溫和平方根權重降低事件密集年份對 loss 的支配。`evaluation batch size` 與 `evaluation workers` 控制 read-only 推論。完整 Train／Validation／Selection 評估仍以 event rows 為單位，維持原 batch boundaries、全部 requested rows、輸出列序與最終 reduction 順序；score export 對 `use_dataset_context=false` 的模型則以 unique ticker/date feature groups 定義固定 batches，每個 group 只推論一次並廣播至原 event-row 輸出列序。開啟 `parallel split evaluation` 時，Inner Train 與 Validation 的完整評估同時執行，峰值最多使用 `2 × evaluation workers`，但各自仍使用原本的資料列、batch 與模型快照。訓練仍固定單執行緒；`zero_grad(set_to_none=True)`、experiment profile 指定的 Adam／AdamW、weight decay、gradient clipping、RAM preload 與可選的 batch prefetch 均忠實套用並寫入 manifest；除已明確設定的 regularization 外，不改訓練 rows、shuffle 或 batch 邊界。Final refit 模式最後一輪的完整指標會直接沿用；`best_inner_checkpoint` 會在恢復 checkpoint 後對完整 Selection 做一次完整 rows、既有 `1/group_size` 的 group-weighted 研究評估。Research／forward-OOS score export 對 `use_dataset_context=false` 的 sequence-only active model 改為每個 unique ticker/date feature group 只推論一次，再精確廣播到全部 high_len event rows；使用 Dataset context 的 legacy model 才維持逐 event-row 固定 batch 推論。兩條路徑都保留原輸出列序。9A起GPU是正式research路徑；目前policy architecture已退回9A `inception_time_v1`並使用canonical filter id `breakout_quality_v1`；9A與8F分別保留排序／高品質及高覆蓋比較基準，Stage 1 `inception_time_market_set_v1`已轉為legacy read-only，9C `ts2vec_frozen_linear_v1`、9D `mantis_v2_frozen_linear_v1`、9E `moment_1_base_frozen_linear_v1`與9B `modern_tcn_v1`只保留歷史重建：`device=auto`優先CUDA，mixed precision自動優先BF16、否則FP16；deterministic algorithms預設開啟、TF32預設關閉。training execution會寫入checkpoint/manifest；CPU fallback仍保留，但不同device/dtype結果須視為不同execution contract。`train` 終端的 Epoch 選擇每輪顯示完整 Inner Train Loss、Validation Loss、新最佳標記與該 Epoch 總耗時；完整 Selection 重訓沒有獨立 Validation，因此每輪顯示 Train Loss 與耗時。完整研究流程會在每一階段結束後顯示階段耗時，並在最後顯示 workflow 總耗時；互動終端中的時間值使用淡藍色，重新導向或測試輸出不插入 ANSI 色碼。關鍵資料區段與工件路徑保留在終端，完整 history、split policy、overlap、counts 與 Epoch `elapsed_sec` 仍保留於 `manifest.json`，不再將整包 Python dict 印到終端。
+- `BREAKOUT_QUALITY_MODEL_ARCHITECTURE`、`BREAKOUT_QUALITY_EXPERIMENT_PROFILE`、`BREAKOUT_QUALITY_PRETRAINING_PROFILE`、epochs、training batch size、evaluation batch size、evaluation workers、parallel split evaluation、training prefetch、feature-bank preload、`learning rate`、`weight decay`、`gradient clip norm`、final refit mode、class weight mode、time weight mode、`random seed`、最少 train/validation rows、threshold 與 inner-validation 預設均集中於 `config/breakout_quality_policy.py`；互動選單直接採用 policy，不再逐項詢問，CLI 可單次覆蓋且不回寫 policy。Inner Validation 開啟時，正式模型模式依 policy 選擇：`selected_epochs` 在完整 eligible Selection重訓相同 epoch；`matched_optimizer_steps` 匹配更新量；`best_inner_checkpoint` 則直接恢復 best epoch state，不重新初始化、不執行 Final Refit。`class_weight_mode=none` 不對約 55/45 的 Label 額外做 inverse-frequency balancing；`time_weight_mode=none` 是第一階段基準，後續可單獨改為 `year_balanced_sqrt`，以溫和平方根權重降低事件密集年份對 loss 的支配。`evaluation batch size` 與 `evaluation workers` 控制 read-only 推論。完整 Train／Validation／Selection 評估仍以 event rows 為單位，維持原 batch boundaries、全部 requested rows、輸出列序與最終 reduction 順序；score export 對 `use_dataset_context=false` 的模型則以 unique ticker/date feature groups 定義固定 batches，每個 group 只推論一次並廣播至原 event-row 輸出列序。開啟 `parallel split evaluation` 時，Inner Train 與 Validation 的完整評估同時執行，峰值最多使用 `2 × evaluation workers`，但各自仍使用原本的資料列、batch 與模型快照。訓練仍固定單執行緒；`zero_grad(set_to_none=True)`、experiment profile 指定的 Adam／AdamW、weight decay、gradient clipping、RAM preload 與可選的 batch prefetch 均忠實套用並寫入 manifest；除已明確設定的 regularization 外，不改訓練 rows、shuffle 或 batch 邊界。Final refit 模式最後一輪的完整指標會直接沿用；`best_inner_checkpoint` 會在恢復 checkpoint 後對完整 Selection 做一次完整 rows、既有 `1/group_size` 的 group-weighted 研究評估。Research／forward-OOS score export 對 `use_dataset_context=false` 的 sequence-only active model 改為每個 unique ticker/date feature group 只推論一次，再精確廣播到全部 high_len event rows；使用 Dataset context 的 legacy model 才維持逐 event-row 固定 batch 推論。兩條路徑都保留原輸出列序。9A起GPU是正式research路徑；目前policy architecture暫時啟用10A `inception_time_market_set_candidate_v1`並沿用filter id `breakout_quality_v1_market_set_v1`；9A與8F分別保留排序／高品質及高覆蓋比較基準，Stage 1 `inception_time_market_set_v1`已轉為legacy read-only，9C `ts2vec_frozen_linear_v1`、9D `mantis_v2_frozen_linear_v1`、9E `moment_1_base_frozen_linear_v1`與9B `modern_tcn_v1`只保留歷史重建：`device=auto`優先CUDA，mixed precision自動優先BF16、否則FP16；deterministic algorithms預設開啟、TF32預設關閉。training execution會寫入checkpoint/manifest；CPU fallback仍保留，但不同device/dtype結果須視為不同execution contract。`train` 終端的 Epoch 選擇每輪顯示完整 Inner Train Loss、Validation Loss、新最佳標記與該 Epoch 總耗時；完整 Selection 重訓沒有獨立 Validation，因此每輪顯示 Train Loss 與耗時。完整研究流程會在每一階段結束後顯示階段耗時，並在最後顯示 workflow 總耗時；互動終端中的時間值使用淡藍色，重新導向或測試輸出不插入 ANSI 色碼。關鍵資料區段與工件路徑保留在終端，完整 history、split policy、overlap、counts 與 Epoch `elapsed_sec` 仍保留於 `manifest.json`，不再將整包 Python dict 印到終端。
 
 也可逐步執行：
 
 ```bash
-python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1
+python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1_market_set_v1
 
-# 9C TS2Vec已淘汰；build-pretrain-dataset／pretrain只保留歷史工件重建，active 9A workflow不執行。
+# 9C TS2Vec已淘汰；build-pretrain-dataset／pretrain只保留歷史工件重建，active 10A workflow不執行。
 
 # 只更新 label；通常由 workflow 自動偵測，不需手動執行
-python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1 --relabel-only
+python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1_market_set_v1 --relabel-only
 # 預設關閉 inner validation：epochs 是完整 Selection 的正式固定訓練次數
-python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --epochs 20 --lr 0.001 --time-weight-mode none --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
+python apps/breakout_quality.py train --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --epochs 20 --lr 0.001 --time-weight-mode none --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
 # 開啟時：epochs 是搜尋上限；以 Selection 尾端 N 個月選 best epoch，之後依 final-refit-mode 直接採用 best checkpoint 或進行完整 Selection 重訓
-python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --epochs 200 --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
-python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope research --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --inference-batch-size 4096 --inference-workers 4 --preload-feature-bank
+python apps/breakout_quality.py train --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --epochs 200 --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --scope research --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --inference-batch-size 4096 --inference-workers 4 --preload-feature-bank
 # 建議日常使用：終端表格報表 + Markdown 解釋報表 + 完整 metrics JSON
-python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --no-include-oos
+python apps/breakout_quality.py report --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --no-include-oos
 # 參數與模型已鎖定後，才把最終 OOS 納入報表
-python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --include-oos
+python apps/breakout_quality.py report --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --include-oos
 # 需要稽核單一 split 的完整原始 JSON 時才使用 evaluate
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split train
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split validation
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split selection
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split oos
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --split train
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --split validation
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --split selection
+python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --split oos
 # 稽核 Selection 是否涵蓋 OOS 的市場狀態，並歸因指定年度；不重建 Dataset、不重訓、不改 Label
-python apps/breakout_quality.py regime-audit --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --focus-year 2022 --min-selection-groups 100 --min-support-share-ratio 0.5
+python apps/breakout_quality.py regime-audit --filter-id breakout_quality_v1_market_set_v1 --experiment-profile unique_group_sampling --focus-year 2022 --min-selection-groups 100 --min-support-share-ratio 0.5
 ```
 
 `regime-audit` 也可由 `python apps/breakout_quality.py` 的互動選單執行。它以 canonical 300-bar feature bank 中的0050序列，在每個 `ticker/date` breakout group只計算一次事件日可觀測市場狀態。Trend使用0050相對200日均線與60日報酬；Drawdown使用距252日高點；Volatility只以Selection的20日年化波動率三分位數定義low／medium／high，OOS不得參與分箱。輸出固定包含年度覆蓋、各regime的Selection/OOS event share、PASS率、Precision、Recall、PR-AUC、combined-regime支撐數與低代表性標記；`--focus-year` 另輸出該年度各combined regime的TP／FP／TN／FN、年度錯誤貢獻，以及描述性排除low-support事件後的指標。排除比較只作歸因，不得回頭建立年度／regime gate或調整threshold。
@@ -183,6 +189,8 @@ python apps/breakout_quality.py regime-audit --filter-id breakout_quality_v1 --e
 - 正式 `models/.../scores.csv` 只能由明確的 `--scope forward_oos` 建立。
 
 ## 建立正式 forward-OOS score table
+
+> 10A `inception_time_market_set_candidate_v1`目前是research-only，不能執行本節的`forward_oos`匯出。以下流程只適用於已具正式runtime資格的architecture（例如9A）。
 
 1. 先以正式 app 的 `build-dataset` 與 `train` 子命令建立完整研究資料並訓練；`train` 依既有 walk-forward policy 執行固定 epoch 模式，或以 Selection 內 validation 選 epoch 後完整重訓，並保留 `model.pt`、`split_assignments.csv`、`manifest.json` 與 `model_information_cutoff`。
 2. 若目前 dataset 已包含 outer OOS，可直接匯出；若需延伸到更新資料，只重新執行 `build-dataset`，不可重新 train 同一模型。

@@ -1583,17 +1583,21 @@ def _train_one_epoch(
                             execution_plan.device,
                         )
                     )
-                    market_by_date = model.encode_market(
+                    candidate_microbatch = candidate_embedding[
+                        event_offset:event_offset + micro_size
+                    ]
+                    market_embedding = model.encode_market_for_events(
+                        candidate_microbatch,
                         sequences,
                         history_mask,
                         valid_stock_mask,
+                        event_to_market,
                     )
                     if event_to_market.ndim != 1 or event_to_market.shape[0] != micro_size:
                         raise ValueError("market microbatch event_to_market shape 不一致")
-                    market_embedding = market_by_date[event_to_market]
                     logits_parts.append(
                         model.fuse_embeddings(
-                            candidate_embedding[event_offset:event_offset + micro_size],
+                            candidate_microbatch,
                             market_embedding,
                         )
                     )

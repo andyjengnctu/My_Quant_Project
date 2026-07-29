@@ -15,6 +15,7 @@ from filters.breakout_quality.models.multiscale_cnn import build_multiscale_cnn
 from filters.breakout_quality.models.residual_tcn import build_residual_tcn
 from filters.breakout_quality.models.spec import (
     INCEPTION_TIME_GROUP_NORM_V1,
+    INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
     INCEPTION_TIME_MARKET_SET_V1,
     INCEPTION_TIME_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
@@ -119,7 +120,10 @@ def build_model(
             context_count=int(context_count),
             spec=spec,
         )
-    if spec.architecture == INCEPTION_TIME_MARKET_SET_V1:
+    if spec.architecture in {
+        INCEPTION_TIME_MARKET_SET_V1,
+        INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
+    }:
         return build_inception_time_market_set(
             nn,
             torch,

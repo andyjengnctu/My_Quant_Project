@@ -71,6 +71,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_INCEPTION_DEPTH,
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
     BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY,
+    BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT,
     BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
     BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
     BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN,
@@ -134,6 +135,7 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.models import (
     ACTIVE_MODEL_ARCHITECTURES,
+    INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
     INCEPTION_TIME_MARKET_SET_V1,
     PATCH_TRANSFORMER_V1,
     LEGACY_MODEL_ARCHITECTURES,
@@ -351,6 +353,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             and inception_kernels[0] > inception_kernels[1] > inception_kernels[2]
             and inception_receptive_field
             >= int(BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS)
+            and int(BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT) >= 1
         ),
     )
 
@@ -612,6 +615,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_market_set_model = build_breakout_quality_model(
         10, 4, architecture=INCEPTION_TIME_MARKET_SET_V1
     )
+    inception_market_set_candidate_model = build_breakout_quality_model(
+        10, 4, architecture=INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
+    )
     patch_transformer_model = build_breakout_quality_model(
         10, 4, architecture=PATCH_TRANSFORMER_V1
     )
@@ -639,6 +645,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_market_set_parameter_count = count_trainable_parameters(
         inception_market_set_model
     )
+    inception_market_set_candidate_parameter_count = count_trainable_parameters(
+        inception_market_set_candidate_model
+    )
     patch_transformer_parameter_count = count_trainable_parameters(
         patch_transformer_model
     )
@@ -654,6 +663,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     inception_spec = get_model_spec("inception_time_v1")
     inception_group_norm_spec = get_model_spec("inception_time_group_norm_v1")
     inception_market_set_spec = get_model_spec(INCEPTION_TIME_MARKET_SET_V1)
+    inception_market_set_candidate_spec = get_model_spec(
+        INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
+    )
     patch_transformer_spec = get_model_spec(PATCH_TRANSFORMER_V1)
     ts2vec_spec = get_model_spec("ts2vec_frozen_linear_v1")
     moment_spec = get_model_spec("moment_1_base_frozen_linear_v1")
@@ -1535,29 +1547,122 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         ),
     )
 
+    inception_market_set_candidate_model.eval()
+    candidate_specific_features = torch.stack(
+        (inception_features[0], inception_features[0], inception_features[1]), dim=0
+    )
+    candidate_same_date_mapping = torch.zeros((3,), dtype=torch.long)
+    with torch.no_grad():
+        candidate_embeddings = inception_market_set_candidate_model.encode_candidate(
+            candidate_specific_features
+        )
+        candidate_market_embeddings = (
+            inception_market_set_candidate_model.encode_market_for_events(
+                candidate_embeddings,
+                market_sequences[:1],
+                market_history_mask[:1],
+                market_valid_stock_mask[:1],
+                candidate_same_date_mapping,
+            )
+        )
+        candidate_market_embeddings_permuted = (
+            inception_market_set_candidate_model.encode_market_for_events(
+                candidate_embeddings,
+                market_sequences[:1, permutation],
+                market_history_mask[:1, permutation],
+                market_valid_stock_mask[:1, permutation],
+                candidate_same_date_mapping,
+            )
+        )
+        candidate_logits = inception_market_set_candidate_model(
+            candidate_specific_features,
+            inception_context_a,
+            (
+                market_sequences[:1],
+                market_history_mask[:1],
+                market_valid_stock_mask[:1],
+                candidate_same_date_mapping,
+            ),
+        )
+    inception_market_set_candidate_reload = build_breakout_quality_model(
+        10,
+        4,
+        model_spec=inception_market_set_candidate_spec.as_manifest_payload(),
+    )
+    inception_market_set_candidate_reload.load_state_dict(
+        inception_market_set_candidate_model.state_dict(), strict=True
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "market_set_10a_candidate_query_is_dynamic_set_invariant_and_strict_reloadable",
+        True,
+        bool(
+            inception_market_set_candidate_parameter_count > inception_parameter_count
+            and inception_market_set_candidate_spec.family == "inception_time_market_set"
+            and inception_market_set_candidate_spec.requires_market_set
+            and inception_market_set_candidate_spec.market_set_query_mode
+            == "candidate_conditioned"
+            and inception_market_set_candidate_spec.market_set_query_count >= 1
+            and not inception_market_set_candidate_spec.use_dataset_context
+            and tuple(candidate_logits.shape) == (3, 2)
+            and torch.isfinite(candidate_logits).all()
+            and torch.equal(
+                candidate_market_embeddings[0], candidate_market_embeddings[1]
+            )
+            and not torch.equal(
+                candidate_market_embeddings[0], candidate_market_embeddings[2]
+            )
+            and torch.allclose(
+                candidate_market_embeddings,
+                candidate_market_embeddings_permuted,
+                atol=1e-6,
+                rtol=1e-6,
+            )
+        ),
+    )
+
     missing_market_rejected = False
+    candidate_missing_market_rejected = False
     try:
         inception_market_set_model(inception_features, inception_context_a, None)
     except ValueError as exc:
         missing_market_rejected = "Market Set model" in str(exc)
+    try:
+        inception_market_set_candidate_model(
+            inception_features, inception_context_a, None
+        )
+    except ValueError as exc:
+        candidate_missing_market_rejected = "Market Set model" in str(exc)
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
         "market_set_stage1_requires_explicit_market_inputs",
         True,
-        missing_market_rejected,
+        bool(missing_market_rejected and candidate_missing_market_rejected),
     )
 
     market_forward_scope_rejected = False
+    candidate_market_forward_scope_rejected = False
     try:
         breakout_quality_export_scores._validate_export_scope_model_support(
             RUNTIME_SCOPE_FORWARD_OOS, inception_market_set_spec
         )
     except ValueError as exc:
         market_forward_scope_rejected = "research score export" in str(exc)
+    try:
+        breakout_quality_export_scores._validate_export_scope_model_support(
+            RUNTIME_SCOPE_FORWARD_OOS, inception_market_set_candidate_spec
+        )
+    except ValueError as exc:
+        candidate_market_forward_scope_rejected = "research score export" in str(exc)
     breakout_quality_export_scores._validate_export_scope_model_support(
         RUNTIME_SCOPE_RESEARCH, inception_market_set_spec
+    )
+    breakout_quality_export_scores._validate_export_scope_model_support(
+        RUNTIME_SCOPE_RESEARCH, inception_market_set_candidate_spec
     )
     add_check(
         results,
@@ -1565,7 +1670,10 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         case_id,
         "market_set_stage1_is_research_only_until_forward_market_bank_exists",
         True,
-        market_forward_scope_rejected,
+        bool(
+            market_forward_scope_rejected
+            and candidate_market_forward_scope_rejected
+        ),
     )
 
     market_dates = pd.date_range("2024-01-01", periods=305, freq="B")
@@ -2780,6 +2888,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "modern_tcn_v1",
         UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     )
+    candidate_market_paths = resolve_filter_artifact_paths(
+        "/project",
+        "synthetic_quality",
+        INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    )
     baseline_paths = resolve_filter_artifact_paths(
         "/project", "synthetic_quality", "inception_time_v1", "baseline"
     )
@@ -2802,6 +2916,12 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "/project",
         "synthetic_quality",
         "modern_tcn_v1",
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    )
+    candidate_market_research = resolve_filter_research_score_path(
+        "/project",
+        "synthetic_quality",
+        INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
         UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     )
     baseline_research = resolve_filter_research_score_path(
@@ -2834,36 +2954,44 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
                 {path.model_path for path in legacy_paths}
                 | {
                     modern_paths.model_path,
+                    candidate_market_paths.model_path,
                     baseline_paths.model_path,
                     adamw_paths.model_path,
                     schedule_paths.model_path,
                     group_norm_paths.model_path,
                 }
             )
-            == len(legacy_paths) + 5
+            == len(legacy_paths) + 6
             and len(
                 set(legacy_research_paths)
                 | {
                     modern_research,
+                    candidate_market_research,
                     baseline_research,
                     adamw_research,
                     schedule_research,
                     group_norm_research,
                 }
             )
-            == len(legacy_research_paths) + 5
+            == len(legacy_research_paths) + 6
             and modern_paths.model_architecture == "modern_tcn_v1"
+            and candidate_market_paths.model_architecture
+            == INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
             and baseline_paths.model_architecture == "inception_time_v1"
             and adamw_paths.model_architecture == "inception_time_v1"
             and group_norm_paths.model_architecture
             == "inception_time_group_norm_v1"
             and modern_paths.experiment_profile
             == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+            and candidate_market_paths.experiment_profile
+            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
             and baseline_paths.experiment_profile == "baseline"
             and adamw_paths.experiment_profile == "adamw_only"
             and schedule_paths.experiment_profile
             == ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE
             and modern_paths.model_dir.parent.name == "modern_tcn_v1"
+            and candidate_market_paths.model_dir.parent.name
+            == INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
             and baseline_paths.model_dir.parent.name == "inception_time_v1"
             and adamw_paths.model_dir.parent.name == "inception_time_v1"
             and schedule_paths.model_dir.parent.name == "inception_time_v1"
@@ -2872,6 +3000,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             and group_norm_paths.model_dir.name
             == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
             and modern_paths.model_dir.name
+            == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+            and candidate_market_paths.model_dir.name
             == UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
             and baseline_paths.model_dir.name == "baseline"
             and adamw_paths.model_dir.name == "adamw_only"
@@ -2887,6 +3017,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "only_current_research_architectures_are_active_and_old_architectures_are_legacy",
         (
             (
+                INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
                 "inception_time_v1",
                 "multiscale_cnn_sequence_only_v1",
             ),

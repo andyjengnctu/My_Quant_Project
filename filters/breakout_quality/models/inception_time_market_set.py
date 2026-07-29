@@ -30,6 +30,10 @@ def build_inception_time_market_set(
     market_feature_count = len(tuple(spec.market_set_base_features)) + 1  # explicit history mask
     temporal_normalization = str(spec.market_set_temporal_normalization)
     normalization_groups = int(spec.market_set_temporal_normalization_groups)
+    query_mode = str(spec.market_set_query_mode or "global_learned")
+    candidate_embedding_dim = int(spec.inception_filters) * (
+        len(tuple(spec.inception_kernel_sizes)) + 1
+    )
 
     if stock_embedding_dim < 1 or temporal_channels < 1:
         raise ValueError("market stock embedding／temporal channels 必須 >=1")
@@ -45,6 +49,8 @@ def build_inception_time_market_set(
         raise ValueError("market temporal normalization 第一版固定為 group_norm")
     if normalization_groups < 1 or temporal_channels % normalization_groups != 0:
         raise ValueError("market temporal normalization groups 不合法")
+    if query_mode not in {"global_learned", "candidate_conditioned"}:
+        raise ValueError(f"不支援的 market query mode: {query_mode!r}")
 
     class ResidualTemporalBlock(nn.Module):
         def __init__(self, channels: int, dilation: int):
@@ -170,6 +176,65 @@ def build_inception_time_market_set(
             )
             return self.output(tokens)
 
+    class CandidateConditionedMarketSetEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.stock_encoder = SharedStockEncoder()
+            self.query_projection = nn.Sequential(
+                nn.Linear(candidate_embedding_dim, query_count * stock_embedding_dim),
+                nn.LayerNorm(query_count * stock_embedding_dim),
+                nn.GELU(),
+            )
+            self.attention = nn.MultiheadAttention(
+                embed_dim=stock_embedding_dim,
+                num_heads=attention_heads,
+                batch_first=True,
+            )
+            self.output = nn.Sequential(
+                nn.Flatten(start_dim=1),
+                nn.Linear(query_count * stock_embedding_dim, market_embedding_dim),
+                nn.LayerNorm(market_embedding_dim),
+                nn.GELU(),
+            )
+
+        def forward(
+            self,
+            candidate_embedding,
+            sequences,
+            history_mask,
+            valid_stock_mask,
+            event_to_market,
+        ):
+            embeddings_by_date = self.stock_encoder(sequences, history_mask)
+            if valid_stock_mask.shape != embeddings_by_date.shape[:2]:
+                raise ValueError("market valid_stock_mask shape 不一致")
+            if event_to_market.ndim != 1 or event_to_market.shape[0] != candidate_embedding.shape[0]:
+                raise ValueError("event_to_market shape 與 candidate embedding batch 不一致")
+            if event_to_market.numel() == 0:
+                raise ValueError("Candidate-conditioned market batch 不得為空")
+            if (
+                int(event_to_market.min().item()) < 0
+                or int(event_to_market.max().item()) >= embeddings_by_date.shape[0]
+            ):
+                raise ValueError("event_to_market 超出 market date 範圍")
+            event_embeddings = embeddings_by_date[event_to_market]
+            event_valid_stock_mask = valid_stock_mask[event_to_market]
+            if torch.any(event_valid_stock_mask.sum(dim=1) == 0):
+                raise ValueError("每個candidate market set至少需要一檔有效股票")
+            queries = self.query_projection(candidate_embedding).reshape(
+                candidate_embedding.shape[0],
+                query_count,
+                stock_embedding_dim,
+            )
+            tokens, _weights = self.attention(
+                query=queries,
+                key=event_embeddings,
+                value=event_embeddings,
+                key_padding_mask=~event_valid_stock_mask,
+                need_weights=False,
+            )
+            return self.output(tokens)
+
     class InceptionTimeMarketSetClassifier(nn.Module):
         requires_market_set = True
 
@@ -185,9 +250,6 @@ def build_inception_time_market_set(
             # The shared encoder representation is used directly; its 9A classification head
             # is not part of this architecture.
             self.candidate_encoder.classifier = nn.Identity()
-            candidate_embedding_dim = int(spec.inception_filters) * (
-                len(tuple(spec.inception_kernel_sizes)) + 1
-            )
             self.market_encoder = LearnedMarketSetEncoder()
             self.fusion = nn.Sequential(
                 nn.Linear(candidate_embedding_dim + market_embedding_dim, fusion_hidden_dim),
@@ -201,6 +263,26 @@ def build_inception_time_market_set(
 
         def encode_market(self, sequences, history_mask, valid_stock_mask):
             return self.market_encoder(sequences, history_mask, valid_stock_mask)
+
+        def encode_market_for_events(
+            self,
+            candidate_embedding,
+            sequences,
+            history_mask,
+            valid_stock_mask,
+            event_to_market,
+        ):
+            if event_to_market.ndim != 1 or event_to_market.shape[0] != candidate_embedding.shape[0]:
+                raise ValueError("event_to_market shape 與 candidate embedding batch 不一致")
+            market_by_date = self.encode_market(sequences, history_mask, valid_stock_mask)
+            if event_to_market.numel() == 0:
+                raise ValueError("market event batch 不得為空")
+            if (
+                int(event_to_market.min().item()) < 0
+                or int(event_to_market.max().item()) >= market_by_date.shape[0]
+            ):
+                raise ValueError("event_to_market 超出 market date 範圍")
+            return market_by_date[event_to_market]
 
         def fuse_embeddings(self, candidate_embedding, market_embedding):
             if candidate_embedding.ndim != 2 or market_embedding.ndim != 2:
@@ -217,16 +299,85 @@ def build_inception_time_market_set(
                 )
             sequences, history_mask, valid_stock_mask, event_to_market = market_inputs
             candidate_embedding = self.encode_candidate(x)
-            market_by_date = self.encode_market(
+            market_embedding = self.encode_market_for_events(
+                candidate_embedding,
                 sequences,
                 history_mask,
                 valid_stock_mask,
+                event_to_market,
             )
             if event_to_market.ndim != 1 or event_to_market.shape[0] != x.shape[0]:
                 raise ValueError("event_to_market shape 與 candidate batch 不一致")
-            market_embedding = market_by_date[event_to_market]
             return self.fuse_embeddings(candidate_embedding, market_embedding)
 
+    class InceptionTimeCandidateConditionedMarketSetClassifier(nn.Module):
+        requires_market_set = True
+
+        def __init__(self):
+            super().__init__()
+            self.candidate_encoder = build_inception_time(
+                nn,
+                torch,
+                feature_count=feature_count,
+                context_count=context_count,
+                spec=spec,
+            )
+            self.candidate_encoder.classifier = nn.Identity()
+            self.market_encoder = CandidateConditionedMarketSetEncoder()
+            self.fusion = nn.Sequential(
+                nn.Linear(candidate_embedding_dim + market_embedding_dim, fusion_hidden_dim),
+                nn.LayerNorm(fusion_hidden_dim),
+                nn.GELU(),
+                nn.Linear(fusion_hidden_dim, 2),
+            )
+
+        def encode_candidate(self, x):
+            return self.candidate_encoder.encode(x)
+
+        def encode_market_for_events(
+            self,
+            candidate_embedding,
+            sequences,
+            history_mask,
+            valid_stock_mask,
+            event_to_market,
+        ):
+            return self.market_encoder(
+                candidate_embedding,
+                sequences,
+                history_mask,
+                valid_stock_mask,
+                event_to_market,
+            )
+
+        def fuse_embeddings(self, candidate_embedding, market_embedding):
+            if candidate_embedding.ndim != 2 or market_embedding.ndim != 2:
+                raise ValueError("candidate／market embedding 必須是 2D")
+            if candidate_embedding.shape[0] != market_embedding.shape[0]:
+                raise ValueError("candidate／market embedding batch size 不一致")
+            return self.fusion(torch.cat((candidate_embedding, market_embedding), dim=1))
+
+        def forward(self, x, context, market_inputs=None):
+            del context
+            if market_inputs is None or len(market_inputs) != 4:
+                raise ValueError(
+                    "Market Set model 需要 (sequences, history_mask, valid_stock_mask, event_to_market)"
+                )
+            sequences, history_mask, valid_stock_mask, event_to_market = market_inputs
+            candidate_embedding = self.encode_candidate(x)
+            if event_to_market.ndim != 1 or event_to_market.shape[0] != x.shape[0]:
+                raise ValueError("event_to_market shape 與 candidate batch 不一致")
+            market_embedding = self.encode_market_for_events(
+                candidate_embedding,
+                sequences,
+                history_mask,
+                valid_stock_mask,
+                event_to_market,
+            )
+            return self.fuse_embeddings(candidate_embedding, market_embedding)
+
+    if query_mode == "candidate_conditioned":
+        return InceptionTimeCandidateConditionedMarketSetClassifier()
     return InceptionTimeMarketSetClassifier()
 
 

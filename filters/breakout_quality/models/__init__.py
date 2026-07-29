@@ -9,6 +9,7 @@ from filters.breakout_quality.models.factory import (
 from filters.breakout_quality.models.spec import (
     ACTIVE_MODEL_ARCHITECTURES,
     INCEPTION_TIME_GROUP_NORM_V1,
+    INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
     INCEPTION_TIME_MARKET_SET_V1,
     INCEPTION_TIME_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
@@ -43,6 +44,7 @@ __all__ = [
     "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
     "INCEPTION_TIME_GROUP_NORM_V1",
+    "INCEPTION_TIME_MARKET_SET_CANDIDATE_V1",
     "INCEPTION_TIME_MARKET_SET_V1",
     "INCEPTION_TIME_V1",
     "MANTIS_V2_FROZEN_LINEAR_V1",

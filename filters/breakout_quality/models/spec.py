@@ -10,6 +10,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY,
     BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS,
     BREAKOUT_QUALITY_MARKET_SET_BASE_FEATURES,
+    BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT,
     BREAKOUT_QUALITY_MARKET_SET_EMBEDDING_DIM,
     BREAKOUT_QUALITY_MARKET_SET_FUSION_HIDDEN_DIM,
     BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS,
@@ -64,6 +65,7 @@ MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
 INCEPTION_TIME_V1 = "inception_time_v1"
 INCEPTION_TIME_MARKET_SET_V1 = "inception_time_market_set_v1"
+INCEPTION_TIME_MARKET_SET_CANDIDATE_V1 = "inception_time_market_set_candidate_v1"
 INCEPTION_TIME_GROUP_NORM_V1 = "inception_time_group_norm_v1"
 MODERN_TCN_V1 = "modern_tcn_v1"
 MANTIS_V2_FROZEN_LINEAR_V1 = "mantis_v2_frozen_linear_v1"
@@ -86,6 +88,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1,
     INCEPTION_TIME_V1,
     INCEPTION_TIME_MARKET_SET_V1,
+    INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
     INCEPTION_TIME_GROUP_NORM_V1,
     MODERN_TCN_V1,
     MANTIS_V2_FROZEN_LINEAR_V1,
@@ -95,6 +98,7 @@ SUPPORTED_MODEL_ARCHITECTURES = (
     RESIDUAL_TCN_V1,
 )
 ACTIVE_MODEL_ARCHITECTURES = (
+    INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
     INCEPTION_TIME_V1,
     MULTISCALE_CNN_SEQUENCE_ONLY_V1,
 )
@@ -146,6 +150,7 @@ class BreakoutQualityModelSpec:
     market_set_temporal_dilations: tuple[int, ...] = ()
     market_set_temporal_normalization: str | None = None
     market_set_temporal_normalization_groups: int | None = None
+    market_set_query_mode: str | None = None
     market_set_query_count: int | None = None
     market_set_attention_heads: int | None = None
     market_set_embedding_dim: int | None = None
@@ -222,6 +227,7 @@ class BreakoutQualityModelSpec:
             "market_set_temporal_stride": self.market_set_temporal_stride,
             "market_set_temporal_normalization": self.market_set_temporal_normalization,
             "market_set_temporal_normalization_groups": self.market_set_temporal_normalization_groups,
+            "market_set_query_mode": self.market_set_query_mode,
             "market_set_query_count": self.market_set_query_count,
             "market_set_attention_heads": self.market_set_attention_heads,
             "market_set_embedding_dim": self.market_set_embedding_dim,
@@ -607,9 +613,18 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             modern_tcn_expansion_ratio=expansion_ratio,
         )
 
-    if normalized == INCEPTION_TIME_MARKET_SET_V1:
+    if normalized in {
+        INCEPTION_TIME_MARKET_SET_V1,
+        INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
+    }:
         depth = int(BREAKOUT_QUALITY_INCEPTION_DEPTH)
         kernel_sizes = build_breakout_quality_inception_kernel_sizes()
+        candidate_conditioned = normalized == INCEPTION_TIME_MARKET_SET_CANDIDATE_V1
+        query_count = int(
+            BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT
+            if candidate_conditioned
+            else BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT
+        )
         if int(BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS) < 2:
             raise ValueError("MARKET_SET_HISTORY_BARS 必須 >= 2")
         if int(BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_KERNEL_SIZE) < 1:
@@ -620,6 +635,8 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             int(value) < 1 for value in BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_DILATIONS
         ):
             raise ValueError("MARKET_SET_TEMPORAL_DILATIONS 必須是非空正整數")
+        if query_count < 1:
+            raise ValueError("market query count 必須 >= 1")
         if int(BREAKOUT_QUALITY_MARKET_SET_STOCK_EMBEDDING_DIM) % int(
             BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS
         ) != 0:
@@ -643,7 +660,14 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             kernel_size=max(kernel_sizes),
             dilations=(),
             convolutions_per_block=1,
-            pooling=("candidate_global_average", "learned_query_attention_pooling"),
+            pooling=(
+                "candidate_global_average",
+                (
+                    "candidate_conditioned_query_attention_pooling"
+                    if candidate_conditioned
+                    else "learned_query_attention_pooling"
+                ),
+            ),
             dropout=0.0,
             receptive_field_bars=resolve_breakout_quality_inception_receptive_field_bars(),
             normalization="batch_norm",
@@ -670,7 +694,8 @@ def get_model_spec(architecture: str) -> BreakoutQualityModelSpec:
             market_set_temporal_normalization_groups=int(
                 BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION_GROUPS
             ),
-            market_set_query_count=int(BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT),
+            market_set_query_mode=("candidate_conditioned" if candidate_conditioned else None),
+            market_set_query_count=query_count,
             market_set_attention_heads=int(BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS),
             market_set_embedding_dim=int(BREAKOUT_QUALITY_MARKET_SET_EMBEDDING_DIM),
             market_set_fusion_hidden_dim=int(BREAKOUT_QUALITY_MARKET_SET_FUSION_HIDDEN_DIM),
@@ -797,6 +822,7 @@ __all__ = [
     "ACTIVE_MODEL_ARCHITECTURES",
     "BreakoutQualityModelSpec",
     "INCEPTION_TIME_GROUP_NORM_V1",
+    "INCEPTION_TIME_MARKET_SET_CANDIDATE_V1",
     "INCEPTION_TIME_MARKET_SET_V1",
     "INCEPTION_TIME_V1",
     "LEGACY_MODEL_ARCHITECTURES",

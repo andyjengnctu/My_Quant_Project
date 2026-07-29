@@ -608,6 +608,7 @@ def _model_runtime_description(model_spec) -> str:
         )
     if str(model_spec.family) == "inception_time_market_set":
         kernels = "/".join(str(value) for value in model_spec.inception_kernel_sizes)
+        query_mode = str(model_spec.market_set_query_mode or "global_learned")
         return (
             f"family=inception_time_market_set, candidate_depth={model_spec.inception_depth}, "
             f"candidate_kernels={kernels}, candidate_rf={model_spec.receptive_field_bars} bars, "
@@ -615,7 +616,8 @@ def _model_runtime_description(model_spec) -> str:
             f"stock_embedding={model_spec.market_set_stock_embedding_dim}, "
             f"market_norm={model_spec.market_set_temporal_normalization}/"
             f"{model_spec.market_set_temporal_normalization_groups}, "
-            f"queries={model_spec.market_set_query_count}, heads={model_spec.market_set_attention_heads}, "
+            f"query_mode={query_mode}, queries={model_spec.market_set_query_count}, "
+            f"heads={model_spec.market_set_attention_heads}, "
             f"market_embedding={model_spec.market_set_embedding_dim}, dataset_context=disabled"
         )
     if str(model_spec.family) == "inception_time":
@@ -1056,6 +1058,12 @@ def _print_policy_defaults(
             f"- Patch Pooling：{model_spec.patch_transformer_pooling}"
         )
     elif str(model_spec.family) == "inception_time_market_set":
+        query_mode = str(model_spec.market_set_query_mode or "global_learned")
+        query_label = (
+            "Candidate-conditioned Queries"
+            if query_mode == "candidate_conditioned"
+            else "Global Learned Queries"
+        )
         architecture_details = (
             f"- Model Family：InceptionTime + Learned Market Set\n"
             f"- Candidate Depth：{model_spec.inception_depth}\n"
@@ -1065,7 +1073,8 @@ def _print_policy_defaults(
             f"- Market Base Features：{'/'.join(model_spec.market_set_base_features)}\n"
             f"- Shared Stock Embedding：{model_spec.market_set_stock_embedding_dim}\n"
             f"- Market Temporal Normalization：{model_spec.market_set_temporal_normalization} / groups {model_spec.market_set_temporal_normalization_groups}\n"
-            f"- Global Learned Queries：{model_spec.market_set_query_count} / heads {model_spec.market_set_attention_heads}\n"
+            f"- Market Query Mode：{query_mode}\n"
+            f"- {query_label}：{model_spec.market_set_query_count} / heads {model_spec.market_set_attention_heads}\n"
             f"- Market Embedding：{model_spec.market_set_embedding_dim}\n"
             f"- Runtime Eligibility：research only"
         )
