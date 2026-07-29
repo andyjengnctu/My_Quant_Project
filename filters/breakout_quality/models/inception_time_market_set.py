@@ -196,6 +196,19 @@ def build_inception_time_market_set(
                 nn.Linear(fusion_hidden_dim, 2),
             )
 
+        def encode_candidate(self, x):
+            return self.candidate_encoder.encode(x)
+
+        def encode_market(self, sequences, history_mask, valid_stock_mask):
+            return self.market_encoder(sequences, history_mask, valid_stock_mask)
+
+        def fuse_embeddings(self, candidate_embedding, market_embedding):
+            if candidate_embedding.ndim != 2 or market_embedding.ndim != 2:
+                raise ValueError("candidate／market embedding 必須是 2D")
+            if candidate_embedding.shape[0] != market_embedding.shape[0]:
+                raise ValueError("candidate／market embedding batch size 不一致")
+            return self.fusion(torch.cat((candidate_embedding, market_embedding), dim=1))
+
         def forward(self, x, context, market_inputs=None):
             del context
             if market_inputs is None or len(market_inputs) != 4:
@@ -203,8 +216,8 @@ def build_inception_time_market_set(
                     "Market Set model 需要 (sequences, history_mask, valid_stock_mask, event_to_market)"
                 )
             sequences, history_mask, valid_stock_mask, event_to_market = market_inputs
-            candidate_embedding = self.candidate_encoder.encode(x)
-            market_by_date = self.market_encoder(
+            candidate_embedding = self.encode_candidate(x)
+            market_by_date = self.encode_market(
                 sequences,
                 history_mask,
                 valid_stock_mask,
@@ -212,7 +225,7 @@ def build_inception_time_market_set(
             if event_to_market.ndim != 1 or event_to_market.shape[0] != x.shape[0]:
                 raise ValueError("event_to_market shape 與 candidate batch 不一致")
             market_embedding = market_by_date[event_to_market]
-            return self.fusion(torch.cat((candidate_embedding, market_embedding), dim=1))
+            return self.fuse_embeddings(candidate_embedding, market_embedding)
 
     return InceptionTimeMarketSetClassifier()
 

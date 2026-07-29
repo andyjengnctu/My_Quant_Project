@@ -80,7 +80,7 @@ BREAKOUT_QUALITY_MARKET_SET_EMBEDDING_DIM = 128
 BREAKOUT_QUALITY_MARKET_SET_FUSION_HIDDEN_DIM = 128
 BREAKOUT_QUALITY_MARKET_SET_MIN_VALID_HISTORY_RATIO = 0.80
 BREAKOUT_QUALITY_MARKET_SET_MAX_STOCKS = 0  # 0 = 使用當時資料集中全部股票；正整數可作資源受控實驗。
-BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH = 4  # 每個實體 batch 最多物化幾個不同市場日期，避免全市場輸入瞬間膨脹。
+BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH = 4  # 每個 market microbatch 最多物化幾個日期；optimizer logical batch 仍固定使用 DEFAULT_BATCH_SIZE 個事件。
 
 
 # =============================================================================

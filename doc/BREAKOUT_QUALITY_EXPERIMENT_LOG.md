@@ -23,10 +23,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260729_174337_e9a9834(1).zip`，SHA256 `00a09176e52ae108d86d3925a2f3f7b4c566d657f4d8919a158ea7f4f20a98ae`；policy已正式切換至研究架構 `inception_time_market_set_v1` 與獨立filter id `breakout_quality_v1_market_set_v1`。本輪另修正 formal synthetic CLI fixture 未依 active architecture 建立 market-set artifacts 的測試契約問題；新架構尚未取得Selection／OOS結果 |
-| SHA256 | 本輪來源 ZIP：`00a09176e52ae108d86d3925a2f3f7b4c566d657f4d8919a158ea7f4f20a98ae`；formal bundle：`to_chatgpt_bundle_20260729_174454_f539e7ea(1).zip`，SHA256 `57f339a1d2da957b0d7f8a4d6f026be79577d8b19a309894c59f51c74e44d64c`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；既有策略與歸因結果來源維持原紀錄 |
+| 基準 ZIP | `test-branch-1_20260729_175535_5404f83.zip`，SHA256 `d5d4c995dbfad5a774c5c55aa6aebbc5e1dd515afa7398780319820f1e677117`；policy維持研究架構 `inception_time_market_set_v1` 與獨立filter id `breakout_quality_v1_market_set_v1`。首輪真實結果揭露 market-date 資源切片被錯當成 optimizer batch，已修正為 logical batch 128 events／market microbatch最多4 dates；修正後待重新訓練 |
+| SHA256 | 本輪來源 ZIP：`d5d4c995dbfad5a774c5c55aa6aebbc5e1dd515afa7398780319820f1e677117`；Stage 1 結果來源為使用者提供的完整 workflow log；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；既有策略與歸因結果來源維持原紀錄 |
 | 程式版本範圍 | 9F `patch_transformer_v1`已由完整OOS淘汰並轉為legacy read-only；9A `inception_time_v1`維持已接受排序／高品質基準，8F `multiscale_cnn_sequence_only_v1`維持高覆蓋基準；研究中active architecture新增 `inception_time_market_set_v1`，只允許建立新research工件，Stage 0／1尚未具正式scanner forward market-bank契約；9A-GN、9B、9C、9D、9E與9F只供舊工件重建 |
-| Policy 預設 | architecture=`inception_time_market_set_v1`、filter id=`breakout_quality_v1_market_set_v1`；候選分支維持Inception depth=`6`、minimum target receptive field=`228 bars`、自動kernels=`39/19/9`、actual receptive field=`229 bars`、residual every=`3`；全市場分支使用300 bars、5個基礎特徵、32維stock embedding、4個global learned queries與128維market embedding；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9A `inception_time_v1`仍是已接受比較基準，不因policy暫時切換而改變其實證判定 |
+| Policy 預設 | architecture=`inception_time_market_set_v1`、filter id=`breakout_quality_v1_market_set_v1`；候選分支維持Inception depth=`6`、minimum target receptive field=`228 bars`、自動kernels=`39/19/9`、actual receptive field=`229 bars`、residual every=`3`；全市場分支使用300 bars、5個基礎特徵、32維stock embedding、4個global learned queries與128維market embedding；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、optimizer logical batch=`128 groups`；market microbatch最多4 dates只作記憶體切片，不得增加optimizer updates；patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。9A `inception_time_v1`仍是已接受比較基準，不因policy暫時切換而改變其實證判定 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | 目前policy使用 `inception_time_market_set_v1`，必須以獨立filter id完整重建Dataset，除既有Full feature bank、context、`event_group_index`與labels外，額外建立按benchmark日期與point-in-time ticker universe共用的market-set artifacts；Label不變且不需另行relabel |
 
@@ -1111,6 +1111,25 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 下一步 | 直接以目前policy執行完整Full workflow；啟動前必須看到filter id=`breakout_quality_v1_market_set_v1`、architecture=`inception_time_market_set_v1`與Market Set架構摘要。完成後比較9A與Stage 1的Selection／OOS PR-AUC、P@50／60／70、Recall、模型PASS與年度穩定性；未確認Global Market Set有一致增量前，不進入candidate query、sector或lag |
 
 
+### 3.45 Stage 1 首輪結果與 Market Microbatch／Optimizer Batch 契約修正（2026-07-29）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | 首輪結果 `RESULT_AVAILABLE / INVALIDATED_AS_SINGLE_CHANGE`；batch契約修正 `IMPLEMENTED`，待重新訓練 |
+| 程式基準 | 使用者ZIP `test-branch-1_20260729_175535_5404f83.zip`，SHA256 `d5d4c995dbfad5a774c5c55aa6aebbc5e1dd515afa7398780319820f1e677117`；結果由使用者本機完整Full workflow提供 |
+| 首輪架構 | `inception_time_market_set_v1 / unique_group_sampling`；候選9A分支＋全市場Shared Stock Encoder＋4個Global Learned Queries；Dataset、Label、threshold與OOS split不變 |
+| 首輪訓練 | 使用者執行log顯示patience=3（9A固定基準為1）；Best Epoch 1、最低Validation Loss 0.689330；完整Selection重訓1 epoch，但Final Refit實際為573 optimizer steps。9A基準為每epoch 181 steps、Best Epoch 2、Final Refit 362 steps。因此首輪同時混入patience與optimizer-step語意差異 |
+| 首輪Selection | 原始PASS 54.81%、模型PASS 92.36%、PASS Precision 54.94%、Lift +0.13 pp、Recall 92.58%、Accuracy 54.32%、平均Score 0.5155、PR-AUC 0.5487 |
+| 首輪OOS | 原始PASS 55.63%、模型PASS 88.26%、PASS Precision 55.01%、Lift −0.62 pp、Recall 87.27%、Accuracy 53.22%、平均Score 0.5137、PR-AUC 0.5077；固定coverage P@50／60／70為50.12／51.67／53.10% |
+| 年度結果 | PR-AUC：2021 0.4752、2022 0.3579、2023 0.5413、2024 0.5379、2025 0.5731；沒有改善2022，且所有年度均低於9A |
+| 直接判讀 | Score集中在約0.51、模型幾乎全部判PASS，Selection與OOS排序接近隨機；此首輪模型不可採用，也不得進入candidate query／sector／lag |
+| 發現的契約問題 | `BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH=4`原意只限制全市場tensor的記憶體切片，但舊實作把每個date-limited實體batch直接當成一次optimizer update，使Final每epoch由181膨脹為573 steps；同時9A BatchNorm每次只看到少數日期的高度相關事件。此變更違反「batch=128 unique groups、optimizer與sampling固定」的單一實驗設計 |
+| 修正 | 訓練現在先形成最多4個日期的market microbatches，再將多個microbatches封裝為最多128 events的一個optimizer logical batch；候選分支對完整logical batch一次forward，使BatchNorm看到跨microbatch事件；market分支逐microbatch forward後再融合；loss denominator、gradient clip、LR schedule與optimizer.step均以logical batch為單位 |
+| 修正後預期契約 | Inner每epoch optimizer steps應回到`ceil(16,832/128)=132`；Final每epoch應回到`ceil(23,072/128)=181`。`max_dates_per_batch`只能改記憶體峰值與速度，不得改optimizer updates、sample weight或epoch語意 |
+| 重建需求 | Market Set Dataset／Label／feature bank可沿用；必須刪除或覆蓋首輪`inception_time_market_set_v1` checkpoint、重新訓練、重新匯出research scores與報表 |
+| 下一步 | 只重跑修正後的同一Stage 1實驗。啟動後先核對Final Refit每epoch為181 steps；若修正後Selection／Validation PR-AUC仍明顯低於9A，直接淘汰Global Market Set v1，不再調LR、query數或attention heads |
+
+
 ---
 
 ## 6. 實驗執行順序
@@ -1152,8 +1171,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → Breakout Event Regime Coverage Audit（RESULT_AVAILABLE；確認深度回撤支撐缺口＋熊市關係漂移）
 → 2022 Focus-year Regime Attribution（RESULT_AVAILABLE；排除low-support後PR-AUC仍僅0.4722，確認廣泛concept shift）
 → Active InceptionTime可設定Receptive Field（REJECTED；RF600與RF251定性結果均不好，退回RF229）
-→ Stage 0 point-in-time Market Set Bank＋Stage 1 Global Market Set Encoder（IMPLEMENTED；research-only，尚無結果）
-→ 以獨立filter id執行單一全市場set-input實驗；未確認Stage 1增量前不加入candidate query／sector／lag
+→ Stage 0 point-in-time Market Set Bank＋Stage 1 Global Market Set Encoder（首輪結果因market microbatch被誤作optimizer batch而失去單一變更可比性；batch契約已修正，待重跑）
+→ 重跑相同Stage 1並先確認Inner／Final每epoch為132／181 optimizer steps；未確認Stage 1增量前不加入candidate query／sector／lag
 → 舊9A runtime仍維持凍結，部署判斷等待全新forward labeled期間
 ```
 

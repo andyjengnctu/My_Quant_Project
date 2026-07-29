@@ -1642,26 +1642,34 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         batch_feature_bank, batch_event_groups
     )
     shuffled_rows = np.asarray([7, 0, 5, 2, 1, 4, 3, 6], dtype=np.int64)
-    market_training_batches = breakout_quality_train._build_training_batch_rows(
+    market_optimizer_batches = breakout_quality_train._build_training_optimizer_batches(
         market_indexed_features,
         shuffled_rows,
         batch_size=3,
         market_set_bank=synthetic_market_bank,
     )
     max_dates_seen = 0
-    for batch_rows in market_training_batches:
-        group_rows = batch_event_groups[np.asarray(batch_rows, dtype=np.int64)]
-        date_rows = synthetic_market_bank.market_date_indices_for_group_indices(group_rows)
-        max_dates_seen = max(max_dates_seen, int(np.unique(date_rows).size))
+    max_logical_rows = 0
+    flattened_optimizer_rows = []
+    for optimizer_batch in market_optimizer_batches:
+        logical_rows = np.concatenate(optimizer_batch)
+        flattened_optimizer_rows.append(logical_rows)
+        max_logical_rows = max(max_logical_rows, int(len(logical_rows)))
+        for microbatch_rows in optimizer_batch:
+            group_rows = batch_event_groups[np.asarray(microbatch_rows, dtype=np.int64)]
+            date_rows = synthetic_market_bank.market_date_indices_for_group_indices(group_rows)
+            max_dates_seen = max(max_dates_seen, int(np.unique(date_rows).size))
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "market_set_training_batches_cover_rows_once_and_cap_distinct_dates",
-        (sorted(shuffled_rows.tolist()), 2),
+        "market_set_microbatches_cap_dates_without_inflating_optimizer_steps",
+        (sorted(shuffled_rows.tolist()), 2, 3, 3),
         (
-            sorted(np.concatenate(market_training_batches).tolist()),
+            sorted(np.concatenate(flattened_optimizer_rows).tolist()),
             max_dates_seen,
+            max_logical_rows,
+            len(market_optimizer_batches),
         ),
     )
 

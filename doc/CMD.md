@@ -125,7 +125,7 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1_market_
 
 - 切換此architecture後必須完整重建Dataset；除了既有candidate feature bank，還會建立共用的`market_daily_features.npy`、`market_daily_valid_mask.npy`、`market_date_ordinals.npy`、`market_tickers.csv`與`group_market_date_index.npy`。
 - 市場股票每日日輸入只含close-to-close、overnight、intraday、high-low range與log-volume change，加上明確history／stock mask；不預先加入MA50、MA200、RSI或ticker identity。
-- 同一天多個breakout只計算一次市場表示。`BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH`預設4，限制每個實體訓練／推論batch最多展開4個不同市場日期；這是資源邊界，不是Label或sampling權重。
+- 同一天多個breakout只計算一次市場表示。`BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH`預設4，只限制 market microbatch 最多展開4個不同市場日期；訓練的 optimizer logical batch 仍由 `BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE` 決定，不得因資源切片增加 optimizer updates。此設定是資源邊界，不是Label、sampling權重或batch-size替代品。
 - 第一版只有4個Global Learned Queries；沒有candidate-conditioned attention、sector tokens或learned lag。這些功能必須等Stage 1顯示穩定增量後再獨立導入。
 - 此架構目前只能匯出`research` scores。`export-scores --scope forward_oos`會明確拒絕，直到正式scanner具備每日point-in-time market bank、版本hash與coverage契約。
 
