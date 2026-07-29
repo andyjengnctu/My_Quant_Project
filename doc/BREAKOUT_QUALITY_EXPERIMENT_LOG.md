@@ -23,8 +23,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260729_185613_cddc3ec.zip`，SHA256 `54eec16aaa01f2683069577e148e6edc0c8f0cb20d887f07ab12330509e251ce`；修正logical-batch後的Stage 1 Market Set完整結果已取得並淘汰。policy退回9A `inception_time_v1`與canonical filter id `breakout_quality_v1`；Market Set只保留legacy read-only compatibility |
-| SHA256 | 本輪來源 ZIP：`54eec16aaa01f2683069577e148e6edc0c8f0cb20d887f07ab12330509e251ce`；修正後Stage 1結果來源為使用者提供的完整workflow log `已貼上文字 (1)(20).txt`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb`；既有策略與歸因結果來源維持原紀錄 |
+| 基準 ZIP | `test-branch-1_20260729_200853_e924511.zip`，SHA256 `55f2bf661d8e22a5abc5e59f4178e5e11c0e35af25663fb6d23ef4710812f6b1`；修正logical-batch後的Stage 1 Market Set完整結果已取得並淘汰，policy維持9A `inception_time_v1`與canonical filter id `breakout_quality_v1`；本輪閉環修正synthetic legacy預期集合漏列Market Set的formal測試問題 |
+| SHA256 | 本輪來源 ZIP：`55f2bf661d8e22a5abc5e59f4178e5e11c0e35af25663fb6d23ef4710812f6b1`；formal bundle：`to_chatgpt_bundle_20260729_201018_881a4304.zip`，SHA256 `dd02c044c61d27d93e57e092ce31b3f9e7b2aef6f4672c3990c398ad278aff90`；修正後Stage 1結果來源為使用者提供的完整workflow log `已貼上文字 (1)(20).txt`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architecture只保留9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；Stage 1 `inception_time_market_set_v1`修正logical-batch後完整OOS仍低於9A，已轉為legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；Inception depth=`6`、minimum target receptive field=`228 bars`、自動kernels=`39/19/9`、actual receptive field=`229 bars`、residual every=`3`；experiment profile=`unique_group_sampling`；training sampling=`unique_ticker_date`、batch=`128 groups`、patience=`1`、final model mode=`selected_epochs`；device=`auto`；mixed precision=`true/auto dtype`；deterministic=`true`；TF32=`false`。Market Set設定只供legacy工件重建，不再是新訓練入口 |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1145,6 +1145,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 年度結果 | PR-AUC：2021 0.6151、2022 0.4526、2023 0.6515、2024 0.6506、2025 0.6578；相較9A每一年均下降，差異依序−0.0007、−0.0056、−0.0030、−0.0106、−0.0300。2022未改善 |
 | 判定 | 修正後單一變更仍明顯低於9A Selection／Validation／OOS排序；全域市場摘要沒有提供可泛化增量，且較高Recall來自放行更多候選。依預先固定規則直接淘汰，不調LR、query數、heads、embedding或fusion容量 |
 | 採用／退回 | policy退回`inception_time_v1 / breakout_quality_v1`；`inception_time_market_set_v1`移至legacy read-only，只供舊Dataset、checkpoint、manifest與research result重現；不刪除既有market-set工件 |
+| Formal double-check閉環 | 使用者於退回9A／Market Set轉legacy後執行formal suite：quick gate、chain checks與ML smoke均PASS；consistency唯一FAIL為synthetic policy SSOT的預期legacy集合漏列`inception_time_market_set_v1`，正式`ACTIVE_MODEL_ARCHITECTURES`／`LEGACY_MODEL_ARCHITECTURES`實作正確。測試fixture已補入該legacy architecture，並連帶解除meta quality的`coverage_synthetic_suite_runs_successfully`失敗 |
 | 下一步 | 停止Global Market Set、candidate query、sector與lag整條架構擴充。舊2021～2025 OOS不再作模型選型；9A模型與runtime部署維持凍結，等待更新行情形成全新forward labeled期間，或另立預先固定、具有新holdout的Label／資料實驗 |
 
 
@@ -1190,7 +1191,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 2022 Focus-year Regime Attribution（RESULT_AVAILABLE；排除low-support後PR-AUC仍僅0.4722，確認廣泛concept shift）
 → Active InceptionTime可設定Receptive Field（REJECTED；RF600與RF251定性結果均不好，退回RF229）
 → Stage 0 point-in-time Market Set Bank＋Stage 1 Global Market Set Encoder（REJECTED；logical-batch修正後OOS PR-AUC 0.6092，低於9A 0.6257；已轉legacy）
-→ 重跑相同Stage 1並先確認Inner／Final每epoch為132／181 optimizer steps；未確認Stage 1增量前不加入candidate query／sector／lag
+→ Market Set formal double-check閉環（FIXED；synthetic legacy預期集合補列`inception_time_market_set_v1`）
 → 舊9A runtime仍維持凍結，部署判斷等待全新forward labeled期間
 ```
 
