@@ -3,7 +3,8 @@ breakout filter
 - 相對強弱
 - 侯選股依sore排序
 - parallel with multiple seeds and chose the best validate loss
-- 程式重構、移除無用legacy、移出非必要放在config/下的設定
+- 程式重構、移除無用legacy、不會再用到的臨時性測試程式
+- 移出非必要放在config/下的設定
 - 優化選單，常用以選單為主(避免去背指令)，不常用以CLI為主(避免選單太雜)
 
 ## To do
