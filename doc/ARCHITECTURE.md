@@ -236,3 +236,22 @@ python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_
 - 本檔只承接穩定子系統、正式入口、依賴方向與共享邊界。
 - 高波動操作細節移至 `doc/CMD.md`；formal 細部契約移至 `doc/TEST_SUITE_CHECKLIST.md`。
 - 不以 exact file-tree、helper 長清單、局部 alias 說明或暫時演進敘事作為本檔主要承載面。
+
+### 11F No-time Target Arrays＋Selection-only Learnability Audit
+
+11F將11E通過的固定消融升級為獨立versioned target：
+
+```text
+strategy_aligned_opportunity_no_time_r_v1
+target_raw_r = favorable_return / risk_budget - adverse_return_to_peak / risk_budget
+```
+
+入口：
+
+```bash
+python apps/breakout_quality.py audit-no-time-target --filter-id breakout_quality_v1
+```
+
+`filters.breakout_quality.continuous_target`重用11A strict component arrays，保留valid mask、opportunity bar、risk-breach bar與adverse-first語意。11F先驗證11E overall、PASS與decile spread均改善及來源artifact SHA256，再寫入獨立`continuous_targets/strategy_aligned_opportunity_no_time_r_v1/`。
+
+Audit只建立Inner Train／Validation／Selection分布、同日rankability及與11A Target的比較；不計算OOS指標、不讀actual R或11B score、不建立experiment profile、optimizer、checkpoint、threshold或runtime score。公式假設明確標記為先前迭代OOS研究形成，但沒有OOS fitted coefficient。CLI-only，不加入互動選單。

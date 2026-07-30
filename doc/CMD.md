@@ -416,3 +416,25 @@ python apps/breakout_quality_strategy_compare.py --dataset full --params models/
 
 - `ARCHITECTURE.md`：分層、正式入口、依賴方向與共享邊界。
 - `TEST_SUITE_CHECKLIST.md`：formal test suite 主表、狀態與收斂索引。
+
+### 11F No-time Target Arrays＋Selection-only Learnability Audit
+
+11E固定消融通過後，建立獨立No-time Target version arrays，並只稽核Selection內分布與同日可排序性。CLI-only，不加入互動選單：
+
+```bash
+python apps/breakout_quality.py audit-no-time-target --filter-id breakout_quality_v1
+```
+
+Target ID：
+
+```text
+strategy_aligned_opportunity_no_time_r_v1
+```
+
+輸出位於：
+
+```text
+outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy_aligned_opportunity_no_time_r_v1/
+```
+
+本命令strict讀取11A component arrays及11E report／CSV SHA256，固定推導`target_raw_r=favorable_r-adverse_r`；只輸出Inner Train、Validation與Selection指標，明確`oos_evaluated=false`。不建立模型、profile、checkpoint、threshold或runtime score。

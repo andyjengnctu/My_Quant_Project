@@ -84,6 +84,7 @@ COMMAND_MODULES = {
     "audit-qualified-candidate-set": "tools.filters.breakout_quality.audit_qualified_candidate_set",
     "audit-target-attribution": "tools.filters.breakout_quality.audit_target_component_attribution",
     "audit-target-time-ablation": "tools.filters.breakout_quality.audit_target_time_penalty_ablation",
+    "audit-no-time-target": "tools.filters.breakout_quality.audit_no_time_continuous_target",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -107,6 +108,7 @@ COMMAND_DESCRIPTIONS = {
     "audit-qualified-candidate-set": "執行11C策略qualified candidate-set失敗歸因；research-only",
     "audit-target-attribution": "執行11D Target成分與Label條件失敗歸因；research-only",
     "audit-target-time-ablation": "執行11E固定移除time penalty的Target稽核；research-only",
+    "audit-no-time-target": "建立11F No-time Target arrays並做Selection-only可學性稽核；research-only",
 }
 
 

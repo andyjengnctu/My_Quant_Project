@@ -14,6 +14,7 @@ from filters.breakout_quality.contract import BreakoutQualityLabelPolicy
 
 CONTINUOUS_TARGET_SCHEMA_VERSION = 1
 STRATEGY_ALIGNED_TARGET_ID = "strategy_aligned_opportunity_r_v1"
+STRATEGY_ALIGNED_NO_TIME_TARGET_ID = "strategy_aligned_opportunity_no_time_r_v1"
 
 TARGET_RAW_FILENAME = "group_target_raw_r.npy"
 TARGET_FAVORABLE_RETURN_FILENAME = "group_favorable_return.npy"
@@ -256,6 +257,107 @@ def build_strategy_aligned_group_targets(
     }
 
 
+
+def build_strategy_aligned_no_time_group_targets(
+    *,
+    favorable_return: np.ndarray,
+    adverse_return_to_peak: np.ndarray,
+    opportunity_bar: np.ndarray,
+    first_risk_breach_bar: np.ndarray,
+    valid_mask: np.ndarray,
+    risk_budget_return: float,
+) -> dict[str, np.ndarray]:
+    """Derive the fixed no-time target from validated 11A component arrays."""
+
+    risk_budget = float(risk_budget_return)
+    if not math.isfinite(risk_budget) or risk_budget <= 0.0:
+        raise ValueError("no-time continuous target risk_budget_return必須是有限正數")
+
+    favorable = np.asarray(favorable_return, dtype=np.float32)
+    adverse = np.asarray(adverse_return_to_peak, dtype=np.float32)
+    opportunity = np.asarray(opportunity_bar, dtype=np.int16)
+    risk_breach = np.asarray(first_risk_breach_bar, dtype=np.int16)
+    valid = np.asarray(valid_mask, dtype=bool)
+    arrays = {
+        "favorable_return": favorable,
+        "adverse_return_to_peak": adverse,
+        "opportunity_bar": opportunity,
+        "first_risk_breach_bar": risk_breach,
+        "valid_mask": valid,
+    }
+    shape = valid.shape
+    if valid.ndim != 1:
+        raise ValueError("no-time continuous target valid_mask必須是一維")
+    for name, values in arrays.items():
+        if np.asarray(values).ndim != 1 or np.asarray(values).shape != shape:
+            raise ValueError(f"no-time continuous target component shape不一致: {name}")
+    if bool(np.any(valid & (~np.isfinite(favorable) | ~np.isfinite(adverse)))):
+        raise ValueError("no-time continuous target valid rows含非有限component")
+    if bool(np.any(~valid & (np.isfinite(favorable) | np.isfinite(adverse)))):
+        raise ValueError("no-time continuous target invalid rows的return component必須為NaN")
+    if bool(np.any(valid & (opportunity < 1))) or bool(np.any(~valid & (opportunity != -1))):
+        raise ValueError("no-time continuous target opportunity_bar sentinel不合法")
+    if bool(np.any(valid & ((risk_breach == 0) | (risk_breach < -1)))) or bool(
+        np.any(~valid & (risk_breach != -1))
+    ):
+        raise ValueError("no-time continuous target first_risk_breach_bar sentinel不合法")
+
+    target = np.full(shape, np.nan, dtype=np.float32)
+    target[valid] = (
+        favorable[valid].astype(np.float64) / risk_budget
+        - adverse[valid].astype(np.float64) / risk_budget
+    ).astype(np.float32)
+    if bool(np.any(valid & ~np.isfinite(target))):
+        raise ValueError("no-time continuous target產生非有限值")
+    return {
+        "target_raw_r": target,
+        "favorable_return": favorable.copy(),
+        "adverse_return_to_peak": adverse.copy(),
+        "opportunity_bar": opportunity.copy(),
+        "first_risk_breach_bar": risk_breach.copy(),
+        "valid_mask": valid.copy(),
+    }
+
+
+def build_strategy_aligned_no_time_contract(
+    source_contract: dict[str, object],
+) -> dict[str, object]:
+    """Build the fixed 11F target contract from the completed 11A contract."""
+
+    if str(source_contract.get("target_id") or "") != STRATEGY_ALIGNED_TARGET_ID:
+        raise ValueError("11F source target contract必須是11A strategy-aligned v1")
+    risk_budget = float(source_contract.get("risk_budget_return", math.nan))
+    horizon = int(source_contract.get("horizon_bars", -1))
+    if not math.isfinite(risk_budget) or risk_budget <= 0.0 or horizon < 2:
+        raise ValueError("11F source target contract的risk budget或horizon不合法")
+    return {
+        "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+        "target_id": STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+        "source_target_id": STRATEGY_ALIGNED_TARGET_ID,
+        "objective_family": "continuous_strategy_aligned_opportunity_no_time",
+        "information_source": "validated_11a_component_arrays",
+        "horizon_bars": horizon,
+        "risk_budget_return": risk_budget,
+        "minimum_opportunity_return": float(
+            source_contract.get("minimum_opportunity_return", math.nan)
+        ),
+        "formula": (
+            "favorable_return_before_first_risk_breach / risk_budget_return "
+            "- adverse_return_required_to_reach_that_peak / risk_budget_return"
+        ),
+        "peak_rule": source_contract.get("peak_rule"),
+        "risk_rule": source_contract.get("risk_rule"),
+        "adverse_scope": source_contract.get("adverse_scope"),
+        "no_safe_bar_rule": source_contract.get("no_safe_bar_rule"),
+        "time_penalty_included": False,
+        "normalization": "none",
+        "clipping": "none",
+        "split_derived_parameters": False,
+        "oos_fitted_parameters": False,
+        "prior_iterative_oos_hypothesis_informed": True,
+        "current_audit_oos_rows_evaluated": False,
+    }
+
 def resolve_continuous_target_dir(
     project_root: str | Path,
     filter_id: str,
@@ -425,6 +527,7 @@ def load_validated_continuous_target_component_arrays(
 __all__ = [
     "CONTINUOUS_TARGET_SCHEMA_VERSION",
     "STRATEGY_ALIGNED_TARGET_ID",
+    "STRATEGY_ALIGNED_NO_TIME_TARGET_ID",
     "TARGET_ADVERSE_RETURN_FILENAME",
     "TARGET_AUDIT_JSON_FILENAME",
     "TARGET_AUDIT_MARKDOWN_FILENAME",
@@ -439,6 +542,8 @@ __all__ = [
     "StrategyAlignedContinuousTargetResult",
     "StrategyAlignedContinuousTargetSpec",
     "build_strategy_aligned_group_targets",
+    "build_strategy_aligned_no_time_contract",
+    "build_strategy_aligned_no_time_group_targets",
     "load_validated_continuous_target_arrays",
     "load_validated_continuous_target_component_arrays",
     "resolve_continuous_target_dir",

@@ -106,8 +106,11 @@ from filters.breakout_quality.augmentation import (
 from filters.breakout_quality.continuous_target import (
     CONTINUOUS_TARGET_SCHEMA_VERSION,
     STRATEGY_ALIGNED_TARGET_ID,
+    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     StrategyAlignedContinuousTargetSpec,
     build_strategy_aligned_group_targets,
+    build_strategy_aligned_no_time_contract,
+    build_strategy_aligned_no_time_group_targets,
     load_validated_continuous_target_arrays,
     load_validated_continuous_target_component_arrays,
     resolve_continuous_target_dir,
@@ -287,6 +290,11 @@ from tools.filters.breakout_quality.audit_target_time_penalty_ablation import (
     attach_time_penalty_ablation,
     render_markdown as render_time_penalty_ablation_markdown,
     time_penalty_ablation_metrics,
+)
+from tools.filters.breakout_quality.audit_no_time_continuous_target import (
+    _selection_metrics as no_time_target_selection_metrics,
+    _validated_11e_report as validated_11e_report_for_no_time_target,
+    render_markdown as render_no_time_target_markdown,
 )
 from tools.filters.breakout_quality.audit_qualified_candidate_set import (
     _actual_trade_metrics as qualified_audit_actual_trade_metrics,
@@ -8707,9 +8715,311 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     return results, summary
 
 
+def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_NO_TIME_TARGET_SELECTION_AUDIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_contract = StrategyAlignedContinuousTargetSpec.from_label_policy(
+        DEFAULT_LABEL_POLICY
+    ).contract_payload()
+    contract = build_strategy_aligned_no_time_contract(source_contract)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_contract_is_versioned_fixed_and_selection_only",
+        (
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            STRATEGY_ALIGNED_TARGET_ID,
+            False,
+            True,
+        ),
+        (
+            contract.get("target_id"),
+            contract.get("source_target_id"),
+            contract.get("time_penalty_included"),
+            contract.get("current_audit_oos_rows_evaluated") is False,
+        ),
+    )
+
+    favorable_return = np.asarray([0.30, 0.20, 0.10, np.nan], dtype=np.float32)
+    adverse_return = np.asarray([0.02, 0.04, 0.01, np.nan], dtype=np.float32)
+    opportunity = np.asarray([2, 4, 1, -1], dtype=np.int16)
+    risk_breach = np.asarray([-1, 5, 1, -1], dtype=np.int16)
+    valid = np.asarray([True, True, True, False], dtype=bool)
+    arrays = build_strategy_aligned_no_time_group_targets(
+        favorable_return=favorable_return,
+        adverse_return_to_peak=adverse_return,
+        opportunity_bar=opportunity,
+        first_risk_breach_bar=risk_breach,
+        valid_mask=valid,
+        risk_budget_return=0.10,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_arrays_equal_favorable_minus_adverse_in_r_units",
+        (2.8, 1.6, 0.9, True),
+        (
+            round(float(arrays["target_raw_r"][0]), 6),
+            round(float(arrays["target_raw_r"][1]), 6),
+            round(float(arrays["target_raw_r"][2]), 6),
+            bool(np.isnan(arrays["target_raw_r"][3])),
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        target_dir = resolve_continuous_target_dir(
+            tmp_dir,
+            "synthetic",
+            target_id=STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+        )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / TARGET_RAW_FILENAME
+        valid_path = target_dir / TARGET_VALID_MASK_FILENAME
+        np.save(target_path, arrays["target_raw_r"], allow_pickle=False)
+        np.save(valid_path, arrays["valid_mask"], allow_pickle=False)
+        sha = __import__("hashlib").sha256
+        manifest = {
+            "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+            "filter_id": "synthetic",
+            "target_contract": contract,
+            "group_count": 4,
+            "dataset_policy": {"synthetic": True},
+            "artifacts": {
+                "target_raw_r": {
+                    "filename": target_path.name,
+                    "size_bytes": target_path.stat().st_size,
+                    "sha256": sha(target_path.read_bytes()).hexdigest(),
+                },
+                "valid_mask": {
+                    "filename": valid_path.name,
+                    "size_bytes": valid_path.stat().st_size,
+                    "sha256": sha(valid_path.read_bytes()).hexdigest(),
+                },
+            },
+        }
+        (target_dir / TARGET_MANIFEST_FILENAME).write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        loaded_manifest, loaded_target, loaded_valid = load_validated_continuous_target_arrays(
+            tmp_dir,
+            "synthetic",
+            target_id=STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            expected_group_count=4,
+            expected_dataset_policy={"synthetic": True},
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_version_is_loadable_by_strict_public_loader",
+        (STRATEGY_ALIGNED_NO_TIME_TARGET_ID, True, True),
+        (
+            (loaded_manifest.get("target_contract") or {}).get("target_id"),
+            bool(np.allclose(loaded_target[:3], arrays["target_raw_r"][:3])),
+            bool(np.array_equal(loaded_valid, arrays["valid_mask"])),
+        ),
+    )
+
+    frame = pd.DataFrame({
+        "date": pd.to_datetime([
+            "2018-01-02", "2018-01-02", "2018-01-03", "2018-01-03",
+            "2020-01-02", "2020-01-02",
+        ]),
+        "label": [LABEL_PASS, LABEL_REJECT, LABEL_PASS, LABEL_REJECT, LABEL_PASS, LABEL_REJECT],
+        "target_raw_r": [2.8, 0.5, 1.8, -0.2, 2.2, 0.1],
+        "source_target_raw_r": [2.5, 0.4, 1.2, -0.3, 1.8, 0.0],
+        "max_upside_return": [0.30, 0.08, 0.22, 0.02, 0.26, 0.04],
+        "decision_mfe_return": [0.28, 0.07, 0.20, 0.01, 0.24, 0.03],
+        "decision_mae_return": [-0.02, -0.05, -0.03, -0.08, -0.02, -0.07],
+        "valid_mask": [True] * 6,
+        "is_inner_train": [True, True, True, True, False, False],
+        "is_validation": [False, False, False, False, True, True],
+        "is_selection": [True] * 6,
+    })
+    metrics, daily = no_time_target_selection_metrics(frame)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_selection_metrics_cover_only_three_selection_splits",
+        (("inner_train", "selection", "validation"), 6, True),
+        (
+            tuple(sorted(metrics)),
+            int(metrics["selection"]["group_count"]),
+            set(daily["split"].astype(str)) == {"inner_train", "validation", "selection"},
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_selection_metrics_preserve_rankability_and_source_comparison",
+        (1.0, 1.0, True),
+        (
+            round(float(metrics["validation"]["same_day_rankability"]["rankable_date_rate"]), 6),
+            round(float(metrics["selection"]["same_day_rankability"]["pairwise_non_tie_rate"]), 6),
+            float(metrics["selection"]["source_vs_no_time_spearman"]) > 0.0,
+        ),
+    )
+
+    markdown = render_no_time_target_markdown({
+        "target_contract": contract,
+        "split_metrics": metrics,
+        "source_11e_gate": {
+            "overall_spearman_delta": 0.0859,
+            "pass_spearman_delta": 0.0942,
+            "decile_spread_delta": 0.6029,
+        },
+    })
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_markdown_exposes_selection_only_and_iterative_oos_boundary",
+        True,
+        all(token in markdown for token in (
+            "Selection-only",
+            "OOS邊界",
+            "不建立OOS指標",
+            "不訓練",
+            "prior" if False else "迭代OOS",
+        )),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        ranker_dir = Path(tmp_dir)
+        audit_dir = ranker_dir / "target_time_penalty_ablation_audit"
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        qualified_path = audit_dir / "qualified_time_penalty_ablation.csv"
+        actual_path = audit_dir / "actual_trade_time_penalty_ablation.csv"
+        pd.DataFrame({"x": [1]}).to_csv(qualified_path, index=False, encoding="utf-8-sig")
+        pd.DataFrame({"x": [2]}).to_csv(actual_path, index=False, encoding="utf-8-sig")
+        sha = __import__("hashlib").sha256
+        report = {
+            "status": "RESULT_AVAILABLE_PENDING_REVIEW",
+            "source_continuous_target_id": STRATEGY_ALIGNED_TARGET_ID,
+            "interpretation_contract": {
+                "research_only": True,
+                "training_performed": False,
+            },
+            "artifacts": {
+                "qualified_ablation": {"sha256": sha(qualified_path.read_bytes()).hexdigest()},
+                "actual_trade_ablation": {"sha256": sha(actual_path.read_bytes()).hexdigest()},
+            },
+            "actual_trades": {
+                "correlations": {
+                    "original_target_vs_realized_r": 0.40,
+                    "no_time_target_vs_realized_r": 0.49,
+                },
+                "deltas": {
+                    "spearman_no_time_minus_original": 0.09,
+                    "decile_spread_no_time_minus_original": 0.60,
+                },
+                "by_label": {
+                    "pass": {
+                        "correlations": {
+                            "original_target_vs_realized_r": 0.36,
+                            "no_time_target_vs_realized_r": 0.45,
+                        }
+                    }
+                },
+            },
+        }
+        report_path = audit_dir / "target_time_penalty_ablation_audit.json"
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        with patch(
+            "tools.filters.breakout_quality.audit_no_time_continuous_target._ranker_dir",
+            return_value=ranker_dir,
+        ):
+            accepted, accepted_path = validated_11e_report_for_no_time_target(
+                filter_id="synthetic",
+                ranker_profile=STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+            )
+            accepted_ok = accepted_path == report_path and accepted.get("status") == report["status"]
+            actual_path.write_text("tampered", encoding="utf-8")
+            try:
+                validated_11e_report_for_no_time_target(
+                    filter_id="synthetic",
+                    ranker_profile=STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+                )
+                tamper_rejected = False
+            except ValueError:
+                tamper_rejected = True
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_requires_positive_11e_gate_and_strict_artifact_hashes",
+        (True, True),
+        (accepted_ok, tamper_rejected),
+    )
+
+    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_source = app_path.read_text(encoding="utf-8")
+    app_tree = ast.parse(app_source, filename=str(app_path))
+    command_modules = {}
+    for node in app_tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target_node, ast.Name) and target_node.id == "COMMAND_MODULES"
+            for target_node in node.targets
+        ):
+            command_modules = ast.literal_eval(node.value)
+            break
+    menu_source = app_source[
+        app_source.find("def _run_interactive_menu") : app_source.find("def main")
+    ]
+    audit_path = (
+        Path(__file__).resolve().parents[1]
+        / "filters"
+        / "breakout_quality"
+        / "audit_no_time_continuous_target.py"
+    )
+    audit_source = audit_path.read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_audit_is_cli_only_and_read_only",
+        (True, True, True, True, True),
+        (
+            command_modules.get("audit-no-time-target")
+            == "tools.filters.breakout_quality.audit_no_time_continuous_target",
+            "11F" not in menu_source,
+            "audit-no-time-target" not in menu_source,
+            "torch.save(" not in audit_source,
+            "optimizer" not in audit_source.lower(),
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_audit_does_not_compute_oos_metrics",
+        (True, True, True),
+        (
+            'SELECTION_SPLITS = ("inner_train", "validation", "selection")' in audit_source,
+            '"oos_evaluated": False' in audit_source,
+            '"oos_rows_scores_labels_or_statistics_evaluated": False' in audit_source,
+        ),
+    )
+
+    summary["command"] = "audit-no-time-target"
+    summary["target_id"] = STRATEGY_ALIGNED_NO_TIME_TARGET_ID
+    return results, summary
+
+
 __all__ = [
     "validate_breakout_quality_chronological_embargo_case",
     "validate_breakout_quality_continuous_target_contract_case",
+    "validate_breakout_quality_continuous_ranker_contract_case",
+    "validate_breakout_quality_qualified_candidate_set_audit_contract_case",
+    "validate_breakout_quality_target_component_attribution_contract_case",
+    "validate_breakout_quality_target_time_penalty_ablation_contract_case",
+    "validate_breakout_quality_no_time_target_selection_audit_contract_case",
     "validate_breakout_quality_policy_single_source_case",
     "validate_breakout_quality_runtime_artifact_contract_case",
     "validate_breakout_quality_strategy_comparison_contract_case",
