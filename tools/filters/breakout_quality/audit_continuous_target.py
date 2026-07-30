@@ -59,6 +59,7 @@ from tools.filters.breakout_quality.common import (
     dataset_paths,
     load_validated_dataset_bundle,
 )
+from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 TARGET_AUDIT_SCHEMA_VERSION = 1
 _SPLIT_ORDER = ("inner_train", "validation", "selection", "oos")
@@ -77,8 +78,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--round-trips",
         default=None,
         help=(
-            "選填 no_filter_round_trips.csv；未指定時只嘗試active 9A strategy_compare標準路徑，"
-            "找不到不視為錯誤"
+            "選填 no_filter_round_trips.csv；未指定時先讀active 9A strategy_compare標準路徑，"
+            "若round-trip檔不存在但no_filter_trades.csv存在，會以canonical交易歸因邏輯在記憶體重建；"
+            "兩者都找不到不視為錯誤"
         ),
     )
     parser.add_argument(
@@ -347,13 +349,8 @@ def _same_day_binary_concordance(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _resolve_round_trip_path(filter_id: str, explicit_path: str | None) -> tuple[Path | None, str]:
-    if explicit_path:
-        path = Path(explicit_path).expanduser().resolve()
-        if not path.is_file():
-            raise FileNotFoundError(f"找不到round-trip檔案: {path}")
-        return path, "explicit"
-    candidate = (
+def _active_strategy_compare_dir(filter_id: str) -> Path:
+    return (
         resolve_filter_model_output_dir(
             PROJECT_ROOT,
             filter_id,
@@ -361,9 +358,61 @@ def _resolve_round_trip_path(filter_id: str, explicit_path: str | None) -> tuple
             BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
         )
         / "strategy_compare"
-        / "no_filter_round_trips.csv"
     )
+
+
+def _resolve_round_trip_path(filter_id: str, explicit_path: str | None) -> tuple[Path | None, str]:
+    if explicit_path:
+        path = Path(explicit_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"找不到round-trip檔案: {path}")
+        return path, "explicit"
+    candidate = _active_strategy_compare_dir(filter_id) / "no_filter_round_trips.csv"
     return (candidate, "active_9a_standard_path") if candidate.is_file() else (None, "not_found")
+
+
+def _resolve_trade_history_path(filter_id: str) -> tuple[Path | None, str]:
+    candidate = _active_strategy_compare_dir(filter_id) / "no_filter_trades.csv"
+    return (candidate, "active_9a_trade_history_fallback") if candidate.is_file() else (None, "not_found")
+
+
+def _load_round_trip_source(
+    filter_id: str,
+    explicit_round_trips: str | None,
+) -> tuple[pd.DataFrame | None, dict[str, Any]]:
+    round_trip_path, round_trip_path_source = _resolve_round_trip_path(
+        filter_id,
+        explicit_round_trips,
+    )
+    if round_trip_path is not None:
+        return pd.read_csv(round_trip_path, encoding="utf-8-sig"), {
+            "path": str(round_trip_path),
+            "path_source": round_trip_path_source,
+            "source_kind": "round_trip_csv",
+            "round_trips_reconstructed": False,
+        }
+
+    trade_history_path, trade_history_path_source = _resolve_trade_history_path(filter_id)
+    if trade_history_path is not None:
+        trade_history = pd.read_csv(trade_history_path, encoding="utf-8-sig")
+        round_trips = reconstruct_round_trips(trade_history, scenario="no_filter")
+        return round_trips, {
+            "path": str(trade_history_path),
+            "path_source": trade_history_path_source,
+            "source_kind": "reconstructed_from_no_filter_trades",
+            "round_trips_reconstructed": True,
+        }
+
+    strategy_compare_dir = _active_strategy_compare_dir(filter_id)
+    return None, {
+        "path_source": "not_found",
+        "source_kind": "not_found",
+        "round_trips_reconstructed": False,
+        "attempted_paths": [
+            str(strategy_compare_dir / "no_filter_round_trips.csv"),
+            str(strategy_compare_dir / "no_filter_trades.csv"),
+        ],
+    }
 
 
 def _first_nonempty_date(row: pd.Series) -> tuple[str, str]:
@@ -385,17 +434,16 @@ def _trade_alignment_diagnostic(
     filter_id: str,
     explicit_round_trips: str | None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
-    path, path_source = _resolve_round_trip_path(filter_id, explicit_round_trips)
-    if path is None:
+    trades, source = _load_round_trip_source(filter_id, explicit_round_trips)
+    if trades is None:
         return {
             "available": False,
-            "reason": "no_filter_round_trips.csv not found",
-            "path_source": path_source,
+            "reason": "no_filter_round_trips.csv and no_filter_trades.csv not found",
+            **source,
             "formula_tuned_from_trade_r": False,
             "diagnostic_only": True,
         }, pd.DataFrame()
 
-    trades = pd.read_csv(path, encoding="utf-8-sig")
     missing = sorted({"ticker", "r_multiple"} - set(trades.columns))
     if missing:
         raise ValueError(f"round-trip檔案缺少欄位: {missing}")
@@ -420,8 +468,7 @@ def _trade_alignment_diagnostic(
     if valid.empty:
         return {
             "available": True,
-            "path": str(path),
-            "path_source": path_source,
+            **source,
             "trade_count": int(len(matched)),
             "matched_trade_count": 0,
             "coverage_rate": 0.0,
@@ -442,8 +489,7 @@ def _trade_alignment_diagnostic(
     median_target = float(np.median(target_values))
     result = {
         "available": True,
-        "path": str(path),
-        "path_source": path_source,
+        **source,
         "trade_count": int(len(matched)),
         "matched_trade_count": int(len(valid)),
         "coverage_rate": float(len(valid) / len(matched)) if len(matched) else None,
@@ -590,8 +636,13 @@ def render_continuous_target_audit_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- 未取得可用no-filter round-trip檔案：`{trade.get('reason', 'not available')}`。")
         lines.append("- 這不影響target分布與同日可排序稽核，但尚不能確認target與實際交易R方向一致。")
     else:
+        source_note = (
+            "（由no_filter_trades.csv以canonical交易歸因邏輯重建）"
+            if bool(trade.get("round_trips_reconstructed"))
+            else ""
+        )
         lines += [
-            f"- 來源：`{trade.get('path')}`",
+            f"- 來源：`{trade.get('path')}`{source_note}",
             f"- 配對：`{trade.get('matched_trade_count', 0)}` / `{trade.get('trade_count', 0)}`；coverage `{_pct(trade.get('coverage_rate'))}`",
             f"- Spearman(target, realized R)：`{_fmt(trade.get('spearman_target_vs_r_multiple'))}`",
             f"- Top target decile平均R：`{_fmt(trade.get('top_target_decile_average_r'))}`；Bottom decile：`{_fmt(trade.get('bottom_target_decile_average_r'))}`",
@@ -765,13 +816,19 @@ def main(argv=None) -> int:
             f"rankable_dates={_pct(rankability.get('rankable_date_rate'))}"
         )
     if trade_alignment.get("available"):
+        source_label = (
+            "reconstructed_from_no_filter_trades"
+            if bool(trade_alignment.get("round_trips_reconstructed"))
+            else "round_trip_csv"
+        )
         print(
             "- trade R: "
+            f"source={source_label} "
             f"matched={trade_alignment.get('matched_trade_count')}/{trade_alignment.get('trade_count')} "
             f"spearman={_fmt(trade_alignment.get('spearman_target_vs_r_multiple'))}"
         )
     else:
-        print("- trade R: no_filter_round_trips.csv未找到，略過實際R方向診斷")
+        print("- trade R: no_filter_round_trips.csv與no_filter_trades.csv均未找到，略過實際R方向診斷")
     print(f"已輸出: {manifest_path}")
     print(f"已輸出: {audit_markdown_path}")
     return 0

@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪結果ZIP `test-branch-1_20260729_211214_690584f.zip`，SHA256 `639bcd20d1cab58015cabd5fe92ed9cd180b65528a281f24763cfb057233fab9`；10A `inception_time_market_set_candidate_v1` 已取得完整Selection／OOS並淘汰，policy正式退回9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| 基準 ZIP | 本輪來源ZIP `test-branch-1_20260730_131450_30c3b58.zip`，SHA256 `6d002495965bff319445e0299dc65d4e9b01a78a01fb78d3bec49b0ba911047b`；11A完整target分布audit已取得，實際Round-trip R診斷待由active 9A `no_filter_round_trips.csv`或`no_filter_trades.csv`補齊；正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
 | SHA256 | 本輪來源 ZIP：`639bcd20d1cab58015cabd5fe92ed9cd180b65528a281f24763cfb057233fab9`；10A完整workflow結果來源為 `已貼上文字 (1)(21).txt`；10A實作前基準 `test-branch-1_20260729_204021_e9b7ec7(1).zip`：`54449357202296cb50c869b70ac00e7d55b4833003d0e4f74b0c1a892cc7cc8c`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
@@ -734,15 +734,15 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED / AUDIT_NOT_RUN_ON_FULL_DATA`；固定target與稽核工具已完成，尚未取得完整資料分布結果 |
+| 狀態 | `RESULT_AVAILABLE / DISTRIBUTION_PASS / TRADE_R_PENDING`；完整target分布與同日排序稽核已通過，actual Round-trip R方向尚待補齊 |
 | 研究假設 | 9A能辨識固定百分比PASS／REJECT，但其Score無法單調代表最終Round-trip R、Payoff或資本效率；下一步應改變學習目標，而不是繼續增加市場輸入或調整排序公式 |
 | 唯一變更 | 第一階段尚不建立模型；由既有future-path cache新增獨立連續風險調整機會target與可學性稽核。若稽核通過，第二階段才保留9A 300×10 InceptionTime encoder、RF229、split與unique-group sampling，改用連續objective |
 | 第一版邊界 | 不加入Market Set、sector、ticker identity、learned lag、runtime gate、threshold調整或策略參數搜尋；不與二元分類auxiliary loss同輪混合 |
 | 無前視邊界 | 目標只由每個事件之後固定40交易日future path建立；Train／Validation與epoch選擇只使用Selection，OOS只在模型凍結後比較 |
-| 先行資料稽核 | CLI已實作；將輸出Inner Train／Validation／Selection／OOS的target分布、tie比例、極端值、同日candidate可排序比例與可選actual R方向診斷。完整本機結果尚未執行 |
+| 先行資料稽核 | 完整資料已執行：valid 54,419／55,509（98.04%），四區段Unique率98.73%～99.55%，同日可排序日與pair非Tie率均100%，Top 1%正target貢獻10.14%～14.81%。但Binary AUC與同日PASS／REJECT concordance均約0.97，顯示主要是既有Label的連續化；尚缺actual R方向診斷 |
 | 採用條件 | OOS連續target rank correlation與同日排序品質形成增量，且固定策略比較不再重現「排除右尾大贏家、曝險大降」；模型指標改善但策略經濟效果未改善仍不採用 |
 | Dataset rebuild | 300×10 feature bank不重建；沿用future-path cache新增獨立continuous-target arrays與contract。9A二元Label及既有工件維持不變 |
-| 下一步 | 執行`python apps/breakout_quality.py audit-continuous-target`；確認target可學且與實際交易R方向一致後，再建立獨立objective／model工件 |
+| 下一步 | 套用actual-R fallback後重新執行`python apps/breakout_quality.py audit-continuous-target`；若有`no_filter_trades.csv`會自動重建round trips。先確認Spearman、top／bottom decile realized R及≥2R大贏家保留率，再決定regression或pairwise ranking，不直接開訓 |
 
 ### 優先 6A：AdamW only
 
@@ -1199,20 +1199,20 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED / AUDIT_NOT_RUN_ON_FULL_DATA`；已完成固定target契約、group arrays產生器、split／同日排序稽核、optional實際Round-trip R方向診斷與正式CLI；本輪不建立或訓練模型 |
-| 程式基準 | 來源ZIP `test-branch-1_20260729_211214_690584f.zip`，SHA256 `639bcd20d1cab58015cabd5fe92ed9cd180b65528a281f24763cfb057233fab9`；先套用10A結案退回9A patch `patch_10a_result_revert_9a_20260729.zip`，SHA256 `014b78a27edbf7782da04c8ece0db0944932f01ca1a4e260c2f7e09a80085d79` |
+| 狀態 | `RESULT_AVAILABLE / DISTRIBUTION_PASS / TRADE_R_PENDING`；完整Dataset target arrays與Selection／Validation／OOS分布、同日排序稽核已完成；尚缺實際Round-trip R方向診斷，因此本輪仍不建立或訓練模型 |
+| 程式基準 | 完整audit結果來源ZIP `test-branch-1_20260730_131450_30c3b58.zip`，SHA256 `6d002495965bff319445e0299dc65d4e9b01a78a01fb78d3bec49b0ba911047b`；其正式policy維持9A。完整audit命令為`python apps/breakout_quality.py audit-continuous-target` |
 | 研究目的 | 9A binary PASS／REJECT score無法單調對應最終Round-trip R或資本效率；11A先測試連續future outcome是否具有足夠分布、同日非tie排序與實際R方向一致性，再決定是否值得建立regression／ranking模型 |
 | 固定target | `strategy_aligned_opportunity_r_v1`：首次觸及−10%風險障礙前的最大有利漲幅÷10%風險預算，減去到達該高點前的最大不利跌幅÷10%，再減`0.5R × (opportunity_bar−1)/(40−1)`；最大高點取最早出現日 |
 | 保守路徑語意 | 同日High／Low先後未知採adverse-first；若Low先觸及−10%障礙，該日High不列入可用機會。首日即觸及風險障礙時target固定為−1R。未滿40根或K線無效標記invalid，不建立第三種label |
 | 無前視／防調參 | target公式只讀既有event anchor與固定future high／low cache；risk budget、horizon與time penalty由目前固定Label policy直接推導。不得讀取Selection／Validation／OOS分布、實際交易R、threshold或模型分數；不做normalization與clipping |
 | 稽核內容 | 對Inner Train、Validation、Selection、OOS固定切分輸出percentiles、正值率、unique率、極端正值集中度、binary-label AUC、與MFE／MAE關係；逐日計算可排序日期比例、pairwise non-tie率、候選數與target spread，以及同日PASS對REJECT concordance |
-| 實際R診斷 | 若找到9A `strategy_compare/no_filter_round_trips.csv`或顯式傳入`--round-trips`，只描述性計算target與realized R Spearman、target top／bottom decile平均R與≥2R贏家保留率；實際R不得回頭改公式、normalization、clip或任何參數 |
+| 實際R診斷 | 優先讀取9A `strategy_compare/no_filter_round_trips.csv`或顯式`--round-trips`；若該衍生檔不存在但同目錄有`no_filter_trades.csv`，以既有canonical `reconstruct_round_trips`在記憶體重建，再描述性計算target與realized R Spearman、target top／bottom decile平均R與≥2R贏家保留率。實際R不得回頭改公式、normalization、clip或任何參數 |
 | 工件 | `outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned_opportunity_r_v1/`；包含6個group arrays、`manifest.json`、`continuous_target_audit.json/.md`、`continuous_target_daily_rankability.csv`與可選trade matches CSV |
 | Dataset／重建 | 不重建feature bank、不重算candidate features、不relabel；直接沿用canonical `group_anchor_prices`、future high／low path cache、available bars、event group index與既有split policy。target contract與工件獨立於model architecture／experiment profile |
-| Formal契約 | 新增B171／T268 direct synthetic contract；13項檢查已通過，涵蓋固定公式、adverse-first、首日−1R、時間懲罰、invalid future、deterministic group arrays、strict JSON、同日rankability、Round-trip輸出樹自動路徑、audit-only狀態與CLI註冊 |
+| Formal契約 | B171／T268 direct synthetic contract擴充為14項：除固定公式、adverse-first、首日−1R、時間懲罰、invalid future、deterministic group arrays、strict JSON、同日rankability、Round-trip輸出樹自動路徑、audit-only與CLI註冊外，另驗證`no_filter_round_trips.csv`缺失時會從canonical `no_filter_trades.csv`重建一筆完整round trip |
 | Formal double-check閉環 | 使用者於2026-07-30以結果ZIP `test-branch-1_20260730_125841_23286ca.zip`（SHA256 `6f7cdcd443966148d16dfca495036bfe9583c5684ca6e39b19832920d6facc59`）執行正式suite；quick gate／chain checks／ML smoke PASS，consistency有3項FAIL：legacy預期集合漏列10A Candidate Query、11A synthetic由`tools/`反向import `apps.breakout_quality`、registry layer誤寫未允許的`research_contract`；meta quality只由synthetic suite失敗連帶觸發。已補legacy fixture、改以AST靜態解析CLI registry、將11A validator歸入`core_invariant`，並將10A set-invariance probe改為確定性candidate embedding差異與跨裝置浮點容差；不改target公式、Dataset、模型或runtime |
-| 完整資料結果 | 尚未執行；交付環境不含使用者本機完整Dataset／future-path artifacts，因此不得填入分布、tie、極端值或實際R方向結論 |
-| 下一步 | 使用者本機執行`python apps/breakout_quality.py audit-continuous-target`並回傳audit md／json。只有target分布、同日pair非tie率與實際R方向足夠時，才進入11A regression／pairwise ranking training contract；否則直接改寫target，不先訓練 |
+| 完整資料結果 | groups=55,509、valid=54,419（98.04%）。Inner／Validation／Selection／OOS mean=0.7394／0.9111／0.7839／0.9815；P50=0.3111／0.3319／0.3167／0.3201；P99=6.5133／8.3370／6.8589／9.9519；正值率69.49%／70.95%／69.89%／68.89%；Unique率98.73%／99.55%／98.73%／99.29%；所有區段同日可排序日與pair非Tie率均100%。Top 1%正target貢獻Selection 11.64%、OOS 10.22%，沒有單一極端尾端主導。Binary AUC約0.9705～0.9718、同日PASS／REJECT concordance約0.9697～0.9724，表示target高度接近既有二元Label的連續化，尚未證明提供新的實際交易價值排序訊息 |
+| 下一步 | 套用本輪fallback後重新執行同一條`python apps/breakout_quality.py audit-continuous-target`。若active 9A strategy compare至少保留`no_filter_trades.csv`，CLI會自動重建round trips並完成實際R診斷；只有Spearman方向、top／bottom decile realized R與≥2R贏家保留率支持target時，才進入11A regression／pairwise ranking training contract。若兩個來源檔都不存在，先重建既有9A strategy compare工件，不直接訓練 |
 
 
 ---
@@ -1259,7 +1259,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → Stage 0 point-in-time Market Set Bank＋Stage 1 Global Market Set Encoder（REJECTED；logical-batch修正後OOS PR-AUC 0.6092，低於9A 0.6257；已轉legacy）
 → Market Set formal double-check閉環（FIXED；synthetic legacy預期集合補列`inception_time_market_set_v1`）
 → 10A Candidate-conditioned Query獨立實驗（REJECTED；OOS排序低於9A，轉legacy）
-→ 11A Strategy-aligned Continuous Outcome Target資料與可學性稽核（IMPLEMENTED；待完整資料audit結果）
+→ 11A Strategy-aligned Continuous Outcome Target資料與可學性稽核（完整分布PASS；待實際Round-trip R方向診斷）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

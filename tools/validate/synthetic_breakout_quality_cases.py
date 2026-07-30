@@ -248,6 +248,7 @@ from tools.filters.breakout_quality import evaluate as breakout_quality_evaluate
 from tools.filters.breakout_quality import export_scores as breakout_quality_export_scores
 from tools.filters.breakout_quality import train as breakout_quality_train
 from tools.filters.breakout_quality.audit_continuous_target import (
+    _load_round_trip_source,
     _resolve_round_trip_path,
     build_continuous_target_audit,
     render_continuous_target_audit_markdown,
@@ -6839,6 +6840,71 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
             "continuous_target_round_trip_auto_path_uses_output_tree",
             (str(expected_round_trip_path), "active_9a_standard_path"),
             (str(resolved_round_trip_path), str(resolved_path_source)),
+        )
+
+        expected_round_trip_path.unlink()
+        trade_history_path = expected_round_trip_path.parent / "no_filter_trades.csv"
+        pd.DataFrame(
+            [
+                {
+                    "Date": "2021-01-05",
+                    "Ticker": "2330",
+                    "Type": "買進 (突破)",
+                    "進場類型": "normal",
+                    "候選類型": "normal",
+                    "買訊日": "2021-01-04",
+                    "候選日": "2021-01-04",
+                    "成交價": 100.0,
+                    "該筆總損益": np.nan,
+                    "R_Multiple": np.nan,
+                },
+                {
+                    "Date": "2021-01-15",
+                    "Ticker": "2330",
+                    "Type": "全倉結算",
+                    "進場類型": "",
+                    "候選類型": "",
+                    "買訊日": "",
+                    "候選日": "",
+                    "成交價": 110.0,
+                    "該筆總損益": 1000.0,
+                    "R_Multiple": 1.5,
+                },
+            ]
+        ).to_csv(trade_history_path, index=False, encoding="utf-8-sig")
+        with patch(
+            "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
+            Path(temp_dir),
+        ):
+            rebuilt_round_trips, rebuilt_source = _load_round_trip_source(
+                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                None,
+            )
+        rebuilt_record = rebuilt_round_trips.iloc[0]
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "continuous_target_round_trip_falls_back_to_canonical_trade_history",
+            (
+                1,
+                "2330",
+                "2021-01-04",
+                1.5,
+                "reconstructed_from_no_filter_trades",
+                True,
+                str(trade_history_path),
+            ),
+            (
+                len(rebuilt_round_trips),
+                str(rebuilt_record["ticker"]),
+                str(rebuilt_record["signal_date"]),
+                float(rebuilt_record["r_multiple"]),
+                str(rebuilt_source["source_kind"]),
+                bool(rebuilt_source["round_trips_reconstructed"]),
+                str(rebuilt_source["path"]),
+            ),
+            tol=1e-12,
         )
 
     add_check(

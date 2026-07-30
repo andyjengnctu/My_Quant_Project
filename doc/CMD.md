@@ -96,7 +96,7 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 python apps/breakout_quality.py audit-continuous-target
 ```
 
-預設會在目前active 9A策略比較目錄尋找`strategy_compare/no_filter_round_trips.csv`，找到時附加實際Round-trip R方向診斷；也可顯式指定：
+預設會在目前active 9A策略比較目錄先尋找`strategy_compare/no_filter_round_trips.csv`；若該衍生檔不存在但`no_filter_trades.csv`仍在，會自動使用canonical交易歸因邏輯在記憶體重建round trips並完成實際R方向診斷。也可顯式指定：
 
 ```bash
 python apps/breakout_quality.py audit-continuous-target --round-trips <no_filter_round_trips.csv>

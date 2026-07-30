@@ -111,7 +111,7 @@ project/
 python apps/breakout_quality.py audit-continuous-target
 ```
 
-target固定使用40-bar horizon與10% risk budget：首次風險觸發前最大有利漲幅R，扣除到達高點前最大不利跌幅R及最多0.5R的時間懲罰。同日High／Low歧義採adverse-first，風險觸發日High不計；首日觸發輸出−1R。公式不讀取split統計、OOS、模型score或actual trade R，不做normalization／clipping。
+target固定使用40-bar horizon與10% risk budget：首次風險觸發前最大有利漲幅R，扣除到達高點前最大不利跌幅R及最多0.5R的時間懲罰。同日High／Low歧義採adverse-first，風險觸發日High不計；首日觸發輸出−1R。公式不讀取split統計、OOS、模型score或actual trade R，不做normalization／clipping。實際R診斷優先讀取active 9A的`no_filter_round_trips.csv`；若只有交易歷史，則重用`trade_attribution.reconstruct_round_trips`從`no_filter_trades.csv`在記憶體重建，禁止另寫第二套Round-trip口徑。
 
 工件位於`outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned_opportunity_r_v1/`，與architecture／experiment profile工件隔離；只沿用feature-group index及future-path cache，不改Dataset fingerprint、不重建feature bank、不relabel。manifest明確保存`training_performed=false`與`runtime_eligible=false`。此階段只產生arrays與audit，不授權regression training、score export或scanner runtime。
 
