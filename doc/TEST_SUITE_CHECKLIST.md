@@ -1553,13 +1553,12 @@
 | 2026-07-30 | B171 | 重用canonical `reconstruct_round_trips`加入trade-history fallback，維持單一Round-trip口徑並重新收斂為DONE | PARTIAL -> DONE | `tools/filters/breakout_quality/audit_continuous_target.py`, `tools/filters/breakout_quality/trade_attribution.py` |
 | 2026-07-30 | B171 | 使用者重跑後固定hard-filter目錄仍無交易工件，且舊版未搜尋既有score-ranking正式輸出，actual-R來源發現契約由DONE退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/audit_continuous_target.py` |
 | 2026-07-30 | B171 | 由strategy compare canonical命名SSOT提供active 9A全部正式`strategy_compare*`語意排序，加入metadata驗證與顯式`--trade-history`後重新收斂為DONE | PARTIAL -> DONE | `tools/filters/breakout_quality/strategy_compare.py`, `tools/filters/breakout_quality/audit_continuous_target.py`, `doc/CMD.md`, `doc/ARCHITECTURE.md` |
-| 2026-07-30 | T69 | 11A synthetic直接import `apps.breakout_quality`，正式reverse-layer檢查由DONE退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
-| 2026-07-30 | T69 | 改以AST靜態解析`COMMAND_MODULES`，確認`core/`、`filters/`與`tools/`均無反向apps import後重新收斂為DONE | PARTIAL -> DONE | `validate_no_reverse_app_layer_dependencies_case` |
 | 2026-07-30 | B172 | 新增11B同日percentile MSE研究profile、獨立訓練CLI與research-only工件，契約進入PARTIAL | NEW -> PARTIAL | `config/breakout_quality_experiments.py`, `tools/filters/breakout_quality/train_continuous_ranker.py`, `apps/breakout_quality.py` |
 | 2026-07-30 | B172 | 驗證profile／architecture分離、同日percentile、strict target loader、2-logit checkpoint、classification／runtime隔離與OOS post-checkpoint後收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_continuous_ranker_contract_case` |
-| 2026-07-30 | B172 | 新增互動選單`[10]`並驗證只路由既有`train-continuous-ranker` command module，維持research-only與9A隔離 | DONE -> DONE | `apps/breakout_quality.py`, `validate_breakout_quality_continuous_ranker_contract_case` |
-| 2026-07-30 | T269 | 新增11B continuous ranker direct synthetic validator並註冊正式registry | NEW -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py`, `tools/validate/synthetic_cases.py` |
-| 2026-07-30 | T269 | direct執行profile、percentile、tamper、CLI、research-only與OOS ordering檢查全數通過後收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_continuous_ranker_contract_case` |
+| 2026-07-30 | B172 | 新增互動選單`[10]`研究入口，選單路由契約由DONE退回PARTIAL | DONE -> PARTIAL | `apps/breakout_quality.py` |
+| 2026-07-30 | B172 | 驗證`[10]`只路由既有`train-continuous-ranker` command module，且維持research-only與9A工件隔離後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_continuous_ranker_contract_case` |
+| 2026-07-30 | T69 | 11A synthetic直接import `apps.breakout_quality`，正式reverse-layer檢查由DONE退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-07-30 | T69 | 改以AST靜態解析`COMMAND_MODULES`，確認`core/`、`filters/`與`tools/`均無反向apps import後重新收斂為DONE | PARTIAL -> DONE | `validate_no_reverse_app_layer_dependencies_case` |
 | 2026-07-30 | T104 | 11A validator使用未註冊的`research_contract` layer，registry metadata由DONE退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_cases.py` |
 | 2026-07-30 | T104 | 將固定target／無OOS衍生參數契約歸入既有`core_invariant` layer並驗證metadata合法後重新收斂為DONE | PARTIAL -> DONE | `validate_synthetic_registry_metadata_contract_case` |
 | 2026-07-30 | T264 | 10A轉legacy後synthetic預期集合漏列Candidate Query，policy SSOT測試由DONE退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
@@ -1570,3 +1569,5 @@
 | 2026-07-30 | T268 | 新增第14項canonical `no_filter_trades.csv`重建round-trip契約並重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_continuous_target_contract_case` |
 | 2026-07-30 | T268 | 固定單一strategy_compare路徑會漏掉正式score-ranking工件，來源發現synthetic契約由DONE退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-07-30 | T268 | direct驗證16項11A契約，新增跨正式輸出發現／跳過static與顯式trade-history override後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_continuous_target_contract_case` |
+| 2026-07-30 | T269 | 新增11B continuous ranker direct synthetic validator並註冊正式registry | NEW -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py`, `tools/validate/synthetic_cases.py` |
+| 2026-07-30 | T269 | direct執行profile、percentile、tamper、CLI、research-only與OOS ordering檢查全數通過後收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_continuous_ranker_contract_case` |

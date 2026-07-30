@@ -22,7 +22,7 @@
 - 後續建議必須優先提供可立即執行的實驗、實作、診斷或修正；不得把等待新的 forward labeled period 當成主要下一步。
 - 本規則取代文件中所有「因 OOS 已查看而不得再研究」或「只能等待新資料」的概括性限制；個別已淘汰方向仍維持淘汰，除非提出本質不同的新機制。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-29**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-07-30**。
 
 ---
 
@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪唯一來源ZIP `test-branch-1_20260730_134655_6e073b2.zip`，SHA256 `ccd1083e852cf8a085f749dd4c1be61c006ecb1bf7f3a1c2990b8558ab6342d4`；11A完整target與actual Round-trip R audit已通過主要方向門檻，11B同日percentile regression已實作但尚未取得訓練結果；正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`ccd1083e852cf8a085f749dd4c1be61c006ecb1bf7f3a1c2990b8558ab6342d4`；11A完整結果文件為使用者提供的`continuous_target_audit(2).md`；10A完整workflow結果來源為 `已貼上文字 (1)(21).txt`；10A實作前基準 `test-branch-1_20260729_204021_e9b7ec7(1).zip`：`54449357202296cb50c869b70ac00e7d55b4833003d0e4f74b0c1a892cc7cc8c`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | 本輪唯一來源ZIP `test-branch-1_20260730_171844_f457748.zip`，SHA256 `c93e7897a5c17f6fb3d8a4d0dd39a7a0da86a1f30f7ac1fc1f95a10ab62b1850`；11A完整target與actual Round-trip R audit已通過主要方向門檻，11B同日percentile regression及互動選單`[10]`已實作但尚未取得訓練結果；正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`c93e7897a5c17f6fb3d8a4d0dd39a7a0da86a1f30f7ac1fc1f95a10ab62b1850`；本地formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為使用者提供的`continuous_target_audit(2).md`；10A完整workflow結果來源為 `已貼上文字 (1)(21).txt`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1222,7 +1222,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 項目 | 紀錄 |
 |---|---|
 | 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；程式、CLI、研究工件與synthetic contract已完成，尚未執行完整訓練與OOS評估 |
-| 程式基準 | 唯一來源ZIP `test-branch-1_20260730_134655_6e073b2.zip`，SHA256 `ccd1083e852cf8a085f749dd4c1be61c006ecb1bf7f3a1c2990b8558ab6342d4`；本輪直接在此版修改，不疊加其他舊patch |
+| 程式基準 | 唯一來源ZIP `test-branch-1_20260730_171844_f457748.zip`，SHA256 `c93e7897a5c17f6fb3d8a4d0dd39a7a0da86a1f30f7ac1fc1f95a10ab62b1850`；此版已包含11B與互動選單`[10]`，本輪只修正式Checklist治理紀錄，不改模型、Dataset、target或runtime |
 | Experiment profile | `strategy_aligned_daily_percentile_mse`；objective=`daily_percentile_regression`、continuous target=`strategy_aligned_opportunity_r_v1`、loss=`mse`、epoch metric=`mean_daily_spearman` |
 | Architecture | 維持9A `inception_time_v1`、300×10 input、RF229與原2-logit head；score定義為`softmax(logits)[:, PASS]`，不新增architecture版本、不改checkpoint parameter shapes |
 | 監督目標 | 對每個日期內的有效11A raw target採average rank並轉為`(rank−1)/(n−1)`；同值使用平均rank、單一候選日固定0.5。此轉換只依該日期事件，不使用其他日期或split統計 |
@@ -1232,6 +1232,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Runtime | `runtime_eligible=false`；不設threshold，不允許binary runtime artifact loader或forward-OOS export，不覆蓋9A `unique_group_sampling`工件 |
 | Dataset／Label | 不重建Dataset、不relabel；嚴格驗證11A target manifest、檔案hash、group count與dataset policy。11A invalid groups不進loss或評估 |
 | Formal契約 | B172／T269驗證profile與architecture分離、classification workflow拒絕research profile、同日percentile/tie/singleton、跨日期隔離、target hash fail-fast、2-logit checkpoint shape、research-only工件、OOS post-checkpoint順序、CLI註冊，以及互動選單`[10]`只路由至同一`train-continuous-ranker` command module |
+| Formal double-check閉環 | 使用者於2026-07-30執行正式suite：quick gate、consistency、chain checks與ML smoke均PASS；meta quality只有`checklist_g_rows_require_actual_status_change`與`checklist_g_rows_sorted_by_date_then_id`兩項FAIL。根因為B172選單紀錄誤寫`DONE -> DONE`，且2026-07-30同日G區塊未依B／T namespace及數字段排序；已將選單新增與驗證拆成`DONE -> PARTIAL -> DONE`，並整段重排同日G列。此閉環只修改文件治理紀錄，不改11B程式或研究契約 |
 | 下一步 | 可執行`python apps/breakout_quality.py`後選`[10]`，或直接執行`python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1`，取得完整Selection/OOS與realized-R結果；尚未取得結果前不得標記ACCEPTED或REJECTED |
 
 
