@@ -9700,6 +9700,196 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
     return results, summary
 
 
+def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_CANDIDATE_COUNTERFACTUAL_EXECUTION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from core.strategy_params import V16StrategyParams
+    from tools.filters.breakout_quality.audit_candidate_counterfactual_execution import (
+        CandidateCounterfactualReplay,
+        _metrics as counterfactual_metrics,
+        _render_markdown as render_counterfactual_markdown,
+    )
+
+    dates = tuple(pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"]))
+    fast = {
+        "_packed_market_data": True,
+        "dates": dates,
+        "date_to_pos": {date: idx for idx, date in enumerate(dates)},
+        "security_profile": None,
+        "Open": np.asarray([99.0, 99.0, 89.0]),
+        "High": np.asarray([100.0, 103.0, 90.0]),
+        "Low": np.asarray([98.0, 98.0, 88.0]),
+        "Close": np.asarray([99.0, 102.0, 89.0]),
+        "Volume": np.asarray([1000.0, 1000.0, 1000.0]),
+        "ATR": np.asarray([5.0, 5.0, 5.0]),
+        "buy_limit": np.asarray([100.0, 100.0, 100.0]),
+        "is_setup": np.asarray([False, False, False]),
+        "ind_sell_signal": np.asarray([False, False, False]),
+    }
+    params = V16StrategyParams()
+    candidate = {
+        "ticker": "2330",
+        "signal_date": "2020-01-01",
+        "candidate_date": "2020-01-02",
+        "trade_date": dates[1],
+        "type": "normal",
+        "entry_source": "normal",
+        "qty": 1000,
+        "limit_px": 100.0,
+        "init_sl": 90.0,
+        "init_trail": 90.0,
+        "target_price": 110.0,
+        "entry_atr": None,
+        "security_profile": None,
+        "today_pos": 1,
+        "yesterday_pos": 0,
+        "sizing_capital": 1_000_000.0,
+        "params_obj": params,
+        "is_orderable": True,
+    }
+    tracker = CandidateCounterfactualReplay(candidate_cutoff="2020-01-02")
+    tracker.begin_replay_day(today=dates[1], all_dfs_fast={"2330": fast}, fallback_params=params)
+    tracker.observe_replay_candidates(
+        today=dates[1],
+        qualified_candidates=[candidate],
+        orderable_candidates=[candidate],
+        all_dfs_fast={"2330": fast},
+        sizing_equity=1_000_000.0,
+        fallback_params=params,
+    )
+    tracker.begin_replay_day(today=dates[2], all_dfs_fast={"2330": fast}, fallback_params=params)
+    frame = tracker.signal_frame()
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_reuses_canonical_entry_and_exit_for_filled_signal",
+        (1, True, True, "2020-01-02", "2020-01-03", "STOP", True),
+        (
+            len(frame), bool(frame.iloc[0]["filled"]), bool(frame.iloc[0]["closed"]),
+            frame.iloc[0]["entry_date"], frame.iloc[0]["exit_date"], frame.iloc[0]["exit_type"],
+            float(frame.iloc[0]["r_multiple"]) < 0.0,
+        ),
+    )
+
+    unfilled = CandidateCounterfactualReplay(candidate_cutoff="2020-01-02")
+    high_open_fast = dict(fast)
+    high_open_fast.update({
+        "Open": np.asarray([110.0, 110.0, 110.0]),
+        "High": np.asarray([111.0, 111.0, 111.0]),
+        "Low": np.asarray([109.0, 109.0, 109.0]),
+        "Close": np.asarray([110.0, 110.0, 110.0]),
+    })
+    unfilled.observe_replay_candidates(
+        today=dates[1], qualified_candidates=[candidate], orderable_candidates=[candidate],
+        all_dfs_fast={"2330": high_open_fast}, sizing_equity=1_000_000.0, fallback_params=params,
+    )
+    unfilled.finalize_replay(last_date=dates[2], fallback_params=params)
+    unfilled_frame = unfilled.signal_frame()
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_keeps_unfilled_signal_unlabeled_not_zero_r",
+        (False, False, True, 1),
+        (
+            bool(unfilled_frame.iloc[0]["filled"]), bool(unfilled_frame.iloc[0]["closed"]),
+            bool(pd.isna(unfilled_frame.iloc[0]["r_multiple"])),
+            int(unfilled_frame.iloc[0]["missed_buy_count"]),
+        ),
+    )
+
+    metric_frame = pd.DataFrame({
+        "ticker": ["A", "B", "C"],
+        "target_match": [True, True, True],
+        "was_orderable": [True, True, False],
+        "filled": [True, False, False],
+        "closed": [True, False, False],
+        "target_raw_r": [2.0, 1.0, 0.0],
+        "r_multiple": [1.5, np.nan, np.nan],
+        "label": [LABEL_PASS, LABEL_PASS, LABEL_REJECT],
+    })
+    metrics = counterfactual_metrics(metric_frame)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_coverage_denominators_are_qualified_orderable_and_filled",
+        (3, 2, 1, 1/3, 1/2, 1/3),
+        (
+            metrics["qualified_signal_count"], metrics["orderable_signal_count"], metrics["filled_signal_count"],
+            metrics["fill_coverage_vs_qualified"], metrics["fill_coverage_vs_orderable"],
+            metrics["strategy_r_coverage_vs_qualified"],
+        ),
+        tol=1e-12,
+    )
+    markdown = render_counterfactual_markdown({
+        "metrics": metrics,
+        "source_11i": {"actual_trade_coverage_vs_qualified": 0.22},
+    })
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_report_states_capacity_ablation_and_unfilled_boundary",
+        True,
+        all(token in markdown for token in (
+            "忽略portfolio capacity", "未成交候選維持unlabeled", "不建立Target arrays", "不授權模型",
+        )),
+    )
+
+    root = Path(__file__).resolve().parents[2]
+    app_source = (root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    app_tree = ast.parse(app_source)
+    command_modules = {}
+    for node in app_tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "COMMAND_MODULES" for target in node.targets
+        ):
+            command_modules = ast.literal_eval(node.value)
+            break
+    menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
+    engine_source = (root / "core" / "portfolio_engine.py").read_text(encoding="utf-8")
+    entry_source = (root / "core" / "portfolio_entries.py").read_text(encoding="utf-8")
+    audit_source = (
+        root / "tools" / "filters" / "breakout_quality" / "audit_candidate_counterfactual_execution.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_cli_only_and_observer_hooks_are_optional",
+        (True, True, True, True, True),
+        (
+            command_modules.get("audit-candidate-counterfactual")
+            == "tools.filters.breakout_quality.audit_candidate_counterfactual_execution",
+            "11J" not in menu_source,
+            "audit-candidate-counterfactual" not in menu_source,
+            'getattr(replay_counts, "begin_replay_day", None)' in engine_source,
+            'getattr(replay_counts, "observe_replay_candidates", None)' in engine_source,
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_reuses_entry_shadow_exit_and_accounting_ssot",
+        (True, True, True, True, True),
+        (
+            "build_candidate_plan_seed" in entry_source,
+            "execute_pre_market_entry_plan" in audit_source,
+            "execute_bar_step" in audit_source,
+            "closeout_open_positions" in audit_source,
+            "calc_ratio_from_milli" in audit_source,
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_is_read_only_and_requires_11i_positive_result",
+        (True, True, True, True, True),
+        (
+            '"training_performed":False' in audit_source,
+            '"runtime_eligible":False' in audit_source,
+            "11J需要11I overall與PASS Target↔R均為正" in audit_source,
+            "11J偵測到11I artifact SHA256不一致" in audit_source,
+            "torch.save" not in audit_source,
+        ),
+    )
+    summary["command"] = "audit-candidate-counterfactual"
+    summary["audit"] = "canonical_per_candidate_execution"
+    return results, summary
+
+
 __all__ = [
     "validate_breakout_quality_chronological_embargo_case",
     "validate_breakout_quality_continuous_target_contract_case",
@@ -9713,5 +9903,6 @@ __all__ = [
     "validate_breakout_quality_policy_single_source_case",
     "validate_breakout_quality_runtime_artifact_contract_case",
     "validate_breakout_quality_selection_strategy_realization_contract_case",
+    "validate_breakout_quality_candidate_counterfactual_execution_contract_case",
     "validate_breakout_quality_strategy_comparison_contract_case",
 ]

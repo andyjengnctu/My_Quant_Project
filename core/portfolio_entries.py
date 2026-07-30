@@ -32,7 +32,7 @@ def _candidate_kind_label(candidate_type):
     return '新訊號'
 
 
-def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
+def build_candidate_plan_seed(candidate_row, sizing_equity=None):
     sizing_capital = candidate_row.get('sizing_capital')
     if (sizing_capital is None or sizing_capital != sizing_capital) and sizing_equity is not None:
         sizing_capital = sizing_equity
@@ -70,7 +70,7 @@ def _build_candidate_full_entry_plan_if_affordable(candidate_row, available_cash
     if not entry_notional_meets_minimum(candidate_row.get('limit_px'), qty, params):
         return None
 
-    entry_plan = _build_candidate_plan_seed(candidate_row, sizing_equity=sizing_equity)
+    entry_plan = build_candidate_plan_seed(candidate_row, sizing_equity=sizing_equity)
     entry_plan['qty'] = qty
     entry_plan['is_orderable'] = True
     entry_plan['reserved_cost_milli'] = reserved_cost_milli
@@ -88,7 +88,7 @@ def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_b
     if full_entry_plan is not None:
         return full_entry_plan
     return build_cash_capped_entry_plan(
-        _build_candidate_plan_seed(candidate_row, sizing_equity=sizing_equity),
+        build_candidate_plan_seed(candidate_row, sizing_equity=sizing_equity),
         effective_entry_budget,
         params,
     )

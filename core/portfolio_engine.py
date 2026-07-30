@@ -859,6 +859,17 @@ def run_portfolio_timeline(
             day_cursor_key = id(day_pit_stats_index)
             day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
 
+        replay_begin_day = getattr(replay_counts, "begin_replay_day", None) if replay_counts is not None else None
+        if callable(replay_begin_day):
+            _run_portfolio_replay_phase(
+                today,
+                "counterfactual_begin_day",
+                replay_begin_day,
+                today=today,
+                all_dfs_fast=day_all_dfs_fast,
+                fallback_params=day_params,
+            )
+
         if today.year not in year_start_equity:
             year_start_equity[today.year] = milli_to_money(current_equity)
             year_first_sim_date[today.year] = pd.Timestamp(today)
@@ -1080,6 +1091,20 @@ def run_portfolio_timeline(
                     before_trade_rows = len(trade_history)
                 else:
                     before_trade_rows = -1
+
+                replay_observe_candidates = getattr(replay_counts, "observe_replay_candidates", None) if replay_counts is not None else None
+                if callable(replay_observe_candidates):
+                    _run_portfolio_replay_phase(
+                        today,
+                        "counterfactual_observe_candidates",
+                        replay_observe_candidates,
+                        today=today,
+                        qualified_candidates=list(candidates_today or []),
+                        orderable_candidates=list(orderable_candidates_today or []),
+                        all_dfs_fast=day_all_dfs_fast,
+                        sizing_equity=sizing_equity,
+                        fallback_params=day_params,
+                    )
 
                 if orderable_candidates_today:
                     t0 = time.perf_counter() if profile_timing_enabled else None
@@ -1304,6 +1329,15 @@ def run_portfolio_timeline(
 
     t0 = time.perf_counter() if profile_timing_enabled else None
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
+    replay_finalize = getattr(replay_counts, "finalize_replay", None) if replay_counts is not None else None
+    if callable(replay_finalize):
+        _run_portfolio_replay_phase(
+            last_date,
+            "counterfactual_finalize",
+            replay_finalize,
+            last_date=last_date,
+            fallback_params=params,
+        )
     closeout_params = active_params_resolver(last_date) if (active_params_resolver is not None and last_date is not None) else params
     today_equity, normal_trade_count, extended_trade_count = closeout_open_positions(
         portfolio=portfolio,

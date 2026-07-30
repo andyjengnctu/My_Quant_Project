@@ -286,3 +286,11 @@ python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_
 11I重用既有Rolling OOS optimizer與canonical portfolio replay，建立2014～2020 Selection內nested OOS策略實現覆蓋。Nested params建立至2020-12-31，但策略replay與Target配對只允許到11F `final_refit_date_range.end=2020-11-05`，避免Target path跨入2021。研究參數透過`V16_MODELS_DIR`寫入獨立research models目錄；`tools/optimizer/outer_rolling_oos.py`必須忠實使用該models path，避免覆蓋正式`models/roos_*.json`。`--optimizer-trials`的CLI預設直接引用`config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`，確保config為單一真理來源；明確CLI值仍可單次覆蓋，已生成腳本不會隨config自動改寫。
 
 正式CLI為`audit-selection-strategy-realization`，只輸出qualified／orderable candidate、round trips、No-time Target匹配與Target↔strategy R診斷。Actual portfolio trades受資金與持倉競爭選擇，未交易候選保持unlabeled；本輪不建立訓練Target、profile、checkpoint或runtime score，亦不加入互動選單。
+
+### 11J Canonical Per-candidate Counterfactual Execution Audit
+
+`audit-candidate-counterfactual`在11I Selection nested-OOS replay上使用optional replay observer。一般`replay_counts`仍是普通dict時，`core.portfolio_engine`行為完全不變；只有11J observer存在時，才平行追蹤每個`ticker/signal_date`的獨立執行路徑。
+
+執行規則不另寫第二套模擬器：candidate plan由`core.portfolio_entries.build_candidate_plan_seed`建立，進場重用`execute_pre_market_entry_plan`，延續／TBD沿用候選既有shadow state，每日管理重用`execute_bar_step`，期末重用`closeout_open_positions`，R與費稅重用exact accounting。Observer只移除portfolio capacity與cash competition，不改history qualification、active params、ensemble min-agree、orderability、限價、停損、停利或出場語意。
+
+候選截止2020-11-05，持倉可管理至2020-12-31。未成交訊號保持unlabeled；11J不建立Target arrays、model profile、checkpoint、threshold或runtime score，且只提供CLI。
