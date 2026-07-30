@@ -350,6 +350,78 @@ def load_validated_continuous_target_arrays(
     return manifest, values, valid
 
 
+def load_validated_continuous_target_component_arrays(
+    project_root: str | Path,
+    filter_id: str,
+    *,
+    target_id: str = STRATEGY_ALIGNED_TARGET_ID,
+    expected_group_count: int | None = None,
+    expected_dataset_policy: dict[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, np.ndarray]]:
+    """Load all continuous-target component arrays with strict manifest validation."""
+
+    manifest, target, valid_mask = load_validated_continuous_target_arrays(
+        project_root,
+        filter_id,
+        target_id=target_id,
+        expected_group_count=expected_group_count,
+        expected_dataset_policy=expected_dataset_policy,
+    )
+    target_dir = resolve_continuous_target_dir(
+        project_root,
+        filter_id,
+        target_id=target_id,
+    )
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError("continuous target manifest缺少artifacts")
+    component_specs = {
+        "favorable_return": TARGET_FAVORABLE_RETURN_FILENAME,
+        "adverse_return_to_peak": TARGET_ADVERSE_RETURN_FILENAME,
+        "opportunity_bar": TARGET_OPPORTUNITY_BAR_FILENAME,
+        "first_risk_breach_bar": TARGET_RISK_BREACH_BAR_FILENAME,
+    }
+    arrays: dict[str, np.ndarray] = {
+        "target_raw_r": np.asarray(target, dtype=np.float32),
+        "valid_mask": np.asarray(valid_mask, dtype=bool),
+    }
+    for name, filename in component_specs.items():
+        path = target_dir / filename
+        record = artifacts.get(name)
+        if not isinstance(record, dict):
+            raise ValueError(f"continuous target artifacts缺少{name}")
+        if str(record.get("filename") or "") != filename or not path.is_file():
+            raise ValueError(f"continuous target component不存在或filename不一致: {name}")
+        if int(record.get("size_bytes", -1)) != int(path.stat().st_size):
+            raise ValueError(f"continuous target component size不一致: {name}")
+        if str(record.get("sha256") or "").lower() != _file_sha256(path).lower():
+            raise ValueError(f"continuous target component SHA256不一致: {name}")
+        arrays[name] = np.load(path, allow_pickle=False)
+
+    group_count = len(arrays["target_raw_r"])
+    for name, values in arrays.items():
+        if np.asarray(values).ndim != 1 or len(values) != group_count:
+            raise ValueError(f"continuous target component shape不一致: {name}")
+    valid = arrays["valid_mask"]
+    for name in ("favorable_return", "adverse_return_to_peak"):
+        values = np.asarray(arrays[name], dtype=np.float64)
+        if bool(np.any(valid & ~np.isfinite(values))):
+            raise ValueError(f"continuous target valid rows含非有限{name}")
+        if bool(np.any(~valid & np.isfinite(values))):
+            raise ValueError(f"continuous target invalid rows必須為NaN: {name}")
+    opportunity = np.asarray(arrays["opportunity_bar"], dtype=np.int64)
+    if bool(np.any(valid & (opportunity < 1))):
+        raise ValueError("continuous target valid rows的opportunity_bar必須>=1")
+    if bool(np.any(~valid & (opportunity != -1))):
+        raise ValueError("continuous target invalid rows的opportunity_bar必須為-1")
+    risk_breach = np.asarray(arrays["first_risk_breach_bar"], dtype=np.int64)
+    if bool(np.any(valid & (risk_breach < -1))) or bool(np.any(valid & (risk_breach == 0))):
+        raise ValueError("continuous target valid rows的first_risk_breach_bar只允許-1或>=1")
+    if bool(np.any(~valid & (risk_breach != -1))):
+        raise ValueError("continuous target invalid rows的first_risk_breach_bar必須為-1")
+    return manifest, arrays
+
+
 __all__ = [
     "CONTINUOUS_TARGET_SCHEMA_VERSION",
     "STRATEGY_ALIGNED_TARGET_ID",
@@ -368,6 +440,7 @@ __all__ = [
     "StrategyAlignedContinuousTargetSpec",
     "build_strategy_aligned_group_targets",
     "load_validated_continuous_target_arrays",
+    "load_validated_continuous_target_component_arrays",
     "resolve_continuous_target_dir",
     "strategy_aligned_target_from_cached_path",
 ]

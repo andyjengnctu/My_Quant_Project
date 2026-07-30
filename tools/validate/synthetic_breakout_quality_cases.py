@@ -104,14 +104,20 @@ from filters.breakout_quality.augmentation import (
     build_training_augmentation_plan,
 )
 from filters.breakout_quality.continuous_target import (
+    CONTINUOUS_TARGET_SCHEMA_VERSION,
     STRATEGY_ALIGNED_TARGET_ID,
     StrategyAlignedContinuousTargetSpec,
     build_strategy_aligned_group_targets,
     load_validated_continuous_target_arrays,
+    load_validated_continuous_target_component_arrays,
     resolve_continuous_target_dir,
     strategy_aligned_target_from_cached_path,
+    TARGET_ADVERSE_RETURN_FILENAME,
+    TARGET_FAVORABLE_RETURN_FILENAME,
     TARGET_MANIFEST_FILENAME,
+    TARGET_OPPORTUNITY_BAR_FILENAME,
     TARGET_RAW_FILENAME,
+    TARGET_RISK_BREACH_BAR_FILENAME,
     TARGET_VALID_MASK_FILENAME,
 )
 from filters.breakout_quality.contract import (
@@ -270,6 +276,11 @@ from tools.filters.breakout_quality.regime_audit import (
     build_regime_audit_payload,
     derive_benchmark_regime_features,
     render_regime_audit_markdown,
+)
+from tools.filters.breakout_quality.audit_target_component_attribution import (
+    attach_target_components as target_attribution_attach_components,
+    attribution_metrics as target_attribution_metrics,
+    render_markdown as render_target_attribution_markdown,
 )
 from tools.filters.breakout_quality.audit_qualified_candidate_set import (
     _actual_trade_metrics as qualified_audit_actual_trade_metrics,
@@ -7647,6 +7658,212 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
 
     summary["command"] = "audit-qualified-candidate-set"
     summary["layers"] = ["all_oos_breakouts", "qualified_candidates", "orderable_candidates", "actual_trades"]
+    return results, summary
+
+
+def validate_breakout_quality_target_component_attribution_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_TARGET_COMPONENT_ATTRIBUTION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    target = np.asarray([2.5, 1.5, 0.5, -0.2, -0.7, -1.0], dtype=np.float32)
+    favorable = np.asarray([0.25, 0.20, 0.10, 0.08, 0.03, 0.00], dtype=np.float32)
+    adverse = np.asarray([0.00, 0.05, 0.05, 0.10, 0.10, 0.10], dtype=np.float32)
+    arrays = {
+        "target_raw_r": target,
+        "valid_mask": np.ones(len(target), dtype=np.bool_),
+        "favorable_return": favorable,
+        "adverse_return_to_peak": adverse,
+        "opportunity_bar": np.ones(len(target), dtype=np.int16),
+        "first_risk_breach_bar": np.asarray([-1, -1, -1, -1, -1, 1], dtype=np.int16),
+    }
+    contract = {
+        "risk_budget_return": 0.10,
+        "horizon_bars": 40,
+        "full_horizon_time_penalty_r": 0.5,
+    }
+    frame = pd.DataFrame({
+        "ticker": [f"T{i}" for i in range(len(target))],
+        "target_date": [f"2021-01-{i + 1:02d}" for i in range(len(target))],
+        "group_index": np.arange(len(target), dtype=np.int64),
+        "label": [LABEL_PASS, LABEL_PASS, LABEL_PASS, LABEL_REJECT, LABEL_REJECT, LABEL_REJECT],
+        "target_raw_r": target,
+        "model_score": [0.95, 0.85, 0.75, 0.35, 0.25, 0.15],
+        "r_multiple": [3.0, 2.0, 1.0, -0.2, -0.8, -1.1],
+    })
+    attached = target_attribution_attach_components(
+        frame,
+        arrays=arrays,
+        target_contract=contract,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_components_reconstruct_fixed_11a_target",
+        True,
+        bool(np.allclose(attached["target_reconstructed_r"], target, rtol=0.0, atol=2e-5)),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_component_r_units_are_favorable_minus_adverse_minus_time",
+        (2.5, 0.5, -1.0),
+        tuple(round(float(value), 6) for value in attached.loc[[0, 2, 5], "target_reconstructed_r"]),
+    )
+
+    metrics = target_attribution_metrics(attached, include_realized_r=True)
+    correlations = metrics["correlations"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_attribution_preserves_score_target_and_target_realized_directions",
+        (1.0, 1.0, 1.0),
+        (
+            round(float(correlations["score_vs_target"]), 6),
+            round(float(correlations["target_vs_realized_r"]), 6),
+            round(float(correlations["score_vs_realized_r"]), 6),
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_attribution_reports_pass_and_reject_conditional_metrics",
+        (3, 3, 1.0, 1.0),
+        (
+            int(metrics["by_label"]["pass"]["row_count"]),
+            int(metrics["by_label"]["reject"]["row_count"]),
+            round(float(metrics["by_label"]["pass"]["correlations"]["target_vs_realized_r"]), 6),
+            round(float(metrics["by_label"]["reject"]["correlations"]["target_vs_realized_r"]), 6),
+        ),
+    )
+    markdown = render_target_attribution_markdown({
+        "qualified_candidates": target_attribution_metrics(attached, include_realized_r=False),
+        "actual_trades": metrics,
+    })
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_attribution_markdown_exposes_label_conditional_decision_boundary",
+        True,
+        all(token in markdown for token in ("PASS", "REJECT", "Target↔R", "停止連續排序線")),
+    )
+
+    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_source = app_path.read_text(encoding="utf-8")
+    app_tree = ast.parse(app_source, filename=str(app_path))
+    command_modules = {}
+    for node in app_tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(target_node, ast.Name) and target_node.id == "COMMAND_MODULES" for target_node in node.targets):
+            command_modules = ast.literal_eval(node.value)
+            break
+    audit_path = (
+        Path(__file__).resolve().parents[1]
+        / "filters"
+        / "breakout_quality"
+        / "audit_target_component_attribution.py"
+    )
+    audit_source = audit_path.read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_attribution_audit_is_cli_only",
+        (True, True, True),
+        (
+            command_modules.get("audit-target-attribution")
+            == "tools.filters.breakout_quality.audit_target_component_attribution",
+            "11D" not in app_source[app_source.find("def _run_interactive_menu"):app_source.find("def main")],
+            'choice == "12"' not in app_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "target_attribution_audit_is_strict_read_only_failure_attribution",
+        (True, True, True, True, True),
+        (
+            "load_validated_continuous_target_component_arrays" in audit_source,
+            '"training_performed": False' in audit_source,
+            '"research_only": True' in audit_source,
+            "torch.save(" not in audit_source,
+            "optimizer" not in audit_source.lower(),
+        ),
+    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        target_dir = resolve_continuous_target_dir(tmp_dir, "synthetic_filter")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        artifact_arrays = {
+            "target_raw_r": (TARGET_RAW_FILENAME, target),
+            "valid_mask": (TARGET_VALID_MASK_FILENAME, np.ones(len(target), dtype=np.bool_)),
+            "favorable_return": (TARGET_FAVORABLE_RETURN_FILENAME, favorable),
+            "adverse_return_to_peak": (TARGET_ADVERSE_RETURN_FILENAME, adverse),
+            "opportunity_bar": (TARGET_OPPORTUNITY_BAR_FILENAME, np.ones(len(target), dtype=np.int16)),
+            "first_risk_breach_bar": (
+                TARGET_RISK_BREACH_BAR_FILENAME,
+                np.asarray([-1, -1, -1, -1, -1, 1], dtype=np.int16),
+            ),
+        }
+        artifacts = {}
+        for name, (filename, values) in artifact_arrays.items():
+            path = target_dir / filename
+            np.save(path, values, allow_pickle=False)
+            artifacts[name] = {
+                "filename": filename,
+                "size_bytes": int(path.stat().st_size),
+                "sha256": __import__("hashlib").sha256(path.read_bytes()).hexdigest(),
+            }
+        manifest = {
+            "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+            "filter_id": "synthetic_filter",
+            "group_count": len(target),
+            "dataset_policy": {"synthetic": True},
+            "target_contract": {"target_id": STRATEGY_ALIGNED_TARGET_ID},
+            "artifacts": artifacts,
+        }
+        (target_dir / TARGET_MANIFEST_FILENAME).write_text(
+            json.dumps(manifest, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        loaded_manifest, loaded_arrays = load_validated_continuous_target_component_arrays(
+            tmp_dir,
+            "synthetic_filter",
+            expected_group_count=len(target),
+            expected_dataset_policy={"synthetic": True},
+        )
+        favorable_path = target_dir / TARGET_FAVORABLE_RETURN_FILENAME
+        favorable_path.write_bytes(favorable_path.read_bytes() + b"tamper")
+        try:
+            load_validated_continuous_target_component_arrays(
+                tmp_dir,
+                "synthetic_filter",
+                expected_group_count=len(target),
+                expected_dataset_policy={"synthetic": True},
+            )
+            tamper_rejected = False
+        except ValueError:
+            tamper_rejected = True
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_component_loader_validates_all_artifacts_and_rejects_tamper",
+        (True, True, True),
+        (
+            str((loaded_manifest.get("target_contract") or {}).get("target_id")) == STRATEGY_ALIGNED_TARGET_ID,
+            bool(np.allclose(loaded_arrays["favorable_return"], favorable)),
+            tamper_rejected,
+        ),
+    )
+    summary["command"] = "audit-target-attribution"
+    summary["layers"] = ["qualified_candidates", "actual_trades", "pass", "reject"]
     return results, summary
 
 def validate_breakout_quality_strategy_comparison_contract_case(_base_params):

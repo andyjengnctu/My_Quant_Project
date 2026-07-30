@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪實作ZIP `test-branch-1_20260730_175638_acf047a.zip`，SHA256 `78f65cc8a06ed586a9a891c1dfa9b21abd890e8cc70f5e3a056d825a53c5173b`；11C Qualified Candidate-set Coverage Audit已實作、尚未取得完整結果。11B維持淘汰，正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`78f65cc8a06ed586a9a891c1dfa9b21abd890e8cc70f5e3a056d825a53c5173b`；11B完整結果文件為使用者提供的`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | 本輪實作基準`test-branch-1_20260730_183212_cf1f2cd.zip`，SHA256 `f915767cd5c49397987d411c3b3bcbd1d1c1b6a8d1a96004f5c4ee74a80fd5ab`；11C正式結果已取得並排除qualified母體崩落假設，11D Label-conditional Target Component Attribution Audit已實作、尚未取得本機結果。11B維持淘汰，正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`f915767cd5c49397987d411c3b3bcbd1d1c1b6a8d1a96004f5c4ee74a80fd5ab`；11C結果來源為使用者提供的`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -724,6 +724,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 39. 把2022排序失效主要歸因於combined-regime low-support，或只靠oversampling／重複少量deep-drawdown事件修復；排除36.01%的low-support事件後PR-AUC只由0.4582升至0.4722，已見regime仍廣泛失效。
 40. Candidate-conditioned Market Set與其learned-lag延伸；10A OOS PR-AUC較9A低0.0248，P@50／60／70%低0.75／0.41／0.47 pp，R@P60%低2.69 pp。Recall增加7.30 pp只因模型PASS增加7.34 pp，不是排序改善；不啟動10B learned lag、query數／heads／embedding或Market Set微調。
 41. 11B同日percentile MSE與其直接微調；OOS mean daily Spearman僅0.1327、PR-AUC 0.5959，actual trade R Spearman −0.0003，Score前10%平均0.6500R反而低於後10%的2.0251R。不得再調MSE／Huber、epoch、patience、LR、batch、percentile公式、直接pairwise loss或同一全事件訓練母體。
+42. 直接建立qualified-candidate-only sampling profile；11C顯示Score↔Target由all OOS 0.1677升至qualified 0.1918、orderable 0.1891，actual trades更達0.2459，沒有母體崩落證據。不得以候選母體不一致為理由直接重訓。
 
 ---
 
@@ -731,21 +732,19 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 所有實驗一次只改一項。既有 OOS 可持續作為固定比較集；每次模型的訓練、Validation、early stopping 與 epoch 選擇必須完全限制在 Selection 內，完整 OOS 只能在模型凍結後執行。OOS 結果可以用來接受、淘汰或形成下一個實驗，不再以「OOS 已被查看」作為停止研究的理由。正式 runtime 仍維持 `base_finalists_agree` 既有排序且 Quality Ranking 關閉，除非新實驗同時通過模型指標與策略經濟效果。
 
-### 目前新增優先：11C Qualified Candidate-set Coverage Audit
+### 目前新增優先：11D Label-conditional Target Component Attribution Audit
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；11B淘汰後的只讀失敗歸因，尚待本機正式OOS replay結果；不訓練、不改模型 |
-| 研究依據 | 11A target本身與realized R有0.4044 Spearman，但11B對全部OOS groups雖仍有0.1677 target Spearman，進入真正交易子集後model score與realized R降為−0.0003；顯示「全breakout事件」訓練母體可能沒有對齊策略實際候選競爭面 |
-| 唯一變更 | 重用既有hard-filter `historical_active_param_oos` no-filter portfolio replay與每日active params，透過可選diagnostic capture保存qualified與orderable candidate membership；不另寫資格規則，不改11A target、9A features、encoder、loss或runtime |
-| 稽核層級 | 固定比較OOS全部breakout groups、qualified候選、資金／持股限制後orderable候選、actual round trips四層；候選以原始`signal_date`對齊11A target與11B score，同一ticker／signal_date重複出現時另保留occurrence並建立unique-group口徑 |
-| 稽核內容 | 各層輸出occurrence／ticker-signal-date unique groups、每日候選數、matched coverage、Score↔11A target的global／mean-daily Spearman、pair concordance及Score decile target；actual trades另輸出Target↔R、Score↔Target、Score↔R、Target／Score decile realized R、≥2R大贏家保留率，以及actual signals對qualified／orderable集合的membership rate |
-| Train／OOS邊界 | 本輪只使用已凍結11A arrays、11B research scores與固定OOS historical active-param replay作迭代研究歸因；不建立loss、sample weight、normalization、threshold、epoch或任何模型參數 |
-| 判定 | 若qualified／orderable層的Score↔Target相較全部OOS明顯崩落，而actual trades仍維持Target↔R正向，下一步才考慮`qualified_candidate_set_sampling`新profile；若Target↔R在同次actual trades也失效，則淘汰11A作策略排序target，不再訓練其變體 |
-| Dataset rebuild | 不重建breakout feature bank、不relabel、不重訓9A／11B；只建立versioned candidate membership與audit工件。需要既有11B scores、11A trade matches及hard-filter strategy comparison metadata |
-| 執行入口 | `python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breakout_quality_v1`（CLI-only；臨時research不加入互動選單）；輸出位於11B research profile下的`qualified_candidate_set_audit/` |
-| 不做項目 | 不重訓11B、不調MSE／Huber／pairwise loss、不blend 9A／11B score、不使用OOS選門檻或權重 |
-| UI治理 | 11B與11C均為臨時／research-only工具，只保留CLI子命令；互動選單只保留穩定正式操作，避免研究項目持續膨脹 |
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；11C完成後的只讀成分與Label條件歸因，不訓練、不改模型 |
+| 研究依據 | 11C中Score↔Target由all OOS 0.1677提升至qualified 0.1918、actual trades 0.2459，但Score↔R仍−0.0003，而Target↔R維持0.4015；母體不一致不是主因 |
+| 唯一變更 | 讀取既有11A component arrays、11B OOS scores與11C qualified／actual trade工件，固定重建favorable R、adverse R、time penalty R並做相關性分解 |
+| 稽核內容 | qualified層檢查Score捕捉哪個Target成分；actual trades檢查各成分↔R、Score↔各成分、Score／Target decile；PASS／REJECT分層判斷Target↔R是否只來自二元分離 |
+| Train／OOS邊界 | 凍結工件的迭代研究歸因；不建立或修改target、loss、sample weight、normalization、epoch、threshold、模型或runtime contract |
+| 判定 | PASS／REJECT內Target↔R均消失則終止連續排序線；PASS內仍正向且Score失效才規劃conditional magnitude；單一成分主導時先做固定成分target audit |
+| Dataset rebuild | 不需要；需要既有11A arrays、11B scores及11C report／qualified groups／actual trade matches |
+| 執行入口 | `python apps/breakout_quality.py audit-target-attribution --filter-id breakout_quality_v1`（CLI-only，不加入互動選單） |
+| 不做項目 | 不建立qualified sampling、不重訓11B、不調MSE／Huber／pairwise、不blend score、不使用OOS擬合任何權重 |
 
 ### 優先 6A：AdamW only
 
@@ -1240,18 +1239,29 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；只讀OOS候選母體與交易子集失敗歸因已實作，尚未取得使用者本機正式replay結果，不得先標記有效或無效 |
-| 程式基準 | `test-branch-1_20260730_175638_acf047a.zip`，SHA256 `78f65cc8a06ed586a9a891c1dfa9b21abd890e8cc70f5e3a056d825a53c5173b`；正式policy仍為9A，11A／11B既有工件不重建 |
-| 目的 | 分離11B的兩種可能失敗：模型在全部breakout母體即學不到11A target，或模型在全部母體仍有弱訊號、但進入historical active-param qualified／orderable決策面後崩落 |
-| 候選單一真理 | `core.portfolio_engine`只在明確傳入`replay_counts`時保存candidate diagnostic snapshot；`strategy_compare.run_no_filter_candidate_replay_from_metadata`重播既有hard-filter no-filter scenario。Filter、active-param、ensemble min-agree、history qualification、資金／持股與buy-sort仍由原portfolio chain決定，不複製第二套資格邏輯 |
-| 日期對齊 | 每筆候選保留`trade_date`、`candidate_date`與原始`signal_date`；11A target與11B score優先以ticker／signal_date對齊，signal缺失才fallback candidate／trade date。重複候選保留occurrence口徑，模型統計另以ticker／target_date去重 |
-| 層級 | `all_oos_breakouts`、`qualified_candidates`、`orderable_candidates`、`actual_trades`。qualified是正式portfolio replay形成的候選，orderable是當日進入排序／下單競爭面的候選，actual trades沿用11A已建立的canonical Round-trip matches |
-| 指標 | 各候選層輸出occurrence、unique groups、每日候選量、target match coverage、Score↔Target global／mean-daily Spearman、pair concordance、Score top／bottom decile target；交易層輸出Target↔R、Score↔Target、Score↔R、兩種decile realized R與≥2R贏家上半部保留率 |
-| 防錯契約 | strategy metadata必須為hard-filter、`historical_active_param_oos`、lookahead-safe且threshold作gate；candidate capture replay的報酬、MDD、RoMD、曝險、PnL與trade counts必須與原no-filter strategy summary一致，不只比trade count；11B scores hash、research-only狀態與ticker/date唯一性均strict驗證 |
-| OOS邊界 | 本輪OOS只用於已凍結模型的迭代研究失敗歸因；不建立或修改target、loss、sampling、weight、epoch、threshold、normalization或runtime contract |
-| 工件 | `outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_daily_percentile_mse/qualified_candidate_set_audit/`；包含qualified／orderable occurrences、兩層unique groups、daily coverage、actual trade matches與JSON／Markdown報表 |
-| 執行 | `python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breakout_quality_v1`（CLI-only；臨時research不加入互動選單）；執行前需保留11B report／scores、11A trade matches與hard-filter `strategy_compare/strategy_comparison.json` |
-| 下一步 | 等正式報表後單一判定：若actual Target↔R仍正向且qualified／orderable Score↔Target明顯低於all OOS，才規劃qualified-candidate sampling；否則淘汰11A／11B整條策略排序目標，不先建立11C模型 |
+| 狀態 | `RESULT_AVAILABLE / QUALIFIED_SAMPLING_NOT_SUPPORTED`；母體與交易子集只讀歸因完成，11B失效不能歸因為qualified／orderable候選層的Score↔Target崩落 |
+| 程式基準 | 結果ZIP `test-branch-1_20260730_183212_cf1f2cd.zip`，SHA256 `f915767cd5c49397987d411c3b3bcbd1d1c1b6a8d1a96004f5c4ee74a80fd5ab`；正式結果來源為`qualified_candidate_set_audit.json`，執行時間180.98秒 |
+| 母體覆蓋 | 全OOS 17,346 unique groups；qualified 4,971（占全OOS 28.66%）；orderable 4,957，為qualified的99.03%；actual trades成功配對422／435，且422筆全部屬於qualified及orderable集合 |
+| Score↔Target | Global Spearman由all OOS 0.1677升至qualified 0.1918、orderable 0.1891；pair concordance由0.5387升至0.5574／0.5573，Score top-bottom target spread由1.2950R擴至1.6516R／1.6305R。Mean daily Spearman雖由0.1327降至0.1096／0.1077，但沒有母體崩落 |
+| Actual trades | Target↔realized R=0.4015，Target top／bottom decile實際R=2.1737R／0.0942R，≥2R贏家78.85%位於Target上半部；Score↔Target=0.2459，但Score↔realized R仍為−0.0003，Score top／bottom decile實際R仍反轉為0.6500R／2.0251R |
+| 判定 | 不建立`qualified_candidate_set_sampling` profile。模型進入qualified／orderable甚至actual-trade集合後仍保留或提高Score↔Target，因此全事件訓練母體不是11B失效主因；問題是Score捕捉到的Target變異並非與realized R相關的Target變異 |
+| OOS邊界 | 本結果只作凍結11B模型的迭代研究歸因；不改target、loss、sampling、weight、epoch、threshold、normalization或runtime contract |
+| Dataset／工件 | 不重建Dataset、不relabel、不重訓9A／11B；保留11C四層candidate與actual trade工件供後續成分歸因 |
+| 下一步 | 進入11D Label-conditional Target Component Attribution Audit：將11A拆為favorable R、adverse R與time penalty R，並在qualified與actual trades分別計算Score及realized R關係；同時依PASS／REJECT分層，判定11A的0.4015是否只來自二元Label分離 |
+
+### 3.52 11D Label-conditional Target Component Attribution Audit（2026-07-30）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；CLI-only只讀歸因已實作，尚待使用者本機既有工件執行，不得先建立conditional模型 |
+| 程式基準 | 以`test-branch-1_20260730_183212_cf1f2cd.zip`為唯一來源基準；本輪新增`audit-target-attribution`、continuous target component strict loader與synthetic契約，不修改9A／11B模型或candidate replay |
+| 研究問題 | 11C顯示actual trades內Score↔Target為0.2459但Score↔R為0，Target↔R仍0.4015；需區分模型是否主要學到二元PASS／REJECT分離、favorable upside、低adverse risk或較快opportunity，而真正R由不同成分驅動 |
+| 固定分解 | 直接讀取11A固定arrays：`favorable_r=favorable_return/risk_budget`、`adverse_r=adverse_return_to_peak/risk_budget`、`time_penalty_r=0.5×(opportunity_bar−1)/(horizon−1)`；逐筆驗證`target=favorable_r−adverse_r−time_penalty_r`，不得重新定義或擬合成分 |
+| 母體 | qualified unique groups與actual trade matches均由已完成11C工件讀取；以11B OOS score的ticker／target_date取得唯一group index與Label，再用group index對齊11A component arrays |
+| 指標 | qualified輸出Score↔Target／favorable／adverse／time；actual trades輸出每一成分↔realized R、Score↔各成分、Score／Target decile的成分與R；另依PASS／REJECT分層輸出Target↔R、Score↔Target、Score↔R及各成分↔R |
+| 判定 | 若PASS與REJECT內Target↔R都接近0，則11A經濟關係主要來自二元分離，停止連續排序線；若PASS內Target↔R仍正向但Score↔Target／R失效，才可規劃conditional magnitude head；若單一成分主導R而Score未捕捉，只能先做固定成分target audit，不直接訓練或調OOS參數 |
+| OOS／runtime邊界 | research-only、`training_performed=false`；不建立loss、sampling、epoch、threshold、normalization、runtime score或策略回測，且不加入互動選單 |
+| 執行 | `python apps/breakout_quality.py audit-target-attribution --filter-id breakout_quality_v1` |
 
 
 ---
@@ -1299,7 +1309,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 10A Candidate-conditioned Query（REJECTED；OOS PR-AUC 0.6009，低於9A；不啟動learned lag）
 → 11A Strategy-aligned Continuous Target Audit（RESULT_AVAILABLE；DISTRIBUTION_PASS／TRADE_R_PRIMARY_PASS）
 → 11B Strategy-aligned Daily Percentile Regression（REJECTED；OOS target弱正向但actual R Spearman −0.0003、decile反轉）
-→ 11C Qualified Candidate-set Coverage Audit（IMPLEMENTED；待本機正式replay結果，只讀診斷不訓練）
+→ 11C Qualified Candidate-set Coverage Audit（RESULT_AVAILABLE；qualified／orderable Score↔Target未崩落，不支持qualified sampling）
+→ 11D Label-conditional Target Component Attribution Audit（IMPLEMENTED；待本機結果，CLI-only只讀歸因）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

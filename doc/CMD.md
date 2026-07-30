@@ -165,6 +165,31 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 
 本命令會重播no-filter OOS以取得candidate membership，但不重訓模型、不relabel、不修改9A／11B工件，也不產生runtime scores。qualified候選資格、orderable限制與active params全部由既有portfolio replay決定；audit只讀取並對齊原始`signal_date`。重播後會核對報酬、MDD、RoMD、曝險、PnL與trade counts均未因diagnostic capture改變，並輸出qualified／orderable兩層occurrence與unique-group CSV、每日coverage、actual membership及JSON／Markdown報表。
 
+### 11D Target Component Attribution Audit
+
+11C完成後，使用既有11A component arrays、11B OOS scores與11C qualified／actual-trade工件做Label條件分解。此命令只提供CLI，不加入互動選單：
+
+```bash
+python apps/breakout_quality.py audit-target-attribution --filter-id breakout_quality_v1
+```
+
+輸出位於：
+
+```text
+outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_daily_percentile_mse/target_component_attribution_audit/
+```
+
+主要工件：
+
+```text
+target_component_attribution_audit.md
+target_component_attribution_audit.json
+qualified_target_component_attribution.csv
+actual_trade_target_component_attribution.csv
+```
+
+本命令固定驗證`target=favorable_r-adverse_r-time_penalty_r`，並在qualified與actual trades分別計算Score／Target成分及realized R關係；另依PASS／REJECT分層。它不訓練、不改target、不調threshold或任何OOS參數。
+
 模型架構與訓練實驗分開管理：
 
 ```python

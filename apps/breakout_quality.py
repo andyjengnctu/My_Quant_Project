@@ -82,6 +82,7 @@ COMMAND_MODULES = {
     "audit-continuous-target": "tools.filters.breakout_quality.audit_continuous_target",
     "train-continuous-ranker": "tools.filters.breakout_quality.train_continuous_ranker",
     "audit-qualified-candidate-set": "tools.filters.breakout_quality.audit_qualified_candidate_set",
+    "audit-target-attribution": "tools.filters.breakout_quality.audit_target_component_attribution",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -103,6 +104,7 @@ COMMAND_DESCRIPTIONS = {
     "audit-continuous-target": "建立11A連續target arrays並稽核分布、同日排序與實際R方向",
     "train-continuous-ranker": "執行11B同日percentile MSE排序研究；research-only",
     "audit-qualified-candidate-set": "執行11C策略qualified candidate-set失敗歸因；research-only",
+    "audit-target-attribution": "執行11D Target成分與Label條件失敗歸因；research-only",
 }
 
 

@@ -139,6 +139,18 @@ python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breako
 
 11C只提供`audit-qualified-candidate-set` CLI入口，不加入互動選單。Audit以原始`signal_date`對齊11A target及11B research score，保留candidate occurrence並另建立ticker／signal-date唯一group口徑；固定比較全部OOS breakouts、qualified candidates、orderable candidates與actual round trips。輸出包含qualified／orderable occurrence與ticker-signal-date unique-group工件、每日coverage、Score↔Target排序，以及actual signals對qualified／orderable的membership與Target／Score↔R診斷，寫入11B profile下的`qualified_candidate_set_audit/`。它不建立optimizer、loss、epoch、normalization、threshold或部署工件，也不授權qualified-candidate training；是否建立新sampling profile必須等正式audit結果後另行決定。
 
+### 11D Label-conditional Target Component Attribution Audit
+
+11C結果顯示qualified／orderable層的Score↔Target沒有崩落，因此11D不新增sampling profile，而是直接分解既有11A target。正式CLI為：
+
+```bash
+python apps/breakout_quality.py audit-target-attribution --filter-id breakout_quality_v1
+```
+
+`filters.breakout_quality.continuous_target.load_validated_continuous_target_component_arrays`以11A manifest的filename、size與SHA256 strict載入raw target、valid mask、favorable return、adverse return、opportunity bar與first risk breach bar。11D以11B OOS score的唯一group index對齊qualified unique groups與actual trades，固定推導favorable R、adverse R與time penalty R，逐筆驗證三成分可重建11A target；再輸出整體及PASS／REJECT條件下的Score↔Target成分與各成分↔realized R。
+
+11D只寫入11B profile下的`target_component_attribution_audit/`，不建立optimizer、checkpoint、sampling、normalization、threshold、runtime score或策略回測；CLI-only，不加入互動選單。
+
 
 - `tools/validate/`：正式 invariant、contract、schema 與 real-case 驗證子系統；正式細目與狀態以 `doc/TEST_SUITE_CHECKLIST.md` 為準。
 
