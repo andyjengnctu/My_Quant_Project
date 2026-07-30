@@ -9772,6 +9772,32 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
         ),
     )
 
+    deferred = CandidateCounterfactualReplay(
+        candidate_cutoff="2020-01-02",
+        defer_finalize=True,
+    )
+    deferred.observe_replay_candidates(
+        today=dates[1], qualified_candidates=[candidate], orderable_candidates=[candidate],
+        all_dfs_fast={"2330": fast}, sizing_equity=1_000_000.0, fallback_params=params,
+    )
+    deferred.finalize_replay(last_date=dates[1], fallback_params=params)
+    discovery_frame = deferred.signal_frame()
+    deferred.defer_finalize = False
+    deferred.finalize_replay(last_date=dates[2], fallback_params=params)
+    managed_frame = deferred.signal_frame()
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_defers_closeout_between_discovery_and_management",
+        (True, False, False, True, "FORCED_CLOSE"),
+        (
+            bool(discovery_frame.iloc[0]["filled"]),
+            bool(discovery_frame.iloc[0]["closed"]),
+            bool(deferred.defer_finalize),
+            bool(managed_frame.iloc[0]["closed"]),
+            managed_frame.iloc[0]["exit_type"],
+        ),
+    )
+
     unfilled = CandidateCounterfactualReplay(candidate_cutoff="2020-01-02")
     high_open_fast = dict(fast)
     high_open_fast.update({
@@ -9873,6 +9899,24 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
             "calc_ratio_from_milli" in audit_source,
         ),
     )
+    discovery_call = audit_source.find('name="11J_candidate_discovery"')
+    discovery_end = audit_source.find("end_date=candidate_cutoff", discovery_call)
+    count_guard = audit_source.find("len(tracker.states)!=source_qualified_count", discovery_end)
+    management_call = audit_source.find('name="11J_counterfactual_management"', count_guard)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_separates_exact_discovery_from_position_management",
+        (True, True, True, True, True, True),
+        (
+            'defer_finalize=True' in audit_source,
+            'if self.defer_finalize:' in audit_source,
+            discovery_call >= 0,
+            discovery_end > discovery_call,
+            count_guard > discovery_end,
+            management_call > count_guard,
+        ),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "candidate_counterfactual_is_read_only_and_requires_11i_positive_result",

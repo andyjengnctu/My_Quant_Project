@@ -519,7 +519,7 @@ python apps/breakout_quality.py audit-selection-strategy-realization --filter-id
 python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet
 ```
 
-候選只收集2014-01-01～2020-11-05；已成交counterfactual position可依進場時參數管理至2020-12-31。此audit忽略portfolio capacity與cash competition，但保留正式限價成交、locked-limit、shadow inheritance、半倉停利、停損、指標出場、賣出受阻、費稅與R口徑。
+11J分兩段執行：第一段完全以11I相同的2014-01-01～2020-11-05範圍發現候選，先精確核對qualified unique signals，且延後counterfactual position的期末結算；第二段自2020-11-06管理至2020-12-31，只推進第一段既有position並禁止新增candidate state。此audit忽略portfolio capacity與cash competition，但保留正式限價成交、locked-limit、shadow inheritance、半倉停利、停損、指標出場、賣出受阻、費稅與R口徑。
 
 輸出位於：
 

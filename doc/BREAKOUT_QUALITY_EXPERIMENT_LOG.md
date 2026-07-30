@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪實作基準`test-branch-1_20260730_225759_e072178.zip`，SHA256 `192f712fc95e3bd04559879f34bb8070d996575a9052d6e6cc0322c3be63f689`；11I Selection nested-OOS結果已取得，No-time Target↔strategy R為0.5644、PASS內0.5182，但actual trade只覆蓋qualified候選21.77%。11J canonical per-candidate counterfactual execution audit已實作、尚待本機結果。正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`192f712fc95e3bd04559879f34bb8070d996575a9052d6e6cc0322c3be63f689`；11I結果來源為使用者提供的`selection_strategy_realization_audit.md`；上一輪11I trial SSOT修正來源：`3c7b295768a988ec5a0b6a951097bd6dfede35334af7ca6a1eedd96f5a85cf2e`；11G結果來源為使用者提供的`continuous_ranker_report(1).md`；11F結果來源為`continuous_target_audit(4).md`；11E結果來源為`target_time_penalty_ablation_audit.md`；11D結果來源為`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | 本輪修正基準`test-branch-1_20260730_232004_2ae43fb.zip`，SHA256 `e7fede23caef3950e5275a238fbfe4fa9349f02fdd28cfc00aea8f9458625f46`；11I Selection nested-OOS結果維持No-time Target↔strategy R 0.5644、PASS內0.5182、actual coverage 21.77%。11J首次本機執行因單一延伸replay只重現1,978／2,003 qualified signals而fail-fast；已改為候選發現與持倉延伸管理兩階段，尚待重跑結果。正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`e7fede23caef3950e5275a238fbfe4fa9349f02fdd28cfc00aea8f9458625f46`；11J失敗紀錄為`expected=2003, actual=1978`，發生於counterfactual結果輸出前；11I結果來源為使用者提供的`selection_strategy_realization_audit.md`；上一輪11I trial SSOT修正來源：`3c7b295768a988ec5a0b6a951097bd6dfede35334af7ca6a1eedd96f5a85cf2e`；11G結果來源為使用者提供的`continuous_ranker_report(1).md`；11F結果來源為`continuous_target_audit(4).md`；11E結果來源為`target_time_penalty_ablation_audit.md`；11D結果來源為`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1349,13 +1349,13 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；CLI-only、只讀nested Selection candidate replay，尚待本機結果 |
-| 程式基準 | `test-branch-1_20260730_225759_e072178.zip`，SHA256 `192f712fc95e3bd04559879f34bb8070d996575a9052d6e6cc0322c3be63f689` |
-| 唯一變更 | 在既有`replay_counts`物件上以optional observer hooks平行追蹤每個qualified訊號；一般dict無observer時行為完全不變。忽略portfolio capacity／cash competition，但不改candidate qualification／orderability |
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；首次本機執行在輸出前因qualified invariant `2,003 != 1,978` fail-fast；已修正為兩階段replay，尚待重跑 |
+| 程式基準 | 修正基準`test-branch-1_20260730_232004_2ae43fb.zip`，SHA256 `e7fede23caef3950e5275a238fbfe4fa9349f02fdd28cfc00aea8f9458625f46`；原11J實作基準為`test-branch-1_20260730_225759_e072178.zip` |
+| 唯一變更 | 在既有`replay_counts`物件上以optional observer hooks平行追蹤每個qualified訊號；一般dict無observer時行為完全不變。忽略portfolio capacity／cash competition，但不改candidate qualification／orderability。候選發現固定重播2014-01-01～2020-11-05並先精確核對11I的2,003筆；其後另開2020-11-06～2020-12-31管理replay，只推進既有counterfactual持倉，不允許新增state |
 | 交易SSOT | 公開既有`build_candidate_plan_seed`供研究重用；進場使用`execute_pre_market_entry_plan`，shadow state沿用原候選列，每日管理使用`execute_bar_step`，期末使用`closeout_open_positions`，R使用`calc_ratio_from_milli` |
 | 訊號口徑 | 以`ticker＋signal_date`唯一化；同訊號可跨日多次orderable嘗試，首次成交後停止再進場。未成交保持`r_multiple=NaN`，不標0R |
-| 日期 | 候選觀察2014-01-01～2020-11-05；持倉管理延伸至nested OOS尾端2020-12-31，讓最後一批Selection訊號有完整可執行出場路徑 |
-| Strict來源 | 必須先有11I completed report，overall與PASS Target↔R均正、coverage未滿；驗證11I artifact與nested params SHA256，重播portfolio summary須與11I一致 |
+| 日期 | 第一段候選發現完全重現11I的2014-01-01～2020-11-05；第一段期末不得強制結算counterfactual部位。第二段自2020-11-06管理至2020-12-31，只允許既有state出場或期末結算，不得新增候選state |
+| Strict來源 | 必須先有11I completed report，overall與PASS Target↔R均正、coverage未滿；驗證11I artifact與nested params SHA256。第一段qualified unique count必須精確等於11I；第二段前後state count必須完全相同，任何差異均fail-fast |
 | 輸出 | `candidate_counterfactual_execution_audit/`下輸出全訊號、filled與unfilled CSV及JSON／Markdown；含qualified／orderable／filled／Target-matched coverage、Target↔counterfactual R、PASS／REJECT與decile結果 |
 | 邊界 | 不建立Target arrays、不訓練、不選epoch、不調optimizer／loss／threshold、不產生runtime score；11J結果review前不得建立新模型 |
 | 執行 | `python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet` |

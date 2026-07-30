@@ -293,4 +293,4 @@ python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_
 
 執行規則不另寫第二套模擬器：candidate plan由`core.portfolio_entries.build_candidate_plan_seed`建立，進場重用`execute_pre_market_entry_plan`，延續／TBD沿用候選既有shadow state，每日管理重用`execute_bar_step`，期末重用`closeout_open_positions`，R與費稅重用exact accounting。Observer只移除portfolio capacity與cash competition，不改history qualification、active params、ensemble min-agree、orderability、限價、停損、停利或出場語意。
 
-候選截止2020-11-05，持倉可管理至2020-12-31。未成交訊號保持unlabeled；11J不建立Target arrays、model profile、checkpoint、threshold或runtime score，且只提供CLI。
+11J採兩階段replay隔離日期語意：candidate discovery必須用與11I完全相同的2014-01-01～2020-11-05範圍，並在任何延伸管理前精確核對qualified unique count；observer於第一段延後finalize。第二段自2020-11-06～2020-12-31只呼叫既有counterfactual position管理與期末結算，candidate cutoff使新候選不進state，且第二段前後state count必須不變。未成交訊號保持unlabeled；11J不建立Target arrays、model profile、checkpoint、threshold或runtime score，且只提供CLI。

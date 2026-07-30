@@ -83,9 +83,10 @@ def _entry_type_text(value: Any) -> str:
 class CandidateCounterfactualReplay(dict):
     """Observer threaded through canonical portfolio replay via the existing replay_counts object."""
 
-    def __init__(self, *, candidate_cutoff: str):
+    def __init__(self, *, candidate_cutoff: str, defer_finalize: bool = False):
         super().__init__()
         self.candidate_cutoff = _date_text(candidate_cutoff)
+        self.defer_finalize = bool(defer_finalize)
         self.states: dict[tuple[str, str], dict[str, Any]] = {}
         self.finalized = False
 
@@ -252,6 +253,8 @@ class CandidateCounterfactualReplay(dict):
             state["last_px"] = position["last_px"]
 
     def finalize_replay(self, *, last_date, fallback_params):
+        if self.defer_finalize:
+            return
         if self.finalized:
             return
         self.finalized = True
@@ -451,25 +454,56 @@ def main(argv=None) -> int:
     if not data_dir.is_dir():
         raise FileNotFoundError(f"11J找不到11I dataset: {data_dir}")
     strategy=dict(source_report.get("strategy") or {})
-    tracker=CandidateCounterfactualReplay(candidate_cutoff=candidate_cutoff)
-    scenario=_run_scenario(
-        name="11J_candidate_counterfactual_execution",
+    max_positions=int(strategy.get("max_positions",10) or 10)
+    enable_rotation=bool(strategy.get("rotation",False))
+    tracker=CandidateCounterfactualReplay(
+        candidate_cutoff=candidate_cutoff,
+        defer_finalize=True,
+    )
+    discovery_scenario=_run_scenario(
+        name="11J_candidate_discovery",
         data_dir=data_dir,
         param_source_kind=param_source_kind,
         params=no_filter_params,
         start_date=start_date,
-        end_date=replay_end,
-        max_positions=int(strategy.get("max_positions",10) or 10),
-        enable_rotation=bool(strategy.get("rotation",False)),
+        end_date=candidate_cutoff,
+        max_positions=max_positions,
+        enable_rotation=enable_rotation,
         quiet=bool(args.quiet),
         replay_counts=tracker,
     )
-    replay_summary=_scenario_summary(scenario)
+    discovery_summary=_scenario_summary(discovery_scenario)
     source_qualified_count=int((source_report.get("coverage") or {}).get("qualified_unique_signal_count",0) or 0)
     if source_qualified_count and len(tracker.states)!=source_qualified_count:
         raise ValueError(
-            "11J候選重播與11I qualified unique signals不一致: "
+            "11J候選發現重播與11I qualified unique signals不一致: "
             f"expected={source_qualified_count}, actual={len(tracker.states)}"
+        )
+
+    discovered_state_count=len(tracker.states)
+    management_start=_date_text(pd.Timestamp(candidate_cutoff)+pd.Timedelta(days=1))
+    tracker.defer_finalize=False
+    if management_start<=replay_end:
+        management_scenario=_run_scenario(
+            name="11J_counterfactual_management",
+            data_dir=data_dir,
+            param_source_kind=param_source_kind,
+            params=no_filter_params,
+            start_date=management_start,
+            end_date=replay_end,
+            max_positions=max_positions,
+            enable_rotation=enable_rotation,
+            quiet=bool(args.quiet),
+            replay_counts=tracker,
+        )
+        management_summary=_scenario_summary(management_scenario)
+    else:
+        tracker.finalize_replay(last_date=pd.Timestamp(candidate_cutoff),fallback_params=None)
+        management_summary={"skipped":True,"reason":"candidate cutoff equals replay end"}
+    if len(tracker.states)!=discovered_state_count:
+        raise ValueError(
+            "11J持倉管理階段不得新增candidate states: "
+            f"before={discovered_state_count}, after={len(tracker.states)}"
         )
 
     lookup,target_manifest=_target_lookup(str(args.filter_id))
@@ -511,7 +545,18 @@ def main(argv=None) -> int:
         "params":{"path":str(params_path),"sha256":_sha256_file(params_path),"source_kind":param_source_kind,"coverage_start":param_first,"coverage_end":param_last},
         "target":{"target_id":STRATEGY_ALIGNED_NO_TIME_TARGET_ID,"manifest_generated_at_utc":target_manifest.get("generated_at_utc")},
         "metrics":metrics,
-        "replay_summary":replay_summary,
+        "replay":{
+            "candidate_discovery":{
+                "start":start_date,
+                "end":candidate_cutoff,
+                "summary":discovery_summary,
+            },
+            "position_management":{
+                "start":management_start,
+                "end":replay_end,
+                "summary":management_summary,
+            },
+        },
         "artifacts":artifacts,
         "training_performed":False,
         "runtime_eligible":False,
