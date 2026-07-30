@@ -83,6 +83,7 @@ COMMAND_MODULES = {
     "train-continuous-ranker": "tools.filters.breakout_quality.train_continuous_ranker",
     "audit-qualified-candidate-set": "tools.filters.breakout_quality.audit_qualified_candidate_set",
     "audit-target-attribution": "tools.filters.breakout_quality.audit_target_component_attribution",
+    "audit-target-time-ablation": "tools.filters.breakout_quality.audit_target_time_penalty_ablation",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -105,6 +106,7 @@ COMMAND_DESCRIPTIONS = {
     "train-continuous-ranker": "執行11B同日percentile MSE排序研究；research-only",
     "audit-qualified-candidate-set": "執行11C策略qualified candidate-set失敗歸因；research-only",
     "audit-target-attribution": "執行11D Target成分與Label條件失敗歸因；research-only",
+    "audit-target-time-ablation": "執行11E固定移除time penalty的Target稽核；research-only",
 }
 
 

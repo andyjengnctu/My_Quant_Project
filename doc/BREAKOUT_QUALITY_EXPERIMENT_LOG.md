@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪實作基準`test-branch-1_20260730_183212_cf1f2cd.zip`，SHA256 `f915767cd5c49397987d411c3b3bcbd1d1c1b6a8d1a96004f5c4ee74a80fd5ab`；11C正式結果已取得並排除qualified母體崩落假設，11D Label-conditional Target Component Attribution Audit已實作、尚未取得本機結果。11B維持淘汰，正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`f915767cd5c49397987d411c3b3bcbd1d1c1b6a8d1a96004f5c4ee74a80fd5ab`；11C結果來源為使用者提供的`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | 本輪實作基準`test-branch-1_20260730_185755_152e019.zip`，SHA256 `c1a2b1285f3fc8999b6969a40b453f3303306d240ebb0224a9eb1ed89ba678cc`；11D正式結果已取得，確認PASS內連續Target仍有actual-R資訊，但原time penalty方向與actual R相反；11E Fixed Time-penalty Ablation Audit已實作、尚未取得本機結果。11B維持淘汰，正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`c1a2b1285f3fc8999b6969a40b453f3303306d240ebb0224a9eb1ed89ba678cc`；11D結果來源為使用者提供的`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -725,6 +725,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 40. Candidate-conditioned Market Set與其learned-lag延伸；10A OOS PR-AUC較9A低0.0248，P@50／60／70%低0.75／0.41／0.47 pp，R@P60%低2.69 pp。Recall增加7.30 pp只因模型PASS增加7.34 pp，不是排序改善；不啟動10B learned lag、query數／heads／embedding或Market Set微調。
 41. 11B同日percentile MSE與其直接微調；OOS mean daily Spearman僅0.1327、PR-AUC 0.5959，actual trade R Spearman −0.0003，Score前10%平均0.6500R反而低於後10%的2.0251R。不得再調MSE／Huber、epoch、patience、LR、batch、percentile公式、直接pairwise loss或同一全事件訓練母體。
 42. 直接建立qualified-candidate-only sampling profile；11C顯示Score↔Target由all OOS 0.1677升至qualified 0.1918、orderable 0.1891，actual trades更達0.2459，沒有母體崩落證據。不得以候選母體不一致為理由直接重訓。
+43. 在11E完成前直接建立PASS-conditional magnitude head，或依11D OOS結果調time penalty正負號／係數；11D雖確認PASS內Target↔R為0.3600，但原time penalty與actual R為+0.4454、Score與time penalty為−0.1610，必須先以固定移除消融隔離驗證，不得搜尋權重或直接訓練。
 
 ---
 
@@ -732,19 +733,20 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 所有實驗一次只改一項。既有 OOS 可持續作為固定比較集；每次模型的訓練、Validation、early stopping 與 epoch 選擇必須完全限制在 Selection 內，完整 OOS 只能在模型凍結後執行。OOS 結果可以用來接受、淘汰或形成下一個實驗，不再以「OOS 已被查看」作為停止研究的理由。正式 runtime 仍維持 `base_finalists_agree` 既有排序且 Quality Ranking 關閉，除非新實驗同時通過模型指標與策略經濟效果。
 
-### 目前新增優先：11D Label-conditional Target Component Attribution Audit
+### 目前新增優先：11E Fixed Time-penalty Ablation Audit
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；11C完成後的只讀成分與Label條件歸因，不訓練、不改模型 |
-| 研究依據 | 11C中Score↔Target由all OOS 0.1677提升至qualified 0.1918、actual trades 0.2459，但Score↔R仍−0.0003，而Target↔R維持0.4015；母體不一致不是主因 |
-| 唯一變更 | 讀取既有11A component arrays、11B OOS scores與11C qualified／actual trade工件，固定重建favorable R、adverse R、time penalty R並做相關性分解 |
-| 稽核內容 | qualified層檢查Score捕捉哪個Target成分；actual trades檢查各成分↔R、Score↔各成分、Score／Target decile；PASS／REJECT分層判斷Target↔R是否只來自二元分離 |
-| Train／OOS邊界 | 凍結工件的迭代研究歸因；不建立或修改target、loss、sample weight、normalization、epoch、threshold、模型或runtime contract |
-| 判定 | PASS／REJECT內Target↔R均消失則終止連續排序線；PASS內仍正向且Score失效才規劃conditional magnitude；單一成分主導時先做固定成分target audit |
-| Dataset rebuild | 不需要；需要既有11A arrays、11B scores及11C report／qualified groups／actual trade matches |
-| 執行入口 | `python apps/breakout_quality.py audit-target-attribution --filter-id breakout_quality_v1`（CLI-only，不加入互動選單） |
-| 不做項目 | 不建立qualified sampling、不重訓11B、不調MSE／Huber／pairwise、不blend score、不使用OOS擬合任何權重 |
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；11D完成後的單一固定Target消融，不訓練、不改模型 |
+| 研究依據 | 11D中actual favorable↔R為0.4998、time penalty↔R為+0.4454，但11A固定扣除time penalty，且qualified Score↔time penalty為−0.1610；可能正好造成11B Score與realized R抵銷 |
+| 唯一變更 | 固定`target_no_time_r=favorable_r-adverse_r`；只移除time penalty，不反向加分、不搜尋係數、不改其他Target成分 |
+| 稽核內容 | qualified比較Score↔原Target／No-time Target；actual trades比較兩者↔R與decile spread；PASS／REJECT分層確認改善是否集中於真正可排序的PASS magnitude |
+| Train／OOS邊界 | 凍結工件的迭代研究消融；不建立新target version、loss、sample weight、normalization、epoch、threshold、模型或runtime contract |
+| 判定 | overall及PASS條件Target↔R與decile spread均改善，才進入新version target arrays及Selection-only可學性audit；否則停止time penalty線，不搜尋OOS最佳係數 |
+| Dataset rebuild | 不需要；需要既有11D report與qualified／actual attribution CSV |
+| 執行入口 | `python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_quality_v1`（CLI-only，不加入互動選單） |
+| 不做項目 | 不建立conditional head、不重訓11B、不反向加分time、不搜尋0.1／0.25／0.5等權重、不blend score |
+
 
 ### 優先 6A：AdamW only
 
@@ -1253,15 +1255,29 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；CLI-only只讀歸因已實作，尚待使用者本機既有工件執行，不得先建立conditional模型 |
-| 程式基準 | 以`test-branch-1_20260730_183212_cf1f2cd.zip`為唯一來源基準；本輪新增`audit-target-attribution`、continuous target component strict loader與synthetic契約，不修改9A／11B模型或candidate replay |
-| 研究問題 | 11C顯示actual trades內Score↔Target為0.2459但Score↔R為0，Target↔R仍0.4015；需區分模型是否主要學到二元PASS／REJECT分離、favorable upside、低adverse risk或較快opportunity，而真正R由不同成分驅動 |
-| 固定分解 | 直接讀取11A固定arrays：`favorable_r=favorable_return/risk_budget`、`adverse_r=adverse_return_to_peak/risk_budget`、`time_penalty_r=0.5×(opportunity_bar−1)/(horizon−1)`；逐筆驗證`target=favorable_r−adverse_r−time_penalty_r`，不得重新定義或擬合成分 |
-| 母體 | qualified unique groups與actual trade matches均由已完成11C工件讀取；以11B OOS score的ticker／target_date取得唯一group index與Label，再用group index對齊11A component arrays |
-| 指標 | qualified輸出Score↔Target／favorable／adverse／time；actual trades輸出每一成分↔realized R、Score↔各成分、Score／Target decile的成分與R；另依PASS／REJECT分層輸出Target↔R、Score↔Target、Score↔R及各成分↔R |
-| 判定 | 若PASS與REJECT內Target↔R都接近0，則11A經濟關係主要來自二元分離，停止連續排序線；若PASS內Target↔R仍正向但Score↔Target／R失效，才可規劃conditional magnitude head；若單一成分主導R而Score未捕捉，只能先做固定成分target audit，不直接訓練或調OOS參數 |
+| 狀態 | `RESULT_AVAILABLE / TIME_PENALTY_DIRECTION_MISMATCH`；PASS內連續Target仍含actual-R排序資訊，11A經濟關係不是只由PASS／REJECT分離造成；但原time penalty與actual R方向相反，禁止直接建立conditional magnitude模型 |
+| 程式基準 | 結果ZIP `test-branch-1_20260730_185755_152e019.zip`，SHA256 `c1a2b1285f3fc8999b6969a40b453f3303306d240ebb0224a9eb1ed89ba678cc`；正式結果來源為`target_component_attribution_audit.md`，由使用者本機既有11A／11B／11C工件執行 |
+| Qualified成分 | 4,971 rows；Score↔Target 0.1918、Score↔favorable R 0.1854、Score↔adverse R 0.1109、Score↔time penalty R −0.1610。模型同時偏好較高favorable與較快opportunity，但對adverse幅度的方向並不理想 |
+| Actual trades | 422 rows；Target↔R 0.4015、Score↔R −0.0003。Favorable R↔R 0.4998為最強固定成分，time penalty R↔R亦為+0.4454；adverse R↔R僅−0.0515，接近無關 |
+| PASS條件 | 214 rows；Target↔R 0.3600、Score↔Target 0.3500，但Score↔R −0.1011。Favorable↔R 0.4470、time penalty↔R 0.4734、adverse↔R 0.0313。證明PASS內仍有連續幅度資訊，但11B學到的Target方向沒有轉化為交易R |
+| REJECT條件 | 208 rows；Target↔R −0.1915、Score↔Target 0.1269、Score↔R −0.0252；favorable↔R 0.1595、time penalty↔R 0.3432、adverse↔R 0.0858。原Target在REJECT內方向不穩，不支持全Label共用magnitude head |
+| 主要錯位 | 11A公式固定扣除time penalty，但actual trades中較大的time penalty與較高R正相關；同時11B Score在qualified中與time penalty為負相關。也就是模型偏好較快機會，而實際策略大贏家反而常需要較長時間發展，形成Target學習與交易R的方向抵銷 |
+| 判定 | 不直接建立PASS-conditional magnitude head，不調time penalty係數、不反向加分、不重跑11B。下一步只允許單一固定消融：移除time penalty，保持favorable與adverse原單位，先驗證No-time Target的actual-R方向與PASS條件穩定性 |
+| Dataset／runtime | 不重建Dataset、不relabel、不重訓9A／11B；11D工件保留research-only，不建立runtime score或策略回測 |
+| 下一步 | 進入11E Fixed Time-penalty Ablation Audit：固定`target_no_time_r=favorable_r-adverse_r`，比較原Target與No-time Target在qualified、actual trades及PASS／REJECT條件下的Spearman與decile spread；本輪仍不建立新target version或模型 |
+
+### 3.53 11E Fixed Time-penalty Ablation Audit（2026-07-30）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；CLI-only固定Target消融已實作，尚待使用者本機既有11D工件執行，不得先建立新target arrays或模型 |
+| 程式基準 | 以`test-branch-1_20260730_185755_152e019.zip`、SHA256 `c1a2b1285f3fc8999b6969a40b453f3303306d240ebb0224a9eb1ed89ba678cc`為唯一來源基準；新增`audit-target-time-ablation`與direct synthetic contract |
+| 唯一變更 | 固定推導`target_no_time_r=favorable_r-adverse_r`，等價於只把原11A的time penalty係數由固定0.5R移除；不反向加分、不搜尋其他係數、不改risk budget、horizon、favorable或adverse定義 |
+| 輸入 | strict讀取已完成11D JSON與qualified／actual attribution CSV，驗證artifact SHA256、research-only狀態及原Target逐筆滿足`target_raw_r=target_no_time_r-time_penalty_r` |
+| 指標 | qualified比較Score↔原Target／No-time Target；actual trades比較兩種Target↔R、top-bottom decile R spread及差值；PASS／REJECT分層比較Target↔R、Score↔No-time Target、Score↔R與time penalty↔R |
+| 判定邊界 | 只有No-time Target在overall與PASS內均提高Target↔R及decile spread，才可進入新version target arrays與Selection-only可學性稽核；若只在REJECT改善或overall未改善，停止time-penalty消融。不得依OOS結果搜尋反向係數或其他權重 |
 | OOS／runtime邊界 | research-only、`training_performed=false`；不建立loss、sampling、epoch、threshold、normalization、runtime score或策略回測，且不加入互動選單 |
-| 執行 | `python apps/breakout_quality.py audit-target-attribution --filter-id breakout_quality_v1` |
+| 執行 | `python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_quality_v1` |
 
 
 ---
@@ -1310,7 +1326,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 11A Strategy-aligned Continuous Target Audit（RESULT_AVAILABLE；DISTRIBUTION_PASS／TRADE_R_PRIMARY_PASS）
 → 11B Strategy-aligned Daily Percentile Regression（REJECTED；OOS target弱正向但actual R Spearman −0.0003、decile反轉）
 → 11C Qualified Candidate-set Coverage Audit（RESULT_AVAILABLE；qualified／orderable Score↔Target未崩落，不支持qualified sampling）
-→ 11D Label-conditional Target Component Attribution Audit（IMPLEMENTED；待本機結果，CLI-only只讀歸因）
+→ 11D Label-conditional Target Component Attribution Audit（RESULT_AVAILABLE；PASS內連續Target有效，但time penalty方向與actual R錯位）
+→ 11E Fixed Time-penalty Ablation Audit（IMPLEMENTED；待本機結果，CLI-only固定消融）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

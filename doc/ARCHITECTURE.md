@@ -151,6 +151,18 @@ python apps/breakout_quality.py audit-target-attribution --filter-id breakout_qu
 
 11D只寫入11B profile下的`target_component_attribution_audit/`，不建立optimizer、checkpoint、sampling、normalization、threshold、runtime score或策略回測；CLI-only，不加入互動選單。
 
+### 11E Fixed Time-penalty Ablation Audit
+
+11D顯示time penalty與actual R方向相反，因此11E只做單一固定消融：
+
+```bash
+python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_quality_v1
+```
+
+11E strict讀取11D報表及兩份attribution CSV的SHA256，固定推導`target_no_time_r=favorable_r-adverse_r`，並逐筆驗證`target_raw_r=target_no_time_r-time_penalty_r`。Audit比較qualified與actual trades的原Target／No-time Target，另輸出PASS／REJECT條件Spearman與top-bottom decile realized R差距。
+
+11E只寫入11B profile下的`target_time_penalty_ablation_audit/`；不反向加分time penalty、不搜尋係數、不建立target version、optimizer、checkpoint、threshold或runtime score。CLI-only，不加入互動選單。
+
 
 - `tools/validate/`：正式 invariant、contract、schema 與 real-case 驗證子系統；正式細目與狀態以 `doc/TEST_SUITE_CHECKLIST.md` 為準。
 

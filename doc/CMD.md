@@ -190,6 +190,31 @@ actual_trade_target_component_attribution.csv
 
 本命令固定驗證`target=favorable_r-adverse_r-time_penalty_r`，並在qualified與actual trades分別計算Score／Target成分及realized R關係；另依PASS／REJECT分層。它不訓練、不改target、不調threshold或任何OOS參數。
 
+### 11E Fixed Time-penalty Ablation Audit
+
+11D完成後，只移除11A固定time penalty，檢查`target_no_time_r=favorable_r-adverse_r`是否更貼近actual R。此命令只提供CLI，不加入互動選單：
+
+```bash
+python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_quality_v1
+```
+
+輸出位於：
+
+```text
+outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_daily_percentile_mse/target_time_penalty_ablation_audit/
+```
+
+主要工件：
+
+```text
+target_time_penalty_ablation_audit.md
+target_time_penalty_ablation_audit.json
+qualified_time_penalty_ablation.csv
+actual_trade_time_penalty_ablation.csv
+```
+
+本命令只比較原11A Target與固定No-time Target，逐筆驗證`original=no_time-time_penalty`，並輸出overall與PASS／REJECT條件下的Target↔R、Score↔Target及decile差距。它不反向加分time penalty、不搜尋係數、不建立新target arrays、不訓練或修改runtime。
+
 模型架構與訓練實驗分開管理：
 
 ```python

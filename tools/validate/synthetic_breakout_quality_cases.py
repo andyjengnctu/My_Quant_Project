@@ -282,6 +282,12 @@ from tools.filters.breakout_quality.audit_target_component_attribution import (
     attribution_metrics as target_attribution_metrics,
     render_markdown as render_target_attribution_markdown,
 )
+from tools.filters.breakout_quality.audit_target_time_penalty_ablation import (
+    _validated_source_csv as time_ablation_validated_source_csv,
+    attach_time_penalty_ablation,
+    render_markdown as render_time_penalty_ablation_markdown,
+    time_penalty_ablation_metrics,
+)
 from tools.filters.breakout_quality.audit_qualified_candidate_set import (
     _actual_trade_metrics as qualified_audit_actual_trade_metrics,
     _assert_replay_matches_strategy_summary as assert_qualified_replay_matches_summary,
@@ -7864,6 +7870,203 @@ def validate_breakout_quality_target_component_attribution_contract_case(_base_p
     )
     summary["command"] = "audit-target-attribution"
     summary["layers"] = ["qualified_candidates", "actual_trades", "pass", "reject"]
+    return results, summary
+
+
+def validate_breakout_quality_target_time_penalty_ablation_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_TARGET_TIME_PENALTY_ABLATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    favorable = np.asarray([3.2, 2.7, 2.2, 1.7, 1.2, 0.7], dtype=np.float64)
+    adverse = np.asarray([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float64)
+    time_penalty = np.asarray([0.0, 1.8, 0.0, 0.8, 0.0, 0.0], dtype=np.float64)
+    no_time = favorable - adverse
+    original = no_time - time_penalty
+    frame = pd.DataFrame({
+        "ticker": [f"T{i}" for i in range(6)],
+        "target_date": [f"2021-02-{i + 1:02d}" for i in range(6)],
+        "group_index": np.arange(6, dtype=np.int64),
+        "label": [LABEL_PASS, LABEL_PASS, LABEL_PASS, LABEL_REJECT, LABEL_REJECT, LABEL_REJECT],
+        "model_score": original,
+        "target_raw_r": original,
+        "favorable_r": favorable,
+        "adverse_r": adverse,
+        "time_penalty_r": time_penalty,
+        "r_multiple": no_time,
+    })
+    attached = attach_time_penalty_ablation(frame)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_derives_fixed_favorable_minus_adverse_target",
+        tuple(round(float(value), 6) for value in no_time),
+        tuple(round(float(value), 6) for value in attached["target_no_time_r"]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_reconstructs_original_target_exactly",
+        True,
+        bool(np.allclose(
+            attached["target_original_reconstructed_r"],
+            attached["target_raw_r"],
+            rtol=0.0,
+            atol=2e-5,
+        )),
+    )
+
+    qualified_metrics = time_penalty_ablation_metrics(
+        attached,
+        include_realized_r=False,
+    )
+    actual_metrics = time_penalty_ablation_metrics(
+        attached,
+        include_realized_r=True,
+    )
+    corr = actual_metrics["correlations"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_reports_original_and_no_time_economic_directions",
+        (1.0, True),
+        (
+            round(float(corr["no_time_target_vs_realized_r"]), 6),
+            float(corr["no_time_target_vs_realized_r"])
+            > float(corr["original_target_vs_realized_r"]),
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_reports_positive_delta_and_decile_spread",
+        (True, True),
+        (
+            float(actual_metrics["deltas"]["spearman_no_time_minus_original"]) > 0.0,
+            float(actual_metrics["deltas"]["decile_spread_no_time_minus_original"]) >= 0.0,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_preserves_pass_reject_conditional_rows",
+        (3, 3),
+        (
+            int(actual_metrics["by_label"]["pass"]["row_count"]),
+            int(actual_metrics["by_label"]["reject"]["row_count"]),
+        ),
+    )
+
+    markdown = render_time_penalty_ablation_markdown({
+        "qualified_candidates": qualified_metrics,
+        "actual_trades": actual_metrics,
+    })
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_markdown_exposes_single_change_and_training_boundary",
+        True,
+        all(token in markdown for token in (
+            "target_no_time_r = favorable_r - adverse_r",
+            "PASS",
+            "REJECT",
+            "不授權訓練",
+            "不測time penalty反向加分",
+        )),
+    )
+
+    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_source = app_path.read_text(encoding="utf-8")
+    app_tree = ast.parse(app_source, filename=str(app_path))
+    command_modules = {}
+    for node in app_tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(
+            isinstance(target_node, ast.Name) and target_node.id == "COMMAND_MODULES"
+            for target_node in node.targets
+        ):
+            command_modules = ast.literal_eval(node.value)
+            break
+    audit_path = (
+        Path(__file__).resolve().parents[1]
+        / "filters"
+        / "breakout_quality"
+        / "audit_target_time_penalty_ablation.py"
+    )
+    audit_source = audit_path.read_text(encoding="utf-8")
+    menu_source = app_source[
+        app_source.find("def _run_interactive_menu") : app_source.find("def main")
+    ]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_audit_is_cli_only",
+        (True, True, True),
+        (
+            command_modules.get("audit-target-time-ablation")
+            == "tools.filters.breakout_quality.audit_target_time_penalty_ablation",
+            "11E" not in menu_source,
+            "audit-target-time-ablation" not in menu_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_is_strict_single_read_only_ablation",
+        (True, True, True, True, True, True),
+        (
+            "target_no_time_r = favorable_r - adverse_r" in audit_source,
+            '"single_fixed_ablation": "remove_time_penalty_only"' in audit_source,
+            '"training_performed": False' in audit_source,
+            '"research_only": True' in audit_source,
+            "torch.save(" not in audit_source,
+            "optimizer" not in audit_source.lower(),
+        ),
+    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        csv_path = Path(tmp_dir) / "source.csv"
+        frame.to_csv(csv_path, index=False, encoding="utf-8-sig")
+        report = {
+            "artifacts": {
+                "synthetic": {
+                    "sha256": __import__("hashlib").sha256(csv_path.read_bytes()).hexdigest(),
+                }
+            }
+        }
+        accepted = time_ablation_validated_source_csv(
+            report,
+            key="synthetic",
+            canonical_path=csv_path,
+        ) == csv_path
+        csv_path.write_text("tampered", encoding="utf-8")
+        try:
+            time_ablation_validated_source_csv(
+                report,
+                key="synthetic",
+                canonical_path=csv_path,
+            )
+            tamper_rejected = False
+        except ValueError:
+            tamper_rejected = True
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "time_ablation_strictly_validates_11d_source_hash",
+        (True, True),
+        (accepted, tamper_rejected),
+    )
+    summary["command"] = "audit-target-time-ablation"
+    summary["ablation"] = "remove_time_penalty_only"
     return results, summary
 
 def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
