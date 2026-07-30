@@ -24,7 +24,8 @@ import pandas as pd
 from config.breakout_quality_experiments import (
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     LR_SCHEDULE_NONE,
-    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+    TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
     SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES,
     SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
     TRAINING_SAMPLING_ALL_EVENT_ROWS,
@@ -242,7 +243,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--experiment-profile",
-        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        choices=SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
         default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
         help=(
             "訓練實驗設定；模型架構固定由 policy 管理。"
@@ -371,6 +372,10 @@ def validate_training_args(args) -> None:
     evaluation_workers = int(args.evaluation_workers)
     train_prefetch_batches = int(args.train_prefetch_batches)
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
+    if experiment.training_objective != TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
+        raise ValueError(
+            "train命令只接受binary classification profile；11B請使用train-continuous-ranker"
+        )
     optimizer_name = str(args.optimizer_name).strip().lower()
     lr_schedule_name = str(args.lr_schedule_name).strip().lower()
     augmentation_name = str(args.augmentation_name).strip().lower()

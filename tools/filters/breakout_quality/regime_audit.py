@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
 from config.breakout_quality_policy import BREAKOUT_QUALITY_EXPERIMENT_PROFILE
 from filters.breakout_quality.contract import (
     DEFAULT_FILTER_ID,
@@ -58,7 +58,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--filter-id", default=DEFAULT_FILTER_ID)
     parser.add_argument(
         "--experiment-profile",
-        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        choices=SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
         default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     )
     parser.add_argument("--score-path", default=None, help="自訂 research_scores.csv；通常不需指定")

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 import math
 from pathlib import Path
 
@@ -269,6 +271,85 @@ def resolve_continuous_target_dir(
     )
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_validated_continuous_target_arrays(
+    project_root: str | Path,
+    filter_id: str,
+    *,
+    target_id: str = STRATEGY_ALIGNED_TARGET_ID,
+    expected_group_count: int | None = None,
+    expected_dataset_policy: dict[str, object] | None = None,
+) -> tuple[dict[str, object], np.ndarray, np.ndarray]:
+    """Load target/valid arrays with strict manifest and hash validation."""
+
+    target_dir = resolve_continuous_target_dir(
+        project_root,
+        filter_id,
+        target_id=target_id,
+    )
+    manifest_path = target_dir / TARGET_MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"找不到 continuous target manifest: {manifest_path}；請先執行 audit-continuous-target"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"無法讀取 continuous target manifest: {manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("continuous target manifest 根節點必須是 object")
+    if int(manifest.get("schema_version", -1)) != CONTINUOUS_TARGET_SCHEMA_VERSION:
+        raise ValueError("continuous target schema version 不相容")
+    if str(manifest.get("filter_id") or "").strip() != str(filter_id).strip():
+        raise ValueError("continuous target manifest.filter_id 不一致")
+    contract = manifest.get("target_contract")
+    if not isinstance(contract, dict) or str(contract.get("target_id") or "") != str(target_id):
+        raise ValueError("continuous target manifest.target_contract 不一致")
+    if expected_group_count is not None and int(manifest.get("group_count", -1)) != int(expected_group_count):
+        raise ValueError("continuous target group_count 與dataset不一致")
+    if expected_dataset_policy is not None and manifest.get("dataset_policy") != expected_dataset_policy:
+        raise ValueError("continuous target dataset_policy 與目前dataset不一致")
+
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError("continuous target manifest缺少artifacts")
+    required = {
+        "target_raw_r": target_dir / TARGET_RAW_FILENAME,
+        "valid_mask": target_dir / TARGET_VALID_MASK_FILENAME,
+    }
+    for name, path in required.items():
+        record = artifacts.get(name)
+        if not isinstance(record, dict):
+            raise ValueError(f"continuous target artifacts缺少{name}")
+        if str(record.get("filename") or "") != path.name or not path.is_file():
+            raise ValueError(f"continuous target artifact不存在或filename不一致: {name}")
+        if int(record.get("size_bytes", -1)) != int(path.stat().st_size):
+            raise ValueError(f"continuous target artifact size不一致: {name}")
+        if str(record.get("sha256") or "").lower() != _file_sha256(path).lower():
+            raise ValueError(f"continuous target artifact SHA256不一致: {name}")
+
+    target = np.load(required["target_raw_r"], allow_pickle=False)
+    valid_mask = np.load(required["valid_mask"], allow_pickle=False)
+    if target.ndim != 1 or valid_mask.ndim != 1 or target.shape != valid_mask.shape:
+        raise ValueError("continuous target array shape不合法")
+    if expected_group_count is not None and len(target) != int(expected_group_count):
+        raise ValueError("continuous target array長度與dataset不一致")
+    valid = np.asarray(valid_mask, dtype=bool)
+    values = np.asarray(target, dtype=np.float32)
+    if bool(np.any(valid & ~np.isfinite(values))):
+        raise ValueError("continuous target valid rows含NaN或infinite")
+    if bool(np.any(~valid & np.isfinite(values))):
+        raise ValueError("continuous target invalid rows必須為NaN")
+    return manifest, values, valid
+
+
 __all__ = [
     "CONTINUOUS_TARGET_SCHEMA_VERSION",
     "STRATEGY_ALIGNED_TARGET_ID",
@@ -286,6 +367,7 @@ __all__ = [
     "StrategyAlignedContinuousTargetResult",
     "StrategyAlignedContinuousTargetSpec",
     "build_strategy_aligned_group_targets",
+    "load_validated_continuous_target_arrays",
     "resolve_continuous_target_dir",
     "strategy_aligned_target_from_cached_path",
 ]

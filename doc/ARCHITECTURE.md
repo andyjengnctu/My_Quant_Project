@@ -115,6 +115,18 @@ target固定使用40-bar horizon與10% risk budget：首次風險觸發前最大
 
 工件位於`outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned_opportunity_r_v1/`，與architecture／experiment profile工件隔離；只沿用feature-group index及future-path cache，不改Dataset fingerprint、不重建feature bank、不relabel。manifest明確保存`training_performed=false`與`runtime_eligible=false`。此階段只產生arrays與audit，不授權regression training、score export或scanner runtime。
 
+### 11B Strategy-aligned Daily Percentile Ranker
+
+11B是獨立experiment profile `strategy_aligned_daily_percentile_mse`，不是新model architecture。它保留active 9A `inception_time_v1`的300×10輸入、RF229與原2-logit head，將`softmax(logits)[:, PASS]`視為0～1排序分數，對Selection內每個日期的11A raw target percentile使用MSE。日期內採average rank，轉換為`(rank−1)/(n−1)`；同值共享平均rank，singleton固定0.5。不同日期互不共享位置、尺度或統計量，因此不建立跨年度normalization。
+
+正式入口為：
+
+```bash
+python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1
+```
+
+Inner Train只負責gradient更新，Validation以mean daily Spearman最大化選epoch、相同Spearman時才比較較低MSE；完整Selection依`selected_epochs`重新初始化重訓。checkpoint寫入前只建立Selection percentile target，OOS percentile、OOS metrics與actual-R診斷均在模型凍結後執行。11B工件寫入`inception_time_v1/strategy_aligned_daily_percentile_mse/`獨立profile路徑，research scores每個group只保留唯一一列並以`selection_role`標示Inner Train／Validation；manifest固定`runtime_eligible=false`；binary runtime loader、classification workflow與forward-OOS score export均拒絕此profile，不覆蓋9A `unique_group_sampling`正式模型。
+
 
 - `tools/validate/`：正式 invariant、contract、schema 與 real-case 驗證子系統；正式細目與狀態以 `doc/TEST_SUITE_CHECKLIST.md` 為準。
 

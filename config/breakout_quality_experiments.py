@@ -16,6 +16,7 @@ ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE = "adam_warmup_cosine"
 HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE = "history_masking_only"
 UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE = "unique_group_sampling"
 UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE = "unique_group_date_balanced"
+STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE = "strategy_aligned_daily_percentile_mse"
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
@@ -36,6 +37,13 @@ SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES = (
 
 TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM = "batch_weight_sum"
 TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE = "fixed_batch_size"
+
+TRAINING_OBJECTIVE_BINARY_CLASSIFICATION = "binary_classification"
+TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
+SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES = (
+    TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
+    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+)
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS = (
     TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
@@ -72,6 +80,10 @@ class BreakoutQualityExperimentProfile:
     training_sampling_mode: str = TRAINING_SAMPLING_ALL_EVENT_ROWS
     time_weight_mode: str | None = None
     training_weight_reduction: str = TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM
+    training_objective: str = TRAINING_OBJECTIVE_BINARY_CLASSIFICATION
+    continuous_target_id: str | None = None
+    loss_name: str = "cross_entropy"
+    epoch_selection_metric: str = "validation_loss"
 
     def __post_init__(self) -> None:
         normalized_name = str(self.name).strip().lower()
@@ -98,6 +110,26 @@ class BreakoutQualityExperimentProfile:
             raise ValueError(
                 f"不支援的 training weight reduction: {self.training_weight_reduction!r}"
             )
+        if self.training_objective not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES:
+            raise ValueError(f"不支援的 training objective: {self.training_objective!r}")
+        if self.training_objective == TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
+            if self.continuous_target_id is not None:
+                raise ValueError("binary classification profile 不得指定 continuous_target_id")
+            if self.loss_name != "cross_entropy" or self.epoch_selection_metric != "validation_loss":
+                raise ValueError("binary classification profile 必須使用 cross_entropy / validation_loss")
+        elif self.training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+            if not str(self.continuous_target_id or "").strip():
+                raise ValueError("daily percentile regression profile 必須指定 continuous_target_id")
+            if self.loss_name != "mse":
+                raise ValueError("daily percentile regression profile 必須使用 mse")
+            if self.epoch_selection_metric != "mean_daily_spearman":
+                raise ValueError("daily percentile regression profile 必須以 mean_daily_spearman 選 epoch")
+            if self.training_sampling_mode != TRAINING_SAMPLING_UNIQUE_TICKER_DATE:
+                raise ValueError("daily percentile regression 只允許 unique ticker/date sampling")
+            if self.time_weight_mode not in {None, TIME_WEIGHT_MODE_NONE}:
+                raise ValueError("daily percentile regression 第一版不允許 time weighting")
+            if self.training_weight_reduction != TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM:
+                raise ValueError("daily percentile regression 第一版只允許 batch_weight_sum")
         if (
             self.training_weight_reduction == TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE
             and self.time_weight_mode != TIME_WEIGHT_MODE_DATE_BALANCED
@@ -176,6 +208,13 @@ class BreakoutQualityExperimentProfile:
             payload["time_weight_mode"] = self.time_weight_mode
         if self.training_weight_reduction != TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM:
             payload["training_weight_reduction"] = self.training_weight_reduction
+        if self.training_objective != TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
+            payload.update({
+                "training_objective": self.training_objective,
+                "continuous_target_id": self.continuous_target_id,
+                "loss_name": self.loss_name,
+                "epoch_selection_metric": self.epoch_selection_metric,
+            })
         return payload
 
 
@@ -366,9 +405,23 @@ _EXPERIMENT_PROFILES = {
         time_weight_mode=TIME_WEIGHT_MODE_DATE_BALANCED,
         training_weight_reduction=TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
     ),
+    STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE: BreakoutQualityExperimentProfile(
+        name=STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+        continuous_target_id="strategy_aligned_opportunity_r_v1",
+        loss_name="mse",
+        epoch_selection_metric="mean_daily_spearman",
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
+SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES = tuple(
+    name
+    for name, profile in _EXPERIMENT_PROFILES.items()
+    if profile.training_objective == TRAINING_OBJECTIVE_BINARY_CLASSIFICATION
+)
 
 
 def normalize_breakout_quality_experiment_profile(value: str) -> str:
@@ -398,6 +451,7 @@ __all__ = [
     "HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE",
     "UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE",
     "UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE",
+    "STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE",
     "TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE",
     "BreakoutQualityExperimentProfile",
     "BreakoutQualityPretrainingProfile",
@@ -405,10 +459,14 @@ __all__ = [
     "LR_SCHEDULE_NONE",
     "SUPPORTED_BREAKOUT_QUALITY_AUGMENTATIONS",
     "SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES",
+    "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES",
     "SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES",
     "SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS",
     "SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES",
     "SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES",
+    "SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES",
+    "TRAINING_OBJECTIVE_BINARY_CLASSIFICATION",
+    "TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION",
     "TRAINING_SAMPLING_ALL_EVENT_ROWS",
     "TRAINING_SAMPLING_UNIQUE_TICKER_DATE",
     "TIME_WEIGHT_MODE_DATE_BALANCED",

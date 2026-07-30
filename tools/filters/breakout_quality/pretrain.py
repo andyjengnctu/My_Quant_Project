@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality_experiments import (
-    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES,
     build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_pretraining_profile,
@@ -71,7 +71,7 @@ def parse_args(argv=None):
     parser.add_argument("--filter-id", default=BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
     parser.add_argument(
         "--experiment-profile",
-        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        choices=SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
         default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
         help="下游 supervised experiment profile；決定 pretrained encoder 的正式工件路徑",
     )

@@ -3,6 +3,7 @@ breakout filter
 - 相對強弱
 - 侯選股依sore排序
 - parallel with multiple seeds and chose the best validate loss
+- 程式重構、移除無用legacy、移出非必要放在config/下的設定
 
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議

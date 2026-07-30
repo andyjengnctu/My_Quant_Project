@@ -30,6 +30,9 @@ from config.breakout_quality_experiments import (
     HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
     UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+    SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     TIME_WEIGHT_MODE_DATE_BALANCED,
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
@@ -104,8 +107,12 @@ from filters.breakout_quality.continuous_target import (
     STRATEGY_ALIGNED_TARGET_ID,
     StrategyAlignedContinuousTargetSpec,
     build_strategy_aligned_group_targets,
+    load_validated_continuous_target_arrays,
     resolve_continuous_target_dir,
     strategy_aligned_target_from_cached_path,
+    TARGET_MANIFEST_FILENAME,
+    TARGET_RAW_FILENAME,
+    TARGET_VALID_MASK_FILENAME,
 )
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
@@ -282,6 +289,7 @@ from tools.filters.breakout_quality.strategy_compare import (
     _to_json_native,
 )
 from tools.filters.breakout_quality.trade_attribution import build_trade_attribution
+from tools.filters.breakout_quality.train_continuous_ranker import build_daily_percentile_targets
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     compute_outer_policy_fingerprint,
@@ -7056,6 +7064,237 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
 
     summary["target_id"] = STRATEGY_ALIGNED_TARGET_ID
     summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_CONTINUOUS_RANKER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    profile = get_breakout_quality_experiment_profile(
+        STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_is_named_training_profile_not_model_architecture",
+        (
+            TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+            STRATEGY_ALIGNED_TARGET_ID,
+            "mse",
+            "mean_daily_spearman",
+            False,
+        ),
+        (
+            profile.training_objective,
+            profile.continuous_target_id,
+            profile.loss_name,
+            profile.epoch_selection_metric,
+            STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
+            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+        ),
+    )
+
+    raw = np.asarray([1.0, 3.0, 2.0, 5.0, 5.0, 9.0], dtype=np.float32)
+    valid = np.ones((6,), dtype=bool)
+    dates = pd.Series(["2020-01-02"] * 3 + ["2021-05-03"] * 3)
+    percentiles = build_daily_percentile_targets(raw, valid, dates)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_daily_percentile_spans_zero_one_and_averages_ties",
+        (0.0, 1.0, 0.5, 0.25, 0.25, 1.0),
+        tuple(round(float(value), 6) for value in percentiles),
+    )
+
+    singleton_percentile = build_daily_percentile_targets(
+        np.asarray([7.0], dtype=np.float32),
+        np.asarray([True], dtype=bool),
+        pd.Series(["2022-08-08"]),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_singleton_date_uses_neutral_half_percentile",
+        (0.5,),
+        tuple(float(value) for value in singleton_percentile),
+    )
+
+    changed_oos = raw.copy()
+    changed_oos[3:] = np.asarray([-100.0, 500.0, 0.0], dtype=np.float32)
+    changed_percentiles = build_daily_percentile_targets(changed_oos, valid, dates)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_same_date_transform_prevents_cross_split_distribution_leakage",
+        tuple(percentiles[:3]),
+        tuple(changed_percentiles[:3]),
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        target_dir = resolve_continuous_target_dir(
+            root,
+            "synthetic_quality",
+            target_id=STRATEGY_ALIGNED_TARGET_ID,
+        )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = target_dir / TARGET_RAW_FILENAME
+        valid_path = target_dir / TARGET_VALID_MASK_FILENAME
+        np.save(raw_path, raw, allow_pickle=False)
+        np.save(valid_path, valid, allow_pickle=False)
+        manifest = {
+            "schema_version": 1,
+            "filter_id": "synthetic_quality",
+            "target_contract": {"target_id": STRATEGY_ALIGNED_TARGET_ID},
+            "group_count": 6,
+            "dataset_policy": {"policy": "synthetic"},
+            "artifacts": {
+                "target_raw_r": build_file_manifest(raw_path),
+                "valid_mask": build_file_manifest(valid_path),
+            },
+        }
+        (target_dir / TARGET_MANIFEST_FILENAME).write_text(
+            json.dumps(manifest, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        loaded_manifest, loaded_raw, loaded_valid = load_validated_continuous_target_arrays(
+            root,
+            "synthetic_quality",
+            expected_group_count=6,
+            expected_dataset_policy={"policy": "synthetic"},
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "continuous_ranker_strictly_loads_versioned_target_arrays",
+            (STRATEGY_ALIGNED_TARGET_ID, tuple(raw), tuple(valid)),
+            (
+                loaded_manifest["target_contract"]["target_id"],
+                tuple(loaded_raw),
+                tuple(loaded_valid),
+            ),
+        )
+        raw_path.write_bytes(raw_path.read_bytes() + b"tamper")
+        try:
+            load_validated_continuous_target_arrays(
+                root,
+                "synthetic_quality",
+                expected_group_count=6,
+                expected_dataset_policy={"policy": "synthetic"},
+            )
+            tamper_rejected = False
+        except ValueError as exc:
+            tamper_rejected = "size" in str(exc) or "SHA256" in str(exc)
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "continuous_ranker_rejects_tampered_target_artifact",
+            True,
+            tamper_rejected,
+        )
+
+    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    tree = ast.parse(app_path.read_text(encoding="utf-8"), filename=str(app_path))
+    command_modules = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(target, ast.Name) and target.id == "COMMAND_MODULES" for target in node.targets):
+            command_modules = ast.literal_eval(node.value)
+            break
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_research_command_is_registered",
+        "tools.filters.breakout_quality.train_continuous_ranker",
+        command_modules.get("train-continuous-ranker"),
+    )
+
+    ranker_source = (
+        Path(__file__).resolve().parents[1]
+        / "filters"
+        / "breakout_quality"
+        / "train_continuous_ranker.py"
+    ).read_text(encoding="utf-8")
+    inception_source = (
+        Path(__file__).resolve().parents[2]
+        / "filters"
+        / "breakout_quality"
+        / "models"
+        / "inception_time.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_reuses_active_two_logit_head_and_pass_probability",
+        (True, True, True),
+        (
+            "self.classifier = nn.Linear(module_output_channels, 2)" in inception_source,
+            "torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]" in ranker_source,
+            '"model_state_dict"' in ranker_source and "torch.save(" in ranker_source,
+        ),
+    )
+    train_source = (
+        Path(__file__).resolve().parents[1]
+        / "filters"
+        / "breakout_quality"
+        / "train.py"
+    ).read_text(encoding="utf-8")
+    artifact_source = (
+        Path(__file__).resolve().parents[2]
+        / "filters"
+        / "breakout_quality"
+        / "artifacts.py"
+    ).read_text(encoding="utf-8")
+    app_source = app_path.read_text(encoding="utf-8")
+    export_source = (
+        Path(__file__).resolve().parents[1]
+        / "filters"
+        / "breakout_quality"
+        / "export_scores.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_profile_is_blocked_from_binary_workflow_and_runtime_loader",
+        (True, True, True, True),
+        (
+            "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in train_source,
+            "research-only continuous ranker artifact不得載入正式binary runtime contract" in artifact_source,
+            "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in app_source,
+            "SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES" in export_source,
+        ),
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_is_research_only_and_oos_follows_checkpoint_write",
+        (True, True, True, True),
+        (
+            '"eligible": False' in ranker_source,
+            "OOS target transformation and model inference occur only after" in ranker_source,
+            "torch.save(" in ranker_source
+            and ranker_source.index("torch.save(")
+            < ranker_source.index("OOS target transformation and model inference occur only after"),
+            'score_frame["group_index"].duplicated().any()' in ranker_source,
+        ),
+    )
+
+    summary["profile"] = STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
+    summary["training_objective"] = profile.training_objective
     return results, summary
 
 def validate_breakout_quality_strategy_comparison_contract_case(_base_params):

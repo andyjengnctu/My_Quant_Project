@@ -17,6 +17,7 @@ from config.breakout_quality_experiments import (
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
     TRAINING_SAMPLING_ALL_EVENT_ROWS,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+    TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
     build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
     normalize_breakout_quality_experiment_profile,
@@ -401,6 +402,10 @@ def load_model_artifact_contract(
             f"manifest={manifest_profile}, path={paths.experiment_profile}"
         )
     expected_experiment = get_breakout_quality_experiment_profile(manifest_profile)
+    if expected_experiment.training_objective != TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
+        raise ValueError(
+            "research-only continuous ranker artifact不得載入正式binary runtime contract"
+        )
     manifest_experiment = manifest.get("experiment_settings")
     if manifest_experiment is None and manifest_profile == BASELINE_EXPERIMENT_PROFILE:
         manifest_experiment = expected_experiment.as_manifest_payload()

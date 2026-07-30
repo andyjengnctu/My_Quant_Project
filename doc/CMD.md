@@ -111,6 +111,28 @@ outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned
 
 主要回傳`continuous_target_audit.md`與`continuous_target_audit.json`。若來源CSV inventory比既有Dataset新，預設fail-fast；`--allow-stale-source`只供明確知道風險的診斷，不得用於正式比較。
 
+### 11B同日Percentile Regression
+
+11A完整audit通過後，執行research-only 11B：
+
+```bash
+python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1
+```
+
+預設profile固定為`strategy_aligned_daily_percentile_mse`，保留9A `inception_time_v1`與2-logit head，以PASS softmax probability回歸同日11A target percentile。訓練與epoch選擇只使用Selection內Inner Train／Validation；OOS在完整Selection重訓與checkpoint寫入後才評估。此命令不重建Dataset、不relabel、不設定threshold，也不產生可供scanner使用的`forward_oos scores.csv`；research scores每個group唯一一列，Selection內另以`selection_role`標示Inner Train／Validation。
+
+主要輸出：
+
+```text
+models/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_daily_percentile_mse/model.pt
+models/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_daily_percentile_mse/manifest.json
+outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_daily_percentile_mse/continuous_ranker_report.md
+outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_daily_percentile_mse/continuous_ranker_report.json
+outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_daily_percentile_mse/continuous_ranker_scores.csv
+```
+
+不得把此profile傳給一般`train`／`workflow`或`export-scores --scope forward_oos`；這些入口只接受binary classification profiles。
+
 模型架構與訓練實驗分開管理：
 
 ```python

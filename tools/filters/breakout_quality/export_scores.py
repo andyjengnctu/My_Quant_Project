@@ -15,7 +15,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
 from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
@@ -87,7 +87,7 @@ def parse_args(argv=None):
     parser.add_argument("--filter-id", default=DEFAULT_FILTER_ID)
     parser.add_argument(
         "--experiment-profile",
-        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        choices=SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
         default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
         help="要讀取／輸出的訓練實驗 profile",
     )

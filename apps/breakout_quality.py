@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.breakout_quality_experiments import (
-    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+    SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
@@ -80,6 +80,7 @@ COMMAND_MODULES = {
     "evaluate": "tools.filters.breakout_quality.evaluate",
     "regime-audit": "tools.filters.breakout_quality.regime_audit",
     "audit-continuous-target": "tools.filters.breakout_quality.audit_continuous_target",
+    "train-continuous-ranker": "tools.filters.breakout_quality.train_continuous_ranker",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -99,6 +100,7 @@ COMMAND_DESCRIPTIONS = {
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "regime-audit": "稽核 Selection／OOS 的市場狀態與 breakout event 覆蓋",
     "audit-continuous-target": "建立11A連續target arrays並稽核分布、同日排序與實際R方向",
+    "train-continuous-ranker": "執行11B同日percentile MSE排序研究；research-only",
 }
 
 
@@ -365,7 +367,7 @@ def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_qualit
     )
     parser.add_argument(
         "--experiment-profile",
-        choices=SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+        choices=SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
         default=str(defaults.experiment_profile),
         help="訓練實驗 profile；模型架構與訓練實驗分開管理",
     )
