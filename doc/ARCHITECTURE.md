@@ -279,3 +279,10 @@ python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_
 `tools.filters.breakout_quality.audit_pass_realization_gap`strict驗證11G report／score SHA256、11F No-time component arrays與11A canonical trade-match SHA256；以group index逐筆驗證`target_raw_r=favorable_r-adverse_r`，聚焦OOS PASS與actual PASS。Audit固定輸出Score對Favorable／Adverse的偏好、`Target−realized R`實現落差、`realized R÷Favorable R`捕捉率、控制Target或兩成分後的partial Spearman，以及Score／Target decile的Target、成分、realized R與落差。
 
 11H為research-only、CLI-only，只作失敗歸因；不建立optimizer、checkpoint、experiment profile、threshold、runtime score或策略回測，不加入互動選單。
+
+
+### 11I Nested Selection Strategy-realization Coverage Audit
+
+11I重用既有Rolling OOS optimizer與canonical portfolio replay，建立2014～2020 Selection內nested OOS策略實現覆蓋。Nested params建立至2020-12-31，但策略replay與Target配對只允許到11F `final_refit_date_range.end=2020-11-05`，避免Target path跨入2021。研究參數透過`V16_MODELS_DIR`寫入獨立research models目錄；`tools/optimizer/outer_rolling_oos.py`必須忠實使用該models path，避免覆蓋正式`models/roos_*.json`。
+
+正式CLI為`audit-selection-strategy-realization`，只輸出qualified／orderable candidate、round trips、No-time Target匹配與Target↔strategy R診斷。Actual portfolio trades受資金與持倉競爭選擇，未交易候選保持unlabeled；本輪不建立訓練Target、profile、checkpoint或runtime score，亦不加入互動選單。

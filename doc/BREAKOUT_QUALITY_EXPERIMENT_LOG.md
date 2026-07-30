@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪實作基準`test-branch-1_20260730_202010_4cc9d53.zip`，SHA256 `89769903bfe6abe41af8dead26c926a5e2123825115c39f035e71e3364dc55bf`；11G PASS-conditional No-time Magnitude Ranker已取得完整結果並淘汰：OOS PASS-only可排序，但actual PASS trades Score↔R為負且decile反轉。11H PASS-only Realization-gap Attribution已實作、尚未取得本機audit結果。正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| 基準 ZIP | 本輪實作基準`test-branch-1_20260730_204217_d8ab94e.zip`，SHA256 `5c8361ca04ad4af1a3ea98212ab684c486975534d100c022ba8f41f1a28a56bc`；11H已確認11G高Score偏向較大未實現機會、較低capture ratio且控制Target後仍與R反向。11I Selection nested-OOS strategy-realization coverage audit已實作、尚待本機產生2014～2020隔離參數鏈與重播結果。正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
 | SHA256 | 本輪來源 ZIP：`89769903bfe6abe41af8dead26c926a5e2123825115c39f035e71e3364dc55bf`；11G結果來源為使用者提供的`continuous_ranker_report(1).md`；11F結果來源為`continuous_target_audit(4).md`；11E結果來源為`target_time_penalty_ablation_audit.md`；11D結果來源為`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
@@ -1312,15 +1312,32 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；CLI-only只讀失敗歸因已實作，尚待使用者本機執行 |
+| 狀態 | `RESULT_AVAILABLE / STRATEGY_REALIZATION_GAP_CONFIRMED`；11G高Score確實偏向較大未實現機會與較低capture ratio，且控制Target後Score↔R仍明顯為負 |
 | 程式基準 | 以`test-branch-1_20260730_202010_4cc9d53.zip`、SHA256 `89769903bfe6abe41af8dead26c926a5e2123825115c39f035e71e3364dc55bf`為來源基準 |
 | 唯一變更 | 不改模型或Target；只讀11G scores、11F No-time component arrays與11A canonical actual trade matches，聚焦原始Label=PASS |
 | 固定指標 | `realization_gap_r=target_raw_r-r_multiple`；`favorable_capture_ratio=r_multiple/favorable_r`；另計算Score↔Favorable／Adverse、Score↔gap／capture及控制Target或兩成分後的partial Spearman |
 | Decile歸因 | 分別依Score與Target切top／bottom 10%，輸出Target、Favorable、Adverse、realized R、gap與capture ratio，確認高Score是否只是更大未實現機會 |
 | 防錯 | strict驗證11G report／scores、11A trade matches SHA256、11F No-time arrays及逐筆`target=favorable-adverse`；actual PASS配對數必須與11G report一致 |
 | Validator閉環 | 本輪獨立直跑另發現11D component-loader synthetic fixture的`first_risk_breach_bar` tuple誤混入常數，已移除並重新驗證11D contract；不改正式11D／11H計算語意 |
+| 正式結果 | OOS PASS 9,650 groups；Score↔Target 0.3464、Score↔Favorable 0.3980。Actual PASS 214筆；Score↔R −0.1066、Score↔gap 0.4051、Score↔capture −0.2023，控制Target後partial Score↔R −0.3167、控制Favorable＋Adverse後−0.3459 |
+| 判定 | 11G失敗主因是策略實現率，不再微調MFE型Target或11G模型。下一步只能建立Selection內nested historical OOS strategy-realization coverage audit；不得用2021～2026正式OOS直接建訓練Target |
 | Runtime | research-only、CLI-only、不訓練、不建立profile／checkpoint／threshold／策略回測，不加入互動選單 |
 | 執行 | `python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_quality_v1` |
+
+
+### 3.57 11I Nested Selection Strategy-realization Coverage Audit（2026-07-30）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；CLI-only兩階段研究流程已實作，尚待本機產生nested params並重播 |
+| 程式基準 | `test-branch-1_20260730_204217_d8ab94e.zip`，SHA256 `5c8361ca04ad4af1a3ea98212ab684c486975534d100c022ba8f41f1a28a56bc` |
+| 必要前置 | 正式rolling params只涵蓋2021～2026，不可倒灌Selection。11I以2014-01-01～2020-12-31、120個月fixed train window、12個月OOS建立nested lookahead-safe params；策略replay只到11F Selection可評分事件上限2020-11-05，並以manifest fail-fast，避免Target使用2021價格。2014以前因資料不足不納入策略實現稽核 |
+| 隔離輸出 | 透過`V16_MODELS_DIR=models/research/breakout_quality/selection_strategy_realization`輸出research `roos_*.json`；修正outer rolling writer忠實採用該環境路徑，正式`models/roos_*.json`不受影響 |
+| Replay | 使用canonical no-filter active-param replay、candidate capture與round-trip reconstruction，比較2014-01-01～2020-11-05 qualified、orderable、actual trades及11F No-time Target↔strategy R；不得超出11F `final_refit_date_range` |
+| Target邊界 | Actual trades受max positions、資金鎖定與候選競爭選擇，只能做coverage audit；未交易qualified candidates不得標0R，本輪不建立Target arrays或授權訓練 |
+| Runtime／UI | research-only、CLI-only，不加入互動選單，不改9A、scanner、optimizer正式參數或runtime |
+| 執行 | 先`audit-selection-strategy-realization --prepare-only`產生PowerShell腳本；完成nested optimizer後再執行`audit-selection-strategy-realization --quiet` |
+
 
 
 ---
@@ -1373,7 +1390,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 11E Fixed Time-penalty Ablation Audit（RESULT_AVAILABLE；overall／PASS／decile spread均改善，固定消融通過）
 → 11F No-time Target Arrays＋Selection-only Learnability Audit（RESULT_AVAILABLE；SELECTION_LEARNABILITY_PASS）
 → 11G PASS-conditional No-time Magnitude Ranker（REJECTED；OOS PASS Target排序成立但actual PASS Score↔R −0.1066、decile反轉）
-→ 11H PASS-only Realization-gap Attribution Audit（IMPLEMENTED；待本機audit，CLI-only、read-only）
+→ 11H PASS-only Realization-gap Attribution Audit（RESULT_AVAILABLE；STRATEGY_REALIZATION_GAP_CONFIRMED）
+→ 11I Nested Selection Strategy-realization Coverage Audit（IMPLEMENTED；待nested optimizer與Selection replay，CLI-only）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

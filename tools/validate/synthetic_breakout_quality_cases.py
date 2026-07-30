@@ -9448,6 +9448,233 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
     return results, summary
 
 
+def validate_breakout_quality_selection_strategy_realization_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_SELECTION_STRATEGY_REALIZATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from tools.filters.breakout_quality.audit_selection_strategy_realization import (
+        _attach_targets,
+        _trade_metrics,
+        _unique_signals,
+        _validate_replay_target_bounds,
+        _write_prepare_script,
+        default_params_path,
+        default_research_models_dir,
+    )
+
+    lookup = pd.DataFrame({
+        "ticker": ["A", "B", "C"],
+        "target_date": ["2018-01-02", "2018-01-03", "2018-01-04"],
+        "group_index": [0, 1, 2],
+        "label": [LABEL_PASS, LABEL_PASS, LABEL_REJECT],
+        "target_raw_r": [2.0, 0.5, -0.2],
+        "target_valid": [True, True, True],
+    })
+    candidates = pd.DataFrame({
+        "ticker": ["A", "A", "B", "C"],
+        "trade_date": ["2018-01-03", "2018-01-04", "2018-01-04", "2018-01-05"],
+        "candidate_date": ["2018-01-02", "2018-01-02", "2018-01-03", "2018-01-04"],
+        "signal_date": ["2018-01-02", "2018-01-02", "2018-01-03", "2018-01-04"],
+        "candidate_type": ["normal", "extended", "normal", "normal"],
+    })
+    attached = _attach_targets(candidates, lookup)
+    unique = _unique_signals(attached)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_strategy_realization_candidate_mapping_uses_signal_date_and_dedup",
+        (4, 3, [0, 1, 2], True),
+        (
+            len(attached),
+            len(unique),
+            sorted(unique["group_index"].astype(int).tolist()),
+            bool(unique["target_match"].all()),
+        ),
+    )
+
+    trades = pd.DataFrame({
+        "ticker": ["A", "B", "C"],
+        "entry_date": ["2018-01-03", "2018-01-04", "2018-01-05"],
+        "signal_date": ["2018-01-02", "2018-01-03", "2018-01-04"],
+        "candidate_date": ["2018-01-02", "2018-01-03", "2018-01-04"],
+        "r_multiple": [2.5, 0.2, -0.5],
+    })
+    trade_attached = _attach_targets(trades, lookup)
+    metrics = _trade_metrics(trade_attached)
+    target_manifest = {
+        "split_report": {
+            "final_refit_date_range": {"start": "2011-01-03", "end": "2020-11-05"}
+        }
+    }
+    valid_bounds = _validate_replay_target_bounds(
+        target_manifest,
+        start_date="2014-01-01",
+        end_date="2020-11-05",
+    )
+    try:
+        _validate_replay_target_bounds(
+            target_manifest,
+            start_date="2014-01-01",
+            end_date="2020-12-31",
+        )
+        embargo_rejected = False
+    except ValueError:
+        embargo_rejected = True
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_strategy_realization_replay_respects_selection_target_boundary",
+        (("2011-01-03", "2020-11-05"), True),
+        (valid_bounds, embargo_rejected),
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_strategy_realization_metrics_preserve_target_and_r_direction",
+        (3, 3, True, 2, 1),
+        (
+            metrics["trade_count"],
+            metrics["matched_trade_count"],
+            float(metrics["spearman_target_vs_realized_r"]) > 0.5,
+            metrics["label_conditional"]["PASS"]["rows"],
+            metrics["label_conditional"]["REJECT"]["rows"],
+        ),
+    )
+
+    research_dir = default_research_models_dir()
+    params_path = default_params_path()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_nested_roos_uses_isolated_research_models_dir",
+        (True, True, "roos_base_finalists_agree.json"),
+        (
+            "models" in research_dir.parts and "research" in research_dir.parts,
+            params_path.parent == research_dir,
+            params_path.name,
+        ),
+    )
+
+    root = Path(__file__).resolve().parents[2]
+    app_path = root / "apps" / "breakout_quality.py"
+    app_source = app_path.read_text(encoding="utf-8")
+    tree = ast.parse(app_source, filename=str(app_path))
+    command_modules = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target_node, ast.Name) and target_node.id == "COMMAND_MODULES"
+            for target_node in node.targets
+        ):
+            command_modules = ast.literal_eval(node.value)
+            break
+    menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
+    audit_path = root / "tools" / "filters" / "breakout_quality" / "audit_selection_strategy_realization.py"
+    audit_source = audit_path.read_text(encoding="utf-8")
+    optimizer_path = root / "tools" / "optimizer" / "outer_rolling_oos.py"
+    optimizer_source = optimizer_path.read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_strategy_realization_is_cli_only_and_registered",
+        (True, True, True),
+        (
+            command_modules.get("audit-selection-strategy-realization")
+            == "tools.filters.breakout_quality.audit_selection_strategy_realization",
+            "audit-selection-strategy-realization" not in menu_source,
+            "11I" not in menu_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_nested_roos_prepare_contract_is_lookahead_safe_and_isolated",
+        (True, True, True, True, True, True),
+        (
+            "DEFAULT_START_DATE = \"2014-01-01\"" in audit_source,
+            "DEFAULT_REPLAY_END_DATE = \"2020-11-05\"" in audit_source,
+            "DEFAULT_NESTED_OOS_END_DATE = \"2020-12-31\"" in audit_source,
+            "--outer-train-window-months" in audit_source and "DEFAULT_TRAIN_WINDOW_MONTHS = 120" in audit_source,
+            "V16_MODELS_DIR" in audit_source,
+            "resolve_models_dir(project_root, environ=environ)" in optimizer_source,
+        ),
+    )
+    from tools.optimizer.outer_rolling_oos import OuterRollingConfig, _write_reports
+    with tempfile.TemporaryDirectory() as td:
+        temp_root = Path(td)
+        prepare_path = _write_prepare_script(
+            output_dir=temp_root / "prepare",
+            trials=17,
+            dataset_profile="reduced",
+        )
+        prepare_source = prepare_path.read_text(encoding="utf-8-sig")
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "selection_nested_roos_prepare_script_preserves_dataset_and_cleans_env",
+            (True, True, True, True),
+            (
+                "--dataset reduced" in prepare_source,
+                "--trials 17" in prepare_source,
+                "--outer-last-oos-date 2020-12-31" in prepare_source,
+                "Remove-Item Env:V16_MODELS_DIR" in prepare_source,
+            ),
+        )
+        isolated_models = temp_root / "isolated_models"
+        write_result = _write_reports(
+            project_root=str(temp_root),
+            output_dir=str(temp_root / "outputs"),
+            session_ts="synthetic",
+            rows=[],
+            config=OuterRollingConfig(
+                training_start_year=2004,
+                first_oos_year=2014,
+                last_oos_year=2020,
+                trials_per_fold=1,
+                train_window_months=120,
+                oos_horizon_months=12,
+            ),
+            models_dir=str(isolated_models),
+        )
+        written_paths = [Path(path) for path in (write_result.get("paramsets") or {}).values()]
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "selection_nested_roos_writer_behaves_as_isolated_override",
+            (True, True, False),
+            (
+                bool(written_paths),
+                bool(written_paths) and all(path.parent == isolated_models for path in written_paths),
+                (temp_root / "models").exists(),
+            ),
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_strategy_realization_does_not_label_untraded_candidates_or_authorize_training",
+        (True, True, True, True),
+        (
+            "untraded_candidates_are_not_labeled_zero" in audit_source,
+            '"training_performed": False' in audit_source,
+            '"runtime_eligible": False' in audit_source,
+            "torch.save" not in audit_source,
+        ),
+    )
+
+    summary["audit"] = "selection_strategy_realization"
+    return results, summary
+
+
 __all__ = [
     "validate_breakout_quality_chronological_embargo_case",
     "validate_breakout_quality_continuous_target_contract_case",
@@ -9460,5 +9687,6 @@ __all__ = [
     "validate_breakout_quality_no_time_target_selection_audit_contract_case",
     "validate_breakout_quality_policy_single_source_case",
     "validate_breakout_quality_runtime_artifact_contract_case",
+    "validate_breakout_quality_selection_strategy_realization_contract_case",
     "validate_breakout_quality_strategy_comparison_contract_case",
 ]

@@ -86,6 +86,7 @@ COMMAND_MODULES = {
     "audit-target-time-ablation": "tools.filters.breakout_quality.audit_target_time_penalty_ablation",
     "audit-no-time-target": "tools.filters.breakout_quality.audit_no_time_continuous_target",
     "audit-pass-realization-gap": "tools.filters.breakout_quality.audit_pass_realization_gap",
+    "audit-selection-strategy-realization": "tools.filters.breakout_quality.audit_selection_strategy_realization",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -111,6 +112,7 @@ COMMAND_DESCRIPTIONS = {
     "audit-target-time-ablation": "執行11E固定移除time penalty的Target稽核；research-only",
     "audit-no-time-target": "建立11F No-time Target arrays並做Selection-only可學性稽核；research-only",
     "audit-pass-realization-gap": "執行11H PASS-only實現落差歸因；research-only、CLI-only",
+    "audit-selection-strategy-realization": "執行11I Selection nested-OOS策略實現覆蓋稽核；research-only、CLI-only",
 }
 
 

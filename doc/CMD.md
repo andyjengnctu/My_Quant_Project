@@ -489,3 +489,22 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 ```
 
 本命令不訓練、不建立新profile／checkpoint、不調Target、loss、epoch、sampling、threshold或runtime score。
+
+
+### 11I Nested Selection Strategy-realization Coverage Audit
+
+11H確認11G高Score對應更大的未實現機會落差；11I先建立Selection內nested rolling OOS參數鏈，再以canonical no-filter portfolio replay量化strategy-realization coverage。CLI-only，不加入互動選單。
+
+先輸出準備腳本：
+
+```powershell
+python apps/breakout_quality.py audit-selection-strategy-realization --filter-id breakout_quality_v1 --prepare-only
+```
+
+執行產生的`prepare_selection_nested_roos.ps1`後，再執行：
+
+```powershell
+python apps/breakout_quality.py audit-selection-strategy-realization --filter-id breakout_quality_v1 --quiet
+```
+
+預設以2014-01-01～2020-12-31、120個月固定訓練窗、12個月OOS建立research-only nested參數鏈；策略replay固定只跑2014-01-01～2020-11-05，並由11F manifest的`final_refit_date_range`再次驗證，避免年底事件Target跨入2021。`V16_MODELS_DIR`隔離到`models/research/breakout_quality/selection_strategy_realization`，不得覆蓋正式2021～2026 rolling params。11I不訓練、不建立Target arrays，且不得把未交易候選標成0R。

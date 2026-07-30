@@ -66,6 +66,7 @@ from core.active_param_ensemble import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
+from core.model_paths import resolve_models_dir
 from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_plain_romd, calc_portfolio_score
 from core.portfolio_param_runtime import (
     build_active_param_objects_from_payload,
@@ -5633,11 +5634,25 @@ def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: O
     return paths
 
 
-def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows: list[dict], config: OuterRollingConfig, chained_override: dict | None = None) -> dict:
+def _write_reports(
+    *,
+    project_root: str,
+    output_dir: str,
+    session_ts: str,
+    rows: list[dict],
+    config: OuterRollingConfig,
+    chained_override: dict | None = None,
+    models_dir: str | None = None,
+) -> dict:
     _ = (output_dir, session_ts)
-    models_dir = os.path.join(project_root, "models")
+    resolved_models_dir = str(models_dir or resolve_models_dir(project_root))
     summary = _build_summary(rows, config=config, chained_override=chained_override)
-    paramset_paths = _write_policy_paramset_files(models_dir=models_dir, rows=rows, config=config, summary=summary)
+    paramset_paths = _write_policy_paramset_files(
+        models_dir=resolved_models_dir,
+        rows=rows,
+        config=config,
+        summary=summary,
+    )
     return {"paramsets": paramset_paths}
 
 def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None, chained_override: dict | None = None) -> dict:
@@ -9084,7 +9099,15 @@ def run_outer_rolling_oos(
     report_write_started = time.perf_counter()
     paths = {}
     if not bool(timing_mode):
-        paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_override=active_replay_chained_for_report)
+        paths = _write_reports(
+            project_root=project_root,
+            output_dir=output_dir,
+            session_ts=session_ts,
+            rows=rows,
+            config=config,
+            chained_override=active_replay_chained_for_report,
+            models_dir=resolve_models_dir(project_root, environ=environ),
+        )
     report_write_sec = max(0.0, time.perf_counter() - report_write_started)
     resource_sampler.stop()
     timing_paths = _write_outer_timing_summary(
