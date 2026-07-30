@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import ast
 import json
 import math
 import os
@@ -1567,8 +1568,25 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
     candidate_same_date_mapping = torch.zeros((3,), dtype=torch.long)
     with torch.no_grad():
-        candidate_embeddings = inception_market_set_candidate_model.encode_candidate(
-            candidate_specific_features
+        encoded_candidate_embeddings = (
+            inception_market_set_candidate_model.encode_candidate(
+                candidate_specific_features
+            )
+        )
+        candidate_embedding_delta = torch.linspace(
+            -0.25,
+            0.25,
+            steps=int(encoded_candidate_embeddings.shape[1]),
+            dtype=encoded_candidate_embeddings.dtype,
+            device=encoded_candidate_embeddings.device,
+        )
+        candidate_embeddings = torch.stack(
+            (
+                encoded_candidate_embeddings[0],
+                encoded_candidate_embeddings[0],
+                encoded_candidate_embeddings[0] + candidate_embedding_delta,
+            ),
+            dim=0,
         )
         candidate_market_embeddings = (
             inception_market_set_candidate_model.encode_market_for_events(
@@ -1631,8 +1649,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             and torch.allclose(
                 candidate_market_embeddings,
                 candidate_market_embeddings_permuted,
-                atol=1e-6,
-                rtol=1e-6,
+                atol=5e-6,
+                rtol=5e-6,
             )
         ),
     )
@@ -2871,6 +2889,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "multiscale_cnn_sequence_only_dual_path_v1",
         "inception_time_group_norm_v1",
         INCEPTION_TIME_MARKET_SET_V1,
+        INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
         "modern_tcn_v1",
         "mantis_v2_frozen_linear_v1",
         "moment_1_base_frozen_linear_v1",
@@ -6840,7 +6859,22 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         ),
     )
 
-    from apps.breakout_quality import COMMAND_MODULES
+    breakout_quality_app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    breakout_quality_app_tree = ast.parse(
+        breakout_quality_app_path.read_text(encoding="utf-8"),
+        filename=str(breakout_quality_app_path),
+    )
+    command_modules = {}
+    for node in breakout_quality_app_tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "COMMAND_MODULES"
+            for target in node.targets
+        ):
+            continue
+        command_modules = ast.literal_eval(node.value)
+        break
 
     add_check(
         results,
@@ -6848,7 +6882,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         case_id,
         "continuous_target_audit_command_is_registered",
         "tools.filters.breakout_quality.audit_continuous_target",
-        COMMAND_MODULES.get("audit-continuous-target"),
+        command_modules.get("audit-continuous-target"),
     )
 
     summary["target_id"] = STRATEGY_ALIGNED_TARGET_ID

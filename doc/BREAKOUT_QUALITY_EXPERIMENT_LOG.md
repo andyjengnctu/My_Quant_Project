@@ -1210,6 +1210,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 工件 | `outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned_opportunity_r_v1/`；包含6個group arrays、`manifest.json`、`continuous_target_audit.json/.md`、`continuous_target_daily_rankability.csv`與可選trade matches CSV |
 | Dataset／重建 | 不重建feature bank、不重算candidate features、不relabel；直接沿用canonical `group_anchor_prices`、future high／low path cache、available bars、event group index與既有split policy。target contract與工件獨立於model architecture／experiment profile |
 | Formal契約 | 新增B171／T268 direct synthetic contract；13項檢查已通過，涵蓋固定公式、adverse-first、首日−1R、時間懲罰、invalid future、deterministic group arrays、strict JSON、同日rankability、Round-trip輸出樹自動路徑、audit-only狀態與CLI註冊 |
+| Formal double-check閉環 | 使用者於2026-07-30以結果ZIP `test-branch-1_20260730_125841_23286ca.zip`（SHA256 `6f7cdcd443966148d16dfca495036bfe9583c5684ca6e39b19832920d6facc59`）執行正式suite；quick gate／chain checks／ML smoke PASS，consistency有3項FAIL：legacy預期集合漏列10A Candidate Query、11A synthetic由`tools/`反向import `apps.breakout_quality`、registry layer誤寫未允許的`research_contract`；meta quality只由synthetic suite失敗連帶觸發。已補legacy fixture、改以AST靜態解析CLI registry、將11A validator歸入`core_invariant`，並將10A set-invariance probe改為確定性candidate embedding差異與跨裝置浮點容差；不改target公式、Dataset、模型或runtime |
 | 完整資料結果 | 尚未執行；交付環境不含使用者本機完整Dataset／future-path artifacts，因此不得填入分布、tie、極端值或實際R方向結論 |
 | 下一步 | 使用者本機執行`python apps/breakout_quality.py audit-continuous-target`並回傳audit md／json。只有target分布、同日pair非tie率與實際R方向足夠時，才進入11A regression／pairwise ranking training contract；否則直接改寫target，不先訓練 |
 
