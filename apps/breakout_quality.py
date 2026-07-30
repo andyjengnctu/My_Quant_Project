@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.breakout_quality_experiments import (
+    STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     build_breakout_quality_pretraining_profile_payload,
@@ -1421,6 +1422,43 @@ def _interactive_regime_audit(program_name: str) -> int:
     )
 
 
+def _interactive_train_continuous_ranker(program_name: str) -> int:
+    filter_id = _policy_filter_id()
+    ranker_module = _load_command_module("train-continuous-ranker")
+    parse_args = getattr(ranker_module, "parse_args", None)
+    if not callable(parse_args):
+        raise RuntimeError("11B train-continuous-ranker command 缺少 parse_args()")
+    defaults = parse_args([])
+    _print_policy_defaults(filter_id)
+    print("11B research-only 同日 Percentile Ranker：")
+    print(
+        f"- Architecture：{BREAKOUT_QUALITY_MODEL_ARCHITECTURE}\n"
+        f"- Experiment Profile：{STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE}\n"
+        f"- Objective：同日 11A target percentile MSE\n"
+        f"- Epoch Selection：Validation mean daily Spearman\n"
+        f"- Epochs / Batch：{int(defaults.epochs)} / {int(defaults.batch_size)}\n"
+        f"- Evaluation Batch：{int(defaults.evaluation_batch_size)}\n"
+        f"- LR / Weight Decay：{float(defaults.lr):g} / {float(defaults.weight_decay):g}\n"
+        f"- Device / Mixed Precision：{defaults.device} / {bool(defaults.mixed_precision)}\n"
+        f"- Inner Validation：{int(defaults.inner_validation_months)} months\n"
+        f"- Early Stopping Patience：{int(defaults.early_stopping_patience)}\n"
+        "- Runtime：research-only，不覆蓋9A正式模型與forward-OOS scores"
+    )
+    if not _prompt_bool("確認開始11B research-only訓練", True):
+        print("已取消。")
+        return 0
+    return _run_command(
+        "train-continuous-ranker",
+        [
+            "--filter-id",
+            filter_id,
+            "--experiment-profile",
+            STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+        ],
+        program_name=program_name,
+    )
+
+
 def _print_menu() -> None:
     print("\n=== Breakout Quality ===")
     print("[1] 完整研究流程（Full／全部股票／OOS）")
@@ -1432,6 +1470,7 @@ def _print_menu() -> None:
     print("[7] 匯出正式 forward-OOS scores")
     print("[8] 市場狀態覆蓋與年度歸因稽核")
     print("[9/Enter] 查看工件狀態")
+    print("[10] 11B 同日 Percentile Ranker（research-only）")
     print("[0] 離開")
 
 
@@ -1467,8 +1506,10 @@ def _run_interactive_menu(program_name: str) -> int:
                 filter_id = _policy_filter_id()
                 _print_policy_defaults(filter_id)
                 _print_artifact_status(filter_id)
+            elif choice == "10":
+                _interactive_train_continuous_ranker(program_name)
             else:
-                print("選項無效，請輸入 0～9。")
+                print("選項無效，請輸入 0～10。")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:

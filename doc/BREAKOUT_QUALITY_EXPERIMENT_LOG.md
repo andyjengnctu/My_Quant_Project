@@ -1231,8 +1231,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 工件 | `models/.../inception_time_v1/strategy_aligned_daily_percentile_mse/model.pt`與manifest／split；`outputs/.../inception_time_v1/strategy_aligned_daily_percentile_mse/continuous_ranker_scores.csv`、report JSON／Markdown及group percentile array。Scores每個group唯一一列，Selection內以`selection_role`標示Inner Train／Validation |
 | Runtime | `runtime_eligible=false`；不設threshold，不允許binary runtime artifact loader或forward-OOS export，不覆蓋9A `unique_group_sampling`工件 |
 | Dataset／Label | 不重建Dataset、不relabel；嚴格驗證11A target manifest、檔案hash、group count與dataset policy。11A invalid groups不進loss或評估 |
-| Formal契約 | B172／T269驗證profile與architecture分離、classification workflow拒絕research profile、同日percentile/tie/singleton、跨日期隔離、target hash fail-fast、2-logit checkpoint shape、research-only工件、OOS post-checkpoint順序與CLI註冊 |
-| 下一步 | 執行`python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1`取得完整Selection/OOS與realized-R結果；尚未取得結果前不得標記ACCEPTED或REJECTED |
+| Formal契約 | B172／T269驗證profile與architecture分離、classification workflow拒絕research profile、同日percentile/tie/singleton、跨日期隔離、target hash fail-fast、2-logit checkpoint shape、research-only工件、OOS post-checkpoint順序、CLI註冊，以及互動選單`[10]`只路由至同一`train-continuous-ranker` command module |
+| 下一步 | 可執行`python apps/breakout_quality.py`後選`[10]`，或直接執行`python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1`，取得完整Selection/OOS與realized-R結果；尚未取得結果前不得標記ACCEPTED或REJECTED |
 
 
 ---

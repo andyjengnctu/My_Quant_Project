@@ -7267,6 +7267,20 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
+        "continuous_ranker_is_available_from_interactive_menu_without_rule_duplication",
+        (True, True, True, True),
+        (
+            'print("[10] 11B 同日 Percentile Ranker（research-only）")' in app_source,
+            'elif choice == "10":' in app_source,
+            "_interactive_train_continuous_ranker(program_name)" in app_source,
+            '_run_command(\n        "train-continuous-ranker"' in app_source,
+        ),
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
         "continuous_ranker_profile_is_blocked_from_binary_workflow_and_runtime_loader",
         (True, True, True, True),
         (
