@@ -102,7 +102,7 @@ OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.01  # local_min_score finalist
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 6  # local_min_score finalist review 的最小候選數
 
 # Rolling OOS optimizer search 預設 trial 數。
-OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 1000
+OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 100
 
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True

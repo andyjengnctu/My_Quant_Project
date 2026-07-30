@@ -18,6 +18,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
 )
+from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.dataset_profiles import get_dataset_dir, normalize_dataset_profile_key
 from core.rolling_oos_params import get_active_param_date_range
@@ -87,7 +88,11 @@ def parse_args(argv=None):
     parser.add_argument("--end-date", default=DEFAULT_REPLAY_END_DATE)
     parser.add_argument("--max-positions", type=int, default=10)
     parser.add_argument("--rotation", choices=("on", "off"), default="off")
-    parser.add_argument("--optimizer-trials", type=int, default=1000)
+    parser.add_argument(
+        "--optimizer-trials",
+        type=int,
+        default=OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    )
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)

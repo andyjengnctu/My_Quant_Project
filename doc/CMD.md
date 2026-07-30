@@ -501,6 +501,8 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 python apps/breakout_quality.py audit-selection-strategy-realization --filter-id breakout_quality_v1 --prepare-only
 ```
 
+未指定`--optimizer-trials`時，trial數直接讀取`config/training_policy.py`的`OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`；不再維護11I專屬硬編碼預設。需要單次覆蓋時可明確加上`--optimizer-trials 100`。每次修改config或CLI值後都必須重新執行`--prepare-only`，因為既有`.ps1`是已生成的靜態腳本。
+
 執行產生的`prepare_selection_nested_roos.ps1`後，再執行：
 
 ```powershell

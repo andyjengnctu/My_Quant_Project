@@ -9449,6 +9449,9 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
 
 
 def validate_breakout_quality_selection_strategy_realization_contract_case(_base_params):
+    from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+    from tools.filters.breakout_quality.audit_selection_strategy_realization import parse_args as parse_selection_strategy_realization_args
+
     case_id = "BREAKOUT_QUALITY_SELECTION_STRATEGY_REALIZATION"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
@@ -9546,6 +9549,17 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
         ),
     )
 
+    default_args = parse_selection_strategy_realization_args([])
+    override_args = parse_selection_strategy_realization_args(["--optimizer-trials", "17"])
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_nested_roos_trial_default_uses_training_policy_single_source",
+        (int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT), 17),
+        (int(default_args.optimizer_trials), int(override_args.optimizer_trials)),
+    )
+
     research_dir = default_research_models_dir()
     params_path = default_params_path()
     add_check(
@@ -9604,6 +9618,17 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
             "--outer-train-window-months" in audit_source and "DEFAULT_TRAIN_WINDOW_MONTHS = 120" in audit_source,
             "V16_MODELS_DIR" in audit_source,
             "resolve_models_dir(project_root, environ=environ)" in optimizer_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_nested_roos_trial_default_has_no_duplicate_magic_number",
+        (True, True),
+        (
+            "default=OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT" in audit_source,
+            'parser.add_argument("--optimizer-trials", type=int, default=1000)' not in audit_source,
         ),
     )
     from tools.optimizer.outer_rolling_oos import OuterRollingConfig, _write_reports
