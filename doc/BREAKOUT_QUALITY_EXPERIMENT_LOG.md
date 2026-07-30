@@ -1199,7 +1199,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `RESULT_AVAILABLE / DISTRIBUTION_PASS / TRADE_R_PENDING`；完整Dataset target arrays與Selection／Validation／OOS分布、同日排序稽核已完成；尚缺實際Round-trip R方向診斷，因此本輪仍不建立或訓練模型 |
+| 狀態 | `RESULT_AVAILABLE / DISTRIBUTION_PASS / TRADE_R_PRIMARY_PASS`；完整Dataset分布與同日排序稽核已完成，且實際Round-trip R主要方向檢查通過。已證明target與realized R呈中等正向關係，但本輪仍未建立或訓練模型；top／bottom decile與≥2R大贏家保留率須以同次最新audit報表作次要確認 |
 | 程式基準 | 最新來源ZIP `test-branch-1_20260730_132733_31c4935.zip`，SHA256 `60d22d76411a186592a1b4bfe8ba689b069beb3dc91f6f36ced1aa5b310d607c`；完整target分布結果沿用使用者提供的`continuous_target_audit.md`，正式policy維持9A。完整audit命令為`python apps/breakout_quality.py audit-continuous-target` |
 | 研究目的 | 9A binary PASS／REJECT score無法單調對應最終Round-trip R或資本效率；11A先測試連續future outcome是否具有足夠分布、同日非tie排序與實際R方向一致性，再決定是否值得建立regression／ranking模型 |
 | 固定target | `strategy_aligned_opportunity_r_v1`：首次觸及−10%風險障礙前的最大有利漲幅÷10%風險預算，減去到達該高點前的最大不利跌幅÷10%，再減`0.5R × (opportunity_bar−1)/(40−1)`；最大高點取最早出現日 |
@@ -1212,8 +1212,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Formal契約 | B171／T268 direct synthetic contract共16項：除固定公式、adverse-first、首日−1R、時間懲罰、invalid future、deterministic group arrays、strict JSON、同日rankability、audit-only與CLI註冊外，驗證hard-filter標準Round-trip路徑、canonical `no_filter_trades.csv`重建、跨正式score-ranking輸出發現且跳過static diagnostic，以及顯式`--trade-history` override |
 | Formal double-check閉環 | 使用者於2026-07-30以結果ZIP `test-branch-1_20260730_125841_23286ca.zip`（SHA256 `6f7cdcd443966148d16dfca495036bfe9583c5684ca6e39b19832920d6facc59`）執行正式suite；quick gate／chain checks／ML smoke PASS，consistency有3項FAIL：legacy預期集合漏列10A Candidate Query、11A synthetic由`tools/`反向import `apps.breakout_quality`、registry layer誤寫未允許的`research_contract`；meta quality只由synthetic suite失敗連帶觸發。已補legacy fixture、改以AST靜態解析CLI registry、將11A validator歸入`core_invariant`，並將10A set-invariance probe改為確定性candidate embedding差異與跨裝置浮點容差；不改target公式、Dataset、模型或runtime |
 | 完整資料結果 | groups=55,509、valid=54,419（98.04%）。Inner／Validation／Selection／OOS mean=0.7394／0.9111／0.7839／0.9815；P50=0.3111／0.3319／0.3167／0.3201；P99=6.5133／8.3370／6.8589／9.9519；正值率69.49%／70.95%／69.89%／68.89%；Unique率98.73%／99.55%／98.73%／99.29%；所有區段同日可排序日與pair非Tie率均100%。Top 1%正target貢獻Selection 11.64%、OOS 10.22%，沒有單一極端尾端主導。Binary AUC約0.9705～0.9718、同日PASS／REJECT concordance約0.9697～0.9724，表示target高度接近既有二元Label的連續化，尚未證明提供新的實際交易價值排序訊息 |
-| 最新來源診斷 | 使用者於2026-07-30在`test-branch-1_20260730_132733_31c4935.zip`再次執行audit，固定hard-filter `strategy_compare`仍找不到`no_filter_round_trips.csv`與`no_filter_trades.csv`。這不代表active 9A其他正式score-ranking輸出也不存在；舊版搜尋範圍過窄。本輪由strategy compare canonical output-name helper提供單一命名真理來源，只擴充來源發現與顯式override，不改target公式、分布結果、Dataset、模型或runtime |
-| 下一步 | 套用本輪來源發現修補後重新執行`python apps/breakout_quality.py audit-continuous-target`。若任何active 9A正式`strategy_compare*`目錄保留no-filter交易工件，CLI會直接完成實際R診斷；若仍完全不存在，才執行一次既有9A hard-filter strategy compare重建工件。只有Spearman方向、top／bottom decile realized R與≥2R贏家保留率支持target時，才進入11A regression／pairwise ranking training contract，不直接開訓 |
+| 最新實際R結果 | 使用者於2026-07-30先重新匯出9A正式`forward_oos` scores，再以`roos_base_finalists_agree.json / max_positions=10 / rotation=off`重建hard-filter標準策略比較工件；11A audit成功讀取`strategy_compare/no_filter_round_trips.csv`。435筆round trips中424筆成功配對，coverage 97.47%；`Spearman(target_raw_r, realized r_multiple)=0.4044`，確認方向為實質正向而非只重述二元Label。11筆未配對不影響主要判讀，但應保留於trade matches供後續稽核 |
+| 下一步 | 11A已通過分布、同日非tie與實際R主要方向門檻。下一個單一變更實驗定為11B同日percentile regression：保留9A InceptionTime輸入與encoder，不重做pairwise BCE hybrid；將Selection內每個交易日的`target_raw_r`轉為固定[0,1]同日percentile soft target，以單一scalar score與MSE訓練，epoch只由Validation同日rank metric選擇，完整Selection依selected epochs重訓後再以固定OOS比較9A。開始實作前，需把同次audit的top／bottom decile realized R與≥2R大贏家保留率寫入結果表作次要合理性確認；不得由這些OOS數值調loss、target轉換或超參數 |
 
 
 ---
@@ -1260,7 +1260,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → Stage 0 point-in-time Market Set Bank＋Stage 1 Global Market Set Encoder（REJECTED；logical-batch修正後OOS PR-AUC 0.6092，低於9A 0.6257；已轉legacy）
 → Market Set formal double-check閉環（FIXED；synthetic legacy預期集合補列`inception_time_market_set_v1`）
 → 10A Candidate-conditioned Query獨立實驗（REJECTED；OOS排序低於9A，轉legacy）
-→ 11A Strategy-aligned Continuous Outcome Target資料與可學性稽核（完整分布PASS；待實際Round-trip R方向診斷）
+→ 11A Strategy-aligned Continuous Outcome Target資料與可學性稽核（分布與實際Round-trip R主要方向PASS；424/435配對，Spearman 0.4044）
+→ 11B 同日percentile regression（PLANNED；9A encoder不變，以連續target同日percentile作soft regression score）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
