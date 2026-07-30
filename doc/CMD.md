@@ -465,3 +465,27 @@ python apps/breakout_quality.py train-continuous-ranker \
 models/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_no_time_pass_magnitude_mse/
 outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_no_time_pass_magnitude_mse/
 ```
+
+### 11H PASS-only Realization-gap Attribution Audit
+
+11G已能排序PASS-only No-time Target，但actual PASS trades的Score↔R為負，因此11H只做凍結工件歸因；CLI-only，不加入互動選單：
+
+```bash
+python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_quality_v1
+```
+
+固定輸入：
+
+- 11G `continuous_ranker_report.json`與`continuous_ranker_scores.csv`。
+- 11F No-time Target component arrays。
+- 11A canonical `continuous_target_trade_matches.csv`。
+
+Audit聚焦原始Label=PASS，固定計算`realization_gap_r=target_raw_r-r_multiple`與`favorable_capture_ratio=r_multiple/favorable_r`，並輸出Score↔Favorable／Adverse、Score↔gap／capture、控制Target後partial Score↔R，以及Score／Target top-bottom decile成分。來源SHA256、逐筆`target=favorable-adverse`與actual PASS配對數均須一致。
+
+輸出位於：
+
+```text
+outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_no_time_pass_magnitude_mse/pass_realization_gap_audit/
+```
+
+本命令不訓練、不建立新profile／checkpoint、不調Target、loss、epoch、sampling、threshold或runtime score。

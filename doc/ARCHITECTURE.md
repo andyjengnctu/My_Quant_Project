@@ -267,3 +267,15 @@ strategy_aligned_no_time_pass_magnitude_mse
 仍重用active `inception_time_v1`與既有2-logit head；模型結構與checkpoint shape不變。`tools.filters.breakout_quality.train_continuous_ranker`依profile的`training_label_scope=pass_only`，只在同日PASS groups內建立No-time Target percentile，並只用PASS groups更新gradient、選epoch與完整Selection refit。
 
 Checkpoint寫入前不得建立OOS percentile；模型凍結後才輸出OOS PASS-only主要指標、all-label次要診斷，以及actual PASS／REJECT round-trip分層結果。11G為research-only、CLI-only，不加入互動選單，不建立threshold、runtime combination或forward-OOS正式scores。
+
+### 11H PASS-only Realization-gap Attribution Audit
+
+11G結果顯示模型能學到PASS-only No-time Target，卻無法排序actual PASS realized R。11H不新增模型或Target，正式CLI為：
+
+```bash
+python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_quality_v1
+```
+
+`tools.filters.breakout_quality.audit_pass_realization_gap`strict驗證11G report／score SHA256、11F No-time component arrays與11A canonical trade-match SHA256；以group index逐筆驗證`target_raw_r=favorable_r-adverse_r`，聚焦OOS PASS與actual PASS。Audit固定輸出Score對Favorable／Adverse的偏好、`Target−realized R`實現落差、`realized R÷Favorable R`捕捉率、控制Target或兩成分後的partial Spearman，以及Score／Target decile的Target、成分、realized R與落差。
+
+11H為research-only、CLI-only，只作失敗歸因；不建立optimizer、checkpoint、experiment profile、threshold、runtime score或策略回測，不加入互動選單。

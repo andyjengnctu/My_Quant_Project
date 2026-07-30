@@ -8084,7 +8084,6 @@ def validate_breakout_quality_target_component_attribution_contract_case(_base_p
             "opportunity_bar": (TARGET_OPPORTUNITY_BAR_FILENAME, np.ones(len(target), dtype=np.int16)),
             "first_risk_breach_bar": (
                 TARGET_RISK_BREACH_BAR_FILENAME,
-    TARGET_TRADE_MATCHES_CSV_FILENAME,
                 np.asarray([-1, -1, -1, -1, -1, 1], dtype=np.int16),
             ),
         }
@@ -9275,11 +9274,186 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
     return results, summary
 
 
+def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_PASS_REALIZATION_GAP_ATTRIBUTION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from tools.filters.breakout_quality.audit_pass_realization_gap import (
+        attach_no_time_components,
+        partial_spearman,
+        realization_gap_metrics,
+        render_markdown,
+    )
+
+    rng = np.random.default_rng(10)
+    count = 30
+    score = np.arange(count, dtype=np.float64) / float(count - 1)
+    latent = rng.normal(size=count)
+    target = 0.5 * score + latent
+    target = target - float(target.min()) + 0.6
+    realized = 1.2 * latent - 2.5 * score + rng.normal(scale=0.1, size=count)
+    adverse = 0.1 + 0.2 * np.linspace(0.0, 1.0, count)
+    favorable = target + adverse
+    frame = pd.DataFrame({
+        "group_index": np.arange(count, dtype=np.int64),
+        "label": np.full(count, LABEL_PASS, dtype=np.int64),
+        "target_raw_r": target,
+        "model_score": score,
+        "r_multiple": realized,
+    })
+    arrays = {
+        "target_raw_r": target.astype(np.float32),
+        "favorable_return": favorable.astype(np.float32) * 0.1,
+        "adverse_return_to_peak": adverse.astype(np.float32) * 0.1,
+        "valid_mask": np.ones(count, dtype=bool),
+    }
+    attached = attach_no_time_components(
+        frame,
+        arrays=arrays,
+        risk_budget_return=0.1,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_realization_gap_components_reconstruct_no_time_target",
+        (True, True, True),
+        (
+            bool(np.allclose(attached["favorable_r"] - attached["adverse_r"], attached["target_raw_r"], atol=1e-5, rtol=0.0)),
+            bool((attached["label"] == LABEL_PASS).all()),
+            bool(np.isfinite(attached[["target_raw_r", "favorable_r", "adverse_r", "model_score"]].to_numpy(dtype=np.float64)).all()),
+        ),
+    )
+
+    metrics = realization_gap_metrics(attached, include_realized_r=True)
+    corr = metrics["correlations"]
+    partial = metrics["partial_correlations"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_realization_gap_detects_target_learning_but_negative_realized_r",
+        (True, True, True, True),
+        (
+            float(corr["score_vs_target"]) > 0.20,
+            float(corr["target_vs_realized_r"]) > 0.45,
+            float(corr["score_vs_realized_r"]) < -0.10,
+            float(corr["score_vs_realization_gap_r"]) > 0.80,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_realization_gap_partial_rank_controls_target",
+        (True, True),
+        (
+            float(partial["score_vs_realized_r_controlling_target"]) < -0.50,
+            partial_spearman(score, realized, [target]) is not None,
+        ),
+    )
+    score_deciles = metrics["score_deciles"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_realization_gap_score_deciles_expose_unrealized_opportunity",
+        (True, True, True),
+        (
+            float(score_deciles["top"]["mean_target_raw_r"]) > float(score_deciles["bottom"]["mean_target_raw_r"]),
+            float(score_deciles["top"]["mean_realization_gap_r"]) > float(score_deciles["bottom"]["mean_realization_gap_r"]),
+            float(score_deciles["top"]["mean_r_multiple"]) < float(score_deciles["bottom"]["mean_r_multiple"]),
+        ),
+    )
+
+    markdown = render_markdown({
+        "oos_pass": realization_gap_metrics(attached.drop(columns=["r_multiple"]), include_realized_r=False),
+        "actual_pass": {key: value for key, value in metrics.items() if key != "frame"},
+    })
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_realization_gap_report_exposes_gap_capture_partial_and_boundary",
+        (True, True, True, True),
+        (
+            "Target−R gap" in markdown,
+            "R÷Favorable" in markdown,
+            "Partial Score↔R" in markdown,
+            "strategy-realization target audit" in markdown,
+        ),
+    )
+
+    root = Path(__file__).resolve().parents[2]
+    app_path = root / "apps" / "breakout_quality.py"
+    app_source = app_path.read_text(encoding="utf-8")
+    tree = ast.parse(app_source, filename=str(app_path))
+    command_modules = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target_node, ast.Name) and target_node.id == "COMMAND_MODULES"
+            for target_node in node.targets
+        ):
+            command_modules = ast.literal_eval(node.value)
+            break
+    menu_source = app_source[
+        app_source.find("def _run_interactive_menu") : app_source.find("def main")
+    ]
+    audit_path = root / "tools" / "filters" / "breakout_quality" / "audit_pass_realization_gap.py"
+    audit_source = audit_path.read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_realization_gap_audit_is_cli_only_and_registered",
+        (True, True, True, True),
+        (
+            command_modules.get("audit-pass-realization-gap")
+            == "tools.filters.breakout_quality.audit_pass_realization_gap",
+            "11H" not in menu_source,
+            "audit-pass-realization-gap" not in menu_source,
+            "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE" in audit_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_realization_gap_audit_strictly_validates_sources",
+        (True, True, True, True),
+        (
+            "11H偵測到11G scores SHA256不一致" in audit_source,
+            "11H偵測到11A trade matches SHA256不一致" in audit_source,
+            "No-time target無法由favorable-adverse逐筆重建" in audit_source,
+            "actual PASS配對數與11G report不一致" in audit_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_realization_gap_audit_is_read_only_and_does_not_authorize_model",
+        (True, True, True, True),
+        (
+            '"research_only": True' in audit_source,
+            '"training_performed": False' in audit_source,
+            '"new_model_not_authorized_until_result_review": True' in audit_source,
+            "torch.save" not in audit_source,
+        ),
+    )
+
+    summary["ranker_profile"] = STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+    summary["audit"] = "pass_realization_gap"
+    return results, summary
+
+
 __all__ = [
     "validate_breakout_quality_chronological_embargo_case",
     "validate_breakout_quality_continuous_target_contract_case",
     "validate_breakout_quality_continuous_ranker_contract_case",
     "validate_breakout_quality_pass_conditional_ranker_contract_case",
+    "validate_breakout_quality_pass_realization_gap_attribution_contract_case",
     "validate_breakout_quality_qualified_candidate_set_audit_contract_case",
     "validate_breakout_quality_target_component_attribution_contract_case",
     "validate_breakout_quality_target_time_penalty_ablation_contract_case",

@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪實作基準`test-branch-1_20260730_194008_2053d47.zip`，SHA256 `d0e8e93fbf11e115fac111ce3ef6c5cee0e1161ade963681b8240100205596f6`；11F No-time Target Selection-only Audit已取得結果並通過分布／rankability門檻。11G PASS-conditional No-time Magnitude Ranker已實作、尚未取得本機訓練結果。11B維持淘汰，正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`d0e8e93fbf11e115fac111ce3ef6c5cee0e1161ade963681b8240100205596f6`；11F結果來源為使用者提供的`continuous_target_audit(4).md`；11E結果來源為使用者提供的`target_time_penalty_ablation_audit.md`；11D結果來源為`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | 本輪實作基準`test-branch-1_20260730_202010_4cc9d53.zip`，SHA256 `89769903bfe6abe41af8dead26c926a5e2123825115c39f035e71e3364dc55bf`；11G PASS-conditional No-time Magnitude Ranker已取得完整結果並淘汰：OOS PASS-only可排序，但actual PASS trades Score↔R為負且decile反轉。11H PASS-only Realization-gap Attribution已實作、尚未取得本機audit結果。正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`89769903bfe6abe41af8dead26c926a5e2123825115c39f035e71e3364dc55bf`；11G結果來源為使用者提供的`continuous_ranker_report(1).md`；11F結果來源為`continuous_target_audit(4).md`；11E結果來源為`target_time_penalty_ablation_audit.md`；11D結果來源為`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -725,7 +725,8 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 40. Candidate-conditioned Market Set與其learned-lag延伸；10A OOS PR-AUC較9A低0.0248，P@50／60／70%低0.75／0.41／0.47 pp，R@P60%低2.69 pp。Recall增加7.30 pp只因模型PASS增加7.34 pp，不是排序改善；不啟動10B learned lag、query數／heads／embedding或Market Set微調。
 41. 11B同日percentile MSE與其直接微調；OOS mean daily Spearman僅0.1327、PR-AUC 0.5959，actual trade R Spearman −0.0003，Score前10%平均0.6500R反而低於後10%的2.0251R。不得再調MSE／Huber、epoch、patience、LR、batch、percentile公式、直接pairwise loss或同一全事件訓練母體。
 42. 直接建立qualified-candidate-only sampling profile；11C顯示Score↔Target由all OOS 0.1677升至qualified 0.1918、orderable 0.1891，actual trades更達0.2459，沒有母體崩落證據。不得以候選母體不一致為理由直接重訓。
-43. 直接以全Label重新訓練No-time percentile ranker，或搜尋time penalty正負號／係數；11F Binary AUC約0.99，證明全Label loss會再次被PASS／REJECT分離支配。唯一允許的新模型線為11G PASS-only magnitude profile；不得加入BCE、pairwise、qualified sampling、time權重搜尋或9A Score blending。
+43. 直接以全Label重新訓練No-time percentile ranker，或搜尋time penalty正負號／係數；11F Binary AUC約0.99，證明全Label loss會再次被PASS／REJECT分離支配。11G已完成唯一允許的PASS-only測試並淘汰，不得回頭加入BCE、pairwise、qualified sampling、time權重搜尋或9A Score blending。
+44. 微調11G PASS-only magnitude ranker；雖OOS PASS-only Score↔Target達0.3464、mean daily Spearman 0.2944，但actual PASS Score↔R為−0.1066，Score top decile僅0.6117R、bottom decile3.5519R。不得再調MSE／Huber、epochs、patience、LR、batch、percentile、head或與9A融合；先完成11H realization-gap歸因。
 
 ---
 
@@ -733,20 +734,18 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 所有實驗一次只改一項。既有 OOS 可持續作為固定比較集；每次模型的訓練、Validation、early stopping 與 epoch 選擇必須完全限制在 Selection 內，完整 OOS 只能在模型凍結後執行。OOS 結果可以用來接受、淘汰或形成下一個實驗，不再以「OOS 已被查看」作為停止研究的理由。正式 runtime 仍維持 `base_finalists_agree` 既有排序且 Quality Ranking 關閉，除非新實驗同時通過模型指標與策略經濟效果。
 
-### 目前新增優先：11G PASS-conditional No-time Magnitude Ranker
+### 目前新增優先：11H PASS-only Realization-gap Attribution Audit
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；research-only、CLI-only，尚待本機訓練 |
-| 研究依據 | 11F同日rankability 100%、pair非tie 99.99%，但Binary AUC約0.99；因此只允許PASS-only magnitude學習，不得重跑全Label 11B機制 |
-| 唯一變更 | profile=`strategy_aligned_no_time_pass_magnitude_mse`；同日percentile只由原始PASS groups的No-time Target建立，gradient／Validation／final refit也只使用PASS groups |
-| Architecture／Optimizer | 維持9A `inception_time_v1`、2 logits、Adam 0.0003、batch128、patience1、selected epochs、seed42 |
-| Validation | 只用Selection內Validation PASS-only mean daily Spearman選epoch；同分才比較PASS-only MSE |
-| OOS主要判定 | 模型凍結後檢查OOS PASS-only Score↔No-time Target、PASS-onlydecile spread，以及actual PASS trades Score↔R／top-bottom decile R；overall與REJECT只作診斷 |
-| Dataset rebuild | 不需要；重用現有300×10 feature bank、split與11F versioned arrays |
-| 執行入口 | `python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse` |
-| 不做項目 | 不加入互動選單、不改architecture、不混BCE／pairwise、不做qualified sampling、不搜尋time係數、不設定runtime threshold或Score融合權重 |
-
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；research-only、CLI-only，不訓練 |
+| 研究依據 | 11G在OOS PASS-only可穩定排序No-time Target，但actual PASS中Score↔Target 0.3476、Target↔R 0.4542時，Score↔R仍為−0.1066且decile反轉；必須確認模型是否偏好未被策略實現的機會 |
+| 唯一變更 | 只讀11G凍結scores、11F No-time component arrays與11A canonical actual trades，固定計算`realization_gap_r=target_raw_r-r_multiple`與`favorable_capture_ratio=r_multiple/favorable_r` |
+| 主要診斷 | OOS PASS及actual PASS的Score↔Favorable／Adverse；actual PASS的Score↔gap、Score↔capture ratio、控制Target後的partial Spearman，以及Score／Target top-bottom decile成分與realized R |
+| 判定 | 若Score↔gap為正且Score↔capture為負，停止MFE型magnitude模型並轉向Selection historical replay的strategy-realization target audit；若Score主要學到Adverse，才允許固定Favorable-only消融 |
+| Dataset／training | 不重建Dataset、不relabel、不訓練、不選epoch、不建立profile或checkpoint |
+| 執行入口 | `python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_quality_v1` |
+| UI／runtime | CLI-only、不加入互動選單、不產生threshold或forward-OOS runtime scores |
 
 ### 優先 6A：AdamW only
 
@@ -1298,15 +1297,30 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；PASS-conditional training profile與既有continuous-ranker CLI已實作，尚待使用者本機訓練；不得預先標記有效 |
-| 程式基準 | 以`test-branch-1_20260730_194008_2053d47.zip`、SHA256 `d0e8e93fbf11e115fac111ce3ef6c5cee0e1161ade963681b8240100205596f6`為唯一來源基準 |
-| Experiment profile | `strategy_aligned_no_time_pass_magnitude_mse`；仍使用active 9A `inception_time_v1`與既有2-logit head，不新增architecture版本 |
-| 唯一變更 | 相對11B把continuous target改為11F No-time Target，且訓練／Validation／final refit只使用原始Label=PASS groups；同日percentile只在同日PASS groups內建立 |
-| 固定條件 | Adam 0.0003、weight decay 0.0001、batch128、patience1、selected epochs、seed42、300×10與RF229全部固定；不加入BCE、pairwise、Huber、qualified sampling或Score blending |
-| Epoch選擇 | 只依Validation PASS-only mean daily Spearman；同分才比較PASS-only MSE。完整Selection PASS groups依selected epochs重新初始化重訓 |
-| OOS評估 | Checkpoint寫入後才建立OOS PASS-only percentile。主要判定為OOS PASS-only Score↔No-time Target與actual PASS trades Score↔R；overall與REJECT只作診斷，不參與選epoch或調參 |
-| Runtime | research-only、CLI-only、無threshold、無9A結合權重、不得匯出forward-OOS runtime scores或覆蓋9A／11B工件 |
-| 執行 | `python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse` |
+| 狀態 | `RESULT_AVAILABLE / REJECTED`；PASS-only No-time Target在OOS可學，但actual PASS realized R反向，模型不得採用或微調 |
+| 程式基準 | 結果ZIP `test-branch-1_20260730_202010_4cc9d53.zip`，SHA256 `89769903bfe6abe41af8dead26c926a5e2123825115c39f035e71e3364dc55bf`；正式結果來源為`continuous_ranker_report(1).md` |
+| Experiment profile | `strategy_aligned_no_time_pass_magnitude_mse`；active 9A `inception_time_v1`與既有2-logit head，training label scope=`pass_only` |
+| Epoch選擇 | Best epoch 2；選epoch當下Validation PASS-only mean daily Spearman 0.2485。完整Selection PASS groups依2 epochs重新初始化重訓 |
+| OOS PASS-only | 9,650 groups；global Spearman 0.3464、mean daily Spearman 0.2944、pair concordance 0.6350；Score top／bottom decile No-time Target為3.7433／1.1282，模型確實學到Target排序 |
+| Actual PASS trades | 214筆；Score↔Target 0.3476、Target↔R 0.4542，但Score↔R −0.1066；Score top／bottom decile實際R為0.6117／3.5519，方向明顯反轉 |
+| Overall／REJECT | Overall 422筆Score↔R −0.0012、top／bottom decile 0.2756／1.4585R；REJECT Score↔R −0.0475，只作診斷 |
+| 判定 | 淘汰11G。失敗不是模型無法學No-time Target，而是模型學到的Target成分沒有轉化成策略可實現R；不得調超參數、loss、head或融合 |
+| 下一步 | 進入11H PASS-only Realization-gap Attribution，固定檢查Score↔Favorable／Adverse、`Target−R` gap、`R÷Favorable` capture ratio與控制Target後partial Score↔R |
+| Runtime | research-only工件保留供重現；不設定threshold、不匯出forward-OOS runtime scores、不覆蓋9A |
+
+### 3.56 11H PASS-only Realization-gap Attribution Audit（2026-07-30）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；CLI-only只讀失敗歸因已實作，尚待使用者本機執行 |
+| 程式基準 | 以`test-branch-1_20260730_202010_4cc9d53.zip`、SHA256 `89769903bfe6abe41af8dead26c926a5e2123825115c39f035e71e3364dc55bf`為來源基準 |
+| 唯一變更 | 不改模型或Target；只讀11G scores、11F No-time component arrays與11A canonical actual trade matches，聚焦原始Label=PASS |
+| 固定指標 | `realization_gap_r=target_raw_r-r_multiple`；`favorable_capture_ratio=r_multiple/favorable_r`；另計算Score↔Favorable／Adverse、Score↔gap／capture及控制Target或兩成分後的partial Spearman |
+| Decile歸因 | 分別依Score與Target切top／bottom 10%，輸出Target、Favorable、Adverse、realized R、gap與capture ratio，確認高Score是否只是更大未實現機會 |
+| 防錯 | strict驗證11G report／scores、11A trade matches SHA256、11F No-time arrays及逐筆`target=favorable-adverse`；actual PASS配對數必須與11G report一致 |
+| Validator閉環 | 本輪獨立直跑另發現11D component-loader synthetic fixture的`first_risk_breach_bar` tuple誤混入常數，已移除並重新驗證11D contract；不改正式11D／11H計算語意 |
+| Runtime | research-only、CLI-only、不訓練、不建立profile／checkpoint／threshold／策略回測，不加入互動選單 |
+| 執行 | `python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_quality_v1` |
 
 
 ---
@@ -1358,7 +1372,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 11D Label-conditional Target Component Attribution Audit（RESULT_AVAILABLE；PASS內連續Target有效，但time penalty方向與actual R錯位）
 → 11E Fixed Time-penalty Ablation Audit（RESULT_AVAILABLE；overall／PASS／decile spread均改善，固定消融通過）
 → 11F No-time Target Arrays＋Selection-only Learnability Audit（RESULT_AVAILABLE；SELECTION_LEARNABILITY_PASS）
-→ 11G PASS-conditional No-time Magnitude Ranker（IMPLEMENTED；待本機訓練，CLI-only、research-only）
+→ 11G PASS-conditional No-time Magnitude Ranker（REJECTED；OOS PASS Target排序成立但actual PASS Score↔R −0.1066、decile反轉）
+→ 11H PASS-only Realization-gap Attribution Audit（IMPLEMENTED；待本機audit，CLI-only、read-only）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
