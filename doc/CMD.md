@@ -96,10 +96,11 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 python apps/breakout_quality.py audit-continuous-target
 ```
 
-預設會在目前active 9A策略比較目錄先尋找`strategy_compare/no_filter_round_trips.csv`；若該衍生檔不存在但`no_filter_trades.csv`仍在，會自動使用canonical交易歸因邏輯在記憶體重建round trips並完成實際R方向診斷。也可顯式指定：
+預設會在active 9A的正式模型輸出樹依序搜尋hard-filter `strategy_compare`、`base_finalists_agree`／`base_finalist_best` score-ranking及其他`strategy_compare*`目錄；有metadata時只接受目前filter／architecture／experiment profile且`comparison_design=historical_active_param_oos`的工件。每個目錄先讀`no_filter_round_trips.csv`，若只有`no_filter_trades.csv`則重用canonical交易歸因邏輯在記憶體重建round trips。hard-filter標準目錄優先，避免因舊版只查單一路徑而漏掉既有正式比較工件。也可顯式指定任一來源：
 
 ```bash
 python apps/breakout_quality.py audit-continuous-target --round-trips <no_filter_round_trips.csv>
+python apps/breakout_quality.py audit-continuous-target --trade-history <no_filter_trades.csv>
 ```
 
 輸出固定在：

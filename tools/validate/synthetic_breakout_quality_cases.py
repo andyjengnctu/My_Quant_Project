@@ -6844,7 +6844,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
 
         expected_round_trip_path.unlink()
         trade_history_path = expected_round_trip_path.parent / "no_filter_trades.csv"
-        pd.DataFrame(
+        trade_history_frame = pd.DataFrame(
             [
                 {
                     "Date": "2021-01-05",
@@ -6871,7 +6871,8 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
                     "R_Multiple": 1.5,
                 },
             ]
-        ).to_csv(trade_history_path, index=False, encoding="utf-8-sig")
+        )
+        trade_history_frame.to_csv(trade_history_path, index=False, encoding="utf-8-sig")
         with patch(
             "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
             Path(temp_dir),
@@ -6905,6 +6906,108 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
                 str(rebuilt_source["path"]),
             ),
             tol=1e-12,
+        )
+
+
+        trade_history_path.unlink()
+        active_output_root = expected_round_trip_path.parents[1]
+        skipped_static_dir = active_output_root / "strategy_compare_score_ranking_base_finalists_agree"
+        skipped_static_dir.mkdir(parents=True, exist_ok=True)
+        (skipped_static_dir / "strategy_comparison.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {
+                        "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                        "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                        "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+                        "comparison_design": "static_param_diagnostic",
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        trade_history_frame.to_csv(
+            skipped_static_dir / "no_filter_trades.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        discovered_dir = active_output_root / "strategy_compare_score_ranking_base_finalist_best"
+        discovered_dir.mkdir(parents=True, exist_ok=True)
+        (discovered_dir / "strategy_comparison.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {
+                        "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                        "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                        "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+                        "comparison_design": "historical_active_param_oos",
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        discovered_trade_history_path = discovered_dir / "no_filter_trades.csv"
+        trade_history_frame.to_csv(
+            discovered_trade_history_path,
+            index=False,
+            encoding="utf-8-sig",
+        )
+        with patch(
+            "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
+            Path(temp_dir),
+        ):
+            discovered_round_trips, discovered_source = _load_round_trip_source(
+                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                None,
+            )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "continuous_target_discovers_official_score_ranking_trade_history_and_skips_static",
+            (
+                1,
+                "active_9a_strategy_compare_trade_history_discovery",
+                str(discovered_trade_history_path),
+                "historical_active_param_oos",
+            ),
+            (
+                len(discovered_round_trips),
+                str(discovered_source["path_source"]),
+                str(discovered_source["path"]),
+                str((discovered_source.get("strategy_compare_metadata") or {}).get("comparison_design")),
+            ),
+        )
+
+        explicit_trade_history_path = Path(temp_dir) / "explicit_no_filter_trades.csv"
+        trade_history_frame.to_csv(
+            explicit_trade_history_path,
+            index=False,
+            encoding="utf-8-sig",
+        )
+        with patch(
+            "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
+            Path(temp_dir),
+        ):
+            explicit_round_trips, explicit_source = _load_round_trip_source(
+                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                None,
+                str(explicit_trade_history_path),
+            )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "continuous_target_accepts_explicit_trade_history_override",
+            (1, "explicit_trade_history", str(explicit_trade_history_path), True),
+            (
+                len(explicit_round_trips),
+                str(explicit_source["path_source"]),
+                str(explicit_source["path"]),
+                bool(explicit_source["round_trips_reconstructed"]),
+            ),
         )
 
     add_check(

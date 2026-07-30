@@ -294,6 +294,34 @@ def _comparison_output_dir_name(comparison_mode: str, labels: dict[str, str], *,
         return f"{labels['output_dir']}_{PARAM_POLICY_SPECS[param_policy]['output_suffix']}"
     return labels["output_dir"]
 
+def canonical_strategy_compare_output_dir_names() -> tuple[str, ...]:
+    """Return active strategy-compare directory names in semantic priority order."""
+
+    hard_filter_labels = _comparison_labels(COMPARISON_MODE_HARD_FILTER)
+    score_ranking_labels = _comparison_labels(COMPARISON_MODE_SCORE_RANKING)
+    return (
+        _comparison_output_dir_name(
+            COMPARISON_MODE_HARD_FILTER,
+            hard_filter_labels,
+            param_policy=PARAM_POLICY_AUTO,
+        ),
+        _comparison_output_dir_name(
+            COMPARISON_MODE_SCORE_RANKING,
+            score_ranking_labels,
+            param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
+        ),
+        _comparison_output_dir_name(
+            COMPARISON_MODE_SCORE_RANKING,
+            score_ranking_labels,
+            param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+        ),
+        _comparison_output_dir_name(
+            COMPARISON_MODE_SCORE_RANKING,
+            score_ranking_labels,
+            param_policy=PARAM_POLICY_AUTO,
+        ),
+    )
+
 def _load_param_source(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1067,6 +1095,7 @@ def main(argv=None):
 
 __all__ = [
     "main", "run_comparison", "run_existing_attribution",
+    "canonical_strategy_compare_output_dir_names",
     "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair",
     "_assert_controlled_payload_pair", "_build_controlled_param_source_pair",
     "_load_param_source", "_capacity_summary", "_normalize_yearly_completeness",

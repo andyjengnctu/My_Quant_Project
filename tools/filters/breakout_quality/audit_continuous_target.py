@@ -59,6 +59,7 @@ from tools.filters.breakout_quality.common import (
     dataset_paths,
     load_validated_dataset_bundle,
 )
+from tools.filters.breakout_quality.strategy_compare import canonical_strategy_compare_output_dir_names
 from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 TARGET_AUDIT_SCHEMA_VERSION = 1
@@ -78,9 +79,16 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--round-trips",
         default=None,
         help=(
-            "選填 no_filter_round_trips.csv；未指定時先讀active 9A strategy_compare標準路徑，"
-            "若round-trip檔不存在但no_filter_trades.csv存在，會以canonical交易歸因邏輯在記憶體重建；"
-            "兩者都找不到不視為錯誤"
+            "選填 no_filter_round_trips.csv；未指定時會依序搜尋active 9A全部正式strategy_compare輸出，"
+            "優先hard-filter標準目錄，再搜尋score-ranking變體"
+        ),
+    )
+    parser.add_argument(
+        "--trade-history",
+        default=None,
+        help=(
+            "選填 no_filter_trades.csv；只在未指定--round-trips時使用，並以canonical交易歸因邏輯"
+            "於記憶體重建round trips"
         ),
     )
     parser.add_argument(
@@ -349,16 +357,71 @@ def _same_day_binary_concordance(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _active_strategy_compare_dir(filter_id: str) -> Path:
-    return (
-        resolve_filter_model_output_dir(
-            PROJECT_ROOT,
-            filter_id,
-            BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-        )
-        / "strategy_compare"
+def _active_strategy_compare_root(filter_id: str) -> Path:
+    return resolve_filter_model_output_dir(
+        PROJECT_ROOT,
+        filter_id,
+        BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     )
+
+
+def _active_strategy_compare_dir(filter_id: str) -> Path:
+    """Return the canonical hard-filter strategy comparison directory."""
+
+    return _active_strategy_compare_root(filter_id) / "strategy_compare"
+
+
+def _strategy_compare_candidate_dirs(filter_id: str) -> list[Path]:
+    """Resolve active 9A strategy outputs in deterministic semantic priority order."""
+
+    root = _active_strategy_compare_root(filter_id)
+    preferred_names = canonical_strategy_compare_output_dir_names()
+    ordered = [root / name for name in preferred_names]
+    if root.is_dir():
+        ordered.extend(sorted(path for path in root.glob("strategy_compare*") if path.is_dir()))
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in ordered:
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _load_strategy_compare_metadata(directory: Path) -> dict[str, Any]:
+    path = directory / "strategy_comparison.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"讀取strategy comparison metadata失敗: {path}｜{type(exc).__name__}: {exc}") from exc
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"strategy comparison metadata格式錯誤: {path}")
+    return dict(metadata)
+
+
+def _strategy_compare_dir_is_eligible(directory: Path, filter_id: str) -> tuple[bool, dict[str, Any]]:
+    metadata = _load_strategy_compare_metadata(directory)
+    if not metadata:
+        return True, {}
+    expected = {
+        "filter_id": str(filter_id),
+        "model_architecture": str(BREAKOUT_QUALITY_MODEL_ARCHITECTURE),
+        "experiment_profile": str(BREAKOUT_QUALITY_EXPERIMENT_PROFILE),
+    }
+    for key, value in expected.items():
+        observed = str(metadata.get(key) or "")
+        if observed and observed != value:
+            return False, metadata
+    comparison_design = str(metadata.get("comparison_design") or "")
+    if comparison_design and comparison_design != "historical_active_param_oos":
+        return False, metadata
+    return True, metadata
 
 
 def _resolve_round_trip_path(filter_id: str, explicit_path: str | None) -> tuple[Path | None, str]:
@@ -367,24 +430,54 @@ def _resolve_round_trip_path(filter_id: str, explicit_path: str | None) -> tuple
         if not path.is_file():
             raise FileNotFoundError(f"找不到round-trip檔案: {path}")
         return path, "explicit"
-    candidate = _active_strategy_compare_dir(filter_id) / "no_filter_round_trips.csv"
-    return (candidate, "active_9a_standard_path") if candidate.is_file() else (None, "not_found")
+    for index, directory in enumerate(_strategy_compare_candidate_dirs(filter_id)):
+        eligible, _ = _strategy_compare_dir_is_eligible(directory, filter_id)
+        if not eligible:
+            continue
+        candidate = directory / "no_filter_round_trips.csv"
+        if candidate.is_file():
+            return candidate, (
+                "active_9a_standard_path"
+                if index == 0
+                else "active_9a_strategy_compare_discovery"
+            )
+    return None, "not_found"
 
 
-def _resolve_trade_history_path(filter_id: str) -> tuple[Path | None, str]:
-    candidate = _active_strategy_compare_dir(filter_id) / "no_filter_trades.csv"
-    return (candidate, "active_9a_trade_history_fallback") if candidate.is_file() else (None, "not_found")
+def _resolve_trade_history_path(
+    filter_id: str,
+    explicit_path: str | None = None,
+) -> tuple[Path | None, str]:
+    if explicit_path:
+        path = Path(explicit_path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"找不到trade history檔案: {path}")
+        return path, "explicit_trade_history"
+    for index, directory in enumerate(_strategy_compare_candidate_dirs(filter_id)):
+        eligible, _ = _strategy_compare_dir_is_eligible(directory, filter_id)
+        if not eligible:
+            continue
+        candidate = directory / "no_filter_trades.csv"
+        if candidate.is_file():
+            return candidate, (
+                "active_9a_trade_history_fallback"
+                if index == 0
+                else "active_9a_strategy_compare_trade_history_discovery"
+            )
+    return None, "not_found"
 
 
 def _load_round_trip_source(
     filter_id: str,
     explicit_round_trips: str | None,
+    explicit_trade_history: str | None = None,
 ) -> tuple[pd.DataFrame | None, dict[str, Any]]:
-    round_trip_path, round_trip_path_source = _resolve_round_trip_path(
-        filter_id,
-        explicit_round_trips,
-    )
-    if round_trip_path is not None:
+    if explicit_round_trips:
+        round_trip_path, round_trip_path_source = _resolve_round_trip_path(
+            filter_id,
+            explicit_round_trips,
+        )
+        assert round_trip_path is not None
         return pd.read_csv(round_trip_path, encoding="utf-8-sig"), {
             "path": str(round_trip_path),
             "path_source": round_trip_path_source,
@@ -392,8 +485,12 @@ def _load_round_trip_source(
             "round_trips_reconstructed": False,
         }
 
-    trade_history_path, trade_history_path_source = _resolve_trade_history_path(filter_id)
-    if trade_history_path is not None:
+    if explicit_trade_history:
+        trade_history_path, trade_history_path_source = _resolve_trade_history_path(
+            filter_id,
+            explicit_trade_history,
+        )
+        assert trade_history_path is not None
         trade_history = pd.read_csv(trade_history_path, encoding="utf-8-sig")
         round_trips = reconstruct_round_trips(trade_history, scenario="no_filter")
         return round_trips, {
@@ -403,15 +500,51 @@ def _load_round_trip_source(
             "round_trips_reconstructed": True,
         }
 
-    strategy_compare_dir = _active_strategy_compare_dir(filter_id)
+    attempted_paths: list[str] = []
+    for index, directory in enumerate(_strategy_compare_candidate_dirs(filter_id)):
+        eligible, metadata = _strategy_compare_dir_is_eligible(directory, filter_id)
+        attempted_paths.extend(
+            [
+                str(directory / "no_filter_round_trips.csv"),
+                str(directory / "no_filter_trades.csv"),
+            ]
+        )
+        if not eligible:
+            continue
+        round_trip_path = directory / "no_filter_round_trips.csv"
+        if round_trip_path.is_file():
+            return pd.read_csv(round_trip_path, encoding="utf-8-sig"), {
+                "path": str(round_trip_path),
+                "path_source": (
+                    "active_9a_standard_path"
+                    if index == 0
+                    else "active_9a_strategy_compare_discovery"
+                ),
+                "source_kind": "round_trip_csv",
+                "round_trips_reconstructed": False,
+                "strategy_compare_metadata": metadata,
+            }
+        trade_history_path = directory / "no_filter_trades.csv"
+        if trade_history_path.is_file():
+            trade_history = pd.read_csv(trade_history_path, encoding="utf-8-sig")
+            round_trips = reconstruct_round_trips(trade_history, scenario="no_filter")
+            return round_trips, {
+                "path": str(trade_history_path),
+                "path_source": (
+                    "active_9a_trade_history_fallback"
+                    if index == 0
+                    else "active_9a_strategy_compare_trade_history_discovery"
+                ),
+                "source_kind": "reconstructed_from_no_filter_trades",
+                "round_trips_reconstructed": True,
+                "strategy_compare_metadata": metadata,
+            }
+
     return None, {
         "path_source": "not_found",
         "source_kind": "not_found",
         "round_trips_reconstructed": False,
-        "attempted_paths": [
-            str(strategy_compare_dir / "no_filter_round_trips.csv"),
-            str(strategy_compare_dir / "no_filter_trades.csv"),
-        ],
+        "attempted_paths": attempted_paths,
     }
 
 
@@ -433,8 +566,13 @@ def _trade_alignment_diagnostic(
     *,
     filter_id: str,
     explicit_round_trips: str | None,
+    explicit_trade_history: str | None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
-    trades, source = _load_round_trip_source(filter_id, explicit_round_trips)
+    trades, source = _load_round_trip_source(
+        filter_id,
+        explicit_round_trips,
+        explicit_trade_history,
+    )
     if trades is None:
         return {
             "available": False,
@@ -634,6 +772,11 @@ def render_continuous_target_audit_markdown(payload: dict[str, Any]) -> str:
     lines += ["", "## 4. 實際Round-trip R方向診斷", ""]
     if not bool(trade.get("available")):
         lines.append(f"- 未取得可用no-filter round-trip檔案：`{trade.get('reason', 'not available')}`。")
+        attempted_paths = list(trade.get("attempted_paths") or [])
+        if attempted_paths:
+            lines.append("- 已搜尋active 9A正式策略比較輸出：")
+            for path in attempted_paths:
+                lines.append(f"  - `{path}`")
         lines.append("- 這不影響target分布與同日可排序稽核，但尚不能確認target與實際交易R方向一致。")
     else:
         source_note = (
@@ -675,6 +818,8 @@ def _artifact_paths(target_dir: Path) -> dict[str, Path]:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if args.round_trips and args.trade_history:
+        raise ValueError("--round-trips與--trade-history只能擇一指定")
     summary, indexed_features, _context, labels, events = load_validated_dataset_bundle(
         args.filter_id,
         expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
@@ -734,6 +879,7 @@ def main(argv=None) -> int:
         group_frame,
         filter_id=args.filter_id,
         explicit_round_trips=args.round_trips,
+        explicit_trade_history=args.trade_history,
     )
     payload, daily_frame = build_continuous_target_audit(
         group_frame,
@@ -827,8 +973,12 @@ def main(argv=None) -> int:
             f"matched={trade_alignment.get('matched_trade_count')}/{trade_alignment.get('trade_count')} "
             f"spearman={_fmt(trade_alignment.get('spearman_target_vs_r_multiple'))}"
         )
+        print(f"  path={trade_alignment.get('path')}")
     else:
-        print("- trade R: no_filter_round_trips.csv與no_filter_trades.csv均未找到，略過實際R方向診斷")
+        attempted = list(trade_alignment.get("attempted_paths") or [])
+        print("- trade R: active 9A全部strategy_compare輸出均未找到可用no-filter交易工件，略過實際R方向診斷")
+        if attempted:
+            print(f"  searched={len(attempted)} paths；可用 --round-trips 或 --trade-history 明確指定")
     print(f"已輸出: {manifest_path}")
     print(f"已輸出: {audit_markdown_path}")
     return 0
