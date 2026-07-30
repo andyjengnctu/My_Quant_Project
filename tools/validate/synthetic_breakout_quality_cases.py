@@ -31,8 +31,10 @@ from config.breakout_quality_experiments import (
     UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    TRAINING_LABEL_SCOPE_PASS_ONLY,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     TIME_WEIGHT_MODE_DATE_BALANCED,
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
@@ -121,6 +123,7 @@ from filters.breakout_quality.continuous_target import (
     TARGET_OPPORTUNITY_BAR_FILENAME,
     TARGET_RAW_FILENAME,
     TARGET_RISK_BREACH_BAR_FILENAME,
+    TARGET_TRADE_MATCHES_CSV_FILENAME,
     TARGET_VALID_MASK_FILENAME,
 )
 from filters.breakout_quality.contract import (
@@ -323,7 +326,11 @@ from tools.filters.breakout_quality.strategy_compare import (
     _to_json_native,
 )
 from tools.filters.breakout_quality.trade_attribution import build_trade_attribution
-from tools.filters.breakout_quality.train_continuous_ranker import build_daily_percentile_targets
+from tools.filters.breakout_quality.train_continuous_ranker import (
+    _scope_group_ids as continuous_ranker_scope_group_ids,
+    _trade_alignment_metrics as continuous_ranker_trade_alignment_metrics,
+    build_daily_percentile_targets,
+)
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     compute_outer_policy_fingerprint,
@@ -7131,6 +7138,29 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         ),
     )
 
+    pass_profile = get_breakout_quality_experiment_profile(
+        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_ranker_is_named_profile_with_no_time_target_and_pass_scope",
+        (
+            TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_PASS_ONLY,
+            False,
+        ),
+        (
+            pass_profile.training_objective,
+            pass_profile.continuous_target_id,
+            pass_profile.training_label_scope,
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+        ),
+    )
+
     raw = np.asarray([1.0, 3.0, 2.0, 5.0, 5.0, 9.0], dtype=np.float32)
     valid = np.ones((6,), dtype=bool)
     dates = pd.Series(["2020-01-02"] * 3 + ["2021-05-03"] * 3)
@@ -7142,6 +7172,37 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "continuous_ranker_daily_percentile_spans_zero_one_and_averages_ties",
         (0.0, 1.0, 0.5, 0.25, 0.25, 1.0),
         tuple(round(float(value), 6) for value in percentiles),
+    )
+
+    synthetic_group_table = pd.DataFrame(
+        {
+            "label": [LABEL_PASS, LABEL_REJECT, LABEL_PASS, LABEL_REJECT, LABEL_PASS, LABEL_PASS],
+            "date": pd.to_datetime(dates),
+        }
+    )
+    scoped_ids = continuous_ranker_scope_group_ids(
+        np.arange(6, dtype=np.int64),
+        synthetic_group_table,
+        label_scope=TRAINING_LABEL_SCOPE_PASS_ONLY,
+    )
+    pass_mask = np.zeros((6,), dtype=bool)
+    pass_mask[scoped_ids] = True
+    pass_percentiles = build_daily_percentile_targets(raw, pass_mask, dates)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_ranker_percentiles_use_only_same_date_pass_groups",
+        (0, 2, 4, 5, 0.0, 1.0, 0.0, 1.0, True, True),
+        (
+            int(scoped_ids[0]), int(scoped_ids[1]), int(scoped_ids[2]), int(scoped_ids[3]),
+            round(float(pass_percentiles[0]), 6),
+            round(float(pass_percentiles[2]), 6),
+            round(float(pass_percentiles[4]), 6),
+            round(float(pass_percentiles[5]), 6),
+            bool(np.isnan(pass_percentiles[1])),
+            bool(np.isnan(pass_percentiles[3])),
+        ),
     )
 
     singleton_percentile = build_daily_percentile_targets(
@@ -7331,7 +7392,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "continuous_ranker_is_research_only_and_oos_follows_checkpoint_write",
-        (True, True, True, True),
+        (True, True, True, True, True, True),
         (
             '"eligible": False' in ranker_source,
             "OOS target transformation and model inference occur only after" in ranker_source,
@@ -7339,11 +7400,212 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             and ranker_source.index("torch.save(")
             < ranker_source.index("OOS target transformation and model inference occur only after"),
             'score_frame["group_index"].duplicated().any()' in ranker_source,
+            'label_scope=profile.training_label_scope' in ranker_source,
+            '"label_conditional": {}' in ranker_source,
+        ),
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_ranker_is_cli_only_and_uses_existing_command",
+        (True, True, True, True),
+        (
+            "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE" in ranker_source,
+            'choices=(' in ranker_source,
+            "11G" not in app_source[app_source.index("def _run_interactive_menu"):],
+            command_modules.get("train-continuous-ranker")
+            == "tools.filters.breakout_quality.train_continuous_ranker",
         ),
     )
 
     summary["profile"] = STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
+    summary["pass_conditional_profile"] = STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
     summary["training_objective"] = profile.training_objective
+    return results, summary
+
+
+def validate_breakout_quality_pass_conditional_ranker_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_PASS_CONDITIONAL_RANKER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    profile = get_breakout_quality_experiment_profile(
+        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_profile_uses_no_time_target_and_pass_only_scope",
+        (
+            TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_PASS_ONLY,
+            "mse",
+            "mean_daily_spearman",
+            False,
+        ),
+        (
+            profile.training_objective,
+            profile.continuous_target_id,
+            profile.training_label_scope,
+            profile.loss_name,
+            profile.epoch_selection_metric,
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+        ),
+    )
+
+    group_table = pd.DataFrame(
+        {
+            "label": [LABEL_PASS, LABEL_REJECT, LABEL_PASS, LABEL_REJECT, LABEL_PASS, LABEL_PASS],
+            "date": pd.to_datetime(["2020-01-02"] * 3 + ["2021-05-03"] * 3),
+        }
+    )
+    ids = continuous_ranker_scope_group_ids(
+        np.arange(6, dtype=np.int64),
+        group_table,
+        label_scope=TRAINING_LABEL_SCOPE_PASS_ONLY,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_scope_keeps_only_original_pass_groups",
+        (0, 2, 4, 5),
+        tuple(int(value) for value in ids),
+    )
+
+    raw = np.asarray([1.0, 99.0, 3.0, -50.0, 5.0, 9.0], dtype=np.float32)
+    mask = np.zeros((6,), dtype=bool)
+    mask[ids] = True
+    percentiles = build_daily_percentile_targets(raw, mask, group_table["date"] )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_percentile_ignores_same_date_reject_target_values",
+        (0.0, 1.0, 0.0, 1.0, True, True),
+        (
+            round(float(percentiles[0]), 6),
+            round(float(percentiles[2]), 6),
+            round(float(percentiles[4]), 6),
+            round(float(percentiles[5]), 6),
+            bool(np.isnan(percentiles[1])),
+            bool(np.isnan(percentiles[3])),
+        ),
+    )
+
+    root = Path(__file__).resolve().parents[2]
+    app_path = root / "apps" / "breakout_quality.py"
+    app_source = app_path.read_text(encoding="utf-8")
+    tree = ast.parse(app_source, filename=str(app_path))
+    command_modules = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "COMMAND_MODULES"
+            for target in node.targets
+        ):
+            command_modules = ast.literal_eval(node.value)
+            break
+    menu_source = app_source[
+        app_source.find("def _run_interactive_menu") : app_source.find("def main")
+    ]
+    ranker_path = root / "tools" / "filters" / "breakout_quality" / "train_continuous_ranker.py"
+    ranker_source = ranker_path.read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_ranker_reuses_existing_cli_and_is_not_in_menu",
+        (True, True, True, True),
+        (
+            command_modules.get("train-continuous-ranker")
+            == "tools.filters.breakout_quality.train_continuous_ranker",
+            "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE" in ranker_source,
+            "11G" not in menu_source,
+            "strategy_aligned_no_time_pass_magnitude_mse" not in menu_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_ranker_freezes_checkpoint_before_oos_pass_percentile",
+        (True, True, True),
+        (
+            "torch.save(" in ranker_source,
+            ranker_source.index("torch.save(")
+            < ranker_source.index("oos_target_mask = np.zeros"),
+            'label_scope=profile.training_label_scope' in ranker_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_ranker_outputs_label_conditional_trade_diagnostics",
+        (True, True, True, True),
+        (
+            '"label_conditional": {}' in ranker_source,
+            'for label_name, label_value in (("PASS", LABEL_PASS), ("REJECT", LABEL_REJECT))' in ranker_source,
+            '"spearman_model_score_vs_target"' in ranker_source,
+            '"spearman_target_vs_r_multiple"' in ranker_source,
+        ),
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        target_dir = Path(temp_dir)
+        pd.DataFrame(
+            [
+                {"ticker": "2330", "target_date": "2021-01-04", "r_multiple": 2.0, "target_raw_r": 99.0},
+                {"ticker": "2317", "target_date": "2021-01-04", "r_multiple": -1.0, "target_raw_r": 99.0},
+                {"ticker": "2454", "target_date": "2021-01-05", "r_multiple": 3.0, "target_raw_r": 99.0},
+            ]
+        ).to_csv(
+            target_dir / TARGET_TRADE_MATCHES_CSV_FILENAME,
+            index=False,
+            encoding="utf-8-sig",
+        )
+        score_frame = pd.DataFrame(
+            [
+                {"ticker": "2330", "date": "2021-01-04", "label": LABEL_PASS, "target_raw_r": 2.5, "model_score": 0.8},
+                {"ticker": "2317", "date": "2021-01-04", "label": LABEL_REJECT, "target_raw_r": -0.2, "model_score": 0.2},
+                {"ticker": "2454", "date": "2021-01-05", "label": LABEL_PASS, "target_raw_r": 3.2, "model_score": 0.9},
+            ]
+        )
+        trade_metrics = continuous_ranker_trade_alignment_metrics(score_frame, target_dir)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_trade_alignment_replaces_old_target_and_splits_labels",
+        (3, 2, 1, 1.0),
+        (
+            trade_metrics.get("matched_trade_count"),
+            trade_metrics.get("label_conditional", {}).get("PASS", {}).get("matched_trade_count"),
+            trade_metrics.get("label_conditional", {}).get("REJECT", {}).get("matched_trade_count"),
+            round(float(trade_metrics.get("spearman_target_vs_r_multiple")), 6),
+        ),
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pass_conditional_ranker_remains_research_only_without_runtime_combination",
+        (True, True, True, True),
+        (
+            '"eligible": False' in ranker_source,
+            '"scope": "research_only"' in ranker_source,
+            "forward_oos" not in ranker_source[ranker_source.find('"runtime_eligibility"'):],
+            "score_blend" not in ranker_source.lower(),
+        ),
+    )
+
+    summary["profile"] = STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+    summary["training_label_scope"] = TRAINING_LABEL_SCOPE_PASS_ONLY
     return results, summary
 
 
@@ -7822,6 +8084,7 @@ def validate_breakout_quality_target_component_attribution_contract_case(_base_p
             "opportunity_bar": (TARGET_OPPORTUNITY_BAR_FILENAME, np.ones(len(target), dtype=np.int16)),
             "first_risk_breach_bar": (
                 TARGET_RISK_BREACH_BAR_FILENAME,
+    TARGET_TRADE_MATCHES_CSV_FILENAME,
                 np.asarray([-1, -1, -1, -1, -1, 1], dtype=np.int16),
             ),
         }
@@ -9016,6 +9279,7 @@ __all__ = [
     "validate_breakout_quality_chronological_embargo_case",
     "validate_breakout_quality_continuous_target_contract_case",
     "validate_breakout_quality_continuous_ranker_contract_case",
+    "validate_breakout_quality_pass_conditional_ranker_contract_case",
     "validate_breakout_quality_qualified_candidate_set_audit_contract_case",
     "validate_breakout_quality_target_component_attribution_contract_case",
     "validate_breakout_quality_target_time_penalty_ablation_contract_case",

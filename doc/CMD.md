@@ -438,3 +438,30 @@ outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy
 ```
 
 本命令strict讀取11A component arrays及11E report／CSV SHA256，固定推導`target_raw_r=favorable_r-adverse_r`；只輸出Inner Train、Validation與Selection指標，明確`oos_evaluated=false`。不建立模型、profile、checkpoint、threshold或runtime score。
+
+### 11G PASS-conditional No-time Magnitude Ranker
+
+11F Selection-only稽核通過後，11G使用既有continuous-ranker CLI與新的research profile；不加入互動選單：
+
+```bash
+python apps/breakout_quality.py train-continuous-ranker \
+  --filter-id breakout_quality_v1 \
+  --experiment-profile strategy_aligned_no_time_pass_magnitude_mse
+```
+
+固定契約：
+
+- Architecture仍為`inception_time_v1`，不新增模型版本。
+- Target為`strategy_aligned_opportunity_no_time_r_v1`。
+- 同日percentile只由原始Label=PASS groups建立；Inner Train、Validation與完整Selection refit也只使用PASS groups。
+- Epoch只依Validation PASS-only mean daily Spearman選擇，同分才比較PASS-only MSE。
+- OOS percentile與推論只在完整Selection refit及checkpoint寫入後建立。
+- Overall與REJECT結果只作診斷；主要判定為OOS PASS-only排序與actual PASS trades的Score↔R。
+- Research-only、無threshold、不得匯出forward-OOS runtime scores或覆蓋9A／11B工件。
+
+輸出位於：
+
+```text
+models/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_no_time_pass_magnitude_mse/
+outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_no_time_pass_magnitude_mse/
+```

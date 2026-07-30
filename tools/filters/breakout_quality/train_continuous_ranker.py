@@ -1,4 +1,4 @@
-"""11B research-only daily-percentile ranker using the active InceptionTime model."""
+"""Research-only continuous rankers using the active InceptionTime model."""
 
 from __future__ import annotations
 
@@ -16,6 +16,9 @@ import pandas as pd
 
 from config.breakout_quality_experiments import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    TRAINING_LABEL_SCOPE_ALL,
+    TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     get_breakout_quality_experiment_profile,
 )
@@ -42,6 +45,7 @@ from config.breakout_quality_policy import (
 )
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_target import (
+    STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_TARGET_ID,
     TARGET_TRADE_MATCHES_CSV_FILENAME,
     load_validated_continuous_target_arrays,
@@ -57,6 +61,7 @@ from filters.breakout_quality.contract import (
     FEATURE_COLUMNS,
     FILTER_FAMILY,
     LABEL_PASS,
+    LABEL_REJECT,
 )
 from filters.breakout_quality.inference import strict_parallel_batched_logits
 from filters.breakout_quality.models.factory import (
@@ -100,15 +105,18 @@ RANKER_TARGET_FILENAME = "group_target_daily_percentile.npy"
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "11B research-only同日percentile regression；保留9A InceptionTime與兩logit head，"
-            "以softmax PASS probability對11A同日target percentile做MSE"
+            "Research-only同日percentile regression；保留9A InceptionTime與兩logit head，"
+            "由experiment profile決定continuous target與label scope"
         )
     )
     parser.add_argument("--filter-id", default=BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
     parser.add_argument(
         "--experiment-profile",
         default=STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
-        choices=(STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,),
+        choices=(
+            STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        ),
     )
     parser.add_argument("--epochs", type=int, default=BREAKOUT_QUALITY_DEFAULT_EPOCHS)
     parser.add_argument("--batch-size", type=int, default=BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE)
@@ -182,11 +190,22 @@ def parse_args(argv=None):
 def _validate_args(args) -> None:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     if profile.training_objective != TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
-        raise ValueError("11B命令只接受daily percentile regression profile")
-    if profile.continuous_target_id != STRATEGY_ALIGNED_TARGET_ID:
-        raise ValueError("11B profile continuous target id不一致")
+        raise ValueError("continuous ranker命令只接受daily percentile regression profile")
+    expected_targets = {
+        STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE: (
+            STRATEGY_ALIGNED_TARGET_ID,
+            TRAINING_LABEL_SCOPE_ALL,
+        ),
+        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE: (
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_PASS_ONLY,
+        ),
+    }
+    expected = expected_targets.get(args.experiment_profile)
+    if expected is None or (profile.continuous_target_id, profile.training_label_scope) != expected:
+        raise ValueError("continuous ranker profile target／label scope契約不一致")
     if not bool(args.use_inner_validation):
-        raise ValueError("11B第一版必須使用inner validation選epoch")
+        raise ValueError("continuous ranker必須使用inner validation選epoch")
     if int(args.epochs) < 1 or int(args.batch_size) < 2 or int(args.evaluation_batch_size) < 1:
         raise ValueError("epochs>=1、batch-size>=2、evaluation-batch-size>=1")
     if float(args.lr) <= 0.0 or float(args.weight_decay) < 0.0:
@@ -217,16 +236,51 @@ def _group_table(events: pd.DataFrame, event_group_index: np.ndarray, labels: np
     expected = np.arange(len(group), dtype=np.int64)
     observed = pd.to_numeric(group["group_index"], errors="raise").to_numpy(dtype=np.int64)
     if not np.array_equal(observed, expected):
-        raise ValueError("11B要求group_index連續完整")
+        raise ValueError("continuous ranker要求group_index連續完整")
     if not np.array_equal(
         np.asarray(event_group_index[group["event_row"].to_numpy(dtype=np.int64)], dtype=np.int64),
         expected,
     ):
-        raise ValueError("11B group representative與event_group_index不一致")
+        raise ValueError("continuous ranker group representative與event_group_index不一致")
     mixed = frame.groupby("group_index", sort=False)["label"].nunique()
     if bool((mixed != 1).any()):
-        raise ValueError("11B發現同group混合binary label")
+        raise ValueError("continuous ranker發現同group混合binary label")
     return group.reset_index(drop=True)
+
+
+def _profile_contract(profile) -> dict[str, str]:
+    if profile.name == STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE:
+        return {
+            "experiment": "11B Strategy-aligned Daily Percentile Ranker",
+            "phase": "11B",
+            "target_description": "same_date_rank_percentile_of_strategy_aligned_opportunity_r_v1",
+            "objective_description": "同日11A target percentile的MSE",
+            "metric_scope": "all_labels",
+        }
+    if profile.name == STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE:
+        return {
+            "experiment": "11G PASS-conditional No-time Magnitude Ranker",
+            "phase": "11G",
+            "target_description": "same_date_pass_only_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
+            "objective_description": "同日PASS-only 11F No-time target percentile的MSE",
+            "metric_scope": "pass_only",
+        }
+    raise ValueError(f"不支援的continuous ranker profile: {profile.name}")
+
+
+def _scope_group_ids(
+    group_ids: np.ndarray,
+    group_table: pd.DataFrame,
+    *,
+    label_scope: str,
+) -> np.ndarray:
+    ids = np.asarray(group_ids, dtype=np.int64)
+    if label_scope == TRAINING_LABEL_SCOPE_ALL:
+        return ids
+    if label_scope == TRAINING_LABEL_SCOPE_PASS_ONLY:
+        labels = group_table.iloc[ids]["label"].to_numpy(dtype=np.int64)
+        return ids[labels == LABEL_PASS]
+    raise ValueError(f"不支援的training label scope: {label_scope}")
 
 
 def build_daily_percentile_targets(
@@ -355,11 +409,20 @@ def _split_metrics(
     bottom = order[:decile_count]
     top = order[-decile_count:]
     daily = _daily_rank_metrics(dates, score_values, raw_values)
+    finite_percentile = np.isfinite(pct_values) & np.isfinite(score_values)
     return {
         "group_count": int(len(ids)),
-        "mse_vs_daily_percentile": float(np.mean((score_values - pct_values) ** 2)),
+        "percentile_target_count": int(finite_percentile.sum()),
+        "mse_vs_daily_percentile": (
+            float(np.mean((score_values[finite_percentile] - pct_values[finite_percentile]) ** 2))
+            if bool(finite_percentile.any())
+            else None
+        ),
         "global_spearman_vs_raw_target": _spearman(score_values, raw_values),
-        "global_spearman_vs_daily_percentile": _spearman(score_values, pct_values),
+        "global_spearman_vs_daily_percentile": _spearman(
+            score_values[finite_percentile],
+            pct_values[finite_percentile],
+        ),
         **daily,
         "score_mean": float(score_values.mean()),
         "score_std": float(score_values.std(ddof=1)) if len(score_values) > 1 else 0.0,
@@ -420,7 +483,7 @@ def _train_epoch(
             score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
             loss = F.mse_loss(score, target, reduction="mean")
         if not bool(torch.isfinite(loss).item()):
-            raise FloatingPointError("11B training loss非有限值")
+            raise FloatingPointError("continuous ranker training loss非有限值")
         if grad_scaler is None:
             loss.backward()
             if float(gradient_clip_norm) > 0.0:
@@ -435,7 +498,7 @@ def _train_epoch(
             grad_scaler.update()
         losses.append(float(loss.detach().cpu().item()))
     if not losses:
-        raise ValueError("11B training沒有任何batch")
+        raise ValueError("continuous ranker training沒有任何batch")
     return float(np.mean(losses))
 
 
@@ -515,7 +578,7 @@ def _select_epoch(
         )
         metric = validation_metrics.get("mean_daily_spearman")
         if metric is None or not math.isfinite(float(metric)):
-            raise ValueError("11B validation mean daily Spearman不可用")
+            raise ValueError("continuous ranker validation mean daily Spearman不可用")
         validation_mse = float(validation_metrics["mse_vs_daily_percentile"])
         improved = (
             float(metric) > best_metric + float(args.early_stopping_min_delta)
@@ -549,7 +612,7 @@ def _select_epoch(
         if int(args.early_stopping_patience) > 0 and epochs_without_improvement >= int(args.early_stopping_patience):
             break
     if best_epoch < 1:
-        raise ValueError("11B無法選出best epoch")
+        raise ValueError("continuous ranker無法選出best epoch")
     return {
         "best_epoch": int(best_epoch),
         "best_validation_mean_daily_spearman": float(best_metric),
@@ -592,6 +655,38 @@ def _fit_final(torch, feature_bank: np.ndarray, group_context: np.ndarray, perce
     return model.eval(), history
 
 
+def _trade_metric_block(valid: pd.DataFrame) -> dict[str, Any]:
+    if valid.empty:
+        return {"matched_trade_count": 0}
+    ordered_score = valid.sort_values("model_score", kind="mergesort")
+    score_count = max(1, int(math.ceil(len(ordered_score) * 0.10)))
+    ordered_target = valid.sort_values("target_raw_r", kind="mergesort")
+    target_count = max(1, int(math.ceil(len(ordered_target) * 0.10)))
+    scores = valid["model_score"].to_numpy(dtype=np.float64)
+    targets = valid["target_raw_r"].to_numpy(dtype=np.float64)
+    r_values = valid["r_multiple"].to_numpy(dtype=np.float64)
+    large = r_values >= 2.0
+    median_score = float(np.median(scores))
+    median_target = float(np.median(targets))
+    return {
+        "matched_trade_count": int(len(valid)),
+        "spearman_model_score_vs_r_multiple": _spearman(scores, r_values),
+        "spearman_model_score_vs_target": _spearman(scores, targets),
+        "spearman_target_vs_r_multiple": _spearman(targets, r_values),
+        "top_model_score_decile_average_r": float(ordered_score.tail(score_count)["r_multiple"].mean()),
+        "bottom_model_score_decile_average_r": float(ordered_score.head(score_count)["r_multiple"].mean()),
+        "top_target_decile_average_r": float(ordered_target.tail(target_count)["r_multiple"].mean()),
+        "bottom_target_decile_average_r": float(ordered_target.head(target_count)["r_multiple"].mean()),
+        "large_winner_count_r_ge_2": int(large.sum()),
+        "large_winner_top_half_score_retention": (
+            float((scores[large] >= median_score).mean()) if bool(large.any()) else None
+        ),
+        "large_winner_top_half_target_retention": (
+            float((targets[large] >= median_target).mean()) if bool(large.any()) else None
+        ),
+    }
+
+
 def _trade_alignment_metrics(score_frame: pd.DataFrame, target_dir: Path) -> dict[str, Any]:
     path = target_dir / TARGET_TRADE_MATCHES_CSV_FILENAME
     if not path.is_file():
@@ -600,92 +695,127 @@ def _trade_alignment_metrics(score_frame: pd.DataFrame, target_dir: Path) -> dic
     missing = sorted({"ticker", "target_date", "r_multiple"} - set(trades.columns))
     if missing:
         return {"available": False, "reason": f"trade matches missing columns: {missing}", "path": str(path)}
-    lookup = score_frame[["ticker", "date", "model_score"]].copy()
+    lookup = score_frame[["ticker", "date", "label", "target_raw_r", "model_score"]].copy()
     lookup["ticker"] = lookup["ticker"].astype(str)
     lookup["target_date"] = pd.to_datetime(lookup["date"], errors="raise").dt.strftime("%Y-%m-%d")
     lookup = lookup.drop(columns=["date"])
     matched = trades.copy()
+    # 11A trade-match files already contain the original target_raw_r.  The
+    # ranker must evaluate the target version selected by its own profile, so
+    # remove overlapping research columns before joining the score lookup.
+    matched = matched.drop(
+        columns=["label", "target_raw_r", "model_score"],
+        errors="ignore",
+    )
     matched["ticker"] = matched["ticker"].astype(str)
     matched["target_date"] = matched["target_date"].astype(str)
     matched["r_multiple"] = pd.to_numeric(matched["r_multiple"], errors="coerce")
     matched = matched.merge(lookup, how="left", on=["ticker", "target_date"], validate="many_to_one")
-    valid = matched[np.isfinite(matched["r_multiple"]) & np.isfinite(matched["model_score"])].copy()
-    if valid.empty:
-        return {"available": True, "path": str(path), "trade_count": int(len(matched)), "matched_trade_count": 0}
-    valid = valid.sort_values("model_score", kind="mergesort")
-    count = max(1, int(math.ceil(len(valid) * 0.10)))
-    scores = valid["model_score"].to_numpy(dtype=np.float64)
-    r_values = valid["r_multiple"].to_numpy(dtype=np.float64)
-    large = r_values >= 2.0
-    median_score = float(np.median(scores))
-    return {
+    valid = matched[
+        np.isfinite(matched["r_multiple"])
+        & np.isfinite(matched["model_score"])
+        & np.isfinite(matched["target_raw_r"])
+        & matched["label"].isin([LABEL_REJECT, LABEL_PASS])
+    ].copy()
+    result = {
         "available": True,
         "path": str(path),
         "trade_count": int(len(matched)),
-        "matched_trade_count": int(len(valid)),
         "coverage_rate": float(len(valid) / len(matched)) if len(matched) else None,
-        "spearman_model_score_vs_r_multiple": _spearman(scores, r_values),
-        "top_model_score_decile_average_r": float(valid.tail(count)["r_multiple"].mean()),
-        "bottom_model_score_decile_average_r": float(valid.head(count)["r_multiple"].mean()),
-        "large_winner_count_r_ge_2": int(large.sum()),
-        "large_winner_top_half_score_retention": (
-            float((scores[large] >= median_score).mean()) if bool(large.any()) else None
-        ),
+        **_trade_metric_block(valid),
+        "label_conditional": {},
     }
+    for label_name, label_value in (("PASS", LABEL_PASS), ("REJECT", LABEL_REJECT)):
+        result["label_conditional"][label_name] = _trade_metric_block(
+            valid[valid["label"] == label_value].copy()
+        )
+    return result
 
 
 def _render_markdown(payload: dict[str, Any]) -> str:
     def fmt(value, digits=4):
         return "-" if value is None else f"{float(value):.{digits}f}"
 
+    phase = payload["phase"]
+    scope = payload["training"]["training_label_scope"]
     lines = [
-        "# 11B Strategy-aligned Daily Percentile Ranker",
+        f"# {payload['experiment']}",
         "",
         f"- Profile：`{payload['experiment_profile']}`",
         f"- Architecture：`{payload['model_architecture']}`",
-        "- Objective：同日11A target percentile的MSE；score為softmax PASS probability。",
+        f"- Objective：{payload['training']['objective_description']}；score為softmax PASS probability。",
+        f"- Training label scope：`{scope}`。",
         "- Runtime：research-only；不得匯出forward-OOS runtime scores。",
         f"- Selected epoch：`{payload['training']['selected_epoch']}`",
         "",
-        "## 1. Split metrics",
+        f"## 1. Primary split metrics（{scope}）",
         "",
-        "| Split | Groups | MSE | Global Spearman | Mean Daily Spearman | Pair Concordance | Binary PR-AUC | P@50% | P@60% | P@70% | Top10 Target | Bottom10 Target |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Split | Groups | MSE | Global Spearman | Mean Daily Spearman | Pair Concordance | Top10 Target | Bottom10 Target |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for name in ("inner_train", "validation", "selection", "oos"):
         row = payload["split_metrics"][name]
         lines.append(
             f"| {name} | {int(row['group_count']):,} | {fmt(row['mse_vs_daily_percentile'], 6)} "
             f"| {fmt(row['global_spearman_vs_raw_target'])} | {fmt(row['mean_daily_spearman'])} "
-            f"| {fmt(row['pairwise_concordance'])} | {fmt(row['binary_pr_auc'])} "
-            f"| {fmt(row['p_at_50pct'])} | {fmt(row['p_at_60pct'])} | {fmt(row['p_at_70pct'])} "
-            f"| {fmt(row['top_score_decile_raw_target_mean'])} | {fmt(row['bottom_score_decile_raw_target_mean'])} |"
+            f"| {fmt(row['pairwise_concordance'])} | {fmt(row['top_score_decile_raw_target_mean'])} "
+            f"| {fmt(row['bottom_score_decile_raw_target_mean'])} |"
         )
-    lines.extend(["", "## 2. Actual Round-trip R", ""])
+    if scope == TRAINING_LABEL_SCOPE_PASS_ONLY:
+        lines.extend([
+            "",
+            "## 2. All-label diagnostic metrics",
+            "",
+            "| Split | Groups | Score↔Target | Mean Daily Spearman | Binary PR-AUC | P@50% | P@60% | P@70% |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for name in ("inner_train", "validation", "selection", "oos"):
+            row = payload["all_group_split_metrics"][name]
+            lines.append(
+                f"| {name} | {int(row['group_count']):,} | {fmt(row['global_spearman_vs_raw_target'])} "
+                f"| {fmt(row['mean_daily_spearman'])} | {fmt(row['binary_pr_auc'])} "
+                f"| {fmt(row['p_at_50pct'])} | {fmt(row['p_at_60pct'])} | {fmt(row['p_at_70pct'])} |"
+            )
+    trade_section = 3 if scope == TRAINING_LABEL_SCOPE_PASS_ONLY else 2
+    lines.extend(["", f"## {trade_section}. Actual Round-trip R", ""])
     trade = payload.get("trade_alignment") or {}
     if trade.get("available"):
         coverage_rate = trade.get("coverage_rate")
-        large_winner_retention = trade.get("large_winner_top_half_score_retention")
         coverage_percent = None if coverage_rate is None else float(coverage_rate) * 100.0
-        large_winner_percent = (
-            None if large_winner_retention is None else float(large_winner_retention) * 100.0
-        )
         lines.extend([
             f"- 配對：`{trade.get('matched_trade_count')}` / `{trade.get('trade_count')}`；coverage `{fmt(coverage_percent, 2)}%`。",
-            f"- Spearman(model score, realized R)：`{fmt(trade.get('spearman_model_score_vs_r_multiple'))}`。",
-            f"- Top score decile平均R：`{fmt(trade.get('top_model_score_decile_average_r'))}`；Bottom decile：`{fmt(trade.get('bottom_model_score_decile_average_r'))}`。",
-            f"- ≥2R大贏家位於score上半部比例：`{fmt(large_winner_percent, 2)}%`。",
+            f"- Overall Score↔R：`{fmt(trade.get('spearman_model_score_vs_r_multiple'))}`；Score↔Target：`{fmt(trade.get('spearman_model_score_vs_target'))}`；Target↔R：`{fmt(trade.get('spearman_target_vs_r_multiple'))}`。",
+            f"- Overall Score top／bottom decile平均R：`{fmt(trade.get('top_model_score_decile_average_r'))}`／`{fmt(trade.get('bottom_model_score_decile_average_r'))}`。",
         ])
+        conditional = trade.get("label_conditional") or {}
+        lines.extend([
+            "",
+            "| Label | Rows | Score↔Target | Score↔R | Target↔R | Score Top10 R | Score Bottom10 R |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ])
+        for label_name in ("PASS", "REJECT"):
+            row = conditional.get(label_name) or {}
+            lines.append(
+                f"| {label_name} | {int(row.get('matched_trade_count', 0)):,} "
+                f"| {fmt(row.get('spearman_model_score_vs_target'))} "
+                f"| {fmt(row.get('spearman_model_score_vs_r_multiple'))} "
+                f"| {fmt(row.get('spearman_target_vs_r_multiple'))} "
+                f"| {fmt(row.get('top_model_score_decile_average_r'))} "
+                f"| {fmt(row.get('bottom_model_score_decile_average_r'))} |"
+            )
     else:
         lines.append(f"- 未取得實際R診斷：`{trade.get('reason')}`。")
+    boundary_section = trade_section + 1
     lines.extend([
         "",
-        "## 3. Boundary",
+        f"## {boundary_section}. Boundary",
         "",
-        "- Epoch、loss與gradient只使用Selection內Inner Train／Validation。",
-        "- OOS只在完整Selection重訓、模型checkpoint寫入後評估。",
+        "- Epoch、loss與gradient只使用Selection內Inner Train／Validation及profile指定label scope。",
+        "- OOS percentile與推論只在完整Selection重訓、模型checkpoint寫入後建立。",
         "- 本模型不設threshold、不提供runtime gate、不覆蓋9A正式模型。",
     ])
+    if phase == "11G":
+        lines.append("- 11G主要判定只看OOS PASS-only排序與actual PASS trades；overall／REJECT只作診斷。")
     return "\n".join(lines) + "\n"
 
 
@@ -694,9 +824,10 @@ def main(argv=None) -> int:
     _validate_args(args)
     started = time.perf_counter()
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
+    contract = _profile_contract(profile)
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     if bool(model_spec.requires_market_set) or bool(model_spec.use_dataset_context) or bool(model_spec.derived_context_features):
-        raise ValueError("11B第一版只允許active sequence-only 9A architecture")
+        raise ValueError("continuous ranker只允許active sequence-only 9A architecture")
 
     summary, indexed_features, context, labels, events = load_validated_dataset_bundle(
         args.filter_id,
@@ -724,8 +855,6 @@ def main(argv=None) -> int:
         expected_group_count=group_count,
         expected_dataset_policy=summary.get("policy"),
     )
-    # Before checkpoint freeze, only Selection-date targets may participate in the
-    # derived percentile objective. OOS percentiles are built later for reporting.
     percentile_target = np.full(raw_target.shape, np.nan, dtype=np.float32)
 
     outer_policy = resolve_breakout_quality_outer_policy(
@@ -747,26 +876,39 @@ def main(argv=None) -> int:
         inner_validation_months=int(args.inner_validation_months),
         early_stopping_enabled=bool(int(args.early_stopping_patience) > 0),
     )
-    inner_train_ids = _group_ids_from_event_rows(event_group_index, inner_train_rows, target_valid)
-    validation_ids = _group_ids_from_event_rows(event_group_index, validation_rows, target_valid)
-    selection_ids = _group_ids_from_event_rows(event_group_index, selection_rows, target_valid)
-    oos_ids = _group_ids_from_event_rows(event_group_index, oos_rows, target_valid)
+    all_split_ids = {
+        "inner_train": _group_ids_from_event_rows(event_group_index, inner_train_rows, target_valid),
+        "validation": _group_ids_from_event_rows(event_group_index, validation_rows, target_valid),
+        "selection": _group_ids_from_event_rows(event_group_index, selection_rows, target_valid),
+        "oos": _group_ids_from_event_rows(event_group_index, oos_rows, target_valid),
+    }
+    scoped_split_ids = {
+        name: _scope_group_ids(
+            ids,
+            group_table,
+            label_scope=profile.training_label_scope,
+        )
+        for name, ids in all_split_ids.items()
+    }
+    for name, ids in all_split_ids.items():
+        if len(ids) < 20:
+            raise ValueError(f"continuous ranker {name}有效group不足: {len(ids)}")
+    for name, ids in scoped_split_ids.items():
+        if len(ids) < 20:
+            raise ValueError(
+                f"continuous ranker {name}在{profile.training_label_scope} scope有效group不足: {len(ids)}"
+            )
+
     selection_target_mask = np.zeros(raw_target.shape, dtype=bool)
-    selection_target_mask[selection_ids] = True
+    selection_target_mask[scoped_split_ids["selection"]] = True
     selection_percentiles = build_daily_percentile_targets(
         raw_target,
         selection_target_mask,
         group_table["date"],
     )
-    percentile_target[selection_ids] = selection_percentiles[selection_ids]
-    for name, ids in {
-        "inner_train": inner_train_ids,
-        "validation": validation_ids,
-        "selection": selection_ids,
-        "oos": oos_ids,
-    }.items():
-        if len(ids) < 20:
-            raise ValueError(f"11B {name}有效group不足: {len(ids)}")
+    percentile_target[scoped_split_ids["selection"]] = selection_percentiles[
+        scoped_split_ids["selection"]
+    ]
 
     torch, _nn = require_torch()
     plan = resolve_torch_execution_plan(
@@ -788,6 +930,10 @@ def main(argv=None) -> int:
         f"torch=device={plan.device_type}, mixed_precision={plan.mixed_precision_enabled}, "
         f"dtype={plan.autocast_dtype_name}, deterministic={plan.deterministic_algorithms}, tf32={plan.allow_tf32}"
     )
+    print(
+        f"profile={profile.name} target={profile.continuous_target_id} "
+        f"training_label_scope={profile.training_label_scope}"
+    )
 
     epoch_selection = _select_epoch(
         torch,
@@ -796,8 +942,8 @@ def main(argv=None) -> int:
         group_table,
         raw_target,
         percentile_target,
-        inner_train_ids,
-        validation_ids,
+        scoped_split_ids["inner_train"],
+        scoped_split_ids["validation"],
         args=args,
         plan=plan,
     )
@@ -807,7 +953,7 @@ def main(argv=None) -> int:
         feature_bank,
         group_context,
         percentile_target,
-        selection_ids,
+        scoped_split_ids["selection"],
         epochs=selected_epoch,
         args=args,
         plan=plan,
@@ -832,6 +978,7 @@ def main(argv=None) -> int:
             "experiment_profile": args.experiment_profile,
             "experiment_settings": profile.as_manifest_payload(),
             "training_objective": profile.training_objective,
+            "training_label_scope": profile.training_label_scope,
             "continuous_target_contract": target_manifest.get("target_contract"),
             "torch_execution": plan.as_manifest_payload(),
             "trainable_parameter_count": int(trainable_parameter_count),
@@ -844,22 +991,20 @@ def main(argv=None) -> int:
     # OOS target transformation and model inference occur only after the frozen
     # checkpoint exists; same-date ranks never mix Selection and OOS dates.
     oos_target_mask = np.zeros(raw_target.shape, dtype=bool)
-    oos_target_mask[oos_ids] = True
+    oos_target_mask[scoped_split_ids["oos"]] = True
     oos_percentiles = build_daily_percentile_targets(
         raw_target,
         oos_target_mask,
         group_table["date"],
     )
-    percentile_target[oos_ids] = oos_percentiles[oos_ids]
-    split_ids = {
-        "inner_train": inner_train_ids,
-        "validation": validation_ids,
-        "selection": selection_ids,
-        "oos": oos_ids,
-    }
-    split_scores: dict[str, np.ndarray] = {}
+    percentile_target[scoped_split_ids["oos"]] = oos_percentiles[
+        scoped_split_ids["oos"]
+    ]
+
+    score_by_group = np.full((group_count,), np.nan, dtype=np.float32)
+    all_group_split_metrics: dict[str, Any] = {}
     split_metrics: dict[str, Any] = {}
-    for name, ids in split_ids.items():
+    for name, ids in all_split_ids.items():
         scores = _predict_scores(
             torch,
             model,
@@ -869,31 +1014,46 @@ def main(argv=None) -> int:
             batch_size=int(args.evaluation_batch_size),
             plan=plan,
         )
-        split_scores[name] = scores
+        score_by_group[ids] = scores
+        all_group_split_metrics[name] = _split_metrics(
+            ids,
+            group_table,
+            raw_target,
+            percentile_target,
+            scores,
+        )
+        scoped_ids = scoped_split_ids[name]
         split_metrics[name] = _split_metrics(
-            ids, group_table, raw_target, percentile_target, scores,
+            scoped_ids,
+            group_table,
+            raw_target,
+            percentile_target,
+            score_by_group[scoped_ids],
         )
 
     role_by_group = np.full((group_count,), "selection_other", dtype=object)
-    role_by_group[inner_train_ids] = "inner_train"
-    role_by_group[validation_ids] = "validation"
-    role_by_group[oos_ids] = "oos"
+    role_by_group[all_split_ids["inner_train"]] = "inner_train"
+    role_by_group[all_split_ids["validation"]] = "validation"
+    role_by_group[all_split_ids["oos"]] = "oos"
     score_frames: list[pd.DataFrame] = []
-    for name, ids in (("selection", selection_ids), ("oos", oos_ids)):
+    for name in ("selection", "oos"):
+        ids = all_split_ids[name]
         frame = group_table.iloc[ids][["ticker", "date", "group_index", "label"]].copy()
         frame["split"] = name
         frame["selection_role"] = role_by_group[ids]
+        frame["in_training_label_scope"] = np.isin(ids, scoped_split_ids[name])
         frame["target_raw_r"] = raw_target[ids]
         frame["target_daily_percentile"] = percentile_target[ids]
-        frame["model_score"] = split_scores[name]
+        frame["model_score"] = score_by_group[ids]
         score_frames.append(frame)
     score_frame = pd.concat(score_frames, ignore_index=True)
     if bool(score_frame["group_index"].duplicated().any()):
-        raise ValueError("11B research scores每個group必須唯一")
+        raise ValueError("continuous ranker research scores每個group必須唯一")
     score_frame = score_frame.sort_values(
         ["date", "ticker", "group_index"],
         kind="mergesort",
     ).reset_index(drop=True)
+
     output_dir = resolve_filter_model_output_dir(
         PROJECT_ROOT,
         args.filter_id,
@@ -908,18 +1068,28 @@ def main(argv=None) -> int:
     score_frame.to_csv(score_path, index=False, encoding="utf-8-sig")
     np.save(percentile_path, percentile_target, allow_pickle=False)
 
-    target_dir = resolve_continuous_target_dir(PROJECT_ROOT, args.filter_id)
+    # Round-trip membership was established by the original 11A audit and is
+    # independent of which continuous target version the ranker uses.
+    trade_source_dir = resolve_continuous_target_dir(
+        PROJECT_ROOT,
+        args.filter_id,
+        target_id=STRATEGY_ALIGNED_TARGET_ID,
+    )
     trade_alignment = _trade_alignment_metrics(
         score_frame[score_frame["split"] == "oos"].copy(),
-        target_dir,
+        trade_source_dir,
     )
     information_cutoff = str(
         pd.to_datetime(events.iloc[selection_rows]["label_eval_end_date"], errors="raise").max().date()
     )
+    training_group_counts = {
+        name: int(len(ids)) for name, ids in scoped_split_ids.items()
+    }
     payload = {
         "schema_version": RANKER_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "experiment": "11B Strategy-aligned Daily Percentile Ranker",
+        "experiment": contract["experiment"],
+        "phase": contract["phase"],
         "status": "RESULT_AVAILABLE_PENDING_REVIEW",
         "filter_id": args.filter_id,
         "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
@@ -927,9 +1097,12 @@ def main(argv=None) -> int:
         "experiment_settings": profile.as_manifest_payload(),
         "training": {
             "objective": profile.training_objective,
+            "objective_description": contract["objective_description"],
             "loss": profile.loss_name,
             "model_score": "softmax_pass_probability",
-            "target": "same_date_rank_percentile_of_strategy_aligned_opportunity_r_v1",
+            "target": contract["target_description"],
+            "training_label_scope": profile.training_label_scope,
+            "training_group_counts": training_group_counts,
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": profile.epoch_selection_metric,
             "epoch_selection": epoch_selection,
@@ -942,6 +1115,7 @@ def main(argv=None) -> int:
         },
         "split_report": split_report,
         "split_metrics": split_metrics,
+        "all_group_split_metrics": all_group_split_metrics,
         "trade_alignment": trade_alignment,
         "target_manifest": target_manifest,
         "model_information_cutoff": information_cutoff,
@@ -950,7 +1124,7 @@ def main(argv=None) -> int:
         "runtime_eligibility": {
             "eligible": False,
             "scope": "research_only",
-            "reason": "11B is a ranking research objective without a deployment threshold or runtime score contract",
+            "reason": f"{contract['phase']} is a conditional magnitude research objective without a deployment combination contract",
         },
         "artifacts": {
             "model": build_file_manifest(artifact_paths.model_path),
@@ -974,6 +1148,7 @@ def main(argv=None) -> int:
         "experiment_settings": profile.as_manifest_payload(),
         "model_spec": model_spec.as_manifest_payload(),
         "training_objective": profile.training_objective,
+        "training_label_scope": profile.training_label_scope,
         "continuous_target_id": profile.continuous_target_id,
         "sequence_length": int(feature_bank.shape[1]),
         "feature_columns": list(FEATURE_COLUMNS),
@@ -985,8 +1160,13 @@ def main(argv=None) -> int:
         "split_assignments": build_file_manifest(artifact_paths.split_path),
         "outer_oos_policy": outer_policy,
         "split_report": split_report,
+        "training_group_counts": training_group_counts,
         "selected_epoch": selected_epoch,
-        "epoch_selection_source": "inner_validation_mean_daily_spearman",
+        "epoch_selection_source": (
+            "inner_validation_pass_only_mean_daily_spearman"
+            if profile.training_label_scope == TRAINING_LABEL_SCOPE_PASS_ONLY
+            else "inner_validation_mean_daily_spearman"
+        ),
         "model_information_cutoff": information_cutoff,
         "source_dataset": summary,
         "source_continuous_target": target_manifest,
@@ -1004,7 +1184,7 @@ def main(argv=None) -> int:
     }
     write_json(artifact_paths.manifest_path, manifest)
 
-    print("\n11B daily percentile ranker完成")
+    print(f"\n{contract['phase']} continuous ranker完成")
     print(
         f"selected_epoch={selected_epoch} "
         f"validation_daily_spearman={epoch_selection['best_validation_mean_daily_spearman']:.4f}"
@@ -1012,16 +1192,17 @@ def main(argv=None) -> int:
     for name in ("inner_train", "validation", "selection", "oos"):
         metrics = split_metrics[name]
         print(
-            f"- {name:<11} groups={metrics['group_count']:,} "
+            f"- {name:<11} scope={profile.training_label_scope} groups={metrics['group_count']:,} "
             f"daily_spearman={metrics['mean_daily_spearman']:.4f} "
-            f"global_spearman={metrics['global_spearman_vs_raw_target']:.4f} "
-            f"PR-AUC={metrics['binary_pr_auc']:.4f}"
+            f"global_spearman={metrics['global_spearman_vs_raw_target']:.4f}"
         )
     if trade_alignment.get("available") and trade_alignment.get("matched_trade_count", 0):
+        pass_trade = (trade_alignment.get("label_conditional") or {}).get("PASS") or {}
         print(
             "- trade R: "
             f"matched={trade_alignment['matched_trade_count']}/{trade_alignment['trade_count']} "
-            f"spearman={trade_alignment['spearman_model_score_vs_r_multiple']:.4f}"
+            f"overall_spearman={trade_alignment['spearman_model_score_vs_r_multiple']:.4f} "
+            f"pass_spearman={pass_trade.get('spearman_model_score_vs_r_multiple')}"
         )
     else:
         print(f"- trade R: {trade_alignment.get('reason', 'unavailable')}")

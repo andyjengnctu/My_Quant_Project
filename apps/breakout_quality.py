@@ -104,7 +104,7 @@ COMMAND_DESCRIPTIONS = {
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "regime-audit": "稽核 Selection／OOS 的市場狀態與 breakout event 覆蓋",
     "audit-continuous-target": "建立11A連續target arrays並稽核分布、同日排序與實際R方向",
-    "train-continuous-ranker": "執行11B同日percentile MSE排序研究；research-only",
+    "train-continuous-ranker": "執行11B／11G continuous ranker研究；research-only、CLI-only",
     "audit-qualified-candidate-set": "執行11C策略qualified candidate-set失敗歸因；research-only",
     "audit-target-attribution": "執行11D Target成分與Label條件失敗歸因；research-only",
     "audit-target-time-ablation": "執行11E固定移除time penalty的Target稽核；research-only",

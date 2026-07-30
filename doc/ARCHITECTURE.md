@@ -255,3 +255,15 @@ python apps/breakout_quality.py audit-no-time-target --filter-id breakout_qualit
 `filters.breakout_quality.continuous_target`重用11A strict component arrays，保留valid mask、opportunity bar、risk-breach bar與adverse-first語意。11F先驗證11E overall、PASS與decile spread均改善及來源artifact SHA256，再寫入獨立`continuous_targets/strategy_aligned_opportunity_no_time_r_v1/`。
 
 Audit只建立Inner Train／Validation／Selection分布、同日rankability及與11A Target的比較；不計算OOS指標、不讀actual R或11B score、不建立experiment profile、optimizer、checkpoint、threshold或runtime score。公式假設明確標記為先前迭代OOS研究形成，但沒有OOS fitted coefficient。CLI-only，不加入互動選單。
+
+### 11G PASS-conditional No-time Magnitude Ranker
+
+11F顯示No-time Target在Selection內可排序，但Binary AUC約0.99，因此11G不得再以全Label objective重跑11B。11G新增experiment profile：
+
+```text
+strategy_aligned_no_time_pass_magnitude_mse
+```
+
+仍重用active `inception_time_v1`與既有2-logit head；模型結構與checkpoint shape不變。`tools.filters.breakout_quality.train_continuous_ranker`依profile的`training_label_scope=pass_only`，只在同日PASS groups內建立No-time Target percentile，並只用PASS groups更新gradient、選epoch與完整Selection refit。
+
+Checkpoint寫入前不得建立OOS percentile；模型凍結後才輸出OOS PASS-only主要指標、all-label次要診斷，以及actual PASS／REJECT round-trip分層結果。11G為research-only、CLI-only，不加入互動選單，不建立threshold、runtime combination或forward-OOS正式scores。

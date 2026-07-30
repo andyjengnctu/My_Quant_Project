@@ -17,6 +17,7 @@ HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE = "history_masking_only"
 UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE = "unique_group_sampling"
 UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE = "unique_group_date_balanced"
 STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE = "strategy_aligned_daily_percentile_mse"
+STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE = "strategy_aligned_no_time_pass_magnitude_mse"
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
@@ -37,6 +38,13 @@ SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES = (
 
 TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM = "batch_weight_sum"
 TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE = "fixed_batch_size"
+
+TRAINING_LABEL_SCOPE_ALL = "all_labels"
+TRAINING_LABEL_SCOPE_PASS_ONLY = "pass_only"
+SUPPORTED_BREAKOUT_QUALITY_TRAINING_LABEL_SCOPES = (
+    TRAINING_LABEL_SCOPE_ALL,
+    TRAINING_LABEL_SCOPE_PASS_ONLY,
+)
 
 TRAINING_OBJECTIVE_BINARY_CLASSIFICATION = "binary_classification"
 TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
@@ -84,6 +92,7 @@ class BreakoutQualityExperimentProfile:
     continuous_target_id: str | None = None
     loss_name: str = "cross_entropy"
     epoch_selection_metric: str = "validation_loss"
+    training_label_scope: str = TRAINING_LABEL_SCOPE_ALL
 
     def __post_init__(self) -> None:
         normalized_name = str(self.name).strip().lower()
@@ -112,11 +121,15 @@ class BreakoutQualityExperimentProfile:
             )
         if self.training_objective not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES:
             raise ValueError(f"不支援的 training objective: {self.training_objective!r}")
+        if self.training_label_scope not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_LABEL_SCOPES:
+            raise ValueError(f"不支援的 training label scope: {self.training_label_scope!r}")
         if self.training_objective == TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
             if self.continuous_target_id is not None:
                 raise ValueError("binary classification profile 不得指定 continuous_target_id")
             if self.loss_name != "cross_entropy" or self.epoch_selection_metric != "validation_loss":
                 raise ValueError("binary classification profile 必須使用 cross_entropy / validation_loss")
+            if self.training_label_scope != TRAINING_LABEL_SCOPE_ALL:
+                raise ValueError("binary classification profile 必須使用all_labels scope")
         elif self.training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
             if not str(self.continuous_target_id or "").strip():
                 raise ValueError("daily percentile regression profile 必須指定 continuous_target_id")
@@ -215,6 +228,8 @@ class BreakoutQualityExperimentProfile:
                 "loss_name": self.loss_name,
                 "epoch_selection_metric": self.epoch_selection_metric,
             })
+            if self.training_label_scope != TRAINING_LABEL_SCOPE_ALL:
+                payload["training_label_scope"] = self.training_label_scope
         return payload
 
 
@@ -414,6 +429,16 @@ _EXPERIMENT_PROFILES = {
         loss_name="mse",
         epoch_selection_metric="mean_daily_spearman",
     ),
+    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE: BreakoutQualityExperimentProfile(
+        name=STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+        continuous_target_id="strategy_aligned_opportunity_no_time_r_v1",
+        loss_name="mse",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_PASS_ONLY,
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -452,6 +477,7 @@ __all__ = [
     "UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE",
     "UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE",
     "STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE",
+    "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE",
     "TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE",
     "BreakoutQualityExperimentProfile",
     "BreakoutQualityPretrainingProfile",
@@ -465,6 +491,9 @@ __all__ = [
     "SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES",
     "SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES",
     "SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES",
+    "SUPPORTED_BREAKOUT_QUALITY_TRAINING_LABEL_SCOPES",
+    "TRAINING_LABEL_SCOPE_ALL",
+    "TRAINING_LABEL_SCOPE_PASS_ONLY",
     "TRAINING_OBJECTIVE_BINARY_CLASSIFICATION",
     "TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION",
     "TRAINING_SAMPLING_ALL_EVENT_ROWS",
