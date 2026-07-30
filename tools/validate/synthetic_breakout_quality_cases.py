@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -98,6 +99,13 @@ from filters.breakout_quality.augmentation import (
     apply_training_augmentation,
     build_training_augmentation_plan,
 )
+from filters.breakout_quality.continuous_target import (
+    STRATEGY_ALIGNED_TARGET_ID,
+    StrategyAlignedContinuousTargetSpec,
+    build_strategy_aligned_group_targets,
+    resolve_continuous_target_dir,
+    strategy_aligned_target_from_cached_path,
+)
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
@@ -189,6 +197,7 @@ from filters.breakout_quality.models.regime_context import (
 from filters.breakout_quality.paths import (
     resolve_existing_filter_artifact_paths,
     resolve_filter_artifact_paths,
+    resolve_filter_model_output_dir,
     resolve_filter_output_dir,
     resolve_filter_research_score_path,
     resolve_filter_report_json_path,
@@ -237,6 +246,11 @@ from tools.filters.breakout_quality import common as breakout_quality_common
 from tools.filters.breakout_quality import evaluate as breakout_quality_evaluate
 from tools.filters.breakout_quality import export_scores as breakout_quality_export_scores
 from tools.filters.breakout_quality import train as breakout_quality_train
+from tools.filters.breakout_quality.audit_continuous_target import (
+    _resolve_round_trip_path,
+    build_continuous_target_audit,
+    render_continuous_target_audit_markdown,
+)
 from tools.filters.breakout_quality.report import (
     build_report_payload,
     render_console_summary,
@@ -6521,6 +6535,326 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
     return results, summary
 
 
+
+def validate_breakout_quality_continuous_target_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_CONTINUOUS_TARGET"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
+    contract = spec.contract_payload()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_id_is_versioned",
+        STRATEGY_ALIGNED_TARGET_ID,
+        contract["target_id"],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_uses_no_split_or_oos_parameters",
+        (False, False, "none", "none"),
+        (
+            contract["split_derived_parameters"],
+            contract["oos_derived_parameters"],
+            contract["normalization"],
+            contract["clipping"],
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_inherits_current_horizon_and_risk_budget",
+        (
+            int(DEFAULT_LABEL_POLICY.label_horizon_bars),
+            abs(float(DEFAULT_LABEL_POLICY.max_adverse_return)),
+            float(DEFAULT_LABEL_POLICY.min_mfe_return)
+            / abs(float(DEFAULT_LABEL_POLICY.max_adverse_return)),
+        ),
+        (
+            int(contract["horizon_bars"]),
+            float(contract["risk_budget_return"]),
+            float(contract["full_horizon_time_penalty_r"]),
+        ),
+        tol=1e-12,
+    )
+
+    horizon = int(spec.horizon_bars)
+    early_high = np.full(horizon, 101.0, dtype=np.float64)
+    early_low = np.full(horizon, 98.0, dtype=np.float64)
+    early_high[4:] = 120.0
+    early = strategy_aligned_target_from_cached_path(
+        early_high,
+        early_low,
+        anchor_price=100.0,
+        available_bars=horizon,
+        spec=spec,
+    )
+    risk_budget = float(spec.risk_budget_return)
+    expected_early_target = (
+        0.20 / risk_budget
+        - 0.02 / risk_budget
+        - float(spec.full_horizon_time_penalty_r) * (4.0 / float(horizon - 1))
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_rewards_fast_favorable_move_net_of_adverse_path",
+        (True, 5, 0.20, 0.02, round(expected_early_target, 12)),
+        (
+            bool(early.valid),
+            int(early.opportunity_bar),
+            round(float(early.favorable_return), 12),
+            round(float(early.adverse_return_to_peak), 12),
+            round(float(early.target_raw_r), 12),
+        ),
+        tol=1e-9,
+    )
+
+    late_high = np.linspace(100.0, 105.0, horizon, dtype=np.float64)
+    late_low = np.full(horizon, 100.0, dtype=np.float64)
+    late = strategy_aligned_target_from_cached_path(
+        late_high,
+        late_low,
+        anchor_price=100.0,
+        available_bars=horizon,
+        spec=spec,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_time_penalty_offsets_minimum_move_at_horizon_end",
+        (True, horizon, 0.0),
+        (bool(late.valid), int(late.opportunity_bar), round(float(late.target_raw_r), 12)),
+        tol=1e-9,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_prefers_early_larger_opportunity",
+        True,
+        float(early.target_raw_r) > float(late.target_raw_r),
+    )
+
+    barrier_high = np.full(horizon, 130.0, dtype=np.float64)
+    barrier_low = np.full(horizon, 100.0, dtype=np.float64)
+    barrier_low[0] = 90.0
+    adverse_first = strategy_aligned_target_from_cached_path(
+        barrier_high,
+        barrier_low,
+        anchor_price=100.0,
+        available_bars=horizon,
+        spec=spec,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_same_bar_risk_touch_excludes_high",
+        (True, 0.0, 0.10, 1, 1, -1.0),
+        (
+            bool(adverse_first.valid),
+            float(adverse_first.favorable_return),
+            float(adverse_first.adverse_return_to_peak),
+            int(adverse_first.opportunity_bar),
+            int(adverse_first.first_risk_breach_bar),
+            float(adverse_first.target_raw_r),
+        ),
+        tol=1e-12,
+    )
+
+    insufficient = strategy_aligned_target_from_cached_path(
+        early_high,
+        early_low,
+        anchor_price=100.0,
+        available_bars=horizon - 1,
+        spec=spec,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_insufficient_future_is_invalid",
+        (False, "insufficient_future", True),
+        (
+            bool(insufficient.valid),
+            str(insufficient.reason),
+            bool(math.isnan(insufficient.target_raw_r)),
+        ),
+    )
+
+    anchors = np.array([100.0, 100.0, 100.0, 100.0], dtype=np.float64)
+    future_highs = np.stack([early_high, late_high, barrier_high, early_high])
+    future_lows = np.stack([early_low, late_low, barrier_low, early_low])
+    available = np.array([horizon, horizon, horizon, horizon - 1], dtype=np.int64)
+    target_arrays = build_strategy_aligned_group_targets(
+        anchors,
+        future_highs,
+        future_lows,
+        available,
+        spec=spec,
+    )
+    repeated_arrays = build_strategy_aligned_group_targets(
+        anchors,
+        future_highs,
+        future_lows,
+        available,
+        spec=spec,
+    )
+    deterministic = all(
+        np.array_equal(target_arrays[key], repeated_arrays[key], equal_nan=True)
+        for key in target_arrays
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_group_arrays_are_deterministic_and_group_scoped",
+        ((4,), np.dtype(np.float32), np.dtype(np.bool_), [True, True, True, False], True),
+        (
+            target_arrays["target_raw_r"].shape,
+            target_arrays["target_raw_r"].dtype,
+            target_arrays["valid_mask"].dtype,
+            target_arrays["valid_mask"].tolist(),
+            deterministic,
+        ),
+    )
+
+    dates = pd.to_datetime(
+        [
+            "2018-01-02", "2018-01-02", "2019-01-02", "2019-01-02",
+            "2020-01-02", "2020-01-02", "2021-01-04", "2021-01-04",
+        ]
+    )
+    synthetic_groups = pd.DataFrame(
+        {
+            "ticker": ["A", "B", "C", "D", "E", "F", "G", "H"],
+            "date": dates,
+            "label": [LABEL_PASS, LABEL_REJECT] * 4,
+            "target_raw_r": [1.5, -0.8, 1.2, -0.6, 1.0, -0.4, 0.8, -0.2],
+            "valid_mask": [True] * 8,
+            "max_upside_return": [0.20, 0.01, 0.16, 0.02, 0.13, 0.03, 0.10, 0.04],
+            "decision_mfe_return": [0.20, 0.01, 0.16, 0.02, 0.13, 0.03, 0.10, 0.04],
+            "decision_mae_return": [-0.02, -0.08, -0.02, -0.07, -0.03, -0.06, -0.03, -0.05],
+            "is_inner_train": [True, True, True, True, False, False, False, False],
+            "is_validation": [False, False, False, False, True, True, False, False],
+            "is_selection": [True, True, True, True, True, True, False, False],
+            "is_oos": [False, False, False, False, False, False, True, True],
+        }
+    )
+    audit_payload, daily = build_continuous_target_audit(
+        synthetic_groups,
+        target_contract=contract,
+        split_report={"policy": "synthetic_fixed_split"},
+        dataset_summary={
+            "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            "dataset": "synthetic",
+            "event_count": len(synthetic_groups),
+            "feature_group_count": len(synthetic_groups),
+        },
+        trade_alignment={
+            "available": False,
+            "reason": "synthetic_no_round_trip_file",
+            "formula_tuned_from_trade_r": False,
+            "diagnostic_only": True,
+        },
+    )
+    markdown = render_continuous_target_audit_markdown(audit_payload)
+    strict_json_ok = True
+    try:
+        json.dumps(audit_payload, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        strict_json_ok = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_audit_is_rankable_strict_json_and_audit_only",
+        ("IMPLEMENTED_AUDIT_ONLY", False, 1.0, 1.0, 7, True, True),
+        (
+            audit_payload["status"],
+            audit_payload["training_performed"],
+            audit_payload["split_metrics"]["oos"]["same_day_rankability"]["rankable_date_rate"],
+            audit_payload["split_metrics"]["selection"]["same_day_binary_concordance"]["pair_weighted_concordance"],
+            len(daily),
+            strict_json_ok,
+            "本輪沒有訓練模型" in markdown,
+        ),
+        tol=1e-12,
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        expected_round_trip_path = (
+            resolve_filter_model_output_dir(
+                temp_dir,
+                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+            )
+            / "strategy_compare"
+            / "no_filter_round_trips.csv"
+        )
+        expected_round_trip_path.parent.mkdir(parents=True, exist_ok=True)
+        expected_round_trip_path.write_text(
+            "ticker,r_multiple\n2330,1.0\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
+            Path(temp_dir),
+        ):
+            resolved_round_trip_path, resolved_path_source = _resolve_round_trip_path(
+                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                None,
+            )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "continuous_target_round_trip_auto_path_uses_output_tree",
+            (str(expected_round_trip_path), "active_9a_standard_path"),
+            (str(resolved_round_trip_path), str(resolved_path_source)),
+        )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_output_path_is_target_version_scoped",
+        (
+            "breakout_quality_v1",
+            "continuous_targets",
+            STRATEGY_ALIGNED_TARGET_ID,
+        ),
+        tuple(
+            resolve_continuous_target_dir(
+                Path("/tmp/project"),
+                "breakout_quality_v1",
+            ).parts[-3:]
+        ),
+    )
+
+    from apps.breakout_quality import COMMAND_MODULES
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_target_audit_command_is_registered",
+        "tools.filters.breakout_quality.audit_continuous_target",
+        COMMAND_MODULES.get("audit-continuous-target"),
+    )
+
+    summary["target_id"] = STRATEGY_ALIGNED_TARGET_ID
+    summary["training_performed"] = False
+    return results, summary
+
 def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_STRATEGY_COMPARISON"
     results = []
@@ -7161,6 +7495,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
 
 __all__ = [
     "validate_breakout_quality_chronological_embargo_case",
+    "validate_breakout_quality_continuous_target_contract_case",
     "validate_breakout_quality_policy_single_source_case",
     "validate_breakout_quality_runtime_artifact_contract_case",
     "validate_breakout_quality_strategy_comparison_contract_case",

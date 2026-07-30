@@ -88,6 +88,28 @@ python -c "from importlib.metadata import version; from momentfm import MOMENTPi
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --epochs 200 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 ```
 
+### 11A連續目標可學性稽核
+
+11A第一階段只由既有future-path cache建立固定連續target與稽核報表，不訓練模型、不選epoch、不調threshold，也不重建feature bank或Label：
+
+```bash
+python apps/breakout_quality.py audit-continuous-target
+```
+
+預設會在目前active 9A策略比較目錄尋找`strategy_compare/no_filter_round_trips.csv`，找到時附加實際Round-trip R方向診斷；也可顯式指定：
+
+```bash
+python apps/breakout_quality.py audit-continuous-target --round-trips <no_filter_round_trips.csv>
+```
+
+輸出固定在：
+
+```text
+outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned_opportunity_r_v1/
+```
+
+主要回傳`continuous_target_audit.md`與`continuous_target_audit.json`。若來源CSV inventory比既有Dataset新，預設fail-fast；`--allow-stale-source`只供明確知道風險的診斷，不得用於正式比較。
+
 模型架構與訓練實驗分開管理：
 
 ```python

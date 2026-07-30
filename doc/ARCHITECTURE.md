@@ -103,6 +103,19 @@ project/
 
 ### `tools/validate/`
 
+### 11A Strategy-aligned Continuous Target audit
+
+11A第一階段是獨立research-target子系統，不是新的model architecture。`filters/breakout_quality/continuous_target.py`以既有canonical event anchor與future high／low path cache建立group-level `strategy_aligned_opportunity_r_v1`；`tools/filters/breakout_quality/audit_continuous_target.py`負責固定split分布、同日排序可學性及可選Round-trip R方向診斷，正式入口為：
+
+```bash
+python apps/breakout_quality.py audit-continuous-target
+```
+
+target固定使用40-bar horizon與10% risk budget：首次風險觸發前最大有利漲幅R，扣除到達高點前最大不利跌幅R及最多0.5R的時間懲罰。同日High／Low歧義採adverse-first，風險觸發日High不計；首日觸發輸出−1R。公式不讀取split統計、OOS、模型score或actual trade R，不做normalization／clipping。
+
+工件位於`outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned_opportunity_r_v1/`，與architecture／experiment profile工件隔離；只沿用feature-group index及future-path cache，不改Dataset fingerprint、不重建feature bank、不relabel。manifest明確保存`training_performed=false`與`runtime_eligible=false`。此階段只產生arrays與audit，不授權regression training、score export或scanner runtime。
+
+
 - `tools/validate/`：正式 invariant、contract、schema 與 real-case 驗證子系統；正式細目與狀態以 `doc/TEST_SUITE_CHECKLIST.md` 為準。
 
 ### `tools/local_regression/`

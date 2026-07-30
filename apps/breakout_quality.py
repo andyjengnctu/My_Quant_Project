@@ -79,6 +79,7 @@ COMMAND_MODULES = {
     "report": "tools.filters.breakout_quality.report",
     "evaluate": "tools.filters.breakout_quality.evaluate",
     "regime-audit": "tools.filters.breakout_quality.regime_audit",
+    "audit-continuous-target": "tools.filters.breakout_quality.audit_continuous_target",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -97,6 +98,7 @@ COMMAND_DESCRIPTIONS = {
     "report": "產生表格化終端報表、Markdown 報表與完整 metrics JSON",
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "regime-audit": "稽核 Selection／OOS 的市場狀態與 breakout event 覆蓋",
+    "audit-continuous-target": "建立11A連續target arrays並稽核分布、同日排序與實際R方向",
 }
 
 
