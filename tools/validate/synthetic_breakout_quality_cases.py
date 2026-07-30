@@ -245,7 +245,7 @@ from core.breakout_reentry import (
 )
 from core.extended_signals import resolve_breakout_quality_rank
 from core.portfolio_candidates import _resolve_candidate_quality_ranking
-from core.portfolio_engine import _aggregate_ensemble_candidate_rows
+from core.portfolio_engine import _aggregate_ensemble_candidate_rows, _candidate_replay_snapshot
 from core.portfolio_exits import _iter_reentry_watch_targets
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
@@ -270,6 +270,15 @@ from tools.filters.breakout_quality.regime_audit import (
     build_regime_audit_payload,
     derive_benchmark_regime_features,
     render_regime_audit_markdown,
+)
+from tools.filters.breakout_quality.audit_qualified_candidate_set import (
+    _actual_trade_metrics as qualified_audit_actual_trade_metrics,
+    _assert_replay_matches_strategy_summary as assert_qualified_replay_matches_summary,
+    _attach_ranker_scores as qualified_audit_attach_ranker_scores,
+    _daily_coverage as qualified_audit_daily_coverage,
+    _layer_metrics as qualified_audit_layer_metrics,
+    _unique_groups as qualified_audit_unique_groups,
+    _validate_strategy_metadata as validate_qualified_audit_strategy_metadata,
 )
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_SCORE_RANKING,
@@ -7267,13 +7276,14 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "continuous_ranker_is_available_from_interactive_menu_without_rule_duplication",
+        "continuous_ranker_is_cli_only_and_does_not_pollute_interactive_menu",
         (True, True, True, True),
         (
-            'print("[10] 11B 同日 Percentile Ranker（research-only）")' in app_source,
-            'elif choice == "10":' in app_source,
-            "_interactive_train_continuous_ranker(program_name)" in app_source,
-            '_run_command(\n        "train-continuous-ranker"' in app_source,
+            command_modules.get("train-continuous-ranker")
+            == "tools.filters.breakout_quality.train_continuous_ranker",
+            'print("[10] 11B 同日 Percentile Ranker（research-only）")' not in app_source,
+            'elif choice == "10":' not in app_source,
+            "_interactive_train_continuous_ranker" not in app_source,
         ),
     )
 
@@ -7309,6 +7319,334 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
 
     summary["profile"] = STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
     summary["training_objective"] = profile.training_objective
+    return results, summary
+
+
+def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_QUALIFIED_CANDIDATE_SET_AUDIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    candidate = {
+        "ticker": "2330",
+        "trade_date": "2022-01-05",
+        "candidate_date": "2022-01-05",
+        "signal_date": "2022-01-03",
+        "type": "normal",
+        "entry_source": "breakout",
+        "params_obj": SimpleNamespace(high_len=201),
+        "ensemble_vote_count": 4,
+        "qty": 1000,
+        "sort_value": 0.75,
+        "ev": 1.25,
+        "hist_win_rate": 0.60,
+        "hist_trade_count": 20,
+        "breakout_quality_score": 0.63,
+        "breakout_quality_score_date": "2022-01-03",
+    }
+    snapshot = _candidate_replay_snapshot(
+        candidate,
+        fallback_trade_date=pd.Timestamp("2022-01-05"),
+        is_orderable=True,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_snapshot_preserves_original_signal_date_without_runtime_objects",
+        (
+            "2330", "2022-01-05", "2022-01-03", True, 201, 4, False,
+        ),
+        (
+            snapshot["ticker"], snapshot["trade_date"], snapshot["signal_date"],
+            snapshot["is_orderable"], snapshot["high_len"],
+            snapshot["ensemble_vote_count"], "params_obj" in snapshot,
+        ),
+    )
+
+    oos_scores = pd.DataFrame(
+        [
+            {"ticker": "1101", "date": "2022-01-03", "group_index": 1, "label": 0,
+             "target_raw_r": -1.0, "target_daily_percentile": 0.0, "model_score": 0.10},
+            {"ticker": "2330", "date": "2022-01-03", "group_index": 2, "label": 1,
+             "target_raw_r": 2.0, "target_daily_percentile": 1.0, "model_score": 0.80},
+            {"ticker": "2603", "date": "2022-01-04", "group_index": 3, "label": 0,
+             "target_raw_r": 0.0, "target_daily_percentile": 0.0, "model_score": 0.20},
+            {"ticker": "2454", "date": "2022-01-04", "group_index": 4, "label": 1,
+             "target_raw_r": 3.0, "target_daily_percentile": 1.0, "model_score": 0.90},
+        ]
+    )
+    occurrences = pd.DataFrame(
+        [
+            {"ticker": "1101", "trade_date": "2022-01-04", "candidate_date": "2022-01-04",
+             "signal_date": "2022-01-03", "candidate_type": "normal"},
+            {"ticker": "1101", "trade_date": "2022-01-05", "candidate_date": "2022-01-05",
+             "signal_date": "2022-01-03", "candidate_type": "continuation"},
+            {"ticker": "2330", "trade_date": "2022-01-04", "candidate_date": "2022-01-04",
+             "signal_date": "2022-01-03", "candidate_type": "normal"},
+            {"ticker": "2603", "trade_date": "2022-01-05", "candidate_date": "2022-01-05",
+             "signal_date": "2022-01-04", "candidate_type": "normal"},
+            {"ticker": "2454", "trade_date": "2022-01-05", "candidate_date": "2022-01-05",
+             "signal_date": "2022-01-04", "candidate_type": "normal"},
+            {"ticker": "9999", "trade_date": "2022-01-05", "candidate_date": "2022-01-05",
+             "signal_date": "2022-01-04", "candidate_type": "normal"},
+        ]
+    )
+    attached = qualified_audit_attach_ranker_scores(
+        occurrences,
+        oos_scores,
+        layer="qualified",
+    )
+    unique = qualified_audit_unique_groups(attached, layer="qualified")
+    metrics = qualified_audit_layer_metrics(
+        unique,
+        occurrence_count=len(attached),
+        occurrence_date_count=int(attached["trade_date"].nunique()),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_occurrences_align_by_signal_date_and_deduplicate_unique_groups",
+        (6, 5, 4, 1, 2, 1.0, 1.0),
+        (
+            len(attached), int(attached["target_match"].sum()), len(unique),
+            int((~attached["target_match"]).sum()),
+            int(unique.loc[(unique["ticker"] == "1101") & (unique["target_date"] == "2022-01-03"), "occurrence_count"].iloc[0]),
+            round(float(metrics["global_spearman_score_vs_target"]), 12),
+            round(float(metrics["mean_daily_spearman_score_vs_target"]), 12),
+        ),
+        tol=1e-12,
+    )
+
+    daily = qualified_audit_daily_coverage(
+        attached,
+        attached[attached["trade_date"] == "2022-01-04"].copy(),
+    )
+    daily_lookup = daily.set_index("trade_date")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_daily_coverage_counts_ticker_signal_pairs_not_dates_only",
+        (2, 2, 4),
+        (
+            int(daily_lookup.loc["2022-01-04", "qualified_unique_signals"]),
+            int(daily_lookup.loc["2022-01-04", "orderable_unique_signals"]),
+            int(daily_lookup.loc["2022-01-05", "qualified_unique_signals"]),
+        ),
+    )
+
+    actual = pd.DataFrame(
+        [
+            {"ticker": "1101", "target_date": "2022-01-03", "target_raw_r": -1.0, "r_multiple": -0.5},
+            {"ticker": "2330", "target_date": "2022-01-03", "target_raw_r": 2.0, "r_multiple": 2.5},
+            {"ticker": "2603", "target_date": "2022-01-04", "target_raw_r": 0.0, "r_multiple": 0.0},
+            {"ticker": "2454", "target_date": "2022-01-04", "target_raw_r": 3.0, "r_multiple": 4.0},
+        ]
+    )
+    actual_metrics, actual_matches = qualified_audit_actual_trade_metrics(actual, oos_scores)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_actual_trade_merge_preserves_target_score_and_realized_r_direction",
+        (4, 4, 1.0, 1.0, 1.0, 4.0, -0.5),
+        (
+            actual_metrics["trade_count"], actual_metrics["matched_trade_count"],
+            round(float(actual_metrics["spearman_target_vs_realized_r"]), 12),
+            round(float(actual_metrics["spearman_score_vs_target"]), 12),
+            round(float(actual_metrics["spearman_score_vs_realized_r"]), 12),
+            float(actual_metrics["top_score_decile_average_r"]),
+            float(actual_metrics["bottom_score_decile_average_r"]),
+        ),
+        tol=1e-12,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_actual_trade_output_retains_each_trade_row",
+        (4, ("1101", "2330", "2454", "2603")),
+        (
+            len(actual_matches),
+            tuple(sorted(actual_matches["ticker"].astype(str).tolist())),
+        ),
+    )
+
+    replay_payload = {
+        "total_return_pct": 12.5,
+        "max_drawdown_pct": 3.0,
+        "return_over_max_drawdown": 4.1666666667,
+        "annual_return_pct": 2.0,
+        "log_r_squared": 0.9,
+        "monthly_win_rate_pct": 60.0,
+        "trade_count": 4,
+        "win_rate_pct": 50.0,
+        "payoff_ratio": 2.0,
+        "expected_value_r": 0.5,
+        "final_equity": 1125000.0,
+        "avg_exposure_pct": 40.0,
+        "max_exposure_pct": 90.0,
+        "missed_buy_count": 1,
+        "missed_sell_count": 0,
+        "reserved_buy_fill_rate_pct": 80.0,
+        "normal_trade_count": 3,
+        "extended_trade_count": 1,
+        "annual_trade_count": 1.0,
+        "benchmark_return_pct": 5.0,
+        "benchmark_max_drawdown_pct": 4.0,
+        "benchmark_annual_return_pct": 1.0,
+        "profile": {
+            "portfolio_total_r": 7.5,
+            "portfolio_median_r": 0.5,
+            "portfolio_avg_r": 1.875,
+            "min_full_year_return_pct": -2.0,
+            "min_month_return_pct": -1.0,
+            "min_quarter_return_pct": -1.5,
+            "full_year_count": 1,
+            "portfolio_capacity_rows": [],
+        },
+    }
+    expected_replay = {
+        key: replay_payload.get(key, replay_payload["profile"].get(key))
+        for key in (
+            "total_return_pct", "max_drawdown_pct", "return_over_max_drawdown",
+            "annual_return_pct", "trade_count", "final_equity",
+            "avg_exposure_pct", "max_exposure_pct", "missed_buy_count",
+            "missed_sell_count", "normal_trade_count", "extended_trade_count",
+            "portfolio_total_r",
+        )
+    }
+    replay_match = assert_qualified_replay_matches_summary(expected_replay, replay_payload)
+    bad_replay = dict(replay_payload)
+    bad_replay["total_return_pct"] = 99.0
+    try:
+        assert_qualified_replay_matches_summary(expected_replay, bad_replay)
+        replay_mismatch_rejected = False
+    except ValueError:
+        replay_mismatch_rejected = True
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_capture_must_preserve_formal_no_filter_strategy_results",
+        (12.5, 4, 7.5, True),
+        (
+            float(replay_match["total_return_pct"]),
+            int(replay_match["trade_count"]),
+            float(replay_match["portfolio_total_r"]),
+            replay_mismatch_rejected,
+        ),
+    )
+
+    valid_metadata = {
+        "comparison_mode": "hard-filter",
+        "comparison_design": "historical_active_param_oos",
+        "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        "lookahead_safe_active_param_schedule": True,
+        "threshold_used_as_gate": True,
+    }
+    try:
+        validate_qualified_audit_strategy_metadata(
+            valid_metadata,
+            filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        )
+        valid_metadata_accepted = True
+    except ValueError:
+        valid_metadata_accepted = False
+    invalid_metadata_rejected = []
+    for mutation in (
+        {"comparison_design": "static_param_diagnostic"},
+        {"lookahead_safe_active_param_schedule": False},
+        {"threshold_used_as_gate": False},
+    ):
+        payload = dict(valid_metadata)
+        payload.update(mutation)
+        try:
+            validate_qualified_audit_strategy_metadata(
+                payload,
+                filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            )
+            invalid_metadata_rejected.append(False)
+        except ValueError:
+            invalid_metadata_rejected.append(True)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_audit_accepts_only_lookahead_safe_hard_filter_historical_replay",
+        (True, True, True, True),
+        (valid_metadata_accepted, *invalid_metadata_rejected),
+    )
+
+    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_source = app_path.read_text(encoding="utf-8")
+    app_tree = ast.parse(app_source, filename=str(app_path))
+    command_modules = {}
+    for node in app_tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(isinstance(target, ast.Name) and target.id == "COMMAND_MODULES" for target in node.targets):
+            command_modules = ast.literal_eval(node.value)
+            break
+    audit_source = (
+        Path(__file__).resolve().parents[1]
+        / "filters"
+        / "breakout_quality"
+        / "audit_qualified_candidate_set.py"
+    ).read_text(encoding="utf-8")
+    strategy_source = (
+        Path(__file__).resolve().parents[1]
+        / "filters"
+        / "breakout_quality"
+        / "strategy_compare.py"
+    ).read_text(encoding="utf-8")
+    engine_source = (
+        Path(__file__).resolve().parents[2]
+        / "core"
+        / "portfolio_engine.py"
+    ).read_text(encoding="utf-8")
+    runner_source = (
+        Path(__file__).resolve().parents[1]
+        / "portfolio_sim"
+        / "simulation_runner.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_audit_is_cli_only_and_reuses_canonical_replay",
+        (True, True, True, True, True, True),
+        (
+            command_modules.get("audit-qualified-candidate-set")
+            == "tools.filters.breakout_quality.audit_qualified_candidate_set",
+            'print("[11] 11C Qualified Candidate-set Audit（research-only）")' not in app_source,
+            'elif choice == "11":' not in app_source,
+            "run_no_filter_candidate_replay_from_metadata" in audit_source,
+            "replay_counts=replay_counts" in strategy_source,
+            "replay_counts=None" in engine_source and "replay_counts=None" in runner_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "qualified_candidate_audit_is_diagnostic_only_and_does_not_authorize_training",
+        (True, True, True, True, True),
+        (
+            '"training_performed": False' in audit_source,
+            '"research_only": True' in audit_source,
+            '"audit_does_not_authorize_new_model": True' in audit_source,
+            "torch.save(" not in audit_source,
+            "optimizer" not in audit_source.lower(),
+        ),
+    )
+
+    summary["command"] = "audit-qualified-candidate-set"
+    summary["layers"] = ["all_oos_breakouts", "qualified_candidates", "orderable_candidates", "actual_trades"]
     return results, summary
 
 def validate_breakout_quality_strategy_comparison_contract_case(_base_params):

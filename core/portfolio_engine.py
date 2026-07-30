@@ -493,6 +493,46 @@ def _flatten_ensemble_extended_signals(active_extended_signals_by_member):
     return flattened
 
 
+def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
+    """Return a stable diagnostic row without leaking runtime objects into CSV/JSON."""
+
+    row = dict(candidate or {})
+    params_obj = row.get("params_obj")
+
+    def _date_text(value):
+        if value is None or value == "":
+            return ""
+        return pd.Timestamp(value).strftime("%Y-%m-%d")
+
+    def _optional_float(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    trade_date = row.get("trade_date") or row.get("candidate_date") or fallback_trade_date
+    signal_date = row.get("signal_date")
+    return {
+        "ticker": str(row.get("ticker") or ""),
+        "trade_date": _date_text(trade_date),
+        "candidate_date": _date_text(row.get("candidate_date") or trade_date),
+        "signal_date": _date_text(signal_date),
+        "candidate_type": str(row.get("type") or ""),
+        "entry_source": str(row.get("entry_source") or ""),
+        "is_orderable": bool(is_orderable),
+        "high_len": int(getattr(params_obj, "high_len", 0) or 0),
+        "ensemble_vote_count": int(row.get("ensemble_vote_count", 1) or 1),
+        "qty": int(row.get("qty", 0) or 0),
+        "sort_value": _optional_float(row.get("sort_value")),
+        "historical_ev": _optional_float(row.get("ev")),
+        "historical_win_rate": _optional_float(row.get("hist_win_rate")),
+        "historical_trade_count": int(row.get("hist_trade_count", 0) or 0),
+        "breakout_quality_score": _optional_float(row.get("breakout_quality_score")),
+        "breakout_quality_score_date": str(row.get("breakout_quality_score_date") or ""),
+    }
+
+
 def _build_daily_ensemble_candidates(
     *,
     ensemble_members,
@@ -769,6 +809,8 @@ def run_portfolio_timeline(
                 bucket = replay_counts[ticker]
             bucket.setdefault("candidate_dates", [])
             bucket.setdefault("orderable_dates", [])
+            bucket.setdefault("candidate_rows", [])
+            bucket.setdefault("orderable_rows", [])
             bucket.setdefault("trade_rows", [])
 
     training_idle_fast_path_enabled = bool(
@@ -997,14 +1039,44 @@ def run_portfolio_timeline(
                 if replay_counts is not None:
                     for candidate in candidates_today:
                         ticker = str(candidate.get("ticker", ""))
-                        bucket = replay_counts.get(ticker)
-                        if bucket is not None:
-                            bucket["candidate_dates"].append(today)
+                        bucket = replay_counts.setdefault(
+                            ticker,
+                            {
+                                "candidate_dates": [],
+                                "orderable_dates": [],
+                                "candidate_rows": [],
+                                "orderable_rows": [],
+                                "trade_rows": [],
+                            },
+                        )
+                        bucket.setdefault("candidate_dates", []).append(today)
+                        bucket.setdefault("candidate_rows", []).append(
+                            _candidate_replay_snapshot(
+                                candidate,
+                                fallback_trade_date=today,
+                                is_orderable=False,
+                            )
+                        )
                     for candidate in orderable_candidates_today:
                         ticker = str(candidate.get("ticker", ""))
-                        bucket = replay_counts.get(ticker)
-                        if bucket is not None:
-                            bucket["orderable_dates"].append(today)
+                        bucket = replay_counts.setdefault(
+                            ticker,
+                            {
+                                "candidate_dates": [],
+                                "orderable_dates": [],
+                                "candidate_rows": [],
+                                "orderable_rows": [],
+                                "trade_rows": [],
+                            },
+                        )
+                        bucket.setdefault("orderable_dates", []).append(today)
+                        bucket.setdefault("orderable_rows", []).append(
+                            _candidate_replay_snapshot(
+                                candidate,
+                                fallback_trade_date=today,
+                                is_orderable=True,
+                            )
+                        )
                     before_trade_rows = len(trade_history)
                 else:
                     before_trade_rows = -1
@@ -1213,9 +1285,17 @@ def run_portfolio_timeline(
         if replay_counts is not None and before_trade_rows >= 0:
             for row in trade_history[before_trade_rows:]:
                 ticker = str(row.get("Ticker", "")).strip()
-                bucket = replay_counts.get(ticker)
-                if bucket is not None:
-                    bucket["trade_rows"].append(row)
+                bucket = replay_counts.setdefault(
+                    ticker,
+                    {
+                        "candidate_dates": [],
+                        "orderable_dates": [],
+                        "candidate_rows": [],
+                        "orderable_rows": [],
+                        "trade_rows": [],
+                    },
+                )
+                bucket.setdefault("trade_rows", []).append(row)
 
         if profile_timing_enabled:
             day_loop_sec += time.perf_counter() - t_day_start

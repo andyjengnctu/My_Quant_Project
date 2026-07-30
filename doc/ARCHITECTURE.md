@@ -125,7 +125,19 @@ target固定使用40-bar horizon與10% risk budget：首次風險觸發前最大
 python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1
 ```
 
-Inner Train只負責gradient更新，Validation以mean daily Spearman最大化選epoch、相同Spearman時才比較較低MSE；完整Selection依`selected_epochs`重新初始化重訓。checkpoint寫入前只建立Selection percentile target，OOS percentile、OOS metrics與actual-R診斷均在模型凍結後執行。11B工件寫入`inception_time_v1/strategy_aligned_daily_percentile_mse/`獨立profile路徑，research scores每個group只保留唯一一列並以`selection_role`標示Inner Train／Validation；manifest固定`runtime_eligible=false`；binary runtime loader、classification workflow與forward-OOS score export均拒絕此profile，不覆蓋9A `unique_group_sampling`正式模型。正式入口除`train-continuous-ranker`子命令外，也由`apps/breakout_quality.py`互動選單的`[10]`選項呼叫同一command module，不另行複製訓練邏輯。
+Inner Train只負責gradient更新，Validation以mean daily Spearman最大化選epoch、相同Spearman時才比較較低MSE；完整Selection依`selected_epochs`重新初始化重訓。checkpoint寫入前只建立Selection percentile target，OOS percentile、OOS metrics與actual-R診斷均在模型凍結後執行。11B工件寫入`inception_time_v1/strategy_aligned_daily_percentile_mse/`獨立profile路徑，research scores每個group只保留唯一一列並以`selection_role`標示Inner Train／Validation；manifest固定`runtime_eligible=false`；binary runtime loader、classification workflow與forward-OOS score export均拒絕此profile，不覆蓋9A `unique_group_sampling`正式模型。11B是已淘汰的research-only實驗，只保留`train-continuous-ranker` CLI子命令供歷史重現；臨時研究不加入互動選單，也不另行複製訓練邏輯。
+
+### 11C Qualified Candidate-set Coverage Audit
+
+11C是11B淘汰後的research-only失敗歸因，不是模型architecture、training profile或runtime功能。`core.portfolio_engine.run_portfolio_timeline`只在呼叫端明確傳入`replay_counts`時保存candidate diagnostic snapshot；正常scanner、optimizer與portfolio replay不建立此資料。`tools/filters/breakout_quality/strategy_compare.py`的`run_no_filter_candidate_replay_from_metadata`重用既有hard-filter `historical_active_param_oos` no-filter metadata與canonical portfolio runner，取得qualified及資金／持股限制後的orderable候選，不另寫active-param、ensemble、history filter或buy-sort規則。開啟candidate capture後，重播的報酬、MDD、RoMD、曝險、PnL與trade counts必須和既有no-filter strategy summary一致，否則fail-fast。
+
+正式入口為：
+
+```bash
+python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breakout_quality_v1
+```
+
+11C只提供`audit-qualified-candidate-set` CLI入口，不加入互動選單。Audit以原始`signal_date`對齊11A target及11B research score，保留candidate occurrence並另建立ticker／signal-date唯一group口徑；固定比較全部OOS breakouts、qualified candidates、orderable candidates與actual round trips。輸出包含qualified／orderable occurrence與ticker-signal-date unique-group工件、每日coverage、Score↔Target排序，以及actual signals對qualified／orderable的membership與Target／Score↔R診斷，寫入11B profile下的`qualified_candidate_set_audit/`。它不建立optimizer、loss、epoch、normalization、threshold或部署工件，也不授權qualified-candidate training；是否建立新sampling profile必須等正式audit結果後另行決定。
 
 
 - `tools/validate/`：正式 invariant、contract、schema 與 real-case 驗證子系統；正式細目與狀態以 `doc/TEST_SUITE_CHECKLIST.md` 為準。

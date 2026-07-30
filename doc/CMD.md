@@ -57,7 +57,7 @@ python apps/workbench.py
 
 正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟選單；選單提供完整研究流程、單步操作、正式 forward-OOS 匯出、工件狀態檢查，以及獨立的 `[10] 11B 同日 Percentile Ranker（research-only）`。第一層選單確認操作類型後，所有已由 `config/breakout_quality_policy.py` 定義的設定都直接採用 policy，不再重複詢問，包括 Filter ID、model architecture、experiment profile、epochs、training batch size、evaluation batch size、evaluation workers、parallel split evaluation、feature-bank preload、training prefetch、Torch device、mixed precision dtype、determinism、TF32、learning rate、weight decay、gradient clipping、final refit mode、class weight mode、time weight mode、random seed、threshold、inner validation、validation 月數與 early stopping。互動式完整研究流程固定使用 Full dataset、全部股票並執行 OOS，不再詢問 dataset 類型、最多股票數或是否執行 OOS；開始確認預設為 Y；互動式單獨建立 dataset 也固定使用 Full dataset 與全部股票。dataset 是否需要建立／重建由 workflow 自動偵測，偵測到過期或不一致時直接重建；只有 dataset 已最新時才詢問是否強制重建，預設 N。需要 reduced、限制股票數或略過 OOS 的開發／單次執行時，改用對應 CLI 參數。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟選單；選單只保留穩定、可重複使用的正式流程、單步操作、forward-OOS匯出與工件狀態檢查。臨時性／research-only實驗一律使用明確CLI子命令，不加入互動選單。第一層選單確認操作類型後，所有已由 `config/breakout_quality_policy.py` 定義的設定都直接採用 policy，不再重複詢問，包括 Filter ID、model architecture、experiment profile、epochs、training batch size、evaluation batch size、evaluation workers、parallel split evaluation、feature-bank preload、training prefetch、Torch device、mixed precision dtype、determinism、TF32、learning rate、weight decay、gradient clipping、final refit mode、class weight mode、time weight mode、random seed、threshold、inner validation、validation 月數與 early stopping。互動式完整研究流程固定使用 Full dataset、全部股票並執行 OOS，不再詢問 dataset 類型、最多股票數或是否執行 OOS；開始確認預設為 Y；互動式單獨建立 dataset 也固定使用 Full dataset 與全部股票。dataset 是否需要建立／重建由 workflow 自動偵測，偵測到過期或不一致時直接重建；只有 dataset 已最新時才詢問是否強制重建，預設 N。需要 reduced、限制股票數或略過 OOS 的開發／單次執行時，改用對應 CLI 參數。
 
 ```bash
 python apps/breakout_quality.py
@@ -113,14 +113,8 @@ outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned
 
 ### 11B同日Percentile Regression
 
-11A完整audit通過後，可從互動選單執行research-only 11B：
+11A完整audit通過後，11B固定使用CLI執行；它是research-only臨時實驗，不加入互動選單：
 
-```bash
-python apps/breakout_quality.py
-# 選擇 [10] 11B 同日 Percentile Ranker（research-only）
-```
-
-批次或需保留完整命令時使用：
 
 ```bash
 python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1
@@ -139,6 +133,37 @@ outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_
 ```
 
 不得把此profile傳給一般`train`／`workflow`或`export-scores --scope forward_oos`；這些入口只接受binary classification profiles。
+
+### 11C Qualified Candidate-set Coverage Audit
+
+11B結果淘汰後，使用既有hard-filter historical active-param strategy comparison重播正式no-filter候選鏈，建立全部OOS／qualified／orderable／actual-trade四層診斷。11C固定使用CLI執行，不加入互動選單：
+
+
+```bash
+python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breakout_quality_v1
+```
+
+前置工件：
+
+```text
+outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/unique_group_sampling/strategy_compare/strategy_comparison.json
+outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_daily_percentile_mse/continuous_ranker_scores.csv
+outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy_aligned_opportunity_r_v1/continuous_target_trade_matches.csv
+```
+
+若strategy comparison位於其他明確目錄，可使用：
+
+```bash
+python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breakout_quality_v1 --strategy-compare-dir <目錄>
+```
+
+輸出位於：
+
+```text
+outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_aligned_daily_percentile_mse/qualified_candidate_set_audit/
+```
+
+本命令會重播no-filter OOS以取得candidate membership，但不重訓模型、不relabel、不修改9A／11B工件，也不產生runtime scores。qualified候選資格、orderable限制與active params全部由既有portfolio replay決定；audit只讀取並對齊原始`signal_date`。重播後會核對報酬、MDD、RoMD、曝險、PnL與trade counts均未因diagnostic capture改變，並輸出qualified／orderable兩層occurrence與unique-group CSV、每日coverage、actual membership及JSON／Markdown報表。
 
 模型架構與訓練實驗分開管理：
 
