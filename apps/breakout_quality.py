@@ -105,6 +105,11 @@ INTERACTIVE_MAX_TICKERS = 0
 INTERACTIVE_EVALUATE_OOS = True
 
 
+LEGACY_COMMAND_ENTRYPOINTS = {
+    "breakout_quality_strategy_compare.py": "strategy-compare",
+}
+
+
 COMMAND_DESCRIPTIONS = {
     "menu": "開啟互動式操作選單",
     "workflow": "依序執行 dataset、必要的Selection-only預訓練、train、research score export與報表",
@@ -153,10 +158,18 @@ def _load_command_module(command: str):
     return command_module
 
 
+def _command_program_name(program_name: str, command: str) -> str:
+    normalized_program_name = str(program_name).replace("\\", "/").strip()
+    script_name = normalized_program_name.rsplit("/", 1)[-1]
+    if LEGACY_COMMAND_ENTRYPOINTS.get(script_name) == command:
+        return normalized_program_name
+    return f"{normalized_program_name} {command}"
+
+
 def _run_command(command: str, args: list[str], *, program_name: str) -> int:
     command_module = _load_command_module(command)
     original_program_name = sys.argv[0]
-    sys.argv[0] = f"{program_name} {command}"
+    sys.argv[0] = _command_program_name(program_name, command)
     try:
         result = command_module.main(list(args))
     finally:

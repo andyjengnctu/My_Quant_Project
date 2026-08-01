@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_144606_024e49d(2).zip`，SHA256 `762eac6a328c318efa9ecbd1922e29607e06b8f9053a80e1322fff770ccbb6c6`。目前已實作單一入口、泛用workflow config、continuous-ranker共用pipeline與Selection point-in-time Score builder／audit；尚未執行完整資料訓練或策略Score sort，因此不得宣稱模型或策略有效。正式binary policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`762eac6a328c318efa9ecbd1922e29607e06b8f9053a80e1322fff770ccbb6c6`。第一階段程式只建立point-in-time模型分數契約與模型層audit；PIT manifest預設`eligible=false`，不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_170534_3cc7f52.zip`，SHA256 `881a4670875a0e633d8ae74eff90f6b96b33e2df9e11b4b05717f64d94d3a003`。此基準已包含單一入口、泛用workflow config、continuous-ranker共用pipeline與Selection point-in-time Score builder／audit；本輪只修正舊strategy-compare相容入口的CLI顯示名稱，不改模型、Target、Score、buy-sort或策略邏輯。尚未執行完整資料訓練或策略Score sort，因此不得宣稱模型或策略有效 |
+| SHA256 | 本輪來源 ZIP：`881a4670875a0e633d8ae74eff90f6b96b33e2df9e11b4b05717f64d94d3a003`；formal bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5`。第一階段PIT manifest仍預設`eligible=false`，不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -695,6 +695,20 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | Runtime邊界 | Builder manifest固定`eligible=false`與`selection_model_validation_only`；不作forward-OOS runtime、scanner、buy-sort或optimizer輸入。策略選單在PIT score-store與泛用Score排序尚未實作時明確阻擋 |
 | 驗證 | 已通過modified-files編譯、CLI help、舊入口轉接、AST無循環／無apps反向依賴、無bare except，以及獨立合成資料的fold embargo、coverage、duplicate rejection與orderable `target_date` coverage；依專案規範未執行`apps/test_suite.py` |
 | 尚未完成 | 未建立真實`selection_point_in_time_scores.csv`、未取得模型Spearman結果、未修改buy-sort、未跑策略optimizer或OOS績效比較 |
+
+
+### 3.61 Formal quick-gate 舊 Strategy Compare Help 閉環（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；已完成根因確認、程式修正與獨立CLI重現，待使用者重新執行正式suite確認 |
+| 程式基準 | 來源`test-branch-1_20260801_170534_3cc7f52.zip`，SHA256 `881a4670875a0e633d8ae74eff90f6b96b33e2df9e11b4b05717f64d94d3a003`；bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5` |
+| Formal結果 | quick gate唯一FAIL為`help::breakout_quality_strategy_compare.py`；consistency、chain checks、ML smoke與meta quality均PASS。Bundle manifest共58個工件，逐檔size與SHA256驗證一致 |
+| 根因 | 舊`apps/breakout_quality_strategy_compare.py`雖正常以exit code 0轉呼叫統一入口，但轉送時把program name硬設為`apps/breakout_quality.py`，使help首行顯示`breakout_quality.py strategy-compare`；quick gate依舊CLI契約要求看到`breakout_quality_strategy_compare.py`，因此判FAIL |
+| 唯一修正 | 舊adapter轉送時保留自己的program name；統一入口新增泛用legacy command-entrypoint alias解析，只有alias已代表該子命令時不再把command附加到`sys.argv[0]`。舊入口仍不建立argparse或第二套strategy compare邏輯 |
+| 獨立驗證 | `python apps/breakout_quality_strategy_compare.py --help`回傳0並顯示`usage: breakout_quality_strategy_compare.py ...`；`python apps/breakout_quality.py strategy-compare --help`回傳0並維持`usage: breakout_quality.py strategy-compare ...`。全專案251個Python檔編譯／AST通過、無bare except、無top-level import cycle、core／config／filters／strategies無反向依賴apps |
+| Dataset／模型 | 不需重建Dataset或relabel；不改continuous-ranker、PIT folds、checkpoint、Score、9A、Target、optimizer、buy-sort、portfolio replay或正式策略參數 |
+| 下一步 | 使用者套用修補後重跑formal suite；若quick gate通過，即繼續建立Selection point-in-time Scores，不新增其他模型或排序變更 |
 
 
 ## 4. 已排除或暫停的方向

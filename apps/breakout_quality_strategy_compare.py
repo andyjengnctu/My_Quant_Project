@@ -18,7 +18,7 @@ def main(argv=None) -> int:
     forwarded = list(sys.argv[1:] if argv is None else argv)
     return int(
         breakout_quality_main(
-            ["apps/breakout_quality.py", "strategy-compare", *forwarded]
+            ["apps/breakout_quality_strategy_compare.py", "strategy-compare", *forwarded]
         )
         or 0
     )
