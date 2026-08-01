@@ -31,9 +31,10 @@ from config.breakout_policy import (
 # - continuous PIT ranker: "strategy_aligned_no_time_pass_magnitude_mse"
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_pass_magnitude_mse"
 
-# 所有 breakout-quality 模型流程共用同一個非負整數 Seed。
-# 切換 experiment profile 不會暗中改變 Seed；CLI --seed 只用於單次覆寫。
+# (AI註: Binary／canonical model流程的正式Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
+# (AI註: 本輪Selection PIT continuous-ranker研究依交接契約固定Seed 1；獨立於既有9A Seed 42，避免改寫canonical binary工件identity。)
+BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED = 1
 
 
 # =============================================================================
@@ -876,6 +877,8 @@ def _resolve_auto(value: str, *, auto_value: str, resolved_default: str) -> str:
 
 
 def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
+    if int(BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED) < 0:
+        raise ValueError("workflow random seed必須是非負整數")
     profile = get_breakout_quality_experiment_profile(
         BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
     )
@@ -977,7 +980,7 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
             else str(profile.continuous_target_id)
         ),
         training_label_scope=str(profile.training_label_scope),
-        seed=resolve_breakout_quality_random_seed(),
+        seed=int(BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED),
         point_in_time_score_start_date=str(
             BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE
         ),
@@ -1022,6 +1025,7 @@ __all__ = [
     'BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE',
     'BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM',
     'BREAKOUT_QUALITY_RANDOM_SEED',
+    'BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED',
     'BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD',
     'BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY',
     'BREAKOUT_QUALITY_FINAL_REFIT_MODE',

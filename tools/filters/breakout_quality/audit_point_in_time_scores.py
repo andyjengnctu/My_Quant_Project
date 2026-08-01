@@ -14,6 +14,10 @@ import pandas as pd
 
 from config.breakout_quality import get_breakout_quality_workflow_settings
 from filters.breakout_quality.artifacts import build_file_manifest
+from filters.breakout_quality.continuous_target import (
+    TARGET_MANIFEST_FILENAME,
+    resolve_continuous_target_dir,
+)
 from filters.breakout_quality.contract import (
     DEFAULT_MODEL_FILENAME,
     LABEL_PASS,
@@ -39,7 +43,7 @@ from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     load_continuous_ranker_data,
 )
 
-AUDIT_SCHEMA_VERSION = 2
+AUDIT_SCHEMA_VERSION = 3
 DRIFT_MEAN_SHIFT_STD_THRESHOLD = 1.0
 _ORDERABLE_PIT_SCORE_COLUMN = "__pit_breakout_quality_score"
 
@@ -781,6 +785,13 @@ def _render_markdown(payload: dict[str, Any]) -> str:
 
     sources = payload.get("source_artifacts") or {}
     outputs = payload.get("report_artifacts") or {}
+
+    def source_path(name: str) -> str:
+        record = sources.get(name, "-")
+        if isinstance(record, dict):
+            return str(record.get("path") or record.get("filename") or "-")
+        return str(record)
+
     lines.extend(
         [
             "",
@@ -795,9 +806,10 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "",
             "## 8. 工件",
             "",
-            f"- PIT manifest：`{sources.get('point_in_time_manifest', '-')}`",
-            f"- PIT Scores：`{sources.get('point_in_time_scores', '-')}`",
-            f"- PIT coverage：`{sources.get('point_in_time_coverage', '-')}`",
+            f"- PIT manifest：`{source_path('point_in_time_manifest')}`",
+            f"- PIT Scores：`{source_path('point_in_time_scores')}`",
+            f"- PIT coverage：`{source_path('point_in_time_coverage')}`",
+            f"- Continuous Target manifest：`{source_path('continuous_target_manifest')}`",
             f"- Markdown 易讀報表：`{outputs.get('markdown', '-')}`",
             f"- 完整指標 JSON：`{outputs.get('json', '-')}`",
         ]
@@ -904,6 +916,14 @@ def main(argv=None) -> int:
         args.model_architecture,
         args.experiment_profile,
     )
+    target_manifest_path = (
+        resolve_continuous_target_dir(
+            PROJECT_ROOT,
+            args.filter_id,
+            target_id=str(bundle.profile.continuous_target_id),
+        )
+        / TARGET_MANIFEST_FILENAME
+    )
     payload = {
         "schema_version": AUDIT_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -943,9 +963,22 @@ def main(argv=None) -> int:
             "future_target_used_for_runtime_sort": False,
         },
         "source_artifacts": {
-            "point_in_time_manifest": str(manifest_path),
-            "point_in_time_scores": str(score_path),
-            "point_in_time_coverage": str(coverage_path),
+            "point_in_time_manifest": {
+                "path": str(manifest_path),
+                **build_file_manifest(manifest_path),
+            },
+            "point_in_time_scores": {
+                "path": str(score_path),
+                **build_file_manifest(score_path),
+            },
+            "point_in_time_coverage": {
+                "path": str(coverage_path),
+                **build_file_manifest(coverage_path),
+            },
+            "continuous_target_manifest": {
+                "path": str(target_manifest_path),
+                **build_file_manifest(target_manifest_path),
+            },
         },
         "report_artifacts": {
             "markdown": str(output_markdown),

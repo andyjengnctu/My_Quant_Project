@@ -160,10 +160,16 @@ def _ranking_enabled_for_rows(rows):
 
 
 def _quality_score_desc_key(item):
+    rank_payload = item.get("breakout_quality_rank")
+    explicitly_unavailable = (
+        isinstance(rank_payload, dict)
+        and not bool(rank_payload.get("available", False))
+    )
     score = _as_finite_float(item.get("breakout_quality_score"), default=math.nan)
-    if not math.isfinite(score):
-        raise ValueError(f"啟用 quality score ranking 的候選缺少有效分數: ticker={item.get('ticker')}")
-    return -score
+    if explicitly_unavailable or not math.isfinite(score):
+        # (AI註: 缺少PIT Score不是REJECT，也不得填0；排在有效Score後再完整沿用原buy-sort。)
+        return (1, 0.0)
+    return (0, -score)
 
 
 def sort_candidate_rows(rows, method=None):
@@ -212,7 +218,7 @@ def sort_candidate_rows(rows, method=None):
             key=lambda item: (
                 _quality_score_desc_key(item),
                 -_as_finite_float(item.get('sort_value'), default=-math.inf),
-                str(item.get('ticker') or ''),
+                _descending_text_key(item.get('ticker')),
             )
         )
     else:

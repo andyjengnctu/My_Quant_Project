@@ -406,36 +406,81 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         if quality_ranking:
             quality_rows = []
             member_quality_rank_by_key = {}
+            availability_flags = set()
+            score_sources = set()
             for row in group_rows:
                 member_key = str(row.get("ensemble_member_key") or "").strip()
                 rank_payload = row.get("breakout_quality_rank")
                 if not isinstance(rank_payload, dict):
+                    raw_score = row.get("breakout_quality_score")
+                    try:
+                        parsed_score = float(raw_score)
+                    except (TypeError, ValueError):
+                        parsed_score = float("nan")
                     rank_payload = {
-                        "score": row.get("breakout_quality_score"),
-                        "available": True,
-                        "unavailable_reason": "",
+                        "score": parsed_score if math.isfinite(parsed_score) else None,
+                        "available": bool(math.isfinite(parsed_score)),
+                        "unavailable_reason": "" if math.isfinite(parsed_score) else "missing_score",
                         "score_date": row.get("breakout_quality_score_date"),
+                        "score_source": row.get("breakout_quality_score_source") or "canonical_runtime",
                         "shared_group_score": True,
                         "filter_id": str(getattr(row.get("params_obj"), "breakout_quality_filter_id", "") or ""),
                     }
-                score = float(rank_payload.get("score", float("nan")))
+                available = bool(rank_payload.get("available", False))
                 score_date = str(rank_payload.get("score_date") or "").strip()
-                if not math.isfinite(score) or not score_date or not bool(rank_payload.get("available", False)):
-                    raise ValueError(f"啟用 quality ranking 的 ensemble 候選缺少有效原始事件分數: ticker={ticker}")
+                score_source = str(rank_payload.get("score_source") or "canonical_runtime").strip()
+                availability_flags.add(available)
+                score_sources.add(score_source)
                 normalized_rank = dict(rank_payload)
-                normalized_rank.update({"score": score, "score_date": score_date, "available": True})
-                quality_rows.append((score, score_date, normalized_rank))
+                normalized_rank.update({
+                    "available": available,
+                    "score_date": score_date,
+                    "score_source": score_source,
+                })
+                if available:
+                    try:
+                        score = float(rank_payload.get("score"))
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"啟用 quality ranking 的 ensemble 候選分數不是有限數值: ticker={ticker}"
+                        ) from exc
+                    if not math.isfinite(score) or not score_date:
+                        raise ValueError(
+                            f"啟用 quality ranking 的 ensemble 候選缺少有效原始事件分數: ticker={ticker}"
+                        )
+                    normalized_rank["score"] = score
+                    quality_rows.append((score, score_date, normalized_rank))
+                else:
+                    normalized_rank["score"] = None
                 if member_key:
                     member_quality_rank_by_key[member_key] = dict(normalized_rank)
 
-            quality_rows.sort(key=lambda item: (item[0], item[1]))
-            median_score, median_score_date, median_rank = quality_rows[(len(quality_rows) - 1) // 2]
-            representative["ensemble_median_quality_score"] = float(median_score)
-            representative["ensemble_median_quality_score_date"] = median_score_date
-            representative["ensemble_quality_score_dates"] = sorted({item[1] for item in quality_rows if item[1]})
-            representative["breakout_quality_score"] = float(median_score)
-            representative["breakout_quality_score_date"] = median_score_date
-            representative["breakout_quality_rank"] = dict(median_rank)
+            if len(availability_flags) > 1:
+                raise ValueError(f"同一 ticker 的 ensemble members Score availability不一致: ticker={ticker}")
+            if len(score_sources) > 1:
+                raise ValueError(f"同一 ticker 的 ensemble members Score source不一致: ticker={ticker}")
+
+            if availability_flags == {True}:
+                quality_rows.sort(key=lambda item: (item[0], item[1]))
+                median_score, median_score_date, median_rank = quality_rows[(len(quality_rows) - 1) // 2]
+                representative["ensemble_median_quality_score"] = float(median_score)
+                representative["ensemble_median_quality_score_date"] = median_score_date
+                representative["ensemble_quality_score_dates"] = sorted({item[1] for item in quality_rows if item[1]})
+                representative["breakout_quality_score"] = float(median_score)
+                representative["breakout_quality_score_date"] = median_score_date
+                representative["breakout_quality_score_source"] = str(median_rank.get("score_source") or "")
+                representative["breakout_quality_rank"] = dict(median_rank)
+            else:
+                fallback_rank = next(iter(member_quality_rank_by_key.values()), {})
+                representative["ensemble_median_quality_score"] = None
+                representative["ensemble_median_quality_score_date"] = str(fallback_rank.get("score_date") or "")
+                representative["ensemble_quality_score_dates"] = sorted(
+                    {str(item.get("score_date") or "") for item in member_quality_rank_by_key.values()} - {""}
+                )
+                representative["breakout_quality_score"] = None
+                representative["breakout_quality_score_date"] = str(fallback_rank.get("score_date") or "")
+                representative["breakout_quality_score_source"] = str(fallback_rank.get("score_source") or "")
+                representative["breakout_quality_rank"] = dict(fallback_rank)
             representative["ensemble_member_quality_rank_by_key"] = member_quality_rank_by_key
         # # (AI註: STOP 後 Re-entry 必須保留原始共識 member 的各自參數與原始 breakout score；
         # #        只保存代表 member 會讓 min_agree>1 的 re-entry 共識或 score 語意分叉。)
@@ -448,11 +493,18 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
 
     def _quality_key(item):
         if not quality_ranking:
-            return 0.0
-        value = float(item.get("ensemble_median_quality_score", item.get("breakout_quality_score", float("nan"))))
+            return (0, 0.0)
+        rank_payload = item.get("breakout_quality_rank")
+        if isinstance(rank_payload, dict) and not bool(rank_payload.get("available", False)):
+            return (1, 0.0)
+        raw_value = item.get("ensemble_median_quality_score", item.get("breakout_quality_score"))
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            return (1, 0.0)
         if not math.isfinite(value):
-            raise ValueError(f"啟用 quality ranking 的 aggregated candidate 缺少分數: ticker={item.get('ticker')}")
-        return -value
+            return (1, 0.0)
+        return (0, -value)
 
     if active_sort_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         aggregated.sort(
@@ -531,6 +583,14 @@ def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
         "historical_trade_count": int(row.get("hist_trade_count", 0) or 0),
         "breakout_quality_score": _optional_float(row.get("breakout_quality_score")),
         "breakout_quality_score_date": str(row.get("breakout_quality_score_date") or ""),
+        "breakout_quality_score_source": str(row.get("breakout_quality_score_source") or ""),
+        "breakout_quality_score_available": bool(
+            isinstance(row.get("breakout_quality_rank"), dict)
+            and row["breakout_quality_rank"].get("available", False)
+        ),
+        "breakout_quality_score_unavailable_reason": str(
+            (row.get("breakout_quality_rank") or {}).get("unavailable_reason") or ""
+        ),
     }
 
 

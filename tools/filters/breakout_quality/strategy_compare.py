@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import copy
 import hashlib
 import json
@@ -18,6 +19,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+    get_breakout_quality_workflow_settings,
 )
 from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_MODE_STATIC,
@@ -37,7 +39,16 @@ from core.rolling_oos_params import (
 )
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from filters.breakout_quality.artifacts import load_runtime_artifact_contract
+from filters.breakout_quality.ranking_score_store import (
+    SCORE_SOURCE_CANONICAL_RUNTIME,
+    SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    SUPPORTED_RANKING_SCORE_SOURCES,
+    load_selection_point_in_time_ranking_contract,
+    load_selection_point_in_time_score_table,
+)
+from filters.breakout_quality.runtime import breakout_quality_ranking_source_context
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
+from tools.filters.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
 from tools.filters.breakout_quality.trade_attribution import (
     ATTRIBUTION_SCHEMA_VERSION,
     write_trade_attribution_outputs,
@@ -51,7 +62,7 @@ from tools.portfolio_sim.simulation_runner import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 COMPARISON_MODE_HARD_FILTER = "hard-filter"
 COMPARISON_MODE_SCORE_RANKING = "score-ranking"
 COMPARISON_MODES = (COMPARISON_MODE_HARD_FILTER, COMPARISON_MODE_SCORE_RANKING)
@@ -103,7 +114,15 @@ def _parse_args(argv=None):
     )
     parser.add_argument("--dataset", choices=("reduced", "full"), default=DEFAULT_DATASET_PROFILE)
     parser.add_argument("--comparison-mode", choices=COMPARISON_MODES, default=COMPARISON_MODE_HARD_FILTER)
-    parser.add_argument("--params", default=None, help="正式 OOS 可明確指定 rolling OOS active-param JSON；亦可用 --param-policy 自動解析。")
+    parser.add_argument("--filter-id", default=BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
+    parser.add_argument(
+        "--score-source", choices=SUPPORTED_RANKING_SCORE_SOURCES,
+        default=SCORE_SOURCE_CANONICAL_RUNTIME,
+        help="score-ranking使用的分數來源；hard-filter只接受canonical_runtime。",
+    )
+    parser.add_argument("--model-architecture", default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
+    parser.add_argument("--experiment-profile", default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE)
+    parser.add_argument("--params", default=None, help="可明確指定active-param JSON；亦可由score source與--param-policy自動解析。")
     parser.add_argument(
         "--param-policy", choices=PARAM_POLICIES, default=PARAM_POLICY_AUTO,
         help="可指定 base-finalist-best 或 base-finalists-agree；auto 沿用 --params。",
@@ -274,11 +293,20 @@ def _validate_requested_param_policy(source: dict[str, Any], requested_policy: s
     }
 
 
-def _resolve_params_path(*, root: Path, params_path: str | None, param_policy: str, allow_static_diagnostic: bool) -> Path:
+def _resolve_params_path(
+    *, root: Path, params_path: str | None, param_policy: str,
+    allow_static_diagnostic: bool, score_source: str = SCORE_SOURCE_CANONICAL_RUNTIME,
+) -> Path:
     if params_path:
         requested = Path(params_path)
         return requested.resolve() if requested.is_absolute() else (root / requested).resolve()
     if param_policy != PARAM_POLICY_AUTO:
+        if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            return (
+                root / "models" / "research" / "breakout_quality"
+                / "selection_strategy_realization"
+                / PARAM_POLICY_SPECS[param_policy]["filename"]
+            ).resolve()
         return (root / "models" / PARAM_POLICY_SPECS[param_policy]["filename"]).resolve()
     if allow_static_diagnostic:
         return Path(resolve_default_primary_param_source_record(str(root))["path"]).resolve()
@@ -731,7 +759,7 @@ def _format_metric(value: Any, *, digits: int, unit: str = "", signed: bool = Fa
     return f"{numeric:{sign}.{digits}f}{unit}"
 
 
-def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
+def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagnostics=None) -> str:
     labels = _comparison_labels(str(metadata["comparison_mode"]))
     active_yearly_column = f"{labels['active_name']}_return_pct"
     rows = [
@@ -762,6 +790,7 @@ def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
         f"- 比較設計：`{metadata['comparison_design']}`",
         f"- 歷史 active-param 無前視：`{metadata['lookahead_safe_active_param_schedule']}`",
         f"- Dataset：`{metadata['dataset']}`",
+        f"- Score source：`{metadata.get('score_source')}`",
         f"- Benchmark：`{metadata['benchmark_ticker']}`",
         f"- 唯一差異：`{labels['difference_text']}`",
         (
@@ -797,19 +826,71 @@ def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
                 f"| {_format_metric(row.get('delta_pct'), digits=2, unit='%', signed=True)} "
                 f"| {'是' if row.get('is_full_year') else '否'} |"
             )
+    if strategy_diagnostics:
+        left = strategy_diagnostics.get("no_filter") or {}
+        right = strategy_diagnostics.get("score_ranking") or {}
+        lines += [
+            "", "## Selection 選股診斷（Future Target僅於回放後join）", "",
+            "| 指標 | Baseline | Score Sort | 差異 |",
+            "|---|---:|---:|---:|",
+        ]
+        for label, key, digits in (
+            ("Orderable Score coverage", "orderable_score_coverage_rate", 4),
+            ("選中候選 Target percentile", "selected_target_percentile_mean", 4),
+            ("Target top-k retention", "target_top_k_retention_mean", 4),
+            ("Target opportunity gap (R)", "target_opportunity_gap_r_mean", 4),
+            ("選中候選 Target mean (R)", "selected_target_mean_r", 4),
+        ):
+            lv, rv = left.get(key), right.get(key)
+            dv = None if lv is None or rv is None else float(rv) - float(lv)
+            lines.append(
+                f"| {label} | {_format_metric(lv, digits=digits)} | "
+                f"{_format_metric(rv, digits=digits)} | {_format_metric(dv, digits=digits, signed=True)} |"
+            )
+        lines += [
+            "",
+            "> Future Target未進入候選排序、資金配置或成交決策；上述診斷只在兩組策略回放完成後離線計算。",
+        ]
     if not metadata["lookahead_safe_active_param_schedule"]:
         lines += ["", "> 警告：本次使用單一／static 參數，只能視為敏感度診斷，不是無前視 OOS 部署證據。"]
-    limitation = (
-        "> 本報表是已查看舊 OOS 後的探索性 score-ranking 機制比較；即使改善，也不得直接視為部署證據，需由全新 forward period 驗證。"
-        if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
-        else "> 本報表只驗證目前固定 active 操作點能否改善策略經濟效果；不得依結果回頭調整 threshold、模型或訓練條件。"
-    )
+    if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING:
+        limitation = (
+            "> 本報表使用Selection point-in-time Scores與當期歷史active params比較排序機制；"
+            "可用於Selection內決定是否進入參數適應，但正式效果仍須由凍結後OOS驗證。"
+            if metadata.get("score_source") == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            else "> 本報表是既有forward period的score-ranking機制比較；不得依結果回頭調整模型或排序規則。"
+        )
+    else:
+        limitation = "> 本報表只驗證目前固定active操作點能否改善策略經濟效果；不得依結果回頭調整threshold、模型或訓練條件。"
     lines += ["", limitation, ""]
     return "\n".join(lines)
 
 
-def _run_scenario(*, name, data_dir, param_source_kind, params, start_date, end_date, max_positions, enable_rotation, quiet, replay_counts=None, replay_execution_rows=None):
+def _run_scenario(
+    *, name, data_dir, param_source_kind, params, start_date, end_date,
+    max_positions, enable_rotation, quiet, replay_counts=None,
+    replay_execution_rows=None, ranking_source=None,
+):
     print(f"\n[{name}] 建立市場與訊號快取")
+    source_context = (
+        nullcontext()
+        if not ranking_source
+        else breakout_quality_ranking_source_context(**ranking_source)
+    )
+    with source_context:
+        return _run_scenario_inside_source_context(
+            name=name, data_dir=data_dir, param_source_kind=param_source_kind,
+            params=params, start_date=start_date, end_date=end_date,
+            max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
+            replay_counts=replay_counts, replay_execution_rows=replay_execution_rows,
+        )
+
+
+def _run_scenario_inside_source_context(
+    *, name, data_dir, param_source_kind, params, start_date, end_date,
+    max_positions, enable_rotation, quiet, replay_counts=None,
+    replay_execution_rows=None,
+):
     if param_source_kind == "single_param":
         context = load_portfolio_market_context(str(data_dir), params, verbose=not quiet)
         print(f"[{name}] 執行 {start_date} ～ {end_date}")
@@ -872,6 +953,140 @@ def _flatten_candidate_replay_rows(replay_counts: dict[str, dict[str, Any]], fie
         ["trade_date", "ticker", "signal_date", "candidate_type"],
         kind="mergesort",
     ).reset_index(drop=True)
+
+
+
+def _flatten_selected_buy_rows(trade_history: pd.DataFrame) -> pd.DataFrame:
+    frame = pd.DataFrame(trade_history).copy()
+    columns = ["ticker", "trade_date", "signal_date", "type"]
+    if frame.empty or not {"Date", "Ticker", "Type"}.issubset(frame.columns):
+        return pd.DataFrame(columns=columns)
+    buy_mask = frame["Type"].fillna("").astype(str).str.startswith("買進 (")
+    out = frame.loc[buy_mask].copy()
+    if out.empty:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame({
+        "ticker": out["Ticker"].fillna("").astype(str).str.strip(),
+        "trade_date": pd.to_datetime(out["Date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+        "signal_date": pd.to_datetime(
+            out.get("買訊日", pd.Series("", index=out.index)), errors="coerce"
+        ).dt.strftime("%Y-%m-%d"),
+        "type": out["Type"].fillna("").astype(str),
+    })
+    return out.dropna(subset=["trade_date"]).sort_values(
+        ["trade_date", "ticker", "signal_date"], kind="mergesort"
+    ).reset_index(drop=True)
+
+
+def _selection_target_lookup(*, root: Path, filter_id: str, architecture: str, profile: str) -> pd.DataFrame:
+    scores = load_selection_point_in_time_score_table(
+        str(root), filter_id, architecture, profile
+    ).reset_index()
+    bundle = load_continuous_ranker_data(
+        filter_id=filter_id,
+        model_architecture=architecture,
+        experiment_profile=profile,
+        preload_feature_bank=False,
+        allow_stale_source=False,
+        project_root=root,
+    )
+    groups = bundle.group_table[["group_index", "ticker", "date", "label"]].copy()
+    groups["ticker"] = groups["ticker"].fillna("").astype(str).str.strip()
+    groups["date"] = pd.to_datetime(groups["date"], errors="raise").dt.strftime("%Y-%m-%d")
+    groups["target_raw_r"] = bundle.raw_target
+    groups["target_available"] = bundle.target_valid & pd.Series(bundle.raw_target).map(math.isfinite).to_numpy()
+    joined = scores.merge(groups, on="group_index", how="left", validate="one_to_one", suffixes=("", "_dataset"))
+    mismatch = (
+        joined["ticker"] != joined["ticker_dataset"]
+    ) | (
+        joined["date"] != joined["date_dataset"]
+    )
+    if bool(mismatch.any()):
+        raise ValueError("Selection PIT Score與Dataset group identity不一致")
+    return joined[[
+        "ticker", "date", "group_index", "breakout_quality_score", "fold_id",
+        "model_information_cutoff", "label", "target_raw_r", "target_available",
+    ]].rename(columns={"date": "signal_date"})
+
+
+def _strategy_selection_diagnostics(
+    *, orderable: pd.DataFrame, selected: pd.DataFrame, lookup: pd.DataFrame,
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    keys = ["ticker", "signal_date"]
+    orderable_joined = orderable.merge(lookup, on=keys, how="left", validate="many_to_one")
+    score_available = pd.to_numeric(
+        orderable_joined["breakout_quality_score_y"], errors="coerce"
+    ).map(math.isfinite) if "breakout_quality_score_y" in orderable_joined else pd.Series(False, index=orderable_joined.index)
+    runtime_score_available = pd.to_numeric(
+        orderable_joined.get("breakout_quality_score_x", pd.Series(float("nan"), index=orderable_joined.index)),
+        errors="coerce",
+    ).map(math.isfinite)
+    declared_runtime_available = orderable_joined.get(
+        "breakout_quality_score_available", pd.Series(False, index=orderable_joined.index)
+    ).fillna(False).astype(bool)
+    runtime_rows = declared_runtime_available | runtime_score_available
+    if bool(runtime_rows.any()):
+        expected = pd.to_numeric(
+            orderable_joined.loc[runtime_rows, "breakout_quality_score_y"], errors="coerce"
+        )
+        actual = pd.to_numeric(
+            orderable_joined.loc[runtime_rows, "breakout_quality_score_x"], errors="coerce"
+        )
+        mismatch = (~expected.map(math.isfinite)) | (~actual.map(math.isfinite)) | ((actual - expected).abs() > 1e-12)
+        if bool(mismatch.any()):
+            raise ValueError("策略replay使用的Breakout Quality Score與PIT score table不一致")
+    target_available = orderable_joined.get("target_available", pd.Series(False, index=orderable_joined.index)).fillna(False).astype(bool)
+    selected_joined = selected.merge(lookup, on=keys, how="left", validate="many_to_one")
+    selected_joined = selected_joined.merge(
+        orderable_joined[["ticker", "trade_date", "signal_date", "target_raw_r"]].drop_duplicates(),
+        on=["ticker", "trade_date", "signal_date"], how="left", suffixes=("", "_orderable"),
+    )
+
+    day_rows = []
+    valid_orderable = orderable_joined.loc[target_available].copy()
+    for trade_date, day in valid_orderable.groupby("trade_date", sort=True):
+        chosen = selected_joined[selected_joined["trade_date"] == trade_date]
+        chosen_keys = set(zip(chosen["ticker"], chosen["signal_date"]))
+        if not chosen_keys:
+            continue
+        day = day.drop_duplicates(["ticker", "signal_date"], keep="first").copy()
+        day["target_percentile"] = day["target_raw_r"].rank(method="average", pct=True)
+        selected_day = day[[
+            (ticker, signal_date) in chosen_keys
+            for ticker, signal_date in zip(day["ticker"], day["signal_date"])
+        ]]
+        if selected_day.empty:
+            continue
+        k = len(selected_day)
+        top = day.nlargest(k, "target_raw_r", keep="first")
+        top_keys = set(zip(top["ticker"], top["signal_date"]))
+        retained = sum(key in top_keys for key in chosen_keys)
+        day_rows.append({
+            "trade_date": trade_date,
+            "selected_count": k,
+            "selected_target_mean_r": float(selected_day["target_raw_r"].mean()),
+            "selected_target_percentile_mean": float(selected_day["target_percentile"].mean()),
+            "target_top_k_retention": float(retained / k),
+            "target_opportunity_gap_r": float(top["target_raw_r"].mean() - selected_day["target_raw_r"].mean()),
+        })
+    daily = pd.DataFrame(day_rows)
+    metrics = {
+        "orderable_occurrences": int(len(orderable_joined)),
+        "orderable_score_covered": int(score_available.sum()),
+        "orderable_score_coverage_rate": float(score_available.mean()) if len(score_available) else None,
+        "runtime_scored_orderable_occurrences": int(runtime_score_available.sum()),
+        "runtime_score_identity_match": True,
+        "orderable_target_covered": int(target_available.sum()),
+        "orderable_target_coverage_rate": float(target_available.mean()) if len(target_available) else None,
+        "selected_buy_rows": int(len(selected_joined)),
+        "diagnostic_days": int(len(daily)),
+        "selected_target_percentile_mean": float(daily["selected_target_percentile_mean"].mean()) if not daily.empty else None,
+        "target_top_k_retention_mean": float(daily["target_top_k_retention"].mean()) if not daily.empty else None,
+        "target_opportunity_gap_r_mean": float(daily["target_opportunity_gap_r"].mean()) if not daily.empty else None,
+        "selected_target_mean_r": float(daily["selected_target_mean_r"].mean()) if not daily.empty else None,
+        "future_target_used_for_runtime_sort": False,
+    }
+    return metrics, orderable_joined, selected_joined
 
 
 def run_no_filter_candidate_replay_from_metadata(
@@ -1007,44 +1222,107 @@ def _resolve_comparison_period(contract) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=None, param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False, fixed_risk=None, allow_static_diagnostic=False, comparison_mode=COMPARISON_MODE_HARD_FILTER, quiet=False):
+def run_comparison(
+    *, project_root=PROJECT_ROOT, dataset="full", params_path=None,
+    param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False,
+    fixed_risk=None, allow_static_diagnostic=False,
+    comparison_mode=COMPARISON_MODE_HARD_FILTER,
+    filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
+    model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+    experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+    quiet=False,
+):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
+    score_source = str(score_source)
+    filter_id = str(filter_id)
+    model_architecture = str(model_architecture)
+    experiment_profile = str(experiment_profile)
     labels = _comparison_labels(comparison_mode)
-    filter_id = BREAKOUT_QUALITY_DEFAULT_FILTER_ID
-    try:
-        contract = load_runtime_artifact_contract(str(root), filter_id)
-    except (FileNotFoundError, ValueError) as exc:
-        raise RuntimeError(
-            "策略對照需要 active breakout-quality 的正式 forward-OOS scores.csv；"
-            "請先執行 `python apps/breakout_quality.py export-scores "
-            f"--filter-id {filter_id} --experiment-profile {BREAKOUT_QUALITY_EXPERIMENT_PROFILE} "
-            "--scope forward_oos`。"
-        ) from exc
-    manifest_architecture = str(contract.manifest.get("model_architecture") or "")
-    manifest_profile = str(contract.manifest.get("experiment_profile") or "")
-    if manifest_architecture != BREAKOUT_QUALITY_MODEL_ARCHITECTURE or manifest_profile != BREAKOUT_QUALITY_EXPERIMENT_PROFILE:
-        raise ValueError(
-            "正式 runtime artifact 與 active breakout-quality policy 不一致: "
-            f"artifact={manifest_architecture}/{manifest_profile}, "
-            f"policy={BREAKOUT_QUALITY_MODEL_ARCHITECTURE}/{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}"
+    if score_source not in SUPPORTED_RANKING_SCORE_SOURCES:
+        raise ValueError(f"不支援的 score source: {score_source!r}")
+    if comparison_mode == COMPARISON_MODE_HARD_FILTER and score_source != SCORE_SOURCE_CANONICAL_RUNTIME:
+        raise ValueError("hard-filter策略比較只接受canonical_runtime score source")
+
+    runtime_contract = None
+    pit_contract = None
+    ranking_source = None
+    if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
+            raise ValueError("Selection PIT score source只支援score-ranking比較")
+        pit_contract = load_selection_point_in_time_ranking_contract(
+            str(root), filter_id, model_architecture, experiment_profile
         )
-    artifact_threshold = float(contract.manifest.get("fixed_evaluation_threshold", float("nan")))
-    configured_threshold = float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD)
-    if not math.isclose(artifact_threshold, configured_threshold, rel_tol=0.0, abs_tol=0.0):
-        raise ValueError(
-            "active threshold 與模型 OOS 前固定 threshold 不一致: "
-            f"artifact={artifact_threshold}, policy={configured_threshold}"
+        workflow_settings = get_breakout_quality_workflow_settings()
+        if (
+            workflow_settings.filter_id == filter_id
+            and workflow_settings.model_architecture == model_architecture
+            and workflow_settings.experiment_profile == experiment_profile
+            and int(pit_contract.seed) != int(workflow_settings.seed)
+        ):
+            raise ValueError(
+                "Selection PIT工件seed與目前workflow不一致，必須重建："
+                f"artifact={pit_contract.seed}, workflow={workflow_settings.seed}"
+            )
+        manifest_architecture = pit_contract.model_architecture
+        manifest_profile = pit_contract.experiment_profile
+        start_date = pit_contract.available_from
+        end_date = pit_contract.available_through
+        ranking_source = {
+            "score_source": score_source,
+            "model_architecture": manifest_architecture,
+            "experiment_profile": manifest_profile,
+        }
+    else:
+        try:
+            runtime_contract = load_runtime_artifact_contract(str(root), filter_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise RuntimeError(
+                "策略對照需要 active breakout-quality 的正式 forward-OOS scores.csv；"
+                "請先執行 export-scores --scope forward_oos。"
+            ) from exc
+        manifest_architecture = str(runtime_contract.manifest.get("model_architecture") or "")
+        manifest_profile = str(runtime_contract.manifest.get("experiment_profile") or "")
+        if manifest_architecture != model_architecture or manifest_profile != experiment_profile:
+            raise ValueError(
+                "runtime artifact與指定模型identity不一致: "
+                f"artifact={manifest_architecture}/{manifest_profile}, "
+                f"requested={model_architecture}/{experiment_profile}"
+            )
+        artifact_threshold = float(
+            runtime_contract.manifest.get("fixed_evaluation_threshold", float("nan"))
         )
+        configured_threshold = float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD)
+        if not math.isclose(artifact_threshold, configured_threshold, rel_tol=0.0, abs_tol=0.0):
+            raise ValueError(
+                "active threshold與模型OOS前固定threshold不一致: "
+                f"artifact={artifact_threshold}, policy={configured_threshold}"
+            )
+        start_date, end_date = _resolve_comparison_period(runtime_contract)
+        if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
+            ranking_source = {
+                "score_source": SCORE_SOURCE_CANONICAL_RUNTIME,
+                "model_architecture": None,
+                "experiment_profile": None,
+            }
+
     param_policy = str(param_policy)
     resolved_params_path = _resolve_params_path(
         root=root, params_path=params_path, param_policy=param_policy,
-        allow_static_diagnostic=allow_static_diagnostic,
+        allow_static_diagnostic=allow_static_diagnostic, score_source=score_source,
     )
     if not resolved_params_path.is_file():
-        raise FileNotFoundError(f"找不到策略比較參數檔: {resolved_params_path}")
+        source_hint = (
+            "請先完成Selection nested ROOS active-param工件"
+            if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            else "請先完成正式rolling OOS active-param工件"
+        )
+        raise FileNotFoundError(
+            f"找不到策略比較參數檔: {resolved_params_path}；{source_hint}。"
+        )
     if fixed_risk is not None and not (0.0 < float(fixed_risk) <= 1.0):
-        raise ValueError("fixed_risk 必須介於 0 與 1")
+        raise ValueError("fixed_risk必須介於0與1")
     param_source = _load_param_source(resolved_params_path)
     param_policy_contract = _validate_requested_param_policy(param_source, param_policy)
     (
@@ -1062,44 +1340,170 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         comparison_mode=comparison_mode,
     )
 
-    is_rolling_source = param_source_kind in {"rolling_oos_param_schedule", "rolling_active_param_ensemble"}
+    is_rolling_source = param_source_kind in {
+        "rolling_oos_param_schedule", "rolling_active_param_ensemble"
+    }
     if not is_rolling_source and not allow_static_diagnostic:
         raise ValueError(
-            "單一／static 參數跨歷史 OOS 回放無法證明無前視；"
-            "請改用 rolling OOS active-param JSON，或明確加 --allow-static-diagnostic 僅作敏感度診斷。"
+            "單一／static參數跨歷史回放無法證明無前視；"
+            "請使用rolling active-param JSON，或加--allow-static-diagnostic僅作敏感度診斷。"
         )
-
     data_dir = Path(get_dataset_dir(str(root), dataset)).resolve()
-    # (AI註: Score 工件需涵蓋首個 OOS 執行日前的訊號 anchor；策略回放本身仍從正式 OOS 執行起日開始。)
-    start_date, end_date = _resolve_comparison_period(contract)
     if param_source_kind == "rolling_oos_param_schedule":
         param_start, param_end = get_active_param_date_range(param_source["payload"])
     elif param_source_kind == "rolling_active_param_ensemble":
         param_start, param_end = get_active_param_ensemble_date_range(param_source["payload"])
     else:
         param_start, param_end = "", ""
-    if is_rolling_source and (pd.Timestamp(param_start) > pd.Timestamp(start_date) or pd.Timestamp(param_end) < pd.Timestamp(end_date)):
+    if is_rolling_source and (
+        pd.Timestamp(param_start) > pd.Timestamp(start_date)
+        or pd.Timestamp(param_end) < pd.Timestamp(end_date)
+    ):
         raise ValueError(
-            "rolling active-param 期間未完整覆蓋 breakout-quality forward OOS："
-            f"params={param_start}~{param_end}, filter={start_date}~{end_date}"
+            "rolling active-param期間未完整覆蓋策略比較期間："
+            f"params={param_start}~{param_end}, comparison={start_date}~{end_date}"
         )
-    baseline_payload = _run_scenario(name="no_filter", data_dir=data_dir, param_source_kind=param_source_kind, params=no_filter_params, start_date=start_date, end_date=end_date, max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet)
-    quality_payload = _run_scenario(name=labels["active_name"], data_dir=data_dir, param_source_kind=param_source_kind, params=quality_params, start_date=start_date, end_date=end_date, max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet)
+
+    baseline_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+    quality_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+    baseline_payload = _run_scenario(
+        name="no_filter", data_dir=data_dir, param_source_kind=param_source_kind,
+        params=no_filter_params, start_date=start_date, end_date=end_date,
+        max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
+        replay_counts=baseline_replay_counts,
+    )
+    quality_payload = _run_scenario(
+        name=labels["active_name"], data_dir=data_dir,
+        param_source_kind=param_source_kind, params=quality_params,
+        start_date=start_date, end_date=end_date, max_positions=max_positions,
+        enable_rotation=enable_rotation, quiet=quiet,
+        replay_counts=quality_replay_counts, ranking_source=ranking_source,
+    )
     _assert_shared_benchmark(baseline_payload, quality_payload)
 
     baseline = _scenario_summary(baseline_payload)
     quality = _scenario_summary(quality_payload)
     deltas = _delta(quality, baseline)
-    yearly = _build_yearly_comparison(baseline_payload["profile"], quality_payload["profile"])
+    yearly = _build_yearly_comparison(
+        baseline_payload["profile"], quality_payload["profile"]
+    )
     if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
-        yearly = yearly.rename(columns={"quality_filter_return_pct": "score_ranking_return_pct"})
+        yearly = yearly.rename(
+            columns={"quality_filter_return_pct": "score_ranking_return_pct"}
+        )
 
-    output_dir_name = _comparison_output_dir_name(comparison_mode, labels, param_policy=param_policy)
-    output_dir = resolve_filter_model_output_dir(str(root), filter_id, manifest_architecture, manifest_profile) / output_dir_name
+    output_dir_name = _comparison_output_dir_name(
+        comparison_mode, labels, param_policy=param_policy
+    )
+    if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        output_dir_name += "_selection_point_in_time"
+    output_dir = (
+        resolve_filter_model_output_dir(
+            str(root), filter_id, manifest_architecture, manifest_profile
+        ) / output_dir_name
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    strategy_diagnostics = None
+    if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
+        baseline_orderable = _flatten_candidate_replay_rows(
+            baseline_replay_counts or {}, "orderable_rows"
+        )
+        quality_orderable = _flatten_candidate_replay_rows(
+            quality_replay_counts or {}, "orderable_rows"
+        )
+        baseline_selected = _flatten_selected_buy_rows(baseline_payload["trade_history"])
+        quality_selected = _flatten_selected_buy_rows(quality_payload["trade_history"])
+        baseline_orderable.to_csv(
+            output_dir / "no_filter_orderable_candidates.csv", index=False,
+            encoding="utf-8-sig"
+        )
+        quality_orderable.to_csv(
+            output_dir / "score_ranking_orderable_candidates.csv", index=False,
+            encoding="utf-8-sig"
+        )
+        baseline_selected.to_csv(
+            output_dir / "no_filter_selected_buys.csv", index=False,
+            encoding="utf-8-sig"
+        )
+        quality_selected.to_csv(
+            output_dir / "score_ranking_selected_buys.csv", index=False,
+            encoding="utf-8-sig"
+        )
+        if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            lookup = _selection_target_lookup(
+                root=root, filter_id=filter_id, architecture=manifest_architecture,
+                profile=manifest_profile,
+            )
+            baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
+                _strategy_selection_diagnostics(
+                    orderable=baseline_orderable,
+                    selected=baseline_selected,
+                    lookup=lookup,
+                )
+            )
+            quality_diag, quality_orderable_joined, quality_selected_joined = (
+                _strategy_selection_diagnostics(
+                    orderable=quality_orderable,
+                    selected=quality_selected,
+                    lookup=lookup,
+                )
+            )
+            strategy_diagnostics = {
+                "no_filter": baseline_diag,
+                "score_ranking": quality_diag,
+                "score_ranking_minus_no_filter": _delta(quality_diag, baseline_diag),
+                "future_target_join_stage": "post_replay_offline_diagnostic_only",
+                "future_target_used_for_runtime_sort": False,
+            }
+            baseline_orderable_joined.to_csv(
+                output_dir / "no_filter_orderable_target_diagnostics.csv",
+                index=False, encoding="utf-8-sig"
+            )
+            quality_orderable_joined.to_csv(
+                output_dir / "score_ranking_orderable_target_diagnostics.csv",
+                index=False, encoding="utf-8-sig"
+            )
+            baseline_selected_joined.to_csv(
+                output_dir / "no_filter_selected_target_diagnostics.csv",
+                index=False, encoding="utf-8-sig"
+            )
+            quality_selected_joined.to_csv(
+                output_dir / "score_ranking_selected_target_diagnostics.csv",
+                index=False, encoding="utf-8-sig"
+            )
+
+    if pit_contract is not None:
+        score_signal_coverage = {
+            "required_start": pit_contract.available_from,
+            "first_scored_event": pit_contract.available_from,
+            "available_through": pit_contract.available_through,
+        }
+        score_artifact_metadata = {
+            "score_manifest_path": str(pit_contract.manifest_path),
+            "score_path": str(pit_contract.score_path),
+            "score_audit_path": str(pit_contract.audit_path),
+            "model_validation_gate": pit_contract.model_validation_gate,
+            "runtime_eligibility": dict(pit_contract.manifest.get("runtime_eligibility") or {}),
+            "score_table": dict(pit_contract.manifest.get("artifacts", {}).get("scores") or {}),
+        }
+    else:
+        score_signal_coverage = {
+            "required_start": runtime_contract.required_signal_start.isoformat(),
+            "first_scored_event": runtime_contract.available_from.isoformat(),
+            "available_through": runtime_contract.available_through.isoformat(),
+        }
+        score_artifact_metadata = {
+            "runtime_manifest_path": str(runtime_contract.paths.manifest_path),
+            "runtime_score_path": str(runtime_contract.paths.score_path),
+            "runtime_eligibility": dict(runtime_contract.manifest.get("runtime_eligibility") or {}),
+            "score_table": dict(runtime_contract.manifest.get("score_table") or {}),
+        }
+
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "comparison_mode": comparison_mode,
+        "score_source": score_source,
         "dataset": dataset,
         "data_dir": str(data_dir),
         "params_path": str(resolved_params_path),
@@ -1112,12 +1516,20 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         "runtime_min_agree": param_policy_contract["min_agree"],
         "ranking_scope": (
             "all_candidates_after_single_member_qualification"
-            if comparison_mode == COMPARISON_MODE_SCORE_RANKING and param_policy_contract["selector"] == "base_finalist_best"
-            else "same_runtime_vote_bucket_only" if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+            if comparison_mode == COMPARISON_MODE_SCORE_RANKING
+            and param_policy_contract["selector"] == "base_finalist_best"
+            else "same_runtime_vote_bucket_only"
+            if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
         ),
-        "comparison_design": "historical_active_param_oos" if is_rolling_source else "static_param_diagnostic",
+        "comparison_design": (
+            "selection_point_in_time_active_param_replay"
+            if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            else "historical_active_param_oos" if is_rolling_source
+            else "static_param_diagnostic"
+        ),
         "lookahead_safe_active_param_schedule": bool(is_rolling_source),
-        "active_param_period": {"start": param_start, "end": param_end} if is_rolling_source else None,
+        "active_param_period": {"start": param_start, "end": param_end}
+        if is_rolling_source else None,
         "active_param_ensemble_policy": ensemble_policy,
         "no_filter_params": no_filter_param_payload,
         f"{labels['active_name']}_params": quality_param_payload,
@@ -1127,29 +1539,24 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         "threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
         "threshold_used_as_gate": bool(comparison_mode == COMPARISON_MODE_HARD_FILTER),
         "score_ranking_order": (
-            (["breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"]
-             if param_policy_contract["selector"] == "base_finalist_best"
-             else ["runtime_member_vote_count_desc", "breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"])
+            ["breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"]
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING
-            else None
+            and param_policy_contract["selector"] == "base_finalist_best"
+            else [
+                "runtime_member_vote_count_desc", "breakout_quality_score_desc",
+                "existing_buy_sort", "ticker_deterministic",
+            ] if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
         ),
-        "unscorable_candidate_policy": "conservative_exclude",
+        "unscorable_candidate_policy": "fallback_original_buy_sort_without_exclusion",
         "max_positions": int(max_positions),
         "enable_rotation": bool(enable_rotation),
         "fixed_risk_override": None if fixed_risk is None else float(fixed_risk),
         "comparison_period": {"start": start_date, "end": end_date},
-        "score_signal_coverage": {
-            "required_start": contract.required_signal_start.isoformat(),
-            "first_scored_event": contract.available_from.isoformat(),
-            "available_through": contract.available_through.isoformat(),
-        },
+        "score_signal_coverage": score_signal_coverage,
         "benchmark_ticker": PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
-        "runtime_manifest_path": str(contract.paths.manifest_path),
-        "runtime_score_path": str(contract.paths.score_path),
-        "runtime_eligibility": dict(contract.manifest.get("runtime_eligibility") or {}),
-        "score_table": dict(contract.manifest.get("score_table") or {}),
         "controlled_param_difference": [_comparison_switch_spec(comparison_mode)[0]],
         "trade_attribution_schema_version": ATTRIBUTION_SCHEMA_VERSION,
+        **score_artifact_metadata,
     }
     json_payload = _to_json_native({
         "metadata": metadata,
@@ -1157,24 +1564,49 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
         labels["active_name"]: quality,
         f"{labels['active_name']}_minus_no_filter": deltas,
         "yearly": yearly.to_dict("records"),
+        "selection_diagnostics": strategy_diagnostics,
     })
     (output_dir / "strategy_comparison.json").write_text(
         json.dumps(json_payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    (output_dir / "strategy_comparison.md").write_text(_markdown_report(metadata, baseline, quality, deltas, yearly), encoding="utf-8")
-    baseline_payload["equity_curve"].to_csv(output_dir / "no_filter_equity.csv", index=False, encoding="utf-8-sig")
-    quality_payload["equity_curve"].to_csv(output_dir / f"{labels['active_name']}_equity.csv", index=False, encoding="utf-8-sig")
-    baseline_payload["trade_history"].to_csv(output_dir / "no_filter_trades.csv", index=False, encoding="utf-8-sig")
-    quality_payload["trade_history"].to_csv(output_dir / f"{labels['active_name']}_trades.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(baseline_payload["profile"].get("portfolio_capacity_rows") or []).to_csv(output_dir / "no_filter_daily_capacity.csv", index=False, encoding="utf-8-sig")
-    pd.DataFrame(quality_payload["profile"].get("portfolio_capacity_rows") or []).to_csv(output_dir / f"{labels['active_name']}_daily_capacity.csv", index=False, encoding="utf-8-sig")
-    yearly.to_csv(output_dir / "yearly_returns_comparison.csv", index=False, encoding="utf-8-sig")
+    (output_dir / "strategy_comparison.md").write_text(
+        _markdown_report(metadata, baseline, quality, deltas, yearly, strategy_diagnostics),
+        encoding="utf-8",
+    )
+    baseline_payload["equity_curve"].to_csv(
+        output_dir / "no_filter_equity.csv", index=False, encoding="utf-8-sig"
+    )
+    quality_payload["equity_curve"].to_csv(
+        output_dir / f"{labels['active_name']}_equity.csv", index=False,
+        encoding="utf-8-sig"
+    )
+    baseline_payload["trade_history"].to_csv(
+        output_dir / "no_filter_trades.csv", index=False, encoding="utf-8-sig"
+    )
+    quality_payload["trade_history"].to_csv(
+        output_dir / f"{labels['active_name']}_trades.csv", index=False,
+        encoding="utf-8-sig"
+    )
+    pd.DataFrame(
+        baseline_payload["profile"].get("portfolio_capacity_rows") or []
+    ).to_csv(
+        output_dir / "no_filter_daily_capacity.csv", index=False,
+        encoding="utf-8-sig"
+    )
+    pd.DataFrame(
+        quality_payload["profile"].get("portfolio_capacity_rows") or []
+    ).to_csv(
+        output_dir / f"{labels['active_name']}_daily_capacity.csv", index=False,
+        encoding="utf-8-sig"
+    )
+    yearly.to_csv(
+        output_dir / "yearly_returns_comparison.csv", index=False,
+        encoding="utf-8-sig"
+    )
     if comparison_mode == COMPARISON_MODE_HARD_FILTER:
         write_trade_attribution_outputs(
-            project_root=root,
-            output_dir=output_dir,
-            filter_id=filter_id,
+            project_root=root, output_dir=output_dir, filter_id=filter_id,
             threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
             metadata=metadata,
             no_filter_trade_history=baseline_payload["trade_history"],
@@ -1188,7 +1620,6 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
     if comparison_mode == COMPARISON_MODE_HARD_FILTER:
         print(f"交易歸因：{output_dir / 'trade_attribution.md'}")
     return json_payload
-
 
 def main(argv=None):
     args = _parse_args(argv)
@@ -1208,6 +1639,10 @@ def main(argv=None):
         fixed_risk=args.fixed_risk,
         allow_static_diagnostic=args.allow_static_diagnostic,
         comparison_mode=args.comparison_mode,
+        filter_id=args.filter_id,
+        score_source=args.score_source,
+        model_architecture=args.model_architecture,
+        experiment_profile=args.experiment_profile,
         quiet=args.quiet,
     )
     return 0

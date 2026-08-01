@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_194645_7b02dab.zip`，SHA256 `8d121ac8b579f2c3a0bf9d0316f208c32573705612d6513ad561edbbbcf754d8`。本輪只改善continuous完整workflow的可讀輸出：PIT audit以同一payload輸出表格化終端摘要、完整Markdown與JSON；狀態頁增加Target audit Markdown；Target已current時仍顯示既有報表路徑。不改模型架構、Target公式、Dataset、Label、Seed、PIT fold邊界、Score、buy-sort或策略交易規則 |
-| SHA256 | 本輪來源 ZIP：`8d121ac8b579f2c3a0bf9d0316f208c32573705612d6513ad561edbbbcf754d8`。本輪只新增報表呈現與路徑揭露；未在GPT環境訓練Seed 42 PIT folds或取得新模型／策略結果，因此仍為`RESULT_NOT_AVAILABLE` |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_200203_fe190a4.zip`，SHA256 `3d7daa9333481667c282845636720118b4c724af66dbf86eec07fd51446b7dee`；使用者本機已取得Seed 42 PIT模型結果。本輪程式修改以此ZIP為基準，新增Selection PIT Score Sort、策略比較接線、正式workflow Seed 1與audit來源hash綁定；修補ZIP SHA256由交付回覆列示 |
+| SHA256 | 來源ZIP SHA256 `3d7daa9333481667c282845636720118b4c724af66dbf86eec07fd51446b7dee`。Seed 42結果只列探索性模型證據；本輪未在GPT環境重訓Seed 1 PIT folds或執行正式Selection策略replay，因此策略結果仍為`RESULT_NOT_AVAILABLE` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -60,7 +60,7 @@
 | Weight Decay | 0.0001 |
 | Gradient Clip | 1.0 |
 | Threshold | 0.5 |
-| Seed | 42 |
+| Seed | Binary／canonical=`42`；本輪Selection PIT continuous workflow=`1` |
 | Final Model Mode | **`selected_epochs`**；8I matched optimizer steps 與 8J direct best checkpoint 均已淘汰 |
 | Class Weight | `none` |
 | Time Weight | `none`；8K `date_balanced` 已淘汰，只保留歷史重現 |
@@ -851,14 +851,14 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `SEED42_REBUILD_REQUIRED / RESULT_PENDING`；既有7個Selection folds與18,247個PIT Scores使用Seed 1，保留為歷史工件。單一Seed改為42後，當前workflow不得續用或混接舊fold，須重建Seed 42 PIT Scores後再執行模型audit |
+| 狀態 | `SEED1_FORMAL_REBUILD_REQUIRED / STRATEGY_RESULT_PENDING`；2026-08-01使用Seed 42完成的7-fold／18,247 groups結果方向通過，但與本輪交接固定Seed 1不一致，只能保留為探索性證據。workflow已恢復顯式Seed 1，舊fold fingerprint不符時不得resume |
 | 研究依據 | 既有11G能預測部分PASS-only No-time Target，但完整Selection refit Score不具備策略optimizer所需的未見資料性質；actual trades又受到舊排序、持倉與資金限制，因此先建立與正式OOS相同語意的PIT Score |
 | 唯一變更 | 使用expanding-window folds；每fold只用score period以前、且`label_eval_end_date < score_start`的歷史資料完成Inner Validation、epoch selection及final refit，再只評分下一段未見資料 |
-| 固定模型 | architecture／experiment profile／target由`config/breakout_quality.py`指定；所有breakout-quality流程統一使用`BREAKOUT_QUALITY_RANDOM_SEED=42`，目前仍為PASS-only No-time magnitude continuous ranker，不重試MSE／Huber／epoch／LR／batch／sampling |
+| 固定模型 | architecture／experiment profile／target由`config/breakout_quality.py`指定；既有9A保留`BREAKOUT_QUALITY_RANDOM_SEED=42`；本輪PIT workflow固定`BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED=1`，目前仍為PASS-only No-time magnitude continuous ranker，不重試MSE／Huber／epoch／LR／batch／sampling |
 | 正式工件 | `selection_point_in_time_scores.csv`、combined manifest／coverage，以及每fold checkpoint、scores、manifest與SHA256 |
 | 模型audit | 先計算Score↔Target Spearman、mean daily Spearman、年度與decile spread、fold drift、PASS分類重疊及orderable coverage；Future Target只在audit離線join，不寫入Score CSV |
-| 策略邊界 | Builder manifest固定`eligible=false`；模型audit通過前不接buy-sort、不跑主策略optimizer。第一階段策略選單會明確阻擋PIT Score source |
-| 下一步 | 先清除或隔離Seed 1的PIT目錄，再以Seed 42重跑builder與PIT model audit。若多數年份沒有穩定正向Target排序能力則停止；通過後才實作泛用`BREAKOUT_QUALITY_SCORE_DESC`與Baseline／Sort Only策略比較 |
+| 策略邊界 | Builder manifest仍固定`eligible=false`；策略入口另以audit gate、Score hash、identity與Seed驗證授權Selection replay。已接入泛用Score buy-sort，但尚未執行策略結果 |
+| 下一步 | 以Seed 1重建PIT folds與audit；通過後執行Baseline／Sort Only策略比較。Seed 42結果不得直接進正式策略比較 |
 | Dataset／training | 不重建binary Dataset、不重訓完整Selection 9A；只沿用既有continuous-ranker training pipeline建立歷史fold模型 |
 | 執行入口 | `python apps/breakout_quality.py build-point-in-time-scores`；完成後執行`audit-point-in-time-scores` |
 | UI／runtime | 新主選單不含9A／11G／11K名稱；experiment profile的training objective自動派送binary classification或continuous PIT流程；research-only低階功能維持CLI-only；PIT Score不是scanner或forward-OOS runtime工件 |
@@ -1617,3 +1617,39 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 固定條件 | 不改architecture、Dataset、Label、Target、loss、epoch、PIT fold邊界、threshold、buy-sort、optimizer search space、portfolio成交或帳務；Seed由profile-dependent 1／42改為單一42，因此continuous checkpoint與PIT Score需重建 |
 | Dataset／Label | 不需重建Dataset或relabel；9A既有Seed 42模型可沿用。Continuous既有Seed 1 checkpoint／PIT folds不可視為Seed 42工件，必須重建 |
 | 下一步 | 套用修補後重跑`python apps/test_suite.py`；正式結果以使用者本機輸出為準 |
+
+
+### 3.71 Selection PIT Seed 42探索性模型結果與Seed契約更正（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `RESULT_AVAILABLE_EXPLORATORY / MODEL_DIRECTION_PASS / FORMAL_SEED_MISMATCH` |
+| 結果來源 | 使用者本機輸出；程式ZIP `test-branch-1_20260801_200203_fe190a4.zip`，SHA256 `3d7daa9333481667c282845636720118b4c724af66dbf86eec07fd51446b7dee` |
+| 工件identity | `inception_time_v1 / strategy_aligned_no_time_pass_magnitude_mse / strategy_aligned_opportunity_no_time_r_v1`；Seed 42；2014-01-01～2020-12-31；7 folds；18,247 groups；coverage 100% |
+| PASS-only排序 | groups 10,160；global Spearman 0.3074；mean daily rho 0.2370；top／bottom decile Target 3.3883／1.0428R，spread 2.3455R |
+| 年度穩定性 | 2014～2020共7/7年度Spearman為正，7/7年度spread為正；年度Spearman 0.2367～0.4034 |
+| Drift／分類重疊 | drift flag=False，最大相鄰mean shift 0.8832 pooled SD；Score vs PASS AUC 0.5620，證明不是單純重複PASS／REJECT |
+| Orderable coverage | 舊`selection_orderable_candidates.csv`不存在，因此模型audit未提供；改由下一階段兩組canonical strategy replay現場產生 |
+| 方向判定 | 模型層方向通過原定gate，可支持Score Sort假設；但交接計畫明確固定Seed 1，因此Seed 42結果不得直接作本輪正式策略前置工件 |
+| 修正 | 新增`BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED=1`，不改既有9A `BREAKOUT_QUALITY_RANDOM_SEED=42`。PIT fold fingerprint與策略入口均檢查Seed，Seed 42舊fold不得混接或進正式Selection策略比較 |
+
+### 3.72 Selection PIT Score Sort與策略比較接線（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_SEED1_RERUN_REQUIRED / STRATEGY_RESULT_NOT_AVAILABLE` |
+| 程式基準 | 修改基準`test-branch-1_20260801_200203_fe190a4.zip`，SHA256 `3d7daa9333481667c282845636720118b4c724af66dbf86eec07fd51446b7dee`；本輪修補ZIP hash列於交付回覆 |
+| 唯一變更 | 在已完成的PIT模型層之後接上泛用Score buy-sort與Controlled Baseline／Sort Only Selection replay；不改continuous模型、Target、loss、epoch、LR、batch、sampling或主策略參數 |
+| 固定條件 | `seed=1`、`base-finalist-best`、單一member／min_agree=1、max positions 10、rotation off；候選生成、進場、持倉、資金、停損停利及歷史active-param schedule固定 |
+| Dataset／Label | 不需重建Dataset或Label／Continuous Target；由Seed 42切回本輪正式Seed 1後，continuous PIT checkpoints、Scores與audit必須重建，舊Seed 42工件不得resume或進策略入口 |
+| Score source | 新增`filters/breakout_quality/ranking_score_store.py`，strict驗證PIT score／manifest／audit identity、日期、coverage、模型gate，並以SHA256綁定audit所使用的PIT manifest／Scores／coverage／Continuous Target manifest；`runtime.py`以scoped context在canonical與Selection PIT來源間派送，不改scanner hard-filter runtime |
+| 排序語意 | 有效Score由高到低；同分使用原buy-sort；缺分不排除、不填0，排在有分候選後並完整回退原buy-sort；最後ticker deterministic。Continuation／Re-entry沿用原setup的source與Score payload |
+| 參數來源 | `selection_point_in_time + base-finalist-best`自動解析`models/research/breakout_quality/selection_strategy_realization/roos_base_best.json`，要求rolling active params完整覆蓋PIT期間且每期1 member／min_agree=1 |
+| Controlled comparison | Baseline與Score Sort只切換`use_breakout_quality_ranking`；候選生成、進場、持倉、資金、停損停利、rotation與策略參數相同 |
+| 離線診斷 | 兩組replay後才joinPIT target，輸出orderable Score coverage、selected Target percentile、Target top-k retention、opportunity gap及selected Target mean；Future Target不進runtime sort |
+| 工件 | `strategy_compare_score_ranking_base_finalist_best_selection_point_in_time/`下輸出comparison Markdown／JSON、equity、trades、daily capacity、yearly、兩組orderable／selected buys與Target診斷CSV |
+| UI／相容 | 主選單`[1]`已接Selection PIT；舊`apps/breakout_quality_strategy_compare.py`為薄轉接。`final_selection_model_oos`仍明確未開放 |
+| Selection／OOS結果 | Seed 1 Selection PIT模型與Baseline／Sort Only策略結果尚未執行；OOS亦未執行。不得以Seed 42探索性模型結果補寫策略績效 |
+| 與基準差異／採用 | 程式層採用Score Sort接線；研究結果尚未採用。只有Seed 1模型gate再次通過且Selection策略比較出現合理選股或績效改善，才允許進主策略參數重新優化 |
+| 驗證 | 獨立synthetic已驗證Score desc、同分／缺分fallback、source context還原、audit來源hash、模型gate不讀策略結果、Future Target post-replay join與workflow Seed 1；正式完整replay尚未執行 |
+| 下一步 | 套用修補後由主選單`[Enter]`重建Seed 1 PIT folds並產生新版audit；模型gate通過後再獨立選`[1]`執行Baseline／Sort Only，不自動串接optimizer |

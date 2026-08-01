@@ -73,17 +73,18 @@ python apps/breakout_quality.py
 
 Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
-模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／report流程；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。`[Enter]`與`[1]`仍彼此獨立；PIT score-store尚未接入策略層時，continuous策略選項會明確停止，不會回退誤用canonical runtime scores。
+模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／report流程；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。`[Enter]`與`[1]`仍彼此獨立。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
 
 
 切換至原9A binary workflow時，只需在 `config/breakout_quality.py` 指定既有classification profile，例如：
 
 ```python
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
-BREAKOUT_QUALITY_RANDOM_SEED = 42  # 所有binary／continuous／PIT流程共用
+BREAKOUT_QUALITY_RANDOM_SEED = 42  # binary／canonical模型
+BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED = 1  # 本輪Selection PIT continuous workflow
 ```
 
-若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`；Seed仍使用同一個 `BREAKOUT_QUALITY_RANDOM_SEED`，不會依profile暗中改值。只有單次重現特殊實驗時才用CLI `--seed`覆寫。PIT日期／fold設定只在continuous objective下生效。
+若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`。既有binary／canonical模型仍使用`BREAKOUT_QUALITY_RANDOM_SEED=42`；本輪Selection PIT continuous workflow依研究契約固定使用`BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED=1`，兩者工件identity不得混接。只有單次重現特殊實驗時才用CLI `--seed`覆寫。PIT日期／fold設定只在continuous objective下生效。
 
 ### Continuous Target自動準備
 
@@ -115,7 +116,15 @@ python apps/breakout_quality.py build-point-in-time-scores --plan-only
 python apps/breakout_quality.py audit-point-in-time-scores
 ```
 
-Audit完成後會直接在終端輸出表格化易讀摘要，依序呈現執行設定與Score coverage、PASS-only／all-valid核心排序能力、逐年Spearman與top-bottom spread、各fold Score分布與drift、PASS／REJECT重疊、orderable candidate coverage及研究邊界；同一份payload同步輸出完整Markdown與JSON，不另算第二套指標。報表只評估模型層排序能力，明確標示策略optimizer尚未執行、Future Target未進runtime排序、PIT工件不可直接作forward-OOS runtime。
+模型audit通過且Seed／identity一致後，執行Selection策略比較：
+
+```bash
+python apps/breakout_quality.py strategy-compare --dataset full --comparison-mode score-ranking --filter-id breakout_quality_v1 --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --max-positions 10 --rotation off
+```
+
+此流程使用`models/research/breakout_quality/selection_strategy_realization/roos_base_best.json`的歷史active params，期間由PIT manifest決定。Score缺失不排除候選、不填0，改為回退原buy-sort；Future Target只在兩組replay完成後離線join，輸出orderable coverage、selected Target percentile、top-k retention與opportunity gap。
+
+Audit完成後會直接在終端輸出表格化易讀摘要，依序呈現執行設定與Score coverage、PASS-only／all-valid核心排序能力、逐年Spearman與top-bottom spread、各fold Score分布與drift、PASS／REJECT重疊、orderable candidate coverage及研究邊界；同一份payload同步輸出完整Markdown與JSON，不另算第二套指標。Audit JSON另以SHA256綁定PIT manifest、Scores、coverage與Continuous Target manifest；任何來源工件改變後都必須重新audit，策略入口不得沿用舊模型gate。報表只評估模型層排序能力，明確標示策略optimizer尚未執行、Future Target未進runtime排序、PIT工件不可直接作forward-OOS runtime。
 
 每個 expanding-window fold 只使用該 score period 以前、且 `label_eval_end_date < score_start` 的資料；Inner Validation 與 epoch selection 也限制在歷史窗內。每個事件只保留模型尚未看過該事件時產生的 Score。串接 Score 工件不含 Future Target，builder manifest 預設 `eligible=false`，只允許模型驗證；策略使用必須等待模型驗證與後續 Score buy-sort 接線完成。
 

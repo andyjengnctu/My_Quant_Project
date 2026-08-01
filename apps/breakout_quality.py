@@ -1678,23 +1678,15 @@ def _interactive_strategy_validation(program_name: str) -> int:
         raise ValueError(
             f"不支援的 strategy comparison mode: {settings.strategy_comparison_mode!r}"
         )
-    if settings.strategy_score_source == "selection_point_in_time":
-        print(
-            "[尚未開放] Selection PIT Score工件與模型驗證入口已完成；"
-            "策略層仍需先完成泛用Score buy-sort與PIT score-store接線。"
-        )
-        print(
-            "舊策略比較CLI仍可用："
-            f"python {program_name} strategy-compare --help"
-        )
-        return 0
     if settings.strategy_score_source == "final_selection_model_oos":
         print(
             "[尚未開放] final Selection model OOS Score source尚未接入統一策略入口；"
             "不得回退成canonical runtime score。"
         )
         return 0
-    if settings.strategy_score_source != "canonical_runtime":
+    if settings.strategy_score_source not in {
+        "selection_point_in_time", "canonical_runtime"
+    }:
         raise ValueError(
             f"不支援的 strategy score source: {settings.strategy_score_source!r}"
         )
@@ -1703,6 +1695,10 @@ def _interactive_strategy_validation(program_name: str) -> int:
         [
             "--dataset", settings.strategy_dataset,
             "--comparison-mode", "score-ranking",
+            "--filter-id", settings.filter_id,
+            "--score-source", settings.strategy_score_source,
+            "--model-architecture", settings.model_architecture,
+            "--experiment-profile", settings.experiment_profile,
             "--param-policy", settings.strategy_param_policy,
             "--max-positions", str(settings.strategy_max_positions),
             "--rotation", settings.strategy_rotation,

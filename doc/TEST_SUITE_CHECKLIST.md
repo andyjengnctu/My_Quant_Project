@@ -1664,6 +1664,8 @@
 | 2026-08-01 | B182 | Target preparation與重建後identity驗證完成獨立synthetic覆蓋，狀態回到DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case`, `validate_breakout_quality_no_time_target_selection_audit_contract_case` |
 | 2026-08-01 | B182 | PIT audit只有精簡Markdown與單行終端摘要，未符合完整workflow易讀報表需求，契約退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/audit_point_in_time_scores.py`, `apps/breakout_quality.py` |
 | 2026-08-01 | B182 | 新增單一payload的終端表格、完整Markdown／JSON、Target及PIT報表狀態路徑後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
+| 2026-08-01 | B183 | 新增Selection PIT score source、模型gate、audit來源hash綁定、Score缺失fallback與Selection historical active-param策略比較接線 | NEW -> DONE | `filters/breakout_quality/ranking_score_store.py`, `filters/breakout_quality/runtime.py`, `core/buy_sort.py`, `core/portfolio_candidates.py`, `core/portfolio_engine.py`, `tools/filters/breakout_quality/strategy_compare.py`, `apps/breakout_quality.py` |
+| 2026-08-01 | B184 | 交接固定Seed 1與現有Seed 42 PIT工件衝突；新增獨立workflow Seed 1及策略入口seed identity fail-fast | NEW -> DONE | `config/breakout_quality.py`, `tools/filters/breakout_quality/strategy_compare.py` |
 | 2026-08-01 | T264 | Seed validator仍接受None並驗證profile-dependent預設，與單一固定Seed需求不符，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-01 | T264 | 改驗證單一非負整數Seed、全profile共用與負值拒絕後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-08-01 | T277 | 1,969／2,003第三次失敗否證shared-snapshot即可隔離的假設，validator退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
@@ -1677,3 +1679,5 @@
 | 2026-08-01 | T279 | 新增PIT fold embargo、完整coverage、Future Target排除、orderable coverage與單一入口direct synthetic validator | NEW -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
 | 2026-08-01 | T279 | PIT易讀終端／Markdown報表章節尚未納入direct validator，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-01 | T279 | 新增核心排序、年度、fold、研究邊界及工件章節驗證後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
+| 2026-08-01 | T280 | 新增PIT Score desc、同分／缺分fallback、source context、audit來源hash、模型gate與post-replay Target診斷synthetic契約 | NEW -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
+

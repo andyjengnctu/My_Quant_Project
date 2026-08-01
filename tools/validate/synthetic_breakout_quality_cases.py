@@ -10952,6 +10952,132 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         ),
     )
 
+    from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD, sort_candidate_rows
+    from filters.breakout_quality.ranking_score_store import (
+        _validate_audit_source_artifact,
+        derive_point_in_time_model_validation_gate,
+    )
+    from filters.breakout_quality.runtime import (
+        breakout_quality_ranking_source_context,
+        get_breakout_quality_ranking_source_context,
+    )
+    from tools.filters.breakout_quality.strategy_compare import (
+        _strategy_selection_diagnostics,
+    )
+
+    ranking_rows = [
+        {"ticker": "B", "use_breakout_quality_ranking": True,
+         "breakout_quality_score": None, "breakout_quality_rank": {"available": False},
+         "sort_value": 0.10, "proj_cost": 100.0},
+        {"ticker": "C", "use_breakout_quality_ranking": True,
+         "breakout_quality_score": 0.80, "breakout_quality_rank": {"available": True},
+         "sort_value": 0.50, "proj_cost": 100.0},
+        {"ticker": "A", "use_breakout_quality_ranking": True,
+         "breakout_quality_score": 0.80, "breakout_quality_rank": {"available": True},
+         "sort_value": 0.20, "proj_cost": 100.0},
+        {"ticker": "D", "use_breakout_quality_ranking": True,
+         "breakout_quality_score": None, "breakout_quality_rank": {"available": False},
+         "sort_value": 0.05, "proj_cost": 100.0},
+    ]
+    sort_candidate_rows(ranking_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "point_in_time_score_sort_desc_tie_and_missing_fallback_contract",
+        ["A", "C", "D", "B"], [row["ticker"] for row in ranking_rows],
+    )
+
+    default_source = get_breakout_quality_ranking_source_context().score_source
+    with breakout_quality_ranking_source_context(
+        score_source="selection_point_in_time",
+        model_architecture="inception_time_v1",
+        experiment_profile="strategy_aligned_no_time_pass_magnitude_mse",
+    ):
+        inside_source = get_breakout_quality_ranking_source_context().score_source
+    restored_source = get_breakout_quality_ranking_source_context().score_source
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "point_in_time_ranking_source_context_is_scoped_and_restored",
+        ("canonical_runtime", "selection_point_in_time", "canonical_runtime"),
+        (default_source, inside_source, restored_source),
+    )
+
+    with tempfile.TemporaryDirectory() as artifact_dir:
+        source_path = Path(artifact_dir) / "selection_point_in_time_scores.csv"
+        source_path.write_text("ticker,date,score\n2330,2020-01-01,0.8\n", encoding="utf-8")
+        source_record = {"path": str(source_path), **build_file_manifest(source_path)}
+        exact_binding_accepted = True
+        try:
+            _validate_audit_source_artifact(
+                source_record, expected_path=source_path, label="synthetic PIT Scores"
+            )
+        except ValueError:
+            exact_binding_accepted = False
+        source_path.write_text("ticker,date,score\n2330,2020-01-01,0.7\n", encoding="utf-8")
+        stale_binding_rejected = False
+        try:
+            _validate_audit_source_artifact(
+                source_record, expected_path=source_path, label="synthetic PIT Scores"
+            )
+        except ValueError as exc:
+            stale_binding_rejected = "SHA256" in str(exc)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "point_in_time_audit_is_bound_to_exact_source_artifact_hashes",
+        (True, True), (exact_binding_accepted, stale_binding_rejected),
+    )
+
+    gate = derive_point_in_time_model_validation_gate({
+        "metrics": {"pass_only_target": {
+            "global_spearman": 0.3074, "mean_daily_spearman": 0.2370,
+        }},
+        "direction_summary": {
+            "valid_year_count": 7,
+            "positive_spearman_year_count": 7,
+            "positive_spread_year_count": 7,
+        },
+    })
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "point_in_time_model_gate_uses_only_target_ordering_evidence",
+        ("PASS", False, False),
+        (gate["status"], gate["strategy_metrics_used"], gate["future_target_used_for_runtime_sort"]),
+    )
+
+    diagnostic_metrics, _diagnostic_orderable, _diagnostic_selected = (
+        _strategy_selection_diagnostics(
+            orderable=pd.DataFrame([
+                {"ticker": "A", "trade_date": "2020-01-02",
+                 "signal_date": "2020-01-01", "breakout_quality_score": 0.8},
+                {"ticker": "B", "trade_date": "2020-01-02",
+                 "signal_date": "2020-01-01", "breakout_quality_score": 0.2},
+            ]),
+            selected=pd.DataFrame([
+                {"ticker": "A", "trade_date": "2020-01-02",
+                 "signal_date": "2020-01-01", "type": "買進"},
+            ]),
+            lookup=pd.DataFrame([
+                {"ticker": "A", "signal_date": "2020-01-01",
+                 "breakout_quality_score": 0.8, "target_raw_r": 2.0,
+                 "target_available": True},
+                {"ticker": "B", "signal_date": "2020-01-01",
+                 "breakout_quality_score": 0.2, "target_raw_r": 1.0,
+                 "target_available": True},
+            ]),
+        )
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "point_in_time_strategy_diagnostic_joins_target_after_replay",
+        (1.0, 1.0, 0.0, False),
+        (
+            diagnostic_metrics["orderable_score_coverage_rate"],
+            diagnostic_metrics["target_top_k_retention_mean"],
+            diagnostic_metrics["target_opportunity_gap_r_mean"],
+            diagnostic_metrics["future_target_used_for_runtime_sort"],
+        ),
+    )
+
     summary["workflow"] = "selection_point_in_time_scores"
     summary["score_contract"] = "future_target_excluded"
+    summary["strategy_score_sort"] = "missing_fallback_original_buy_sort"
     return results, summary
