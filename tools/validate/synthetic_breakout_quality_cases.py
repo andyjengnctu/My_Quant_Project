@@ -380,6 +380,25 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             and all(not path.exists() for path in removed_legacy_config_paths)
         ),
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "breakout_quality_has_one_user_facing_random_seed_setting",
+        (1, False),
+        (
+            canonical_source.count("BREAKOUT_QUALITY_RANDOM_SEED ="),
+            "BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED" in canonical_source,
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "breakout_quality_strategy_compare_uses_only_canonical_app_entry",
+        False,
+        (project_root / "apps" / "breakout_quality_strategy_compare.py").exists(),
+    )
     user_settings_marker = canonical_source.index(
         "# USER SETTINGS — edit this section only"
     )
@@ -444,15 +463,33 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         True,
         isinstance(configured_seed, int) and configured_seed >= 0,
     )
-    with patch("config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED", 7):
-        overridden_seed = resolve_breakout_quality_random_seed()
+    from config import breakout_quality as breakout_quality_config
+
+    with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_RANDOM_SEED", 7):
+        overridden_seed = breakout_quality_config.resolve_breakout_quality_random_seed()
+        with patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+        ):
+            binary_workflow_seed = (
+                breakout_quality_config.get_breakout_quality_workflow_settings().seed
+            )
+        with patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        ):
+            continuous_workflow_seed = (
+                breakout_quality_config.get_breakout_quality_workflow_settings().seed
+            )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
         "single_seed_override_applies_to_all_profiles",
-        7,
-        overridden_seed,
+        (7, 7, 7),
+        (overridden_seed, binary_workflow_seed, continuous_workflow_seed),
     )
     with patch("config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED", -1):
         try:

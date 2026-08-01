@@ -80,11 +80,10 @@ Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。�
 
 ```python
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
-BREAKOUT_QUALITY_RANDOM_SEED = 42  # binary／canonical模型
-BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED = 1  # 本輪Selection PIT continuous workflow
+BREAKOUT_QUALITY_RANDOM_SEED = 42  # 所有breakout-quality正式模型流程共用
 ```
 
-若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`。既有binary／canonical模型仍使用`BREAKOUT_QUALITY_RANDOM_SEED=42`；本輪Selection PIT continuous workflow依研究契約固定使用`BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED=1`，兩者工件identity不得混接。只有單次重現特殊實驗時才用CLI `--seed`覆寫。PIT日期／fold設定只在continuous objective下生效。
+若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`。Binary、continuous、pretraining與Selection PIT workflow全部共用`BREAKOUT_QUALITY_RANDOM_SEED`；目前值為42。只有單次重現特殊實驗時才用CLI `--seed`覆寫。PIT日期／fold設定只在continuous objective下生效。
 
 ### Continuous Target自動準備
 

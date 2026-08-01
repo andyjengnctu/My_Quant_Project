@@ -1666,6 +1666,8 @@
 | 2026-08-01 | B182 | 新增單一payload的終端表格、完整Markdown／JSON、Target及PIT報表狀態路徑後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
 | 2026-08-01 | B183 | 新增Selection PIT score source、模型gate、audit來源hash綁定、Score缺失fallback與Selection historical active-param策略比較接線 | NEW -> DONE | `filters/breakout_quality/ranking_score_store.py`, `filters/breakout_quality/runtime.py`, `core/buy_sort.py`, `core/portfolio_candidates.py`, `core/portfolio_engine.py`, `tools/filters/breakout_quality/strategy_compare.py`, `apps/breakout_quality.py` |
 | 2026-08-01 | B184 | 交接固定Seed 1與現有Seed 42 PIT工件衝突；新增獨立workflow Seed 1及策略入口seed identity fail-fast | NEW -> DONE | `config/breakout_quality.py`, `tools/filters/breakout_quality/strategy_compare.py` |
+| 2026-08-01 | B184 | 後續基準重新引入第二個workflow Seed與已刪除的舊strategy compare app，單一設定／單一入口契約退回PARTIAL | DONE -> PARTIAL | `config/breakout_quality.py`, `apps/breakout_quality_strategy_compare.py` |
+| 2026-08-01 | B184 | 移除workflow專用Seed與舊app，所有profile共用`BREAKOUT_QUALITY_RANDOM_SEED`且只保留`apps/breakout_quality.py strategy-compare`後重新收斂為DONE | PARTIAL -> DONE | `config/breakout_quality.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-01 | T264 | Seed validator仍接受None並驗證profile-dependent預設，與單一固定Seed需求不符，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-01 | T264 | 改驗證單一非負整數Seed、全profile共用與負值拒絕後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-08-01 | T277 | 1,969／2,003第三次失敗否證shared-snapshot即可隔離的假設，validator退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
