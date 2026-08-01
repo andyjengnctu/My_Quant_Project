@@ -50,17 +50,24 @@ from filters.breakout_quality.runtime import breakout_quality_ranking_source_con
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from tools.filters.breakout_quality.audit_score_ranking_capture import (
     build_score_ranking_capture_audit,
+    render_capture_audit_console,
     write_score_ranking_capture_audit_outputs,
 )
 from tools.filters.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
 from tools.filters.breakout_quality.strategy_report_style import (
     SIGNAL_NEGATIVE,
-    html_delta_cell,
-    html_page,
-    html_signal_badge,
     signal_for_delta,
     signal_marker,
     terminal_signal,
+)
+from filters.breakout_quality.console_report import (
+    console_color_enabled,
+    print_artifact_paths,
+    project_relative_display_path,
+    render_key_values,
+    render_section,
+    render_table,
+    render_title,
 )
 from tools.filters.breakout_quality.trade_attribution import (
     ATTRIBUTION_SCHEMA_VERSION,
@@ -156,7 +163,7 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--capture-audit-only",
         action="store_true",
-        help="只讀取既有score-ranking比較工件，重新產生彩色主報表與資本效率／Target capture audit。",
+        help="只讀取既有score-ranking比較工件，重新輸出console主報表與資本效率／Target capture audit。",
     )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
@@ -894,10 +901,63 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
     return "\n".join(lines)
 
 
-def _html_report(metadata, baseline, quality, delta, yearly, strategy_diagnostics=None) -> str:
+def _render_strategy_console_report(
+    metadata: dict[str, Any],
+    baseline: dict[str, Any],
+    quality: dict[str, Any],
+    delta: dict[str, Any],
+    yearly: pd.DataFrame,
+    strategy_diagnostics: dict[str, Any] | None = None,
+    *,
+    color: bool | None = None,
+) -> str:
+    """Render the complete readable strategy comparison directly for console."""
+
+    use_color = console_color_enabled() if color is None else bool(color)
     labels = _comparison_labels(str(metadata["comparison_mode"]))
     active_yearly_column = f"{labels['active_name']}_return_pct"
-    metric_specs = [
+    title = (
+        "Breakout Quality Score 排序策略經濟效果對照"
+        if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+        else "Breakout Quality 策略經濟效果對照"
+    )
+    period = metadata.get("comparison_period") or {}
+    params_path = project_relative_display_path(
+        metadata.get("params_path", "-"), project_root=PROJECT_ROOT
+    )
+    lines = [
+        render_title(title),
+        render_key_values(
+            (
+                ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
+                ("參數檔", params_path),
+                ("參數型態", metadata.get("param_source_kind", "-")),
+                ("參數 selector", metadata.get("param_selector", "-")),
+                (
+                    "Runtime members",
+                    f"{metadata.get('runtime_member_count_min')}～{metadata.get('runtime_member_count_max')}；"
+                    f"min_agree={metadata.get('runtime_min_agree')}",
+                ),
+                ("比較設計", metadata.get("comparison_design", "-")),
+                ("歷史 active-param 無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
+                ("Dataset", metadata.get("dataset", "-")),
+                ("Score source", metadata.get("score_source", "-")),
+                ("Benchmark", metadata.get("benchmark_ticker", "-")),
+                ("唯一差異", labels["difference_text"]),
+                *(
+                    (
+                        ("排序鍵", " → ".join(metadata.get("score_ranking_order") or [])),
+                        ("Ranking 範圍", metadata.get("ranking_scope", "-")),
+                    )
+                    if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+                    else ()
+                ),
+            )
+        ),
+    ]
+
+    metric_rows = []
+    for label, key, unit, preference in (
         ("淨總報酬", "total_return_pct", "%", "higher"),
         ("最大回撤", "max_drawdown_pct", "%", "lower"),
         ("報酬／最大回撤", "return_over_max_drawdown", "", "higher"),
@@ -914,40 +974,61 @@ def _html_report(metadata, baseline, quality, delta, yearly, strategy_diagnostic
         ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower"),
         ("期末未滿倉日", "underfilled_end_days", " 日", "lower"),
         ("期末持股缺口總和", "end_position_gap_slot_days", " 格日", "lower"),
-    ]
-    metric_rows = []
-    for label, key, unit, preference in metric_specs:
+    ):
         digits = 0 if key in {
             "trade_count", "candidate_supply_gap_days", "underfilled_end_days",
             "end_position_gap_slot_days",
         } else 4 if key == "log_r_squared" else 2
         signal = signal_for_delta(
-            delta.get(key),
-            preference=preference,
+            delta.get(key), preference=preference,
             warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
         )
-        metric_rows.append(
-            f"<tr><td>{label}</td><td>{_format_metric(baseline.get(key), digits=digits, unit=unit)}</td>"
-            f"<td>{_format_metric(quality.get(key), digits=digits, unit=unit)}</td>"
-            f"{html_delta_cell(_format_metric(delta.get(key), digits=digits, unit=unit, signed=True), signal)}"
-            f"<td>{html_signal_badge(signal)}</td></tr>"
-        )
+        delta_text = _format_metric(delta.get(key), digits=digits, unit=unit, signed=True)
+        judgment = signal_marker(signal)
+        metric_rows.append((
+            label,
+            _format_metric(baseline.get(key), digits=digits, unit=unit),
+            _format_metric(quality.get(key), digits=digits, unit=unit),
+            terminal_signal(delta_text, signal, enabled=use_color),
+            terminal_signal(judgment, signal, enabled=use_color),
+        ))
+    lines.extend((
+        render_section("主要結果", number=1),
+        render_table(
+            ("指標", "No filter", labels["active_title"], "差異", "判讀"),
+            metric_rows,
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
 
-    yearly_rows = []
-    for row in yearly.to_dict("records"):
-        signal = signal_for_delta(row.get("delta_pct"), preference="higher")
-        yearly_rows.append(
-            f"<tr><td>{int(row['year'])}</td><td>{_format_metric(row.get('no_filter_return_pct'), digits=2, unit='%')}</td>"
-            f"<td>{_format_metric(row.get(active_yearly_column), digits=2, unit='%')}</td>"
-            f"{html_delta_cell(_format_metric(row.get('delta_pct'), digits=2, unit='%', signed=True), signal)}"
-            f"<td>{html_signal_badge(signal)}</td><td>{'是' if row.get('is_full_year') else '否'}</td></tr>"
-        )
+    lines.append(render_section("年度報酬", number=2))
+    if yearly.empty:
+        lines.append("無年度資料。")
+    else:
+        yearly_rows = []
+        for row in yearly.to_dict("records"):
+            signal = signal_for_delta(row.get("delta_pct"), preference="higher")
+            yearly_rows.append((
+                int(row["year"]),
+                _format_metric(row.get("no_filter_return_pct"), digits=2, unit="%"),
+                _format_metric(row.get(active_yearly_column), digits=2, unit="%"),
+                terminal_signal(
+                    _format_metric(row.get("delta_pct"), digits=2, unit="%", signed=True),
+                    signal, enabled=use_color,
+                ),
+                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+                "是" if row.get("is_full_year") else "否",
+            ))
+        lines.append(render_table(
+            ("年度", "No filter", labels["active_title"], "差異", "判讀", "完整年度"),
+            yearly_rows,
+            alignments=("right", "right", "right", "right", "left", "center"),
+        ))
 
-    diagnostic_html = ""
     if strategy_diagnostics:
         left = strategy_diagnostics.get("no_filter") or {}
         right = strategy_diagnostics.get("score_ranking") or {}
-        diag_rows = []
+        diagnostic_rows = []
         for label, key, preference in (
             ("Orderable Score coverage", "orderable_score_coverage_rate", "higher"),
             ("選中候選 Target percentile", "selected_target_percentile_mean", "higher"),
@@ -955,61 +1036,52 @@ def _html_report(metadata, baseline, quality, delta, yearly, strategy_diagnostic
             ("Target opportunity gap (R)", "target_opportunity_gap_r_mean", "lower"),
             ("選中候選 Target mean (R)", "selected_target_mean_r", "higher"),
         ):
-            left_value = left.get(key)
-            right_value = right.get(key)
-            delta_value = None if left_value is None or right_value is None else float(right_value) - float(left_value)
-            signal = signal_for_delta(delta_value, preference=preference)
-            diag_rows.append(
-                f"<tr><td>{label}</td><td>{_format_metric(left_value, digits=4)}</td>"
-                f"<td>{_format_metric(right_value, digits=4)}</td>"
-                f"{html_delta_cell(_format_metric(delta_value, digits=4, signed=True), signal)}"
-                f"<td>{html_signal_badge(signal)}</td></tr>"
+            left_value, right_value = left.get(key), right.get(key)
+            delta_value = (
+                None if left_value is None or right_value is None
+                else float(right_value) - float(left_value)
             )
-        diagnostic_html = (
-            "<h2>Selection 選股診斷</h2>"
-            "<table><thead><tr><th>指標</th><th>Baseline</th><th>Score Sort</th><th>差異</th><th>判讀</th></tr></thead>"
-            f"<tbody>{''.join(diag_rows)}</tbody></table>"
-            "<div class=\"callout warning\">Future Target只於兩組回放完成後離線join，未進入runtime排序。</div>"
-        )
+            signal = signal_for_delta(delta_value, preference=preference)
+            diagnostic_rows.append((
+                label,
+                _format_metric(left_value, digits=4),
+                _format_metric(right_value, digits=4),
+                terminal_signal(
+                    _format_metric(delta_value, digits=4, signed=True),
+                    signal, enabled=use_color,
+                ),
+                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+            ))
+        lines.extend((
+            render_section("Selection 選股診斷（Future Target 僅於回放後 join）", number=3),
+            render_table(
+                ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+                diagnostic_rows,
+                alignments=("left", "right", "right", "right", "left"),
+            ),
+            "Future Target 未進入候選排序、資金配置或成交決策。",
+        ))
 
-    period = metadata.get("comparison_period") or {}
-    body = f"""
-<div class="card meta-grid"><div><strong>期間</strong><br>{period.get('start','')} ～ {period.get('end','')}</div>
-<div><strong>參數 selector</strong><br><code>{metadata.get('param_selector','')}</code></div>
-<div><strong>Score source</strong><br><code>{metadata.get('score_source','')}</code></div>
-<div><strong>唯一差異</strong><br><code>{labels['difference_text']}</code></div></div>
-<h2>主要結果</h2><table><thead><tr><th>指標</th><th>No filter</th><th>{labels['active_title']}</th><th>差異</th><th>判讀</th></tr></thead><tbody>{''.join(metric_rows)}</tbody></table>
-<h2>年度報酬</h2><table><thead><tr><th>年度</th><th>No filter</th><th>{labels['active_title']}</th><th>差異</th><th>判讀</th><th>完整年度</th></tr></thead><tbody>{''.join(yearly_rows)}</tbody></table>
-{diagnostic_html}
-<div class="callout warning"><strong>顏色口徑</strong><br>綠色為依指標方向改善，紅色為惡化，黃色為方向無單一好壞但變化值得注意，灰色為中性。</div>
-"""
-    title = (
-        "Breakout Quality Score 排序策略經濟效果對照"
-        if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
-        else "Breakout Quality 策略經濟效果對照"
-    )
-    return html_page(title=title, subtitle="Controlled strategy comparison", body=body)
+    lines.append(render_section("判讀限制", number=4 if strategy_diagnostics else 3))
+    if not metadata.get("lookahead_safe_active_param_schedule"):
+        lines.append("⚠️ 本次使用單一／static 參數，只能視為敏感度診斷，不是無前視部署證據。")
+    if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING:
+        lines.append(
+            "本報表使用 Selection point-in-time Scores 與當期歷史 active params；"
+            "可用於 Selection 內決定是否進入參數適應，正式效果仍須由凍結後 OOS 驗證。"
+            if metadata.get("score_source") == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            else "本報表是既有 forward period 的排序機制比較，不得依結果回頭調整模型或排序規則。"
+        )
+    else:
+        lines.append("本報表只驗證固定 active 操作點，不得依結果回頭調整 threshold、模型或訓練條件。")
+    return "\n".join(lines)
 
 
-def _print_colored_strategy_summary(*, baseline: dict[str, Any], quality: dict[str, Any], delta: dict[str, Any]) -> None:
-    print("\n策略比較重點：")
-    for label, key, preference, unit in (
-        ("總報酬", "total_return_pct", "higher", "%"),
-        ("最大回撤", "max_drawdown_pct", "lower", "%"),
-        ("Return/MDD", "return_over_max_drawdown", "higher", ""),
-        ("平均曝險", "avg_exposure_pct", "attention", "%"),
-    ):
-        signal = signal_for_delta(
-            delta.get(key),
-            preference=preference,
-            warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
-        )
-        text = (
-            f"- {label}: {_format_metric(baseline.get(key), digits=2, unit=unit)} → "
-            f"{_format_metric(quality.get(key), digits=2, unit=unit)} "
-            f"({_format_metric(delta.get(key), digits=2, unit=unit, signed=True)}) {signal_marker(signal)}"
-        )
-        print(terminal_signal(text, signal))
+def _remove_legacy_html_outputs(output_dir: Path) -> None:
+    for filename in ("strategy_comparison.html", "score_ranking_capture_audit.html"):
+        path = output_dir / filename
+        if path.is_file():
+            path.unlink()
 
 
 def _run_scenario(
@@ -1449,7 +1521,10 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
         no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
         quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
     )
-    print(f"完成：{output_dir / 'trade_attribution.md'}")
+    print_artifact_paths(
+        (("交易歸因 Markdown", output_dir / "trade_attribution.md"),),
+        project_root=root,
+    )
     return attribution
 
 
@@ -1512,10 +1587,7 @@ def run_existing_score_ranking_capture_audit(
         _markdown_report(metadata, baseline, quality, deltas, yearly, diagnostics),
         encoding="utf-8",
     )
-    (output_dir / "strategy_comparison.html").write_text(
-        _html_report(metadata, baseline, quality, deltas, yearly, diagnostics),
-        encoding="utf-8",
-    )
+    _remove_legacy_html_outputs(output_dir)
     result = build_score_ranking_capture_audit(
         metadata=metadata,
         baseline_summary=baseline,
@@ -1537,16 +1609,19 @@ def run_existing_score_ranking_capture_audit(
         json.dumps(_to_json_native(payload), ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    _print_colored_strategy_summary(baseline=baseline, quality=quality, delta=deltas)
-    decision = audit_payload.get("decision") or {}
-    print(
-        terminal_signal(
-            f"Capture audit: {decision.get('status')}｜{decision.get('conclusion')}",
-            str(decision.get("signal") or SIGNAL_NEGATIVE),
-        )
+    print("\n" + _render_strategy_console_report(
+        metadata, baseline, quality, deltas, yearly, diagnostics
+    ))
+    print("\n" + render_capture_audit_console(result))
+    print_artifact_paths(
+        (
+            ("策略比較 Markdown", output_dir / "strategy_comparison.md"),
+            ("策略比較 JSON", output_dir / "strategy_comparison.json"),
+            ("Capture audit Markdown", output_dir / "score_ranking_capture_audit.md"),
+            ("Capture audit JSON", output_dir / "score_ranking_capture_audit.json"),
+        ),
+        project_root=root,
     )
-    print(f"彩色策略報表：{output_dir / 'strategy_comparison.html'}")
-    print(f"彩色Capture Audit：{output_dir / 'score_ranking_capture_audit.html'}")
     return audit_payload
 
 
@@ -1915,10 +1990,7 @@ def run_comparison(
         _markdown_report(metadata, baseline, quality, deltas, yearly, strategy_diagnostics),
         encoding="utf-8",
     )
-    (output_dir / "strategy_comparison.html").write_text(
-        _html_report(metadata, baseline, quality, deltas, yearly, strategy_diagnostics),
-        encoding="utf-8",
-    )
+    _remove_legacy_html_outputs(output_dir)
     baseline_payload["equity_curve"].to_csv(
         output_dir / "no_filter_equity.csv", index=False, encoding="utf-8-sig"
     )
@@ -1988,21 +2060,24 @@ def run_comparison(
             no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
             quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
         )
-    _print_colored_strategy_summary(baseline=baseline, quality=quality, delta=deltas)
-    print(f"\n完成：{output_dir / 'strategy_comparison.md'}")
-    print(f"彩色易讀報表：{output_dir / 'strategy_comparison.html'}")
+    print("\n" + _render_strategy_console_report(
+        metadata, baseline, quality, deltas, yearly, strategy_diagnostics
+    ))
+    if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
+        print("\n" + render_capture_audit_console(capture_result))
+    artifacts = [
+        ("策略比較 Markdown", output_dir / "strategy_comparison.md"),
+        ("策略比較 JSON", output_dir / "strategy_comparison.json"),
+        ("年度比較 CSV", output_dir / "yearly_returns_comparison.csv"),
+    ]
     if comparison_mode == COMPARISON_MODE_HARD_FILTER:
-        print(f"交易歸因：{output_dir / 'trade_attribution.md'}")
+        artifacts.append(("交易歸因 Markdown", output_dir / "trade_attribution.md"))
     if capture_audit_payload is not None:
-        decision = capture_audit_payload.get("decision") or {}
-        print(
-            terminal_signal(
-                f"Capture audit: {decision.get('status')}｜{decision.get('conclusion')}",
-                str(decision.get("signal") or SIGNAL_NEGATIVE),
-            )
-        )
-        print(f"Capture audit Markdown：{output_dir / 'score_ranking_capture_audit.md'}")
-        print(f"Capture audit 彩色HTML：{output_dir / 'score_ranking_capture_audit.html'}")
+        artifacts.extend((
+            ("Capture audit Markdown", output_dir / "score_ranking_capture_audit.md"),
+            ("Capture audit JSON", output_dir / "score_ranking_capture_audit.json"),
+        ))
+    print_artifact_paths(artifacts, project_root=root)
     return json_payload
 
 def main(argv=None):

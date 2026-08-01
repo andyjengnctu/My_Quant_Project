@@ -53,6 +53,8 @@ python apps/workbench.py
 
 # Breakout quality filter
 
+- 所有簡易報表共用統一console格式；使用者可見的工件路徑一律從專案根目錄顯示相對路徑並使用`/`分隔。易讀內容直接顯示於console，持久工件依命令保留Markdown／JSON／CSV，不產生HTML。
+
 ## 研究資料、訓練與評估
 
 正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
@@ -470,10 +472,10 @@ python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking
 
 - `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。
 - 可正常評分但低 Score 的候選仍保留，只是順位靠後。Hard-filter模式的正式不可評分事件仍保守REJECT；Score-ranking模式的缺分候選不得排除或填0，必須保存`available=false`與原始Score來源，排在有效Score後並完整回退既有buy-sort。Continuation與STOP後Re-entry沿用原始breakout Score及原始Score事件日期。
-- `[2] 策略績效驗證`完成score-ranking比較後會同時輸出原策略比較與read-only capture attribution audit。兩份報表都提供Markdown易讀版、JSON完整資料與真正帶色的HTML；終端摘要亦以綠／紅／黃／灰顯示改善、惡化、注意與中性。Markdown使用相同顏色語意的🟢／🔴／🟡／⚪標記，避免純文字環境遺失判讀。
-- 原策略比較主要工件：`strategy_comparison.md`、`strategy_comparison.html`、`strategy_comparison.json`。Capture audit主要工件：`score_ranking_capture_audit.md`、`score_ranking_capture_audit.html`、`score_ranking_capture_audit.json`，另輸出兩組trade lifecycle、年度比較與scenario summary CSV。
+- `[2] 策略績效驗證`完成score-ranking比較後，會直接在console依統一標題、段落、表格、判讀與工件清單格式完整顯示原策略比較及read-only capture attribution audit；改善、惡化、注意與中性分別以綠／紅／黃／灰呈現，非TTY或重新導向時自動退回純文字。Markdown仍以🟢／🔴／🟡／⚪保留相同語意，JSON／CSV保存完整資料；不產生HTML，若輸出目錄已有舊版HTML會在重建報表時刪除。
+- 原策略比較主要工件：`strategy_comparison.md`、`strategy_comparison.json`。Capture audit主要工件：`score_ranking_capture_audit.md`、`score_ranking_capture_audit.json`，另輸出兩組trade lifecycle、年度比較與scenario summary CSV。所有console工件路徑只顯示從專案根目錄開始的相對路徑，manifest與runtime identity仍可保存canonical path。
 - Capture audit只讀已完成replay工件，分解平均實際投入、預留／投入比例、stop distance、保留買單成交率、持有期、首次半倉時間、半倉至結算日曆日、依daily-capacity交易日曆計算的尾倉slot-days、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap與年度差異。若交易列沒有canonical產業欄位則顯示N/A，不自行推測類股。Future Target只在兩組replay完成後join，不進候選排序、資金配置、成交或optimizer。
-- 若策略比較已完成，只重建彩色主報表與capture audit、不重跑兩組portfolio replay：
+- 若策略比較已完成，只重建console／Markdown主報表與capture audit、不重跑兩組portfolio replay：
 
 ```bash
 python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking --score-source selection_point_in_time --param-policy base-finalist-best --capture-audit-only

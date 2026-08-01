@@ -79,6 +79,14 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.console_report import (
+    console_color_enabled,
+    project_relative_display_path,
+    render_key_values,
+    render_section,
+    render_status_paths,
+    render_title,
+)
 
 
 COMMAND_MODULES = {
@@ -751,9 +759,6 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
 
     workflow_started = time.perf_counter()
     color_time = bool(sys.stdout.isatty())
-    print("\n=== Breakout Quality Research Workflow ===")
-    print(f"filter_id={filter_id}")
-    print(f"dataset={args.dataset}")
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     if str(model_spec.family) == "moment_frozen_linear":
         require_moment_pipeline_class()
@@ -762,62 +767,44 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
     schedule_parameters = experiment.lr_schedule_parameters()
     augmentation_parameters = experiment.augmentation_parameters()
-    print(
-        "model="
-        f"{model_spec.architecture}, {_model_runtime_description(model_spec)}"
-    )
+    workflow_rows = [
+        ("Filter ID", filter_id),
+        ("Dataset", args.dataset),
+        ("Model Contract", f"model={model_spec.architecture}, {_model_runtime_description(model_spec)}"),
+        ("Experiment Profile", experiment.name),
+        ("Optimizer", experiment.optimizer_name),
+        ("LR Schedule", f"{experiment.lr_schedule_name} / {schedule_parameters or '-'}"),
+        ("Augmentation", f"{experiment.augmentation_name} / {augmentation_parameters or '-'}"),
+        ("Training Sampling", experiment.training_sampling_mode),
+        ("Epoch／Batch", f"{int(args.epochs)} / {int(args.batch_size)}"),
+        ("Evaluation", f"batch={int(args.evaluation_batch_size)}, workers={int(args.evaluation_workers)}, parallel={bool(args.parallel_split_evaluation)}"),
+        ("Feature Bank", f"preload={bool(args.preload_feature_bank)}, prefetch={int(args.train_prefetch_batches)}"),
+        ("LR／Weight Decay", f"{float(args.lr):g} / {float(args.weight_decay):g}"),
+        ("Final Refit", args.final_refit_mode),
+        ("Class／Time Weight", f"{args.class_weight_mode} / {args.time_weight_mode}"),
+        ("Seed／Threshold", f"{int(args.seed)} / {float(args.fixed_threshold):g}"),
+        ("Inner Validation", bool(args.use_inner_validation)),
+        ("Torch", f"device={args.device}, mixed_precision={bool(args.mixed_precision)}, dtype={args.mixed_precision_dtype}, deterministic={bool(args.deterministic_algorithms)}, tf32={bool(args.allow_tf32)}"),
+    ]
     if str(model_spec.family) == "moment_frozen_linear":
-        print(
-            "external_encoder="
-            f"repository={model_spec.moment_repository}, "
-            f"revision={model_spec.moment_revision}, "
-            f"runtime={MOMENT_PACKAGE_NAME}-{MOMENT_PACKAGE_VERSION}/"
-            f"{MOMENT_TRANSFORMERS_PACKAGE_NAME}-{MOMENT_TRANSFORMERS_VERSION}, "
-            "project_pretraining=False, encoder_fine_tuning=False"
-        )
-    if str(model_spec.family) == "mantis_v2_frozen_linear":
-        print(
-            "external_encoder="
-            f"repository={model_spec.mantis_repository}, "
-            f"revision={model_spec.mantis_revision}, "
-            "project_pretraining=False, encoder_fine_tuning=False"
-        )
-    if str(model_spec.family) == "ts2vec_frozen_linear":
-        print(
-            "pretrain="
-            f"profile={BREAKOUT_QUALITY_PRETRAINING_PROFILE}, "
-            f"settings={build_breakout_quality_pretraining_profile_payload(BREAKOUT_QUALITY_PRETRAINING_PROFILE)}, "
-            f"dataset_stride={int(BREAKOUT_QUALITY_PRETRAINING_STRIDE)}, "
-            "selection_only=True, oos_windows=False, pass_reject_labels=False"
-        )
-    print(
-        "train="
-        f"epochs={int(args.epochs)}, batch_size={int(args.batch_size)}, "
-        f"evaluation_batch_size={int(args.evaluation_batch_size)}, "
-        f"evaluation_workers={int(args.evaluation_workers)}, "
-        f"parallel_split_evaluation={bool(args.parallel_split_evaluation)}, "
-        f"prefetch={int(args.train_prefetch_batches)}, "
-        f"preload_feature_bank={bool(args.preload_feature_bank)}, "
-        f"experiment_profile={experiment.name}, "
-        f"optimizer={experiment.optimizer_name}, "
-        f"lr_schedule={experiment.lr_schedule_name}, "
-        f"lr_schedule_parameters={schedule_parameters}, "
-        f"augmentation={experiment.augmentation_name}, "
-        f"augmentation_parameters={augmentation_parameters}, "
-        f"training_sampling={experiment.training_sampling_mode}, "
-        f"lr={float(args.lr)}, weight_decay={float(args.weight_decay)}, "
-        f"gradient_clip_norm={float(args.gradient_clip_norm)}, "
-        f"final_refit_mode={args.final_refit_mode}, "
-        f"class_weight_mode={args.class_weight_mode}, "
-        f"time_weight_mode={args.time_weight_mode}, seed={int(args.seed)}, "
-        f"threshold={float(args.fixed_threshold):.6f}, "
-        f"inner_validation={bool(args.use_inner_validation)}, "
-        f"device={args.device}, mixed_precision={bool(args.mixed_precision)}, "
-        f"mixed_precision_dtype={args.mixed_precision_dtype}, "
-        f"deterministic_algorithms={bool(args.deterministic_algorithms)}, "
-        f"allow_tf32={bool(args.allow_tf32)}"
-    )
-    print("注意：OOS 只供最終泛化評估，不得依結果回頭調整 threshold、epochs 或模型。")
+        workflow_rows.append((
+            "External Encoder",
+            f"external_encoder=repository={model_spec.moment_repository}, revision={model_spec.moment_revision}, runtime={MOMENT_PACKAGE_NAME}-{MOMENT_PACKAGE_VERSION}/{MOMENT_TRANSFORMERS_PACKAGE_NAME}-{MOMENT_TRANSFORMERS_VERSION}, project_pretraining=False, encoder_fine_tuning=False",
+        ))
+    elif str(model_spec.family) == "mantis_v2_frozen_linear":
+        workflow_rows.append((
+            "External Encoder",
+            f"external_encoder=repository={model_spec.mantis_repository}, revision={model_spec.mantis_revision}, project_pretraining=False, encoder_fine_tuning=False",
+        ))
+    elif str(model_spec.family) == "ts2vec_frozen_linear":
+        workflow_rows.append((
+            "Selection Pretrain",
+            f"pretrain=profile={BREAKOUT_QUALITY_PRETRAINING_PROFILE}, stride={int(BREAKOUT_QUALITY_PRETRAINING_STRIDE)}, settings={build_breakout_quality_pretraining_profile_payload(BREAKOUT_QUALITY_PRETRAINING_PROFILE)}, selection_only=True, oos_windows=False, pass_reject_labels=False",
+        ))
+    print("\n" + render_title("Breakout Quality Research Workflow"))
+    print(render_key_values(workflow_rows))
+    print(render_section("研究邊界"))
+    print("OOS 只供最終泛化評估，不得依結果回頭調整 threshold、epochs 或模型。")
 
     refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(
         filter_id,
@@ -1049,18 +1036,19 @@ def _print_policy_defaults(
     filter_id: str,
     train_settings: argparse.Namespace | None = None,
 ) -> None:
-    print(f"使用 policy Filter ID：{normalize_filter_id(filter_id)}")
-    print("使用 config/breakout_quality.py Label 預設：")
-    print(
-        f"- Feature Window：{int(DEFAULT_LABEL_POLICY.feature_window_bars)} bars\n"
-        f"- Label Horizon：{int(DEFAULT_LABEL_POLICY.label_horizon_bars)} bars\n"
-        f"- 最低 MFE：>{float(DEFAULT_LABEL_POLICY.min_mfe_return) * 100:g}%\n"
-        f"- 最低 MFE/MAE：>{float(DEFAULT_LABEL_POLICY.min_reward_risk_ratio):g}\n"
-        f"- 最大不利跌幅：{float(DEFAULT_LABEL_POLICY.max_adverse_return) * 100:g}%（觸及即 REJECT）"
-    )
+    print("\n" + render_title("Breakout Quality Policy"))
+    print(render_key_values((("Filter ID", normalize_filter_id(filter_id)),)))
+    print(render_section("Label 設定", number=1))
+    print(render_key_values((
+        ("Feature Window", f"{int(DEFAULT_LABEL_POLICY.feature_window_bars)} bars"),
+        ("Label Horizon", f"{int(DEFAULT_LABEL_POLICY.label_horizon_bars)} bars"),
+        ("最低 MFE", f">{float(DEFAULT_LABEL_POLICY.min_mfe_return) * 100:g}%"),
+        ("最低 MFE／MAE", f">{float(DEFAULT_LABEL_POLICY.min_reward_risk_ratio):g}"),
+        ("最大不利跌幅", f"{float(DEFAULT_LABEL_POLICY.max_adverse_return) * 100:g}%（觸及即 REJECT）"),
+    )))
     if train_settings is None:
         return
-    print("使用 config/breakout_quality.py 訓練預設：")
+    print(render_section("模型與訓練設定", number=2))
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     experiment = get_breakout_quality_experiment_profile(
         train_settings.experiment_profile
@@ -1262,13 +1250,15 @@ def _print_artifact_status(
         ),
         "runtime_scores": model_paths.score_path,
     }
-    print(
-        f"\n=== Artifact Status: {filter_id} / "
-        f"{model_paths.model_architecture} / {model_paths.experiment_profile} ==="
-    )
-    for name, path in status_paths.items():
-        status = "存在" if path.is_file() else "缺少"
-        print(f"[{status}] {name:<18} {path}")
+    print("\n" + render_title(
+        f"Breakout Quality 工件狀態｜{filter_id} / "
+        f"{model_paths.model_architecture} / {model_paths.experiment_profile}"
+    ))
+    print(render_status_paths(
+        ((name, path, path.is_file()) for name, path in status_paths.items()),
+        project_root=PROJECT_ROOT,
+        color=console_color_enabled(),
+    ))
 
     summary_path = dataset_paths["summary"]
     if summary_path.is_file():
@@ -1277,12 +1267,12 @@ def _print_artifact_status(
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             print(f"[警告] 無法讀取 dataset summary: {type(exc).__name__}: {exc}")
         else:
-            print(
-                "dataset_summary: "
-                f"dataset={summary.get('dataset')}, "
-                f"events={summary.get('event_count')}, "
-                f"date_range={summary.get('event_date_range')}"
-            )
+            print(render_section("Dataset 摘要"))
+            print(render_key_values((
+                ("Dataset", summary.get("dataset")),
+                ("Events", summary.get("event_count")),
+                ("Date Range", summary.get("event_date_range")),
+            )))
 
 
 def _interactive_workflow(program_name: str, *, workflow_settings=None) -> int:
@@ -1507,22 +1497,27 @@ def _interactive_regime_audit(program_name: str) -> int:
 
 def _print_workflow_status() -> None:
     settings = get_breakout_quality_workflow_settings()
-    print("\n=== Current Breakout Quality Workflow ===")
-    print(f"Filter ID：{settings.filter_id}")
-    print(f"Architecture：{settings.model_architecture}")
-    print(f"Experiment Profile：{settings.experiment_profile}")
-    print(f"Training Objective：{settings.training_objective}")
-    print(f"Training Scope：{settings.training_label_scope}")
-    print(f"Seed：{settings.seed}")
-    print(f"Strategy Comparison Mode：{settings.strategy_comparison_mode}")
-    print(f"Strategy Param Policy：{settings.strategy_param_policy}")
-    print(f"Strategy Score Source：{settings.strategy_score_source}")
-    print(f"Strategy Buy Sort：{settings.strategy_buy_sort}")
+    print("\n" + render_title("Current Breakout Quality Workflow"))
+    base_rows = [
+        ("Filter ID", settings.filter_id),
+        ("Architecture", settings.model_architecture),
+        ("Experiment Profile", settings.experiment_profile),
+        ("Training Objective", settings.training_objective),
+        ("Training Scope", settings.training_label_scope),
+        ("Seed", settings.seed),
+        ("Strategy Comparison Mode", settings.strategy_comparison_mode),
+        ("Strategy Param Policy", settings.strategy_param_policy),
+        ("Strategy Score Source", settings.strategy_score_source),
+        ("Strategy Buy Sort", settings.strategy_buy_sort),
+    ]
 
     if settings.is_binary_classification:
         defaults = _train_defaults()
-        print("Model Output：PASS／REJECT probability")
-        print(f"Fixed Threshold：{float(defaults.fixed_threshold):g}")
+        base_rows.extend((
+            ("Model Output", "PASS／REJECT probability"),
+            ("Fixed Threshold", f"{float(defaults.fixed_threshold):g}"),
+        ))
+        print(render_key_values(base_rows))
         _print_artifact_status(
             settings.filter_id,
             model_architecture=settings.model_architecture,
@@ -1534,16 +1529,20 @@ def _print_workflow_status() -> None:
         raise ValueError(
             f"不支援的 workflow training objective: {settings.training_objective!r}"
         )
-    print(f"Continuous Target：{settings.continuous_target_id}")
-    print(
-        "PIT Score Period："
-        f"{settings.point_in_time_score_start_date} ~ "
-        f"{settings.point_in_time_score_end_date or 'Selection end'}"
-    )
-    print(
-        f"PIT Fold／Validation：{settings.point_in_time_fold_months}／"
-        f"{settings.point_in_time_inner_validation_months} months"
-    )
+    base_rows.extend((
+        ("Continuous Target", settings.continuous_target_id),
+        (
+            "PIT Score Period",
+            f"{settings.point_in_time_score_start_date} ～ "
+            f"{settings.point_in_time_score_end_date or 'Selection end'}",
+        ),
+        (
+            "PIT Fold／Validation",
+            f"{settings.point_in_time_fold_months}／"
+            f"{settings.point_in_time_inner_validation_months} months",
+        ),
+    ))
+    print(render_key_values(base_rows))
     status_paths = {
         "Dataset summary": _dataset_paths(settings.filter_id)["summary"],
         "Target manifest": resolve_continuous_target_dir(
@@ -1572,9 +1571,12 @@ def _print_workflow_status() -> None:
             PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
         ),
     }
-    print("\nWorkflow artifacts:")
-    for name, path in status_paths.items():
-        print(f"[{'存在' if path.is_file() else '缺少'}] {name:<20} {path}")
+    print(render_section("Workflow 工件"))
+    print(render_status_paths(
+        ((name, path, path.is_file()) for name, path in status_paths.items()),
+        project_root=PROJECT_ROOT,
+        color=console_color_enabled(),
+    ))
 
 
 def _interactive_model_research(program_name: str) -> int:

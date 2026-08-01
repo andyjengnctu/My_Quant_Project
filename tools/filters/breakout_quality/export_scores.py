@@ -73,6 +73,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_research_score_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.common import (
     discover_dataset_csv_inputs,
     load_dataset_frame,
@@ -790,8 +791,10 @@ def main(argv=None) -> int:
             ),
         }
         write_json(research_manifest_path, research_manifest)
-        print(f"已輸出研究分數: {score_path}")
-        print(f"已輸出研究契約: {research_manifest_path}")
+        print_artifact_paths(
+            (("Research scores", score_path), ("Research manifest", research_manifest_path)),
+            project_root=PROJECT_ROOT,
+        )
         print(f"scope={args.scope} rows={len(scored)} date_range={event_range}")
         return 0
 
@@ -882,14 +885,15 @@ def main(argv=None) -> int:
     }
     manifest["score_filename"] = DEFAULT_SCORE_FILENAME
     write_json(writable_paths.manifest_path, manifest)
-    print(f"已輸出正式單一路徑: {score_path}")
-    print(f"已輸出不可評分事件稽核: {unavailable_path}")
+    print_artifact_paths(
+        (("Runtime scores", score_path), ("Unavailable audit", unavailable_path), ("Manifest", writable_paths.manifest_path)),
+        project_root=PROJECT_ROOT,
+    )
     print(
         "runtime candidate coverage: "
         f"total={len(scored):,}, model_scored={len(events):,}, "
         f"conservative_reject={len(unavailable_events):,}"
     )
-    print(f"已更新: {writable_paths.manifest_path}")
     print(f"scope={args.scope} rows={len(scored)} date_range={event_range}")
     return 0
 

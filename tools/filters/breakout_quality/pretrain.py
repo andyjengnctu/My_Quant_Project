@@ -64,6 +64,7 @@ from tools.filters.breakout_quality.common import (
     load_validated_dataset_bundle,
     write_json,
 )
+from filters.breakout_quality.console_report import print_artifact_paths
 
 
 def parse_args(argv=None):
@@ -407,8 +408,10 @@ def main(argv=None) -> int:
             "elapsed_sec": round(time.perf_counter() - started, 3),
         }
         write_json(paths.manifest, manifest)
-        print(f"已輸出 pretrained encoder: {paths.encoder}")
-        print(f"已輸出 pretraining manifest: {paths.manifest}")
+        print_artifact_paths(
+            (("Pretrained encoder", paths.encoder), ("Pretraining manifest", paths.manifest)),
+            project_root=PROJECT_ROOT,
+        )
         return 0
     finally:
         close_pretraining_windows(windows)

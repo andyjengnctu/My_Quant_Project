@@ -20,6 +20,7 @@ from tools.filters.breakout_quality.audit_no_time_continuous_target import (
     main as build_no_time_target,
 )
 from tools.filters.breakout_quality.common import PROJECT_ROOT, load_validated_dataset_bundle
+from filters.breakout_quality.console_report import print_artifact_paths
 
 SUPPORTED_TARGET_IDS = (
     STRATEGY_ALIGNED_TARGET_ID,
@@ -149,7 +150,7 @@ def main(argv=None) -> int:
             target_id=target_id,
         )
         if report_path.is_file():
-            print(f"Continuous Target 易讀報表：{report_path}")
+            print_artifact_paths((("Continuous Target Markdown", report_path),), project_root=PROJECT_ROOT)
         return 0
 
     print(f"[Continuous Target] 建立／更新：{target_id}")
@@ -180,7 +181,7 @@ def main(argv=None) -> int:
         target_id=target_id,
     )
     if report_path.is_file():
-        print(f"Continuous Target 易讀報表：{report_path}")
+        print_artifact_paths((("Continuous Target Markdown", report_path),), project_root=PROJECT_ROOT)
     return 0
 
 

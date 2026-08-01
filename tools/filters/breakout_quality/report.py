@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import unicodedata
@@ -22,6 +21,11 @@ from filters.breakout_quality.paths import (
     ensure_filter_report_dir,
     resolve_filter_report_json_path,
     resolve_filter_report_markdown_path,
+)
+from filters.breakout_quality.console_report import (
+    console_color_enabled,
+    print_artifact_paths,
+    render_title,
 )
 from tools.filters.breakout_quality.evaluate import (
     EVALUATION_SPLIT_OOS,
@@ -102,14 +106,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-
-def _console_color_enabled() -> bool:
-    if os.environ.get("NO_COLOR") is not None:
-        return False
-    if os.environ.get("TERM", "").strip().lower() == "dumb":
-        return False
-    stream = getattr(sys, "stdout", None)
-    return bool(stream is not None and hasattr(stream, "isatty") and stream.isatty())
 
 
 def _paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
@@ -2050,9 +2046,7 @@ def render_console_summary(payload: dict, *, color: bool = False) -> str:
     training = payload["training"]
     lines = [
         "",
-        "=" * 96,
-        " " + _paint("Breakout Quality 評估報表", "blue", enabled=color, bold=True),
-        "=" * 96,
+        render_title(_paint("Breakout Quality 評估報表", "blue", enabled=color, bold=True)),
         f"Filter ID       : {payload['filter_id']}",
         "主要統計口徑    : Ticker/Date Group Weighted",
     ]
@@ -2195,12 +2189,11 @@ def main(argv=None) -> int:
         experiment_profile=str(args.experiment_profile),
         score_path=args.score_path,
     )
-    print(render_console_summary(payload, color=_console_color_enabled()))
-    print("\n" + "=" * 96)
-    print(" 報表檔案")
-    print("=" * 96)
-    print(f"Markdown 報表：{markdown_path}")
-    print(f"完整指標 JSON：{json_path}")
+    print(render_console_summary(payload, color=console_color_enabled()))
+    print_artifact_paths(
+        (("Markdown", markdown_path), ("完整指標 JSON", json_path)),
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

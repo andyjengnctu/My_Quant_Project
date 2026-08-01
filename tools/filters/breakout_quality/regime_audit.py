@@ -29,6 +29,7 @@ from filters.breakout_quality.contract import (
 )
 from filters.breakout_quality.paths import ensure_filter_report_dir
 from filters.breakout_quality.splits import KEY_COLUMNS, normalize_split_assignment_keys
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.common import load_validated_dataset_bundle
 from tools.filters.breakout_quality.evaluate import (
     GROUP_SCORE_NUMERICAL_NOISE_ATOL,
@@ -925,9 +926,7 @@ def main(argv=None) -> int:
         focus_year=int(args.focus_year),
     )
     print(render_regime_audit_markdown(payload))
-    print("已輸出：")
-    for name, path in paths.items():
-        print(f"- {name}: {path}")
+    print_artifact_paths(tuple(paths.items()), project_root=PROJECT_ROOT)
     return 0
 
 

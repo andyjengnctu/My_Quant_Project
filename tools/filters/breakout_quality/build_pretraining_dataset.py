@@ -35,6 +35,7 @@ from tools.filters.breakout_quality.common import (
     load_dataset_frame,
     write_json,
 )
+from filters.breakout_quality.console_report import print_artifact_paths
 
 
 def parse_args(argv=None):
@@ -243,8 +244,8 @@ def main(argv=None) -> int:
             shutil.rmtree(paths.output_dir)
         temp_dir.replace(paths.output_dir)
 
-    print(f"已建立 TS2Vec Selection-only pretraining dataset: {paths.output_dir}")
-    print(f"windows={window_count:,}, date={selection_start}~{selection_end}, stride={stride}")
+    print(f"TS2Vec Selection-only pretraining dataset完成：windows={window_count:,}, date={selection_start}~{selection_end}, stride={stride}")
+    print_artifact_paths((("Pretraining dataset", paths.output_dir),), project_root=PROJECT_ROOT)
     return 0
 
 

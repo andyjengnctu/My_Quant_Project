@@ -42,6 +42,14 @@ from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     calculate_spearman,
     load_continuous_ranker_data,
 )
+from filters.breakout_quality.console_report import (
+    print_artifact_paths,
+    project_relative_display_path,
+    render_key_values,
+    render_section,
+    render_table,
+    render_title,
+)
 
 AUDIT_SCHEMA_VERSION = 3
 DRIFT_MEAN_SHIFT_STD_THRESHOLD = 1.0
@@ -493,23 +501,8 @@ def _fmt_percent(value: Any, digits: int = 2) -> str:
     return f"{numeric * 100.0:.{digits}f}%"
 
 
-def _render_console_table(headers: list[str], rows: list[list[str]]) -> list[str]:
-    if not rows:
-        return ["（無資料）"]
-    normalized = [[str(value) for value in row] for row in rows]
-    widths = [len(str(header)) for header in headers]
-    for row in normalized:
-        if len(row) != len(headers):
-            raise ValueError("console table欄位數與header不一致")
-        for index, value in enumerate(row):
-            widths[index] = max(widths[index], len(value))
-    lines = [
-        "  ".join(str(header).ljust(widths[index]) for index, header in enumerate(headers)),
-        "  ".join("-" * width for width in widths),
-    ]
-    for row in normalized:
-        lines.append("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
-    return lines
+def _render_console_table(headers, rows):
+    return render_table(headers, rows).splitlines()
 
 
 def _direction_summary(yearly_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -545,23 +538,22 @@ def render_console_summary(payload: dict[str, Any]) -> str:
 
     lines = [
         "",
-        "=" * 100,
-        " Breakout Quality Selection Point-in-time 模型評估報表",
-        "=" * 100,
-        f"Filter ID           : {payload['filter_id']}",
-        f"Architecture        : {payload['model_architecture']}",
-        f"Experiment Profile  : {payload['experiment_profile']}",
-        f"Continuous Target   : {payload['continuous_target_id']}",
-        f"Training Scope      : {workflow.get('training_label_scope', '-')}",
-        f"Random Seed         : {workflow.get('seed', '-')}",
-        f"Score Period        : {payload['score_period']['start']} ～ {payload['score_period']['end']}",
-        f"PIT Folds           : {workflow.get('fold_count', '-')}",
-        f"Fold / Validation   : {workflow.get('fold_months', '-')} / {workflow.get('inner_validation_months', '-')} months",
-        f"Score Coverage      : {int(score_coverage.get('scored_group_count', 0)):,}/{int(score_coverage.get('expected_group_count', 0)):,} ({_fmt_percent(score_coverage.get('coverage_rate'))})",
-        "Primary Evidence    : PASS-only No-time Target ordering",
-        "Strategy Result     : 尚未執行；本報表只評估模型排序能力",
-        "",
-        "1. 核心排序能力",
+        render_title("Breakout Quality Selection Point-in-time 模型評估報表"),
+        render_key_values((
+            ("Filter ID", payload["filter_id"]),
+            ("Architecture", payload["model_architecture"]),
+            ("Experiment Profile", payload["experiment_profile"]),
+            ("Continuous Target", payload["continuous_target_id"]),
+            ("Training Scope", workflow.get("training_label_scope", "-")),
+            ("Random Seed", workflow.get("seed", "-")),
+            ("Score Period", f"{payload['score_period']['start']} ～ {payload['score_period']['end']}"),
+            ("PIT Folds", workflow.get("fold_count", "-")),
+            ("Fold／Validation", f"{workflow.get('fold_months', '-')}／{workflow.get('inner_validation_months', '-')} months"),
+            ("Score Coverage", f"{int(score_coverage.get('scored_group_count', 0)):,}/{int(score_coverage.get('expected_group_count', 0)):,} ({_fmt_percent(score_coverage.get('coverage_rate'))})"),
+            ("Primary Evidence", "PASS-only No-time Target ordering"),
+            ("Strategy Result", "尚未執行；本報表只評估模型排序能力"),
+        )),
+        render_section("核心排序能力", number=1),
     ]
     lines.extend(
         _render_console_table(
@@ -591,7 +583,7 @@ def render_console_summary(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "2. 年度穩定性（PASS-only）",
+            render_section("年度穩定性（PASS-only）", number=2),
             (
                 "正向 Spearman 年度："
                 f"{direction['positive_spearman_year_count']}/{direction['valid_year_count']} "
@@ -619,7 +611,7 @@ def render_console_summary(payload: dict[str, Any]) -> str:
         )
     )
 
-    lines.extend(["", "3. Fold 分布與漂移"])
+    lines.append(render_section("Fold 分布與漂移", number=3))
     fold_rows = [
         [
             str(row["fold_id"]),
@@ -645,13 +637,13 @@ def render_console_summary(payload: dict[str, Any]) -> str:
             f"Max adjacent shift : {_fmt_metric(drift.get('max_adjacent_mean_shift_in_pooled_std'))} pooled SD",
             f"Flagged folds      : {', '.join(drift['flagged_folds']) if drift['flagged_folds'] else '-'}",
             "",
-            "4. PASS／REJECT 重疊診斷",
+            render_section("PASS／REJECT 重疊診斷", number=4),
             f"Score vs PASS AUC          : {_fmt_metric(classification.get('score_vs_pass_reject_auc'))}",
             f"Overall PASS share         : {_fmt_percent(classification.get('overall_pass_share'))}",
             f"Top score decile PASS share: {_fmt_percent(classification.get('top_score_decile_pass_share'))}",
             f"PASS-only Target Spearman  : {_fmt_metric(primary.get('global_spearman'))}",
             "",
-            "5. Orderable candidate Score coverage",
+            render_section("Orderable candidate Score coverage", number=5),
         ]
     )
     orderable = payload["orderable_candidate_coverage"]
@@ -662,12 +654,15 @@ def render_console_summary(payload: dict[str, Any]) -> str:
             f"未評分={int(orderable['unscored_candidate_count']):,}"
         )
     else:
-        lines.append(f"未提供：{orderable.get('reason')}；{orderable.get('path')}")
+        orderable_path = project_relative_display_path(
+            orderable.get("path") or "-", project_root=PROJECT_ROOT
+        )
+        lines.append(f"未提供：{orderable.get('reason')}；{orderable_path}")
 
     lines.extend(
         [
             "",
-            "綜合狀態",
+            render_section("綜合狀態", number=6),
             "- 報表狀態：RESULT_AVAILABLE_PENDING_REVIEW",
             "- 策略 optimizer：未執行",
             "- Future Target runtime sort：未使用",
@@ -989,11 +984,10 @@ def main(argv=None) -> int:
     write_json(output_json, payload)
     output_markdown.write_text(_render_markdown(payload), encoding="utf-8")
     print(render_console_summary(payload))
-    print("\n" + "=" * 100)
-    print(" 報表檔案")
-    print("=" * 100)
-    print(f"Markdown 易讀報表：{output_markdown}")
-    print(f"完整指標 JSON    ：{output_json}")
+    print_artifact_paths(
+        (("Markdown", output_markdown), ("完整指標 JSON", output_json)),
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

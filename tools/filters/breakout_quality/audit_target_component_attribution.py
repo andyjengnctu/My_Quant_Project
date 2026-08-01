@@ -31,6 +31,7 @@ from tools.filters.breakout_quality.audit_qualified_candidate_set import (
     AUDIT_JSON_FILENAME as QUALIFIED_AUDIT_JSON_FILENAME,
     QUALIFIED_GROUPS_FILENAME,
 )
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.train_continuous_ranker import (
     RANKER_SCORE_FILENAME,
@@ -516,8 +517,10 @@ def main(argv=None) -> int:
         f"adverse={_fmt(a.get('adverse_r_vs_realized_r'))} "
         f"time={_fmt(a.get('time_penalty_r_vs_realized_r'))}"
     )
-    print(f"已輸出: {markdown_path}")
-    print(f"已輸出: {json_path}")
+    print_artifact_paths(
+        [("Markdown 報表", markdown_path), ("完整 JSON", json_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

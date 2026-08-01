@@ -37,6 +37,7 @@ from tools.filters.breakout_quality.audit_selection_strategy_realization import 
     _unique_signals,
     _validate_param_coverage,
 )
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_HARD_FILTER,
@@ -837,8 +838,10 @@ def main(argv=None) -> int:
         f"overall={metrics.get('spearman_target_vs_counterfactual_r')} "
         f"pass={(metrics.get('label_conditional') or {}).get('PASS',{}).get('spearman_target_vs_counterfactual_r')}"
     )
-    print(f"已輸出: {md_path}")
-    print(f"已輸出: {json_path}")
+    print_artifact_paths(
+        [("Markdown 報表", md_path), ("完整 JSON", json_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

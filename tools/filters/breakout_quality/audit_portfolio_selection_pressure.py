@@ -20,7 +20,8 @@ from tools.filters.breakout_quality.audit_selection_strategy_realization import 
     AUDIT_JSON_FILENAME as SOURCE_AUDIT_JSON_FILENAME,
     _output_dir as selection_strategy_output_dir,
 )
-from tools.filters.breakout_quality.common import write_json
+from filters.breakout_quality.console_report import print_artifact_paths
+from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.train_continuous_ranker import _spearman
 
 AUDIT_SCHEMA_VERSION = 1
@@ -488,8 +489,10 @@ def main(argv=None) -> int:
         f"top_k_retention={metrics['top_k_retention_occurrence_weighted']} "
         f"target_gap_r={metrics['target_opportunity_gap_r_date_weighted']}"
     )
-    print(f"已輸出: {markdown_path}")
-    print(f"已輸出: {json_path}")
+    print_artifact_paths(
+        [("Markdown 報表", markdown_path), ("完整 JSON", json_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

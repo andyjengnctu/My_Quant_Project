@@ -28,6 +28,7 @@ from filters.breakout_quality.continuous_target import (
 )
 from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
 from filters.breakout_quality.paths import resolve_filter_output_dir
+from filters.breakout_quality.console_report import print_artifact_paths, project_relative_display_path
 from tools.filters.breakout_quality.common import PROJECT_ROOT, load_validated_dataset_bundle, write_json
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_HARD_FILTER,
@@ -321,7 +322,10 @@ def main(argv=None) -> int:
     if not params_path.is_absolute():
         params_path = (PROJECT_ROOT / params_path).resolve()
     if bool(args.prepare_only):
-        print(f"已輸出11I nested ROOS準備腳本: {prepare_script}")
+        print_artifact_paths(
+            [("Nested ROOS 準備腳本", prepare_script)],
+            project_root=PROJECT_ROOT,
+        )
         return 0
     if not params_path.is_file():
         raise FileNotFoundError(
@@ -465,8 +469,10 @@ def main(argv=None) -> int:
         f"overall={trade_metrics.get('spearman_target_vs_realized_r')} "
         f"pass={(trade_metrics.get('label_conditional') or {}).get('PASS', {}).get('spearman_target_vs_realized_r')}"
     )
-    print(f"已輸出: {md_path}")
-    print(f"已輸出: {json_path}")
+    print_artifact_paths(
+        [("Markdown 報表", md_path), ("完整 JSON", json_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

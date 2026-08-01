@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_022643_9c4f83a.zip`，SHA256 `fd8e4d0e3b04e03fc47ce610d869f24499cb937a1b38c4f98dfd057e2ff1b032`；沿用使用者已完成的2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort controlled comparison與事後Target診斷，新增read-only capture attribution及彩色易讀報表；實際capture結果尚未執行 |
-| SHA256 | 來源ZIP SHA256 `fd8e4d0e3b04e03fc47ce610d869f24499cb937a1b38c4f98dfd057e2ff1b032`。既有3.78結果維持：Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。模型層通過、Sort Only拒絕；本輪只新增資本使用／Target capture歸因與彩色報表，未改寫或重算上述績效 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260802_031330_46cfab1.zip`，SHA256 `15b26d3fc08ae0b80fd003cde47ba98e2935e665f4e200e2ccc206b1b8455697`；沿用2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort結果與read-only capture attribution實作，將breakout-quality簡易報表統一為console直接顯示、Markdown／JSON／CSV保存、停止HTML，並統一顯示專案根目錄相對工件路徑；實際capture結果尚未執行 |
+| SHA256 | 來源ZIP SHA256 `15b26d3fc08ae0b80fd003cde47ba98e2935e665f4e200e2ccc206b1b8455697`。既有3.78結果維持：Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。模型層通過、Sort Only拒絕；本輪只調整報表顯示與工件路徑呈現，不改寫或重算上述績效 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1763,11 +1763,11 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 歸因指標 | 平均預留與實際投入、投入／預留比例、初始stop distance、保留買單fill rate、持有日、首次partial時間、partial到full exit日曆日、依daily-capacity交易日曆計算的尾倉slot-days、partial比例、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap、capital return及年度差異；交易列沒有canonical產業欄位時產業指標為N/A，不自行推測 |
 | 決策邊界 | 只有Target選擇改善、經濟效果失敗且audit確認曝險／sizing／capture／turnover／fill至少一項可觀測瓶頸，才標記`ADAPTATION_DIAGNOSTIC_SUPPORTED`；否則Sort Only維持淘汰且不得直接啟動optimizer。這只是Selection內是否值得做參數適應的診斷，不是OOS採用證據 |
 | Future Target | 只讀兩組replay完成後輸出的selected-target diagnostics；不得進runtime排序、資金配置、成交或optimizer，payload明確保存`future_target_used_for_runtime=false` |
-| 易讀報表 | 原`strategy_comparison`及新`score_ranking_capture_audit`均輸出Markdown、JSON與彩色HTML。Markdown用🟢／🔴／🟡／⚪，HTML及終端分別用綠／紅／黃／灰標示改善、惡化、注意與中性；顏色只呈現已計算差異，不建立第二套指標 |
-| 正式工件 | `strategy_comparison.md/.html/.json`；`score_ranking_capture_audit.md/.html/.json`；`no_filter_capture_lifecycle.csv`、`score_ranking_capture_lifecycle.csv`、`score_ranking_capture_yearly.csv`、`score_ranking_capture_scenarios.csv` |
-| 重用流程 | `[2] 策略績效驗證`完整replay後自動輸出兩份彩色易讀報表；已有3.78 replay工件時可用`strategy-compare --comparison-mode score-ranking --score-source selection_point_in_time --param-policy base-finalist-best --capture-audit-only`只重建報表與audit，不重跑portfolio |
+| 易讀報表 | 原`strategy_comparison`及新`score_ranking_capture_audit`都直接在console完整顯示；TTY用綠／紅／黃／灰，非TTY退回純文字。正式檔案保留Markdown、JSON與必要CSV，停止產生HTML，舊HTML於重建時清除；顏色只呈現已計算差異，不建立第二套指標 |
+| 正式工件 | `strategy_comparison.md/.json`；`score_ranking_capture_audit.md/.json`；`no_filter_capture_lifecycle.csv`、`score_ranking_capture_lifecycle.csv`、`score_ranking_capture_yearly.csv`、`score_ranking_capture_scenarios.csv`；console只顯示專案根目錄相對路徑 |
+| 重用流程 | `[2] 策略績效驗證`完整replay後自動在console輸出兩份易讀報表；已有3.78 replay工件時可用`strategy-compare --comparison-mode score-ranking --score-source selection_point_in_time --param-policy base-finalist-best --capture-audit-only`只重建報表與audit，不重跑portfolio |
 | 固定條件 | 不改Dataset、Label、Continuous Target、PIT folds／Scores／audit、Seed 42、Score Sort、歷史active params、候選生成、成交、資金、停損停利、帳務或3.78既有績效結果 |
-| 驗證 | 新增獨立synthetic覆蓋trade lifecycle、投入／stop、partial日曆天數與daily-capacity交易slot-days、entry-date／月份集中度、產業欄位缺失N/A、Target capture、decision gate、Future Target runtime隔離、Markdown色彩語意、HTML CSS色彩、所有正式輸出工件及`--capture-audit-only`只讀重建且禁止portfolio replay；完整本機歸因數值尚未執行，不可預寫結論 |
+| 驗證 | 新增獨立synthetic覆蓋trade lifecycle、投入／stop、partial日曆天數與daily-capacity交易slot-days、entry-date／月份集中度、產業欄位缺失N/A、Target capture、decision gate、Future Target runtime隔離、console完整表格與ANSI色彩、Markdown色彩語意、HTML不產生且舊檔清除、所有正式輸出工件及`--capture-audit-only`只讀重建且禁止portfolio replay；完整本機歸因數值尚未執行，不可預寫結論 |
 | 下一步 | 先執行`--capture-audit-only`取得3.78既有replay的capture結果；只有狀態為`ADAPTATION_DIAGNOSTIC_SUPPORTED`，才提出固定Score契約下的Selection策略參數適應範圍 |
 
 ### 3.80 Breakout Quality主選單編號一致化（2026-08-02）
@@ -1781,3 +1781,15 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 固定條件 | 不改Dataset、Label、Continuous Target、PIT Scores、Seed 42、Score Sort、歷史active params、交易引擎、capture audit或任何績效結果 |
 | 驗證 | synthetic CLI需分別驗證Enter／1／2／3路由與畫面文字，避免只改顯示而未改執行行為 |
 
+### 3.81 Console易讀報表、相對工件路徑與HTML移除（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_APPLICABLE`；只調整breakout-quality使用者可見輸出，不改模型、Score、策略、Target或績效計算 |
+| 程式基準 | `test-branch-1_20260802_031330_46cfab1.zip`；SHA256 `15b26d3fc08ae0b80fd003cde47ba98e2935e665f4e200e2ccc206b1b8455697` |
+| Console SSOT | 新增`filters/breakout_quality/console_report.py`，統一標題、段落、key-value、表格、狀態、ANSI-safe欄寬與工件清單；`apps/breakout_quality.py`狀態頁及主要build／train／audit／strategy報表共用，不再各自拼接不同格式 |
+| 易讀報表 | 策略比較與capture audit的完整易讀內容直接寫入console；TTY使用綠／紅／黃／灰，重新導向或非TTY自動退回純文字。Markdown／JSON／CSV仍作正式持久工件，不新增HTML |
+| HTML處理 | 停止產生`strategy_comparison.html`與`score_ranking_capture_audit.html`；重建主報表或capture audit時會刪除同目錄舊版HTML，避免使用者誤讀過期檔案 |
+| 路徑規則 | 所有breakout-quality console工件／狀態路徑以專案根目錄為基準顯示`/`分隔相對路徑；manifest、hash identity與runtime canonical path不變。此通用顯示規則已寫入`doc/PROJECT_SETTINGS.md` |
+| 固定條件 | Dataset、Label、Continuous Target、Seed 42、PIT folds／Scores／audit、Score Sort、歷史active params、候選生成、成交、資金、停損停利、帳務與3.78績效結果全部不變 |
+| 驗證邊界 | Direct synthetic驗證console完整章節、強制色彩與非HTML工件、舊HTML清除、`--capture-audit-only`不重跑portfolio、相對路徑及共用格式；本輪沒有新的capture或策略數值 |

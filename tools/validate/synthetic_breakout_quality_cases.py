@@ -11257,14 +11257,19 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
+    from filters.breakout_quality.console_report import (
+        project_relative_display_path,
+        strip_ansi,
+    )
     from tools.filters.breakout_quality.audit_score_ranking_capture import (
         build_score_ranking_capture_audit,
+        render_capture_audit_console,
         write_score_ranking_capture_audit_outputs,
     )
     from tools.filters.breakout_quality.strategy_compare import (
         COMPARISON_MODE_SCORE_RANKING,
-        _html_report,
         _markdown_report,
+        _render_strategy_console_report,
         run_existing_score_ranking_capture_audit,
     )
 
@@ -11402,40 +11407,46 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     comparison_markdown = _markdown_report(
         metadata, baseline_summary, score_summary, comparison_delta, yearly, selection_diagnostics
     )
-    comparison_html = _html_report(
-        metadata, baseline_summary, score_summary, comparison_delta, yearly, selection_diagnostics
+    comparison_console = _render_strategy_console_report(
+        metadata, baseline_summary, score_summary, comparison_delta, yearly,
+        selection_diagnostics, color=True,
     )
+    capture_console = render_capture_audit_console(result, color=True)
     with tempfile.TemporaryDirectory() as temp_dir:
-        payload = write_score_ranking_capture_audit_outputs(result=result, output_dir=temp_dir)
         output_dir = Path(temp_dir)
+        (output_dir / "score_ranking_capture_audit.html").write_text(
+            "legacy", encoding="utf-8"
+        )
+        payload = write_score_ranking_capture_audit_outputs(result=result, output_dir=temp_dir)
         audit_markdown = (output_dir / "score_ranking_capture_audit.md").read_text(encoding="utf-8")
-        audit_html = (output_dir / "score_ranking_capture_audit.html").read_text(encoding="utf-8")
         outputs_complete = all(
             (output_dir / name).is_file()
             for name in (
                 "score_ranking_capture_audit.json", "score_ranking_capture_audit.md",
-                "score_ranking_capture_audit.html", "no_filter_capture_lifecycle.csv",
-                "score_ranking_capture_lifecycle.csv", "score_ranking_capture_yearly.csv",
-                "score_ranking_capture_scenarios.csv",
+                "no_filter_capture_lifecycle.csv", "score_ranking_capture_lifecycle.csv",
+                "score_ranking_capture_yearly.csv", "score_ranking_capture_scenarios.csv",
             )
         )
+        no_html_outputs = not (output_dir / "score_ranking_capture_audit.html").exists()
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "strategy_and_capture_reports_have_readable_color_semantics_and_complete_outputs",
+        "strategy_and_capture_reports_are_console_readable_without_html_outputs",
         (True, True, True, True, True),
         (
             outputs_complete,
+            no_html_outputs,
             (
                 "🔴 惡化" in comparison_markdown
                 and "🟡 注意" in audit_markdown
                 and "半倉殘留交易slot-days" in audit_markdown
                 and "產業資料覆蓋" in audit_markdown
             ),
-            'class="delta negative"' in comparison_html,
             (
-                'class="badge warning"' in audit_html
-                and "Exit reason" in audit_html
-                and "半倉殘留交易slot-days" in audit_html
+                "Breakout Quality Score 排序策略經濟效果對照" in strip_ansi(comparison_console)
+                and "Breakout Quality Score 排序資本效率／Target Capture 歸因" in strip_ansi(capture_console)
+                and "Exit reason" in strip_ansi(capture_console)
+                and "\x1b[" in comparison_console
+                and "\x1b[" in capture_console
             ),
             payload["decision"]["status"] == "ADAPTATION_DIAGNOSTIC_SUPPORTED",
         ),
@@ -11485,6 +11496,8 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
             existing_dir / "score_ranking_daily_capacity.csv",
             index=False, encoding="utf-8-sig",
         )
+        (existing_dir / "strategy_comparison.html").write_text("legacy", encoding="utf-8")
+        (existing_dir / "score_ranking_capture_audit.html").write_text("legacy", encoding="utf-8")
         with (
             patch(
                 "tools.filters.breakout_quality.strategy_compare.resolve_filter_model_output_dir",
@@ -11506,16 +11519,35 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
         reuse_outputs_complete = all(
             (existing_dir / name).is_file()
             for name in (
-                "strategy_comparison.md", "strategy_comparison.html",
+                "strategy_comparison.md", "strategy_comparison.json",
                 "score_ranking_capture_audit.json", "score_ranking_capture_audit.md",
-                "score_ranking_capture_audit.html",
             )
+        )
+        reuse_has_no_html = not any(
+            (existing_dir / name).exists()
+            for name in ("strategy_comparison.html", "score_ranking_capture_audit.html")
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "capture_audit_only_reuses_existing_artifacts_without_portfolio_replay",
-        (True, "ADAPTATION_DIAGNOSTIC_SUPPORTED"),
-        (reuse_outputs_complete, reused_payload["decision"]["status"]),
+        "capture_audit_only_reuses_existing_artifacts_without_portfolio_replay_or_html",
+        (True, True, "ADAPTATION_DIAGNOSTIC_SUPPORTED"),
+        (reuse_outputs_complete, reuse_has_no_html, reused_payload["decision"]["status"]),
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        relative_root = Path(temp_dir)
+        relative_output = relative_root / "outputs" / "filters" / "breakout_quality" / "report.json"
+        relative_output.parent.mkdir(parents=True, exist_ok=True)
+        relative_output.write_text("{}", encoding="utf-8")
+        displayed_path = project_relative_display_path(
+            relative_output,
+            project_root=relative_root,
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "console_artifact_paths_are_project_root_relative_and_forward_slashed",
+        "outputs/filters/breakout_quality/report.json",
+        displayed_path,
     )
 
     summary["workflow"] = "score_ranking_capture_audit"

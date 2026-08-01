@@ -26,6 +26,7 @@ from filters.breakout_quality.continuous_target import (
     resolve_continuous_target_dir,
 )
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_HARD_FILTER,
@@ -717,8 +718,10 @@ def main(argv=None) -> int:
         f"Target↔R={_fmt(actual_metrics.get('spearman_target_vs_realized_r'))} "
         f"Score↔R={_fmt(actual_metrics.get('spearman_score_vs_realized_r'))}"
     )
-    print(f"已輸出: {report_markdown_path}")
-    print(f"已輸出: {report_json_path}")
+    print_artifact_paths(
+        [("Markdown 報表", report_markdown_path), ("完整 JSON", report_json_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

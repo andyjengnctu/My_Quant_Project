@@ -32,6 +32,7 @@ from filters.breakout_quality.continuous_target import (
 )
 from filters.breakout_quality.contract import LABEL_PASS
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.train_continuous_ranker import (
     RANKER_REPORT_JSON_FILENAME,
@@ -561,8 +562,10 @@ def main(argv=None) -> int:
         f"score↔capture={_fmt(actual_corr.get('score_vs_favorable_capture_ratio'))} "
         f"partial(score,R|target)={_fmt(partial.get('score_vs_realized_r_controlling_target'))}"
     )
-    print(f"已輸出: {markdown_path}")
-    print(f"已輸出: {json_path}")
+    print_artifact_paths(
+        [("Markdown 報表", markdown_path), ("完整 JSON", json_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

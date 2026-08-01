@@ -15,11 +15,16 @@ from tools.filters.breakout_quality.strategy_report_style import (
     SIGNAL_POSITIVE,
     SIGNAL_WARNING,
     finite_number,
-    html_delta_cell,
-    html_page,
-    html_signal_badge,
     signal_for_delta,
     signal_marker,
+    terminal_signal,
+)
+from filters.breakout_quality.console_report import (
+    console_color_enabled,
+    render_key_values,
+    render_section,
+    render_table,
+    render_title,
 )
 
 SCHEMA_VERSION = 1
@@ -632,23 +637,61 @@ def render_capture_audit_markdown(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_capture_audit_html(result: dict[str, Any]) -> str:
+def render_capture_audit_console(
+    result: dict[str, Any],
+    *,
+    color: bool | None = None,
+) -> str:
+    """Render the complete capture attribution as the readable console report."""
+
+    use_color = console_color_enabled() if color is None else bool(color)
     metadata = result["metadata"]
     baseline = result["baseline"]
     score_sort = result["score_sort"]
     delta = result["score_sort_minus_baseline"]
     decision = result["decision"]
-    rows = []
+    period = metadata.get("comparison_period") or {}
+    decision_signal = str(decision.get("signal") or SIGNAL_NEUTRAL)
+    lines = [
+        render_title("Breakout Quality Score 排序資本效率／Target Capture 歸因"),
+        render_key_values((
+            ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
+            ("Score source", metadata.get("score_source", "-")),
+            ("報表性質", "Selection read-only attribution"),
+            ("Future Target runtime", "未使用"),
+        )),
+        render_section("綜合判定", number=1),
+        terminal_signal(
+            f"{signal_marker(decision_signal)} {decision.get('status')}｜{decision.get('conclusion')}",
+            decision_signal,
+            enabled=use_color,
+        ),
+        "主要瓶頸：" + "；".join(decision.get("bottlenecks") or []),
+    ]
+
+    metric_rows = []
     for label, key, unit, preference in _CAPTURE_ROWS:
-        dv = delta.get(key)
-        signal = signal_for_delta(dv, preference=preference, warning_threshold=0.0)
+        delta_value = delta.get(key)
+        signal = signal_for_delta(delta_value, preference=preference, warning_threshold=0.0)
         digits = 0 if key == "partial_residual_slot_days" else 2
-        rows.append(
-            f"<tr><td>{label}</td><td>{_fmt(baseline.get(key), digits, unit)}</td>"
-            f"<td>{_fmt(score_sort.get(key), digits, unit)}</td>"
-            f"{html_delta_cell(_fmt(dv, digits, unit, signed=True), signal)}"
-            f"<td>{html_signal_badge(signal)}</td></tr>"
-        )
+        metric_rows.append((
+            label,
+            _fmt(baseline.get(key), digits, unit),
+            _fmt(score_sort.get(key), digits, unit),
+            terminal_signal(
+                _fmt(delta_value, digits, unit, signed=True), signal, enabled=use_color
+            ),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    lines.extend((
+        render_section("資本使用與 Capture", number=2),
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            metric_rows,
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
     exit_rows = []
     for label, key in (
         ("停損", "stop_exit_share_pct"),
@@ -656,50 +699,75 @@ def render_capture_audit_html(result: dict[str, Any]) -> str:
         ("汰弱", "rotation_exit_share_pct"),
         ("期末強制", "forced_exit_share_pct"),
     ):
-        signal = signal_for_delta(
-            delta.get(key), preference="attention", warning_threshold=0.0
-        )
-        exit_rows.append(
-            f"<tr><td>{label}</td><td>{_fmt(baseline.get(key), 2, '%')}</td>"
-            f"<td>{_fmt(score_sort.get(key), 2, '%')}</td>"
-            f"{html_delta_cell(_fmt(delta.get(key), 2, '%', signed=True), signal)}"
-            f"<td>{html_signal_badge(signal)}</td></tr>"
-        )
+        signal = signal_for_delta(delta.get(key), preference="attention", warning_threshold=0.0)
+        exit_rows.append((
+            label,
+            _fmt(baseline.get(key), 2, "%"),
+            _fmt(score_sort.get(key), 2, "%"),
+            terminal_signal(_fmt(delta.get(key), 2, "%", signed=True), signal, enabled=use_color),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    lines.extend((
+        render_section("Exit reason", number=3),
+        render_table(
+            ("類別", "Baseline", "Score Sort", "差異", "判讀"),
+            exit_rows,
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
 
-    yearly_rows = []
-    for row in result["yearly"].to_dict("records"):
-        r_signal = signal_for_delta(row.get("delta_avg_r"), preference="higher")
-        capture_signal = signal_for_delta(row.get("delta_avg_capture_ratio"), preference="higher")
-        invested_signal = signal_for_delta(row.get("delta_avg_invested_total"), preference="higher")
-        yearly_rows.append(
-            f"<tr><td>{int(row['entry_year'])}</td><td>{_fmt(row.get('baseline_avg_r'))}</td>"
-            f"<td>{_fmt(row.get('score_sort_avg_r'))}</td>{html_delta_cell(_fmt(row.get('delta_avg_r'), signed=True), r_signal)}"
-            f"<td>{_fmt(row.get('baseline_avg_capture_ratio'))}</td><td>{_fmt(row.get('score_sort_avg_capture_ratio'))}</td>"
-            f"{html_delta_cell(_fmt(row.get('delta_avg_capture_ratio'), signed=True), capture_signal)}"
-            f"<td>{_fmt(row.get('baseline_avg_invested_total'),0)}</td><td>{_fmt(row.get('score_sort_avg_invested_total'),0)}</td>"
-            f"{html_delta_cell(_fmt(row.get('delta_avg_invested_total'),0,signed=True), invested_signal)}</tr>"
-        )
-    bottlenecks = "".join(f"<li>{item}</li>" for item in decision.get("bottlenecks") or [])
-    meta = metadata.get("comparison_period") or {}
-    body = f"""
-<div class="card meta-grid"><div><strong>期間</strong><br>{meta.get('start','')} ～ {meta.get('end','')}</div>
-<div><strong>Score source</strong><br><code>{metadata.get('score_source','')}</code></div>
-<div><strong>Future Target runtime</strong><br>{'未使用' if not decision.get('future_target_used_for_runtime') else '警告：已使用'}</div></div>
-<div class="callout {decision['signal']}">{html_signal_badge(decision['signal'])} <strong>{decision['status']}</strong><br>{decision['conclusion']}</div>
-<div class="card"><strong>主要瓶頸</strong><ul class="compact">{bottlenecks}</ul></div>
-<h2>資本使用與 Target Capture</h2>
-<table><thead><tr><th>指標</th><th>Baseline</th><th>Score Sort</th><th>差異</th><th>判讀</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
-<h2>Exit reason</h2>
-<table><thead><tr><th>類別</th><th>Baseline</th><th>Score Sort</th><th>差異</th><th>判讀</th></tr></thead><tbody>{''.join(exit_rows)}</tbody></table>
-<h2>依進場年度</h2>
-<table><thead><tr><th>年度</th><th>Baseline avg R</th><th>Score avg R</th><th>ΔR</th><th>Baseline capture</th><th>Score capture</th><th>Δcapture</th><th>Baseline投入</th><th>Score投入</th><th>Δ投入</th></tr></thead><tbody>{''.join(yearly_rows)}</tbody></table>
-<div class="callout warning"><strong>口徑</strong><br>綠色代表依本audit目的改善；紅色代表惡化；黃色表示方向本身無單一好壞但變化值得注意。半倉slot-days使用每日capacity交易日曆；產業欄位不存在時不推測類股。Future Target只在回放後離線join。</div>
-"""
-    return html_page(
-        title="Breakout Quality Score 排序資本效率／Target Capture 歸因",
-        subtitle="Selection PIT Score Sort read-only attribution",
-        body=body,
-    )
+    yearly = result["yearly"]
+    lines.append(render_section("依進場年度", number=4))
+    if yearly.empty:
+        lines.append("無年度資料。")
+    else:
+        yearly_rows = []
+        for row in yearly.to_dict("records"):
+            r_signal = signal_for_delta(row.get("delta_avg_r"), preference="higher")
+            capture_signal = signal_for_delta(
+                row.get("delta_avg_capture_ratio"), preference="higher"
+            )
+            invested_signal = signal_for_delta(
+                row.get("delta_avg_invested_total"), preference="higher"
+            )
+            yearly_rows.append((
+                int(row["entry_year"]),
+                _fmt(row.get("baseline_avg_r")),
+                _fmt(row.get("score_sort_avg_r")),
+                terminal_signal(_fmt(row.get("delta_avg_r"), signed=True), r_signal, enabled=use_color),
+                _fmt(row.get("baseline_avg_capture_ratio")),
+                _fmt(row.get("score_sort_avg_capture_ratio")),
+                terminal_signal(
+                    _fmt(row.get("delta_avg_capture_ratio"), signed=True),
+                    capture_signal,
+                    enabled=use_color,
+                ),
+                _fmt(row.get("baseline_avg_invested_total"), 0),
+                _fmt(row.get("score_sort_avg_invested_total"), 0),
+                terminal_signal(
+                    _fmt(row.get("delta_avg_invested_total"), 0, signed=True),
+                    invested_signal,
+                    enabled=use_color,
+                ),
+            ))
+        lines.append(render_table(
+            (
+                "年度", "Base R", "Sort R", "ΔR", "Base capture", "Sort capture",
+                "Δcapture", "Base投入", "Sort投入", "Δ投入",
+            ),
+            yearly_rows,
+            alignments=("right", "right", "right", "right", "right", "right", "right", "right", "right", "right"),
+        ))
+
+    lines.extend((
+        render_section("使用限制", number=5),
+        "- 本報表不改模型、Score、排序或策略參數。",
+        "- Target capture ratio 只在正 Target 且可對應時統計。",
+        "- 半倉殘留 slot-days 使用每日 capacity 的交易日曆。",
+        "- 無 canonical 產業欄位時，產業集中度顯示 N/A，不自行推測。",
+        "- 黃色指標只表示結構變化，不可單獨解讀為好或壞。",
+    ))
+    return "\n".join(lines)
 
 
 def _json_native(value: Any) -> Any:
@@ -721,6 +789,9 @@ def _json_native(value: Any) -> Any:
 def write_score_ranking_capture_audit_outputs(*, result: dict[str, Any], output_dir: str | Path) -> dict[str, Any]:
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    legacy_html = out_dir / "score_ranking_capture_audit.html"
+    if legacy_html.is_file():
+        legacy_html.unlink()
     payload = _json_native({
         "schema_version": result["schema_version"],
         "metadata": result["metadata"],
@@ -736,9 +807,6 @@ def write_score_ranking_capture_audit_outputs(*, result: dict[str, Any], output_
     )
     (out_dir / "score_ranking_capture_audit.md").write_text(
         render_capture_audit_markdown(result), encoding="utf-8"
-    )
-    (out_dir / "score_ranking_capture_audit.html").write_text(
-        render_capture_audit_html(result), encoding="utf-8"
     )
     result["baseline_lifecycle"].to_csv(
         out_dir / "no_filter_capture_lifecycle.csv", index=False, encoding="utf-8-sig"
@@ -760,6 +828,6 @@ def write_score_ranking_capture_audit_outputs(*, result: dict[str, Any], output_
 
 __all__ = [
     "SCHEMA_VERSION", "build_trade_lifecycle_rows", "build_score_ranking_capture_audit",
-    "render_capture_audit_markdown", "render_capture_audit_html",
+    "render_capture_audit_markdown", "render_capture_audit_console",
     "write_score_ranking_capture_audit_outputs",
 ]

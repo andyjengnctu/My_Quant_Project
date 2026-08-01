@@ -53,6 +53,7 @@ from filters.breakout_quality.torch_runtime import (
     SUPPORTED_TORCH_DEVICES,
 )
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     build_checkpoint_payload,
     build_percentile_target,
@@ -844,9 +845,10 @@ def main(argv=None) -> int:
         f"folds={len(folds)} groups={validation['scored_group_count']:,} "
         f"coverage={validation['coverage_rate']:.4f}"
     )
-    print(f"已輸出: {score_path}")
-    print(f"已輸出: {manifest_path}")
-    print(f"已輸出: {coverage_path}")
+    print_artifact_paths(
+        (("PIT Scores", score_path), ("PIT manifest", manifest_path), ("PIT coverage", coverage_path)),
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

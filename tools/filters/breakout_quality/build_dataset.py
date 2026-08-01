@@ -44,6 +44,7 @@ from filters.breakout_quality.market_set import (
 )
 from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.console_report import print_artifact_paths
 from core.display_common import InlineProgress, render_elapsed
 from tools.filters.breakout_quality.common import (
     PROJECT_ROOT,
@@ -634,9 +635,15 @@ def _full_build(args, policy, *, started: float) -> int:
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
     write_json(paths.summary, summary)
-    print(f"已輸出 indexed feature bank: {paths.feature_bank}")
-    print(f"已輸出 event arrays: {paths.event_context.parent}")
-    print(f"已輸出: {paths.events}")
+    print_artifact_paths(
+        (
+            ("Indexed feature bank", paths.feature_bank),
+            ("Event arrays", paths.event_context.parent),
+            ("Events CSV", paths.events),
+            ("Dataset summary", paths.summary),
+        ),
+        project_root=PROJECT_ROOT,
+    )
     print(
         "storage="
         f"events={storage_summary['event_count']} groups={storage_summary['feature_group_count']} "

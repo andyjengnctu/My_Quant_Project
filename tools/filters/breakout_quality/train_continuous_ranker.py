@@ -94,6 +94,7 @@ from tools.filters.breakout_quality.common import (
     load_validated_dataset_bundle,
     write_json,
 )
+from filters.breakout_quality.console_report import print_artifact_paths
 
 RANKER_SCHEMA_VERSION = 1
 RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
@@ -1235,8 +1236,10 @@ def main(argv=None) -> int:
         )
     else:
         print(f"- trade R: {trade_alignment.get('reason', 'unavailable')}")
-    print(f"已輸出: {artifact_paths.model_path}")
-    print(f"已輸出: {report_markdown_path}")
+    print_artifact_paths(
+        (("Continuous ranker model", artifact_paths.model_path), ("Markdown", report_markdown_path)),
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

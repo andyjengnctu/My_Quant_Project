@@ -68,6 +68,7 @@ from tools.filters.breakout_quality.audit_target_time_penalty_ablation import (
     AUDIT_JSON_FILENAME as ABLATION_AUDIT_JSON_FILENAME,
     QUALIFIED_ABLATION_FILENAME,
 )
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.common import (
     PROJECT_ROOT,
     load_validated_dataset_bundle,
@@ -524,8 +525,10 @@ def main(argv=None) -> int:
             f"source_rho={_fmt(metrics.get('source_vs_no_time_spearman'))}"
         )
     print("- OOS: not evaluated")
-    print(f"已輸出: {manifest_path}")
-    print(f"已輸出: {audit_markdown_path}")
+    print_artifact_paths(
+        [("Target manifest", manifest_path), ("Markdown 報表", audit_markdown_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

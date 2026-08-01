@@ -28,7 +28,8 @@ from tools.filters.breakout_quality.audit_target_component_attribution import (
     _read_json,
     _sha256_file,
 )
-from tools.filters.breakout_quality.common import write_json
+from filters.breakout_quality.console_report import print_artifact_paths
+from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.train_continuous_ranker import _spearman
 
 AUDIT_SCHEMA_VERSION = 1
@@ -476,8 +477,10 @@ def main(argv=None) -> int:
         f"no_time={_fmt(a.get('no_time_target_vs_realized_r'))} "
         f"delta={_fmt(d.get('spearman_no_time_minus_original'))}"
     )
-    print(f"已輸出: {markdown_path}")
-    print(f"已輸出: {json_path}")
+    print_artifact_paths(
+        [("Markdown 報表", markdown_path), ("完整 JSON", json_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

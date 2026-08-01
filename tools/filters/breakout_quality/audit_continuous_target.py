@@ -55,6 +55,7 @@ from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     resolve_breakout_quality_outer_policy,
 )
+from filters.breakout_quality.console_report import print_artifact_paths, project_relative_display_path
 from tools.filters.breakout_quality.common import (
     dataset_paths,
     load_validated_dataset_bundle,
@@ -973,14 +974,21 @@ def main(argv=None) -> int:
             f"matched={trade_alignment.get('matched_trade_count')}/{trade_alignment.get('trade_count')} "
             f"spearman={_fmt(trade_alignment.get('spearman_target_vs_r_multiple'))}"
         )
-        print(f"  path={trade_alignment.get('path')}")
+        trade_path = trade_alignment.get("path")
+        if trade_path:
+            print(
+                "  path="
+                + project_relative_display_path(trade_path, project_root=PROJECT_ROOT)
+            )
     else:
         attempted = list(trade_alignment.get("attempted_paths") or [])
         print("- trade R: active 9A全部strategy_compare輸出均未找到可用no-filter交易工件，略過實際R方向診斷")
         if attempted:
             print(f"  searched={len(attempted)} paths；可用 --round-trips 或 --trade-history 明確指定")
-    print(f"已輸出: {manifest_path}")
-    print(f"已輸出: {audit_markdown_path}")
+    print_artifact_paths(
+        [("Target manifest", manifest_path), ("Markdown 報表", audit_markdown_path)],
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 

@@ -157,6 +157,7 @@ from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     resolve_breakout_quality_outer_policy,
 )
+from filters.breakout_quality.console_report import print_artifact_paths
 from tools.filters.breakout_quality.common import (
     event_group_summary,
     event_group_keys,
@@ -2749,10 +2750,10 @@ def main(argv=None) -> int:
             final_refit_sampling_summary=final_refit_sampling_summary,
         )
     )
-    print("\n輸出工件")
-    print(f"  - Model：{artifact_paths.model_path}")
-    print(f"  - Split：{artifact_paths.split_path}")
-    print(f"  - Manifest：{artifact_paths.manifest_path}")
+    print_artifact_paths(
+        (("Model", artifact_paths.model_path), ("Split", artifact_paths.split_path), ("Manifest", artifact_paths.manifest_path)),
+        project_root=PROJECT_ROOT,
+    )
     return 0
 
 
