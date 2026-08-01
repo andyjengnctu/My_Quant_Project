@@ -59,11 +59,15 @@ def _validate_group_consistency(events: pd.DataFrame) -> None:
     if missing:
         raise ValueError(f"continuous ranker dataset 缺少欄位: {missing}")
     work = events[["group_index", "ticker", "date", "label_eval_end_date"]].copy()
-    mixed = work.groupby("group_index", sort=False).agg(
+    grouped = work.groupby("group_index", sort=False)
+    mixed = grouped.agg(
         ticker_count=("ticker", "nunique"),
         date_count=("date", "nunique"),
-        label_end_count=("label_eval_end_date", "nunique"),
     )
+    # ``nunique`` drops missing values by default.  A terminal group whose label horizon is
+    # incomplete therefore produced count=0 even when every row consistently carried the same
+    # missing value.  Treat missing as one state, while mixed missing/completed dates still fail.
+    mixed["label_end_count"] = grouped["label_eval_end_date"].nunique(dropna=False)
     invalid = mixed[
         (mixed["ticker_count"] != 1)
         | (mixed["date_count"] != 1)

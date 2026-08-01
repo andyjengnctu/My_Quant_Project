@@ -10225,6 +10225,61 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _validate_score_frame,
         parse_args as parse_point_in_time_args,
     )
+    from tools.filters.breakout_quality.continuous_ranker_pipeline import (
+        _validate_group_consistency,
+    )
+
+    consistent_terminal_events = pd.DataFrame(
+        [
+            {
+                "ticker": "2330",
+                "date": "2026-03-02",
+                "group_index": 0,
+                "label_eval_end_date": None,
+            },
+            {
+                "ticker": "2330",
+                "date": "2026-03-02",
+                "group_index": 0,
+                "label_eval_end_date": None,
+            },
+            {
+                "ticker": "2317",
+                "date": "2020-01-02",
+                "group_index": 1,
+                "label_eval_end_date": "2020-03-02",
+            },
+        ]
+    )
+    all_missing_label_end_accepted = True
+    try:
+        _validate_group_consistency(consistent_terminal_events)
+    except ValueError:
+        all_missing_label_end_accepted = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_group_consistency_accepts_all_missing_terminal_label_end",
+        True,
+        all_missing_label_end_accepted,
+    )
+
+    mixed_label_end_rejected = False
+    inconsistent_terminal_events = consistent_terminal_events.copy()
+    inconsistent_terminal_events.loc[1, "label_eval_end_date"] = "2026-04-30"
+    try:
+        _validate_group_consistency(inconsistent_terminal_events)
+    except ValueError as exc:
+        mixed_label_end_rejected = "invalid_groups=1" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_group_consistency_rejects_mixed_missing_and_completed_label_end",
+        True,
+        mixed_label_end_rejected,
+    )
 
     settings = get_breakout_quality_workflow_settings()
     parsed = parse_point_in_time_args([])

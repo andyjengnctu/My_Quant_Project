@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_170534_3cc7f52.zip`，SHA256 `881a4670875a0e633d8ae74eff90f6b96b33e2df9e11b4b05717f64d94d3a003`。此基準已包含單一入口、泛用workflow config、continuous-ranker共用pipeline與Selection point-in-time Score builder／audit；本輪只修正舊strategy-compare相容入口的CLI顯示名稱，不改模型、Target、Score、buy-sort或策略邏輯。尚未執行完整資料訓練或策略Score sort，因此不得宣稱模型或策略有效 |
-| SHA256 | 本輪來源 ZIP：`881a4670875a0e633d8ae74eff90f6b96b33e2df9e11b4b05717f64d94d3a003`；formal bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5`。第一階段PIT manifest仍預設`eligible=false`，不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_171848_309fb6d.zip`，SHA256 `3c0f78e34ecae675ca4b41dd7adada3009d5c5b68834b92728b3c690b7524fec`。此基準已包含單一入口、泛用workflow config、continuous-ranker共用pipeline與Selection point-in-time Score builder／audit；本輪修正PIT builder載入完整Dataset時，尾端Label horizon未完成group的`label_eval_end_date`全為空值卻被`nunique()`誤判為0種而中止的問題。不改模型、Target、Score值、fold邊界、buy-sort或策略邏輯。尚未完成完整Selection folds，因此不得宣稱模型或策略有效 |
+| SHA256 | 本輪來源 ZIP：`3c0f78e34ecae675ca4b41dd7adada3009d5c5b68834b92728b3c690b7524fec`；前一formal bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5`。第一階段PIT manifest仍預設`eligible=false`，不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -784,6 +784,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | Dataset／training | 不重建binary Dataset、不重訓完整Selection 9A；只沿用既有continuous-ranker training pipeline建立歷史fold模型 |
 | 執行入口 | `python apps/breakout_quality.py build-point-in-time-scores`；完成後執行`audit-point-in-time-scores` |
 | UI／runtime | 新主選單不含9A／11G／11K名稱；research-only低階功能維持CLI-only；PIT Score不是scanner或forward-OOS runtime工件 |
+| 啟動錯誤閉環 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`：完整Dataset尾端Label horizon未完成group可合法使整組`label_eval_end_date`皆空；group一致性檢查改以`nunique(dropna=False)`把「全空」視為單一一致狀態，同時仍拒絕同group混用空值與完成日期或多個完成日期。這些group因`target_valid=false`及日期比較為False，不會進入train／validation／final refit；本輪只解除誤判，不放寬前視隔離 |
 
 ### 優先 6A：AdamW only
 
