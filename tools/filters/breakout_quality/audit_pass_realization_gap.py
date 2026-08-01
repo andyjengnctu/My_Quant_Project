@@ -14,11 +14,11 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
 )
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
 )

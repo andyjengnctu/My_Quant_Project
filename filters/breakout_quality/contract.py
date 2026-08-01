@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Mapping
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     get_breakout_quality_experiment_profile,
     normalize_breakout_quality_experiment_profile,
 )
 from filters.breakout_quality.models.spec import normalize_active_model_architecture
 
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_BENCHMARK_TICKER,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,

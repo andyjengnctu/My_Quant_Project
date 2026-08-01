@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_policy import BREAKOUT_QUALITY_DEFAULT_FILTER_ID
+from config.breakout_quality import BREAKOUT_QUALITY_DEFAULT_FILTER_ID
 from filters.breakout_quality.continuous_target import STRATEGY_ALIGNED_NO_TIME_TARGET_ID
 from tools.filters.breakout_quality.audit_selection_strategy_realization import (
     AUDIT_JSON_FILENAME as SOURCE_AUDIT_JSON_FILENAME,

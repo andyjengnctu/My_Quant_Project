@@ -21,7 +21,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     LR_SCHEDULE_NONE,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
@@ -41,7 +41,7 @@ from config.breakout_quality_experiments import (
     get_breakout_quality_experiment_profile,
 )
 
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,

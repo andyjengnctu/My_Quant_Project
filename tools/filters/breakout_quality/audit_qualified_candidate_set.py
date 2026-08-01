@@ -14,8 +14,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
-from config.breakout_quality_policy import (
+from config.breakout_quality import STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
+from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,

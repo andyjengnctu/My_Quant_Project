@@ -9,13 +9,13 @@ import time
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES,
     build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_pretraining_profile,
 )
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,

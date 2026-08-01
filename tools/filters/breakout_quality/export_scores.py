@@ -15,8 +15,8 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
-from config.breakout_quality_policy import (
+from config.breakout_quality import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
+from config.breakout_quality import (
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_EVALUATION_WORKERS,

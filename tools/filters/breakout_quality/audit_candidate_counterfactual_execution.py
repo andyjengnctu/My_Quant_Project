@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_policy import BREAKOUT_QUALITY_DEFAULT_FILTER_ID, BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
+from config.breakout_quality import BREAKOUT_QUALITY_DEFAULT_FILTER_ID, BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
 from core.exact_accounting import calc_ratio_from_milli
 from core.portfolio_exits import closeout_open_positions
 from core.portfolio_fast_access import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value

@@ -15,8 +15,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
-from config.breakout_quality_policy import BREAKOUT_QUALITY_EXPERIMENT_PROFILE
+from config.breakout_quality import SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES
+from config.breakout_quality import BREAKOUT_QUALITY_EXPERIMENT_PROFILE
 from filters.breakout_quality.artifacts import (
     compute_file_sha256,
     load_model_artifact_contract,

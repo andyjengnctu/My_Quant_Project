@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import get_breakout_quality_experiment_profile
+from config.breakout_quality import get_breakout_quality_experiment_profile
 from filters.breakout_quality.continuous_target import (
     load_validated_continuous_target_arrays,
 )

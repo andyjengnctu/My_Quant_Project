@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import zipfile
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,

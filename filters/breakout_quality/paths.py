@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     BASELINE_EXPERIMENT_PROFILE,
     normalize_breakout_quality_experiment_profile,
 )

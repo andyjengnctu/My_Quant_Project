@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     TRAINING_LABEL_SCOPE_ALL,
@@ -22,7 +22,7 @@ from config.breakout_quality_experiments import (
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     get_breakout_quality_experiment_profile,
 )
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,

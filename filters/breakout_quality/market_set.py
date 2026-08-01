@@ -8,7 +8,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_MARKET_SET_BASE_FEATURES,
     BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS,
     BREAKOUT_QUALITY_MARKET_SET_MAX_STOCKS,

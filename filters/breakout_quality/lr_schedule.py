@@ -6,7 +6,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     LR_SCHEDULE_NONE,
 )

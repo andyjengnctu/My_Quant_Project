@@ -13,13 +13,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
 )
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_PRETRAINING_FAMILY,
     BREAKOUT_QUALITY_PRETRAINING_PROFILE,
@@ -28,7 +28,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
 )
-from config.breakout_quality_workflow import get_breakout_quality_workflow_settings
+from config.breakout_quality import get_breakout_quality_workflow_settings
 from core.display_common import render_elapsed
 from core.runtime_utils import (
     is_interactive_console,
@@ -1030,7 +1030,7 @@ def _print_policy_defaults(
     train_settings: argparse.Namespace | None = None,
 ) -> None:
     print(f"使用 policy Filter ID：{normalize_filter_id(filter_id)}")
-    print("使用 config/breakout_quality_policy.py Label 預設：")
+    print("使用 config/breakout_quality.py Label 預設：")
     print(
         f"- Feature Window：{int(DEFAULT_LABEL_POLICY.feature_window_bars)} bars\n"
         f"- Label Horizon：{int(DEFAULT_LABEL_POLICY.label_horizon_bars)} bars\n"
@@ -1040,7 +1040,7 @@ def _print_policy_defaults(
     )
     if train_settings is None:
         return
-    print("使用 config/breakout_quality_policy.py 訓練預設：")
+    print("使用 config/breakout_quality.py 訓練預設：")
     model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     experiment = get_breakout_quality_experiment_profile(
         train_settings.experiment_profile

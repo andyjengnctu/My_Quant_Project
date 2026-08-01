@@ -1,5 +1,5 @@
 from config.breakout_policy import BREAKOUT_DEFAULT_HIGH_LEN
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
 )

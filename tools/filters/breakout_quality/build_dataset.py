@@ -17,7 +17,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_policy import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+from config.breakout_quality import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,

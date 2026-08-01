@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_175951_e781354.zip`，SHA256 `f2d8b1dcc1d79d848013995f68fc80697039776c7837ce010cf19df966e63a8c`。此基準已完成泛用profile workflow router並保留7個Selection PIT folds與18,247個未見事件Scores；使用者formal bundle顯示consistency唯一FAIL為strategy-compare政策隔離後的舊synthetic expected path-source字串，meta quality唯一FAIL為該synthetic suite失敗的衍生結果。本輪只同步validator fixture至canonical directory discovery，不改runtime、模型、Target、Score、fold、checkpoint、buy-sort或策略交易規則 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_180913_c77a7cc(1).zip`，SHA256 `90691c277723f2846e94f56c4bc4f17f9c852112d65805b46ecee9a75088b101`。本輪只合併三個breakout-quality config為單一可編輯來源並保留舊import相容alias；不改模型、Label、profile內容、PIT Scores、checkpoint、buy-sort或策略交易規則 |
 | SHA256 | 本輪來源 ZIP：`f2d8b1dcc1d79d848013995f68fc80697039776c7837ce010cf19df966e63a8c`；formal bundle `to_chatgpt_bundle_20260801_180117_5ac62bbf.zip`，SHA256 `e33c8a5ace14bd0e2fbef31a30d97d06550d04d5473dd18393e495a7e6566d5d`。Formal結果為quick gate PASS、consistency FAIL 1／5,030、chain checks PASS、ML smoke PASS、meta quality FAIL 1；兩個FAIL同源於一筆stale synthetic expectation。PIT manifest仍預設`eligible=false`；continuous策略不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
@@ -759,6 +759,21 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 下一步 | 使用者覆蓋修補後重跑正式suite；預期consistency與meta quality同時恢復PASS。若仍有新FAIL，再依新bundle閉環，不修改runtime以迎合舊fixture |
 
 
+### 3.65 Breakout-quality Config單一來源整併（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；完成設定架構整併與獨立相容驗證，未重新訓練模型或執行策略回放 |
+| 程式基準 | 來源`test-branch-1_20260801_180913_c77a7cc(1).zip`，SHA256 `90691c277723f2846e94f56c4bc4f17f9c852112d65805b46ecee9a75088b101` |
+| 問題 | `breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`分散模型、profile與workflow設定；使用者切換9A／continuous流程時需理解三個檔案，且容易誤改非作用中的設定 |
+| 唯一修正 | 新增`config/breakout_quality.py`作唯一可編輯設定來源。檔案最上方先放主選單workflow profile切換，再依模型identity、Dataset／Label、architecture、training、validation、execution、PIT與策略分類排列；profile類別／registry、驗證、衍生值與helper全部集中下半部 |
+| 相容方式 | 三個舊檔縮成真正的module alias，舊`from config.breakout_quality_policy／experiments／workflow import ...`仍取得同一canonical module；專案內部import全部改讀`config.breakout_quality`，不保留第二份常數或函式 |
+| 行為一致性 | 合併前後132個公開名稱完整保留；所有可序列化設定、active profile payload、workflow manifest payload、Inception kernels與receptive field逐項一致。舊alias與canonical object identity一致，monkeypatch不會分叉 |
+| 固定條件 | 不改active architecture、binary／continuous profile定義、optimizer、Label、threshold、seed目前值、PIT fold／checkpoint／Scores、strategy mode解析、portfolio accounting、候選生成、成交或出場 |
+| Dataset／Label | 不需重建Dataset或relabel；設定檔整併不改任何artifact identity或hash契約 |
+| 結果邊界 | 本輪只改善設定可維護性與單一真理來源；不得據此宣稱9A、continuous ranker或策略績效改善 |
+
+
 ## 4. 已排除或暫停的方向
 
 下列方向已有足夠證據，不應在沒有新機制或新資料證據時重複測試：
@@ -824,7 +839,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 狀態 | `SCORES_BUILT / AUDIT_FIX_IMPLEMENTED / AUDIT_RESULT_PENDING`；7個Selection folds與18,247個PIT Scores已完成，orderable coverage欄位碰撞已修正，待重跑模型audit |
 | 研究依據 | 既有11G能預測部分PASS-only No-time Target，但完整Selection refit Score不具備策略optimizer所需的未見資料性質；actual trades又受到舊排序、持倉與資金限制，因此先建立與正式OOS相同語意的PIT Score |
 | 唯一變更 | 使用expanding-window folds；每fold只用score period以前、且`label_eval_end_date < score_start`的歷史資料完成Inner Validation、epoch selection及final refit，再只評分下一段未見資料 |
-| 固定模型 | architecture／experiment profile／target由`config/breakout_quality_workflow.py`指定；目前為`seed=1`、PASS-only No-time magnitude continuous ranker，不重試MSE／Huber／epoch／LR／batch／sampling |
+| 固定模型 | architecture／experiment profile／target由`config/breakout_quality.py`指定；目前為`seed=1`、PASS-only No-time magnitude continuous ranker，不重試MSE／Huber／epoch／LR／batch／sampling |
 | 正式工件 | `selection_point_in_time_scores.csv`、combined manifest／coverage，以及每fold checkpoint、scores、manifest與SHA256 |
 | 模型audit | 先計算Score↔Target Spearman、mean daily Spearman、年度與decile spread、fold drift、PASS分類重疊及orderable coverage；Future Target只在audit離線join，不寫入Score CSV |
 | 策略邊界 | Builder manifest固定`eligible=false`；模型audit通過前不接buy-sort、不跑主策略optimizer。第一階段策略選單會明確阻擋PIT Score source |

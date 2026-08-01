@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from config.breakout_quality_policy import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+from config.breakout_quality import BREAKOUT_QUALITY_MODEL_ARCHITECTURE
 from filters.breakout_quality.models.inception_time import build_inception_time
 from filters.breakout_quality.models.inception_time_market_set import build_inception_time_market_set
 from filters.breakout_quality.models.mantis_v2 import build_mantis_v2_frozen_linear

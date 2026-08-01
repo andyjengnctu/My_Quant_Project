@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_INCEPTION_DEPTH,
     BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY,
     BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS,

@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     BASELINE_EXPERIMENT_PROFILE,
     TIME_WEIGHT_MODE_DATE_BALANCED,
     TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
@@ -22,7 +22,7 @@ from config.breakout_quality_experiments import (
     get_breakout_quality_experiment_profile,
     normalize_breakout_quality_experiment_profile,
 )
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_FINAL_REFIT_MODE,
@@ -598,7 +598,7 @@ def load_model_artifact_contract(
     model_policy = _require_mapping(manifest, "policy")
     if dict(model_policy) != DEFAULT_LABEL_POLICY.as_manifest_payload():
         raise ValueError(
-            "breakout quality model policy 與目前 config/breakout_quality_policy.py 不一致；"
+            "breakout quality model policy 與目前 config/breakout_quality.py 不一致；"
             "請重新執行 workflow 以 relabel 並重訓模型"
         )
     if int(manifest.get("sequence_length", -1)) != int(DEFAULT_LABEL_POLICY.feature_window_bars):

@@ -23,7 +23,7 @@ from config.breakout_policy import (
     BREAKOUT_HIGH_LEN_SEARCH_STEP,
     build_breakout_optimizer_high_len_values,
 )
-from config.breakout_quality_experiments import (
+from config.breakout_quality import (
     ADAMW_ONLY_EXPERIMENT_PROFILE,
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     BASELINE_EXPERIMENT_PROFILE,
@@ -49,7 +49,7 @@ from config.breakout_quality_experiments import (
     get_breakout_quality_experiment_profile,
     get_breakout_quality_pretraining_profile,
 )
-from config.breakout_quality_policy import (
+from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
@@ -355,6 +355,100 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     case_id = "BREAKOUT_QUALITY_POLICY_SSOT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+
+    import importlib
+    from config import breakout_quality as canonical_config
+
+    project_root = Path(__file__).resolve().parents[2]
+    canonical_config_path = project_root / "config" / "breakout_quality.py"
+    canonical_source = canonical_config_path.read_text(encoding="utf-8")
+    legacy_config_paths = tuple(
+        project_root / "config" / filename
+        for filename in (
+            "breakout_quality_policy.py",
+            "breakout_quality_experiments.py",
+            "breakout_quality_workflow.py",
+        )
+    )
+    legacy_modules = tuple(
+        importlib.import_module(module_name)
+        for module_name in (
+            "config.breakout_quality_policy",
+            "config.breakout_quality_experiments",
+            "config.breakout_quality_workflow",
+        )
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "breakout_quality_config_has_one_editable_canonical_module",
+        True,
+        bool(
+            canonical_config_path.is_file()
+            and all(path.is_file() for path in legacy_config_paths)
+            and all(module is canonical_config for module in legacy_modules)
+            and all(
+                "sys.modules[__name__] = _canonical"
+                in path.read_text(encoding="utf-8")
+                for path in legacy_config_paths
+            )
+        ),
+    )
+    user_settings_marker = canonical_source.index(
+        "# USER SETTINGS — edit this section only"
+    )
+    internal_marker = canonical_source.index(
+        "# INTERNAL PROFILE DEFINITIONS AND SUPPORTED VALUES"
+    )
+    first_implementation_line = min(
+        node.lineno
+        for node in ast.parse(canonical_source).body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "breakout_quality_user_settings_are_grouped_before_implementation",
+        True,
+        bool(
+            user_settings_marker < internal_marker
+            and canonical_source[:internal_marker].count("def ") == 0
+            and canonical_source[:internal_marker].count("class ") == 0
+            and canonical_source[:internal_marker].count(
+                "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE ="
+            )
+            == 1
+            and first_implementation_line
+            > canonical_source[:internal_marker].count("\n")
+        ),
+    )
+    stale_import_patterns = (
+        "from config.breakout_quality_policy import",
+        "from config.breakout_quality_experiments import",
+        "from config.breakout_quality_workflow import",
+        "from config import breakout_quality_policy",
+        "from config import breakout_quality_experiments",
+        "from config import breakout_quality_workflow",
+    )
+    stale_import_files = []
+    current_validator_path = Path(__file__).resolve()
+    for source_root in ("apps", "core", "filters", "strategies", "tools"):
+        for source_path in (project_root / source_root).rglob("*.py"):
+            if source_path.resolve() == current_validator_path:
+                continue
+            source_text = source_path.read_text(encoding="utf-8")
+            if any(pattern in source_text for pattern in stale_import_patterns):
+                stale_import_files.append(source_path.relative_to(project_root).as_posix())
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "breakout_quality_runtime_imports_use_canonical_config",
+        (),
+        tuple(sorted(stale_import_files)),
+    )
 
     optimizer_values = build_breakout_optimizer_high_len_values()
     quality_values = build_breakout_quality_default_high_len_values()
@@ -10259,8 +10353,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from config import breakout_quality_workflow as workflow_config
-    from config.breakout_quality_workflow import get_breakout_quality_workflow_settings
+    from config import breakout_quality as workflow_config
+    from config.breakout_quality import get_breakout_quality_workflow_settings
     from tools.filters.breakout_quality.audit_point_in_time_scores import (
         _orderable_coverage,
     )

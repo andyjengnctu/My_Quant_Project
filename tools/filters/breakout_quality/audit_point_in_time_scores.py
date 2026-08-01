@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality_workflow import get_breakout_quality_workflow_settings
+from config.breakout_quality import get_breakout_quality_workflow_settings
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import (
     DEFAULT_MODEL_FILENAME,
