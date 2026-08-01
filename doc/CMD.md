@@ -511,7 +511,7 @@ python apps/breakout_quality.py audit-selection-strategy-realization --filter-id
 
 預設以2014-01-01～2020-12-31、120個月固定訓練窗、12個月OOS建立research-only nested參數鏈；策略replay固定只跑2014-01-01～2020-11-05，並由11F manifest的`final_refit_date_range`再次驗證，避免年底事件Target跨入2021。`V16_MODELS_DIR`隔離到`models/research/breakout_quality/selection_strategy_realization`，不得覆蓋正式2021～2026 rolling params。11I不訓練、不建立Target arrays，且不得把未交易候選標成0R。
 
-### 11J Canonical Per-candidate Counterfactual Execution Audit
+### 11J Canonical Per-candidate Counterfactual Execution Audit（已停止）
 
 11I確認Selection nested-OOS No-time Target方向成立、但actual portfolio trade coverage不足後，使用同一nested params與canonical candidate replay，對每個qualified訊號建立獨立counterfactual execution：
 
@@ -528,3 +528,21 @@ outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy
 ```
 
 未成交訊號保持`r_multiple`空值，不填0R。11J不建立Target arrays、不訓練、不加入互動選單。
+
+11J已於2026-08-01停止：plain dict＋execution sidecar仍只重現1,969／2,003，不再要求執行，也不得再修改core以追求重現。
+
+### 11K Portfolio Selection-pressure Attribution Audit
+
+直接讀取11I既有orderable candidates與actual trade matches，不重播市場：
+
+```bash
+python apps/breakout_quality.py audit-selection-pressure --filter-id breakout_quality_v1
+```
+
+輸出位於：
+
+```text
+outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy_aligned_opportunity_no_time_r_v1/selection_strategy_realization_audit/portfolio_selection_pressure_audit/
+```
+
+固定輸出同日Target percentile、actual top-half／top-quartile比例、依每日實際買入數k的Target top-k retention、Target opportunity gap與候選壓力分桶。未選候選沒有realized R，維持缺值，不填0R、不推估反事實績效。11K為read-only、CLI-only，不訓練、不修改runtime。

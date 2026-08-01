@@ -88,6 +88,7 @@ COMMAND_MODULES = {
     "audit-pass-realization-gap": "tools.filters.breakout_quality.audit_pass_realization_gap",
     "audit-selection-strategy-realization": "tools.filters.breakout_quality.audit_selection_strategy_realization",
     "audit-candidate-counterfactual": "tools.filters.breakout_quality.audit_candidate_counterfactual_execution",
+    "audit-selection-pressure": "tools.filters.breakout_quality.audit_portfolio_selection_pressure",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -114,7 +115,8 @@ COMMAND_DESCRIPTIONS = {
     "audit-no-time-target": "建立11F No-time Target arrays並做Selection-only可學性稽核；research-only",
     "audit-pass-realization-gap": "執行11H PASS-only實現落差歸因；research-only、CLI-only",
     "audit-selection-strategy-realization": "執行11I Selection nested-OOS策略實現覆蓋稽核；research-only、CLI-only",
-    "audit-candidate-counterfactual": "執行11J per-candidate counterfactual execution稽核；research-only、CLI-only",
+    "audit-candidate-counterfactual": "執行11J per-candidate counterfactual execution稽核；已停止、僅供歷史追溯",
+    "audit-selection-pressure": "執行11K portfolio selection-pressure歸因；read-only、CLI-only",
 }
 
 

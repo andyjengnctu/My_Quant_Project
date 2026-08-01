@@ -10075,6 +10075,120 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
     return results, summary
 
 
+def validate_breakout_quality_portfolio_selection_pressure_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_PORTFOLIO_SELECTION_PRESSURE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from tools.filters.breakout_quality.audit_portfolio_selection_pressure import (
+        _build_selection_pressure_tables,
+        _render_markdown as render_selection_pressure_markdown,
+        parse_args as parse_selection_pressure_args,
+    )
+
+    orderable = pd.DataFrame([
+        {"ticker": "A", "trade_date": "2020-01-02", "target_raw_r": 3.0, "target_match": True},
+        {"ticker": "B", "trade_date": "2020-01-02", "target_raw_r": 2.0, "target_match": True},
+        {"ticker": "C", "trade_date": "2020-01-02", "target_raw_r": 1.0, "target_match": True},
+        {"ticker": "D", "trade_date": "2020-01-03", "target_raw_r": 4.0, "target_match": True},
+        {"ticker": "E", "trade_date": "2020-01-03", "target_raw_r": 1.0, "target_match": True},
+    ])
+    trades = pd.DataFrame([
+        {"ticker": "A", "entry_date": "2020-01-02", "target_raw_r": 3.0, "target_match": True, "r_multiple": 2.0},
+        {"ticker": "E", "entry_date": "2020-01-03", "target_raw_r": 1.0, "target_match": True, "r_multiple": -1.0},
+    ])
+    signals, daily, buckets, metrics = _build_selection_pressure_tables(orderable, trades)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "portfolio_selection_pressure_same_day_percentile_and_top_k_are_exact",
+        (5, 2, 0.75, 0.5, 1.5),
+        (
+            len(signals), metrics["selected_trade_count"],
+            metrics["selected_target_percentile_mean_competition"],
+            metrics["top_k_retention_occurrence_weighted"],
+            metrics["target_opportunity_gap_r_date_weighted"],
+        ),
+        tol=1e-12,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "portfolio_selection_pressure_preserves_realized_r_only_for_selected_rows",
+        (2, 3, True),
+        (
+            int(signals["r_multiple"].notna().sum()),
+            int(signals["r_multiple"].isna().sum()),
+            bool(signals.loc[~signals["selected"], "r_multiple"].isna().all()),
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "portfolio_selection_pressure_daily_and_bucket_outputs_are_explicit",
+        (2, ["1", "2-3", "4-5", "6-10", "11+"], True),
+        (
+            len(daily), buckets["pressure_bucket"].tolist(),
+            bool({"top_k_retention", "target_opportunity_gap_r"}.issubset(buckets.columns)),
+        ),
+    )
+
+    duplicate_rejected = False
+    try:
+        _build_selection_pressure_tables(pd.concat([orderable, orderable.iloc[[0]]], ignore_index=True), trades)
+    except ValueError as exc:
+        duplicate_rejected = "同ticker／trade_date存在多筆" in str(exc)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "portfolio_selection_pressure_rejects_duplicate_candidate_day_identity",
+        True,
+        duplicate_rejected,
+    )
+
+    markdown = render_selection_pressure_markdown({"metrics": metrics})
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "portfolio_selection_pressure_report_states_non_counterfactual_boundary",
+        True,
+        all(token in markdown for token in (
+            "不重播市場", "未交易候選沒有realized R", "不填0R", "不授權使用future Target作runtime排序",
+        )),
+    )
+
+    root = Path(__file__).resolve().parents[2]
+    app_source = (root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    app_tree = ast.parse(app_source)
+    command_modules = {}
+    for node in app_tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "COMMAND_MODULES" for target in node.targets
+        ):
+            command_modules = ast.literal_eval(node.value)
+            break
+    menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
+    audit_source = (
+        root / "tools" / "filters" / "breakout_quality" / "audit_portfolio_selection_pressure.py"
+    ).read_text(encoding="utf-8")
+    args = parse_selection_pressure_args([])
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "portfolio_selection_pressure_is_cli_only_read_only_and_uses_11i_artifacts",
+        (True, True, True, True, True, True, True, True),
+        (
+            command_modules.get("audit-selection-pressure")
+            == "tools.filters.breakout_quality.audit_portfolio_selection_pressure",
+            "11K" not in menu_source,
+            "audit-selection-pressure" not in menu_source,
+            args.filter_id == BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            '"strategy_replay_performed": False' in audit_source,
+            '"counterfactual_performed": False' in audit_source,
+            '"training_performed": False' in audit_source,
+            "_artifact_path(source_dir, source, \"orderable\")" in audit_source,
+        ),
+    )
+
+    summary["command"] = "audit-selection-pressure"
+    summary["audit"] = "portfolio_selection_pressure"
+    return results, summary
+
+
 __all__ = [
     "validate_breakout_quality_chronological_embargo_case",
     "validate_breakout_quality_continuous_target_contract_case",
@@ -10089,5 +10203,6 @@ __all__ = [
     "validate_breakout_quality_runtime_artifact_contract_case",
     "validate_breakout_quality_selection_strategy_realization_contract_case",
     "validate_breakout_quality_candidate_counterfactual_execution_contract_case",
+    "validate_breakout_quality_portfolio_selection_pressure_contract_case",
     "validate_breakout_quality_strategy_comparison_contract_case",
 ]

@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪修正基準`test-branch-1_20260801_141056_9f9b630.zip`，SHA256 `dec5fc345541b7d4bd5e80f0037dcdc43ecbf3f45b721f2dfd1ab8529094e602`；11I Selection nested-OOS結果維持No-time Target↔strategy R 0.5644、PASS內0.5182、actual coverage 21.77%。11J第五次本機執行在低記憶體單次replay下仍只重現1,969／2,003，證明自訂`dict` observer即使不執行counterfactual，仍未忠實重現11I普通`dict replay_counts`路徑。11J已改為普通dict canonical replay與獨立execution sidecar list，核心不再呼叫研究lifecycle callback。正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`dec5fc345541b7d4bd5e80f0037dcdc43ecbf3f45b721f2dfd1ab8529094e602`；11J第五次失敗為`expected=2003, actual=1969`，發生於compact capture、單次replay且MemoryError已排除後。與11I成功基準`test-branch-1_20260730_225759_e072178.zip`比對後，11I audit、strategy compare、active params與rolling params均相同，差異集中於早期11J加入的portfolio-engine observer lifecycle。本輪恢復普通dict `replay_counts`，另以`replay_execution_rows` sidecar追加orderable執行快照，不放寬2,003 guard；11I結果來源為使用者提供的`selection_strategy_realization_audit.md`；上一輪11I trial SSOT修正來源：`3c7b295768a988ec5a0b6a951097bd6dfede35334af7ca6a1eedd96f5a85cf2e`；11G結果來源為使用者提供的`continuous_ranker_report(1).md`；11F結果來源為`continuous_target_audit(4).md`；11E結果來源為`target_time_penalty_ablation_audit.md`；11D結果來源為`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | 本輪來源`test-branch-1_20260801_143545_4d07fe5.zip`，SHA256 `953b03570c4df22c4e0389f6031f6b90a70530171f76e1f6d5d8a60f52160ab7`。11I結果維持No-time Target↔strategy R 0.5644、PASS內0.5182、actual coverage 21.77%。11J第六次在plain dict＋execution sidecar下仍只重現1,969／2,003，已停止，不再投入replay除錯。下一步改為11K只讀11I既有orderable／actual-trade工件的portfolio selection-pressure attribution；正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`953b03570c4df22c4e0389f6031f6b90a70530171f76e1f6d5d8a60f52160ab7`。11J停止狀態為`STOPPED / REPLAY_NONREPRODUCIBLE`；六次本機重播曾出現1,978／2,003、1,969／2,003與MemoryError，且最後在普通dict＋sidecar架構仍為1,969／2,003。11K不重播策略、不建立counterfactual，只strict讀取11I `selection_orderable_candidates.csv`與`selection_strategy_realization_matches.csv`，分析同日Target percentile、top-k retention、selection opportunity gap及壓力分桶；11I結果來源為使用者提供的`selection_strategy_realization_audit.md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -727,7 +727,8 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 42. 直接建立qualified-candidate-only sampling profile；11C顯示Score↔Target由all OOS 0.1677升至qualified 0.1918、orderable 0.1891，actual trades更達0.2459，沒有母體崩落證據。不得以候選母體不一致為理由直接重訓。
 43. 直接以全Label重新訓練No-time percentile ranker，或搜尋time penalty正負號／係數；11F Binary AUC約0.99，證明全Label loss會再次被PASS／REJECT分離支配。11G已完成唯一允許的PASS-only測試並淘汰，不得回頭加入BCE、pairwise、qualified sampling、time權重搜尋或9A Score blending。
 44. 微調11G PASS-only magnitude ranker；雖OOS PASS-only Score↔Target達0.3464、mean daily Spearman 0.2944，但actual PASS Score↔R為−0.1066，Score top decile僅0.6117R、bottom decile3.5519R。不得再調MSE／Huber、epochs、patience、LR、batch、percentile、head或與9A融合。
-45. 直接以11I actual portfolio round trips建立完整strategy-realization target；11I僅415筆Target matched trades，actual trade coverage只占qualified 21.77%。未成交或因capacity／cash competition未入選的候選不得填0R，也不得把portfolio selection偏差當成全部候選Target；必須先做11J per-candidate counterfactual execution。
+45. 直接以11I actual portfolio round trips建立完整strategy-realization target；11I僅415筆Target matched trades，actual trade coverage只占qualified 21.77%。未成交或因capacity／cash competition未入選的候選不得填0R，也不得把portfolio selection偏差當成全部候選Target。
+46. 繼續修補11J counterfactual replay一致性；六次本機執行仍無法重現11I的2,003筆，且曾出現MemoryError。11J正式停止，不再改core／observer／sidecar／日期或identity；後續只使用11I已凍結工件做read-only歸因。
 
 ---
 
@@ -735,21 +736,19 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 所有實驗一次只改一項。既有 OOS 可持續作為固定比較集；每次模型的訓練、Validation、early stopping 與 epoch 選擇必須完全限制在 Selection 內，完整 OOS 只能在模型凍結後執行。OOS 結果可以用來接受、淘汰或形成下一個實驗，不再以「OOS 已被查看」作為停止研究的理由。正式 runtime 仍維持 `base_finalists_agree` 既有排序且 Quality Ranking 關閉，除非新實驗同時通過模型指標與策略經濟效果。
 
-### 目前新增優先：11J Canonical Per-candidate Counterfactual Execution Audit
+### 目前新增優先：11K Portfolio Selection-pressure Attribution Audit
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；research-only、CLI-only，不建立Target arrays或模型 |
-| 研究依據 | 11I nested Selection中No-time Target↔strategy R=0.5644、PASS內0.5182，top／bottom decile R為2.6354／−0.6363，證明Target方向成立；但actual trade coverage只有21.77%，portfolio round trips不能代表全部qualified候選 |
-| 唯一變更 | 對每個11I qualified訊號建立獨立counterfactual path，忽略portfolio持倉上限與cash competition；候選資格與每日orderable occurrence仍由同一nested canonical replay產生。Capture只保存canonical rows與compact orderable entry欄位，不保存第二份qualified raw candidate |
-| 執行SSOT | 進場重用`build_candidate_plan_seed`＋`execute_pre_market_entry_plan`，延續／TBD沿用候選既有shadow state，每日出場重用`execute_bar_step`，期末重用`closeout_open_positions`，R與費稅重用exact accounting |
-| Coverage | 固定輸出qualified→orderable→filled→closed與Target-matched strategy R coverage；未成交候選保持unlabeled，不填0R |
-| 時間邊界 | canonical portfolio只重播一次2014-01-01～2020-11-05；已成交counterfactual path直接依各自ticker market array延伸至2020-12-31並期末強制結算，不建立第二次portfolio replay或2021候選 |
-| 判定 | 若counterfactual fill coverage明顯高於21.77%且Target↔R／PASS內仍正向，才可規劃filled-candidate strategy-realization target；若大量候選仍無法成交，需把fillability拆成獨立任務，不得填0R |
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；research-only、read-only、CLI-only |
+| 研究依據 | 11I已凍結2,003 qualified、1,993 orderable與415筆Target-matched actual trades；Target方向明確成立，但portfolio coverage只有21.77%。11J無法重現候選母體，停止後改用既有11I工件回答可直接驗證的選擇壓力問題 |
+| 唯一變更 | 不重播市場；把11I orderable occurrence以ticker＋trade date對齊actual entry，計算同日Target percentile、actual選中top-half／top-quartile比例、依每日實際買入數k的Target top-k retention與Target opportunity gap |
+| 壓力分桶 | 依同日orderable數分為1、2-3、4-5、6-10、11+，輸出各桶selected rate、selected percentile、top-k retention、Target gap與actual Target↔R |
+| R診斷 | realized R只存在actual trades；未選候選保持缺值。只在已選交易中檢查同日Target percentile↔R及top／bottom quartile平均R，不宣稱反事實績效 |
+| 判定 | 若selected percentile與top-k retention偏高，候選擠出不是主要問題，下一步轉向成交後capture／exit path；若偏低且Target gap明顯為正，才規劃固定ranking-proxy audit |
 | Dataset／training | 不重建Dataset、不relabel、不訓練、不選epoch、不建立profile／checkpoint／threshold |
-| 效率契約 | 禁止`copy.deepcopy(signal_state)`；`params_obj`只保留read-only reference，shadow只用`clone_shadow_position`；每日管理只掃描open positions，不掃描全部states |
-| 執行入口 | `python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet` |
-| UI／runtime | CLI-only、不加入互動選單、不修改9A或正式runtime |
+| 執行入口 | `python apps/breakout_quality.py audit-selection-pressure --filter-id breakout_quality_v1` |
+| UI／runtime | CLI-only、不加入互動選單、不修改9A、core交易規則或正式runtime |
 
 
 ### 優先 6A：AdamW only
@@ -1346,20 +1345,30 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Runtime／UI | research-only、CLI-only，不加入互動選單，不改9A、scanner、optimizer正式參數或runtime |
 | 執行 | 先`audit-selection-strategy-realization --prepare-only`產生PowerShell腳本；完成nested optimizer後再執行`audit-selection-strategy-realization --quiet` |
 
-### 3.58 11J Canonical Per-candidate Counterfactual Execution Audit（2026-08-01更新）
+### 3.58 11J Canonical Per-candidate Counterfactual Execution Audit（2026-08-01停止）
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；第五次本機執行在低記憶體單次replay下仍為1,969／2,003。已確認根因是自訂observer dict仍介入canonical replay path；改為普通dict與獨立sidecar後待重跑 |
-| 程式基準 | 修正基準`test-branch-1_20260801_141056_9f9b630.zip`，SHA256 `dec5fc345541b7d4bd5e80f0037dcdc43ecbf3f45b721f2dfd1ab8529094e602`；11I成功基準為`test-branch-1_20260730_225759_e072178.zip` |
-| 第五次失敗根因 | 低記憶體修正雖移除deepcopy與雙replay，但仍把`CanonicalCandidateReplayCapture(dict)`作為`replay_counts`。與11I成功基準比對後，11I audit／strategy compare／active params均相同，差異只剩portfolio engine的observer lifecycle；研究物件不得再成為canonical counts container |
-| 唯一變更 | 11J現在以普通`discovery_counts={}`執行與11I完全同型的canonical replay；orderable執行資料另寫入`replay_execution_rows=[]` sidecar。Portfolio engine不再探測或呼叫`begin_replay_day／observe_replay_candidates／finalize_replay`，sidecar只追加entry SSOT必要欄位、params reference、cloned shadow與ticker fast-data reference |
-| Replay／identity防線 | 先由普通dict的`candidate_rows`套用11I相同flatten／target-date／unique流程精確核對2,003；guard通過後才讀sidecar離線執行。Counterfactual state keys仍必須與canonical keys完全一致；2020-11-06～12-31由sidecar fast-data交易日聯集延伸，不重跑portfolio |
-| 交易SSOT | 仍重用`build_candidate_plan_seed`、`execute_pre_market_entry_plan`、`execute_bar_step`、`closeout_open_positions`及`calc_ratio_from_milli`；sidecar只改資料傳遞，不改成交、shadow、stop、take-profit、indicator exit、費稅或R定義 |
-| Strict來源 | 必須先有11I completed report，驗證11I artifact與nested params SHA256。Canonical qualified unique signals仍必須精確等於2,003；離線states亦必須與canonical keys完全一致，不得放寬、補值或將缺少訊號視為未成交 |
-| 輸出 | `candidate_counterfactual_execution_audit/`下輸出全訊號、filled與unfilled CSV及JSON／Markdown；report記錄`execution_mode=plain_replay_counts_with_execution_sidecar`、`replay_counts_type=plain_dict`、`lifecycle_callbacks_used=false`及`recursive_candidate_deepcopy=false` |
-| 邊界 | 不建立Target arrays、不訓練、不選epoch、不調optimizer／loss／threshold、不產生runtime score；11J結果review前不得建立新模型 |
-| 執行 | `python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet` |
+| 狀態 | `STOPPED / REPLAY_NONREPRODUCIBLE`；不再要求本機執行，不再修改core、observer、sidecar、日期或identity |
+| 最終基準 | `test-branch-1_20260801_143545_4d07fe5.zip`，SHA256 `953b03570c4df22c4e0389f6031f6b90a70530171f76e1f6d5d8a60f52160ab7` |
+| 最終失敗 | plain `dict replay_counts`＋獨立execution sidecar仍得到1,969／2,003，與11I凍結候選母體不一致；先前另曾得到1,978／2,003及於2014-05-15發生MemoryError |
+| 結論 | 11J已消耗過多除錯成本，且問題集中在歷史replay重現而非Target經濟假設。不得放寬2,003 guard、補值、把缺少候選視為未成交或繼續修改正式交易核心 |
+| 保留邊界 | 歷史程式與文件保留供追溯；任何11J輸出都不得作Target、模型、ranking或runtime依據 |
+| 下一步 | 跳過counterfactual，進入11K只讀portfolio selection-pressure attribution |
+
+### 3.59 11K Portfolio Selection-pressure Attribution Audit（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；只讀11I凍結工件，不重播市場、不建立counterfactual、不訓練 |
+| 程式基準 | `test-branch-1_20260801_143545_4d07fe5.zip`，SHA256 `953b03570c4df22c4e0389f6031f6b90a70530171f76e1f6d5d8a60f52160ab7` |
+| 研究目的 | 判斷portfolio capacity／cash competition發生時，actual trades是否已偏向同日較高No-time Target候選，或現有buy-sort系統性排除較高Target候選 |
+| 固定輸入 | strict驗證11I JSON與orderable／trade-matches SHA256；actual trades必須是orderable ticker＋entry-date完整子集，且matched count必須等於11I 415 |
+| 核心指標 | 同日Target percentile、top-half／top-quartile rate、按每日實際買入數k的Target top-k retention、Target opportunity gap、Target↔selected indicator，以及壓力分桶結果 |
+| R邊界 | realized R只用actual selected trades；未選候選保持NaN，不填0R，不推估反事實R。另描述性計算selected percentile↔R及selected top／bottom quartile平均R |
+| Runtime／UI | research-only、CLI-only，不加入互動選單，不修改9A、optimizer、threshold、Dataset、Target或core交易規則 |
+| 執行 | `python apps/breakout_quality.py audit-selection-pressure --filter-id breakout_quality_v1` |
+
 
 ---
 
@@ -1413,7 +1422,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 11G PASS-conditional No-time Magnitude Ranker（REJECTED；OOS PASS Target排序成立但actual PASS Score↔R −0.1066、decile反轉）
 → 11H PASS-only Realization-gap Attribution Audit（RESULT_AVAILABLE；STRATEGY_REALIZATION_GAP_CONFIRMED）
 → 11I Nested Selection Strategy-realization Coverage Audit（RESULT_AVAILABLE；Target方向通過，但actual coverage 21.77%不足）
-→ 11J Canonical Per-candidate Counterfactual Execution Audit（IMPLEMENTED；待本機結果，CLI-only）
+→ 11J Canonical Per-candidate Counterfactual Execution Audit（STOPPED；replay無法重現2,003筆，不再修補）
+→ 11K Portfolio Selection-pressure Attribution Audit（IMPLEMENTED；待本機結果，read-only／CLI-only）
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

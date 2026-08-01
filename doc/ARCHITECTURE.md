@@ -287,10 +287,15 @@ python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_
 
 正式CLI為`audit-selection-strategy-realization`，只輸出qualified／orderable candidate、round trips、No-time Target匹配與Target↔strategy R診斷。Actual portfolio trades受資金與持倉競爭選擇，未交易候選保持unlabeled；本輪不建立訓練Target、profile、checkpoint或runtime score，亦不加入互動選單。
 
-### 11J Canonical Per-candidate Counterfactual Execution Audit
+### 11J Canonical Per-candidate Counterfactual Execution Audit（已停止）
 
 `audit-candidate-counterfactual`採plain-counts＋execution-sidecar架構。Canonical portfolio replay的`replay_counts`必須是普通dict，與11I完全同型；研究狀態機、observer或自訂dict不得成為counts container。Portfolio engine只在呼叫端明確提供`replay_execution_rows`時，將orderable candidate縮成in-memory sidecar快照；不呼叫任何research lifecycle callback，也不執行entry、position step、closeout或accounting。`CandidateCounterfactualReplay`只在canonical replay與2,003 guard完成後離線執行。
 
 執行規則不另寫第二套模擬器：離線candidate plan由`core.portfolio_entries.build_candidate_plan_seed`建立，進場重用`execute_pre_market_entry_plan`，延續／TBD沿用sidecar當下凍結的shadow state，每日管理重用`execute_bar_step`，期末重用`closeout_open_positions`，R與費稅重用exact accounting。只隔離資料傳遞與執行時點，不改history qualification、active params、ensemble min-agree、orderability、限價、停損、停利或出場語意。
 
 11J只執行一次與11I相同的2014-01-01～2020-11-05 canonical replay，先由普通dict `candidate_rows`套用相同flatten／target-date／unique流程核對2,003筆。獨立sidecar只保存compact orderable entry plan，不保存第二份qualified raw candidate。禁止recursive deepcopy `signal_state`，因其包含`_params_obj`；params只保留read-only reference，shadow position只用`clone_shadow_position`複製。2,003 guard通過後才離線執行entry與position management，每日只掃描open positions；2020-11-06～2020-12-31由sidecar fast-data交易日聯集延伸，不再建立第二次market cache或portfolio replay。未成交訊號保持unlabeled；11J不建立Target arrays、model profile、checkpoint、threshold或runtime score，且只提供CLI。
+
+
+### 11K Portfolio Selection-pressure Attribution Audit
+
+11K是11I凍結工件的read-only歸因層。它不重播portfolio、不建立counterfactual，而是把orderable candidate occurrence依ticker＋trade date對齊actual entry，計算同日No-time Target percentile、top-k retention、Target opportunity gap及候選壓力分桶。未選候選不具realized R，保持缺值。正式入口為`apps/breakout_quality.py audit-selection-pressure`，CLI-only；依賴方向為apps薄路由→tools audit→11I artifact，禁止反向修改core或runtime。
