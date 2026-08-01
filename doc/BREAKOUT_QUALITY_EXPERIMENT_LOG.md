@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_010530_611f6d3.zip`，SHA256 `2faa38e8013dd1080e01ed7173ea43fab94b7886bee209a20f5bf5cf866614c2`；使用者本機已取得Seed 42 PIT模型結果。本輪修正第二個workflow Seed及舊strategy compare app回歸問題；修補ZIP SHA256由交付回覆列示 |
-| SHA256 | 來源ZIP SHA256 `2faa38e8013dd1080e01ed7173ea43fab94b7886bee209a20f5bf5cf866614c2`。Seed統一為42後，既有Seed 42 PIT結果可作目前正式Selection模型層證據；尚未執行Selection Baseline／Score Sort策略replay，因此策略結果仍為`RESULT_NOT_AVAILABLE` |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260802_013153_8239ebe.zip`，SHA256 `0590fd64c93afa09aa35b1a54840fea05ab4c159be293c3d227a1823a092a644`；使用者本機已取得Seed 42 PIT模型結果。本輪只修正B183／B184 synthetic validator唯一映射與checklist同步；修補ZIP SHA256由交付回覆列示 |
+| SHA256 | 來源ZIP SHA256 `0590fd64c93afa09aa35b1a54840fea05ab4c159be293c3d227a1823a092a644`。Seed 42 PIT模型證據與Score Sort runtime均未改動；尚未執行Selection Baseline／Score Sort策略replay，因此策略結果仍為`RESULT_NOT_AVAILABLE` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1684,3 +1684,18 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 結果邊界 | 本輪只修正式入口與測試治理同步；Baseline／Score Sort策略結果仍為`RESULT_NOT_AVAILABLE`，不得由測試通過推論策略有效 |
 | 下一步 | 套用修補並確實刪除舊app後，重新執行`python apps/test_suite.py`；預期consistency單一失敗與meta四項連帶失敗消失，正式結果仍以本機輸出為準 |
 
+
+
+### 3.75 Checklist Registry唯一映射閉環（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；已依第二次formal bundle修正兩個consistency failure，尚未宣稱本機formal suite通過 |
+| 程式基準 | `test-branch-1_20260802_013153_8239ebe.zip`；SHA256 `0590fd64c93afa09aa35b1a54840fea05ab4c159be293c3d227a1823a092a644` |
+| Formal bundle | `to_chatgpt_bundle_20260802_013316_c2844f24.zip`；SHA256 `31c0a5e0a2127427d930ea5d194aa0d55ae1329605b14c97cc501026d772e3cd` |
+| 原始結果 | quick gate、chain checks、ml smoke通過；consistency只剩`B184_done_summary_has_done_test_mapping`與`done_test_names_unique`兩項；meta quality僅因synthetic suite非零退出連帶失敗 |
+| 根因 | T279與T280同時映射`validate_breakout_quality_point_in_time_score_builder_contract_case`，違反DONE test name唯一性；B184雖為DONE但沒有自己的T映射 |
+| 唯一修正 | 將B183的Score Sort／來源context／audit hash／模型gate／post-replay Target診斷拆為`validate_breakout_quality_selection_point_in_time_score_sort_contract_case`；新增`validate_breakout_quality_single_seed_single_entry_contract_case`承接B184；T280改指B183獨立validator並新增T281映射B184 |
+| 固定條件 | 不改Dataset、Label、Continuous Target、PIT Scores、模型、Seed 42、Score Sort runtime、策略參數、交易規則、帳務或績效結果 |
+| 結果邊界 | 本輪只修validator registry與checklist機械同步；Selection Baseline／Score Sort策略結果仍為`RESULT_NOT_AVAILABLE` |
+| 下一步 | 套用修補後重新執行`python apps/test_suite.py`；正式結果以使用者本機輸出為準 |

@@ -10989,6 +10989,16 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         ),
     )
 
+    summary["workflow"] = "selection_point_in_time_scores"
+    summary["score_contract"] = "future_target_excluded"
+    return results, summary
+
+
+def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_SELECTION_POINT_IN_TIME_SCORE_SORT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
     from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD, sort_candidate_rows
     from filters.breakout_quality.ranking_score_store import (
         _validate_audit_source_artifact,
@@ -11117,4 +11127,125 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     summary["workflow"] = "selection_point_in_time_scores"
     summary["score_contract"] = "future_target_excluded"
     summary["strategy_score_sort"] = "missing_fallback_original_buy_sort"
+    return results, summary
+
+
+
+def validate_breakout_quality_single_seed_single_entry_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_SINGLE_SEED_SINGLE_ENTRY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    project_root = Path(__file__).resolve().parents[2]
+    canonical_config_path = project_root / "config" / "breakout_quality.py"
+    canonical_source = canonical_config_path.read_text(encoding="utf-8")
+    canonical_app_path = project_root / "apps" / "breakout_quality.py"
+    canonical_app_source = canonical_app_path.read_text(encoding="utf-8")
+    legacy_app_path = project_root / "apps" / "breakout_quality_strategy_compare.py"
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_seed_contract_has_one_editable_setting_and_no_workflow_seed",
+        (1, False),
+        (
+            canonical_source.count("BREAKOUT_QUALITY_RANDOM_SEED ="),
+            "BREAKOUT_QUALITY_WORKFLOW_RANDOM_SEED" in canonical_source,
+        ),
+    )
+
+    from config import breakout_quality as breakout_quality_config
+
+    configured_seed = breakout_quality_config.resolve_breakout_quality_random_seed()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_seed_contract_resolves_nonnegative_integer",
+        True,
+        isinstance(configured_seed, int) and configured_seed >= 0,
+    )
+
+    with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_RANDOM_SEED", 7):
+        overridden_seed = breakout_quality_config.resolve_breakout_quality_random_seed()
+        with patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+        ):
+            binary_seed = breakout_quality_config.get_breakout_quality_workflow_settings().seed
+        with patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        ):
+            continuous_seed = breakout_quality_config.get_breakout_quality_workflow_settings().seed
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_seed_contract_applies_override_to_all_profiles",
+        (7, 7, 7),
+        (overridden_seed, binary_seed, continuous_seed),
+    )
+
+    with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_RANDOM_SEED", -1):
+        try:
+            breakout_quality_config.resolve_breakout_quality_random_seed()
+        except ValueError:
+            negative_seed_rejected = True
+        else:
+            negative_seed_rejected = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_seed_contract_rejects_negative_seed",
+        True,
+        negative_seed_rejected,
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_entry_contract_removes_legacy_strategy_compare_app",
+        False,
+        legacy_app_path.exists(),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_entry_contract_declares_canonical_strategy_compare_subcommand",
+        True,
+        bool(
+            canonical_app_path.is_file()
+            and '"strategy-compare": "tools.filters.breakout_quality.strategy_compare"'
+            in canonical_app_source
+            and "_run_command(\n        \"strategy-compare\"" in canonical_app_source
+        ),
+    )
+
+    strategy_compare_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "strategy_compare.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_seed_contract_strategy_gate_rejects_seed_mismatch",
+        True,
+        all(
+            token in strategy_compare_source
+            for token in (
+                "int(pit_contract.seed) != int(workflow_settings.seed)",
+                "Selection PIT工件seed與目前workflow不一致",
+            )
+        ),
+    )
+
+    summary["seed_source"] = "config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED"
+    summary["strategy_compare_entry"] = "apps/breakout_quality.py strategy-compare"
     return results, summary

@@ -501,7 +501,8 @@
 | T277 | `validate_breakout_quality_candidate_counterfactual_execution_contract_case` | B180 |
 | T278 | `validate_breakout_quality_portfolio_selection_pressure_contract_case` | B181 |
 | T279 | `validate_breakout_quality_point_in_time_score_builder_contract_case` | B182 |
-| T280 | `validate_breakout_quality_point_in_time_score_builder_contract_case` | B183 |
+| T280 | `validate_breakout_quality_selection_point_in_time_score_sort_contract_case` | B183 |
+| T281 | `validate_breakout_quality_single_seed_single_entry_contract_case` | B184 |
 
 ## G. 逐項收斂紀錄
 
@@ -1684,9 +1685,14 @@
 | 2026-08-01 | T279 | 新增PIT fold embargo、完整coverage、Future Target排除、orderable coverage與單一入口direct synthetic validator | NEW -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
 | 2026-08-01 | T279 | PIT易讀終端／Markdown報表章節尚未納入direct validator，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-01 | T279 | 新增核心排序、年度、fold、研究邊界及工件章節驗證後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
-| 2026-08-01 | T280 | 新增PIT Score desc、同分／缺分fallback、source context、audit來源hash、模型gate與post-replay Target診斷synthetic契約 | NEW -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
+| 2026-08-01 | T280 | 新增PIT Score desc、同分／缺分fallback、source context、audit來源hash、模型gate與post-replay Target診斷synthetic契約 | NEW -> DONE | `validate_breakout_quality_selection_point_in_time_score_sort_contract_case` |
 | 2026-08-02 | B26 | formal bundle確認B183／B184主表與T280 DONE摘要漏同步，checklist治理契約退回PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-08-02 | B26 | 補齊B183／B184主表與T280映射並獨立核對主表、T摘要及G最新狀態後重新收斂為DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-08-02 | B26 | formal rerun確認T279／T280重複validator名稱且B184沒有獨立DONE測試映射，checklist registry契約再次退回PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md`, `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-02 | B26 | 將B183與B184拆為唯一synthetic validator、補T281並同步T／G後重新收斂為DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md`, `tools/validate/synthetic_cases.py` |
 | 2026-08-02 | B184 | formal consistency確認舊`apps/breakout_quality_strategy_compare.py`仍存在，唯一入口契約退回PARTIAL | DONE -> PARTIAL | `apps/breakout_quality_strategy_compare.py` |
 | 2026-08-02 | B184 | 從實際程式基準刪除舊app並保留`apps/breakout_quality.py strategy-compare`唯一入口後重新收斂為DONE | PARTIAL -> DONE | `apps/breakout_quality.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-02 | T280 | formal consistency確認T280與T279重複指向PIT builder validator，測試摘要唯一性契約退回PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-08-02 | T280 | 改由獨立Selection PIT Score Sort validator承接B183後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_selection_point_in_time_score_sort_contract_case` |
+| 2026-08-02 | T281 | 新增單一Seed與唯一Strategy Compare入口獨立validator並映射B184 | NEW -> DONE | `validate_breakout_quality_single_seed_single_entry_contract_case` |
 
