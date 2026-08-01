@@ -41,6 +41,7 @@ from tools.filters.breakout_quality.continuous_ranker_pipeline import (
 
 AUDIT_SCHEMA_VERSION = 1
 DRIFT_MEAN_SHIFT_STD_THRESHOLD = 1.0
+_ORDERABLE_PIT_SCORE_COLUMN = "__pit_breakout_quality_score"
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -435,13 +436,21 @@ def _orderable_coverage(
                 "（target_date/signal_date/candidate_date/date）"
             ),
         }
-    lookup = score_frame[["ticker", "date", "breakout_quality_score"]].copy()
+    if _ORDERABLE_PIT_SCORE_COLUMN in candidates.columns:
+        raise ValueError(
+            "orderable candidate工件使用了PIT audit保留欄位: "
+            f"{_ORDERABLE_PIT_SCORE_COLUMN}"
+        )
+    candidate_has_existing_score = "breakout_quality_score" in candidates.columns
+    lookup = score_frame[["ticker", "date", "breakout_quality_score"]].copy().rename(
+        columns={"breakout_quality_score": _ORDERABLE_PIT_SCORE_COLUMN}
+    )
     lookup["date"] = lookup["date"].dt.strftime("%Y-%m-%d")
     work = candidates.copy()
     work["ticker"] = work["ticker"].astype(str)
     work["date"] = pd.to_datetime(work[date_column], errors="raise").dt.strftime("%Y-%m-%d")
     work = work.merge(lookup, how="left", on=["ticker", "date"], validate="many_to_one")
-    scored = np.isfinite(pd.to_numeric(work["breakout_quality_score"], errors="coerce"))
+    scored = np.isfinite(pd.to_numeric(work[_ORDERABLE_PIT_SCORE_COLUMN], errors="coerce"))
     return {
         "available": True,
         "path": str(path),
@@ -449,6 +458,10 @@ def _orderable_coverage(
         "scored_candidate_count": int(scored.sum()),
         "coverage_rate": float(scored.mean()) if len(work) else None,
         "unscored_candidate_count": int((~scored).sum()),
+        "candidate_artifact_has_existing_breakout_quality_score": bool(
+            candidate_has_existing_score
+        ),
+        "coverage_score_source": "selection_point_in_time_scores",
     }
 
 

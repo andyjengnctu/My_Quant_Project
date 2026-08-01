@@ -10504,8 +10504,16 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         orderable_path = Path(tmp_dir) / "orderable.csv"
         pd.DataFrame(
             [
-                {"ticker": "0056", "target_date": "2014-01-02"},
-                {"ticker": "X", "target_date": "2014-01-03"},
+                {
+                    "ticker": "0056",
+                    "target_date": "2014-01-02",
+                    "breakout_quality_score": 0.01,
+                },
+                {
+                    "ticker": "X",
+                    "target_date": "2014-01-03",
+                    "breakout_quality_score": 0.99,
+                },
             ]
         ).to_csv(orderable_path, index=False, encoding="utf-8-sig")
         score_dates = validated.copy()
@@ -10529,6 +10537,17 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             orderable["coverage_rate"],
         ),
         tol=1e-12,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_orderable_coverage_ignores_existing_candidate_score_column",
+        (True, "selection_point_in_time_scores"),
+        (
+            orderable["candidate_artifact_has_existing_breakout_quality_score"],
+            orderable["coverage_score_source"],
+        ),
     )
 
     summary["workflow"] = "selection_point_in_time_scores"

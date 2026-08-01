@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_171848_309fb6d.zip`，SHA256 `3c0f78e34ecae675ca4b41dd7adada3009d5c5b68834b92728b3c690b7524fec`。此基準已包含單一入口、泛用workflow config、continuous-ranker共用pipeline與Selection point-in-time Score builder／audit；本輪修正PIT builder載入完整Dataset時，尾端Label horizon未完成group的`label_eval_end_date`全為空值卻被`nunique()`誤判為0種而中止的問題。不改模型、Target、Score值、fold邊界、buy-sort或策略邏輯。尚未完成完整Selection folds，因此不得宣稱模型或策略有效 |
-| SHA256 | 本輪來源 ZIP：`3c0f78e34ecae675ca4b41dd7adada3009d5c5b68834b92728b3c690b7524fec`；前一formal bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5`。第一階段PIT manifest仍預設`eligible=false`，不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_173038_874fe01.zip`，SHA256 `e0271e5d47c31176956a51057b0f1eabdb3f03fbb054b4022426488a7bd30914`。此基準已完成7個Selection PIT folds與18,247個未見事件Scores；本輪只修正模型audit計算orderable coverage時，既有候選工件也含`breakout_quality_score`造成pandas merge自動產生`_x/_y`、原欄名消失而中止的問題。Audit現在以保留欄名明確引用PIT Score來源，既有候選Score只作輸入欄位存在紀錄，不參與coverage。未修改模型、Target、fold、checkpoint、Score值、buy-sort或策略邏輯 |
+| SHA256 | 本輪來源 ZIP：`e0271e5d47c31176956a51057b0f1eabdb3f03fbb054b4022426488a7bd30914`；前一formal bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5`。PIT manifest仍預設`eligible=false`，目前只完成Score建立，模型audit結果尚未取得；不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -711,6 +711,22 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 下一步 | 使用者套用修補後重跑formal suite；若quick gate通過，即繼續建立Selection point-in-time Scores，不新增其他模型或排序變更 |
 
 
+### 3.62 Selection PIT Scores完成與Orderable Coverage欄位碰撞修正（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `SCORES_BUILT / AUDIT_FIX_IMPLEMENTED / AUDIT_RESULT_PENDING`；真實Selection PIT Scores已完成，模型audit因orderable候選既有Score欄位碰撞中止，本輪已修正程式但尚未取得重跑結果 |
+| 程式基準 | 使用者結果基準`test-branch-1_20260801_173038_874fe01.zip`，SHA256 `e0271e5d47c31176956a51057b0f1eabdb3f03fbb054b4022426488a7bd30914` |
+| PIT建立結果 | 7個年度expanding folds，評分期間2014-01-01～2020-12-31；串接18,247 groups，coverage=1.0000。各fold score groups依序為2,077、1,803、2,521、3,068、1,853、3,507、3,418 |
+| Epoch選擇 | 各fold selected epoch依序為3、4、2、2、1、2、1；對應Validation mean daily Spearman為0.2707、0.2446、0.1536、0.2293、0.2693、0.2513、0.2516。這些是fold內Validation選epoch數值，不是PIT評分期間的模型audit結果 |
+| 已建立工件 | `selection_point_in_time_scores.csv`、combined manifest與coverage，以及7個fold checkpoint／scores／manifest；使用者執行輸出顯示combined coverage完整 |
+| Audit失敗根因 | 既有`selection_orderable_candidates.csv`含舊`breakout_quality_score`；audit再merge PIT lookup同名欄位後，pandas改名為`breakout_quality_score_x/y`，後續讀取原欄名發生`KeyError`。此錯誤發生在Scores完成後的離線coverage audit，不影響fold訓練、checkpoint或已輸出的PIT Score值 |
+| 唯一修正 | PIT lookup在merge前改用audit保留欄名；coverage只讀該保留欄位。候選工件原有Score即使存在且皆為有限值，也不得被誤算為PIT coverage；另回報候選工件是否帶有舊Score與實際coverage score source |
+| 防錯驗證 | 合成orderable工件刻意帶入同名舊Score：一筆有PIT match、一筆無PIT match但舊Score有效；修正後coverage仍正確為1／2=0.5，證明未誤用舊Score。保留欄位若被外部工件占用則fail-fast |
+| Dataset／模型 | 不重建Dataset、不relabel、不重訓fold、不改continuous-ranker、selected epoch、checkpoint、Score CSV、Target、seed、buy-sort或策略參數 |
+| 下一步 | 直接重跑`python apps/breakout_quality.py audit-point-in-time-scores`；取得global／daily Spearman、年度spread、fold drift及orderable coverage後，才判定是否進入泛用Score buy-sort。不得因本次audit程式錯誤重跑7個fold |
+
+
 ## 4. 已排除或暫停的方向
 
 下列方向已有足夠證據，不應在沒有新機制或新資料證據時重複測試：
@@ -773,14 +789,14 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；第一階段程式已完成，尚未執行完整Selection folds |
+| 狀態 | `SCORES_BUILT / AUDIT_FIX_IMPLEMENTED / AUDIT_RESULT_PENDING`；7個Selection folds與18,247個PIT Scores已完成，orderable coverage欄位碰撞已修正，待重跑模型audit |
 | 研究依據 | 既有11G能預測部分PASS-only No-time Target，但完整Selection refit Score不具備策略optimizer所需的未見資料性質；actual trades又受到舊排序、持倉與資金限制，因此先建立與正式OOS相同語意的PIT Score |
 | 唯一變更 | 使用expanding-window folds；每fold只用score period以前、且`label_eval_end_date < score_start`的歷史資料完成Inner Validation、epoch selection及final refit，再只評分下一段未見資料 |
 | 固定模型 | architecture／experiment profile／target由`config/breakout_quality_workflow.py`指定；目前為`seed=1`、PASS-only No-time magnitude continuous ranker，不重試MSE／Huber／epoch／LR／batch／sampling |
 | 正式工件 | `selection_point_in_time_scores.csv`、combined manifest／coverage，以及每fold checkpoint、scores、manifest與SHA256 |
 | 模型audit | 先計算Score↔Target Spearman、mean daily Spearman、年度與decile spread、fold drift、PASS分類重疊及orderable coverage；Future Target只在audit離線join，不寫入Score CSV |
 | 策略邊界 | Builder manifest固定`eligible=false`；模型audit通過前不接buy-sort、不跑主策略optimizer。第一階段策略選單會明確阻擋PIT Score source |
-| 下一步 | 在具備完整Dataset／Target工件的本機執行PIT builder與audit；若多數年份沒有穩定正向Target排序能力則停止。通過後才實作泛用`BREAKOUT_QUALITY_SCORE_DESC`與Baseline／Sort Only策略比較 |
+| 下一步 | 不重跑builder；直接執行PIT model audit。若多數年份沒有穩定正向Target排序能力則停止；通過後才實作泛用`BREAKOUT_QUALITY_SCORE_DESC`與Baseline／Sort Only策略比較 |
 | Dataset／training | 不重建binary Dataset、不重訓完整Selection 9A；只沿用既有continuous-ranker training pipeline建立歷史fold模型 |
 | 執行入口 | `python apps/breakout_quality.py build-point-in-time-scores`；完成後執行`audit-point-in-time-scores` |
 | UI／runtime | 新主選單不含9A／11G／11K名稱；research-only低階功能維持CLI-only；PIT Score不是scanner或forward-OOS runtime工件 |
@@ -1461,7 +1477,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 11I Nested Selection Strategy-realization Coverage Audit（RESULT_AVAILABLE；Target方向通過，但actual coverage 21.77%不足）
 → 11J Canonical Per-candidate Counterfactual Execution Audit（STOPPED；replay無法重現2,003筆，不再修補）
 → 11K Portfolio Selection-pressure Attribution Audit（IMPLEMENTED；歷史read-only工件保留，不再作主線）
-→ Selection Point-in-time Score Workflow（IMPLEMENTED；待完整資料建立fold scores與模型audit）
+→ Selection Point-in-time Score Workflow（SCORES_BUILT；7 folds／18,247 groups完成，待模型audit重跑）
 → 模型audit通過後才新增泛用Score buy-sort與Baseline／Sort Only比較
 → 有合理改善跡象後才讓主策略參數適應Score排序，最後再作正式OOS比較
 ```
