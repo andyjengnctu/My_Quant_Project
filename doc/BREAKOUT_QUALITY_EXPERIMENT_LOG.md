@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_013153_8239ebe.zip`，SHA256 `0590fd64c93afa09aa35b1a54840fea05ab4c159be293c3d227a1823a092a644`；使用者本機已取得Seed 42 PIT模型結果。本輪只修正B183／B184 synthetic validator唯一映射與checklist同步；修補ZIP SHA256由交付回覆列示 |
-| SHA256 | 來源ZIP SHA256 `0590fd64c93afa09aa35b1a54840fea05ab4c159be293c3d227a1823a092a644`。Seed 42 PIT模型證據與Score Sort runtime均未改動；尚未執行Selection Baseline／Score Sort策略replay，因此策略結果仍為`RESULT_NOT_AVAILABLE` |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260802_013952_744919d.zip`，SHA256 `6683b981a6ca4e9719a41bf2518462cb6851c9d7e168656dade9a4608b21f886`；使用者本機已取得Seed 42 PIT模型結果，並首次執行Selection Baseline／Score Sort replay。本輪修正PIT缺分事件在candidate／continuation state中被誤作`float(None)`的runtime錯誤；修補ZIP SHA256由交付回覆列示 |
+| SHA256 | 來源ZIP SHA256 `6683b981a6ca4e9719a41bf2518462cb6851c9d7e168656dade9a4608b21f886`。Baseline replay已完成至2020-12-31，終值2,840,064；Score Sort於2014-01-02候選建立階段因不可評分事件`score=None`被轉為float而中止，尚無可比較策略結果。本輪只修正缺分保存／fallback契約，模型與策略績效仍待本機重跑 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1699,3 +1699,22 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 固定條件 | 不改Dataset、Label、Continuous Target、PIT Scores、模型、Seed 42、Score Sort runtime、策略參數、交易規則、帳務或績效結果 |
 | 結果邊界 | 本輪只修validator registry與checklist機械同步；Selection Baseline／Score Sort策略結果仍為`RESULT_NOT_AVAILABLE` |
 | 下一步 | 套用修補後重新執行`python apps/test_suite.py`；正式結果以使用者本機輸出為準 |
+
+### 3.76 Selection PIT缺分候選Runtime閉環（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / STRATEGY_RERUN_PENDING`；已重現並修正Score Sort第一日runtime錯誤，尚未取得完整Baseline／Score Sort比較結果 |
+| 程式基準 | `test-branch-1_20260802_013952_744919d.zip`；SHA256 `6683b981a6ca4e9719a41bf2518462cb6851c9d7e168656dade9a4608b21f886` |
+| 使用者本機結果 | Baseline `no_filter`已完成2014-01-01～2020-12-31 replay，終值2,840,064；Score Sort在2014-01-02 `build_daily_candidates`以`TypeError: float() argument must be a string or a real number, not 'NoneType'`中止，因此本輪沒有策略績效差異可判定 |
+| 根因 | Selection PIT lookup對score table缺少ticker／signal-date事件時正確回傳`available=false`、`score=None`、`unavailable_reason=missing_ticker_date_score`；但`attach_breakout_quality_rank()`仍沿用舊hard-filter假設，先執行`float(score)`且禁止不可評分事件進入continuation／re-entry state，與B183「缺分不得排除或填0、須回退原buy-sort」契約衝突 |
+| 唯一修正 | 新增單一`normalize_breakout_quality_rank_payload()`；可評分payload仍嚴格要求0～1有限值，不可評分payload保存`score=None`、原因、原始score date、score source及PIT identity。Candidate row、continuation與re-entry共用同一正規化，不重新查詢原事件Score |
+| 排序語意 | 缺分事件不是REJECT；normal／continuation／re-entry候選均保留`use_breakout_quality_ranking=true`與`available=false`，`breakout_quality_score=None`，由既有buy-sort邏輯排在有效Score後並完整回退原排序 |
+| 額外修正 | 原attach流程會丟失`score_source`，使PIT continuation下一日被誤判為canonical source；新版保存全部來源metadata。舊持倉fallback也不再把`score=None`硬標成`available=true` |
+| 文件契約同步 | B170舊文字的「不可評分事件保守排除」改為分流：hard-filter維持保守REJECT；score-ranking缺分不得排除或填0，須保存payload並回退原buy-sort，與B183及runtime一致 |
+| 固定條件 | 不改Dataset、Label、Continuous Target、Seed 42、PIT checkpoints／Scores／audit、模型gate、active params、候選生成、成交、持倉、資金、停損停利、buy-sort優先規則或Future Target邊界 |
+| Dataset／Label／模型工件 | 不需重建；只需重新執行主選單`[1] 策略績效驗證` |
+| 獨立驗證 | T280新增不可評分PIT payload保存、PIT source繼承、不重新lookup、candidate row不執行`float(None)`及Score維持None的direct synthetic案例；全專案靜態與依賴檢查另由本輪交付列示 |
+| 結果邊界 | Baseline終值只證明基準路徑可完成；Score Sort尚未完成，因此不得比較報酬、MDD、選股Target或宣稱排序有效／無效 |
+| 下一步 | 套用修補後直接重跑`python apps/breakout_quality.py strategy-compare`或主選單`[1]`；不需重跑PIT模型或audit |
+

@@ -11000,6 +11000,11 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     summary = {"ticker": case_id, "synthetic": True}
 
     from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD, sort_candidate_rows
+    from core.extended_signals import (
+        attach_breakout_quality_rank,
+        resolve_breakout_quality_rank,
+    )
+    from core.portfolio_candidates import _make_candidate_row
     from filters.breakout_quality.ranking_score_store import (
         _validate_audit_source_artifact,
         derive_point_in_time_model_validation_gate,
@@ -11031,6 +11036,87 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         results, "synthetic_breakout_quality", case_id,
         "point_in_time_score_sort_desc_tie_and_missing_fallback_contract",
         ["A", "C", "D", "B"], [row["ticker"] for row in ranking_rows],
+    )
+
+    unavailable_rank = {
+        "score": None,
+        "available": False,
+        "unavailable_reason": "missing_ticker_date_score",
+        "score_date": "2014-01-01",
+        "score_source": "selection_point_in_time",
+        "shared_group_score": True,
+        "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "strategy_aligned_no_time_pass_magnitude_mse",
+    }
+    signal_state = {}
+    attach_breakout_quality_rank(signal_state, unavailable_rank)
+    inherited_unavailable_rank = resolve_breakout_quality_rank(signal_state)
+    ranking_params = replace(
+        _base_params,
+        use_breakout_quality_ranking=True,
+        breakout_quality_filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    )
+    with breakout_quality_ranking_source_context(
+        score_source="selection_point_in_time",
+        model_architecture="inception_time_v1",
+        experiment_profile="strategy_aligned_no_time_pass_magnitude_mse",
+    ):
+        with patch(
+            "core.portfolio_candidates.resolve_breakout_quality_candidate_rank",
+            side_effect=AssertionError("延續候選不得重新查詢原事件Score"),
+        ):
+            resolved_inherited_unavailable_rank = _resolve_candidate_quality_ranking(
+                params=ranking_params,
+                ticker="0056",
+                signal_date=pd.Timestamp("2014-01-01"),
+                signal_state=signal_state,
+            )
+    unavailable_candidate = _make_candidate_row(
+        buy_sort_method=BUY_LIMIT_OVERAGE_SORT_METHOD,
+        ticker="0056",
+        candidate_type="normal",
+        est_limit_px=100.0,
+        ev=0.0,
+        y_atr=2.0,
+        t_pos=1,
+        y_pos=0,
+        est_qty=0,
+        win_rate=0.0,
+        trade_count=0,
+        asset_growth_pct=0.0,
+        est_init_sl=90.0,
+        est_init_trail=95.0,
+        est_target_price=120.0,
+        entry_atr=2.0,
+        is_orderable=True,
+        params=_base_params,
+        trade_date=pd.Timestamp("2014-01-02"),
+        signal_date=pd.Timestamp("2014-01-01"),
+        prev_close=99.0,
+        quality_rank=unavailable_rank,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "point_in_time_missing_score_is_preserved_for_continuation_and_candidate_fallback",
+        (
+            False,
+            None,
+            "missing_ticker_date_score",
+            "selection_point_in_time",
+            "selection_point_in_time",
+            False,
+            None,
+        ),
+        (
+            inherited_unavailable_rank["available"],
+            inherited_unavailable_rank["score"],
+            inherited_unavailable_rank["unavailable_reason"],
+            inherited_unavailable_rank["score_source"],
+            resolved_inherited_unavailable_rank["score_source"],
+            unavailable_candidate["breakout_quality_rank"]["available"],
+            unavailable_candidate["breakout_quality_score"],
+        ),
     )
 
     default_source = get_breakout_quality_ranking_source_context().score_source

@@ -183,11 +183,18 @@ def create_breakout_reentry_watch_state(
     if inherited_rank is None:
         inherited_rank = position.get("breakout_quality_rank")
     if inherited_rank is None and bool(position.get("use_breakout_quality_ranking", False)):
+        raw_score = position.get("breakout_quality_score")
+        try:
+            parsed_score = float(raw_score)
+        except (TypeError, ValueError):
+            parsed_score = float("nan")
+        score_available = bool(math.isfinite(parsed_score))
         inherited_rank = {
-            "score": position.get("breakout_quality_score"),
-            "available": True,
-            "unavailable_reason": "",
+            "score": parsed_score if score_available else None,
+            "available": score_available,
+            "unavailable_reason": "" if score_available else "missing_score",
             "score_date": position.get("breakout_quality_score_date"),
+            "score_source": position.get("breakout_quality_score_source") or "canonical_runtime",
             "shared_group_score": True,
             "filter_id": str(getattr(params, "breakout_quality_filter_id", "") or ""),
         }

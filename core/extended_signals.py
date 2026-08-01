@@ -64,35 +64,61 @@ def resolve_signal_tracking_params(signal_state, fallback_params):
     return fallback_params
 
 
+def normalize_breakout_quality_rank_payload(quality_rank):
+    """Normalize one breakout-event ranking payload without changing availability semantics."""
+
+    if not isinstance(quality_rank, dict):
+        raise TypeError("breakout quality rank 必須是 dict")
+
+    normalized = dict(quality_rank)
+    available = bool(quality_rank.get("available", False))
+    score_date = str(quality_rank.get("score_date") or "").strip()
+    score_source = str(quality_rank.get("score_source") or "canonical_runtime").strip()
+    if not score_date:
+        raise ValueError("breakout quality rank 必須保存原始 breakout score_date")
+    if not score_source:
+        raise ValueError("breakout quality rank 必須保存 score_source")
+
+    if available:
+        try:
+            score = float(quality_rank.get("score"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("可評分 breakout quality rank score 必須是 0~1 有限值") from exc
+        if not np.isfinite(score) or score < 0.0 or score > 1.0:
+            raise ValueError("可評分 breakout quality rank score 必須是 0~1 有限值")
+        unavailable_reason = ""
+    else:
+        score = None
+        unavailable_reason = str(
+            quality_rank.get("unavailable_reason") or "unavailable"
+        ).strip()
+
+    normalized.update({
+        "score": score,
+        "available": available,
+        "unavailable_reason": unavailable_reason,
+        "score_date": score_date,
+        "score_source": score_source,
+        "shared_group_score": bool(quality_rank.get("shared_group_score", False)),
+        "filter_id": str(quality_rank.get("filter_id") or "").strip(),
+    })
+    return normalized
+
+
 def attach_breakout_quality_rank(signal_state, quality_rank):
-    """Attach one canonical breakout-event score to continuation/re-entry state."""
+    """Attach the original breakout-event ranking state to continuation/re-entry state."""
 
     if signal_state is None:
         return None
     if quality_rank is None:
         signal_state.pop("breakout_quality_rank", None)
         return signal_state
-    if not isinstance(quality_rank, dict):
-        raise TypeError("breakout quality rank 必須是 dict")
 
-    score = float(quality_rank.get("score", np.nan))
-    score_date = str(quality_rank.get("score_date") or "").strip()
-    available = bool(quality_rank.get("available", False))
-    if not np.isfinite(score) or score < 0.0 or score > 1.0:
-        raise ValueError("breakout quality rank score 必須是 0~1 有限值")
-    if not score_date:
-        raise ValueError("breakout quality rank 必須保存原始 breakout score_date")
-    if not available:
-        raise ValueError("不可評分 breakout event 不可進入 continuation／re-entry state")
-
-    signal_state["breakout_quality_rank"] = {
-        "score": score,
-        "available": True,
-        "unavailable_reason": "",
-        "score_date": score_date,
-        "shared_group_score": bool(quality_rank.get("shared_group_score", False)),
-        "filter_id": str(quality_rank.get("filter_id") or "").strip(),
-    }
+    # (AI註: PIT缺分不是REJECT；延續／re-entry需保存原事件的不可評分狀態，
+    #       後續候選才能一致回退原buy-sort，而不是重新查詢或中止replay。)
+    signal_state["breakout_quality_rank"] = normalize_breakout_quality_rank_payload(
+        quality_rank
+    )
     return signal_state
 
 

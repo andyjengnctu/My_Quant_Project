@@ -14,7 +14,11 @@ from core.trade_plans import (
     is_extended_signal_orderable_for_day,
     resolve_signal_tracking_params,
 )
-from core.extended_signals import attach_breakout_quality_rank, resolve_breakout_quality_rank
+from core.extended_signals import (
+    attach_breakout_quality_rank,
+    normalize_breakout_quality_rank_payload,
+    resolve_breakout_quality_rank,
+)
 from core.portfolio_fast_data import (
     get_fast_close,
     get_fast_dates,
@@ -120,6 +124,11 @@ def _make_candidate_row(
         prev_close=prev_close,
         limit_price=est_limit_px,
     )
+    normalized_quality_rank = (
+        None
+        if quality_rank is None
+        else normalize_breakout_quality_rank_payload(quality_rank)
+    )
     row = {
         'ticker': ticker,
         'type': candidate_type,
@@ -155,15 +164,24 @@ def _make_candidate_row(
         'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
         'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
         'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
-        'use_breakout_quality_ranking': bool(quality_rank is not None),
+        'use_breakout_quality_ranking': bool(normalized_quality_rank is not None),
         'breakout_quality_score': (
             None
-            if quality_rank is None or not bool(quality_rank.get('available', False))
-            else float(quality_rank['score'])
+            if normalized_quality_rank is None
+            or not bool(normalized_quality_rank.get('available', False))
+            else normalized_quality_rank['score']
         ),
-        'breakout_quality_score_date': '' if quality_rank is None else str(quality_rank.get('score_date') or ''),
-        'breakout_quality_score_source': '' if quality_rank is None else str(quality_rank.get('score_source') or ''),
-        'breakout_quality_rank': None if quality_rank is None else dict(quality_rank),
+        'breakout_quality_score_date': (
+            '' if normalized_quality_rank is None
+            else str(normalized_quality_rank.get('score_date') or '')
+        ),
+        'breakout_quality_score_source': (
+            '' if normalized_quality_rank is None
+            else str(normalized_quality_rank.get('score_source') or '')
+        ),
+        'breakout_quality_rank': (
+            None if normalized_quality_rank is None else dict(normalized_quality_rank)
+        ),
     }
     if signal_state is not None:
         row['signal_state'] = signal_state
