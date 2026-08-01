@@ -1012,34 +1012,128 @@ def _selection_target_lookup(*, root: Path, filter_id: str, architecture: str, p
 def _strategy_selection_diagnostics(
     *, orderable: pd.DataFrame, selected: pd.DataFrame, lookup: pd.DataFrame,
 ) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
-    keys = ["ticker", "signal_date"]
-    orderable_joined = orderable.merge(lookup, on=keys, how="left", validate="many_to_one")
+    orderable_work = pd.DataFrame(orderable).copy()
+    selected_work = pd.DataFrame(selected).copy()
+    lookup_work = pd.DataFrame(lookup).copy()
+
+    for frame, columns in (
+        (orderable_work, ("trade_date", "signal_date")),
+        (selected_work, ("trade_date", "signal_date")),
+        (lookup_work, ("signal_date",)),
+    ):
+        for column in columns:
+            if column in frame.columns:
+                frame[column] = pd.to_datetime(
+                    frame[column], errors="coerce"
+                ).dt.strftime("%Y-%m-%d").fillna("")
+
+    # Continuation／re-entry 的交易 signal_date 可以晚於原始 breakout event；
+    # runtime Score 與 Future Target 都必須以保存下來的原始 score_date 對回 PIT 工件。
+    raw_score_dates = orderable_work.get(
+        "breakout_quality_score_date",
+        pd.Series("", index=orderable_work.index, dtype="object"),
+    ).fillna("").astype(str).str.strip()
+    parsed_score_dates = pd.to_datetime(raw_score_dates, errors="coerce")
+    invalid_score_dates = raw_score_dates.ne("") & parsed_score_dates.isna()
+    if bool(invalid_score_dates.any()):
+        bad = orderable_work.loc[invalid_score_dates].iloc[0]
+        bad_score_date = raw_score_dates.loc[invalid_score_dates].iloc[0]
+        raise ValueError(
+            "策略replay保存的Breakout Quality score_date無法解析: "
+            f"ticker={bad.get('ticker')}, trade_date={bad.get('trade_date')}, "
+            f"signal_date={bad.get('signal_date')}, score_date={bad_score_date!r}"
+        )
+    normalized_score_dates = parsed_score_dates.dt.strftime("%Y-%m-%d").fillna("")
+    orderable_work["score_event_date"] = normalized_score_dates.where(
+        normalized_score_dates.ne(""), orderable_work.get("signal_date", "")
+    )
+
+    lookup_work = lookup_work.rename(columns={
+        "signal_date": "score_event_date",
+        "breakout_quality_score": "pit_breakout_quality_score",
+    })
+    if bool(lookup_work.duplicated(["ticker", "score_event_date"]).any()):
+        raise ValueError("Selection PIT diagnostic lookup同一ticker/score_event_date不唯一")
+
+    orderable_joined = orderable_work.merge(
+        lookup_work,
+        on=["ticker", "score_event_date"],
+        how="left",
+        validate="many_to_one",
+    )
     score_available = pd.to_numeric(
-        orderable_joined["breakout_quality_score_y"], errors="coerce"
-    ).map(math.isfinite) if "breakout_quality_score_y" in orderable_joined else pd.Series(False, index=orderable_joined.index)
+        orderable_joined.get(
+            "pit_breakout_quality_score",
+            pd.Series(float("nan"), index=orderable_joined.index),
+        ),
+        errors="coerce",
+    ).map(math.isfinite)
     runtime_score_available = pd.to_numeric(
-        orderable_joined.get("breakout_quality_score_x", pd.Series(float("nan"), index=orderable_joined.index)),
+        orderable_joined.get(
+            "breakout_quality_score",
+            pd.Series(float("nan"), index=orderable_joined.index),
+        ),
         errors="coerce",
     ).map(math.isfinite)
     declared_runtime_available = orderable_joined.get(
-        "breakout_quality_score_available", pd.Series(False, index=orderable_joined.index)
+        "breakout_quality_score_available",
+        pd.Series(False, index=orderable_joined.index),
     ).fillna(False).astype(bool)
     runtime_rows = declared_runtime_available | runtime_score_available
     if bool(runtime_rows.any()):
         expected = pd.to_numeric(
-            orderable_joined.loc[runtime_rows, "breakout_quality_score_y"], errors="coerce"
+            orderable_joined.loc[runtime_rows, "pit_breakout_quality_score"],
+            errors="coerce",
         )
         actual = pd.to_numeric(
-            orderable_joined.loc[runtime_rows, "breakout_quality_score_x"], errors="coerce"
+            orderable_joined.loc[runtime_rows, "breakout_quality_score"],
+            errors="coerce",
         )
-        mismatch = (~expected.map(math.isfinite)) | (~actual.map(math.isfinite)) | ((actual - expected).abs() > 1e-12)
+        mismatch = (
+            (~expected.map(math.isfinite))
+            | (~actual.map(math.isfinite))
+            | ((actual - expected).abs() > 1e-12)
+        )
         if bool(mismatch.any()):
-            raise ValueError("策略replay使用的Breakout Quality Score與PIT score table不一致")
-    target_available = orderable_joined.get("target_available", pd.Series(False, index=orderable_joined.index)).fillna(False).astype(bool)
-    selected_joined = selected.merge(lookup, on=keys, how="left", validate="many_to_one")
-    selected_joined = selected_joined.merge(
-        orderable_joined[["ticker", "trade_date", "signal_date", "target_raw_r"]].drop_duplicates(),
-        on=["ticker", "trade_date", "signal_date"], how="left", suffixes=("", "_orderable"),
+            bad_index = mismatch[mismatch].index[0]
+            bad = orderable_joined.loc[bad_index]
+            raise ValueError(
+                "策略replay使用的Breakout Quality Score與PIT score table不一致: "
+                f"ticker={bad.get('ticker')}, trade_date={bad.get('trade_date')}, "
+                f"signal_date={bad.get('signal_date')}, "
+                f"score_event_date={bad.get('score_event_date')}, "
+                f"runtime_score={actual.loc[bad_index]}, pit_score={expected.loc[bad_index]}"
+            )
+
+    target_available = orderable_joined.get(
+        "target_available", pd.Series(False, index=orderable_joined.index)
+    ).fillna(False).astype(bool)
+
+    occurrence_keys = ["ticker", "trade_date", "signal_date"]
+    occurrence_columns = [
+        *occurrence_keys,
+        "score_event_date",
+        "target_raw_r",
+        "target_available",
+        "pit_breakout_quality_score",
+    ]
+    occurrence_score_event_counts = orderable_joined.groupby(
+        occurrence_keys, dropna=False
+    )["score_event_date"].nunique(dropna=False)
+    if bool((occurrence_score_event_counts > 1).any()):
+        bad_key = occurrence_score_event_counts[occurrence_score_event_counts > 1].index[0]
+        raise ValueError(
+            "同一策略候選發生多個Breakout Quality score event date: "
+            f"ticker={bad_key[0]}, trade_date={bad_key[1]}, signal_date={bad_key[2]}"
+        )
+    occurrence_lookup = orderable_joined[occurrence_columns].drop_duplicates(
+        occurrence_keys, keep="first"
+    )
+    selected_joined = selected_work.merge(
+        occurrence_lookup,
+        on=occurrence_keys,
+        how="left",
+        validate="many_to_one",
     )
 
     day_rows = []
@@ -1067,7 +1161,9 @@ def _strategy_selection_diagnostics(
             "selected_target_mean_r": float(selected_day["target_raw_r"].mean()),
             "selected_target_percentile_mean": float(selected_day["target_percentile"].mean()),
             "target_top_k_retention": float(retained / k),
-            "target_opportunity_gap_r": float(top["target_raw_r"].mean() - selected_day["target_raw_r"].mean()),
+            "target_opportunity_gap_r": float(
+                top["target_raw_r"].mean() - selected_day["target_raw_r"].mean()
+            ),
         })
     daily = pd.DataFrame(day_rows)
     metrics = {

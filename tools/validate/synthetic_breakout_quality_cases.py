@@ -11176,38 +11176,74 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         (gate["status"], gate["strategy_metrics_used"], gate["future_target_used_for_runtime_sort"]),
     )
 
-    diagnostic_metrics, _diagnostic_orderable, _diagnostic_selected = (
+    diagnostic_orderable_input = pd.DataFrame([
+        {"ticker": "A", "trade_date": "2020-01-03",
+         "signal_date": "2020-01-02", "breakout_quality_score_date": "2020-01-01",
+         "breakout_quality_score": 0.8, "breakout_quality_score_available": True},
+        {"ticker": "B", "trade_date": "2020-01-03",
+         "signal_date": "2020-01-01", "breakout_quality_score_date": "2020-01-01",
+         "breakout_quality_score": 0.2, "breakout_quality_score_available": True},
+    ])
+    diagnostic_selected_input = pd.DataFrame([
+        {"ticker": "A", "trade_date": "2020-01-03",
+         "signal_date": "2020-01-02", "type": "買進"},
+    ])
+    diagnostic_lookup_input = pd.DataFrame([
+        {"ticker": "A", "signal_date": "2020-01-01",
+         "breakout_quality_score": 0.8, "target_raw_r": 2.0,
+         "target_available": True},
+        {"ticker": "B", "signal_date": "2020-01-01",
+         "breakout_quality_score": 0.2, "target_raw_r": 1.0,
+         "target_available": True},
+    ])
+    diagnostic_metrics, diagnostic_orderable, diagnostic_selected = (
         _strategy_selection_diagnostics(
-            orderable=pd.DataFrame([
-                {"ticker": "A", "trade_date": "2020-01-02",
-                 "signal_date": "2020-01-01", "breakout_quality_score": 0.8},
-                {"ticker": "B", "trade_date": "2020-01-02",
-                 "signal_date": "2020-01-01", "breakout_quality_score": 0.2},
-            ]),
-            selected=pd.DataFrame([
-                {"ticker": "A", "trade_date": "2020-01-02",
-                 "signal_date": "2020-01-01", "type": "買進"},
-            ]),
-            lookup=pd.DataFrame([
-                {"ticker": "A", "signal_date": "2020-01-01",
-                 "breakout_quality_score": 0.8, "target_raw_r": 2.0,
-                 "target_available": True},
-                {"ticker": "B", "signal_date": "2020-01-01",
-                 "breakout_quality_score": 0.2, "target_raw_r": 1.0,
-                 "target_available": True},
-            ]),
+            orderable=diagnostic_orderable_input,
+            selected=diagnostic_selected_input,
+            lookup=diagnostic_lookup_input,
         )
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "point_in_time_strategy_diagnostic_joins_target_after_replay",
-        (1.0, 1.0, 0.0, False),
+        "point_in_time_strategy_diagnostic_uses_original_score_date_after_replay",
+        (1.0, 1.0, 0.0, False, "2020-01-01", "2020-01-01"),
         (
             diagnostic_metrics["orderable_score_coverage_rate"],
             diagnostic_metrics["target_top_k_retention_mean"],
             diagnostic_metrics["target_opportunity_gap_r_mean"],
             diagnostic_metrics["future_target_used_for_runtime_sort"],
+            diagnostic_orderable.loc[0, "score_event_date"],
+            diagnostic_selected.loc[0, "score_event_date"],
         ),
+    )
+
+    true_score_mismatch_rejected = False
+    mismatch_message_has_identity = False
+    mismatched_orderable = diagnostic_orderable_input.copy()
+    mismatched_orderable.loc[0, "breakout_quality_score"] = 0.7
+    try:
+        _strategy_selection_diagnostics(
+            orderable=mismatched_orderable,
+            selected=diagnostic_selected_input,
+            lookup=diagnostic_lookup_input,
+        )
+    except ValueError as exc:
+        true_score_mismatch_rejected = True
+        mismatch_message_has_identity = all(
+            text in str(exc)
+            for text in (
+                "ticker=A",
+                "signal_date=2020-01-02",
+                "score_event_date=2020-01-01",
+                "runtime_score=0.7",
+                "pit_score=0.8",
+            )
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "point_in_time_strategy_diagnostic_rejects_true_score_mismatch_with_identity",
+        (True, True),
+        (true_score_mismatch_rejected, mismatch_message_has_identity),
     )
 
     summary["workflow"] = "selection_point_in_time_scores"

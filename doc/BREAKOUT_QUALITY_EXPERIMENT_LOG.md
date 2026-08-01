@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_013952_744919d.zip`，SHA256 `6683b981a6ca4e9719a41bf2518462cb6851c9d7e168656dade9a4608b21f886`；使用者本機已取得Seed 42 PIT模型結果，並首次執行Selection Baseline／Score Sort replay。本輪修正PIT缺分事件在candidate／continuation state中被誤作`float(None)`的runtime錯誤；修補ZIP SHA256由交付回覆列示 |
-| SHA256 | 來源ZIP SHA256 `6683b981a6ca4e9719a41bf2518462cb6851c9d7e168656dade9a4608b21f886`。Baseline replay已完成至2020-12-31，終值2,840,064；Score Sort於2014-01-02候選建立階段因不可評分事件`score=None`被轉為float而中止，尚無可比較策略結果。本輪只修正缺分保存／fallback契約，模型與策略績效仍待本機重跑 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260802_015757_25ace3c.zip`，SHA256 `f0591239b0caa737252b83e98a02d204a7d72eb668b58bb942daf6341f446cc9`；使用者本機Baseline replay已完成，Score Sort進入replay後的PIT Score identity／Target診斷時因continuation／re-entry的新`signal_date`被誤作原始Score事件日期而中止。本輪改以保存的`breakout_quality_score_date`對回PIT Score與Future Target；修補ZIP SHA256由交付回覆列示 |
+| SHA256 | 來源ZIP SHA256 `f0591239b0caa737252b83e98a02d204a7d72eb668b58bb942daf6341f446cc9`。Baseline replay已完成至2020-12-31，終值2,840,064；前一輪`float(None)`已消失，Score Sort本輪在post-replay診斷誤以交易`signal_date`查原始PIT Score而發生假性identity mismatch，尚未輸出可比較策略結果。本輪只修正診斷日期鍵與錯誤可追蹤性，模型、Score、排序及交易結果均不變 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1717,4 +1717,19 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 獨立驗證 | T280新增不可評分PIT payload保存、PIT source繼承、不重新lookup、candidate row不執行`float(None)`及Score維持None的direct synthetic案例；全專案靜態與依賴檢查另由本輪交付列示 |
 | 結果邊界 | Baseline終值只證明基準路徑可完成；Score Sort尚未完成，因此不得比較報酬、MDD、選股Target或宣稱排序有效／無效 |
 | 下一步 | 套用修補後直接重跑`python apps/breakout_quality.py strategy-compare`或主選單`[1]`；不需重跑PIT模型或audit |
+
+### 3.77 Selection PIT Score Event Date診斷閉環（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / STRATEGY_RERUN_PENDING`；runtime replay不再因假性Score identity mismatch中止，正式策略比較結果待使用者本機重跑 |
+| 程式基準 | `test-branch-1_20260802_015757_25ace3c.zip`；SHA256 `f0591239b0caa737252b83e98a02d204a7d72eb668b58bb942daf6341f446cc9` |
+| 使用者結果 | Baseline完成2014-01-01～2020-12-31，終值2,840,064；Score Sort已通過先前`float(None)`位置，但在post-replay策略診斷拋出「策略replay使用的Breakout Quality Score與PIT score table不一致」，未產生正式比較報表 |
+| 根因 | continuation／re-entry的交易`signal_date`可以晚於原始breakout事件；runtime已正確保存並沿用原始`breakout_quality_score_date`，但`_strategy_selection_diagnostics()`仍以新的交易`signal_date`對回PIT table，將合法沿用的原始Score誤判為不一致，Future Target也會對錯事件 |
+| 修正 | 新增`score_event_date`診斷鍵：優先使用`breakout_quality_score_date`，只有未提供時才回退candidate `signal_date`。PIT Score identity、coverage及Future Target事後join均使用原始Score事件日期；交易選取與成交追蹤仍使用當前`trade_date／signal_date`，兩種日期語意不再混用 |
+| Fail-fast | 真正Score數值不一致仍會拒絕，錯誤訊息新增ticker、trade date、交易signal date、score event date、runtime score及PIT score，避免再次只得到無法定位的總括錯誤 |
+| 固定條件 | Seed 42、PIT Score工件、continuous模型、Target、buy-sort、歷史active params、候選生成、成交、持倉、資金、停損停利及帳務完全不變；Future Target仍只在replay後離線使用 |
+| Dataset／模型工件 | 不需重建Dataset、Label、Continuous Target、PIT folds、checkpoint、Scores或模型audit；只需重新執行Selection策略比較 |
+| 獨立驗證 | T280新增continuation／re-entry交易signal date晚於原始score date的案例，確認Score identity與Target均對回原事件；另驗證真正0.7對0.8的Score差異仍fail-fast且錯誤包含完整identity |
+| 下一步 | 執行`python apps/breakout_quality.py strategy-compare`；只有完整產出Baseline／Score Sort報表後，才能判斷是否進入主策略參數適應階段 |
 
