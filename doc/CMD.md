@@ -519,7 +519,7 @@ python apps/breakout_quality.py audit-selection-strategy-realization --filter-id
 python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet
 ```
 
-11J採compact-capture／offline execution：只以11I相同的2014-01-01～2020-11-05執行一次canonical replay，先用相同flatten／target-date／unique流程精確核對2,003筆。Capture不遞迴複製`signal_state`或`params_obj`，qualified identity直接使用portfolio engine既有candidate rows，orderable只保留成交必要欄位與單一ticker market array參照。通過後才離線執行counterfactual；每日只推進open positions，2020-11-06～2020-12-31直接由仍開倉ticker的交易日延伸，不再第二次建立市場快取或重跑portfolio。
+11J採plain replay-counts＋execution sidecar：只以11I相同的2014-01-01～2020-11-05執行一次canonical replay，`replay_counts`固定使用普通dict，再用相同flatten／target-date／unique流程精確核對2,003筆。Orderable成交資料由獨立`replay_execution_rows` sidecar保存；不得把observer、自訂dict或counterfactual狀態機傳入canonical replay。Sidecar不遞迴複製`signal_state`或`params_obj`，只保留成交必要欄位、params reference、cloned shadow與單一ticker market array參照。通過2,003 guard後才離線執行counterfactual；每日只推進open positions，2020-11-06～2020-12-31由sidecar market calendars延伸，不重跑portfolio。
 
 此audit忽略portfolio capacity與cash competition，但保留正式限價成交、locked-limit、shadow inheritance、半倉停利、停損、指標出場、賣出受阻、費稅與R口徑。輸出位於：
 

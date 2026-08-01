@@ -162,93 +162,31 @@ def _candidate_stub_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class CanonicalCandidateReplayCapture(dict):
-    """Low-memory observer for canonical rows and compact orderable entry plans."""
-
-    def __init__(self, *, candidate_cutoff: str):
-        super().__init__()
-        self.candidate_cutoff = _date_text(candidate_cutoff)
-        self._days: dict[str, dict[str, Any]] = {}
-        self.qualified_occurrence_count = 0
-        self.orderable_occurrence_count = 0
-
-    def _day(self, today: Any) -> dict[str, Any]:
-        today_text = _date_text(today)
-        return self._days.setdefault(
-            today_text,
-            {
-                "today": pd.Timestamp(today),
-                "all_dfs_fast": None,
-                "fallback_params": None,
-                "sizing_equity": None,
-                "orderable_candidates": [],
-                "orderable_candidate_snapshots": [],
-            },
-        )
-
-    def begin_replay_day(self, *, today, all_dfs_fast, fallback_params):
-        day = self._day(today)
-        day["all_dfs_fast"] = all_dfs_fast
-        day["fallback_params"] = fallback_params
-
-    def observe_replay_candidates(
-        self,
-        *,
-        today,
-        qualified_candidates,
-        qualified_candidate_snapshots=None,
-        orderable_candidates,
-        orderable_candidate_snapshots=None,
-        all_dfs_fast,
-        sizing_equity,
-        fallback_params,
-    ):
-        day = self._day(today)
-        day["all_dfs_fast"] = all_dfs_fast
-        day["fallback_params"] = fallback_params
-        day["sizing_equity"] = sizing_equity
-        if _date_text(today) > self.candidate_cutoff:
-            return
-        qualified_rows = list(qualified_candidates or [])
-        qualified_snapshots = list(qualified_candidate_snapshots or [])
-        orderable_rows = list(orderable_candidates or [])
-        orderable_snapshots = list(orderable_candidate_snapshots or [])
-        if len(qualified_rows) != len(qualified_snapshots):
-            raise ValueError(
-                "11J capture qualified candidate與canonical snapshot數量不一致: "
-                f"candidates={len(qualified_rows)}, snapshots={len(qualified_snapshots)}"
-            )
-        if len(orderable_rows) != len(orderable_snapshots):
-            raise ValueError(
-                "11J capture orderable candidate與canonical snapshot數量不一致: "
-                f"candidates={len(orderable_rows)}, snapshots={len(orderable_snapshots)}"
-            )
-        # Qualified snapshots are already stored by portfolio_engine in this dict.
-        # Do not retain a second raw-candidate copy.
-        self.qualified_occurrence_count += len(qualified_snapshots)
-        self.orderable_occurrence_count += len(orderable_snapshots)
-        day["orderable_candidates"] = [
-            _freeze_candidate_for_offline_replay(row, all_dfs_fast=all_dfs_fast)
-            for row in orderable_rows
-        ]
-        # Snapshots are fresh immutable diagnostic dicts created by portfolio_engine.
-        day["orderable_candidate_snapshots"] = orderable_snapshots
-
-    def iter_days(self):
-        for key in sorted(self._days):
-            yield self._days[key]
-
-    def latest_runtime_context(self) -> tuple[dict[str, Any], Any]:
-        for key in sorted(self._days, reverse=True):
-            day = self._days[key]
-            if day.get("all_dfs_fast") is not None and day.get("fallback_params") is not None:
-                return day["all_dfs_fast"], day["fallback_params"]
-        raise ValueError("11J capture沒有可用的runtime context")
+def _execution_market_dates(
+    execution_rows: list[dict[str, Any]],
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[pd.Timestamp]:
+    start = pd.Timestamp(start_date)
+    end = pd.Timestamp(end_date)
+    dates: set[pd.Timestamp] = set()
+    seen_fast_ids: set[int] = set()
+    for row in execution_rows:
+        fast_df = row.get("_candidate_fast_df")
+        if fast_df is None or id(fast_df) in seen_fast_ids:
+            continue
+        seen_fast_ids.add(id(fast_df))
+        for value in get_fast_dates(fast_df):
+            date = pd.Timestamp(value)
+            if start <= date <= end:
+                dates.add(date)
+    return sorted(dates)
 
 
 def _run_offline_counterfactual(
     *,
-    discovery_capture: CanonicalCandidateReplayCapture,
+    execution_rows: list[dict[str, Any]],
     canonical_qualified: pd.DataFrame,
     candidate_cutoff: str,
     replay_end: str,
@@ -258,46 +196,56 @@ def _run_offline_counterfactual(
         defer_finalize=True,
     )
     tracker.seed_canonical_signals(canonical_qualified)
-    last_params = None
-    last_all_dfs_fast = None
-    for day in discovery_capture.iter_days():
-        if day.get("all_dfs_fast") is None or day.get("fallback_params") is None:
-            raise ValueError(f"11J discovery capture缺少每日runtime context: {day.get('today')}")
-        last_params = day["fallback_params"]
-        last_all_dfs_fast = day["all_dfs_fast"]
-        tracker.begin_replay_day(
-            today=day["today"],
-            all_dfs_fast=day["all_dfs_fast"],
-            fallback_params=day["fallback_params"],
-        )
-        tracker.observe_replay_candidates(
-            today=day["today"],
-            qualified_candidates=[],
-            qualified_candidate_snapshots=[],
-            orderable_candidates=day["orderable_candidates"],
-            orderable_candidate_snapshots=day["orderable_candidate_snapshots"],
-            all_dfs_fast=day["all_dfs_fast"],
-            sizing_equity=day.get("sizing_equity"),
-            fallback_params=day["fallback_params"],
-        )
 
-    if last_all_dfs_fast is None or last_params is None:
-        last_all_dfs_fast, last_params = discovery_capture.latest_runtime_context()
-    management_start = pd.Timestamp(candidate_cutoff) + pd.Timedelta(days=1)
-    management_end = pd.Timestamp(replay_end)
-    management_dates = tracker.open_position_dates(
-        start_date=management_start,
-        end_date=management_end,
+    rows_by_date: dict[str, list[dict[str, Any]]] = {}
+    fallback_params = None
+    for raw in execution_rows:
+        row = dict(raw or {})
+        trade_date = _date_text(row.get("trade_date") or row.get("candidate_date"))
+        if not trade_date:
+            raise ValueError(f"11J sidecar execution row缺少trade_date: {row}")
+        rows_by_date.setdefault(trade_date, []).append(row)
+        if fallback_params is None and row.get("params_obj") is not None:
+            fallback_params = row.get("params_obj")
+    if fallback_params is None:
+        raise ValueError("11J sidecar execution rows沒有可用params_obj")
+
+    market_dates = _execution_market_dates(
+        execution_rows,
+        start_date=min(rows_by_date) if rows_by_date else candidate_cutoff,
+        end_date=replay_end,
     )
-    for today in management_dates:
+    candidate_cutoff_ts = pd.Timestamp(candidate_cutoff)
+    management_days = 0
+    for today in market_dates:
         tracker.begin_replay_day(
             today=today,
-            all_dfs_fast=last_all_dfs_fast,
-            fallback_params=last_params,
+            all_dfs_fast={},
+            fallback_params=fallback_params,
         )
-    tracker.offline_management_day_count = len(management_dates)
+        if today > candidate_cutoff_ts:
+            management_days += 1
+            continue
+        day_rows = rows_by_date.get(_date_text(today), [])
+        if not day_rows:
+            continue
+        snapshots = [dict(row.get("_canonical_snapshot") or {}) for row in day_rows]
+        sizing_values = [row.get("_sizing_equity") for row in day_rows if row.get("_sizing_equity") is not None]
+        sizing_equity = sizing_values[0] if sizing_values else None
+        tracker.observe_replay_candidates(
+            today=today,
+            qualified_candidates=[],
+            qualified_candidate_snapshots=[],
+            orderable_candidates=day_rows,
+            orderable_candidate_snapshots=snapshots,
+            all_dfs_fast={},
+            sizing_equity=sizing_equity,
+            fallback_params=fallback_params,
+        )
+
+    tracker.offline_management_day_count = management_days
     tracker.defer_finalize = False
-    tracker.finalize_replay(last_date=pd.Timestamp(replay_end), fallback_params=last_params)
+    tracker.finalize_replay(last_date=pd.Timestamp(replay_end), fallback_params=fallback_params)
     return tracker
 
 
@@ -747,7 +695,8 @@ def main(argv=None) -> int:
     strategy=dict(source_report.get("strategy") or {})
     max_positions=int(strategy.get("max_positions",10) or 10)
     enable_rotation=bool(strategy.get("rotation",False))
-    discovery_capture=CanonicalCandidateReplayCapture(candidate_cutoff=candidate_cutoff)
+    discovery_counts: dict[str, dict[str, Any]] = {}
+    execution_rows: list[dict[str, Any]] = []
     discovery_scenario=_run_scenario(
         name="11J_candidate_discovery",
         data_dir=data_dir,
@@ -758,11 +707,12 @@ def main(argv=None) -> int:
         max_positions=max_positions,
         enable_rotation=enable_rotation,
         quiet=bool(args.quiet),
-        replay_counts=discovery_capture,
+        replay_counts=discovery_counts,
+        replay_execution_rows=execution_rows,
     )
     discovery_summary=_scenario_summary(discovery_scenario)
     lookup,target_manifest=_target_lookup(str(args.filter_id))
-    discovery_qualified=_flatten_candidate_replay_rows(discovery_capture,"candidate_rows")
+    discovery_qualified=_flatten_candidate_replay_rows(discovery_counts,"candidate_rows")
     discovery_qualified=_attach_targets(discovery_qualified,lookup)
     discovery_qualified_unique=_unique_signals(discovery_qualified)
     source_qualified_count=int((source_report.get("coverage") or {}).get("qualified_unique_signal_count",0) or 0)
@@ -774,7 +724,7 @@ def main(argv=None) -> int:
         )
     management_start=_date_text(pd.Timestamp(candidate_cutoff)+pd.Timedelta(days=1))
     tracker=_run_offline_counterfactual(
-        discovery_capture=discovery_capture,
+        execution_rows=execution_rows,
         canonical_qualified=discovery_qualified,
         candidate_cutoff=candidate_cutoff,
         replay_end=replay_end,
@@ -847,11 +797,13 @@ def main(argv=None) -> int:
                 "end":replay_end,
                 "summary":management_summary,
             },
-            "execution_mode":"compact_capture_single_replay_offline_counterfactual",
+            "execution_mode":"plain_replay_counts_with_execution_sidecar",
             "capture":{
-                "day_count":int(len(tuple(discovery_capture.iter_days()))),
-                "qualified_occurrence_count":int(discovery_capture.qualified_occurrence_count),
-                "orderable_occurrence_count":int(discovery_capture.orderable_occurrence_count),
+                "day_count":int(len({_date_text(row.get("trade_date")) for row in execution_rows})),
+                "qualified_occurrence_count":int(len(discovery_qualified)),
+                "orderable_occurrence_count":int(len(execution_rows)),
+                "replay_counts_type":"plain_dict",
+                "lifecycle_callbacks_used":False,
                 "recursive_candidate_deepcopy":False,
             },
         },
@@ -862,7 +814,8 @@ def main(argv=None) -> int:
             "selection_nested_oos_only":True,
             "portfolio_capacity_and_cash_competition_ignored":True,
             "canonical_entry_shadow_exit_accounting_reused":True,
-            "canonical_replay_is_capture_only":True,
+            "canonical_replay_uses_plain_dict_counts":True,
+            "execution_capture_is_sidecar_only":True,
             "counterfactual_execution_runs_after_replay":True,
             "single_canonical_portfolio_replay":True,
             "compact_candidate_capture":True,
@@ -892,8 +845,8 @@ def main(argv=None) -> int:
 __all__=[
     "AUDIT_JSON_FILENAME",
     "AUDIT_MARKDOWN_FILENAME",
-    "CanonicalCandidateReplayCapture",
     "CandidateCounterfactualReplay",
+    "_execution_market_dates",
     "_freeze_candidate_for_offline_replay",
     "_run_offline_counterfactual",
     "main",

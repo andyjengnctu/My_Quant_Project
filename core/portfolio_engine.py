@@ -50,6 +50,7 @@ from core.portfolio_ops import (
 )
 from core.portfolio_exits import append_portfolio_position_active_level_row
 from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
+from core.trade_plans import clone_shadow_position
 
 
 BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS = 64
@@ -533,6 +534,68 @@ def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
     }
 
 
+def _candidate_execution_replay_snapshot(candidate, *, fallback_trade_date, all_dfs_fast, sizing_equity):
+    """Return a compact in-memory sidecar row for research execution replay.
+
+    This payload is never serialized by the canonical replay and never receives
+    lifecycle callbacks.  Read-only params/market objects remain shared; only
+    the small mutable shadow position is cloned.
+    """
+
+    row = dict(candidate or {})
+    fields = (
+        "ticker",
+        "type",
+        "entry_source",
+        "signal_date",
+        "candidate_date",
+        "trade_date",
+        "qty",
+        "limit_px",
+        "init_sl",
+        "init_trail",
+        "target_price",
+        "entry_atr",
+        "security_profile",
+        "today_pos",
+        "yesterday_pos",
+        "sizing_capital",
+        "params_obj",
+        "orig_limit",
+        "orig_atr",
+        "max_qty",
+    )
+    snapshot = {key: row.get(key) for key in fields}
+    snapshot["_sizing_equity"] = sizing_equity
+    trade_date = row.get("trade_date") or row.get("candidate_date") or fallback_trade_date
+    snapshot["trade_date"] = pd.Timestamp(trade_date).strftime("%Y-%m-%d")
+    snapshot["candidate_date"] = pd.Timestamp(
+        row.get("candidate_date") or trade_date
+    ).strftime("%Y-%m-%d")
+    signal_date = row.get("signal_date")
+    snapshot["signal_date"] = (
+        pd.Timestamp(signal_date).strftime("%Y-%m-%d") if signal_date not in (None, "") else ""
+    )
+    signal_state = row.get("signal_state") if isinstance(row.get("signal_state"), dict) else {}
+    shadow = row.get("shadow_position_state")
+    if shadow is None:
+        shadow = signal_state.get("shadow_position")
+    if shadow is not None:
+        snapshot["shadow_position_state"] = clone_shadow_position(shadow)
+    context = row.get("_ensemble_context") if isinstance(row.get("_ensemble_context"), dict) else {}
+    candidate_all_dfs = context.get("all_dfs_fast") or all_dfs_fast or {}
+    ticker = str(row.get("ticker") or "")
+    fast_df = candidate_all_dfs.get(ticker) if ticker else None
+    if fast_df is not None:
+        snapshot["_candidate_fast_df"] = fast_df
+    snapshot["_canonical_snapshot"] = _candidate_replay_snapshot(
+        row,
+        fallback_trade_date=fallback_trade_date,
+        is_orderable=True,
+    )
+    return snapshot
+
+
 def _build_daily_ensemble_candidates(
     *,
     ensemble_members,
@@ -704,6 +767,7 @@ def run_portfolio_timeline(
     profile_stats=None,
     verbose=True,
     replay_counts=None,
+    replay_execution_rows=None,
     pit_stats_index=None,
     active_params_resolver=None,
     active_context_resolver=None,
@@ -858,17 +922,6 @@ def run_portfolio_timeline(
             day_normal_setup_index = day_context.get('normal_setup_index') or normal_setup_index
             day_cursor_key = id(day_pit_stats_index)
             day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
-
-        replay_begin_day = getattr(replay_counts, "begin_replay_day", None) if replay_counts is not None else None
-        if callable(replay_begin_day):
-            _run_portfolio_replay_phase(
-                today,
-                "counterfactual_begin_day",
-                replay_begin_day,
-                today=today,
-                all_dfs_fast=day_all_dfs_fast,
-                fallback_params=day_params,
-            )
 
         if today.year not in year_start_equity:
             year_start_equity[today.year] = milli_to_money(current_equity)
@@ -1094,21 +1147,16 @@ def run_portfolio_timeline(
                 else:
                     before_trade_rows = -1
 
-                replay_observe_candidates = getattr(replay_counts, "observe_replay_candidates", None) if replay_counts is not None else None
-                if callable(replay_observe_candidates):
-                    _run_portfolio_replay_phase(
-                        today,
-                        "counterfactual_observe_candidates",
-                        replay_observe_candidates,
-                        today=today,
-                        qualified_candidates=list(candidates_today or []),
-                        qualified_candidate_snapshots=qualified_candidate_snapshots_today,
-                        orderable_candidates=list(orderable_candidates_today or []),
-                        orderable_candidate_snapshots=orderable_candidate_snapshots_today,
-                        all_dfs_fast=day_all_dfs_fast,
-                        sizing_equity=sizing_equity,
-                        fallback_params=day_params,
-                    )
+                if replay_execution_rows is not None:
+                    for candidate in orderable_candidates_today:
+                        replay_execution_rows.append(
+                            _candidate_execution_replay_snapshot(
+                                candidate,
+                                fallback_trade_date=today,
+                                all_dfs_fast=day_all_dfs_fast,
+                                sizing_equity=sizing_equity,
+                            )
+                        )
 
                 if orderable_candidates_today:
                     t0 = time.perf_counter() if profile_timing_enabled else None
@@ -1333,15 +1381,6 @@ def run_portfolio_timeline(
 
     t0 = time.perf_counter() if profile_timing_enabled else None
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
-    replay_finalize = getattr(replay_counts, "finalize_replay", None) if replay_counts is not None else None
-    if callable(replay_finalize):
-        _run_portfolio_replay_phase(
-            last_date,
-            "counterfactual_finalize",
-            replay_finalize,
-            last_date=last_date,
-            fallback_params=params,
-        )
     closeout_params = active_params_resolver(last_date) if (active_params_resolver is not None and last_date is not None) else params
     today_equity, normal_trade_count, extended_trade_count = closeout_open_positions(
         portfolio=portfolio,

@@ -768,7 +768,7 @@ def _markdown_report(metadata, baseline, quality, delta, yearly) -> str:
     return "\n".join(lines)
 
 
-def _run_scenario(*, name, data_dir, param_source_kind, params, start_date, end_date, max_positions, enable_rotation, quiet, replay_counts=None):
+def _run_scenario(*, name, data_dir, param_source_kind, params, start_date, end_date, max_positions, enable_rotation, quiet, replay_counts=None, replay_execution_rows=None):
     print(f"\n[{name}] 建立市場與訊號快取")
     if param_source_kind == "single_param":
         context = load_portfolio_market_context(str(data_dir), params, verbose=not quiet)
@@ -780,6 +780,7 @@ def _run_scenario(*, name, data_dir, param_source_kind, params, start_date, end_
             benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=not quiet,
             pit_stats_index=context.get("all_pit_stats_index"),
             replay_counts=replay_counts,
+            replay_execution_rows=replay_execution_rows,
         )
     elif param_source_kind in {"static_active_param_ensemble", "rolling_active_param_ensemble"}:
         print(f"[{name}] 執行 active-param ensemble replay {start_date} ～ {end_date}")
@@ -789,6 +790,7 @@ def _run_scenario(*, name, data_dir, param_source_kind, params, start_date, end_
             start_year=pd.Timestamp(start_date).year, start_date=start_date, end_date=end_date,
             benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
             fixed_risk=None, verbose=not quiet, replay_counts=replay_counts,
+            replay_execution_rows=replay_execution_rows,
         )
     elif param_source_kind == "rolling_oos_param_schedule":
         print(f"[{name}] 執行 rolling active-param replay {start_date} ～ {end_date}")
@@ -798,6 +800,7 @@ def _run_scenario(*, name, data_dir, param_source_kind, params, start_date, end_
             start_year=pd.Timestamp(start_date).year, start_date=start_date, end_date=end_date,
             benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
             fixed_risk=None, verbose=not quiet, replay_counts=replay_counts,
+            replay_execution_rows=replay_execution_rows,
         )
     else:
         raise ValueError(f"不支援的參數來源類型: {param_source_kind}")
