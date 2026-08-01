@@ -1669,3 +1669,18 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 結果 | 既有Seed 42 PIT模型結果維持`MODEL_DIRECTION_PASS`；本輪未執行Baseline／Score Sort策略replay，策略結果仍為`RESULT_NOT_AVAILABLE` |
 | 測試 | 新增synthetic契約：canonical config只能有一個Seed設定、binary與continuous workflow對同一override解析相同Seed、舊strategy compare app必須不存在 |
 | 下一步 | 刪除本機舊app後，直接執行`python apps/breakout_quality.py strategy-compare`或從主選單選`[1]` |
+
+### 3.74 單一入口與Checklist Formal Bundle閉環（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；已依使用者提供bundle完成失敗閉環，待本機重新執行正式suite確認 |
+| 程式基準 | `test-branch-1_20260802_011924_a6141cf.zip`；SHA256 `61036fe4c869a496081103e67c74f235c620b3e1c5ce9b391ba44d817ad7a8a6` |
+| Formal bundle | `to_chatgpt_bundle_20260802_012046_117ce083.zip`；SHA256 `a8d7f45c641cf81ba0b3333c1643138022c3fad1b6505f46684ebe12d8e7e976` |
+| 原始結果 | quick gate、chain checks、ml smoke通過；consistency只有`breakout_quality_strategy_compare_uses_only_canonical_app_entry`失敗；meta quality四項失敗中coverage為同一synthetic失敗連帶，另三項為B183／B184主表及T280 DONE摘要漏同步 |
+| 根因 | 前一修補ZIP只能覆蓋檔案，未實際刪除本機舊`apps/breakout_quality_strategy_compare.py`；同輪新增G收斂紀錄B183、B184與T280，但未同步主表與DONE測試映射 |
+| 修正 | 從本輪實際程式基準刪除舊strategy compare app；補上B183 Selection PIT Score排序／策略比較主表、B184單一Seed／唯一入口主表及T280對B183映射；新增B26與B184的PARTIAL到DONE閉環紀錄 |
+| 固定條件 | 不改Dataset、Label、Continuous Target、PIT Scores、模型、Seed 42、Score Sort、策略參數、交易規則、帳務或正式績效結果 |
+| 結果邊界 | 本輪只修正式入口與測試治理同步；Baseline／Score Sort策略結果仍為`RESULT_NOT_AVAILABLE`，不得由測試通過推論策略有效 |
+| 下一步 | 套用修補並確實刪除舊app後，重新執行`python apps/test_suite.py`；預期consistency單一失敗與meta四項連帶失敗消失，正式結果仍以本機輸出為準 |
+
