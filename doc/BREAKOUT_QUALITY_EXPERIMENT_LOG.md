@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_180913_c77a7cc(1).zip`，SHA256 `90691c277723f2846e94f56c4bc4f17f9c852112d65805b46ecee9a75088b101`。本輪只合併三個breakout-quality config為單一可編輯來源並保留舊import相容alias；不改模型、Label、profile內容、PIT Scores、checkpoint、buy-sort或策略交易規則 |
-| SHA256 | 本輪來源 ZIP：`f2d8b1dcc1d79d848013995f68fc80697039776c7837ce010cf19df966e63a8c`；formal bundle `to_chatgpt_bundle_20260801_180117_5ac62bbf.zip`，SHA256 `e33c8a5ace14bd0e2fbef31a30d97d06550d04d5473dd18393e495a7e6566d5d`。Formal結果為quick gate PASS、consistency FAIL 1／5,030、chain checks PASS、ML smoke PASS、meta quality FAIL 1；兩個FAIL同源於一筆stale synthetic expectation。PIT manifest仍預設`eligible=false`；continuous策略不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_183429_c2f3b2a.zip`，SHA256 `e5cf9d58b8b3f5165cff24a2e17889247e3ce6add46656aaf9a83cd1e1f8faa6`。此基準已將三個舊breakout-quality config刪除，只保留`config/breakout_quality.py`；本輪同步single-source synthetic與文件契約，不改模型、Label、profile內容、PIT Scores、checkpoint、buy-sort或策略交易規則 |
+| SHA256 | 本輪來源 ZIP：`e5cf9d58b8b3f5165cff24a2e17889247e3ce6add46656aaf9a83cd1e1f8faa6`；formal bundle `to_chatgpt_bundle_20260801_183502_5e1d75ef.zip`，SHA256 `a4b1867dab4e3c7ed3c07573ec13d363be622b4aec82d1113ccfbf59e68c1f47`。Formal結果為quick gate PASS、consistency FAIL 1／987、chain checks PASS、ML smoke PASS、meta quality FAIL 4；全部同源於single-source synthetic仍import已刪除的`config.breakout_quality_policy`，使coverage suite在0 cases時中止。PIT manifest仍預設`eligible=false`；continuous策略不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -767,11 +767,26 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 程式基準 | 來源`test-branch-1_20260801_180913_c77a7cc(1).zip`，SHA256 `90691c277723f2846e94f56c4bc4f17f9c852112d65805b46ecee9a75088b101` |
 | 問題 | `breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`分散模型、profile與workflow設定；使用者切換9A／continuous流程時需理解三個檔案，且容易誤改非作用中的設定 |
 | 唯一修正 | 新增`config/breakout_quality.py`作唯一可編輯設定來源。檔案最上方先放主選單workflow profile切換，再依模型identity、Dataset／Label、architecture、training、validation、execution、PIT與策略分類排列；profile類別／registry、驗證、衍生值與helper全部集中下半部 |
-| 相容方式 | 三個舊檔縮成真正的module alias，舊`from config.breakout_quality_policy／experiments／workflow import ...`仍取得同一canonical module；專案內部import全部改讀`config.breakout_quality`，不保留第二份常數或函式 |
-| 行為一致性 | 合併前後132個公開名稱完整保留；所有可序列化設定、active profile payload、workflow manifest payload、Inception kernels與receptive field逐項一致。舊alias與canonical object identity一致，monkeypatch不會分叉 |
+| 最終檔案契約 | 依使用者要求只保留必要檔案，三個舊設定檔已刪除；專案內部與外部腳本都必須直接import`config.breakout_quality`，不提供會隱藏殘留依賴的alias |
+| 行為一致性 | 合併前後132個公開名稱完整保留；所有可序列化設定、active profile payload、workflow manifest payload、Inception kernels與receptive field逐項一致。後續刪除alias檔只移除舊import入口，不改canonical設定值、衍生結果或runtime行為 |
 | 固定條件 | 不改active architecture、binary／continuous profile定義、optimizer、Label、threshold、seed目前值、PIT fold／checkpoint／Scores、strategy mode解析、portfolio accounting、候選生成、成交或出場 |
 | Dataset／Label | 不需重建Dataset或relabel；設定檔整併不改任何artifact identity或hash契約 |
 | 結果邊界 | 本輪只改善設定可維護性與單一真理來源；不得據此宣稱9A、continuous ranker或策略績效改善 |
+
+
+### 3.66 單一Config刪檔後Formal閉環（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；已修正bundle確認的validator／文件殘留，待使用者重跑正式suite確認 |
+| 程式基準 | 來源`test-branch-1_20260801_183429_c2f3b2a.zip`，SHA256 `e5cf9d58b8b3f5165cff24a2e17889247e3ce6add46656aaf9a83cd1e1f8faa6`；bundle`to_chatgpt_bundle_20260801_183502_5e1d75ef.zip`，SHA256 `a4b1867dab4e3c7ed3c07573ec13d363be622b4aec82d1113ccfbf59e68c1f47` |
+| Formal結果 | quick gate PASS；consistency 956 PASS／30 SKIP／1 FAIL；chain checks與ML smoke PASS；meta quality FAIL 4。Consistency唯一FAIL為synthetic suite啟動時`ModuleNotFoundError: config.breakout_quality_policy`；coverage run info顯示returncode=1、synthetic_case_count=0 |
+| 根因 | Runtime與專案內部imports已正確使用`config.breakout_quality`，但`validate_breakout_quality_policy_single_source_case`仍把三個舊alias檔存在與可import當成成功條件。使用者刪除舊檔後，該case在產生check row前就拋例外，連帶使coverage line／branch／key-target gates因0個synthetic cases而失敗 |
+| 唯一修正 | Single-source validator改為要求canonical檔存在、舊三檔全部不存在，並繼續AST／source掃描runtime是否殘留舊import；同步canonical docstring、CMD、Architecture與checklist。沒有恢復alias檔來迎合舊測試 |
+| Meta quality閉環 | 四個meta failures均是synthetic suite未執行的衍生結果；修正後suite可進入原coverage cases。實際coverage百分比仍以本機正式重跑為準，不預先寫成PASS |
+| Dataset／模型 | 不重建Dataset、不relabel、不重訓9A或continuous folds；不改checkpoint、PIT Scores、Target、threshold、seed、optimizer、buy-sort、portfolio replay或策略參數 |
+| 獨立驗證 | 已獨立執行changed-case、全專案compile／AST、舊import AST掃描、bare-except、依賴方向、import cycle、CLI、binary／continuous workflow解析、Markdown table與checklist transition檢查；依規範未執行`apps/test_suite.py`或其正式steps |
+| 下一步 | 使用者覆蓋修補後重跑正式suite；預期consistency與四個coverage衍生FAIL同步消失。如coverage仍有獨立FAIL，再以新bundle追查，不恢復舊config檔 |
 
 
 ## 4. 已排除或暫停的方向

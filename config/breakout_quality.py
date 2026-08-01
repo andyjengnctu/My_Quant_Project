@@ -1,9 +1,9 @@
 """Single source of truth for breakout-quality configuration.
 
 Edit only the user-settings section at the top of this file. Named profile definitions,
-validation, derived values, and helper functions are centralized below. The historical
-``breakout_quality_policy``, ``breakout_quality_experiments``, and
-``breakout_quality_workflow`` modules are compatibility shims and must not contain settings.
+validation, derived values, and helper functions are centralized below. This is the only
+breakout-quality configuration module; the former policy, experiments, and workflow modules
+were removed to keep one user-facing source of truth.
 """
 
 from __future__ import annotations

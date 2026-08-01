@@ -356,26 +356,15 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    import importlib
-    from config import breakout_quality as canonical_config
-
     project_root = Path(__file__).resolve().parents[2]
     canonical_config_path = project_root / "config" / "breakout_quality.py"
     canonical_source = canonical_config_path.read_text(encoding="utf-8")
-    legacy_config_paths = tuple(
+    removed_legacy_config_paths = tuple(
         project_root / "config" / filename
         for filename in (
             "breakout_quality_policy.py",
             "breakout_quality_experiments.py",
             "breakout_quality_workflow.py",
-        )
-    )
-    legacy_modules = tuple(
-        importlib.import_module(module_name)
-        for module_name in (
-            "config.breakout_quality_policy",
-            "config.breakout_quality_experiments",
-            "config.breakout_quality_workflow",
         )
     )
     add_check(
@@ -386,13 +375,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         True,
         bool(
             canonical_config_path.is_file()
-            and all(path.is_file() for path in legacy_config_paths)
-            and all(module is canonical_config for module in legacy_modules)
-            and all(
-                "sys.modules[__name__] = _canonical"
-                in path.read_text(encoding="utf-8")
-                for path in legacy_config_paths
-            )
+            and all(not path.exists() for path in removed_legacy_config_paths)
         ),
     )
     user_settings_marker = canonical_source.index(
