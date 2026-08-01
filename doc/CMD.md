@@ -519,9 +519,9 @@ python apps/breakout_quality.py audit-selection-strategy-realization --filter-id
 python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet
 ```
 
-11J分兩段執行：第一段完全以11I相同的2014-01-01～2020-11-05範圍發現候選，且延後counterfactual position的期末結算；第二段自2020-11-06管理至2020-12-31，只推進第一段既有position並禁止新增candidate state。候選identity不再由11J自行解析raw candidate；`core.portfolio_engine`只建立一次canonical candidate snapshot，同一份snapshot同時寫入11I replay rows並傳給11J observer。第一段先以11I相同flatten／target-date／unique流程核對2,003筆，再核對observer state完全一致。此audit忽略portfolio capacity與cash competition，但保留正式限價成交、locked-limit、shadow inheritance、半倉停利、停損、指標出場、賣出受阻、費稅與R口徑。
+11J採capture-then-offline兩階段：第一段以11I相同的2014-01-01～2020-11-05做純候選capture；第二段以2020-11-06～2020-12-31做純market／active-param context capture。兩次canonical replay期間都不執行counterfactual entry或position管理。第一段先以11I相同flatten／target-date／unique流程精確核對2,003筆，通過後才將凍結候選按日期送入離線counterfactual狀態機，並以第二段context管理至期末。
 
-輸出位於：
+此audit忽略portfolio capacity與cash competition，但保留正式限價成交、locked-limit、shadow inheritance、半倉停利、停損、指標出場、賣出受阻、費稅與R口徑。輸出位於：
 
 ```text
 outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy_aligned_opportunity_no_time_r_v1/selection_strategy_realization_audit/candidate_counterfactual_execution_audit/

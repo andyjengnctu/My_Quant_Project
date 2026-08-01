@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -98,11 +99,147 @@ def _entry_type_text(value: Any) -> str:
     return text if text else "normal"
 
 
-class CandidateCounterfactualReplay(dict):
-    """Observer threaded through canonical portfolio replay via the existing replay_counts object."""
+def _freeze_candidate_for_offline_replay(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Freeze mutable signal state while retaining shared read-only market/param objects."""
+
+    frozen = dict(candidate or {})
+    for key in ("shadow_position_state", "signal_state"):
+        if key in frozen:
+            frozen[key] = copy.deepcopy(frozen[key])
+    return frozen
+
+
+class CanonicalCandidateReplayCapture(dict):
+    """Pure capture observer: records canonical rows and runtime context without execution."""
+
+    def __init__(self, *, candidate_cutoff: str):
+        super().__init__()
+        self.candidate_cutoff = _date_text(candidate_cutoff)
+        self._days: dict[str, dict[str, Any]] = {}
+
+    def _day(self, today: Any) -> dict[str, Any]:
+        today_text = _date_text(today)
+        return self._days.setdefault(
+            today_text,
+            {
+                "today": pd.Timestamp(today),
+                "all_dfs_fast": None,
+                "fallback_params": None,
+                "sizing_equity": None,
+                "qualified_candidates": [],
+                "qualified_candidate_snapshots": [],
+                "orderable_candidates": [],
+                "orderable_candidate_snapshots": [],
+            },
+        )
+
+    def begin_replay_day(self, *, today, all_dfs_fast, fallback_params):
+        day = self._day(today)
+        day["all_dfs_fast"] = all_dfs_fast
+        day["fallback_params"] = fallback_params
+
+    def observe_replay_candidates(
+        self,
+        *,
+        today,
+        qualified_candidates,
+        qualified_candidate_snapshots=None,
+        orderable_candidates,
+        orderable_candidate_snapshots=None,
+        all_dfs_fast,
+        sizing_equity,
+        fallback_params,
+    ):
+        day = self._day(today)
+        day["all_dfs_fast"] = all_dfs_fast
+        day["fallback_params"] = fallback_params
+        day["sizing_equity"] = sizing_equity
+        if _date_text(today) > self.candidate_cutoff:
+            return
+        qualified_rows = list(qualified_candidates or [])
+        qualified_snapshots = [dict(row or {}) for row in list(qualified_candidate_snapshots or [])]
+        orderable_rows = list(orderable_candidates or [])
+        orderable_snapshots = [dict(row or {}) for row in list(orderable_candidate_snapshots or [])]
+        if len(qualified_rows) != len(qualified_snapshots):
+            raise ValueError(
+                "11J capture qualified candidate與canonical snapshot數量不一致: "
+                f"candidates={len(qualified_rows)}, snapshots={len(qualified_snapshots)}"
+            )
+        if len(orderable_rows) != len(orderable_snapshots):
+            raise ValueError(
+                "11J capture orderable candidate與canonical snapshot數量不一致: "
+                f"candidates={len(orderable_rows)}, snapshots={len(orderable_snapshots)}"
+            )
+        day["qualified_candidates"] = [
+            _freeze_candidate_for_offline_replay(row) for row in qualified_rows
+        ]
+        day["qualified_candidate_snapshots"] = qualified_snapshots
+        day["orderable_candidates"] = [
+            _freeze_candidate_for_offline_replay(row) for row in orderable_rows
+        ]
+        day["orderable_candidate_snapshots"] = orderable_snapshots
+
+    def iter_days(self):
+        for key in sorted(self._days):
+            yield self._days[key]
+
+
+def _run_offline_counterfactual(
+    *,
+    discovery_capture: CanonicalCandidateReplayCapture,
+    management_capture: CanonicalCandidateReplayCapture | None,
+    candidate_cutoff: str,
+    replay_end: str,
+) -> CandidateCounterfactualReplay:
+    tracker = CandidateCounterfactualReplay(
+        candidate_cutoff=candidate_cutoff,
+        defer_finalize=True,
+    )
+    last_params = None
+    for day in discovery_capture.iter_days():
+        if day.get("all_dfs_fast") is None or day.get("fallback_params") is None:
+            raise ValueError(f"11J discovery capture缺少每日runtime context: {day.get('today')}")
+        last_params = day["fallback_params"]
+        tracker.begin_replay_day(
+            today=day["today"],
+            all_dfs_fast=day["all_dfs_fast"],
+            fallback_params=day["fallback_params"],
+        )
+        tracker.observe_replay_candidates(
+            today=day["today"],
+            qualified_candidates=day["qualified_candidates"],
+            qualified_candidate_snapshots=day["qualified_candidate_snapshots"],
+            orderable_candidates=day["orderable_candidates"],
+            orderable_candidate_snapshots=day["orderable_candidate_snapshots"],
+            all_dfs_fast=day["all_dfs_fast"],
+            sizing_equity=day.get("sizing_equity"),
+            fallback_params=day["fallback_params"],
+        )
+    discovered_state_count = len(tracker.states)
+    if management_capture is not None:
+        for day in management_capture.iter_days():
+            if day.get("all_dfs_fast") is None or day.get("fallback_params") is None:
+                raise ValueError(f"11J management capture缺少每日runtime context: {day.get('today')}")
+            last_params = day["fallback_params"]
+            tracker.begin_replay_day(
+                today=day["today"],
+                all_dfs_fast=day["all_dfs_fast"],
+                fallback_params=day["fallback_params"],
+            )
+    if len(tracker.states) != discovered_state_count:
+        raise ValueError(
+            "11J離線持倉管理不得新增candidate states: "
+            f"before={discovered_state_count}, after={len(tracker.states)}"
+        )
+    tracker.defer_finalize = False
+    tracker.finalize_replay(last_date=pd.Timestamp(replay_end), fallback_params=last_params)
+    return tracker
+
+
+class CandidateCounterfactualReplay:
+    """Offline counterfactual state machine; never passed into canonical portfolio replay."""
 
     def __init__(self, *, candidate_cutoff: str, defer_finalize: bool = False):
-        super().__init__()
         self.candidate_cutoff = _date_text(candidate_cutoff)
         self.defer_finalize = bool(defer_finalize)
         self.states: dict[tuple[str, str], dict[str, Any]] = {}
@@ -501,10 +638,7 @@ def main(argv=None) -> int:
     strategy=dict(source_report.get("strategy") or {})
     max_positions=int(strategy.get("max_positions",10) or 10)
     enable_rotation=bool(strategy.get("rotation",False))
-    tracker=CandidateCounterfactualReplay(
-        candidate_cutoff=candidate_cutoff,
-        defer_finalize=True,
-    )
+    discovery_capture=CanonicalCandidateReplayCapture(candidate_cutoff=candidate_cutoff)
     discovery_scenario=_run_scenario(
         name="11J_candidate_discovery",
         data_dir=data_dir,
@@ -515,11 +649,11 @@ def main(argv=None) -> int:
         max_positions=max_positions,
         enable_rotation=enable_rotation,
         quiet=bool(args.quiet),
-        replay_counts=tracker,
+        replay_counts=discovery_capture,
     )
     discovery_summary=_scenario_summary(discovery_scenario)
     lookup,target_manifest=_target_lookup(str(args.filter_id))
-    discovery_qualified=_flatten_candidate_replay_rows(tracker,"candidate_rows")
+    discovery_qualified=_flatten_candidate_replay_rows(discovery_capture,"candidate_rows")
     discovery_qualified=_attach_targets(discovery_qualified,lookup)
     discovery_qualified_unique=_unique_signals(discovery_qualified)
     source_qualified_count=int((source_report.get("coverage") or {}).get("qualified_unique_signal_count",0) or 0)
@@ -529,6 +663,32 @@ def main(argv=None) -> int:
             "11J canonical候選快照與11I qualified unique signals不一致: "
             f"expected={source_qualified_count}, actual={canonical_discovery_count}"
         )
+    management_start=_date_text(pd.Timestamp(candidate_cutoff)+pd.Timedelta(days=1))
+    management_capture=None
+    if management_start<=replay_end:
+        management_capture=CanonicalCandidateReplayCapture(candidate_cutoff=candidate_cutoff)
+        management_scenario=_run_scenario(
+            name="11J_counterfactual_management_context",
+            data_dir=data_dir,
+            param_source_kind=param_source_kind,
+            params=no_filter_params,
+            start_date=management_start,
+            end_date=replay_end,
+            max_positions=max_positions,
+            enable_rotation=enable_rotation,
+            quiet=bool(args.quiet),
+            replay_counts=management_capture,
+        )
+        management_summary=_scenario_summary(management_scenario)
+    else:
+        management_summary={"skipped":True,"reason":"candidate cutoff equals replay end"}
+
+    tracker=_run_offline_counterfactual(
+        discovery_capture=discovery_capture,
+        management_capture=management_capture,
+        candidate_cutoff=candidate_cutoff,
+        replay_end=replay_end,
+    )
     if len(tracker.states)!=canonical_discovery_count:
         canonical_keys=set(zip(
             discovery_qualified_unique["ticker"].astype(str),
@@ -538,35 +698,9 @@ def main(argv=None) -> int:
         missing=sorted(canonical_keys-state_keys)[:10]
         unexpected=sorted(state_keys-canonical_keys)[:10]
         raise ValueError(
-            "11J observer state未忠實採用canonical候選快照: "
+            "11J離線counterfactual state未忠實採用canonical capture: "
             f"canonical={canonical_discovery_count}, states={len(tracker.states)}, "
             f"missing_sample={missing}, unexpected_sample={unexpected}"
-        )
-
-    discovered_state_count=len(tracker.states)
-    management_start=_date_text(pd.Timestamp(candidate_cutoff)+pd.Timedelta(days=1))
-    tracker.defer_finalize=False
-    if management_start<=replay_end:
-        management_scenario=_run_scenario(
-            name="11J_counterfactual_management",
-            data_dir=data_dir,
-            param_source_kind=param_source_kind,
-            params=no_filter_params,
-            start_date=management_start,
-            end_date=replay_end,
-            max_positions=max_positions,
-            enable_rotation=enable_rotation,
-            quiet=bool(args.quiet),
-            replay_counts=tracker,
-        )
-        management_summary=_scenario_summary(management_scenario)
-    else:
-        tracker.finalize_replay(last_date=pd.Timestamp(candidate_cutoff),fallback_params=None)
-        management_summary={"skipped":True,"reason":"candidate cutoff equals replay end"}
-    if len(tracker.states)!=discovered_state_count:
-        raise ValueError(
-            "11J持倉管理階段不得新增candidate states: "
-            f"before={discovered_state_count}, after={len(tracker.states)}"
         )
 
     signals=tracker.signal_frame()
@@ -613,11 +747,12 @@ def main(argv=None) -> int:
                 "end":candidate_cutoff,
                 "summary":discovery_summary,
             },
-            "position_management":{
+            "position_management_context":{
                 "start":management_start,
                 "end":replay_end,
                 "summary":management_summary,
             },
+            "execution_mode":"capture_then_offline_counterfactual",
         },
         "artifacts":artifacts,
         "training_performed":False,
@@ -626,6 +761,8 @@ def main(argv=None) -> int:
             "selection_nested_oos_only":True,
             "portfolio_capacity_and_cash_competition_ignored":True,
             "canonical_entry_shadow_exit_accounting_reused":True,
+            "canonical_replay_is_capture_only":True,
+            "counterfactual_execution_runs_after_replay":True,
             "unfilled_candidates_remain_unlabeled":True,
             "new_model_not_authorized_until_result_review":True,
         },

@@ -289,8 +289,8 @@ python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_
 
 ### 11J Canonical Per-candidate Counterfactual Execution Audit
 
-`audit-candidate-counterfactual`在11I Selection nested-OOS replay上使用optional replay observer。一般`replay_counts`仍是普通dict時，`core.portfolio_engine`行為完全不變；只有11J observer存在時，才平行追蹤獨立執行路徑。Candidate identity的單一真理是`core.portfolio_engine`建立的canonical replay snapshot：同一份snapshot同時寫入11I candidate rows並傳給11J observer，禁止observer再由raw candidate重建日期key。
+`audit-candidate-counterfactual`採capture-then-offline架構。Canonical portfolio replay只掛入`CanonicalCandidateReplayCapture`，該observer僅複製raw candidate、canonical replay snapshot、每日market context與active params；不執行entry、position step、closeout或accounting，因此不得改變canonical candidate universe。`CandidateCounterfactualReplay`是獨立離線狀態機，不再繼承dict，也禁止作為`replay_counts`傳入portfolio engine。
 
-執行規則不另寫第二套模擬器：candidate plan由`core.portfolio_entries.build_candidate_plan_seed`建立，進場重用`execute_pre_market_entry_plan`，延續／TBD沿用候選既有shadow state，每日管理重用`execute_bar_step`，期末重用`closeout_open_positions`，R與費稅重用exact accounting。Observer只移除portfolio capacity與cash competition，不改history qualification、active params、ensemble min-agree、orderability、限價、停損、停利或出場語意。
+執行規則不另寫第二套模擬器：離線candidate plan由`core.portfolio_entries.build_candidate_plan_seed`建立，進場重用`execute_pre_market_entry_plan`，延續／TBD沿用capture當下凍結的shadow state，每日管理重用`execute_bar_step`，期末重用`closeout_open_positions`，R與費稅重用exact accounting。只隔離執行時點，不改history qualification、active params、ensemble min-agree、orderability、限價、停損、停利或出場語意。
 
-11J採兩階段replay隔離日期語意：candidate discovery必須用與11I完全相同的2014-01-01～2020-11-05範圍；先將canonical snapshots以11I相同的flatten／target-date／unique流程重建qualified集合並核對來源數，再核對observer state keys與該集合完全一致；observer於第一段延後finalize。第二段自2020-11-06～2020-12-31只呼叫既有counterfactual position管理與期末結算，candidate cutoff使新候選不進state，且第二段前後state count必須不變。未成交訊號保持unlabeled；11J不建立Target arrays、model profile、checkpoint、threshold或runtime score，且只提供CLI。
+11J分兩段取得context：discovery capture使用與11I完全相同的2014-01-01～2020-11-05，先以11I相同flatten／target-date／unique流程核對2,003筆；management capture使用2020-11-06～2020-12-31，但不收新候選。兩次canonical replay都完成後，才按日期離線執行counterfactual entry與position management。可變`signal_state／shadow_position_state`在capture當下凍結；market bank與params只保留read-only參照。未成交訊號保持unlabeled；11J不建立Target arrays、model profile、checkpoint、threshold或runtime score，且只提供CLI。

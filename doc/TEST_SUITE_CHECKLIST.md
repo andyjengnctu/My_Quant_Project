@@ -1643,3 +1643,7 @@
 | 2026-07-31 | B180 | 改為canonical snapshot單次建立並同時供replay rows與observer，新增canonical count／state key雙重guard後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_candidate_counterfactual_execution_contract_case` |
 | 2026-07-31 | T277 | 第二次本機11J在相同discovery日期仍為1,978／2,003，原日期假設被否證，validator由DONE退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-07-31 | T277 | 新增shared canonical snapshot key、candidate／snapshot長度拒絕及engine傳遞契約後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_candidate_counterfactual_execution_contract_case` |
+| 2026-08-01 | B180 | 第三次本機11J在shared canonical snapshot架構下仍只重現1,969／2,003，確認counterfactual執行與canonical replay同迴圈仍有狀態耦合，契約退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/audit_candidate_counterfactual_execution.py` |
+| 2026-08-01 | B180 | 改為純capture canonical replay完成後才離線執行counterfactual，禁止狀態機作為replay_counts，重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_candidate_counterfactual_execution_contract_case` |
+| 2026-08-01 | T277 | 1,969／2,003第三次失敗否證shared-snapshot即可隔離的假設，validator退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-01 | T277 | 新增pure capture、mutable signal freeze、offline execution ordering及禁止replay_counts=tracker契約後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_candidate_counterfactual_execution_contract_case` |
