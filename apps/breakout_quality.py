@@ -28,6 +28,7 @@ from config.breakout_quality_policy import (
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
 )
+from config.breakout_quality_workflow import get_breakout_quality_workflow_settings
 from core.display_common import render_elapsed
 from core.runtime_utils import (
     is_interactive_console,
@@ -66,6 +67,11 @@ from filters.breakout_quality.paths import (
     resolve_filter_output_dir,
     resolve_filter_report_json_path,
     resolve_filter_report_markdown_path,
+    resolve_selection_point_in_time_audit_json_path,
+    resolve_selection_point_in_time_audit_markdown_path,
+    resolve_selection_point_in_time_coverage_path,
+    resolve_selection_point_in_time_manifest_path,
+    resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 
@@ -89,6 +95,9 @@ COMMAND_MODULES = {
     "audit-selection-strategy-realization": "tools.filters.breakout_quality.audit_selection_strategy_realization",
     "audit-candidate-counterfactual": "tools.filters.breakout_quality.audit_candidate_counterfactual_execution",
     "audit-selection-pressure": "tools.filters.breakout_quality.audit_portfolio_selection_pressure",
+    "build-point-in-time-scores": "tools.filters.breakout_quality.build_point_in_time_scores",
+    "audit-point-in-time-scores": "tools.filters.breakout_quality.audit_point_in_time_scores",
+    "strategy-compare": "tools.filters.breakout_quality.strategy_compare",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -117,6 +126,9 @@ COMMAND_DESCRIPTIONS = {
     "audit-selection-strategy-realization": "執行11I Selection nested-OOS策略實現覆蓋稽核；research-only、CLI-only",
     "audit-candidate-counterfactual": "執行11J per-candidate counterfactual execution稽核；已停止、僅供歷史追溯",
     "audit-selection-pressure": "執行11K portfolio selection-pressure歸因；read-only、CLI-only",
+    "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
+    "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
+    "strategy-compare": "策略績效比較；相容原breakout_quality_strategy_compare入口",
 }
 
 
@@ -125,7 +137,7 @@ def _print_help(program_name: str) -> None:
     print("說明: Breakout quality filter 的單一正式操作入口；互動終端不帶參數時直接開啟選單。")
     print("command:")
     for command, description in COMMAND_DESCRIPTIONS.items():
-        print(f"  {command:<13} {description}")
+        print(f"  {command:<30} {description}")
     print()
     print(f"查看子命令參數: python {program_name} <command> --help")
 
@@ -1438,17 +1450,119 @@ def _interactive_regime_audit(program_name: str) -> int:
 
 
 
+def _print_workflow_status() -> None:
+    settings = get_breakout_quality_workflow_settings()
+    print("\n=== Current Breakout Quality Workflow ===")
+    print(f"Filter ID：{settings.filter_id}")
+    print(f"Architecture：{settings.model_architecture}")
+    print(f"Experiment Profile：{settings.experiment_profile}")
+    print(f"Continuous Target：{settings.continuous_target_id}")
+    print(f"Training Scope：{settings.training_label_scope}")
+    print(f"Seed：{settings.seed}")
+    print(
+        "PIT Score Period："
+        f"{settings.point_in_time_score_start_date} ~ "
+        f"{settings.point_in_time_score_end_date or 'Selection end'}"
+    )
+    print(
+        f"PIT Fold／Validation：{settings.point_in_time_fold_months}／"
+        f"{settings.point_in_time_inner_validation_months} months"
+    )
+    print(f"Strategy Param Policy：{settings.strategy_param_policy}")
+    print(f"Strategy Score Source：{settings.strategy_score_source}")
+    print(f"Strategy Buy Sort：{settings.strategy_buy_sort}")
+    status_paths = {
+        "PIT scores": resolve_selection_point_in_time_score_path(
+            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+        ),
+        "PIT manifest": resolve_selection_point_in_time_manifest_path(
+            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+        ),
+        "PIT coverage": resolve_selection_point_in_time_coverage_path(
+            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+        ),
+        "PIT audit JSON": resolve_selection_point_in_time_audit_json_path(
+            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+        ),
+        "PIT audit Markdown": resolve_selection_point_in_time_audit_markdown_path(
+            PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+        ),
+    }
+    print("\nWorkflow artifacts:")
+    for name, path in status_paths.items():
+        print(f"[{'存在' if path.is_file() else '缺少'}] {name:<20} {path}")
+
+
+def _interactive_model_research(program_name: str) -> int:
+    settings = get_breakout_quality_workflow_settings()
+    _print_workflow_status()
+    if not _prompt_bool("建立／更新PIT Scores並執行模型驗證", True):
+        return 0
+    build_args = [
+        "--filter-id", settings.filter_id,
+        "--model-architecture", settings.model_architecture,
+        "--experiment-profile", settings.experiment_profile,
+        "--score-start-date", settings.point_in_time_score_start_date,
+        "--fold-months", str(settings.point_in_time_fold_months),
+        "--inner-validation-months", str(settings.point_in_time_inner_validation_months),
+        "--seed", str(settings.seed),
+    ]
+    if settings.point_in_time_score_end_date:
+        build_args.extend(["--score-end-date", settings.point_in_time_score_end_date])
+    build_args.append("--resume" if settings.point_in_time_resume else "--no-resume")
+    code = _run_command(
+        "build-point-in-time-scores", build_args, program_name=program_name
+    )
+    if code != 0:
+        return code
+    return _run_command(
+        "audit-point-in-time-scores",
+        [
+            "--filter-id", settings.filter_id,
+            "--model-architecture", settings.model_architecture,
+            "--experiment-profile", settings.experiment_profile,
+        ],
+        program_name=program_name,
+    )
+
+
+def _interactive_strategy_validation(program_name: str) -> int:
+    settings = get_breakout_quality_workflow_settings()
+    _print_workflow_status()
+    if settings.strategy_score_source == "selection_point_in_time":
+        print(
+            "[尚未開放] Selection PIT Score工件與模型驗證入口已完成；"
+            "策略層仍需先完成泛用Score buy-sort與PIT score-store接線。"
+        )
+        print(
+            "舊策略比較CLI仍可用："
+            f"python {program_name} strategy-compare --help"
+        )
+        return 0
+    if settings.strategy_score_source == "final_selection_model_oos":
+        print(
+            "[尚未開放] final Selection model OOS Score source尚未接入統一策略入口；"
+            "不得回退成canonical runtime score。"
+        )
+        return 0
+    return _run_command(
+        "strategy-compare",
+        [
+            "--dataset", settings.strategy_dataset,
+            "--comparison-mode", "score-ranking",
+            "--param-policy", settings.strategy_param_policy,
+            "--max-positions", str(settings.strategy_max_positions),
+            "--rotation", settings.strategy_rotation,
+        ],
+        program_name=program_name,
+    )
+
+
 def _print_menu() -> None:
     print("\n=== Breakout Quality ===")
-    print("[1] 完整研究流程（Full／全部股票／OOS）")
-    print("[2] 建立／重建 Full dataset（全部股票）")
-    print("[3] 訓練模型（使用 policy 預設參數）")
-    print("[4] 匯出 research scores")
-    print("[5] 產生易讀研究報表（固定納入 OOS）")
-    print("[6] 輸出詳細 JSON 評估")
-    print("[7] 匯出正式 forward-OOS scores")
-    print("[8] 市場狀態覆蓋與年度歸因稽核")
-    print("[9/Enter] 查看工件狀態")
+    print("[Enter] 模型研究與驗證")
+    print("[1] 策略績效驗證")
+    print("[2] 查看目前設定與工件狀態")
     print("[0] 離開")
 
 
@@ -1460,32 +1574,18 @@ def _run_interactive_menu(program_name: str) -> int:
         except EOFError:
             print("\n輸入已結束。")
             return 0
-        choice = "9" if raw_choice == "" else raw_choice
+        choice = "model" if raw_choice == "" else raw_choice
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         try:
-            if choice == "1":
-                _interactive_workflow(program_name)
+            if choice == "model":
+                _interactive_model_research(program_name)
+            elif choice == "1":
+                _interactive_strategy_validation(program_name)
             elif choice == "2":
-                _interactive_build_dataset(program_name)
-            elif choice == "3":
-                _interactive_train(program_name)
-            elif choice == "4":
-                _interactive_export_research(program_name)
-            elif choice == "5":
-                _interactive_report(program_name)
-            elif choice == "6":
-                _interactive_evaluate(program_name)
-            elif choice == "7":
-                _interactive_export_forward_oos(program_name)
-            elif choice == "8":
-                _interactive_regime_audit(program_name)
-            elif choice == "9":
-                filter_id = _policy_filter_id()
-                _print_policy_defaults(filter_id)
-                _print_artifact_status(filter_id)
+                _print_workflow_status()
             else:
-                print("選項無效，請輸入 0～9。")
+                print("選項無效，請按 Enter 或輸入 0～2。")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:

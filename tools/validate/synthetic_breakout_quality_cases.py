@@ -10206,3 +10206,276 @@ __all__ = [
     "validate_breakout_quality_portfolio_selection_pressure_contract_case",
     "validate_breakout_quality_strategy_comparison_contract_case",
 ]
+
+
+def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_BUILDER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.breakout_quality_workflow import get_breakout_quality_workflow_settings
+    from tools.filters.breakout_quality.audit_point_in_time_scores import (
+        _orderable_coverage,
+    )
+    from tools.filters.breakout_quality.build_point_in_time_scores import (
+        REQUIRED_SCORE_COLUMNS,
+        _build_fold_periods,
+        _combined_validation,
+        _fold_group_ids,
+        _validate_score_frame,
+        parse_args as parse_point_in_time_args,
+    )
+
+    settings = get_breakout_quality_workflow_settings()
+    parsed = parse_point_in_time_args([])
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_cli_defaults_follow_current_workflow_config",
+        (
+            settings.filter_id,
+            settings.model_architecture,
+            settings.experiment_profile,
+            settings.seed,
+            settings.point_in_time_fold_months,
+            settings.point_in_time_inner_validation_months,
+        ),
+        (
+            parsed.filter_id,
+            parsed.model_architecture,
+            parsed.experiment_profile,
+            parsed.seed,
+            parsed.fold_months,
+            parsed.inner_validation_months,
+        ),
+    )
+
+    periods = _build_fold_periods(
+        pd.Timestamp("2019-12-31"),
+        pd.Timestamp("2020-03-15"),
+        fold_months=1,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_fold_periods_are_contiguous_and_calendar_month_based",
+        [
+            ("2019-12-31", "2020-01-30"),
+            ("2020-01-31", "2020-02-28"),
+            ("2020-02-29", "2020-03-15"),
+        ],
+        [
+            (str(item["score_start"].date()), str(item["score_end"].date()))
+            for item in periods
+        ],
+    )
+
+    group_table = pd.DataFrame(
+        [
+            {
+                "ticker": "A",
+                "date": "2010-01-01",
+                "group_index": 0,
+                "label": 1,
+                "label_eval_end_date": "2010-02-01",
+            },
+            {
+                "ticker": "B",
+                "date": "2011-12-01",
+                "group_index": 1,
+                "label": 1,
+                "label_eval_end_date": "2012-01-10",
+            },
+            {
+                "ticker": "C",
+                "date": "2012-01-02",
+                "group_index": 2,
+                "label": 1,
+                "label_eval_end_date": "2012-02-15",
+            },
+            {
+                "ticker": "D",
+                "date": "2013-12-01",
+                "group_index": 3,
+                "label": 1,
+                "label_eval_end_date": "2013-12-20",
+            },
+            {
+                "ticker": "E",
+                "date": "2013-12-20",
+                "group_index": 4,
+                "label": 1,
+                "label_eval_end_date": "2014-01-10",
+            },
+            {
+                "ticker": "0056",
+                "date": "2014-01-02",
+                "group_index": 5,
+                "label": 0,
+                "label_eval_end_date": "2014-02-15",
+            },
+            {
+                "ticker": "G",
+                "date": "2014-06-01",
+                "group_index": 6,
+                "label": 1,
+                "label_eval_end_date": "2014-07-15",
+            },
+        ]
+    )
+    bundle = SimpleNamespace(
+        group_table=group_table,
+        profile=SimpleNamespace(training_label_scope="pass_only"),
+        target_valid=np.ones(len(group_table), dtype=bool),
+        event_group_index=np.arange(len(group_table), dtype=np.int64),
+    )
+    fold = {
+        "fold_id": "fold_000",
+        "score_start": pd.Timestamp("2014-01-01"),
+        "score_end": pd.Timestamp("2014-12-31"),
+    }
+    ids = _fold_group_ids(bundle, fold, validation_months=24)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_split_requires_completed_labels_before_each_information_boundary",
+        ([0], [2, 3], [0, 1, 2, 3], [5, 6]),
+        (
+            ids["train_ids"].tolist(),
+            ids["validation_ids"].tolist(),
+            ids["final_ids"].tolist(),
+            ids["score_ids"].tolist(),
+        ),
+    )
+
+    fold_contract = {
+        "fold_id": "fold_000",
+        "model_information_cutoff": "2013-12-20",
+        "planned_periods": {
+            "score_start": "2014-01-01",
+            "score_end": "2014-12-31",
+        },
+    }
+    score_frame = pd.DataFrame(
+        [
+            {
+                "ticker": "0056",
+                "date": "2014-01-02",
+                "group_index": 5,
+                "breakout_quality_score": 0.2,
+                "fold_id": "fold_000",
+                "model_information_cutoff": "2013-12-20",
+            },
+            {
+                "ticker": "G",
+                "date": "2014-06-01",
+                "group_index": 6,
+                "breakout_quality_score": 0.8,
+                "fold_id": "fold_000",
+                "model_information_cutoff": "2013-12-20",
+            },
+        ]
+    )
+    validated = _validate_score_frame(score_frame, fold_contract=fold_contract)
+    coverage = _combined_validation(
+        validated,
+        bundle,
+        score_start=pd.Timestamp("2014-01-01"),
+        score_end=pd.Timestamp("2014-12-31"),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_score_output_has_no_future_target_and_complete_unique_coverage",
+        (True, 2, 1.0, 0, 0, 0),
+        (
+            not bool(
+                {"label", "target_raw_r", "target_daily_percentile"}
+                & set(REQUIRED_SCORE_COLUMNS)
+            ),
+            coverage["scored_group_count"],
+            coverage["coverage_rate"],
+            coverage["duplicate_group_count"],
+            coverage["missing_group_count"],
+            coverage["extra_group_count"],
+        ),
+    )
+
+    duplicate_rejected = False
+    try:
+        _combined_validation(
+            pd.concat([validated, validated.iloc[[0]]], ignore_index=True),
+            bundle,
+            score_start=pd.Timestamp("2014-01-01"),
+            score_end=pd.Timestamp("2014-12-31"),
+        )
+    except ValueError as exc:
+        duplicate_rejected = "重複group" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_combined_output_rejects_duplicate_groups",
+        True,
+        duplicate_rejected,
+    )
+
+    identity_mismatch_rejected = False
+    mismatched = validated.copy()
+    mismatched.loc[mismatched["group_index"] == 5, "ticker"] = "9999"
+    try:
+        _combined_validation(
+            mismatched,
+            bundle,
+            score_start=pd.Timestamp("2014-01-01"),
+            score_end=pd.Timestamp("2014-12-31"),
+        )
+    except ValueError as exc:
+        identity_mismatch_rejected = "identity不一致" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_combined_output_rejects_ticker_date_identity_mismatch",
+        True,
+        identity_mismatch_rejected,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        orderable_path = Path(tmp_dir) / "orderable.csv"
+        pd.DataFrame(
+            [
+                {"ticker": "0056", "target_date": "2014-01-02"},
+                {"ticker": "X", "target_date": "2014-01-03"},
+            ]
+        ).to_csv(orderable_path, index=False, encoding="utf-8-sig")
+        score_dates = validated.copy()
+        score_dates["date"] = pd.to_datetime(score_dates["date"], errors="raise")
+        orderable = _orderable_coverage(
+            score_dates,
+            requested_path=str(orderable_path),
+            filter_id=settings.filter_id,
+            target_id=settings.continuous_target_id,
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_orderable_coverage_uses_canonical_target_date",
+        (True, 2, 1, 0.5),
+        (
+            orderable["available"],
+            orderable["candidate_count"],
+            orderable["scored_candidate_count"],
+            orderable["coverage_rate"],
+        ),
+        tol=1e-12,
+    )
+
+    summary["workflow"] = "selection_point_in_time_scores"
+    summary["score_contract"] = "future_target_excluded"
+    return results, summary

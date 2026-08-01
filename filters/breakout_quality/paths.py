@@ -287,6 +287,112 @@ def resolve_existing_filter_research_manifest_path(
     return legacy if legacy.is_file() else canonical
 
 
+
+POINT_IN_TIME_DIRNAME = "point_in_time"
+SELECTION_POINT_IN_TIME_SCORE_FILENAME = "selection_point_in_time_scores.csv"
+SELECTION_POINT_IN_TIME_MANIFEST_FILENAME = "selection_point_in_time_manifest.json"
+SELECTION_POINT_IN_TIME_COVERAGE_FILENAME = "selection_point_in_time_coverage.csv"
+SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME = "selection_point_in_time_audit.json"
+SELECTION_POINT_IN_TIME_AUDIT_MARKDOWN_FILENAME = "selection_point_in_time_audit.md"
+
+
+def resolve_filter_point_in_time_dir(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    return resolve_filter_model_dir(
+        project_root,
+        filter_id,
+        model_architecture,
+        experiment_profile,
+    ) / POINT_IN_TIME_DIRNAME
+
+
+def resolve_filter_point_in_time_fold_dir(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    fold_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    normalized_fold_id = str(fold_id).strip()
+    if not normalized_fold_id or Path(normalized_fold_id).name != normalized_fold_id:
+        raise ValueError("point-in-time fold_id 必須是安全的單一資料夾名稱")
+    return resolve_filter_point_in_time_dir(
+        project_root,
+        filter_id,
+        model_architecture,
+        experiment_profile,
+    ) / "folds" / normalized_fold_id
+
+
+def resolve_selection_point_in_time_score_path(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    return resolve_filter_point_in_time_dir(
+        project_root, filter_id, model_architecture, experiment_profile
+    ) / SELECTION_POINT_IN_TIME_SCORE_FILENAME
+
+
+def resolve_selection_point_in_time_manifest_path(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    return resolve_filter_point_in_time_dir(
+        project_root, filter_id, model_architecture, experiment_profile
+    ) / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+
+
+def resolve_selection_point_in_time_coverage_path(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    return resolve_filter_point_in_time_dir(
+        project_root, filter_id, model_architecture, experiment_profile
+    ) / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME
+
+
+def resolve_filter_point_in_time_output_dir(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    return resolve_filter_model_output_dir(
+        project_root, filter_id, model_architecture, experiment_profile
+    ) / POINT_IN_TIME_DIRNAME
+
+
+def resolve_selection_point_in_time_audit_json_path(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    return resolve_filter_point_in_time_output_dir(
+        project_root, filter_id, model_architecture, experiment_profile
+    ) / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME
+
+
+def resolve_selection_point_in_time_audit_markdown_path(
+    project_root: str | os.PathLike[str],
+    filter_id: str,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> Path:
+    return resolve_filter_point_in_time_output_dir(
+        project_root, filter_id, model_architecture, experiment_profile
+    ) / SELECTION_POINT_IN_TIME_AUDIT_MARKDOWN_FILENAME
+
 def resolve_filter_report_dir(
     project_root: str | os.PathLike[str],
     filter_id: str,
@@ -392,5 +498,13 @@ __all__ = [
     "resolve_filter_report_dir",
     "resolve_filter_report_json_path",
     "resolve_filter_report_markdown_path",
+    "resolve_filter_point_in_time_dir",
+    "resolve_filter_point_in_time_fold_dir",
+    "resolve_filter_point_in_time_output_dir",
+    "resolve_selection_point_in_time_score_path",
+    "resolve_selection_point_in_time_manifest_path",
+    "resolve_selection_point_in_time_coverage_path",
+    "resolve_selection_point_in_time_audit_json_path",
+    "resolve_selection_point_in_time_audit_markdown_path",
     "resolve_model_architecture",
 ]

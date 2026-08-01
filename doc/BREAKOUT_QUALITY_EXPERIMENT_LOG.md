@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源`test-branch-1_20260801_143545_4d07fe5.zip`，SHA256 `953b03570c4df22c4e0389f6031f6b90a70530171f76e1f6d5d8a60f52160ab7`。11I結果維持No-time Target↔strategy R 0.5644、PASS內0.5182、actual coverage 21.77%。11J第六次在plain dict＋execution sidecar下仍只重現1,969／2,003，已停止，不再投入replay除錯。下一步改為11K只讀11I既有orderable／actual-trade工件的portfolio selection-pressure attribution；正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`953b03570c4df22c4e0389f6031f6b90a70530171f76e1f6d5d8a60f52160ab7`。11J停止狀態為`STOPPED / REPLAY_NONREPRODUCIBLE`；六次本機重播曾出現1,978／2,003、1,969／2,003與MemoryError，且最後在普通dict＋sidecar架構仍為1,969／2,003。11K不重播策略、不建立counterfactual，只strict讀取11I `selection_orderable_candidates.csv`與`selection_strategy_realization_matches.csv`，分析同日Target percentile、top-k retention、selection opportunity gap及壓力分桶；11I結果來源為使用者提供的`selection_strategy_realization_audit.md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_144606_024e49d(2).zip`，SHA256 `762eac6a328c318efa9ecbd1922e29607e06b8f9053a80e1322fff770ccbb6c6`。目前已實作單一入口、泛用workflow config、continuous-ranker共用pipeline與Selection point-in-time Score builder／audit；尚未執行完整資料訓練或策略Score sort，因此不得宣稱模型或策略有效。正式binary policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`762eac6a328c318efa9ecbd1922e29607e06b8f9053a80e1322fff770ccbb6c6`。第一階段程式只建立point-in-time模型分數契約與模型層audit；PIT manifest預設`eligible=false`，不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -679,6 +679,24 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 判定 | 年度表證明單一threshold coverage具有明顯regime差異，因此不得只靠分類表決定部署；下一步直接執行固定9A策略經濟效果對照 |
 | 下一步 | 取得真實`strategy_comparison.md/.json`後比較淨總報酬、最大回撤、RoMD、年化、Log R²、月勝率、交易數、候選／持股缺口與年度穩定性；結果只決定是否部署／是否再比較8F，不得回頭調9A |
 
+
+### 3.60 Selection Point-in-time Score Workflow 第一階段（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；已完成程式與獨立合成契約驗證，尚未在完整專案資料上訓練 |
+| 程式基準 | 來源 `test-branch-1_20260801_144606_024e49d(2).zip`，SHA256 `762eac6a328c318efa9ecbd1922e29607e06b8f9053a80e1322fff770ccbb6c6` |
+| 單一入口 | `apps/breakout_quality.py`主選單改為模型研究、策略驗證、設定／工件狀態三項；舊`apps/breakout_quality_strategy_compare.py`只轉送至新`strategy-compare`子命令 |
+| 泛用config | 新增`config/breakout_quality_workflow.py`，集中filter、architecture、continuous profile、target、seed、PIT日期／fold及策略Score source；選單與工件名稱不寫死9A／11G／11K |
+| 共用pipeline | 新增`continuous_ranker_pipeline.py`重用既有資料載入、percentile target、Validation選epoch、final refit、checkpoint與inference；沒有複製loss或建立第二套訓練語意 |
+| PIT builder | 新增expanding-window builder。Train／Validation／final refit均要求事件早於score period且`label_eval_end_date < score_start`；每個group只能由一個未見該事件的fold模型評分 |
+| 工件防錯 | 每fold保存日期範圍、row/group coverage、selected epoch、checkpoint與Score hash；串接時檢查重複、缺失、cutoff、identity、有限值與完整coverage。正式Score CSV不含Future Target |
+| 模型audit | 新增PIT audit，離線join Target後輸出global／daily Spearman、年度與decile spread、fold分布／drift、PASS分類重疊與orderable coverage；已支援既有orderable工件的`target_date`日期欄位 |
+| Runtime邊界 | Builder manifest固定`eligible=false`與`selection_model_validation_only`；不作forward-OOS runtime、scanner、buy-sort或optimizer輸入。策略選單在PIT score-store與泛用Score排序尚未實作時明確阻擋 |
+| 驗證 | 已通過modified-files編譯、CLI help、舊入口轉接、AST無循環／無apps反向依賴、無bare except，以及獨立合成資料的fold embargo、coverage、duplicate rejection與orderable `target_date` coverage；依專案規範未執行`apps/test_suite.py` |
+| 尚未完成 | 未建立真實`selection_point_in_time_scores.csv`、未取得模型Spearman結果、未修改buy-sort、未跑策略optimizer或OOS績效比較 |
+
+
 ## 4. 已排除或暫停的方向
 
 下列方向已有足夠證據，不應在沒有新機制或新資料證據時重複測試：
@@ -729,6 +747,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 44. 微調11G PASS-only magnitude ranker；雖OOS PASS-only Score↔Target達0.3464、mean daily Spearman 0.2944，但actual PASS Score↔R為−0.1066，Score top decile僅0.6117R、bottom decile3.5519R。不得再調MSE／Huber、epochs、patience、LR、batch、percentile、head或與9A融合。
 45. 直接以11I actual portfolio round trips建立完整strategy-realization target；11I僅415筆Target matched trades，actual trade coverage只占qualified 21.77%。未成交或因capacity／cash competition未入選的候選不得填0R，也不得把portfolio selection偏差當成全部候選Target。
 46. 繼續修補11J counterfactual replay一致性；六次本機執行仍無法重現11I的2,003筆，且曾出現MemoryError。11J正式停止，不再改core／observer／sidecar／日期或identity；後續只使用11I已凍結工件做read-only歸因。
+47. 將Future Target直接作runtime buy-sort、以OOS搜尋Score權重、重試11G loss／epoch／LR／batch／sampling、把完整Selection 9A重訓當成本輪前置條件、或新增11L版本名稱。後續只先驗證既有PASS-only No-time continuous ranker的Selection point-in-time預測能力，再決定是否進入泛用Score排序與策略參數適應。
 
 ---
 
@@ -736,20 +755,21 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 所有實驗一次只改一項。既有 OOS 可持續作為固定比較集；每次模型的訓練、Validation、early stopping 與 epoch 選擇必須完全限制在 Selection 內，完整 OOS 只能在模型凍結後執行。OOS 結果可以用來接受、淘汰或形成下一個實驗，不再以「OOS 已被查看」作為停止研究的理由。正式 runtime 仍維持 `base_finalists_agree` 既有排序且 Quality Ranking 關閉，除非新實驗同時通過模型指標與策略經濟效果。
 
-### 目前新增優先：11K Portfolio Selection-pressure Attribution Audit
+### 目前新增優先：Selection Point-in-time Continuous-ranker Workflow
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；research-only、read-only、CLI-only |
-| 研究依據 | 11I已凍結2,003 qualified、1,993 orderable與415筆Target-matched actual trades；Target方向明確成立，但portfolio coverage只有21.77%。11J無法重現候選母體，停止後改用既有11I工件回答可直接驗證的選擇壓力問題 |
-| 唯一變更 | 不重播市場；把11I orderable occurrence以ticker＋trade date對齊actual entry，計算同日Target percentile、actual選中top-half／top-quartile比例、依每日實際買入數k的Target top-k retention與Target opportunity gap |
-| 壓力分桶 | 依同日orderable數分為1、2-3、4-5、6-10、11+，輸出各桶selected rate、selected percentile、top-k retention、Target gap與actual Target↔R |
-| R診斷 | realized R只存在actual trades；未選候選保持缺值。只在已選交易中檢查同日Target percentile↔R及top／bottom quartile平均R，不宣稱反事實績效 |
-| 判定 | 若selected percentile與top-k retention偏高，候選擠出不是主要問題，下一步轉向成交後capture／exit path；若偏低且Target gap明顯為正，才規劃固定ranking-proxy audit |
-| Dataset／training | 不重建Dataset、不relabel、不訓練、不選epoch、不建立profile／checkpoint／threshold |
-| 執行入口 | `python apps/breakout_quality.py audit-selection-pressure --filter-id breakout_quality_v1` |
-| UI／runtime | CLI-only、不加入互動選單、不修改9A、core交易規則或正式runtime |
-
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；第一階段程式已完成，尚未執行完整Selection folds |
+| 研究依據 | 既有11G能預測部分PASS-only No-time Target，但完整Selection refit Score不具備策略optimizer所需的未見資料性質；actual trades又受到舊排序、持倉與資金限制，因此先建立與正式OOS相同語意的PIT Score |
+| 唯一變更 | 使用expanding-window folds；每fold只用score period以前、且`label_eval_end_date < score_start`的歷史資料完成Inner Validation、epoch selection及final refit，再只評分下一段未見資料 |
+| 固定模型 | architecture／experiment profile／target由`config/breakout_quality_workflow.py`指定；目前為`seed=1`、PASS-only No-time magnitude continuous ranker，不重試MSE／Huber／epoch／LR／batch／sampling |
+| 正式工件 | `selection_point_in_time_scores.csv`、combined manifest／coverage，以及每fold checkpoint、scores、manifest與SHA256 |
+| 模型audit | 先計算Score↔Target Spearman、mean daily Spearman、年度與decile spread、fold drift、PASS分類重疊及orderable coverage；Future Target只在audit離線join，不寫入Score CSV |
+| 策略邊界 | Builder manifest固定`eligible=false`；模型audit通過前不接buy-sort、不跑主策略optimizer。第一階段策略選單會明確阻擋PIT Score source |
+| 下一步 | 在具備完整Dataset／Target工件的本機執行PIT builder與audit；若多數年份沒有穩定正向Target排序能力則停止。通過後才實作泛用`BREAKOUT_QUALITY_SCORE_DESC`與Baseline／Sort Only策略比較 |
+| Dataset／training | 不重建binary Dataset、不重訓完整Selection 9A；只沿用既有continuous-ranker training pipeline建立歷史fold模型 |
+| 執行入口 | `python apps/breakout_quality.py build-point-in-time-scores`；完成後執行`audit-point-in-time-scores` |
+| UI／runtime | 新主選單不含9A／11G／11K名稱；research-only低階功能維持CLI-only；PIT Score不是scanner或forward-OOS runtime工件 |
 
 ### 優先 6A：AdamW only
 
@@ -1370,6 +1390,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 執行 | `python apps/breakout_quality.py audit-selection-pressure --filter-id breakout_quality_v1` |
 
 
+
+
 ---
 
 ## 6. 實驗執行順序
@@ -1423,7 +1445,10 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 → 11H PASS-only Realization-gap Attribution Audit（RESULT_AVAILABLE；STRATEGY_REALIZATION_GAP_CONFIRMED）
 → 11I Nested Selection Strategy-realization Coverage Audit（RESULT_AVAILABLE；Target方向通過，但actual coverage 21.77%不足）
 → 11J Canonical Per-candidate Counterfactual Execution Audit（STOPPED；replay無法重現2,003筆，不再修補）
-→ 11K Portfolio Selection-pressure Attribution Audit（IMPLEMENTED；待本機結果，read-only／CLI-only）
+→ 11K Portfolio Selection-pressure Attribution Audit（IMPLEMENTED；歷史read-only工件保留，不再作主線）
+→ Selection Point-in-time Score Workflow（IMPLEMENTED；待完整資料建立fold scores與模型audit）
+→ 模型audit通過後才新增泛用Score buy-sort與Baseline／Sort Only比較
+→ 有合理改善跡象後才讓主策略參數適應Score排序，最後再作正式OOS比較
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。

@@ -111,6 +111,11 @@ def parse_args(argv=None):
     )
     parser.add_argument("--filter-id", default=BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
     parser.add_argument(
+        "--model-architecture",
+        default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        help="continuous ranker architecture；必須是 sequence-only model",
+    )
+    parser.add_argument(
         "--experiment-profile",
         default=STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
         choices=(
@@ -189,6 +194,13 @@ def parse_args(argv=None):
 
 def _validate_args(args) -> None:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
+    model_spec = get_model_spec(str(args.model_architecture))
+    if (
+        bool(model_spec.requires_market_set)
+        or bool(model_spec.use_dataset_context)
+        or bool(model_spec.derived_context_features)
+    ):
+        raise ValueError("continuous ranker只允許sequence-only architecture")
     if profile.training_objective != TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
         raise ValueError("continuous ranker命令只接受daily percentile regression profile")
     expected_targets = {
@@ -440,7 +452,7 @@ def _new_model_and_optimizer(torch, *, feature_count: int, context_count: int, a
     model = build_model(
         feature_count=feature_count,
         context_count=context_count,
-        architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        architecture=str(args.model_architecture),
     ).to(plan.device)
     optimizer = torch.optim.Adam(
         [parameter for parameter in model.parameters() if parameter.requires_grad],
@@ -622,7 +634,18 @@ def _select_epoch(
     }
 
 
-def _fit_final(torch, feature_bank: np.ndarray, group_context: np.ndarray, percentile_target: np.ndarray, final_ids: np.ndarray, *, epochs: int, args, plan):
+def _fit_final(
+    torch,
+    feature_bank: np.ndarray,
+    group_context: np.ndarray,
+    percentile_target: np.ndarray,
+    final_ids: np.ndarray,
+    *,
+    epochs: int,
+    args,
+    plan,
+    phase_label: str = "完整Selection重訓",
+):
     model, optimizer = _new_model_and_optimizer(
         torch,
         feature_count=int(feature_bank.shape[2]),
@@ -632,7 +655,7 @@ def _fit_final(torch, feature_bank: np.ndarray, group_context: np.ndarray, perce
     )
     grad_scaler = build_grad_scaler(torch, plan)
     history: list[dict[str, Any]] = []
-    print(f"\n完整Selection重訓（{int(epochs)} Epoch）")
+    print(f"\n{str(phase_label)}（{int(epochs)} Epoch）")
     for epoch in range(1, int(epochs) + 1):
         started = time.perf_counter()
         loss = _train_epoch(
@@ -825,10 +848,7 @@ def main(argv=None) -> int:
     started = time.perf_counter()
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     contract = _profile_contract(profile)
-    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    if bool(model_spec.requires_market_set) or bool(model_spec.use_dataset_context) or bool(model_spec.derived_context_features):
-        raise ValueError("continuous ranker只允許active sequence-only 9A architecture")
-
+    model_spec = get_model_spec(str(args.model_architecture))
     summary, indexed_features, context, labels, events = load_validated_dataset_bundle(
         args.filter_id,
         expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
@@ -962,7 +982,7 @@ def main(argv=None) -> int:
     artifact_paths = resolve_filter_artifact_paths(
         PROJECT_ROOT,
         args.filter_id,
-        BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        str(args.model_architecture),
         args.experiment_profile,
     )
     artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
@@ -1057,7 +1077,7 @@ def main(argv=None) -> int:
     output_dir = resolve_filter_model_output_dir(
         PROJECT_ROOT,
         args.filter_id,
-        BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        str(args.model_architecture),
         args.experiment_profile,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1092,7 +1112,7 @@ def main(argv=None) -> int:
         "phase": contract["phase"],
         "status": "RESULT_AVAILABLE_PENDING_REVIEW",
         "filter_id": args.filter_id,
-        "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        "model_architecture": str(args.model_architecture),
         "experiment_profile": args.experiment_profile,
         "experiment_settings": profile.as_manifest_payload(),
         "training": {
@@ -1143,7 +1163,7 @@ def main(argv=None) -> int:
         "research_schema_version": RANKER_SCHEMA_VERSION,
         "filter_family": FILTER_FAMILY,
         "filter_id": args.filter_id,
-        "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+        "model_architecture": str(args.model_architecture),
         "experiment_profile": args.experiment_profile,
         "experiment_settings": profile.as_manifest_payload(),
         "model_spec": model_spec.as_manifest_payload(),

@@ -57,10 +57,69 @@ python apps/workbench.py
 
 正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟選單；選單只保留穩定、可重複使用的正式流程、單步操作、forward-OOS匯出與工件狀態檢查。臨時性／research-only實驗一律使用明確CLI子命令，不加入互動選單。第一層選單確認操作類型後，所有已由 `config/breakout_quality_policy.py` 定義的設定都直接採用 policy，不再重複詢問，包括 Filter ID、model architecture、experiment profile、epochs、training batch size、evaluation batch size、evaluation workers、parallel split evaluation、feature-bank preload、training prefetch、Torch device、mixed precision dtype、determinism、TF32、learning rate、weight decay、gradient clipping、final refit mode、class weight mode、time weight mode、random seed、threshold、inner validation、validation 月數與 early stopping。互動式完整研究流程固定使用 Full dataset、全部股票並執行 OOS，不再詢問 dataset 類型、最多股票數或是否執行 OOS；開始確認預設為 Y；互動式單獨建立 dataset 也固定使用 Full dataset 與全部股票。dataset 是否需要建立／重建由 workflow 自動偵測，偵測到過期或不一致時直接重建；只有 dataset 已最新時才詢問是否強制重建，預設 N。需要 reduced、限制股票數或略過 OOS 的開發／單次執行時，改用對應 CLI 參數。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟唯一正式選單。主選單只保留完整工作流程，不顯示 Dataset、單獨 train、export、audit 或版本化研究名稱；這些低階與 research-only 功能仍使用明確 CLI 子命令。模型研究與策略驗證不強制串接。
 
 ```bash
 python apps/breakout_quality.py
+```
+
+```text
+=== Breakout Quality ===
+[Enter] 模型研究與驗證
+[1] 策略績效驗證
+[2] 查看目前設定與工件狀態
+[0] 離開
+```
+
+目前模型研究 workflow 由 `config/breakout_quality_workflow.py` 指定 filter、architecture、continuous-ranker profile、target、seed、PIT 日期與 fold 設定。`[Enter]` 先建立 Selection point-in-time Scores，再執行模型層 audit；`[1]` 不會自動訓練模型。第一階段尚未完成 Score buy-sort 與策略 score-store 接線，因此當 score source 為 `selection_point_in_time` 時，策略選項會明確顯示尚未開放，不會誤用既有 canonical runtime scores。
+
+### Selection point-in-time continuous-ranker Scores
+
+批次建立 PIT Scores：
+
+```bash
+python apps/breakout_quality.py build-point-in-time-scores
+```
+
+只查看並驗證 fold 計畫，不訓練或寫入正式 Score：
+
+```bash
+python apps/breakout_quality.py build-point-in-time-scores --plan-only
+```
+
+模型層 audit：
+
+```bash
+python apps/breakout_quality.py audit-point-in-time-scores
+```
+
+每個 expanding-window fold 只使用該 score period 以前、且 `label_eval_end_date < score_start` 的資料；Inner Validation 與 epoch selection 也限制在歷史窗內。每個事件只保留模型尚未看過該事件時產生的 Score。串接 Score 工件不含 Future Target，builder manifest 預設 `eligible=false`，只允許模型驗證；策略使用必須等待模型驗證與後續 Score buy-sort 接線完成。
+
+主要工件：
+
+```text
+models/filters/breakout_quality/<filter_id>/<architecture>/<profile>/point_in_time/
+  selection_point_in_time_scores.csv
+  selection_point_in_time_manifest.json
+  selection_point_in_time_coverage.csv
+  folds/<fold_id>/model.pt
+  folds/<fold_id>/scores.csv
+  folds/<fold_id>/manifest.json
+```
+
+Audit 工件：
+
+```text
+outputs/filters/breakout_quality/<filter_id>/<architecture>/<profile>/point_in_time_audit/
+  selection_point_in_time_audit.json
+  selection_point_in_time_audit.md
+```
+
+舊策略比較入口仍可使用，但只作相容轉接：
+
+```bash
+python apps/breakout_quality_strategy_compare.py --help
+python apps/breakout_quality.py strategy-compare --help
 ```
 
 只有需要重建9D MantisV2 legacy工件時才需安裝固定相依套件。官方 `mantis-tsfm==1.0.0` 宣告 `pandas<3.0`，而本專案鎖定 pandas 3.x，因此必須先安裝相容依賴，再以 `--no-deps` 安裝 Mantis，避免 pip 降級既有資料鏈：
@@ -82,7 +141,7 @@ python -c "from importlib.metadata import version; from momentfm import MOMENTPi
 
 9E legacy runtime 契約固定為 `momentfm==0.1.4` 與 `transformers==5.5.0`。不要直接執行 `pip install momentfm==0.1.4`，否則 pip 可能嘗試把本專案的 NumPy／Hub／Transformers 降到該套件 metadata 所列的舊版本。由於採刻意隔離安裝，`pip check` 仍會依舊 metadata 報告版本不相容，不能用它取代上方版本檢查與正式 `apps/test_suite.py`。
 
-完整研究流程會依active architecture分流：必要時建立 supervised dataset；目前policy已退回9A `inception_time_v1`，依序執行train → export research scores → 產生易讀研究報表；8F sequence-only保留高覆蓋基準。10A Candidate-conditioned Market Set與Stage 1 Global Market Set均為legacy read-only。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
+既有 `workflow` CLI相容流程會依active architecture分流：必要時建立 supervised dataset；目前policy已退回9A `inception_time_v1`，依序執行train → export research scores → 產生易讀研究報表；8F sequence-only保留高覆蓋基準。10A Candidate-conditioned Market Set與Stage 1 Global Market Set均為legacy read-only。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --epochs 200 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24

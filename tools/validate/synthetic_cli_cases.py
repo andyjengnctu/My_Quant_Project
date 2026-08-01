@@ -15,16 +15,6 @@ from config.breakout_quality_experiments import (
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
 )
-from config.breakout_quality_policy import (
-    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-)
-from tools.filters.breakout_quality.regime_audit import (
-    DEFAULT_FOCUS_YEAR,
-    DEFAULT_MIN_SELECTION_GROUPS,
-    DEFAULT_MIN_SUPPORT_SHARE_RATIO,
-)
-
 from .checks import add_check
 
 
@@ -79,7 +69,11 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         "用法: python apps/breakout_quality.py [menu|workflow|<command>] [options]" in help_text,
     )
-    for command in ("menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain", "train", "export-scores", "report", "evaluate", "regime-audit"):
+    for command in (
+        "menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain",
+        "train", "export-scores", "report", "evaluate", "regime-audit",
+        "build-point-in-time-scores", "audit-point-in-time-scores", "strategy-compare",
+    ):
         add_check(
             results,
             "cli_contract",
@@ -132,12 +126,10 @@ def validate_dataset_cli_contract_case(_base_params):
         )
         return 0
 
+    workflow_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
     with (
-        patch(
-            "builtins.input",
-            side_effect=["8", str(int(DEFAULT_FOCUS_YEAR)), "0"],
-        ),
-        patch("apps.breakout_quality._print_policy_defaults"),
+        patch("builtins.input", side_effect=["", "", "0"]),
+        patch("apps.breakout_quality._print_workflow_status"),
         patch(
             "apps.breakout_quality._run_command",
             side_effect=_record_interactive_command,
@@ -151,7 +143,7 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_regime_audit_menu_rc",
+        "breakout_quality_model_research_menu_rc",
         0,
         rc,
     )
@@ -159,26 +151,32 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_regime_audit_menu_route",
+        "breakout_quality_model_research_menu_route",
         True,
         (
-            len(interactive_commands) == 1
-            and interactive_commands[0]["command"] == "regime-audit"
-            and interactive_commands[0]["args"]
+            [item["command"] for item in interactive_commands]
+            == ["build-point-in-time-scores", "audit-point-in-time-scores"]
+            and interactive_commands[0]["args"][:6]
             == [
                 "--filter-id",
-                BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                workflow_settings.filter_id,
+                "--model-architecture",
+                workflow_settings.model_architecture,
                 "--experiment-profile",
-                BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-                "--focus-year",
-                str(int(DEFAULT_FOCUS_YEAR)),
-                "--min-selection-groups",
-                str(int(DEFAULT_MIN_SELECTION_GROUPS)),
-                "--min-support-share-ratio",
-                str(float(DEFAULT_MIN_SUPPORT_SHARE_RATIO)),
+                workflow_settings.experiment_profile,
             ]
-            and "市場狀態覆蓋與年度歸因稽核" in interactive_text
-            and "[9/Enter] 查看工件狀態" in interactive_text
+            and interactive_commands[1]["args"]
+            == [
+                "--filter-id",
+                workflow_settings.filter_id,
+                "--model-architecture",
+                workflow_settings.model_architecture,
+                "--experiment-profile",
+                workflow_settings.experiment_profile,
+            ]
+            and "[Enter] 模型研究與驗證" in interactive_text
+            and "[1] 策略績效驗證" in interactive_text
+            and "[2] 查看目前設定與工件狀態" in interactive_text
         ),
     )
 
