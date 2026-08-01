@@ -37,6 +37,7 @@ from core.runtime_utils import (
 )
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
 from filters.breakout_quality.continuous_target import (
+    TARGET_AUDIT_MARKDOWN_FILENAME,
     TARGET_MANIFEST_FILENAME,
     resolve_continuous_target_dir,
 )
@@ -1550,6 +1551,11 @@ def _print_workflow_status() -> None:
             settings.filter_id,
             target_id=str(settings.continuous_target_id),
         ) / TARGET_MANIFEST_FILENAME,
+        "Target audit Markdown": resolve_continuous_target_dir(
+            PROJECT_ROOT,
+            settings.filter_id,
+            target_id=str(settings.continuous_target_id),
+        ) / TARGET_AUDIT_MARKDOWN_FILENAME,
         "PIT scores": resolve_selection_point_in_time_score_path(
             PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
         ),

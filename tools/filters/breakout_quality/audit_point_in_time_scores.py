@@ -39,7 +39,7 @@ from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     load_continuous_ranker_data,
 )
 
-AUDIT_SCHEMA_VERSION = 1
+AUDIT_SCHEMA_VERSION = 2
 DRIFT_MEAN_SHIFT_STD_THRESHOLD = 1.0
 _ORDERABLE_PIT_SCORE_COLUMN = "__pit_breakout_quality_score"
 
@@ -465,68 +465,343 @@ def _orderable_coverage(
     }
 
 
-def _render_markdown(payload: dict[str, Any]) -> str:
-    def fmt(value, digits=4):
-        return "-" if value is None else f"{float(value):.{digits}f}"
+def _fmt_metric(value: Any, digits: int = 4) -> str:
+    if value is None:
+        return "-"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(numeric):
+        return "-"
+    return f"{numeric:.{digits}f}"
 
+
+def _fmt_percent(value: Any, digits: int = 2) -> str:
+    if value is None:
+        return "-"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not math.isfinite(numeric):
+        return "-"
+    return f"{numeric * 100.0:.{digits}f}%"
+
+
+def _render_console_table(headers: list[str], rows: list[list[str]]) -> list[str]:
+    if not rows:
+        return ["（無資料）"]
+    normalized = [[str(value) for value in row] for row in rows]
+    widths = [len(str(header)) for header in headers]
+    for row in normalized:
+        if len(row) != len(headers):
+            raise ValueError("console table欄位數與header不一致")
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+    lines = [
+        "  ".join(str(header).ljust(widths[index]) for index, header in enumerate(headers)),
+        "  ".join("-" * width for width in widths),
+    ]
+    for row in normalized:
+        lines.append("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
+    return lines
+
+
+def _direction_summary(yearly_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    valid_rows = [row for row in yearly_rows if row.get("global_spearman") is not None]
+    positive_spearman = [row for row in valid_rows if float(row["global_spearman"]) > 0.0]
+    positive_spread = [
+        row
+        for row in valid_rows
+        if row.get("top_bottom_target_spread") is not None
+        and float(row["top_bottom_target_spread"]) > 0.0
+    ]
+    return {
+        "valid_year_count": int(len(valid_rows)),
+        "positive_spearman_year_count": int(len(positive_spearman)),
+        "positive_spearman_year_rate": (
+            float(len(positive_spearman) / len(valid_rows)) if valid_rows else None
+        ),
+        "positive_spread_year_count": int(len(positive_spread)),
+        "positive_spread_year_rate": (
+            float(len(positive_spread) / len(valid_rows)) if valid_rows else None
+        ),
+    }
+
+
+def render_console_summary(payload: dict[str, Any]) -> str:
     primary = payload["metrics"]["pass_only_target"]
     all_target = payload["metrics"]["all_valid_target"]
     classification = payload["classification_overlap"]
+    drift = payload["fold_drift"]
+    direction = payload["direction_summary"]
+    score_coverage = payload.get("score_coverage") or {}
+    workflow = payload.get("workflow") or {}
+
     lines = [
-        "# Selection Point-in-time Score Audit",
         "",
-        f"- Architecture：`{payload['model_architecture']}`",
-        f"- Experiment profile：`{payload['experiment_profile']}`",
-        f"- Target：`{payload['continuous_target_id']}`",
-        f"- Score period：`{payload['score_period']['start']} ~ {payload['score_period']['end']}`",
-        "- Primary decision scope：PASS-only target ordering。",
+        "=" * 100,
+        " Breakout Quality Selection Point-in-time 模型評估報表",
+        "=" * 100,
+        f"Filter ID           : {payload['filter_id']}",
+        f"Architecture        : {payload['model_architecture']}",
+        f"Experiment Profile  : {payload['experiment_profile']}",
+        f"Continuous Target   : {payload['continuous_target_id']}",
+        f"Training Scope      : {workflow.get('training_label_scope', '-')}",
+        f"Random Seed         : {workflow.get('seed', '-')}",
+        f"Score Period        : {payload['score_period']['start']} ～ {payload['score_period']['end']}",
+        f"PIT Folds           : {workflow.get('fold_count', '-')}",
+        f"Fold / Validation   : {workflow.get('fold_months', '-')} / {workflow.get('inner_validation_months', '-')} months",
+        f"Score Coverage      : {int(score_coverage.get('scored_group_count', 0)):,}/{int(score_coverage.get('expected_group_count', 0)):,} ({_fmt_percent(score_coverage.get('coverage_rate'))})",
+        "Primary Evidence    : PASS-only No-time Target ordering",
+        "Strategy Result     : 尚未執行；本報表只評估模型排序能力",
         "",
-        "## 1. Predictive ordering",
+        "1. 核心排序能力",
+    ]
+    lines.extend(
+        _render_console_table(
+            ["Scope", "Groups", "Spearman", "Daily rho", "Top", "Bottom", "Spread"],
+            [
+                [
+                    "PASS-only",
+                    f"{int(primary['group_count']):,}",
+                    _fmt_metric(primary.get("global_spearman")),
+                    _fmt_metric(primary.get("mean_daily_spearman")),
+                    _fmt_metric(primary.get("top_decile_target_mean")),
+                    _fmt_metric(primary.get("bottom_decile_target_mean")),
+                    _fmt_metric(primary.get("top_bottom_target_spread")),
+                ],
+                [
+                    "All valid",
+                    f"{int(all_target['group_count']):,}",
+                    _fmt_metric(all_target.get("global_spearman")),
+                    _fmt_metric(all_target.get("mean_daily_spearman")),
+                    _fmt_metric(all_target.get("top_decile_target_mean")),
+                    _fmt_metric(all_target.get("bottom_decile_target_mean")),
+                    _fmt_metric(all_target.get("top_bottom_target_spread")),
+                ],
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "2. 年度穩定性（PASS-only）",
+            (
+                "正向 Spearman 年度："
+                f"{direction['positive_spearman_year_count']}/{direction['valid_year_count']} "
+                f"({_fmt_percent(direction['positive_spearman_year_rate'])})；"
+                "正向 Top-bottom spread 年度："
+                f"{direction['positive_spread_year_count']}/{direction['valid_year_count']} "
+                f"({_fmt_percent(direction['positive_spread_year_rate'])})"
+            ),
+        ]
+    )
+    yearly_rows = [
+        [
+            str(row["year"]),
+            f"{int(row['group_count']):,}",
+            _fmt_metric(row.get("global_spearman")),
+            _fmt_metric(row.get("mean_daily_spearman")),
+            _fmt_metric(row.get("top_bottom_target_spread")),
+        ]
+        for row in payload["yearly_pass_only"]
+    ]
+    lines.extend(
+        _render_console_table(
+            ["Year", "Groups", "Spearman", "Daily rho", "Spread"],
+            yearly_rows,
+        )
+    )
+
+    lines.extend(["", "3. Fold 分布與漂移"])
+    fold_rows = [
+        [
+            str(row["fold_id"]),
+            f"{int(row['group_count']):,}",
+            _fmt_metric(row.get("score_mean")),
+            _fmt_metric(row.get("score_std")),
+            _fmt_metric(row.get("score_p10")),
+            _fmt_metric(row.get("score_p50")),
+            _fmt_metric(row.get("score_p90")),
+            _fmt_metric(row.get("pass_target_spearman")),
+        ]
+        for row in payload["fold_metrics"]
+    ]
+    lines.extend(
+        _render_console_table(
+            ["Fold", "Groups", "Mean", "Std", "P10", "P50", "P90", "PASS rho"],
+            fold_rows,
+        )
+    )
+    lines.extend(
+        [
+            f"Drift flag         : {drift['drift_flag']}",
+            f"Max adjacent shift : {_fmt_metric(drift.get('max_adjacent_mean_shift_in_pooled_std'))} pooled SD",
+            f"Flagged folds      : {', '.join(drift['flagged_folds']) if drift['flagged_folds'] else '-'}",
+            "",
+            "4. PASS／REJECT 重疊診斷",
+            f"Score vs PASS AUC          : {_fmt_metric(classification.get('score_vs_pass_reject_auc'))}",
+            f"Overall PASS share         : {_fmt_percent(classification.get('overall_pass_share'))}",
+            f"Top score decile PASS share: {_fmt_percent(classification.get('top_score_decile_pass_share'))}",
+            f"PASS-only Target Spearman  : {_fmt_metric(primary.get('global_spearman'))}",
+            "",
+            "5. Orderable candidate Score coverage",
+        ]
+    )
+    orderable = payload["orderable_candidate_coverage"]
+    if orderable.get("available"):
+        lines.append(
+            f"{int(orderable['scored_candidate_count']):,}/{int(orderable['candidate_count']):,} "
+            f"({_fmt_percent(orderable.get('coverage_rate'))})；"
+            f"未評分={int(orderable['unscored_candidate_count']):,}"
+        )
+    else:
+        lines.append(f"未提供：{orderable.get('reason')}；{orderable.get('path')}")
+
+    lines.extend(
+        [
+            "",
+            "綜合狀態",
+            "- 報表狀態：RESULT_AVAILABLE_PENDING_REVIEW",
+            "- 策略 optimizer：未執行",
+            "- Future Target runtime sort：未使用",
+            "- Forward-OOS runtime：本 PIT 工件不可直接使用",
+            "- 下一步：先審閱本報表；只有排序能力在多數年份穩定為正，才進入策略績效驗證。",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_markdown(payload: dict[str, Any]) -> str:
+    primary = payload["metrics"]["pass_only_target"]
+    all_target = payload["metrics"]["all_valid_target"]
+    classification = payload["classification_overlap"]
+    direction = payload["direction_summary"]
+    drift = payload["fold_drift"]
+    workflow = payload.get("workflow") or {}
+    coverage = payload.get("score_coverage") or {}
+
+    lines = [
+        "# Breakout Quality Selection Point-in-time 模型評估報表",
         "",
-        "| Scope | Groups | Global Spearman | Mean daily Spearman | Top target | Bottom target | Spread |",
+        "> 本報表只評估 Selection point-in-time Score 對 Future Target 的離線排序能力。",
+        "> 未執行策略 optimizer、未使用 Future Target 作 runtime buy-sort，也不代表正式 OOS 部署資格。",
+        "",
+        "## 1. 執行設定與資料範圍",
+        "",
+        "| 項目 | 內容 |",
+        "|---|---|",
+        f"| Filter ID | `{payload['filter_id']}` |",
+        f"| Architecture | `{payload['model_architecture']}` |",
+        f"| Experiment profile | `{payload['experiment_profile']}` |",
+        f"| Continuous Target | `{payload['continuous_target_id']}` |",
+        f"| Training scope | `{workflow.get('training_label_scope', '-')}` |",
+        f"| Seed | `{workflow.get('seed', '-')}` |",
+        f"| Score period | `{payload['score_period']['start']} ~ {payload['score_period']['end']}` |",
+        f"| PIT folds | `{workflow.get('fold_count', '-')}` |",
+        f"| Fold／Validation | `{workflow.get('fold_months', '-')}／{workflow.get('inner_validation_months', '-')} months` |",
+        f"| Score coverage | `{int(coverage.get('scored_group_count', 0)):,}/{int(coverage.get('expected_group_count', 0)):,}`（{_fmt_percent(coverage.get('coverage_rate'))}） |",
+        "",
+        "## 2. 核心排序能力",
+        "",
+        "| Scope | Groups | Global Spearman | Mean daily Spearman | Top decile Target | Bottom decile Target | Top-bottom spread |",
         "|---|---:|---:|---:|---:|---:|---:|",
-        f"| PASS-only | {primary['group_count']:,} | {fmt(primary['global_spearman'])} | {fmt(primary['mean_daily_spearman'])} | {fmt(primary['top_decile_target_mean'])} | {fmt(primary['bottom_decile_target_mean'])} | {fmt(primary['top_bottom_target_spread'])} |",
-        f"| All valid labels | {all_target['group_count']:,} | {fmt(all_target['global_spearman'])} | {fmt(all_target['mean_daily_spearman'])} | {fmt(all_target['top_decile_target_mean'])} | {fmt(all_target['bottom_decile_target_mean'])} | {fmt(all_target['top_bottom_target_spread'])} |",
+        f"| **PASS-only（主要判讀）** | {primary['group_count']:,} | {_fmt_metric(primary['global_spearman'])} | {_fmt_metric(primary['mean_daily_spearman'])} | {_fmt_metric(primary['top_decile_target_mean'])} | {_fmt_metric(primary['bottom_decile_target_mean'])} | {_fmt_metric(primary['top_bottom_target_spread'])} |",
+        f"| All valid labels | {all_target['group_count']:,} | {_fmt_metric(all_target['global_spearman'])} | {_fmt_metric(all_target['mean_daily_spearman'])} | {_fmt_metric(all_target['top_decile_target_mean'])} | {_fmt_metric(all_target['bottom_decile_target_mean'])} | {_fmt_metric(all_target['top_bottom_target_spread'])} |",
         "",
-        "## 2. PASS／REJECT overlap",
+        "## 3. 年度穩定性（PASS-only）",
         "",
-        f"- Score binary AUC：{fmt(classification['score_vs_pass_reject_auc'])}",
-        f"- Overall PASS share：{fmt(classification['overall_pass_share'])}",
-        f"- Top score decile PASS share：{fmt(classification['top_score_decile_pass_share'])}",
-        f"- PASS-only target Spearman：{fmt(primary['global_spearman'])}",
-        "",
-        "## 3. Yearly PASS-only target ordering",
+        f"- 有效年度：**{direction['valid_year_count']}**",
+        f"- Spearman 為正：**{direction['positive_spearman_year_count']}/{direction['valid_year_count']}**（{_fmt_percent(direction['positive_spearman_year_rate'])}）",
+        f"- Top-bottom spread 為正：**{direction['positive_spread_year_count']}/{direction['valid_year_count']}**（{_fmt_percent(direction['positive_spread_year_rate'])}）",
         "",
         "| Year | Groups | Spearman | Mean daily Spearman | Top-bottom spread |",
         "|---:|---:|---:|---:|---:|",
     ]
     for row in payload["yearly_pass_only"]:
         lines.append(
-            f"| {row['year']} | {row['group_count']:,} | {fmt(row['global_spearman'])} | "
-            f"{fmt(row['mean_daily_spearman'])} | {fmt(row['top_bottom_target_spread'])} |"
+            f"| {row['year']} | {row['group_count']:,} | {_fmt_metric(row['global_spearman'])} | "
+            f"{_fmt_metric(row['mean_daily_spearman'])} | {_fmt_metric(row['top_bottom_target_spread'])} |"
         )
-    drift = payload["fold_drift"]
+
     lines.extend(
         [
             "",
-            "## 4. Fold drift",
+            "## 4. Fold 分布與漂移",
+            "",
+            "| Fold | Groups | Mean | Std | P10 | P50 | P90 | PASS Target Spearman | Adjacent mean shift（pooled SD） |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in payload["fold_metrics"]:
+        lines.append(
+            f"| `{row['fold_id']}` | {row['group_count']:,} | {_fmt_metric(row['score_mean'])} | "
+            f"{_fmt_metric(row['score_std'])} | {_fmt_metric(row['score_p10'])} | "
+            f"{_fmt_metric(row['score_p50'])} | {_fmt_metric(row['score_p90'])} | "
+            f"{_fmt_metric(row['pass_target_spearman'])} | "
+            f"{_fmt_metric(row['adjacent_mean_shift_in_pooled_std'])} |"
+        )
+    lines.extend(
+        [
             "",
             f"- Drift flag：`{drift['drift_flag']}`",
-            f"- Max adjacent mean shift：{fmt(drift['max_adjacent_mean_shift_in_pooled_std'])} pooled SD",
-            f"- Flagged folds：{', '.join(drift['flagged_folds']) if drift['flagged_folds'] else '-'}",
+            f"- 最大相鄰 fold 平均值位移：{_fmt_metric(drift['max_adjacent_mean_shift_in_pooled_std'])} pooled SD",
+            f"- 被標記 fold：{', '.join(drift['flagged_folds']) if drift['flagged_folds'] else '-'}",
+            f"- 判定口徑：{drift['criterion']}",
             "",
-            "## 5. Orderable candidate coverage",
+            "## 5. PASS／REJECT 重疊診斷",
+            "",
+            "| 指標 | 結果 |",
+            "|---|---:|",
+            f"| Score vs PASS／REJECT AUC | {_fmt_metric(classification['score_vs_pass_reject_auc'])} |",
+            f"| Overall PASS share | {_fmt_percent(classification['overall_pass_share'])} |",
+            f"| Top score decile PASS share | {_fmt_percent(classification['top_score_decile_pass_share'])} |",
+            f"| PASS-only Target Spearman | {_fmt_metric(primary['global_spearman'])} |",
+            "",
+            classification["interpretation_contract"],
+            "",
+            "## 6. Orderable candidate Score coverage",
             "",
         ]
     )
     orderable = payload["orderable_candidate_coverage"]
     if orderable.get("available"):
-        lines.append(
-            f"- {orderable['scored_candidate_count']:,}/{orderable['candidate_count']:,} "
-            f"({fmt(orderable['coverage_rate'])})"
+        lines.extend(
+            [
+                f"- 已評分：**{orderable['scored_candidate_count']:,}/{orderable['candidate_count']:,}**（{_fmt_percent(orderable['coverage_rate'])}）",
+                f"- 未評分：**{orderable['unscored_candidate_count']:,}**",
+                f"- 候選工件：`{orderable['path']}`",
+                f"- Coverage Score source：`{orderable['coverage_score_source']}`",
+            ]
         )
     else:
-        lines.append(f"- unavailable：{orderable.get('reason')}; `{orderable.get('path')}`")
+        lines.append(f"- 尚不可用：{orderable.get('reason')}；`{orderable.get('path')}`")
+
+    sources = payload.get("source_artifacts") or {}
+    outputs = payload.get("report_artifacts") or {}
+    lines.extend(
+        [
+            "",
+            "## 7. 研究邊界與下一步",
+            "",
+            "- 主要證據：PASS-only No-time Target ordering。",
+            "- Actual selected R 不作本階段主要否決依據。",
+            "- 策略 optimizer：**未執行**。",
+            "- Future Target runtime sort：**未使用**。",
+            "- Forward-OOS runtime：本 PIT 工件**不可直接使用**。",
+            "- 只有本報表顯示多數年度具有穩定正向排序能力後，才進入策略績效驗證。",
+            "",
+            "## 8. 工件",
+            "",
+            f"- PIT manifest：`{sources.get('point_in_time_manifest', '-')}`",
+            f"- PIT Scores：`{sources.get('point_in_time_scores', '-')}`",
+            f"- PIT coverage：`{sources.get('point_in_time_coverage', '-')}`",
+            f"- Markdown 易讀報表：`{outputs.get('markdown', '-')}`",
+            f"- 完整指標 JSON：`{outputs.get('json', '-')}`",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -596,6 +871,7 @@ def main(argv=None) -> int:
             "PASS-only target Spearman衡量分類內部magnitude排序能力。"
         ),
     }
+    yearly_pass_only = _yearly_metrics(pass_target)
     fold_rows, fold_drift = _fold_metrics(merged)
     orderable = _orderable_coverage(
         score_frame,
@@ -604,6 +880,30 @@ def main(argv=None) -> int:
         target_id=str(bundle.profile.continuous_target_id),
     )
     score_period = dict(manifest.get("score_period") or {})
+    output_json = resolve_selection_point_in_time_audit_json_path(
+        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
+    )
+    output_markdown = resolve_selection_point_in_time_audit_markdown_path(
+        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
+    )
+    score_path = resolve_selection_point_in_time_score_path(
+        PROJECT_ROOT,
+        args.filter_id,
+        args.model_architecture,
+        args.experiment_profile,
+    )
+    manifest_path = resolve_selection_point_in_time_manifest_path(
+        PROJECT_ROOT,
+        args.filter_id,
+        args.model_architecture,
+        args.experiment_profile,
+    )
+    coverage_path = resolve_selection_point_in_time_coverage_path(
+        PROJECT_ROOT,
+        args.filter_id,
+        args.model_architecture,
+        args.experiment_profile,
+    )
     payload = {
         "schema_version": AUDIT_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -615,12 +915,23 @@ def main(argv=None) -> int:
         "score_period": score_period,
         "score_group_count": int(len(merged)),
         "score_coverage": manifest.get("coverage"),
+        "workflow": {
+            "training_label_scope": manifest.get("training_label_scope"),
+            "seed": manifest.get("seed"),
+            "fold_count": manifest.get("fold_count"),
+            "fold_months": manifest.get("fold_months"),
+            "inner_validation_months": manifest.get("inner_validation_months"),
+            "selection_period": manifest.get("selection_period"),
+            "torch_execution": manifest.get("torch_execution"),
+            "elapsed_sec": manifest.get("elapsed_sec"),
+        },
         "metrics": {
             "pass_only_target": pass_metrics,
             "reject_only_target": reject_metrics,
             "all_valid_target": all_metrics,
         },
-        "yearly_pass_only": _yearly_metrics(pass_target),
+        "yearly_pass_only": yearly_pass_only,
+        "direction_summary": _direction_summary(yearly_pass_only),
         "fold_metrics": fold_rows,
         "fold_drift": fold_drift,
         "classification_overlap": classification_overlap,
@@ -632,45 +943,33 @@ def main(argv=None) -> int:
             "future_target_used_for_runtime_sort": False,
         },
         "source_artifacts": {
-            "point_in_time_manifest": str(
-                resolve_selection_point_in_time_manifest_path(
-                    PROJECT_ROOT,
-                    args.filter_id,
-                    args.model_architecture,
-                    args.experiment_profile,
-                )
-            ),
-            "point_in_time_scores": str(
-                resolve_selection_point_in_time_score_path(
-                    PROJECT_ROOT,
-                    args.filter_id,
-                    args.model_architecture,
-                    args.experiment_profile,
-                )
-            ),
+            "point_in_time_manifest": str(manifest_path),
+            "point_in_time_scores": str(score_path),
+            "point_in_time_coverage": str(coverage_path),
+        },
+        "report_artifacts": {
+            "markdown": str(output_markdown),
+            "json": str(output_json),
         },
     }
-    output_json = resolve_selection_point_in_time_audit_json_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
-    output_markdown = resolve_selection_point_in_time_audit_markdown_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
     output_json.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_json, payload)
     output_markdown.write_text(_render_markdown(payload), encoding="utf-8")
-    print("Selection point-in-time model audit完成")
-    print(
-        f"PASS-only groups={pass_metrics['group_count']:,} "
-        f"Spearman={pass_metrics['global_spearman']} "
-        f"mean_daily={pass_metrics['mean_daily_spearman']}"
-    )
-    print(f"已輸出: {output_markdown}")
-    print(f"已輸出: {output_json}")
+    print(render_console_summary(payload))
+    print("\n" + "=" * 100)
+    print(" 報表檔案")
+    print("=" * 100)
+    print(f"Markdown 易讀報表：{output_markdown}")
+    print(f"完整指標 JSON    ：{output_json}")
     return 0
 
 
-__all__ = ["AUDIT_SCHEMA_VERSION", "main", "parse_args"]
+__all__ = [
+    "AUDIT_SCHEMA_VERSION",
+    "main",
+    "parse_args",
+    "render_console_summary",
+]
 
 
 if __name__ == "__main__":

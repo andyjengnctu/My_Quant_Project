@@ -10,7 +10,9 @@ from config.breakout_quality import get_breakout_quality_workflow_settings
 from filters.breakout_quality.continuous_target import (
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_TARGET_ID,
+    TARGET_AUDIT_MARKDOWN_FILENAME,
     load_validated_continuous_target_arrays,
+    resolve_continuous_target_dir,
 )
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID, DEFAULT_LABEL_POLICY
 from tools.filters.breakout_quality.audit_continuous_target import main as build_base_target
@@ -23,6 +25,17 @@ SUPPORTED_TARGET_IDS = (
     STRATEGY_ALIGNED_TARGET_ID,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
 )
+
+
+def _readable_report_path(*, filter_id: str, target_id: str) -> Path:
+    return (
+        resolve_continuous_target_dir(
+            PROJECT_ROOT,
+            filter_id,
+            target_id=target_id,
+        )
+        / TARGET_AUDIT_MARKDOWN_FILENAME
+    )
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -131,6 +144,12 @@ def main(argv=None) -> int:
     )
     if current:
         print(f"[skip] Continuous Target已符合目前Dataset：{target_id}")
+        report_path = _readable_report_path(
+            filter_id=args.filter_id,
+            target_id=target_id,
+        )
+        if report_path.is_file():
+            print(f"Continuous Target 易讀報表：{report_path}")
         return 0
 
     print(f"[Continuous Target] 建立／更新：{target_id}")
@@ -156,6 +175,12 @@ def main(argv=None) -> int:
     if not current:
         raise ValueError(f"Continuous Target重建後仍未通過identity驗證: {reason}")
     print(f"[Continuous Target] identity驗證完成：{target_id}")
+    report_path = _readable_report_path(
+        filter_id=args.filter_id,
+        target_id=target_id,
+    )
+    if report_path.is_file():
+        print(f"Continuous Target 易讀報表：{report_path}")
     return 0
 
 

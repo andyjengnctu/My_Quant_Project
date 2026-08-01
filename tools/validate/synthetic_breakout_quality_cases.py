@@ -10432,7 +10432,10 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from config import breakout_quality as workflow_config
     from config.breakout_quality import get_breakout_quality_workflow_settings
     from tools.filters.breakout_quality.audit_point_in_time_scores import (
+        _direction_summary,
         _orderable_coverage,
+        _render_markdown as render_point_in_time_markdown,
+        render_console_summary as render_point_in_time_console,
     )
     from tools.filters.breakout_quality.build_point_in_time_scores import (
         REQUIRED_SCORE_COLUMNS,
@@ -10816,6 +10819,136 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         (
             orderable["candidate_artifact_has_existing_breakout_quality_score"],
             orderable["coverage_score_source"],
+        ),
+    )
+
+    yearly_rows = [
+        {
+            "year": 2014,
+            "group_count": 2,
+            "global_spearman": 0.3,
+            "mean_daily_spearman": 0.2,
+            "top_bottom_target_spread": 0.8,
+        }
+    ]
+    report_payload = {
+        "status": "RESULT_AVAILABLE_PENDING_REVIEW",
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "strategy_aligned_no_time_pass_magnitude_mse",
+        "continuous_target_id": "strategy_aligned_opportunity_no_time_r_v1",
+        "score_period": {"start": "2014-01-01", "end": "2014-12-31"},
+        "score_coverage": {
+            "expected_group_count": 2,
+            "scored_group_count": 2,
+            "coverage_rate": 1.0,
+        },
+        "workflow": {
+            "training_label_scope": "pass_only",
+            "seed": 42,
+            "fold_count": 1,
+            "fold_months": 12,
+            "inner_validation_months": 24,
+        },
+        "metrics": {
+            "pass_only_target": {
+                "group_count": 2,
+                "global_spearman": 0.3,
+                "mean_daily_spearman": 0.2,
+                "top_decile_target_mean": 1.5,
+                "bottom_decile_target_mean": 0.7,
+                "top_bottom_target_spread": 0.8,
+            },
+            "all_valid_target": {
+                "group_count": 2,
+                "global_spearman": 0.25,
+                "mean_daily_spearman": 0.15,
+                "top_decile_target_mean": 1.4,
+                "bottom_decile_target_mean": 0.6,
+                "top_bottom_target_spread": 0.8,
+            },
+        },
+        "yearly_pass_only": yearly_rows,
+        "direction_summary": _direction_summary(yearly_rows),
+        "fold_metrics": [
+            {
+                "fold_id": "fold_000",
+                "group_count": 2,
+                "score_mean": 0.5,
+                "score_std": 0.2,
+                "score_p10": 0.3,
+                "score_p50": 0.5,
+                "score_p90": 0.7,
+                "adjacent_mean_shift_in_pooled_std": None,
+                "pass_target_spearman": 0.3,
+            }
+        ],
+        "fold_drift": {
+            "criterion": "synthetic drift contract",
+            "drift_flag": False,
+            "flagged_folds": [],
+            "max_adjacent_mean_shift_in_pooled_std": 0.0,
+        },
+        "classification_overlap": {
+            "score_vs_pass_reject_auc": 0.6,
+            "overall_pass_share": 0.5,
+            "top_score_decile_pass_share": 1.0,
+            "interpretation_contract": "synthetic overlap contract",
+        },
+        "orderable_candidate_coverage": {
+            "available": True,
+            "path": "/tmp/orderable.csv",
+            "candidate_count": 2,
+            "scored_candidate_count": 2,
+            "unscored_candidate_count": 0,
+            "coverage_rate": 1.0,
+            "coverage_score_source": "selection_point_in_time_scores",
+        },
+        "source_artifacts": {
+            "point_in_time_manifest": "/tmp/manifest.json",
+            "point_in_time_scores": "/tmp/scores.csv",
+            "point_in_time_coverage": "/tmp/coverage.csv",
+        },
+        "report_artifacts": {
+            "markdown": "/tmp/audit.md",
+            "json": "/tmp/audit.json",
+        },
+    }
+    report_console = render_point_in_time_console(report_payload)
+    report_markdown = render_point_in_time_markdown(report_payload)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_audit_outputs_readable_console_summary",
+        True,
+        all(
+            text in report_console
+            for text in (
+                "Selection Point-in-time 模型評估報表",
+                "核心排序能力",
+                "年度穩定性",
+                "Fold 分布與漂移",
+                "策略 optimizer：未執行",
+            )
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_audit_outputs_complete_markdown_report",
+        True,
+        all(
+            text in report_markdown
+            for text in (
+                "# Breakout Quality Selection Point-in-time 模型評估報表",
+                "## 2. 核心排序能力",
+                "## 3. 年度穩定性（PASS-only）",
+                "## 4. Fold 分布與漂移",
+                "## 7. 研究邊界與下一步",
+                "## 8. 工件",
+            )
         ),
     )
 

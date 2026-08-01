@@ -93,7 +93,7 @@ BREAKOUT_QUALITY_RANDOM_SEED = 42  # 所有binary／continuous／PIT流程共用
 python apps/breakout_quality.py prepare-continuous-target --filter-id breakout_quality_v1 --target-id strategy_aligned_opportunity_no_time_r_v1
 ```
 
-此命令只依目前Dataset與profile準備Target，不訓練模型。已存在Target必須與目前Dataset artifact SHA256一致才會跳過；Dataset重新掃描或group排列改變時會重建。No-time Target為目前active workflow已接受的固定公式時，可直接重建既定arrays，不要求每次重新執行歷史11E研究gate；原`audit-no-time-target`未帶workflow rebuild flag時仍保留原research-only gate語意。
+此命令只依目前Dataset與profile準備Target，不訓練模型。已存在Target必須與目前Dataset artifact SHA256一致才會跳過；Dataset重新掃描或group排列改變時會重建。No-time Target為目前active workflow已接受的固定公式時，可直接重建既定arrays，不要求每次重新執行歷史11E研究gate；原`audit-no-time-target`未帶workflow rebuild flag時仍保留原research-only gate語意。命令完成或確認Target已是current時，終端會顯示既有`continuous_target_audit.md`易讀報表路徑；主選單狀態頁同時列出Target manifest與Target audit Markdown。
 
 ### Selection point-in-time continuous-ranker Scores
 
@@ -115,6 +115,8 @@ python apps/breakout_quality.py build-point-in-time-scores --plan-only
 python apps/breakout_quality.py audit-point-in-time-scores
 ```
 
+Audit完成後會直接在終端輸出表格化易讀摘要，依序呈現執行設定與Score coverage、PASS-only／all-valid核心排序能力、逐年Spearman與top-bottom spread、各fold Score分布與drift、PASS／REJECT重疊、orderable candidate coverage及研究邊界；同一份payload同步輸出完整Markdown與JSON，不另算第二套指標。報表只評估模型層排序能力，明確標示策略optimizer尚未執行、Future Target未進runtime排序、PIT工件不可直接作forward-OOS runtime。
+
 每個 expanding-window fold 只使用該 score period 以前、且 `label_eval_end_date < score_start` 的資料；Inner Validation 與 epoch selection 也限制在歷史窗內。每個事件只保留模型尚未看過該事件時產生的 Score。串接 Score 工件不含 Future Target，builder manifest 預設 `eligible=false`，只允許模型驗證；策略使用必須等待模型驗證與後續 Score buy-sort 接線完成。
 
 主要工件：
@@ -133,14 +135,13 @@ Audit 工件：
 
 ```text
 outputs/filters/breakout_quality/<filter_id>/<architecture>/<profile>/point_in_time_audit/
-  selection_point_in_time_audit.json
-  selection_point_in_time_audit.md
+  selection_point_in_time_audit.md    # 易讀完整報表
+  selection_point_in_time_audit.json  # 完整結構化指標
 ```
 
-舊策略比較入口仍可使用，但只作相容轉接：
+策略比較唯一入口：
 
 ```bash
-python apps/breakout_quality.py strategy-compare --help
 python apps/breakout_quality.py strategy-compare --help
 ```
 

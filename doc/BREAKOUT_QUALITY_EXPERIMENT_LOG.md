@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_192601_f010c1c.zip`，SHA256 `52df60d1fad47a76878d34105ed86565381cba34f3b6750e2db29b30d8cd4981`。本輪修正continuous主選單workflow在Dataset建立後缺少configured Continuous Target manifest而中止：新增泛用Target準備步驟，依active profile自動驗證或重建Target，再建立PIT Scores。Target identity新增Dataset artifact SHA256及衍生Target來源manifest SHA256綁定。不改模型架構、Label公式、Seed、PIT fold邊界、buy-sort或策略交易規則 |
-| SHA256 | 本輪來源 ZIP：`52df60d1fad47a76878d34105ed86565381cba34f3b6750e2db29b30d8cd4981`。使用者本機已完成Full Dataset掃描：股票555／616、events 1,793,028、groups 55,509，但隨後因`strategy_aligned_opportunity_no_time_r_v1/manifest.json`缺少而停止。本輪只補齊Target自動準備與stale identity防護，尚未訓練Seed 42 PIT folds，模型與策略結果皆為`RESULT_NOT_AVAILABLE` |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_194645_7b02dab.zip`，SHA256 `8d121ac8b579f2c3a0bf9d0316f208c32573705612d6513ad561edbbbcf754d8`。本輪只改善continuous完整workflow的可讀輸出：PIT audit以同一payload輸出表格化終端摘要、完整Markdown與JSON；狀態頁增加Target audit Markdown；Target已current時仍顯示既有報表路徑。不改模型架構、Target公式、Dataset、Label、Seed、PIT fold邊界、Score、buy-sort或策略交易規則 |
+| SHA256 | 本輪來源 ZIP：`8d121ac8b579f2c3a0bf9d0316f208c32573705612d6513ad561edbbbcf754d8`。本輪只新增報表呈現與路徑揭露；未在GPT環境訓練Seed 42 PIT folds或取得新模型／策略結果，因此仍為`RESULT_NOT_AVAILABLE` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1526,6 +1526,21 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 固定條件 | architecture=`inception_time_v1`、profile=`strategy_aligned_no_time_pass_magnitude_mse`、Target公式、Seed=42、PIT 12／24 months、loss、epoch、batch、sampling、buy-sort、策略參數與交易帳務均不變 |
 | 驗證邊界 | 本輪只完成自動準備、manifest identity與synthetic契約；尚未產生Seed 42 PIT Scores或模型audit，不得宣稱預測能力或策略改善 |
 | 下一步 | 套用修補後重新按Enter；Dataset應顯示skip，程式會先建立基礎component Target與No-time Target，再自動進入PIT folds |
+
+
+### 3.70 Continuous PIT易讀模型評估報表（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE` |
+| 程式基準 | `test-branch-1_20260801_194645_7b02dab.zip`；SHA256 `8d121ac8b579f2c3a0bf9d0316f208c32573705612d6513ad561edbbbcf754d8` |
+| 問題 | Continuous workflow雖已有Target Markdown與PIT audit Markdown，但終端只輸出單行指標，PIT Markdown也缺少完整設定、Score coverage、逐fold分布、年度方向摘要、研究邊界與工件索引，使用者難以像既有binary workflow一樣直接閱讀 |
+| 唯一修正 | `audit-point-in-time-scores`改以單一payload同步輸出表格化終端摘要、`selection_point_in_time_audit.md`完整易讀報表與JSON。固定章節包含執行設定、核心排序、年度穩定性、fold drift、PASS／REJECT重疊、orderable coverage、研究邊界及工件路徑。主選單狀態頁新增Target audit Markdown；Target current／重建完成時直接顯示易讀報表路徑 |
+| 指標單一來源 | Console、Markdown與JSON共用同一payload，不重算另一套Spearman、decile、drift或coverage |
+| Dataset／Label | 不需重建Dataset或relabel；既有Target與PIT模型工件均不因報表格式改變而失效 |
+| 固定條件 | architecture、profile、Target、Seed=42、PIT 12／24 months、loss、epoch、batch、sampling、Score、buy-sort、策略參數與交易帳務均不變 |
+| 驗證邊界 | Direct synthetic只驗證報表章節、數值來源與「策略optimizer未執行／Future Target未作runtime sort」邊界；尚未取得本機完整PIT模型結果，不得預先判定模型通過 |
+| 下一步 | 使用者由主選單完成Target→PIT→audit後，直接審閱終端摘要或`selection_point_in_time_audit.md`；只有多數年度排序方向穩定為正時才進策略績效驗證 |
 
 
 ## 6. 實驗執行順序
