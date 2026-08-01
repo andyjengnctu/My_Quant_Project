@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_015757_25ace3c.zip`，SHA256 `f0591239b0caa737252b83e98a02d204a7d72eb668b58bb942daf6341f446cc9`；使用者本機Baseline replay已完成，Score Sort進入replay後的PIT Score identity／Target診斷時因continuation／re-entry的新`signal_date`被誤作原始Score事件日期而中止。本輪改以保存的`breakout_quality_score_date`對回PIT Score與Future Target；修補ZIP SHA256由交付回覆列示 |
-| SHA256 | 來源ZIP SHA256 `f0591239b0caa737252b83e98a02d204a7d72eb668b58bb942daf6341f446cc9`。Baseline replay已完成至2020-12-31，終值2,840,064；前一輪`float(None)`已消失，Score Sort本輪在post-replay診斷誤以交易`signal_date`查原始PIT Score而發生假性identity mismatch，尚未輸出可比較策略結果。本輪只修正診斷日期鍵與錯誤可追蹤性，模型、Score、排序及交易結果均不變 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260802_020859_8ae2f29.zip`，SHA256 `2c51f5e0ae36204205aac25b81452935e99a1ac2c862329deeff33ec65c4e0f4`；使用者本機已完成2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort controlled comparison與事後Target診斷。模型排序方向維持通過，但原策略參數下的Sort Only經濟效果明顯劣於Baseline，不得直接採用 |
+| SHA256 | 來源ZIP SHA256 `2c51f5e0ae36204205aac25b81452935e99a1ac2c862329deeff33ec65c4e0f4`。Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。Score Sort雖改善selected Target percentile、top-k retention、opportunity gap與Target mean，但平均曝險由77.33%降至54.20%，且4/7完整年度報酬較差；目前判定為模型層通過、Sort Only策略層拒絕，下一步先做資本使用／Target capture歸因，再決定是否執行主策略參數適應 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1732,4 +1732,23 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Dataset／模型工件 | 不需重建Dataset、Label、Continuous Target、PIT folds、checkpoint、Scores或模型audit；只需重新執行Selection策略比較 |
 | 獨立驗證 | T280新增continuation／re-entry交易signal date晚於原始score date的案例，確認Score identity與Target均對回原事件；另驗證真正0.7對0.8的Score差異仍fail-fast且錯誤包含完整identity |
 | 下一步 | 執行`python apps/breakout_quality.py strategy-compare`；只有完整產出Baseline／Score Sort報表後，才能判斷是否進入主策略參數適應階段 |
+
+### 3.78 Selection PIT Score Sort經濟效果結果（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `RESULT_AVAILABLE / MODEL_DIRECTION_PASS / SORT_ONLY_REJECTED / PARAM_ADAPTATION_DIAGNOSTIC_NEXT` |
+| 程式基準 | `test-branch-1_20260802_020859_8ae2f29.zip`；SHA256 `2c51f5e0ae36204205aac25b81452935e99a1ac2c862329deeff33ec65c4e0f4` |
+| 比較設計 | 2014-01-01～2020-12-31；Selection point-in-time Scores；歷史active params無前視；`base_finalist_best`；single member／min_agree=1；Baseline與Score Sort唯一差異為`use_breakout_quality_ranking=False/True`，hard filter兩組皆False |
+| 固定模型 | `breakout_quality_v1 / inception_time_v1 / strategy_aligned_no_time_pass_magnitude_mse / strategy_aligned_opportunity_no_time_r_v1 / seed 42`；不改loss、epoch、LR、batch、sampling、threshold或PIT folds |
+| Baseline結果 | 淨總報酬182.62%、MDD 13.18%、RoMD 13.86、年化16.00%、Log R² 0.9349、月勝率61.90%、527 trades、勝率38.14%、Payoff 2.92、EV 0.28R、平均曝險77.33% |
+| Score Sort結果 | 淨總報酬144.80%、MDD 21.53%、RoMD 6.73、年化13.65%、Log R² 0.8599、月勝率63.10%、502 trades、勝率35.26%、Payoff 3.07、EV 0.35R、平均曝險54.20% |
+| 主要差異 | Score Sort淨總報酬−37.82pp、MDD +8.35pp、RoMD −7.13、年化−2.36pp、交易數−25、勝率−2.88pp、平均曝險−23.13pp；Payoff +0.15、EV +0.07R、月勝率+1.19pp |
+| 年度穩定性 | Score Sort於2014、2016、2017優於Baseline；2015、2018、2019、2020較差。最大負貢獻為2018 −12.08pp，其次2015 −9.43pp；不是單一年份造成，4/7完整年度落後 |
+| 候選供給 | 平均每日可掛單候選19.78→19.66，供給幾乎不變；候選供給不足日329→338只增9日。期末未滿倉日755→630、持股缺口格日2336→2121反而改善，因此報酬惡化不能歸因為候選數不足或持倉slot不足 |
+| Selection Target診斷 | Orderable Score coverage 0.9808→0.9942；selected Target percentile 0.6964→0.7170；top-k retention 0.3679→0.4694；opportunity gap 1.9209R→1.3577R；selected Target mean 1.0868R→1.2079R。模型確實把實際買入候選往較高No-time Target移動 |
+| 核心判讀 | 模型排序與Target選股層通過，但No-time Target不是實際策略的資本效率或可捕捉R。Score Sort選到的候選具有較高Target與較高單筆EV／Payoff，卻在既有sizing、停損停利、partial exit、持有期與資金配置下造成平均曝險大幅下降、勝率與路徑穩定性惡化，最終總報酬及MDD皆變差 |
+| 採用判定 | `Sort Only`不得成為正式排序；正式runtime維持Baseline。Continuous ranker本身不淘汰，因PIT模型gate及實際selected Target改善均成立，符合「先確認模型有效，再判斷參數是否需適應」的研究假設 |
+| 下一個單一變更 | 先新增read-only `score-ranking capture attribution audit`，使用既有兩組replay工件分解初始投入比例、stop distance／ATR risk、fill rate、持有期、半倉後殘餘slot-days、exit reason、realized R／Target capture ratio、產業／日期集中度及2018差異。Future Target仍只作post-replay join，不進runtime或optimizer。只有歸因顯示問題可由既有主策略參數空間調整，才固定Score契約後執行Selection內參數適應 |
+| OOS邊界 | 本結果僅為Selection PIT比較；未執行Adapted策略或正式OOS。不得使用OOS調Score權重、排序規則或策略參數 |
 
