@@ -105,10 +105,6 @@ INTERACTIVE_MAX_TICKERS = 0
 INTERACTIVE_EVALUATE_OOS = True
 
 
-LEGACY_COMMAND_ENTRYPOINTS = {
-    "breakout_quality_strategy_compare.py": "strategy-compare",
-}
-
 
 COMMAND_DESCRIPTIONS = {
     "menu": "開啟互動式操作選單",
@@ -160,9 +156,6 @@ def _load_command_module(command: str):
 
 def _command_program_name(program_name: str, command: str) -> str:
     normalized_program_name = str(program_name).replace("\\", "/").strip()
-    script_name = normalized_program_name.rsplit("/", 1)[-1]
-    if LEGACY_COMMAND_ENTRYPOINTS.get(script_name) == command:
-        return normalized_program_name
     return f"{normalized_program_name} {command}"
 
 

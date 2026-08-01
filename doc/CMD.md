@@ -80,10 +80,10 @@ Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。�
 
 ```python
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
-BREAKOUT_QUALITY_WORKFLOW_SEED = 42
+# BREAKOUT_QUALITY_RANDOM_SEED = None  # 保持None即可自動使用binary預設42
 ```
 
-若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`；PIT日期／fold設定只在continuous objective下生效。
+若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`；`BREAKOUT_QUALITY_RANDOM_SEED=None`會自動使用continuous預設1。只有重現特殊實驗時才填入非負整數覆寫；CLI `--seed`優先於config。PIT日期／fold設定只在continuous objective下生效。
 
 ### Selection point-in-time continuous-ranker Scores
 
@@ -130,7 +130,7 @@ outputs/filters/breakout_quality/<filter_id>/<architecture>/<profile>/point_in_t
 舊策略比較入口仍可使用，但只作相容轉接：
 
 ```bash
-python apps/breakout_quality_strategy_compare.py --help
+python apps/breakout_quality.py strategy-compare --help
 python apps/breakout_quality.py strategy-compare --help
 ```
 
@@ -410,7 +410,7 @@ models/roos_base_finalists_agree.json
 完成上方 `forward_oos` score 匯出與 Rolling OOS 參數組後執行：
 
 ```bash
-python apps/breakout_quality_strategy_compare.py --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off
+python apps/breakout_quality.py strategy-compare --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off
 ```
 
 - 比較期間固定為 runtime manifest 的 `execution_start` ～ `available_through`；Score table 可從更早的 `required_signal_start` 開始，只用來供應首個執行日前的原始 breakout signal Score。Rolling active-param 生效期間只需完整覆蓋實際策略執行期，不需覆蓋前置 Score anchor。
@@ -423,7 +423,7 @@ python apps/breakout_quality_strategy_compare.py --dataset full --params models/
 - 若策略比較已經跑完，只需重建歸因與修正部分年度標記，不必再次執行 replay：
 
 ```bash
-python apps/breakout_quality_strategy_compare.py --attribution-only
+python apps/breakout_quality.py strategy-compare --attribution-only
 ```
 
 - `--attribution-only` 只讀取既有 `strategy_comparison.json`、`no_filter_trades.csv`、`quality_filter_trades.csv` 與正式 runtime score；它會把只到 2026-03-02 的 2026 年標為非完整年度，再輸出交易歸因。
@@ -436,7 +436,7 @@ python apps/breakout_quality_strategy_compare.py --attribution-only
 以 `base_finalist_best` 單一 runtime member 做較純的 Score Ranking ablation：
 
 ```bash
-python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --param-policy base-finalist-best --dataset full --max-positions 10 --rotation off
+python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking --param-policy base-finalist-best --dataset full --max-positions 10 --rotation off
 ```
 
 工具會自動使用 `models/roos_base_best.json`，並驗證每個生效日恰有 1 個 member、`min_agree=1`。Baseline 與 score-ranking 兩組都固定 `use_breakout_quality_filter=False`；唯一差異為 `use_breakout_quality_ranking=False/True`。因所有候選票數皆為 1，實際有效排序為「Quality Score 由高到低 → 既有買入排序 → deterministic ticker」。輸出位於 `strategy_compare_score_ranking_base_finalist_best/`。
@@ -444,7 +444,7 @@ python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking
 保留 `base_finalists_agree` 的既有探索性比較時使用：
 
 ```bash
-python apps/breakout_quality_strategy_compare.py --comparison-mode score-ranking --param-policy base-finalists-agree --dataset full --max-positions 10 --rotation off
+python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking --param-policy base-finalists-agree --dataset full --max-positions 10 --rotation off
 ```
 
 此模式自動使用 `models/roos_base_finalists_agree.json`；候選先通過 `min_agree`，再依「finalist同意數由高到低 → 同票Quality Score由高到低 → 既有買入排序 → deterministic ticker」，輸出位於 `strategy_compare_score_ranking_base_finalists_agree/`。
@@ -465,7 +465,7 @@ python apps/ml_optimizer.py --dataset full --model trade --trials 10
 目前 random-seed ensemble 已啟用，因此 `run_best_params.json` 可能是 static active-param ensemble，而不是單一參數 JSON；策略對照工具支援此格式，但僅可明確標記為非 OOS 敏感度診斷：
 
 ```bash
-python apps/breakout_quality_strategy_compare.py --dataset full --params models/run_best_params.json --allow-static-diagnostic --max-positions 10 --rotation off
+python apps/breakout_quality.py strategy-compare --dataset full --params models/run_best_params.json --allow-static-diagnostic --max-positions 10 --rotation off
 ```
 
 不指定 `--params` 時，也只有加上 `--allow-static-diagnostic` 才會使用正式 primary param source。此結果不可作為 2021～2025 無前視 OOS 部署證據。

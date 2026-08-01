@@ -55,7 +55,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
     BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
-    BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
+    BREAKOUT_QUALITY_RANDOM_SEED,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
     BREAKOUT_QUALITY_FINAL_REFIT_MODE,
@@ -93,6 +93,7 @@ from config.breakout_quality import (
     build_breakout_quality_default_high_len_values,
     build_breakout_quality_inception_kernel_sizes,
     resolve_breakout_quality_inception_receptive_field_bars,
+    resolve_breakout_quality_random_seed,
 )
 from filters.breakout_quality.artifacts import (
     _validate_torch_execution_record,
@@ -431,6 +432,53 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         "breakout_quality_runtime_imports_use_canonical_config",
         (),
         tuple(sorted(stale_import_files)),
+    )
+
+    binary_seed = resolve_breakout_quality_random_seed(
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+    )
+    continuous_seed = resolve_breakout_quality_random_seed(
+        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_seed_resolves_legal_profile_defaults",
+        True,
+        bool(binary_seed >= 0 and continuous_seed >= 0),
+    )
+    with patch("config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED", 7):
+        overridden_binary_seed = resolve_breakout_quality_random_seed(
+            UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+        )
+        overridden_continuous_seed = resolve_breakout_quality_random_seed(
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_seed_override_applies_to_all_profiles",
+        (7, 7),
+        (overridden_binary_seed, overridden_continuous_seed),
+    )
+    with patch("config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED", -1):
+        try:
+            resolve_breakout_quality_random_seed(
+                UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
+            )
+        except ValueError:
+            negative_seed_rejected = True
+        else:
+            negative_seed_rejected = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "single_seed_negative_override_rejected",
+        True,
+        negative_seed_rejected,
     )
 
     optimizer_values = build_breakout_optimizer_high_len_values()
@@ -3198,7 +3246,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) > 0.0
         and float(BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY) >= 0.0
         and float(BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM) >= 0.0
-        and int(BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED) >= 0
+        and (BREAKOUT_QUALITY_RANDOM_SEED is None or int(BREAKOUT_QUALITY_RANDOM_SEED) >= 0)
         and int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE) >= 1
         and int(BREAKOUT_QUALITY_EVALUATION_WORKERS) >= 1
         and isinstance(BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION, bool)

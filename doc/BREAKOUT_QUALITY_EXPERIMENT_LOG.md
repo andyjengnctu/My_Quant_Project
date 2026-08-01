@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_183429_c2f3b2a.zip`，SHA256 `e5cf9d58b8b3f5165cff24a2e17889247e3ce6add46656aaf9a83cd1e1f8faa6`。此基準已將三個舊breakout-quality config刪除，只保留`config/breakout_quality.py`；本輪同步single-source synthetic與文件契約，不改模型、Label、profile內容、PIT Scores、checkpoint、buy-sort或策略交易規則 |
-| SHA256 | 本輪來源 ZIP：`e5cf9d58b8b3f5165cff24a2e17889247e3ce6add46656aaf9a83cd1e1f8faa6`；formal bundle `to_chatgpt_bundle_20260801_183502_5e1d75ef.zip`，SHA256 `a4b1867dab4e3c7ed3c07573ec13d363be622b4aec82d1113ccfbf59e68c1f47`。Formal結果為quick gate PASS、consistency FAIL 1／987、chain checks PASS、ML smoke PASS、meta quality FAIL 4；全部同源於single-source synthetic仍import已刪除的`config.breakout_quality_policy`，使coverage suite在0 cases時中止。PIT manifest仍預設`eligible=false`；continuous策略不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_185047_5a647b5.zip`，SHA256 `2eb142dcbd23d9508fc5e1aed3cdb2dcb49eac35e48733b3dc57fb9e64fa51dd`。本輪將breakout-quality seed收斂為單一可覆寫設定，並正式移除已刪除的舊strategy compare app入口及其quick-gate／文件／checklist契約；不改模型、Label、PIT Score值、checkpoint、buy-sort或策略交易規則 |
+| SHA256 | 本輪來源 ZIP：`2eb142dcbd23d9508fc5e1aed3cdb2dcb49eac35e48733b3dc57fb9e64fa51dd`；formal bundle `to_chatgpt_bundle_20260801_185213_8c8baa64.zip`，SHA256 `acb26b34e76dc5ecd4731c5f676437543c9ee39c78ece6ec1f8e61f98fd1cdbd`。Formal結果為quick gate FAIL 1、consistency FAIL 2、chain checks PASS、ML smoke PASS、meta quality FAIL 1；根因是已刪除的`apps/breakout_quality_strategy_compare.py`仍被quick gate、CMD與B170／B182正式契約要求存在。Seed另有`DEFAULT_RANDOM_SEED=42`與`WORKFLOW_SEED=1`雙重來源，本輪一併閉環 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1545,3 +1545,18 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 ```
 
 任何新結果都必須追加至第 3 節，並同步更新第 2 節目前基準、第 4 節排除方向與第 5～6 節待辦順序。
+
+
+### 3.66 單一Seed與刪除舊Strategy Compare入口閉環（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；已完成程式、文件與獨立契約修正，待使用者重跑正式suite |
+| 程式基準 | `test-branch-1_20260801_185047_5a647b5.zip`；SHA256 `2eb142dcbd23d9508fc5e1aed3cdb2dcb49eac35e48733b3dc57fb9e64fa51dd`；bundle `to_chatgpt_bundle_20260801_185213_8c8baa64.zip`；SHA256 `acb26b34e76dc5ecd4731c5f676437543c9ee39c78ece6ec1f8e61f98fd1cdbd` |
+| Formal結果 | quick gate只有`help::breakout_quality_strategy_compare.py`失敗；consistency兩列為CMD仍要求舊script存在及B170仍宣告舊entry；meta quality只因synthetic suite非零退出連帶失敗 |
+| Seed根因 | `BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED=42`控制低階train CLI，`BREAKOUT_QUALITY_WORKFLOW_SEED=1`另控制主選單／PIT workflow，形成兩套使用者設定 |
+| Seed修正 | 只保留`BREAKOUT_QUALITY_RANDOM_SEED`。預設`None`時依當前profile objective自動解析：binary classification為42、continuous ranker為1；使用者只切換`BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE`。需特殊重現時可在config填非負整數，單次CLI `--seed`優先 |
+| 入口修正 | 已刪除的`apps/breakout_quality_strategy_compare.py`不再是相容或正式入口；quick gate、CMD、Architecture、B170／B182、synthetic registry全部改以`apps/breakout_quality.py strategy-compare`為唯一入口 |
+| 固定條件 | 不改architecture、Dataset、Label、Target、loss、epoch、PIT folds、checkpoint、Score、threshold、buy-sort、optimizer search space、portfolio成交或帳務 |
+| Dataset／Label | 不需重建Dataset或relabel；不需重訓既有模型或PIT folds |
+| 下一步 | 套用修補後重跑`python apps/test_suite.py`；正式結果以使用者本機輸出為準 |

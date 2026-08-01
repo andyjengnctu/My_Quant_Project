@@ -14,6 +14,7 @@ from config.breakout_quality import (
     SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES,
     build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_pretraining_profile,
+    resolve_breakout_quality_random_seed,
 )
 from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
@@ -94,7 +95,12 @@ def parse_args(argv=None):
     parser.add_argument("--mask-probability", type=float, default=BREAKOUT_QUALITY_PRETRAINING_MASK_PROBABILITY)
     parser.add_argument("--contrastive-alpha", type=float, default=BREAKOUT_QUALITY_PRETRAINING_CONTRASTIVE_ALPHA)
     parser.add_argument("--temporal-unit", type=int, default=BREAKOUT_QUALITY_PRETRAINING_TEMPORAL_UNIT)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="亂數種子；省略時依experiment profile自動解析，config單一seed override優先",
+    )
     parser.add_argument("--device", choices=SUPPORTED_TORCH_DEVICES, default=BREAKOUT_QUALITY_TORCH_DEVICE)
     parser.add_argument(
         "--mixed-precision",
@@ -116,7 +122,12 @@ def parse_args(argv=None):
         action=argparse.BooleanOptionalAction,
         default=BREAKOUT_QUALITY_ALLOW_TF32,
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.seed is None:
+        args.seed = resolve_breakout_quality_random_seed(args.experiment_profile)
+    elif int(args.seed) < 0:
+        parser.error("--seed 必須 >= 0")
+    return args
 
 
 def validate_args(args) -> None:

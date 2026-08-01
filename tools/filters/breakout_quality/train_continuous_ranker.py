@@ -21,6 +21,7 @@ from config.breakout_quality import (
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     get_breakout_quality_experiment_profile,
+    resolve_breakout_quality_random_seed,
 )
 from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
@@ -29,7 +30,6 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
     BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
-    BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
     BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
     BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
@@ -137,7 +137,12 @@ def parse_args(argv=None):
         type=float,
         default=BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
     )
-    parser.add_argument("--seed", type=int, default=BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="亂數種子；省略時依experiment profile自動解析，config單一seed override優先",
+    )
     parser.add_argument(
         "--use-inner-validation",
         action=argparse.BooleanOptionalAction,
@@ -189,7 +194,12 @@ def parse_args(argv=None):
         action="store_true",
         help="只供離線重現；預設要求來源CSV inventory與dataset一致",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.seed is None:
+        args.seed = resolve_breakout_quality_random_seed(args.experiment_profile)
+    elif int(args.seed) < 0:
+        parser.error("--seed 必須 >= 0")
+    return args
 
 
 def _validate_args(args) -> None:

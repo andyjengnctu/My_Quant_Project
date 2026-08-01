@@ -39,6 +39,7 @@ from config.breakout_quality import (
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
     build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
+    resolve_breakout_quality_random_seed,
 )
 
 from config.breakout_quality import (
@@ -46,7 +47,6 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
     BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
-    BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED,
     BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
     BREAKOUT_QUALITY_FINAL_REFIT_MODE,
     BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
@@ -285,7 +285,12 @@ def parse_args(argv=None):
         default=BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
         help="訓練 sample 的時間權重模式",
     )
-    parser.add_argument("--seed", type=int, default=BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="亂數種子；省略時依experiment profile自動解析，config單一seed override優先",
+    )
     parser.add_argument(
         "--fixed-threshold",
         type=float,
@@ -357,6 +362,10 @@ def parse_args(argv=None):
     )
     args = parser.parse_args(argv)
     experiment = get_breakout_quality_experiment_profile(args.experiment_profile)
+    if args.seed is None:
+        args.seed = resolve_breakout_quality_random_seed(args.experiment_profile)
+    elif int(args.seed) < 0:
+        parser.error("--seed 必須 >= 0")
     args.optimizer_name = experiment.optimizer_name
     args.lr_schedule_name = experiment.lr_schedule_name
     args.augmentation_name = experiment.augmentation_name

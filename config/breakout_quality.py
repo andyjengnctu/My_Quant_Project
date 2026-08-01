@@ -30,7 +30,10 @@ from config.breakout_policy import (
 # - 9A binary filter: "unique_group_sampling"
 # - continuous PIT ranker: "strategy_aligned_no_time_pass_magnitude_mse"
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_pass_magnitude_mse"
-BREAKOUT_QUALITY_WORKFLOW_SEED = 1
+
+# None = profile預設（binary classification使用42；continuous ranker使用1）。
+# 只有需要覆寫所有模型流程時才填非負整數；CLI --seed仍可單次覆寫。
+BREAKOUT_QUALITY_RANDOM_SEED = None
 
 
 # =============================================================================
@@ -112,7 +115,6 @@ BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY = 0.0001  # optimizer weight decay；0 表
 BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM = 1.0  # 每次更新前的全域 gradient norm 上限；0 表示關閉。
 BREAKOUT_QUALITY_CLASS_WEIGHT_MODE = "none"  # Cross-entropy 類別權重；none 不平衡補償，inverse_frequency 依訓練資料加權。PASS／REJECT 接近均衡時建議 none。
 BREAKOUT_QUALITY_TIME_WEIGHT_MODE = "none"  # 8F accepted 基準；8K date-balanced training 已由完整 OOS 淘汰。
-BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED = 42  # 模型初始化、Dropout 與每個 epoch 資料洗牌的預設亂數種子。
 BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES = 20  # 開始訓練前要求的最少有效 train rows。
 
 
@@ -652,6 +654,27 @@ def get_breakout_quality_experiment_profile(
         normalize_breakout_quality_experiment_profile(value)
     ]
 
+
+_BINARY_CLASSIFICATION_DEFAULT_RANDOM_SEED = 42
+_CONTINUOUS_RANKER_DEFAULT_RANDOM_SEED = 1
+
+
+def resolve_breakout_quality_random_seed(experiment_profile: str) -> int:
+    """Resolve the single configured seed for a named experiment profile."""
+
+    configured_seed = BREAKOUT_QUALITY_RANDOM_SEED
+    if configured_seed is not None:
+        resolved = int(configured_seed)
+    else:
+        profile = get_breakout_quality_experiment_profile(experiment_profile)
+        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+            resolved = _CONTINUOUS_RANKER_DEFAULT_RANDOM_SEED
+        else:
+            resolved = _BINARY_CLASSIFICATION_DEFAULT_RANDOM_SEED
+    if resolved < 0:
+        raise ValueError("breakout quality random seed 必須是None或>=0的整數")
+    return resolved
+
 # =============================================================================
 # DERIVED VALUES AND HELPER FUNCTIONS — do not edit unless changing implementation
 # =============================================================================
@@ -875,8 +898,6 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
         raise ValueError(
             "workflow experiment profile必須是binary classification或continuous ranker"
         )
-    if int(BREAKOUT_QUALITY_WORKFLOW_SEED) < 0:
-        raise ValueError("workflow seed 必須 >= 0")
     if int(BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS) < 1:
         raise ValueError("point-in-time fold months 必須 >= 1")
     if int(BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS) < 1:
@@ -968,7 +989,7 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
             else str(profile.continuous_target_id)
         ),
         training_label_scope=str(profile.training_label_scope),
-        seed=int(BREAKOUT_QUALITY_WORKFLOW_SEED),
+        seed=resolve_breakout_quality_random_seed(profile.name),
         point_in_time_score_start_date=str(
             BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE
         ),
@@ -1012,7 +1033,7 @@ __all__ = [
     'BREAKOUT_QUALITY_DEFAULT_FILTER_ID',
     'BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE',
     'BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM',
-    'BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED',
+    'BREAKOUT_QUALITY_RANDOM_SEED',
     'BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD',
     'BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY',
     'BREAKOUT_QUALITY_FINAL_REFIT_MODE',
@@ -1111,6 +1132,7 @@ __all__ = [
     'TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE',
     'SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS',
     'get_breakout_quality_experiment_profile',
+    'resolve_breakout_quality_random_seed',
     'get_breakout_quality_pretraining_profile',
     'build_breakout_quality_pretraining_profile_payload',
     'normalize_breakout_quality_experiment_profile',
