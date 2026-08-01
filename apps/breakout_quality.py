@@ -1201,10 +1201,20 @@ def _print_policy_defaults(
         )
 
 
-def _print_artifact_status(filter_id: str) -> None:
+def _print_artifact_status(
+    filter_id: str,
+    *,
+    model_architecture: str | None = None,
+    experiment_profile: str | None = None,
+) -> None:
     filter_id = normalize_filter_id(filter_id)
     dataset_paths = _dataset_paths(filter_id)
-    model_paths = resolve_existing_filter_artifact_paths(PROJECT_ROOT, filter_id)
+    model_paths = resolve_existing_filter_artifact_paths(
+        PROJECT_ROOT,
+        filter_id,
+        model_architecture=model_architecture,
+        experiment_profile=experiment_profile,
+    )
     status_paths = {
         **dataset_paths,
         "model": model_paths.model_path,
@@ -1255,9 +1265,21 @@ def _print_artifact_status(filter_id: str) -> None:
             )
 
 
-def _interactive_workflow(program_name: str) -> int:
-    filter_id = _policy_filter_id()
-    train_args = _policy_train_settings(filter_id)
+def _interactive_workflow(program_name: str, *, workflow_settings=None) -> int:
+    if workflow_settings is None:
+        filter_id = _policy_filter_id()
+        train_args = _policy_train_settings(filter_id)
+    else:
+        filter_id = normalize_filter_id(workflow_settings.filter_id)
+        if workflow_settings.model_architecture != BREAKOUT_QUALITY_MODEL_ARCHITECTURE:
+            raise ValueError(
+                "binary workflow model architecture必須與active policy一致: "
+                f"workflow={workflow_settings.model_architecture}, "
+                f"policy={BREAKOUT_QUALITY_MODEL_ARCHITECTURE}"
+            )
+        train_args = _policy_train_settings(filter_id)
+        train_args.experiment_profile = str(workflow_settings.experiment_profile)
+        train_args.seed = int(workflow_settings.seed)
     _print_policy_defaults(filter_id, train_args)
     dataset = INTERACTIVE_DATASET_PROFILE
     max_tickers = INTERACTIVE_MAX_TICKERS
@@ -1469,9 +1491,30 @@ def _print_workflow_status() -> None:
     print(f"Filter ID：{settings.filter_id}")
     print(f"Architecture：{settings.model_architecture}")
     print(f"Experiment Profile：{settings.experiment_profile}")
-    print(f"Continuous Target：{settings.continuous_target_id}")
+    print(f"Training Objective：{settings.training_objective}")
     print(f"Training Scope：{settings.training_label_scope}")
     print(f"Seed：{settings.seed}")
+    print(f"Strategy Comparison Mode：{settings.strategy_comparison_mode}")
+    print(f"Strategy Param Policy：{settings.strategy_param_policy}")
+    print(f"Strategy Score Source：{settings.strategy_score_source}")
+    print(f"Strategy Buy Sort：{settings.strategy_buy_sort}")
+
+    if settings.is_binary_classification:
+        defaults = _train_defaults()
+        print("Model Output：PASS／REJECT probability")
+        print(f"Fixed Threshold：{float(defaults.fixed_threshold):g}")
+        _print_artifact_status(
+            settings.filter_id,
+            model_architecture=settings.model_architecture,
+            experiment_profile=settings.experiment_profile,
+        )
+        return
+
+    if not settings.is_continuous_ranker:
+        raise ValueError(
+            f"不支援的 workflow training objective: {settings.training_objective!r}"
+        )
+    print(f"Continuous Target：{settings.continuous_target_id}")
     print(
         "PIT Score Period："
         f"{settings.point_in_time_score_start_date} ~ "
@@ -1481,9 +1524,6 @@ def _print_workflow_status() -> None:
         f"PIT Fold／Validation：{settings.point_in_time_fold_months}／"
         f"{settings.point_in_time_inner_validation_months} months"
     )
-    print(f"Strategy Param Policy：{settings.strategy_param_policy}")
-    print(f"Strategy Score Source：{settings.strategy_score_source}")
-    print(f"Strategy Buy Sort：{settings.strategy_buy_sort}")
     status_paths = {
         "PIT scores": resolve_selection_point_in_time_score_path(
             PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
@@ -1508,6 +1548,16 @@ def _print_workflow_status() -> None:
 
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_workflow_settings()
+    if settings.is_binary_classification:
+        return _interactive_workflow(
+            program_name,
+            workflow_settings=settings,
+        )
+    if not settings.is_continuous_ranker:
+        raise ValueError(
+            f"不支援的 workflow training objective: {settings.training_objective!r}"
+        )
+
     _print_workflow_status()
     if not _prompt_bool("建立／更新PIT Scores並執行模型驗證", True):
         return 0
@@ -1542,6 +1592,26 @@ def _interactive_model_research(program_name: str) -> int:
 def _interactive_strategy_validation(program_name: str) -> int:
     settings = get_breakout_quality_workflow_settings()
     _print_workflow_status()
+
+    if settings.strategy_comparison_mode == "hard-filter":
+        if settings.strategy_score_source != "canonical_runtime":
+            raise ValueError("hard-filter策略驗證只接受canonical_runtime score source")
+        return _run_command(
+            "strategy-compare",
+            [
+                "--dataset", settings.strategy_dataset,
+                "--comparison-mode", "hard-filter",
+                "--param-policy", settings.strategy_param_policy,
+                "--max-positions", str(settings.strategy_max_positions),
+                "--rotation", settings.strategy_rotation,
+            ],
+            program_name=program_name,
+        )
+
+    if settings.strategy_comparison_mode != "score-ranking":
+        raise ValueError(
+            f"不支援的 strategy comparison mode: {settings.strategy_comparison_mode!r}"
+        )
     if settings.strategy_score_source == "selection_point_in_time":
         print(
             "[尚未開放] Selection PIT Score工件與模型驗證入口已完成；"
@@ -1558,6 +1628,10 @@ def _interactive_strategy_validation(program_name: str) -> int:
             "不得回退成canonical runtime score。"
         )
         return 0
+    if settings.strategy_score_source != "canonical_runtime":
+        raise ValueError(
+            f"不支援的 strategy score source: {settings.strategy_score_source!r}"
+        )
     return _run_command(
         "strategy-compare",
         [

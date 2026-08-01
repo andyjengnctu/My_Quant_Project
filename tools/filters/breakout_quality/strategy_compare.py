@@ -106,7 +106,7 @@ def _parse_args(argv=None):
     parser.add_argument("--params", default=None, help="正式 OOS 可明確指定 rolling OOS active-param JSON；亦可用 --param-policy 自動解析。")
     parser.add_argument(
         "--param-policy", choices=PARAM_POLICIES, default=PARAM_POLICY_AUTO,
-        help="score-ranking 隔離比較可指定 base-finalist-best 或 base-finalists-agree；auto 沿用 --params。",
+        help="可指定 base-finalist-best 或 base-finalists-agree；auto 沿用 --params。",
     )
     parser.add_argument("--max-positions", type=int, default=10)
     parser.add_argument("--rotation", choices=("off", "on"), default="off")
@@ -290,21 +290,37 @@ def _resolve_params_path(*, root: Path, params_path: str | None, param_policy: s
 
 
 def _comparison_output_dir_name(comparison_mode: str, labels: dict[str, str], *, param_policy: str) -> str:
-    if comparison_mode == COMPARISON_MODE_SCORE_RANKING and param_policy != PARAM_POLICY_AUTO:
+    if param_policy != PARAM_POLICY_AUTO:
         return f"{labels['output_dir']}_{PARAM_POLICY_SPECS[param_policy]['output_suffix']}"
     return labels["output_dir"]
 
-def canonical_strategy_compare_output_dir_names() -> tuple[str, ...]:
+def canonical_strategy_compare_output_dir_names(
+    comparison_mode: str | None = None,
+) -> tuple[str, ...]:
     """Return active strategy-compare directory names in semantic priority order."""
 
+    if comparison_mode is not None and comparison_mode not in COMPARISON_MODES:
+        raise ValueError(f"不支援的 comparison mode: {comparison_mode!r}")
     hard_filter_labels = _comparison_labels(COMPARISON_MODE_HARD_FILTER)
     score_ranking_labels = _comparison_labels(COMPARISON_MODE_SCORE_RANKING)
-    return (
+    hard_filter_names = (
+        _comparison_output_dir_name(
+            COMPARISON_MODE_HARD_FILTER,
+            hard_filter_labels,
+            param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+        ),
+        _comparison_output_dir_name(
+            COMPARISON_MODE_HARD_FILTER,
+            hard_filter_labels,
+            param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
+        ),
         _comparison_output_dir_name(
             COMPARISON_MODE_HARD_FILTER,
             hard_filter_labels,
             param_policy=PARAM_POLICY_AUTO,
         ),
+    )
+    score_ranking_names = (
         _comparison_output_dir_name(
             COMPARISON_MODE_SCORE_RANKING,
             score_ranking_labels,
@@ -321,6 +337,30 @@ def canonical_strategy_compare_output_dir_names() -> tuple[str, ...]:
             param_policy=PARAM_POLICY_AUTO,
         ),
     )
+    if comparison_mode == COMPARISON_MODE_HARD_FILTER:
+        return hard_filter_names
+    if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
+        return score_ranking_names
+    return (*hard_filter_names, *score_ranking_names)
+
+
+def _first_existing_comparison_dir(
+    root: Path,
+    *,
+    comparison_mode: str,
+) -> Path:
+    candidates = [
+        root / name
+        for name in canonical_strategy_compare_output_dir_names(comparison_mode)
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    raise FileNotFoundError(
+        "找不到既有strategy compare輸出目錄；已檢查: "
+        + ", ".join(str(path) for path in candidates)
+    )
+
 
 def _load_param_source(path: Path) -> dict[str, Any]:
     try:
@@ -889,9 +929,13 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
     contract = load_runtime_artifact_contract(str(root), filter_id)
     architecture = str(contract.manifest.get("model_architecture") or "")
     experiment_profile = str(contract.manifest.get("experiment_profile") or "")
-    output_dir = resolve_filter_model_output_dir(
+    output_root = resolve_filter_model_output_dir(
         str(root), filter_id, architecture, experiment_profile
-    ) / "strategy_compare"
+    )
+    output_dir = _first_existing_comparison_dir(
+        output_root,
+        comparison_mode=COMPARISON_MODE_HARD_FILTER,
+    )
     payload = _load_existing_comparison_payload(output_dir)
     metadata = dict(payload["metadata"] or {})
     metadata.setdefault("comparison_mode", COMPARISON_MODE_HARD_FILTER)
@@ -993,8 +1037,6 @@ def run_comparison(*, project_root=PROJECT_ROOT, dataset="full", params_path=Non
             f"artifact={artifact_threshold}, policy={configured_threshold}"
         )
     param_policy = str(param_policy)
-    if comparison_mode != COMPARISON_MODE_SCORE_RANKING and param_policy != PARAM_POLICY_AUTO:
-        raise ValueError("--param-policy 目前只用於 score-ranking 隔離比較")
     resolved_params_path = _resolve_params_path(
         root=root, params_path=params_path, param_policy=param_policy,
         allow_static_diagnostic=allow_static_diagnostic,
@@ -1174,7 +1216,7 @@ def main(argv=None):
 __all__ = [
     "main", "run_comparison", "run_existing_attribution",
     "run_no_filter_candidate_replay_from_metadata",
-    "canonical_strategy_compare_output_dir_names",
+    "canonical_strategy_compare_output_dir_names", "_first_existing_comparison_dir",
     "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair",
     "_assert_controlled_payload_pair", "_build_controlled_param_source_pair",
     "_load_param_source", "_capacity_summary", "_normalize_yearly_completeness",

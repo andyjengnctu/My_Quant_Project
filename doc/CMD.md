@@ -71,7 +71,17 @@ python apps/breakout_quality.py
 [0] 離開
 ```
 
-目前模型研究 workflow 由 `config/breakout_quality_workflow.py` 指定 filter、architecture、continuous-ranker profile、target、seed、PIT 日期與 fold 設定。`[Enter]` 先建立 Selection point-in-time Scores，再執行模型層 audit；`[1]` 不會自動訓練模型。第一階段尚未完成 Score buy-sort 與策略 score-store 接線，因此當 score source 為 `selection_point_in_time` 時，策略選項會明確顯示尚未開放，不會誤用既有 canonical runtime scores。
+模型研究 workflow 由 `config/breakout_quality_workflow.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行既有Dataset／train／research score／report流程；daily percentile regression執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。`[Enter]`與`[1]`仍彼此獨立；PIT score-store尚未接入策略層時，continuous策略選項會明確停止，不會回退誤用canonical runtime scores。
+
+
+切換至原9A binary workflow時，只需在 `config/breakout_quality_workflow.py` 指定既有classification profile，例如：
+
+```python
+BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
+BREAKOUT_QUALITY_WORKFLOW_SEED = 42
+```
+
+若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`；PIT日期／fold設定只在continuous objective下生效。
 
 ### Selection point-in-time continuous-ranker Scores
 

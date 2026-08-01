@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_173038_874fe01.zip`，SHA256 `e0271e5d47c31176956a51057b0f1eabdb3f03fbb054b4022426488a7bd30914`。此基準已完成7個Selection PIT folds與18,247個未見事件Scores；本輪只修正模型audit計算orderable coverage時，既有候選工件也含`breakout_quality_score`造成pandas merge自動產生`_x/_y`、原欄名消失而中止的問題。Audit現在以保留欄名明確引用PIT Score來源，既有候選Score只作輸入欄位存在紀錄，不參與coverage。未修改模型、Target、fold、checkpoint、Score值、buy-sort或策略邏輯 |
-| SHA256 | 本輪來源 ZIP：`e0271e5d47c31176956a51057b0f1eabdb3f03fbb054b4022426488a7bd30914`；前一formal bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5`。PIT manifest仍預設`eligible=false`，目前只完成Score建立，模型audit結果尚未取得；不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_173825_934eddc.zip`，SHA256 `f4a75d6a5d5d74b3c5579b28148684bcb155f2a35b412cd73622b6498fb1de35`。此基準已完成7個Selection PIT folds與18,247個未見事件Scores；本輪修正統一主選單原先把workflow profile硬限制為continuous ranker的問題。現在experiment profile的training objective為模型流程派送單一來源：binary classification沿用既有classification workflow與hard-filter策略比較，continuous ranker維持PIT builder／audit與尚未接線前的策略阻擋。預設continuous profile、既有PIT Scores、模型、Target、fold、checkpoint、Score值、buy-sort及策略交易規則均未改變 |
+| SHA256 | 本輪來源 ZIP：`f4a75d6a5d5d74b3c5579b28148684bcb155f2a35b412cd73622b6498fb1de35`；前一formal bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5`。PIT manifest仍預設`eligible=false`；continuous策略不得當成forward-OOS runtime score或直接送入策略optimizer。切換binary profile只改選單派送與工件顯示，不將PIT Scores轉成binary runtime artifact。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -687,7 +687,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；已完成程式與獨立合成契約驗證，尚未在完整專案資料上訓練 |
 | 程式基準 | 來源 `test-branch-1_20260801_144606_024e49d(2).zip`，SHA256 `762eac6a328c318efa9ecbd1922e29607e06b8f9053a80e1322fff770ccbb6c6` |
 | 單一入口 | `apps/breakout_quality.py`主選單改為模型研究、策略驗證、設定／工件狀態三項；舊`apps/breakout_quality_strategy_compare.py`只轉送至新`strategy-compare`子命令 |
-| 泛用config | 新增`config/breakout_quality_workflow.py`，集中filter、architecture、continuous profile、target、seed、PIT日期／fold及策略Score source；選單與工件名稱不寫死9A／11G／11K |
+| 泛用config | 新增`config/breakout_quality_workflow.py`，集中filter、architecture、experiment profile、seed、PIT日期／fold及策略mode／Score source／buy-sort；選單與工件名稱不寫死9A／11G／11K。後續3.63補正為依profile training objective自動派送binary或continuous流程 |
 | 共用pipeline | 新增`continuous_ranker_pipeline.py`重用既有資料載入、percentile target、Validation選epoch、final refit、checkpoint與inference；沒有複製loss或建立第二套訓練語意 |
 | PIT builder | 新增expanding-window builder。Train／Validation／final refit均要求事件早於score period且`label_eval_end_date < score_start`；每個group只能由一個未見該事件的fold模型評分 |
 | 工件防錯 | 每fold保存日期範圍、row/group coverage、selected epoch、checkpoint與Score hash；串接時檢查重複、缺失、cutoff、identity、有限值與完整coverage。正式Score CSV不含Future Target |
@@ -725,6 +725,23 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 防錯驗證 | 合成orderable工件刻意帶入同名舊Score：一筆有PIT match、一筆無PIT match但舊Score有效；修正後coverage仍正確為1／2=0.5，證明未誤用舊Score。保留欄位若被外部工件占用則fail-fast |
 | Dataset／模型 | 不重建Dataset、不relabel、不重訓fold、不改continuous-ranker、selected epoch、checkpoint、Score CSV、Target、seed、buy-sort或策略參數 |
 | 下一步 | 直接重跑`python apps/breakout_quality.py audit-point-in-time-scores`；取得global／daily Spearman、年度spread、fold drift及orderable coverage後，才判定是否進入泛用Score buy-sort。不得因本次audit程式錯誤重跑7個fold |
+
+
+### 3.63 泛用Profile Workflow Router修正（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；完成程式、設定與獨立路由驗證，未重新訓練模型或執行策略回放 |
+| 程式基準 | 來源`test-branch-1_20260801_173825_934eddc.zip`，SHA256 `f4a75d6a5d5d74b3c5579b28148684bcb155f2a35b412cd73622b6498fb1de35` |
+| 問題 | 第一階段主選單雖使用泛用名稱，但`get_breakout_quality_workflow_settings()`、狀態頁、`[Enter]`與`[1]`均硬綁continuous ranker／PIT流程；把profile改成9A `unique_group_sampling`會直接報錯，違反config驅動設計 |
+| 唯一修正 | Experiment profile既有`training_objective`成為流程派送單一來源。Binary classification走既有完整classification research workflow；continuous ranker維持Selection PIT builder＋audit。狀態頁只顯示當前objective相關工件 |
+| 策略auto契約 | `BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE／SCORE_SOURCE／BUY_SORT`新增`auto`：binary解析為`hard-filter／canonical_runtime／original`；continuous解析為`score-ranking／selection_point_in_time／breakout_quality_score_desc`。明確覆寫仍需通過跨欄一致性檢查 |
+| 參數政策 | `base-finalist-best`／`base-finalists-agree`不再只限score-ranking；hard-filter也可由統一選單忠實傳入並以不同輸出目錄隔離。Controlled pair仍只允許切換相應filter或ranking開關；`attribution-only`與11C預設改由同一canonical directory discovery辨識policy-specific及舊目錄 |
+| 切換方式 | 原9A：workflow profile設為`unique_group_sampling`，若要重現原訓練再將seed設為42；continuous主線：profile維持`strategy_aligned_no_time_pass_magnitude_mse`與seed=1。主選單文字不改名 |
+| 固定條件 | 不改active architecture、Dataset、Label、threshold、continuous Target、PIT folds／checkpoint／Scores、portfolio accounting、候選生成、成交、出場或正式runtime開關 |
+| Dataset／Label | 不需重建Dataset或relabel；只有使用者在binary模型流程確認開始訓練時，才依既有workflow規則檢查並更新工件 |
+| 驗證 | 已獨立驗證binary／continuous settings解析、binary模型route、binary hard-filter策略route、hard-filter參數政策輸出隔離與下游目錄發現、CLI help、全專案編譯／AST與依賴方向；依專案規範未執行`apps/test_suite.py` |
+| 結果邊界 | 本輪只修正操作與配置契約；不得據此宣稱9A或continuous模型、排序或策略績效改善 |
 
 
 ## 4. 已排除或暫停的方向
@@ -799,7 +816,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 下一步 | 不重跑builder；直接執行PIT model audit。若多數年份沒有穩定正向Target排序能力則停止；通過後才實作泛用`BREAKOUT_QUALITY_SCORE_DESC`與Baseline／Sort Only策略比較 |
 | Dataset／training | 不重建binary Dataset、不重訓完整Selection 9A；只沿用既有continuous-ranker training pipeline建立歷史fold模型 |
 | 執行入口 | `python apps/breakout_quality.py build-point-in-time-scores`；完成後執行`audit-point-in-time-scores` |
-| UI／runtime | 新主選單不含9A／11G／11K名稱；research-only低階功能維持CLI-only；PIT Score不是scanner或forward-OOS runtime工件 |
+| UI／runtime | 新主選單不含9A／11G／11K名稱；experiment profile的training objective自動派送binary classification或continuous PIT流程；research-only低階功能維持CLI-only；PIT Score不是scanner或forward-OOS runtime工件 |
 | 啟動錯誤閉環 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`：完整Dataset尾端Label horizon未完成group可合法使整組`label_eval_end_date`皆空；group一致性檢查改以`nunique(dropna=False)`把「全空」視為單一一致狀態，同時仍拒絕同group混用空值與完成日期或多個完成日期。這些group因`target_valid=false`及日期比較為False，不會進入train／validation／final refit；本輪只解除誤判，不放寬前視隔離 |
 
 ### 優先 6A：AdamW only

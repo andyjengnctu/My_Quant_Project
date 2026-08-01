@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from io import StringIO
 import importlib
 import json
@@ -13,7 +14,9 @@ import zipfile
 
 from config.breakout_quality_experiments import (
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+    TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+    UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
 )
 from .checks import add_check
 
@@ -178,6 +181,83 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[1] 策略績效驗證" in interactive_text
             and "[2] 查看目前設定與工件狀態" in interactive_text
         ),
+    )
+
+    binary_workflow_settings = replace(
+        workflow_settings,
+        experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+        training_objective=TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
+        continuous_target_id=None,
+        training_label_scope="all_labels",
+        strategy_comparison_mode="hard-filter",
+        strategy_score_source="canonical_runtime",
+        strategy_buy_sort="original",
+    )
+    with (
+        patch(
+            "apps.breakout_quality.get_breakout_quality_workflow_settings",
+            return_value=binary_workflow_settings,
+        ),
+        patch("apps.breakout_quality._interactive_workflow", return_value=41) as binary_route,
+    ):
+        binary_rc = app_breakout_quality._interactive_model_research(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_binary_profile_routes_to_classification_workflow",
+        (41, 1, binary_workflow_settings),
+        (
+            binary_rc,
+            binary_route.call_count,
+            binary_route.call_args.kwargs.get("workflow_settings"),
+        ),
+    )
+
+    strategy_commands = []
+
+    def _record_strategy_command(command, args, *, program_name):
+        strategy_commands.append((str(command), list(args), str(program_name)))
+        return 0
+
+    with (
+        patch(
+            "apps.breakout_quality.get_breakout_quality_workflow_settings",
+            return_value=binary_workflow_settings,
+        ),
+        patch("apps.breakout_quality._print_workflow_status"),
+        patch(
+            "apps.breakout_quality._run_command",
+            side_effect=_record_strategy_command,
+        ),
+    ):
+        binary_strategy_rc = app_breakout_quality._interactive_strategy_validation(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_binary_strategy_routes_to_hard_filter",
+        (
+            0,
+            [
+                (
+                    "strategy-compare",
+                    [
+                        "--dataset", binary_workflow_settings.strategy_dataset,
+                        "--comparison-mode", "hard-filter",
+                        "--param-policy", binary_workflow_settings.strategy_param_policy,
+                        "--max-positions", str(binary_workflow_settings.strategy_max_positions),
+                        "--rotation", binary_workflow_settings.strategy_rotation,
+                    ],
+                    "apps/breakout_quality.py",
+                )
+            ],
+        ),
+        (binary_strategy_rc, strategy_commands),
     )
 
     fake_workflow_args = SimpleNamespace(filter_id="synthetic_quality")

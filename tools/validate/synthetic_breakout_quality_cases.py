@@ -309,6 +309,7 @@ from tools.filters.breakout_quality.audit_qualified_candidate_set import (
     _validate_strategy_metadata as validate_qualified_audit_strategy_metadata,
 )
 from tools.filters.breakout_quality.strategy_compare import (
+    COMPARISON_MODE_HARD_FILTER,
     COMPARISON_MODE_SCORE_RANKING,
     PARAM_POLICY_BASE_FINALIST_BEST,
     PARAM_POLICY_BASE_FINALISTS_AGREE,
@@ -319,6 +320,7 @@ from tools.filters.breakout_quality.strategy_compare import (
     _capacity_summary,
     _comparison_labels,
     _comparison_output_dir_name,
+    _first_existing_comparison_dir,
     _normalize_yearly_completeness,
     _resolve_comparison_period,
     _resolve_params_path,
@@ -8810,6 +8812,46 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         ),
     )
 
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "hard_filter_param_policies_use_isolated_output_directories",
+        (
+            "strategy_compare_base_finalist_best",
+            "strategy_compare_base_finalists_agree",
+        ),
+        (
+            _comparison_output_dir_name(
+                COMPARISON_MODE_HARD_FILTER,
+                _comparison_labels(COMPARISON_MODE_HARD_FILTER),
+                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+            ),
+            _comparison_output_dir_name(
+                COMPARISON_MODE_HARD_FILTER,
+                _comparison_labels(COMPARISON_MODE_HARD_FILTER),
+                param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
+            ),
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        compare_root = Path(tmp_dir)
+        expected_compare_dir = compare_root / "strategy_compare_base_finalist_best"
+        expected_compare_dir.mkdir()
+        discovered_compare_dir = _first_existing_comparison_dir(
+            compare_root,
+            comparison_mode=COMPARISON_MODE_HARD_FILTER,
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "hard_filter_policy_specific_output_is_discoverable",
+        expected_compare_dir.name,
+        discovered_compare_dir.name,
+    )
+
     rolling_left = rolling_pair[1]["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]
     rolling_right = rolling_pair[2]["params_ensemble_by_effective_date"]["2021-01-01"][0]["params"]
     add_check(
@@ -10213,6 +10255,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
+    from config import breakout_quality_workflow as workflow_config
     from config.breakout_quality_workflow import get_breakout_quality_workflow_settings
     from tools.filters.breakout_quality.audit_point_in_time_scores import (
         _orderable_coverage,
@@ -10282,6 +10325,58 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     )
 
     settings = get_breakout_quality_workflow_settings()
+    with patch.object(
+        workflow_config,
+        "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    ):
+        binary_settings = workflow_config.get_breakout_quality_workflow_settings()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "workflow_binary_profile_resolves_classification_and_hard_filter",
+        (
+            "binary_classification",
+            None,
+            "hard-filter",
+            "canonical_runtime",
+            "original",
+        ),
+        (
+            binary_settings.training_objective,
+            binary_settings.continuous_target_id,
+            binary_settings.strategy_comparison_mode,
+            binary_settings.strategy_score_source,
+            binary_settings.strategy_buy_sort,
+        ),
+    )
+    with patch.object(
+        workflow_config,
+        "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    ):
+        continuous_settings = workflow_config.get_breakout_quality_workflow_settings()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "workflow_continuous_profile_resolves_point_in_time_score_ranking",
+        (
+            "daily_percentile_regression",
+            "strategy_aligned_opportunity_no_time_r_v1",
+            "score-ranking",
+            "selection_point_in_time",
+            "breakout_quality_score_desc",
+        ),
+        (
+            continuous_settings.training_objective,
+            continuous_settings.continuous_target_id,
+            continuous_settings.strategy_comparison_mode,
+            continuous_settings.strategy_score_source,
+            continuous_settings.strategy_buy_sort,
+        ),
+    )
     parsed = parse_point_in_time_args([])
     add_check(
         results,

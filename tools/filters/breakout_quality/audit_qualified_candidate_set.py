@@ -28,6 +28,8 @@ from filters.breakout_quality.continuous_target import (
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.strategy_compare import (
+    COMPARISON_MODE_HARD_FILTER,
+    _first_existing_comparison_dir,
     _scenario_summary as summarize_strategy_scenario,
     run_no_filter_candidate_replay_from_metadata,
 )
@@ -95,14 +97,15 @@ def _strategy_compare_dir(filter_id: str, explicit_dir: str | None) -> Path:
     if explicit_dir:
         path = Path(explicit_dir).expanduser().resolve()
     else:
-        path = (
-            resolve_filter_model_output_dir(
-                PROJECT_ROOT,
-                filter_id,
-                BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-                BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-            )
-            / "strategy_compare"
+        output_root = resolve_filter_model_output_dir(
+            PROJECT_ROOT,
+            filter_id,
+            BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+        )
+        path = _first_existing_comparison_dir(
+            output_root,
+            comparison_mode=COMPARISON_MODE_HARD_FILTER,
         )
     if not path.is_dir():
         raise FileNotFoundError(f"找不到11C strategy_compare目錄: {path}")
