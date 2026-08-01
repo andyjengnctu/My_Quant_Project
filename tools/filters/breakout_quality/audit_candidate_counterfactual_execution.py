@@ -34,10 +34,16 @@ from tools.filters.breakout_quality.audit_selection_strategy_realization import 
     _output_dir as source_output_dir,
     _sha256_file,
     _target_lookup,
+    _unique_signals,
     _validate_param_coverage,
 )
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
-from tools.filters.breakout_quality.strategy_compare import COMPARISON_MODE_HARD_FILTER, _run_scenario, _scenario_summary
+from tools.filters.breakout_quality.strategy_compare import (
+    COMPARISON_MODE_HARD_FILTER,
+    _flatten_candidate_replay_rows,
+    _run_scenario,
+    _scenario_summary,
+)
 from tools.filters.breakout_quality.train_continuous_ranker import _spearman
 
 AUDIT_SCHEMA_VERSION = 1
@@ -62,16 +68,28 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _candidate_key(candidate: dict[str, Any], today: Any) -> tuple[str, str]:
-    ticker = str(candidate.get("ticker") or "").strip()
+def _candidate_key(
+    candidate: dict[str, Any],
+    today: Any,
+    *,
+    snapshot: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    canonical = dict(snapshot or {})
+    ticker = str(canonical.get("ticker") or candidate.get("ticker") or "").strip()
     signal_date = _date_text(
-        candidate.get("signal_date")
+        canonical.get("signal_date")
+        or canonical.get("candidate_date")
+        or canonical.get("trade_date")
+        or candidate.get("signal_date")
         or candidate.get("candidate_date")
         or candidate.get("trade_date")
         or today
     )
     if not ticker or not signal_date:
-        raise ValueError(f"11J candidate缺少ticker／signal_date: {candidate}")
+        raise ValueError(
+            "11J candidate缺少canonical ticker／signal_date: "
+            f"candidate={candidate}, snapshot={snapshot}"
+        )
     return ticker, signal_date
 
 
@@ -90,8 +108,14 @@ class CandidateCounterfactualReplay(dict):
         self.states: dict[tuple[str, str], dict[str, Any]] = {}
         self.finalized = False
 
-    def _state_for_candidate(self, candidate: dict[str, Any], today: Any) -> dict[str, Any]:
-        key = _candidate_key(candidate, today)
+    def _state_for_candidate(
+        self,
+        candidate: dict[str, Any],
+        today: Any,
+        *,
+        snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        key = _candidate_key(candidate, today, snapshot=snapshot)
         state = self.states.get(key)
         today_text = _date_text(today)
         if state is None:
@@ -178,7 +202,9 @@ class CandidateCounterfactualReplay(dict):
         *,
         today,
         qualified_candidates,
+        qualified_candidate_snapshots=None,
         orderable_candidates,
+        orderable_candidate_snapshots=None,
         all_dfs_fast,
         sizing_equity,
         fallback_params,
@@ -186,17 +212,36 @@ class CandidateCounterfactualReplay(dict):
         today_text = _date_text(today)
         if today_text > self.candidate_cutoff:
             return
-        for candidate in list(qualified_candidates or []):
-            state = self._state_for_candidate(candidate, today)
+        qualified_rows = list(qualified_candidates or [])
+        qualified_snapshots = list(qualified_candidate_snapshots or [])
+        orderable_rows = list(orderable_candidates or [])
+        orderable_snapshots = list(orderable_candidate_snapshots or [])
+        if qualified_snapshots and len(qualified_snapshots) != len(qualified_rows):
+            raise ValueError(
+                "11J qualified candidate與canonical snapshot數量不一致: "
+                f"candidates={len(qualified_rows)}, snapshots={len(qualified_snapshots)}"
+            )
+        if orderable_snapshots and len(orderable_snapshots) != len(orderable_rows):
+            raise ValueError(
+                "11J orderable candidate與canonical snapshot數量不一致: "
+                f"candidates={len(orderable_rows)}, snapshots={len(orderable_snapshots)}"
+            )
+        if not qualified_snapshots:
+            qualified_snapshots = [None] * len(qualified_rows)
+        if not orderable_snapshots:
+            orderable_snapshots = [None] * len(orderable_rows)
+
+        for candidate, snapshot in zip(qualified_rows, qualified_snapshots):
+            state = self._state_for_candidate(candidate, today, snapshot=snapshot)
             state["qualified_occurrence_count"] = int(state["qualified_occurrence_count"]) + 1
 
         attempted_keys: set[tuple[str, str]] = set()
-        for candidate in list(orderable_candidates or []):
-            key = _candidate_key(candidate, today)
+        for candidate, snapshot in zip(orderable_rows, orderable_snapshots):
+            key = _candidate_key(candidate, today, snapshot=snapshot)
             if key in attempted_keys:
                 continue
             attempted_keys.add(key)
-            state = self._state_for_candidate(candidate, today)
+            state = self._state_for_candidate(candidate, today, snapshot=snapshot)
             state["orderable_occurrence_count"] = int(state["orderable_occurrence_count"]) + 1
             if bool(state.get("filled")) or bool(state.get("closed")):
                 continue
@@ -473,11 +518,29 @@ def main(argv=None) -> int:
         replay_counts=tracker,
     )
     discovery_summary=_scenario_summary(discovery_scenario)
+    lookup,target_manifest=_target_lookup(str(args.filter_id))
+    discovery_qualified=_flatten_candidate_replay_rows(tracker,"candidate_rows")
+    discovery_qualified=_attach_targets(discovery_qualified,lookup)
+    discovery_qualified_unique=_unique_signals(discovery_qualified)
     source_qualified_count=int((source_report.get("coverage") or {}).get("qualified_unique_signal_count",0) or 0)
-    if source_qualified_count and len(tracker.states)!=source_qualified_count:
+    canonical_discovery_count=len(discovery_qualified_unique)
+    if source_qualified_count and canonical_discovery_count!=source_qualified_count:
         raise ValueError(
-            "11J候選發現重播與11I qualified unique signals不一致: "
-            f"expected={source_qualified_count}, actual={len(tracker.states)}"
+            "11J canonical候選快照與11I qualified unique signals不一致: "
+            f"expected={source_qualified_count}, actual={canonical_discovery_count}"
+        )
+    if len(tracker.states)!=canonical_discovery_count:
+        canonical_keys=set(zip(
+            discovery_qualified_unique["ticker"].astype(str),
+            discovery_qualified_unique["target_date"].astype(str),
+        ))
+        state_keys=set(tracker.states)
+        missing=sorted(canonical_keys-state_keys)[:10]
+        unexpected=sorted(state_keys-canonical_keys)[:10]
+        raise ValueError(
+            "11J observer state未忠實採用canonical候選快照: "
+            f"canonical={canonical_discovery_count}, states={len(tracker.states)}, "
+            f"missing_sample={missing}, unexpected_sample={unexpected}"
         )
 
     discovered_state_count=len(tracker.states)
@@ -506,7 +569,6 @@ def main(argv=None) -> int:
             f"before={discovered_state_count}, after={len(tracker.states)}"
         )
 
-    lookup,target_manifest=_target_lookup(str(args.filter_id))
     signals=tracker.signal_frame()
     signals=_attach_targets(signals,lookup)
     source_trade_path=source_report_path.parent / str(((source_report.get("artifacts") or {}).get("trade_matches") or {}).get("filename") or "")

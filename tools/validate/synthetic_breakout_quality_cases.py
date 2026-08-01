@@ -9772,6 +9772,59 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
         ),
     )
 
+    canonical_tracker = CandidateCounterfactualReplay(candidate_cutoff="2020-01-02")
+    raw_a = dict(candidate, signal_date="", candidate_date="2020-01-02")
+    raw_b = dict(candidate, signal_date="", candidate_date="2020-01-02")
+    snapshot_a = {
+        "ticker": "2330",
+        "trade_date": "2020-01-02",
+        "candidate_date": "2020-01-02",
+        "signal_date": "2020-01-01",
+    }
+    snapshot_b = {
+        "ticker": "2330",
+        "trade_date": "2020-01-02",
+        "candidate_date": "2020-01-02",
+        "signal_date": "2020-01-02",
+    }
+    canonical_tracker.observe_replay_candidates(
+        today=dates[1],
+        qualified_candidates=[raw_a, raw_b],
+        qualified_candidate_snapshots=[snapshot_a, snapshot_b],
+        orderable_candidates=[],
+        orderable_candidate_snapshots=[],
+        all_dfs_fast={"2330": fast},
+        sizing_equity=1_000_000.0,
+        fallback_params=params,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_uses_same_canonical_snapshot_keys_as_replay_rows",
+        (("2330", "2020-01-01"), ("2330", "2020-01-02")),
+        tuple(sorted(canonical_tracker.states)),
+    )
+
+    snapshot_mismatch_rejected = False
+    try:
+        canonical_tracker.observe_replay_candidates(
+            today=dates[1],
+            qualified_candidates=[raw_a, raw_b],
+            qualified_candidate_snapshots=[snapshot_a],
+            orderable_candidates=[],
+            orderable_candidate_snapshots=[],
+            all_dfs_fast={"2330": fast},
+            sizing_equity=1_000_000.0,
+            fallback_params=params,
+        )
+    except ValueError as exc:
+        snapshot_mismatch_rejected = "canonical snapshot數量不一致" in str(exc)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_rejects_candidate_snapshot_length_divergence",
+        True,
+        snapshot_mismatch_rejected,
+    )
+
     deferred = CandidateCounterfactualReplay(
         candidate_cutoff="2020-01-02",
         defer_finalize=True,
@@ -9877,7 +9930,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "candidate_counterfactual_cli_only_and_observer_hooks_are_optional",
-        (True, True, True, True, True),
+        (True, True, True, True, True, True, True),
         (
             command_modules.get("audit-candidate-counterfactual")
             == "tools.filters.breakout_quality.audit_candidate_counterfactual_execution",
@@ -9885,6 +9938,8 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
             "audit-candidate-counterfactual" not in menu_source,
             'getattr(replay_counts, "begin_replay_day", None)' in engine_source,
             'getattr(replay_counts, "observe_replay_candidates", None)' in engine_source,
+            "qualified_candidate_snapshots=qualified_candidate_snapshots_today" in engine_source,
+            "orderable_candidate_snapshots=orderable_candidate_snapshots_today" in engine_source,
         ),
     )
     add_check(
@@ -9901,19 +9956,23 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
     )
     discovery_call = audit_source.find('name="11J_candidate_discovery"')
     discovery_end = audit_source.find("end_date=candidate_cutoff", discovery_call)
-    count_guard = audit_source.find("len(tracker.states)!=source_qualified_count", discovery_end)
-    management_call = audit_source.find('name="11J_counterfactual_management"', count_guard)
+    canonical_count = audit_source.find("canonical_discovery_count=len(discovery_qualified_unique)", discovery_end)
+    source_count_guard = audit_source.find("canonical_discovery_count!=source_qualified_count", canonical_count)
+    observer_count_guard = audit_source.find("len(tracker.states)!=canonical_discovery_count", source_count_guard)
+    management_call = audit_source.find('name="11J_counterfactual_management"', observer_count_guard)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "candidate_counterfactual_separates_exact_discovery_from_position_management",
-        (True, True, True, True, True, True),
+        (True, True, True, True, True, True, True, True),
         (
             'defer_finalize=True' in audit_source,
             'if self.defer_finalize:' in audit_source,
             discovery_call >= 0,
             discovery_end > discovery_call,
-            count_guard > discovery_end,
-            management_call > count_guard,
+            canonical_count > discovery_end,
+            source_count_guard > canonical_count,
+            observer_count_guard > source_count_guard,
+            management_call > observer_count_guard,
         ),
     )
 

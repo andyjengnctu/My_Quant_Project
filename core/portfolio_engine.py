@@ -1047,9 +1047,17 @@ def run_portfolio_timeline(
                 if profile_timing_enabled:
                     candidate_scan_sec += time.perf_counter() - t0
 
+                qualified_candidate_snapshots_today = []
+                orderable_candidate_snapshots_today = []
                 if replay_counts is not None:
                     for candidate in candidates_today:
-                        ticker = str(candidate.get("ticker", ""))
+                        snapshot = _candidate_replay_snapshot(
+                            candidate,
+                            fallback_trade_date=today,
+                            is_orderable=False,
+                        )
+                        qualified_candidate_snapshots_today.append(snapshot)
+                        ticker = str(snapshot.get("ticker", ""))
                         bucket = replay_counts.setdefault(
                             ticker,
                             {
@@ -1061,15 +1069,15 @@ def run_portfolio_timeline(
                             },
                         )
                         bucket.setdefault("candidate_dates", []).append(today)
-                        bucket.setdefault("candidate_rows", []).append(
-                            _candidate_replay_snapshot(
-                                candidate,
-                                fallback_trade_date=today,
-                                is_orderable=False,
-                            )
-                        )
+                        bucket.setdefault("candidate_rows", []).append(snapshot)
                     for candidate in orderable_candidates_today:
-                        ticker = str(candidate.get("ticker", ""))
+                        snapshot = _candidate_replay_snapshot(
+                            candidate,
+                            fallback_trade_date=today,
+                            is_orderable=True,
+                        )
+                        orderable_candidate_snapshots_today.append(snapshot)
+                        ticker = str(snapshot.get("ticker", ""))
                         bucket = replay_counts.setdefault(
                             ticker,
                             {
@@ -1081,13 +1089,7 @@ def run_portfolio_timeline(
                             },
                         )
                         bucket.setdefault("orderable_dates", []).append(today)
-                        bucket.setdefault("orderable_rows", []).append(
-                            _candidate_replay_snapshot(
-                                candidate,
-                                fallback_trade_date=today,
-                                is_orderable=True,
-                            )
-                        )
+                        bucket.setdefault("orderable_rows", []).append(snapshot)
                     before_trade_rows = len(trade_history)
                 else:
                     before_trade_rows = -1
@@ -1100,7 +1102,9 @@ def run_portfolio_timeline(
                         replay_observe_candidates,
                         today=today,
                         qualified_candidates=list(candidates_today or []),
+                        qualified_candidate_snapshots=qualified_candidate_snapshots_today,
                         orderable_candidates=list(orderable_candidates_today or []),
+                        orderable_candidate_snapshots=orderable_candidate_snapshots_today,
                         all_dfs_fast=day_all_dfs_fast,
                         sizing_equity=sizing_equity,
                         fallback_params=day_params,
