@@ -11252,6 +11252,277 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     return results, summary
 
 
+def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_SCORE_RANKING_CAPTURE_AUDIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from tools.filters.breakout_quality.audit_score_ranking_capture import (
+        build_score_ranking_capture_audit,
+        write_score_ranking_capture_audit_outputs,
+    )
+    from tools.filters.breakout_quality.strategy_compare import (
+        COMPARISON_MODE_SCORE_RANKING,
+        _html_report,
+        _markdown_report,
+        run_existing_score_ranking_capture_audit,
+    )
+
+    baseline_history = pd.DataFrame([
+        {
+            "Date": "2014-01-02", "Ticker": "2330",
+            "Type": "買進 (新訊號, EV:1.00R)", "買訊日": "2014-01-01",
+            "候選類型": "新訊號", "進場類型": "normal", "成交價": 100.0,
+            "停損價": 90.0, "股數": 1000, "預留總金額": 101000.0,
+            "投入總金額": 100500.0, "Quality Score": 0.6,
+            "Quality Score Date": "2014-01-01",
+        },
+        {"Date": "2014-01-10", "Ticker": "2330", "Type": "半倉停利", "成交價": 115.0, "股數": 500},
+        {"Date": "2014-01-20", "Ticker": "2330", "Type": "全倉結算(指標)", "該筆總損益": 12000.0, "R_Multiple": 1.2},
+        {"Date": "2014-02-01", "Ticker": "1101", "Type": "錯失買進(新訊號)", "預留總金額": 50000.0},
+    ])
+    score_history = pd.DataFrame([
+        {
+            "Date": "2014-01-02", "Ticker": "2330",
+            "Type": "買進 (新訊號, EV:1.00R)", "買訊日": "2014-01-01",
+            "候選類型": "新訊號", "進場類型": "normal", "成交價": 100.0,
+            "停損價": 88.0, "股數": 800, "預留總金額": 100000.0,
+            "投入總金額": 80500.0, "Quality Score": 0.8,
+            "Quality Score Date": "2014-01-01",
+        },
+        {"Date": "2014-01-25", "Ticker": "2330", "Type": "全倉結算(停損)", "該筆總損益": -7000.0, "R_Multiple": -0.7},
+        {"Date": "2014-02-01", "Ticker": "1101", "Type": "錯失買進(新訊號)", "預留總金額": 50000.0},
+    ])
+    selected = pd.DataFrame([
+        {
+            "ticker": "2330", "trade_date": "2014-01-02",
+            "signal_date": "2014-01-01", "score_event_date": "2014-01-01",
+            "target_raw_r": 2.0,
+        }
+    ])
+    baseline_capacity = pd.DataFrame({
+        "Date": [
+            "2014-01-02", "2014-01-03", "2014-01-06", "2014-01-07",
+            "2014-01-08", "2014-01-09", "2014-01-10", "2014-01-13",
+            "2014-01-14", "2014-01-15", "2014-01-16", "2014-01-17",
+            "2014-01-20", "2014-01-25", "2014-02-01",
+        ]
+    })
+    score_capacity = baseline_capacity.copy()
+    metadata = {
+        "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
+        "comparison_period": {"start": "2014-01-01", "end": "2014-12-31"},
+        "score_source": "selection_point_in_time",
+        "params_path": "synthetic.json", "param_source_kind": "rolling_active_param_ensemble",
+        "param_selector": "base_finalist_best", "runtime_member_count_min": 1,
+        "runtime_member_count_max": 1, "runtime_min_agree": 1,
+        "comparison_design": "selection_point_in_time_active_param_replay",
+        "lookahead_safe_active_param_schedule": True, "dataset": "full",
+        "benchmark_ticker": "0050", "filter_id": "synthetic",
+        "model_architecture": "inception_time_v1", "experiment_profile": "synthetic",
+        "score_ranking_order": ["breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"],
+        "ranking_scope": "all_candidates_after_single_member_qualification",
+    }
+    baseline_summary = {
+        "total_return_pct": 20.0, "max_drawdown_pct": 10.0,
+        "return_over_max_drawdown": 2.0, "annual_return_pct": 10.0,
+        "log_r_squared": 0.9, "monthly_win_rate_pct": 60.0, "trade_count": 1,
+        "win_rate_pct": 100.0, "payoff_ratio": 2.0, "expected_value_r": 1.2,
+        "avg_exposure_pct": 77.0, "min_full_year_return_pct": 20.0,
+        "avg_orderable_candidates": 10.0, "candidate_supply_gap_days": 1,
+        "underfilled_end_days": 1, "end_position_gap_slot_days": 1,
+    }
+    score_summary = {
+        **baseline_summary,
+        "total_return_pct": 10.0, "max_drawdown_pct": 20.0,
+        "return_over_max_drawdown": 0.5, "avg_exposure_pct": 55.0,
+        "expected_value_r": -0.7, "win_rate_pct": 0.0,
+    }
+    selection_diagnostics = {
+        "no_filter": {}, "score_ranking": {},
+        "score_ranking_minus_no_filter": {
+            "selected_target_mean_r": 0.2,
+            "target_top_k_retention_mean": 0.1,
+        },
+    }
+    result = build_score_ranking_capture_audit(
+        metadata=metadata,
+        baseline_summary=baseline_summary,
+        score_sort_summary=score_summary,
+        baseline_trade_history=baseline_history,
+        score_sort_trade_history=score_history,
+        baseline_selected_target_diagnostics=selected,
+        score_sort_selected_target_diagnostics=selected,
+        selection_diagnostics=selection_diagnostics,
+        baseline_daily_capacity=baseline_capacity,
+        score_sort_daily_capacity=score_capacity,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "capture_audit_reconstructs_capital_partial_and_target_capture_metrics",
+        (100500.0, 80500.0, 6, 0.6, -0.35, 100.0, 100.0, 0.0, None),
+        (
+            result["baseline"]["avg_invested_total"],
+            result["score_sort"]["avg_invested_total"],
+            result["baseline"]["partial_residual_slot_days"],
+            result["baseline"]["avg_target_capture_ratio"],
+            result["score_sort"]["avg_target_capture_ratio"],
+            result["baseline"]["top_5_entry_dates_share_pct"],
+            result["baseline"]["top_entry_month_share_pct"],
+            result["baseline"]["industry_coverage_pct"],
+            result["baseline"]["top_industry_share_pct"],
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "capture_audit_supports_parameter_adaptation_only_after_target_improves_and_sort_only_fails",
+        ("ADAPTATION_DIAGNOSTIC_SUPPORTED", True, True, True, False),
+        (
+            result["decision"]["status"],
+            result["decision"]["target_selection_improved"],
+            result["decision"]["economic_effect_failed"],
+            result["decision"]["parameter_adaptation_candidate"],
+            result["decision"]["future_target_used_for_runtime"],
+        ),
+    )
+
+    yearly = pd.DataFrame([
+        {
+            "year": 2014, "no_filter_return_pct": 20.0,
+            "score_ranking_return_pct": 10.0, "delta_pct": -10.0,
+            "is_full_year": True,
+        }
+    ])
+    comparison_delta = {
+        key: float(score_summary[key]) - float(baseline_summary[key])
+        for key in score_summary
+        if isinstance(score_summary.get(key), (int, float))
+        and isinstance(baseline_summary.get(key), (int, float))
+    }
+    comparison_markdown = _markdown_report(
+        metadata, baseline_summary, score_summary, comparison_delta, yearly, selection_diagnostics
+    )
+    comparison_html = _html_report(
+        metadata, baseline_summary, score_summary, comparison_delta, yearly, selection_diagnostics
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        payload = write_score_ranking_capture_audit_outputs(result=result, output_dir=temp_dir)
+        output_dir = Path(temp_dir)
+        audit_markdown = (output_dir / "score_ranking_capture_audit.md").read_text(encoding="utf-8")
+        audit_html = (output_dir / "score_ranking_capture_audit.html").read_text(encoding="utf-8")
+        outputs_complete = all(
+            (output_dir / name).is_file()
+            for name in (
+                "score_ranking_capture_audit.json", "score_ranking_capture_audit.md",
+                "score_ranking_capture_audit.html", "no_filter_capture_lifecycle.csv",
+                "score_ranking_capture_lifecycle.csv", "score_ranking_capture_yearly.csv",
+                "score_ranking_capture_scenarios.csv",
+            )
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_and_capture_reports_have_readable_color_semantics_and_complete_outputs",
+        (True, True, True, True, True),
+        (
+            outputs_complete,
+            (
+                "🔴 惡化" in comparison_markdown
+                and "🟡 注意" in audit_markdown
+                and "半倉殘留交易slot-days" in audit_markdown
+                and "產業資料覆蓋" in audit_markdown
+            ),
+            'class="delta negative"' in comparison_html,
+            (
+                'class="badge warning"' in audit_html
+                and "Exit reason" in audit_html
+                and "半倉殘留交易slot-days" in audit_html
+            ),
+            payload["decision"]["status"] == "ADAPTATION_DIAGNOSTIC_SUPPORTED",
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output_root = Path(temp_dir) / "model_output"
+        labels = _comparison_labels(COMPARISON_MODE_SCORE_RANKING)
+        output_name = _comparison_output_dir_name(
+            COMPARISON_MODE_SCORE_RANKING,
+            labels,
+            param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+        ) + "_selection_point_in_time"
+        existing_dir = output_root / output_name
+        existing_dir.mkdir(parents=True, exist_ok=True)
+        existing_payload = {
+            "metadata": metadata,
+            "no_filter": baseline_summary,
+            "score_ranking": score_summary,
+            "score_ranking_minus_no_filter": comparison_delta,
+            "yearly": yearly.to_dict("records"),
+            "selection_diagnostics": selection_diagnostics,
+        }
+        (existing_dir / "strategy_comparison.json").write_text(
+            json.dumps(existing_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        baseline_history.to_csv(
+            existing_dir / "no_filter_trades.csv", index=False, encoding="utf-8-sig"
+        )
+        score_history.to_csv(
+            existing_dir / "score_ranking_trades.csv", index=False, encoding="utf-8-sig"
+        )
+        selected.to_csv(
+            existing_dir / "no_filter_selected_target_diagnostics.csv",
+            index=False, encoding="utf-8-sig",
+        )
+        selected.to_csv(
+            existing_dir / "score_ranking_selected_target_diagnostics.csv",
+            index=False, encoding="utf-8-sig",
+        )
+        baseline_capacity.to_csv(
+            existing_dir / "no_filter_daily_capacity.csv",
+            index=False, encoding="utf-8-sig",
+        )
+        score_capacity.to_csv(
+            existing_dir / "score_ranking_daily_capacity.csv",
+            index=False, encoding="utf-8-sig",
+        )
+        with (
+            patch(
+                "tools.filters.breakout_quality.strategy_compare.resolve_filter_model_output_dir",
+                return_value=output_root,
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare.run_comparison",
+                side_effect=AssertionError("capture-audit-only不得重跑portfolio"),
+            ),
+        ):
+            reused_payload = run_existing_score_ranking_capture_audit(
+                project_root=temp_dir,
+                filter_id="synthetic",
+                model_architecture="inception_time_v1",
+                experiment_profile="synthetic",
+                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+                score_source="selection_point_in_time",
+            )
+        reuse_outputs_complete = all(
+            (existing_dir / name).is_file()
+            for name in (
+                "strategy_comparison.md", "strategy_comparison.html",
+                "score_ranking_capture_audit.json", "score_ranking_capture_audit.md",
+                "score_ranking_capture_audit.html",
+            )
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "capture_audit_only_reuses_existing_artifacts_without_portfolio_replay",
+        (True, "ADAPTATION_DIAGNOSTIC_SUPPORTED"),
+        (reuse_outputs_complete, reused_payload["decision"]["status"]),
+    )
+
+    summary["workflow"] = "score_ranking_capture_audit"
+    summary["future_target_runtime"] = False
+    return results, summary
+
+
 
 def validate_breakout_quality_single_seed_single_entry_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_SINGLE_SEED_SINGLE_ENTRY"

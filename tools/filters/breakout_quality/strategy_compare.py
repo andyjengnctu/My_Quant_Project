@@ -48,7 +48,20 @@ from filters.breakout_quality.ranking_score_store import (
 )
 from filters.breakout_quality.runtime import breakout_quality_ranking_source_context
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
+from tools.filters.breakout_quality.audit_score_ranking_capture import (
+    build_score_ranking_capture_audit,
+    write_score_ranking_capture_audit_outputs,
+)
 from tools.filters.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
+from tools.filters.breakout_quality.strategy_report_style import (
+    SIGNAL_NEGATIVE,
+    html_delta_cell,
+    html_page,
+    html_signal_badge,
+    signal_for_delta,
+    signal_marker,
+    terminal_signal,
+)
 from tools.filters.breakout_quality.trade_attribution import (
     ATTRIBUTION_SCHEMA_VERSION,
     write_trade_attribution_outputs,
@@ -139,6 +152,11 @@ def _parse_args(argv=None):
         "--attribution-only",
         action="store_true",
         help="只讀取既有 strategy_compare CSV/JSON 產生交易歸因，不重新執行 portfolio replay。",
+    )
+    parser.add_argument(
+        "--capture-audit-only",
+        action="store_true",
+        help="只讀取既有score-ranking比較工件，重新產生彩色主報表與資本效率／Target capture audit。",
     )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
@@ -763,22 +781,22 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
     labels = _comparison_labels(str(metadata["comparison_mode"]))
     active_yearly_column = f"{labels['active_name']}_return_pct"
     rows = [
-        ("淨總報酬", "total_return_pct", "%"),
-        ("最大回撤", "max_drawdown_pct", "%"),
-        ("報酬／最大回撤", "return_over_max_drawdown", ""),
-        ("年化報酬", "annual_return_pct", "%"),
-        ("Log R²", "log_r_squared", ""),
-        ("月勝率", "monthly_win_rate_pct", "%"),
-        ("交易數", "trade_count", ""),
-        ("勝率", "win_rate_pct", "%"),
-        ("Payoff", "payoff_ratio", ""),
-        ("EV", "expected_value_r", " R"),
-        ("平均曝險", "avg_exposure_pct", "%"),
-        ("最差完整年度", "min_full_year_return_pct", "%"),
-        ("平均每日可掛單候選", "avg_orderable_candidates", ""),
-        ("候選供給不足日", "candidate_supply_gap_days", " 日"),
-        ("期末未滿倉日", "underfilled_end_days", " 日"),
-        ("期末持股缺口總和", "end_position_gap_slot_days", " 格日"),
+        ("淨總報酬", "total_return_pct", "%", "higher"),
+        ("最大回撤", "max_drawdown_pct", "%", "lower"),
+        ("報酬／最大回撤", "return_over_max_drawdown", "", "higher"),
+        ("年化報酬", "annual_return_pct", "%", "higher"),
+        ("Log R²", "log_r_squared", "", "higher"),
+        ("月勝率", "monthly_win_rate_pct", "%", "higher"),
+        ("交易數", "trade_count", "", "neutral"),
+        ("勝率", "win_rate_pct", "%", "higher"),
+        ("Payoff", "payoff_ratio", "", "higher"),
+        ("EV", "expected_value_r", " R", "higher"),
+        ("平均曝險", "avg_exposure_pct", "%", "attention"),
+        ("最差完整年度", "min_full_year_return_pct", "%", "higher"),
+        ("平均每日可掛單候選", "avg_orderable_candidates", "", "neutral"),
+        ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower"),
+        ("期末未滿倉日", "underfilled_end_days", " 日", "lower"),
+        ("期末持股缺口總和", "end_position_gap_slot_days", " 格日", "lower"),
     ]
     lines = [
         ("# Breakout Quality Score 排序策略經濟效果對照" if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING else "# Breakout Quality 策略經濟效果對照"), "",
@@ -804,26 +822,34 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
             if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             else []
         ),
-        "", "## 主要結果", "", f"| 指標 | No filter | {labels['active_title']} | 差異 |", "|---|---:|---:|---:|",
+        "", "## 主要結果", "", f"| 指標 | No filter | {labels['active_title']} | 差異 | 判讀 |", "|---|---:|---:|---:|:---:|",
     ]
-    for label, key, unit in rows:
+    for label, key, unit, preference in rows:
         digits = 0 if key in {"trade_count", "candidate_supply_gap_days", "underfilled_end_days", "end_position_gap_slot_days"} else 4 if key == "log_r_squared" else 2
+        metric_signal = signal_for_delta(
+            delta.get(key),
+            preference=preference,
+            warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
+        )
         lines.append(
             f"| {label} | {_format_metric(baseline.get(key), digits=digits, unit=unit)} "
             f"| {_format_metric(quality.get(key), digits=digits, unit=unit)} "
-            f"| {_format_metric(delta.get(key), digits=digits, unit=unit, signed=True)} |"
+            f"| {_format_metric(delta.get(key), digits=digits, unit=unit, signed=True)} "
+            f"| {signal_marker(metric_signal)} |"
         )
     lines += ["", "## 年度報酬", ""]
     if yearly.empty:
         lines.append("無年度資料。")
     else:
-        lines += [f"| 年度 | No filter | {labels['active_title']} | 差異 | 完整年度 |", "|---:|---:|---:|---:|:---:|"]
+        lines += [f"| 年度 | No filter | {labels['active_title']} | 差異 | 判讀 | 完整年度 |", "|---:|---:|---:|---:|:---:|:---:|"]
         for row in yearly.to_dict("records"):
+            year_signal = signal_for_delta(row.get("delta_pct"), preference="higher")
             lines.append(
                 f"| {int(row['year'])} "
                 f"| {_format_metric(row.get('no_filter_return_pct'), digits=2, unit='%')} "
                 f"| {_format_metric(row.get(active_yearly_column), digits=2, unit='%')} "
                 f"| {_format_metric(row.get('delta_pct'), digits=2, unit='%', signed=True)} "
+                f"| {signal_marker(year_signal)} "
                 f"| {'是' if row.get('is_full_year') else '否'} |"
             )
     if strategy_diagnostics:
@@ -831,21 +857,23 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
         right = strategy_diagnostics.get("score_ranking") or {}
         lines += [
             "", "## Selection 選股診斷（Future Target僅於回放後join）", "",
-            "| 指標 | Baseline | Score Sort | 差異 |",
-            "|---|---:|---:|---:|",
+            "| 指標 | Baseline | Score Sort | 差異 | 判讀 |",
+            "|---|---:|---:|---:|:---:|",
         ]
-        for label, key, digits in (
-            ("Orderable Score coverage", "orderable_score_coverage_rate", 4),
-            ("選中候選 Target percentile", "selected_target_percentile_mean", 4),
-            ("Target top-k retention", "target_top_k_retention_mean", 4),
-            ("Target opportunity gap (R)", "target_opportunity_gap_r_mean", 4),
-            ("選中候選 Target mean (R)", "selected_target_mean_r", 4),
+        for label, key, digits, preference in (
+            ("Orderable Score coverage", "orderable_score_coverage_rate", 4, "higher"),
+            ("選中候選 Target percentile", "selected_target_percentile_mean", 4, "higher"),
+            ("Target top-k retention", "target_top_k_retention_mean", 4, "higher"),
+            ("Target opportunity gap (R)", "target_opportunity_gap_r_mean", 4, "lower"),
+            ("選中候選 Target mean (R)", "selected_target_mean_r", 4, "higher"),
         ):
             lv, rv = left.get(key), right.get(key)
             dv = None if lv is None or rv is None else float(rv) - float(lv)
+            diag_signal = signal_for_delta(dv, preference=preference)
             lines.append(
                 f"| {label} | {_format_metric(lv, digits=digits)} | "
-                f"{_format_metric(rv, digits=digits)} | {_format_metric(dv, digits=digits, signed=True)} |"
+                f"{_format_metric(rv, digits=digits)} | {_format_metric(dv, digits=digits, signed=True)} "
+                f"| {signal_marker(diag_signal)} |"
             )
         lines += [
             "",
@@ -864,6 +892,124 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
         limitation = "> 本報表只驗證目前固定active操作點能否改善策略經濟效果；不得依結果回頭調整threshold、模型或訓練條件。"
     lines += ["", limitation, ""]
     return "\n".join(lines)
+
+
+def _html_report(metadata, baseline, quality, delta, yearly, strategy_diagnostics=None) -> str:
+    labels = _comparison_labels(str(metadata["comparison_mode"]))
+    active_yearly_column = f"{labels['active_name']}_return_pct"
+    metric_specs = [
+        ("淨總報酬", "total_return_pct", "%", "higher"),
+        ("最大回撤", "max_drawdown_pct", "%", "lower"),
+        ("報酬／最大回撤", "return_over_max_drawdown", "", "higher"),
+        ("年化報酬", "annual_return_pct", "%", "higher"),
+        ("Log R²", "log_r_squared", "", "higher"),
+        ("月勝率", "monthly_win_rate_pct", "%", "higher"),
+        ("交易數", "trade_count", "", "neutral"),
+        ("勝率", "win_rate_pct", "%", "higher"),
+        ("Payoff", "payoff_ratio", "", "higher"),
+        ("EV", "expected_value_r", " R", "higher"),
+        ("平均曝險", "avg_exposure_pct", "%", "attention"),
+        ("最差完整年度", "min_full_year_return_pct", "%", "higher"),
+        ("平均每日可掛單候選", "avg_orderable_candidates", "", "neutral"),
+        ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower"),
+        ("期末未滿倉日", "underfilled_end_days", " 日", "lower"),
+        ("期末持股缺口總和", "end_position_gap_slot_days", " 格日", "lower"),
+    ]
+    metric_rows = []
+    for label, key, unit, preference in metric_specs:
+        digits = 0 if key in {
+            "trade_count", "candidate_supply_gap_days", "underfilled_end_days",
+            "end_position_gap_slot_days",
+        } else 4 if key == "log_r_squared" else 2
+        signal = signal_for_delta(
+            delta.get(key),
+            preference=preference,
+            warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
+        )
+        metric_rows.append(
+            f"<tr><td>{label}</td><td>{_format_metric(baseline.get(key), digits=digits, unit=unit)}</td>"
+            f"<td>{_format_metric(quality.get(key), digits=digits, unit=unit)}</td>"
+            f"{html_delta_cell(_format_metric(delta.get(key), digits=digits, unit=unit, signed=True), signal)}"
+            f"<td>{html_signal_badge(signal)}</td></tr>"
+        )
+
+    yearly_rows = []
+    for row in yearly.to_dict("records"):
+        signal = signal_for_delta(row.get("delta_pct"), preference="higher")
+        yearly_rows.append(
+            f"<tr><td>{int(row['year'])}</td><td>{_format_metric(row.get('no_filter_return_pct'), digits=2, unit='%')}</td>"
+            f"<td>{_format_metric(row.get(active_yearly_column), digits=2, unit='%')}</td>"
+            f"{html_delta_cell(_format_metric(row.get('delta_pct'), digits=2, unit='%', signed=True), signal)}"
+            f"<td>{html_signal_badge(signal)}</td><td>{'是' if row.get('is_full_year') else '否'}</td></tr>"
+        )
+
+    diagnostic_html = ""
+    if strategy_diagnostics:
+        left = strategy_diagnostics.get("no_filter") or {}
+        right = strategy_diagnostics.get("score_ranking") or {}
+        diag_rows = []
+        for label, key, preference in (
+            ("Orderable Score coverage", "orderable_score_coverage_rate", "higher"),
+            ("選中候選 Target percentile", "selected_target_percentile_mean", "higher"),
+            ("Target top-k retention", "target_top_k_retention_mean", "higher"),
+            ("Target opportunity gap (R)", "target_opportunity_gap_r_mean", "lower"),
+            ("選中候選 Target mean (R)", "selected_target_mean_r", "higher"),
+        ):
+            left_value = left.get(key)
+            right_value = right.get(key)
+            delta_value = None if left_value is None or right_value is None else float(right_value) - float(left_value)
+            signal = signal_for_delta(delta_value, preference=preference)
+            diag_rows.append(
+                f"<tr><td>{label}</td><td>{_format_metric(left_value, digits=4)}</td>"
+                f"<td>{_format_metric(right_value, digits=4)}</td>"
+                f"{html_delta_cell(_format_metric(delta_value, digits=4, signed=True), signal)}"
+                f"<td>{html_signal_badge(signal)}</td></tr>"
+            )
+        diagnostic_html = (
+            "<h2>Selection 選股診斷</h2>"
+            "<table><thead><tr><th>指標</th><th>Baseline</th><th>Score Sort</th><th>差異</th><th>判讀</th></tr></thead>"
+            f"<tbody>{''.join(diag_rows)}</tbody></table>"
+            "<div class=\"callout warning\">Future Target只於兩組回放完成後離線join，未進入runtime排序。</div>"
+        )
+
+    period = metadata.get("comparison_period") or {}
+    body = f"""
+<div class="card meta-grid"><div><strong>期間</strong><br>{period.get('start','')} ～ {period.get('end','')}</div>
+<div><strong>參數 selector</strong><br><code>{metadata.get('param_selector','')}</code></div>
+<div><strong>Score source</strong><br><code>{metadata.get('score_source','')}</code></div>
+<div><strong>唯一差異</strong><br><code>{labels['difference_text']}</code></div></div>
+<h2>主要結果</h2><table><thead><tr><th>指標</th><th>No filter</th><th>{labels['active_title']}</th><th>差異</th><th>判讀</th></tr></thead><tbody>{''.join(metric_rows)}</tbody></table>
+<h2>年度報酬</h2><table><thead><tr><th>年度</th><th>No filter</th><th>{labels['active_title']}</th><th>差異</th><th>判讀</th><th>完整年度</th></tr></thead><tbody>{''.join(yearly_rows)}</tbody></table>
+{diagnostic_html}
+<div class="callout warning"><strong>顏色口徑</strong><br>綠色為依指標方向改善，紅色為惡化，黃色為方向無單一好壞但變化值得注意，灰色為中性。</div>
+"""
+    title = (
+        "Breakout Quality Score 排序策略經濟效果對照"
+        if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+        else "Breakout Quality 策略經濟效果對照"
+    )
+    return html_page(title=title, subtitle="Controlled strategy comparison", body=body)
+
+
+def _print_colored_strategy_summary(*, baseline: dict[str, Any], quality: dict[str, Any], delta: dict[str, Any]) -> None:
+    print("\n策略比較重點：")
+    for label, key, preference, unit in (
+        ("總報酬", "total_return_pct", "higher", "%"),
+        ("最大回撤", "max_drawdown_pct", "lower", "%"),
+        ("Return/MDD", "return_over_max_drawdown", "higher", ""),
+        ("平均曝險", "avg_exposure_pct", "attention", "%"),
+    ):
+        signal = signal_for_delta(
+            delta.get(key),
+            preference=preference,
+            warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
+        )
+        text = (
+            f"- {label}: {_format_metric(baseline.get(key), digits=2, unit=unit)} → "
+            f"{_format_metric(quality.get(key), digits=2, unit=unit)} "
+            f"({_format_metric(delta.get(key), digits=2, unit=unit, signed=True)}) {signal_marker(signal)}"
+        )
+        print(terminal_signal(text, signal))
 
 
 def _run_scenario(
@@ -1307,6 +1453,103 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
     return attribution
 
 
+def run_existing_score_ranking_capture_audit(
+    *,
+    project_root=PROJECT_ROOT,
+    filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+    experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+    param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+    score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    labels = _comparison_labels(COMPARISON_MODE_SCORE_RANKING)
+    output_root = resolve_filter_model_output_dir(
+        str(root), filter_id, model_architecture, experiment_profile
+    )
+    output_name = _comparison_output_dir_name(
+        COMPARISON_MODE_SCORE_RANKING,
+        labels,
+        param_policy=param_policy,
+    )
+    if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        output_name += "_selection_point_in_time"
+    output_dir = output_root / output_name
+    payload = _load_existing_comparison_payload(output_dir)
+    metadata = dict(payload.get("metadata") or {})
+    if str(metadata.get("comparison_mode") or "") != COMPARISON_MODE_SCORE_RANKING:
+        raise ValueError("既有工件不是score-ranking策略比較")
+    for key, expected in (
+        ("filter_id", filter_id),
+        ("model_architecture", model_architecture),
+        ("experiment_profile", experiment_profile),
+        ("score_source", score_source),
+    ):
+        if str(metadata.get(key) or "") != str(expected):
+            raise ValueError(
+                f"既有score-ranking工件{key}與目前要求不一致: "
+                f"artifact={metadata.get(key)!r}, expected={expected!r}"
+            )
+
+    required = {
+        "no_filter_trades": output_dir / "no_filter_trades.csv",
+        "score_ranking_trades": output_dir / "score_ranking_trades.csv",
+        "no_filter_selected": output_dir / "no_filter_selected_target_diagnostics.csv",
+        "score_ranking_selected": output_dir / "score_ranking_selected_target_diagnostics.csv",
+        "no_filter_capacity": output_dir / "no_filter_daily_capacity.csv",
+        "score_ranking_capacity": output_dir / "score_ranking_daily_capacity.csv",
+    }
+    missing = [str(path) for path in required.values() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("capture-audit-only缺少既有工件: " + ", ".join(missing))
+
+    baseline = dict(payload.get("no_filter") or {})
+    quality = dict(payload.get("score_ranking") or {})
+    deltas = dict(payload.get("score_ranking_minus_no_filter") or _delta(quality, baseline))
+    yearly = _normalize_yearly_completeness(pd.DataFrame(payload.get("yearly") or []))
+    diagnostics = payload.get("selection_diagnostics")
+    (output_dir / "strategy_comparison.md").write_text(
+        _markdown_report(metadata, baseline, quality, deltas, yearly, diagnostics),
+        encoding="utf-8",
+    )
+    (output_dir / "strategy_comparison.html").write_text(
+        _html_report(metadata, baseline, quality, deltas, yearly, diagnostics),
+        encoding="utf-8",
+    )
+    result = build_score_ranking_capture_audit(
+        metadata=metadata,
+        baseline_summary=baseline,
+        score_sort_summary=quality,
+        baseline_trade_history=pd.read_csv(required["no_filter_trades"], encoding="utf-8-sig"),
+        score_sort_trade_history=pd.read_csv(required["score_ranking_trades"], encoding="utf-8-sig"),
+        baseline_selected_target_diagnostics=pd.read_csv(required["no_filter_selected"], encoding="utf-8-sig"),
+        score_sort_selected_target_diagnostics=pd.read_csv(required["score_ranking_selected"], encoding="utf-8-sig"),
+        selection_diagnostics=diagnostics,
+        baseline_daily_capacity=pd.read_csv(required["no_filter_capacity"], encoding="utf-8-sig"),
+        score_sort_daily_capacity=pd.read_csv(required["score_ranking_capacity"], encoding="utf-8-sig"),
+    )
+    audit_payload = write_score_ranking_capture_audit_outputs(
+        result=result,
+        output_dir=output_dir,
+    )
+    payload["score_ranking_capture_audit"] = audit_payload
+    (output_dir / "strategy_comparison.json").write_text(
+        json.dumps(_to_json_native(payload), ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    _print_colored_strategy_summary(baseline=baseline, quality=quality, delta=deltas)
+    decision = audit_payload.get("decision") or {}
+    print(
+        terminal_signal(
+            f"Capture audit: {decision.get('status')}｜{decision.get('conclusion')}",
+            str(decision.get("signal") or SIGNAL_NEGATIVE),
+        )
+    )
+    print(f"彩色策略報表：{output_dir / 'strategy_comparison.html'}")
+    print(f"彩色Capture Audit：{output_dir / 'score_ranking_capture_audit.html'}")
+    return audit_payload
+
+
 def _resolve_comparison_period(contract) -> tuple[str, str]:
     start = contract.execution_start
     end = contract.available_through
@@ -1501,6 +1744,8 @@ def run_comparison(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     strategy_diagnostics = None
+    baseline_selected_joined = pd.DataFrame()
+    quality_selected_joined = pd.DataFrame()
     if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
         baseline_orderable = _flatten_candidate_replay_rows(
             baseline_replay_counts or {}, "orderable_rows"
@@ -1670,6 +1915,10 @@ def run_comparison(
         _markdown_report(metadata, baseline, quality, deltas, yearly, strategy_diagnostics),
         encoding="utf-8",
     )
+    (output_dir / "strategy_comparison.html").write_text(
+        _html_report(metadata, baseline, quality, deltas, yearly, strategy_diagnostics),
+        encoding="utf-8",
+    )
     baseline_payload["equity_curve"].to_csv(
         output_dir / "no_filter_equity.csv", index=False, encoding="utf-8-sig"
     )
@@ -1700,6 +1949,33 @@ def run_comparison(
         output_dir / "yearly_returns_comparison.csv", index=False,
         encoding="utf-8-sig"
     )
+    capture_audit_payload = None
+    if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
+        capture_result = build_score_ranking_capture_audit(
+            metadata=metadata,
+            baseline_summary=baseline,
+            score_sort_summary=quality,
+            baseline_trade_history=baseline_payload["trade_history"],
+            score_sort_trade_history=quality_payload["trade_history"],
+            baseline_selected_target_diagnostics=baseline_selected_joined,
+            score_sort_selected_target_diagnostics=quality_selected_joined,
+            selection_diagnostics=strategy_diagnostics,
+            baseline_daily_capacity=pd.DataFrame(
+                baseline_payload["profile"].get("portfolio_capacity_rows") or []
+            ),
+            score_sort_daily_capacity=pd.DataFrame(
+                quality_payload["profile"].get("portfolio_capacity_rows") or []
+            ),
+        )
+        capture_audit_payload = write_score_ranking_capture_audit_outputs(
+            result=capture_result,
+            output_dir=output_dir,
+        )
+        json_payload["score_ranking_capture_audit"] = capture_audit_payload
+        (output_dir / "strategy_comparison.json").write_text(
+            json.dumps(json_payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
     if comparison_mode == COMPARISON_MODE_HARD_FILTER:
         write_trade_attribution_outputs(
             project_root=root, output_dir=output_dir, filter_id=filter_id,
@@ -1712,13 +1988,38 @@ def run_comparison(
             no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
             quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
         )
+    _print_colored_strategy_summary(baseline=baseline, quality=quality, delta=deltas)
     print(f"\n完成：{output_dir / 'strategy_comparison.md'}")
+    print(f"彩色易讀報表：{output_dir / 'strategy_comparison.html'}")
     if comparison_mode == COMPARISON_MODE_HARD_FILTER:
         print(f"交易歸因：{output_dir / 'trade_attribution.md'}")
+    if capture_audit_payload is not None:
+        decision = capture_audit_payload.get("decision") or {}
+        print(
+            terminal_signal(
+                f"Capture audit: {decision.get('status')}｜{decision.get('conclusion')}",
+                str(decision.get("signal") or SIGNAL_NEGATIVE),
+            )
+        )
+        print(f"Capture audit Markdown：{output_dir / 'score_ranking_capture_audit.md'}")
+        print(f"Capture audit 彩色HTML：{output_dir / 'score_ranking_capture_audit.html'}")
     return json_payload
 
 def main(argv=None):
     args = _parse_args(argv)
+    if args.attribution_only and args.capture_audit_only:
+        raise ValueError("--attribution-only 與 --capture-audit-only 不可同時使用")
+    if args.capture_audit_only:
+        if args.comparison_mode != COMPARISON_MODE_SCORE_RANKING:
+            raise ValueError("--capture-audit-only只支援score-ranking")
+        run_existing_score_ranking_capture_audit(
+            filter_id=args.filter_id,
+            model_architecture=args.model_architecture,
+            experiment_profile=args.experiment_profile,
+            param_policy=args.param_policy,
+            score_source=args.score_source,
+        )
+        return 0
     if args.attribution_only:
         if args.comparison_mode != COMPARISON_MODE_HARD_FILTER:
             raise ValueError("--attribution-only 目前只支援 hard-filter 既有歸因")
@@ -1746,6 +2047,7 @@ def main(argv=None):
 
 __all__ = [
     "main", "run_comparison", "run_existing_attribution",
+    "run_existing_score_ranking_capture_audit",
     "run_no_filter_candidate_replay_from_metadata",
     "canonical_strategy_compare_output_dir_names", "_first_existing_comparison_dir",
     "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair",

@@ -188,10 +188,58 @@ def validate_dataset_cli_contract_case(_base_params):
                 "--experiment-profile",
                 workflow_settings.experiment_profile,
             ]
-            and "[Enter] 模型研究與驗證" in interactive_text
-            and "[1] 策略績效驗證" in interactive_text
-            and "[2] 查看目前設定與工件狀態" in interactive_text
+            and "[1/Enter] 模型研究與驗證" in interactive_text
+            and "[2] 策略績效驗證" in interactive_text
+            and "[3] 查看目前設定與工件狀態" in interactive_text
         ),
+    )
+
+    with (
+        patch("builtins.input", side_effect=["1", "0"]),
+        patch("apps.breakout_quality._interactive_model_research", return_value=0) as model_menu,
+    ):
+        numbered_model_rc = app_breakout_quality._run_interactive_menu(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_numbered_model_menu_route",
+        (0, 1),
+        (numbered_model_rc, model_menu.call_count),
+    )
+
+    with (
+        patch("builtins.input", side_effect=["2", "0"]),
+        patch("apps.breakout_quality._interactive_strategy_validation", return_value=0) as strategy_menu,
+    ):
+        strategy_menu_rc = app_breakout_quality._run_interactive_menu(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_strategy_menu_route",
+        (0, 1),
+        (strategy_menu_rc, strategy_menu.call_count),
+    )
+
+    with (
+        patch("builtins.input", side_effect=["3", "0"]),
+        patch("apps.breakout_quality._print_workflow_status") as status_menu,
+    ):
+        status_menu_rc = app_breakout_quality._run_interactive_menu(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_status_menu_route",
+        (0, 1),
+        (status_menu_rc, status_menu.call_count),
     )
 
     dataset_prepare_commands = []

@@ -1709,9 +1709,9 @@ def _interactive_strategy_validation(program_name: str) -> int:
 
 def _print_menu() -> None:
     print("\n=== Breakout Quality ===")
-    print("[Enter] 模型研究與驗證")
-    print("[1] 策略績效驗證")
-    print("[2] 查看目前設定與工件狀態")
+    print("[1/Enter] 模型研究與驗證")
+    print("[2] 策略績效驗證")
+    print("[3] 查看目前設定與工件狀態")
     print("[0] 離開")
 
 
@@ -1723,18 +1723,18 @@ def _run_interactive_menu(program_name: str) -> int:
         except EOFError:
             print("\n輸入已結束。")
             return 0
-        choice = "model" if raw_choice == "" else raw_choice
+        choice = "1" if raw_choice == "" else raw_choice
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         try:
-            if choice == "model":
+            if choice == "1":
                 _interactive_model_research(program_name)
-            elif choice == "1":
-                _interactive_strategy_validation(program_name)
             elif choice == "2":
+                _interactive_strategy_validation(program_name)
+            elif choice == "3":
                 _print_workflow_status()
             else:
-                print("選項無效，請按 Enter 或輸入 0～2。")
+                print("選項無效，請按 Enter 或輸入 0～3。")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:

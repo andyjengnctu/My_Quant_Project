@@ -65,15 +65,15 @@ python apps/breakout_quality.py
 
 ```text
 === Breakout Quality ===
-[Enter] 模型研究與驗證
-[1] 策略績效驗證
-[2] 查看目前設定與工件狀態
+[1/Enter] 模型研究與驗證
+[2] 策略績效驗證
+[3] 查看目前設定與工件狀態
 [0] 離開
 ```
 
 Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
-模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／report流程；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。`[Enter]`與`[1]`仍彼此獨立。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
+模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／report流程；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。`[1/Enter]`與`[2]`仍彼此獨立。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
 
 
 切換至原9A binary workflow時，只需在 `config/breakout_quality.py` 指定既有classification profile，例如：
@@ -469,7 +469,17 @@ python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking
 此模式自動使用 `models/roos_base_finalists_agree.json`；候選先通過 `min_agree`，再依「finalist同意數由高到低 → 同票Quality Score由高到低 → 既有買入排序 → deterministic ticker」，輸出位於 `strategy_compare_score_ranking_base_finalists_agree/`。
 
 - `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。
-- 可正常評分但低 Score 的候選仍保留，只是順位靠後；`unavailable_scores.csv` 中不可評分候選維持保守排除。Continuation 與 STOP 後 Re-entry 沿用原始 breakout Score。
+- 可正常評分但低 Score 的候選仍保留，只是順位靠後。Hard-filter模式的正式不可評分事件仍保守REJECT；Score-ranking模式的缺分候選不得排除或填0，必須保存`available=false`與原始Score來源，排在有效Score後並完整回退既有buy-sort。Continuation與STOP後Re-entry沿用原始breakout Score及原始Score事件日期。
+- `[2] 策略績效驗證`完成score-ranking比較後會同時輸出原策略比較與read-only capture attribution audit。兩份報表都提供Markdown易讀版、JSON完整資料與真正帶色的HTML；終端摘要亦以綠／紅／黃／灰顯示改善、惡化、注意與中性。Markdown使用相同顏色語意的🟢／🔴／🟡／⚪標記，避免純文字環境遺失判讀。
+- 原策略比較主要工件：`strategy_comparison.md`、`strategy_comparison.html`、`strategy_comparison.json`。Capture audit主要工件：`score_ranking_capture_audit.md`、`score_ranking_capture_audit.html`、`score_ranking_capture_audit.json`，另輸出兩組trade lifecycle、年度比較與scenario summary CSV。
+- Capture audit只讀已完成replay工件，分解平均實際投入、預留／投入比例、stop distance、保留買單成交率、持有期、首次半倉時間、半倉至結算日曆日、依daily-capacity交易日曆計算的尾倉slot-days、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap與年度差異。若交易列沒有canonical產業欄位則顯示N/A，不自行推測類股。Future Target只在兩組replay完成後join，不進候選排序、資金配置、成交或optimizer。
+- 若策略比較已完成，只重建彩色主報表與capture audit、不重跑兩組portfolio replay：
+
+```bash
+python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking --score-source selection_point_in_time --param-policy base-finalist-best --capture-audit-only
+```
+
+- `--capture-audit-only`只支援score-ranking，並要求既有`strategy_comparison.json`、兩組transaction CSV及兩組selected-target diagnostics完整存在；缺工件時fail-fast，不會悄悄重跑或改用其他Score來源。
 - Optimizer search space 固定 ranking=`False`，不得把此機制放入參數搜尋。
 - 此實驗是在已查看舊 OOS 後進行的探索性機制比較；即使改善，也必須由全新 forward period 驗證後才可考慮部署。
 

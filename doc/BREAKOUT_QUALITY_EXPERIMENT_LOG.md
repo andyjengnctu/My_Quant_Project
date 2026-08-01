@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_020859_8ae2f29.zip`，SHA256 `2c51f5e0ae36204205aac25b81452935e99a1ac2c862329deeff33ec65c4e0f4`；使用者本機已完成2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort controlled comparison與事後Target診斷。模型排序方向維持通過，但原策略參數下的Sort Only經濟效果明顯劣於Baseline，不得直接採用 |
-| SHA256 | 來源ZIP SHA256 `2c51f5e0ae36204205aac25b81452935e99a1ac2c862329deeff33ec65c4e0f4`。Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。Score Sort雖改善selected Target percentile、top-k retention、opportunity gap與Target mean，但平均曝險由77.33%降至54.20%，且4/7完整年度報酬較差；目前判定為模型層通過、Sort Only策略層拒絕，下一步先做資本使用／Target capture歸因，再決定是否執行主策略參數適應 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260802_022643_9c4f83a.zip`，SHA256 `fd8e4d0e3b04e03fc47ce610d869f24499cb937a1b38c4f98dfd057e2ff1b032`；沿用使用者已完成的2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort controlled comparison與事後Target診斷，新增read-only capture attribution及彩色易讀報表；實際capture結果尚未執行 |
+| SHA256 | 來源ZIP SHA256 `fd8e4d0e3b04e03fc47ce610d869f24499cb937a1b38c4f98dfd057e2ff1b032`。既有3.78結果維持：Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。模型層通過、Sort Only拒絕；本輪只新增資本使用／Target capture歸因與彩色報表，未改寫或重算上述績效 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1713,7 +1713,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 額外修正 | 原attach流程會丟失`score_source`，使PIT continuation下一日被誤判為canonical source；新版保存全部來源metadata。舊持倉fallback也不再把`score=None`硬標成`available=true` |
 | 文件契約同步 | B170舊文字的「不可評分事件保守排除」改為分流：hard-filter維持保守REJECT；score-ranking缺分不得排除或填0，須保存payload並回退原buy-sort，與B183及runtime一致 |
 | 固定條件 | 不改Dataset、Label、Continuous Target、Seed 42、PIT checkpoints／Scores／audit、模型gate、active params、候選生成、成交、持倉、資金、停損停利、buy-sort優先規則或Future Target邊界 |
-| Dataset／Label／模型工件 | 不需重建；只需重新執行主選單`[1] 策略績效驗證` |
+| Dataset／Label／模型工件 | 不需重建；只需重新執行主選單`[2] 策略績效驗證` |
 | 獨立驗證 | T280新增不可評分PIT payload保存、PIT source繼承、不重新lookup、candidate row不執行`float(None)`及Score維持None的direct synthetic案例；全專案靜態與依賴檢查另由本輪交付列示 |
 | 結果邊界 | Baseline終值只證明基準路徑可完成；Score Sort尚未完成，因此不得比較報酬、MDD、選股Target或宣稱排序有效／無效 |
 | 下一步 | 套用修補後直接重跑`python apps/breakout_quality.py strategy-compare`或主選單`[1]`；不需重跑PIT模型或audit |
@@ -1751,4 +1751,33 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 採用判定 | `Sort Only`不得成為正式排序；正式runtime維持Baseline。Continuous ranker本身不淘汰，因PIT模型gate及實際selected Target改善均成立，符合「先確認模型有效，再判斷參數是否需適應」的研究假設 |
 | 下一個單一變更 | 先新增read-only `score-ranking capture attribution audit`，使用既有兩組replay工件分解初始投入比例、stop distance／ATR risk、fill rate、持有期、半倉後殘餘slot-days、exit reason、realized R／Target capture ratio、產業／日期集中度及2018差異。Future Target仍只作post-replay join，不進runtime或optimizer。只有歸因顯示問題可由既有主策略參數空間調整，才固定Score契約後執行Selection內參數適應 |
 | OOS邊界 | 本結果僅為Selection PIT比較；未執行Adapted策略或正式OOS。不得使用OOS調Score權重、排序規則或策略參數 |
+
+### 3.79 Score-ranking Capture Attribution與彩色易讀報表（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / CAPTURE_AUDIT_RESULT_NOT_AVAILABLE`；程式與報表契約完成，實際歸因結果待使用者從既有replay工件執行 |
+| 程式基準 | `test-branch-1_20260802_022643_9c4f83a.zip`；SHA256 `fd8e4d0e3b04e03fc47ce610d869f24499cb937a1b38c4f98dfd057e2ff1b032` |
+| 前置結果 | 3.78已確認PIT模型與selected Target方向通過，但Sort Only總報酬、MDD、RoMD、年化與平均曝險惡化；正式runtime維持Baseline，下一步只允許read-only capture attribution判斷是否有參數適應的機械瓶頸 |
+| 新增audit | `tools/filters/breakout_quality/audit_score_ranking_capture.py`只讀既有Baseline／Score Sort transaction history、策略summary及post-replay selected-target diagnostics，逐筆重建entry到full exit lifecycle；不重播portfolio、不改candidate、Score、params、成交、帳務或optimizer |
+| 歸因指標 | 平均預留與實際投入、投入／預留比例、初始stop distance、保留買單fill rate、持有日、首次partial時間、partial到full exit日曆日、依daily-capacity交易日曆計算的尾倉slot-days、partial比例、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap、capital return及年度差異；交易列沒有canonical產業欄位時產業指標為N/A，不自行推測 |
+| 決策邊界 | 只有Target選擇改善、經濟效果失敗且audit確認曝險／sizing／capture／turnover／fill至少一項可觀測瓶頸，才標記`ADAPTATION_DIAGNOSTIC_SUPPORTED`；否則Sort Only維持淘汰且不得直接啟動optimizer。這只是Selection內是否值得做參數適應的診斷，不是OOS採用證據 |
+| Future Target | 只讀兩組replay完成後輸出的selected-target diagnostics；不得進runtime排序、資金配置、成交或optimizer，payload明確保存`future_target_used_for_runtime=false` |
+| 易讀報表 | 原`strategy_comparison`及新`score_ranking_capture_audit`均輸出Markdown、JSON與彩色HTML。Markdown用🟢／🔴／🟡／⚪，HTML及終端分別用綠／紅／黃／灰標示改善、惡化、注意與中性；顏色只呈現已計算差異，不建立第二套指標 |
+| 正式工件 | `strategy_comparison.md/.html/.json`；`score_ranking_capture_audit.md/.html/.json`；`no_filter_capture_lifecycle.csv`、`score_ranking_capture_lifecycle.csv`、`score_ranking_capture_yearly.csv`、`score_ranking_capture_scenarios.csv` |
+| 重用流程 | `[2] 策略績效驗證`完整replay後自動輸出兩份彩色易讀報表；已有3.78 replay工件時可用`strategy-compare --comparison-mode score-ranking --score-source selection_point_in_time --param-policy base-finalist-best --capture-audit-only`只重建報表與audit，不重跑portfolio |
+| 固定條件 | 不改Dataset、Label、Continuous Target、PIT folds／Scores／audit、Seed 42、Score Sort、歷史active params、候選生成、成交、資金、停損停利、帳務或3.78既有績效結果 |
+| 驗證 | 新增獨立synthetic覆蓋trade lifecycle、投入／stop、partial日曆天數與daily-capacity交易slot-days、entry-date／月份集中度、產業欄位缺失N/A、Target capture、decision gate、Future Target runtime隔離、Markdown色彩語意、HTML CSS色彩、所有正式輸出工件及`--capture-audit-only`只讀重建且禁止portfolio replay；完整本機歸因數值尚未執行，不可預寫結論 |
+| 下一步 | 先執行`--capture-audit-only`取得3.78既有replay的capture結果；只有狀態為`ADAPTATION_DIAGNOSTIC_SUPPORTED`，才提出固定Score契約下的Selection策略參數適應範圍 |
+
+### 3.80 Breakout Quality主選單編號一致化（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_APPLICABLE`；只調整互動選單編號與對應測試／文件，不改模型、Score、策略或報表計算 |
+| 程式基準 | `test-branch-1_20260802_022643_9c4f83a.zip`；SHA256 `fd8e4d0e3b04e03fc47ce610d869f24499cb937a1b38c4f98dfd057e2ff1b032` |
+| 新選單 | `[1/Enter] 模型研究與驗證`、`[2] 策略績效驗證`、`[3] 查看目前設定與工件狀態`、`[0] 離開` |
+| 輸入契約 | Enter與數字1皆進模型研究；數字2進策略驗證；數字3顯示狀態；無效提示範圍同步為0～3 |
+| 固定條件 | 不改Dataset、Label、Continuous Target、PIT Scores、Seed 42、Score Sort、歷史active params、交易引擎、capture audit或任何績效結果 |
+| 驗證 | synthetic CLI需分別驗證Enter／1／2／3路由與畫面文字，避免只改顯示而未改執行行為 |
 
