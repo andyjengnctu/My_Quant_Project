@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪修正基準`test-branch-1_20260801_125344_a8fb416.zip`，SHA256 `7e6f60b6c64bf07b6c3c3a87efbd388f79f4f1ac7757ff9fc1bdd0f548b5639b`；11I Selection nested-OOS結果維持No-time Target↔strategy R 0.5644、PASS內0.5182、actual coverage 21.77%。11J第三次在canonical snapshot guard仍只重現1,969／2,003，否證日期與identity兩個先前假設；根因收斂為counterfactual執行器與canonical candidate replay同迴圈運作，可能影響候選發現狀態。11J改為先純capture完整canonical replay，再於replay結束後離線執行counterfactual狀態機。正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
-| SHA256 | 本輪來源 ZIP：`7e6f60b6c64bf07b6c3c3a87efbd388f79f4f1ac7757ff9fc1bdd0f548b5639b`；11J第三次失敗為`expected=2003, actual=1969`，發生在observer掛載的canonical discovery replay，證明共用snapshot仍不足以隔離執行副作用；11I結果來源為使用者提供的`selection_strategy_realization_audit.md`；上一輪11I trial SSOT修正來源：`3c7b295768a988ec5a0b6a951097bd6dfede35334af7ca6a1eedd96f5a85cf2e`；11G結果來源為使用者提供的`continuous_ranker_report(1).md`；11F結果來源為`continuous_target_audit(4).md`；11E結果來源為`target_time_penalty_ablation_audit.md`；11D結果來源為`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；上一輪formal bundle `to_chatgpt_bundle_20260730_172006_97718afc.zip`：`63d850c44f9ce8e011c87f07bbf755f0eb8048422b44374c14a68c6bd6a4a684`；11A完整結果文件為`continuous_target_audit(2).md`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
+| 基準 ZIP | 本輪修正基準`test-branch-1_20260801_130716_e0b5906.zip`，SHA256 `7e8e30991ba5b25333fadc5da1f17553b515e839c0d033c014aeae1d28dfea81`；11I Selection nested-OOS結果維持No-time Target↔strategy R 0.5644、PASS內0.5182、actual coverage 21.77%。11J第四次本機執行在2014-05-15的`counterfactual_observe_candidates`發生MemoryError且速度過慢；根因為capture對每筆`signal_state`做recursive deepcopy，連帶重複複製`_params_obj`，並同時保存qualified／orderable raw與snapshot，之後再建立第二次management replay。11J已改為compact candidate capture、open-position-only推進及單次canonical replay。正式policy仍為9A `inception_time_v1`與filter id `breakout_quality_v1` |
+| SHA256 | 本輪來源 ZIP：`7e8e30991ba5b25333fadc5da1f17553b515e839c0d033c014aeae1d28dfea81`；11J第四次失敗為2014-05-15 `MemoryError`，phase=`counterfactual_observe_candidates`；第三次失敗仍保留為`expected=2003, actual=1969`。本輪修正不放寬2,003 guard，而是移除recursive candidate deepcopy、qualified raw duplicate與第二次management replay；11I結果來源為使用者提供的`selection_strategy_realization_audit.md`；上一輪11I trial SSOT修正來源：`3c7b295768a988ec5a0b6a951097bd6dfede35334af7ca6a1eedd96f5a85cf2e`；11G結果來源為使用者提供的`continuous_ranker_report(1).md`；11F結果來源為`continuous_target_audit(4).md`；11E結果來源為`target_time_penalty_ablation_audit.md`；11D結果來源為`target_component_attribution_audit.md`；11C結果來源為`qualified_candidate_set_audit.json`；11B完整結果文件為`continuous_ranker_report.md/.json`；9A分類結果來源仍為 `b6278b87f7ac045010d9799b4cab63d301be61ea4d5a0e99b84e4e6ae63983eb` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -741,12 +741,13 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 |---|---|
 | 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；research-only、CLI-only，不建立Target arrays或模型 |
 | 研究依據 | 11I nested Selection中No-time Target↔strategy R=0.5644、PASS內0.5182，top／bottom decile R為2.6354／−0.6363，證明Target方向成立；但actual trade coverage只有21.77%，portfolio round trips不能代表全部qualified候選 |
-| 唯一變更 | 對每個11I qualified訊號建立獨立counterfactual path，忽略portfolio持倉上限與cash competition；候選資格與每日orderable occurrence仍由同一nested canonical replay產生 |
+| 唯一變更 | 對每個11I qualified訊號建立獨立counterfactual path，忽略portfolio持倉上限與cash competition；候選資格與每日orderable occurrence仍由同一nested canonical replay產生。Capture只保存canonical rows與compact orderable entry欄位，不保存第二份qualified raw candidate |
 | 執行SSOT | 進場重用`build_candidate_plan_seed`＋`execute_pre_market_entry_plan`，延續／TBD沿用候選既有shadow state，每日出場重用`execute_bar_step`，期末重用`closeout_open_positions`，R與費稅重用exact accounting |
 | Coverage | 固定輸出qualified→orderable→filled→closed與Target-matched strategy R coverage；未成交候選保持unlabeled，不填0R |
-| 時間邊界 | 候選只收2014-01-01～2020-11-05；已進場counterfactual path可沿用進場時參數管理至2020-12-31並期末強制結算，不建立2021候選 |
+| 時間邊界 | canonical portfolio只重播一次2014-01-01～2020-11-05；已成交counterfactual path直接依各自ticker market array延伸至2020-12-31並期末強制結算，不建立第二次portfolio replay或2021候選 |
 | 判定 | 若counterfactual fill coverage明顯高於21.77%且Target↔R／PASS內仍正向，才可規劃filled-candidate strategy-realization target；若大量候選仍無法成交，需把fillability拆成獨立任務，不得填0R |
 | Dataset／training | 不重建Dataset、不relabel、不訓練、不選epoch、不建立profile／checkpoint／threshold |
+| 效率契約 | 禁止`copy.deepcopy(signal_state)`；`params_obj`只保留read-only reference，shadow只用`clone_shadow_position`；每日管理只掃描open positions，不掃描全部states |
 | 執行入口 | `python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet` |
 | UI／runtime | CLI-only、不加入互動選單、不修改9A或正式runtime |
 
@@ -1349,14 +1350,14 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 | 項目 | 紀錄 |
 |---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；第三次本機執行在canonical discovery guard仍為`1,969／2,003`，證明日期切段與shared snapshot均未消除observer與canonical replay同迴圈的狀態耦合；已改為capture-then-offline架構，尚待重跑 |
-| 程式基準 | 修正基準`test-branch-1_20260801_125344_a8fb416.zip`，SHA256 `7e6f60b6c64bf07b6c3c3a87efbd388f79f4f1ac7757ff9fc1bdd0f548b5639b`；原11J實作基準為`test-branch-1_20260730_225759_e072178.zip` |
-| 唯一變更 | canonical replay只掛入`CanonicalCandidateReplayCapture`：它只凍結每日raw candidate、canonical snapshot、market context與active params，不執行進場／出場／帳務，也不建立counterfactual position。完成2,003筆來源核對後，才由`CandidateCounterfactualReplay`離線依日期順序執行；該狀態機不再繼承dict，也不得傳入portfolio engine |
-| 交易SSOT | 離線階段仍重用`build_candidate_plan_seed`、`execute_pre_market_entry_plan`、`execute_bar_step`、`closeout_open_positions`及`calc_ratio_from_milli`；只隔離執行時點，不改成交、shadow、stop、take-profit、indicator exit、費稅或R定義 |
-| 訊號口徑 | candidate discovery仍由canonical replay rows，以`ticker＋target_date`依11I相同流程唯一化；capture會凍結可變`signal_state／shadow_position_state`，保留read-only market context與params參照。capture candidate與snapshot數量不一致立即fail-fast |
-| 日期 | Discovery純capture：2014-01-01～2020-11-05；management純capture：2020-11-06～2020-12-31。兩段canonical replay完成後，離線狀態機先處理discovery候選，再只推進既有position至execution end並期末結算 |
-| Strict來源 | 必須先有11I completed report，驗證11I artifact與nested params SHA256。純capture的canonical qualified unique signals必須精確等於2,003；離線counterfactual states亦必須與canonical keys完全一致。不得放寬、補值或將缺少訊號視為未成交 |
-| 輸出 | `candidate_counterfactual_execution_audit/`下輸出全訊號、filled與unfilled CSV及JSON／Markdown；report記錄`execution_mode=capture_then_offline_counterfactual` |
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；第四次本機執行於2014-05-15、phase=`counterfactual_observe_candidates`發生MemoryError且速度過慢。已完成低記憶體與單次replay修正，尚待重跑 |
+| 程式基準 | 修正基準`test-branch-1_20260801_130716_e0b5906.zip`，SHA256 `7e8e30991ba5b25333fadc5da1f17553b515e839c0d033c014aeae1d28dfea81`；原11J實作基準為`test-branch-1_20260730_225759_e072178.zip` |
+| MemoryError根因 | 舊capture對每筆raw candidate執行`copy.deepcopy(signal_state)`；`signal_state`含`_params_obj`，會遞迴複製完整active params。Capture另重複保留qualified raw／snapshot與orderable raw／snapshot，並為2020-11-06～12-31再次建立市場快取與portfolio replay |
+| 唯一變更 | canonical replay只執行一次至2020-11-05。Portfolio engine原有`candidate_rows／orderable_rows`仍作canonical身份來源；capture不再保存qualified raw candidate，只將orderable candidate縮成entry SSOT需要欄位。`params_obj`維持共用reference，shadow僅透過`clone_shadow_position`複製 |
+| 離線狀態 | 完成2,003筆來源核對後，以canonical occurrence frame一次seed全部states；每日只掃描`open_keys`。2020-11-06～12-31的管理日期由截止日仍開倉部位各自market array的交易日聯集產生，不重跑portfolio或候選發現 |
+| 交易SSOT | 仍重用`build_candidate_plan_seed`、`execute_pre_market_entry_plan`、`execute_bar_step`、`closeout_open_positions`及`calc_ratio_from_milli`；compact capture只改資料保存方式與執行排程，不改成交、shadow、stop、take-profit、indicator exit、費稅或R定義 |
+| Strict來源 | 必須先有11I completed report，驗證11I artifact與nested params SHA256。Canonical qualified unique signals仍必須精確等於2,003；離線states亦必須與canonical keys完全一致，不得放寬、補值或將缺少訊號視為未成交 |
+| 輸出 | `candidate_counterfactual_execution_audit/`下輸出全訊號、filled與unfilled CSV及JSON／Markdown；report記錄`execution_mode=compact_capture_single_replay_offline_counterfactual`、capture day／occurrence counts及`recursive_candidate_deepcopy=false` |
 | 邊界 | 不建立Target arrays、不訓練、不選epoch、不調optimizer／loss／threshold、不產生runtime score；11J結果review前不得建立新模型 |
 | 執行 | `python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet` |
 

@@ -9709,6 +9709,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
     from tools.filters.breakout_quality.audit_candidate_counterfactual_execution import (
         CanonicalCandidateReplayCapture,
         CandidateCounterfactualReplay,
+        _freeze_candidate_for_offline_replay,
         _metrics as counterfactual_metrics,
         _render_markdown as render_counterfactual_markdown,
         _run_offline_counterfactual,
@@ -9794,27 +9795,57 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
         sizing_equity=1_000_000.0,
         fallback_params=params,
     )
-    management_capture = CanonicalCandidateReplayCapture(candidate_cutoff="2020-01-02")
-    management_capture.begin_replay_day(
-        today=dates[2], all_dfs_fast={"2330": fast}, fallback_params=params,
-    )
+    canonical_qualified = pd.DataFrame([{
+        "ticker": "2330",
+        "target_date": "2020-01-01",
+        "trade_date": "2020-01-02",
+        "candidate_type": "normal",
+        "entry_source": "normal",
+    }])
     offline = _run_offline_counterfactual(
         discovery_capture=discovery_capture,
-        management_capture=management_capture,
+        canonical_qualified=canonical_qualified,
         candidate_cutoff="2020-01-02",
         replay_end="2020-01-03",
     )
     offline_frame = offline.signal_frame()
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "candidate_counterfactual_capture_is_pure_then_executes_offline",
-        (True, True, True, True, False),
+        "candidate_counterfactual_capture_is_compact_then_executes_offline",
+        (True, True, True, True, False, 1),
         (
             len(discovery_capture) == 0,
             len(tuple(discovery_capture.iter_days())) == 1,
             bool(offline_frame.iloc[0]["filled"]),
             bool(offline_frame.iloc[0]["closed"]),
             isinstance(offline, dict),
+            int(offline.offline_management_day_count),
+        ),
+    )
+
+    large_params_payload = {"weights": list(range(10000))}
+    shadow = {"qty": 1000, "sl": 90.0, "_last_exec_contexts": [{"x": 1}]}
+    memory_candidate = dict(candidate)
+    memory_candidate["params_obj"] = large_params_payload
+    memory_candidate["signal_state"] = {
+        "_params_obj": large_params_payload,
+        "shadow_position": shadow,
+    }
+    frozen = _freeze_candidate_for_offline_replay(
+        memory_candidate,
+        all_dfs_fast={"2330": fast},
+    )
+    shadow["qty"] = 1
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "candidate_counterfactual_compact_freeze_preserves_params_reference_without_recursive_copy",
+        (True, True, True, True, True),
+        (
+            frozen.get("params_obj") is large_params_payload,
+            "signal_state" not in frozen,
+            frozen.get("_candidate_fast_df") is fast,
+            int((frozen.get("shadow_position_state") or {}).get("qty", 0)) == 1000,
+            (frozen.get("shadow_position_state") or {}).get("_last_exec_contexts") is not shadow.get("_last_exec_contexts"),
         ),
     )
 
@@ -10006,37 +10037,40 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
     capture_binding = audit_source.find("replay_counts=discovery_capture", discovery_call)
     canonical_count = audit_source.find("canonical_discovery_count=len(discovery_qualified_unique)", discovery_end)
     source_count_guard = audit_source.find("canonical_discovery_count!=source_qualified_count", canonical_count)
-    management_call = audit_source.find('name="11J_counterfactual_management_context"', source_count_guard)
-    offline_call = audit_source.find("tracker=_run_offline_counterfactual(", management_call)
+    offline_call = audit_source.find("tracker=_run_offline_counterfactual(", source_count_guard)
     state_guard = audit_source.find("len(tracker.states)!=canonical_discovery_count", offline_call)
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "candidate_counterfactual_captures_canonical_replay_before_offline_execution",
-        (True, True, True, True, True, True, True, True, True, True),
+        "candidate_counterfactual_uses_one_canonical_replay_before_compact_offline_execution",
+        (True, True, True, True, True, True, True, True, True, True, True),
         (
             discovery_call >= 0,
             discovery_end > discovery_call,
             capture_binding > discovery_call,
             canonical_count > discovery_end,
             source_count_guard > canonical_count,
-            management_call > source_count_guard,
-            offline_call > management_call,
+            offline_call > source_count_guard,
             state_guard > offline_call,
+            'name="11J_counterfactual_management_context"' not in audit_source,
             "replay_counts=tracker" not in audit_source,
-            '"execution_mode":"capture_then_offline_counterfactual"' in audit_source,
+            '"execution_mode":"compact_capture_single_replay_offline_counterfactual"' in audit_source,
+            '"portfolio_replay_repeated":False' in audit_source,
         ),
     )
 
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "candidate_counterfactual_capture_does_not_execute_or_mutate_canonical_replay",
-        (True, True, True, True, True),
+        "candidate_counterfactual_capture_is_low_memory_and_does_not_mutate_canonical_replay",
+        (True, True, True, True, True, True, True, True),
         (
             "class CandidateCounterfactualReplay:" in audit_source,
             "class CandidateCounterfactualReplay(dict):" not in audit_source,
             "_freeze_candidate_for_offline_replay" in audit_source,
-            "counterfactual execution runs after replay" not in audit_source.lower(),
-            '"counterfactual_execution_runs_after_replay":True' in audit_source,
+            "copy.deepcopy" not in audit_source,
+            '"signal_state" not in frozen' not in audit_source,
+            "self.open_keys" in audit_source,
+            '"single_canonical_portfolio_replay":True' in audit_source,
+            '"compact_candidate_capture":True' in audit_source,
         ),
     )
 
