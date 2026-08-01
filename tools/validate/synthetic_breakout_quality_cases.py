@@ -321,6 +321,7 @@ from tools.filters.breakout_quality.strategy_compare import (
     _comparison_labels,
     _comparison_output_dir_name,
     _first_existing_comparison_dir,
+    canonical_strategy_compare_output_dir_names,
     _normalize_yearly_completeness,
     _resolve_comparison_period,
     _resolve_params_path,
@@ -6861,6 +6862,9 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         tol=1e-12,
     )
     with tempfile.TemporaryDirectory() as temp_dir:
+        preferred_hard_filter_dir = canonical_strategy_compare_output_dir_names(
+            COMPARISON_MODE_HARD_FILTER
+        )[0]
         expected_round_trip_path = (
             resolve_filter_model_output_dir(
                 temp_dir,
@@ -6868,7 +6872,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
                 BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
                 BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
             )
-            / "strategy_compare"
+            / preferred_hard_filter_dir
             / "no_filter_round_trips.csv"
         )
         expected_round_trip_path.parent.mkdir(parents=True, exist_ok=True)

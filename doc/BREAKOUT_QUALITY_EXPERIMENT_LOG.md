@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_173825_934eddc.zip`，SHA256 `f4a75d6a5d5d74b3c5579b28148684bcb155f2a35b412cd73622b6498fb1de35`。此基準已完成7個Selection PIT folds與18,247個未見事件Scores；本輪修正統一主選單原先把workflow profile硬限制為continuous ranker的問題。現在experiment profile的training objective為模型流程派送單一來源：binary classification沿用既有classification workflow與hard-filter策略比較，continuous ranker維持PIT builder／audit與尚未接線前的策略阻擋。預設continuous profile、既有PIT Scores、模型、Target、fold、checkpoint、Score值、buy-sort及策略交易規則均未改變 |
-| SHA256 | 本輪來源 ZIP：`f4a75d6a5d5d74b3c5579b28148684bcb155f2a35b412cd73622b6498fb1de35`；前一formal bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5`。PIT manifest仍預設`eligible=false`；continuous策略不得當成forward-OOS runtime score或直接送入策略optimizer。切換binary profile只改選單派送與工件顯示，不將PIT Scores轉成binary runtime artifact。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_175951_e781354.zip`，SHA256 `f2d8b1dcc1d79d848013995f68fc80697039776c7837ce010cf19df966e63a8c`。此基準已完成泛用profile workflow router並保留7個Selection PIT folds與18,247個未見事件Scores；使用者formal bundle顯示consistency唯一FAIL為strategy-compare政策隔離後的舊synthetic expected path-source字串，meta quality唯一FAIL為該synthetic suite失敗的衍生結果。本輪只同步validator fixture至canonical directory discovery，不改runtime、模型、Target、Score、fold、checkpoint、buy-sort或策略交易規則 |
+| SHA256 | 本輪來源 ZIP：`f2d8b1dcc1d79d848013995f68fc80697039776c7837ce010cf19df966e63a8c`；formal bundle `to_chatgpt_bundle_20260801_180117_5ac62bbf.zip`，SHA256 `e33c8a5ace14bd0e2fbef31a30d97d06550d04d5473dd18393e495a7e6566d5d`。Formal結果為quick gate PASS、consistency FAIL 1／5,030、chain checks PASS、ML smoke PASS、meta quality FAIL 1；兩個FAIL同源於一筆stale synthetic expectation。PIT manifest仍預設`eligible=false`；continuous策略不得當成forward-OOS runtime score或直接送入策略optimizer。11I既有結果、11J停止判定及11K歷史工件狀態均保留，不再延伸11L或修補11J |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -742,6 +742,21 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | Dataset／Label | 不需重建Dataset或relabel；只有使用者在binary模型流程確認開始訓練時，才依既有workflow規則檢查並更新工件 |
 | 驗證 | 已獨立驗證binary／continuous settings解析、binary模型route、binary hard-filter策略route、hard-filter參數政策輸出隔離與下游目錄發現、CLI help、全專案編譯／AST與依賴方向；依專案規範未執行`apps/test_suite.py` |
 | 結果邊界 | 本輪只修正操作與配置契約；不得據此宣稱9A或continuous模型、排序或策略績效改善 |
+
+
+### 3.64 Formal Consistency Canonical Strategy-Compare Fixture閉環（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；根因已由formal bundle確認，validator fixture已同步，待使用者重跑正式suite確認 |
+| 程式基準 | 來源`test-branch-1_20260801_175951_e781354.zip`，SHA256 `f2d8b1dcc1d79d848013995f68fc80697039776c7837ce010cf19df966e63a8c`；bundle `to_chatgpt_bundle_20260801_180117_5ac62bbf.zip`，SHA256 `e33c8a5ace14bd0e2fbef31a30d97d06550d04d5473dd18393e495a7e6566d5d` |
+| Formal結果 | quick gate PASS；consistency為4,999 PASS／30 SKIP／1 FAIL；chain checks與ML smoke PASS；meta quality唯一FAIL為`coverage_synthetic_suite_runs_successfully`。Consistency唯一失敗metric為`continuous_target_round_trip_auto_path_uses_output_tree` |
+| 根因 | Router修正後hard-filter strategy compare正式優先目錄為`strategy_compare_base_finalist_best`，舊`strategy_compare`只作相容fallback。Runtime正確把舊目錄回報為`active_9a_strategy_compare_discovery`；synthetic fixture仍把檔案建立在舊目錄，卻期待`active_9a_standard_path`，形成validator自相矛盾 |
+| 唯一修正 | Synthetic fixture不再硬編碼`strategy_compare`；改呼叫`canonical_strategy_compare_output_dir_names(COMPARISON_MODE_HARD_FILTER)[0]`建立目前正式優先目錄，並保留`active_9a_standard_path`預期。Runtime discovery、目錄優先序與相容fallback均不修改 |
+| Meta quality閉環 | Coverage比例、critical targets與checklist本身均已通過；meta quality失敗只因synthetic fail count=1。修正同一fixture後，該衍生FAIL應同步消失，但正式結果仍須由本機重跑確認 |
+| Dataset／模型 | 不重建Dataset、不relabel、不重訓9A或continuous folds；不改checkpoint、PIT Scores、Target、threshold、seed、optimizer、buy-sort、portfolio replay或策略參數 |
+| 獨立驗證 | 已獨立驗證canonical優先目錄回報`active_9a_standard_path`、舊目錄回報`active_9a_strategy_compare_discovery`、全專案AST／compile、bare-except、依賴方向、import cycle、Markdown table與formal registry／checklist一致性；依規範未執行`apps/test_suite.py`或其正式step |
+| 下一步 | 使用者覆蓋修補後重跑正式suite；預期consistency與meta quality同時恢復PASS。若仍有新FAIL，再依新bundle閉環，不修改runtime以迎合舊fixture |
 
 
 ## 4. 已排除或暫停的方向
