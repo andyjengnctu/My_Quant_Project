@@ -304,6 +304,36 @@ def _dataset_refresh_plan(
     return "none", []
 
 
+def _dataset_refresh_step(
+    filter_id: str,
+    dataset: str,
+    *,
+    max_tickers: int,
+    force_rebuild: bool = False,
+) -> tuple[str, list[str], tuple[str, list[str], str] | None]:
+    """Resolve the single dataset preparation step shared by all workflows."""
+    refresh_mode, refresh_reasons = _dataset_refresh_plan(
+        filter_id,
+        dataset,
+        max_tickers=max_tickers,
+    )
+    if force_rebuild:
+        refresh_mode = "rebuild"
+        refresh_reasons = ["使用者要求強制完整重建 dataset"]
+    if refresh_mode not in {"rebuild", "relabel"}:
+        return refresh_mode, refresh_reasons, None
+
+    build_args = ["--dataset", str(dataset), "--filter-id", filter_id]
+    if int(max_tickers) > 0:
+        build_args.extend(["--max-tickers", str(int(max_tickers))])
+    if refresh_mode == "relabel":
+        build_args.append("--relabel-only")
+        label = "快速更新 labels（沿用 feature bank）"
+    else:
+        label = "完整建立 indexed feature bank dataset"
+    return refresh_mode, refresh_reasons, ("build-dataset", build_args, label)
+
+
 def _dataset_rebuild_reasons(
     filter_id: str,
     dataset: str,
@@ -782,28 +812,18 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     )
     print("注意：OOS 只供最終泛化評估，不得依結果回頭調整 threshold、epochs 或模型。")
 
-    refresh_mode, refresh_reasons = _dataset_refresh_plan(
+    refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(
         filter_id,
         args.dataset,
         max_tickers=int(args.max_tickers),
+        force_rebuild=bool(args.rebuild_dataset),
     )
-    if bool(args.rebuild_dataset):
-        refresh_mode = "rebuild"
-        refresh_reasons = ["使用者要求強制完整重建 dataset"]
     steps: list[tuple[str, list[str], str]] = []
-    if refresh_mode in {"rebuild", "relabel"}:
+    if dataset_step is not None:
         tag = "rebuild" if refresh_mode == "rebuild" else "relabel"
         for reason in refresh_reasons:
             print(f"[{tag}] {reason}")
-        build_args = ["--dataset", str(args.dataset), "--filter-id", filter_id]
-        if int(args.max_tickers) > 0:
-            build_args.extend(["--max-tickers", str(int(args.max_tickers))])
-        if refresh_mode == "relabel":
-            build_args.append("--relabel-only")
-            label = "快速更新 labels（沿用 feature bank）"
-        else:
-            label = "完整建立 indexed feature bank dataset"
-        steps.append(("build-dataset", build_args, label))
+        steps.append(dataset_step)
     else:
         print("[skip] dataset 工件、來源 CSV inventory、ticker coverage 與 policy 均未變更。")
 
@@ -1518,6 +1538,7 @@ def _print_workflow_status() -> None:
         f"{settings.point_in_time_inner_validation_months} months"
     )
     status_paths = {
+        "Dataset summary": _dataset_paths(settings.filter_id)["summary"],
         "PIT scores": resolve_selection_point_in_time_score_path(
             PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
         ),
@@ -1552,7 +1573,7 @@ def _interactive_model_research(program_name: str) -> int:
         )
 
     _print_workflow_status()
-    if not _prompt_bool("建立／更新PIT Scores並執行模型驗證", True):
+    if not _prompt_bool("必要時先建立Dataset，再建立／更新PIT Scores並執行模型驗證", True):
         return 0
     build_args = [
         "--filter-id", settings.filter_id,
@@ -1566,6 +1587,25 @@ def _interactive_model_research(program_name: str) -> int:
     if settings.point_in_time_score_end_date:
         build_args.extend(["--score-end-date", settings.point_in_time_score_end_date])
     build_args.append("--resume" if settings.point_in_time_resume else "--no-resume")
+
+    refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(
+        settings.filter_id,
+        INTERACTIVE_DATASET_PROFILE,
+        max_tickers=INTERACTIVE_MAX_TICKERS,
+    )
+    if dataset_step is not None:
+        tag = "rebuild" if refresh_mode == "rebuild" else "relabel"
+        print("偵測到PIT模型所需Dataset尚未就緒，將先自動準備：")
+        for reason in refresh_reasons:
+            print(f"[{tag}] {reason}")
+        command, command_args, label = dataset_step
+        print(f"\n[Dataset] {label}")
+        code = _run_command(command, command_args, program_name=program_name)
+        if code != 0:
+            return code
+    else:
+        print("[skip] PIT所需Full dataset已符合目前來源與policy。")
+
     code = _run_command(
         "build-point-in-time-scores", build_args, program_name=program_name
     )

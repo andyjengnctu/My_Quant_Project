@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_190545_31efeae.zip`，SHA256 `4feec395fd20ca42a9aee1024c4ef8fd813abd36eca7bbbace1c6ee071e3ed71`。本輪將breakout-quality Seed進一步收斂為單一固定非負整數設定；移除依profile自動切換binary=42／continuous=1的隱性邏輯。預設改為42，CLI `--seed`僅作單次覆寫；不改模型架構、Label、Target、PIT fold邊界、buy-sort或策略交易規則 |
-| SHA256 | 本輪來源 ZIP：`4feec395fd20ca42a9aee1024c4ef8fd813abd36eca7bbbace1c6ee071e3ed71`。前一formal bundle `to_chatgpt_bundle_20260801_185213_8c8baa64.zip`，SHA256 `acb26b34e76dc5ecd4731c5f676437543c9ee39c78ece6ec1f8e61f98fd1cdbd`；其中舊strategy compare入口與雙Seed來源已於前輪閉環。本輪只移除profile-dependent Seed解析，尚待使用者重跑formal suite |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_191450_5f7702c.zip`，SHA256 `7c5b5f5029c6303642be11430d090ebebea6a05be41e36da626c3f75550cb5f7`。本輪修正continuous主選單workflow缺少Dataset準備步驟：binary與continuous改共用同一Dataset refresh step；PIT流程在Full dataset缺少、過期或policy不一致時先自動重建，只有Label policy改變時快速relabel，再建立PIT Scores。不改模型架構、Label、Target、Seed、PIT fold邊界、buy-sort或策略交易規則 |
+| SHA256 | 本輪來源 ZIP：`7c5b5f5029c6303642be11430d090ebebea6a05be41e36da626c3f75550cb5f7`。前一formal bundle `to_chatgpt_bundle_20260801_185213_8c8baa64.zip`，SHA256 `acb26b34e76dc5ecd4731c5f676437543c9ee39c78ece6ec1f8e61f98fd1cdbd`；舊strategy compare入口、單一config與固定Seed 42已於前輪閉環。本輪只修正continuous workflow的Dataset自動準備，尚待使用者重跑formal suite及本機完整Dataset建立 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1501,6 +1501,20 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 固定條件 | 不改architecture、Label、continuous Target、loss、epoch、batch、sampling、PIT fold日期、buy-sort、策略參數、成交與帳務 |
 | 驗證邊界 | 本輪只完成設定與路由契約；尚未產生Seed 42 continuous模型或PIT結果，不得宣稱預測或策略效果 |
 | 下一步 | 使用者本機重跑formal suite；若繼續continuous主線，先移除或改名舊`point_in_time`目錄，再以Seed 42完整建立PIT Scores與audit |
+
+### 3.68 Continuous PIT Workflow自動準備Dataset（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING / MODEL_RESULT_NOT_AVAILABLE` |
+| 程式基準 | `test-branch-1_20260801_191450_5f7702c.zip`；SHA256 `7c5b5f5029c6303642be11430d090ebebea6a05be41e36da626c3f75550cb5f7` |
+| 問題 | 主選單continuous objective直接呼叫PIT builder，未先執行binary workflow已有的Dataset refresh contract；首次執行在`dataset_summary.json`缺少時立即`FileNotFoundError` |
+| 唯一修正 | 抽出共用`_dataset_refresh_step()`；binary與continuous共用相同Full dataset／全部股票檢查。Continuous在缺少、storage／source inventory／ticker coverage／feature policy不一致時先執行`build-dataset`完整重建；只有Label policy改變時使用`--relabel-only`；Dataset就緒後才執行PIT builder與audit |
+| Dataset／Label | 本輪程式修正本身不改Dataset或Label契約。使用者本機目前缺少Dataset工件，因此下次主選單執行會建立正式Full dataset；若已有有效工件則跳過，若只有Label policy改變則快速relabel |
+| 固定條件 | architecture、experiment profile、continuous Target、Seed 42、loss、epoch、batch、sampling、PIT fold／validation日期、Score、buy-sort、策略參數、成交與帳務均不變 |
+| 驗證邊界 | Synthetic CLI已驗證缺少Dataset時命令順序必須為`build-dataset → build-point-in-time-scores → audit-point-in-time-scores`，Dataset已就緒時仍只執行後兩步。尚未在本環境建立完整台股Dataset或訓練PIT folds，不得宣稱模型結果 |
+| 下一步 | 套用修補後重新由主選單按Enter；程式會先建立Full dataset，再開始Seed 42 PIT folds。正式測試結果以使用者本機`python apps/test_suite.py`為準 |
+
 
 ## 6. 實驗執行順序
 

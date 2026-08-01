@@ -137,6 +137,10 @@ def validate_dataset_cli_contract_case(_base_params):
             "apps.breakout_quality._run_command",
             side_effect=_record_interactive_command,
         ),
+        patch(
+            "apps.breakout_quality._dataset_refresh_step",
+            return_value=("none", [], None),
+        ),
     ):
         rc, interactive_text = _capture_stdout(
             app_breakout_quality._run_interactive_menu,
@@ -180,6 +184,53 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[Enter] 模型研究與驗證" in interactive_text
             and "[1] 策略績效驗證" in interactive_text
             and "[2] 查看目前設定與工件狀態" in interactive_text
+        ),
+    )
+
+    dataset_prepare_commands = []
+
+    def _record_dataset_prepare_command(command, args, *, program_name):
+        dataset_prepare_commands.append((str(command), list(args), str(program_name)))
+        return 0
+
+    dataset_step = (
+        "build-dataset",
+        ["--dataset", "full", "--filter-id", workflow_settings.filter_id],
+        "完整建立 indexed feature bank dataset",
+    )
+    with (
+        patch("builtins.input", return_value=""),
+        patch("apps.breakout_quality._print_workflow_status"),
+        patch(
+            "apps.breakout_quality._dataset_refresh_step",
+            return_value=("rebuild", ["dataset_summary.json 缺少"], dataset_step),
+        ),
+        patch(
+            "apps.breakout_quality._run_command",
+            side_effect=_record_dataset_prepare_command,
+        ),
+    ):
+        dataset_prepare_rc = app_breakout_quality._interactive_model_research(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_continuous_workflow_prepares_missing_dataset_first",
+        (
+            0,
+            [
+                "build-dataset",
+                "build-point-in-time-scores",
+                "audit-point-in-time-scores",
+            ],
+            dataset_step[1],
+        ),
+        (
+            dataset_prepare_rc,
+            [item[0] for item in dataset_prepare_commands],
+            dataset_prepare_commands[0][1],
         ),
     )
 
