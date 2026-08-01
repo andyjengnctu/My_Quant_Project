@@ -140,8 +140,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--seed",
         type=int,
-        default=None,
-        help="亂數種子；省略時依experiment profile自動解析，config單一seed override優先",
+        default=resolve_breakout_quality_random_seed(),
+        help="亂數種子；省略時使用config的BREAKOUT_QUALITY_RANDOM_SEED",
     )
     parser.add_argument(
         "--use-inner-validation",
@@ -195,9 +195,7 @@ def parse_args(argv=None):
         help="只供離線重現；預設要求來源CSV inventory與dataset一致",
     )
     args = parser.parse_args(argv)
-    if args.seed is None:
-        args.seed = resolve_breakout_quality_random_seed(args.experiment_profile)
-    elif int(args.seed) < 0:
+    if int(args.seed) < 0:
         parser.error("--seed 必須 >= 0")
     return args
 

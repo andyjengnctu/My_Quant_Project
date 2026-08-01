@@ -31,9 +31,9 @@ from config.breakout_policy import (
 # - continuous PIT ranker: "strategy_aligned_no_time_pass_magnitude_mse"
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_pass_magnitude_mse"
 
-# None = profile預設（binary classification使用42；continuous ranker使用1）。
-# 只有需要覆寫所有模型流程時才填非負整數；CLI --seed仍可單次覆寫。
-BREAKOUT_QUALITY_RANDOM_SEED = None
+# 所有 breakout-quality 模型流程共用同一個非負整數 Seed。
+# 切換 experiment profile 不會暗中改變 Seed；CLI --seed 只用於單次覆寫。
+BREAKOUT_QUALITY_RANDOM_SEED = 42
 
 
 # =============================================================================
@@ -655,24 +655,12 @@ def get_breakout_quality_experiment_profile(
     ]
 
 
-_BINARY_CLASSIFICATION_DEFAULT_RANDOM_SEED = 42
-_CONTINUOUS_RANKER_DEFAULT_RANDOM_SEED = 1
+def resolve_breakout_quality_random_seed() -> int:
+    """Return the single configured breakout-quality random seed."""
 
-
-def resolve_breakout_quality_random_seed(experiment_profile: str) -> int:
-    """Resolve the single configured seed for a named experiment profile."""
-
-    configured_seed = BREAKOUT_QUALITY_RANDOM_SEED
-    if configured_seed is not None:
-        resolved = int(configured_seed)
-    else:
-        profile = get_breakout_quality_experiment_profile(experiment_profile)
-        if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
-            resolved = _CONTINUOUS_RANKER_DEFAULT_RANDOM_SEED
-        else:
-            resolved = _BINARY_CLASSIFICATION_DEFAULT_RANDOM_SEED
+    resolved = int(BREAKOUT_QUALITY_RANDOM_SEED)
     if resolved < 0:
-        raise ValueError("breakout quality random seed 必須是None或>=0的整數")
+        raise ValueError("breakout quality random seed 必須是>=0的整數")
     return resolved
 
 # =============================================================================
@@ -989,7 +977,7 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
             else str(profile.continuous_target_id)
         ),
         training_label_scope=str(profile.training_label_scope),
-        seed=resolve_breakout_quality_random_seed(profile.name),
+        seed=resolve_breakout_quality_random_seed(),
         point_in_time_score_start_date=str(
             BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE
         ),

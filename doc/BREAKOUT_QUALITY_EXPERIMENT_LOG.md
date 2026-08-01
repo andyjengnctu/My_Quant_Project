@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_185047_5a647b5.zip`，SHA256 `2eb142dcbd23d9508fc5e1aed3cdb2dcb49eac35e48733b3dc57fb9e64fa51dd`。本輪將breakout-quality seed收斂為單一可覆寫設定，並正式移除已刪除的舊strategy compare app入口及其quick-gate／文件／checklist契約；不改模型、Label、PIT Score值、checkpoint、buy-sort或策略交易規則 |
-| SHA256 | 本輪來源 ZIP：`2eb142dcbd23d9508fc5e1aed3cdb2dcb49eac35e48733b3dc57fb9e64fa51dd`；formal bundle `to_chatgpt_bundle_20260801_185213_8c8baa64.zip`，SHA256 `acb26b34e76dc5ecd4731c5f676437543c9ee39c78ece6ec1f8e61f98fd1cdbd`。Formal結果為quick gate FAIL 1、consistency FAIL 2、chain checks PASS、ML smoke PASS、meta quality FAIL 1；根因是已刪除的`apps/breakout_quality_strategy_compare.py`仍被quick gate、CMD與B170／B182正式契約要求存在。Seed另有`DEFAULT_RANDOM_SEED=42`與`WORKFLOW_SEED=1`雙重來源，本輪一併閉環 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_190545_31efeae.zip`，SHA256 `4feec395fd20ca42a9aee1024c4ef8fd813abd36eca7bbbace1c6ee071e3ed71`。本輪將breakout-quality Seed進一步收斂為單一固定非負整數設定；移除依profile自動切換binary=42／continuous=1的隱性邏輯。預設改為42，CLI `--seed`僅作單次覆寫；不改模型架構、Label、Target、PIT fold邊界、buy-sort或策略交易規則 |
+| SHA256 | 本輪來源 ZIP：`4feec395fd20ca42a9aee1024c4ef8fd813abd36eca7bbbace1c6ee071e3ed71`。前一formal bundle `to_chatgpt_bundle_20260801_185213_8c8baa64.zip`，SHA256 `acb26b34e76dc5ecd4731c5f676437543c9ee39c78ece6ec1f8e61f98fd1cdbd`；其中舊strategy compare入口與雙Seed來源已於前輪閉環。本輪只移除profile-dependent Seed解析，尚待使用者重跑formal suite |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -737,7 +737,7 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 唯一修正 | Experiment profile既有`training_objective`成為流程派送單一來源。Binary classification走既有完整classification research workflow；continuous ranker維持Selection PIT builder＋audit。狀態頁只顯示當前objective相關工件 |
 | 策略auto契約 | `BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE／SCORE_SOURCE／BUY_SORT`新增`auto`：binary解析為`hard-filter／canonical_runtime／original`；continuous解析為`score-ranking／selection_point_in_time／breakout_quality_score_desc`。明確覆寫仍需通過跨欄一致性檢查 |
 | 參數政策 | `base-finalist-best`／`base-finalists-agree`不再只限score-ranking；hard-filter也可由統一選單忠實傳入並以不同輸出目錄隔離。Controlled pair仍只允許切換相應filter或ranking開關；`attribution-only`與11C預設改由同一canonical directory discovery辨識policy-specific及舊目錄 |
-| 切換方式 | 原9A：workflow profile設為`unique_group_sampling`，若要重現原訓練再將seed設為42；continuous主線：profile維持`strategy_aligned_no_time_pass_magnitude_mse`與seed=1。主選單文字不改名 |
+| 切換方式 | 原9A與continuous皆只切換workflow profile；Seed統一由`BREAKOUT_QUALITY_RANDOM_SEED`控制，預設42，不再依profile切換。此列原先的continuous seed=1規則已由3.67取代 |
 | 固定條件 | 不改active architecture、Dataset、Label、threshold、continuous Target、PIT folds／checkpoint／Scores、portfolio accounting、候選生成、成交、出場或正式runtime開關 |
 | Dataset／Label | 不需重建Dataset或relabel；只有使用者在binary模型流程確認開始訓練時，才依既有workflow規則檢查並更新工件 |
 | 驗證 | 已獨立驗證binary／continuous settings解析、binary模型route、binary hard-filter策略route、hard-filter參數政策輸出隔離與下游目錄發現、CLI help、全專案編譯／AST與依賴方向；依專案規範未執行`apps/test_suite.py` |
@@ -851,14 +851,14 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 
 | 項目 | 設計 |
 |---|---|
-| 狀態 | `SCORES_BUILT / AUDIT_FIX_IMPLEMENTED / AUDIT_RESULT_PENDING`；7個Selection folds與18,247個PIT Scores已完成，orderable coverage欄位碰撞已修正，待重跑模型audit |
+| 狀態 | `SEED42_REBUILD_REQUIRED / RESULT_PENDING`；既有7個Selection folds與18,247個PIT Scores使用Seed 1，保留為歷史工件。單一Seed改為42後，當前workflow不得續用或混接舊fold，須重建Seed 42 PIT Scores後再執行模型audit |
 | 研究依據 | 既有11G能預測部分PASS-only No-time Target，但完整Selection refit Score不具備策略optimizer所需的未見資料性質；actual trades又受到舊排序、持倉與資金限制，因此先建立與正式OOS相同語意的PIT Score |
 | 唯一變更 | 使用expanding-window folds；每fold只用score period以前、且`label_eval_end_date < score_start`的歷史資料完成Inner Validation、epoch selection及final refit，再只評分下一段未見資料 |
-| 固定模型 | architecture／experiment profile／target由`config/breakout_quality.py`指定；目前為`seed=1`、PASS-only No-time magnitude continuous ranker，不重試MSE／Huber／epoch／LR／batch／sampling |
+| 固定模型 | architecture／experiment profile／target由`config/breakout_quality.py`指定；所有breakout-quality流程統一使用`BREAKOUT_QUALITY_RANDOM_SEED=42`，目前仍為PASS-only No-time magnitude continuous ranker，不重試MSE／Huber／epoch／LR／batch／sampling |
 | 正式工件 | `selection_point_in_time_scores.csv`、combined manifest／coverage，以及每fold checkpoint、scores、manifest與SHA256 |
 | 模型audit | 先計算Score↔Target Spearman、mean daily Spearman、年度與decile spread、fold drift、PASS分類重疊及orderable coverage；Future Target只在audit離線join，不寫入Score CSV |
 | 策略邊界 | Builder manifest固定`eligible=false`；模型audit通過前不接buy-sort、不跑主策略optimizer。第一階段策略選單會明確阻擋PIT Score source |
-| 下一步 | 不重跑builder；直接執行PIT model audit。若多數年份沒有穩定正向Target排序能力則停止；通過後才實作泛用`BREAKOUT_QUALITY_SCORE_DESC`與Baseline／Sort Only策略比較 |
+| 下一步 | 先清除或隔離Seed 1的PIT目錄，再以Seed 42重跑builder與PIT model audit。若多數年份沒有穩定正向Target排序能力則停止；通過後才實作泛用`BREAKOUT_QUALITY_SCORE_DESC`與Baseline／Sort Only策略比較 |
 | Dataset／training | 不重建binary Dataset、不重訓完整Selection 9A；只沿用既有continuous-ranker training pipeline建立歷史fold模型 |
 | 執行入口 | `python apps/breakout_quality.py build-point-in-time-scores`；完成後執行`audit-point-in-time-scores` |
 | UI／runtime | 新主選單不含9A／11G／11K名稱；experiment profile的training objective自動派送binary classification或continuous PIT流程；research-only低階功能維持CLI-only；PIT Score不是scanner或forward-OOS runtime工件 |
@@ -1487,6 +1487,21 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 
 ---
 
+
+### 3.67 Breakout Quality固定單一Seed 42（2026-08-01）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING / MODEL_RESULT_NOT_AVAILABLE` |
+| 程式基準 | `test-branch-1_20260801_190545_31efeae.zip`；SHA256 `4feec395fd20ca42a9aee1024c4ef8fd813abd36eca7bbbace1c6ee071e3ed71` |
+| 問題 | `BREAKOUT_QUALITY_RANDOM_SEED=None`仍隱含依profile選binary=42／continuous=1；使用者切換profile時Seed會暗中改變，仍不是單一真理來源 |
+| 唯一修正 | `BREAKOUT_QUALITY_RANDOM_SEED`改為必填非負整數，預設42。Binary、continuous、pretraining、PIT與主選單workflow全部使用同一值；experiment profile不再影響Seed。CLI `--seed`只作單次覆寫 |
+| Dataset／Label | 不需重建Dataset或relabel |
+| 工件影響 | 9A既有Seed 42 checkpoint／scores可沿用。Continuous既有Seed 1 checkpoint與7-fold PIT Scores保留為歷史工件，但不得以`--resume`接成Seed 42；當前continuous workflow須重建Seed 42 checkpoint／PIT Scores |
+| 固定條件 | 不改architecture、Label、continuous Target、loss、epoch、batch、sampling、PIT fold日期、buy-sort、策略參數、成交與帳務 |
+| 驗證邊界 | 本輪只完成設定與路由契約；尚未產生Seed 42 continuous模型或PIT結果，不得宣稱預測或策略效果 |
+| 下一步 | 使用者本機重跑formal suite；若繼續continuous主線，先移除或改名舊`point_in_time`目錄，再以Seed 42完整建立PIT Scores與audit |
+
 ## 6. 實驗執行順序
 
 ```text
@@ -1556,7 +1571,8 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Formal結果 | quick gate只有`help::breakout_quality_strategy_compare.py`失敗；consistency兩列為CMD仍要求舊script存在及B170仍宣告舊entry；meta quality只因synthetic suite非零退出連帶失敗 |
 | Seed根因 | `BREAKOUT_QUALITY_DEFAULT_RANDOM_SEED=42`控制低階train CLI，`BREAKOUT_QUALITY_WORKFLOW_SEED=1`另控制主選單／PIT workflow，形成兩套使用者設定 |
 | Seed修正 | 只保留`BREAKOUT_QUALITY_RANDOM_SEED`。預設`None`時依當前profile objective自動解析：binary classification為42、continuous ranker為1；使用者只切換`BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE`。需特殊重現時可在config填非負整數，單次CLI `--seed`優先 |
+| Seed簡化補正 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`：`BREAKOUT_QUALITY_RANDOM_SEED`改為必填非負整數，預設42；binary、continuous、pretraining與PIT皆使用同一值。移除`None`與依profile自動選Seed邏輯。Dataset／Label不需重建；若continuous既有checkpoint／PIT folds為Seed 1，改用42後須重建相應模型工件，不得續接成同一實驗 |
 | 入口修正 | 已刪除的`apps/breakout_quality_strategy_compare.py`不再是相容或正式入口；quick gate、CMD、Architecture、B170／B182、synthetic registry全部改以`apps/breakout_quality.py strategy-compare`為唯一入口 |
-| 固定條件 | 不改architecture、Dataset、Label、Target、loss、epoch、PIT folds、checkpoint、Score、threshold、buy-sort、optimizer search space、portfolio成交或帳務 |
-| Dataset／Label | 不需重建Dataset或relabel；不需重訓既有模型或PIT folds |
+| 固定條件 | 不改architecture、Dataset、Label、Target、loss、epoch、PIT fold邊界、threshold、buy-sort、optimizer search space、portfolio成交或帳務；Seed由profile-dependent 1／42改為單一42，因此continuous checkpoint與PIT Score需重建 |
+| Dataset／Label | 不需重建Dataset或relabel；9A既有Seed 42模型可沿用。Continuous既有Seed 1 checkpoint／PIT folds不可視為Seed 42工件，必須重建 |
 | 下一步 | 套用修補後重跑`python apps/test_suite.py`；正式結果以使用者本機輸出為準 |

@@ -434,40 +434,28 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         tuple(sorted(stale_import_files)),
     )
 
-    binary_seed = resolve_breakout_quality_random_seed(
-        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
-    )
-    continuous_seed = resolve_breakout_quality_random_seed(
-        STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
-    )
+    configured_seed = resolve_breakout_quality_random_seed()
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "single_seed_resolves_legal_profile_defaults",
+        "single_seed_is_nonnegative_integer",
         True,
-        bool(binary_seed >= 0 and continuous_seed >= 0),
+        isinstance(configured_seed, int) and configured_seed >= 0,
     )
     with patch("config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED", 7):
-        overridden_binary_seed = resolve_breakout_quality_random_seed(
-            UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
-        )
-        overridden_continuous_seed = resolve_breakout_quality_random_seed(
-            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
-        )
+        overridden_seed = resolve_breakout_quality_random_seed()
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
         "single_seed_override_applies_to_all_profiles",
-        (7, 7),
-        (overridden_binary_seed, overridden_continuous_seed),
+        7,
+        overridden_seed,
     )
     with patch("config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED", -1):
         try:
-            resolve_breakout_quality_random_seed(
-                UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
-            )
+            resolve_breakout_quality_random_seed()
         except ValueError:
             negative_seed_rejected = True
         else:
@@ -3246,7 +3234,8 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         and float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) > 0.0
         and float(BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY) >= 0.0
         and float(BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM) >= 0.0
-        and (BREAKOUT_QUALITY_RANDOM_SEED is None or int(BREAKOUT_QUALITY_RANDOM_SEED) >= 0)
+        and isinstance(BREAKOUT_QUALITY_RANDOM_SEED, int)
+        and int(BREAKOUT_QUALITY_RANDOM_SEED) >= 0
         and int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE) >= 1
         and int(BREAKOUT_QUALITY_EVALUATION_WORKERS) >= 1
         and isinstance(BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION, bool)

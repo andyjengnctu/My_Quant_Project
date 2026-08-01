@@ -1649,6 +1649,8 @@
 | 2026-07-31 | T277 | 新增shared canonical snapshot key、candidate／snapshot長度拒絕及engine傳遞契約後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_candidate_counterfactual_execution_contract_case` |
 | 2026-08-01 | B11 | 刪除三個舊breakout-quality config後，single-source synthetic仍動態import已刪模組，造成consistency與coverage synthetic suite失敗，契約退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-01 | B11 | 改驗證canonical config存在、舊三檔不存在且runtime無舊import，並同步CMD／Architecture／Experiment Log後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
+| 2026-08-01 | B11 | `BREAKOUT_QUALITY_RANDOM_SEED=None`仍依profile暗中解析1／42，單一設定契約退回PARTIAL | DONE -> PARTIAL | `config/breakout_quality.py`, `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-01 | B11 | 改為單一必填非負整數Seed，profile不再影響Seed，CLI只作單次覆寫後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-08-01 | B180 | 第三次本機11J在shared canonical snapshot架構下仍只重現1,969／2,003，確認counterfactual執行與canonical replay同迴圈仍有狀態耦合，契約退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/audit_candidate_counterfactual_execution.py` |
 | 2026-08-01 | B180 | 改為純capture canonical replay完成後才離線執行counterfactual，禁止狀態機作為replay_counts，重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_candidate_counterfactual_execution_contract_case` |
 | 2026-08-01 | B180 | 第四次本機11J於2014-05-15的counterfactual observe phase發生MemoryError且執行過慢，確認recursive params copy與重複capture違反效率契約，退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/audit_candidate_counterfactual_execution.py` |
@@ -1658,6 +1660,8 @@
 | 2026-08-01 | B181 | 跳過11J後新增11K只讀portfolio selection-pressure歸因契約 | NEW -> PARTIAL | `tools/filters/breakout_quality/audit_portfolio_selection_pressure.py`, `apps/breakout_quality.py` |
 | 2026-08-01 | B181 | 驗證同日percentile、top-k retention、Target gap、壓力分桶、actual-R缺值、11I來源與CLI-only後收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_portfolio_selection_pressure_contract_case` |
 | 2026-08-01 | B182 | 新增Selection point-in-time continuous-ranker rolling fold、完整coverage、hash與Future Target隔離契約並收斂為DONE | NEW -> DONE | `validate_breakout_quality_point_in_time_score_builder_contract_case` |
+| 2026-08-01 | T264 | Seed validator仍接受None並驗證profile-dependent預設，與單一固定Seed需求不符，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-01 | T264 | 改驗證單一非負整數Seed、全profile共用與負值拒絕後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_policy_single_source_case` |
 | 2026-08-01 | T277 | 1,969／2,003第三次失敗否證shared-snapshot即可隔離的假設，validator退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-01 | T277 | 新增pure capture、mutable signal freeze、offline execution ordering及禁止replay_counts=tracker契約後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_candidate_counterfactual_execution_contract_case` |
 | 2026-08-01 | T277 | MemoryError暴露validator未覆蓋recursive `_params_obj` copy與雙replay成本，測試由DONE退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |

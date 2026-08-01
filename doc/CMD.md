@@ -80,10 +80,10 @@ Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。�
 
 ```python
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
-# BREAKOUT_QUALITY_RANDOM_SEED = None  # 保持None即可自動使用binary預設42
+BREAKOUT_QUALITY_RANDOM_SEED = 42  # 所有binary／continuous／PIT流程共用
 ```
 
-若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`；`BREAKOUT_QUALITY_RANDOM_SEED=None`會自動使用continuous預設1。只有重現特殊實驗時才填入非負整數覆寫；CLI `--seed`優先於config。PIT日期／fold設定只在continuous objective下生效。
+若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`；Seed仍使用同一個 `BREAKOUT_QUALITY_RANDOM_SEED`，不會依profile暗中改值。只有單次重現特殊實驗時才用CLI `--seed`覆寫。PIT日期／fold設定只在continuous objective下生效。
 
 ### Selection point-in-time continuous-ranker Scores
 
