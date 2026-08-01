@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260801_191450_5f7702c.zip`，SHA256 `7c5b5f5029c6303642be11430d090ebebea6a05be41e36da626c3f75550cb5f7`。本輪修正continuous主選單workflow缺少Dataset準備步驟：binary與continuous改共用同一Dataset refresh step；PIT流程在Full dataset缺少、過期或policy不一致時先自動重建，只有Label policy改變時快速relabel，再建立PIT Scores。不改模型架構、Label、Target、Seed、PIT fold邊界、buy-sort或策略交易規則 |
-| SHA256 | 本輪來源 ZIP：`7c5b5f5029c6303642be11430d090ebebea6a05be41e36da626c3f75550cb5f7`。前一formal bundle `to_chatgpt_bundle_20260801_185213_8c8baa64.zip`，SHA256 `acb26b34e76dc5ecd4731c5f676437543c9ee39c78ece6ec1f8e61f98fd1cdbd`；舊strategy compare入口、單一config與固定Seed 42已於前輪閉環。本輪只修正continuous workflow的Dataset自動準備，尚待使用者重跑formal suite及本機完整Dataset建立 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260801_192601_f010c1c.zip`，SHA256 `52df60d1fad47a76878d34105ed86565381cba34f3b6750e2db29b30d8cd4981`。本輪修正continuous主選單workflow在Dataset建立後缺少configured Continuous Target manifest而中止：新增泛用Target準備步驟，依active profile自動驗證或重建Target，再建立PIT Scores。Target identity新增Dataset artifact SHA256及衍生Target來源manifest SHA256綁定。不改模型架構、Label公式、Seed、PIT fold邊界、buy-sort或策略交易規則 |
+| SHA256 | 本輪來源 ZIP：`52df60d1fad47a76878d34105ed86565381cba34f3b6750e2db29b30d8cd4981`。使用者本機已完成Full Dataset掃描：股票555／616、events 1,793,028、groups 55,509，但隨後因`strategy_aligned_opportunity_no_time_r_v1/manifest.json`缺少而停止。本輪只補齊Target自動準備與stale identity防護，尚未訓練Seed 42 PIT folds，模型與策略結果皆為`RESULT_NOT_AVAILABLE` |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1514,6 +1514,18 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 固定條件 | architecture、experiment profile、continuous Target、Seed 42、loss、epoch、batch、sampling、PIT fold／validation日期、Score、buy-sort、策略參數、成交與帳務均不變 |
 | 驗證邊界 | Synthetic CLI已驗證缺少Dataset時命令順序必須為`build-dataset → build-point-in-time-scores → audit-point-in-time-scores`，Dataset已就緒時仍只執行後兩步。尚未在本環境建立完整台股Dataset或訓練PIT folds，不得宣稱模型結果 |
 | 下一步 | 套用修補後重新由主選單按Enter；程式會先建立Full dataset，再開始Seed 42 PIT folds。正式測試結果以使用者本機`python apps/test_suite.py`為準 |
+
+### 3.69 Continuous Target自動準備與Dataset identity綁定（2026-08-01）
+
+| 項目 | 結果 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE` |
+| 問題 | Full Dataset已成功建立，但continuous workflow直接進PIT builder；configured No-time Target manifest缺少時發生`FileNotFoundError`。既有Target loader另只比對group count與policy，Dataset重新掃描但數量相同時仍可能誤用舊group排列的Target arrays |
+| 唯一修正 | 新增泛用`prepare-continuous-target`前置命令。主選單continuous命令順序改為`Dataset preparation → Continuous Target preparation → PIT Score build → PIT audit`。Target已存在時需通過group count、Dataset policy、Dataset artifact SHA256；衍生No-time Target另驗證來源Target manifest SHA256。缺少或stale時自動重建。Active workflow已採用的固定No-time公式允許直接重建既定arrays，不要求每次重跑歷史11E研究gate；原research-only CLI未帶approved flag時仍維持既有gate |
+| Dataset／Label | 使用者本機Full Dataset已建立，無需再次掃描；Target arrays與manifest需建立。Label公式、Dataset內容與group contract不變 |
+| 固定條件 | architecture=`inception_time_v1`、profile=`strategy_aligned_no_time_pass_magnitude_mse`、Target公式、Seed=42、PIT 12／24 months、loss、epoch、batch、sampling、buy-sort、策略參數與交易帳務均不變 |
+| 驗證邊界 | 本輪只完成自動準備、manifest identity與synthetic契約；尚未產生Seed 42 PIT Scores或模型audit，不得宣稱預測能力或策略改善 |
+| 下一步 | 套用修補後重新按Enter；Dataset應顯示skip，程式會先建立基礎component Target與No-time Target，再自動進入PIT folds |
 
 
 ## 6. 實驗執行順序

@@ -296,6 +296,7 @@ from tools.filters.breakout_quality.audit_target_time_penalty_ablation import (
     time_penalty_ablation_metrics,
 )
 from tools.filters.breakout_quality.audit_no_time_continuous_target import (
+    _approved_workflow_rebuild_gate as approved_no_time_workflow_rebuild_gate,
     _selection_metrics as no_time_target_selection_metrics,
     _validated_11e_report as validated_11e_report_for_no_time_target,
     render_markdown as render_no_time_target_markdown,
@@ -7363,12 +7364,16 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         valid_path = target_dir / TARGET_VALID_MASK_FILENAME
         np.save(raw_path, raw, allow_pickle=False)
         np.save(valid_path, valid, allow_pickle=False)
+        dataset_source_path = root / "events.csv"
+        dataset_source_path.write_text("ticker,date\n2330,2020-01-02\n", encoding="utf-8")
+        dataset_artifacts = {"events_csv": build_file_manifest(dataset_source_path)}
         manifest = {
             "schema_version": 1,
             "filter_id": "synthetic_quality",
             "target_contract": {"target_id": STRATEGY_ALIGNED_TARGET_ID},
             "group_count": 6,
             "dataset_policy": {"policy": "synthetic"},
+            "dataset_artifact_source": dataset_artifacts,
             "artifacts": {
                 "target_raw_r": build_file_manifest(raw_path),
                 "valid_mask": build_file_manifest(valid_path),
@@ -7383,6 +7388,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             "synthetic_quality",
             expected_group_count=6,
             expected_dataset_policy={"policy": "synthetic"},
+            expected_dataset_artifacts=dataset_artifacts,
         )
         add_check(
             results,
@@ -7396,6 +7402,32 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 tuple(loaded_valid),
             ),
         )
+        stale_dataset_artifacts = {
+            "events_csv": {
+                **dataset_artifacts["events_csv"],
+                "sha256": "0" * 64,
+            }
+        }
+        try:
+            load_validated_continuous_target_arrays(
+                root,
+                "synthetic_quality",
+                expected_group_count=6,
+                expected_dataset_policy={"policy": "synthetic"},
+                expected_dataset_artifacts=stale_dataset_artifacts,
+            )
+            stale_dataset_rejected = False
+        except ValueError as exc:
+            stale_dataset_rejected = "Dataset artifact" in str(exc)
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "continuous_ranker_rejects_target_from_different_dataset_artifacts",
+            True,
+            stale_dataset_rejected,
+        )
+
         raw_path.write_bytes(raw_path.read_bytes() + b"tamper")
         try:
             load_validated_continuous_target_arrays(
@@ -9162,6 +9194,30 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
             contract.get("source_target_id"),
             contract.get("time_penalty_included"),
             contract.get("current_audit_oos_rows_evaluated") is False,
+        ),
+    )
+
+    approved_settings = SimpleNamespace(
+        is_continuous_ranker=True,
+        filter_id="synthetic",
+        experiment_profile="strategy_aligned_no_time_pass_magnitude_mse",
+        continuous_target_id=STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+    )
+    with patch(
+        "tools.filters.breakout_quality.audit_no_time_continuous_target.get_breakout_quality_workflow_settings",
+        return_value=approved_settings,
+    ):
+        approved_gate = approved_no_time_workflow_rebuild_gate(filter_id="synthetic")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "no_time_target_active_workflow_rebuild_uses_fixed_formula_without_rechecking_history",
+        ("active_workflow_profile", False, True),
+        (
+            approved_gate.get("approval_basis"),
+            approved_gate.get("historical_research_gate_recomputed"),
+            approved_gate.get("fixed_formula_only"),
         ),
     )
 

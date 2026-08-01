@@ -882,6 +882,7 @@ def main(argv=None) -> int:
         target_id=str(profile.continuous_target_id),
         expected_group_count=group_count,
         expected_dataset_policy=summary.get("policy"),
+        expected_dataset_artifacts=summary.get("dataset_artifacts"),
     )
     percentile_target = np.full(raw_target.shape, np.nan, dtype=np.float32)
 

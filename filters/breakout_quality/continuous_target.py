@@ -381,6 +381,81 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+
+def _artifact_record_identity(record: object) -> tuple[str, int, str] | None:
+    if not isinstance(record, dict):
+        return None
+    try:
+        return (
+            str(record.get("filename") or ""),
+            int(record.get("size_bytes", -1)),
+            str(record.get("sha256") or "").lower(),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_target_dataset_artifact_source(
+    *,
+    project_root: str | Path,
+    filter_id: str,
+    target_id: str,
+    manifest: dict[str, object],
+    expected_dataset_artifacts: dict[str, object],
+) -> None:
+    """Bind target arrays to the exact indexed Dataset artifacts that produced them."""
+
+    source_records = manifest.get("dataset_artifact_source")
+    if not isinstance(source_records, dict):
+        source_target = manifest.get("source_target")
+        if not isinstance(source_target, dict):
+            raise ValueError("continuous target manifest缺少dataset artifact來源")
+        source_target_id = str(source_target.get("target_id") or "").strip()
+        source_manifest_record = source_target.get("manifest")
+        if not source_target_id or not isinstance(source_manifest_record, dict):
+            raise ValueError("continuous target manifest.source_target不完整")
+        source_manifest_path = (
+            resolve_continuous_target_dir(
+                project_root,
+                filter_id,
+                target_id=source_target_id,
+            )
+            / TARGET_MANIFEST_FILENAME
+        )
+        expected_source_manifest_identity = _artifact_record_identity(source_manifest_record)
+        if expected_source_manifest_identity is None or not source_manifest_path.is_file():
+            raise ValueError("continuous target source manifest不存在或metadata不完整")
+        actual_source_manifest_identity = (
+            source_manifest_path.name,
+            int(source_manifest_path.stat().st_size),
+            _file_sha256(source_manifest_path).lower(),
+        )
+        if actual_source_manifest_identity != expected_source_manifest_identity:
+            raise ValueError("continuous target source manifest已改變；請重建目前Target")
+        try:
+            source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("無法讀取continuous target source manifest") from exc
+        if not isinstance(source_manifest, dict):
+            raise ValueError("continuous target source manifest根節點必須是object")
+        source_records = source_manifest.get("dataset_artifact_source")
+
+    if not isinstance(source_records, dict) or not source_records:
+        raise ValueError("continuous target manifest缺少可驗證的dataset artifact來源")
+    for artifact_name, stored_record in source_records.items():
+        current_record = expected_dataset_artifacts.get(str(artifact_name))
+        stored_identity = _artifact_record_identity(stored_record)
+        current_identity = _artifact_record_identity(current_record)
+        if stored_identity is None or current_identity is None:
+            raise ValueError(
+                f"continuous target dataset artifact metadata不完整: {artifact_name}"
+            )
+        if stored_identity != current_identity:
+            raise ValueError(
+                f"continuous target與目前Dataset artifact不一致: {artifact_name}；請重建Target"
+            )
+
+
 def load_validated_continuous_target_arrays(
     project_root: str | Path,
     filter_id: str,
@@ -388,6 +463,7 @@ def load_validated_continuous_target_arrays(
     target_id: str = STRATEGY_ALIGNED_TARGET_ID,
     expected_group_count: int | None = None,
     expected_dataset_policy: dict[str, object] | None = None,
+    expected_dataset_artifacts: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], np.ndarray, np.ndarray]:
     """Load target/valid arrays with strict manifest and hash validation."""
 
@@ -399,7 +475,8 @@ def load_validated_continuous_target_arrays(
     manifest_path = target_dir / TARGET_MANIFEST_FILENAME
     if not manifest_path.is_file():
         raise FileNotFoundError(
-            f"找不到 continuous target manifest: {manifest_path}；請先執行 audit-continuous-target"
+            f"找不到 continuous target manifest: {manifest_path}；"
+            "請先由模型研究workflow建立目前設定的Continuous Target"
         )
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -418,6 +495,14 @@ def load_validated_continuous_target_arrays(
         raise ValueError("continuous target group_count 與dataset不一致")
     if expected_dataset_policy is not None and manifest.get("dataset_policy") != expected_dataset_policy:
         raise ValueError("continuous target dataset_policy 與目前dataset不一致")
+    if expected_dataset_artifacts is not None:
+        _validate_target_dataset_artifact_source(
+            project_root=project_root,
+            filter_id=filter_id,
+            target_id=target_id,
+            manifest=manifest,
+            expected_dataset_artifacts=expected_dataset_artifacts,
+        )
 
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -459,6 +544,7 @@ def load_validated_continuous_target_component_arrays(
     target_id: str = STRATEGY_ALIGNED_TARGET_ID,
     expected_group_count: int | None = None,
     expected_dataset_policy: dict[str, object] | None = None,
+    expected_dataset_artifacts: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, np.ndarray]]:
     """Load all continuous-target component arrays with strict manifest validation."""
 
@@ -468,6 +554,7 @@ def load_validated_continuous_target_component_arrays(
         target_id=target_id,
         expected_group_count=expected_group_count,
         expected_dataset_policy=expected_dataset_policy,
+        expected_dataset_artifacts=expected_dataset_artifacts,
     )
     target_dir = resolve_continuous_target_dir(
         project_root,

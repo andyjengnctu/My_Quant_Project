@@ -12,7 +12,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
+from config.breakout_quality import (
+    STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
+    get_breakout_quality_workflow_settings,
+)
 from config.breakout_quality import (
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
@@ -95,6 +98,14 @@ def parse_args(argv=None):
         action="store_true",
         help="僅供歷史重現；允許Dataset來源inventory與目前資料不同",
     )
+    parser.add_argument(
+        "--approved-workflow-rebuild",
+        action="store_true",
+        help=(
+            "目前active workflow已正式選用No-time target時，允許只依固定公式與"
+            "Dataset identity重建工件；不重跑歷史11E研究gate"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -172,6 +183,28 @@ def _validated_11e_report(
     return report, report_path
 
 
+def _approved_workflow_rebuild_gate(*, filter_id: str) -> dict[str, Any]:
+    settings = get_breakout_quality_workflow_settings()
+    if not settings.is_continuous_ranker:
+        raise ValueError("approved workflow rebuild只允許continuous ranker workflow")
+    if str(settings.filter_id) != str(filter_id):
+        raise ValueError("approved workflow rebuild的filter_id與目前workflow不一致")
+    if str(settings.continuous_target_id or "") != STRATEGY_ALIGNED_NO_TIME_TARGET_ID:
+        raise ValueError("目前workflow未選用No-time continuous target")
+    return {
+        "approval_basis": "active_workflow_profile",
+        "experiment_profile": str(settings.experiment_profile),
+        "continuous_target_id": str(settings.continuous_target_id),
+        "historical_research_gate_recomputed": False,
+        "historical_research_result_reused": True,
+        "fixed_formula_only": True,
+        "oos_fitted_coefficient": False,
+        "overall_spearman_delta": None,
+        "pass_spearman_delta": None,
+        "decile_spread_delta": None,
+    }
+
+
 def _selection_metrics(
     group_frame: pd.DataFrame,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
@@ -243,14 +276,21 @@ def render_markdown(payload: dict[str, Any]) -> str:
             f"| {_pct(metrics.get('top_1pct_positive_sum_share'))} |"
         )
     gate = payload.get("source_11e_gate") or {}
+    lines += ["", "## 3. Target採用依據", ""]
+    if gate.get("approval_basis") == "active_workflow_profile":
+        lines += [
+            f"- Active profile：`{gate.get('experiment_profile')}`。",
+            f"- Continuous Target：`{gate.get('continuous_target_id')}`。",
+            "- 本次只重建已採用的固定公式工件，不重跑歷史研究gate、不擬合係數。",
+        ]
+    else:
+        lines += [
+            f"- Overall ΔSpearman：`{_fmt(gate.get('overall_spearman_delta'))}`。",
+            f"- PASS ΔSpearman：`{_fmt(gate.get('pass_spearman_delta'))}`。",
+            f"- Decile spread增量：`{_fmt(gate.get('decile_spread_delta'))}`R。",
+            "- 以上只作新版本公式的先前研究依據；未參與本輪Selection分布、rankability或任何參數擬合。",
+        ]
     lines += [
-        "",
-        "## 3. 11E固定放行證據",
-        "",
-        f"- Overall ΔSpearman：`{_fmt(gate.get('overall_spearman_delta'))}`。",
-        f"- PASS ΔSpearman：`{_fmt(gate.get('pass_spearman_delta'))}`。",
-        f"- Decile spread增量：`{_fmt(gate.get('decile_spread_delta'))}`R。",
-        "- 以上只作新版本公式的先前研究依據；未參與本輪Selection分布、rankability或任何參數擬合。",
         "",
         "## 4. 本輪邊界",
         "",
@@ -279,6 +319,7 @@ def main(argv=None) -> int:
         target_id=STRATEGY_ALIGNED_TARGET_ID,
         expected_group_count=group_count,
         expected_dataset_policy=summary.get("policy"),
+        expected_dataset_artifacts=summary.get("dataset_artifacts"),
     )
     source_contract = source_manifest.get("target_contract") or {}
     target_contract = build_strategy_aligned_no_time_contract(source_contract)
@@ -294,14 +335,39 @@ def main(argv=None) -> int:
     if group_count <= 0 or valid_count <= 0:
         raise ValueError("11F沒有可用group target")
 
-    report_11e, report_11e_path = _validated_11e_report(
-        filter_id=args.filter_id,
-        ranker_profile=args.ranker_profile,
-    )
-    actual_11e = report_11e.get("actual_trades") or {}
-    correlations_11e = actual_11e.get("correlations") or {}
-    deltas_11e = actual_11e.get("deltas") or {}
-    pass_corr_11e = (((actual_11e.get("by_label") or {}).get("pass") or {}).get("correlations") or {})
+    if bool(args.approved_workflow_rebuild):
+        source_11e_gate = _approved_workflow_rebuild_gate(filter_id=args.filter_id)
+    else:
+        report_11e, report_11e_path = _validated_11e_report(
+            filter_id=args.filter_id,
+            ranker_profile=args.ranker_profile,
+        )
+        actual_11e = report_11e.get("actual_trades") or {}
+        correlations_11e = actual_11e.get("correlations") or {}
+        deltas_11e = actual_11e.get("deltas") or {}
+        pass_corr_11e = (
+            (((actual_11e.get("by_label") or {}).get("pass") or {}).get("correlations") or {})
+        )
+        source_11e_gate = {
+            "approval_basis": "validated_11e_research_gate",
+            "report_path": str(report_11e_path),
+            "report_sha256": _sha256_file(report_11e_path),
+            "overall_original_spearman": correlations_11e.get("original_target_vs_realized_r"),
+            "overall_no_time_spearman": correlations_11e.get("no_time_target_vs_realized_r"),
+            "overall_spearman_delta": deltas_11e.get("spearman_no_time_minus_original"),
+            "pass_original_spearman": pass_corr_11e.get("original_target_vs_realized_r"),
+            "pass_no_time_spearman": pass_corr_11e.get("no_time_target_vs_realized_r"),
+            "pass_spearman_delta": (
+                float(
+                    pass_corr_11e["no_time_target_vs_realized_r"]
+                    - pass_corr_11e["original_target_vs_realized_r"]
+                )
+                if pass_corr_11e.get("no_time_target_vs_realized_r") is not None
+                and pass_corr_11e.get("original_target_vs_realized_r") is not None
+                else None
+            ),
+            "decile_spread_delta": deltas_11e.get("decile_spread_no_time_minus_original"),
+        }
 
     outer_policy = resolve_breakout_quality_outer_policy(
         PROJECT_ROOT,
@@ -340,22 +406,6 @@ def main(argv=None) -> int:
     )
     split_metrics, daily_frame = _selection_metrics(group_frame)
 
-    source_11e_gate = {
-        "report_path": str(report_11e_path),
-        "report_sha256": _sha256_file(report_11e_path),
-        "overall_original_spearman": correlations_11e.get("original_target_vs_realized_r"),
-        "overall_no_time_spearman": correlations_11e.get("no_time_target_vs_realized_r"),
-        "overall_spearman_delta": deltas_11e.get("spearman_no_time_minus_original"),
-        "pass_original_spearman": pass_corr_11e.get("original_target_vs_realized_r"),
-        "pass_no_time_spearman": pass_corr_11e.get("no_time_target_vs_realized_r"),
-        "pass_spearman_delta": (
-            float(pass_corr_11e["no_time_target_vs_realized_r"] - pass_corr_11e["original_target_vs_realized_r"])
-            if pass_corr_11e.get("no_time_target_vs_realized_r") is not None
-            and pass_corr_11e.get("original_target_vs_realized_r") is not None
-            else None
-        ),
-        "decile_spread_delta": deltas_11e.get("decile_spread_no_time_minus_original"),
-    }
     payload = {
         "schema_version": AUDIT_SCHEMA_VERSION,
         "experiment": EXPERIMENT_NAME,
@@ -368,6 +418,11 @@ def main(argv=None) -> int:
             "manifest_generated_at_utc": source_manifest.get("generated_at_utc"),
         },
         "source_11e_gate": source_11e_gate,
+        "rebuild_mode": (
+            "approved_active_workflow"
+            if bool(args.approved_workflow_rebuild)
+            else "research_gate_validation"
+        ),
         "dataset": {
             "dataset_profile": summary.get("dataset"),
             "event_count": int(summary.get("event_count", len(events))),
@@ -387,6 +442,9 @@ def main(argv=None) -> int:
             "prior_iterative_oos_hypothesis_informed": True,
             "no_oos_fitted_coefficient": True,
             "no_model_profile_checkpoint_threshold_or_runtime_authorized": True,
+            "approved_target_rebuild_without_research_gate": bool(
+                args.approved_workflow_rebuild
+            ),
         },
         "elapsed_sec": float(time.perf_counter() - started),
     }
@@ -430,6 +488,11 @@ def main(argv=None) -> int:
             "manifest": build_file_manifest(source_manifest_path),
         },
         "source_11e": source_11e_gate,
+        "rebuild_mode": (
+            "approved_active_workflow"
+            if bool(args.approved_workflow_rebuild)
+            else "research_gate_validation"
+        ),
         "artifacts": {name: build_file_manifest(path) for name, path in array_paths.items()},
         "audit_outputs": {
             "json": build_file_manifest(audit_json_path),
@@ -443,7 +506,11 @@ def main(argv=None) -> int:
     manifest_path = target_dir / TARGET_MANIFEST_FILENAME
     write_json(manifest_path, manifest)
 
-    print("11F no-time target selection-only audit完成")
+    print(
+        "No-time continuous target workflow重建完成"
+        if bool(args.approved_workflow_rebuild)
+        else "11F no-time target selection-only audit完成"
+    )
     print(
         f"target={STRATEGY_ALIGNED_NO_TIME_TARGET_ID} groups={group_count:,} valid={valid_count:,}"
     )
@@ -460,6 +527,15 @@ def main(argv=None) -> int:
     print(f"已輸出: {manifest_path}")
     print(f"已輸出: {audit_markdown_path}")
     return 0
+
+
+__all__ = [
+    "AUDIT_SCHEMA_VERSION",
+    "_approved_workflow_rebuild_gate",
+    "main",
+    "parse_args",
+    "render_markdown",
+]
 
 
 if __name__ == "__main__":

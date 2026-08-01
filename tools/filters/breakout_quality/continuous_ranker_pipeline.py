@@ -134,6 +134,7 @@ def load_continuous_ranker_data(
         target_id=str(profile.continuous_target_id),
         expected_group_count=int(len(group_table)),
         expected_dataset_policy=summary.get("policy"),
+        expected_dataset_artifacts=summary.get("dataset_artifacts"),
     )
     outer_policy = resolve_breakout_quality_outer_policy(
         Path(project_root),

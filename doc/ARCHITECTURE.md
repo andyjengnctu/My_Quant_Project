@@ -238,6 +238,10 @@ python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_
 - 高波動操作細節移至 `doc/CMD.md`；formal 細部契約移至 `doc/TEST_SUITE_CHECKLIST.md`。
 - 不以 exact file-tree、helper 長清單、局部 alias 說明或暫時演進敘事作為本檔主要承載面。
 
+### Continuous Target preparation boundary
+
+`tools/filters/breakout_quality/prepare_continuous_target.py`是continuous workflow的泛用前置層。它不定義Target公式，只依active profile的`continuous_target_id`驗證或轉呼叫既有Target builder。Target manifest除Dataset policy與group count外，必須綁定產生它的Dataset artifact SHA256；衍生Target另綁定來源Target manifest SHA256。`apps/breakout_quality.py`的continuous完整流程固定為Dataset preparation → Continuous Target preparation → PIT Score build → PIT model audit；低階research audit仍維持CLI-only。
+
 ### 11F No-time Target Arrays＋Selection-only Learnability Audit
 
 11F將11E通過的固定消融升級為獨立versioned target：

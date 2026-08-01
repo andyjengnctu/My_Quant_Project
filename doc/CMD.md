@@ -73,7 +73,7 @@ python apps/breakout_quality.py
 
 Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
-模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／report流程；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel，完成後才執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。`[Enter]`與`[1]`仍彼此獨立；PIT score-store尚未接入策略層時，continuous策略選項會明確停止，不會回退誤用canonical runtime scores。
+模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／report流程；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。`[Enter]`與`[1]`仍彼此獨立；PIT score-store尚未接入策略層時，continuous策略選項會明確停止，不會回退誤用canonical runtime scores。
 
 
 切換至原9A binary workflow時，只需在 `config/breakout_quality.py` 指定既有classification profile，例如：
@@ -84,6 +84,16 @@ BREAKOUT_QUALITY_RANDOM_SEED = 42  # 所有binary／continuous／PIT流程共用
 ```
 
 若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`；Seed仍使用同一個 `BREAKOUT_QUALITY_RANDOM_SEED`，不會依profile暗中改值。只有單次重現特殊實驗時才用CLI `--seed`覆寫。PIT日期／fold設定只在continuous objective下生效。
+
+### Continuous Target自動準備
+
+主選單會自動執行；CLI-only入口如下：
+
+```bash
+python apps/breakout_quality.py prepare-continuous-target --filter-id breakout_quality_v1 --target-id strategy_aligned_opportunity_no_time_r_v1
+```
+
+此命令只依目前Dataset與profile準備Target，不訓練模型。已存在Target必須與目前Dataset artifact SHA256一致才會跳過；Dataset重新掃描或group排列改變時會重建。No-time Target為目前active workflow已接受的固定公式時，可直接重建既定arrays，不要求每次重新執行歷史11E研究gate；原`audit-no-time-target`未帶workflow rebuild flag時仍保留原research-only gate語意。
 
 ### Selection point-in-time continuous-ranker Scores
 

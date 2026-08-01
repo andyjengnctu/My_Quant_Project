@@ -36,6 +36,10 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
+from filters.breakout_quality.continuous_target import (
+    TARGET_MANIFEST_FILENAME,
+    resolve_continuous_target_dir,
+)
 from filters.breakout_quality.mantis_contract import require_mantis_v2_class
 from filters.breakout_quality.moment_contract import (
     MOMENT_PACKAGE_NAME,
@@ -86,6 +90,7 @@ COMMAND_MODULES = {
     "evaluate": "tools.filters.breakout_quality.evaluate",
     "regime-audit": "tools.filters.breakout_quality.regime_audit",
     "audit-continuous-target": "tools.filters.breakout_quality.audit_continuous_target",
+    "prepare-continuous-target": "tools.filters.breakout_quality.prepare_continuous_target",
     "train-continuous-ranker": "tools.filters.breakout_quality.train_continuous_ranker",
     "audit-qualified-candidate-set": "tools.filters.breakout_quality.audit_qualified_candidate_set",
     "audit-target-attribution": "tools.filters.breakout_quality.audit_target_component_attribution",
@@ -118,6 +123,7 @@ COMMAND_DESCRIPTIONS = {
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "regime-audit": "稽核 Selection／OOS 的市場狀態與 breakout event 覆蓋",
     "audit-continuous-target": "建立11A連續target arrays並稽核分布、同日排序與實際R方向",
+    "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
     "train-continuous-ranker": "執行11B／11G continuous ranker研究；research-only、CLI-only",
     "audit-qualified-candidate-set": "執行11C策略qualified candidate-set失敗歸因；research-only",
     "audit-target-attribution": "執行11D Target成分與Label條件失敗歸因；research-only",
@@ -129,7 +135,7 @@ COMMAND_DESCRIPTIONS = {
     "audit-selection-pressure": "執行11K portfolio selection-pressure歸因；read-only、CLI-only",
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
     "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
-    "strategy-compare": "策略績效比較；相容原breakout_quality_strategy_compare入口",
+    "strategy-compare": "執行breakout-quality策略績效比較",
 }
 
 
@@ -1539,6 +1545,11 @@ def _print_workflow_status() -> None:
     )
     status_paths = {
         "Dataset summary": _dataset_paths(settings.filter_id)["summary"],
+        "Target manifest": resolve_continuous_target_dir(
+            PROJECT_ROOT,
+            settings.filter_id,
+            target_id=str(settings.continuous_target_id),
+        ) / TARGET_MANIFEST_FILENAME,
         "PIT scores": resolve_selection_point_in_time_score_path(
             PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
         ),
@@ -1573,7 +1584,10 @@ def _interactive_model_research(program_name: str) -> int:
         )
 
     _print_workflow_status()
-    if not _prompt_bool("必要時先建立Dataset，再建立／更新PIT Scores並執行模型驗證", True):
+    if not _prompt_bool(
+        "必要時先建立Dataset與Continuous Target，再建立／更新PIT Scores並執行模型驗證",
+        True,
+    ):
         return 0
     build_args = [
         "--filter-id", settings.filter_id,
@@ -1605,6 +1619,19 @@ def _interactive_model_research(program_name: str) -> int:
             return code
     else:
         print("[skip] PIT所需Full dataset已符合目前來源與policy。")
+
+    code = _run_command(
+        "prepare-continuous-target",
+        [
+            "--filter-id",
+            settings.filter_id,
+            "--target-id",
+            str(settings.continuous_target_id),
+        ],
+        program_name=program_name,
+    )
+    if code != 0:
+        return code
 
     code = _run_command(
         "build-point-in-time-scores", build_args, program_name=program_name

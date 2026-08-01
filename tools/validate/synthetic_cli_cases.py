@@ -75,7 +75,7 @@ def validate_dataset_cli_contract_case(_base_params):
     for command in (
         "menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain",
         "train", "export-scores", "report", "evaluate", "regime-audit",
-        "build-point-in-time-scores", "audit-point-in-time-scores", "strategy-compare",
+        "prepare-continuous-target", "build-point-in-time-scores", "audit-point-in-time-scores", "strategy-compare",
     ):
         add_check(
             results,
@@ -162,8 +162,15 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         (
             [item["command"] for item in interactive_commands]
-            == ["build-point-in-time-scores", "audit-point-in-time-scores"]
-            and interactive_commands[0]["args"][:6]
+            == ["prepare-continuous-target", "build-point-in-time-scores", "audit-point-in-time-scores"]
+            and interactive_commands[0]["args"]
+            == [
+                "--filter-id",
+                workflow_settings.filter_id,
+                "--target-id",
+                workflow_settings.continuous_target_id,
+            ]
+            and interactive_commands[1]["args"][:6]
             == [
                 "--filter-id",
                 workflow_settings.filter_id,
@@ -172,7 +179,7 @@ def validate_dataset_cli_contract_case(_base_params):
                 "--experiment-profile",
                 workflow_settings.experiment_profile,
             ]
-            and interactive_commands[1]["args"]
+            and interactive_commands[2]["args"]
             == [
                 "--filter-id",
                 workflow_settings.filter_id,
@@ -222,6 +229,7 @@ def validate_dataset_cli_contract_case(_base_params):
             0,
             [
                 "build-dataset",
+                "prepare-continuous-target",
                 "build-point-in-time-scores",
                 "audit-point-in-time-scores",
             ],
@@ -231,6 +239,43 @@ def validate_dataset_cli_contract_case(_base_params):
             dataset_prepare_rc,
             [item[0] for item in dataset_prepare_commands],
             dataset_prepare_commands[0][1],
+        ),
+    )
+
+    prepare_target_module = importlib.import_module(
+        "tools.filters.breakout_quality.prepare_continuous_target"
+    )
+    with (
+        patch.object(
+            prepare_target_module,
+            "_dataset_identity",
+            return_value=({"policy": {}, "dataset_artifacts": {}}, 4),
+        ),
+        patch.object(
+            prepare_target_module,
+            "_target_is_current",
+            side_effect=[(False, "manifest missing"), (True, "current")],
+        ),
+        patch.object(prepare_target_module, "_build_target", return_value=0) as build_target,
+    ):
+        prepare_target_rc = prepare_target_module.main(
+            [
+                "--filter-id",
+                workflow_settings.filter_id,
+                "--target-id",
+                workflow_settings.continuous_target_id,
+            ]
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_prepare_continuous_target_rebuilds_then_revalidates",
+        (0, 1, workflow_settings.continuous_target_id),
+        (
+            prepare_target_rc,
+            build_target.call_count,
+            build_target.call_args.kwargs.get("target_id"),
         ),
     )
 
