@@ -1931,3 +1931,17 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 不包含項目 | 本輪不執行完整Selection單次1000-trial final refit、不產生`adapted_best_params.json`、不執行正式OOS、不改Score模型／PIT folds／search space／TP／fixed risk或排序規則。只有rolling診斷支持適應後，才另行設計final refit與凍結流程 |
 | 獨立驗證 | 完整synthetic consistency共4,134 checks／242 cases／0失敗；另完成253個Python source的AST／compileall、7個修改模組import、import cycle、下層反向依賴`apps/`、bare except、唯一入口、config可調整性、PIT identity、Future Target隔離、Checklist B／T／G／E與`apps/test_suite.py`靜態可信度檢查。Direct contract覆蓋outer rolling trials來源、Baseline fold／trial mismatch拒絕、固定ranking／filter不進trial、一般search space與TP不變、process-safe session spec、PIT cache identity、bootstrap／partial Score-history coverage、PIT內gap拒絕、Adapted active-param固定契約、前置工件hash重用、合併menu／CLI及`ROLLING_SELECTION_DIAGNOSTIC`邊界；正式`apps/test_suite.py`依專案規則未在本輪執行 |
 | 下一步 | 套用patch後先由使用者本機執行`python apps/test_suite.py`；五步全PASS後執行主選單`[2] → [2] 驗證策略參數適應`。本輪未取得實際rolling結果，不得預寫Adapted有效 |
+
+### 3.90 Formal Meta Quality Checklist G排序閉環（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；四個功能步驟已由使用者本機確認PASS，本輪只修正meta quality的Checklist G機械排序，正式suite待使用者重跑 |
+| 程式基準 | `test-branch-1_20260802_204537_76279dd.zip`；SHA256 `fd03e8ac95378a2cdf0080d67754822f436ec9cb28132048b1f93fa9194279f0` |
+| Formal結果 | quick gate、consistency、chain checks與ml smoke皆PASS；meta quality唯一失敗為`checklist_g_rows_sorted_by_date_then_id` |
+| 根因 | `2026-08-02`同日區塊先列出T283，再補寫B186的`DONE -> PARTIAL -> DONE`狀態變更，違反日期升冪且同日依tracking ID排序的既有契約；主表、T摘要、transition內容及rolling adaptation程式本身均未失敗 |
+| 修正 | 重排完整`2026-08-02` G區塊為B26、B170、B182、B183、B184、B185、B186、T280、T281、T282、T283；同ID多筆列維持原實際演進次序，並在B26補記本次治理契約退回與重新收斂 |
+| 固定條件 | 不改Dataset、Label、Continuous Target、Seed 42、PIT Scores、rolling folds、100 trials／fold、search space、optimizer、Score Sort、候選、成交、資金、停損停利、capture、Selection／OOS邊界或任何績效數值 |
+| Dataset／模型工件 | 不需重建；本輪只修改`doc/TEST_SUITE_CHECKLIST.md`與本實驗紀錄 |
+| 獨立驗證 | 以獨立parser檢查G全表日期／natural tracking ID排序、同ID transition chain、NEW首筆、no-op、欄數與裸pipe；另核對主表／T／G最新狀態、摘要、唯一入口、AST／compileall、import cycle、反向依賴與bare except。正式`apps/test_suite.py`未由GPT執行 |
+| 下一步 | 套用patch後重跑`python apps/test_suite.py`；預期meta quality不再回報Checklist G排序失敗。本輪沒有新的Adapted Rolling結果 |

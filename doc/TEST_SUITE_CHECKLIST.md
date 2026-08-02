@@ -1694,6 +1694,8 @@
 | 2026-08-02 | B26 | 補齊B183／B184主表與T280映射並獨立核對主表、T摘要及G最新狀態後重新收斂為DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-08-02 | B26 | formal rerun確認T279／T280重複validator名稱且B184沒有獨立DONE測試映射，checklist registry契約再次退回PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md`, `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-02 | B26 | 將B183與B184拆為唯一synthetic validator、補T281並同步T／G後重新收斂為DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md`, `tools/validate/synthetic_cases.py` |
+| 2026-08-02 | B26 | formal meta quality檢出同日G列將T283排在後補B186之前，日期／tracking ID機械排序契約退回PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-08-02 | B26 | 重排完整2026-08-02區塊並核對同ID transition chain、主表／T／G摘要後重新收斂為DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-08-02 | B170 | 舊主表仍將所有不可評分事件寫成保守排除，與Selection PIT Score Sort缺分fallback契約衝突，契約退回PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-08-02 | B170 | 明確拆分hard-filter不可評分保守REJECT與score-ranking缺分保存payload後回退原排序，重新收斂為DONE | PARTIAL -> DONE | `core/extended_signals.py`, `core/portfolio_candidates.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-08-02 | B182 | 使用者本機確認Dataset skip已彙總，但基礎Target audit、逐Epoch／refit與六段PIT完整console仍造成互動流程洗版，compact輸出契約退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/audit_continuous_target.py`, `tools/filters/breakout_quality/train_continuous_ranker.py`, `tools/filters/breakout_quality/audit_point_in_time_scores.py` |
@@ -1714,6 +1716,8 @@
 | 2026-08-02 | B185 | 使用者確認兩份分區報表連續輸出仍形成第二套1～8編號且指標跨表重覆，互動易讀契約再次退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_compare.py` |
 | 2026-08-02 | B185 | 策略與capture合併為單一一階10區塊、結論置末、全部既有數據保留且第二份capture輸出取消後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_score_ranking_capture_audit_contract_case`, `validate_dataset_cli_contract_case` |
 | 2026-08-02 | B186 | 新增Selection Score-ranking參數適應、PIT identity隔離、三組比較與合併menu／CLI契約並收斂為DONE | NEW -> DONE | `validate_breakout_quality_strategy_adaptation_contract_case` |
+| 2026-08-02 | B186 | 使用者確認既有Baseline為100 trials／fold rolling active params，但初版Adapted為完整Selection單次1000 trials，訓練預算與擬合語意不對稱，契約退回PARTIAL | DONE -> PARTIAL | `config/breakout_quality.py`, `tools/filters/breakout_quality/strategy_adapt.py` |
+| 2026-08-02 | B186 | Adapted改為與Baseline相同fold、window、objective、policy及100 trials／fold的Selection rolling驗證，另保存Score-history bootstrap／partial coverage並禁止PIT期間內缺口後重新收斂為DONE | PARTIAL -> DONE | `tools/optimizer/session_factory.py`, `tools/optimizer/outer_rolling_oos.py`, `tools/filters/breakout_quality/strategy_adapt.py` |
 | 2026-08-02 | T280 | formal consistency確認T280與T279重複指向PIT builder validator，測試摘要唯一性契約退回PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-08-02 | T280 | 改由獨立Selection PIT Score Sort validator承接B183後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_selection_point_in_time_score_sort_contract_case` |
 | 2026-08-02 | T280 | 原validator只驗證排序列上的`score=None`，未覆蓋缺分payload進入signal state時的`float(None)`，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
@@ -1723,7 +1727,5 @@
 | 2026-08-02 | T281 | 新增單一Seed與唯一Strategy Compare入口獨立validator並映射B184 | NEW -> DONE | `validate_breakout_quality_single_seed_single_entry_contract_case` |
 | 2026-08-02 | T282 | 新增Score-ranking capture attribution與彩色報表獨立validator並映射B185 | NEW -> DONE | `validate_breakout_quality_score_ranking_capture_audit_contract_case` |
 | 2026-08-02 | T283 | 新增策略參數適應固定search contract、PIT cache／study identity、前置工件隔離、trial補足、合併入口與Selection結果邊界validator並映射B186 | NEW -> DONE | `validate_breakout_quality_strategy_adaptation_contract_case` |
-| 2026-08-02 | B186 | 使用者確認既有Baseline為100 trials／fold rolling active params，但初版Adapted為完整Selection單次1000 trials，訓練預算與擬合語意不對稱，契約退回PARTIAL | DONE -> PARTIAL | `config/breakout_quality.py`, `tools/filters/breakout_quality/strategy_adapt.py` |
-| 2026-08-02 | B186 | Adapted改為與Baseline相同fold、window、objective、policy及100 trials／fold的Selection rolling驗證，另保存Score-history bootstrap／partial coverage並禁止PIT期間內缺口後重新收斂為DONE | PARTIAL -> DONE | `tools/optimizer/session_factory.py`, `tools/optimizer/outer_rolling_oos.py`, `tools/filters/breakout_quality/strategy_adapt.py` |
 | 2026-08-02 | T283 | 原validator仍驗證單次1000-trial fitted Selection、study續跑及`FITTED_SELECTION_DIAGNOSTIC`，與新rolling契約不符，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-02 | T283 | 改驗證outer rolling trial來源、Baseline fold對稱、process-safe PIT session、Score-history coverage、rolling工件及`ROLLING_SELECTION_DIAGNOSTIC`後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_adaptation_contract_case` |
