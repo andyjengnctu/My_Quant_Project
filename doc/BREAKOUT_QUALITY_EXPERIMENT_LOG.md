@@ -1977,3 +1977,18 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Dataset／Label／模型工件 | 不需重建；若既有rolling結果工件完整，只需重新執行選單`[2] 驗證策略參數適應`即可看到統一後簡表 |
 | 驗證 | T283改為直接驗證前九區標題及順序、共同定義、適應差異欄、Bootstrap coverage、參數差異、結論置末與第二份capture標題排除；正式`apps/test_suite.py`依專案規則留待使用者本機執行 |
 | 結果邊界 | 本輪沒有重跑optimizer或portfolio replay，不得由顯示重構推論Adapted Rolling效果改變 |
+
+### 3.93 Rolling Adaptation trials來源解耦Baseline歷史工件（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`；移除Baseline歷史active-param工件trial數對目前Adapted Rolling設定的硬性限制，尚未重跑optimizer或產生新Adapted結果 |
+| 程式基準 | `test-branch-1_20260802_224235_c249226.zip`；SHA256 `d0172528bd9423d1d5ea49cd50a878e0f598ec5367fdd31a6b2e4df5ab9b7123` |
+| 問題 | 使用者將`config/training_policy.py`的`OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`由100調為200後，`strategy-adapt`仍要求requested／config值等於既有Baseline `roos_base_best.json`保存的100，導致合法config調整被`ValueError`阻擋，違反config可調整性與「歷史工件不得鎖死目前設定」原則 |
+| 新契約 | Adapted Rolling的`trials_per_fold`預設直接讀取目前`OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`；明確CLI值仍可單次覆蓋。Baseline active-param工件的`meta.trials_per_fold`只保留為來源追溯與報表診斷，不再參與相等性fail-fast |
+| 保留一致性 | Baseline工件仍提供first／last OOS、fixed train window、OOS horizon、fold schedule、active-param selector與歷史參數；Adapted工件必須忠實採用本次requested trials，既有Adapted搜尋只有runtime identity與本次trials相同才可重用，否則重新執行optimizer |
+| Identity與輸出 | `rolling_preflight.json`、runtime identity、optimizer summary、三組比較payload與compact console同時保存本次Adapted trials、trial source及Baseline歷史artifact trials；`trial_count_match_required=false`，避免隱藏兩者差異但不再阻擋執行 |
+| 固定條件 | 不改rolling fold日期、train window、OOS horizon、search space、objective、Seed 42、Score Sort、PIT identity、TP、fixed risk、position cap、max positions、rotation、Future Target或Selection／OOS邊界 |
+| 結果邊界 | 若目前policy為200且既有Adapted搜尋為100，runtime identity不同，應重跑7 folds × 200 trials；Baseline／Sort Only仍使用既有歷史active params。此結果可比較策略效果，但報表會明確顯示Baseline工件與Adapted的trial預算不同，不再宣稱trial數相等 |
+| 驗證 | T283使用Baseline artifact trial數故意不同於目前training policy的synthetic案例，確認Baseline contract可載入、outer rolling argv採目前requested值、runtime保存來源與舊artifact值、Adapted active-param只接受本次requested trials，且compact report顯示兩者而不作硬性gate。正式`apps/test_suite.py`依專案規則由使用者本機執行 |
+| 下一步 | 套用patch後先執行`python apps/test_suite.py`；通過後執行主選單`[2] → [2] 驗證策略參數適應`。目前training policy為200時會執行200 trials／fold，不再因Baseline歷史工件為100而中止 |

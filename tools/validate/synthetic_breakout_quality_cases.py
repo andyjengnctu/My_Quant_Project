@@ -11967,6 +11967,9 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         (target_mismatch_rejected, fold_mismatch_rejected),
     )
 
+    baseline_artifact_trials = (
+        100 if int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT) != 100 else 50
+    )
     baseline_payload = {
         "selector": "base_finalist_best",
         "meta": {
@@ -11975,7 +11978,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             "last_oos_date": "2015-01-01",
             "train_window_months": 120,
             "oos_horizon_months": 12,
-            "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+            "trials_per_fold": baseline_artifact_trials,
             "active_param_policy": "daily_active_param_ensemble",
         },
         "summary": {
@@ -12024,14 +12027,19 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             baseline_contract = _load_baseline_rolling_contract(
                 root=root, args=args, settings=settings
             )
-            mismatch_args = SimpleNamespace(**{**vars(args), "trials_per_fold": 99})
-            mismatched_trials_rejected = False
+            alternate_args = SimpleNamespace(
+                **{
+                    **vars(args),
+                    "trials_per_fold": int(args.trials_per_fold) + 1,
+                }
+            )
+            alternate_trial_count_accepted = True
             try:
                 _load_baseline_rolling_contract(
-                    root=root, args=mismatch_args, settings=settings
+                    root=root, args=alternate_args, settings=settings
                 )
             except ValueError:
-                mismatched_trials_rejected = True
+                alternate_trial_count_accepted = False
 
         score_path = root / "scores.csv"
         manifest_path = root / "manifest.json"
@@ -12098,6 +12106,10 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         adapted_path = root / "adapted_roos_base_best.json"
         adapted_payload = {
             **baseline_payload,
+            "meta": {
+                **baseline_payload["meta"],
+                "trials_per_fold": int(args.trials_per_fold),
+            },
             "params_ensemble_by_effective_date": {
                 "2014-01-01": [{"params": {
                     "use_breakout_quality_ranking": True,
@@ -12163,12 +12175,20 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
 
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_matches_baseline_folds_and_trials_per_fold",
-        (100, True, ["--trials", "100"]),
+        "rolling_adaptation_trials_follow_current_policy_without_baseline_artifact_gate",
+        (
+            baseline_artifact_trials,
+            int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
+            True,
+            ["--trials", str(int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT))],
+            False,
+        ),
         (
             baseline_contract["meta"]["trials_per_fold"],
-            mismatched_trials_rejected,
+            runtime_contract["rolling_policy"]["trials_per_fold"],
+            alternate_trial_count_accepted,
             _outer_rolling_argv(args=args, baseline_contract=baseline_contract)[-2:],
+            runtime_contract["rolling_policy"]["trial_count_match_required"],
         ),
     )
     add_check(
@@ -12307,7 +12327,10 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         },
         "parameter_comparison": [],
         "rolling_validation": {
-            "trials_per_fold": 100,
+            "trials_per_fold": 200,
+            "trials_per_fold_source": "config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT",
+            "baseline_trials_per_fold": 100,
+            "trial_count_match_required": False,
             "train_window_months": 120,
             "oos_horizon_months": 12,
             "optimizer_search_reused": True,
@@ -12350,13 +12373,14 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "rolling_adaptation_compact_report_matches_current_strategy_layout_and_keeps_unique_sections",
-        (True, True, True, True, True, True, True),
+        (True, True, True, True, True, True, True, True),
         (
             all(position >= 0 for position in adaptation_section_positions),
             adaptation_section_positions == sorted(adaptation_section_positions),
             "定義：衡量整體權益最後賺多少" in compact_adaptation_console,
             "適應差異" in compact_adaptation_console,
             "Bootstrap fallback" in compact_adaptation_console,
+            "Baseline工件 trials／fold" in compact_adaptation_console,
             "Baseline中位" in compact_adaptation_console,
             "Score Sort 資金配置與 Target Capture 診斷" not in compact_adaptation_console,
         ),

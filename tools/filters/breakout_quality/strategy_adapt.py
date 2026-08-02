@@ -101,9 +101,9 @@ def _parse_args(argv=None):
     settings = get_breakout_quality_workflow_settings()
     parser = argparse.ArgumentParser(
         description=(
-            "以與Baseline相同的rolling folds及trials／fold，固定Selection PIT "
-            "Score Sort執行策略參數適應，並輸出Baseline／Sort Only／"
-            "Adapted Rolling三組Selection診斷。"
+            "沿用Baseline rolling fold schedule，並由目前training policy提供"
+            "trials／fold，固定Selection PIT Score Sort執行策略參數適應，"
+            "輸出Baseline／Sort Only／Adapted Rolling三組Selection診斷。"
         )
     )
     parser.add_argument("--dataset", choices=("reduced", "full"), default=settings.strategy_dataset)
@@ -120,7 +120,10 @@ def _parse_args(argv=None):
         dest="trials_per_fold",
         type=int,
         default=settings.strategy_adapt_trials_per_fold,
-        help="每個rolling fold的optimizer trial數；必須與Baseline active params一致",
+        help=(
+            "每個rolling fold的optimizer trial數；預設讀取目前training policy。"
+            "Baseline既有工件的歷史trial數只作診斷，不作硬性限制"
+        ),
     )
     parser.add_argument("--max-positions", type=int, default=settings.strategy_max_positions)
     parser.add_argument("--rotation", choices=("off", "on"), default=settings.strategy_rotation)
@@ -368,18 +371,6 @@ def _load_baseline_rolling_contract(*, root: Path, args, settings) -> dict[str, 
         raise ValueError("Baseline rolling active params沒有有效fold摘要")
     if len(list(payload.get("folds") or [])) != int(summary["folds"]):
         raise ValueError("Baseline rolling active params的fold明細與summary不一致")
-    baseline_trials = int(meta["trials_per_fold"])
-    if int(args.trials_per_fold) != baseline_trials:
-        raise ValueError(
-            "Adapted Rolling的trials／fold必須與Baseline一致："
-            f"requested={int(args.trials_per_fold)}, baseline={baseline_trials}"
-        )
-    if int(settings.strategy_adapt_trials_per_fold) != baseline_trials:
-        raise ValueError(
-            "目前training_policy的outer rolling trials與Baseline工件不一致；"
-            "請先用目前設定重建Baseline active params："
-            f"config={int(settings.strategy_adapt_trials_per_fold)}, artifact={baseline_trials}"
-        )
     return {
         "path": params_path,
         "payload": payload,
@@ -561,7 +552,17 @@ def _build_runtime_contract(
             "last_oos_date": str(baseline_meta["last_oos_date"]),
             "train_window_months": int(baseline_meta["train_window_months"]),
             "oos_horizon_months": int(baseline_meta["oos_horizon_months"]),
-            "trials_per_fold": int(baseline_meta["trials_per_fold"]),
+            "trials_per_fold": int(args.trials_per_fold),
+            "trials_per_fold_source": (
+                "config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT"
+                if int(args.trials_per_fold)
+                == int(settings.strategy_adapt_trials_per_fold)
+                else "explicit_cli_override"
+            ),
+            "baseline_artifact_trials_per_fold": int(
+                baseline_meta["trials_per_fold"]
+            ),
+            "trial_count_match_required": False,
             "folds": int(baseline_contract["summary"].get("folds", 0) or 0),
             "active_param_policy": str(baseline_meta.get("active_param_policy") or ""),
         },
@@ -695,10 +696,16 @@ def _completed_adapted_search_is_compatible(
         "last_oos_date",
         "train_window_months",
         "oos_horizon_months",
-        "trials_per_fold",
     ):
         if str(meta.get(key)) != str(baseline_meta.get(key)):
             return False
+    if int(meta.get("trials_per_fold", 0) or 0) != int(
+        dict(runtime_contract.get("rolling_policy") or {}).get(
+            "trials_per_fold", 0
+        )
+        or 0
+    ):
+        return False
     if int(dict(payload.get("summary") or {}).get("folds", 0) or 0) != int(
         dict(baseline_contract.get("summary") or {}).get("folds", 0) or 0
     ):
@@ -765,13 +772,19 @@ def _validate_adapted_rolling_params(
     baseline_meta = dict(baseline_contract["meta"])
     for key in (
         "first_oos_date", "last_oos_date", "train_window_months",
-        "oos_horizon_months", "trials_per_fold",
+        "oos_horizon_months",
     ):
         if str(meta.get(key)) != str(baseline_meta.get(key)):
             raise ValueError(
-                "Adapted Rolling與Baseline rolling policy不一致："
+                "Adapted Rolling與Baseline fold schedule不一致："
                 f"{key}: adapted={meta.get(key)!r}, baseline={baseline_meta.get(key)!r}"
             )
+    if int(meta.get("trials_per_fold", 0) or 0) != int(args.trials_per_fold):
+        raise ValueError(
+            "Adapted Rolling工件未採用目前requested trials／fold："
+            f"artifact={meta.get('trials_per_fold')!r}, "
+            f"requested={int(args.trials_per_fold)}"
+        )
     if int(dict(payload.get("summary") or {}).get("folds", 0) or 0) != int(
         baseline_contract["summary"].get("folds", 0) or 0
     ):
@@ -1326,7 +1339,9 @@ def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
     coverage = dict(rolling.get("training_score_coverage") or {})
     summary = render_key_values((
         ("Rolling folds", coverage.get("fold_count", rolling.get("fold_count", "-"))),
-        ("每 fold trials", rolling.get("trials_per_fold", "-")),
+        ("Adapted trials／fold", rolling.get("trials_per_fold", "-")),
+        ("Trials source", rolling.get("trials_per_fold_source", "-")),
+        ("Baseline工件 trials／fold", rolling.get("baseline_trials_per_fold", "-")),
         ("Train window", f"{rolling.get('train_window_months', '-')} months"),
         ("OOS horizon", f"{rolling.get('oos_horizon_months', '-')} months"),
         ("Bootstrap fallback folds", coverage.get("bootstrap_fallback_only_folds", "-")),
@@ -1929,7 +1944,14 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             dict(adapted_params_payload.get("summary") or {}).get("folds", 0) or 0
         ),
         "baseline_trials_per_fold": int(baseline_meta["trials_per_fold"]),
-        "same_rolling_policy_as_baseline": True,
+        "trials_per_fold_source": str(
+            runtime_contract["rolling_policy"]["trials_per_fold_source"]
+        ),
+        "trial_count_match_required": False,
+        "same_fold_schedule_as_baseline": True,
+        "same_rolling_policy_as_baseline": (
+            int(args.trials_per_fold) == int(baseline_meta["trials_per_fold"])
+        ),
         "baseline_sort_only_reused": bool(current_pair_reused),
         "optimizer_search_reused": bool(optimizer_search_reused),
         "fixed_contract_materialized_files": [
@@ -1956,9 +1978,17 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         rolling_validation={
             "fold_count": int(score_coverage.get("fold_count", 0) or 0),
             "trials_per_fold": int(args.trials_per_fold),
+            "trials_per_fold_source": str(
+                runtime_contract["rolling_policy"]["trials_per_fold_source"]
+            ),
+            "baseline_trials_per_fold": int(baseline_meta["trials_per_fold"]),
+            "trial_count_match_required": False,
             "train_window_months": int(baseline_meta["train_window_months"]),
             "oos_horizon_months": int(baseline_meta["oos_horizon_months"]),
-            "same_rolling_policy_as_baseline": True,
+            "same_fold_schedule_as_baseline": True,
+            "same_rolling_policy_as_baseline": (
+                int(args.trials_per_fold) == int(baseline_meta["trials_per_fold"])
+            ),
             "optimizer_search_reused": bool(optimizer_search_reused),
             "training_score_coverage": score_coverage,
         },
