@@ -11686,17 +11686,30 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     from config import breakout_quality as breakout_quality_config
+    from config.training_policy import (
+        OPTIMIZER_FIXED_TP_PERCENT,
+        OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    )
+    from filters.breakout_quality.runtime import (
+        get_breakout_quality_ranking_source_context,
+    )
     from strategies.breakout.search_space import build_trial_params
     from tools.filters.breakout_quality.audit_score_ranking_capture import (
         _CAPTURE_ROWS,
         _decision,
     )
     from tools.filters.breakout_quality.strategy_adapt import (
-        _assert_study_identity,
+        ADAPTATION_STATUS,
+        _build_base_policy,
         _build_runtime_contract,
+        _build_training_score_coverage_contract,
         _current_pair_artifact_paths,
+        _load_baseline_rolling_contract,
         _load_current_pair_if_compatible,
+        _optimizer_session_spec,
+        _outer_rolling_argv,
         _render_three_way_console,
+        _validate_adapted_rolling_params,
         _validate_fixed_contract,
         _validate_pit_contract_against_settings,
         _write_current_pair_manifest,
@@ -11705,9 +11718,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         build_full_evaluation_cache_key,
         build_prep_cache_key,
     )
-    from config.training_policy import (
-        OPTIMIZER_FIXED_TP_PERCENT,
-    )
+    from tools.optimizer.session_factory import build_optimizer_session_from_spec
 
     class FakeTrial:
         def __init__(self):
@@ -11743,7 +11754,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     params = build_trial_params(session, trial)
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "adaptation_fixed_score_switches_are_not_optuna_trial_dimensions",
+        "rolling_adaptation_fixed_score_switches_are_not_optuna_trial_dimensions",
         (True, False, False, False, 0.0),
         (
             params.use_breakout_quality_ranking,
@@ -11766,27 +11777,22 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     fixed_non_score_trial_params = {
         key: value
         for key, value in trial.params.items()
-        if key not in {
-            "use_breakout_quality_ranking",
-            "use_breakout_quality_filter",
-        }
+        if key not in {"use_breakout_quality_ranking", "use_breakout_quality_filter"}
     }
     normal_non_score_trial_params = {
         key: value
         for key, value in normal_trial.params.items()
-        if key not in {
-            "use_breakout_quality_ranking",
-            "use_breakout_quality_filter",
-        }
+        if key not in {"use_breakout_quality_ranking", "use_breakout_quality_filter"}
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "adaptation_reuses_current_optimizer_search_space_except_fixed_score_switches",
-        (False, False, True),
+        "rolling_adaptation_reuses_optimizer_search_space_and_current_tp_policy",
+        (False, False, True, 0.0),
         (
             normal_params.use_breakout_quality_ranking,
             normal_params.use_breakout_quality_filter,
             fixed_non_score_trial_params == normal_non_score_trial_params,
+            params.tp_percent,
         ),
     )
 
@@ -11795,8 +11801,8 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     eval_a = build_full_evaluation_cache_key(
         params,
         objective_mode="split_train_romd",
-        train_start_year=2014,
-        search_train_end_year=2020,
+        train_start_year=2004,
+        search_train_end_year=2013,
         max_positions=7,
         enable_rotation=True,
         runtime_identity="pit-a",
@@ -11804,15 +11810,15 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     eval_b = build_full_evaluation_cache_key(
         params,
         objective_mode="split_train_romd",
-        train_start_year=2014,
-        search_train_end_year=2020,
+        train_start_year=2004,
+        search_train_end_year=2013,
         max_positions=7,
         enable_rotation=True,
         runtime_identity="pit-b",
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "adaptation_optimizer_caches_are_partitioned_by_pit_identity",
+        "rolling_adaptation_optimizer_caches_are_partitioned_by_pit_identity",
         (True, True),
         (prep_a != prep_b, eval_a != eval_b),
     )
@@ -11824,13 +11830,25 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         model_architecture=settings.model_architecture,
         experiment_profile=settings.experiment_profile,
         param_policy="base-finalist-best",
-        trials=3,
+        trials_per_fold=OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
         max_positions=7,
         rotation="on",
         fixed_risk=0.02,
         max_position_cap_pct=0.40,
+        quiet=True,
     )
     _validate_fixed_contract(args, settings)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_adaptation_trials_come_from_outer_policy_not_single_refit_policy",
+        (OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT, True),
+        (
+            settings.strategy_adapt_trials_per_fold,
+            settings.strategy_adapt_trials_per_fold
+            == OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+        ),
+    )
+
     pit_settings_payload = {
         "continuous_target_id": settings.continuous_target_id,
         "seed": settings.seed,
@@ -11875,13 +11893,77 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         fold_mismatch_rejected = True
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "adaptation_freezes_current_model_target_seed_and_pit_fold_contract",
+        "rolling_adaptation_freezes_model_target_seed_and_pit_fold_contract",
         (True, True),
         (target_mismatch_rejected, fold_mismatch_rejected),
     )
 
+    baseline_payload = {
+        "selector": "base_finalist_best",
+        "meta": {
+            "window_mode": "fixed",
+            "first_oos_date": "2014-01-01",
+            "last_oos_date": "2015-01-01",
+            "train_window_months": 120,
+            "oos_horizon_months": 12,
+            "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+            "active_param_policy": "daily_active_param_ensemble",
+        },
+        "summary": {
+            "folds": 2,
+            "selection_period": "2004-01-01~2014-12-31",
+            "oos_period": "2014-01-01~2015-12-31",
+        },
+        "folds": [
+            {
+                "fold": "1/2",
+                "selection_start_date": "2004-01-01",
+                "selection_end_date": "2013-12-31",
+                "oos_start_date": "2014-01-01",
+                "oos_end_date": "2014-12-31",
+            },
+            {
+                "fold": "2/2",
+                "selection_start_date": "2005-01-01",
+                "selection_end_date": "2014-12-31",
+                "oos_start_date": "2015-01-01",
+                "oos_end_date": "2015-12-31",
+            },
+        ],
+    }
+
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
+        baseline_path = root / "roos_base_best.json"
+        baseline_path.write_text(
+            json.dumps(baseline_payload, ensure_ascii=False), encoding="utf-8"
+        )
+        with (
+            patch(
+                "tools.filters.breakout_quality.strategy_adapt._resolve_params_path",
+                return_value=baseline_path,
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_adapt._load_param_source",
+                return_value={"kind": "rolling_active_param_ensemble"},
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_adapt._validate_requested_param_policy",
+                return_value={"selector": "base_finalist_best"},
+            ),
+        ):
+            baseline_contract = _load_baseline_rolling_contract(
+                root=root, args=args, settings=settings
+            )
+            mismatch_args = SimpleNamespace(**{**vars(args), "trials_per_fold": 99})
+            mismatched_trials_rejected = False
+            try:
+                _load_baseline_rolling_contract(
+                    root=root, args=mismatch_args, settings=settings
+                )
+            except ValueError:
+                mismatched_trials_rejected = True
+
         score_path = root / "scores.csv"
         manifest_path = root / "manifest.json"
         audit_path = root / "audit.json"
@@ -11896,8 +11978,15 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             manifest_path=manifest_path,
             audit_path=audit_path,
             available_from="2014-01-01",
-            available_through="2020-12-31",
-            continuous_target_id="strategy_aligned_opportunity_no_time_r_v1",
+            available_through="2015-12-31",
+            continuous_target_id=settings.continuous_target_id,
+        )
+        coverage = _build_training_score_coverage_contract(
+            baseline_contract=baseline_contract, pit_contract=pit_contract
+        )
+        project_root = Path(__file__).resolve().parents[2]
+        base_policy = _build_base_policy(
+            root=project_root, baseline_contract=baseline_contract
         )
         with patch(
             "tools.filters.breakout_quality.strategy_adapt.build_source_data_inventory",
@@ -11908,74 +11997,68 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
                 args=args,
                 settings=settings,
                 pit_contract=pit_contract,
+                baseline_contract=baseline_contract,
+                base_policy=base_policy,
             )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "adaptation_runtime_contract_uses_current_configurable_fixed_values",
-        (
-            7, True, 0.02, 0.40, OPTIMIZER_FIXED_TP_PERCENT,
-            False, False, False, True,
-        ),
-        (
-            runtime_contract["fixed_runtime"]["max_positions"],
-            runtime_contract["fixed_runtime"]["rotation"],
-            runtime_contract["fixed_runtime"]["fixed_risk"],
-            runtime_contract["fixed_runtime"]["max_position_cap_pct"],
-            runtime_contract["fixed_runtime"]["tp_percent_policy"]["fixed_value"],
-            runtime_contract["runtime_restrictions"]["ranking_switch_searched"],
-            runtime_contract["runtime_restrictions"]["future_target_used_for_objective"],
-            runtime_contract["runtime_restrictions"]["oos_used_for_fitting"],
-            isinstance(settings.strategy_adapt_trials, int)
-            and settings.strategy_adapt_trials >= 1,
-        ),
-    )
-
-    class FakeStudy:
-        def __init__(self, *, identity="", trials=None):
-            self.user_attrs = {}
-            if identity:
-                self.user_attrs[
-                    "breakout_quality_strategy_adaptation_runtime_identity_sha256"
-                ] = identity
-            self.trials = list(trials or [])
-
-        def set_user_attr(self, key, value):
-            self.user_attrs[key] = value
-
-    fresh_study = FakeStudy()
-    _assert_study_identity(fresh_study, runtime_contract)
-    mismatch_rejected = False
-    try:
-        _assert_study_identity(
-            FakeStudy(identity="different", trials=[SimpleNamespace(number=0)]),
-            runtime_contract,
+        session_spec = _optimizer_session_spec(
+            root=root,
+            output_dir=root / "rolling_validation",
+            args=args,
+            runtime_contract=runtime_contract,
         )
-    except RuntimeError:
-        mismatch_rejected = True
-    missing_identity_rejected = False
-    try:
-        _assert_study_identity(
-            FakeStudy(trials=[SimpleNamespace(number=0)]),
-            runtime_contract,
+        optimizer_session = build_optimizer_session_from_spec(
+            walk_forward_policy=base_policy,
+            spec=session_spec,
         )
-    except RuntimeError:
-        missing_identity_rejected = True
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "adaptation_study_identity_is_set_and_stale_pit_study_is_rejected",
-        (runtime_contract["runtime_identity_sha256"], True, True),
-        (
-            fresh_study.user_attrs[
-                "breakout_quality_strategy_adaptation_runtime_identity_sha256"
-            ],
-            mismatch_rejected,
-            missing_identity_rejected,
-        ),
-    )
+        try:
+            with optimizer_session.optimizer_runtime_context():
+                runtime_source = get_breakout_quality_ranking_source_context()
+            session_contract = (
+                optimizer_session.fixed_strategy_param_overrides[
+                    "use_breakout_quality_ranking"
+                ],
+                optimizer_session.fixed_strategy_param_overrides[
+                    "use_breakout_quality_filter"
+                ],
+                optimizer_session.runtime_cache_identity,
+                runtime_source.score_source,
+            )
+        finally:
+            optimizer_session.close_trial_prep_executor()
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        pair_dir = root / "models" / "research" / "breakout_quality" / "pair"
+        adapted_path = root / "adapted_roos_base_best.json"
+        adapted_payload = {
+            **baseline_payload,
+            "params_ensemble_by_effective_date": {
+                "2014-01-01": [{"params": {
+                    "use_breakout_quality_ranking": True,
+                    "use_breakout_quality_filter": False,
+                    "breakout_quality_filter_id": settings.filter_id,
+                    "fixed_risk": 0.02,
+                    "max_position_cap_pct": 0.40,
+                    "tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
+                }}],
+                "2015-01-01": [{"params": {
+                    "use_breakout_quality_ranking": True,
+                    "use_breakout_quality_filter": False,
+                    "breakout_quality_filter_id": settings.filter_id,
+                    "fixed_risk": 0.02,
+                    "max_position_cap_pct": 0.40,
+                    "tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
+                }}],
+            },
+        }
+        adapted_path.write_text(
+            json.dumps(adapted_payload, ensure_ascii=False), encoding="utf-8"
+        )
+        validated_adapted = _validate_adapted_rolling_params(
+            path=adapted_path,
+            baseline_contract=baseline_contract,
+            runtime_contract=runtime_contract,
+            args=args,
+        )
+
+        pair_dir = root / "pair"
         pair_dir.mkdir(parents=True, exist_ok=True)
         pair_paths = _current_pair_artifact_paths(pair_dir)
         for key, artifact_path in pair_paths.items():
@@ -12008,6 +12091,51 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             output_dir=pair_dir,
             runtime_identity_sha256="pit-identity-a",
         )
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_adaptation_matches_baseline_folds_and_trials_per_fold",
+        (100, True, ["--trials", "100"]),
+        (
+            baseline_contract["meta"]["trials_per_fold"],
+            mismatched_trials_rejected,
+            _outer_rolling_argv(args=args, baseline_contract=baseline_contract)[-2:],
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_training_score_history_records_bootstrap_fallback_and_partial_coverage",
+        (2, 1, 1, 0, True, False),
+        (
+            coverage["fold_count"],
+            coverage["bootstrap_fallback_only_folds"],
+            coverage["partial_score_history_folds"],
+            coverage["full_score_history_folds"],
+            coverage["folds"][0]["missing_score_fallback_used_before_pit_start"],
+            runtime_contract["runtime_restrictions"][
+                "score_gaps_inside_pit_period_allowed"
+            ],
+        ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_optimizer_session_spec_is_process_safe_and_pins_pit_runtime",
+        (True, False, runtime_contract["runtime_identity_sha256"], "selection_point_in_time"),
+        session_contract,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adapted_rolling_active_params_preserve_fixed_runtime_contract",
+        (ADAPTATION_STATUS, False),
+        (
+            validated_adapted["breakout_quality_adaptation"][
+                "result_interpretation"
+            ],
+            validated_adapted["breakout_quality_adaptation"][
+                "final_selection_refit"
+            ],
+        ),
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "adaptation_current_pair_reuse_requires_identity_and_all_artifact_hashes",
@@ -12044,7 +12172,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "raw_mean_capture_is_json_diagnostic_only_and_not_adaptation_gate",
+        "raw_mean_capture_remains_json_only_and_outside_adaptation_gate",
         ("SORT_ONLY_REJECTED_NO_MECHANICAL_BOTTLENECK", False, False),
         (
             decision["status"],
@@ -12060,26 +12188,35 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     adapt_source = (
         project_root / "tools" / "filters" / "breakout_quality" / "strategy_adapt.py"
     ).read_text(encoding="utf-8")
+    outer_source = (
+        project_root / "tools" / "optimizer" / "outer_rolling_oos.py"
+    ).read_text(encoding="utf-8")
+    config_source = (project_root / "config" / "breakout_quality.py").read_text(
+        encoding="utf-8"
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "adaptation_has_one_canonical_cli_and_merged_interactive_flow",
+        "strategy_adapt_is_rolling_validation_not_single_selection_refit",
         True,
         all(
             token in app_source
             for token in (
                 '"strategy-adapt": "tools.filters.breakout_quality.strategy_adapt"',
                 "[1/Enter] 比較目前策略",
-                "[2] 策略參數適應與績效比較",
+                "[2] 驗證策略參數適應",
+                '"--trials-per-fold"',
             )
         )
-        and "FITTED_SELECTION_DIAGNOSTIC" in adapt_source
-        and "future_target_used_for_objective" in adapt_source
-        and 'current_pair_dir = output_dir / "baseline_sort_only"' in adapt_source
-        and "_load_or_run_current_pair(" in adapt_source
-        and "CURRENT_PAIR_MANIFEST_FILENAME" in adapt_source
-        and "output_dir_override=output_dir" in adapt_source
-        and "remaining_trials = max(0, int(args.trials) - existing_trial_count)"
-        in adapt_source,
+        and "ROLLING_SELECTION_DIAGNOSTIC" in adapt_source
+        and "run_outer_rolling_oos(" in adapt_source
+        and "rolling_optimizer_summary.json" in adapt_source
+        and "rolling_adaptation_manifest.json" in adapt_source
+        and "adapted_best_params.json" not in adapt_source
+        and "FITTED_SELECTION_DIAGNOSTIC" not in adapt_source
+        and "optimizer_session_spec" in outer_source
+        and "build_optimizer_session_from_spec" in outer_source
+        and "OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT" in config_source
+        and "OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT" not in config_source,
     )
 
     compact_adaptation_payload = {
@@ -12098,21 +12235,25 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         compact_adaptation_console = _render_three_way_console(
             compact_adaptation_payload
         )
-    compact_adaptation_text = compact_adaptation_console
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "interactive_adaptation_report_is_grouped_by_portfolio_trade_capital_and_target_layers",
-        (True, True, True, True),
+        "rolling_adaptation_report_groups_portfolio_trade_capital_and_target_layers",
+        (True, True, True, True, True),
         (
-            "投組報酬與風險" in compact_adaptation_text,
-            "單筆交易品質" in compact_adaptation_text,
-            "資金配置與持倉" in compact_adaptation_text,
-            "Target 與實際交易轉換" in compact_adaptation_text,
+            "投組報酬與風險" in compact_adaptation_console,
+            "單筆交易品質" in compact_adaptation_console,
+            "資金配置與持倉" in compact_adaptation_console,
+            "Target 與實際交易轉換" in compact_adaptation_console,
+            "Adapted Rolling" in compact_adaptation_console,
         ),
     )
 
-    summary["workflow"] = "selection_score_ranking_strategy_adaptation"
+    summary["workflow"] = "selection_score_ranking_rolling_adaptation_validation"
     summary["result_status"] = "IMPLEMENTED_RESULT_NOT_AVAILABLE"
+    summary["trials_per_fold"] = int(
+        OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+    )
+    summary["final_selection_refit"] = False
     return results, summary
 
 

@@ -16,7 +16,7 @@ from config.breakout_policy import (
     BREAKOUT_DEFAULT_HIGH_LEN,
     build_breakout_optimizer_high_len_values,
 )
-from config.training_policy import OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT
+from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 
 
 # =============================================================================
@@ -185,7 +185,6 @@ BREAKOUT_QUALITY_STRATEGY_DATASET = "full"
 BREAKOUT_QUALITY_STRATEGY_PARAM_POLICY = "base-finalist-best"
 BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS = 10
 BREAKOUT_QUALITY_STRATEGY_ROTATION = "off"
-BREAKOUT_QUALITY_STRATEGY_ADAPT_TRIALS = OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT
 BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK = 0.01
 BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT = 0.30
 
@@ -809,7 +808,7 @@ class BreakoutQualityWorkflowSettings:
     strategy_param_policy: str
     strategy_max_positions: int
     strategy_rotation: str
-    strategy_adapt_trials: int
+    strategy_adapt_trials_per_fold: int
     strategy_adapt_fixed_risk: float
     strategy_adapt_max_position_cap_pct: float
     strategy_comparison_mode: str
@@ -854,7 +853,8 @@ class BreakoutQualityWorkflowSettings:
                 "max_positions": int(self.strategy_max_positions),
                 "rotation": self.strategy_rotation,
                 "adaptation": {
-                    "trials": int(self.strategy_adapt_trials),
+                    "trials_per_fold": int(self.strategy_adapt_trials_per_fold),
+                    "trial_source": "OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT",
                     "fixed_risk": float(self.strategy_adapt_fixed_risk),
                     "max_position_cap_pct": float(
                         self.strategy_adapt_max_position_cap_pct
@@ -924,8 +924,8 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
         raise ValueError("strategy max positions 必須 >= 1")
     if BREAKOUT_QUALITY_STRATEGY_ROTATION not in {"off", "on"}:
         raise ValueError("strategy rotation 必須是 off 或 on")
-    if int(BREAKOUT_QUALITY_STRATEGY_ADAPT_TRIALS) < 1:
-        raise ValueError("strategy adaptation trials 必須 >= 1")
+    if int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT) < 1:
+        raise ValueError("outer rolling optimizer trials per fold 必須 >= 1")
     if not 0.0 < float(BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK) <= 1.0:
         raise ValueError("strategy adaptation fixed risk 必須介於0與1")
     if not 0.0 < float(BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT) <= 1.0:
@@ -1024,7 +1024,9 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
         strategy_param_policy=str(BREAKOUT_QUALITY_STRATEGY_PARAM_POLICY),
         strategy_max_positions=int(BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS),
         strategy_rotation=str(BREAKOUT_QUALITY_STRATEGY_ROTATION),
-        strategy_adapt_trials=int(BREAKOUT_QUALITY_STRATEGY_ADAPT_TRIALS),
+        strategy_adapt_trials_per_fold=int(
+            OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+        ),
         strategy_adapt_fixed_risk=float(BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK),
         strategy_adapt_max_position_cap_pct=float(
             BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT
@@ -1151,7 +1153,6 @@ __all__ = [
     'normalize_breakout_quality_experiment_profile',
     'normalize_breakout_quality_pretraining_profile',
     'BREAKOUT_QUALITY_STRATEGY_BUY_SORT',
-    'BREAKOUT_QUALITY_STRATEGY_ADAPT_TRIALS',
     'BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK',
     'BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT',
     'BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE',

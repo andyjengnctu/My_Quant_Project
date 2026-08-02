@@ -151,7 +151,7 @@ COMMAND_DESCRIPTIONS = {
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
     "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
     "strategy-compare": "執行breakout-quality策略績效比較",
-    "strategy-adapt": "執行Selection Score-ranking策略參數適應與三組績效比較",
+    "strategy-adapt": "驗證Selection rolling Score-ranking策略參數適應",
 }
 
 
@@ -1574,7 +1574,7 @@ def _print_workflow_status() -> None:
         ("Strategy Param Policy", settings.strategy_param_policy),
         ("Strategy Score Source", settings.strategy_score_source),
         ("Strategy Buy Sort", settings.strategy_buy_sort),
-        ("Strategy Adapt Trials", settings.strategy_adapt_trials),
+        ("Strategy Adapt Trials / Fold", settings.strategy_adapt_trials_per_fold),
         ("Strategy Adapt Fixed Risk", f"{settings.strategy_adapt_fixed_risk:.2%}"),
         (
             "Strategy Adapt Position Cap",
@@ -1795,7 +1795,7 @@ def _interactive_strategy_validation(program_name: str) -> int:
     while True:
         print("\n=== 策略績效驗證 ===")
         print("[1/Enter] 比較目前策略")
-        print("[2] 策略參數適應與績效比較")
+        print("[2] 驗證策略參數適應")
         print("[0] 返回")
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -1832,7 +1832,7 @@ def _interactive_strategy_validation(program_name: str) -> int:
                         "--model-architecture", settings.model_architecture,
                         "--experiment-profile", settings.experiment_profile,
                         "--param-policy", settings.strategy_param_policy,
-                        "--trials", str(settings.strategy_adapt_trials),
+                        "--trials-per-fold", str(settings.strategy_adapt_trials_per_fold),
                         "--max-positions", str(settings.strategy_max_positions),
                         "--rotation", settings.strategy_rotation,
                         "--fixed-risk", str(settings.strategy_adapt_fixed_risk),

@@ -1912,3 +1912,22 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 驗證 | direct synthetic新增10個一階章節、結論位於第10節、第二份capture標題不得出現在合併報表、內部參數檔路徑不顯示等契約；完整CLI與capture正式工件契約維持不變。正式`apps/test_suite.py`依專案規則留待使用者本機執行 |
 | 結果邊界 | 本輪沒有新的Selection／OOS／Adapted結果；報表合併不得解讀為策略效果改變 |
 
+
+### 3.89 Selection Rolling Score-ranking參數適應驗證改版（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`；完成rolling adaptation程式與驗證契約，尚未執行完整optimizer或產生Adapted Rolling績效 |
+| 程式基準 | `test-branch-1_20260802_200805_eb6d123.zip`；SHA256 `bb5f321a1eb3899d7588949d30f3e764824dc1cd8854efc9e990b4f4d17a7497` |
+| 改版原因 | 3.85初版把Adapted設計為完整Selection單次1000 trials，而正式Baseline active params使用7個rolling folds、每fold `OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT=100`。兩者訓練預算、參數生效方式及擬合語意不對稱，Selection三組結果不能乾淨歸因於Score-ranking參數適應 |
+| 新入口 | `python apps/breakout_quality.py strategy-adapt`與主選單`[2] 策略績效驗證 → [2] 驗證策略參數適應`共用同一rolling validation實作；`[1/Enter] 比較目前策略`維持獨立Baseline／Sort Only比較，不新增第三個手動比較選項 |
+| Rolling對稱契約 | Adapted直接讀取正式Baseline `roos_base_best.json`，要求同一first／last OOS、120個月fixed train window、12個月OOS horizon、fold數、`base-finalist-best`及100 trials／fold；CLI、config與Baseline工件任一trial數不一致即fail-fast。第一階段不再引用`OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT=1000`，也不產生完整Selection final-refit參數 |
+| 唯一策略差異 | Adapted optimizer session固定`use_breakout_quality_ranking=True`、`use_breakout_quality_filter=False`與`selection_point_in_time` Score source；正式search space、objective、inner validation、local-min／finalist流程、TP=0.0、fixed risk、position cap、max positions與rotation沿用目前設定。Ranking、filter、Score threshold／權重、模型超參數、PIT fold、Future Target與OOS均不得成為trial維度 |
+| Process-safe runtime | `run_outer_rolling_oos()`新增可選、JSON可序列化的`optimizer_session_spec`；主程序、fold worker及seed-ensemble worker都由同一spec重建固定策略覆寫、PIT runtime context與runtime cache identity。一般optimizer未傳spec時仍走原路徑，預設行為不變 |
+| PIT／cache identity | Dataset、Baseline active params SHA256、rolling policy、search space、optimizer effective policy、filter／architecture／profile／target／Seed、PIT Score CSV／manifest／audit SHA256及固定runtime共同形成identity，並切分prep／full-evaluation cache；Adapted active params完成後再次驗證fold、trial與每個member的固定ranking／filter／risk／cap／TP契約 |
+| Training Score coverage | 正式PIT Scores期間為2014-01-01～2020-12-31，而Baseline最早training window為2004-01-01～2013-12-31。新版不隱藏此差異：每fold輸出`rolling_training_score_coverage.csv`；PIT開始日前缺分依既有正式契約回退原buy-sort。以本輪正式Baseline 7 folds預檢：首個2014 fold為`bootstrap_fallback_only`，後6 folds皆為`partial_score_history`，訓練期間calendar coverage依序約10%～60%，沒有full-history fold。OOS必須完整位於PIT期間，PIT期間內若出現非預期Score coverage缺口則fail-fast |
+| 三組結果 | 同一流程輸出Baseline（原排序＋原rolling params）、Sort Only（Score Sort＋原rolling params）及Adapted Rolling（Score Sort＋新rolling params），並產生績效、年度、capital／capture、Selection Target與參數分布比較；Adapted只可標記`ROLLING_SELECTION_DIAGNOSTIC`，不得宣稱正式泛化 |
+| 正式工件 | `models/research/breakout_quality/score_ranking_adaptation/rolling_validation/`下輸出`rolling_preflight.json`、`rolling_training_score_coverage.csv`、`adapted_active_params/roos_base_best.json`、`rolling_optimizer_summary.json`、`rolling_adaptation_manifest.json`及三組Markdown／JSON／CSV／replay／capture工件；Baseline／Sort Only隔離在`baseline_sort_only/`，不覆寫既有正式比較 |
+| 不包含項目 | 本輪不執行完整Selection單次1000-trial final refit、不產生`adapted_best_params.json`、不執行正式OOS、不改Score模型／PIT folds／search space／TP／fixed risk或排序規則。只有rolling診斷支持適應後，才另行設計final refit與凍結流程 |
+| 獨立驗證 | 完整synthetic consistency共4,134 checks／242 cases／0失敗；另完成253個Python source的AST／compileall、7個修改模組import、import cycle、下層反向依賴`apps/`、bare except、唯一入口、config可調整性、PIT identity、Future Target隔離、Checklist B／T／G／E與`apps/test_suite.py`靜態可信度檢查。Direct contract覆蓋outer rolling trials來源、Baseline fold／trial mismatch拒絕、固定ranking／filter不進trial、一般search space與TP不變、process-safe session spec、PIT cache identity、bootstrap／partial Score-history coverage、PIT內gap拒絕、Adapted active-param固定契約、前置工件hash重用、合併menu／CLI及`ROLLING_SELECTION_DIAGNOSTIC`邊界；正式`apps/test_suite.py`依專案規則未在本輪執行 |
+| 下一步 | 套用patch後先由使用者本機執行`python apps/test_suite.py`；五步全PASS後執行主選單`[2] → [2] 驗證策略參數適應`。本輪未取得實際rolling結果，不得預寫Adapted有效 |

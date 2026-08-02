@@ -8173,7 +8173,12 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
     log_path = str((task or {}).get("log_path") or "")
 
     def _execute() -> dict:
-        from tools.optimizer.session_factory import build_optimizer_session, configure_optuna_logging, ensure_study_effective_policy_compatible
+        from tools.optimizer.session_factory import (
+            build_optimizer_session,
+            build_optimizer_session_from_spec,
+            configure_optuna_logging,
+            ensure_study_effective_policy_compatible,
+        )
         from tools.optimizer.prep import load_all_raw_data
         from tools.optimizer.runtime import create_optimizer_study
         from tools.optimizer.session import close_study_storage
@@ -8247,7 +8252,14 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
-        session = build_optimizer_session(walk_forward_policy=fold_policy)
+        session_spec = dict(task.get("optimizer_session_spec") or {})
+        session = (
+            build_optimizer_session_from_spec(
+                walk_forward_policy=fold_policy, spec=session_spec
+            )
+            if session_spec
+            else build_optimizer_session(walk_forward_policy=fold_policy)
+        )
         session.rolling_fold_workers_max = int(fold_workers)
         session.rolling_fold_parallel = True
         reset_prep_cache_stats = getattr(session, "reset_prep_cache_stats", None)
@@ -8614,10 +8626,21 @@ def run_outer_rolling_oos(
     ensure_study_effective_policy_compatible,
     configure_optuna_logging,
     optimizer_seed=None,
+    optimizer_session_spec: dict | None = None,
     default_trials: int = OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     timing_mode: bool = False,
 ) -> int:
     from tools.optimizer.session import close_study_storage
+    from tools.optimizer.session_factory import build_optimizer_session_from_spec
+
+    session_spec = dict(optimizer_session_spec or {})
+
+    def _build_session(walk_forward_policy):
+        if session_spec:
+            return build_optimizer_session_from_spec(
+                walk_forward_policy=walk_forward_policy, spec=session_spec
+            )
+        return build_optimizer_session(walk_forward_policy=walk_forward_policy)
 
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(os.path.join(output_dir, "outer_rolling_oos"), exist_ok=True)
@@ -8670,7 +8693,7 @@ def run_outer_rolling_oos(
         shared_load_start = time.perf_counter()
         shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
         shared_data_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
-        shared_data_session = build_optimizer_session(walk_forward_policy=shared_data_policy)
+        shared_data_session = _build_session(shared_data_policy)
         try:
             shared_data_session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
             shared_raw_context = {
@@ -8726,6 +8749,7 @@ def run_outer_rolling_oos(
                 "sampler_kind": str(sampler_kind),
                 "timing_mode": bool(timing_mode),
                 "fold_workers": int(fold_workers),
+                "optimizer_session_spec": dict(session_spec),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
             })
             # Fold log path is kept internally for diagnostics, but not printed during normal progress.
@@ -8809,6 +8833,7 @@ def run_outer_rolling_oos(
                 "sampler_kind": str(sampler_kind),
                 "timing_mode": bool(timing_mode),
                 "fold_workers": int(fold_workers),
+                "optimizer_session_spec": dict(session_spec),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
             }
             result = _run_outer_rolling_oos_fold_task(task)
@@ -8845,7 +8870,7 @@ def run_outer_rolling_oos(
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
-        session = build_optimizer_session(walk_forward_policy=fold_policy)
+        session = _build_session(fold_policy)
         attach_shared_executor = getattr(session, "attach_shared_trial_prep_executor_holder", None)
         if callable(attach_shared_executor):
             attach_shared_executor(rolling_shared_prep_executor_holder)

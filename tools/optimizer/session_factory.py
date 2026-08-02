@@ -1,3 +1,4 @@
+import importlib
 import os
 
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
@@ -56,6 +57,37 @@ def ensure_study_effective_policy_compatible(*, study, walk_forward_policy: dict
         f"\n目前 policy: {contract['snapshot']}"
         "\n請改用新記憶庫，或先刪除舊記憶庫再重來。"
     )
+
+def build_runtime_context_factory_from_spec(spec):
+    """Build a zero-argument runtime context factory from a serializable spec."""
+    payload = dict(spec or {})
+    module_name = str(payload.get("module") or "").strip()
+    callable_name = str(payload.get("callable") or "").strip()
+    kwargs = dict(payload.get("kwargs") or {})
+    if not module_name or not callable_name:
+        raise ValueError("runtime context spec 必須提供 module 與 callable")
+
+    def _factory():
+        module = importlib.import_module(module_name)
+        context_callable = getattr(module, callable_name, None)
+        if not callable(context_callable):
+            raise ValueError(
+                f"runtime context callable 不存在或不可呼叫: {module_name}.{callable_name}"
+            )
+        return context_callable(**kwargs)
+
+    return _factory
+
+
+def build_optimizer_session_from_spec(*, walk_forward_policy: dict, spec=None):
+    """Create an optimizer session from a process-safe serializable contract."""
+    payload = dict(spec or {})
+    runtime_context_spec = payload.pop("runtime_context_spec", None)
+    if runtime_context_spec is not None:
+        payload["runtime_context_factory"] = build_runtime_context_factory_from_spec(
+            runtime_context_spec
+        )
+    return build_optimizer_session(walk_forward_policy=walk_forward_policy, **payload)
 
 
 def build_optimizer_session(
