@@ -95,7 +95,7 @@ OPTIMIZER_ALLOW_PER_RUN_TEMP_DB = True
 
 # local_min review 計算開關。
 # OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED 控制一般模式預設值；Full Mode 另有獨立預設，避免全期間正式訓練預設耗費 local review。
-OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
+OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = False
 OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED = False
 _OPTIMIZER_RUNTIME_MODEL_MODE = None
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.01  # local_min_score finalist review 預設取訓練次數的比例
@@ -105,11 +105,11 @@ OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 6  # local_min_score finalist rev
 OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT = 1000
 
 # Rolling OOS 與 Selection rolling adaptation 每個 fold 的預設 trial 數。
-OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 100
+OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 200
 
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 1
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = False
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 8
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = "auto" # "auto" = 過半數；整數 = 至少幾個 seed 同意。最大值永遠是 N。
 
 #  finalists agree：先以每個 seed 的全部 finalists 加總選出單一 seed。
