@@ -18,10 +18,7 @@ from config.breakout_quality import (
 )
 from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
 from core.dataset_profiles import get_dataset_dir
-from filters.breakout_quality.paths import (
-    resolve_filter_artifact_paths,
-    resolve_filter_model_output_dir,
-)
+from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from core.raw_universe_contract import RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD
 from core.runtime_utils import get_taipei_now
 from core.walk_forward_policy import (
@@ -827,32 +824,56 @@ def _load_json_mapping(path: Path) -> dict[str, Any] | None:
 
 
 
-def _validate_formal_model_manifest(*, root: Path, args) -> Path:
-    artifacts = resolve_filter_artifact_paths(
-        str(root),
-        str(args.filter_id),
-        str(args.model_architecture),
-        str(args.experiment_profile),
-    )
-    manifest_path = artifacts.manifest_path
-    if not manifest_path.is_file():
-        raise FileNotFoundError(
-            "Score Adapted正式runtime manifest不存在；禁止開始rolling trials："
-            f"filter_id={args.filter_id}, architecture={args.model_architecture}, "
-            f"experiment_profile={args.experiment_profile}, path={manifest_path}"
-        )
-    payload = _load_json_mapping(manifest_path)
-    if payload is None:
+def _validate_selection_pit_runtime_artifacts(*, pit_contract, args) -> dict[str, Path]:
+    """Validate the artifacts actually read by Selection PIT ranking runtime.
+
+    Selection PIT ranking is score-table based.  It does not load the canonical
+    full-model checkpoint/manifest used by the binary filter runtime.  The
+    contract loader has already verified hashes, sizes, identities, coverage,
+    continuous-target binding, and the model-validation audit.  This preflight
+    keeps the runtime boundary explicit without inventing a nonexistent
+    profile-root ``manifest.json`` requirement.
+    """
+
+    expected_identity = {
+        "filter_id": str(args.filter_id),
+        "model_architecture": str(args.model_architecture),
+        "experiment_profile": str(args.experiment_profile),
+    }
+    actual_identity = {
+        "filter_id": str(getattr(pit_contract, "filter_id", "")),
+        "model_architecture": str(
+            getattr(pit_contract, "model_architecture", "")
+        ),
+        "experiment_profile": str(
+            getattr(pit_contract, "experiment_profile", "")
+        ),
+    }
+    if actual_identity != expected_identity:
         raise ValueError(
-            f"Score Adapted正式runtime manifest無法解析：{manifest_path}"
+            "Score Adapted Selection PIT runtime identity不一致；禁止開始rolling trials："
+            f"expected={expected_identity}, actual={actual_identity}"
         )
-    manifest_profile = str(payload.get("experiment_profile") or "").strip()
-    if manifest_profile and manifest_profile != str(args.experiment_profile):
+
+    artifacts = {
+        "selection_pit_manifest": Path(pit_contract.manifest_path).resolve(),
+        "selection_pit_scores": Path(pit_contract.score_path).resolve(),
+        "selection_pit_audit": Path(pit_contract.audit_path).resolve(),
+    }
+    for label, path in artifacts.items():
+        if not path.is_file():
+            raise FileNotFoundError(
+                "Score Adapted Selection PIT runtime工件不存在；"
+                f"禁止開始rolling trials：artifact={label}, path={path}"
+            )
+
+    gate = dict(getattr(pit_contract, "model_validation_gate", {}) or {})
+    if str(gate.get("status") or "") != "PASS":
         raise ValueError(
-            "Score Adapted正式runtime manifest profile不一致；禁止開始rolling trials："
-            f"manifest={manifest_profile}, expected={args.experiment_profile}"
+            "Score Adapted Selection PIT模型驗證未通過；禁止開始rolling trials："
+            f"status={gate.get('status')!r}"
         )
-    return manifest_path
+    return artifacts
 
 def _completed_adapted_search_is_compatible(
     *,
@@ -2214,7 +2235,10 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         str(root), args.filter_id, args.model_architecture, args.experiment_profile
     )
     _validate_pit_contract_against_settings(pit_contract, settings)
-    formal_manifest_path = _validate_formal_model_manifest(root=root, args=args)
+    pit_runtime_artifacts = _validate_selection_pit_runtime_artifacts(
+        pit_contract=pit_contract,
+        args=args,
+    )
     baseline_contract = _load_baseline_rolling_contract(
         root=root, args=args, settings=settings
     )
@@ -2273,12 +2297,13 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             "runtime_identity_sha256": adapted_contract["runtime_identity_sha256"],
             "score_adapted_contract": adapted_contract,
             "optimizer_training_arms": ["score_adapted"],
-            "formal_runtime_manifest": project_relative_display_path(
-                formal_manifest_path, project_root=root
-            ),
-            "formal_runtime_manifest_sha256": compute_file_sha256(
-                formal_manifest_path
-            ),
+            "selection_pit_runtime_artifacts": {
+                key: {
+                    "path": project_relative_display_path(path, project_root=root),
+                    "sha256": compute_file_sha256(path),
+                }
+                for key, path in pit_runtime_artifacts.items()
+            },
             "created_at": get_taipei_now().isoformat(),
         },
     )
@@ -2376,7 +2401,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     capture_dir = output_dir / "adapted_params_ranking_capture"
     artifact_paths = {
         "rolling_preflight": preflight_path,
-        "formal_runtime_manifest": formal_manifest_path,
+        **pit_runtime_artifacts,
         "training_score_coverage": coverage_path,
         "adapted_params": adapted_arm["params_path"],
         "adapted_preflight": adapted_arm["preflight_path"],

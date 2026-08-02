@@ -2073,3 +2073,47 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 - Future Target：仍只允許post-replay join，不得進runtime、optimizer或cache key以外的決策路徑。
 - `baseline_adapted`既有結果：不納入正式2×2比較。
 
+
+## 2026-08-03 — Score Adapted preflight改驗證Selection PIT工件
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`
+
+本輪只修正rolling trials開始前的工件preflight；未執行optimizer、四組Selection replay或正式OOS，不得預判Adapted有效。
+
+### 問題
+
+前版為避免diagnostics退回`unique_group_sampling`，新增了full-model profile根目錄`manifest.json`檢查。但`selection_point_in_time` ranking runtime不載入full-model checkpoint／manifest，只讀取Selection PIT score table。正式continuous-ranker profile可具有完整PIT Scores、PIT manifest及PIT模型驗證，而不需要存在：
+
+`models/filters/breakout_quality/<filter_id>/<architecture>/<experiment_profile>/manifest.json`
+
+因此使用者工件狀態全部完整，仍在任何rolling trial開始前被錯誤`FileNotFoundError`阻擋。
+
+### 根因
+
+`strategy_adapt._validate_formal_model_manifest()`錯用了binary／canonical filter runtime的`resolve_filter_artifact_paths()`。真正Selection PIT ranking依賴已由`load_selection_point_in_time_ranking_contract()`驗證：
+
+- `selection_point_in_time_scores.csv`
+- `selection_point_in_time_manifest.json`
+- `selection_point_in_time_audit.json`
+- coverage工件與Continuous Target綁定
+- filter／architecture／experiment profile identity
+- score檔SHA256與size
+- PIT模型驗證gate
+
+### 修正
+
+- 移除full-model profile根目錄manifest要求。
+- 新增Selection PIT runtime preflight，只接受已載入且identity一致、模型驗證為PASS的PIT contract。
+- `rolling_preflight.json`與最終adaptation manifest改保存PIT score／manifest／audit相對路徑及SHA256。
+- 缺少PIT工件、PIT identity不一致或PIT模型驗證未通過仍在trials前fail-fast。
+- diagnostics／OOS_CHAIN runtime context、SQLite resume、不可重試錯誤分類及單一Score Adapted訓練四組回放契約不變。
+
+### 固定條件與結果邊界
+
+不改Dataset、Label、Continuous Target、PIT Scores、模型、Seed 42、fold schedule、trials、search space、objective、TP、fixed risk、position cap、max positions、rotation、ranking規則、交易／帳務、Future Target post-replay only或Selection／OOS邊界。Dataset／Label／PIT工件不需重建。
+
+### 驗證
+
+T283改為直接建立三個PIT runtime工件，驗證正常contract可通過、缺少score檔與錯誤profile會於rolling前拒絕；不再建立或要求full-model`manifest.json`。正式`apps/test_suite.py`依專案規定由使用者本機執行。

@@ -11696,7 +11696,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         _optimizer_session_spec,
         _render_three_way_console,
         _validate_fixed_contract,
-        _validate_formal_model_manifest,
+        _validate_selection_pit_runtime_artifacts,
     )
     from tools.optimizer.outer_rolling_oos import (
         _apply_outer_rolling_process_environ,
@@ -11849,34 +11849,63 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        valid_manifest = root / "manifest.json"
-        valid_manifest.write_text(
-            json.dumps({"experiment_profile": settings.experiment_profile}) + "\n",
-            encoding="utf-8",
+        pit_manifest = root / "selection_point_in_time_manifest.json"
+        pit_scores = root / "selection_point_in_time_scores.csv"
+        pit_audit = root / "selection_point_in_time_audit.json"
+        for path, content in (
+            (pit_manifest, "{}\n"),
+            (pit_scores, "ticker,date,breakout_quality_score\n"),
+            (pit_audit, "{}\n"),
+        ):
+            path.write_text(content, encoding="utf-8")
+        valid_contract = SimpleNamespace(
+            filter_id=settings.filter_id,
+            model_architecture=settings.model_architecture,
+            experiment_profile=settings.experiment_profile,
+            manifest_path=pit_manifest,
+            score_path=pit_scores,
+            audit_path=pit_audit,
+            model_validation_gate={"status": "PASS"},
         )
-        with patch(
-            "tools.filters.breakout_quality.strategy_adapt.resolve_filter_artifact_paths",
-            return_value=SimpleNamespace(manifest_path=valid_manifest),
-        ):
-            manifest_result = _validate_formal_model_manifest(root=root, args=args)
-        missing_manifest = root / "missing.json"
-        with patch(
-            "tools.filters.breakout_quality.strategy_adapt.resolve_filter_artifact_paths",
-            return_value=SimpleNamespace(manifest_path=missing_manifest),
-        ):
-            try:
-                _validate_formal_model_manifest(root=root, args=args)
-            except FileNotFoundError as exc:
-                missing_manifest_rejected = "禁止開始rolling trials" in str(exc)
-            else:
-                missing_manifest_rejected = False
+        pit_artifacts = _validate_selection_pit_runtime_artifacts(
+            pit_contract=valid_contract,
+            args=args,
+        )
+        missing_contract = SimpleNamespace(
+            **{**valid_contract.__dict__, "score_path": root / "missing_scores.csv"}
+        )
+        try:
+            _validate_selection_pit_runtime_artifacts(
+                pit_contract=missing_contract,
+                args=args,
+            )
+        except FileNotFoundError as exc:
+            missing_pit_artifact_rejected = "禁止開始rolling trials" in str(exc)
+        else:
+            missing_pit_artifact_rejected = False
+        wrong_profile_contract = SimpleNamespace(
+            **{**valid_contract.__dict__, "experiment_profile": "unique_group_sampling"}
+        )
+        try:
+            _validate_selection_pit_runtime_artifacts(
+                pit_contract=wrong_profile_contract,
+                args=args,
+            )
+        except ValueError as exc:
+            wrong_profile_rejected = "runtime identity不一致" in str(exc)
+        else:
+            wrong_profile_rejected = False
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "formal_runtime_manifest_is_validated_before_rolling_trials",
-        (True, True),
-        (manifest_result == valid_manifest, missing_manifest_rejected),
+        "selection_pit_runtime_artifacts_are_validated_before_rolling_trials",
+        (
+            {"selection_pit_manifest", "selection_pit_scores", "selection_pit_audit"},
+            True,
+            True,
+        ),
+        (set(pit_artifacts), missing_pit_artifact_rejected, wrong_profile_rejected),
     )
 
     with patch.dict(os.environ, {}, clear=True):
