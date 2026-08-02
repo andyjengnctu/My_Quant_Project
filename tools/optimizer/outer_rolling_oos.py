@@ -5935,6 +5935,176 @@ def _format_exception_summary(exc: BaseException) -> str:
     return f"{name}: {message}" if message else name
 
 
+
+
+def _optimizer_runtime_context_spec(session_spec: dict | None) -> dict:
+    return dict(dict(session_spec or {}).get("runtime_context_spec") or {})
+
+
+def _validate_optimizer_runtime_context(session, session_spec: dict | None) -> None:
+    """Fail before search when a serialized runtime context cannot be reproduced."""
+    spec = _optimizer_runtime_context_spec(session_spec)
+    if not spec:
+        return
+    module_name = str(spec.get("module") or "")
+    callable_name = str(spec.get("callable") or "")
+    kwargs = dict(spec.get("kwargs") or {})
+    try:
+        with session.optimizer_runtime_context():
+            if (
+                module_name == "filters.breakout_quality.runtime"
+                and callable_name == "breakout_quality_ranking_source_context"
+            ):
+                from filters.breakout_quality.runtime import (
+                    get_breakout_quality_ranking_source_context,
+                )
+
+                actual = get_breakout_quality_ranking_source_context()
+                expected = {
+                    "score_source": str(kwargs.get("score_source") or ""),
+                    "model_architecture": (
+                        None
+                        if kwargs.get("model_architecture") is None
+                        else str(kwargs.get("model_architecture"))
+                    ),
+                    "experiment_profile": (
+                        None
+                        if kwargs.get("experiment_profile") is None
+                        else str(kwargs.get("experiment_profile"))
+                    ),
+                }
+                actual_payload = {
+                    "score_source": str(actual.score_source),
+                    "model_architecture": actual.model_architecture,
+                    "experiment_profile": actual.experiment_profile,
+                }
+                if actual_payload != expected:
+                    raise RuntimeError(
+                        "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: optimizer runtime context不一致："
+                        f"actual={actual_payload}, expected={expected}"
+                    )
+    except Exception as exc:
+        text = str(exc)
+        if "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR" in text:
+            raise
+        raise RuntimeError(
+            "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: optimizer runtime context無法建立："
+            f"module={module_name}, callable={callable_name}, error={type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _is_non_retryable_fold_failure(exc: BaseException | None) -> bool:
+    seen: set[int] = set()
+    current = exc
+    parts: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        parts.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+    text = " ".join(parts).lower()
+    markers = (
+        "non_retryable_runtime_identity_error",
+        "找不到 breakout quality 正式 manifest",
+        "breakout quality manifest experiment_profile",
+        "runtime context不一致",
+        "runtime identity",
+    )
+    return any(marker.lower() in text for marker in markers)
+
+
+def _outer_rolling_db_member_suffix(task: dict | None) -> str:
+    payload = dict(task or {})
+    if not bool(payload.get("seed_ensemble_member")):
+        return ""
+    member_index = int(payload.get("seed_ensemble_member_index", 0) or 0)
+    seed = payload.get("optimizer_seed")
+    seed_text = "none" if seed is None else str(int(seed))
+    return f"_seed{member_index:02d}_{seed_text}"
+
+
+def _outer_rolling_runtime_identity(task: dict | None) -> str:
+    payload = dict(task or {})
+    direct = str(payload.get("runtime_cache_identity") or "").strip()
+    if direct:
+        return direct
+    session_spec = dict(payload.get("optimizer_session_spec") or {})
+    return str(session_spec.get("runtime_cache_identity") or "").strip()
+
+
+def _resolve_outer_rolling_db_file(
+    *, output_dir: str, session_ts: str, oos_year: int, task: dict | None, environ
+) -> tuple[str, bool]:
+    db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
+    os.makedirs(db_dir, exist_ok=True)
+    member_suffix = _outer_rolling_db_member_suffix(task)
+    resume_enabled = _env_flag(
+        environ, "OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES", False
+    )
+    runtime_identity = _outer_rolling_runtime_identity(task)
+    if resume_enabled and runtime_identity:
+        stable_name = (
+            f"outer_oos_runtime_{runtime_identity[:20]}_{int(oos_year)}"
+            f"{member_suffix}.db"
+        )
+        stable_path = os.path.join(db_dir, stable_name)
+        return stable_path, os.path.isfile(stable_path)
+    new_path = os.path.join(
+        db_dir, f"outer_oos_{session_ts}_{int(oos_year)}{member_suffix}.db"
+    )
+    return new_path, False
+
+
+def _ensure_study_runtime_identity_compatible(study, session) -> None:
+    if not hasattr(study, "user_attrs") or not hasattr(study, "set_user_attr"):
+        return
+    current_identity = str(getattr(session, "runtime_cache_identity", "") or "").strip()
+    if not current_identity:
+        return
+    key = "optimizer_runtime_cache_identity"
+    current_overrides = dict(
+        getattr(session, "fixed_strategy_param_overrides", {}) or {}
+    )
+    existing_identity = str(
+        dict(getattr(study, "user_attrs", {}) or {}).get(key) or ""
+    ).strip()
+    trials = list(getattr(study, "trials", []) or [])
+    if existing_identity and existing_identity != current_identity and trials:
+        raise RuntimeError(
+            "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: Optimizer study runtime identity不一致，"
+            f"existing={existing_identity}, current={current_identity}"
+        )
+    if not existing_identity and trials:
+        for trial in trials:
+            trial_overrides = dict(
+                (getattr(trial, "user_attrs", {}) or {}).get(
+                    "fixed_strategy_param_overrides", {}
+                )
+                or {}
+            )
+            if trial_overrides != current_overrides:
+                raise RuntimeError(
+                    "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: 既有Optimizer study缺少runtime identity，"
+                    "且trial固定策略契約與目前設定不一致，禁止接續。"
+                )
+    study.set_user_attr(key, current_identity)
+    study.set_user_attr(
+        "optimizer_fixed_strategy_param_overrides", current_overrides
+    )
+
+
+def _remaining_optimizer_trials(study, requested_trials: int) -> tuple[int, int]:
+    existing = len(list(getattr(study, "trials", []) or []))
+    return existing, max(0, int(requested_trials) - int(existing))
+
+
+def _apply_outer_rolling_process_environ(environ) -> None:
+    """Expose explicit rolling runtime settings to spawned fold workers."""
+    for raw_key, raw_value in dict(environ or {}).items():
+        key = str(raw_key)
+        if key == "V16_MODELS_DIR" or key.startswith("OPTIMIZER_"):
+            os.environ[key] = str(raw_value)
+
+
 def _parallel_fold_log_path_for_fallback(path: str) -> str:
     raw = str(path or "").strip()
     if not raw:
@@ -7448,6 +7618,12 @@ def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: li
     missing_tasks = [dict(task) for task in list(tasks or []) if int(task.get("oos_year", 0) or 0) not in completed_oos]
     if not missing_tasks:
         return chain_state
+    if _is_non_retryable_fold_failure(cause):
+        raise RuntimeError(
+            "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: parallel fold發生runtime identity／manifest錯誤；"
+            "序列fallback不會改變結果，已直接中止。"
+            f" cause={_format_exception_summary(cause)}"
+        ) from cause
     cause_text = f" | cause={_format_exception_summary(cause)}" if cause is not None else ""
     print(f"{C_YELLOW}⚠️ parallel fold 中斷，改用單 fold fallback 跑完剩餘 {len(missing_tasks)} 個 fold{cause_text}{C_RESET}", flush=True)
     for task in missing_tasks:
@@ -8387,6 +8563,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             if session_spec
             else build_optimizer_session(walk_forward_policy=fold_policy)
         )
+        _validate_optimizer_runtime_context(session, session_spec)
         session.rolling_fold_workers_max = int(fold_workers)
         session.rolling_fold_parallel = True
         reset_prep_cache_stats = getattr(session, "reset_prep_cache_stats", None)
@@ -8400,10 +8577,15 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         sqlite_storage_enabled = _is_outer_rolling_sqlite_storage_enabled(os.environ)
         db_file = ""
         db_name = None
+        resumed_db = False
         if sqlite_storage_enabled:
-            db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
-            os.makedirs(db_dir, exist_ok=True)
-            db_file = os.path.join(db_dir, f"outer_oos_{session_ts}_{int(oos_year)}.db")
+            db_file, resumed_db = _resolve_outer_rolling_db_file(
+                output_dir=output_dir,
+                session_ts=session_ts,
+                oos_year=int(oos_year),
+                task=task,
+                environ=os.environ,
+            )
             db_name = f"sqlite:///{db_file}"
         study = None
         try:
@@ -8427,6 +8609,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             study_started = time.perf_counter()
             study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
+            _ensure_study_runtime_identity_compatible(study, session)
             study_create_sec = max(0.0, time.perf_counter() - study_started)
             seed_context = _seed_progress_context_from_task(task)
             progress = _FoldLogSearchProgress(
@@ -8438,15 +8621,26 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 total_trials=int(config.trials_per_fold),
                 seed_context=seed_context,
             )
-            progress.emit(0, force=True)
+            existing_trials, remaining_trials = _remaining_optimizer_trials(
+                study, int(config.trials_per_fold)
+            )
+            session.current_session_trial = int(existing_trials)
+            progress.emit(int(existing_trials), force=True)
+            if resumed_db and existing_trials:
+                print(
+                    f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
+                    f"resume study {existing_trials}/{int(config.trials_per_fold)} trials",
+                    flush=True,
+                )
             optimize_started = time.perf_counter()
             search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
-            study.optimize(
-                session.objective,
-                n_trials=int(config.trials_per_fold),
-                n_jobs=int(search_parallel_trials),
-                callbacks=[progress.callback(session)],
-            )
+            if remaining_trials > 0:
+                study.optimize(
+                    session.objective,
+                    n_trials=int(remaining_trials),
+                    n_jobs=int(search_parallel_trials),
+                    callbacks=[progress.callback(session)],
+                )
             search_done_ts = time.time()
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             trial_count = len(list(getattr(study, "trials", []) or []))
@@ -8595,14 +8789,15 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 best_local_min_score=best_local_min_score,
                 elapsed_sec=0.0,
             )
-            diagnostics = _evaluate_finalist_oos_diagnostics(
-                session=session,
-                finalists=finalists,
-                policy_items=policy_items,
-                oos_year=int(oos_year),
-                oos_start_date=oos_start_date,
-                oos_end_date=oos_end_date,
-            )
+            with session.optimizer_runtime_context():
+                diagnostics = _evaluate_finalist_oos_diagnostics(
+                    session=session,
+                    finalists=finalists,
+                    policy_items=policy_items,
+                    oos_year=int(oos_year),
+                    oos_start_date=oos_start_date,
+                    oos_end_date=oos_end_date,
+                )
             oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
             print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
             _write_parallel_fold_progress_event(
@@ -8788,6 +8983,7 @@ def run_outer_rolling_oos(
     folds = _build_rolling_folds(config)
     fold_count = int(len(folds))
     _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
+    _apply_outer_rolling_process_environ(environ)
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     sampler_kind = "random" if bool(timing_mode) else "tpe"
@@ -9006,6 +9202,7 @@ def run_outer_rolling_oos(
         fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
         session = _build_session(fold_policy)
+        _validate_optimizer_runtime_context(session, session_spec)
         attach_shared_executor = getattr(session, "attach_shared_trial_prep_executor_holder", None)
         if callable(attach_shared_executor):
             attach_shared_executor(rolling_shared_prep_executor_holder)
@@ -9030,10 +9227,22 @@ def run_outer_rolling_oos(
         sqlite_storage_enabled = _is_outer_rolling_sqlite_storage_enabled(os.environ)
         db_file = ""
         db_name = None
+        resumed_db = False
         if sqlite_storage_enabled:
-            db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
-            os.makedirs(db_dir, exist_ok=True)
-            db_file = os.path.join(db_dir, f"outer_oos_{session_ts}_{int(oos_year)}.db")
+            sequential_task = {
+                "optimizer_seed": optimizer_seed,
+                "seed_ensemble_member": False,
+                "runtime_cache_identity": str(
+                    dict(session_spec or {}).get("runtime_cache_identity") or ""
+                ),
+            }
+            db_file, resumed_db = _resolve_outer_rolling_db_file(
+                output_dir=output_dir,
+                session_ts=session_ts,
+                oos_year=int(oos_year),
+                task=sequential_task,
+                environ=environ,
+            )
             db_name = f"sqlite:///{db_file}"
         study = None
         try:
@@ -9053,6 +9262,7 @@ def run_outer_rolling_oos(
             study_started = time.perf_counter()
             study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
+            _ensure_study_runtime_identity_compatible(study, session)
             study_create_sec = max(0.0, time.perf_counter() - study_started)
             progress = _SearchProgress(
                 fold_idx=fold_idx,
@@ -9064,14 +9274,25 @@ def run_outer_rolling_oos(
                 completed_results=rows,
                 overall_start=overall_start,
             )
+            existing_trials, remaining_trials = _remaining_optimizer_trials(
+                study, int(config.trials_per_fold)
+            )
+            session.current_session_trial = int(existing_trials)
+            if resumed_db and existing_trials:
+                print(
+                    f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | "
+                    f"resume study {existing_trials}/{int(config.trials_per_fold)} trials",
+                    flush=True,
+                )
             optimize_started = time.perf_counter()
             search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
-            study.optimize(
-                session.objective,
-                n_trials=int(config.trials_per_fold),
-                n_jobs=int(search_parallel_trials),
-                callbacks=[progress.callback(session)],
-            )
+            if remaining_trials > 0:
+                study.optimize(
+                    session.objective,
+                    n_trials=int(remaining_trials),
+                    n_jobs=int(search_parallel_trials),
+                    callbacks=[progress.callback(session)],
+                )
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             progress.done(int(session.current_session_trial))
             best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
@@ -9134,14 +9355,15 @@ def run_outer_rolling_oos(
             local_rank_map = _build_local_rank_map(finalists)
             retention_rank_map = _build_retention_rank_map(finalists)
             diagnostics_started = time.perf_counter()
-            diagnostics = _evaluate_finalist_oos_diagnostics(
-                session=session,
-                finalists=finalists,
-                policy_items=policy_items,
-                oos_year=int(oos_year),
-                oos_start_date=oos_start_date,
-                oos_end_date=oos_end_date,
-            )
+            with session.optimizer_runtime_context():
+                diagnostics = _evaluate_finalist_oos_diagnostics(
+                    session=session,
+                    finalists=finalists,
+                    policy_items=policy_items,
+                    oos_year=int(oos_year),
+                    oos_start_date=oos_start_date,
+                    oos_end_date=oos_end_date,
+                )
             oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
             print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
             fold_elapsed = time.perf_counter() - fold_start
@@ -9249,15 +9471,26 @@ def run_outer_rolling_oos(
     resolved_chain_max_positions = int(chain_max_positions if chain_max_positions is not None else 10)
     resolved_chain_enable_rotation = bool(chain_enable_rotation if chain_enable_rotation is not None else False)
     active_replay_started = time.perf_counter()
-    active_replay_chained = _build_active_replay_chained_oos_summary(
-        rows=rows,
-        config=config,
-        selected_data_dir=selected_data_dir,
-        output_dir=output_dir,
-        max_positions=resolved_chain_max_positions,
-        enable_rotation=resolved_chain_enable_rotation,
-        overall_start=overall_start,
-    ) if rows else {}
+    if rows:
+        chain_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
+        chain_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
+        chain_session = _build_session(chain_policy)
+        try:
+            _validate_optimizer_runtime_context(chain_session, session_spec)
+            with chain_session.optimizer_runtime_context():
+                active_replay_chained = _build_active_replay_chained_oos_summary(
+                    rows=rows,
+                    config=config,
+                    selected_data_dir=selected_data_dir,
+                    output_dir=output_dir,
+                    max_positions=resolved_chain_max_positions,
+                    enable_rotation=resolved_chain_enable_rotation,
+                    overall_start=overall_start,
+                )
+        finally:
+            chain_session.close_trial_prep_executor()
+    else:
+        active_replay_chained = {}
     active_replay_chain_sec = max(0.0, time.perf_counter() - active_replay_started)
     final_report_chain_elapsed_sec = max(0.0, time.perf_counter() - overall_start)
     active_replay_chained_for_report = _with_chain_elapsed_override(

@@ -18,6 +18,10 @@ from config.breakout_quality import (
 )
 from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
 from core.dataset_profiles import get_dataset_dir
+from filters.breakout_quality.paths import (
+    resolve_filter_artifact_paths,
+    resolve_filter_model_output_dir,
+)
 from core.raw_universe_contract import RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD
 from core.runtime_utils import get_taipei_now
 from core.walk_forward_policy import (
@@ -62,6 +66,8 @@ from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_SCORE_RANKING,
     PARAM_POLICY_BASE_FINALIST_BEST,
     _assert_shared_benchmark,
+    _comparison_labels,
+    _comparison_output_dir_name,
     _build_controlled_param_source_pair,
     _delta,
     _flatten_candidate_replay_rows,
@@ -75,7 +81,6 @@ from tools.filters.breakout_quality.strategy_compare import (
     _validate_requested_param_policy,
     _to_json_native,
     _yearly_frame,
-    run_comparison,
 )
 from tools.optimizer.prep import load_all_raw_data
 from tools.optimizer.outer_rolling_oos import (
@@ -101,9 +106,9 @@ def _parse_args(argv=None):
     settings = get_breakout_quality_workflow_settings()
     parser = argparse.ArgumentParser(
         description=(
-            "沿用Baseline rolling fold schedule，並由目前training policy提供"
-            "trials／fold，分別固定原ranking與Selection PIT Score ranking執行"
-            "對稱rolling參數重調，輸出四組2×2 Selection診斷。"
+            "沿用正式Baseline ROOS與rolling fold schedule，由目前training policy提供"
+            "trials／fold，只在Selection PIT Score ranking下訓練一套Adapted params，"
+            "再以舊／Score ranking回放舊／新兩套參數，輸出四組2×2 Selection診斷。"
         )
     )
     parser.add_argument("--dataset", choices=("reduced", "full"), default=settings.strategy_dataset)
@@ -173,39 +178,123 @@ def _current_pair_artifact_paths(output_dir: Path) -> dict[str, Path]:
         "capture_scenarios": output_dir / "score_ranking_capture_scenarios.csv",
     }
 
+
+def _canonical_current_pair_output_dir(*, root: Path, args) -> Path:
+    output_name = _comparison_output_dir_name(
+        COMPARISON_MODE_SCORE_RANKING,
+        _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+        param_policy=str(args.param_policy),
+    ) + "_selection_point_in_time"
+    return (
+        resolve_filter_model_output_dir(
+            str(root),
+            str(args.filter_id),
+            str(args.model_architecture),
+            str(args.experiment_profile),
+        )
+        / output_name
+    ).resolve()
+
+
 def _load_current_pair_if_compatible(
-    *, root: Path, output_dir: Path, runtime_identity_sha256: str
+    *,
+    root: Path,
+    output_dir: Path,
+    runtime_identity_sha256: str,
+    args,
+    pit_contract,
+    baseline_contract: dict[str, Any],
 ) -> dict[str, Any] | None:
-    manifest_path = output_dir / CURRENT_PAIR_MANIFEST_FILENAME
-    if not manifest_path.is_file():
+    expected_paths = _current_pair_artifact_paths(output_dir)
+    if not expected_paths["strategy_comparison_json"].is_file():
         return None
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload = json.loads(
+            expected_paths["strategy_comparison_json"].read_text(encoding="utf-8")
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
-    if str(manifest.get("runtime_identity_sha256") or "") != str(
-        runtime_identity_sha256
+    metadata = dict(payload.get("metadata") or {})
+    if not metadata:
+        return None
+
+    expected = {
+        "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
+        "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        "dataset": str(args.dataset),
+        "params_file_sha256": str(baseline_contract["sha256"]),
+        "requested_param_policy": str(args.param_policy),
+        "filter_id": str(args.filter_id),
+        "model_architecture": str(args.model_architecture),
+        "experiment_profile": str(args.experiment_profile),
+        "max_positions": int(args.max_positions),
+        "enable_rotation": str(args.rotation) == "on",
+        "fixed_risk_override": float(args.fixed_risk),
+        "max_position_cap_pct_override": float(args.max_position_cap_pct),
+        "comparison_design": "selection_point_in_time_active_param_replay",
+        "lookahead_safe_active_param_schedule": True,
+    }
+    for key, expected_value in expected.items():
+        actual = metadata.get(key)
+        if isinstance(expected_value, float):
+            try:
+                matched = math.isclose(
+                    float(actual), expected_value, rel_tol=0.0, abs_tol=1e-12
+                )
+            except (TypeError, ValueError):
+                matched = False
+        else:
+            matched = actual == expected_value
+        if not matched:
+            return None
+
+    period = dict(metadata.get("comparison_period") or {})
+    if period != {
+        "start": str(pit_contract.available_from),
+        "end": str(pit_contract.available_through),
+    }:
+        return None
+    for metadata_key, expected_path in (
+        ("score_path", pit_contract.score_path),
+        ("score_manifest_path", pit_contract.manifest_path),
+        ("score_audit_path", pit_contract.audit_path),
+    ):
+        raw_path = str(metadata.get(metadata_key) or "").strip()
+        if not raw_path or Path(raw_path).resolve() != Path(expected_path).resolve():
+            return None
+    score_table = dict(metadata.get("score_table") or {})
+    recorded_score_sha = str(
+        score_table.get("sha256")
+        or score_table.get("file_sha256")
+        or score_table.get("content_sha256")
+        or ""
+    )
+    if recorded_score_sha and recorded_score_sha != compute_file_sha256(
+        pit_contract.score_path
     ):
         return None
-    recorded = dict(manifest.get("artifacts") or {})
-    expected_paths = _current_pair_artifact_paths(output_dir)
-    for key, path in expected_paths.items():
-        entry = dict(recorded.get(key) or {})
-        expected_display_path = project_relative_display_path(path, project_root=root)
-        if (
-            not path.is_file()
-            or str(entry.get("path") or "") != expected_display_path
-            or str(entry.get("sha256") or "") != compute_file_sha256(path)
+
+    for path in expected_paths.values():
+        if not path.is_file():
+            return None
+
+    manifest_path = output_dir / CURRENT_PAIR_MANIFEST_FILENAME
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if str(manifest.get("runtime_identity_sha256") or "") != str(
+            runtime_identity_sha256
         ):
             return None
-    comparison_path = expected_paths["strategy_comparison_json"]
-    try:
-        payload = json.loads(comparison_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict) or not isinstance(payload.get("metadata"), dict):
-        return None
+        recorded = dict(manifest.get("artifacts") or {})
+        for key, artifact_path in expected_paths.items():
+            entry = dict(recorded.get(key) or {})
+            if str(entry.get("sha256") or "") != compute_file_sha256(artifact_path):
+                return None
     return payload
+
 
 def _write_current_pair_manifest(
     *, root: Path, output_dir: Path, runtime_identity_sha256: str
@@ -234,39 +323,39 @@ def _write_current_pair_manifest(
     )
     return manifest_path
 
+
 def _load_or_run_current_pair(
-    *, root: Path, args, runtime_contract: dict[str, Any], output_dir: Path
+    *,
+    root: Path,
+    args,
+    runtime_contract: dict[str, Any],
+    output_dir: Path,
+    pit_contract,
+    baseline_contract: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
     payload = _load_current_pair_if_compatible(
         root=root,
         output_dir=output_dir,
         runtime_identity_sha256=runtime_contract["runtime_identity_sha256"],
+        args=args,
+        pit_contract=pit_contract,
+        baseline_contract=baseline_contract,
     )
-    if payload is not None:
-        print("\n[Baseline／Sort Only] identity與工件hash一致，沿用既有結果。")
-        return payload, True
-    payload = run_comparison(
-        project_root=root,
-        dataset=args.dataset,
-        param_policy=args.param_policy,
-        max_positions=args.max_positions,
-        enable_rotation=str(args.rotation) == "on",
-        fixed_risk=args.fixed_risk,
-        max_position_cap_pct=args.max_position_cap_pct,
-        comparison_mode=COMPARISON_MODE_SCORE_RANKING,
-        filter_id=args.filter_id,
-        score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
-        model_architecture=args.model_architecture,
-        experiment_profile=args.experiment_profile,
-        output_dir_override=output_dir,
-        quiet=args.quiet,
-    )
-    _write_current_pair_manifest(
-        root=root,
-        output_dir=output_dir,
-        runtime_identity_sha256=runtime_contract["runtime_identity_sha256"],
-    )
-    return payload, False
+    if payload is None:
+        raise FileNotFoundError(
+            "找不到與目前identity一致的Baseline／Sort Only正式比較工件；"
+            "請先執行主選單[2]策略績效驗證→[1]比較目前策略。"
+        )
+    manifest_path = output_dir / CURRENT_PAIR_MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        _write_current_pair_manifest(
+            root=root,
+            output_dir=output_dir,
+            runtime_identity_sha256=runtime_contract["runtime_identity_sha256"],
+        )
+    print("\n[Baseline／Sort Only] 已載入[1]正式比較工件；不重新執行舊參數replay。")
+    return payload, True
+
 
 def _validate_fixed_contract(args, settings) -> None:
     if settings.strategy_comparison_mode != "score-ranking":
@@ -544,7 +633,7 @@ def _build_runtime_contract(
     )
     contract = {
         "schema_version": SCHEMA_VERSION,
-        "adaptation_mode": "rolling_selection_2x2_validation",
+        "adaptation_mode": "rolling_selection_2x2_single_adapted_optimizer",
         "optimization_arm": str(arm_name),
         "result_interpretation": ADAPTATION_STATUS,
         "dataset": str(args.dataset),
@@ -736,6 +825,35 @@ def _load_json_mapping(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+
+
+def _validate_formal_model_manifest(*, root: Path, args) -> Path:
+    artifacts = resolve_filter_artifact_paths(
+        str(root),
+        str(args.filter_id),
+        str(args.model_architecture),
+        str(args.experiment_profile),
+    )
+    manifest_path = artifacts.manifest_path
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            "Score Adapted正式runtime manifest不存在；禁止開始rolling trials："
+            f"filter_id={args.filter_id}, architecture={args.model_architecture}, "
+            f"experiment_profile={args.experiment_profile}, path={manifest_path}"
+        )
+    payload = _load_json_mapping(manifest_path)
+    if payload is None:
+        raise ValueError(
+            f"Score Adapted正式runtime manifest無法解析：{manifest_path}"
+        )
+    manifest_profile = str(payload.get("experiment_profile") or "").strip()
+    if manifest_profile and manifest_profile != str(args.experiment_profile):
+        raise ValueError(
+            "Score Adapted正式runtime manifest profile不一致；禁止開始rolling trials："
+            f"manifest={manifest_profile}, expected={args.experiment_profile}"
+        )
+    return manifest_path
+
 def _completed_adapted_search_is_compatible(
     *,
     existing_preflight: dict[str, Any] | None,
@@ -906,7 +1024,7 @@ def _validate_adapted_rolling_params(
                     f"expected={expected_value!r}"
                 )
     payload["breakout_quality_adaptation"] = {
-        "mode": "rolling_selection_2x2_validation",
+        "mode": "rolling_selection_2x2_single_adapted_optimizer",
         "optimization_arm": str(arm_name),
         "result_interpretation": ADAPTATION_STATUS,
         "runtime_identity_sha256": str(runtime_contract["runtime_identity_sha256"]),
@@ -950,6 +1068,8 @@ def _run_rolling_optimizer_arm(
     optimizer_output_dir = arm_dir / "optimizer_runtime"
     outer_environ = dict(os.environ)
     outer_environ["V16_MODELS_DIR"] = str(models_dir.resolve())
+    outer_environ["OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"
+    outer_environ["OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = "1"
     params_path = models_dir / "roos_base_best.json"
     search_reused = _completed_adapted_search_is_compatible(
         existing_preflight=existing_preflight,
@@ -1019,7 +1139,7 @@ def _run_rolling_optimizer_arm(
     summary_path = arm_dir / "rolling_optimizer_summary.json"
     folds = int(dict(params_payload.get("summary") or {}).get("folds", 0) or 0)
     summary = {
-        "mode": "rolling_selection_2x2_validation",
+        "mode": "rolling_selection_2x2_single_adapted_optimizer",
         "optimization_arm": str(arm_name),
         "arm_label": str(arm_label),
         "ranking_enabled": bool(ranking_enabled),
@@ -1245,6 +1365,7 @@ def _write_optimized_arm_replay_outputs(
     return paths
 
 
+
 def _run_four_way_comparison(
     *,
     root: Path,
@@ -1252,8 +1373,7 @@ def _run_four_way_comparison(
     pit_contract,
     current_payload: dict[str, Any],
     baseline_contract: dict[str, Any],
-    baseline_adapted_arm: dict[str, Any],
-    score_adapted_arm: dict[str, Any],
+    adapted_arm: dict[str, Any],
     current_pair_dir: Path,
     output_dir: Path,
     rolling_validation: dict[str, Any],
@@ -1270,26 +1390,26 @@ def _run_four_way_comparison(
     if missing:
         raise FileNotFoundError("四組比較缺少既有Baseline工件: " + ", ".join(missing))
 
-    baseline_adapted_replay = _run_optimized_arm_replay(
+    param_only_replay = _run_optimized_arm_replay(
         root=root,
         args=args,
         pit_contract=pit_contract,
-        params_path=baseline_adapted_arm["params_path"],
-        arm_name="baseline_adapted",
+        params_path=adapted_arm["params_path"],
+        arm_name="param_only",
         ranking_enabled=False,
     )
-    score_adapted_replay = _run_optimized_arm_replay(
+    adapted_replay = _run_optimized_arm_replay(
         root=root,
         args=args,
         pit_contract=pit_contract,
-        params_path=score_adapted_arm["params_path"],
-        arm_name="score_adapted",
+        params_path=adapted_arm["params_path"],
+        arm_name="adapted",
         ranking_enabled=True,
     )
     baseline = dict(current_payload["no_filter"])
     sort_only = dict(current_payload["score_ranking"])
-    baseline_adapted = dict(baseline_adapted_replay["summary"])
-    score_adapted = dict(score_adapted_replay["summary"])
+    param_only = dict(param_only_replay["summary"])
+    adapted = dict(adapted_replay["summary"])
 
     baseline_equity = pd.read_csv(required["baseline_equity"], encoding="utf-8-sig")
     benchmark_reference = {
@@ -1298,8 +1418,8 @@ def _run_four_way_comparison(
         "benchmark_annual_return_pct": baseline["benchmark_annual_return_pct"],
         "equity_curve": baseline_equity,
     }
-    _assert_shared_benchmark(benchmark_reference, baseline_adapted_replay["payload"])
-    _assert_shared_benchmark(benchmark_reference, score_adapted_replay["payload"])
+    _assert_shared_benchmark(benchmark_reference, param_only_replay["payload"])
+    _assert_shared_benchmark(benchmark_reference, adapted_replay["payload"])
 
     lookup = _selection_target_lookup(
         root=root,
@@ -1307,17 +1427,17 @@ def _run_four_way_comparison(
         architecture=args.model_architecture,
         profile=args.experiment_profile,
     )
-    baseline_adapted_diag, baseline_adapted_orderable, baseline_adapted_selected = (
+    param_only_diag, param_only_orderable, param_only_selected = (
         _strategy_selection_diagnostics(
-            orderable=baseline_adapted_replay["orderable"],
-            selected=baseline_adapted_replay["selected"],
+            orderable=param_only_replay["orderable"],
+            selected=param_only_replay["selected"],
             lookup=lookup,
         )
     )
-    score_adapted_diag, score_adapted_orderable, score_adapted_selected = (
+    adapted_diag, adapted_orderable, adapted_selected = (
         _strategy_selection_diagnostics(
-            orderable=score_adapted_replay["orderable"],
-            selected=score_adapted_replay["selected"],
+            orderable=adapted_replay["orderable"],
+            selected=adapted_replay["selected"],
             lookup=lookup,
         )
     )
@@ -1325,181 +1445,154 @@ def _run_four_way_comparison(
     baseline_diag = dict(existing_diagnostics.get("no_filter") or {})
     sort_diag = dict(existing_diagnostics.get("score_ranking") or {})
 
-    baseline_adapted_paths = _write_optimized_arm_replay_outputs(
+    param_only_paths = _write_optimized_arm_replay_outputs(
         output_dir=output_dir,
-        prefix="baseline_adapted",
-        replay=baseline_adapted_replay,
-        orderable_joined=baseline_adapted_orderable,
-        selected_joined=baseline_adapted_selected,
+        prefix="param_only",
+        replay=param_only_replay,
+        orderable_joined=param_only_orderable,
+        selected_joined=param_only_selected,
     )
-    score_adapted_paths = _write_optimized_arm_replay_outputs(
+    adapted_paths = _write_optimized_arm_replay_outputs(
         output_dir=output_dir,
-        prefix="score_adapted",
-        replay=score_adapted_replay,
-        orderable_joined=score_adapted_orderable,
-        selected_joined=score_adapted_selected,
+        prefix="adapted",
+        replay=adapted_replay,
+        orderable_joined=adapted_orderable,
+        selected_joined=adapted_selected,
     )
 
-    baseline_adapted_yearly = _yearly_frame(
-        baseline_adapted_replay["payload"]["profile"], "baseline_adapted"
+    param_only_yearly = _yearly_frame(
+        param_only_replay["payload"]["profile"], "param_only"
     )
-    score_adapted_yearly = _yearly_frame(
-        score_adapted_replay["payload"]["profile"], "score_adapted"
+    adapted_yearly = _yearly_frame(adapted_replay["payload"]["profile"], "adapted")
+    param_only_yearly.to_csv(
+        param_only_paths["yearly_returns"], index=False, encoding="utf-8-sig"
     )
-    baseline_adapted_yearly.to_csv(
-        baseline_adapted_paths["yearly_returns"], index=False, encoding="utf-8-sig"
-    )
-    score_adapted_yearly.to_csv(
-        score_adapted_paths["yearly_returns"], index=False, encoding="utf-8-sig"
+    adapted_yearly.to_csv(
+        adapted_paths["yearly_returns"], index=False, encoding="utf-8-sig"
     )
     current_yearly = pd.DataFrame(current_payload.get("yearly") or [])
     yearly_keys = [
         key
         for key in ("year", "is_full_year", "start_date", "end_date")
         if key in current_yearly.columns
-        and key in baseline_adapted_yearly.columns
-        and key in score_adapted_yearly.columns
+        and key in param_only_yearly.columns
+        and key in adapted_yearly.columns
     ]
     if not yearly_keys:
         yearly_keys = ["year"]
     four_way_yearly = current_yearly.merge(
-        baseline_adapted_yearly,
-        on=yearly_keys,
-        how="outer",
-        validate="one_to_one",
+        param_only_yearly, on=yearly_keys, how="outer", validate="one_to_one"
     ).merge(
-        score_adapted_yearly,
-        on=yearly_keys,
-        how="outer",
-        validate="one_to_one",
+        adapted_yearly, on=yearly_keys, how="outer", validate="one_to_one"
     ).sort_values("year").reset_index(drop=True)
-    four_way_yearly["ranking_only_delta_pct"] = (
+    four_way_yearly["old_params_ranking_delta_pct"] = (
         four_way_yearly["score_ranking_return_pct"]
         - four_way_yearly["no_filter_return_pct"]
     )
-    four_way_yearly["optimized_system_delta_pct"] = (
-        four_way_yearly["score_adapted_return_pct"]
-        - four_way_yearly["baseline_adapted_return_pct"]
+    four_way_yearly["adapted_params_ranking_delta_pct"] = (
+        four_way_yearly["adapted_return_pct"]
+        - four_way_yearly["param_only_return_pct"]
+    )
+    four_way_yearly["old_ranking_param_delta_pct"] = (
+        four_way_yearly["param_only_return_pct"]
+        - four_way_yearly["no_filter_return_pct"]
+    )
+    four_way_yearly["score_ranking_param_delta_pct"] = (
+        four_way_yearly["adapted_return_pct"]
+        - four_way_yearly["score_ranking_return_pct"]
     )
     yearly_path = output_dir / "strategy_adaptation_yearly_returns.csv"
     four_way_yearly.to_csv(yearly_path, index=False, encoding="utf-8-sig")
 
-    optimized_capture_dir = output_dir / "optimized_pair_capture"
-    optimized_capture = build_score_ranking_capture_audit(
+    adapted_params_capture_dir = output_dir / "adapted_params_ranking_capture"
+    adapted_params_capture = build_score_ranking_capture_audit(
         metadata={
             **metadata,
-            "comparison_design": "rolling_selection_2x2_optimized_system",
+            "comparison_design": "same_adapted_params_ranking_counterfactual",
         },
-        baseline_summary=baseline_adapted,
-        score_sort_summary=score_adapted,
-        baseline_trade_history=baseline_adapted_replay["payload"]["trade_history"],
-        score_sort_trade_history=score_adapted_replay["payload"]["trade_history"],
-        baseline_selected_target_diagnostics=baseline_adapted_selected,
-        score_sort_selected_target_diagnostics=score_adapted_selected,
+        baseline_summary=param_only,
+        score_sort_summary=adapted,
+        baseline_trade_history=param_only_replay["payload"]["trade_history"],
+        score_sort_trade_history=adapted_replay["payload"]["trade_history"],
+        baseline_selected_target_diagnostics=param_only_selected,
+        score_sort_selected_target_diagnostics=adapted_selected,
         selection_diagnostics={
-            "score_ranking_minus_no_filter": _delta(
-                score_adapted_diag, baseline_adapted_diag
-            )
+            "score_ranking_minus_no_filter": _delta(adapted_diag, param_only_diag)
         },
         baseline_daily_capacity=pd.DataFrame(
-            baseline_adapted_replay["payload"]["profile"].get(
-                "portfolio_capacity_rows"
-            )
-            or []
+            param_only_replay["payload"]["profile"].get("portfolio_capacity_rows") or []
         ),
         score_sort_daily_capacity=pd.DataFrame(
-            score_adapted_replay["payload"]["profile"].get(
-                "portfolio_capacity_rows"
-            )
-            or []
+            adapted_replay["payload"]["profile"].get("portfolio_capacity_rows") or []
         ),
     )
-    optimized_capture_payload = write_score_ranking_capture_audit_outputs(
-        result=optimized_capture,
-        output_dir=optimized_capture_dir,
+    adapted_params_capture_payload = write_score_ranking_capture_audit_outputs(
+        result=adapted_params_capture,
+        output_dir=adapted_params_capture_dir,
     )
 
     parameter_comparison = _build_param_comparison_rows(
-        baseline_params_path=baseline_adapted_arm["params_path"],
-        adapted_params_path=score_adapted_arm["params_path"],
+        baseline_params_path=baseline_contract["path"],
+        adapted_params_path=adapted_arm["params_path"],
     )
+    adapted_params_path = adapted_arm["params_path"]
     result = {
         "schema_version": SCHEMA_VERSION,
         "status": ADAPTATION_STATUS,
-        "comparison_design": "ranking_parameter_2x2",
+        "comparison_design": "ranking_parameter_2x2_single_adapted_optimizer",
         "metadata": {
             **metadata,
             "result_interpretation": ADAPTATION_STATUS,
-            "baseline_adapted_params_path": project_relative_display_path(
-                baseline_adapted_arm["params_path"], project_root=root
+            "adapted_params_path": project_relative_display_path(
+                adapted_params_path, project_root=root
             ),
-            "baseline_adapted_params_sha256": compute_file_sha256(
-                baseline_adapted_arm["params_path"]
-            ),
-            "score_adapted_params_path": project_relative_display_path(
-                score_adapted_arm["params_path"], project_root=root
-            ),
-            "score_adapted_params_sha256": compute_file_sha256(
-                score_adapted_arm["params_path"]
-            ),
+            "adapted_params_sha256": compute_file_sha256(adapted_params_path),
             "future_target_used_for_runtime": False,
             "oos_generalization_claimed": False,
             "final_selection_refit_executed": False,
+            "optimizer_training_arms": ["score_adapted"],
         },
         "baseline": baseline,
         "sort_only": sort_only,
-        "baseline_adapted": baseline_adapted,
-        "score_adapted": score_adapted,
-        "ranking_only_delta": _delta(sort_only, baseline),
-        "baseline_refit_delta": _delta(baseline_adapted, baseline),
-        "score_adaptation_delta": _delta(score_adapted, sort_only),
-        "optimized_system_delta": _delta(score_adapted, baseline_adapted),
+        "param_only": param_only,
+        "adapted": adapted,
+        "old_params_ranking_delta": _delta(sort_only, baseline),
+        "adapted_params_ranking_delta": _delta(adapted, param_only),
+        "old_ranking_param_delta": _delta(param_only, baseline),
+        "score_ranking_param_delta": _delta(adapted, sort_only),
+        "overall_delta": _delta(adapted, baseline),
         "selection_diagnostics": {
             "baseline": baseline_diag,
             "sort_only": sort_diag,
-            "baseline_adapted": baseline_adapted_diag,
-            "score_adapted": score_adapted_diag,
-            "ranking_only_delta": _delta(sort_diag, baseline_diag),
-            "optimized_system_delta": _delta(
-                score_adapted_diag, baseline_adapted_diag
-            ),
+            "param_only": param_only_diag,
+            "adapted": adapted_diag,
+            "old_params_ranking_delta": _delta(sort_diag, baseline_diag),
+            "adapted_params_ranking_delta": _delta(adapted_diag, param_only_diag),
+            "old_ranking_param_delta": _delta(param_only_diag, baseline_diag),
+            "score_ranking_param_delta": _delta(adapted_diag, sort_diag),
             "future_target_join_stage": "post_replay_offline_diagnostic_only",
             "future_target_used_for_runtime_sort": False,
         },
-        "current_capture_audit": current_payload.get(
-            "score_ranking_capture_audit"
-        ),
-        "optimized_capture_audit": optimized_capture_payload,
+        "current_capture_audit": current_payload.get("score_ranking_capture_audit"),
+        "adapted_params_capture_audit": adapted_params_capture_payload,
         "yearly": four_way_yearly.to_dict("records"),
-        "optimized_active_params": {
-            "baseline_adapted": {
-                "path": project_relative_display_path(
-                    baseline_adapted_arm["params_path"], project_root=root
-                ),
-                "sha256": compute_file_sha256(
-                    baseline_adapted_arm["params_path"]
-                ),
-            },
-            "score_adapted": {
-                "path": project_relative_display_path(
-                    score_adapted_arm["params_path"], project_root=root
-                ),
-                "sha256": compute_file_sha256(score_adapted_arm["params_path"]),
-            },
+        "adapted_active_params": {
+            "path": project_relative_display_path(adapted_params_path, project_root=root),
+            "sha256": compute_file_sha256(adapted_params_path),
         },
         "parameter_comparison": parameter_comparison,
         "rolling_validation": dict(rolling_validation),
         "replay_artifacts": {
-            "baseline_adapted": {
+            "param_only": {
                 key: project_relative_display_path(value, project_root=root)
-                for key, value in baseline_adapted_paths.items()
+                for key, value in param_only_paths.items()
             },
-            "score_adapted": {
+            "adapted": {
                 key: project_relative_display_path(value, project_root=root)
-                for key, value in score_adapted_paths.items()
+                for key, value in adapted_paths.items()
             },
-            "optimized_capture_dir": project_relative_display_path(
-                optimized_capture_dir, project_root=root
+            "adapted_params_capture_dir": project_relative_display_path(
+                adapted_params_capture_dir, project_root=root
             ),
         },
     }
@@ -1509,8 +1602,10 @@ def _run_four_way_comparison(
     )
     print("\n" + _render_four_way_console(result))
     if not compact_console_enabled():
-        print("\n" + render_capture_audit_console(optimized_capture))
+        print("\n" + render_capture_audit_console(adapted_params_capture))
     return result
+
+
 
 
 def _metric_rows(result: dict[str, Any]):
@@ -1539,7 +1634,7 @@ def _metric_rows(result: dict[str, Any]):
         ("Target ≥ 0.5R capture", "target_ge_0_5_capture_ratio", ""),
     )
     current_capture = dict(result.get("current_capture_audit") or {})
-    optimized_capture = dict(result.get("optimized_capture_audit") or {})
+    adapted_capture = dict(result.get("adapted_params_capture_audit") or {})
     enriched = {
         "baseline": {
             **dict(result.get("baseline") or {}),
@@ -1549,16 +1644,17 @@ def _metric_rows(result: dict[str, Any]):
             **dict(result.get("sort_only") or {}),
             **dict(current_capture.get("score_sort") or {}),
         },
-        "baseline_adapted": {
-            **dict(result.get("baseline_adapted") or {}),
-            **dict(optimized_capture.get("baseline") or {}),
+        "param_only": {
+            **dict(result.get("param_only") or {}),
+            **dict(adapted_capture.get("baseline") or {}),
         },
-        "score_adapted": {
-            **dict(result.get("score_adapted") or {}),
-            **dict(optimized_capture.get("score_sort") or {}),
+        "adapted": {
+            **dict(result.get("adapted") or {}),
+            **dict(adapted_capture.get("score_sort") or {}),
         },
     }
     return rows, enriched
+
 
 
 def _fmt(value, unit=""):
@@ -1677,10 +1773,14 @@ def _yearly_pair_table(
     )
 
 
+
 def _capture_yearly_pairs(result: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     current = list(dict(result.get("current_capture_audit") or {}).get("yearly") or [])
-    optimized = list(dict(result.get("optimized_capture_audit") or {}).get("yearly") or [])
-    return {"current": current, "optimized": optimized}
+    adapted = list(
+        dict(result.get("adapted_params_capture_audit") or {}).get("yearly") or []
+    )
+    return {"current": current, "adapted": adapted}
+
 
 
 def _capture_yearly_table(
@@ -1731,23 +1831,21 @@ def _capture_yearly_table(
     )
 
 
+
 def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
     rolling = dict(result.get("rolling_validation") or {})
     coverage = dict(rolling.get("training_score_coverage") or {})
     summary = render_key_values((
         ("Rolling folds", coverage.get("fold_count", rolling.get("fold_count", "-"))),
-        ("兩組重調 trials／fold", rolling.get("trials_per_fold", "-")),
+        ("Adapted trials／fold", rolling.get("trials_per_fold", "-")),
         ("Trials source", rolling.get("trials_per_fold_source", "-")),
         ("Baseline歷史工件 trials／fold", rolling.get("baseline_trials_per_fold", "-")),
         ("Train window", f"{rolling.get('train_window_months', '-')} months"),
         ("OOS horizon", f"{rolling.get('oos_horizon_months', '-')} months"),
-        ("Baseline Adapted search reused", rolling.get("baseline_adapted_search_reused", "-")),
         ("Score Adapted search reused", rolling.get("score_adapted_search_reused", "-")),
-        ("Bootstrap fallback folds", coverage.get("bootstrap_fallback_only_folds", "-")),
-        ("Partial-score folds", coverage.get("partial_score_history_folds", "-")),
-        ("Full-score folds", coverage.get("full_score_history_folds", "-")),
+        ("新參數optimizer數", rolling.get("optimizer_training_arm_count", 1)),
     ))
-    labels = {
+    status_labels = {
         "bootstrap_fallback_only": "Bootstrap fallback",
         "partial_score_history": "Partial Score history",
         "full_score_history": "Full Score history",
@@ -1755,7 +1853,8 @@ def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
     rows = []
     for row in list(coverage.get("folds") or []):
         try:
-            coverage_text = f"{float(row.get('calendar_coverage_ratio')) * 100.0:.1f}%"
+            coverage_pct = float(row.get("calendar_coverage_ratio")) * 100.0
+            coverage_text = f"{coverage_pct:.1f}%"
         except (TypeError, ValueError):
             coverage_text = "N/A"
         rows.append((
@@ -1763,14 +1862,18 @@ def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
             row.get("selection_period", "-"),
             row.get("oos_period", "-"),
             coverage_text,
-            labels.get(str(row.get("status")), str(row.get("status") or "-")),
+            status_labels.get(str(row.get("status")), str(row.get("status") or "-")),
         ))
-    table = render_table(
-        ("Fold", "Selection period", "OOS period", "Score coverage", "狀態"),
-        rows,
-        alignments=("left", "left", "left", "right", "left"),
-    ) if rows else "無Rolling Score coverage資料。"
+    table = (
+        render_table(
+            ("Fold", "Selection period", "OOS period", "Score coverage", "狀態"),
+            rows,
+            alignments=("left", "left", "left", "right", "left"),
+        )
+        if rows else "無Rolling Score coverage資料。"
+    )
     return summary, table
+
 
 
 def _pair_judgement(delta: dict[str, Any], *, subject: str) -> tuple[str, str]:
@@ -1851,7 +1954,7 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
     diagnostics = dict(result.get("selection_diagnostics") or {})
     diagnostic_values = {
         key: dict(diagnostics.get(key) or {})
-        for key in ("baseline", "sort_only", "baseline_adapted", "score_adapted")
+        for key in ("baseline", "sort_only", "param_only", "adapted")
     }
     diagnostic_specs = (
         ("Orderable Score coverage", "orderable_score_coverage_rate", "", "higher", 4),
@@ -1873,12 +1976,12 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
                 left_label="Baseline", right_label="Sort Only",
                 delta_label="Ranking差異", use_color=use_color,
             ),
-            "B. 各自 Rolling 重調：完整系統效果",
+            "B. 同一套新Adapted參數：Ranking效果",
             _pair_table(
                 values, specs,
-                left_key="baseline_adapted", right_key="score_adapted",
-                left_label="Baseline Adapted", right_label="Score Adapted",
-                delta_label="最佳化系統差異", use_color=use_color,
+                left_key="param_only", right_key="adapted",
+                left_label="Param Only", right_label="Adapted",
+                delta_label="新參數Ranking差異", use_color=use_color,
             ),
         )
 
@@ -1886,9 +1989,9 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
         render_title("Breakout Quality Ranking × Parameter 2×2驗證摘要"),
         render_key_values((
             ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
-            ("比較設計", "Baseline／Sort Only／Baseline Adapted／Score Adapted"),
+            ("比較設計", "Baseline／Sort Only／Param Only／Adapted"),
             ("純Ranking比較", "Sort Only − Baseline；active params完全相同"),
-            ("最佳化系統比較", "Score Adapted − Baseline Adapted；搜尋規則與預算相同"),
+            ("新參數Ranking比較", "Adapted − Param Only；兩組使用同一套新Adapted params"),
             ("Score source", metadata.get("score_source", "selection_point_in_time")),
             ("結果性質", ADAPTATION_STATUS),
             ("Future Target runtime", "未使用"),
@@ -1914,12 +2017,12 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
             left_label="Baseline", right_label="Sort Only",
             delta_label="Ranking差異", use_color=use_color,
         ),
-        "B. 各自 Rolling 重調：完整系統效果",
+        "B. 同一套新Adapted參數：Ranking效果",
         _pair_table(
             diagnostic_values, diagnostic_specs,
-            left_key="baseline_adapted", right_key="score_adapted",
-            left_label="Baseline Adapted", right_label="Score Adapted",
-            delta_label="最佳化系統差異", use_color=use_color,
+            left_key="param_only", right_key="adapted",
+            left_label="Param Only", right_label="Adapted",
+            delta_label="新參數Ranking差異", use_color=use_color,
         ),
         render_section("Target 到實際報酬的轉換", number=6),
         "定義：Target R是事後價格機會；capture衡量Realized R相對Target R的轉換；gap越低越好。",
@@ -1939,12 +2042,12 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
             left_label="Baseline", right_label="Sort Only",
             delta_label="Ranking差異", use_color=use_color,
         ),
-        "B. 各自 Rolling 重調：年度完整系統效果",
+        "B. 同一套新Adapted參數：年度Ranking效果",
         _yearly_pair_table(
             yearly_rows,
-            left_column="baseline_adapted_return_pct", right_column="score_adapted_return_pct",
-            left_label="Baseline Adapted", right_label="Score Adapted",
-            delta_label="最佳化系統差異", use_color=use_color,
+            left_column="param_only_return_pct", right_column="adapted_return_pct",
+            left_label="Param Only", right_label="Adapted",
+            delta_label="新參數Ranking差異", use_color=use_color,
         ),
         "固定原參數進場年度 Aggregate capture：",
         _capture_yearly_table(
@@ -1955,39 +2058,39 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
             delta_label="Ranking差異", unit="", preference="higher", digits=2,
             use_color=use_color,
         ),
-        "各自重調後進場年度 Aggregate capture：",
+        "新Adapted參數進場年度 Aggregate capture：",
         _capture_yearly_table(
-            capture_yearly["optimized"],
+            capture_yearly["adapted"],
             left_prefix="baseline", right_prefix="score_sort",
             metric_suffix="aggregate_capture_ratio",
-            left_label="Baseline Adapted", right_label="Score Adapted",
-            delta_label="最佳化系統差異", unit="", preference="higher", digits=2,
+            left_label="Param Only", right_label="Adapted",
+            delta_label="新參數Ranking差異", unit="", preference="higher", digits=2,
             use_color=use_color,
         ),
         render_section("Rolling 訓練與 Score coverage", number=10),
-        "定義：兩個重調組使用相同folds、trials／fold、search space、objective、Seed與sampler；只固定不同ranking。",
+        "定義：新參數只由Score ranking rolling optimizer訓練一次；Param Only與Adapted共用同一套active params。",
         rolling_summary,
         rolling_table,
         "限制：PIT開始日前缺分依正式契約回退原buy-sort；PIT期間內缺口禁止。",
-        render_section("重調後參數差異", number=11),
-        "定義：比較Baseline Adapted與Score Adapted各fold finalist-best active params的中位數與範圍。",
+        render_section("舊ROOS與新Adapted參數差異", number=11),
+        "定義：比較既有正式ROOS與新Score Adapted各fold finalist-best active params的中位數與範圍。",
         render_table(
-            ("參數", "Base Adapted中位", "Base Adapted範圍", "Score Adapted中位", "Score Adapted範圍"),
+            ("參數", "舊ROOS中位", "舊ROOS範圍", "Adapted中位", "Adapted範圍"),
             _param_comparison_table_rows(result),
             alignments=("left", "right", "right", "right", "right"),
         ),
     ]
 
-    ranking_delta = dict(result.get("ranking_only_delta") or {})
-    optimized_delta = dict(result.get("optimized_system_delta") or {})
+    ranking_delta = dict(result.get("old_params_ranking_delta") or {})
+    adapted_ranking_delta = dict(result.get("adapted_params_ranking_delta") or {})
     ranking_signal, ranking_text = _pair_judgement(
         ranking_delta, subject="純Ranking"
     )
-    optimized_signal, optimized_text = _pair_judgement(
-        optimized_delta, subject="各自重調後的完整系統"
+    adapted_signal, adapted_text = _pair_judgement(
+        adapted_ranking_delta, subject="新Adapted參數下的Ranking"
     )
     optimized_decision = dict(
-        dict(result.get("optimized_capture_audit") or {}).get("decision") or {}
+        dict(result.get("adapted_params_capture_audit") or {}).get("decision") or {}
     )
     decision_signal = str(optimized_decision.get("signal") or SIGNAL_NEUTRAL)
     bottlenecks = "；".join(optimized_decision.get("bottlenecks") or []) or "未辨識出明確瓶頸"
@@ -1999,8 +2102,8 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
             enabled=use_color,
         ),
         terminal_signal(
-            f"{signal_marker(optimized_signal)} Optimized-system判定：{optimized_text}",
-            optimized_signal,
+            f"{signal_marker(adapted_signal)} 新參數Ranking判定：{adapted_text}",
+            adapted_signal,
             enabled=use_color,
         ),
         terminal_signal(
@@ -2010,19 +2113,21 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
             enabled=use_color,
         ),
         f"主要瓶頸：{bottlenecks}",
-        "判讀原則：哪種ranking較好，只看Sort Only − Baseline與Score Adapted − Baseline Adapted；不得用Score Adapted − Sort Only替代ranking結論。",
-        "下一步：只有optimized-system比較支持Score ranking後，才進完整Selection final refit；本流程不執行正式OOS。",
+        "判讀原則：舊參數看Sort Only − Baseline；新參數看Adapted − Param Only。Param Only與Adapted使用完全相同的新active params。",
+        "下一步：只有兩個Ranking比較與參數適應效果支持後，才進完整Selection final refit；本流程不執行正式OOS。",
         "限制：本結果是無前視Rolling Selection診斷；Future Target只在回放完成後join。",
         "核心純Ranking差異：總報酬 "
         f"{_compact_metric_value(ranking_delta.get('total_return_pct'), unit='pp', digits=2)}；"
         "報酬／回撤 "
         f"{_compact_metric_value(ranking_delta.get('return_over_max_drawdown'), digits=2)}。",
-        "核心最佳化系統差異：總報酬 "
-        f"{_compact_metric_value(optimized_delta.get('total_return_pct'), unit='pp', digits=2)}；"
+        "核心新參數Ranking差異：總報酬 "
+        f"{_compact_metric_value(adapted_ranking_delta.get('total_return_pct'), unit='pp', digits=2)}；"
         "報酬／回撤 "
-        f"{_compact_metric_value(optimized_delta.get('return_over_max_drawdown'), digits=2)}。",
+        f"{_compact_metric_value(adapted_ranking_delta.get('return_over_max_drawdown'), digits=2)}。",
     ))
     return "\n".join(lines)
+
+
 
 
 def _render_four_way_markdown(result: dict[str, Any]) -> str:
@@ -2031,41 +2136,42 @@ def _render_four_way_markdown(result: dict[str, Any]) -> str:
         "# Selection Ranking × Parameter 2×2 Rolling Validation",
         "",
         f"- 狀態：`{ADAPTATION_STATUS}`",
-        "- Ranking-only：Sort Only − Baseline，兩組使用完全相同的歷史active params。",
-        "- Optimized-system：Score Adapted − Baseline Adapted，兩組使用相同folds、搜尋規則與預算。",
+        "- 新參數只由Score ranking rolling optimizer訓練一次。",
+        "- 舊參數Ranking效果：Sort Only − Baseline。",
+        "- 新參數Ranking效果：Adapted − Param Only；兩組使用完全相同的新Adapted params。",
         "- Future Target只在replay後離線join，未進runtime或optimizer。",
         "",
         "## 核心指標",
         "",
-        "| 指標 | Baseline | Sort Only | Baseline Adapted | Score Adapted |",
+        "| 指標 | Baseline | Sort Only | Param Only | Adapted |",
         "|---|---:|---:|---:|---:|",
     ]
     for label, key, unit in rows:
         lines.append(
             f"| {label} | {_fmt(values['baseline'].get(key), unit)} | "
             f"{_fmt(values['sort_only'].get(key), unit)} | "
-            f"{_fmt(values['baseline_adapted'].get(key), unit)} | "
-            f"{_fmt(values['score_adapted'].get(key), unit)} |"
+            f"{_fmt(values['param_only'].get(key), unit)} | "
+            f"{_fmt(values['adapted'].get(key), unit)} |"
         )
     lines.extend((
         "",
         "## 年度報酬",
         "",
-        "| 年度 | Baseline | Sort Only | Baseline Adapted | Score Adapted |",
+        "| 年度 | Baseline | Sort Only | Param Only | Adapted |",
         "|---:|---:|---:|---:|---:|",
     ))
     for row in list(result.get("yearly") or []):
         lines.append(
             f"| {int(row['year'])} | {_fmt(row.get('no_filter_return_pct'), '%')} | "
             f"{_fmt(row.get('score_ranking_return_pct'), '%')} | "
-            f"{_fmt(row.get('baseline_adapted_return_pct'), '%')} | "
-            f"{_fmt(row.get('score_adapted_return_pct'), '%')} |"
+            f"{_fmt(row.get('param_only_return_pct'), '%')} | "
+            f"{_fmt(row.get('adapted_return_pct'), '%')} |"
         )
     lines.extend((
         "",
-        "## 重調後參數差異",
+        "## 舊ROOS與新Adapted參數差異",
         "",
-        "| 參數 | Base Adapted中位 | Base Adapted範圍 | Score Adapted中位 | Score Adapted範圍 |",
+        "| 參數 | 舊ROOS中位 | 舊ROOS範圍 | Adapted中位 | Adapted範圍 |",
         "|---|---:|---:|---:|---:|",
     ))
     for parameter, left_med, left_range, right_med, right_range in _param_comparison_table_rows(result):
@@ -2076,12 +2182,13 @@ def _render_four_way_markdown(result: dict[str, Any]) -> str:
         "",
         "## 判讀邊界",
         "",
-        "- 哪種ranking較好，只能使用Ranking-only與Optimized-system兩個對稱差異。",
-        "- Score Adapted − Sort Only只代表Score ranking條件下的參數重調效果，不是ranking效果。",
+        "- Param Only不是舊ranking重新最佳化；它只是把同一套新Adapted params切回舊ranking做反事實回放。",
+        "- 本流程只訓練Score Adapted一套新參數，不重訓舊ranking。",
         "- 本結果不是完整Selection final refit，也不是正式OOS。",
         "",
     ))
     return "\n".join(lines)
+
 
 
 _render_four_way_console_impl = _render_four_way_console
@@ -2095,6 +2202,7 @@ def _render_three_way_markdown(result: dict[str, Any]) -> str:
     return _render_four_way_markdown(result)
 
 
+
 def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     args = _parse_args(argv)
     root = Path(project_root).resolve()
@@ -2106,6 +2214,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         str(root), args.filter_id, args.model_architecture, args.experiment_profile
     )
     _validate_pit_contract_against_settings(pit_contract, settings)
+    formal_manifest_path = _validate_formal_model_manifest(root=root, args=args)
     baseline_contract = _load_baseline_rolling_contract(
         root=root, args=args, settings=settings
     )
@@ -2124,50 +2233,24 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             f"pit={pit_contract.available_through}, baseline={baseline_last_oos_end}"
         )
 
-    common_policy = _build_base_policy(
+    adapted_policy = _build_base_policy(
         root=root, baseline_contract=baseline_contract
     )
-    baseline_adapted_policy = dict(common_policy)
-    baseline_adapted_policy.update({
-        "adaptation_arm": "baseline_adapted",
-        "adaptation_scope": "selection_rolling_2x2_baseline_adapted",
-    })
-    score_adapted_policy = dict(common_policy)
-    score_adapted_policy.update({
+    adapted_policy.update({
         "adaptation_arm": "score_adapted",
-        "adaptation_scope": "selection_rolling_2x2_score_adapted",
+        "adaptation_scope": "selection_rolling_single_score_adapted_optimizer",
     })
-    baseline_adapted_contract = _build_runtime_contract(
+    adapted_contract = _build_runtime_contract(
         root=root,
         args=args,
         settings=settings,
         pit_contract=pit_contract,
         baseline_contract=baseline_contract,
-        base_policy=baseline_adapted_policy,
-        arm_name="baseline_adapted",
-        ranking_enabled=False,
-    )
-    score_adapted_contract = _build_runtime_contract(
-        root=root,
-        args=args,
-        settings=settings,
-        pit_contract=pit_contract,
-        baseline_contract=baseline_contract,
-        base_policy=score_adapted_policy,
+        base_policy=adapted_policy,
         arm_name="score_adapted",
         ranking_enabled=True,
     )
-    if (
-        baseline_adapted_contract["rolling_policy"]
-        != score_adapted_contract["rolling_policy"]
-    ):
-        raise ValueError("2×2兩個重調組的rolling policy不一致")
-    if (
-        baseline_adapted_contract["search_space_identity_sha256"]
-        != score_adapted_contract["search_space_identity_sha256"]
-    ):
-        raise ValueError("2×2兩個重調組的search space不一致")
-    score_coverage = dict(score_adapted_contract["training_score_coverage"])
+    score_coverage = dict(adapted_contract["training_score_coverage"])
     bootstrap_folds = int(score_coverage["bootstrap_fallback_only_folds"])
     partial_folds = int(score_coverage["partial_score_history_folds"])
     if bootstrap_folds or partial_folds:
@@ -2180,20 +2263,22 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
 
     output_dir = (root / ADAPTATION_RELATIVE_DIR).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    combined_identity = _canonical_json_sha256({
-        "baseline_adapted": baseline_adapted_contract["runtime_identity_sha256"],
-        "score_adapted": score_adapted_contract["runtime_identity_sha256"],
-    })
     preflight_path = output_dir / "rolling_preflight.json"
     _write_json(
         preflight_path,
         {
             "schema_version": SCHEMA_VERSION,
-            "status": "ROLLING_2X2_PREFLIGHT_PASS",
-            "comparison_design": "ranking_parameter_2x2",
-            "runtime_identity_sha256": combined_identity,
-            "baseline_adapted_contract": baseline_adapted_contract,
-            "score_adapted_contract": score_adapted_contract,
+            "status": "ROLLING_2X2_SINGLE_ADAPTED_OPTIMIZER_PREFLIGHT_PASS",
+            "comparison_design": "ranking_parameter_2x2_single_adapted_optimizer",
+            "runtime_identity_sha256": adapted_contract["runtime_identity_sha256"],
+            "score_adapted_contract": adapted_contract,
+            "optimizer_training_arms": ["score_adapted"],
+            "formal_runtime_manifest": project_relative_display_path(
+                formal_manifest_path, project_root=root
+            ),
+            "formal_runtime_manifest_sha256": compute_file_sha256(
+                formal_manifest_path
+            ),
             "created_at": get_taipei_now().isoformat(),
         },
     )
@@ -2202,7 +2287,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         coverage_path, index=False, encoding="utf-8-sig"
     )
 
-    current_pair_dir = output_dir / "baseline_sort_only"
+    current_pair_dir = _canonical_current_pair_output_dir(root=root, args=args)
     current_pair_contract = {
         "runtime_identity_sha256": _build_current_pair_runtime_identity(
             root=root,
@@ -2216,6 +2301,8 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         args=args,
         runtime_contract=current_pair_contract,
         output_dir=current_pair_dir,
+        pit_contract=pit_contract,
+        baseline_contract=baseline_contract,
     )
     current_decision = dict(
         current_payload.get("score_ranking_capture_audit", {})
@@ -2226,25 +2313,13 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             f"status={current_decision.get('status')!r}"
         )
 
-    baseline_adapted_arm = _run_rolling_optimizer_arm(
+    adapted_arm = _run_rolling_optimizer_arm(
         root=root,
         args=args,
         settings=settings,
         baseline_contract=baseline_contract,
-        base_policy=baseline_adapted_policy,
-        runtime_contract=baseline_adapted_contract,
-        output_dir=output_dir,
-        arm_name="baseline_adapted",
-        arm_label="Baseline Adapted",
-        ranking_enabled=False,
-    )
-    score_adapted_arm = _run_rolling_optimizer_arm(
-        root=root,
-        args=args,
-        settings=settings,
-        baseline_contract=baseline_contract,
-        base_policy=score_adapted_policy,
-        runtime_contract=score_adapted_contract,
+        base_policy=adapted_policy,
+        runtime_contract=adapted_contract,
         output_dir=output_dir,
         arm_name="score_adapted",
         arm_label="Score Adapted",
@@ -2253,22 +2328,20 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
 
     optimizer_summary_path = output_dir / "rolling_optimizer_summary.json"
     optimizer_summary = {
-        "mode": "rolling_selection_2x2_validation",
+        "mode": "rolling_selection_2x2_single_adapted_optimizer",
         "result_interpretation": ADAPTATION_STATUS,
         "folds": int(score_coverage.get("fold_count", 0) or 0),
         "trials_per_fold": int(args.trials_per_fold),
         "trials_per_fold_source": str(
-            score_adapted_contract["rolling_policy"]["trials_per_fold_source"]
+            adapted_contract["rolling_policy"]["trials_per_fold_source"]
         ),
-        "same_fold_schedule_between_adapted_arms": True,
-        "same_search_space_between_adapted_arms": True,
-        "same_search_budget_between_adapted_arms": True,
         "baseline_history_trials_per_fold": int(baseline_meta["trials_per_fold"]),
         "baseline_history_trial_count_match_required": False,
         "baseline_sort_only_reused": bool(current_pair_reused),
-        "baseline_adapted": baseline_adapted_arm["optimizer_summary"],
-        "score_adapted": score_adapted_arm["optimizer_summary"],
-        "combined_runtime_identity_sha256": combined_identity,
+        "optimizer_training_arm_count": 1,
+        "optimizer_training_arms": ["score_adapted"],
+        "score_adapted": adapted_arm["optimizer_summary"],
+        "runtime_identity_sha256": adapted_contract["runtime_identity_sha256"],
         "final_selection_refit_executed": False,
         "formal_oos_executed": False,
     }
@@ -2280,57 +2353,44 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         pit_contract=pit_contract,
         current_payload=current_payload,
         baseline_contract=baseline_contract,
-        baseline_adapted_arm=baseline_adapted_arm,
-        score_adapted_arm=score_adapted_arm,
+        adapted_arm=adapted_arm,
         current_pair_dir=current_pair_dir,
         output_dir=output_dir,
         rolling_validation={
             "fold_count": int(score_coverage.get("fold_count", 0) or 0),
             "trials_per_fold": int(args.trials_per_fold),
             "trials_per_fold_source": str(
-                score_adapted_contract["rolling_policy"]["trials_per_fold_source"]
+                adapted_contract["rolling_policy"]["trials_per_fold_source"]
             ),
             "baseline_trials_per_fold": int(baseline_meta["trials_per_fold"]),
             "trial_count_match_required": False,
             "train_window_months": int(baseline_meta["train_window_months"]),
             "oos_horizon_months": int(baseline_meta["oos_horizon_months"]),
-            "same_fold_schedule_between_adapted_arms": True,
-            "same_search_space_between_adapted_arms": True,
-            "same_search_budget_between_adapted_arms": True,
-            "baseline_adapted_search_reused": bool(
-                baseline_adapted_arm["search_reused"]
-            ),
-            "score_adapted_search_reused": bool(
-                score_adapted_arm["search_reused"]
-            ),
+            "optimizer_training_arm_count": 1,
+            "optimizer_training_arms": ["score_adapted"],
+            "score_adapted_search_reused": bool(adapted_arm["search_reused"]),
             "training_score_coverage": score_coverage,
         },
     )
 
-    optimized_capture_dir = output_dir / "optimized_pair_capture"
+    capture_dir = output_dir / "adapted_params_ranking_capture"
     artifact_paths = {
         "rolling_preflight": preflight_path,
+        "formal_runtime_manifest": formal_manifest_path,
         "training_score_coverage": coverage_path,
-        "baseline_adapted_params": baseline_adapted_arm["params_path"],
-        "score_adapted_params": score_adapted_arm["params_path"],
-        "baseline_adapted_preflight": baseline_adapted_arm["preflight_path"],
-        "score_adapted_preflight": score_adapted_arm["preflight_path"],
-        "baseline_adapted_optimizer_summary": baseline_adapted_arm[
-            "optimizer_summary_path"
-        ],
-        "score_adapted_optimizer_summary": score_adapted_arm[
-            "optimizer_summary_path"
-        ],
+        "adapted_params": adapted_arm["params_path"],
+        "adapted_preflight": adapted_arm["preflight_path"],
+        "adapted_optimizer_summary": adapted_arm["optimizer_summary_path"],
         "optimizer_summary": optimizer_summary_path,
         "comparison_json": output_dir / "strategy_adaptation_comparison.json",
         "comparison_markdown": output_dir / "strategy_adaptation_comparison.md",
         "yearly_csv": output_dir / "strategy_adaptation_yearly_returns.csv",
-        "baseline_adapted_equity": output_dir / "baseline_adapted_equity.csv",
-        "baseline_adapted_trades": output_dir / "baseline_adapted_trades.csv",
-        "score_adapted_equity": output_dir / "score_adapted_equity.csv",
-        "score_adapted_trades": output_dir / "score_adapted_trades.csv",
-        "optimized_capture_json": optimized_capture_dir / "score_ranking_capture_audit.json",
-        "optimized_capture_markdown": optimized_capture_dir / "score_ranking_capture_audit.md",
+        "param_only_equity": output_dir / "param_only_equity.csv",
+        "param_only_trades": output_dir / "param_only_trades.csv",
+        "adapted_equity": output_dir / "adapted_equity.csv",
+        "adapted_trades": output_dir / "adapted_trades.csv",
+        "adapted_params_capture_json": capture_dir / "score_ranking_capture_audit.json",
+        "adapted_params_capture_markdown": capture_dir / "score_ranking_capture_audit.md",
         "baseline_sort_only_comparison_json": current_pair_dir / "strategy_comparison.json",
         "baseline_sort_only_comparison_markdown": current_pair_dir / "strategy_comparison.md",
         "baseline_sort_only_manifest": current_pair_dir / CURRENT_PAIR_MANIFEST_FILENAME,
@@ -2348,12 +2408,11 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     execution_argv = _canonical_execution_argv(args)
     manifest = {
         "schema_version": SCHEMA_VERSION,
-        "status": "ROLLING_2X2_VALIDATION_COMPLETED",
-        "comparison_design": "ranking_parameter_2x2",
+        "status": "ROLLING_2X2_SINGLE_ADAPTED_OPTIMIZER_COMPLETED",
+        "comparison_design": "ranking_parameter_2x2_single_adapted_optimizer",
         "result_interpretation": ADAPTATION_STATUS,
-        "combined_runtime_identity_sha256": combined_identity,
-        "baseline_adapted_contract": baseline_adapted_contract,
-        "score_adapted_contract": score_adapted_contract,
+        "runtime_identity_sha256": adapted_contract["runtime_identity_sha256"],
+        "score_adapted_contract": adapted_contract,
         "optimizer_summary": optimizer_summary,
         "baseline_sort_only_reused": bool(current_pair_reused),
         "execution_command": " ".join(execution_argv),
@@ -2372,8 +2431,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         (
             ("Rolling 2×2 preflight", preflight_path),
             ("Training Score coverage", coverage_path),
-            ("Baseline Adapted active params", baseline_adapted_arm["params_path"]),
-            ("Score Adapted active params", score_adapted_arm["params_path"]),
+            ("Score Adapted active params", adapted_arm["params_path"]),
             ("Rolling adaptation manifest", manifest_path),
             ("Rolling optimizer summary", optimizer_summary_path),
             ("四組比較 Markdown", output_dir / "strategy_adaptation_comparison.md"),
@@ -2382,6 +2440,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         project_root=root,
     )
     return comparison_result
+
 
 
 def main(argv=None):

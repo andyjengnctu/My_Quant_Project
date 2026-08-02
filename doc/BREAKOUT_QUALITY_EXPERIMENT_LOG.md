@@ -2011,4 +2011,65 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 固定邊界 | 不改Dataset、Label、continuous ranker、PIT Scores／folds、Seed 42、search space、objective、TP、risk／position限制、Score Sort規則、Future Target post-replay only或Selection／OOS邊界；不執行完整Selection final refit或正式OOS |
 | 驗證 | T283改為驗證兩個相反ranking固定arm、共同非ranking搜尋維度與預算、runtime/cache identity分離、兩套active-param固定契約、四組報表、兩種對稱判讀與舊Baseline／Sort工件hash重用。正式`apps/test_suite.py`依規定由使用者本機執行 |
 | 下一步 | 套用patch後先跑`python apps/test_suite.py`；通過後執行主選單`[2] → [2] 驗證策略參數適應`。首次執行需完成Baseline Adapted與Score Adapted兩套rolling optimizer；結果產生前維持`RESULT_NOT_AVAILABLE` |
+## 2026-08-03 — Ranking×Parameter 2×2改為單一Score Adapted訓練，並修正diagnostics runtime context
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE`
+
+本輪只完成程式、契約與獨立synthetic驗證；未執行正式rolling optimizer、Selection四組績效或正式OOS，不得預先宣稱Adapted有效。
+
+### 問題
+
+1. 前版把2×2誤實作為`Baseline Adapted`與`Score Adapted`兩套rolling optimizer。既有正式ROOS本身已是舊ranking的rolling結果，再訓練一次舊ranking既浪費時間，也把正式基準換成另一批受trial budget／sampler影響的參數。
+2. Score Adapted的optimizer objective使用正式Selection PIT context，但fold trial完成後的OOS diagnostics未進入同一runtime context，process內設定退回`unique_group_sampling`並尋找錯誤manifest。通用sequential fallback無法修正deterministic identity錯誤，反而再次浪費執行時間。
+3. Outer rolling預設memory study；程序失敗後已完成trials不具跨程序恢復能力。
+
+### 修正後設計
+
+只訓練一套新參數：
+
+| 組別 | Ranking | Active params | 新訓練 |
+|---|---|---|---:|
+| Baseline | 舊ranking | 既有正式ROOS | 否 |
+| Sort Only | Score ranking | 同一套既有正式ROOS | 否 |
+| Param Only | 舊ranking | Score Adapted新參數 | 否，只回放 |
+| Adapted | Score ranking | 同一套Score Adapted新參數 | 是，唯一optimizer |
+
+正式歸因：
+
+- `Sort Only − Baseline`：舊參數下純ranking效果。
+- `Adapted − Param Only`：同一套新參數下純ranking效果。
+- `Param Only − Baseline`：舊ranking下參數替換效果。
+- `Adapted − Sort Only`：Score ranking下參數適應效果。
+- `Adapted − Baseline`：候選新系統相對正式Baseline的整體效果。
+
+### 流程修正
+
+- `[2] 驗證策略參數適應`只載入並驗證`[1] 比較目前策略`已保存的Baseline／Sort Only正式工件；缺少或identity過期時要求先執行`[1]`，不在`[2]`暗中重跑舊參數replay。
+- 移除正式流程對`baseline_adapted/`的依賴；既有目錄可保留為research-only歷史工件，但不再讀取或重跑。
+- Score Adapted只有一個runtime identity、一套optimizer輸出與一套active params；Param Only與Adapted直接共用該active-param schedule，只切換ranking。
+
+### Runtime context與錯誤分類修正
+
+- 在rolling trials開始前，以正式`filter_id`、architecture與experiment profile解析並驗證model manifest；不存在、無法解析或profile不符時立即fail-fast。
+- 平行worker建立session後先驗證序列化runtime context可重建。
+- fold OOS diagnostics及OOS_CHAIN replay全部包在同一`session.optimizer_runtime_context()`。
+- adaptation專用環境設定同步寫入父process環境，確保Windows spawn worker繼承正式`V16_MODELS_DIR`、study storage及resume設定。
+- runtime identity／manifest錯誤標記為`NON_RETRYABLE_RUNTIME_IDENTITY_ERROR`，直接中止；不再啟動無效sequential fallback。
+
+### Study持久化與續跑
+
+- Score Adapted強制使用SQLite study。
+- DB名稱由runtime identity、OOS fold與seed member決定，同一identity重跑會接續同一study。
+- 只補足`requested trials − existing trials`。
+- study保存並檢查effective policy、runtime cache identity與固定策略覆寫；不一致時禁止續跑。
+- 先前已失敗且使用memory storage的程序，若已結束，已完成trials無法由本修正事後恢復；本機下一次須重新建立Score Adapted搜尋。此限制不影響修正後未來中斷的SQLite續跑。
+
+### 結果邊界
+
+- 完整Selection final refit：未執行。
+- 正式OOS：未執行。
+- Future Target：仍只允許post-replay join，不得進runtime、optimizer或cache key以外的決策路徑。
+- `baseline_adapted`既有結果：不納入正式2×2比較。
 
