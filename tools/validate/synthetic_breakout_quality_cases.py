@@ -11512,7 +11512,7 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     with patch.dict(os.environ, {"BREAKOUT_QUALITY_COMPACT_CONSOLE": "1"}):
         compact_comparison_console = _render_strategy_console_report(
             metadata, baseline_summary, score_summary, comparison_delta, yearly,
-            selection_diagnostics, color=True,
+            selection_diagnostics, capture_result=result, color=True,
         )
         compact_capture_console = render_capture_audit_console(result, color=True)
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -11531,20 +11531,24 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
             )
         )
         no_html_outputs = not (output_dir / "score_ranking_capture_audit.html").exists()
+    compact_strategy_text = strip_ansi(compact_comparison_console)
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "interactive_strategy_reports_are_grouped_by_decision_layer_without_internal_context_noise",
-        (True, True, True, True, True, True),
+        "interactive_strategy_report_is_one_flat_ten_section_decision_report",
+        (True, True, True, True, True, True, True, True, True, True, True, True),
         (
-            "投組報酬與風險" in strip_ansi(compact_comparison_console),
-            "單筆交易品質" in strip_ansi(compact_comparison_console),
-            "資金使用與持倉容量" in strip_ansi(compact_comparison_console),
-            "部位與資金配置" in strip_ansi(compact_capture_console),
-            "單筆交易品質與 Target 轉換" in strip_ansi(compact_capture_console),
-            (
-                "參數檔" not in strip_ansi(compact_comparison_console)
-                and "資本使用與 Capture" not in strip_ansi(compact_capture_console)
-            ),
+            "1. 投組報酬與風險" in compact_strategy_text,
+            "2. 單筆交易結果" in compact_strategy_text,
+            "3. 資金投入與部位大小" in compact_strategy_text,
+            "4. 候選供給與持倉容量" in compact_strategy_text,
+            "5. 模型選股能力" in compact_strategy_text,
+            "6. Target 到實際報酬的轉換" in compact_strategy_text,
+            "7. 資金周轉與進場集中" in compact_strategy_text,
+            "8. 出場結構" in compact_strategy_text,
+            "9. 年度結果與年度歸因" in compact_strategy_text,
+            "10. 綜合判定、限制與下一步" in compact_strategy_text,
+            "Score Sort 資金配置與 Target Capture 診斷" not in compact_strategy_text,
+            "參數檔" not in compact_strategy_text,
         ),
     )
 

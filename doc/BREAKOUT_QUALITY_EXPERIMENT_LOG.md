@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_034615_439e600(3).zip`，SHA256 `268eed2ee4312891166197edb7257827d94752f09ebdd8a71b2ba3b0b58085b1`；沿用2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort結果、read-only capture attribution與共用console報表實作；本輪再統一`[1/Enter] 模型研究與驗證`的狀態文字／PIT模型報表色彩，並將Dataset建立進度限制在單一終端列，避免長行自動換行洗版 |
-| SHA256 | 來源ZIP SHA256 `268eed2ee4312891166197edb7257827d94752f09ebdd8a71b2ba3b0b58085b1`。既有3.78結果維持：Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。模型層通過、Sort Only拒絕；本輪只調整使用者可見報表與進度顯示，不改寫或重算上述績效 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260802_191150_34070ba(1).zip`，SHA256 `517d655859da3a4043702edc999c91b3fb602a49dfe3bf3bd40c51e8618a95c7`；沿用2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort、read-only capture attribution與策略參數適應實作；本輪將`[2] 策略績效驗證 → [1/Enter] 比較目前策略`的兩份互動簡表合併為單一10區塊一階報表，完整保留既有數據且結論移至最後 |
+| SHA256 | 來源ZIP SHA256 `517d655859da3a4043702edc999c91b3fb602a49dfe3bf3bd40c51e8618a95c7`。既有3.78結果維持：Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。模型層通過、Sort Only拒絕；本輪只重組互動報表，不重算或改寫任何績效、capture或decision gate |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1895,3 +1895,20 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Dataset／Label／模型工件 | 不需重建；只需套用程式後重新進入`[2] 策略績效驗證`即可看到新分區報表 |
 | 驗證 | direct synthetic新增互動compact scope、分區標題、內部context抑制及完整CLI不受影響契約；相關capture與CLI validators獨立通過。正式`apps/test_suite.py`依專案規則留待使用者本機執行 |
 | 結果邊界 | 本輪沒有新的Selection／OOS／Adapted績效結果，不得由報表重組推論策略效果改變 |
+
+### 3.88 策略比較與Capture合併為單一一階報表（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_APPLICABLE / FORMAL_RERUN_PENDING`；只重構`[2] 策略績效驗證 → [1/Enter] 比較目前策略`的互動式compact console，不改策略、模型、Score、capture或任何績效數值 |
+| 程式基準 | 來源`test-branch-1_20260802_191150_34070ba(1).zip`；SHA256 `517d655859da3a4043702edc999c91b3fb602a49dfe3bf3bd40c51e8618a95c7`；本輪修補ZIP只包含修改檔，SHA256列於交付回覆 |
+| 問題 | 3.87雖已將主策略表與capture表各自分區，但互動流程仍連續輸出兩份報表，造成主報表讀完後又出現第二套`1～8`編號；相同指標亦可能跨兩份報表重覆出現，整體仍過於混雜 |
+| 新資訊架構 | 互動Score-ranking比較只輸出一份報表，且只使用一階`1～10`：`投組報酬與風險`、`單筆交易結果`、`資金投入與部位大小`、`候選供給與持倉容量`、`模型選股能力`、`Target到實際報酬的轉換`、`資金周轉與進場集中`、`出場結構`、`年度結果與年度歸因`、`綜合判定、限制與下一步`；結論固定放最後 |
+| 數據完整性 | 保留原策略主表、Selection選股診斷、capture主指標、成交／半倉／集中度、四類exit reason、完整年度報酬、依進場年度R／aggregate capture／投入金額及所有判讀；重覆指標只顯示一次。年度章節明確區分「權益曲線年度」與「交易進場年度」兩種統計口徑 |
+| 顯示行為 | compact模式下不再追加第二份`Score Sort資金配置與Target Capture診斷`；`--capture-audit-only`在compact scope亦輸出同一份合併摘要。非compact直接CLI仍保留原兩份完整技術報表，Markdown／JSON／CSV schema與內容不變 |
+| 指標說明 | 每個一階區塊先以單行定義其指標口徑；EV與平均Realized R因目前採相同R口徑仍保留，以對應兩份正式工件，但加註其數值通常相同；Future Target持續明示只在回放完成後join，未參與runtime或optimizer |
+| 固定條件 | 不改Dataset、Label、Continuous Target、PIT Score、Seed 42、active params、ranking、候選生成、成交、風險sizing、停損停利、accounting、capture公式、decision gate、adaptation search space或3.78既有結果 |
+| Dataset／Label／模型工件 | 不需重建；套用程式後重新進入策略比較即可看到新版單一報表 |
+| 驗證 | direct synthetic新增10個一階章節、結論位於第10節、第二份capture標題不得出現在合併報表、內部參數檔路徑不顯示等契約；完整CLI與capture正式工件契約維持不變。正式`apps/test_suite.py`依專案規則留待使用者本機執行 |
+| 結果邊界 | 本輪沒有新的Selection／OOS／Adapted結果；報表合併不得解讀為策略效果改變 |
+

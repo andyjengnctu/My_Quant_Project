@@ -1245,6 +1245,465 @@ def _render_compact_strategy_console_report(
     return "\n".join(lines)
 
 
+
+def _compact_capture_metric_rows(
+    baseline: dict[str, Any],
+    score_sort: dict[str, Any],
+    delta: dict[str, Any],
+    specs: tuple[tuple[str, str, str, str, int], ...],
+    *,
+    use_color: bool,
+) -> list[tuple[str, str, str, str, str]]:
+    """Render capture-attribution metrics in the same table contract as strategy metrics."""
+
+    rows: list[tuple[str, str, str, str, str]] = []
+    for label, key, unit, preference, digits in specs:
+        signal = signal_for_delta(
+            delta.get(key), preference=preference, warning_threshold=0.0
+        )
+        rows.append((
+            label,
+            _format_metric(baseline.get(key), digits=digits, unit=unit),
+            _format_metric(score_sort.get(key), digits=digits, unit=unit),
+            terminal_signal(
+                _format_metric(
+                    delta.get(key), digits=digits, unit=unit, signed=True
+                ),
+                signal,
+                enabled=use_color,
+            ),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    return rows
+
+
+def _render_flat_score_ranking_console_report(
+    metadata: dict[str, Any],
+    baseline: dict[str, Any],
+    quality: dict[str, Any],
+    delta: dict[str, Any],
+    yearly: pd.DataFrame,
+    strategy_diagnostics: dict[str, Any] | None,
+    capture_result: dict[str, Any],
+    *,
+    use_color: bool,
+) -> str:
+    """Render one flat ten-section interactive report with all current evidence."""
+
+    period = metadata.get("comparison_period") or {}
+    capture_baseline = dict(capture_result.get("baseline") or {})
+    capture_score = dict(capture_result.get("score_sort") or {})
+    capture_delta = dict(capture_result.get("score_sort_minus_baseline") or {})
+    capture_decision = dict(capture_result.get("decision") or {})
+    capture_yearly_value = capture_result.get("yearly")
+    capture_yearly = (
+        capture_yearly_value.copy()
+        if isinstance(capture_yearly_value, pd.DataFrame)
+        else pd.DataFrame(capture_yearly_value or [])
+    )
+
+    lines = [
+        render_title("Breakout Quality Score 排序策略驗證摘要"),
+        render_key_values((
+            ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
+            ("比較", "Baseline vs Score Sort"),
+            ("參數型態", metadata.get("param_source_kind", "-")),
+            ("參數 selector", metadata.get("param_selector", "-")),
+            (
+                "Runtime members",
+                f"{metadata.get('runtime_member_count_min')}～"
+                f"{metadata.get('runtime_member_count_max')}；"
+                f"min_agree={metadata.get('runtime_min_agree')}",
+            ),
+            ("比較設計", metadata.get("comparison_design", "-")),
+            ("歷史 active-param 無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
+            ("Dataset", metadata.get("dataset", "-")),
+            ("Score source", metadata.get("score_source", "-")),
+            ("Benchmark", metadata.get("benchmark_ticker", "-")),
+            ("唯一差異", _comparison_labels(COMPARISON_MODE_SCORE_RANKING)["difference_text"]),
+            ("排序鍵", " → ".join(metadata.get("score_ranking_order") or [])),
+            ("Ranking 範圍", metadata.get("ranking_scope", "-")),
+            ("歸因性質", "Selection read-only attribution"),
+            ("Future Target runtime", "未使用"),
+        )),
+    ]
+
+    portfolio_specs = (
+        ("淨總報酬", "total_return_pct", "%", "higher"),
+        ("最大回撤", "max_drawdown_pct", "%", "lower"),
+        ("報酬／最大回撤", "return_over_max_drawdown", "", "higher"),
+        ("年化報酬", "annual_return_pct", "%", "higher"),
+        ("Log R²", "log_r_squared", "", "higher"),
+        ("月勝率", "monthly_win_rate_pct", "%", "higher"),
+        ("最差完整年度", "min_full_year_return_pct", "%", "higher"),
+    )
+    lines.extend((
+        render_section("投組報酬與風險", number=1),
+        "定義：衡量整體權益最後賺多少、曾承受多少回撤，以及成長路徑是否穩定。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_metric_rows(
+                baseline, quality, delta, portfolio_specs, use_color=use_color
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    trade_rows = _compact_metric_rows(
+        baseline,
+        quality,
+        delta,
+        (
+            ("交易數", "trade_count", "", "neutral"),
+            ("勝率", "win_rate_pct", "%", "higher"),
+            ("Payoff", "payoff_ratio", "", "higher"),
+            ("EV", "expected_value_r", " R", "higher"),
+        ),
+        use_color=use_color,
+    )
+    trade_rows.extend(_compact_capture_metric_rows(
+        capture_baseline,
+        capture_score,
+        capture_delta,
+        (
+            ("平均 Realized R", "avg_realized_r", " R", "higher", 2),
+            ("平均投入資金報酬", "avg_capital_return_pct", "%", "higher", 2),
+        ),
+        use_color=use_color,
+    ))
+    lines.extend((
+        render_section("單筆交易結果", number=2),
+        "定義：勝率看獲利筆數；Payoff看平均贏家／輸家；EV與Realized R看每筆初始風險的實際期望值。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            trade_rows,
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+        "註：目前EV採平均Realized R口徑，兩者保留是為了對應策略主表與capture歸因表。",
+    ))
+
+    sizing_specs = (
+        ("平均曝險", "avg_exposure_pct", "%", "higher", 2),
+        ("平均預留金額", "avg_reserved_total", "", "attention", 2),
+        ("平均實際投入金額", "avg_invested_total", "", "higher", 2),
+        ("投入／預留比", "avg_invested_vs_reserved_pct", "%", "higher", 2),
+        ("平均初始停損距離", "avg_stop_distance_pct", "%", "attention", 2),
+    )
+    lines.extend((
+        render_section("資金投入與部位大小", number=3),
+        "定義：曝險是每日投入市場資金占權益比例；停損越寬，固定風險sizing下每筆部位通常越小。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_capture_metric_rows(
+                capture_baseline,
+                capture_score,
+                capture_delta,
+                sizing_specs,
+                use_color=use_color,
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    capacity_rows = _compact_metric_rows(
+        baseline,
+        quality,
+        delta,
+        (
+            ("平均每日可掛單候選", "avg_orderable_candidates", "", "neutral"),
+            ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower"),
+            ("每日結束未滿倉日", "underfilled_end_days", " 日", "lower"),
+            ("每日結束持股缺口", "end_position_gap_slot_days", " 格日", "lower"),
+        ),
+        use_color=use_color,
+    )
+    capacity_rows.extend(_compact_capture_metric_rows(
+        capture_baseline,
+        capture_score,
+        capture_delta,
+        (("保留買單成交率", "reserved_buy_fill_rate_pct", "%", "higher", 2),),
+        use_color=use_color,
+    ))
+    lines.extend((
+        render_section("候選供給與持倉容量", number=4),
+        "定義：候選供給看是否有股票可買；未滿倉與缺口看持倉格是否填滿；成交率看預留買單是否落地。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            capacity_rows,
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    diagnostic_specs = (
+        ("Orderable Score coverage", "orderable_score_coverage_rate", "higher"),
+        ("選中候選 Target percentile", "selected_target_percentile_mean", "higher"),
+        ("Target top-k retention", "target_top_k_retention_mean", "higher"),
+        ("Target opportunity gap (R)", "target_opportunity_gap_r_mean", "lower"),
+        ("選中候選 Target mean (R)", "selected_target_mean_r", "higher"),
+    )
+    diagnostic_rows: list[tuple[str, str, str, str, str]] = []
+    positive_diagnostics = 0
+    if strategy_diagnostics:
+        left = dict(strategy_diagnostics.get("no_filter") or {})
+        right = dict(strategy_diagnostics.get("score_ranking") or {})
+        for label, key, preference in diagnostic_specs:
+            lv = left.get(key)
+            rv = right.get(key)
+            try:
+                dv = float(rv) - float(lv)
+            except (TypeError, ValueError):
+                dv = None
+            signal = signal_for_delta(dv, preference=preference)
+            positive_diagnostics += int(signal == SIGNAL_POSITIVE)
+            diagnostic_rows.append((
+                label,
+                _format_metric(lv, digits=4),
+                _format_metric(rv, digits=4),
+                terminal_signal(
+                    _format_metric(dv, digits=4, signed=True),
+                    signal,
+                    enabled=use_color,
+                ),
+                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+            ))
+    lines.extend((
+        render_section("模型選股能力", number=5),
+        "定義：比較實際選中候選與事後Future Target理想排序；Future Target只在回放完成後join。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            diagnostic_rows,
+            alignments=("left", "right", "right", "right", "left"),
+        ) if diagnostic_rows else "本次沒有可用的Selection選股診斷。",
+    ))
+
+    target_specs = (
+        ("平均 Target R", "avg_target_r", " R", "higher", 2),
+        ("Aggregate Target capture", "aggregate_target_capture_ratio", "", "higher", 2),
+        ("Median Target capture", "median_target_capture_ratio", "", "higher", 2),
+        ("Target ≥ 0.5R capture", "target_ge_0_5_capture_ratio", "", "higher", 2),
+        ("平均 Target realization gap", "avg_target_realization_gap_r", " R", "lower", 2),
+    )
+    lines.extend((
+        render_section("Target 到實際報酬的轉換", number=6),
+        "定義：Target R是事後價格機會；capture衡量Realized R相對Target R的轉換；gap越低越好。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_capture_metric_rows(
+                capture_baseline,
+                capture_score,
+                capture_delta,
+                target_specs,
+                use_color=use_color,
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    turnover_specs = (
+        ("平均持有日", "avg_holding_calendar_days", " 日", "lower", 2),
+        ("半倉交易占比", "partial_exit_trade_share_pct", "%", "attention", 2),
+        ("半倉後至結算平均日曆日", "avg_partial_to_exit_calendar_days", " 日", "lower", 2),
+        ("半倉殘留交易slot-days", "partial_residual_slot_days", " 格日", "lower", 0),
+        ("Top 5進場日交易占比", "top_5_entry_dates_share_pct", "%", "attention", 2),
+        ("最大單月進場占比", "top_entry_month_share_pct", "%", "attention", 2),
+        ("進場月份 HHI", "entry_month_hhi", "", "attention", 2),
+        ("產業資料覆蓋", "industry_coverage_pct", "%", "neutral", 2),
+        ("最大產業占比", "top_industry_share_pct", "%", "attention", 2),
+        ("產業 HHI", "industry_hhi", "", "attention", 2),
+    )
+    lines.extend((
+        render_section("資金周轉與進場集中", number=7),
+        "定義：持有與半倉指標衡量資金占用時間；日期、月份與產業指標衡量交易是否集中。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_capture_metric_rows(
+                capture_baseline,
+                capture_score,
+                capture_delta,
+                turnover_specs,
+                use_color=use_color,
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    exit_specs = (
+        ("停損", "stop_exit_share_pct", "%", "attention", 2),
+        ("指標", "indicator_exit_share_pct", "%", "attention", 2),
+        ("汰弱", "rotation_exit_share_pct", "%", "attention", 2),
+        ("期末強制", "forced_exit_share_pct", "%", "attention", 2),
+    )
+    lines.extend((
+        render_section("出場結構", number=8),
+        "定義：依每筆交易最後的全倉結算原因分類；占比改變只表示結構差異，不直接等於損益好壞。",
+        render_table(
+            ("類別", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_capture_metric_rows(
+                capture_baseline,
+                capture_score,
+                capture_delta,
+                exit_specs,
+                use_color=use_color,
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    lines.extend((
+        render_section("年度結果與年度歸因", number=9),
+        "定義：年度報酬按權益曲線年度；R、capture與投入金額按交易進場年度分組，兩種口徑不可混為同一概念。",
+    ))
+    if yearly.empty:
+        lines.append("無權益年度報酬資料。")
+    else:
+        yearly_rows = []
+        for row in yearly.to_dict("records"):
+            signal = signal_for_delta(row.get("delta_pct"), preference="higher")
+            yearly_rows.append((
+                int(row["year"]),
+                _format_metric(row.get("no_filter_return_pct"), digits=2, unit="%"),
+                _format_metric(row.get("score_ranking_return_pct"), digits=2, unit="%"),
+                terminal_signal(
+                    _format_metric(row.get("delta_pct"), digits=2, unit="pp", signed=True),
+                    signal,
+                    enabled=use_color,
+                ),
+                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+                "是" if row.get("is_full_year") else "否",
+            ))
+        lines.extend((
+            "權益年度報酬：",
+            render_table(
+                ("年度", "Baseline", "Score Sort", "差異", "判讀", "完整年度"),
+                yearly_rows,
+                alignments=("right", "right", "right", "right", "left", "center"),
+            ),
+        ))
+    if capture_yearly.empty:
+        lines.append("無進場年度歸因資料。")
+    else:
+        quality_rows = []
+        invested_rows = []
+        for row in capture_yearly.to_dict("records"):
+            r_signal = signal_for_delta(row.get("delta_avg_r"), preference="higher")
+            capture_signal = signal_for_delta(
+                row.get("delta_aggregate_capture_ratio"), preference="higher"
+            )
+            invested_signal = signal_for_delta(
+                row.get("delta_avg_invested_total"), preference="higher"
+            )
+            quality_rows.append((
+                int(row["entry_year"]),
+                _format_metric(row.get("baseline_avg_r"), digits=2),
+                _format_metric(row.get("score_sort_avg_r"), digits=2),
+                terminal_signal(
+                    _format_metric(row.get("delta_avg_r"), digits=2, signed=True),
+                    r_signal,
+                    enabled=use_color,
+                ),
+                _format_metric(row.get("baseline_aggregate_capture_ratio"), digits=2),
+                _format_metric(row.get("score_sort_aggregate_capture_ratio"), digits=2),
+                terminal_signal(
+                    _format_metric(
+                        row.get("delta_aggregate_capture_ratio"), digits=2, signed=True
+                    ),
+                    capture_signal,
+                    enabled=use_color,
+                ),
+            ))
+            invested_rows.append((
+                int(row["entry_year"]),
+                _format_metric(row.get("baseline_avg_invested_total"), digits=0),
+                _format_metric(row.get("score_sort_avg_invested_total"), digits=0),
+                terminal_signal(
+                    _format_metric(
+                        row.get("delta_avg_invested_total"), digits=0, signed=True
+                    ),
+                    invested_signal,
+                    enabled=use_color,
+                ),
+            ))
+        lines.extend((
+            "進場年度交易品質：",
+            render_table(
+                ("年度", "Base R", "Sort R", "ΔR", "Base capture", "Sort capture", "Δcapture"),
+                quality_rows,
+                alignments=("right", "right", "right", "right", "right", "right", "right"),
+            ),
+            "進場年度投入規模：",
+            render_table(
+                ("年度", "Base投入", "Sort投入", "Δ投入"),
+                invested_rows,
+                alignments=("right", "right", "right", "right"),
+            ),
+        ))
+
+    total_delta = _numeric_delta(delta, "total_return_pct")
+    romd_delta = _numeric_delta(delta, "return_over_max_drawdown")
+    mdd_delta = _numeric_delta(delta, "max_drawdown_pct")
+    if total_delta is not None and romd_delta is not None and total_delta < 0 and romd_delta < 0:
+        strategy_signal = SIGNAL_NEGATIVE
+        strategy_judgement = (
+            "直接Score-first Ranking不採用：總報酬與報酬／回撤下降，"
+            "且最大回撤未獲改善。"
+        )
+    elif total_delta is not None and romd_delta is not None and total_delta > 0 and romd_delta > 0:
+        strategy_signal = SIGNAL_POSITIVE
+        strategy_judgement = "Score-first Ranking在Selection內改善投組報酬與風險調整績效。"
+    else:
+        strategy_signal = SIGNAL_WARNING
+        strategy_judgement = "Score-first Ranking結果混合，尚不足以直接採用。"
+    model_judgement = (
+        f"{positive_diagnostics}/{len(diagnostic_rows)}項Future Target選股診斷改善，模型排序方向保留。"
+        if diagnostic_rows and positive_diagnostics >= max(1, len(diagnostic_rows) - 1)
+        else f"只有{positive_diagnostics}/{len(diagnostic_rows)}項Future Target選股診斷改善，模型證據不足。"
+        if diagnostic_rows
+        else "缺少Future Target選股診斷，無法判定模型排序方向。"
+    )
+    model_signal = (
+        SIGNAL_POSITIVE
+        if diagnostic_rows and positive_diagnostics >= max(1, len(diagnostic_rows) - 1)
+        else SIGNAL_WARNING
+        if diagnostic_rows
+        else SIGNAL_NEUTRAL
+    )
+    bottlenecks = "；".join(capture_decision.get("bottlenecks") or []) or "未辨識出明確瓶頸"
+    decision_signal = str(capture_decision.get("signal") or SIGNAL_NEUTRAL)
+    lines.extend((
+        render_section("綜合判定、限制與下一步", number=10),
+        terminal_signal(
+            f"{signal_marker(strategy_signal)} 策略判定：{strategy_judgement}",
+            strategy_signal,
+            enabled=use_color,
+        ),
+        terminal_signal(
+            f"{signal_marker(model_signal)} 模型判定：{model_judgement}",
+            model_signal,
+            enabled=use_color,
+        ),
+        terminal_signal(
+            f"{signal_marker(decision_signal)} 參數適應判定："
+            f"{capture_decision.get('status', '-')}｜{capture_decision.get('conclusion', '-')}",
+            decision_signal,
+            enabled=use_color,
+        ),
+        f"主要瓶頸：{bottlenecks}",
+        "下一步：固定模型、PIT Score與排序契約，只在Selection內檢驗停損、風險sizing、每筆投入上限與Target轉換；完成後凍結並做OOS。",
+        "限制：本結果是Selection PIT證據；Future Target僅在回放完成後join，未參與排序、資金配置、成交或optimizer。",
+    ))
+    if not metadata.get("lookahead_safe_active_param_schedule"):
+        lines.append("警告：本次歷史active-param排程不是無前視，只能視為敏感度診斷。")
+    if mdd_delta is not None:
+        lines.append(
+            "核心差異：總報酬 "
+            f"{_format_metric(total_delta, digits=2, unit='pp', signed=True)}；"
+            "最大回撤 "
+            f"{_format_metric(mdd_delta, digits=2, unit='pp', signed=True)}；"
+            "平均曝險 "
+            f"{_format_metric(capture_delta.get('avg_exposure_pct'), digits=2, unit='pp', signed=True)}。"
+        )
+    return "\n".join(lines)
+
 def _render_strategy_console_report(
     metadata: dict[str, Any],
     baseline: dict[str, Any],
@@ -1253,11 +1712,27 @@ def _render_strategy_console_report(
     yearly: pd.DataFrame,
     strategy_diagnostics: dict[str, Any] | None = None,
     *,
+    capture_result: dict[str, Any] | None = None,
     color: bool | None = None,
 ) -> str:
     """Render the complete readable strategy comparison directly for console."""
 
     use_color = console_color_enabled() if color is None else bool(color)
+    if (
+        compact_console_enabled()
+        and metadata.get("comparison_mode") == COMPARISON_MODE_SCORE_RANKING
+        and capture_result is not None
+    ):
+        return _render_flat_score_ranking_console_report(
+            metadata,
+            baseline,
+            quality,
+            delta,
+            yearly,
+            strategy_diagnostics,
+            capture_result,
+            use_color=use_color,
+        )
     if compact_console_enabled():
         return _render_compact_strategy_console_report(
             metadata,
@@ -1954,9 +2429,16 @@ def run_existing_score_ranking_capture_audit(
         encoding="utf-8",
     )
     print("\n" + _render_strategy_console_report(
-        metadata, baseline, quality, deltas, yearly, diagnostics
+        metadata,
+        baseline,
+        quality,
+        deltas,
+        yearly,
+        diagnostics,
+        capture_result=result,
     ))
-    print("\n" + render_capture_audit_console(result))
+    if not compact_console_enabled():
+        print("\n" + render_capture_audit_console(result))
     print_artifact_paths(
         (
             ("策略比較 Markdown", output_dir / "strategy_comparison.md"),
@@ -2422,9 +2904,18 @@ def run_comparison(
             quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
         )
     print("\n" + _render_strategy_console_report(
-        metadata, baseline, quality, deltas, yearly, strategy_diagnostics
+        metadata,
+        baseline,
+        quality,
+        deltas,
+        yearly,
+        strategy_diagnostics,
+        capture_result=capture_result,
     ))
-    if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
+    if (
+        comparison_mode == COMPARISON_MODE_SCORE_RANKING
+        and not compact_console_enabled()
+    ):
         print("\n" + render_capture_audit_console(capture_result))
     artifacts = [
         ("策略比較 Markdown", output_dir / "strategy_comparison.md"),
