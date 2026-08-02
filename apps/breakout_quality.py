@@ -151,7 +151,7 @@ COMMAND_DESCRIPTIONS = {
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
     "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
     "strategy-compare": "執行breakout-quality策略績效比較",
-    "strategy-adapt": "驗證Selection rolling Score-ranking策略參數適應",
+    "strategy-adapt": "驗證Selection rolling Ranking×Parameter 2×2策略適應",
 }
 
 

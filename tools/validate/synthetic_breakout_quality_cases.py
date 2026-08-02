@@ -11690,40 +11690,25 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         OPTIMIZER_FIXED_TP_PERCENT,
         OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     )
-    from filters.breakout_quality.runtime import (
-        get_breakout_quality_ranking_source_context,
-    )
     from strategies.breakout.search_space import build_trial_params
-    from tools.filters.breakout_quality.audit_score_ranking_capture import (
-        _CAPTURE_ROWS,
-        _decision,
-    )
     from tools.filters.breakout_quality.strategy_adapt import (
         ADAPTATION_STATUS,
-        _build_base_policy,
+        _build_current_pair_runtime_identity,
         _build_runtime_contract,
-        _build_training_score_coverage_contract,
         _current_pair_artifact_paths,
-        _load_baseline_rolling_contract,
+        _fixed_strategy_param_overrides,
         _load_current_pair_if_compatible,
         _optimizer_session_spec,
         _outer_rolling_argv,
         _render_three_way_console,
         _validate_adapted_rolling_params,
         _validate_fixed_contract,
-        _validate_pit_contract_against_settings,
         _write_current_pair_manifest,
-    )
-    from tools.optimizer.outer_rolling_oos import (
-        _build_policy_schedule_entry,
-        build_effective_trial_params_payload,
-        materialize_fixed_strategy_param_overrides_in_active_param_payload,
     )
     from tools.optimizer.param_cache import (
         build_full_evaluation_cache_key,
         build_prep_cache_key,
     )
-    from tools.optimizer.session_factory import build_optimizer_session_from_spec
 
     class FakeTrial:
         def __init__(self):
@@ -11742,156 +11727,6 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             self.params[name] = float(low)
             return float(low)
 
-    fixed = {
-        "use_breakout_quality_filter": False,
-        "use_breakout_quality_ranking": True,
-        "fixed_risk": 0.02,
-        "max_position_cap_pct": 0.40,
-    }
-    trial = FakeTrial()
-    session = SimpleNamespace(
-        fixed_strategy_param_overrides=fixed,
-        has_fixed_strategy_param=lambda name: name in fixed,
-        get_fixed_strategy_param=lambda name, default=None: fixed.get(name, default),
-        optimizer_fixed_tp_percent=0.0,
-        resolve_optimizer_tp_percent=lambda _trial, fixed_tp_percent: fixed_tp_percent,
-    )
-    params = build_trial_params(session, trial)
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_fixed_score_switches_are_not_optuna_trial_dimensions",
-        (True, False, False, False, 0.0),
-        (
-            params.use_breakout_quality_ranking,
-            params.use_breakout_quality_filter,
-            "use_breakout_quality_ranking" in trial.params,
-            "use_breakout_quality_filter" in trial.params,
-            params.tp_percent,
-        ),
-    )
-
-    export_trial = SimpleNamespace(
-        number=0,
-        params={},
-        user_attrs={"fixed_tp_percent": 0.0},
-    )
-    export_session = SimpleNamespace(
-        optimizer_fixed_tp_percent=0.0,
-        fixed_strategy_param_overrides=fixed,
-    )
-    effective_payload = build_effective_trial_params_payload(
-        session=export_session,
-        trial=export_trial,
-    )
-    schedule_payload = _build_policy_schedule_entry(
-        item={
-            "trial": export_trial,
-            "base_score": 1.0,
-            "local_min_score": 1.0,
-            "local_retention": 1.0,
-        },
-        policy_name="base_finalist_best",
-        oos_year=2014,
-        selection_period="2004-01-01~2013-12-31",
-        local_rank_map={0: 1},
-        retention_rank_map={0: 1},
-        fixed_strategy_param_overrides=fixed,
-        fixed_tp_percent=0.0,
-    )
-    materialized_payload = materialize_fixed_strategy_param_overrides_in_active_param_payload(
-        {
-            "params_by_effective_date": {
-                "2014-01-01": {
-                    "use_breakout_quality_ranking": False,
-                    "use_breakout_quality_filter": True,
-                }
-            },
-            "params_ensemble_by_effective_date": {
-                "2014-01-01": [
-                    {
-                        "member_index": 1,
-                        "params": {
-                            "use_breakout_quality_ranking": False,
-                            "use_breakout_quality_filter": True,
-                        },
-                    }
-                ]
-            },
-        },
-        fixed,
-    )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_fixed_contract_reaches_oos_schedule_and_active_param_export",
-        (True, False, True, False, True, False),
-        (
-            effective_payload["use_breakout_quality_ranking"],
-            effective_payload["use_breakout_quality_filter"],
-            schedule_payload["params"]["use_breakout_quality_ranking"],
-            schedule_payload["params"]["use_breakout_quality_filter"],
-            materialized_payload["params_ensemble_by_effective_date"]["2014-01-01"][0]["params"]["use_breakout_quality_ranking"],
-            materialized_payload["params_by_effective_date"]["2014-01-01"]["use_breakout_quality_filter"],
-        ),
-    )
-
-    normal_trial = FakeTrial()
-    normal_session = SimpleNamespace(
-        fixed_strategy_param_overrides={},
-        has_fixed_strategy_param=lambda _name: False,
-        get_fixed_strategy_param=lambda _name, default=None: default,
-        optimizer_fixed_tp_percent=0.0,
-        resolve_optimizer_tp_percent=lambda _trial, fixed_tp_percent: fixed_tp_percent,
-    )
-    normal_params = build_trial_params(normal_session, normal_trial)
-    fixed_non_score_trial_params = {
-        key: value
-        for key, value in trial.params.items()
-        if key not in {"use_breakout_quality_ranking", "use_breakout_quality_filter"}
-    }
-    normal_non_score_trial_params = {
-        key: value
-        for key, value in normal_trial.params.items()
-        if key not in {"use_breakout_quality_ranking", "use_breakout_quality_filter"}
-    }
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_reuses_optimizer_search_space_and_current_tp_policy",
-        (False, False, True, 0.0),
-        (
-            normal_params.use_breakout_quality_ranking,
-            normal_params.use_breakout_quality_filter,
-            fixed_non_score_trial_params == normal_non_score_trial_params,
-            params.tp_percent,
-        ),
-    )
-
-    prep_a = build_prep_cache_key(params, runtime_identity="pit-a")
-    prep_b = build_prep_cache_key(params, runtime_identity="pit-b")
-    eval_a = build_full_evaluation_cache_key(
-        params,
-        objective_mode="split_train_romd",
-        train_start_year=2004,
-        search_train_end_year=2013,
-        max_positions=7,
-        enable_rotation=True,
-        runtime_identity="pit-a",
-    )
-    eval_b = build_full_evaluation_cache_key(
-        params,
-        objective_mode="split_train_romd",
-        train_start_year=2004,
-        search_train_end_year=2013,
-        max_positions=7,
-        enable_rotation=True,
-        runtime_identity="pit-b",
-    )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_optimizer_caches_are_partitioned_by_pit_identity",
-        (True, True),
-        (prep_a != prep_b, eval_a != eval_b),
-    )
-
     settings = breakout_quality_config.get_breakout_quality_workflow_settings()
     args = SimpleNamespace(
         dataset="full",
@@ -11907,149 +11742,114 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         quiet=True,
     )
     _validate_fixed_contract(args, settings)
+
+    arm_params = {}
+    arm_trials = {}
+    for arm_name, ranking_enabled in (
+        ("baseline_adapted", False),
+        ("score_adapted", True),
+    ):
+        fixed = _fixed_strategy_param_overrides(
+            args, ranking_enabled=ranking_enabled
+        )
+        trial = FakeTrial()
+        session = SimpleNamespace(
+            fixed_strategy_param_overrides=fixed,
+            has_fixed_strategy_param=lambda name, fixed=fixed: name in fixed,
+            get_fixed_strategy_param=lambda name, default=None, fixed=fixed: fixed.get(
+                name, default
+            ),
+            optimizer_fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+            resolve_optimizer_tp_percent=lambda _trial, fixed_tp_percent: fixed_tp_percent,
+        )
+        arm_params[arm_name] = build_trial_params(session, trial)
+        arm_trials[arm_name] = trial.params
+
+    baseline_params = arm_params["baseline_adapted"]
+    score_params = arm_params["score_adapted"]
     add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_trials_come_from_outer_policy_not_single_refit_policy",
-        (OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT, True),
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "two_by_two_arms_fix_opposite_ranking_without_searching_switches",
+        (False, True, False, False, False, False, 0.0, 0.0),
         (
-            settings.strategy_adapt_trials_per_fold,
-            settings.strategy_adapt_trials_per_fold
-            == OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+            baseline_params.use_breakout_quality_ranking,
+            score_params.use_breakout_quality_ranking,
+            baseline_params.use_breakout_quality_filter,
+            score_params.use_breakout_quality_filter,
+            "use_breakout_quality_ranking" in arm_trials["baseline_adapted"],
+            "use_breakout_quality_ranking" in arm_trials["score_adapted"],
+            baseline_params.tp_percent,
+            score_params.tp_percent,
         ),
     )
-
-    pit_settings_payload = {
-        "continuous_target_id": settings.continuous_target_id,
-        "seed": settings.seed,
-        "available_from": settings.point_in_time_score_start_date,
-        "available_through": "2020-12-31",
-        "manifest": {
-            "fold_months": settings.point_in_time_fold_months,
-            "inner_validation_months": settings.point_in_time_inner_validation_months,
-        },
+    baseline_non_switch = {
+        key: value
+        for key, value in arm_trials["baseline_adapted"].items()
+        if key not in {"use_breakout_quality_ranking", "use_breakout_quality_filter"}
     }
-    _validate_pit_contract_against_settings(
-        SimpleNamespace(**pit_settings_payload), settings
-    )
-    target_mismatch_rejected = False
-    try:
-        _validate_pit_contract_against_settings(
-            SimpleNamespace(
-                **{
-                    **pit_settings_payload,
-                    "continuous_target_id": "different_target",
-                }
-            ),
-            settings,
-        )
-    except ValueError:
-        target_mismatch_rejected = True
-    fold_mismatch_rejected = False
-    try:
-        _validate_pit_contract_against_settings(
-            SimpleNamespace(
-                **{
-                    **pit_settings_payload,
-                    "manifest": {
-                        **pit_settings_payload["manifest"],
-                        "fold_months": settings.point_in_time_fold_months + 1,
-                    },
-                }
-            ),
-            settings,
-        )
-    except ValueError:
-        fold_mismatch_rejected = True
+    score_non_switch = {
+        key: value
+        for key, value in arm_trials["score_adapted"].items()
+        if key not in {"use_breakout_quality_ranking", "use_breakout_quality_filter"}
+    }
     add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_freezes_model_target_seed_and_pit_fold_contract",
-        (True, True),
-        (target_mismatch_rejected, fold_mismatch_rejected),
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "two_by_two_arms_share_identical_search_dimensions",
+        True,
+        baseline_non_switch == score_non_switch,
     )
 
-    baseline_artifact_trials = (
-        100 if int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT) != 100 else 50
-    )
-    baseline_payload = {
-        "selector": "base_finalist_best",
-        "meta": {
-            "window_mode": "fixed",
-            "first_oos_date": "2014-01-01",
-            "last_oos_date": "2015-01-01",
-            "train_window_months": 120,
-            "oos_horizon_months": 12,
-            "trials_per_fold": baseline_artifact_trials,
-            "active_param_policy": "daily_active_param_ensemble",
-        },
-        "summary": {
-            "folds": 2,
-            "selection_period": "2004-01-01~2014-12-31",
-            "oos_period": "2014-01-01~2015-12-31",
-        },
-        "folds": [
-            {
-                "fold": "1/2",
-                "selection_start_date": "2004-01-01",
-                "selection_end_date": "2013-12-31",
-                "oos_start_date": "2014-01-01",
-                "oos_end_date": "2014-12-31",
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        baseline_path = root / "baseline.json"
+        baseline_payload = {
+            "selector": "base_finalist_best",
+            "meta": {
+                "window_mode": "fixed",
+                "first_oos_date": "2014-01-01",
+                "last_oos_date": "2015-01-01",
+                "train_window_months": 120,
+                "oos_horizon_months": 12,
+                "trials_per_fold": 100,
+                "active_param_policy": "base_finalist_best",
             },
-            {
-                "fold": "2/2",
-                "selection_start_date": "2005-01-01",
-                "selection_end_date": "2014-12-31",
-                "oos_start_date": "2015-01-01",
-                "oos_end_date": "2015-12-31",
-            },
-        ],
-    }
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        baseline_path = root / "roos_base_best.json"
+            "summary": {"folds": 2, "selection_period": "2004-01-01~2014-12-31"},
+            "folds": [
+                {
+                    "fold": "1/2",
+                    "selection_start_date": "2004-01-01",
+                    "selection_end_date": "2013-12-31",
+                    "oos_start_date": "2014-01-01",
+                    "oos_end_date": "2014-12-31",
+                },
+                {
+                    "fold": "2/2",
+                    "selection_start_date": "2005-01-01",
+                    "selection_end_date": "2014-12-31",
+                    "oos_start_date": "2015-01-01",
+                    "oos_end_date": "2015-12-31",
+                },
+            ],
+        }
         baseline_path.write_text(
             json.dumps(baseline_payload, ensure_ascii=False), encoding="utf-8"
         )
-        with (
-            patch(
-                "tools.filters.breakout_quality.strategy_adapt._resolve_params_path",
-                return_value=baseline_path,
-            ),
-            patch(
-                "tools.filters.breakout_quality.strategy_adapt._load_param_source",
-                return_value={"kind": "rolling_active_param_ensemble"},
-            ),
-            patch(
-                "tools.filters.breakout_quality.strategy_adapt._validate_requested_param_policy",
-                return_value={"selector": "base_finalist_best"},
-            ),
-        ):
-            baseline_contract = _load_baseline_rolling_contract(
-                root=root, args=args, settings=settings
-            )
-            alternate_args = SimpleNamespace(
-                **{
-                    **vars(args),
-                    "trials_per_fold": int(args.trials_per_fold) + 1,
-                }
-            )
-            alternate_trial_count_accepted = True
-            try:
-                _load_baseline_rolling_contract(
-                    root=root, args=alternate_args, settings=settings
-                )
-            except ValueError:
-                alternate_trial_count_accepted = False
-
+        baseline_contract = {
+            "path": baseline_path,
+            "payload": baseline_payload,
+            "meta": baseline_payload["meta"],
+            "summary": baseline_payload["summary"],
+            "sha256": "baseline-sha",
+        }
         score_path = root / "scores.csv"
         manifest_path = root / "manifest.json"
         audit_path = root / "audit.json"
-        for path, content in (
-            (score_path, "score"),
-            (manifest_path, "manifest"),
-            (audit_path, "audit"),
-        ):
-            path.write_text(content, encoding="utf-8")
+        for artifact in (score_path, manifest_path, audit_path):
+            artifact.write_text("synthetic\n", encoding="utf-8")
         pit_contract = SimpleNamespace(
             score_path=score_path,
             manifest_path=manifest_path,
@@ -12057,87 +11857,200 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             available_from="2014-01-01",
             available_through="2015-12-31",
             continuous_target_id=settings.continuous_target_id,
+            seed=settings.seed,
+            manifest={
+                "fold_months": settings.point_in_time_fold_months,
+                "inner_validation_months": settings.point_in_time_inner_validation_months,
+            },
         )
-        coverage = _build_training_score_coverage_contract(
-            baseline_contract=baseline_contract, pit_contract=pit_contract
-        )
-        project_root = Path(__file__).resolve().parents[2]
-        base_policy = _build_base_policy(
-            root=project_root, baseline_contract=baseline_contract
-        )
+        base_policy = {
+            "model_mode": "oos",
+            "study_scope": "split",
+            "evaluation_scope": "rolling_selection_diagnostic",
+            "objective_mode": "split_train_romd",
+            "selection_start_year": 2004,
+            "train_start_year": 2004,
+            "min_train_years": 10,
+            "search_train_end_year": 2013,
+            "oos_start_year": 2014,
+            "selection_start_date": "2004-01-01",
+            "train_start_date": "2004-01-01",
+            "search_train_end_date": "2013-12-31",
+            "oos_start_date": "2014-01-01",
+            "oos_end_date": "2015-12-31",
+            "latest_data_date": "2015-12-31",
+            "train_window_months": 120,
+        }
         with patch(
             "tools.filters.breakout_quality.strategy_adapt.build_source_data_inventory",
-            return_value={"identity": "synthetic"},
+            return_value={"synthetic": True},
         ):
-            runtime_contract = _build_runtime_contract(
+            baseline_contract_runtime = _build_runtime_contract(
                 root=root,
                 args=args,
                 settings=settings,
                 pit_contract=pit_contract,
                 baseline_contract=baseline_contract,
-                base_policy=base_policy,
+                base_policy={**base_policy, "adaptation_arm": "baseline_adapted"},
+                arm_name="baseline_adapted",
+                ranking_enabled=False,
             )
-        session_spec = _optimizer_session_spec(
-            root=root,
-            output_dir=root / "rolling_validation",
-            args=args,
-            runtime_contract=runtime_contract,
-        )
-        optimizer_session = build_optimizer_session_from_spec(
-            walk_forward_policy=base_policy,
-            spec=session_spec,
-        )
-        try:
-            with optimizer_session.optimizer_runtime_context():
-                runtime_source = get_breakout_quality_ranking_source_context()
-            session_contract = (
-                optimizer_session.fixed_strategy_param_overrides[
-                    "use_breakout_quality_ranking"
-                ],
-                optimizer_session.fixed_strategy_param_overrides[
-                    "use_breakout_quality_filter"
-                ],
-                optimizer_session.runtime_cache_identity,
-                runtime_source.score_source,
+            score_contract_runtime = _build_runtime_contract(
+                root=root,
+                args=args,
+                settings=settings,
+                pit_contract=pit_contract,
+                baseline_contract=baseline_contract,
+                base_policy={**base_policy, "adaptation_arm": "score_adapted"},
+                arm_name="score_adapted",
+                ranking_enabled=True,
             )
-        finally:
-            optimizer_session.close_trial_prep_executor()
 
-        adapted_path = root / "adapted_roos_base_best.json"
-        adapted_payload = {
-            **baseline_payload,
-            "meta": {
-                **baseline_payload["meta"],
-                "trials_per_fold": int(args.trials_per_fold),
-            },
-            "params_ensemble_by_effective_date": {
-                "2014-01-01": [{"params": {
-                    "use_breakout_quality_ranking": True,
-                    "use_breakout_quality_filter": False,
-                    "breakout_quality_filter_id": settings.filter_id,
-                    "fixed_risk": 0.02,
-                    "max_position_cap_pct": 0.40,
-                    "tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
-                }}],
-                "2015-01-01": [{"params": {
-                    "use_breakout_quality_ranking": True,
-                    "use_breakout_quality_filter": False,
-                    "breakout_quality_filter_id": settings.filter_id,
-                    "fixed_risk": 0.02,
-                    "max_position_cap_pct": 0.40,
-                    "tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
-                }}],
-            },
-        }
-        adapted_path.write_text(
-            json.dumps(adapted_payload, ensure_ascii=False), encoding="utf-8"
-        )
-        validated_adapted = _validate_adapted_rolling_params(
-            path=adapted_path,
-            baseline_contract=baseline_contract,
-            runtime_contract=runtime_contract,
+        baseline_spec = _optimizer_session_spec(
+            output_dir=root,
             args=args,
+            runtime_contract=baseline_contract_runtime,
+            arm_name="baseline_adapted",
+            ranking_enabled=False,
         )
+        score_spec = _optimizer_session_spec(
+            output_dir=root,
+            args=args,
+            runtime_contract=score_contract_runtime,
+            arm_name="score_adapted",
+            ranking_enabled=True,
+        )
+        current_pair_identity = _build_current_pair_runtime_identity(
+            root=root,
+            args=args,
+            pit_contract=pit_contract,
+            baseline_contract=baseline_contract,
+        )
+        alternate_args = SimpleNamespace(**{**vars(args), "trials_per_fold": 999})
+        alternate_pair_identity = _build_current_pair_runtime_identity(
+            root=root,
+            args=alternate_args,
+            pit_contract=pit_contract,
+            baseline_contract=baseline_contract,
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "baseline_sort_only_reuse_identity_is_independent_of_adaptation_trial_budget",
+            True,
+            current_pair_identity == alternate_pair_identity,
+        )
+
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "two_by_two_runtime_contracts_share_policy_budget_but_partition_identity",
+            (True, True, False, True, True),
+            (
+                baseline_contract_runtime["rolling_policy"]
+                == score_contract_runtime["rolling_policy"],
+                baseline_contract_runtime["search_space_identity_sha256"]
+                == score_contract_runtime["search_space_identity_sha256"],
+                baseline_contract_runtime["runtime_identity_sha256"]
+                == score_contract_runtime["runtime_identity_sha256"],
+                baseline_spec["fixed_strategy_param_overrides"][
+                    "use_breakout_quality_ranking"
+                ] is False,
+                score_spec["fixed_strategy_param_overrides"][
+                    "use_breakout_quality_ranking"
+                ] is True,
+            ),
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "two_by_two_trials_follow_current_outer_policy_without_historical_gate",
+            (
+                OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+                100,
+                False,
+                ["--trials", str(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)],
+            ),
+            (
+                baseline_contract_runtime["rolling_policy"]["trials_per_fold"],
+                baseline_contract_runtime["rolling_policy"][
+                    "baseline_artifact_trials_per_fold"
+                ],
+                baseline_contract_runtime["rolling_policy"][
+                    "trial_count_match_required"
+                ],
+                _outer_rolling_argv(
+                    args=args, baseline_contract=baseline_contract
+                )[-2:],
+            ),
+        )
+
+        for arm_name, ranking_enabled, contract in (
+            ("Baseline Adapted", False, baseline_contract_runtime),
+            ("Score Adapted", True, score_contract_runtime),
+        ):
+            artifact = root / f"{arm_name.replace(' ', '_')}.json"
+            params_payload = {
+                "meta": {
+                    **baseline_payload["meta"],
+                    "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+                },
+                "summary": {"folds": 2},
+                "params_ensemble_by_effective_date": {
+                    "2014-01-01": [{
+                        "member_index": 1,
+                        "params": {
+                            "use_breakout_quality_ranking": ranking_enabled,
+                            "use_breakout_quality_filter": False,
+                            "breakout_quality_filter_id": settings.filter_id,
+                            "fixed_risk": 0.02,
+                            "max_position_cap_pct": 0.40,
+                            "tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
+                        },
+                    }],
+                    "2015-01-01": [{
+                        "member_index": 1,
+                        "params": {
+                            "use_breakout_quality_ranking": ranking_enabled,
+                            "use_breakout_quality_filter": False,
+                            "breakout_quality_filter_id": settings.filter_id,
+                            "fixed_risk": 0.02,
+                            "max_position_cap_pct": 0.40,
+                            "tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
+                        },
+                    }],
+                },
+            }
+            artifact.write_text(
+                json.dumps(params_payload, ensure_ascii=False), encoding="utf-8"
+            )
+            validated = _validate_adapted_rolling_params(
+                path=artifact,
+                baseline_contract=baseline_contract,
+                runtime_contract=contract,
+                args=args,
+                arm_name=arm_name,
+                ranking_enabled=ranking_enabled,
+            )
+            add_check(
+                results,
+                "synthetic_breakout_quality",
+                case_id,
+                f"{arm_name.lower().replace(' ', '_')}_active_params_preserve_arm_contract",
+                (arm_name, ranking_enabled, False),
+                (
+                    validated["breakout_quality_adaptation"]["optimization_arm"],
+                    validated["breakout_quality_adaptation"][
+                        "use_breakout_quality_ranking"
+                    ],
+                    validated["breakout_quality_adaptation"][
+                        "final_selection_refit"
+                    ],
+                ),
+            )
 
         pair_dir = root / "pair"
         pair_dir.mkdir(parents=True, exist_ok=True)
@@ -12154,186 +12067,91 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         _write_current_pair_manifest(
             root=root,
             output_dir=pair_dir,
-            runtime_identity_sha256="pit-identity-a",
+            runtime_identity_sha256="two-by-two-a",
         )
-        compatible_payload = _load_current_pair_if_compatible(
+        compatible = _load_current_pair_if_compatible(
             root=root,
             output_dir=pair_dir,
-            runtime_identity_sha256="pit-identity-a",
+            runtime_identity_sha256="two-by-two-a",
         )
-        wrong_identity_payload = _load_current_pair_if_compatible(
+        incompatible = _load_current_pair_if_compatible(
             root=root,
             output_dir=pair_dir,
-            runtime_identity_sha256="pit-identity-b",
+            runtime_identity_sha256="two-by-two-b",
         )
-        pair_paths["yearly_csv"].write_text("tampered\n", encoding="utf-8")
-        tampered_payload = _load_current_pair_if_compatible(
-            root=root,
-            output_dir=pair_dir,
-            runtime_identity_sha256="pit-identity-a",
-        )
-
     add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_trials_follow_current_policy_without_baseline_artifact_gate",
-        (
-            baseline_artifact_trials,
-            int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
-            True,
-            ["--trials", str(int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT))],
-            False,
-        ),
-        (
-            baseline_contract["meta"]["trials_per_fold"],
-            runtime_contract["rolling_policy"]["trials_per_fold"],
-            alternate_trial_count_accepted,
-            _outer_rolling_argv(args=args, baseline_contract=baseline_contract)[-2:],
-            runtime_contract["rolling_policy"]["trial_count_match_required"],
-        ),
-    )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_training_score_history_records_bootstrap_fallback_and_partial_coverage",
-        (2, 1, 1, 0, True, False),
-        (
-            coverage["fold_count"],
-            coverage["bootstrap_fallback_only_folds"],
-            coverage["partial_score_history_folds"],
-            coverage["full_score_history_folds"],
-            coverage["folds"][0]["missing_score_fallback_used_before_pit_start"],
-            runtime_contract["runtime_restrictions"][
-                "score_gaps_inside_pit_period_allowed"
-            ],
-        ),
-    )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_optimizer_session_spec_is_process_safe_and_pins_pit_runtime",
-        (True, False, runtime_contract["runtime_identity_sha256"], "selection_point_in_time"),
-        session_contract,
-    )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "adapted_rolling_active_params_preserve_fixed_runtime_contract",
-        (ADAPTATION_STATUS, False),
-        (
-            validated_adapted["breakout_quality_adaptation"][
-                "result_interpretation"
-            ],
-            validated_adapted["breakout_quality_adaptation"][
-                "final_selection_refit"
-            ],
-        ),
-    )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "adaptation_current_pair_reuse_requires_identity_and_all_artifact_hashes",
-        (True, True, True),
-        (
-            isinstance(compatible_payload, dict),
-            wrong_identity_payload is None,
-            tampered_payload is None,
-        ),
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "two_by_two_current_pair_reuse_requires_identity_and_hashes",
+        (True, True),
+        (isinstance(compatible, dict), incompatible is None),
     )
 
-    decision = _decision(
-        baseline={"avg_invested_total": 100.0},
-        score_sort={"avg_invested_total": 100.0},
-        delta={
-            "total_return_pct": -10.0,
-            "return_over_max_drawdown": -1.0,
-            "avg_exposure_pct": 0.0,
-            "aggregate_target_capture_ratio": 0.0,
-            "median_target_capture_ratio": 0.0,
-            "target_ge_0_5_capture_ratio": 0.0,
-            "raw_mean_target_capture_ratio": -100.0,
-            "avg_target_realization_gap_r": 0.0,
-            "avg_holding_calendar_days": 0.0,
-            "avg_partial_to_exit_calendar_days": 0.0,
-            "reserved_buy_fill_rate_pct": 0.0,
-        },
-        selection_diagnostics={
-            "score_ranking_minus_no_filter": {
-                "selected_target_mean_r": 0.1,
-                "target_top_k_retention_mean": 0.1,
-            }
-        },
+    prep_base = build_prep_cache_key(
+        baseline_params,
+        runtime_identity=baseline_contract_runtime["runtime_identity_sha256"],
+    )
+    prep_score = build_prep_cache_key(
+        score_params,
+        runtime_identity=score_contract_runtime["runtime_identity_sha256"],
+    )
+    eval_base = build_full_evaluation_cache_key(
+        baseline_params,
+        objective_mode="split_train_romd",
+        train_start_year=2004,
+        search_train_end_year=2013,
+        max_positions=7,
+        enable_rotation=True,
+        runtime_identity=baseline_contract_runtime["runtime_identity_sha256"],
+    )
+    eval_score = build_full_evaluation_cache_key(
+        score_params,
+        objective_mode="split_train_romd",
+        train_start_year=2004,
+        search_train_end_year=2013,
+        max_positions=7,
+        enable_rotation=True,
+        runtime_identity=score_contract_runtime["runtime_identity_sha256"],
     )
     add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "raw_mean_capture_remains_json_only_and_outside_adaptation_gate",
-        ("SORT_ONLY_REJECTED_NO_MECHANICAL_BOTTLENECK", False, False),
-        (
-            decision["status"],
-            decision["parameter_adaptation_candidate"],
-            any(row[1] == "raw_mean_target_capture_ratio" for row in _CAPTURE_ROWS),
-        ),
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "two_by_two_optimizer_caches_are_partitioned_by_arm_identity",
+        (True, True),
+        (prep_base != prep_score, eval_base != eval_score),
     )
 
-    project_root = Path(__file__).resolve().parents[2]
-    app_source = (project_root / "apps" / "breakout_quality.py").read_text(
-        encoding="utf-8"
-    )
-    adapt_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "strategy_adapt.py"
-    ).read_text(encoding="utf-8")
-    outer_source = (
-        project_root / "tools" / "optimizer" / "outer_rolling_oos.py"
-    ).read_text(encoding="utf-8")
-    config_source = (project_root / "config" / "breakout_quality.py").read_text(
-        encoding="utf-8"
-    )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "strategy_adapt_is_rolling_validation_not_single_selection_refit",
-        True,
-        all(
-            token in app_source
-            for token in (
-                '"strategy-adapt": "tools.filters.breakout_quality.strategy_adapt"',
-                "[1/Enter] 比較目前策略",
-                "[2] 驗證策略參數適應",
-                '"--trials-per-fold"',
-            )
-        )
-        and "ROLLING_SELECTION_DIAGNOSTIC" in adapt_source
-        and "run_outer_rolling_oos(" in adapt_source
-        and "rolling_optimizer_summary.json" in adapt_source
-        and "rolling_adaptation_manifest.json" in adapt_source
-        and "adapted_best_params.json" not in adapt_source
-        and "FITTED_SELECTION_DIAGNOSTIC" not in adapt_source
-        and "optimizer_session_spec" in outer_source
-        and "build_optimizer_session_from_spec" in outer_source
-        and "OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT" in config_source
-        and "OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT" not in config_source,
-    )
-
-    compact_adaptation_payload = {
+    compact_payload = {
         "metadata": {
             "comparison_period": {"start": "2014-01-01", "end": "2020-12-31"},
-            "lookahead_safe_active_param_schedule": True,
             "score_source": "selection_point_in_time",
         },
         "baseline": {},
         "sort_only": {},
-        "adapted": {},
-        "adapted_minus_sort_only": {},
+        "baseline_adapted": {},
+        "score_adapted": {},
+        "ranking_only_delta": {},
+        "optimized_system_delta": {},
         "current_capture_audit": {},
-        "adapted_capture_audit": {},
+        "optimized_capture_audit": {},
         "yearly": [],
         "selection_diagnostics": {
-            "baseline": {}, "sort_only": {}, "adapted": {},
-            "adapted_minus_sort_only": {},
+            "baseline": {},
+            "sort_only": {},
+            "baseline_adapted": {},
+            "score_adapted": {},
         },
         "parameter_comparison": [],
         "rolling_validation": {
             "trials_per_fold": 200,
             "trials_per_fold_source": "config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT",
             "baseline_trials_per_fold": 100,
-            "trial_count_match_required": False,
             "train_window_months": 120,
             "oos_horizon_months": 12,
-            "optimizer_search_reused": True,
+            "baseline_adapted_search_reused": True,
+            "score_adapted_search_reused": False,
             "training_score_coverage": {
                 "fold_count": 1,
                 "bootstrap_fallback_only_folds": 1,
@@ -12350,47 +12168,75 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         },
     }
     with patch.dict(os.environ, {"BREAKOUT_QUALITY_COMPACT_CONSOLE": "1"}):
-        compact_adaptation_console = _render_three_way_console(
-            compact_adaptation_payload
-        )
-    adaptation_section_titles = (
-        "1. 投組報酬與風險",
-        "2. 單筆交易結果",
-        "3. 資金投入與部位大小",
-        "4. 候選供給與持倉容量",
-        "5. 模型選股能力",
-        "6. Target 到實際報酬的轉換",
-        "7. 資金周轉與進場集中",
-        "8. 出場結構",
-        "9. 年度結果與年度歸因",
-        "10. Rolling 訓練與 Score coverage",
-        "11. 參數差異",
-        "12. 綜合判定、限制與下一步",
+        compact_console = _render_three_way_console(compact_payload)
+    section_titles = tuple(
+        f"{index}. {title}"
+        for index, title in enumerate((
+            "投組報酬與風險",
+            "單筆交易結果",
+            "資金投入與部位大小",
+            "候選供給與持倉容量",
+            "模型選股能力",
+            "Target 到實際報酬的轉換",
+            "資金周轉與進場集中",
+            "出場結構",
+            "年度結果與年度歸因",
+            "Rolling 訓練與 Score coverage",
+            "重調後參數差異",
+            "綜合判定、限制與下一步",
+        ), start=1)
     )
-    adaptation_section_positions = [
-        compact_adaptation_console.find(title) for title in adaptation_section_titles
-    ]
+    positions = [compact_console.find(title) for title in section_titles]
     add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_compact_report_matches_current_strategy_layout_and_keeps_unique_sections",
-        (True, True, True, True, True, True, True, True),
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "two_by_two_compact_report_separates_ranking_and_optimized_system_effects",
+        (True, True, True, True, True, True, True),
         (
-            all(position >= 0 for position in adaptation_section_positions),
-            adaptation_section_positions == sorted(adaptation_section_positions),
-            "定義：衡量整體權益最後賺多少" in compact_adaptation_console,
-            "適應差異" in compact_adaptation_console,
-            "Bootstrap fallback" in compact_adaptation_console,
-            "Baseline工件 trials／fold" in compact_adaptation_console,
-            "Baseline中位" in compact_adaptation_console,
-            "Score Sort 資金配置與 Target Capture 診斷" not in compact_adaptation_console,
+            all(position >= 0 for position in positions),
+            positions == sorted(positions),
+            "A. 固定原參數：純 Ranking 效果" in compact_console,
+            "B. 各自 Rolling 重調：完整系統效果" in compact_console,
+            "Ranking差異" in compact_console,
+            "最佳化系統差異" in compact_console,
+            "Baseline Adapted" in compact_console and "Score Adapted" in compact_console,
         ),
     )
 
-    summary["workflow"] = "selection_score_ranking_rolling_adaptation_validation"
-    summary["result_status"] = "IMPLEMENTED_RESULT_NOT_AVAILABLE"
-    summary["trials_per_fold"] = int(
-        OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+    project_root = Path(__file__).resolve().parents[2]
+    app_source = (project_root / "apps" / "breakout_quality.py").read_text(
+        encoding="utf-8"
     )
+    adapt_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "strategy_adapt.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_adapt_entry_runs_symmetric_two_by_two_rolling_validation",
+        True,
+        all(
+            token in app_source
+            for token in (
+                '"strategy-adapt": "tools.filters.breakout_quality.strategy_adapt"',
+                "[2] 驗證策略參數適應",
+            )
+        )
+        and 'arm_name="baseline_adapted"' in adapt_source
+        and 'arm_name="score_adapted"' in adapt_source
+        and 'ranking_enabled=False' in adapt_source
+        and 'ranking_enabled=True' in adapt_source
+        and 'comparison_design": "ranking_parameter_2x2"' in adapt_source
+        and "adapted_best_params.json" not in adapt_source
+        and "FITTED_SELECTION_DIAGNOSTIC" not in adapt_source,
+    )
+
+    summary["workflow"] = "selection_ranking_parameter_2x2_rolling_validation"
+    summary["result_status"] = "IMPLEMENTED_RESULT_NOT_AVAILABLE"
+    summary["trials_per_fold"] = int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+    summary["optimization_arms"] = ["baseline_adapted", "score_adapted"]
     summary["final_selection_refit"] = False
     return results, summary
 

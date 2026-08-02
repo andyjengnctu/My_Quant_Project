@@ -1992,3 +1992,23 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 結果邊界 | 若目前policy為200且既有Adapted搜尋為100，runtime identity不同，應重跑7 folds × 200 trials；Baseline／Sort Only仍使用既有歷史active params。此結果可比較策略效果，但報表會明確顯示Baseline工件與Adapted的trial預算不同，不再宣稱trial數相等 |
 | 驗證 | T283使用Baseline artifact trial數故意不同於目前training policy的synthetic案例，確認Baseline contract可載入、outer rolling argv採目前requested值、runtime保存來源與舊artifact值、Adapted active-param只接受本次requested trials，且compact report顯示兩者而不作硬性gate。正式`apps/test_suite.py`依專案規則由使用者本機執行 |
 | 下一步 | 套用patch後先執行`python apps/test_suite.py`；通過後執行主選單`[2] → [2] 驗證策略參數適應`。目前training policy為200時會執行200 trials／fold，不再因Baseline歷史工件為100而中止 |
+
+### 3.94 Ranking × Parameter 2×2 Rolling適應驗證（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`；完成2×2對稱rolling實作，尚未執行兩套optimizer與四組Selection replay，不得預判哪種ranking較好 |
+| 程式基準 | `test-branch-1_20260802_225828_9750ad1(1).zip`；SHA256 `c9acc89e37cfbed4fbc8c5c16d27656e8d69ecd47fd3c682b870bf66a7099e27` |
+| 問題 | 原三組Baseline／Sort Only／Adapted Rolling中，Adapted Rolling同時改變ranking與active params；`Adapted − Baseline`及`Adapted − Sort Only`均無法乾淨判斷ranking優劣，因改善／惡化可能只是重新最佳化造成 |
+| 新比較矩陣 | Baseline＝原ranking＋原歷史params；Sort Only＝Score ranking＋同一原歷史params；Baseline Adapted＝原ranking＋重新rolling最佳化params；Score Adapted＝Score ranking＋重新rolling最佳化params |
+| Ranking-only判定 | 固定原歷史params，只比較`Sort Only − Baseline`；此差異仍是ranking本身的純控制實驗 |
+| Optimized-system判定 | Baseline Adapted與Score Adapted各自執行optimizer，但必須共用相同fold schedule、trials／fold來源與值、search space、objective、Seed、sampler、TP、fixed risk、position cap、max positions及rotation；唯一固定差異為ranking False／True。以`Score Adapted − Baseline Adapted`判斷兩套完整最佳化系統 |
+| 其他差異用途 | `Baseline Adapted − Baseline`只代表原ranking refit效果；`Score Adapted − Sort Only`只代表Score ranking條件下的參數重調效果；兩者不得代替ranking判定 |
+| 工件隔離 | 新增`baseline_adapted/`與`score_adapted/`兩個獨立arm，各自保存preflight、runtime identity、optimizer runtime、active params與summary；prep／evaluation cache及study不得跨arm共用。Baseline／Sort Only read-only工件仍隔離在`baseline_sort_only/` |
+| 四組回放 | 兩套重調active params完成後，分別以原ranking與Score ranking回放，輸出四組績效、年度、Selection Target、capital／capture、active-param分布與兩種對稱差異；optimized capture audit固定比較Baseline Adapted與Score Adapted |
+| Console | 沿用既有前九個共同區塊；每區先顯示「固定原參數：純Ranking效果」，再顯示「各自Rolling重調：完整系統效果」。第10區保留fold／trials／PIT Score coverage與兩臂search reuse，第11區比較兩個重調arm的參數中位數／範圍，第12區分別輸出Ranking-only與Optimized-system判定 |
+| Trials契約 | 兩個重調arm的trials／fold都從目前`OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`或同一CLI override取得，彼此必須相同；Baseline歷史工件舊trial數仍只作追溯，不作hard gate |
+| 固定邊界 | 不改Dataset、Label、continuous ranker、PIT Scores／folds、Seed 42、search space、objective、TP、risk／position限制、Score Sort規則、Future Target post-replay only或Selection／OOS邊界；不執行完整Selection final refit或正式OOS |
+| 驗證 | T283改為驗證兩個相反ranking固定arm、共同非ranking搜尋維度與預算、runtime/cache identity分離、兩套active-param固定契約、四組報表、兩種對稱判讀與舊Baseline／Sort工件hash重用。正式`apps/test_suite.py`依規定由使用者本機執行 |
+| 下一步 | 套用patch後先跑`python apps/test_suite.py`；通過後執行主選單`[2] → [2] 驗證策略參數適應`。首次執行需完成Baseline Adapted與Score Adapted兩套rolling optimizer；結果產生前維持`RESULT_NOT_AVAILABLE` |
+

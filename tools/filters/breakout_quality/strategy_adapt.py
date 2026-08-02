@@ -102,8 +102,8 @@ def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             "沿用Baseline rolling fold schedule，並由目前training policy提供"
-            "trials／fold，固定Selection PIT Score Sort執行策略參數適應，"
-            "輸出Baseline／Sort Only／Adapted Rolling三組Selection診斷。"
+            "trials／fold，分別固定原ranking與Selection PIT Score ranking執行"
+            "對稱rolling參數重調，輸出四組2×2 Selection診斷。"
         )
     )
     parser.add_argument("--dataset", choices=("reduced", "full"), default=settings.strategy_dataset)
@@ -414,7 +414,7 @@ def _build_training_score_coverage_contract(
             raise ValueError(f"Baseline rolling fold日期不合法: fold={index}")
         if oos_start < score_start or oos_end > score_end:
             raise ValueError(
-                "Adapted Rolling的每個OOS replay都必須完整位於Selection PIT期間："
+                "Score Adapted的每個OOS replay都必須完整位於Selection PIT期間："
                 f"fold={index}, oos={oos_start.date()}~{oos_end.date()}, "
                 f"pit={score_start.date()}~{score_end.date()}"
             )
@@ -520,7 +520,15 @@ def _build_base_policy(*, root: Path, baseline_contract: dict[str, Any]) -> dict
 
 
 def _build_runtime_contract(
-    *, root: Path, args, settings, pit_contract, baseline_contract, base_policy
+    *,
+    root: Path,
+    args,
+    settings,
+    pit_contract,
+    baseline_contract,
+    base_policy,
+    arm_name: str,
+    ranking_enabled: bool,
 ) -> dict[str, Any]:
     score_hash = compute_file_sha256(pit_contract.score_path)
     manifest_hash = compute_file_sha256(pit_contract.manifest_path)
@@ -536,7 +544,8 @@ def _build_runtime_contract(
     )
     contract = {
         "schema_version": SCHEMA_VERSION,
-        "adaptation_mode": "rolling_selection_validation",
+        "adaptation_mode": "rolling_selection_2x2_validation",
+        "optimization_arm": str(arm_name),
         "result_interpretation": ADAPTATION_STATUS,
         "dataset": str(args.dataset),
         "dataset_identity": build_source_data_inventory(root, args.dataset),
@@ -544,7 +553,9 @@ def _build_runtime_contract(
             "start": str(pit_contract.available_from),
             "end": str(pit_contract.available_through),
         },
-        "rolling_training_period": str(baseline_contract["summary"].get("selection_period") or ""),
+        "rolling_training_period": str(
+            baseline_contract["summary"].get("selection_period") or ""
+        ),
         "training_score_coverage": training_score_coverage,
         "rolling_policy": {
             "window_mode": str(baseline_meta["window_mode"]),
@@ -564,26 +575,38 @@ def _build_runtime_contract(
             ),
             "trial_count_match_required": False,
             "folds": int(baseline_contract["summary"].get("folds", 0) or 0),
-            "active_param_policy": str(baseline_meta.get("active_param_policy") or ""),
+            "active_param_policy": str(
+                baseline_meta.get("active_param_policy") or ""
+            ),
         },
         "baseline_active_params": {
-            "path": project_relative_display_path(baseline_contract["path"], project_root=root),
+            "path": project_relative_display_path(
+                baseline_contract["path"], project_root=root
+            ),
             "sha256": str(baseline_contract["sha256"]),
             "selector": str(baseline_contract["payload"].get("selector") or ""),
         },
         "optimizer_policy": "base-finalist-best",
         "objective": "split_train_romd",
         "optimizer_effective_policy": effective_policy,
-        "search_space_identity_sha256": _canonical_json_sha256(search_space_snapshot),
+        "search_space_identity_sha256": _canonical_json_sha256(
+            search_space_snapshot
+        ),
         "search_space_snapshot": search_space_snapshot,
         "seed": int(settings.seed),
         "pit_identity": {
             "score_csv_sha256": score_hash,
             "manifest_sha256": manifest_hash,
             "audit_sha256": audit_hash,
-            "score_path": project_relative_display_path(pit_contract.score_path, project_root=root),
-            "manifest_path": project_relative_display_path(pit_contract.manifest_path, project_root=root),
-            "audit_path": project_relative_display_path(pit_contract.audit_path, project_root=root),
+            "score_path": project_relative_display_path(
+                pit_contract.score_path, project_root=root
+            ),
+            "manifest_path": project_relative_display_path(
+                pit_contract.manifest_path, project_root=root
+            ),
+            "audit_path": project_relative_display_path(
+                pit_contract.audit_path, project_root=root
+            ),
         },
         "model_identity": {
             "filter_id": str(args.filter_id),
@@ -591,10 +614,14 @@ def _build_runtime_contract(
             "experiment_profile": str(args.experiment_profile),
             "continuous_target_id": str(pit_contract.continuous_target_id),
         },
-        "ranking_mode": "breakout_quality_score_desc",
+        "ranking_mode": (
+            "breakout_quality_score_desc"
+            if bool(ranking_enabled)
+            else "existing_buy_sort"
+        ),
         "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
         "fixed_runtime": {
-            "use_breakout_quality_ranking": True,
+            "use_breakout_quality_ranking": bool(ranking_enabled),
             "use_breakout_quality_filter": False,
             "fixed_risk": float(args.fixed_risk),
             "max_position_cap_pct": float(args.max_position_cap_pct),
@@ -619,6 +646,40 @@ def _build_runtime_contract(
     }
     contract["runtime_identity_sha256"] = _canonical_json_sha256(contract)
     return contract
+
+
+def _build_current_pair_runtime_identity(
+    *, root: Path, args, pit_contract, baseline_contract
+) -> str:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "comparison_design": "selection_point_in_time_active_param_replay",
+        "dataset": str(args.dataset),
+        "baseline_active_params_sha256": str(baseline_contract["sha256"]),
+        "pit_identity": {
+            "score_csv_sha256": compute_file_sha256(pit_contract.score_path),
+            "manifest_sha256": compute_file_sha256(pit_contract.manifest_path),
+            "audit_sha256": compute_file_sha256(pit_contract.audit_path),
+        },
+        "model_identity": {
+            "filter_id": str(args.filter_id),
+            "architecture": str(args.model_architecture),
+            "experiment_profile": str(args.experiment_profile),
+            "continuous_target_id": str(pit_contract.continuous_target_id),
+        },
+        "execution": {
+            "max_positions": int(args.max_positions),
+            "rotation": str(args.rotation) == "on",
+            "fixed_risk": float(args.fixed_risk),
+            "max_position_cap_pct": float(args.max_position_cap_pct),
+            "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        },
+        "comparison_period": {
+            "start": str(pit_contract.available_from),
+            "end": str(pit_contract.available_through),
+        },
+    }
+    return _canonical_json_sha256(payload)
 
 
 def _canonical_execution_argv(args) -> list[str]:
@@ -653,10 +714,12 @@ def _outer_rolling_argv(*, args, baseline_contract: dict[str, Any]) -> list[str]
     ]
 
 
-def _fixed_strategy_param_overrides(args) -> dict[str, Any]:
+def _fixed_strategy_param_overrides(
+    args, *, ranking_enabled: bool
+) -> dict[str, Any]:
     return {
         "use_breakout_quality_filter": False,
-        "use_breakout_quality_ranking": True,
+        "use_breakout_quality_ranking": bool(ranking_enabled),
         "breakout_quality_filter_id": str(args.filter_id),
         "fixed_risk": float(args.fixed_risk),
         "max_position_cap_pct": float(args.max_position_cap_pct),
@@ -719,8 +782,8 @@ def _materialize_adapted_param_artifacts(
     fixed_strategy_param_overrides: dict[str, Any],
 ) -> list[Path]:
     updated_paths: list[Path] = []
-    for path in sorted(adapted_models_dir.glob("*.json")):
-        payload = _load_json_mapping(path)
+    for artifact_path in sorted(adapted_models_dir.glob("*.json")):
+        payload = _load_json_mapping(artifact_path)
         if payload is None:
             continue
         if not any(
@@ -737,15 +800,26 @@ def _materialize_adapted_param_artifacts(
             payload,
             fixed_strategy_param_overrides,
         )
-        _write_json(path, materialized)
-        updated_paths.append(path)
+        _write_json(artifact_path, materialized)
+        updated_paths.append(artifact_path)
     return updated_paths
 
 
-def _optimizer_session_spec(*, root: Path, output_dir: Path, args, runtime_contract) -> dict[str, Any]:
+def _optimizer_session_spec(
+    *,
+    output_dir: Path,
+    args,
+    runtime_contract,
+    arm_name: str,
+    ranking_enabled: bool,
+) -> dict[str, Any]:
     return {
-        "output_dir": str((output_dir / "optimizer_runtime" / "sessions").resolve()),
-        "fixed_strategy_param_overrides": _fixed_strategy_param_overrides(args),
+        "output_dir": str(
+            (output_dir / arm_name / "optimizer_runtime" / "sessions").resolve()
+        ),
+        "fixed_strategy_param_overrides": _fixed_strategy_param_overrides(
+            args, ranking_enabled=ranking_enabled
+        ),
         "runtime_context_spec": {
             "module": "filters.breakout_quality.runtime",
             "callable": "breakout_quality_ranking_source_context",
@@ -763,42 +837,54 @@ def _optimizer_session_spec(*, root: Path, output_dir: Path, args, runtime_contr
 
 
 def _validate_adapted_rolling_params(
-    *, path: Path, baseline_contract: dict[str, Any], runtime_contract: dict[str, Any], args
+    *,
+    path: Path,
+    baseline_contract: dict[str, Any],
+    runtime_contract: dict[str, Any],
+    args,
+    arm_name: str,
+    ranking_enabled: bool,
 ) -> dict[str, Any]:
     if not path.is_file():
-        raise FileNotFoundError(f"rolling optimizer未產生base-finalist-best工件: {path}")
+        raise FileNotFoundError(
+            f"{arm_name} rolling optimizer未產生base-finalist-best工件: {path}"
+        )
     payload = json.loads(path.read_text(encoding="utf-8"))
     meta = dict(payload.get("meta") or {})
     baseline_meta = dict(baseline_contract["meta"])
     for key in (
-        "first_oos_date", "last_oos_date", "train_window_months",
+        "first_oos_date",
+        "last_oos_date",
+        "train_window_months",
         "oos_horizon_months",
     ):
         if str(meta.get(key)) != str(baseline_meta.get(key)):
             raise ValueError(
-                "Adapted Rolling與Baseline fold schedule不一致："
+                f"{arm_name}與Baseline fold schedule不一致："
                 f"{key}: adapted={meta.get(key)!r}, baseline={baseline_meta.get(key)!r}"
             )
     if int(meta.get("trials_per_fold", 0) or 0) != int(args.trials_per_fold):
         raise ValueError(
-            "Adapted Rolling工件未採用目前requested trials／fold："
+            f"{arm_name}工件未採用目前requested trials／fold："
             f"artifact={meta.get('trials_per_fold')!r}, "
             f"requested={int(args.trials_per_fold)}"
         )
     if int(dict(payload.get("summary") or {}).get("folds", 0) or 0) != int(
         baseline_contract["summary"].get("folds", 0) or 0
     ):
-        raise ValueError("Adapted Rolling fold數與Baseline不一致")
+        raise ValueError(f"{arm_name} fold數與Baseline不一致")
     members = []
-    for effective_date, raw_members in dict(payload.get("params_ensemble_by_effective_date") or {}).items():
+    for effective_date, raw_members in dict(
+        payload.get("params_ensemble_by_effective_date") or {}
+    ).items():
         for raw_member in list(raw_members or []):
             params = dict((raw_member or {}).get("params") or {})
             members.append((str(effective_date), params))
     if not members:
-        raise ValueError("Adapted Rolling工件沒有active-param members")
+        raise ValueError(f"{arm_name}工件沒有active-param members")
     for effective_date, params in members:
         expected = {
-            "use_breakout_quality_ranking": True,
+            "use_breakout_quality_ranking": bool(ranking_enabled),
             "use_breakout_quality_filter": False,
             "breakout_quality_filter_id": str(args.filter_id),
             "fixed_risk": float(args.fixed_risk),
@@ -808,24 +894,170 @@ def _validate_adapted_rolling_params(
         for key, expected_value in expected.items():
             actual = params.get(key)
             if isinstance(expected_value, float):
-                matched = actual is not None and math.isclose(float(actual), expected_value, rel_tol=0.0, abs_tol=1e-12)
+                matched = actual is not None and math.isclose(
+                    float(actual), expected_value, rel_tol=0.0, abs_tol=1e-12
+                )
             else:
                 matched = actual == expected_value
             if not matched:
                 raise ValueError(
-                    "Adapted Rolling固定契約未落入active params："
-                    f"effective_date={effective_date}, {key}={actual!r}, expected={expected_value!r}"
+                    f"{arm_name}固定契約未落入active params："
+                    f"effective_date={effective_date}, {key}={actual!r}, "
+                    f"expected={expected_value!r}"
                 )
     payload["breakout_quality_adaptation"] = {
-        "mode": "rolling_selection_validation",
+        "mode": "rolling_selection_2x2_validation",
+        "optimization_arm": str(arm_name),
         "result_interpretation": ADAPTATION_STATUS,
         "runtime_identity_sha256": str(runtime_contract["runtime_identity_sha256"]),
         "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        "use_breakout_quality_ranking": bool(ranking_enabled),
         "future_target_used_for_runtime": False,
         "final_selection_refit": False,
     }
     _write_json(path, payload)
     return payload
+
+
+def _run_rolling_optimizer_arm(
+    *,
+    root: Path,
+    args,
+    settings,
+    baseline_contract: dict[str, Any],
+    base_policy: dict[str, Any],
+    runtime_contract: dict[str, Any],
+    output_dir: Path,
+    arm_name: str,
+    arm_label: str,
+    ranking_enabled: bool,
+) -> dict[str, Any]:
+    arm_dir = output_dir / arm_name
+    arm_dir.mkdir(parents=True, exist_ok=True)
+    preflight_path = arm_dir / "rolling_preflight.json"
+    existing_preflight = _load_json_mapping(preflight_path)
+    _write_json(
+        preflight_path,
+        {
+            **runtime_contract,
+            "status": "ROLLING_ADAPTATION_ARM_PREFLIGHT_PASS",
+            "created_at": get_taipei_now().isoformat(),
+        },
+    )
+
+    models_dir = arm_dir / "active_params"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    optimizer_output_dir = arm_dir / "optimizer_runtime"
+    outer_environ = dict(os.environ)
+    outer_environ["V16_MODELS_DIR"] = str(models_dir.resolve())
+    params_path = models_dir / "roos_base_best.json"
+    search_reused = _completed_adapted_search_is_compatible(
+        existing_preflight=existing_preflight,
+        runtime_contract=runtime_contract,
+        adapted_params_path=params_path,
+        baseline_contract=baseline_contract,
+    )
+    if search_reused:
+        print(
+            f"\n[{arm_label}] 既有rolling搜尋與目前runtime identity一致；"
+            "沿用已選參數並重新套用固定ranking契約，不重跑optimizer。"
+        )
+    else:
+        session_spec = _optimizer_session_spec(
+            output_dir=output_dir,
+            args=args,
+            runtime_contract=runtime_contract,
+            arm_name=arm_name,
+            ranking_enabled=ranking_enabled,
+        )
+        exit_code = run_outer_rolling_oos(
+            argv=_outer_rolling_argv(
+                args=args, baseline_contract=baseline_contract
+            ),
+            environ=outer_environ,
+            project_root=str(root),
+            output_dir=str(optimizer_output_dir),
+            base_policy=base_policy,
+            selected_data_dir=get_dataset_dir(str(root), args.dataset),
+            dataset_label=str(args.dataset),
+            load_all_raw_data=load_all_raw_data,
+            optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
+            build_optimizer_session=build_optimizer_session,
+            create_optimizer_study=create_optimizer_study,
+            ensure_study_effective_policy_compatible=ensure_study_effective_policy_compatible,
+            configure_optuna_logging=configure_optuna_logging,
+            optimizer_seed=int(settings.seed),
+            optimizer_session_spec=session_spec,
+            default_trials=int(args.trials_per_fold),
+            timing_mode=False,
+        )
+        if int(exit_code) != 0:
+            raise RuntimeError(
+                f"{arm_label} rolling optimizer失敗：returncode={exit_code}"
+            )
+
+    fixed_overrides = _fixed_strategy_param_overrides(
+        args, ranking_enabled=ranking_enabled
+    )
+    materialized_paths = _materialize_adapted_param_artifacts(
+        adapted_models_dir=models_dir,
+        fixed_strategy_param_overrides=fixed_overrides,
+    )
+    if params_path not in materialized_paths:
+        raise RuntimeError(
+            f"{arm_label} active-param工件無法套用固定ranking契約："
+            f"path={params_path}"
+        )
+    params_payload = _validate_adapted_rolling_params(
+        path=params_path,
+        baseline_contract=baseline_contract,
+        runtime_contract=runtime_contract,
+        args=args,
+        arm_name=arm_label,
+        ranking_enabled=ranking_enabled,
+    )
+    summary_path = arm_dir / "rolling_optimizer_summary.json"
+    folds = int(dict(params_payload.get("summary") or {}).get("folds", 0) or 0)
+    summary = {
+        "mode": "rolling_selection_2x2_validation",
+        "optimization_arm": str(arm_name),
+        "arm_label": str(arm_label),
+        "ranking_enabled": bool(ranking_enabled),
+        "result_interpretation": ADAPTATION_STATUS,
+        "folds": folds,
+        "trials_per_fold": int(args.trials_per_fold),
+        "total_requested_trials": int(args.trials_per_fold) * folds,
+        "trials_per_fold_source": str(
+            runtime_contract["rolling_policy"]["trials_per_fold_source"]
+        ),
+        "same_fold_schedule_as_baseline": True,
+        "optimizer_search_reused": bool(search_reused),
+        "fixed_contract_materialized_files": [
+            project_relative_display_path(item, project_root=root)
+            for item in materialized_paths
+        ],
+        "seed": int(settings.seed),
+        "fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
+        "runtime_identity_sha256": runtime_contract["runtime_identity_sha256"],
+        "final_selection_refit_executed": False,
+        "formal_oos_executed": False,
+    }
+    _write_json(summary_path, summary)
+    return {
+        "arm_name": arm_name,
+        "arm_label": arm_label,
+        "ranking_enabled": bool(ranking_enabled),
+        "dir": arm_dir,
+        "preflight_path": preflight_path,
+        "models_dir": models_dir,
+        "params_path": params_path,
+        "params_payload": params_payload,
+        "optimizer_summary_path": summary_path,
+        "optimizer_summary": summary,
+        "search_reused": bool(search_reused),
+        "runtime_contract": runtime_contract,
+        "materialized_paths": materialized_paths,
+    }
 
 
 def _active_param_values(path: str | Path) -> dict[str, list[Any]]:
@@ -910,60 +1142,61 @@ def _param_comparison_table_rows(result: dict[str, Any]) -> list[tuple[str, str,
             rows.append((str(row.get("parameter")), baseline, baseline, adapted, adapted))
     return rows
 
-def _run_three_way_comparison(
+def _resolve_controlled_arm_params(
     *,
-    root: Path,
+    params_path: Path,
     args,
-    pit_contract,
-    current_payload: dict[str, Any],
-    baseline_contract: dict[str, Any],
-    adapted_params_path: Path,
-    current_pair_dir: Path,
-    output_dir: Path,
-    rolling_validation: dict[str, Any],
-) -> dict[str, Any]:
-    metadata = dict(current_payload["metadata"])
-    comparison_dir = Path(current_pair_dir).resolve()
-    required = {
-        "baseline_trades": comparison_dir / "no_filter_trades.csv",
-        "baseline_capacity": comparison_dir / "no_filter_daily_capacity.csv",
-        "baseline_selected": comparison_dir / "no_filter_selected_target_diagnostics.csv",
-    }
-    missing = [str(path) for path in required.values() if not path.is_file()]
-    if missing:
-        raise FileNotFoundError("三組比較缺少Baseline工件: " + ", ".join(missing))
-
-    adapted_source = _load_param_source(adapted_params_path)
-    _validate_requested_param_policy(adapted_source, args.param_policy)
+    ranking_enabled: bool,
+) -> tuple[str, Any]:
+    source = _load_param_source(params_path)
+    _validate_requested_param_policy(source, args.param_policy)
     (
-        adapted_source_kind,
-        _adapted_no_sort_params,
-        adapted_score_params,
-        _adapted_no_sort_payload,
-        _adapted_score_payload,
-        _adapted_ensemble_policy,
+        source_kind,
+        no_sort_params,
+        score_params,
+        _no_sort_payload,
+        _score_payload,
+        _ensemble_policy,
     ) = _build_controlled_param_source_pair(
-        adapted_source,
+        source,
         filter_id=str(args.filter_id),
         threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
         fixed_risk=float(args.fixed_risk),
         max_position_cap_pct=float(args.max_position_cap_pct),
         comparison_mode=COMPARISON_MODE_SCORE_RANKING,
     )
-    if adapted_source_kind != "rolling_active_param_ensemble":
-        raise ValueError("Adapted三組比較只接受rolling active-param ensemble")
+    if source_kind != "rolling_active_param_ensemble":
+        raise ValueError("2×2參數適應比較只接受rolling active-param ensemble")
+    return source_kind, score_params if ranking_enabled else no_sort_params
 
+
+def _run_optimized_arm_replay(
+    *,
+    root: Path,
+    args,
+    pit_contract,
+    params_path: Path,
+    arm_name: str,
+    ranking_enabled: bool,
+) -> dict[str, Any]:
+    source_kind, params = _resolve_controlled_arm_params(
+        params_path=params_path,
+        args=args,
+        ranking_enabled=ranking_enabled,
+    )
     replay_counts: dict[str, Any] = {}
-    ranking_source = {
-        "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
-        "model_architecture": args.model_architecture,
-        "experiment_profile": args.experiment_profile,
-    }
-    adapted_payload = _run_scenario(
-        name="adapted_rolling_score_ranking",
+    ranking_source = None
+    if ranking_enabled:
+        ranking_source = {
+            "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+            "model_architecture": args.model_architecture,
+            "experiment_profile": args.experiment_profile,
+        }
+    payload = _run_scenario(
+        name=arm_name,
         data_dir=Path(get_dataset_dir(str(root), args.dataset)).resolve(),
-        param_source_kind=adapted_source_kind,
-        params=adapted_score_params,
+        param_source_kind=source_kind,
+        params=params,
         start_date=pit_contract.available_from,
         end_date=pit_contract.available_through,
         max_positions=int(args.max_positions),
@@ -972,33 +1205,119 @@ def _run_three_way_comparison(
         replay_counts=replay_counts,
         ranking_source=ranking_source,
     )
-    adapted = _scenario_summary(adapted_payload)
+    return {
+        "payload": payload,
+        "summary": _scenario_summary(payload),
+        "replay_counts": replay_counts,
+        "orderable": _flatten_candidate_replay_rows(replay_counts, "orderable_rows"),
+        "selected": _flatten_selected_buy_rows(payload["trade_history"]),
+    }
+
+
+def _write_optimized_arm_replay_outputs(
+    *,
+    output_dir: Path,
+    prefix: str,
+    replay: dict[str, Any],
+    orderable_joined: pd.DataFrame,
+    selected_joined: pd.DataFrame,
+) -> dict[str, Path]:
+    payload = replay["payload"]
+    paths = {
+        "equity": output_dir / f"{prefix}_equity.csv",
+        "trades": output_dir / f"{prefix}_trades.csv",
+        "daily_capacity": output_dir / f"{prefix}_daily_capacity.csv",
+        "orderable_diagnostics": output_dir / f"{prefix}_orderable_target_diagnostics.csv",
+        "selected_diagnostics": output_dir / f"{prefix}_selected_target_diagnostics.csv",
+        "yearly_returns": output_dir / f"{prefix}_yearly_returns.csv",
+    }
+    payload["equity_curve"].to_csv(paths["equity"], index=False, encoding="utf-8-sig")
+    payload["trade_history"].to_csv(paths["trades"], index=False, encoding="utf-8-sig")
+    pd.DataFrame(payload["profile"].get("portfolio_capacity_rows") or []).to_csv(
+        paths["daily_capacity"], index=False, encoding="utf-8-sig"
+    )
+    orderable_joined.to_csv(
+        paths["orderable_diagnostics"], index=False, encoding="utf-8-sig"
+    )
+    selected_joined.to_csv(
+        paths["selected_diagnostics"], index=False, encoding="utf-8-sig"
+    )
+    return paths
+
+
+def _run_four_way_comparison(
+    *,
+    root: Path,
+    args,
+    pit_contract,
+    current_payload: dict[str, Any],
+    baseline_contract: dict[str, Any],
+    baseline_adapted_arm: dict[str, Any],
+    score_adapted_arm: dict[str, Any],
+    current_pair_dir: Path,
+    output_dir: Path,
+    rolling_validation: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = dict(current_payload["metadata"])
+    comparison_dir = Path(current_pair_dir).resolve()
+    required = {
+        "baseline_equity": comparison_dir / "no_filter_equity.csv",
+        "baseline_trades": comparison_dir / "no_filter_trades.csv",
+        "baseline_capacity": comparison_dir / "no_filter_daily_capacity.csv",
+        "baseline_selected": comparison_dir / "no_filter_selected_target_diagnostics.csv",
+    }
+    missing = [str(item) for item in required.values() if not item.is_file()]
+    if missing:
+        raise FileNotFoundError("四組比較缺少既有Baseline工件: " + ", ".join(missing))
+
+    baseline_adapted_replay = _run_optimized_arm_replay(
+        root=root,
+        args=args,
+        pit_contract=pit_contract,
+        params_path=baseline_adapted_arm["params_path"],
+        arm_name="baseline_adapted",
+        ranking_enabled=False,
+    )
+    score_adapted_replay = _run_optimized_arm_replay(
+        root=root,
+        args=args,
+        pit_contract=pit_contract,
+        params_path=score_adapted_arm["params_path"],
+        arm_name="score_adapted",
+        ranking_enabled=True,
+    )
     baseline = dict(current_payload["no_filter"])
     sort_only = dict(current_payload["score_ranking"])
+    baseline_adapted = dict(baseline_adapted_replay["summary"])
+    score_adapted = dict(score_adapted_replay["summary"])
 
-    baseline_equity = pd.read_csv(comparison_dir / "no_filter_equity.csv", encoding="utf-8-sig")
-    _assert_shared_benchmark(
-        {
-            "benchmark_return_pct": baseline["benchmark_return_pct"],
-            "benchmark_max_drawdown_pct": baseline["benchmark_max_drawdown_pct"],
-            "benchmark_annual_return_pct": baseline["benchmark_annual_return_pct"],
-            "equity_curve": baseline_equity,
-        },
-        adapted_payload,
-    )
+    baseline_equity = pd.read_csv(required["baseline_equity"], encoding="utf-8-sig")
+    benchmark_reference = {
+        "benchmark_return_pct": baseline["benchmark_return_pct"],
+        "benchmark_max_drawdown_pct": baseline["benchmark_max_drawdown_pct"],
+        "benchmark_annual_return_pct": baseline["benchmark_annual_return_pct"],
+        "equity_curve": baseline_equity,
+    }
+    _assert_shared_benchmark(benchmark_reference, baseline_adapted_replay["payload"])
+    _assert_shared_benchmark(benchmark_reference, score_adapted_replay["payload"])
 
-    adapted_orderable = _flatten_candidate_replay_rows(replay_counts, "orderable_rows")
-    adapted_selected = _flatten_selected_buy_rows(adapted_payload["trade_history"])
     lookup = _selection_target_lookup(
         root=root,
         filter_id=args.filter_id,
         architecture=args.model_architecture,
         profile=args.experiment_profile,
     )
-    adapted_diag, adapted_orderable_joined, adapted_selected_joined = (
+    baseline_adapted_diag, baseline_adapted_orderable, baseline_adapted_selected = (
         _strategy_selection_diagnostics(
-            orderable=adapted_orderable,
-            selected=adapted_selected,
+            orderable=baseline_adapted_replay["orderable"],
+            selected=baseline_adapted_replay["selected"],
+            lookup=lookup,
+        )
+    )
+    score_adapted_diag, score_adapted_orderable, score_adapted_selected = (
+        _strategy_selection_diagnostics(
+            orderable=score_adapted_replay["orderable"],
+            selected=score_adapted_replay["selected"],
             lookup=lookup,
         )
     )
@@ -1006,133 +1325,193 @@ def _run_three_way_comparison(
     baseline_diag = dict(existing_diagnostics.get("no_filter") or {})
     sort_diag = dict(existing_diagnostics.get("score_ranking") or {})
 
-    adapted_payload["equity_curve"].to_csv(
-        output_dir / "adapted_rolling_equity.csv", index=False, encoding="utf-8-sig"
+    baseline_adapted_paths = _write_optimized_arm_replay_outputs(
+        output_dir=output_dir,
+        prefix="baseline_adapted",
+        replay=baseline_adapted_replay,
+        orderable_joined=baseline_adapted_orderable,
+        selected_joined=baseline_adapted_selected,
     )
-    adapted_payload["trade_history"].to_csv(
-        output_dir / "adapted_rolling_trades.csv", index=False, encoding="utf-8-sig"
-    )
-    pd.DataFrame(adapted_payload["profile"].get("portfolio_capacity_rows") or []).to_csv(
-        output_dir / "adapted_rolling_daily_capacity.csv", index=False, encoding="utf-8-sig"
-    )
-    adapted_orderable_joined.to_csv(
-        output_dir / "adapted_rolling_orderable_target_diagnostics.csv",
-        index=False,
-        encoding="utf-8-sig",
-    )
-    adapted_selected_joined.to_csv(
-        output_dir / "adapted_rolling_selected_target_diagnostics.csv",
-        index=False,
-        encoding="utf-8-sig",
+    score_adapted_paths = _write_optimized_arm_replay_outputs(
+        output_dir=output_dir,
+        prefix="score_adapted",
+        replay=score_adapted_replay,
+        orderable_joined=score_adapted_orderable,
+        selected_joined=score_adapted_selected,
     )
 
-    adapted_yearly = _yearly_frame(adapted_payload["profile"], "adapted")
-    adapted_yearly.to_csv(
-        output_dir / "adapted_rolling_yearly_returns.csv", index=False, encoding="utf-8-sig"
+    baseline_adapted_yearly = _yearly_frame(
+        baseline_adapted_replay["payload"]["profile"], "baseline_adapted"
+    )
+    score_adapted_yearly = _yearly_frame(
+        score_adapted_replay["payload"]["profile"], "score_adapted"
+    )
+    baseline_adapted_yearly.to_csv(
+        baseline_adapted_paths["yearly_returns"], index=False, encoding="utf-8-sig"
+    )
+    score_adapted_yearly.to_csv(
+        score_adapted_paths["yearly_returns"], index=False, encoding="utf-8-sig"
     )
     current_yearly = pd.DataFrame(current_payload.get("yearly") or [])
     yearly_keys = [
         key
         for key in ("year", "is_full_year", "start_date", "end_date")
-        if key in current_yearly.columns and key in adapted_yearly.columns
+        if key in current_yearly.columns
+        and key in baseline_adapted_yearly.columns
+        and key in score_adapted_yearly.columns
     ]
     if not yearly_keys:
         yearly_keys = ["year"]
-    three_way_yearly = current_yearly.merge(
-        adapted_yearly, on=yearly_keys, how="outer", validate="one_to_one"
+    four_way_yearly = current_yearly.merge(
+        baseline_adapted_yearly,
+        on=yearly_keys,
+        how="outer",
+        validate="one_to_one",
+    ).merge(
+        score_adapted_yearly,
+        on=yearly_keys,
+        how="outer",
+        validate="one_to_one",
     ).sort_values("year").reset_index(drop=True)
-    three_way_yearly["adapted_minus_baseline_pct"] = (
-        three_way_yearly["adapted_return_pct"]
-        - three_way_yearly["no_filter_return_pct"]
+    four_way_yearly["ranking_only_delta_pct"] = (
+        four_way_yearly["score_ranking_return_pct"]
+        - four_way_yearly["no_filter_return_pct"]
     )
-    three_way_yearly["adapted_minus_sort_only_pct"] = (
-        three_way_yearly["adapted_return_pct"]
-        - three_way_yearly["score_ranking_return_pct"]
+    four_way_yearly["optimized_system_delta_pct"] = (
+        four_way_yearly["score_adapted_return_pct"]
+        - four_way_yearly["baseline_adapted_return_pct"]
     )
-    three_way_yearly.to_csv(
-        output_dir / "strategy_adaptation_yearly_returns.csv",
-        index=False,
-        encoding="utf-8-sig",
-    )
+    yearly_path = output_dir / "strategy_adaptation_yearly_returns.csv"
+    four_way_yearly.to_csv(yearly_path, index=False, encoding="utf-8-sig")
 
-    adapted_capture = build_score_ranking_capture_audit(
+    optimized_capture_dir = output_dir / "optimized_pair_capture"
+    optimized_capture = build_score_ranking_capture_audit(
         metadata={
             **metadata,
-            "comparison_design": "rolling_selection_adaptation_diagnostic",
+            "comparison_design": "rolling_selection_2x2_optimized_system",
         },
-        baseline_summary=baseline,
-        score_sort_summary=adapted,
-        baseline_trade_history=pd.read_csv(required["baseline_trades"], encoding="utf-8-sig"),
-        score_sort_trade_history=adapted_payload["trade_history"],
-        baseline_selected_target_diagnostics=pd.read_csv(
-            required["baseline_selected"], encoding="utf-8-sig"
-        ),
-        score_sort_selected_target_diagnostics=adapted_selected_joined,
+        baseline_summary=baseline_adapted,
+        score_sort_summary=score_adapted,
+        baseline_trade_history=baseline_adapted_replay["payload"]["trade_history"],
+        score_sort_trade_history=score_adapted_replay["payload"]["trade_history"],
+        baseline_selected_target_diagnostics=baseline_adapted_selected,
+        score_sort_selected_target_diagnostics=score_adapted_selected,
         selection_diagnostics={
-            "score_ranking_minus_no_filter": _delta(adapted_diag, baseline_diag)
+            "score_ranking_minus_no_filter": _delta(
+                score_adapted_diag, baseline_adapted_diag
+            )
         },
-        baseline_daily_capacity=pd.read_csv(
-            required["baseline_capacity"], encoding="utf-8-sig"
+        baseline_daily_capacity=pd.DataFrame(
+            baseline_adapted_replay["payload"]["profile"].get(
+                "portfolio_capacity_rows"
+            )
+            or []
         ),
         score_sort_daily_capacity=pd.DataFrame(
-            adapted_payload["profile"].get("portfolio_capacity_rows") or []
+            score_adapted_replay["payload"]["profile"].get(
+                "portfolio_capacity_rows"
+            )
+            or []
         ),
     )
-    adapted_capture_payload = write_score_ranking_capture_audit_outputs(
-        result=adapted_capture,
-        output_dir=output_dir,
+    optimized_capture_payload = write_score_ranking_capture_audit_outputs(
+        result=optimized_capture,
+        output_dir=optimized_capture_dir,
     )
 
     parameter_comparison = _build_param_comparison_rows(
-        baseline_params_path=baseline_contract["path"],
-        adapted_params_path=adapted_params_path,
+        baseline_params_path=baseline_adapted_arm["params_path"],
+        adapted_params_path=score_adapted_arm["params_path"],
     )
     result = {
         "schema_version": SCHEMA_VERSION,
         "status": ADAPTATION_STATUS,
+        "comparison_design": "ranking_parameter_2x2",
         "metadata": {
             **metadata,
-            "adapted_param_source_kind": "rolling_active_param_ensemble",
-            "adapted_result_interpretation": ADAPTATION_STATUS,
-            "adapted_params_path": project_relative_display_path(adapted_params_path, project_root=root),
-            "adapted_params_sha256": compute_file_sha256(adapted_params_path),
+            "result_interpretation": ADAPTATION_STATUS,
+            "baseline_adapted_params_path": project_relative_display_path(
+                baseline_adapted_arm["params_path"], project_root=root
+            ),
+            "baseline_adapted_params_sha256": compute_file_sha256(
+                baseline_adapted_arm["params_path"]
+            ),
+            "score_adapted_params_path": project_relative_display_path(
+                score_adapted_arm["params_path"], project_root=root
+            ),
+            "score_adapted_params_sha256": compute_file_sha256(
+                score_adapted_arm["params_path"]
+            ),
             "future_target_used_for_runtime": False,
             "oos_generalization_claimed": False,
             "final_selection_refit_executed": False,
         },
         "baseline": baseline,
         "sort_only": sort_only,
-        "adapted": adapted,
-        "sort_only_minus_baseline": _delta(sort_only, baseline),
-        "adapted_minus_baseline": _delta(adapted, baseline),
-        "adapted_minus_sort_only": _delta(adapted, sort_only),
+        "baseline_adapted": baseline_adapted,
+        "score_adapted": score_adapted,
+        "ranking_only_delta": _delta(sort_only, baseline),
+        "baseline_refit_delta": _delta(baseline_adapted, baseline),
+        "score_adaptation_delta": _delta(score_adapted, sort_only),
+        "optimized_system_delta": _delta(score_adapted, baseline_adapted),
         "selection_diagnostics": {
             "baseline": baseline_diag,
             "sort_only": sort_diag,
-            "adapted": adapted_diag,
-            "adapted_minus_baseline": _delta(adapted_diag, baseline_diag),
-            "adapted_minus_sort_only": _delta(adapted_diag, sort_diag),
+            "baseline_adapted": baseline_adapted_diag,
+            "score_adapted": score_adapted_diag,
+            "ranking_only_delta": _delta(sort_diag, baseline_diag),
+            "optimized_system_delta": _delta(
+                score_adapted_diag, baseline_adapted_diag
+            ),
             "future_target_join_stage": "post_replay_offline_diagnostic_only",
             "future_target_used_for_runtime_sort": False,
         },
-        "current_capture_audit": current_payload.get("score_ranking_capture_audit"),
-        "adapted_capture_audit": adapted_capture_payload,
-        "yearly": three_way_yearly.to_dict("records"),
-        "adapted_rolling_params": {
-            "path": project_relative_display_path(adapted_params_path, project_root=root),
-            "sha256": compute_file_sha256(adapted_params_path),
+        "current_capture_audit": current_payload.get(
+            "score_ranking_capture_audit"
+        ),
+        "optimized_capture_audit": optimized_capture_payload,
+        "yearly": four_way_yearly.to_dict("records"),
+        "optimized_active_params": {
+            "baseline_adapted": {
+                "path": project_relative_display_path(
+                    baseline_adapted_arm["params_path"], project_root=root
+                ),
+                "sha256": compute_file_sha256(
+                    baseline_adapted_arm["params_path"]
+                ),
+            },
+            "score_adapted": {
+                "path": project_relative_display_path(
+                    score_adapted_arm["params_path"], project_root=root
+                ),
+                "sha256": compute_file_sha256(score_adapted_arm["params_path"]),
+            },
         },
         "parameter_comparison": parameter_comparison,
         "rolling_validation": dict(rolling_validation),
+        "replay_artifacts": {
+            "baseline_adapted": {
+                key: project_relative_display_path(value, project_root=root)
+                for key, value in baseline_adapted_paths.items()
+            },
+            "score_adapted": {
+                key: project_relative_display_path(value, project_root=root)
+                for key, value in score_adapted_paths.items()
+            },
+            "optimized_capture_dir": project_relative_display_path(
+                optimized_capture_dir, project_root=root
+            ),
+        },
     }
     _write_json(output_dir / "strategy_adaptation_comparison.json", result)
     (output_dir / "strategy_adaptation_comparison.md").write_text(
-        _render_three_way_markdown(result), encoding="utf-8"
+        _render_four_way_markdown(result), encoding="utf-8"
     )
-    print("\n" + _render_three_way_console(result))
+    print("\n" + _render_four_way_console(result))
     if not compact_console_enabled():
-        print("\n" + render_capture_audit_console(adapted_capture))
+        print("\n" + render_capture_audit_console(optimized_capture))
     return result
+
 
 def _metric_rows(result: dict[str, Any]):
     rows = (
@@ -1160,16 +1539,27 @@ def _metric_rows(result: dict[str, Any]):
         ("Target ≥ 0.5R capture", "target_ge_0_5_capture_ratio", ""),
     )
     current_capture = dict(result.get("current_capture_audit") or {})
-    adapted_capture = dict(result.get("adapted_capture_audit") or {})
-    capture_baseline = dict(current_capture.get("baseline") or {})
-    capture_sort_only = dict(current_capture.get("score_sort") or {})
-    capture_adapted = dict(adapted_capture.get("score_sort") or {})
+    optimized_capture = dict(result.get("optimized_capture_audit") or {})
     enriched = {
-        "baseline": {**result["baseline"], **capture_baseline},
-        "sort_only": {**result["sort_only"], **capture_sort_only},
-        "adapted": {**result["adapted"], **capture_adapted},
+        "baseline": {
+            **dict(result.get("baseline") or {}),
+            **dict(current_capture.get("baseline") or {}),
+        },
+        "sort_only": {
+            **dict(result.get("sort_only") or {}),
+            **dict(current_capture.get("score_sort") or {}),
+        },
+        "baseline_adapted": {
+            **dict(result.get("baseline_adapted") or {}),
+            **dict(optimized_capture.get("baseline") or {}),
+        },
+        "score_adapted": {
+            **dict(result.get("score_adapted") or {}),
+            **dict(optimized_capture.get("score_sort") or {}),
+        },
     }
     return rows, enriched
+
 
 def _fmt(value, unit=""):
     try:
@@ -1178,34 +1568,9 @@ def _fmt(value, unit=""):
         return "N/A"
     if not math.isfinite(number):
         return "N/A"
-    digits = 0 if unit == "" and abs(number) >= 1000 else 4 if "R²" in unit else 2
+    digits = 0 if unit == "" and abs(number) >= 1000 else 2
     return f"{number:.{digits}f}{unit}"
 
-def _three_way_rows_for_keys(
-    values: dict[str, dict[str, Any]],
-    specs: tuple[tuple[str, str, str], ...],
-) -> list[tuple[str, str, str, str]]:
-    integer_keys = {"trade_count", "candidate_supply_gap_days"}
-
-    def _value(scenario: str, key: str, unit: str) -> str:
-        raw = values[scenario].get(key)
-        if key not in integer_keys:
-            return _fmt(raw, unit)
-        try:
-            number = float(raw)
-        except (TypeError, ValueError):
-            return "N/A"
-        return "N/A" if not math.isfinite(number) else f"{number:.0f}{unit}"
-
-    return [
-        (
-            label,
-            _value("baseline", key, unit),
-            _value("sort_only", key, unit),
-            _value("adapted", key, unit),
-        )
-        for label, key, unit in specs
-    ]
 
 def _compact_metric_value(value: Any, *, unit: str = "", digits: int = 2) -> str:
     try:
@@ -1217,120 +1582,152 @@ def _compact_metric_value(value: Any, *, unit: str = "", digits: int = 2) -> str
     return f"{number:.{int(digits)}f}{unit}"
 
 
-def _compact_three_way_rows(
+def _pair_rows(
     values: dict[str, dict[str, Any]],
     specs: tuple[tuple[str, str, str, str, int], ...],
     *,
+    left_key: str,
+    right_key: str,
     use_color: bool,
-) -> list[tuple[str, str, str, str, str, str]]:
-    rows: list[tuple[str, str, str, str, str, str]] = []
+) -> list[tuple[str, str, str, str, str]]:
+    rows: list[tuple[str, str, str, str, str]] = []
     for label, key, unit, preference, digits in specs:
-        baseline = values["baseline"].get(key)
-        sort_only = values["sort_only"].get(key)
-        adapted = values["adapted"].get(key)
+        left = values[left_key].get(key)
+        right = values[right_key].get(key)
         try:
-            delta = float(adapted) - float(sort_only)
+            delta = float(right) - float(left)
         except (TypeError, ValueError):
             delta = None
         if delta is not None and not math.isfinite(delta):
             delta = None
         signal = signal_for_delta(delta, preference=preference, warning_threshold=0.0)
+        delta_text = "N/A" if delta is None else f"{delta:+.{int(digits)}f}{unit}"
         rows.append((
             label,
-            _compact_metric_value(baseline, unit=unit, digits=digits),
-            _compact_metric_value(sort_only, unit=unit, digits=digits),
-            _compact_metric_value(adapted, unit=unit, digits=digits),
-            terminal_signal(
-                _compact_metric_value(delta, unit=unit, digits=digits)
-                if delta is None
-                else f"{delta:+.{int(digits)}f}{unit}",
-                signal,
-                enabled=use_color,
-            ),
+            _compact_metric_value(left, unit=unit, digits=digits),
+            _compact_metric_value(right, unit=unit, digits=digits),
+            terminal_signal(delta_text, signal, enabled=use_color),
             terminal_signal(signal_marker(signal), signal, enabled=use_color),
         ))
     return rows
 
 
-def _compact_three_way_table(
+def _pair_table(
     values: dict[str, dict[str, Any]],
     specs: tuple[tuple[str, str, str, str, int], ...],
     *,
+    left_key: str,
+    right_key: str,
+    left_label: str,
+    right_label: str,
+    delta_label: str,
     use_color: bool,
 ) -> str:
     return render_table(
-        ("指標", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
-        _compact_three_way_rows(values, specs, use_color=use_color),
-        alignments=("left", "right", "right", "right", "right", "left"),
+        ("指標", left_label, right_label, delta_label, "判讀"),
+        _pair_rows(
+            values,
+            specs,
+            left_key=left_key,
+            right_key=right_key,
+            use_color=use_color,
+        ),
+        alignments=("left", "right", "right", "right", "left"),
     )
 
 
-def _capture_yearly_three_way(result: dict[str, Any]) -> list[dict[str, Any]]:
-    current_rows = list(dict(result.get("current_capture_audit") or {}).get("yearly") or [])
-    adapted_rows = list(dict(result.get("adapted_capture_audit") or {}).get("yearly") or [])
-    current_by_year = {
-        int(row["entry_year"]): dict(row)
-        for row in current_rows
-        if row.get("entry_year") is not None
-    }
-    adapted_by_year = {
-        int(row["entry_year"]): dict(row)
-        for row in adapted_rows
-        if row.get("entry_year") is not None
-    }
-    rows: list[dict[str, Any]] = []
-    for year in sorted(set(current_by_year) | set(adapted_by_year)):
-        current = current_by_year.get(year, {})
-        adapted = adapted_by_year.get(year, {})
-        rows.append({
-            "entry_year": year,
-            "baseline_avg_r": current.get("baseline_avg_r", adapted.get("baseline_avg_r")),
-            "sort_only_avg_r": current.get("score_sort_avg_r"),
-            "adapted_avg_r": adapted.get("score_sort_avg_r"),
-            "baseline_capture": current.get(
-                "baseline_aggregate_capture_ratio",
-                adapted.get("baseline_aggregate_capture_ratio"),
-            ),
-            "sort_only_capture": current.get("score_sort_aggregate_capture_ratio"),
-            "adapted_capture": adapted.get("score_sort_aggregate_capture_ratio"),
-            "baseline_invested": current.get(
-                "baseline_avg_invested_total",
-                adapted.get("baseline_avg_invested_total"),
-            ),
-            "sort_only_invested": current.get("score_sort_avg_invested_total"),
-            "adapted_invested": adapted.get("score_sort_avg_invested_total"),
-        })
-    return rows
-
-
-def _compact_yearly_value_row(
+def _yearly_pair_table(
+    yearly_rows: list[dict[str, Any]],
     *,
-    year: int,
-    baseline: Any,
-    sort_only: Any,
-    adapted: Any,
-    unit: str,
-    digits: int,
-    preference: str,
+    left_column: str,
+    right_column: str,
+    left_label: str,
+    right_label: str,
+    delta_label: str,
     use_color: bool,
-) -> tuple[str, str, str, str, str, str]:
-    try:
-        delta = float(adapted) - float(sort_only)
-    except (TypeError, ValueError):
-        delta = None
-    if delta is not None and not math.isfinite(delta):
-        delta = None
-    signal = signal_for_delta(delta, preference=preference, warning_threshold=0.0)
-    delta_text = (
-        "N/A" if delta is None else f"{delta:+.{int(digits)}f}{unit}"
+) -> str:
+    rows = []
+    for row in yearly_rows:
+        left = row.get(left_column)
+        right = row.get(right_column)
+        try:
+            delta = float(right) - float(left)
+        except (TypeError, ValueError):
+            delta = None
+        if delta is not None and not math.isfinite(delta):
+            delta = None
+        signal = signal_for_delta(delta, preference="higher", warning_threshold=0.0)
+        rows.append((
+            str(int(row["year"])),
+            _compact_metric_value(left, unit="%", digits=2),
+            _compact_metric_value(right, unit="%", digits=2),
+            terminal_signal(
+                "N/A" if delta is None else f"{delta:+.2f}pp",
+                signal,
+                enabled=use_color,
+            ),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    if not rows:
+        return "無年度報酬資料。"
+    return render_table(
+        ("年度", left_label, right_label, delta_label, "判讀"),
+        rows,
+        alignments=("right", "right", "right", "right", "left"),
     )
-    return (
-        str(int(year)),
-        _compact_metric_value(baseline, unit=unit, digits=digits),
-        _compact_metric_value(sort_only, unit=unit, digits=digits),
-        _compact_metric_value(adapted, unit=unit, digits=digits),
-        terminal_signal(delta_text, signal, enabled=use_color),
-        terminal_signal(signal_marker(signal), signal, enabled=use_color),
+
+
+def _capture_yearly_pairs(result: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    current = list(dict(result.get("current_capture_audit") or {}).get("yearly") or [])
+    optimized = list(dict(result.get("optimized_capture_audit") or {}).get("yearly") or [])
+    return {"current": current, "optimized": optimized}
+
+
+def _capture_yearly_table(
+    rows: list[dict[str, Any]],
+    *,
+    left_prefix: str,
+    right_prefix: str,
+    metric_suffix: str,
+    left_label: str,
+    right_label: str,
+    delta_label: str,
+    unit: str,
+    preference: str,
+    digits: int,
+    use_color: bool,
+) -> str:
+    table_rows = []
+    for row in rows:
+        year = row.get("entry_year")
+        if year is None:
+            continue
+        left = row.get(f"{left_prefix}_{metric_suffix}")
+        right = row.get(f"{right_prefix}_{metric_suffix}")
+        try:
+            delta = float(right) - float(left)
+        except (TypeError, ValueError):
+            delta = None
+        if delta is not None and not math.isfinite(delta):
+            delta = None
+        signal = signal_for_delta(delta, preference=preference, warning_threshold=0.0)
+        table_rows.append((
+            str(int(year)),
+            _compact_metric_value(left, unit=unit, digits=digits),
+            _compact_metric_value(right, unit=unit, digits=digits),
+            terminal_signal(
+                "N/A" if delta is None else f"{delta:+.{digits}f}{unit}",
+                signal,
+                enabled=use_color,
+            ),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    if not table_rows:
+        return "無進場年度資料。"
+    return render_table(
+        ("年度", left_label, right_label, delta_label, "判讀"),
+        table_rows,
+        alignments=("right", "right", "right", "right", "left"),
     )
 
 
@@ -1339,17 +1736,18 @@ def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
     coverage = dict(rolling.get("training_score_coverage") or {})
     summary = render_key_values((
         ("Rolling folds", coverage.get("fold_count", rolling.get("fold_count", "-"))),
-        ("Adapted trials／fold", rolling.get("trials_per_fold", "-")),
+        ("兩組重調 trials／fold", rolling.get("trials_per_fold", "-")),
         ("Trials source", rolling.get("trials_per_fold_source", "-")),
-        ("Baseline工件 trials／fold", rolling.get("baseline_trials_per_fold", "-")),
+        ("Baseline歷史工件 trials／fold", rolling.get("baseline_trials_per_fold", "-")),
         ("Train window", f"{rolling.get('train_window_months', '-')} months"),
         ("OOS horizon", f"{rolling.get('oos_horizon_months', '-')} months"),
+        ("Baseline Adapted search reused", rolling.get("baseline_adapted_search_reused", "-")),
+        ("Score Adapted search reused", rolling.get("score_adapted_search_reused", "-")),
         ("Bootstrap fallback folds", coverage.get("bootstrap_fallback_only_folds", "-")),
         ("Partial-score folds", coverage.get("partial_score_history_folds", "-")),
         ("Full-score folds", coverage.get("full_score_history_folds", "-")),
-        ("Optimizer search reused", rolling.get("optimizer_search_reused", "-")),
     ))
-    status_labels = {
+    labels = {
         "bootstrap_fallback_only": "Bootstrap fallback",
         "partial_score_history": "Partial Score history",
         "full_score_history": "Full Score history",
@@ -1357,8 +1755,7 @@ def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
     rows = []
     for row in list(coverage.get("folds") or []):
         try:
-            coverage_pct = float(row.get("calendar_coverage_ratio")) * 100.0
-            coverage_text = f"{coverage_pct:.1f}%"
+            coverage_text = f"{float(row.get('calendar_coverage_ratio')) * 100.0:.1f}%"
         except (TypeError, ValueError):
             coverage_text = "N/A"
         rows.append((
@@ -1366,25 +1763,35 @@ def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
             row.get("selection_period", "-"),
             row.get("oos_period", "-"),
             coverage_text,
-            status_labels.get(str(row.get("status")), str(row.get("status") or "-")),
+            labels.get(str(row.get("status")), str(row.get("status") or "-")),
         ))
-    table = (
-        render_table(
-            ("Fold", "Selection period", "OOS period", "Score coverage", "狀態"),
-            rows,
-            alignments=("left", "left", "left", "right", "left"),
-        )
-        if rows else "無Rolling Score coverage資料。"
-    )
+    table = render_table(
+        ("Fold", "Selection period", "OOS period", "Score coverage", "狀態"),
+        rows,
+        alignments=("left", "left", "left", "right", "left"),
+    ) if rows else "無Rolling Score coverage資料。"
     return summary, table
 
 
-def _render_compact_three_way_console(result: dict[str, Any]) -> str:
+def _pair_judgement(delta: dict[str, Any], *, subject: str) -> tuple[str, str]:
+    try:
+        total = float(delta.get("total_return_pct"))
+        romd = float(delta.get("return_over_max_drawdown"))
+        mdd = float(delta.get("max_drawdown_pct"))
+    except (TypeError, ValueError):
+        return SIGNAL_NEUTRAL, f"{subject}資料不足。"
+    if total > 0 and romd > 0 and mdd <= 0:
+        return SIGNAL_POSITIVE, f"{subject}改善總報酬與報酬／回撤，且未放大最大回撤。"
+    if total < 0 and romd < 0 and mdd >= 0:
+        return SIGNAL_NEGATIVE, f"{subject}總報酬與報酬／回撤惡化，且最大回撤未改善。"
+    return SIGNAL_WARNING, f"{subject}結果混合，需結合年度、資金與capture判讀。"
+
+
+def _render_four_way_console(result: dict[str, Any]) -> str:
     _rows, values = _metric_rows(result)
     metadata = dict(result.get("metadata") or {})
     period = dict(metadata.get("comparison_period") or {})
     use_color = console_color_enabled()
-
     portfolio_specs = (
         ("淨總報酬", "total_return_pct", "%", "higher", 2),
         ("最大回撤", "max_drawdown_pct", "%", "lower", 2),
@@ -1441,12 +1848,10 @@ def _render_compact_three_way_console(result: dict[str, Any]) -> str:
         ("汰弱", "rotation_exit_share_pct", "%", "attention", 2),
         ("期末強制", "forced_exit_share_pct", "%", "attention", 2),
     )
-
     diagnostics = dict(result.get("selection_diagnostics") or {})
     diagnostic_values = {
-        "baseline": dict(diagnostics.get("baseline") or {}),
-        "sort_only": dict(diagnostics.get("sort_only") or {}),
-        "adapted": dict(diagnostics.get("adapted") or {}),
+        key: dict(diagnostics.get(key) or {})
+        for key in ("baseline", "sort_only", "baseline_adapted", "score_adapted")
     }
     diagnostic_specs = (
         ("Orderable Score coverage", "orderable_score_coverage_rate", "", "higher", 4),
@@ -1455,340 +1860,239 @@ def _render_compact_three_way_console(result: dict[str, Any]) -> str:
         ("Target opportunity gap (R)", "target_opportunity_gap_r_mean", "", "lower", 4),
         ("選中候選 Target mean (R)", "selected_target_mean_r", "", "higher", 4),
     )
-
-    yearly_rows = [
-        _compact_yearly_value_row(
-            year=int(row["year"]),
-            baseline=row.get("no_filter_return_pct"),
-            sort_only=row.get("score_ranking_return_pct"),
-            adapted=row.get("adapted_return_pct"),
-            unit="%",
-            digits=2,
-            preference="higher",
-            use_color=use_color,
-        )
-        for row in list(result.get("yearly") or [])
-        if row.get("year") is not None
-    ]
-    capture_yearly = _capture_yearly_three_way(result)
-    r_yearly_rows = [
-        _compact_yearly_value_row(
-            year=row["entry_year"], baseline=row.get("baseline_avg_r"),
-            sort_only=row.get("sort_only_avg_r"), adapted=row.get("adapted_avg_r"),
-            unit="", digits=2, preference="higher", use_color=use_color,
-        )
-        for row in capture_yearly
-    ]
-    capture_yearly_rows = [
-        _compact_yearly_value_row(
-            year=row["entry_year"], baseline=row.get("baseline_capture"),
-            sort_only=row.get("sort_only_capture"), adapted=row.get("adapted_capture"),
-            unit="", digits=2, preference="higher", use_color=use_color,
-        )
-        for row in capture_yearly
-    ]
-    invested_yearly_rows = [
-        _compact_yearly_value_row(
-            year=row["entry_year"], baseline=row.get("baseline_invested"),
-            sort_only=row.get("sort_only_invested"), adapted=row.get("adapted_invested"),
-            unit="", digits=0, preference="higher", use_color=use_color,
-        )
-        for row in capture_yearly
-    ]
+    yearly_rows = list(result.get("yearly") or [])
+    capture_yearly = _capture_yearly_pairs(result)
     rolling_summary, rolling_table = _compact_rolling_coverage(result)
 
+    def pair_blocks(specs):
+        return (
+            "A. 固定原參數：純 Ranking 效果",
+            _pair_table(
+                values, specs,
+                left_key="baseline", right_key="sort_only",
+                left_label="Baseline", right_label="Sort Only",
+                delta_label="Ranking差異", use_color=use_color,
+            ),
+            "B. 各自 Rolling 重調：完整系統效果",
+            _pair_table(
+                values, specs,
+                left_key="baseline_adapted", right_key="score_adapted",
+                left_label="Baseline Adapted", right_label="Score Adapted",
+                delta_label="最佳化系統差異", use_color=use_color,
+            ),
+        )
+
     lines = [
-        render_title("Breakout Quality Score 排序策略參數適應驗證摘要"),
+        render_title("Breakout Quality Ranking × Parameter 2×2驗證摘要"),
         render_key_values((
             ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
-            ("比較", "Baseline vs Sort Only vs Adapted Rolling"),
-            ("適應差異", "Adapted Rolling − Sort Only"),
-            ("驗證設計", "相同rolling folds、trials／fold、search space與objective"),
-            ("歷史 active-param 無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
+            ("比較設計", "Baseline／Sort Only／Baseline Adapted／Score Adapted"),
+            ("純Ranking比較", "Sort Only − Baseline；active params完全相同"),
+            ("最佳化系統比較", "Score Adapted − Baseline Adapted；搜尋規則與預算相同"),
             ("Score source", metadata.get("score_source", "selection_point_in_time")),
             ("結果性質", ADAPTATION_STATUS),
             ("Future Target runtime", "未使用"),
         )),
         render_section("投組報酬與風險", number=1),
         "定義：衡量整體權益最後賺多少、曾承受多少回撤，以及成長路徑是否穩定。",
-        _compact_three_way_table(values, portfolio_specs, use_color=use_color),
+        *pair_blocks(portfolio_specs),
         render_section("單筆交易結果", number=2),
         "定義：勝率看獲利筆數；Payoff看平均贏家／輸家；EV與Realized R看每筆初始風險的實際期望值。",
-        _compact_three_way_table(values, trade_specs, use_color=use_color),
-        "註：目前EV採平均Realized R口徑，兩者保留是為了對應策略主表與capture歸因表。",
+        *pair_blocks(trade_specs),
         render_section("資金投入與部位大小", number=3),
         "定義：曝險是每日投入市場資金占權益比例；停損越寬，固定風險sizing下每筆部位通常越小。",
-        _compact_three_way_table(values, sizing_specs, use_color=use_color),
+        *pair_blocks(sizing_specs),
         render_section("候選供給與持倉容量", number=4),
         "定義：候選供給看是否有股票可買；未滿倉與缺口看持倉格是否填滿；成交率看預留買單是否落地。",
-        _compact_three_way_table(values, capacity_specs, use_color=use_color),
+        *pair_blocks(capacity_specs),
         render_section("模型選股能力", number=5),
         "定義：比較實際選中候選與事後Future Target理想排序；Future Target只在回放完成後join。",
-        _compact_three_way_table(diagnostic_values, diagnostic_specs, use_color=use_color),
+        "A. 固定原參數：純 Ranking 效果",
+        _pair_table(
+            diagnostic_values, diagnostic_specs,
+            left_key="baseline", right_key="sort_only",
+            left_label="Baseline", right_label="Sort Only",
+            delta_label="Ranking差異", use_color=use_color,
+        ),
+        "B. 各自 Rolling 重調：完整系統效果",
+        _pair_table(
+            diagnostic_values, diagnostic_specs,
+            left_key="baseline_adapted", right_key="score_adapted",
+            left_label="Baseline Adapted", right_label="Score Adapted",
+            delta_label="最佳化系統差異", use_color=use_color,
+        ),
         render_section("Target 到實際報酬的轉換", number=6),
         "定義：Target R是事後價格機會；capture衡量Realized R相對Target R的轉換；gap越低越好。",
-        _compact_three_way_table(values, target_specs, use_color=use_color),
+        *pair_blocks(target_specs),
         render_section("資金周轉與進場集中", number=7),
         "定義：持有與半倉指標衡量資金占用時間；日期、月份與產業指標衡量交易是否集中。",
-        _compact_three_way_table(values, turnover_specs, use_color=use_color),
+        *pair_blocks(turnover_specs),
         render_section("出場結構", number=8),
         "定義：依每筆交易最後的全倉結算原因分類；占比改變只表示結構差異，不直接等於損益好壞。",
-        _compact_three_way_table(values, exit_specs, use_color=use_color),
+        *pair_blocks(exit_specs),
         render_section("年度結果與年度歸因", number=9),
-        "定義：年度報酬按權益曲線年度；R、capture與投入金額按交易進場年度分組，兩種口徑不可混為同一概念。",
-        "權益年度報酬：",
-        render_table(
-            ("年度", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
+        "定義：年度報酬按權益曲線年度；R、capture與投入金額按交易進場年度分組。",
+        "A. 固定原參數：年度純 Ranking 效果",
+        _yearly_pair_table(
             yearly_rows,
-            alignments=("right", "right", "right", "right", "right", "left"),
-        ) if yearly_rows else "無權益年度報酬資料。",
-        "進場年度平均 R：",
-        render_table(
-            ("年度", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
-            r_yearly_rows,
-            alignments=("right", "right", "right", "right", "right", "left"),
-        ) if r_yearly_rows else "無進場年度R資料。",
-        "進場年度 Aggregate capture：",
-        render_table(
-            ("年度", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
-            capture_yearly_rows,
-            alignments=("right", "right", "right", "right", "right", "left"),
-        ) if capture_yearly_rows else "無進場年度capture資料。",
-        "進場年度投入規模：",
-        render_table(
-            ("年度", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
-            invested_yearly_rows,
-            alignments=("right", "right", "right", "right", "right", "left"),
-        ) if invested_yearly_rows else "無進場年度投入資料。",
+            left_column="no_filter_return_pct", right_column="score_ranking_return_pct",
+            left_label="Baseline", right_label="Sort Only",
+            delta_label="Ranking差異", use_color=use_color,
+        ),
+        "B. 各自 Rolling 重調：年度完整系統效果",
+        _yearly_pair_table(
+            yearly_rows,
+            left_column="baseline_adapted_return_pct", right_column="score_adapted_return_pct",
+            left_label="Baseline Adapted", right_label="Score Adapted",
+            delta_label="最佳化系統差異", use_color=use_color,
+        ),
+        "固定原參數進場年度 Aggregate capture：",
+        _capture_yearly_table(
+            capture_yearly["current"],
+            left_prefix="baseline", right_prefix="score_sort",
+            metric_suffix="aggregate_capture_ratio",
+            left_label="Baseline", right_label="Sort Only",
+            delta_label="Ranking差異", unit="", preference="higher", digits=2,
+            use_color=use_color,
+        ),
+        "各自重調後進場年度 Aggregate capture：",
+        _capture_yearly_table(
+            capture_yearly["optimized"],
+            left_prefix="baseline", right_prefix="score_sort",
+            metric_suffix="aggregate_capture_ratio",
+            left_label="Baseline Adapted", right_label="Score Adapted",
+            delta_label="最佳化系統差異", unit="", preference="higher", digits=2,
+            use_color=use_color,
+        ),
         render_section("Rolling 訓練與 Score coverage", number=10),
-        "定義：確認Adapted與Baseline使用相同rolling預算，並揭露各fold訓練期間可使用PIT Score的比例。",
+        "定義：兩個重調組使用相同folds、trials／fold、search space、objective、Seed與sampler；只固定不同ranking。",
         rolling_summary,
         rolling_table,
         "限制：PIT開始日前缺分依正式契約回退原buy-sort；PIT期間內缺口禁止。",
-        render_section("參數差異", number=11),
-        "定義：比較Baseline與Adapted Rolling各fold active params的中位數與範圍。",
+        render_section("重調後參數差異", number=11),
+        "定義：比較Baseline Adapted與Score Adapted各fold finalist-best active params的中位數與範圍。",
         render_table(
-            ("參數", "Baseline中位", "Baseline範圍", "Adapted中位", "Adapted範圍"),
+            ("參數", "Base Adapted中位", "Base Adapted範圍", "Score Adapted中位", "Score Adapted範圍"),
             _param_comparison_table_rows(result),
             alignments=("left", "right", "right", "right", "right"),
         ),
     ]
 
-    adapted_delta = dict(result.get("adapted_minus_sort_only") or {})
-    total_delta = adapted_delta.get("total_return_pct")
-    romd_delta = adapted_delta.get("return_over_max_drawdown")
-    mdd_delta = adapted_delta.get("max_drawdown_pct")
-    try:
-        total_number = float(total_delta)
-        romd_number = float(romd_delta)
-    except (TypeError, ValueError):
-        total_number = romd_number = math.nan
-    if math.isfinite(total_number) and math.isfinite(romd_number) and total_number > 0 and romd_number > 0:
-        adaptation_signal = SIGNAL_POSITIVE
-        adaptation_judgement = "參數適應相對Sort Only改善總報酬與報酬／回撤，可進一步評估final refit。"
-    elif math.isfinite(total_number) and math.isfinite(romd_number) and total_number < 0 and romd_number < 0:
-        adaptation_signal = SIGNAL_NEGATIVE
-        adaptation_judgement = "參數適應相對Sort Only未改善投組結果，不支持直接進入final refit。"
-    else:
-        adaptation_signal = SIGNAL_WARNING
-        adaptation_judgement = "參數適應結果混合，需結合年度、資金與capture判讀。"
-
-    diagnostic_delta = dict(diagnostics.get("adapted_minus_sort_only") or {})
-    diagnostic_preferences = {
-        "orderable_score_coverage_rate": "higher",
-        "selected_target_percentile_mean": "higher",
-        "target_top_k_retention_mean": "higher",
-        "target_opportunity_gap_r_mean": "lower",
-        "selected_target_mean_r": "higher",
-    }
-    positive_diagnostics = sum(
-        signal_for_delta(diagnostic_delta.get(key), preference=preference) == SIGNAL_POSITIVE
-        for key, preference in diagnostic_preferences.items()
+    ranking_delta = dict(result.get("ranking_only_delta") or {})
+    optimized_delta = dict(result.get("optimized_system_delta") or {})
+    ranking_signal, ranking_text = _pair_judgement(
+        ranking_delta, subject="純Ranking"
     )
-    model_signal = (
-        SIGNAL_POSITIVE if positive_diagnostics >= 4
-        else SIGNAL_WARNING if positive_diagnostics > 0
-        else SIGNAL_NEUTRAL
+    optimized_signal, optimized_text = _pair_judgement(
+        optimized_delta, subject="各自重調後的完整系統"
     )
-    adapted_capture_decision = dict(dict(result.get("adapted_capture_audit") or {}).get("decision") or {})
-    decision_signal = str(adapted_capture_decision.get("signal") or SIGNAL_NEUTRAL)
-    bottlenecks = "；".join(adapted_capture_decision.get("bottlenecks") or []) or "未辨識出明確瓶頸"
+    optimized_decision = dict(
+        dict(result.get("optimized_capture_audit") or {}).get("decision") or {}
+    )
+    decision_signal = str(optimized_decision.get("signal") or SIGNAL_NEUTRAL)
+    bottlenecks = "；".join(optimized_decision.get("bottlenecks") or []) or "未辨識出明確瓶頸"
     lines.extend((
         render_section("綜合判定、限制與下一步", number=12),
         terminal_signal(
-            f"{signal_marker(adaptation_signal)} 參數適應判定：{adaptation_judgement}",
-            adaptation_signal,
+            f"{signal_marker(ranking_signal)} Ranking-only判定：{ranking_text}",
+            ranking_signal,
             enabled=use_color,
         ),
         terminal_signal(
-            f"{signal_marker(model_signal)} 模型選股判定："
-            f"Adapted相對Sort Only有{positive_diagnostics}/5項Future Target診斷改善。",
-            model_signal,
+            f"{signal_marker(optimized_signal)} Optimized-system判定：{optimized_text}",
+            optimized_signal,
             enabled=use_color,
         ),
         terminal_signal(
-            f"{signal_marker(decision_signal)} 資金／capture判定："
-            f"{adapted_capture_decision.get('status', '-')}｜"
-            f"{adapted_capture_decision.get('conclusion', '-')}",
+            f"{signal_marker(decision_signal)} 重調後資金／capture判定："
+            f"{optimized_decision.get('status', '-')}｜{optimized_decision.get('conclusion', '-')}",
             decision_signal,
             enabled=use_color,
         ),
         f"主要瓶頸：{bottlenecks}",
-        "下一步：只有Rolling診斷支持適應後，才另行執行完整Selection final refit並凍結參數；本流程不直接執行正式OOS。",
-        "限制：本結果是無前視Rolling Selection診斷；Future Target僅在回放完成後join，未參與runtime或optimizer。",
-        "核心適應差異（Adapted Rolling − Sort Only）：總報酬 "
-        f"{_compact_metric_value(total_delta, unit='pp', digits=2)}；最大回撤 "
-        f"{_compact_metric_value(mdd_delta, unit='pp', digits=2)}；平均曝險 "
-        f"{_compact_metric_value(adapted_delta.get('avg_exposure_pct'), unit='pp', digits=2)}。",
+        "判讀原則：哪種ranking較好，只看Sort Only − Baseline與Score Adapted − Baseline Adapted；不得用Score Adapted − Sort Only替代ranking結論。",
+        "下一步：只有optimized-system比較支持Score ranking後，才進完整Selection final refit；本流程不執行正式OOS。",
+        "限制：本結果是無前視Rolling Selection診斷；Future Target只在回放完成後join。",
+        "核心純Ranking差異：總報酬 "
+        f"{_compact_metric_value(ranking_delta.get('total_return_pct'), unit='pp', digits=2)}；"
+        "報酬／回撤 "
+        f"{_compact_metric_value(ranking_delta.get('return_over_max_drawdown'), digits=2)}。",
+        "核心最佳化系統差異：總報酬 "
+        f"{_compact_metric_value(optimized_delta.get('total_return_pct'), unit='pp', digits=2)}；"
+        "報酬／回撤 "
+        f"{_compact_metric_value(optimized_delta.get('return_over_max_drawdown'), digits=2)}。",
     ))
     return "\n".join(lines)
 
-def _render_three_way_console(result: dict[str, Any]) -> str:
-    if compact_console_enabled():
-        return _render_compact_three_way_console(result)
-    rows, values = _metric_rows(result)
-    metric_rows = []
-    for label, key, unit in rows:
-        metric_rows.append((
-            label,
-            _fmt(values["baseline"].get(key), unit),
-            _fmt(values["sort_only"].get(key), unit),
-            _fmt(values["adapted"].get(key), unit),
-        ))
-    yearly_rows = []
-    for row in list(result.get("yearly") or []):
-        yearly_rows.append((
-            str(int(row["year"])),
-            _fmt(row.get("no_filter_return_pct"), "%"),
-            _fmt(row.get("score_ranking_return_pct"), "%"),
-            _fmt(row.get("adapted_return_pct"), "%"),
-        ))
-    diagnostics = result["selection_diagnostics"]
-    diag_rows = []
-    for label, key in (
-        ("Orderable occurrences", "orderable_occurrences"),
-        ("Score coverage", "orderable_score_coverage_rate"),
-        ("Selected buys", "selected_buy_rows"),
-        ("Target percentile", "selected_target_percentile_mean"),
-        ("Top-k retention", "target_top_k_retention_mean"),
-        ("Opportunity gap", "target_opportunity_gap_r_mean"),
-        ("Selected Target R", "selected_target_mean_r"),
-    ):
-        diag_rows.append((
-            label,
-            _fmt(diagnostics["baseline"].get(key)),
-            _fmt(diagnostics["sort_only"].get(key)),
-            _fmt(diagnostics["adapted"].get(key)),
-        ))
-    return "\n".join((
-        render_title("Selection Score-ranking Rolling Strategy Adaptation Validation"),
-        render_key_values((
-            ("狀態", ADAPTATION_STATUS),
-            ("判讀", "相同rolling policy的Selection診斷；不是final refit或正式OOS"),
-            ("Future Target runtime", "未使用"),
-        )),
-        render_section("三組策略結果", number=1),
-        render_table(
-            ("指標", "Baseline", "Sort Only", "Adapted Rolling"),
-            metric_rows,
-            alignments=("left", "right", "right", "right"),
-        ),
-        render_section("年度績效", number=2),
-        render_table(
-            ("年度", "Baseline", "Sort Only", "Adapted Rolling"),
-            yearly_rows,
-            alignments=("left", "right", "right", "right"),
-        ),
-        render_section("Selection 選股診斷", number=3),
-        render_table(
-            ("指標", "Baseline", "Sort Only", "Adapted Rolling"),
-            diag_rows,
-            alignments=("left", "right", "right", "right"),
-        ),
-        render_section("參數差異", number=4),
-        render_table(
-            ("參數", "Baseline中位", "Baseline範圍", "Adapted中位", "Adapted範圍"),
-            _param_comparison_table_rows(result),
-            alignments=("left", "right", "right", "right", "right"),
-        ),
-        "Adapted Rolling只判斷參數適應方向；不產生最終refit參數，也不宣稱OOS泛化。",
-    ))
 
-def _render_three_way_markdown(result: dict[str, Any]) -> str:
+def _render_four_way_markdown(result: dict[str, Any]) -> str:
     rows, values = _metric_rows(result)
     lines = [
-        "# Selection Score-ranking Rolling Strategy Adaptation Validation",
+        "# Selection Ranking × Parameter 2×2 Rolling Validation",
         "",
         f"- 狀態：`{ADAPTATION_STATUS}`",
-        "- Adapted Rolling為無前視rolling Selection診斷，不是最終refit或正式OOS結果。",
-        "- Future Target只於回放後離線join，未進入runtime或optimizer objective。",
+        "- Ranking-only：Sort Only − Baseline，兩組使用完全相同的歷史active params。",
+        "- Optimized-system：Score Adapted − Baseline Adapted，兩組使用相同folds、搜尋規則與預算。",
+        "- Future Target只在replay後離線join，未進runtime或optimizer。",
         "",
-        "## 三組策略結果",
+        "## 核心指標",
         "",
-        "| 指標 | Baseline | Sort Only | Adapted Rolling |",
-        "|---|---:|---:|---:|",
+        "| 指標 | Baseline | Sort Only | Baseline Adapted | Score Adapted |",
+        "|---|---:|---:|---:|---:|",
     ]
     for label, key, unit in rows:
         lines.append(
             f"| {label} | {_fmt(values['baseline'].get(key), unit)} | "
             f"{_fmt(values['sort_only'].get(key), unit)} | "
-            f"{_fmt(values['adapted'].get(key), unit)} |"
+            f"{_fmt(values['baseline_adapted'].get(key), unit)} | "
+            f"{_fmt(values['score_adapted'].get(key), unit)} |"
         )
     lines.extend((
         "",
-        "## 年度績效",
+        "## 年度報酬",
         "",
-        "| 年度 | Baseline | Sort Only | Adapted Rolling |",
-        "|---:|---:|---:|---:|",
+        "| 年度 | Baseline | Sort Only | Baseline Adapted | Score Adapted |",
+        "|---:|---:|---:|---:|---:|",
     ))
     for row in list(result.get("yearly") or []):
         lines.append(
             f"| {int(row['year'])} | {_fmt(row.get('no_filter_return_pct'), '%')} | "
             f"{_fmt(row.get('score_ranking_return_pct'), '%')} | "
-            f"{_fmt(row.get('adapted_return_pct'), '%')} |"
-        )
-    diagnostics = result["selection_diagnostics"]
-    lines.extend((
-        "",
-        "## Selection 選股診斷",
-        "",
-        "| 指標 | Baseline | Sort Only | Adapted Rolling |",
-        "|---|---:|---:|---:|",
-    ))
-    for label, key in (
-        ("Orderable occurrences", "orderable_occurrences"),
-        ("Score coverage", "orderable_score_coverage_rate"),
-        ("Selected buys", "selected_buy_rows"),
-        ("Target percentile", "selected_target_percentile_mean"),
-        ("Top-k retention", "target_top_k_retention_mean"),
-        ("Opportunity gap", "target_opportunity_gap_r_mean"),
-        ("Selected Target R", "selected_target_mean_r"),
-    ):
-        lines.append(
-            f"| {label} | {_fmt(diagnostics['baseline'].get(key))} | "
-            f"{_fmt(diagnostics['sort_only'].get(key))} | "
-            f"{_fmt(diagnostics['adapted'].get(key))} |"
+            f"{_fmt(row.get('baseline_adapted_return_pct'), '%')} | "
+            f"{_fmt(row.get('score_adapted_return_pct'), '%')} |"
         )
     lines.extend((
         "",
-        "## 參數差異",
+        "## 重調後參數差異",
         "",
-        "| 參數 | Baseline中位 | Baseline範圍 | Adapted中位 | Adapted範圍 |",
+        "| 參數 | Base Adapted中位 | Base Adapted範圍 | Score Adapted中位 | Score Adapted範圍 |",
         "|---|---:|---:|---:|---:|",
     ))
-    for parameter, minimum, median, maximum, adapted_value in _param_comparison_table_rows(result):
+    for parameter, left_med, left_range, right_med, right_range in _param_comparison_table_rows(result):
         lines.append(
-            f"| {parameter} | {minimum} | {median} | {maximum} | {adapted_value} |"
+            f"| {parameter} | {left_med} | {left_range} | {right_med} | {right_range} |"
         )
     lines.extend((
         "",
-        "## 判讀限制",
+        "## 判讀邊界",
         "",
-        "- 本結果只回答在相同rolling folds與trials／fold下，Score Sort參數適應是否有改善方向。",
-        "- 若rolling診斷支持適應，下一階段才執行完整Selection final refit並凍結最終參數。",
+        "- 哪種ranking較好，只能使用Ranking-only與Optimized-system兩個對稱差異。",
+        "- Score Adapted − Sort Only只代表Score ranking條件下的參數重調效果，不是ranking效果。",
+        "- 本結果不是完整Selection final refit，也不是正式OOS。",
         "",
     ))
     return "\n".join(lines)
+
+
+_render_four_way_console_impl = _render_four_way_console
+
+
+def _render_three_way_console(result: dict[str, Any]) -> str:
+    return _render_four_way_console_impl(result)
+
+
+def _render_three_way_markdown(result: dict[str, Any]) -> str:
+    return _render_four_way_markdown(result)
 
 
 def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
@@ -1820,16 +2124,50 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             f"pit={pit_contract.available_through}, baseline={baseline_last_oos_end}"
         )
 
-    base_policy = _build_base_policy(root=root, baseline_contract=baseline_contract)
-    runtime_contract = _build_runtime_contract(
+    common_policy = _build_base_policy(
+        root=root, baseline_contract=baseline_contract
+    )
+    baseline_adapted_policy = dict(common_policy)
+    baseline_adapted_policy.update({
+        "adaptation_arm": "baseline_adapted",
+        "adaptation_scope": "selection_rolling_2x2_baseline_adapted",
+    })
+    score_adapted_policy = dict(common_policy)
+    score_adapted_policy.update({
+        "adaptation_arm": "score_adapted",
+        "adaptation_scope": "selection_rolling_2x2_score_adapted",
+    })
+    baseline_adapted_contract = _build_runtime_contract(
         root=root,
         args=args,
         settings=settings,
         pit_contract=pit_contract,
         baseline_contract=baseline_contract,
-        base_policy=base_policy,
+        base_policy=baseline_adapted_policy,
+        arm_name="baseline_adapted",
+        ranking_enabled=False,
     )
-    score_coverage = dict(runtime_contract["training_score_coverage"])
+    score_adapted_contract = _build_runtime_contract(
+        root=root,
+        args=args,
+        settings=settings,
+        pit_contract=pit_contract,
+        baseline_contract=baseline_contract,
+        base_policy=score_adapted_policy,
+        arm_name="score_adapted",
+        ranking_enabled=True,
+    )
+    if (
+        baseline_adapted_contract["rolling_policy"]
+        != score_adapted_contract["rolling_policy"]
+    ):
+        raise ValueError("2×2兩個重調組的rolling policy不一致")
+    if (
+        baseline_adapted_contract["search_space_identity_sha256"]
+        != score_adapted_contract["search_space_identity_sha256"]
+    ):
+        raise ValueError("2×2兩個重調組的search space不一致")
+    score_coverage = dict(score_adapted_contract["training_score_coverage"])
     bootstrap_folds = int(score_coverage["bootstrap_fallback_only_folds"])
     partial_folds = int(score_coverage["partial_score_history_folds"])
     if bootstrap_folds or partial_folds:
@@ -1839,197 +2177,183 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             f"partial-score folds={partial_folds}. "
             "PIT開始日前依正式缺分契約回退原buy-sort；PIT期間內缺口禁止。"
         )
+
     output_dir = (root / ADAPTATION_RELATIVE_DIR).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    combined_identity = _canonical_json_sha256({
+        "baseline_adapted": baseline_adapted_contract["runtime_identity_sha256"],
+        "score_adapted": score_adapted_contract["runtime_identity_sha256"],
+    })
     preflight_path = output_dir / "rolling_preflight.json"
-    existing_preflight = _load_json_mapping(preflight_path)
-    coverage_path = output_dir / "rolling_training_score_coverage.csv"
     _write_json(
         preflight_path,
         {
-            **runtime_contract,
-            "status": "ROLLING_ADAPTATION_PREFLIGHT_PASS",
+            "schema_version": SCHEMA_VERSION,
+            "status": "ROLLING_2X2_PREFLIGHT_PASS",
+            "comparison_design": "ranking_parameter_2x2",
+            "runtime_identity_sha256": combined_identity,
+            "baseline_adapted_contract": baseline_adapted_contract,
+            "score_adapted_contract": score_adapted_contract,
             "created_at": get_taipei_now().isoformat(),
         },
     )
+    coverage_path = output_dir / "rolling_training_score_coverage.csv"
     pd.DataFrame(score_coverage["folds"]).to_csv(
         coverage_path, index=False, encoding="utf-8-sig"
     )
-    current_pair_dir = output_dir / "baseline_sort_only"
 
+    current_pair_dir = output_dir / "baseline_sort_only"
+    current_pair_contract = {
+        "runtime_identity_sha256": _build_current_pair_runtime_identity(
+            root=root,
+            args=args,
+            pit_contract=pit_contract,
+            baseline_contract=baseline_contract,
+        )
+    }
     current_payload, current_pair_reused = _load_or_run_current_pair(
         root=root,
         args=args,
-        runtime_contract=runtime_contract,
+        runtime_contract=current_pair_contract,
         output_dir=current_pair_dir,
     )
-    current_decision = dict(current_payload.get("score_ranking_capture_audit", {})).get(
-        "decision", {}
-    )
+    current_decision = dict(
+        current_payload.get("score_ranking_capture_audit", {})
+    ).get("decision", {})
     if str(current_decision.get("status") or "") != "ADAPTATION_DIAGNOSTIC_SUPPORTED":
         raise RuntimeError(
             "目前Baseline／Sort Only capture audit未通過參數適應前置條件："
             f"status={current_decision.get('status')!r}"
         )
 
-    adapted_models_dir = output_dir / "adapted_active_params"
-    adapted_models_dir.mkdir(parents=True, exist_ok=True)
-    optimizer_output_dir = output_dir / "optimizer_runtime"
-    outer_environ = dict(os.environ)
-    outer_environ["V16_MODELS_DIR"] = str(adapted_models_dir.resolve())
-    session_spec = _optimizer_session_spec(
+    baseline_adapted_arm = _run_rolling_optimizer_arm(
         root=root,
+        args=args,
+        settings=settings,
+        baseline_contract=baseline_contract,
+        base_policy=baseline_adapted_policy,
+        runtime_contract=baseline_adapted_contract,
         output_dir=output_dir,
+        arm_name="baseline_adapted",
+        arm_label="Baseline Adapted",
+        ranking_enabled=False,
+    )
+    score_adapted_arm = _run_rolling_optimizer_arm(
+        root=root,
         args=args,
-        runtime_contract=runtime_contract,
-    )
-    adapted_params_path = adapted_models_dir / "roos_base_best.json"
-    optimizer_search_reused = _completed_adapted_search_is_compatible(
-        existing_preflight=existing_preflight,
-        runtime_contract=runtime_contract,
-        adapted_params_path=adapted_params_path,
+        settings=settings,
         baseline_contract=baseline_contract,
+        base_policy=score_adapted_policy,
+        runtime_contract=score_adapted_contract,
+        output_dir=output_dir,
+        arm_name="score_adapted",
+        arm_label="Score Adapted",
+        ranking_enabled=True,
     )
-    if optimizer_search_reused:
-        print(
-            "\n[Adapted Rolling] 既有7-fold搜尋與目前runtime identity一致；"
-            "沿用已選參數並重新套用固定Score-ranking契約，不重跑optimizer。"
-        )
-    else:
-        exit_code = run_outer_rolling_oos(
-            argv=_outer_rolling_argv(args=args, baseline_contract=baseline_contract),
-            environ=outer_environ,
-            project_root=str(root),
-            output_dir=str(optimizer_output_dir),
-            base_policy=base_policy,
-            selected_data_dir=get_dataset_dir(str(root), args.dataset),
-            dataset_label=str(args.dataset),
-            load_all_raw_data=load_all_raw_data,
-            optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
-            build_optimizer_session=build_optimizer_session,
-            create_optimizer_study=create_optimizer_study,
-            ensure_study_effective_policy_compatible=ensure_study_effective_policy_compatible,
-            configure_optuna_logging=configure_optuna_logging,
-            optimizer_seed=int(settings.seed),
-            optimizer_session_spec=session_spec,
-            default_trials=int(args.trials_per_fold),
-            timing_mode=False,
-        )
-        if int(exit_code) != 0:
-            raise RuntimeError(f"Adapted Rolling optimizer失敗：returncode={exit_code}")
 
-    materialized_param_paths = _materialize_adapted_param_artifacts(
-        adapted_models_dir=adapted_models_dir,
-        fixed_strategy_param_overrides=_fixed_strategy_param_overrides(args),
-    )
-    if adapted_params_path not in materialized_param_paths:
-        raise RuntimeError(
-            "Adapted Rolling active-param工件無法套用固定Score-ranking契約："
-            f"path={adapted_params_path}"
-        )
-    adapted_params_payload = _validate_adapted_rolling_params(
-        path=adapted_params_path,
-        baseline_contract=baseline_contract,
-        runtime_contract=runtime_contract,
-        args=args,
-    )
     optimizer_summary_path = output_dir / "rolling_optimizer_summary.json"
-    adapted_manifest_path = output_dir / "rolling_adaptation_manifest.json"
     optimizer_summary = {
-        "mode": "rolling_selection_validation",
+        "mode": "rolling_selection_2x2_validation",
         "result_interpretation": ADAPTATION_STATUS,
-        "folds": int(dict(adapted_params_payload.get("summary") or {}).get("folds", 0) or 0),
+        "folds": int(score_coverage.get("fold_count", 0) or 0),
         "trials_per_fold": int(args.trials_per_fold),
-        "total_requested_trials": int(args.trials_per_fold) * int(
-            dict(adapted_params_payload.get("summary") or {}).get("folds", 0) or 0
-        ),
-        "baseline_trials_per_fold": int(baseline_meta["trials_per_fold"]),
         "trials_per_fold_source": str(
-            runtime_contract["rolling_policy"]["trials_per_fold_source"]
+            score_adapted_contract["rolling_policy"]["trials_per_fold_source"]
         ),
-        "trial_count_match_required": False,
-        "same_fold_schedule_as_baseline": True,
-        "same_rolling_policy_as_baseline": (
-            int(args.trials_per_fold) == int(baseline_meta["trials_per_fold"])
-        ),
+        "same_fold_schedule_between_adapted_arms": True,
+        "same_search_space_between_adapted_arms": True,
+        "same_search_budget_between_adapted_arms": True,
+        "baseline_history_trials_per_fold": int(baseline_meta["trials_per_fold"]),
+        "baseline_history_trial_count_match_required": False,
         "baseline_sort_only_reused": bool(current_pair_reused),
-        "optimizer_search_reused": bool(optimizer_search_reused),
-        "fixed_contract_materialized_files": [
-            project_relative_display_path(path, project_root=root)
-            for path in materialized_param_paths
-        ],
-        "seed": int(settings.seed),
-        "fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
-        "runtime_identity_sha256": runtime_contract["runtime_identity_sha256"],
+        "baseline_adapted": baseline_adapted_arm["optimizer_summary"],
+        "score_adapted": score_adapted_arm["optimizer_summary"],
+        "combined_runtime_identity_sha256": combined_identity,
         "final_selection_refit_executed": False,
         "formal_oos_executed": False,
     }
     _write_json(optimizer_summary_path, optimizer_summary)
 
-    comparison_result = _run_three_way_comparison(
+    comparison_result = _run_four_way_comparison(
         root=root,
         args=args,
         pit_contract=pit_contract,
         current_payload=current_payload,
         baseline_contract=baseline_contract,
-        adapted_params_path=adapted_params_path,
+        baseline_adapted_arm=baseline_adapted_arm,
+        score_adapted_arm=score_adapted_arm,
         current_pair_dir=current_pair_dir,
         output_dir=output_dir,
         rolling_validation={
             "fold_count": int(score_coverage.get("fold_count", 0) or 0),
             "trials_per_fold": int(args.trials_per_fold),
             "trials_per_fold_source": str(
-                runtime_contract["rolling_policy"]["trials_per_fold_source"]
+                score_adapted_contract["rolling_policy"]["trials_per_fold_source"]
             ),
             "baseline_trials_per_fold": int(baseline_meta["trials_per_fold"]),
             "trial_count_match_required": False,
             "train_window_months": int(baseline_meta["train_window_months"]),
             "oos_horizon_months": int(baseline_meta["oos_horizon_months"]),
-            "same_fold_schedule_as_baseline": True,
-            "same_rolling_policy_as_baseline": (
-                int(args.trials_per_fold) == int(baseline_meta["trials_per_fold"])
+            "same_fold_schedule_between_adapted_arms": True,
+            "same_search_space_between_adapted_arms": True,
+            "same_search_budget_between_adapted_arms": True,
+            "baseline_adapted_search_reused": bool(
+                baseline_adapted_arm["search_reused"]
             ),
-            "optimizer_search_reused": bool(optimizer_search_reused),
+            "score_adapted_search_reused": bool(
+                score_adapted_arm["search_reused"]
+            ),
             "training_score_coverage": score_coverage,
         },
     )
+
+    optimized_capture_dir = output_dir / "optimized_pair_capture"
     artifact_paths = {
         "rolling_preflight": preflight_path,
         "training_score_coverage": coverage_path,
-        "adapted_rolling_params": adapted_params_path,
+        "baseline_adapted_params": baseline_adapted_arm["params_path"],
+        "score_adapted_params": score_adapted_arm["params_path"],
+        "baseline_adapted_preflight": baseline_adapted_arm["preflight_path"],
+        "score_adapted_preflight": score_adapted_arm["preflight_path"],
+        "baseline_adapted_optimizer_summary": baseline_adapted_arm[
+            "optimizer_summary_path"
+        ],
+        "score_adapted_optimizer_summary": score_adapted_arm[
+            "optimizer_summary_path"
+        ],
         "optimizer_summary": optimizer_summary_path,
         "comparison_json": output_dir / "strategy_adaptation_comparison.json",
         "comparison_markdown": output_dir / "strategy_adaptation_comparison.md",
         "yearly_csv": output_dir / "strategy_adaptation_yearly_returns.csv",
-        "adapted_capture_json": output_dir / "score_ranking_capture_audit.json",
-        "adapted_capture_markdown": output_dir / "score_ranking_capture_audit.md",
-        "adapted_equity": output_dir / "adapted_rolling_equity.csv",
-        "adapted_trades": output_dir / "adapted_rolling_trades.csv",
-        "adapted_daily_capacity": output_dir / "adapted_rolling_daily_capacity.csv",
-        "adapted_orderable_diagnostics": output_dir / "adapted_rolling_orderable_target_diagnostics.csv",
-        "adapted_selected_diagnostics": output_dir / "adapted_rolling_selected_target_diagnostics.csv",
-        "adapted_yearly_returns": output_dir / "adapted_rolling_yearly_returns.csv",
-        "adaptation_yearly_comparison": output_dir / "strategy_adaptation_yearly_returns.csv",
-        "adapted_baseline_capture_lifecycle": output_dir / "no_filter_capture_lifecycle.csv",
-        "adapted_score_capture_lifecycle": output_dir / "score_ranking_capture_lifecycle.csv",
-        "adapted_capture_yearly": output_dir / "score_ranking_capture_yearly.csv",
-        "adapted_capture_scenarios": output_dir / "score_ranking_capture_scenarios.csv",
+        "baseline_adapted_equity": output_dir / "baseline_adapted_equity.csv",
+        "baseline_adapted_trades": output_dir / "baseline_adapted_trades.csv",
+        "score_adapted_equity": output_dir / "score_adapted_equity.csv",
+        "score_adapted_trades": output_dir / "score_adapted_trades.csv",
+        "optimized_capture_json": optimized_capture_dir / "score_ranking_capture_audit.json",
+        "optimized_capture_markdown": optimized_capture_dir / "score_ranking_capture_audit.md",
         "baseline_sort_only_comparison_json": current_pair_dir / "strategy_comparison.json",
         "baseline_sort_only_comparison_markdown": current_pair_dir / "strategy_comparison.md",
-        "baseline_sort_only_capture_json": current_pair_dir / "score_ranking_capture_audit.json",
-        "baseline_sort_only_capture_markdown": current_pair_dir / "score_ranking_capture_audit.md",
         "baseline_sort_only_manifest": current_pair_dir / CURRENT_PAIR_MANIFEST_FILENAME,
     }
-    missing_artifacts = [str(path) for path in artifact_paths.values() if not path.is_file()]
+    missing_artifacts = [
+        str(item) for item in artifact_paths.values() if not item.is_file()
+    ]
     if missing_artifacts:
         raise FileNotFoundError(
-            "Rolling adaptation完成後缺少必要工件: " + ", ".join(missing_artifacts)
+            "Rolling 2×2 adaptation完成後缺少必要工件: "
+            + ", ".join(missing_artifacts)
         )
+
+    manifest_path = output_dir / "rolling_adaptation_manifest.json"
     execution_argv = _canonical_execution_argv(args)
     manifest = {
-        **runtime_contract,
-        "status": "ROLLING_ADAPTATION_VALIDATION_COMPLETED",
+        "schema_version": SCHEMA_VERSION,
+        "status": "ROLLING_2X2_VALIDATION_COMPLETED",
+        "comparison_design": "ranking_parameter_2x2",
         "result_interpretation": ADAPTATION_STATUS,
+        "combined_runtime_identity_sha256": combined_identity,
+        "baseline_adapted_contract": baseline_adapted_contract,
+        "score_adapted_contract": score_adapted_contract,
         "optimizer_summary": optimizer_summary,
         "baseline_sort_only_reused": bool(current_pair_reused),
         "execution_command": " ".join(execution_argv),
@@ -2037,26 +2361,28 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         "created_at": get_taipei_now().isoformat(),
         "artifacts": {
             key: {
-                "path": project_relative_display_path(path, project_root=root),
-                "sha256": compute_file_sha256(path),
+                "path": project_relative_display_path(item, project_root=root),
+                "sha256": compute_file_sha256(item),
             }
-            for key, path in artifact_paths.items()
+            for key, item in artifact_paths.items()
         },
     }
-    _write_json(adapted_manifest_path, manifest)
+    _write_json(manifest_path, manifest)
     print_artifact_paths(
         (
-            ("Rolling preflight", preflight_path),
+            ("Rolling 2×2 preflight", preflight_path),
             ("Training Score coverage", coverage_path),
-            ("Adapted Rolling active params", adapted_params_path),
-            ("Rolling adaptation manifest", adapted_manifest_path),
+            ("Baseline Adapted active params", baseline_adapted_arm["params_path"]),
+            ("Score Adapted active params", score_adapted_arm["params_path"]),
+            ("Rolling adaptation manifest", manifest_path),
             ("Rolling optimizer summary", optimizer_summary_path),
-            ("三組比較 Markdown", output_dir / "strategy_adaptation_comparison.md"),
-            ("三組比較 JSON", output_dir / "strategy_adaptation_comparison.json"),
+            ("四組比較 Markdown", output_dir / "strategy_adaptation_comparison.md"),
+            ("四組比較 JSON", output_dir / "strategy_adaptation_comparison.json"),
         ),
         project_root=root,
     )
     return comparison_result
+
 
 def main(argv=None):
     run_adaptation(argv=argv)
