@@ -43,6 +43,8 @@ from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     load_continuous_ranker_data,
 )
 from filters.breakout_quality.console_report import (
+    console_color_enabled,
+    paint,
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -501,6 +503,69 @@ def _fmt_percent(value: Any, digits: int = 2) -> str:
     return f"{numeric * 100.0:.{digits}f}%"
 
 
+def _finite_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _signed_tone(value: Any) -> str:
+    numeric = _finite_number(value)
+    if numeric is None:
+        return "gray"
+    if numeric > 0.0:
+        return "green"
+    if numeric < 0.0:
+        return "red"
+    return "yellow"
+
+
+def _coverage_tone(value: Any) -> str:
+    numeric = _finite_number(value)
+    if numeric is None:
+        return "gray"
+    if numeric >= 1.0 - 1e-12:
+        return "green"
+    if numeric > 0.0:
+        return "yellow"
+    return "red"
+
+
+def _ratio_tone(numerator: Any, denominator: Any) -> str:
+    top = _finite_number(numerator)
+    bottom = _finite_number(denominator)
+    if top is None or bottom is None or bottom <= 0.0:
+        return "gray"
+    ratio = top / bottom
+    if ratio >= 1.0 - 1e-12:
+        return "green"
+    if ratio >= 0.5:
+        return "yellow"
+    return "red"
+
+
+def _auc_tone(value: Any) -> str:
+    numeric = _finite_number(value)
+    if numeric is None:
+        return "gray"
+    if numeric > 0.5:
+        return "green"
+    if numeric < 0.5:
+        return "red"
+    return "yellow"
+
+
+def _colored_section(title: str, *, number: int, color: bool) -> str:
+    return render_section(
+        paint(title, "cyan", enabled=color, bold=True),
+        number=number,
+    )
+
+
 def _render_console_table(headers, rows):
     return render_table(headers, rows).splitlines()
 
@@ -527,7 +592,7 @@ def _direction_summary(yearly_rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def render_console_summary(payload: dict[str, Any]) -> str:
+def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> str:
     primary = payload["metrics"]["pass_only_target"]
     all_target = payload["metrics"]["all_valid_target"]
     classification = payload["classification_overlap"]
@@ -535,10 +600,22 @@ def render_console_summary(payload: dict[str, Any]) -> str:
     direction = payload["direction_summary"]
     score_coverage = payload.get("score_coverage") or {}
     workflow = payload.get("workflow") or {}
+    score_coverage_text = (
+        f"{int(score_coverage.get('scored_group_count', 0)):,}/"
+        f"{int(score_coverage.get('expected_group_count', 0)):,} "
+        f"({_fmt_percent(score_coverage.get('coverage_rate'))})"
+    )
 
     lines = [
         "",
-        render_title("Breakout Quality Selection Point-in-time 模型評估報表"),
+        render_title(
+            paint(
+                "Breakout Quality Selection Point-in-time 模型評估報表",
+                "cyan",
+                enabled=color,
+                bold=True,
+            )
+        ),
         render_key_values((
             ("Filter ID", payload["filter_id"]),
             ("Architecture", payload["model_architecture"]),
@@ -548,34 +625,89 @@ def render_console_summary(payload: dict[str, Any]) -> str:
             ("Random Seed", workflow.get("seed", "-")),
             ("Score Period", f"{payload['score_period']['start']} ～ {payload['score_period']['end']}"),
             ("PIT Folds", workflow.get("fold_count", "-")),
-            ("Fold／Validation", f"{workflow.get('fold_months', '-')}／{workflow.get('inner_validation_months', '-')} months"),
-            ("Score Coverage", f"{int(score_coverage.get('scored_group_count', 0)):,}/{int(score_coverage.get('expected_group_count', 0)):,} ({_fmt_percent(score_coverage.get('coverage_rate'))})"),
-            ("Primary Evidence", "PASS-only No-time Target ordering"),
-            ("Strategy Result", "尚未執行；本報表只評估模型排序能力"),
+            (
+                "Fold／Validation",
+                f"{workflow.get('fold_months', '-')}／"
+                f"{workflow.get('inner_validation_months', '-')} months",
+            ),
+            (
+                "Score Coverage",
+                paint(
+                    score_coverage_text,
+                    _coverage_tone(score_coverage.get("coverage_rate")),
+                    enabled=color,
+                    bold=True,
+                ),
+            ),
+            (
+                "Primary Evidence",
+                paint(
+                    "PASS-only No-time Target ordering",
+                    "cyan",
+                    enabled=color,
+                    bold=True,
+                ),
+            ),
+            (
+                "Strategy Result",
+                paint(
+                    "尚未執行；本報表只評估模型排序能力",
+                    "yellow",
+                    enabled=color,
+                    bold=True,
+                ),
+            ),
         )),
-        render_section("核心排序能力", number=1),
+        _colored_section("核心排序能力", number=1, color=color),
     ]
     lines.extend(
         _render_console_table(
             ["Scope", "Groups", "Spearman", "Daily rho", "Top", "Bottom", "Spread"],
             [
                 [
-                    "PASS-only",
+                    paint("PASS-only", "cyan", enabled=color, bold=True),
                     f"{int(primary['group_count']):,}",
-                    _fmt_metric(primary.get("global_spearman")),
-                    _fmt_metric(primary.get("mean_daily_spearman")),
+                    paint(
+                        _fmt_metric(primary.get("global_spearman")),
+                        _signed_tone(primary.get("global_spearman")),
+                        enabled=color,
+                        bold=True,
+                    ),
+                    paint(
+                        _fmt_metric(primary.get("mean_daily_spearman")),
+                        _signed_tone(primary.get("mean_daily_spearman")),
+                        enabled=color,
+                        bold=True,
+                    ),
                     _fmt_metric(primary.get("top_decile_target_mean")),
                     _fmt_metric(primary.get("bottom_decile_target_mean")),
-                    _fmt_metric(primary.get("top_bottom_target_spread")),
+                    paint(
+                        _fmt_metric(primary.get("top_bottom_target_spread")),
+                        _signed_tone(primary.get("top_bottom_target_spread")),
+                        enabled=color,
+                        bold=True,
+                    ),
                 ],
                 [
                     "All valid",
                     f"{int(all_target['group_count']):,}",
-                    _fmt_metric(all_target.get("global_spearman")),
-                    _fmt_metric(all_target.get("mean_daily_spearman")),
+                    paint(
+                        _fmt_metric(all_target.get("global_spearman")),
+                        _signed_tone(all_target.get("global_spearman")),
+                        enabled=color,
+                    ),
+                    paint(
+                        _fmt_metric(all_target.get("mean_daily_spearman")),
+                        _signed_tone(all_target.get("mean_daily_spearman")),
+                        enabled=color,
+                    ),
                     _fmt_metric(all_target.get("top_decile_target_mean")),
                     _fmt_metric(all_target.get("bottom_decile_target_mean")),
-                    _fmt_metric(all_target.get("top_bottom_target_spread")),
+                    paint(
+                        _fmt_metric(all_target.get("top_bottom_target_spread")),
+                        _signed_tone(all_target.get("top_bottom_target_spread")),
+                        enabled=color,
+                    ),
                 ],
             ],
         )
@@ -583,14 +715,31 @@ def render_console_summary(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            render_section("年度穩定性（PASS-only）", number=2),
+            _colored_section("年度穩定性（PASS-only）", number=2, color=color),
             (
                 "正向 Spearman 年度："
-                f"{direction['positive_spearman_year_count']}/{direction['valid_year_count']} "
-                f"({_fmt_percent(direction['positive_spearman_year_rate'])})；"
+                + paint(
+                    f"{direction['positive_spearman_year_count']}/{direction['valid_year_count']} "
+                    f"({_fmt_percent(direction['positive_spearman_year_rate'])})",
+                    _ratio_tone(
+                        direction["positive_spearman_year_count"],
+                        direction["valid_year_count"],
+                    ),
+                    enabled=color,
+                    bold=True,
+                )
+                + "；"
                 "正向 Top-bottom spread 年度："
-                f"{direction['positive_spread_year_count']}/{direction['valid_year_count']} "
-                f"({_fmt_percent(direction['positive_spread_year_rate'])})"
+                + paint(
+                    f"{direction['positive_spread_year_count']}/{direction['valid_year_count']} "
+                    f"({_fmt_percent(direction['positive_spread_year_rate'])})",
+                    _ratio_tone(
+                        direction["positive_spread_year_count"],
+                        direction["valid_year_count"],
+                    ),
+                    enabled=color,
+                    bold=True,
+                )
             ),
         ]
     )
@@ -598,9 +747,23 @@ def render_console_summary(payload: dict[str, Any]) -> str:
         [
             str(row["year"]),
             f"{int(row['group_count']):,}",
-            _fmt_metric(row.get("global_spearman")),
-            _fmt_metric(row.get("mean_daily_spearman")),
-            _fmt_metric(row.get("top_bottom_target_spread")),
+            paint(
+                _fmt_metric(row.get("global_spearman")),
+                _signed_tone(row.get("global_spearman")),
+                enabled=color,
+                bold=True,
+            ),
+            paint(
+                _fmt_metric(row.get("mean_daily_spearman")),
+                _signed_tone(row.get("mean_daily_spearman")),
+                enabled=color,
+            ),
+            paint(
+                _fmt_metric(row.get("top_bottom_target_spread")),
+                _signed_tone(row.get("top_bottom_target_spread")),
+                enabled=color,
+                bold=True,
+            ),
         ]
         for row in payload["yearly_pass_only"]
     ]
@@ -611,7 +774,7 @@ def render_console_summary(payload: dict[str, Any]) -> str:
         )
     )
 
-    lines.append(render_section("Fold 分布與漂移", number=3))
+    lines.append(_colored_section("Fold 分布與漂移", number=3, color=color))
     fold_rows = [
         [
             str(row["fold_id"]),
@@ -621,7 +784,12 @@ def render_console_summary(payload: dict[str, Any]) -> str:
             _fmt_metric(row.get("score_p10")),
             _fmt_metric(row.get("score_p50")),
             _fmt_metric(row.get("score_p90")),
-            _fmt_metric(row.get("pass_target_spearman")),
+            paint(
+                _fmt_metric(row.get("pass_target_spearman")),
+                _signed_tone(row.get("pass_target_spearman")),
+                enabled=color,
+                bold=True,
+            ),
         ]
         for row in payload["fold_metrics"]
     ]
@@ -633,41 +801,120 @@ def render_console_summary(payload: dict[str, Any]) -> str:
     )
     lines.extend(
         [
-            f"Drift flag         : {drift['drift_flag']}",
-            f"Max adjacent shift : {_fmt_metric(drift.get('max_adjacent_mean_shift_in_pooled_std'))} pooled SD",
-            f"Flagged folds      : {', '.join(drift['flagged_folds']) if drift['flagged_folds'] else '-'}",
+            "Drift flag         : "
+            + paint(
+                str(bool(drift["drift_flag"])),
+                "red" if bool(drift["drift_flag"]) else "green",
+                enabled=color,
+                bold=True,
+            ),
+            "Max adjacent shift : "
+            + paint(
+                _fmt_metric(drift.get("max_adjacent_mean_shift_in_pooled_std")),
+                (
+                    "red"
+                    if float(drift.get("max_adjacent_mean_shift_in_pooled_std") or 0.0)
+                    >= DRIFT_MEAN_SHIFT_STD_THRESHOLD
+                    else "green"
+                ),
+                enabled=color,
+                bold=True,
+            )
+            + " pooled SD",
+            "Flagged folds      : "
+            + paint(
+                ", ".join(drift["flagged_folds"]) if drift["flagged_folds"] else "-",
+                "red" if drift["flagged_folds"] else "gray",
+                enabled=color,
+            ),
             "",
-            render_section("PASS／REJECT 重疊診斷", number=4),
-            f"Score vs PASS AUC          : {_fmt_metric(classification.get('score_vs_pass_reject_auc'))}",
+            _colored_section("PASS／REJECT 重疊診斷", number=4, color=color),
+            "Score vs PASS AUC          : "
+            + paint(
+                _fmt_metric(classification.get("score_vs_pass_reject_auc")),
+                _auc_tone(classification.get("score_vs_pass_reject_auc")),
+                enabled=color,
+                bold=True,
+            ),
             f"Overall PASS share         : {_fmt_percent(classification.get('overall_pass_share'))}",
-            f"Top score decile PASS share: {_fmt_percent(classification.get('top_score_decile_pass_share'))}",
-            f"PASS-only Target Spearman  : {_fmt_metric(primary.get('global_spearman'))}",
+            "Top score decile PASS share: "
+            + paint(
+                _fmt_percent(classification.get("top_score_decile_pass_share")),
+                _signed_tone(
+                    (_finite_number(classification.get("top_score_decile_pass_share")) or 0.0)
+                    - (_finite_number(classification.get("overall_pass_share")) or 0.0)
+                ),
+                enabled=color,
+                bold=True,
+            ),
+            "PASS-only Target Spearman  : "
+            + paint(
+                _fmt_metric(primary.get("global_spearman")),
+                _signed_tone(primary.get("global_spearman")),
+                enabled=color,
+                bold=True,
+            ),
             "",
-            render_section("Orderable candidate Score coverage", number=5),
+            _colored_section("Orderable candidate Score coverage", number=5, color=color),
         ]
     )
     orderable = payload["orderable_candidate_coverage"]
     if orderable.get("available"):
-        lines.append(
+        orderable_text = (
             f"{int(orderable['scored_candidate_count']):,}/{int(orderable['candidate_count']):,} "
             f"({_fmt_percent(orderable.get('coverage_rate'))})；"
             f"未評分={int(orderable['unscored_candidate_count']):,}"
+        )
+        lines.append(
+            paint(
+                orderable_text,
+                _coverage_tone(orderable.get("coverage_rate")),
+                enabled=color,
+                bold=True,
+            )
         )
     else:
         orderable_path = project_relative_display_path(
             orderable.get("path") or "-", project_root=PROJECT_ROOT
         )
-        lines.append(f"未提供：{orderable.get('reason')}；{orderable_path}")
+        lines.append(
+            paint(
+                f"未提供：{orderable.get('reason')}；{orderable_path}",
+                "yellow",
+                enabled=color,
+                bold=True,
+            )
+        )
 
     lines.extend(
         [
             "",
-            render_section("綜合狀態", number=6),
-            "- 報表狀態：RESULT_AVAILABLE_PENDING_REVIEW",
-            "- 策略 optimizer：未執行",
-            "- Future Target runtime sort：未使用",
-            "- Forward-OOS runtime：本 PIT 工件不可直接使用",
-            "- 下一步：先審閱本報表；只有排序能力在多數年份穩定為正，才進入策略績效驗證。",
+            _colored_section("綜合狀態", number=6, color=color),
+            "- 報表狀態："
+            + paint(
+                "RESULT_AVAILABLE_PENDING_REVIEW",
+                "yellow",
+                enabled=color,
+                bold=True,
+            ),
+            "- 策略 optimizer："
+            + paint("未執行", "yellow", enabled=color, bold=True),
+            "- Future Target runtime sort："
+            + paint("未使用", "green", enabled=color, bold=True),
+            "- Forward-OOS runtime："
+            + paint(
+                "本 PIT 工件不可直接使用",
+                "yellow",
+                enabled=color,
+                bold=True,
+            ),
+            "- 下一步："
+            + paint(
+                "先審閱本報表；只有排序能力在多數年份穩定為正，才進入策略績效驗證。",
+                "cyan",
+                enabled=color,
+                bold=True,
+            ),
         ]
     )
     return "\n".join(lines)
@@ -983,7 +1230,7 @@ def main(argv=None) -> int:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_json, payload)
     output_markdown.write_text(_render_markdown(payload), encoding="utf-8")
-    print(render_console_summary(payload))
+    print(render_console_summary(payload, color=console_color_enabled()))
     print_artifact_paths(
         (("Markdown", output_markdown), ("完整指標 JSON", output_json)),
         project_root=PROJECT_ROOT,

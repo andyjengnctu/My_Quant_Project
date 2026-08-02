@@ -10952,6 +10952,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         },
     }
     report_console = render_point_in_time_console(report_payload)
+    colored_report_console = render_point_in_time_console(report_payload, color=True)
     report_markdown = render_point_in_time_markdown(report_payload)
     add_check(
         results,
@@ -10969,6 +10970,22 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
                 "策略 optimizer：未執行",
             )
         ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_audit_console_uses_shared_status_colors",
+        True,
+        all(
+            token in colored_report_console
+            for token in (
+                "\x1b[96m",
+                "\x1b[92m",
+                "\x1b[93m",
+            )
+        )
+        and "\x1b[" not in report_console,
     )
     add_check(
         results,

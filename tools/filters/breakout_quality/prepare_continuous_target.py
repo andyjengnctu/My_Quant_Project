@@ -20,7 +20,11 @@ from tools.filters.breakout_quality.audit_no_time_continuous_target import (
     main as build_no_time_target,
 )
 from tools.filters.breakout_quality.common import PROJECT_ROOT, load_validated_dataset_bundle
-from filters.breakout_quality.console_report import print_artifact_paths
+from filters.breakout_quality.console_report import (
+    console_color_enabled,
+    paint,
+    print_artifact_paths,
+)
 
 SUPPORTED_TARGET_IDS = (
     STRATEGY_ALIGNED_TARGET_ID,
@@ -132,6 +136,7 @@ def _build_target(
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    color_enabled = console_color_enabled()
     summary, group_count = _dataset_identity(
         args.filter_id,
         allow_stale_source=bool(args.allow_stale_source),
@@ -144,7 +149,14 @@ def main(argv=None) -> int:
         group_count=group_count,
     )
     if current:
-        print(f"[skip] Continuous Target已符合目前Dataset：{target_id}")
+        print(
+            paint(
+                f"[略過] Continuous Target 已符合目前 Dataset：{target_id}",
+                "green",
+                enabled=color_enabled,
+                bold=True,
+            )
+        )
         report_path = _readable_report_path(
             filter_id=args.filter_id,
             target_id=target_id,
@@ -153,7 +165,14 @@ def main(argv=None) -> int:
             print_artifact_paths((("Continuous Target Markdown", report_path),), project_root=PROJECT_ROOT)
         return 0
 
-    print(f"[Continuous Target] 建立／更新：{target_id}")
+    print(
+        paint(
+            f"[Continuous Target] 建立／更新：{target_id}",
+            "yellow",
+            enabled=color_enabled,
+            bold=True,
+        )
+    )
     print(f"- 原因：{reason}")
     code = _build_target(
         filter_id=args.filter_id,
@@ -175,7 +194,14 @@ def main(argv=None) -> int:
     )
     if not current:
         raise ValueError(f"Continuous Target重建後仍未通過identity驗證: {reason}")
-    print(f"[Continuous Target] identity驗證完成：{target_id}")
+    print(
+        paint(
+            f"[Continuous Target] identity 驗證完成：{target_id}",
+            "green",
+            enabled=color_enabled,
+            bold=True,
+        )
+    )
     report_path = _readable_report_path(
         filter_id=args.filter_id,
         target_id=target_id,

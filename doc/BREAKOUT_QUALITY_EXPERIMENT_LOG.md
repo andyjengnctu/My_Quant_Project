@@ -22,7 +22,7 @@
 - 後續建議必須優先提供可立即執行的實驗、實作、診斷或修正；不得把等待新的 forward labeled period 當成主要下一步。
 - 本規則取代文件中所有「因 OOS 已查看而不得再研究」或「只能等待新資料」的概括性限制；個別已淘汰方向仍維持淘汰，除非提出本質不同的新機制。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-08-01**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-08-02**。
 
 ---
 
@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_031330_46cfab1.zip`，SHA256 `15b26d3fc08ae0b80fd003cde47ba98e2935e665f4e200e2ccc206b1b8455697`；沿用2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort結果與read-only capture attribution實作，將breakout-quality簡易報表統一為console直接顯示、Markdown／JSON／CSV保存、停止HTML，並統一顯示專案根目錄相對工件路徑；實際capture結果尚未執行 |
-| SHA256 | 來源ZIP SHA256 `15b26d3fc08ae0b80fd003cde47ba98e2935e665f4e200e2ccc206b1b8455697`。既有3.78結果維持：Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。模型層通過、Sort Only拒絕；本輪只調整報表顯示與工件路徑呈現，不改寫或重算上述績效 |
+| 基準 ZIP | 本輪來源 `test-branch-1_20260802_034615_439e600(3).zip`，SHA256 `268eed2ee4312891166197edb7257827d94752f09ebdd8a71b2ba3b0b58085b1`；沿用2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort結果、read-only capture attribution與共用console報表實作；本輪再統一`[1/Enter] 模型研究與驗證`的狀態文字／PIT模型報表色彩，並將Dataset建立進度限制在單一終端列，避免長行自動換行洗版 |
+| SHA256 | 來源ZIP SHA256 `268eed2ee4312891166197edb7257827d94752f09ebdd8a71b2ba3b0b58085b1`。既有3.78結果維持：Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。模型層通過、Sort Only拒絕；本輪只調整使用者可見報表與進度顯示，不改寫或重算上述績效 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -1793,3 +1793,18 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 路徑規則 | 所有breakout-quality console工件／狀態路徑以專案根目錄為基準顯示`/`分隔相對路徑；manifest、hash identity與runtime canonical path不變。此通用顯示規則已寫入`doc/PROJECT_SETTINGS.md` |
 | 固定條件 | Dataset、Label、Continuous Target、Seed 42、PIT folds／Scores／audit、Score Sort、歷史active params、候選生成、成交、資金、停損停利、帳務與3.78績效結果全部不變 |
 | 驗證邊界 | Direct synthetic驗證console完整章節、強制色彩與非HTML工件、舊HTML清除、`--capture-audit-only`不重跑portfolio、相對路徑及共用格式；本輪沒有新的capture或策略數值 |
+
+### 3.82 模型研究簡易報表配色與Dataset建立去洗版（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_APPLICABLE`；只改善`[1/Enter] 模型研究與驗證`的console可讀性與Dataset建立進度更新，不改任何研究或策略結果 |
+| 程式基準 | 來源`test-branch-1_20260802_034615_439e600(3).zip`；SHA256 `268eed2ee4312891166197edb7257827d94752f09ebdd8a71b2ba3b0b58085b1`；本輪修補ZIP只包含修改檔，SHA256列於交付回覆 |
+| 共用色彩 | workflow標題／段落、Dataset／Continuous Target準備狀態、PIT fold plan、fold執行狀態與PIT模型評估報表改用既有`console_report`色彩語意：青色為標題／主要證據、綠色為完成／正向／完整coverage、黃色為待執行／部分coverage／需注意、紅色為負向／drift、灰色為中性或不適用；非TTY與`NO_COLOR`仍輸出純文字 |
+| Dataset去洗版 | 共用`InlineProgress`先依終端顯示寬度截斷含ANSI／中日文寬字元的進度文字，再以carriage return覆寫同一列；較短新內容會補空白清除殘字，skip訊息會先清除進度列後獨立輸出，最後完成摘要只輸出一次完整行。進度文字縮短為`ticker／events／groups／elapsed`，避免窄視窗自動換行累積 |
+| PIT報表 | 核心Spearman、年度正向率、fold PASS rho、drift、AUC、Top-decile PASS改善、Score coverage與研究邊界使用同一套狀態色；純文字輸出與彩色輸出移除ANSI後內容完全一致，不建立第二套指標或判定 |
+| 固定條件 | 不改Dataset schema、feature、Label、Continuous Target公式、Seed 42、training scope、fold日期、checkpoint、PIT Scores、策略排序、active params、候選生成、交易、資金、停損停利、帳務或3.78績效結果 |
+| Dataset／Label／模型工件 | 不需重建；既有工件可直接使用。只有使用者原本就缺少Dataset／Target／PIT工件時，互動流程才會照既有契約建立 |
+| 獨立驗證 | 全專案Python語法解析、修改模組import、ANSI／純文字內容同一性、TTY長行截斷與單列覆寫、非TTY只輸出最終狀態、Markdown表格欄數、修改檔路徑與ZIP內容均由本輪獨立檢查；正式`apps/test_suite.py`依專案規則留待使用者本機執行 |
+| 結果邊界 | 本輪沒有Selection／OOS／策略績效實驗，故主要結果與基準差異均為N/A；不得由顯示改善推論模型效果改變 |
+

@@ -1,4 +1,5 @@
 import re
+import shutil
 import sys
 import unicodedata
 
@@ -44,7 +45,7 @@ def _display_width(s):
 
 
 class InlineProgress:
-    """Refresh one terminal line; redirected output receives only the final state."""
+    """Refresh one bounded terminal line; redirected output receives only the final state."""
 
     def __init__(self, stream=None):
         self.stream = stream if stream is not None else sys.stdout
@@ -54,35 +55,80 @@ class InlineProgress:
         self._active = False
 
     def update(self, text):
-        value = str(text)
+        value = str(text).replace("\r", " ").replace("\n", " ")
         self._last_text = value
         if not self.inline:
             return
-        visible_width = _display_width(value)
-        padding = " " * max(0, self._last_width - visible_width)
-        self.stream.write(f"\r{value}{padding}")
+        columns = _terminal_content_width()
+        fitted = _truncate_display_width(value, columns)
+        visible_width = _display_width(fitted)
+        padding = " " * max(0, min(self._last_width, columns) - visible_width)
+        self.stream.write(f"\r{fitted}{padding}")
         self.stream.flush()
         self._last_width = visible_width
         self._active = True
 
     def print_line(self, text):
         if self.inline and self._active:
-            self.stream.write("\r" + (" " * self._last_width) + "\r")
+            clear_width = min(self._last_width, _terminal_content_width())
+            self.stream.write("\r" + (" " * clear_width) + "\r")
         print(str(text), file=self.stream, flush=True)
         self._last_width = 0
         self._active = False
 
     def finish(self, text=None):
-        if text is not None:
-            self.update(text)
         if self.inline:
-            if self._active:
+            if text is not None:
+                if self._active:
+                    clear_width = min(self._last_width, _terminal_content_width())
+                    self.stream.write("\r" + (" " * clear_width) + "\r")
+                value = str(text).replace("\r", " ").replace("\n", " ")
+                print(value, file=self.stream, flush=True)
+            elif self._active:
                 self.stream.write("\n")
                 self.stream.flush()
-        elif self._last_text:
-            print(self._last_text, file=self.stream, flush=True)
+        else:
+            if text is not None:
+                self._last_text = str(text).replace("\r", " ").replace("\n", " ")
+            if self._last_text:
+                print(self._last_text, file=self.stream, flush=True)
         self._last_width = 0
         self._active = False
+
+
+def _terminal_content_width():
+    return max(1, int(shutil.get_terminal_size(fallback=(100, 24)).columns) - 1)
+
+
+def _truncate_display_width(text, max_width):
+    raw = str(text)
+    limit = max(1, int(max_width))
+    if _display_width(raw) <= limit:
+        return raw
+
+    target_width = max(0, limit - 1)
+    output = []
+    visible_width = 0
+    index = 0
+    contains_ansi = False
+    while index < len(raw):
+        ansi_match = ANSI_RE.match(raw, index)
+        if ansi_match is not None:
+            output.append(ansi_match.group(0))
+            contains_ansi = True
+            index = ansi_match.end()
+            continue
+        char = raw[index]
+        char_width = _display_width(char)
+        if visible_width + char_width > target_width:
+            break
+        output.append(char)
+        visible_width += char_width
+        index += 1
+    output.append("…")
+    if contains_ansi:
+        output.append(C_RESET)
+    return "".join(output)
 
 
 def _pad_display(s, width, align='left'):

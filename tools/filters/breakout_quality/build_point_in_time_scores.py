@@ -53,7 +53,14 @@ from filters.breakout_quality.torch_runtime import (
     SUPPORTED_TORCH_DEVICES,
 )
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
-from filters.breakout_quality.console_report import print_artifact_paths
+from filters.breakout_quality.console_report import (
+    console_color_enabled,
+    paint,
+    print_artifact_paths,
+    render_key_values,
+    render_section,
+    render_table,
+)
 from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     build_checkpoint_payload,
     build_percentile_target,
@@ -619,14 +626,41 @@ def _combined_validation(
     }
 
 
-def _print_plan(folds: list[dict[str, Any]], fold_details: list[dict[str, Any]]) -> None:
-    print("\nSelection point-in-time fold plan")
-    for fold, detail in zip(folds, fold_details):
-        print(
-            f"- {fold['fold_id']} score={fold['score_start'].date()}~{fold['score_end'].date()} "
-            f"train={len(detail['train_ids']):,} validation={len(detail['validation_ids']):,} "
-            f"final={len(detail['final_ids']):,} score={len(detail['score_ids']):,}"
+def _print_plan(
+    folds: list[dict[str, Any]],
+    fold_details: list[dict[str, Any]],
+    *,
+    color: bool = False,
+) -> None:
+    print(
+        render_section(
+            paint(
+                "Selection point-in-time fold plan",
+                "cyan",
+                enabled=color,
+                bold=True,
+            )
         )
+    )
+    rows = []
+    for fold, detail in zip(folds, fold_details):
+        rows.append(
+            (
+                paint(str(fold["fold_id"]), "cyan", enabled=color, bold=True),
+                f"{fold['score_start'].date()} ～ {fold['score_end'].date()}",
+                f"{len(detail['train_ids']):,}",
+                f"{len(detail['validation_ids']):,}",
+                f"{len(detail['final_ids']):,}",
+                f"{len(detail['score_ids']):,}",
+            )
+        )
+    print(
+        render_table(
+            ("Fold", "Score period", "Train", "Validation", "Refit", "Score"),
+            rows,
+            alignments=("left", "left", "right", "right", "right", "right"),
+        )
+    )
 
 
 def _combined_fold_record(args, item: dict[str, Any]) -> dict[str, Any]:
@@ -658,6 +692,7 @@ def main(argv=None) -> int:
     _validate_args(args)
     settings = get_breakout_quality_workflow_settings()
     started = time.perf_counter()
+    color_enabled = console_color_enabled()
     bundle = load_continuous_ranker_data(
         filter_id=args.filter_id,
         model_architecture=args.model_architecture,
@@ -692,16 +727,34 @@ def main(argv=None) -> int:
     ]
     for fold, ids in zip(folds, fold_details):
         _validate_minimum_counts(settings, str(fold["fold_id"]), ids)
-    _print_plan(folds, fold_details)
+    _print_plan(folds, fold_details, color=color_enabled)
     if bool(args.plan_only):
-        print("plan-only完成；未訓練、未寫入正式PIT工件。")
+        print(
+            paint(
+                "plan-only完成；未訓練、未寫入正式PIT工件。",
+                "yellow",
+                enabled=color_enabled,
+                bold=True,
+            )
+        )
         return 0
 
     torch, plan = resolve_ranker_execution_plan(args)
     print(
-        f"torch=device={plan.device_type}, mixed_precision={plan.mixed_precision_enabled}, "
-        f"dtype={plan.autocast_dtype_name}, deterministic={plan.deterministic_algorithms}, "
-        f"tf32={plan.allow_tf32}"
+        render_section(
+            paint("執行環境", "cyan", enabled=color_enabled, bold=True)
+        )
+    )
+    print(
+        render_key_values(
+            (
+                ("Torch device", plan.device_type),
+                ("Mixed precision", plan.mixed_precision_enabled),
+                ("Compute dtype", plan.autocast_dtype_name),
+                ("Deterministic", plan.deterministic_algorithms),
+                ("TF32", plan.allow_tf32),
+            )
+        )
     )
     point_in_time_dir = resolve_filter_point_in_time_dir(
         PROJECT_ROOT,
@@ -735,11 +788,19 @@ def main(argv=None) -> int:
         )
         if reused is not None:
             frame, manifest = reused
-            print(f"\n{fold['fold_id']}：重用既有fold工件")
+            print(
+                "\n"
+                + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
+                + "："
+                + paint("重用既有 fold 工件", "green", enabled=color_enabled, bold=True)
+            )
         else:
             print(
-                f"\n{fold['fold_id']}：訓練並評分 "
-                f"{fold['score_start'].date()}~{fold['score_end'].date()}"
+                "\n"
+                + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
+                + "："
+                + paint("訓練並評分", "yellow", enabled=color_enabled, bold=True)
+                + f" {fold['score_start'].date()} ～ {fold['score_end'].date()}"
             )
             frame, manifest = _train_fold(
                 args,
@@ -840,10 +901,32 @@ def main(argv=None) -> int:
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
     write_json(manifest_path, manifest)
-    print("\nSelection point-in-time scores完成")
     print(
-        f"folds={len(folds)} groups={validation['scored_group_count']:,} "
-        f"coverage={validation['coverage_rate']:.4f}"
+        render_section(
+            paint(
+                "Selection point-in-time scores 完成",
+                "green",
+                enabled=color_enabled,
+                bold=True,
+            )
+        )
+    )
+    print(
+        render_key_values(
+            (
+                ("Folds", len(folds)),
+                ("Scored groups", f"{validation['scored_group_count']:,}"),
+                (
+                    "Coverage",
+                    paint(
+                        f"{validation['coverage_rate']:.2%}",
+                        "green" if float(validation["coverage_rate"]) >= 1.0 - 1e-12 else "yellow",
+                        enabled=color_enabled,
+                        bold=True,
+                    ),
+                ),
+            )
+        )
     )
     print_artifact_paths(
         (("PIT Scores", score_path), ("PIT manifest", manifest_path), ("PIT coverage", coverage_path)),

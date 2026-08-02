@@ -911,8 +911,32 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_dataset_progress_is_single_line_summary",
-        "Dataset 重建  12/100 ( 12.0%) | 2330 | 累計 events=12,345 groups=678 | 耗時 01:05.4",
+        "Dataset 建立  12/100 ( 12.0%) | 2330 | events=12,345 | groups=678 | 01:05.4",
         build_progress_line,
+    )
+
+    class _SyntheticTTY(StringIO):
+        def isatty(self):
+            return True
+
+    from core.display_common import InlineProgress
+
+    progress_stream = _SyntheticTTY()
+    progress = InlineProgress(stream=progress_stream)
+    progress.update("Dataset 建立 " + ("X" * 200))
+    progress.update("Dataset 建立完成")
+    progress.finish()
+    rendered_progress = progress_stream.getvalue()
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_dataset_progress_bounds_and_reuses_one_terminal_line",
+        True,
+        rendered_progress.count("\n") == 1
+        and rendered_progress.count("\r") == 2
+        and "\x1b[2K" not in rendered_progress
+        and "…" in rendered_progress,
     )
     compact_summary = train_module._render_training_summary(
         split_report={

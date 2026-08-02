@@ -44,7 +44,11 @@ from filters.breakout_quality.market_set import (
 )
 from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.source_inventory import build_source_data_inventory
-from filters.breakout_quality.console_report import print_artifact_paths
+from filters.breakout_quality.console_report import (
+    console_color_enabled,
+    paint,
+    print_artifact_paths,
+)
 from core.display_common import InlineProgress, render_elapsed
 from tools.filters.breakout_quality.common import (
     PROJECT_ROOT,
@@ -237,9 +241,9 @@ def _render_full_build_progress(
 ) -> str:
     ratio = (100.0 * int(index) / int(total)) if int(total) > 0 else 100.0
     return (
-        f"Dataset 重建 {int(index):>3}/{int(total)} ({ratio:5.1f}%) | "
-        f"{ticker} | 累計 events={int(event_count):,} groups={int(group_count):,} | "
-        f"耗時 {render_elapsed(elapsed_sec, color=color)}"
+        f"Dataset 建立 {int(index):>3}/{int(total)} ({ratio:5.1f}%) | "
+        f"{ticker} | events={int(event_count):,} | groups={int(group_count):,} | "
+        f"{render_elapsed(elapsed_sec, color=color)}"
     )
 
 
@@ -297,6 +301,7 @@ def _full_build(args, policy, *, started: float) -> int:
     chunk_paths: dict[str, list[Path]] = {name: [] for name in chunk_names}
     skipped_ticker_count = 0
     progress = InlineProgress()
+    color_enabled = console_color_enabled(progress.stream)
     market_group_date_chunks: list[np.ndarray] = []
     market_valid_ticker_count = 0
 
@@ -331,7 +336,10 @@ def _full_build(args, policy, *, started: float) -> int:
                 stock_frame = load_dataset_frame(input_map[ticker], ticker, min_rows=min_rows)
             except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
                 skipped_ticker_count += 1
-                progress.print_line(f"[skip] {ticker}: {exc}")
+                progress.print_line(
+                    f"{paint('[略過]', 'yellow', enabled=color_enabled, bold=True)} "
+                    f"{ticker}: {exc}"
+                )
                 progress.update(
                     _render_full_build_progress(
                         index=idx,
@@ -340,7 +348,7 @@ def _full_build(args, policy, *, started: float) -> int:
                         event_count=event_count,
                         group_count=group_count,
                         elapsed_sec=time.perf_counter() - started,
-                        color=progress.inline,
+                        color=color_enabled,
                     )
                 )
                 continue
@@ -371,7 +379,7 @@ def _full_build(args, policy, *, started: float) -> int:
                         event_count=event_count,
                         group_count=group_count,
                         elapsed_sec=time.perf_counter() - started,
-                        color=progress.inline,
+                        color=color_enabled,
                     )
                 )
                 del stock_frame, dataset
@@ -465,17 +473,17 @@ def _full_build(args, policy, *, started: float) -> int:
                     event_count=event_count,
                     group_count=group_count,
                     elapsed_sec=time.perf_counter() - started,
-                    color=progress.inline,
+                    color=color_enabled,
                 )
             )
             del stock_frame, dataset, event_frame, arrays
 
         progress.finish(
-            "Dataset 掃描完成 | "
+            f"{paint('Dataset 建立完成', 'green', enabled=color_enabled, bold=True)} | "
             f"股票={processed_ticker_count:,}/{len(tickers):,} | "
             f"跳過={skipped_ticker_count:,} | "
             f"events={event_count:,} groups={group_count:,} | "
-            f"耗時 {render_elapsed(time.perf_counter() - started, color=progress.inline)}"
+            f"耗時 {render_elapsed(time.perf_counter() - started, color=color_enabled)}"
         )
         if market_set_required:
             assert market_features_memmap is not None and market_valid_memmap is not None

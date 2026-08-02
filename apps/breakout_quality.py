@@ -81,6 +81,7 @@ from filters.breakout_quality.paths import (
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.console_report import (
     console_color_enabled,
+    paint,
     project_relative_display_path,
     render_key_values,
     render_section,
@@ -1497,7 +1498,18 @@ def _interactive_regime_audit(program_name: str) -> int:
 
 def _print_workflow_status() -> None:
     settings = get_breakout_quality_workflow_settings()
-    print("\n" + render_title("Current Breakout Quality Workflow"))
+    color_enabled = console_color_enabled()
+    print(
+        "\n"
+        + render_title(
+            paint(
+                "Current Breakout Quality Workflow",
+                "cyan",
+                enabled=color_enabled,
+                bold=True,
+            )
+        )
+    )
     base_rows = [
         ("Filter ID", settings.filter_id),
         ("Architecture", settings.model_architecture),
@@ -1571,16 +1583,21 @@ def _print_workflow_status() -> None:
             PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
         ),
     }
-    print(render_section("Workflow 工件"))
+    print(
+        render_section(
+            paint("Workflow 工件", "cyan", enabled=color_enabled, bold=True)
+        )
+    )
     print(render_status_paths(
         ((name, path, path.is_file()) for name, path in status_paths.items()),
         project_root=PROJECT_ROOT,
-        color=console_color_enabled(),
+        color=color_enabled,
     ))
 
 
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_workflow_settings()
+    color_enabled = console_color_enabled()
     if settings.is_binary_classification:
         return _interactive_workflow(
             program_name,
@@ -1617,16 +1634,37 @@ def _interactive_model_research(program_name: str) -> int:
     )
     if dataset_step is not None:
         tag = "rebuild" if refresh_mode == "rebuild" else "relabel"
-        print("偵測到PIT模型所需Dataset尚未就緒，將先自動準備：")
+        print(
+            paint(
+                "偵測到 PIT 模型所需 Dataset 尚未就緒，將先自動準備：",
+                "yellow",
+                enabled=color_enabled,
+                bold=True,
+            )
+        )
         for reason in refresh_reasons:
-            print(f"[{tag}] {reason}")
+            print(
+                f"{paint(f'[{tag}]', 'yellow', enabled=color_enabled, bold=True)} "
+                f"{reason}"
+            )
         command, command_args, label = dataset_step
-        print(f"\n[Dataset] {label}")
+        print(
+            "\n"
+            + paint("[Dataset]", "cyan", enabled=color_enabled, bold=True)
+            + f" {label}"
+        )
         code = _run_command(command, command_args, program_name=program_name)
         if code != 0:
             return code
     else:
-        print("[skip] PIT所需Full dataset已符合目前來源與policy。")
+        print(
+            paint(
+                "[略過] PIT 所需 Full dataset 已符合目前來源與 policy。",
+                "green",
+                enabled=color_enabled,
+                bold=True,
+            )
+        )
 
     code = _run_command(
         "prepare-continuous-target",
