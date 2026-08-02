@@ -27,6 +27,7 @@ from core.walk_forward_policy import (
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.console_report import (
     compact_console_enabled,
+    console_color_enabled,
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -47,6 +48,15 @@ from tools.filters.breakout_quality.audit_score_ranking_capture import (
     build_score_ranking_capture_audit,
     render_capture_audit_console,
     write_score_ranking_capture_audit_outputs,
+)
+from tools.filters.breakout_quality.strategy_report_style import (
+    SIGNAL_NEGATIVE,
+    SIGNAL_NEUTRAL,
+    SIGNAL_POSITIVE,
+    SIGNAL_WARNING,
+    signal_for_delta,
+    signal_marker,
+    terminal_signal,
 )
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_SCORE_RANKING,
@@ -897,6 +907,7 @@ def _run_three_way_comparison(
     adapted_params_path: Path,
     current_pair_dir: Path,
     output_dir: Path,
+    rolling_validation: dict[str, Any],
 ) -> dict[str, Any]:
     metadata = dict(current_payload["metadata"])
     comparison_dir = Path(current_pair_dir).resolve()
@@ -1099,13 +1110,15 @@ def _run_three_way_comparison(
             "sha256": compute_file_sha256(adapted_params_path),
         },
         "parameter_comparison": parameter_comparison,
+        "rolling_validation": dict(rolling_validation),
     }
     _write_json(output_dir / "strategy_adaptation_comparison.json", result)
     (output_dir / "strategy_adaptation_comparison.md").write_text(
         _render_three_way_markdown(result), encoding="utf-8"
     )
     print("\n" + _render_three_way_console(result))
-    print("\n" + render_capture_audit_console(adapted_capture))
+    if not compact_console_enabled():
+        print("\n" + render_capture_audit_console(adapted_capture))
     return result
 
 def _metric_rows(result: dict[str, Any]):
@@ -1181,120 +1194,439 @@ def _three_way_rows_for_keys(
         for label, key, unit in specs
     ]
 
+def _compact_metric_value(value: Any, *, unit: str = "", digits: int = 2) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    if not math.isfinite(number):
+        return "N/A"
+    return f"{number:.{int(digits)}f}{unit}"
+
+
+def _compact_three_way_rows(
+    values: dict[str, dict[str, Any]],
+    specs: tuple[tuple[str, str, str, str, int], ...],
+    *,
+    use_color: bool,
+) -> list[tuple[str, str, str, str, str, str]]:
+    rows: list[tuple[str, str, str, str, str, str]] = []
+    for label, key, unit, preference, digits in specs:
+        baseline = values["baseline"].get(key)
+        sort_only = values["sort_only"].get(key)
+        adapted = values["adapted"].get(key)
+        try:
+            delta = float(adapted) - float(sort_only)
+        except (TypeError, ValueError):
+            delta = None
+        if delta is not None and not math.isfinite(delta):
+            delta = None
+        signal = signal_for_delta(delta, preference=preference, warning_threshold=0.0)
+        rows.append((
+            label,
+            _compact_metric_value(baseline, unit=unit, digits=digits),
+            _compact_metric_value(sort_only, unit=unit, digits=digits),
+            _compact_metric_value(adapted, unit=unit, digits=digits),
+            terminal_signal(
+                _compact_metric_value(delta, unit=unit, digits=digits)
+                if delta is None
+                else f"{delta:+.{int(digits)}f}{unit}",
+                signal,
+                enabled=use_color,
+            ),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    return rows
+
+
+def _compact_three_way_table(
+    values: dict[str, dict[str, Any]],
+    specs: tuple[tuple[str, str, str, str, int], ...],
+    *,
+    use_color: bool,
+) -> str:
+    return render_table(
+        ("指標", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
+        _compact_three_way_rows(values, specs, use_color=use_color),
+        alignments=("left", "right", "right", "right", "right", "left"),
+    )
+
+
+def _capture_yearly_three_way(result: dict[str, Any]) -> list[dict[str, Any]]:
+    current_rows = list(dict(result.get("current_capture_audit") or {}).get("yearly") or [])
+    adapted_rows = list(dict(result.get("adapted_capture_audit") or {}).get("yearly") or [])
+    current_by_year = {
+        int(row["entry_year"]): dict(row)
+        for row in current_rows
+        if row.get("entry_year") is not None
+    }
+    adapted_by_year = {
+        int(row["entry_year"]): dict(row)
+        for row in adapted_rows
+        if row.get("entry_year") is not None
+    }
+    rows: list[dict[str, Any]] = []
+    for year in sorted(set(current_by_year) | set(adapted_by_year)):
+        current = current_by_year.get(year, {})
+        adapted = adapted_by_year.get(year, {})
+        rows.append({
+            "entry_year": year,
+            "baseline_avg_r": current.get("baseline_avg_r", adapted.get("baseline_avg_r")),
+            "sort_only_avg_r": current.get("score_sort_avg_r"),
+            "adapted_avg_r": adapted.get("score_sort_avg_r"),
+            "baseline_capture": current.get(
+                "baseline_aggregate_capture_ratio",
+                adapted.get("baseline_aggregate_capture_ratio"),
+            ),
+            "sort_only_capture": current.get("score_sort_aggregate_capture_ratio"),
+            "adapted_capture": adapted.get("score_sort_aggregate_capture_ratio"),
+            "baseline_invested": current.get(
+                "baseline_avg_invested_total",
+                adapted.get("baseline_avg_invested_total"),
+            ),
+            "sort_only_invested": current.get("score_sort_avg_invested_total"),
+            "adapted_invested": adapted.get("score_sort_avg_invested_total"),
+        })
+    return rows
+
+
+def _compact_yearly_value_row(
+    *,
+    year: int,
+    baseline: Any,
+    sort_only: Any,
+    adapted: Any,
+    unit: str,
+    digits: int,
+    preference: str,
+    use_color: bool,
+) -> tuple[str, str, str, str, str, str]:
+    try:
+        delta = float(adapted) - float(sort_only)
+    except (TypeError, ValueError):
+        delta = None
+    if delta is not None and not math.isfinite(delta):
+        delta = None
+    signal = signal_for_delta(delta, preference=preference, warning_threshold=0.0)
+    delta_text = (
+        "N/A" if delta is None else f"{delta:+.{int(digits)}f}{unit}"
+    )
+    return (
+        str(int(year)),
+        _compact_metric_value(baseline, unit=unit, digits=digits),
+        _compact_metric_value(sort_only, unit=unit, digits=digits),
+        _compact_metric_value(adapted, unit=unit, digits=digits),
+        terminal_signal(delta_text, signal, enabled=use_color),
+        terminal_signal(signal_marker(signal), signal, enabled=use_color),
+    )
+
+
+def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
+    rolling = dict(result.get("rolling_validation") or {})
+    coverage = dict(rolling.get("training_score_coverage") or {})
+    summary = render_key_values((
+        ("Rolling folds", coverage.get("fold_count", rolling.get("fold_count", "-"))),
+        ("每 fold trials", rolling.get("trials_per_fold", "-")),
+        ("Train window", f"{rolling.get('train_window_months', '-')} months"),
+        ("OOS horizon", f"{rolling.get('oos_horizon_months', '-')} months"),
+        ("Bootstrap fallback folds", coverage.get("bootstrap_fallback_only_folds", "-")),
+        ("Partial-score folds", coverage.get("partial_score_history_folds", "-")),
+        ("Full-score folds", coverage.get("full_score_history_folds", "-")),
+        ("Optimizer search reused", rolling.get("optimizer_search_reused", "-")),
+    ))
+    status_labels = {
+        "bootstrap_fallback_only": "Bootstrap fallback",
+        "partial_score_history": "Partial Score history",
+        "full_score_history": "Full Score history",
+    }
+    rows = []
+    for row in list(coverage.get("folds") or []):
+        try:
+            coverage_pct = float(row.get("calendar_coverage_ratio")) * 100.0
+            coverage_text = f"{coverage_pct:.1f}%"
+        except (TypeError, ValueError):
+            coverage_text = "N/A"
+        rows.append((
+            row.get("fold", "-"),
+            row.get("selection_period", "-"),
+            row.get("oos_period", "-"),
+            coverage_text,
+            status_labels.get(str(row.get("status")), str(row.get("status") or "-")),
+        ))
+    table = (
+        render_table(
+            ("Fold", "Selection period", "OOS period", "Score coverage", "狀態"),
+            rows,
+            alignments=("left", "left", "left", "right", "left"),
+        )
+        if rows else "無Rolling Score coverage資料。"
+    )
+    return summary, table
+
+
 def _render_compact_three_way_console(result: dict[str, Any]) -> str:
     _rows, values = _metric_rows(result)
+    metadata = dict(result.get("metadata") or {})
+    period = dict(metadata.get("comparison_period") or {})
+    use_color = console_color_enabled()
+
     portfolio_specs = (
-        ("淨總報酬", "total_return_pct", "%"),
-        ("最大回撤", "max_drawdown_pct", "%"),
-        ("報酬／最大回撤", "return_over_max_drawdown", ""),
-        ("年化報酬", "annual_return_pct", "%"),
-        ("Log R²", "log_r_squared", ""),
-        ("月勝率", "monthly_win_rate_pct", "%"),
+        ("淨總報酬", "total_return_pct", "%", "higher", 2),
+        ("最大回撤", "max_drawdown_pct", "%", "lower", 2),
+        ("報酬／最大回撤", "return_over_max_drawdown", "", "higher", 2),
+        ("年化報酬", "annual_return_pct", "%", "higher", 2),
+        ("Log R²", "log_r_squared", "", "higher", 4),
+        ("月勝率", "monthly_win_rate_pct", "%", "higher", 2),
+        ("最差完整年度", "min_full_year_return_pct", "%", "higher", 2),
     )
     trade_specs = (
-        ("交易數", "trade_count", ""),
-        ("勝率", "win_rate_pct", "%"),
-        ("Payoff", "payoff_ratio", ""),
-        ("EV", "expected_value_r", " R"),
+        ("交易數", "trade_count", "", "neutral", 0),
+        ("勝率", "win_rate_pct", "%", "higher", 2),
+        ("Payoff", "payoff_ratio", "", "higher", 2),
+        ("EV", "expected_value_r", " R", "higher", 2),
+        ("平均 Realized R", "avg_realized_r", " R", "higher", 2),
+        ("平均投入資金報酬", "avg_capital_return_pct", "%", "higher", 2),
     )
-    capital_specs = (
-        ("平均曝險", "avg_exposure_pct", "%"),
-        ("平均候選供給", "avg_orderable_candidates", ""),
-        ("候選不足日", "candidate_supply_gap_days", " 日"),
-        ("平均預留金額", "avg_reserved_total", ""),
-        ("平均投入金額", "avg_invested_total", ""),
-        ("投入／預留比", "avg_invested_vs_reserved_pct", "%"),
-        ("初始停損距離", "avg_stop_distance_pct", "%"),
+    sizing_specs = (
+        ("平均曝險", "avg_exposure_pct", "%", "higher", 2),
+        ("平均預留金額", "avg_reserved_total", "", "attention", 2),
+        ("平均實際投入金額", "avg_invested_total", "", "higher", 2),
+        ("投入／預留比", "avg_invested_vs_reserved_pct", "%", "higher", 2),
+        ("平均初始停損距離", "avg_stop_distance_pct", "%", "attention", 2),
+    )
+    capacity_specs = (
+        ("平均每日可掛單候選", "avg_orderable_candidates", "", "neutral", 2),
+        ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower", 0),
+        ("每日結束未滿倉日", "underfilled_end_days", " 日", "lower", 0),
+        ("每日結束持股缺口", "end_position_gap_slot_days", " 格日", "lower", 0),
+        ("保留買單成交率", "reserved_buy_fill_rate_pct", "%", "higher", 2),
     )
     target_specs = (
-        ("平均 Realized R", "avg_realized_r", " R"),
-        ("平均 Target R", "avg_target_r", " R"),
-        ("Aggregate capture", "aggregate_target_capture_ratio", ""),
-        ("Median capture", "median_target_capture_ratio", ""),
-        ("Target ≥ 0.5R capture", "target_ge_0_5_capture_ratio", ""),
+        ("平均 Target R", "avg_target_r", " R", "higher", 2),
+        ("Aggregate Target capture", "aggregate_target_capture_ratio", "", "higher", 2),
+        ("Median Target capture", "median_target_capture_ratio", "", "higher", 2),
+        ("Target ≥ 0.5R capture", "target_ge_0_5_capture_ratio", "", "higher", 2),
+        ("平均 Target realization gap", "avg_target_realization_gap_r", " R", "lower", 2),
     )
+    turnover_specs = (
+        ("平均持有日", "avg_holding_calendar_days", " 日", "lower", 2),
+        ("半倉交易占比", "partial_exit_trade_share_pct", "%", "attention", 2),
+        ("半倉後至結算平均日曆日", "avg_partial_to_exit_calendar_days", " 日", "lower", 2),
+        ("半倉殘留交易slot-days", "partial_residual_slot_days", " 格日", "lower", 0),
+        ("Top 5進場日交易占比", "top_5_entry_dates_share_pct", "%", "attention", 2),
+        ("最大單月進場占比", "top_entry_month_share_pct", "%", "attention", 2),
+        ("進場月份 HHI", "entry_month_hhi", "", "attention", 2),
+        ("產業資料覆蓋", "industry_coverage_pct", "%", "neutral", 2),
+        ("最大產業占比", "top_industry_share_pct", "%", "attention", 2),
+        ("產業 HHI", "industry_hhi", "", "attention", 2),
+    )
+    exit_specs = (
+        ("停損", "stop_exit_share_pct", "%", "attention", 2),
+        ("指標", "indicator_exit_share_pct", "%", "attention", 2),
+        ("汰弱", "rotation_exit_share_pct", "%", "attention", 2),
+        ("期末強制", "forced_exit_share_pct", "%", "attention", 2),
+    )
+
+    diagnostics = dict(result.get("selection_diagnostics") or {})
+    diagnostic_values = {
+        "baseline": dict(diagnostics.get("baseline") or {}),
+        "sort_only": dict(diagnostics.get("sort_only") or {}),
+        "adapted": dict(diagnostics.get("adapted") or {}),
+    }
+    diagnostic_specs = (
+        ("Orderable Score coverage", "orderable_score_coverage_rate", "", "higher", 4),
+        ("選中候選 Target percentile", "selected_target_percentile_mean", "", "higher", 4),
+        ("Target top-k retention", "target_top_k_retention_mean", "", "higher", 4),
+        ("Target opportunity gap (R)", "target_opportunity_gap_r_mean", "", "lower", 4),
+        ("選中候選 Target mean (R)", "selected_target_mean_r", "", "higher", 4),
+    )
+
     yearly_rows = [
-        (
-            str(int(row["year"])),
-            _fmt(row.get("no_filter_return_pct"), "%"),
-            _fmt(row.get("score_ranking_return_pct"), "%"),
-            _fmt(row.get("adapted_return_pct"), "%"),
+        _compact_yearly_value_row(
+            year=int(row["year"]),
+            baseline=row.get("no_filter_return_pct"),
+            sort_only=row.get("score_ranking_return_pct"),
+            adapted=row.get("adapted_return_pct"),
+            unit="%",
+            digits=2,
+            preference="higher",
+            use_color=use_color,
         )
         for row in list(result.get("yearly") or [])
+        if row.get("year") is not None
     ]
-    diagnostics = result["selection_diagnostics"]
-    diag_rows = [
-        (
-            label,
-            _fmt(diagnostics["baseline"].get(key)),
-            _fmt(diagnostics["sort_only"].get(key)),
-            _fmt(diagnostics["adapted"].get(key)),
+    capture_yearly = _capture_yearly_three_way(result)
+    r_yearly_rows = [
+        _compact_yearly_value_row(
+            year=row["entry_year"], baseline=row.get("baseline_avg_r"),
+            sort_only=row.get("sort_only_avg_r"), adapted=row.get("adapted_avg_r"),
+            unit="", digits=2, preference="higher", use_color=use_color,
         )
-        for label, key in (
-            ("Score coverage", "orderable_score_coverage_rate"),
-            ("Target percentile", "selected_target_percentile_mean"),
-            ("Top-k retention", "target_top_k_retention_mean"),
-            ("Opportunity gap", "target_opportunity_gap_r_mean"),
-            ("Selected Target R", "selected_target_mean_r"),
-        )
+        for row in capture_yearly
     ]
-    return "\n".join((
-        render_title("策略參數適應績效摘要"),
+    capture_yearly_rows = [
+        _compact_yearly_value_row(
+            year=row["entry_year"], baseline=row.get("baseline_capture"),
+            sort_only=row.get("sort_only_capture"), adapted=row.get("adapted_capture"),
+            unit="", digits=2, preference="higher", use_color=use_color,
+        )
+        for row in capture_yearly
+    ]
+    invested_yearly_rows = [
+        _compact_yearly_value_row(
+            year=row["entry_year"], baseline=row.get("baseline_invested"),
+            sort_only=row.get("sort_only_invested"), adapted=row.get("adapted_invested"),
+            unit="", digits=0, preference="higher", use_color=use_color,
+        )
+        for row in capture_yearly
+    ]
+    rolling_summary, rolling_table = _compact_rolling_coverage(result)
+
+    lines = [
+        render_title("Breakout Quality Score 排序策略參數適應驗證摘要"),
         render_key_values((
-            ("狀態", ADAPTATION_STATUS),
+            ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
             ("比較", "Baseline vs Sort Only vs Adapted Rolling"),
-            ("判讀", "相同rolling policy的Selection診斷；不是final refit或正式OOS"),
+            ("適應差異", "Adapted Rolling − Sort Only"),
+            ("驗證設計", "相同rolling folds、trials／fold、search space與objective"),
+            ("歷史 active-param 無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
+            ("Score source", metadata.get("score_source", "selection_point_in_time")),
+            ("結果性質", ADAPTATION_STATUS),
+            ("Future Target runtime", "未使用"),
         )),
         render_section("投組報酬與風險", number=1),
-        "讀法：先比較總報酬、回撤與報酬／回撤，再看成長穩定性。",
+        "定義：衡量整體權益最後賺多少、曾承受多少回撤，以及成長路徑是否穩定。",
+        _compact_three_way_table(values, portfolio_specs, use_color=use_color),
+        render_section("單筆交易結果", number=2),
+        "定義：勝率看獲利筆數；Payoff看平均贏家／輸家；EV與Realized R看每筆初始風險的實際期望值。",
+        _compact_three_way_table(values, trade_specs, use_color=use_color),
+        "註：目前EV採平均Realized R口徑，兩者保留是為了對應策略主表與capture歸因表。",
+        render_section("資金投入與部位大小", number=3),
+        "定義：曝險是每日投入市場資金占權益比例；停損越寬，固定風險sizing下每筆部位通常越小。",
+        _compact_three_way_table(values, sizing_specs, use_color=use_color),
+        render_section("候選供給與持倉容量", number=4),
+        "定義：候選供給看是否有股票可買；未滿倉與缺口看持倉格是否填滿；成交率看預留買單是否落地。",
+        _compact_three_way_table(values, capacity_specs, use_color=use_color),
+        render_section("模型選股能力", number=5),
+        "定義：比較實際選中候選與事後Future Target理想排序；Future Target只在回放完成後join。",
+        _compact_three_way_table(diagnostic_values, diagnostic_specs, use_color=use_color),
+        render_section("Target 到實際報酬的轉換", number=6),
+        "定義：Target R是事後價格機會；capture衡量Realized R相對Target R的轉換；gap越低越好。",
+        _compact_three_way_table(values, target_specs, use_color=use_color),
+        render_section("資金周轉與進場集中", number=7),
+        "定義：持有與半倉指標衡量資金占用時間；日期、月份與產業指標衡量交易是否集中。",
+        _compact_three_way_table(values, turnover_specs, use_color=use_color),
+        render_section("出場結構", number=8),
+        "定義：依每筆交易最後的全倉結算原因分類；占比改變只表示結構差異，不直接等於損益好壞。",
+        _compact_three_way_table(values, exit_specs, use_color=use_color),
+        render_section("年度結果與年度歸因", number=9),
+        "定義：年度報酬按權益曲線年度；R、capture與投入金額按交易進場年度分組，兩種口徑不可混為同一概念。",
+        "權益年度報酬：",
         render_table(
-            ("指標", "Baseline", "Sort Only", "Adapted Rolling"),
-            _three_way_rows_for_keys(values, portfolio_specs),
-            alignments=("left", "right", "right", "right"),
-        ),
-        render_section("單筆交易品質", number=2),
-        "讀法：EV與Payoff描述單筆品質，不代表資本已充分投入。",
-        render_table(
-            ("指標", "Baseline", "Sort Only", "Adapted Rolling"),
-            _three_way_rows_for_keys(values, trade_specs),
-            alignments=("left", "right", "right", "right"),
-        ),
-        render_section("資金配置與持倉", number=3),
-        "讀法：持倉格數、停損距離與實際投入金額必須一起判讀。",
-        render_table(
-            ("指標", "Baseline", "Sort Only", "Adapted Rolling"),
-            _three_way_rows_for_keys(values, capital_specs),
-            alignments=("left", "right", "right", "right"),
-        ),
-        render_section("Target 與實際交易轉換", number=4),
-        "讀法：Target是事後機會，Realized R是實際結果，capture衡量轉換效率。",
-        render_table(
-            ("指標", "Baseline", "Sort Only", "Adapted Rolling"),
-            _three_way_rows_for_keys(values, target_specs),
-            alignments=("left", "right", "right", "right"),
-        ),
-        render_section("年度報酬", number=5),
-        render_table(
-            ("年度", "Baseline", "Sort Only", "Adapted Rolling"),
+            ("年度", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
             yearly_rows,
-            alignments=("left", "right", "right", "right"),
-        ) if yearly_rows else "無年度資料。",
-        render_section("模型選股方向", number=6),
-        "讀法：Future Target僅在回放後加入，不參與runtime或optimizer。",
+            alignments=("right", "right", "right", "right", "right", "left"),
+        ) if yearly_rows else "無權益年度報酬資料。",
+        "進場年度平均 R：",
         render_table(
-            ("指標", "Baseline", "Sort Only", "Adapted Rolling"),
-            diag_rows,
-            alignments=("left", "right", "right", "right"),
-        ),
-        render_section("參數差異", number=7),
+            ("年度", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
+            r_yearly_rows,
+            alignments=("right", "right", "right", "right", "right", "left"),
+        ) if r_yearly_rows else "無進場年度R資料。",
+        "進場年度 Aggregate capture：",
+        render_table(
+            ("年度", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
+            capture_yearly_rows,
+            alignments=("right", "right", "right", "right", "right", "left"),
+        ) if capture_yearly_rows else "無進場年度capture資料。",
+        "進場年度投入規模：",
+        render_table(
+            ("年度", "Baseline", "Sort Only", "Adapted Rolling", "適應差異", "判讀"),
+            invested_yearly_rows,
+            alignments=("right", "right", "right", "right", "right", "left"),
+        ) if invested_yearly_rows else "無進場年度投入資料。",
+        render_section("Rolling 訓練與 Score coverage", number=10),
+        "定義：確認Adapted與Baseline使用相同rolling預算，並揭露各fold訓練期間可使用PIT Score的比例。",
+        rolling_summary,
+        rolling_table,
+        "限制：PIT開始日前缺分依正式契約回退原buy-sort；PIT期間內缺口禁止。",
+        render_section("參數差異", number=11),
+        "定義：比較Baseline與Adapted Rolling各fold active params的中位數與範圍。",
         render_table(
             ("參數", "Baseline中位", "Baseline範圍", "Adapted中位", "Adapted範圍"),
             _param_comparison_table_rows(result),
             alignments=("left", "right", "right", "right", "right"),
         ),
-        render_section("判讀限制", number=8),
-        "Adapted Rolling是無前視rolling Selection診斷；通過後才可進完整Selection final refit。",
+    ]
+
+    adapted_delta = dict(result.get("adapted_minus_sort_only") or {})
+    total_delta = adapted_delta.get("total_return_pct")
+    romd_delta = adapted_delta.get("return_over_max_drawdown")
+    mdd_delta = adapted_delta.get("max_drawdown_pct")
+    try:
+        total_number = float(total_delta)
+        romd_number = float(romd_delta)
+    except (TypeError, ValueError):
+        total_number = romd_number = math.nan
+    if math.isfinite(total_number) and math.isfinite(romd_number) and total_number > 0 and romd_number > 0:
+        adaptation_signal = SIGNAL_POSITIVE
+        adaptation_judgement = "參數適應相對Sort Only改善總報酬與報酬／回撤，可進一步評估final refit。"
+    elif math.isfinite(total_number) and math.isfinite(romd_number) and total_number < 0 and romd_number < 0:
+        adaptation_signal = SIGNAL_NEGATIVE
+        adaptation_judgement = "參數適應相對Sort Only未改善投組結果，不支持直接進入final refit。"
+    else:
+        adaptation_signal = SIGNAL_WARNING
+        adaptation_judgement = "參數適應結果混合，需結合年度、資金與capture判讀。"
+
+    diagnostic_delta = dict(diagnostics.get("adapted_minus_sort_only") or {})
+    diagnostic_preferences = {
+        "orderable_score_coverage_rate": "higher",
+        "selected_target_percentile_mean": "higher",
+        "target_top_k_retention_mean": "higher",
+        "target_opportunity_gap_r_mean": "lower",
+        "selected_target_mean_r": "higher",
+    }
+    positive_diagnostics = sum(
+        signal_for_delta(diagnostic_delta.get(key), preference=preference) == SIGNAL_POSITIVE
+        for key, preference in diagnostic_preferences.items()
+    )
+    model_signal = (
+        SIGNAL_POSITIVE if positive_diagnostics >= 4
+        else SIGNAL_WARNING if positive_diagnostics > 0
+        else SIGNAL_NEUTRAL
+    )
+    adapted_capture_decision = dict(dict(result.get("adapted_capture_audit") or {}).get("decision") or {})
+    decision_signal = str(adapted_capture_decision.get("signal") or SIGNAL_NEUTRAL)
+    bottlenecks = "；".join(adapted_capture_decision.get("bottlenecks") or []) or "未辨識出明確瓶頸"
+    lines.extend((
+        render_section("綜合判定、限制與下一步", number=12),
+        terminal_signal(
+            f"{signal_marker(adaptation_signal)} 參數適應判定：{adaptation_judgement}",
+            adaptation_signal,
+            enabled=use_color,
+        ),
+        terminal_signal(
+            f"{signal_marker(model_signal)} 模型選股判定："
+            f"Adapted相對Sort Only有{positive_diagnostics}/5項Future Target診斷改善。",
+            model_signal,
+            enabled=use_color,
+        ),
+        terminal_signal(
+            f"{signal_marker(decision_signal)} 資金／capture判定："
+            f"{adapted_capture_decision.get('status', '-')}｜"
+            f"{adapted_capture_decision.get('conclusion', '-')}",
+            decision_signal,
+            enabled=use_color,
+        ),
+        f"主要瓶頸：{bottlenecks}",
+        "下一步：只有Rolling診斷支持適應後，才另行執行完整Selection final refit並凍結參數；本流程不直接執行正式OOS。",
+        "限制：本結果是無前視Rolling Selection診斷；Future Target僅在回放完成後join，未參與runtime或optimizer。",
+        "核心適應差異（Adapted Rolling − Sort Only）：總報酬 "
+        f"{_compact_metric_value(total_delta, unit='pp', digits=2)}；最大回撤 "
+        f"{_compact_metric_value(mdd_delta, unit='pp', digits=2)}；平均曝險 "
+        f"{_compact_metric_value(adapted_delta.get('avg_exposure_pct'), unit='pp', digits=2)}。",
     ))
+    return "\n".join(lines)
 
 def _render_three_way_console(result: dict[str, Any]) -> str:
     if compact_console_enabled():
@@ -1621,6 +1953,15 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         adapted_params_path=adapted_params_path,
         current_pair_dir=current_pair_dir,
         output_dir=output_dir,
+        rolling_validation={
+            "fold_count": int(score_coverage.get("fold_count", 0) or 0),
+            "trials_per_fold": int(args.trials_per_fold),
+            "train_window_months": int(baseline_meta["train_window_months"]),
+            "oos_horizon_months": int(baseline_meta["oos_horizon_months"]),
+            "same_rolling_policy_as_baseline": True,
+            "optimizer_search_reused": bool(optimizer_search_reused),
+            "training_score_coverage": score_coverage,
+        },
     )
     artifact_paths = {
         "rolling_preflight": preflight_path,

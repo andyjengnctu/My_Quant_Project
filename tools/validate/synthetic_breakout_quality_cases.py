@@ -12289,31 +12289,76 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     )
 
     compact_adaptation_payload = {
+        "metadata": {
+            "comparison_period": {"start": "2014-01-01", "end": "2020-12-31"},
+            "lookahead_safe_active_param_schedule": True,
+            "score_source": "selection_point_in_time",
+        },
         "baseline": {},
         "sort_only": {},
         "adapted": {},
+        "adapted_minus_sort_only": {},
         "current_capture_audit": {},
         "adapted_capture_audit": {},
         "yearly": [],
         "selection_diagnostics": {
             "baseline": {}, "sort_only": {}, "adapted": {},
+            "adapted_minus_sort_only": {},
         },
         "parameter_comparison": [],
+        "rolling_validation": {
+            "trials_per_fold": 100,
+            "train_window_months": 120,
+            "oos_horizon_months": 12,
+            "optimizer_search_reused": True,
+            "training_score_coverage": {
+                "fold_count": 1,
+                "bootstrap_fallback_only_folds": 1,
+                "partial_score_history_folds": 0,
+                "full_score_history_folds": 0,
+                "folds": [{
+                    "fold": "1/1",
+                    "selection_period": "2004-01-01~2013-12-31",
+                    "oos_period": "2014-01-01~2014-12-31",
+                    "calendar_coverage_ratio": 0.0,
+                    "status": "bootstrap_fallback_only",
+                }],
+            },
+        },
     }
     with patch.dict(os.environ, {"BREAKOUT_QUALITY_COMPACT_CONSOLE": "1"}):
         compact_adaptation_console = _render_three_way_console(
             compact_adaptation_payload
         )
+    adaptation_section_titles = (
+        "1. 投組報酬與風險",
+        "2. 單筆交易結果",
+        "3. 資金投入與部位大小",
+        "4. 候選供給與持倉容量",
+        "5. 模型選股能力",
+        "6. Target 到實際報酬的轉換",
+        "7. 資金周轉與進場集中",
+        "8. 出場結構",
+        "9. 年度結果與年度歸因",
+        "10. Rolling 訓練與 Score coverage",
+        "11. 參數差異",
+        "12. 綜合判定、限制與下一步",
+    )
+    adaptation_section_positions = [
+        compact_adaptation_console.find(title) for title in adaptation_section_titles
+    ]
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "rolling_adaptation_report_groups_portfolio_trade_capital_and_target_layers",
-        (True, True, True, True, True),
+        "rolling_adaptation_compact_report_matches_current_strategy_layout_and_keeps_unique_sections",
+        (True, True, True, True, True, True, True),
         (
-            "投組報酬與風險" in compact_adaptation_console,
-            "單筆交易品質" in compact_adaptation_console,
-            "資金配置與持倉" in compact_adaptation_console,
-            "Target 與實際交易轉換" in compact_adaptation_console,
-            "Adapted Rolling" in compact_adaptation_console,
+            all(position >= 0 for position in adaptation_section_positions),
+            adaptation_section_positions == sorted(adaptation_section_positions),
+            "定義：衡量整體權益最後賺多少" in compact_adaptation_console,
+            "適應差異" in compact_adaptation_console,
+            "Bootstrap fallback" in compact_adaptation_console,
+            "Baseline中位" in compact_adaptation_console,
+            "Score Sort 資金配置與 Target Capture 診斷" not in compact_adaptation_console,
         ),
     )
 

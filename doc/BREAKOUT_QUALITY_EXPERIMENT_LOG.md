@@ -1961,3 +1961,19 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Dataset／Label／模型工件 | 不需重建；若本機仍保留本次`rolling_validation/rolling_preflight.json`與`adapted_active_params/roos_base_best.json`，套用patch後重跑`[2] 驗證策略參數適應`即可復原並完成三組比較 |
 | 驗證 | T283新增effective trial params、policy schedule與active-param payload三層直接案例，確認`ranking=True / filter=False`跨objective、OOS與export一致；另保留最終active-param fail-fast。正式`apps/test_suite.py`依專案規則由使用者本機執行 |
 | 下一步 | 套用patch後先執行`python apps/test_suite.py`；通過後重新執行主選單`[2] → [2] 驗證策略參數適應`。預期沿用既有7-fold搜尋，只重做固定契約materialization與Baseline／Sort Only／Adapted Rolling三組replay；在新結果產生前不得宣稱Adapted有效 |
+
+### 3.92 策略比較與Rolling Adaptation互動簡表統一（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_APPLICABLE / FORMAL_RERUN_PENDING`；只統一互動式compact console資訊架構，不改optimizer、active params、Score、交易或任何績效數值 |
+| 程式基準 | 來源`test-branch-1_20260802_221006_5d5a1ca.zip`；SHA256 `59d0dfcc9913dacc32ce4ebae20e6d084afc129f98db607f7bfeed736974ff8f`；本輪patch SHA256列於交付回覆 |
+| 使用者要求 | `[1/Enter] 比較目前策略`與`[2] 驗證策略參數適應`的簡易報表須採一致格式；`[2]`獨有的Rolling訓練／Score coverage與active-param差異仍需保留 |
+| 共通版型 | Adaptation compact改用與策略比較完全相同的前九個一階區塊與定義：投組報酬與風險、單筆交易結果、資金投入與部位大小、候選供給與持倉容量、模型選股能力、Target到實際報酬的轉換、資金周轉與進場集中、出場結構、年度結果與年度歸因 |
+| 三組欄位 | 每個共通表格固定顯示Baseline、Sort Only、Adapted Rolling、`Adapted Rolling − Sort Only`適應差異與判讀；年度權益、進場年度R、aggregate capture及投入規模採同一欄位順序 |
+| Adaptation專屬區塊 | 第10區保留Rolling folds、trials／fold、train window、OOS horizon、搜尋重用狀態及逐fold PIT Score coverage；第11區保留Baseline／Adapted active-param中位數與範圍；第12區才輸出綜合判定、限制與下一步，確保結論永遠位於最後 |
+| 顯示降噪 | 互動compact模式不再在三組摘要後追加第二份`Score Sort資金配置與Target Capture診斷`；直接CLI非compact模式仍保留完整技術報表及既有Markdown／JSON／CSV工件 |
+| 固定條件 | 不改Dataset、Label、Continuous Target、PIT Scores、Seed 42、7 folds、100 trials／fold、search space、objective、TP=0.0、fixed risk、position cap、max positions、rotation、Score排序、Future Target邊界或任何Selection結果 |
+| Dataset／Label／模型工件 | 不需重建；若既有rolling結果工件完整，只需重新執行選單`[2] 驗證策略參數適應`即可看到統一後簡表 |
+| 驗證 | T283改為直接驗證前九區標題及順序、共同定義、適應差異欄、Bootstrap coverage、參數差異、結論置末與第二份capture標題排除；正式`apps/test_suite.py`依專案規則留待使用者本機執行 |
+| 結果邊界 | 本輪沒有重跑optimizer或portfolio replay，不得由顯示重構推論Adapted Rolling效果改變 |
