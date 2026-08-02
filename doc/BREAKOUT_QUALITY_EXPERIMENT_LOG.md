@@ -1862,3 +1862,19 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | OOS邊界 | 本輪只建立Selection fitting流程；Future Target只可在replay後離線join。只有Adapted params與Score模型、Score工件、排序規則、search space、fixed risk及部位限制全部凍結後，才可執行正式OOS；OOS不得回頭調整任何項目 |
 | 驗證 | 已新增direct synthetic覆蓋固定ranking／filter不進trial、現行TP=0.0、目前模型／target／Seed／PIT fold凍結、PIT cache／study identity、缺少identity拒絕續跑、config固定值、前置工件隔離及identity／全工件hash重用、trial補足語意、Future Target／OOS隔離、合併選單／CLI、capture新口徑及`FITTED_SELECTION_DIAGNOSTIC`。正式`apps/test_suite.py`依專案規則未在本輪執行，須由使用者本機重跑 |
 | 下一步 | 套用patch後先執行`python apps/test_suite.py`；通過後執行主選單策略驗證的`[2]`或CLI `python apps/breakout_quality.py strategy-adapt`取得第一輪Selection結果 |
+
+### 3.86 Strategy Adaptation Formal Synthetic Session契約閉環（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；已修正使用者本機formal bundle檢出的synthetic session介面落差，尚待使用者重跑`apps/test_suite.py`確認正式雙重檢查 |
+| 程式基準 | `test-branch-1_20260802_181238_754f580.zip`；SHA256 `0bd8af98f12ee5f23480771e8fae2b9c2e32c0e9a2c95f1bd4114f2cbd285e32` |
+| Formal bundle | `to_chatgpt_bundle_20260802_181408_21f259c0.zip`；SHA256 `02d7523c26298cab2f95a4681707569dd4420c4290c56282ea5d3d5f4cf3ac72` |
+| Formal結果 | quick gate、chain checks、ml smoke通過；consistency只有synthetic suite runtime失敗；meta quality的`coverage_synthetic_suite_runs_successfully`與`coverage_key_targets_hit`為同一中斷造成的連帶失敗 |
+| 根因 | 3.85為正式`OptimizerSession`新增`apply_fixed_strategy_param_overrides()`、`optimizer_runtime_context()`與`runtime_cache_identity`，但`tools/validate/synthetic_strategy_cases.py`的`_FakeOptimizerSession`仍停留在舊介面，objective synthetic於首個override呼叫即`AttributeError`；不是optimizer objective、PIT identity、Score ranking、交易或帳務邏輯失敗 |
+| 修正 | synthetic session同步正式最小介面：支援固定策略參數覆寫、runtime context及runtime cache identity；新增direct contract釘死三個hook，避免後續正式session擴充後測試替身再次落後 |
+| 獨立驗證 | 直接受影響的optimizer synthetic共51項0失敗；完整synthetic consistency共4,126項、242 cases、0失敗、0 skip。另完成全專案AST／compile、import cycle、下層反向依賴`apps/`、bare except、正式入口及checklist可信度獨立檢查；依規定未執行`apps/test_suite.py` |
+| 固定條件 | 不改strategy adaptation search space、objective、PIT Score／manifest／audit、Seed 42、TP=0.0、fixed risk、position cap、max positions、rotation、Score Sort、Future Target／OOS邊界、交易或帳務 |
+| Dataset／Label／模型工件 | 不需重建Dataset、Label、Continuous Target、PIT Scores、模型checkpoint或策略比較工件；本輪只修正formal synthetic test double |
+| Selection／OOS結果 | 無新增結果；Adapted仍為`RESULT_NOT_AVAILABLE`，不得由本輪測試修正推論有效性 |
+| 下一步 | 套用patch後重跑`python apps/test_suite.py`；五步全PASS後再執行`python apps/breakout_quality.py strategy-adapt` |

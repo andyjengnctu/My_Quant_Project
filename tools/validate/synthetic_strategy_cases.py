@@ -8,7 +8,7 @@ import re
 import unicodedata
 from decimal import Decimal
 from pathlib import Path
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, nullcontext, redirect_stderr, redirect_stdout
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -252,7 +252,13 @@ class _FakeProfileRecorder:
 
 
 class _FakeOptimizerSession:
-    def __init__(self, *, fixed_tp_percent=0.25):
+    def __init__(
+        self,
+        *,
+        fixed_tp_percent=0.25,
+        fixed_strategy_param_overrides=None,
+        runtime_cache_identity=None,
+    ):
         self.raw_data_cache = {}
         self.raw_data_cache_data_dir = None
         self.default_max_workers = 1
@@ -265,6 +271,8 @@ class _FakeOptimizerSession:
         self.train_max_positions = 3
         self.train_enable_rotation = False
         self.optimizer_fixed_tp_percent = fixed_tp_percent
+        self.fixed_strategy_param_overrides = dict(fixed_strategy_param_overrides or {})
+        self.runtime_cache_identity = runtime_cache_identity
         self.profile_recorder = _FakeProfileRecorder()
         self.recorded_prep_failures = []
 
@@ -273,6 +281,16 @@ class _FakeOptimizerSession:
 
     def get_trial_prep_executor_bundle(self, max_workers):
         return None
+
+    def apply_fixed_strategy_param_overrides(self, params):
+        if not self.fixed_strategy_param_overrides:
+            return params
+        payload = params_to_json_dict(params)
+        payload.update(self.fixed_strategy_param_overrides)
+        return build_params_from_mapping(payload)
+
+    def optimizer_runtime_context(self):
+        return nullcontext()
 
     def resolve_optimizer_tp_percent(self, trial, fixed_tp_percent):
         if fixed_tp_percent is None:
@@ -1246,6 +1264,28 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     case_id = "OPTIMIZER_OBJECTIVE_EXPORT_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
+
+    runtime_session = _FakeOptimizerSession(
+        fixed_strategy_param_overrides={"use_breakout_quality_ranking": True},
+        runtime_cache_identity="synthetic-pit-identity",
+    )
+    overridden_params = runtime_session.apply_fixed_strategy_param_overrides(
+        V16StrategyParams(use_breakout_quality_ranking=False)
+    )
+    with runtime_session.optimizer_runtime_context():
+        runtime_context_entered = True
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "optimizer_test_session_mirrors_fixed_override_and_runtime_identity_hooks",
+        (True, "synthetic-pit-identity", True),
+        (
+            overridden_params.use_breakout_quality_ranking,
+            runtime_session.runtime_cache_identity,
+            runtime_context_entered,
+        ),
+    )
 
     sample_high_len = _optimizer_search_space_sample_value("high_len")
     explicit_tp_params = build_optimizer_trial_params(
