@@ -68,7 +68,10 @@ from tools.filters.breakout_quality.strategy_compare import (
     run_comparison,
 )
 from tools.optimizer.prep import load_all_raw_data
-from tools.optimizer.outer_rolling_oos import run_outer_rolling_oos
+from tools.optimizer.outer_rolling_oos import (
+    materialize_fixed_strategy_param_overrides_in_active_param_payload,
+    run_outer_rolling_oos,
+)
 from tools.optimizer.runtime import create_optimizer_study
 from tools.optimizer.session_factory import (
     build_optimizer_session,
@@ -639,16 +642,93 @@ def _outer_rolling_argv(*, args, baseline_contract: dict[str, Any]) -> list[str]
     ]
 
 
+def _fixed_strategy_param_overrides(args) -> dict[str, Any]:
+    return {
+        "use_breakout_quality_filter": False,
+        "use_breakout_quality_ranking": True,
+        "breakout_quality_filter_id": str(args.filter_id),
+        "fixed_risk": float(args.fixed_risk),
+        "max_position_cap_pct": float(args.max_position_cap_pct),
+    }
+
+
+def _load_json_mapping(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _completed_adapted_search_is_compatible(
+    *,
+    existing_preflight: dict[str, Any] | None,
+    runtime_contract: dict[str, Any],
+    adapted_params_path: Path,
+    baseline_contract: dict[str, Any],
+) -> bool:
+    if not isinstance(existing_preflight, dict):
+        return False
+    if str(existing_preflight.get("runtime_identity_sha256") or "") != str(
+        runtime_contract["runtime_identity_sha256"]
+    ):
+        return False
+    payload = _load_json_mapping(adapted_params_path)
+    if payload is None:
+        return False
+    meta = dict(payload.get("meta") or {})
+    baseline_meta = dict(baseline_contract.get("meta") or {})
+    for key in (
+        "first_oos_date",
+        "last_oos_date",
+        "train_window_months",
+        "oos_horizon_months",
+        "trials_per_fold",
+    ):
+        if str(meta.get(key)) != str(baseline_meta.get(key)):
+            return False
+    if int(dict(payload.get("summary") or {}).get("folds", 0) or 0) != int(
+        dict(baseline_contract.get("summary") or {}).get("folds", 0) or 0
+    ):
+        return False
+    return bool(dict(payload.get("params_ensemble_by_effective_date") or {}))
+
+
+def _materialize_adapted_param_artifacts(
+    *,
+    adapted_models_dir: Path,
+    fixed_strategy_param_overrides: dict[str, Any],
+) -> list[Path]:
+    updated_paths: list[Path] = []
+    for path in sorted(adapted_models_dir.glob("*.json")):
+        payload = _load_json_mapping(path)
+        if payload is None:
+            continue
+        if not any(
+            payload.get(key)
+            for key in (
+                "params_by_oos_year",
+                "params_by_effective_date",
+                "params_ensemble_by_effective_date",
+                "params_ensemble",
+            )
+        ):
+            continue
+        materialized = materialize_fixed_strategy_param_overrides_in_active_param_payload(
+            payload,
+            fixed_strategy_param_overrides,
+        )
+        _write_json(path, materialized)
+        updated_paths.append(path)
+    return updated_paths
+
+
 def _optimizer_session_spec(*, root: Path, output_dir: Path, args, runtime_contract) -> dict[str, Any]:
     return {
         "output_dir": str((output_dir / "optimizer_runtime" / "sessions").resolve()),
-        "fixed_strategy_param_overrides": {
-            "use_breakout_quality_filter": False,
-            "use_breakout_quality_ranking": True,
-            "breakout_quality_filter_id": str(args.filter_id),
-            "fixed_risk": float(args.fixed_risk),
-            "max_position_cap_pct": float(args.max_position_cap_pct),
-        },
+        "fixed_strategy_param_overrides": _fixed_strategy_param_overrides(args),
         "runtime_context_spec": {
             "module": "filters.breakout_quality.runtime",
             "callable": "breakout_quality_ranking_source_context",
@@ -1415,6 +1495,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     output_dir = (root / ADAPTATION_RELATIVE_DIR).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     preflight_path = output_dir / "rolling_preflight.json"
+    existing_preflight = _load_json_mapping(preflight_path)
     coverage_path = output_dir / "rolling_training_score_coverage.csv"
     _write_json(
         preflight_path,
@@ -1455,29 +1536,50 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         args=args,
         runtime_contract=runtime_contract,
     )
-    exit_code = run_outer_rolling_oos(
-        argv=_outer_rolling_argv(args=args, baseline_contract=baseline_contract),
-        environ=outer_environ,
-        project_root=str(root),
-        output_dir=str(optimizer_output_dir),
-        base_policy=base_policy,
-        selected_data_dir=get_dataset_dir(str(root), args.dataset),
-        dataset_label=str(args.dataset),
-        load_all_raw_data=load_all_raw_data,
-        optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
-        build_optimizer_session=build_optimizer_session,
-        create_optimizer_study=create_optimizer_study,
-        ensure_study_effective_policy_compatible=ensure_study_effective_policy_compatible,
-        configure_optuna_logging=configure_optuna_logging,
-        optimizer_seed=int(settings.seed),
-        optimizer_session_spec=session_spec,
-        default_trials=int(args.trials_per_fold),
-        timing_mode=False,
-    )
-    if int(exit_code) != 0:
-        raise RuntimeError(f"Adapted Rolling optimizer失敗：returncode={exit_code}")
-
     adapted_params_path = adapted_models_dir / "roos_base_best.json"
+    optimizer_search_reused = _completed_adapted_search_is_compatible(
+        existing_preflight=existing_preflight,
+        runtime_contract=runtime_contract,
+        adapted_params_path=adapted_params_path,
+        baseline_contract=baseline_contract,
+    )
+    if optimizer_search_reused:
+        print(
+            "\n[Adapted Rolling] 既有7-fold搜尋與目前runtime identity一致；"
+            "沿用已選參數並重新套用固定Score-ranking契約，不重跑optimizer。"
+        )
+    else:
+        exit_code = run_outer_rolling_oos(
+            argv=_outer_rolling_argv(args=args, baseline_contract=baseline_contract),
+            environ=outer_environ,
+            project_root=str(root),
+            output_dir=str(optimizer_output_dir),
+            base_policy=base_policy,
+            selected_data_dir=get_dataset_dir(str(root), args.dataset),
+            dataset_label=str(args.dataset),
+            load_all_raw_data=load_all_raw_data,
+            optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
+            build_optimizer_session=build_optimizer_session,
+            create_optimizer_study=create_optimizer_study,
+            ensure_study_effective_policy_compatible=ensure_study_effective_policy_compatible,
+            configure_optuna_logging=configure_optuna_logging,
+            optimizer_seed=int(settings.seed),
+            optimizer_session_spec=session_spec,
+            default_trials=int(args.trials_per_fold),
+            timing_mode=False,
+        )
+        if int(exit_code) != 0:
+            raise RuntimeError(f"Adapted Rolling optimizer失敗：returncode={exit_code}")
+
+    materialized_param_paths = _materialize_adapted_param_artifacts(
+        adapted_models_dir=adapted_models_dir,
+        fixed_strategy_param_overrides=_fixed_strategy_param_overrides(args),
+    )
+    if adapted_params_path not in materialized_param_paths:
+        raise RuntimeError(
+            "Adapted Rolling active-param工件無法套用固定Score-ranking契約："
+            f"path={adapted_params_path}"
+        )
     adapted_params_payload = _validate_adapted_rolling_params(
         path=adapted_params_path,
         baseline_contract=baseline_contract,
@@ -1497,6 +1599,11 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         "baseline_trials_per_fold": int(baseline_meta["trials_per_fold"]),
         "same_rolling_policy_as_baseline": True,
         "baseline_sort_only_reused": bool(current_pair_reused),
+        "optimizer_search_reused": bool(optimizer_search_reused),
+        "fixed_contract_materialized_files": [
+            project_relative_display_path(path, project_root=root)
+            for path in materialized_param_paths
+        ],
         "seed": int(settings.seed),
         "fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
         "runtime_identity_sha256": runtime_contract["runtime_identity_sha256"],

@@ -1945,3 +1945,19 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Dataset／模型工件 | 不需重建；本輪只修改`doc/TEST_SUITE_CHECKLIST.md`與本實驗紀錄 |
 | 獨立驗證 | 以獨立parser檢查G全表日期／natural tracking ID排序、同ID transition chain、NEW首筆、no-op、欄數與裸pipe；另核對主表／T／G最新狀態、摘要、唯一入口、AST／compileall、import cycle、反向依賴與bare except。正式`apps/test_suite.py`未由GPT執行 |
 | 下一步 | 套用patch後重跑`python apps/test_suite.py`；預期meta quality不再回報Checklist G排序失敗。本輪沒有新的Adapted Rolling結果 |
+
+### 3.91 Adapted Rolling固定參數跨Objective／OOS／Active-param輸出閉環（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / ADAPTED_RESULT_RERUN_PENDING / OPTIMIZER_SEARCH_REUSE_SUPPORTED`；7-fold optimizer搜尋已完成，但原逐fold OOS／OOS_CHAIN與active-param輸出遺失固定Score-ranking契約，因此不得採用；修正後若原工件仍在，可沿用已選trial而不重跑100 trials／fold |
+| 程式基準 | `test-branch-1_20260802_205227_8906865.zip`；SHA256 `3e1c6f1e69d847eec0b92228056471e6417542302cf45ef9b3404e877b76ac73` |
+| 使用者本機結果 | Baseline／Sort Only完整重播與3.78一致；Adapted Rolling共7 folds、每fold 100 trials，optimizer與local-min均完成，總時間約36分57秒；產生`adapted_active_params/roos_base_best.json`後，validator在2014-01-01 member讀到`use_breakout_quality_ranking=False`而中止 |
+| 根因 | Optimizer objective先以`session.apply_fixed_strategy_param_overrides()`正確套用`ranking=True / filter=False`，所以trial評分與被選參數是在Score Sort下完成；但outer rolling的逐fold OOS diagnostics、finalist ensemble replay、policy schedule與active-param export再次只從原始`trial.params`重建完整參數，未套用session固定覆寫，缺少的欄位遂回到`V16StrategyParams`預設`ranking=False`。原validator最後正確擋下不一致，但擋得太晚 |
+| 結果邊界 | 使用者輸出中的Adapted逐foldOOS、OOS_AVG、OOS_CHAIN與active-param replay均未使用固定Score Sort，不能作參數適應結論；已選trial的可搜尋策略欄位仍可保留，因其training objective確實在固定Score Sort context下評分。Baseline／Sort Only既有結果不受影響 |
+| 修正 | `build_best_params_payload_from_trial()`支援持久化與明確傳入fixed overrides；objective把固定契約寫入trial user attrs。Outer rolling新增單一effective-param materialization，逐fold單trial OOS、finalist ensemble OOS、policy schedules、best-finalist params及所有active-param JSON均共用同一契約，不再由raw trial params分叉 |
+| 既有搜尋復原 | `strategy-adapt`先核對上一版`rolling_preflight.json` runtime identity、rolling meta、fold數、trials與`roos_base_best.json`完整性；一致時直接將固定契約materialize到既有active-param工件並進行三組正式replay，不再追加另一輪100 trials／fold。Identity或工件不一致時才重新執行optimizer |
+| 固定條件 | 不改Dataset、Label、Continuous Target、PIT Scores、Seed 42、7 folds、100 trials／fold、search space、objective、TP=0.0、fixed risk、position cap、max positions、rotation、Score Sort規則、Future Target或Selection／OOS邊界 |
+| Dataset／Label／模型工件 | 不需重建；若本機仍保留本次`rolling_validation/rolling_preflight.json`與`adapted_active_params/roos_base_best.json`，套用patch後重跑`[2] 驗證策略參數適應`即可復原並完成三組比較 |
+| 驗證 | T283新增effective trial params、policy schedule與active-param payload三層直接案例，確認`ranking=True / filter=False`跨objective、OOS與export一致；另保留最終active-param fail-fast。正式`apps/test_suite.py`依專案規則由使用者本機執行 |
+| 下一步 | 套用patch後先執行`python apps/test_suite.py`；通過後重新執行主選單`[2] → [2] 驗證策略參數適應`。預期沿用既有7-fold搜尋，只重做固定契約materialization與Baseline／Sort Only／Adapted Rolling三組replay；在新結果產生前不得宣稱Adapted有效 |

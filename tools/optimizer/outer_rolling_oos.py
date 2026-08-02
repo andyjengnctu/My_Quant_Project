@@ -64,8 +64,9 @@ from core.active_param_ensemble import (
     get_active_param_ensemble_policy,
     is_active_param_ensemble_payload,
 )
+from core.config import V16StrategyParams
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
-from core.params_io import build_params_from_mapping
+from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.model_paths import resolve_models_dir
 from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_plain_romd, calc_portfolio_score
 from core.portfolio_param_runtime import (
@@ -129,6 +130,105 @@ class OuterRollingConfig:
 
 
 OOS_SCORE_DECIMALS = 2
+
+
+def materialize_fixed_strategy_param_overrides_in_payload(
+    params_payload: dict | None,
+    fixed_strategy_param_overrides: dict | None,
+) -> dict:
+    """Return a full validated strategy payload with fixed runtime fields applied."""
+    payload = params_to_json_dict(V16StrategyParams())
+    payload.update(dict(params_payload or {}))
+    payload.update(dict(fixed_strategy_param_overrides or {}))
+    return params_to_json_dict(build_params_from_mapping(payload))
+
+
+def build_effective_trial_params_payload(*, session, trial) -> dict:
+    """Rebuild the exact params used by the optimizer objective and runtime."""
+    return build_best_params_payload_from_trial(
+        trial,
+        fixed_tp_percent=getattr(
+            session,
+            "optimizer_fixed_tp_percent",
+            OPTIMIZER_FIXED_TP_PERCENT,
+        ),
+        fixed_strategy_param_overrides=getattr(
+            session,
+            "fixed_strategy_param_overrides",
+            None,
+        ),
+    )
+
+
+def materialize_fixed_strategy_param_overrides_in_active_param_payload(
+    payload: dict,
+    fixed_strategy_param_overrides: dict | None,
+) -> dict:
+    """Apply one fixed-runtime contract to every params node in an active-param artifact."""
+    resolved = dict(payload or {})
+    overrides = dict(fixed_strategy_param_overrides or {})
+    if not overrides:
+        return resolved
+
+    for field_name in ("params_by_oos_year", "params_by_effective_date"):
+        mapping = dict(resolved.get(field_name) or {})
+        if mapping:
+            resolved[field_name] = {
+                str(key): materialize_fixed_strategy_param_overrides_in_payload(
+                    dict(value or {}),
+                    overrides,
+                )
+                for key, value in mapping.items()
+            }
+
+    for field_name in ("params_ensemble_by_effective_date",):
+        mapping = dict(resolved.get(field_name) or {})
+        if not mapping:
+            continue
+        normalized_mapping = {}
+        for key, raw_members in mapping.items():
+            members = []
+            for raw_member in list(raw_members or []):
+                member = dict(raw_member or {})
+                member["params"] = materialize_fixed_strategy_param_overrides_in_payload(
+                    dict(member.get("params") or {}),
+                    overrides,
+                )
+                members.append(member)
+            normalized_mapping[str(key)] = members
+        resolved[field_name] = normalized_mapping
+
+    if isinstance(resolved.get("params_ensemble"), list):
+        members = []
+        for raw_member in list(resolved.get("params_ensemble") or []):
+            member = dict(raw_member or {})
+            member["params"] = materialize_fixed_strategy_param_overrides_in_payload(
+                dict(member.get("params") or {}),
+                overrides,
+            )
+            members.append(member)
+        resolved["params_ensemble"] = members
+
+    return resolved
+
+
+def _materialize_fixed_strategy_param_overrides_in_members(
+    raw_members,
+    fixed_strategy_param_overrides: dict | None,
+) -> list[dict]:
+    members = renumber_seed_ensemble_members(raw_members)
+    overrides = dict(fixed_strategy_param_overrides or {})
+    if not overrides:
+        return members
+    normalized = []
+    for raw_member in members:
+        member = dict(raw_member)
+        member["params"] = materialize_fixed_strategy_param_overrides_in_payload(
+            dict(member.get("params") or {}),
+            overrides,
+        )
+        normalized.append(member)
+    return renumber_seed_ensemble_members(normalized)
 
 BASE_FINALIST_BEST_POLICY_NAME = "base_finalist_best"
 LOCAL_FINALIST_BEST_POLICY_NAME = "local_finalist_best"
@@ -3265,10 +3365,26 @@ def _policy_description(policy_name: str) -> str:
     return f"Use {policy_name} params for each OOS year."
 
 
-def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int, selection_period: str, local_rank_map: dict[int, int], retention_rank_map: dict[int, int], oos_start_date: str | None = None, oos_end_date: str | None = None, optimizer_seed: int | None = None) -> dict:
+def _build_policy_schedule_entry(
+    *,
+    item: dict,
+    policy_name: str,
+    oos_year: int,
+    selection_period: str,
+    local_rank_map: dict[int, int],
+    retention_rank_map: dict[int, int],
+    oos_start_date: str | None = None,
+    oos_end_date: str | None = None,
+    optimizer_seed: int | None = None,
+    fixed_strategy_param_overrides: dict | None = None,
+    fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+) -> dict:
     effective_start = str(oos_start_date or f"{str(oos_year)[:4]}-01-01")
     effective_end = str(oos_end_date or f"{str(oos_year)[:4]}-12-31")
-    ensemble_members = renumber_seed_ensemble_members(item.get("params_ensemble"))
+    ensemble_members = _materialize_fixed_strategy_param_overrides_in_members(
+        item.get("params_ensemble"),
+        fixed_strategy_param_overrides,
+    )
     if ensemble_members:
         if optimizer_seed is not None:
             for member in ensemble_members:
@@ -3337,7 +3453,11 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
         "local_rank": int(local_rank_map.get(trial_number, 0)),
         "retention": float(item.get("local_retention", 0.0)),
         "retention_rank": int(retention_rank_map.get(trial_number, 0)),
-        "params": build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT),
+        "params": build_best_params_payload_from_trial(
+            trial,
+            fixed_tp_percent=fixed_tp_percent,
+            fixed_strategy_param_overrides=fixed_strategy_param_overrides,
+        ),
     }
     if _is_finalists_agree_policy(policy_name):
         for key in _finalists_agree_metadata_keys():
@@ -3382,7 +3502,7 @@ def _get_or_prepare_oos_inputs(*, session, params):
 
 
 def _evaluate_period_oos(*, session, trial, oos_year: int, include_equity_curve: bool = False, oos_start_date: str | None = None, oos_end_date: str | None = None):
-    payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
+    payload = build_effective_trial_params_payload(session=session, trial=trial)
     params = build_params_from_mapping(payload)
     prep_result = _get_or_prepare_oos_inputs(session=session, params=params)
     all_dates = sorted(prep_result["master_dates"])
@@ -3451,7 +3571,10 @@ def _format_oos_delta(reference_score, selected_score) -> str:
 def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name: str, oos_year: int, oos_start_date: str | None = None, oos_end_date: str | None = None) -> dict:
     from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_ensemble
 
-    members = renumber_seed_ensemble_members(item.get("params_ensemble"))
+    members = _materialize_fixed_strategy_param_overrides_in_members(
+        item.get("params_ensemble"),
+        getattr(session, "fixed_strategy_param_overrides", None),
+    )
     if not members:
         return {}
     data_dir = getattr(session, "raw_data_cache_data_dir", None)
@@ -3624,7 +3747,11 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         "best_finalist_score_r_source": str(best_metrics.get("score_r_source", "single_stock")),
         "best_finalist_initial_capital": float(best_metrics.get("initial_capital", 0.0)),
         "best_finalist_equity_curve": list(best_metrics.get("equity_curve") or []),
-        "best_finalist_params": build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT) if best_trial is not None else {},
+        "best_finalist_params": (
+            build_effective_trial_params_payload(session=session, trial=best_trial)
+            if best_trial is not None
+            else {}
+        ),
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": float(benchmark_return_pct),
         "benchmark_mdd_pct": float(benchmark_mdd_pct),
@@ -8504,6 +8631,14 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     oos_start_date=oos_start_date,
                     oos_end_date=oos_end_date,
                     optimizer_seed=optimizer_seed,
+                    fixed_strategy_param_overrides=getattr(
+                        session, "fixed_strategy_param_overrides", None
+                    ),
+                    fixed_tp_percent=getattr(
+                        session,
+                        "optimizer_fixed_tp_percent",
+                        OPTIMIZER_FIXED_TP_PERCENT,
+                    ),
                 )
                 for name, item in policy_items.items()
                 if item is not None
@@ -9022,6 +9157,14 @@ def run_outer_rolling_oos(
                     oos_start_date=oos_start_date,
                     oos_end_date=oos_end_date,
                     optimizer_seed=optimizer_seed,
+                    fixed_strategy_param_overrides=getattr(
+                        session, "fixed_strategy_param_overrides", None
+                    ),
+                    fixed_tp_percent=getattr(
+                        session,
+                        "optimizer_fixed_tp_percent",
+                        OPTIMIZER_FIXED_TP_PERCENT,
+                    ),
                 )
                 for name, item in policy_items.items()
                 if item is not None

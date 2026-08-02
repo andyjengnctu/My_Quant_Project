@@ -298,11 +298,29 @@ def build_optimizer_trial_params(param_mapping, user_attrs=None, fixed_tp_percen
     return {key: validated_params[key] for key in resolved_params}
 
 
-def build_best_params_payload_from_trial(best_trial, fixed_tp_percent=None):
-    resolved_params = build_optimizer_trial_params(best_trial.params, best_trial.user_attrs, fixed_tp_percent=fixed_tp_percent)
+def build_best_params_payload_from_trial(
+    best_trial,
+    fixed_tp_percent=None,
+    fixed_strategy_param_overrides=None,
+):
+    resolved_params = build_optimizer_trial_params(
+        best_trial.params,
+        best_trial.user_attrs,
+        fixed_tp_percent=fixed_tp_percent,
+    )
     canonicalized_params = _canonicalize_best_params_for_export(resolved_params)
     base_payload = params_to_json_dict(V16StrategyParams())
     base_payload.update(canonicalized_params)
+
+    persisted_overrides = dict(
+        (getattr(best_trial, "user_attrs", {}) or {}).get(
+            "fixed_strategy_param_overrides",
+            {},
+        )
+        or {}
+    )
+    persisted_overrides.update(dict(fixed_strategy_param_overrides or {}))
+    base_payload.update(persisted_overrides)
     return params_to_json_dict(build_params_from_mapping(base_payload))
 
 

@@ -11714,6 +11714,11 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         _validate_pit_contract_against_settings,
         _write_current_pair_manifest,
     )
+    from tools.optimizer.outer_rolling_oos import (
+        _build_policy_schedule_entry,
+        build_effective_trial_params_payload,
+        materialize_fixed_strategy_param_overrides_in_active_param_payload,
+    )
     from tools.optimizer.param_cache import (
         build_full_evaluation_cache_key,
         build_prep_cache_key,
@@ -11762,6 +11767,70 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             "use_breakout_quality_ranking" in trial.params,
             "use_breakout_quality_filter" in trial.params,
             params.tp_percent,
+        ),
+    )
+
+    export_trial = SimpleNamespace(
+        number=0,
+        params={},
+        user_attrs={"fixed_tp_percent": 0.0},
+    )
+    export_session = SimpleNamespace(
+        optimizer_fixed_tp_percent=0.0,
+        fixed_strategy_param_overrides=fixed,
+    )
+    effective_payload = build_effective_trial_params_payload(
+        session=export_session,
+        trial=export_trial,
+    )
+    schedule_payload = _build_policy_schedule_entry(
+        item={
+            "trial": export_trial,
+            "base_score": 1.0,
+            "local_min_score": 1.0,
+            "local_retention": 1.0,
+        },
+        policy_name="base_finalist_best",
+        oos_year=2014,
+        selection_period="2004-01-01~2013-12-31",
+        local_rank_map={0: 1},
+        retention_rank_map={0: 1},
+        fixed_strategy_param_overrides=fixed,
+        fixed_tp_percent=0.0,
+    )
+    materialized_payload = materialize_fixed_strategy_param_overrides_in_active_param_payload(
+        {
+            "params_by_effective_date": {
+                "2014-01-01": {
+                    "use_breakout_quality_ranking": False,
+                    "use_breakout_quality_filter": True,
+                }
+            },
+            "params_ensemble_by_effective_date": {
+                "2014-01-01": [
+                    {
+                        "member_index": 1,
+                        "params": {
+                            "use_breakout_quality_ranking": False,
+                            "use_breakout_quality_filter": True,
+                        },
+                    }
+                ]
+            },
+        },
+        fixed,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "rolling_adaptation_fixed_contract_reaches_oos_schedule_and_active_param_export",
+        (True, False, True, False, True, False),
+        (
+            effective_payload["use_breakout_quality_ranking"],
+            effective_payload["use_breakout_quality_filter"],
+            schedule_payload["params"]["use_breakout_quality_ranking"],
+            schedule_payload["params"]["use_breakout_quality_filter"],
+            materialized_payload["params_ensemble_by_effective_date"]["2014-01-01"][0]["params"]["use_breakout_quality_ranking"],
+            materialized_payload["params_by_effective_date"]["2014-01-01"]["use_breakout_quality_filter"],
         ),
     )
 

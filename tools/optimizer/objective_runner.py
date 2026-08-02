@@ -575,6 +575,11 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
 
 def run_optimizer_objective(session, trial):
     objective_start = time.perf_counter()
+    fixed_overrides = dict(
+        getattr(session, "fixed_strategy_param_overrides", {}) or {}
+    )
+    if fixed_overrides:
+        trial.set_user_attr("fixed_strategy_param_overrides", fixed_overrides)
     ai_params = build_trial_params(session, trial)
     ai_params = session.apply_fixed_strategy_param_overrides(ai_params)
     prep_cache_key = build_prep_cache_key(
