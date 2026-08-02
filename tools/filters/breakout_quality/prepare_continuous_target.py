@@ -125,9 +125,7 @@ def _build_target(
         group_count=group_count,
     )
     if not source_current:
-        if compact_console_enabled():
-            print("[Continuous Target] 先建立必要的基礎 target")
-        else:
+        if not compact_console_enabled():
             print("[Continuous Target] 基礎component target缺少或過期，先重建：")
             print(f"- {source_reason}")
         code = int(build_base_target(common_args) or 0)

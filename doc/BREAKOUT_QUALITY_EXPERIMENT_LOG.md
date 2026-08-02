@@ -1824,3 +1824,22 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Dataset／Label／模型工件 | 不需因本修正重建；若使用者原本正在建立Dataset，套用新版後重新執行即可取得降噪輸出 |
 | 驗證 | 新增skip原因正規化、彙總順序、rebuild reason單行化、current target靜默與compact工件路徑抑制契約；另獨立檢查compact scope恢復、狀態頁無路徑、PIT unavailable diagnostics無路徑、全專案語法／import／裸except／依賴循環及正式測試入口與checklist可信度 |
 | 結果邊界 | 本輪沒有Selection、OOS或策略績效結果，顯示改善不得解讀為模型效果改變 |
+
+### 3.84 模型研究互動輸出第二次收斂（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；只調整互動式模型研究console與相應validator，完整Markdown／JSON及模型計算不變 |
+| 程式基準 | `test-branch-1_20260802_163620_82699ea.zip`；SHA256 `e970a5ab1cb45ce2c1db837f864bdcf82bc7761b194012fff1b6252ddca09246` |
+| Formal bundle | `to_chatgpt_bundle_20260802_163751_43e54221.zip`；SHA256 `48264151d484df2ed83cf26b7640d62f012b7d8a4f6f37e0c72f5a0c41ccdfa3` |
+| 使用者實際輸出 | Dataset skip已正確彙總為61筆，但基礎11A target audit仍列4個split、No-time target再列3個split；7個PIT folds逐Epoch與refit共輸出數十行；模型audit又重覆Workflow identity並顯示年度、fold、分類、coverage及狀態六段 |
+| Formal結果 | quick gate、chain checks、ml smoke通過；consistency只有`breakout_quality_model_research_menu_route`失敗；meta quality的唯一實質失敗為同一synthetic failure連帶 |
+| Formal根因 | validator在`_dataset_refresh_step`回傳不需重建時仍要求console必須出現一個`[Dataset]`，與「沒有動作就不輸出」的compact契約衝突；程式路由本身仍正確執行Target→PIT→audit |
+| Target輸出 | compact流程不再顯示基礎11A split audit；最終No-time Target只輸出valid coverage、Selection mean、AUC、source rho及OOS未評估的一行摘要 |
+| Fold輸出 | compact流程保留一行PIT plan及一行執行環境；epoch selection與歷史refit不逐Epoch列印，每個新建fold只輸出best epoch、Validation rho、score groups及耗時一行；重用fold只在最終摘要計數 |
+| 模型報表 | compact流程不再重覆Filter／Architecture／Profile／Seed等Workflow設定，也不顯示完整年度與fold分布表；只保留期間／coverage、PASS-only核心排序、年度正向比例與drift、分類重疊、orderable coverage、正式model gate及下一步。直接CLI、Markdown與JSON仍保留完整報表 |
+| 固定條件 | 不改Dataset、Label、Continuous Target公式、PIT fold邊界、Seed 42、architecture、loss、epoch selection、refit、Score、模型gate、策略參數、交易或帳務 |
+| Dataset／Label／模型工件 | 不需重建；本輪只改顯示。既有完整工件可直接重跑選單並由resume重用PIT folds |
+| Selection結果 | 使用者輸出仍為PASS-only global rho 0.3074、daily rho 0.2370、spread 2.3455R、7/7年度rho與spread為正、drift=False、Score vs PASS AUC 0.5620；與3.71相同，無新模型實驗差異 |
+| 採用判定 | 採用compact互動輸出；完整診斷移至既有Markdown／JSON，避免為可讀性刪除研究證據 |
+| 下一步 | 套用後重跑`python apps/test_suite.py`作本機formal double check；策略層仍依既定順序執行`[2] 策略績效驗證` |

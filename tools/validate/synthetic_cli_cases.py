@@ -196,7 +196,7 @@ def validate_dataset_cli_contract_case(_base_params):
                 item["compact_console"] == "1"
                 for item in interactive_commands
             )
-            and interactive_text.count("[Dataset]") == 1
+            and interactive_text.count("[Dataset]") == 0
             and "偵測到 PIT 模型所需 Dataset 尚未就緒" not in interactive_text
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text

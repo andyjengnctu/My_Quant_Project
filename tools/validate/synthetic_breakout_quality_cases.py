@@ -10472,6 +10472,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _direction_summary,
         _orderable_coverage,
         _render_markdown as render_point_in_time_markdown,
+        render_compact_console_summary as render_point_in_time_compact_console,
         render_console_summary as render_point_in_time_console,
     )
     from tools.filters.breakout_quality.build_point_in_time_scores import (
@@ -10953,6 +10954,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     }
     report_console = render_point_in_time_console(report_payload)
     colored_report_console = render_point_in_time_console(report_payload, color=True)
+    compact_report_console = render_point_in_time_compact_console(report_payload)
     report_markdown = render_point_in_time_markdown(report_payload)
     add_check(
         results,
@@ -10986,6 +10988,67 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             )
         )
         and "\x1b[" not in report_console,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_audit_compact_console_avoids_repeated_detail_tables",
+        True,
+        all(
+            text in compact_report_console
+            for text in (
+                "PIT 模型驗證",
+                "核心排序",
+                "年度穩定",
+                "模型 Gate",
+                "執行策略績效驗證",
+            )
+        )
+        and all(
+            text not in compact_report_console
+            for text in (
+                "Current Breakout Quality Workflow",
+                "Fold 分布與漂移",
+                "fold_000",
+                "完整指標 JSON",
+            )
+        ),
+    )
+    project_root = Path(__file__).resolve().parents[2]
+    ranker_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "train_continuous_ranker.py"
+    ).read_text(encoding="utf-8")
+    pit_builder_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "build_point_in_time_scores.py"
+    ).read_text(encoding="utf-8")
+    base_target_audit_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "audit_continuous_target.py"
+    ).read_text(encoding="utf-8")
+    no_time_target_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "audit_no_time_continuous_target.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_compact_training_output_is_one_line_per_new_fold",
+        True,
+        ranker_source.count("if not compact_console:") >= 4
+        and "fold_progress.print_line(" in pit_builder_source
+        and "best epoch=" in pit_builder_source
+        and "PIT Scores 完成" in pit_builder_source,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_compact_target_output_hides_base_audit_and_summarizes_final_target",
+        True,
+        "if compact_console_enabled():" in base_target_audit_source
+        and "Continuous Target 完成" in no_time_target_source
+        and "Selection mean=" in no_time_target_source
+        and "OOS未評估" in no_time_target_source,
     )
     add_check(
         results,

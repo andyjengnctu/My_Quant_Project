@@ -14,6 +14,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from core.display_common import InlineProgress, format_elapsed
+
 from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
@@ -633,6 +635,16 @@ def _print_plan(
     *,
     color: bool = False,
 ) -> None:
+    if compact_console_enabled():
+        total_score_groups = sum(len(detail["score_ids"]) for detail in fold_details)
+        print(
+            paint("PIT 計畫", "cyan", enabled=color, bold=True)
+            + f" | folds={len(folds)}"
+            + f" | period={folds[0]['score_start'].date()}～{folds[-1]['score_end'].date()}"
+            + f" | score groups={total_score_groups:,}"
+        )
+        return
+
     print(
         render_section(
             paint(
@@ -741,22 +753,37 @@ def main(argv=None) -> int:
         return 0
 
     torch, plan = resolve_ranker_execution_plan(args)
-    print(
-        render_section(
-            paint("執行環境", "cyan", enabled=color_enabled, bold=True)
+    compact_console = compact_console_enabled()
+    if compact_console:
+        precision = (
+            plan.autocast_dtype_name
+            if plan.mixed_precision_enabled
+            else "float32"
         )
-    )
-    print(
-        render_key_values(
-            (
-                ("Torch device", plan.device_type),
-                ("Mixed precision", plan.mixed_precision_enabled),
-                ("Compute dtype", plan.autocast_dtype_name),
-                ("Deterministic", plan.deterministic_algorithms),
-                ("TF32", plan.allow_tf32),
+        print(
+            paint("執行環境", "cyan", enabled=color_enabled, bold=True)
+            + f" | device={plan.device_type}"
+            + f" | dtype={precision}"
+            + f" | deterministic={plan.deterministic_algorithms}"
+            + f" | TF32={plan.allow_tf32}"
+        )
+    else:
+        print(
+            render_section(
+                paint("執行環境", "cyan", enabled=color_enabled, bold=True)
             )
         )
-    )
+        print(
+            render_key_values(
+                (
+                    ("Torch device", plan.device_type),
+                    ("Mixed precision", plan.mixed_precision_enabled),
+                    ("Compute dtype", plan.autocast_dtype_name),
+                    ("Deterministic", plan.deterministic_algorithms),
+                    ("TF32", plan.allow_tf32),
+                )
+            )
+        )
     point_in_time_dir = resolve_filter_point_in_time_dir(
         PROJECT_ROOT,
         args.filter_id,
@@ -768,10 +795,10 @@ def main(argv=None) -> int:
     score_frames: list[pd.DataFrame] = []
     fold_manifests: list[dict[str, Any]] = []
     coverage_rows: list[dict[str, Any]] = []
-    compact_console = compact_console_enabled()
     reused_fold_count = 0
     built_fold_count = 0
-    for fold, ids in zip(folds, fold_details):
+    fold_progress = InlineProgress()
+    for fold_index, (fold, ids) in enumerate(zip(folds, fold_details), start=1):
         fold_contract = _fold_contract_payload(args, bundle, fold, ids)
         fingerprint = _json_fingerprint(fold_contract)
         fold_dir = resolve_filter_point_in_time_fold_dir(
@@ -802,13 +829,19 @@ def main(argv=None) -> int:
                 )
         else:
             built_fold_count += 1
-            print(
-                "\n"
-                + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
-                + "："
-                + paint("訓練並評分", "yellow", enabled=color_enabled, bold=True)
-                + f" {fold['score_start'].date()} ～ {fold['score_end'].date()}"
-            )
+            fold_started = time.perf_counter()
+            if compact_console:
+                fold_progress.update(
+                    f"PIT fold {fold_index}/{len(folds)} | {fold['fold_id']} | 訓練並評分"
+                )
+            else:
+                print(
+                    "\n"
+                    + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
+                    + "："
+                    + paint("訓練並評分", "yellow", enabled=color_enabled, bold=True)
+                    + f" {fold['score_start'].date()} ～ {fold['score_end'].date()}"
+                )
             frame, manifest = _train_fold(
                 args,
                 bundle,
@@ -819,6 +852,17 @@ def main(argv=None) -> int:
                 torch=torch,
                 plan=plan,
             )
+            if compact_console:
+                epoch_selection = dict(manifest.get("epoch_selection") or {})
+                fold_progress.print_line(
+                    paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
+                    + " "
+                    + paint("完成", "green", enabled=color_enabled, bold=True)
+                    + f" | best epoch={int(manifest['selected_epoch'])}"
+                    + f" | val rho={float(epoch_selection.get('best_validation_mean_daily_spearman')):.4f}"
+                    + f" | score={len(frame):,}"
+                    + f" | {format_elapsed(time.perf_counter() - fold_started)}"
+                )
         score_frames.append(frame)
         fold_manifests.append(manifest)
         coverage_rows.append(
@@ -908,38 +952,44 @@ def main(argv=None) -> int:
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
     write_json(manifest_path, manifest)
-    print(
-        render_section(
-            paint(
-                "Selection point-in-time scores 完成",
-                "green",
-                enabled=color_enabled,
-                bold=True,
+    if compact_console:
+        print(
+            paint("PIT Scores 完成", "green", enabled=color_enabled, bold=True)
+            + f" | folds={len(folds)}"
+            + f" | 重用={reused_fold_count}"
+            + f" | 新建={built_fold_count}"
+            + f" | groups={validation['scored_group_count']:,}"
+            + f" | coverage={validation['coverage_rate']:.2%}"
+            + f" | {format_elapsed(time.perf_counter() - started)}"
+        )
+    else:
+        print(
+            render_section(
+                paint(
+                    "Selection point-in-time scores 完成",
+                    "green",
+                    enabled=color_enabled,
+                    bold=True,
+                )
             )
         )
-    )
-    print(
-        render_key_values(
-            (
-                ("Folds", len(folds)),
-                *(
-                    (("重用／新建", f"{reused_fold_count}／{built_fold_count}"),)
-                    if compact_console
-                    else ()
-                ),
-                ("Scored groups", f"{validation['scored_group_count']:,}"),
+        print(
+            render_key_values(
                 (
-                    "Coverage",
-                    paint(
-                        f"{validation['coverage_rate']:.2%}",
-                        "green" if float(validation["coverage_rate"]) >= 1.0 - 1e-12 else "yellow",
-                        enabled=color_enabled,
-                        bold=True,
+                    ("Folds", len(folds)),
+                    ("Scored groups", f"{validation['scored_group_count']:,}"),
+                    (
+                        "Coverage",
+                        paint(
+                            f"{validation['coverage_rate']:.2%}",
+                            "green" if float(validation["coverage_rate"]) >= 1.0 - 1e-12 else "yellow",
+                            enabled=color_enabled,
+                            bold=True,
+                        ),
                     ),
-                ),
+                )
             )
         )
-    )
     print_artifact_paths(
         (("PIT Scores", score_path), ("PIT manifest", manifest_path), ("PIT coverage", coverage_path)),
         project_root=PROJECT_ROOT,

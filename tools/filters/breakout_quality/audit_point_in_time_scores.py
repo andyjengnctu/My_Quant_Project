@@ -32,6 +32,9 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_manifest_path,
     resolve_selection_point_in_time_score_path,
 )
+from filters.breakout_quality.ranking_score_store import (
+    derive_point_in_time_model_validation_gate,
+)
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.build_point_in_time_scores import (
     FOLD_MANIFEST_FILENAME,
@@ -924,6 +927,100 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
     return "\n".join(lines)
 
 
+def render_compact_console_summary(
+    payload: dict[str, Any], *, color: bool = False
+) -> str:
+    """Render the interactive workflow summary without repeating full audit detail."""
+
+    primary = payload["metrics"]["pass_only_target"]
+    classification = payload["classification_overlap"]
+    direction = payload["direction_summary"]
+    drift = payload["fold_drift"]
+    score_coverage = payload.get("score_coverage") or {}
+    score_period = payload.get("score_period") or {}
+    workflow = payload.get("workflow") or {}
+    orderable = payload["orderable_candidate_coverage"]
+    gate = derive_point_in_time_model_validation_gate(payload)
+
+    gate_passed = gate["status"] == "PASS"
+    orderable_text = (
+        f"{int(orderable['scored_candidate_count']):,}/"
+        f"{int(orderable['candidate_count']):,} "
+        f"({_fmt_percent(orderable.get('coverage_rate'))})"
+        if orderable.get("available")
+        else "尚未提供；策略 replay 時建立"
+    )
+    rows = (
+        (
+            "期間／Coverage",
+            f"{score_period.get('start')}～{score_period.get('end')}"
+            f" | folds={int(workflow.get('fold_count') or 0)}"
+            f" | {int(score_coverage.get('scored_group_count', 0)):,}/"
+            f"{int(score_coverage.get('expected_group_count', 0)):,}"
+            f" ({_fmt_percent(score_coverage.get('coverage_rate'))})",
+        ),
+        (
+            "核心排序",
+            paint(
+                f"PASS-only rho={_fmt_metric(primary.get('global_spearman'))}"
+                f" | daily rho={_fmt_metric(primary.get('mean_daily_spearman'))}"
+                f" | spread={_fmt_metric(primary.get('top_bottom_target_spread'))}R",
+                "green" if gate_passed else "red",
+                enabled=color,
+                bold=True,
+            ),
+        ),
+        (
+            "年度穩定",
+            paint(
+                f"rho>0：{direction['positive_spearman_year_count']}/"
+                f"{direction['valid_year_count']}"
+                f" | spread>0：{direction['positive_spread_year_count']}/"
+                f"{direction['valid_year_count']}"
+                f" | drift={bool(drift['drift_flag'])}",
+                "green" if gate_passed and not bool(drift["drift_flag"]) else "yellow",
+                enabled=color,
+                bold=True,
+            ),
+        ),
+        (
+            "分類重疊",
+            f"AUC={_fmt_metric(classification.get('score_vs_pass_reject_auc'))}"
+            f" | Top decile PASS={_fmt_percent(classification.get('top_score_decile_pass_share'))}"
+            f" | Overall={_fmt_percent(classification.get('overall_pass_share'))}",
+        ),
+        ("Orderable coverage", orderable_text),
+        (
+            "模型 Gate",
+            paint(
+                gate["status"],
+                "green" if gate_passed else "red",
+                enabled=color,
+                bold=True,
+            ),
+        ),
+        (
+            "下一步",
+            paint(
+                "執行策略績效驗證"
+                if gate_passed
+                else "停止策略驗證，先檢查模型排序失敗項目",
+                "cyan" if gate_passed else "red",
+                enabled=color,
+                bold=True,
+            ),
+        ),
+    )
+    return "\n".join(
+        (
+            render_section(
+                paint("PIT 模型驗證", "cyan", enabled=color, bold=True)
+            ),
+            render_key_values(rows),
+        )
+    )
+
+
 def _render_markdown(payload: dict[str, Any]) -> str:
     primary = payload["metrics"]["pass_only_target"]
     all_target = payload["metrics"]["all_valid_target"]
@@ -1234,7 +1331,11 @@ def main(argv=None) -> int:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_json, payload)
     output_markdown.write_text(_render_markdown(payload), encoding="utf-8")
-    print(render_console_summary(payload, color=console_color_enabled()))
+    color_enabled = console_color_enabled()
+    if compact_console_enabled():
+        print(render_compact_console_summary(payload, color=color_enabled))
+    else:
+        print(render_console_summary(payload, color=color_enabled))
     print_artifact_paths(
         (("Markdown", output_markdown), ("完整指標 JSON", output_json)),
         project_root=PROJECT_ROOT,
@@ -1246,6 +1347,7 @@ __all__ = [
     "AUDIT_SCHEMA_VERSION",
     "main",
     "parse_args",
+    "render_compact_console_summary",
     "render_console_summary",
 ]
 

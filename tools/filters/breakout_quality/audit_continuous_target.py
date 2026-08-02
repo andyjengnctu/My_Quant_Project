@@ -956,6 +956,13 @@ def main(argv=None) -> int:
     manifest_path = target_dir / TARGET_MANIFEST_FILENAME
     _write_json(manifest_path, manifest)
 
+    if compact_console_enabled():
+        print_artifact_paths(
+            [("Target manifest", manifest_path), ("Markdown 報表", audit_markdown_path)],
+            project_root=PROJECT_ROOT,
+        )
+        return 0
+
     print("11A continuous target audit完成")
     print(f"target={spec.target_id} groups={group_count:,} valid={valid_count:,}")
     for split_name in _SPLIT_ORDER:

@@ -94,7 +94,10 @@ from tools.filters.breakout_quality.common import (
     load_validated_dataset_bundle,
     write_json,
 )
-from filters.breakout_quality.console_report import print_artifact_paths
+from filters.breakout_quality.console_report import (
+    compact_console_enabled,
+    print_artifact_paths,
+)
 
 RANKER_SCHEMA_VERSION = 1
 RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
@@ -566,7 +569,9 @@ def _select_epoch(
     best_validation_mse = math.inf
     epochs_without_improvement = 0
     history: list[dict[str, Any]] = []
-    print("\nEpoch選擇（依Validation mean daily Spearman）")
+    compact_console = compact_console_enabled()
+    if not compact_console:
+        print("\nEpoch選擇（依Validation mean daily Spearman）")
     for epoch in range(1, int(args.epochs) + 1):
         started = time.perf_counter()
         batch_loss = _train_epoch(
@@ -624,12 +629,13 @@ def _select_epoch(
             "elapsed_sec": round(float(elapsed), 3),
             "is_best_epoch": bool(improved),
         })
-        marker = " ★新最佳" if improved else ""
-        print(
-            f"  Epoch {epoch:>3}/{int(args.epochs)} | Train MSE {train_metrics['mse_vs_daily_percentile']:.6f} "
-            f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(metric):.4f} "
-            f"| {elapsed:.1f}s{marker}"
-        )
+        if not compact_console:
+            marker = " ★新最佳" if improved else ""
+            print(
+                f"  Epoch {epoch:>3}/{int(args.epochs)} | Train MSE {train_metrics['mse_vs_daily_percentile']:.6f} "
+                f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(metric):.4f} "
+                f"| {elapsed:.1f}s{marker}"
+            )
         if int(args.early_stopping_patience) > 0 and epochs_without_improvement >= int(args.early_stopping_patience):
             break
     if best_epoch < 1:
@@ -664,7 +670,9 @@ def _fit_final(
     )
     grad_scaler = build_grad_scaler(torch, plan)
     history: list[dict[str, Any]] = []
-    print(f"\n{str(phase_label)}（{int(epochs)} Epoch）")
+    compact_console = compact_console_enabled()
+    if not compact_console:
+        print(f"\n{str(phase_label)}（{int(epochs)} Epoch）")
     for epoch in range(1, int(epochs) + 1):
         started = time.perf_counter()
         loss = _train_epoch(
@@ -683,7 +691,8 @@ def _fit_final(
         )
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})
-        print(f"  Epoch {epoch:>3}/{int(epochs)} | Batch MSE {loss:.6f} | {elapsed:.1f}s")
+        if not compact_console:
+            print(f"  Epoch {epoch:>3}/{int(epochs)} | Batch MSE {loss:.6f} | {elapsed:.1f}s")
     return model.eval(), history
 
 
