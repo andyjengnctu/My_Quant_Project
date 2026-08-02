@@ -20,6 +20,7 @@ from tools.filters.breakout_quality.strategy_report_style import (
     terminal_signal,
 )
 from filters.breakout_quality.console_report import (
+    compact_console_enabled,
     console_color_enabled,
     render_key_values,
     render_section,
@@ -33,12 +34,10 @@ _MISSED_BUY_PREFIX = "錯失買進"
 _FULL_EXIT_PREFIXES = ("全倉結算", "汰弱賣出", "期末強制結算")
 _PARTIAL_EXIT_PREFIX = "半倉停利"
 
-
 def _clean_text(value: Any) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return ""
     return str(value).strip()
-
 
 def _date_text(value: Any) -> str:
     text = _clean_text(value)
@@ -47,20 +46,16 @@ def _date_text(value: Any) -> str:
     parsed = pd.to_datetime(text, errors="coerce")
     return "" if pd.isna(parsed) else parsed.strftime("%Y-%m-%d")
 
-
 def _number(value: Any) -> float | None:
     if isinstance(value, str):
         value = value.replace(",", "").strip()
     return finite_number(value)
 
-
 def _is_buy(type_text: str) -> bool:
     return str(type_text).startswith(_BUY_PREFIX)
 
-
 def _is_full_exit(type_text: str) -> bool:
     return any(str(type_text).startswith(prefix) for prefix in _FULL_EXIT_PREFIXES)
-
 
 def _target_lookup(selected_target_diagnostics: pd.DataFrame) -> pd.DataFrame:
     frame = pd.DataFrame(selected_target_diagnostics).copy()
@@ -77,14 +72,12 @@ def _target_lookup(selected_target_diagnostics: pd.DataFrame) -> pd.DataFrame:
     frame = frame[columns].drop_duplicates(["ticker", "trade_date", "signal_date"], keep="first")
     return frame.rename(columns={"trade_date": "entry_date"})
 
-
 def _trading_calendar_dates(daily_capacity: pd.DataFrame | None) -> pd.DatetimeIndex:
     frame = pd.DataFrame(daily_capacity).copy()
     if frame.empty or "Date" not in frame.columns:
         return pd.DatetimeIndex([])
     dates = pd.to_datetime(frame["Date"], errors="coerce").dropna().drop_duplicates().sort_values()
     return pd.DatetimeIndex(dates)
-
 
 def build_trade_lifecycle_rows(
     trade_history: pd.DataFrame,
@@ -249,18 +242,15 @@ def build_trade_lifecycle_rows(
     out["target_realization_gap_r"] = out["target_raw_r"] - out["r_multiple"]
     return out.reindex(columns=columns)
 
-
 def _safe_mean(series: pd.Series) -> float | None:
     values = pd.to_numeric(series, errors="coerce")
     values = values[values.map(math.isfinite)]
     return float(values.mean()) if not values.empty else None
 
-
 def _safe_median(series: pd.Series) -> float | None:
     values = pd.to_numeric(series, errors="coerce")
     values = values[values.map(math.isfinite)]
     return float(values.median()) if not values.empty else None
-
 
 def _aggregate_capture_ratio(
     lifecycle: pd.DataFrame,
@@ -286,7 +276,6 @@ def _aggregate_capture_ratio(
         return None
     return numerator / denominator
 
-
 def _concentration(series: pd.Series) -> tuple[float | None, float | None]:
     values = series.fillna("").astype(str).str.strip()
     values = values[values != ""]
@@ -295,7 +284,6 @@ def _concentration(series: pd.Series) -> tuple[float | None, float | None]:
     shares = values.value_counts(normalize=True)
     return float(shares.max() * 100.0), float((shares.pow(2)).sum())
 
-
 def _top_n_share(series: pd.Series, n: int) -> float | None:
     values = series.fillna("").astype(str).str.strip()
     values = values[values != ""]
@@ -303,7 +291,6 @@ def _top_n_share(series: pd.Series, n: int) -> float | None:
         return None
     counts = values.value_counts()
     return float(counts.nlargest(int(n)).sum() / counts.sum() * 100.0)
-
 
 def _scenario_summary(
     *,
@@ -380,7 +367,6 @@ def _scenario_summary(
         "avg_capital_return_pct": _safe_mean(lifecycle.get("capital_return_pct", pd.Series(dtype=float))),
     }
 
-
 def _delta(right: dict[str, Any], left: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in sorted(set(left) | set(right)):
@@ -389,7 +375,6 @@ def _delta(right: dict[str, Any], left: dict[str, Any]) -> dict[str, Any]:
         if lv is not None and rv is not None:
             result[key] = rv - lv
     return result
-
 
 def _yearly_rows(lifecycle: pd.DataFrame, scenario: str) -> pd.DataFrame:
     if lifecycle.empty:
@@ -415,7 +400,6 @@ def _yearly_rows(lifecycle: pd.DataFrame, scenario: str) -> pd.DataFrame:
         })
     return pd.DataFrame(rows)
 
-
 def _build_yearly(baseline_lifecycle: pd.DataFrame, score_lifecycle: pd.DataFrame) -> pd.DataFrame:
     left = _yearly_rows(baseline_lifecycle, "baseline")
     right = _yearly_rows(score_lifecycle, "score_sort")
@@ -430,7 +414,6 @@ def _build_yearly(baseline_lifecycle: pd.DataFrame, score_lifecycle: pd.DataFram
     ):
         merged[f"delta_{metric}"] = merged[f"score_sort_{metric}"] - merged[f"baseline_{metric}"]
     return merged.reset_index(drop=True)
-
 
 def _decision(
     *,
@@ -509,7 +492,6 @@ def _decision(
         "future_target_used_for_runtime": False,
     }
 
-
 def build_score_ranking_capture_audit(
     *,
     metadata: dict[str, Any],
@@ -565,7 +547,6 @@ def build_score_ranking_capture_audit(
         "score_sort_lifecycle": score_lifecycle,
     }
 
-
 def _fmt(value: Any, digits: int = 2, unit: str = "", signed: bool = False) -> str:
     number = finite_number(value)
     if number is None:
@@ -602,7 +583,6 @@ _CAPTURE_ROWS = (
     ("指標結算占比", "indicator_exit_share_pct", "%", "attention"),
     ("汰弱賣出占比", "rotation_exit_share_pct", "%", "attention"),
 )
-
 
 def render_capture_audit_markdown(result: dict[str, Any]) -> str:
     metadata = result["metadata"]
@@ -685,6 +665,267 @@ def render_capture_audit_markdown(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _compact_capture_rows(
+    baseline: dict[str, Any],
+    score_sort: dict[str, Any],
+    delta: dict[str, Any],
+    specs: tuple[tuple[str, str, str, str], ...],
+    *,
+    use_color: bool,
+    omit_unavailable: bool = False,
+) -> list[tuple[str, str, str, str, str]]:
+    rows: list[tuple[str, str, str, str, str]] = []
+    for label, key, unit, preference in specs:
+        left = baseline.get(key)
+        right = score_sort.get(key)
+        if omit_unavailable and finite_number(left) is None and finite_number(right) is None:
+            continue
+        signal = signal_for_delta(
+            delta.get(key), preference=preference, warning_threshold=0.0
+        )
+        digits = 0 if key == "partial_residual_slot_days" else 2
+        rows.append((
+            label,
+            _fmt(left, digits, unit),
+            _fmt(right, digits, unit),
+            terminal_signal(
+                _fmt(delta.get(key), digits, unit, signed=True),
+                signal,
+                enabled=use_color,
+            ),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    return rows
+
+
+def _render_compact_capture_audit_console(
+    result: dict[str, Any],
+    *,
+    use_color: bool,
+) -> str:
+    """Render interactive attribution by capital, trade, capture, and time layers."""
+
+    metadata = result["metadata"]
+    baseline = result["baseline"]
+    score_sort = result["score_sort"]
+    delta = result["score_sort_minus_baseline"]
+    decision = result["decision"]
+    period = metadata.get("comparison_period") or {}
+    decision_signal = str(decision.get("signal") or SIGNAL_NEUTRAL)
+
+    lines = [
+        render_title("Score Sort 資金配置與 Target Capture 診斷"),
+        render_key_values((
+            ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
+            ("報表性質", "Selection事後歸因；不改策略"),
+            ("Future Target runtime", "未使用"),
+        )),
+        render_section("綜合判定", number=1),
+        terminal_signal(
+            f"{signal_marker(decision_signal)} {decision.get('conclusion')}",
+            decision_signal,
+            enabled=use_color,
+        ),
+        "主要瓶頸：" + "；".join(decision.get("bottlenecks") or []),
+        "讀法：先看投組資金是否充分投入，再看較高Target是否轉成實際R。",
+    ]
+
+    sizing_specs = (
+        ("平均曝險", "avg_exposure_pct", "%", "higher"),
+        ("平均預留金額", "avg_reserved_total", "", "attention"),
+        ("平均實際投入金額", "avg_invested_total", "", "higher"),
+        ("投入／預留比", "avg_invested_vs_reserved_pct", "%", "higher"),
+        ("平均初始停損距離", "avg_stop_distance_pct", "%", "attention"),
+    )
+    lines.extend((
+        render_section("部位與資金配置", number=2),
+        "讀法：停損越寬，在固定風險sizing下每筆可投入金額通常越小。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_capture_rows(
+                baseline, score_sort, delta, sizing_specs, use_color=use_color
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    quality_specs = (
+        ("平均 Realized R", "avg_realized_r", " R", "higher"),
+        ("平均 Target R", "avg_target_r", " R", "higher"),
+        ("Aggregate Target capture", "aggregate_target_capture_ratio", "", "higher"),
+        ("Median Target capture", "median_target_capture_ratio", "", "higher"),
+        ("Target ≥ 0.5R capture", "target_ge_0_5_capture_ratio", "", "higher"),
+        ("平均 Target realization gap", "avg_target_realization_gap_r", " R", "lower"),
+        ("平均投入資金報酬", "avg_capital_return_pct", "%", "higher"),
+    )
+    lines.extend((
+        render_section("單筆交易品質與 Target 轉換", number=3),
+        "讀法：Realized R是實際交易結果；Target R是事後機會；capture衡量兩者轉換效率。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_capture_rows(
+                baseline, score_sort, delta, quality_specs, use_color=use_color
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    execution_specs = (
+        ("保留買單成交率", "reserved_buy_fill_rate_pct", "%", "higher"),
+        ("平均持有日", "avg_holding_calendar_days", " 日", "lower"),
+        ("半倉交易占比", "partial_exit_trade_share_pct", "%", "attention"),
+        ("半倉後至結算平均日", "avg_partial_to_exit_calendar_days", " 日", "lower"),
+        ("半倉殘留持倉格日", "partial_residual_slot_days", " 格日", "lower"),
+    )
+    execution_rows = _compact_capture_rows(
+        baseline,
+        score_sort,
+        delta,
+        execution_specs,
+        use_color=use_color,
+        omit_unavailable=True,
+    )
+    lines.extend((
+        render_section("成交與資金周轉", number=4),
+        "讀法：成交率看掛單能否落地；持有日與尾倉格日反映資金被占用多久。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            execution_rows,
+            alignments=("left", "right", "right", "right", "left"),
+        ) if execution_rows else "本次沒有可用的成交／周轉診斷。",
+    ))
+
+    concentration_specs = (
+        ("Top 5進場日交易占比", "top_5_entry_dates_share_pct", "%", "attention"),
+        ("最大單月進場占比", "top_entry_month_share_pct", "%", "attention"),
+        ("進場月份 HHI", "entry_month_hhi", "", "attention"),
+    )
+    lines.extend((
+        render_section("進場集中度", number=5),
+        "讀法：占比或HHI越高，代表交易越集中在少數日期或月份。",
+        render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_capture_rows(
+                baseline, score_sort, delta, concentration_specs, use_color=use_color
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+    industry_coverage = finite_number(baseline.get("industry_coverage_pct")) or 0.0
+    score_industry_coverage = finite_number(score_sort.get("industry_coverage_pct")) or 0.0
+    if max(industry_coverage, score_industry_coverage) <= 0.0:
+        lines.append("產業集中度：無canonical產業資料，略過。")
+    else:
+        industry_specs = (
+            ("產業資料覆蓋", "industry_coverage_pct", "%", "neutral"),
+            ("最大產業占比", "top_industry_share_pct", "%", "attention"),
+            ("產業 HHI", "industry_hhi", "", "attention"),
+        )
+        lines.append(render_table(
+            ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+            _compact_capture_rows(
+                baseline,
+                score_sort,
+                delta,
+                industry_specs,
+                use_color=use_color,
+                omit_unavailable=True,
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ))
+
+    exit_rows = []
+    for label, key in (
+        ("停損", "stop_exit_share_pct"),
+        ("指標", "indicator_exit_share_pct"),
+        ("汰弱", "rotation_exit_share_pct"),
+        ("期末強制", "forced_exit_share_pct"),
+    ):
+        signal = signal_for_delta(
+            delta.get(key), preference="attention", warning_threshold=0.0
+        )
+        exit_rows.append((
+            label,
+            _fmt(baseline.get(key), 2, "%"),
+            _fmt(score_sort.get(key), 2, "%"),
+            terminal_signal(
+                _fmt(delta.get(key), 2, "%", signed=True), signal, enabled=use_color
+            ),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    lines.extend((
+        render_section("最終出場結構", number=6),
+        "讀法：只看最後的全倉結算原因；結構變化不等於損益方向。",
+        render_table(
+            ("類別", "Baseline", "Score Sort", "差異", "判讀"),
+            exit_rows,
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    yearly = result["yearly"]
+    lines.append(render_section("依進場年度", number=7))
+    if yearly.empty:
+        lines.append("無年度資料。")
+    else:
+        quality_rows = []
+        invested_rows = []
+        for row in yearly.to_dict("records"):
+            r_signal = signal_for_delta(row.get("delta_avg_r"), preference="higher")
+            capture_signal = signal_for_delta(
+                row.get("delta_aggregate_capture_ratio"), preference="higher"
+            )
+            invested_signal = signal_for_delta(
+                row.get("delta_avg_invested_total"), preference="higher"
+            )
+            quality_rows.append((
+                int(row["entry_year"]),
+                _fmt(row.get("baseline_avg_r")),
+                _fmt(row.get("score_sort_avg_r")),
+                terminal_signal(
+                    _fmt(row.get("delta_avg_r"), signed=True), r_signal, enabled=use_color
+                ),
+                _fmt(row.get("baseline_aggregate_capture_ratio")),
+                _fmt(row.get("score_sort_aggregate_capture_ratio")),
+                terminal_signal(
+                    _fmt(row.get("delta_aggregate_capture_ratio"), signed=True),
+                    capture_signal,
+                    enabled=use_color,
+                ),
+            ))
+            invested_rows.append((
+                int(row["entry_year"]),
+                _fmt(row.get("baseline_avg_invested_total"), 0),
+                _fmt(row.get("score_sort_avg_invested_total"), 0),
+                terminal_signal(
+                    _fmt(row.get("delta_avg_invested_total"), 0, signed=True),
+                    invested_signal,
+                    enabled=use_color,
+                ),
+            ))
+        lines.extend((
+            "交易品質：按進場年份比較平均Realized R與aggregate capture。",
+            render_table(
+                ("年度", "Base R", "Sort R", "ΔR", "Base capture", "Sort capture", "Δcapture"),
+                quality_rows,
+                alignments=("right", "right", "right", "right", "right", "right", "right"),
+            ),
+            "投入規模：按進場年份比較每筆平均實際投入金額。",
+            render_table(
+                ("年度", "Base投入", "Sort投入", "Δ投入"),
+                invested_rows,
+                alignments=("right", "right", "right", "right"),
+            ),
+        ))
+
+    lines.extend((
+        render_section("判讀限制", number=8),
+        "本報表是Selection事後歸因；Future Target未參與runtime。",
+        "黃色只表示結構變化；正式採用仍須凍結後OOS驗證。",
+    ))
+    return "\n".join(lines)
+
+
 def render_capture_audit_console(
     result: dict[str, Any],
     *,
@@ -693,6 +934,8 @@ def render_capture_audit_console(
     """Render the complete capture attribution as the readable console report."""
 
     use_color = console_color_enabled() if color is None else bool(color)
+    if compact_console_enabled():
+        return _render_compact_capture_audit_console(result, use_color=use_color)
     metadata = result["metadata"]
     baseline = result["baseline"]
     score_sort = result["score_sort"]
@@ -832,7 +1075,6 @@ def _json_native(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_native(item) for item in value]
     return str(value)
-
 
 def write_score_ranking_capture_audit_outputs(*, result: dict[str, Any], output_dir: str | Path) -> dict[str, Any]:
     out_dir = Path(output_dir)

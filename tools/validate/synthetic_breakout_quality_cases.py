@@ -11509,6 +11509,12 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
         selection_diagnostics, color=True,
     )
     capture_console = render_capture_audit_console(result, color=True)
+    with patch.dict(os.environ, {"BREAKOUT_QUALITY_COMPACT_CONSOLE": "1"}):
+        compact_comparison_console = _render_strategy_console_report(
+            metadata, baseline_summary, score_summary, comparison_delta, yearly,
+            selection_diagnostics, color=True,
+        )
+        compact_capture_console = render_capture_audit_console(result, color=True)
     with tempfile.TemporaryDirectory() as temp_dir:
         output_dir = Path(temp_dir)
         (output_dir / "score_ranking_capture_audit.html").write_text(
@@ -11525,6 +11531,23 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
             )
         )
         no_html_outputs = not (output_dir / "score_ranking_capture_audit.html").exists()
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "interactive_strategy_reports_are_grouped_by_decision_layer_without_internal_context_noise",
+        (True, True, True, True, True, True),
+        (
+            "投組報酬與風險" in strip_ansi(compact_comparison_console),
+            "單筆交易品質" in strip_ansi(compact_comparison_console),
+            "資金使用與持倉容量" in strip_ansi(compact_comparison_console),
+            "部位與資金配置" in strip_ansi(compact_capture_console),
+            "單筆交易品質與 Target 轉換" in strip_ansi(compact_capture_console),
+            (
+                "參數檔" not in strip_ansi(compact_comparison_console)
+                and "資本使用與 Capture" not in strip_ansi(compact_capture_console)
+            ),
+        ),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "strategy_and_capture_reports_are_console_readable_without_html_outputs",
@@ -11669,6 +11692,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         _build_runtime_contract,
         _current_pair_artifact_paths,
         _load_current_pair_if_compatible,
+        _render_three_way_console,
         _validate_fixed_contract,
         _validate_pit_contract_against_settings,
         _write_current_pair_manifest,
@@ -12052,6 +12076,35 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         and "output_dir_override=output_dir" in adapt_source
         and "remaining_trials = max(0, int(args.trials) - existing_trial_count)"
         in adapt_source,
+    )
+
+    compact_adaptation_payload = {
+        "baseline": {},
+        "sort_only": {},
+        "adapted": {},
+        "current_capture_audit": {},
+        "adapted_capture_audit": {},
+        "yearly": [],
+        "selection_diagnostics": {
+            "baseline": {}, "sort_only": {}, "adapted": {},
+        },
+        "parameter_comparison": [],
+    }
+    with patch.dict(os.environ, {"BREAKOUT_QUALITY_COMPACT_CONSOLE": "1"}):
+        compact_adaptation_console = _render_three_way_console(
+            compact_adaptation_payload
+        )
+    compact_adaptation_text = compact_adaptation_console
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "interactive_adaptation_report_is_grouped_by_portfolio_trade_capital_and_target_layers",
+        (True, True, True, True),
+        (
+            "投組報酬與風險" in compact_adaptation_text,
+            "單筆交易品質" in compact_adaptation_text,
+            "資金配置與持倉" in compact_adaptation_text,
+            "Target 與實際交易轉換" in compact_adaptation_text,
+        ),
     )
 
     summary["workflow"] = "selection_score_ranking_strategy_adaptation"

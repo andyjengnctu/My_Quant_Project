@@ -20,6 +20,7 @@ from core.runtime_utils import get_taipei_now
 from core.walk_forward_policy import build_optimizer_effective_policy_fingerprint
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.console_report import (
+    compact_console_enabled,
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -78,7 +79,6 @@ ADAPTATION_RELATIVE_DIR = Path(
 )
 CURRENT_PAIR_MANIFEST_FILENAME = "adaptation_pair_manifest.json"
 
-
 def _parse_args(argv=None):
     settings = get_breakout_quality_workflow_settings()
     parser = argparse.ArgumentParser(
@@ -108,13 +108,11 @@ def _parse_args(argv=None):
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
 
-
 def _canonical_json_sha256(payload: Any) -> str:
     encoded = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,7 +121,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         + "\n",
         encoding="utf-8",
     )
-
 
 def _current_pair_artifact_paths(output_dir: Path) -> dict[str, Path]:
     return {
@@ -147,7 +144,6 @@ def _current_pair_artifact_paths(output_dir: Path) -> dict[str, Path]:
         "capture_yearly": output_dir / "score_ranking_capture_yearly.csv",
         "capture_scenarios": output_dir / "score_ranking_capture_scenarios.csv",
     }
-
 
 def _load_current_pair_if_compatible(
     *, root: Path, output_dir: Path, runtime_identity_sha256: str
@@ -183,7 +179,6 @@ def _load_current_pair_if_compatible(
         return None
     return payload
 
-
 def _write_current_pair_manifest(
     *, root: Path, output_dir: Path, runtime_identity_sha256: str
 ) -> Path:
@@ -210,7 +205,6 @@ def _write_current_pair_manifest(
         },
     )
     return manifest_path
-
 
 def _load_or_run_current_pair(
     *, root: Path, args, runtime_contract: dict[str, Any], output_dir: Path
@@ -246,7 +240,6 @@ def _load_or_run_current_pair(
     )
     return payload, False
 
-
 def _validate_fixed_contract(args, settings) -> None:
     if settings.strategy_comparison_mode != "score-ranking":
         raise ValueError("strategy adaptation只支援continuous-ranker score-ranking workflow")
@@ -279,7 +272,6 @@ def _validate_fixed_contract(args, settings) -> None:
         raise ValueError("max_position_cap_pct必須介於0與1之間")
     if int(args.trials) < 1:
         raise ValueError("trials必須>=1")
-
 
 def _validate_pit_contract_against_settings(pit_contract, settings) -> None:
     manifest = dict(getattr(pit_contract, "manifest", {}) or {})
@@ -317,7 +309,6 @@ def _validate_pit_contract_against_settings(pit_contract, settings) -> None:
             "Selection PIT工件與目前workflow凍結契約不一致："
             + "; ".join(mismatches)
         )
-
 
 def _build_runtime_contract(
     *, root: Path, args, settings, pit_contract, walk_forward_policy=None
@@ -394,7 +385,6 @@ def _build_runtime_contract(
     contract["runtime_identity_sha256"] = _canonical_json_sha256(contract)
     return contract
 
-
 def _canonical_execution_argv(args) -> list[str]:
     argv = [
         "python",
@@ -425,7 +415,6 @@ def _canonical_execution_argv(args) -> list[str]:
         argv.append("--quiet")
     return argv
 
-
 def _build_walk_forward_policy(pit_contract) -> dict[str, Any]:
     start = pd.Timestamp(pit_contract.available_from)
     end = pd.Timestamp(pit_contract.available_through)
@@ -451,7 +440,6 @@ def _build_walk_forward_policy(pit_contract) -> dict[str, Any]:
         RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD: required_min_rows,
     }
 
-
 def _assert_study_identity(study, runtime_contract: dict[str, Any]) -> None:
     key = "breakout_quality_strategy_adaptation_runtime_identity_sha256"
     expected = str(runtime_contract["runtime_identity_sha256"])
@@ -464,7 +452,6 @@ def _assert_study_identity(study, runtime_contract: dict[str, Any]) -> None:
         )
     study.set_user_attr(key, expected)
     study.set_user_attr("breakout_quality_strategy_adaptation_contract", runtime_contract)
-
 
 def _select_adapted_params(*, study, session) -> tuple[dict[str, Any], dict[str, Any]]:
     finalists, _best_trial = print_local_min_score_finalist_review(
@@ -505,8 +492,6 @@ def _select_adapted_params(*, study, session) -> tuple[dict[str, Any], dict[str,
         "total_trial_count": int(len(study.trials)),
     }
     return payload, summary
-
-
 
 def _build_param_comparison_rows(
     *,
@@ -587,6 +572,7 @@ def _param_comparison_table_rows(result: dict[str, Any]) -> list[tuple[str, str,
                 str(row.get("adapted_value")),
             ))
     return rows
+
 
 def _run_three_way_comparison(
     *,
@@ -783,7 +769,6 @@ def _run_three_way_comparison(
     print("\n" + render_capture_audit_console(adapted_capture))
     return result
 
-
 def _metric_rows(result: dict[str, Any]):
     rows = (
         ("淨總報酬", "total_return_pct", "%"),
@@ -821,7 +806,6 @@ def _metric_rows(result: dict[str, Any]):
     }
     return rows, enriched
 
-
 def _fmt(value, unit=""):
     try:
         number = float(value)
@@ -832,8 +816,150 @@ def _fmt(value, unit=""):
     digits = 0 if unit == "" and abs(number) >= 1000 else 4 if "R²" in unit else 2
     return f"{number:.{digits}f}{unit}"
 
+def _three_way_rows_for_keys(
+    values: dict[str, dict[str, Any]],
+    specs: tuple[tuple[str, str, str], ...],
+) -> list[tuple[str, str, str, str]]:
+    integer_keys = {"trade_count", "candidate_supply_gap_days"}
+
+    def _value(scenario: str, key: str, unit: str) -> str:
+        raw = values[scenario].get(key)
+        if key not in integer_keys:
+            return _fmt(raw, unit)
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            return "N/A"
+        return "N/A" if not math.isfinite(number) else f"{number:.0f}{unit}"
+
+    return [
+        (
+            label,
+            _value("baseline", key, unit),
+            _value("sort_only", key, unit),
+            _value("adapted", key, unit),
+        )
+        for label, key, unit in specs
+    ]
+
+def _render_compact_three_way_console(result: dict[str, Any]) -> str:
+    _rows, values = _metric_rows(result)
+    portfolio_specs = (
+        ("淨總報酬", "total_return_pct", "%"),
+        ("最大回撤", "max_drawdown_pct", "%"),
+        ("報酬／最大回撤", "return_over_max_drawdown", ""),
+        ("年化報酬", "annual_return_pct", "%"),
+        ("Log R²", "log_r_squared", ""),
+        ("月勝率", "monthly_win_rate_pct", "%"),
+    )
+    trade_specs = (
+        ("交易數", "trade_count", ""),
+        ("勝率", "win_rate_pct", "%"),
+        ("Payoff", "payoff_ratio", ""),
+        ("EV", "expected_value_r", " R"),
+    )
+    capital_specs = (
+        ("平均曝險", "avg_exposure_pct", "%"),
+        ("平均候選供給", "avg_orderable_candidates", ""),
+        ("候選不足日", "candidate_supply_gap_days", " 日"),
+        ("平均預留金額", "avg_reserved_total", ""),
+        ("平均投入金額", "avg_invested_total", ""),
+        ("投入／預留比", "avg_invested_vs_reserved_pct", "%"),
+        ("初始停損距離", "avg_stop_distance_pct", "%"),
+    )
+    target_specs = (
+        ("平均 Realized R", "avg_realized_r", " R"),
+        ("平均 Target R", "avg_target_r", " R"),
+        ("Aggregate capture", "aggregate_target_capture_ratio", ""),
+        ("Median capture", "median_target_capture_ratio", ""),
+        ("Target ≥ 0.5R capture", "target_ge_0_5_capture_ratio", ""),
+    )
+    yearly_rows = [
+        (
+            str(int(row["year"])),
+            _fmt(row.get("no_filter_return_pct"), "%"),
+            _fmt(row.get("score_ranking_return_pct"), "%"),
+            _fmt(row.get("adapted_return_pct"), "%"),
+        )
+        for row in list(result.get("yearly") or [])
+    ]
+    diagnostics = result["selection_diagnostics"]
+    diag_rows = [
+        (
+            label,
+            _fmt(diagnostics["baseline"].get(key)),
+            _fmt(diagnostics["sort_only"].get(key)),
+            _fmt(diagnostics["adapted"].get(key)),
+        )
+        for label, key in (
+            ("Score coverage", "orderable_score_coverage_rate"),
+            ("Target percentile", "selected_target_percentile_mean"),
+            ("Top-k retention", "target_top_k_retention_mean"),
+            ("Opportunity gap", "target_opportunity_gap_r_mean"),
+            ("Selected Target R", "selected_target_mean_r"),
+        )
+    ]
+    return "\n".join((
+        render_title("策略參數適應績效摘要"),
+        render_key_values((
+            ("狀態", ADAPTATION_STATUS),
+            ("比較", "Baseline vs Sort Only vs Adapted"),
+            ("判讀", "Selection內擬合診斷；不是泛化結果"),
+        )),
+        render_section("投組報酬與風險", number=1),
+        "讀法：先比較總報酬、回撤與報酬／回撤，再看成長穩定性。",
+        render_table(
+            ("指標", "Baseline", "Sort Only", "Adapted"),
+            _three_way_rows_for_keys(values, portfolio_specs),
+            alignments=("left", "right", "right", "right"),
+        ),
+        render_section("單筆交易品質", number=2),
+        "讀法：EV與Payoff描述單筆品質，不代表資本已充分投入。",
+        render_table(
+            ("指標", "Baseline", "Sort Only", "Adapted"),
+            _three_way_rows_for_keys(values, trade_specs),
+            alignments=("left", "right", "right", "right"),
+        ),
+        render_section("資金配置與持倉", number=3),
+        "讀法：持倉格數、停損距離與實際投入金額必須一起判讀。",
+        render_table(
+            ("指標", "Baseline", "Sort Only", "Adapted"),
+            _three_way_rows_for_keys(values, capital_specs),
+            alignments=("left", "right", "right", "right"),
+        ),
+        render_section("Target 與實際交易轉換", number=4),
+        "讀法：Target是事後機會，Realized R是實際結果，capture衡量轉換效率。",
+        render_table(
+            ("指標", "Baseline", "Sort Only", "Adapted"),
+            _three_way_rows_for_keys(values, target_specs),
+            alignments=("left", "right", "right", "right"),
+        ),
+        render_section("年度報酬", number=5),
+        render_table(
+            ("年度", "Baseline", "Sort Only", "Adapted"),
+            yearly_rows,
+            alignments=("left", "right", "right", "right"),
+        ) if yearly_rows else "無年度資料。",
+        render_section("模型選股方向", number=6),
+        "讀法：Future Target僅在回放後加入，不參與runtime或optimizer。",
+        render_table(
+            ("指標", "Baseline", "Sort Only", "Adapted"),
+            diag_rows,
+            alignments=("left", "right", "right", "right"),
+        ),
+        render_section("參數差異", number=7),
+        render_table(
+            ("參數", "歷史最小", "歷史中位", "歷史最大", "Adapted"),
+            _param_comparison_table_rows(result),
+            alignments=("left", "right", "right", "right", "right"),
+        ),
+        render_section("判讀限制", number=8),
+        "Adapted只代表Selection內擬合結果；必須凍結後執行正式OOS，才可決定採用或拒絕。",
+    ))
 
 def _render_three_way_console(result: dict[str, Any]) -> str:
+    if compact_console_enabled():
+        return _render_compact_three_way_console(result)
     rows, values = _metric_rows(result)
     metric_rows = []
     for label, key, unit in rows:
@@ -901,7 +1027,6 @@ def _render_three_way_console(result: dict[str, Any]) -> str:
         ),
         "Adapted結果必須待凍結後正式OOS驗證，才可決定採用或拒絕。",
     ))
-
 
 def _render_three_way_markdown(result: dict[str, Any]) -> str:
     rows, values = _metric_rows(result)
@@ -1159,7 +1284,6 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         project_root=root,
     )
     return comparison_result
-
 
 def main(argv=None):
     run_adaptation(argv=argv)

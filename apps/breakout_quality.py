@@ -1763,17 +1763,18 @@ def _interactive_strategy_validation(program_name: str) -> int:
     if settings.strategy_comparison_mode == "hard-filter":
         if settings.strategy_score_source != "canonical_runtime":
             raise ValueError("hard-filter策略驗證只接受canonical_runtime score source")
-        return _run_command(
-            "strategy-compare",
-            [
-                "--dataset", settings.strategy_dataset,
-                "--comparison-mode", "hard-filter",
-                "--param-policy", settings.strategy_param_policy,
-                "--max-positions", str(settings.strategy_max_positions),
-                "--rotation", settings.strategy_rotation,
-            ],
-            program_name=program_name,
-        )
+        with _compact_console_scope():
+            return _run_command(
+                "strategy-compare",
+                [
+                    "--dataset", settings.strategy_dataset,
+                    "--comparison-mode", "hard-filter",
+                    "--param-policy", settings.strategy_param_policy,
+                    "--max-positions", str(settings.strategy_max_positions),
+                    "--rotation", settings.strategy_rotation,
+                ],
+                program_name=program_name,
+            )
 
     if settings.strategy_comparison_mode != "score-ranking":
         raise ValueError(
@@ -1805,39 +1806,41 @@ def _interactive_strategy_validation(program_name: str) -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            return _run_command(
-                "strategy-compare",
-                [
-                    "--dataset", settings.strategy_dataset,
-                    "--comparison-mode", "score-ranking",
-                    "--filter-id", settings.filter_id,
-                    "--score-source", settings.strategy_score_source,
-                    "--model-architecture", settings.model_architecture,
-                    "--experiment-profile", settings.experiment_profile,
-                    "--param-policy", settings.strategy_param_policy,
-                    "--max-positions", str(settings.strategy_max_positions),
-                    "--rotation", settings.strategy_rotation,
-                ],
-                program_name=program_name,
-            )
+            with _compact_console_scope():
+                return _run_command(
+                    "strategy-compare",
+                    [
+                        "--dataset", settings.strategy_dataset,
+                        "--comparison-mode", "score-ranking",
+                        "--filter-id", settings.filter_id,
+                        "--score-source", settings.strategy_score_source,
+                        "--model-architecture", settings.model_architecture,
+                        "--experiment-profile", settings.experiment_profile,
+                        "--param-policy", settings.strategy_param_policy,
+                        "--max-positions", str(settings.strategy_max_positions),
+                        "--rotation", settings.strategy_rotation,
+                    ],
+                    program_name=program_name,
+                )
         if choice == "2":
-            return _run_command(
-                "strategy-adapt",
-                [
-                    "--dataset", settings.strategy_dataset,
-                    "--filter-id", settings.filter_id,
-                    "--model-architecture", settings.model_architecture,
-                    "--experiment-profile", settings.experiment_profile,
-                    "--param-policy", settings.strategy_param_policy,
-                    "--trials", str(settings.strategy_adapt_trials),
-                    "--max-positions", str(settings.strategy_max_positions),
-                    "--rotation", settings.strategy_rotation,
-                    "--fixed-risk", str(settings.strategy_adapt_fixed_risk),
-                    "--max-position-cap-pct",
-                    str(settings.strategy_adapt_max_position_cap_pct),
-                ],
-                program_name=program_name,
-            )
+            with _compact_console_scope():
+                return _run_command(
+                    "strategy-adapt",
+                    [
+                        "--dataset", settings.strategy_dataset,
+                        "--filter-id", settings.filter_id,
+                        "--model-architecture", settings.model_architecture,
+                        "--experiment-profile", settings.experiment_profile,
+                        "--param-policy", settings.strategy_param_policy,
+                        "--trials", str(settings.strategy_adapt_trials),
+                        "--max-positions", str(settings.strategy_max_positions),
+                        "--rotation", settings.strategy_rotation,
+                        "--fixed-risk", str(settings.strategy_adapt_fixed_risk),
+                        "--max-position-cap-pct",
+                        str(settings.strategy_adapt_max_position_cap_pct),
+                    ],
+                    program_name=program_name,
+                )
         print("無效選項，請重新輸入。")
 
 

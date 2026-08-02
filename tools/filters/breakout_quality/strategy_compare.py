@@ -56,11 +56,15 @@ from tools.filters.breakout_quality.audit_score_ranking_capture import (
 from tools.filters.breakout_quality.continuous_ranker_pipeline import load_continuous_ranker_data
 from tools.filters.breakout_quality.strategy_report_style import (
     SIGNAL_NEGATIVE,
+    SIGNAL_NEUTRAL,
+    SIGNAL_POSITIVE,
+    SIGNAL_WARNING,
     signal_for_delta,
     signal_marker,
     terminal_signal,
 )
 from filters.breakout_quality.console_report import (
+    compact_console_enabled,
     console_color_enabled,
     print_artifact_paths,
     project_relative_display_path,
@@ -119,14 +123,12 @@ _RESULT_FIELDS = (
     "benchmark_annual_return_pct", "profile",
 )
 
-
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
@@ -174,7 +176,6 @@ def _parse_args(argv=None):
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
 
-
 def _comparison_switch_spec(comparison_mode: str) -> tuple[str, bool, bool]:
     mode = str(comparison_mode)
     if mode == COMPARISON_MODE_HARD_FILTER:
@@ -182,7 +183,6 @@ def _comparison_switch_spec(comparison_mode: str) -> tuple[str, bool, bool]:
     if mode == COMPARISON_MODE_SCORE_RANKING:
         return "use_breakout_quality_ranking", False, True
     raise ValueError(f"不支援的 comparison_mode: {comparison_mode}")
-
 
 def _comparison_labels(comparison_mode: str) -> dict[str, str]:
     if comparison_mode == COMPARISON_MODE_HARD_FILTER:
@@ -201,7 +201,6 @@ def _comparison_labels(comparison_mode: str) -> dict[str, str]:
         }
     raise ValueError(f"不支援的 comparison_mode: {comparison_mode}")
 
-
 def _assert_controlled_param_pair(no_filter_params, quality_params, *, comparison_mode=COMPARISON_MODE_HARD_FILTER) -> None:
     left = params_to_json_dict(no_filter_params)
     right = params_to_json_dict(quality_params)
@@ -215,7 +214,6 @@ def _assert_controlled_param_pair(no_filter_params, quality_params, *, compariso
         raise ValueError("baseline 不可同時啟用 hard filter 與 score ranking")
     if bool(right.get("use_breakout_quality_filter")) and bool(right.get("use_breakout_quality_ranking")):
         raise ValueError("active scenario 不可同時啟用 hard filter 與 score ranking")
-
 
 def _collect_payload_differences(left: Any, right: Any, path: tuple[Any, ...] = ()) -> list[tuple[tuple[Any, ...], Any, Any]]:
     if isinstance(left, dict) and isinstance(right, dict):
@@ -235,7 +233,6 @@ def _collect_payload_differences(left: Any, right: Any, path: tuple[Any, ...] = 
         return out
     return [] if left == right else [(path, left, right)]
 
-
 def _assert_controlled_payload_pair(no_filter_payload: dict, quality_payload: dict, *, comparison_mode=COMPARISON_MODE_HARD_FILTER) -> None:
     differences = _collect_payload_differences(no_filter_payload, quality_payload)
     switch_field, left_expected, right_expected = _comparison_switch_spec(comparison_mode)
@@ -249,7 +246,6 @@ def _assert_controlled_payload_pair(no_filter_payload: dict, quality_payload: di
     if invalid:
         raise ValueError(f"策略對照只允許 {switch_field} 由 {left_expected} 切為 {right_expected}，實際額外差異={invalid}")
 
-
 def _resolve_param_selector(source: dict[str, Any]) -> str:
     payload = source.get("payload")
     if isinstance(payload, dict):
@@ -261,7 +257,6 @@ def _resolve_param_selector(source: dict[str, Any]) -> str:
         if selector:
             return selector
     return "single_param" if source.get("kind") == "single_param" else "unknown"
-
 
 def _rolling_member_counts(source: dict[str, Any]) -> list[int]:
     payload = source.get("payload")
@@ -277,7 +272,6 @@ def _rolling_member_counts(source: dict[str, Any]) -> list[int]:
             raise ValueError(f"生效日 {effective_date} 的 active-param members 無效")
         counts.append(len(members))
     return counts
-
 
 def _validate_requested_param_policy(source: dict[str, Any], requested_policy: str) -> dict[str, Any]:
     selector = _resolve_param_selector(source)
@@ -323,7 +317,6 @@ def _validate_requested_param_policy(source: dict[str, Any], requested_policy: s
         "min_agree": actual_min_agree,
     }
 
-
 def _resolve_params_path(
     *, root: Path, params_path: str | None, param_policy: str,
     allow_static_diagnostic: bool, score_source: str = SCORE_SOURCE_CANONICAL_RUNTIME,
@@ -346,7 +339,6 @@ def _resolve_params_path(
         "--param-policy base-finalist-best / base-finalists-agree 自動解析；"
         "只有非 OOS 敏感度診斷才可加 --allow-static-diagnostic 使用 run_best_params.json。"
     )
-
 
 def _comparison_output_dir_name(comparison_mode: str, labels: dict[str, str], *, param_policy: str) -> str:
     if param_policy != PARAM_POLICY_AUTO:
@@ -402,7 +394,6 @@ def canonical_strategy_compare_output_dir_names(
         return score_ranking_names
     return (*hard_filter_names, *score_ranking_names)
 
-
 def _first_existing_comparison_dir(
     root: Path,
     *,
@@ -419,7 +410,6 @@ def _first_existing_comparison_dir(
         "找不到既有strategy compare輸出目錄；已檢查: "
         + ", ".join(str(path) for path in candidates)
     )
-
 
 def _load_param_source(path: Path) -> dict[str, Any]:
     try:
@@ -444,7 +434,6 @@ def _load_param_source(path: Path) -> dict[str, Any]:
         return {"kind": "static_active_param_ensemble", "payload": payload}
     return {"kind": "single_param", "params": load_params_from_json(str(path))}
 
-
 def _apply_scenario_overrides(
     params,
     *,
@@ -468,7 +457,6 @@ def _apply_scenario_overrides(
         overrides["max_position_cap_pct"] = float(max_position_cap_pct)
     return replace(params, **overrides)
 
-
 def _assert_controlled_ensemble_pair(no_filter_payload: dict, quality_payload: dict, *, comparison_mode=COMPARISON_MODE_HARD_FILTER) -> None:
     if resolve_active_param_ensemble_mode(no_filter_payload) != resolve_active_param_ensemble_mode(quality_payload):
         raise ValueError("策略對照的 ensemble mode 不一致")
@@ -482,7 +470,6 @@ def _assert_controlled_ensemble_pair(no_filter_payload: dict, quality_payload: d
     else:
         get_active_param_ensemble_date_range(no_filter_payload)
         get_active_param_ensemble_date_range(quality_payload)
-
 
 def _rewrite_param_mapping(
     mapping: dict,
@@ -509,7 +496,6 @@ def _rewrite_param_mapping(
             )
         )
     return rewritten
-
 
 def _rewrite_ensemble_mapping(
     mapping: dict,
@@ -544,7 +530,6 @@ def _rewrite_ensemble_mapping(
             output_members.append(output_member)
         rewritten[str(key)] = output_members
     return rewritten
-
 
 def _build_controlled_param_source_pair(
     source: dict[str, Any],
@@ -704,7 +689,6 @@ def _build_controlled_param_source_pair(
         policy,
     )
 
-
 def _unpack_result(result) -> dict[str, Any]:
     if len(result) != len(_RESULT_FIELDS):
         raise ValueError(f"portfolio result 欄位數不一致: expected={len(_RESULT_FIELDS)}, actual={len(result)}")
@@ -713,7 +697,6 @@ def _unpack_result(result) -> dict[str, Any]:
         payload["total_return_pct"], payload["max_drawdown_pct"]
     )
     return payload
-
 
 def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
     frame = pd.DataFrame(profile.get("portfolio_capacity_rows") or [])
@@ -741,7 +724,6 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
         "full_position_days": int((frame["End_Position_Gap"] == 0).sum()),
     }
 
-
 def _to_json_native(value: Any) -> Any:
     """Convert pandas/numpy scalars and timestamps to stable JSON-native values."""
 
@@ -760,7 +742,6 @@ def _to_json_native(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_to_json_native(item) for item in value]
     return str(value)
-
 
 def _scenario_summary(payload: dict[str, Any]) -> dict[str, Any]:
     profile = dict(payload["profile"] or {})
@@ -788,7 +769,6 @@ def _scenario_summary(payload: dict[str, Any]) -> dict[str, Any]:
     summary.update(_capacity_summary(profile))
     return _to_json_native(summary)
 
-
 def _delta(quality: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
     out = {}
     for key, value in quality.items():
@@ -796,7 +776,6 @@ def _delta(quality: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, (int, float)) and not isinstance(value, bool) and isinstance(base, (int, float)) and not isinstance(base, bool):
             out[key] = float(value) - float(base)
     return out
-
 
 def _assert_shared_benchmark(no_filter: dict[str, Any], quality: dict[str, Any]) -> None:
     for key in ("benchmark_return_pct", "benchmark_max_drawdown_pct", "benchmark_annual_return_pct"):
@@ -806,7 +785,6 @@ def _assert_shared_benchmark(no_filter: dict[str, Any], quality: dict[str, Any])
     right_dates = list(pd.to_datetime(quality["equity_curve"]["Date"]).dt.strftime("%Y-%m-%d"))
     if left_dates != right_dates:
         raise ValueError("兩組回測交易日期不一致")
-
 
 def _normalize_yearly_completeness(frame: pd.DataFrame) -> pd.DataFrame:
     """A clipped final year is not complete merely because it reaches the last available replay date."""
@@ -823,13 +801,11 @@ def _normalize_yearly_completeness(frame: pd.DataFrame) -> pd.DataFrame:
     out["is_full_year"] = out["is_full_year"].astype(bool) & calendar_covered
     return out
 
-
 def _yearly_frame(profile: dict[str, Any], scenario: str) -> pd.DataFrame:
     frame = _normalize_yearly_completeness(pd.DataFrame(profile.get("yearly_return_rows") or []))
     if frame.empty:
         return pd.DataFrame(columns=["year", f"{scenario}_return_pct", "is_full_year", "start_date", "end_date"])
     return frame.rename(columns={"year_return_pct": f"{scenario}_return_pct"})
-
 
 def _build_yearly_comparison(no_filter_profile: dict[str, Any], quality_profile: dict[str, Any]) -> pd.DataFrame:
     left = _yearly_frame(no_filter_profile, "no_filter")
@@ -839,12 +815,10 @@ def _build_yearly_comparison(no_filter_profile: dict[str, Any], quality_profile:
     merged["delta_pct"] = merged["quality_filter_return_pct"] - merged["no_filter_return_pct"]
     return merged.sort_values("year").reset_index(drop=True)
 
-
 def _refresh_yearly_summary(summary: dict[str, Any], yearly: pd.DataFrame, *, return_column: str) -> None:
     full = yearly[yearly["is_full_year"].astype(bool)] if not yearly.empty else yearly
     summary["full_year_count"] = int(len(full))
     summary["min_full_year_return_pct"] = float(full[return_column].min()) if not full.empty else 0.0
-
 
 def _load_existing_comparison_payload(output_dir: Path) -> dict[str, Any]:
     path = output_dir / "strategy_comparison.json"
@@ -855,7 +829,6 @@ def _load_existing_comparison_payload(output_dir: Path) -> dict[str, Any]:
     if not isinstance(payload, dict) or not isinstance(payload.get("metadata"), dict):
         raise ValueError(f"既有策略比較 JSON schema 無效: {path}")
     return payload
-
 
 def _format_metric(value: Any, *, digits: int, unit: str = "", signed: bool = False) -> str:
     if value is None or isinstance(value, bool):
@@ -868,7 +841,6 @@ def _format_metric(value: Any, *, digits: int, unit: str = "", signed: bool = Fa
         return "N/A"
     sign = "+" if signed else ""
     return f"{numeric:{sign}.{digits}f}{unit}"
-
 
 def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagnostics=None) -> str:
     labels = _comparison_labels(str(metadata["comparison_mode"]))
@@ -987,6 +959,292 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
     return "\n".join(lines)
 
 
+def _numeric_delta(delta: dict[str, Any], key: str) -> float | None:
+    value = delta.get(key)
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+def _compact_metric_rows(
+    baseline: dict[str, Any],
+    quality: dict[str, Any],
+    delta: dict[str, Any],
+    specs: tuple[tuple[str, str, str, str], ...],
+    *,
+    use_color: bool,
+) -> list[tuple[str, str, str, str, str]]:
+    rows: list[tuple[str, str, str, str, str]] = []
+    integer_keys = {
+        "trade_count", "candidate_supply_gap_days", "underfilled_end_days",
+        "end_position_gap_slot_days",
+    }
+    for label, key, unit, preference in specs:
+        digits = 0 if key in integer_keys else 4 if key == "log_r_squared" else 2
+        signal = signal_for_delta(
+            delta.get(key),
+            preference=preference,
+            warning_threshold=5.0 if key == "avg_exposure_pct" else 0.0,
+        )
+        rows.append((
+            label,
+            _format_metric(baseline.get(key), digits=digits, unit=unit),
+            _format_metric(quality.get(key), digits=digits, unit=unit),
+            terminal_signal(
+                _format_metric(delta.get(key), digits=digits, unit=unit, signed=True),
+                signal,
+                enabled=use_color,
+            ),
+            terminal_signal(signal_marker(signal), signal, enabled=use_color),
+        ))
+    return rows
+
+
+def _render_compact_strategy_console_report(
+    metadata: dict[str, Any],
+    baseline: dict[str, Any],
+    quality: dict[str, Any],
+    delta: dict[str, Any],
+    yearly: pd.DataFrame,
+    strategy_diagnostics: dict[str, Any] | None,
+    *,
+    use_color: bool,
+) -> str:
+    """Render the interactive strategy report by decision layer rather than source table."""
+
+    labels = _comparison_labels(str(metadata["comparison_mode"]))
+    active_yearly_column = f"{labels['active_name']}_return_pct"
+    active_label = (
+        "Score Sort"
+        if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+        else labels["active_title"]
+    )
+    period = metadata.get("comparison_period") or {}
+    title = (
+        "Breakout Quality Score 排序策略績效摘要"
+        if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+        else "Breakout Quality 策略績效摘要"
+    )
+
+    total_delta = _numeric_delta(delta, "total_return_pct")
+    romd_delta = _numeric_delta(delta, "return_over_max_drawdown")
+    mdd_delta = _numeric_delta(delta, "max_drawdown_pct")
+    if total_delta is not None and romd_delta is not None and total_delta < 0 and romd_delta < 0:
+        portfolio_signal = SIGNAL_NEGATIVE
+        portfolio_text = "投組層失敗：總報酬與報酬／回撤同步下降。"
+    elif total_delta is not None and romd_delta is not None and total_delta > 0 and romd_delta > 0:
+        portfolio_signal = SIGNAL_POSITIVE
+        portfolio_text = "投組層改善：總報酬與報酬／回撤同步提高。"
+    else:
+        portfolio_signal = SIGNAL_WARNING
+        portfolio_text = "投組層結果混合：報酬與風險指標未同向改善。"
+
+    ev_delta = _numeric_delta(delta, "expected_value_r")
+    payoff_delta = _numeric_delta(delta, "payoff_ratio")
+    trade_signal = (
+        SIGNAL_POSITIVE
+        if ev_delta is not None and payoff_delta is not None and ev_delta > 0 and payoff_delta > 0
+        else SIGNAL_NEGATIVE
+        if ev_delta is not None and payoff_delta is not None and ev_delta < 0 and payoff_delta < 0
+        else SIGNAL_WARNING
+    )
+    trade_text = (
+        "交易層：EV與Payoff同步改善，但仍須結合勝率與投入規模判讀。"
+        if trade_signal == SIGNAL_POSITIVE
+        else "交易層：單筆交易品質未全面改善。"
+    )
+
+    exposure_delta = _numeric_delta(delta, "avg_exposure_pct")
+    underfilled_delta = _numeric_delta(delta, "underfilled_end_days")
+    capital_signal = SIGNAL_WARNING
+    capital_text = (
+        "資金層：平均曝險下降，但未滿倉日也下降；代表持倉格較滿、每格投入較小。"
+        if exposure_delta is not None and exposure_delta < 0
+        and underfilled_delta is not None and underfilled_delta < 0
+        else "資金層：需分開檢查曝險、候選供給與持倉格使用。"
+    )
+
+    diagnostic_specs = (
+        ("Orderable Score coverage", "orderable_score_coverage_rate", "higher"),
+        ("選中候選 Target percentile", "selected_target_percentile_mean", "higher"),
+        ("Target top-k retention", "target_top_k_retention_mean", "higher"),
+        ("Target opportunity gap", "target_opportunity_gap_r_mean", "lower"),
+        ("選中候選 Target mean", "selected_target_mean_r", "higher"),
+    )
+    model_signal = SIGNAL_NEUTRAL
+    model_text = "模型層：本次沒有可用的事後Target選股診斷。"
+    diagnostic_rows: list[tuple[str, str, str, str, str]] = []
+    if strategy_diagnostics:
+        left = strategy_diagnostics.get("no_filter") or {}
+        right = strategy_diagnostics.get("score_ranking") or {}
+        positive_count = 0
+        available_count = 0
+        for label, key, preference in diagnostic_specs:
+            left_value, right_value = left.get(key), right.get(key)
+            try:
+                left_number = float(left_value)
+                right_number = float(right_value)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(left_number) or not math.isfinite(right_number):
+                continue
+            delta_value = right_number - left_number
+            signal = signal_for_delta(delta_value, preference=preference)
+            available_count += 1
+            positive_count += int(signal == SIGNAL_POSITIVE)
+            diagnostic_rows.append((
+                label,
+                _format_metric(left_number, digits=4),
+                _format_metric(right_number, digits=4),
+                terminal_signal(
+                    _format_metric(delta_value, digits=4, signed=True),
+                    signal,
+                    enabled=use_color,
+                ),
+                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+            ))
+        if available_count:
+            model_signal = (
+                SIGNAL_POSITIVE if positive_count >= max(1, available_count - 1)
+                else SIGNAL_WARNING
+            )
+            model_text = f"模型層：{positive_count}/{available_count}項Selection選股診斷改善。"
+
+    lines = [
+        render_title(title),
+        render_key_values((
+            ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
+            ("比較", f"Baseline vs {active_label}"),
+            ("Score source", metadata.get("score_source", "-")),
+            ("歷史參數無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
+        )),
+        render_section("綜合判定", number=1),
+        terminal_signal(f"{signal_marker(portfolio_signal)} {portfolio_text}", portfolio_signal, enabled=use_color),
+        terminal_signal(f"{signal_marker(trade_signal)} {trade_text}", trade_signal, enabled=use_color),
+        terminal_signal(f"{signal_marker(capital_signal)} {capital_text}", capital_signal, enabled=use_color),
+        terminal_signal(f"{signal_marker(model_signal)} {model_text}", model_signal, enabled=use_color),
+    ]
+    if total_delta is not None or mdd_delta is not None:
+        lines.append(
+            "關鍵差異：總報酬 "
+            f"{_format_metric(total_delta, digits=2, unit='pp', signed=True)}；"
+            "最大回撤 "
+            f"{_format_metric(mdd_delta, digits=2, unit='pp', signed=True)}；"
+            "平均曝險 "
+            f"{_format_metric(exposure_delta, digits=2, unit='pp', signed=True)}。"
+        )
+
+    portfolio_specs = (
+        ("淨總報酬", "total_return_pct", "%", "higher"),
+        ("最大回撤", "max_drawdown_pct", "%", "lower"),
+        ("報酬／最大回撤", "return_over_max_drawdown", "", "higher"),
+        ("年化報酬", "annual_return_pct", "%", "higher"),
+        ("Log R²", "log_r_squared", "", "higher"),
+        ("月勝率", "monthly_win_rate_pct", "%", "higher"),
+        ("最差完整年度", "min_full_year_return_pct", "%", "higher"),
+    )
+    lines.extend((
+        render_section("投組報酬與風險", number=2),
+        "讀法：看最終賺多少、承受多少回撤，以及權益成長是否穩定。",
+        render_table(
+            ("指標", "Baseline", active_label, "差異", "判讀"),
+            _compact_metric_rows(
+                baseline, quality, delta, portfolio_specs, use_color=use_color
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    trade_specs = (
+        ("交易數", "trade_count", "", "neutral"),
+        ("勝率", "win_rate_pct", "%", "higher"),
+        ("Payoff", "payoff_ratio", "", "higher"),
+        ("EV", "expected_value_r", " R", "higher"),
+    )
+    lines.extend((
+        render_section("單筆交易品質", number=3),
+        "讀法：看每筆交易的命中率與盈虧結構；不代表整體資金使用效率。",
+        render_table(
+            ("指標", "Baseline", active_label, "差異", "判讀"),
+            _compact_metric_rows(
+                baseline, quality, delta, trade_specs, use_color=use_color
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    capital_specs = (
+        ("平均曝險", "avg_exposure_pct", "%", "attention"),
+        ("平均每日可掛單候選", "avg_orderable_candidates", "", "neutral"),
+        ("候選供給不足日", "candidate_supply_gap_days", " 日", "lower"),
+        ("每日結束未滿倉日", "underfilled_end_days", " 日", "lower"),
+        ("每日結束持股缺口", "end_position_gap_slot_days", " 格日", "lower"),
+    )
+    lines.extend((
+        render_section("資金使用與持倉容量", number=4),
+        "讀法：持有幾檔與投入多少資金是不同概念；持倉格較滿不等於曝險較高。",
+        render_table(
+            ("指標", "Baseline", active_label, "差異", "判讀"),
+            _compact_metric_rows(
+                baseline, quality, delta, capital_specs, use_color=use_color
+            ),
+            alignments=("left", "right", "right", "right", "left"),
+        ),
+    ))
+
+    lines.append(render_section("年度報酬", number=5))
+    if yearly.empty:
+        lines.append("無年度資料。")
+    else:
+        yearly_rows = []
+        for row in yearly.to_dict("records"):
+            signal = signal_for_delta(row.get("delta_pct"), preference="higher")
+            yearly_rows.append((
+                int(row["year"]),
+                _format_metric(row.get("no_filter_return_pct"), digits=2, unit="%"),
+                _format_metric(row.get(active_yearly_column), digits=2, unit="%"),
+                terminal_signal(
+                    _format_metric(row.get("delta_pct"), digits=2, unit="pp", signed=True),
+                    signal,
+                    enabled=use_color,
+                ),
+                terminal_signal(signal_marker(signal), signal, enabled=use_color),
+            ))
+        lines.append(render_table(
+            ("年度", "Baseline", active_label, "差異", "判讀"),
+            yearly_rows,
+            alignments=("right", "right", "right", "right", "left"),
+        ))
+
+    next_number = 6
+    if diagnostic_rows:
+        lines.extend((
+            render_section("模型選股方向", number=next_number),
+            "讀法：Future Target只在回放完成後加入；這裡衡量選股方向，不是實際策略報酬。",
+            render_table(
+                ("指標", "Baseline", "Score Sort", "差異", "判讀"),
+                diagnostic_rows,
+                alignments=("left", "right", "right", "right", "left"),
+            ),
+        ))
+        next_number += 1
+
+    lines.append(render_section("判讀限制", number=next_number))
+    if not metadata.get("lookahead_safe_active_param_schedule"):
+        lines.append("⚠️ 本次使用單一／static參數，只能視為敏感度診斷。")
+    if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING:
+        lines.append(
+            "本結果是Selection內的PIT比較；模型排序、投組績效與資金配置必須分層判讀，"
+            "正式採用仍須由凍結後OOS驗證。"
+        )
+    else:
+        lines.append("本結果只驗證固定active操作點，不得依結果回頭調整模型或threshold。")
+    return "\n".join(lines)
+
+
 def _render_strategy_console_report(
     metadata: dict[str, Any],
     baseline: dict[str, Any],
@@ -1000,6 +1258,16 @@ def _render_strategy_console_report(
     """Render the complete readable strategy comparison directly for console."""
 
     use_color = console_color_enabled() if color is None else bool(color)
+    if compact_console_enabled():
+        return _render_compact_strategy_console_report(
+            metadata,
+            baseline,
+            quality,
+            delta,
+            yearly,
+            strategy_diagnostics,
+            use_color=use_color,
+        )
     labels = _comparison_labels(str(metadata["comparison_mode"]))
     active_yearly_column = f"{labels['active_name']}_return_pct"
     title = (
@@ -1169,7 +1437,6 @@ def _remove_legacy_html_outputs(output_dir: Path) -> None:
         if path.is_file():
             path.unlink()
 
-
 def _run_scenario(
     *, name, data_dir, param_source_kind, params, start_date, end_date,
     max_positions, enable_rotation, quiet, replay_counts=None,
@@ -1188,7 +1455,6 @@ def _run_scenario(
             max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
             replay_counts=replay_counts, replay_execution_rows=replay_execution_rows,
         )
-
 
 def _run_scenario_inside_source_context(
     *, name, data_dir, param_source_kind, params, start_date, end_date,
@@ -1231,7 +1497,6 @@ def _run_scenario_inside_source_context(
         raise ValueError(f"不支援的參數來源類型: {param_source_kind}")
     return _unpack_result(result)
 
-
 def _flatten_candidate_replay_rows(replay_counts: dict[str, dict[str, Any]], field: str) -> pd.DataFrame:
     if field not in {"candidate_rows", "orderable_rows"}:
         raise ValueError(f"不支援的candidate replay field: {field}")
@@ -1258,8 +1523,6 @@ def _flatten_candidate_replay_rows(replay_counts: dict[str, dict[str, Any]], fie
         kind="mergesort",
     ).reset_index(drop=True)
 
-
-
 def _flatten_selected_buy_rows(trade_history: pd.DataFrame) -> pd.DataFrame:
     frame = pd.DataFrame(trade_history).copy()
     columns = ["ticker", "trade_date", "signal_date", "type"]
@@ -1280,7 +1543,6 @@ def _flatten_selected_buy_rows(trade_history: pd.DataFrame) -> pd.DataFrame:
     return out.dropna(subset=["trade_date"]).sort_values(
         ["trade_date", "ticker", "signal_date"], kind="mergesort"
     ).reset_index(drop=True)
-
 
 def _selection_target_lookup(*, root: Path, filter_id: str, architecture: str, profile: str) -> pd.DataFrame:
     scores = load_selection_point_in_time_score_table(
@@ -1311,7 +1573,6 @@ def _selection_target_lookup(*, root: Path, filter_id: str, architecture: str, p
         "ticker", "date", "group_index", "breakout_quality_score", "fold_id",
         "model_information_cutoff", "label", "target_raw_r", "target_available",
     ]].rename(columns={"date": "signal_date"})
-
 
 def _strategy_selection_diagnostics(
     *, orderable: pd.DataFrame, selected: pd.DataFrame, lookup: pd.DataFrame,
@@ -1488,7 +1749,6 @@ def _strategy_selection_diagnostics(
     }
     return metrics, orderable_joined, selected_joined
 
-
 def run_no_filter_candidate_replay_from_metadata(
     metadata: dict[str, Any],
     *,
@@ -1534,7 +1794,6 @@ def run_no_filter_candidate_replay_from_metadata(
     qualified = _flatten_candidate_replay_rows(replay_counts, "candidate_rows")
     orderable = _flatten_candidate_replay_rows(replay_counts, "orderable_rows")
     return scenario, qualified, orderable
-
 
 def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
     root = Path(project_root).resolve()
@@ -1612,7 +1871,6 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
         project_root=root,
     )
     return attribution
-
 
 def run_existing_score_ranking_capture_audit(
     *,
@@ -1710,7 +1968,6 @@ def run_existing_score_ranking_capture_audit(
     )
     return audit_payload
 
-
 def _resolve_comparison_period(contract) -> tuple[str, str]:
     start = contract.execution_start
     end = contract.available_through
@@ -1720,7 +1977,6 @@ def _resolve_comparison_period(contract) -> tuple[str, str]:
             f"execution_start={start}, available_through={end}"
         )
     return start.isoformat(), end.isoformat()
-
 
 def run_comparison(
     *, project_root=PROJECT_ROOT, dataset="full", params_path=None,

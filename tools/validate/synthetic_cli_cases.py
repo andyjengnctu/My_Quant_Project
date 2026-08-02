@@ -6,6 +6,7 @@ from dataclasses import replace
 from io import StringIO
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -456,9 +457,13 @@ def validate_dataset_cli_contract_case(_base_params):
     )
 
     strategy_commands = []
+    strategy_compact_flags = []
 
     def _record_strategy_command(command, args, *, program_name):
         strategy_commands.append((str(command), list(args), str(program_name)))
+        strategy_compact_flags.append(
+            os.environ.get("BREAKOUT_QUALITY_COMPACT_CONSOLE") == "1"
+        )
         return 0
 
     with (
@@ -498,6 +503,78 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
         (binary_strategy_rc, strategy_commands),
     )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_interactive_strategy_validation_enables_compact_console",
+        [True],
+        strategy_compact_flags,
+    )
+
+    score_strategy_commands = []
+    score_strategy_compact_flags = []
+
+    def _record_score_strategy_command(command, args, *, program_name):
+        score_strategy_commands.append((str(command), list(args), str(program_name)))
+        score_strategy_compact_flags.append(
+            os.environ.get("BREAKOUT_QUALITY_COMPACT_CONSOLE") == "1"
+        )
+        return 0
+
+    original_compact_value = os.environ.get("BREAKOUT_QUALITY_COMPACT_CONSOLE")
+    with (
+        patch(
+            "apps.breakout_quality.get_breakout_quality_workflow_settings",
+            return_value=workflow_settings,
+        ),
+        patch("apps.breakout_quality._print_workflow_status"),
+        patch("builtins.input", return_value="1"),
+        patch(
+            "apps.breakout_quality._run_command",
+            side_effect=_record_score_strategy_command,
+        ),
+    ):
+        score_compare_rc = app_breakout_quality._interactive_strategy_validation(
+            "apps/breakout_quality.py"
+        )
+    with (
+        patch(
+            "apps.breakout_quality.get_breakout_quality_workflow_settings",
+            return_value=workflow_settings,
+        ),
+        patch("apps.breakout_quality._print_workflow_status"),
+        patch("builtins.input", return_value="2"),
+        patch(
+            "apps.breakout_quality._run_command",
+            side_effect=_record_score_strategy_command,
+        ),
+    ):
+        score_adapt_rc = app_breakout_quality._interactive_strategy_validation(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_score_strategy_compare_and_adapt_enable_compact_console",
+        (0, 0, ["strategy-compare", "strategy-adapt"], [True, True]),
+        (
+            score_compare_rc,
+            score_adapt_rc,
+            [item[0] for item in score_strategy_commands],
+            score_strategy_compact_flags,
+        ),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_compact_console_scope_restores_environment",
+        original_compact_value,
+        os.environ.get("BREAKOUT_QUALITY_COMPACT_CONSOLE"),
+    )
+
 
     fake_workflow_args = SimpleNamespace(filter_id="synthetic_quality")
     with (

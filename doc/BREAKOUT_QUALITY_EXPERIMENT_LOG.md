@@ -1878,3 +1878,20 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Dataset／Label／模型工件 | 不需重建Dataset、Label、Continuous Target、PIT Scores、模型checkpoint或策略比較工件；本輪只修正formal synthetic test double |
 | Selection／OOS結果 | 無新增結果；Adapted仍為`RESULT_NOT_AVAILABLE`，不得由本輪測試修正推論有效性 |
 | 下一步 | 套用patch後重跑`python apps/test_suite.py`；五步全PASS後再執行`python apps/breakout_quality.py strategy-adapt` |
+
+### 3.87 策略績效驗證互動報表依決策層分區（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_APPLICABLE / FORMAL_RERUN_PENDING`；只重組`[2] 策略績效驗證`的互動式簡易報表，不改策略比較、capture、optimizer或任何績效數值 |
+| 程式基準 | `test-branch-1_20260802_182132_7ce4eb8.zip`；SHA256 `e59e3e79fbaa9a9b306637595702ed4bb929bb4ec38803aaa9d2c8230c2d12ba` |
+| 問題 | 原主表把投組報酬、單筆交易、資金曝險、候選供給與持倉缺口混在同一張表；capture audit又把部位、周轉、Target轉換、集中度與exit mix混為一表，使用者難以由結果建立因果鏈 |
+| 互動入口 | `[2] 策略績效驗證`下的目前策略比較與策略參數適應均啟用既有compact console scope；直接CLI仍保留完整技術context及完整表格，Markdown／JSON／CSV內容與schema不變 |
+| 策略比較簡表 | 先顯示四層綜合判定，再依`投組報酬與風險`、`單筆交易品質`、`資金使用與持倉容量`、`年度報酬`、`模型選股方向`及`判讀限制`分區；每區增加單行讀法，將「持倉格較滿但每格投入較小」與「模型Target排序改善但投組失敗」直接分層呈現 |
+| Capture簡表 | 依`部位與資金配置`、`單筆交易品質與Target轉換`、`成交與資金周轉`、`進場集中度`、`最終出場結構`及`依進場年度`分區；年度寬表拆成交易品質與投入規模兩張窄表；無canonical產業資料時只顯示一行略過，不再列多個N/A欄位 |
+| Adaptation簡表 | Baseline／Sort Only／Adapted三組比較同樣拆為投組、單筆、資金配置、Target轉換、年度、模型選股及參數差異，不再將全部指標塞入單一三組表 |
+| 顯示降噪 | 互動簡表不顯示參數檔路徑、param selector、runtime members、ranking key等除錯context；保留期間、比較組別、Score source與無前視狀態。直接CLI仍可查看完整context |
+| 固定條件 | 不改Dataset、Label、Continuous Target、PIT Score、Seed 42、active params、候選、排序、成交、資金、停損停利、accounting、capture公式、decision gate、optimizer search space或3.78既有結果 |
+| Dataset／Label／模型工件 | 不需重建；只需套用程式後重新進入`[2] 策略績效驗證`即可看到新分區報表 |
+| 驗證 | direct synthetic新增互動compact scope、分區標題、內部context抑制及完整CLI不受影響契約；相關capture與CLI validators獨立通過。正式`apps/test_suite.py`依專案規則留待使用者本機執行 |
+| 結果邊界 | 本輪沒有新的Selection／OOS／Adapted績效結果，不得由報表重組推論策略效果改變 |
