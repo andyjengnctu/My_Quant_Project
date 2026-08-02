@@ -193,6 +193,71 @@ def _canonical_current_pair_output_dir(*, root: Path, args) -> Path:
     ).resolve()
 
 
+def _collect_nested_param_values(payload: Any, field: str) -> list[Any]:
+    values: list[Any] = []
+    if isinstance(payload, dict):
+        if field in payload:
+            values.append(payload[field])
+        for value in payload.values():
+            values.extend(_collect_nested_param_values(value, field))
+    elif isinstance(payload, (list, tuple)):
+        for value in payload:
+            values.extend(_collect_nested_param_values(value, field))
+    return values
+
+
+def _effective_fixed_value_matches(
+    *, metadata: dict[str, Any], override_field: str, param_field: str, expected: float
+) -> tuple[bool, str]:
+    recorded_override = metadata.get(override_field)
+    override_matches = True
+    if recorded_override is not None:
+        try:
+            override_matches = math.isclose(
+                float(recorded_override), float(expected), rel_tol=0.0, abs_tol=1e-12
+            )
+        except (TypeError, ValueError):
+            override_matches = False
+
+    # 舊版[1]沒有明確傳入override，但正式ROOS本身可能已固定為相同值。
+    # 無論新舊metadata，都以兩組實際回放參數再驗證一次，避免只信宣告欄位。
+    sourced_values: list[tuple[str, Any]] = []
+    for payload_key in ("no_filter_params", "score_ranking_params"):
+        sourced_values.extend(
+            (payload_key, value)
+            for value in _collect_nested_param_values(
+                metadata.get(payload_key), param_field
+            )
+        )
+    normalized: list[float] = []
+    for payload_key, value in sourced_values:
+        try:
+            normalized.append(float(value))
+        except (TypeError, ValueError):
+            return False, f"{payload_key}.{param_field}含無效值={value!r}"
+    if not normalized:
+        return False, f"工件未保存可驗證的effective {param_field}"
+    effective_matches = all(
+        math.isclose(value, float(expected), rel_tol=0.0, abs_tol=1e-12)
+        for value in normalized
+    )
+    unique_values = sorted(set(normalized))
+    return (
+        override_matches and effective_matches,
+        f"{override_field}={recorded_override!r}; effective {param_field}={unique_values}",
+    )
+
+
+def _resolve_recorded_artifact_path(raw_path: Any, *, root: Path) -> Path | None:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+    path = Path(text)
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
 def _load_current_pair_if_compatible(
     *,
     root: Path,
@@ -201,19 +266,20 @@ def _load_current_pair_if_compatible(
     args,
     pit_contract,
     baseline_contract: dict[str, Any],
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, list[str]]:
+    del runtime_identity_sha256  # adaptation manifest是衍生索引；相容後會重新寫入。
+    issues: list[str] = []
     expected_paths = _current_pair_artifact_paths(output_dir)
-    if not expected_paths["strategy_comparison_json"].is_file():
-        return None
+    comparison_path = expected_paths["strategy_comparison_json"]
+    if not comparison_path.is_file():
+        return None, [f"缺少{project_relative_display_path(comparison_path, project_root=root)}"]
     try:
-        payload = json.loads(
-            expected_paths["strategy_comparison_json"].read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
+        payload = json.loads(comparison_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, [f"strategy_comparison.json無法讀取：{type(exc).__name__}: {exc}"]
     metadata = dict(payload.get("metadata") or {})
     if not metadata:
-        return None
+        return None, ["strategy_comparison.json缺少metadata"]
 
     expected = {
         "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
@@ -226,39 +292,53 @@ def _load_current_pair_if_compatible(
         "experiment_profile": str(args.experiment_profile),
         "max_positions": int(args.max_positions),
         "enable_rotation": str(args.rotation) == "on",
-        "fixed_risk_override": float(args.fixed_risk),
-        "max_position_cap_pct_override": float(args.max_position_cap_pct),
         "comparison_design": "selection_point_in_time_active_param_replay",
         "lookahead_safe_active_param_schedule": True,
     }
     for key, expected_value in expected.items():
         actual = metadata.get(key)
-        if isinstance(expected_value, float):
-            try:
-                matched = math.isclose(
-                    float(actual), expected_value, rel_tol=0.0, abs_tol=1e-12
-                )
-            except (TypeError, ValueError):
-                matched = False
-        else:
-            matched = actual == expected_value
-        if not matched:
-            return None
+        if actual != expected_value:
+            issues.append(f"{key}: artifact={actual!r}, expected={expected_value!r}")
 
-    period = dict(metadata.get("comparison_period") or {})
-    if period != {
+    for override_field, param_field, expected_value in (
+        ("fixed_risk_override", "fixed_risk", float(args.fixed_risk)),
+        (
+            "max_position_cap_pct_override",
+            "max_position_cap_pct",
+            float(args.max_position_cap_pct),
+        ),
+    ):
+        matched, detail = _effective_fixed_value_matches(
+            metadata=metadata,
+            override_field=override_field,
+            param_field=param_field,
+            expected=expected_value,
+        )
+        if not matched:
+            issues.append(f"{param_field}: {detail}, expected={expected_value}")
+
+    expected_period = {
         "start": str(pit_contract.available_from),
         "end": str(pit_contract.available_through),
-    }:
-        return None
+    }
+    period = dict(metadata.get("comparison_period") or {})
+    if period != expected_period:
+        issues.append(
+            f"comparison_period: artifact={period!r}, expected={expected_period!r}"
+        )
     for metadata_key, expected_path in (
         ("score_path", pit_contract.score_path),
         ("score_manifest_path", pit_contract.manifest_path),
         ("score_audit_path", pit_contract.audit_path),
     ):
-        raw_path = str(metadata.get(metadata_key) or "").strip()
-        if not raw_path or Path(raw_path).resolve() != Path(expected_path).resolve():
-            return None
+        recorded_path = _resolve_recorded_artifact_path(
+            metadata.get(metadata_key), root=root
+        )
+        if recorded_path != Path(expected_path).resolve():
+            issues.append(
+                f"{metadata_key}: artifact={recorded_path}, "
+                f"expected={Path(expected_path).resolve()}"
+            )
     score_table = dict(metadata.get("score_table") or {})
     recorded_score_sha = str(
         score_table.get("sha256")
@@ -266,31 +346,23 @@ def _load_current_pair_if_compatible(
         or score_table.get("content_sha256")
         or ""
     )
-    if recorded_score_sha and recorded_score_sha != compute_file_sha256(
-        pit_contract.score_path
-    ):
-        return None
+    actual_score_sha = compute_file_sha256(pit_contract.score_path)
+    if recorded_score_sha and recorded_score_sha != actual_score_sha:
+        issues.append(
+            f"score SHA256: artifact={recorded_score_sha}, expected={actual_score_sha}"
+        )
 
-    for path in expected_paths.values():
-        if not path.is_file():
-            return None
+    missing = [
+        project_relative_display_path(path, project_root=root)
+        for path in expected_paths.values()
+        if not path.is_file()
+    ]
+    if missing:
+        issues.append("缺少必要比較工件：" + ", ".join(missing))
 
-    manifest_path = output_dir / CURRENT_PAIR_MANIFEST_FILENAME
-    if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        if str(manifest.get("runtime_identity_sha256") or "") != str(
-            runtime_identity_sha256
-        ):
-            return None
-        recorded = dict(manifest.get("artifacts") or {})
-        for key, artifact_path in expected_paths.items():
-            entry = dict(recorded.get(key) or {})
-            if str(entry.get("sha256") or "") != compute_file_sha256(artifact_path):
-                return None
-    return payload
+    if issues:
+        return None, issues
+    return payload, []
 
 
 def _write_current_pair_manifest(
@@ -330,7 +402,7 @@ def _load_or_run_current_pair(
     pit_contract,
     baseline_contract: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
-    payload = _load_current_pair_if_compatible(
+    payload, issues = _load_current_pair_if_compatible(
         root=root,
         output_dir=output_dir,
         runtime_identity_sha256=runtime_contract["runtime_identity_sha256"],
@@ -339,17 +411,18 @@ def _load_or_run_current_pair(
         baseline_contract=baseline_contract,
     )
     if payload is None:
+        details = "；".join(issues[:8]) or "未知identity差異"
         raise FileNotFoundError(
             "找不到與目前identity一致的Baseline／Sort Only正式比較工件；"
-            "請先執行主選單[2]策略績效驗證→[1]比較目前策略。"
+            f"原因={details}。請先執行主選單[2]策略績效驗證→[1]比較目前策略。"
         )
-    manifest_path = output_dir / CURRENT_PAIR_MANIFEST_FILENAME
-    if not manifest_path.is_file():
-        _write_current_pair_manifest(
-            root=root,
-            output_dir=output_dir,
-            runtime_identity_sha256=runtime_contract["runtime_identity_sha256"],
-        )
+    # adaptation_pair_manifest是[2]的衍生索引；[1]重跑或舊版identity格式變更後
+    # 應依已驗證的正式比較工件重新產生，不得反過來阻擋有效工件。
+    _write_current_pair_manifest(
+        root=root,
+        output_dir=output_dir,
+        runtime_identity_sha256=runtime_contract["runtime_identity_sha256"],
+    )
     print("\n[Baseline／Sort Only] 已載入[1]正式比較工件；不重新執行舊參數replay。")
     return payload, True
 

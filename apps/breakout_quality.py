@@ -1819,6 +1819,9 @@ def _interactive_strategy_validation(program_name: str) -> int:
                         "--param-policy", settings.strategy_param_policy,
                         "--max-positions", str(settings.strategy_max_positions),
                         "--rotation", settings.strategy_rotation,
+                        "--fixed-risk", str(settings.strategy_adapt_fixed_risk),
+                        "--max-position-cap-pct",
+                        str(settings.strategy_adapt_max_position_cap_pct),
                     ],
                     program_name=program_name,
                 )

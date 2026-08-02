@@ -11692,11 +11692,14 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     )
     from strategies.breakout.search_space import build_trial_params
     from tools.filters.breakout_quality.strategy_adapt import (
+        _current_pair_artifact_paths,
         _fixed_strategy_param_overrides,
+        _load_current_pair_if_compatible,
         _optimizer_session_spec,
         _render_three_way_console,
         _validate_fixed_contract,
         _validate_selection_pit_runtime_artifacts,
+        _write_current_pair_manifest,
     )
     from tools.optimizer.outer_rolling_oos import (
         _apply_outer_rolling_process_environ,
@@ -11906,6 +11909,139 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             True,
         ),
         (set(pit_artifacts), missing_pit_artifact_rejected, wrong_profile_rejected),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        output_dir = root / "strategy_compare_score_ranking_base_finalist_best_selection_point_in_time"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        score_path = root / "selection_point_in_time_scores.csv"
+        score_manifest_path = root / "selection_point_in_time_manifest.json"
+        score_audit_path = root / "selection_point_in_time_audit.json"
+        score_path.write_text("ticker,date,breakout_quality_score\n", encoding="utf-8")
+        score_manifest_path.write_text("{}\n", encoding="utf-8")
+        score_audit_path.write_text("{}\n", encoding="utf-8")
+        pair_pit_contract = SimpleNamespace(
+            available_from="2014-01-01",
+            available_through="2020-12-31",
+            score_path=score_path,
+            manifest_path=score_manifest_path,
+            audit_path=score_audit_path,
+        )
+        effective_params = {
+            "params_by_effective_date": {
+                "2014-01-01": {
+                    "fixed_risk": float(args.fixed_risk),
+                    "max_position_cap_pct": float(args.max_position_cap_pct),
+                }
+            }
+        }
+        pair_payload = {
+            "metadata": {
+                "comparison_mode": "score-ranking",
+                "score_source": "selection_point_in_time",
+                "dataset": args.dataset,
+                "params_file_sha256": "baseline-sha",
+                "requested_param_policy": args.param_policy,
+                "filter_id": args.filter_id,
+                "model_architecture": args.model_architecture,
+                "experiment_profile": args.experiment_profile,
+                "max_positions": args.max_positions,
+                "enable_rotation": True,
+                "fixed_risk_override": None,
+                "max_position_cap_pct_override": None,
+                "comparison_design": "selection_point_in_time_active_param_replay",
+                "lookahead_safe_active_param_schedule": True,
+                "comparison_period": {
+                    "start": pair_pit_contract.available_from,
+                    "end": pair_pit_contract.available_through,
+                },
+                "score_path": str(score_path),
+                "score_manifest_path": str(score_manifest_path),
+                "score_audit_path": str(score_audit_path),
+                "score_table": {},
+                "no_filter_params": effective_params,
+                "score_ranking_params": effective_params,
+            }
+        }
+        artifact_paths = _current_pair_artifact_paths(output_dir)
+        for artifact_path in artifact_paths.values():
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text("synthetic\n", encoding="utf-8")
+        artifact_paths["strategy_comparison_json"].write_text(
+            json.dumps(pair_payload, ensure_ascii=False), encoding="utf-8"
+        )
+        stale_manifest = output_dir / "adaptation_pair_manifest.json"
+        stale_manifest.write_text(
+            json.dumps({
+                "runtime_identity_sha256": "stale",
+                "artifacts": {},
+            }),
+            encoding="utf-8",
+        )
+        loaded_pair, pair_issues = _load_current_pair_if_compatible(
+            root=root,
+            output_dir=output_dir,
+            runtime_identity_sha256="current-identity",
+            args=args,
+            pit_contract=pair_pit_contract,
+            baseline_contract={"sha256": "baseline-sha"},
+        )
+        _write_current_pair_manifest(
+            root=root,
+            output_dir=output_dir,
+            runtime_identity_sha256="current-identity",
+        )
+        refreshed_manifest = json.loads(stale_manifest.read_text(encoding="utf-8"))
+
+        invalid_payload = json.loads(json.dumps(pair_payload))
+        invalid_payload["metadata"]["score_ranking_params"][
+            "params_by_effective_date"
+        ]["2014-01-01"]["fixed_risk"] = float(args.fixed_risk) + 0.01
+        artifact_paths["strategy_comparison_json"].write_text(
+            json.dumps(invalid_payload, ensure_ascii=False), encoding="utf-8"
+        )
+        rejected_pair, rejected_issues = _load_current_pair_if_compatible(
+            root=root,
+            output_dir=output_dir,
+            runtime_identity_sha256="current-identity",
+            args=args,
+            pit_contract=pair_pit_contract,
+            baseline_contract={"sha256": "baseline-sha"},
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "existing_strategy_compare_without_explicit_overrides_is_reused_by_effective_params",
+        (True, [], "current-identity", True, True),
+        (
+            loaded_pair is not None,
+            pair_issues,
+            refreshed_manifest.get("runtime_identity_sha256"),
+            rejected_pair is None,
+            any("fixed_risk" in issue for issue in rejected_issues),
+        ),
+    )
+
+    app_source = (Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py").read_text(
+        encoding="utf-8"
+    )
+    strategy_menu_choice_one = app_source.split('if choice == "1":', 1)[1].split(
+        'if choice == "2":', 1
+    )[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_compare_menu_writes_same_fixed_risk_and_position_cap_contract",
+        (True, True),
+        (
+            '"--fixed-risk"' in strategy_menu_choice_one
+            and "settings.strategy_adapt_fixed_risk" in strategy_menu_choice_one,
+            '"--max-position-cap-pct"' in strategy_menu_choice_one
+            and "settings.strategy_adapt_max_position_cap_pct" in strategy_menu_choice_one,
+        ),
     )
 
     with patch.dict(os.environ, {}, clear=True):

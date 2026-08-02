@@ -2117,3 +2117,38 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 ### 驗證
 
 T283改為直接建立三個PIT runtime工件，驗證正常contract可通過、缺少score檔與錯誤profile會於rolling前拒絕；不再建立或要求full-model`manifest.json`。正式`apps/test_suite.py`依專案規定由使用者本機執行。
+
+## 2026-08-03 — Baseline／Sort Only正式比較工件identity相容修正
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`
+
+本輪只修正`[1] 比較目前策略`與`[2] 驗證策略參數適應`之間的工件identity與重用契約；未執行Score Adapted optimizer、四組Selection replay或正式OOS。
+
+### 程式基準
+
+- ZIP：`test-branch-1_20260803_014347_0235c8f.zip`
+- SHA256：`0c05fbb9dcd3508648a3a280824c2ee8334e15f34e0dba2aafd20bcffd3e6f3c`
+- 全新解壓：`/mnt/data/bq_baseline_artifact_identity_fix_20260803_0144`
+
+### 問題
+
+使用者已完成`[1] 比較目前策略`，但`[2]`仍回報找不到identity一致的正式比較工件。根因是互動式`[1]`沒有明確傳入第一輪adaptation固定的`fixed_risk=0.01`與`max_position_cap_pct=0.30`，因此strategy comparison metadata的override欄位為`null`；`[2]`只用override欄位與目前固定值做嚴格比對，未檢查舊ROOS回放實際active params已是相同值。舊`adaptation_pair_manifest`亦被錯當成來源真理，可能在`[1]`重跑後反向阻擋新正式工件。
+
+### 修正
+
+- 互動式`[1]`現在明確傳入與`[2]`相同的fixed risk及position cap，後續新工件metadata直接一致。
+- 既有`[1]`工件若override欄位為`null`，改由Baseline與Sort Only兩組實際參數payload逐項確認`fixed_risk`及`max_position_cap_pct`全都等於目前固定值；符合時直接沿用，不要求重跑。
+- 若任一effective param不同或缺少可驗證值，仍拒絕載入。
+- `adaptation_pair_manifest.json`降為`[2]`可重建的衍生索引；正式comparison payload、PIT identity與必要CSV／JSON／Markdown工件均通過後，manifest會依目前identity與實際SHA256重新寫入。
+- identity錯誤訊息改列出具體不一致欄位，避免只有泛化的「請先執行[1]」。
+
+### 固定條件與結果邊界
+
+不改Dataset、Label、Continuous Target、PIT Scores、模型、Seed 42、rolling folds、trials、search space、objective、ranking、TP、risk值、position cap值、max positions、rotation、交易／帳務、Future Target post-replay only或Selection／OOS邊界。既有`[1]`工件若effective params符合條件即可直接重用。
+
+### 驗證
+
+T283新增：舊metadata未明確override但effective params一致時可載入；任一實際risk錯值時拒絕；stale adaptation manifest在正式工件通過後可刷新；互動式`[1]`argv明確攜帶共同risk／cap。正式`apps/test_suite.py`依專案規定由使用者本機執行。
+
