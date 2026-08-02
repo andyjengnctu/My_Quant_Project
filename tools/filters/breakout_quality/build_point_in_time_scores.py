@@ -54,6 +54,7 @@ from filters.breakout_quality.torch_runtime import (
 )
 from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
 from filters.breakout_quality.console_report import (
+    compact_console_enabled,
     console_color_enabled,
     paint,
     print_artifact_paths,
@@ -767,6 +768,9 @@ def main(argv=None) -> int:
     score_frames: list[pd.DataFrame] = []
     fold_manifests: list[dict[str, Any]] = []
     coverage_rows: list[dict[str, Any]] = []
+    compact_console = compact_console_enabled()
+    reused_fold_count = 0
+    built_fold_count = 0
     for fold, ids in zip(folds, fold_details):
         fold_contract = _fold_contract_payload(args, bundle, fold, ids)
         fingerprint = _json_fingerprint(fold_contract)
@@ -788,13 +792,16 @@ def main(argv=None) -> int:
         )
         if reused is not None:
             frame, manifest = reused
-            print(
-                "\n"
-                + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
-                + "："
-                + paint("重用既有 fold 工件", "green", enabled=color_enabled, bold=True)
-            )
+            reused_fold_count += 1
+            if not compact_console:
+                print(
+                    "\n"
+                    + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
+                    + "："
+                    + paint("重用既有 fold 工件", "green", enabled=color_enabled, bold=True)
+                )
         else:
+            built_fold_count += 1
             print(
                 "\n"
                 + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
@@ -915,6 +922,11 @@ def main(argv=None) -> int:
         render_key_values(
             (
                 ("Folds", len(folds)),
+                *(
+                    (("重用／新建", f"{reused_fold_count}／{built_fold_count}"),)
+                    if compact_console
+                    else ()
+                ),
                 ("Scored groups", f"{validation['scored_group_count']:,}"),
                 (
                     "Coverage",

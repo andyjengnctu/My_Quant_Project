@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import argparse
+from collections import Counter
 import shutil
 import tempfile
 import time
@@ -45,6 +46,7 @@ from filters.breakout_quality.market_set import (
 from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.console_report import (
+    compact_console_enabled,
     console_color_enabled,
     paint,
     print_artifact_paths,
@@ -247,8 +249,34 @@ def _render_full_build_progress(
     )
 
 
+def _skip_reason_label(exc: Exception) -> str:
+    message = str(exc).strip()
+    if "有效資料不足" in message:
+        return "有效資料不足"
+    if "缺少必要欄位" in message:
+        return "欄位不完整"
+    if isinstance(exc, (UnicodeDecodeError, OSError)):
+        return "檔案讀取失敗"
+    return type(exc).__name__
+
+
+def _render_skip_summary(reason_counts: Counter[str]) -> str:
+    total = sum(int(count) for count in reason_counts.values())
+    if total <= 0:
+        return "跳過=0"
+    details = "；".join(
+        f"{reason}={int(count):,}"
+        for reason, count in sorted(
+            reason_counts.items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )
+    )
+    return f"跳過={total:,}（{details}）"
+
+
 def _full_build(args, policy, *, started: float) -> int:
     requested_max_tickers = max(0, int(args.max_tickers or 0))
+    compact_console = compact_console_enabled()
     source_inventory_before = build_source_data_inventory(PROJECT_ROOT, args.dataset)
     out_dir = dataset_output_dir(args.filter_id)
     paths = dataset_paths(args.filter_id)
@@ -264,8 +292,12 @@ def _full_build(args, policy, *, started: float) -> int:
         )
 
     csv_inputs, duplicate_lines = discover_dataset_csv_inputs(PROJECT_ROOT, args.dataset)
-    for line in duplicate_lines:
-        print(line)
+    if duplicate_lines:
+        if compact_console:
+            print(f"[注意] 重複來源檔={len(duplicate_lines):,}，已依既有規則去重。")
+        else:
+            for line in duplicate_lines:
+                print(line)
     input_map = {ticker: path for ticker, path in csv_inputs}
     benchmark_path = input_map.get(policy.benchmark_ticker)
     if benchmark_path is None:
@@ -300,6 +332,7 @@ def _full_build(args, policy, *, started: float) -> int:
     )
     chunk_paths: dict[str, list[Path]] = {name: [] for name in chunk_names}
     skipped_ticker_count = 0
+    skipped_reason_counts: Counter[str] = Counter()
     progress = InlineProgress()
     color_enabled = console_color_enabled(progress.stream)
     market_group_date_chunks: list[np.ndarray] = []
@@ -336,10 +369,7 @@ def _full_build(args, policy, *, started: float) -> int:
                 stock_frame = load_dataset_frame(input_map[ticker], ticker, min_rows=min_rows)
             except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
                 skipped_ticker_count += 1
-                progress.print_line(
-                    f"{paint('[略過]', 'yellow', enabled=color_enabled, bold=True)} "
-                    f"{ticker}: {exc}"
-                )
+                skipped_reason_counts[_skip_reason_label(exc)] += 1
                 progress.update(
                     _render_full_build_progress(
                         index=idx,
@@ -481,7 +511,7 @@ def _full_build(args, policy, *, started: float) -> int:
         progress.finish(
             f"{paint('Dataset 建立完成', 'green', enabled=color_enabled, bold=True)} | "
             f"股票={processed_ticker_count:,}/{len(tickers):,} | "
-            f"跳過={skipped_ticker_count:,} | "
+            f"{_render_skip_summary(skipped_reason_counts)} | "
             f"events={event_count:,} groups={group_count:,} | "
             f"耗時 {render_elapsed(time.perf_counter() - started, color=color_enabled)}"
         )
@@ -616,6 +646,11 @@ def _full_build(args, policy, *, started: float) -> int:
             "requested_max_tickers": requested_max_tickers,
             "selected_ticker_count": int(len(tickers)),
             "processed_ticker_count": int(processed_ticker_count),
+            "skipped_ticker_count": int(skipped_ticker_count),
+            "skipped_reason_counts": {
+                str(reason): int(count)
+                for reason, count in sorted(skipped_reason_counts.items())
+            },
         },
         "dataset_artifacts": _build_artifact_records(paths),
         "market_set_contract": (market_set_contract_payload() if market_set_required else None),
@@ -652,11 +687,12 @@ def _full_build(args, policy, *, started: float) -> int:
         ),
         project_root=PROJECT_ROOT,
     )
-    print(
-        "storage="
-        f"events={storage_summary['event_count']} groups={storage_summary['feature_group_count']} "
-        f"dedup={storage_summary['feature_storage_reduction_ratio']}x"
-    )
+    if not compact_console:
+        print(
+            "storage="
+            f"events={storage_summary['event_count']} groups={storage_summary['feature_group_count']} "
+            f"dedup={storage_summary['feature_storage_reduction_ratio']}x"
+        )
     return 0
 
 

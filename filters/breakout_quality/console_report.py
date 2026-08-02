@@ -19,6 +19,14 @@ from core.display import (
 )
 
 DEFAULT_REPORT_WIDTH = 100
+COMPACT_CONSOLE_ENV = "BREAKOUT_QUALITY_COMPACT_CONSOLE"
+
+
+def compact_console_enabled() -> bool:
+    """Return whether interactive workflow output should hide internal artifacts."""
+
+    value = os.environ.get(COMPACT_CONSOLE_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def console_color_enabled(stream=None) -> bool:
@@ -162,6 +170,8 @@ def print_artifact_paths(
     project_root: str | os.PathLike[str],
     title: str = "工件輸出",
 ) -> None:
+    if compact_console_enabled():
+        return
     rendered = render_artifact_paths(
         artifacts,
         project_root=project_root,
@@ -201,6 +211,8 @@ def strip_ansi(text: object) -> str:
 
 __all__ = [
     "DEFAULT_REPORT_WIDTH",
+    "COMPACT_CONSOLE_ENV",
+    "compact_console_enabled",
     "console_color_enabled",
     "paint",
     "project_relative_display_path",

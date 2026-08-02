@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import importlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -80,12 +82,14 @@ from filters.breakout_quality.paths import (
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.console_report import (
+    COMPACT_CONSOLE_ENV,
     console_color_enabled,
     paint,
     project_relative_display_path,
     render_key_values,
     render_section,
     render_status_paths,
+    render_table,
     render_title,
 )
 
@@ -184,6 +188,53 @@ def _run_command(command: str, args: list[str], *, program_name: str) -> int:
     finally:
         sys.argv[0] = original_program_name
     return int(result or 0)
+
+
+@contextmanager
+def _compact_console_scope():
+    previous = os.environ.get(COMPACT_CONSOLE_ENV)
+    os.environ[COMPACT_CONSOLE_ENV] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(COMPACT_CONSOLE_ENV, None)
+        else:
+            os.environ[COMPACT_CONSOLE_ENV] = previous
+
+
+def _compact_dataset_refresh_reason(reasons: list[str]) -> str:
+    """Collapse technical rebuild diagnostics into user-facing categories."""
+
+    text = " ".join(dict.fromkeys(str(reason).strip() for reason in reasons if str(reason).strip()))
+    labels: list[str] = []
+
+    def add(label: str) -> None:
+        if label not in labels:
+            labels.append(label)
+
+    lowered = text.lower()
+    if "使用者要求" in text:
+        add("使用者要求重建")
+    if any(token in lowered for token in ("工件缺少", "artifact", "summary.json", "損壞")):
+        add("既有工件不完整")
+    if "source_data_inventory" in lowered or "來源 csv inventory" in lowered:
+        add("來源資料已更新")
+    if any(token in lowered for token in ("profile 不符", "ticker coverage 不符")):
+        add("資料範圍不符")
+    if any(
+        token in lowered
+        for token in (
+            "schema 已變更",
+            "format 已變更",
+            "contract 已變更",
+            "policy 已變更",
+            "policy metadata",
+            "label horizon",
+        )
+    ):
+        add("設定已變更")
+    return "、".join(labels) if labels else "既有 Dataset 需更新"
 
 
 def _train_defaults() -> argparse.Namespace:
@@ -1583,16 +1634,39 @@ def _print_workflow_status() -> None:
             PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
         ),
     }
+    grouped_status = (
+        ("Dataset", (status_paths["Dataset summary"],)),
+        (
+            "Continuous Target",
+            (status_paths["Target manifest"], status_paths["Target audit Markdown"]),
+        ),
+        (
+            "PIT Scores",
+            (status_paths["PIT scores"], status_paths["PIT manifest"], status_paths["PIT coverage"]),
+        ),
+        (
+            "PIT 模型驗證",
+            (status_paths["PIT audit JSON"], status_paths["PIT audit Markdown"]),
+        ),
+    )
+    status_rows = []
+    for label, paths in grouped_status:
+        existing = sum(path.is_file() for path in paths)
+        if existing == len(paths):
+            status, tone = "完整", "green"
+        elif existing == 0:
+            status, tone = "缺少", "red"
+        else:
+            status, tone = "不完整", "yellow"
+        status_rows.append(
+            (paint(f"[{status}]", tone, enabled=color_enabled, bold=True), label)
+        )
     print(
         render_section(
-            paint("Workflow 工件", "cyan", enabled=color_enabled, bold=True)
+            paint("Workflow 狀態", "cyan", enabled=color_enabled, bold=True)
         )
     )
-    print(render_status_paths(
-        ((name, path, path.is_file()) for name, path in status_paths.items()),
-        project_root=PROJECT_ROOT,
-        color=color_enabled,
-    ))
+    print(render_table(("狀態", "項目"), status_rows))
 
 
 def _interactive_model_research(program_name: str) -> int:
@@ -1633,66 +1707,45 @@ def _interactive_model_research(program_name: str) -> int:
         max_tickers=INTERACTIVE_MAX_TICKERS,
     )
     if dataset_step is not None:
-        tag = "rebuild" if refresh_mode == "rebuild" else "relabel"
-        print(
-            paint(
-                "偵測到 PIT 模型所需 Dataset 尚未就緒，將先自動準備：",
-                "yellow",
-                enabled=color_enabled,
-                bold=True,
-            )
-        )
-        for reason in refresh_reasons:
-            print(
-                f"{paint(f'[{tag}]', 'yellow', enabled=color_enabled, bold=True)} "
-                f"{reason}"
-            )
         command, command_args, label = dataset_step
+        reason_summary = _compact_dataset_refresh_reason(refresh_reasons)
         print(
-            "\n"
-            + paint("[Dataset]", "cyan", enabled=color_enabled, bold=True)
-            + f" {label}"
+            paint("[Dataset]", "cyan", enabled=color_enabled, bold=True)
+            + f" {label}｜{reason_summary}"
         )
-        code = _run_command(command, command_args, program_name=program_name)
+        with _compact_console_scope():
+            code = _run_command(command, command_args, program_name=program_name)
         if code != 0:
             return code
-    else:
-        print(
-            paint(
-                "[略過] PIT 所需 Full dataset 已符合目前來源與 policy。",
-                "green",
-                enabled=color_enabled,
-                bold=True,
-            )
+
+    with _compact_console_scope():
+        code = _run_command(
+            "prepare-continuous-target",
+            [
+                "--filter-id",
+                settings.filter_id,
+                "--target-id",
+                str(settings.continuous_target_id),
+            ],
+            program_name=program_name,
         )
+        if code != 0:
+            return code
 
-    code = _run_command(
-        "prepare-continuous-target",
-        [
-            "--filter-id",
-            settings.filter_id,
-            "--target-id",
-            str(settings.continuous_target_id),
-        ],
-        program_name=program_name,
-    )
-    if code != 0:
-        return code
-
-    code = _run_command(
-        "build-point-in-time-scores", build_args, program_name=program_name
-    )
-    if code != 0:
-        return code
-    return _run_command(
-        "audit-point-in-time-scores",
-        [
-            "--filter-id", settings.filter_id,
-            "--model-architecture", settings.model_architecture,
-            "--experiment-profile", settings.experiment_profile,
-        ],
-        program_name=program_name,
-    )
+        code = _run_command(
+            "build-point-in-time-scores", build_args, program_name=program_name
+        )
+        if code != 0:
+            return code
+        return _run_command(
+            "audit-point-in-time-scores",
+            [
+                "--filter-id", settings.filter_id,
+                "--model-architecture", settings.model_architecture,
+                "--experiment-profile", settings.experiment_profile,
+            ],
+            program_name=program_name,
+        )
 
 
 def _interactive_strategy_validation(program_name: str) -> int:

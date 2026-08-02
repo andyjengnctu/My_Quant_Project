@@ -1808,3 +1808,19 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 獨立驗證 | 全專案Python語法解析、修改模組import、ANSI／純文字內容同一性、TTY長行截斷與單列覆寫、非TTY只輸出最終狀態、Markdown表格欄數、修改檔路徑與ZIP內容均由本輪獨立檢查；正式`apps/test_suite.py`依專案規則留待使用者本機執行 |
 | 結果邊界 | 本輪沒有Selection／OOS／策略績效實驗，故主要結果與基準差異均為N/A；不得由顯示改善推論模型效果改變 |
 
+
+### 3.83 模型研究流程跳過訊息彙總與工件路徑降噪（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_APPLICABLE`；只調整`[1/Enter] 模型研究與驗證`的使用者可見console，不改Dataset、模型、Score或策略結果 |
+| 程式基準 | 來源`test-branch-1_20260802_160127_20d8492(1).zip`；SHA256 `b5096f340f71c67d6031d2ef7086dc080204095ab5fdc129e3d74e32650385f4` |
+| 問題 | Dataset完整建立仍逐筆列出所有「有效資料不足」ticker，雖然進度本身覆寫單列，數十筆skip訊息仍造成洗版；模型流程亦反覆輸出使用者通常不會開啟的內部工件路徑與storage資訊 |
+| Dataset輸出 | 取消逐ticker`[略過]`行；依原因累計並合併至唯一完成列，例如`跳過=59（有效資料不足=59）`。動態列數不再造成不同原因字串；compact模式下重複來源檔也只顯示一筆彙總；完整skip統計仍保存於dataset summary的`source_selection`供追蹤 |
+| Compact console | 互動式模型研究流程啟用暫時compact console scope；所有共用`print_artifact_paths()`在此scope內不輸出，target／PIT console內另有的診斷路徑亦隱藏；scope結束後恢復原環境，直接CLI仍保留原工件路徑行為 |
+| Workflow狀態 | Continuous-ranker狀態頁不再逐一列出8個檔案與路徑；改為`Dataset`、`Continuous Target`、`PIT Scores`、`PIT 模型驗證`四個聚合狀態，顯示`完整／不完整／缺少` |
+| 重覆資訊 | Dataset compact流程不再於完成列後重覆輸出`storage=events/groups/dedup`；Dataset重建技術原因合併成單行使用者分類；已符合的Continuous Target不再重覆宣告；PIT已重用fold不逐筆列出，只於完成摘要顯示`重用／新建`；最終Dataset完成列已包含股票數、跳過彙總、events、groups與耗時 |
+| 固定條件 | 不改Dataset schema既有欄位、feature、Label、Continuous Target、Seed 42、PIT fold、checkpoint、Score、模型gate、策略排序、交易或帳務；dataset summary只新增skip診斷欄位 |
+| Dataset／Label／模型工件 | 不需因本修正重建；若使用者原本正在建立Dataset，套用新版後重新執行即可取得降噪輸出 |
+| 驗證 | 新增skip原因正規化、彙總順序、rebuild reason單行化、current target靜默與compact工件路徑抑制契約；另獨立檢查compact scope恢復、狀態頁無路徑、PIT unavailable diagnostics無路徑、全專案語法／import／裸except／依賴循環及正式測試入口與checklist可信度 |
+| 結果邊界 | 本輪沒有Selection、OOS或策略績效結果，顯示改善不得解讀為模型效果改變 |

@@ -43,6 +43,7 @@ from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     load_continuous_ranker_data,
 )
 from filters.breakout_quality.console_report import (
+    compact_console_enabled,
     console_color_enabled,
     paint,
     print_artifact_paths,
@@ -874,12 +875,15 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
             )
         )
     else:
-        orderable_path = project_relative_display_path(
-            orderable.get("path") or "-", project_root=PROJECT_ROOT
-        )
+        unavailable_text = f"未提供：{orderable.get('reason')}"
+        if not compact_console_enabled():
+            orderable_path = project_relative_display_path(
+                orderable.get("path") or "-", project_root=PROJECT_ROOT
+            )
+            unavailable_text += f"；{orderable_path}"
         lines.append(
             paint(
-                f"未提供：{orderable.get('reason')}；{orderable_path}",
+                unavailable_text,
                 "yellow",
                 enabled=color,
                 bold=True,

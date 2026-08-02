@@ -21,6 +21,7 @@ from tools.filters.breakout_quality.audit_no_time_continuous_target import (
 )
 from tools.filters.breakout_quality.common import PROJECT_ROOT, load_validated_dataset_bundle
 from filters.breakout_quality.console_report import (
+    compact_console_enabled,
     console_color_enabled,
     paint,
     print_artifact_paths,
@@ -124,8 +125,11 @@ def _build_target(
         group_count=group_count,
     )
     if not source_current:
-        print("[Continuous Target] 基礎component target缺少或過期，先重建：")
-        print(f"- {source_reason}")
+        if compact_console_enabled():
+            print("[Continuous Target] 先建立必要的基礎 target")
+        else:
+            print("[Continuous Target] 基礎component target缺少或過期，先重建：")
+            print(f"- {source_reason}")
         code = int(build_base_target(common_args) or 0)
         if code != 0:
             return code
@@ -148,21 +152,23 @@ def main(argv=None) -> int:
         summary=summary,
         group_count=group_count,
     )
+    compact_console = compact_console_enabled()
     if current:
-        print(
-            paint(
-                f"[略過] Continuous Target 已符合目前 Dataset：{target_id}",
-                "green",
-                enabled=color_enabled,
-                bold=True,
+        if not compact_console:
+            print(
+                paint(
+                    f"[略過] Continuous Target 已符合目前 Dataset：{target_id}",
+                    "green",
+                    enabled=color_enabled,
+                    bold=True,
+                )
             )
-        )
-        report_path = _readable_report_path(
-            filter_id=args.filter_id,
-            target_id=target_id,
-        )
-        if report_path.is_file():
-            print_artifact_paths((("Continuous Target Markdown", report_path),), project_root=PROJECT_ROOT)
+            report_path = _readable_report_path(
+                filter_id=args.filter_id,
+                target_id=target_id,
+            )
+            if report_path.is_file():
+                print_artifact_paths((("Continuous Target Markdown", report_path),), project_root=PROJECT_ROOT)
         return 0
 
     print(
@@ -173,7 +179,8 @@ def main(argv=None) -> int:
             bold=True,
         )
     )
-    print(f"- 原因：{reason}")
+    if not compact_console:
+        print(f"- 原因：{reason}")
     code = _build_target(
         filter_id=args.filter_id,
         target_id=target_id,
@@ -194,20 +201,21 @@ def main(argv=None) -> int:
     )
     if not current:
         raise ValueError(f"Continuous Target重建後仍未通過identity驗證: {reason}")
-    print(
-        paint(
-            f"[Continuous Target] identity 驗證完成：{target_id}",
-            "green",
-            enabled=color_enabled,
-            bold=True,
+    if not compact_console:
+        print(
+            paint(
+                f"[Continuous Target] identity 驗證完成：{target_id}",
+                "green",
+                enabled=color_enabled,
+                bold=True,
+            )
         )
-    )
-    report_path = _readable_report_path(
-        filter_id=args.filter_id,
-        target_id=target_id,
-    )
-    if report_path.is_file():
-        print_artifact_paths((("Continuous Target Markdown", report_path),), project_root=PROJECT_ROOT)
+        report_path = _readable_report_path(
+            filter_id=args.filter_id,
+            target_id=target_id,
+        )
+        if report_path.is_file():
+            print_artifact_paths((("Continuous Target Markdown", report_path),), project_root=PROJECT_ROOT)
     return 0
 
 

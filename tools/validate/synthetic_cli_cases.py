@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from io import StringIO
@@ -125,6 +126,9 @@ def validate_dataset_cli_contract_case(_base_params):
                 "command": str(command),
                 "args": list(args),
                 "program_name": str(program_name),
+                "compact_console": app_breakout_quality.os.environ.get(
+                    app_breakout_quality.COMPACT_CONSOLE_ENV
+                ),
             }
         )
         return 0
@@ -188,6 +192,14 @@ def validate_dataset_cli_contract_case(_base_params):
                 "--experiment-profile",
                 workflow_settings.experiment_profile,
             ]
+            and all(
+                item["compact_console"] == "1"
+                for item in interactive_commands
+            )
+            and interactive_text.count("[Dataset]") == 1
+            and "偵測到 PIT 模型所需 Dataset 尚未就緒" not in interactive_text
+            and "[rebuild]" not in interactive_text
+            and "[relabel]" not in interactive_text
             and "[1/Enter] 模型研究與驗證" in interactive_text
             and "[2] 策略績效驗證" in interactive_text
             and "[3] 查看目前設定與工件狀態" in interactive_text
@@ -242,10 +254,40 @@ def validate_dataset_cli_contract_case(_base_params):
         (status_menu_rc, status_menu.call_count),
     )
 
+    status_output = StringIO()
+    with redirect_stdout(status_output):
+        app_breakout_quality._print_workflow_status()
+    rendered_status = status_output.getvalue()
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_workflow_status_groups_artifacts_without_paths",
+        True,
+        (
+            "Workflow 狀態" in rendered_status
+            and "Continuous Target" in rendered_status
+            and "PIT Scores" in rendered_status
+            and "PIT 模型驗證" in rendered_status
+            and "路徑" not in rendered_status
+            and "outputs/" not in rendered_status
+            and "models/" not in rendered_status
+        ),
+    )
+
     dataset_prepare_commands = []
 
     def _record_dataset_prepare_command(command, args, *, program_name):
-        dataset_prepare_commands.append((str(command), list(args), str(program_name)))
+        dataset_prepare_commands.append(
+            (
+                str(command),
+                list(args),
+                str(program_name),
+                app_breakout_quality.os.environ.get(
+                    app_breakout_quality.COMPACT_CONSOLE_ENV
+                ),
+            )
+        )
         return 0
 
     dataset_step = (
@@ -282,11 +324,29 @@ def validate_dataset_cli_contract_case(_base_params):
                 "audit-point-in-time-scores",
             ],
             dataset_step[1],
+            ["1", "1", "1", "1"],
         ),
         (
             dataset_prepare_rc,
             [item[0] for item in dataset_prepare_commands],
             dataset_prepare_commands[0][1],
+            [item[3] for item in dataset_prepare_commands],
+        ),
+    )
+
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_dataset_refresh_reasons_are_compacted",
+        "既有工件不完整、來源資料已更新、設定已變更",
+        app_breakout_quality._compact_dataset_refresh_reason(
+            [
+                "dataset 工件缺少: feature_bank, events",
+                "來源 CSV inventory 已更新: existing=old, current=new",
+                "feature contract 已變更",
+                "feature contract 已變更",
+            ]
         ),
     )
 
@@ -325,6 +385,41 @@ def validate_dataset_cli_contract_case(_base_params):
             build_target.call_count,
             build_target.call_args.kwargs.get("target_id"),
         ),
+    )
+
+    compact_current_output = StringIO()
+    with (
+        patch.object(
+            prepare_target_module,
+            "_dataset_identity",
+            return_value=({"policy": {}, "dataset_artifacts": {}}, 4),
+        ),
+        patch.object(
+            prepare_target_module,
+            "_target_is_current",
+            return_value=(True, "current"),
+        ),
+        patch.dict(
+            app_breakout_quality.os.environ,
+            {app_breakout_quality.COMPACT_CONSOLE_ENV: "1"},
+        ),
+        redirect_stdout(compact_current_output),
+    ):
+        compact_current_rc = prepare_target_module.main(
+            [
+                "--filter-id",
+                workflow_settings.filter_id,
+                "--target-id",
+                workflow_settings.continuous_target_id,
+            ]
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_compact_current_target_is_silent",
+        (0, ""),
+        (compact_current_rc, compact_current_output.getvalue()),
     )
 
     binary_workflow_settings = replace(
@@ -913,6 +1008,51 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_dataset_progress_is_single_line_summary",
         "Dataset 建立  12/100 ( 12.0%) | 2330 | events=12,345 | groups=678 | 01:05.4",
         build_progress_line,
+    )
+
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_dataset_skips_are_aggregated",
+        "跳過=61（有效資料不足=59；欄位不完整=2）",
+        build_module._render_skip_summary(
+            Counter({"有效資料不足": 59, "欄位不完整": 2})
+        ),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_dataset_skip_reason_removes_dynamic_row_count",
+        "有效資料不足",
+        build_module._skip_reason_label(
+            ValueError("有效資料不足: 清洗後僅剩 356 列")
+        ),
+    )
+
+    console_report_module = importlib.import_module(
+        "filters.breakout_quality.console_report"
+    )
+    compact_artifact_output = StringIO()
+    with (
+        patch.dict(
+            console_report_module.os.environ,
+            {console_report_module.COMPACT_CONSOLE_ENV: "1"},
+        ),
+        redirect_stdout(compact_artifact_output),
+    ):
+        console_report_module.print_artifact_paths(
+            (("Dataset summary", Path("outputs/example.json")),),
+            project_root=Path.cwd(),
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_compact_console_hides_internal_artifact_paths",
+        "",
+        compact_artifact_output.getvalue(),
     )
 
     class _SyntheticTTY(StringIO):
