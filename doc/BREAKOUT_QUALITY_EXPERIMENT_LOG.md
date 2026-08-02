@@ -2152,3 +2152,49 @@ T283改為直接建立三個PIT runtime工件，驗證正常contract可通過、
 
 T283新增：舊metadata未明確override但effective params一致時可載入；任一實際risk錯值時拒絕；stale adaptation manifest在正式工件通過後可刷新；互動式`[1]`argv明確攜帶共同risk／cap。正式`apps/test_suite.py`依專案規定由使用者本機執行。
 
+## 2026-08-03 — Score Adapted PIT models root與active-param輸出目錄分離
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`
+
+本輪只修正Score Adapted rolling的路徑解析與不可重試分類；未執行optimizer、四組Selection replay或正式OOS，不得預判Adapted有效。
+
+### 程式基準
+
+- ZIP：`test-branch-1_20260803_015534_cc59543.zip`
+- SHA256：`488db8f18f43b322564cbee0810c17fdf033303e1b3dcbe31267c6d659965ca0`
+- 全新解壓：`/mnt/data/bq_pit_path_resolution_fix_20260803_0156`
+
+### 問題
+
+Score Adapted為了把`roos_*.json`隔離到`rolling_validation/score_adapted/active_params/`，將通用`V16_MODELS_DIR`改指向該輸出目錄。但Breakout Quality Selection PIT路徑解析同樣使用`V16_MODELS_DIR`作正式模型根目錄，導致worker錯誤尋找：
+
+`models/research/.../score_adapted/active_params/filters/breakout_quality/.../point_in_time/selection_point_in_time_scores.csv`
+
+而不是正式：
+
+`models/filters/breakout_quality/.../point_in_time/selection_point_in_time_scores.csv`
+
+因此7個fold均在trial 0附近失敗；原不可重試分類亦未涵蓋`找不到Selection PIT score`，通用流程又進入不可能成功的sequential fallback。
+
+### 修正
+
+- 由preflight已驗證的Selection PIT score路徑反推出正式models根目錄，Windows spawn worker的`V16_MODELS_DIR`只指向該正式根目錄。
+- `run_outer_rolling_oos()`新增可選`paramset_models_dir`，只負責最終`roos_*.json`輸出；Score Adapted明確傳入arm的`active_params/`，不再借用`V16_MODELS_DIR`。
+- Objective、fold diagnostics與OOS_CHAIN仍透過同一Selection PIT runtime context取得architecture／profile／score source。
+- `找不到Selection PIT score／manifest／audit`及PIT runtime identity不一致加入不可重試分類，直接中止，不再進sequential fallback。
+- SQLite study identity、單一Score Adapted訓練與Baseline／Sort Only／Param Only／Adapted四組回放契約不變。
+
+### 既有執行工件
+
+本次錯誤發生時各fold顯示trial 0／200，沒有可用完成trial。套用修正後可直接重新執行；若SQLite DB內已有合法同identity trials，既有resume契約仍只補足剩餘trials。舊`baseline_adapted/`工件仍不納入正式流程。
+
+### 固定條件與結果邊界
+
+不改Dataset、Label、Continuous Target、PIT Scores、模型、Seed 42、fold schedule、trials、search space、objective、TP、fixed risk、position cap、max positions、rotation、ranking規則、交易／帳務、Future Target post-replay only或Selection／OOS邊界。Dataset／Label／PIT工件不需重建。
+
+### 驗證
+
+T283新增正式PIT models root解析、active-param獨立輸出、Selection PIT缺檔不可重試及source wiring案例。正式`apps/test_suite.py`依專案規定由使用者本機執行。
+

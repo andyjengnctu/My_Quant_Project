@@ -948,6 +948,29 @@ def _validate_selection_pit_runtime_artifacts(*, pit_contract, args) -> dict[str
         )
     return artifacts
 
+
+
+def _resolve_selection_pit_models_root(artifacts: dict[str, Path]) -> Path:
+    """Return the canonical models root that owns the verified PIT artifacts."""
+
+    score_path = Path(artifacts["selection_pit_scores"]).resolve()
+    for parent in score_path.parents:
+        if parent.name == "filters":
+            models_root = parent.parent.resolve()
+            expected_prefix = models_root / "filters" / "breakout_quality"
+            try:
+                score_path.relative_to(expected_prefix)
+            except ValueError as exc:
+                raise ValueError(
+                    "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: Selection PIT score不在正式"
+                    f"breakout-quality models樹下：path={score_path}"
+                ) from exc
+            return models_root
+    raise ValueError(
+        "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: 無法由Selection PIT score解析正式models根目錄："
+        f"path={score_path}"
+    )
+
 def _completed_adapted_search_is_compatible(
     *,
     existing_preflight: dict[str, Any] | None,
@@ -1143,6 +1166,7 @@ def _run_rolling_optimizer_arm(
     arm_name: str,
     arm_label: str,
     ranking_enabled: bool,
+    pit_models_root: Path,
 ) -> dict[str, Any]:
     arm_dir = output_dir / arm_name
     arm_dir.mkdir(parents=True, exist_ok=True)
@@ -1157,14 +1181,17 @@ def _run_rolling_optimizer_arm(
         },
     )
 
-    models_dir = arm_dir / "active_params"
-    models_dir.mkdir(parents=True, exist_ok=True)
+    active_param_output_dir = arm_dir / "active_params"
+    active_param_output_dir.mkdir(parents=True, exist_ok=True)
     optimizer_output_dir = arm_dir / "optimizer_runtime"
     outer_environ = dict(os.environ)
-    outer_environ["V16_MODELS_DIR"] = str(models_dir.resolve())
+    # V16_MODELS_DIR is the canonical model-artifact root used by Selection PIT
+    # ranking runtime.  Active-param export is passed separately below so the
+    # adaptation output directory never shadows PIT score/manifest resolution.
+    outer_environ["V16_MODELS_DIR"] = str(Path(pit_models_root).resolve())
     outer_environ["OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"
     outer_environ["OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = "1"
-    params_path = models_dir / "roos_base_best.json"
+    params_path = active_param_output_dir / "roos_base_best.json"
     search_reused = _completed_adapted_search_is_compatible(
         existing_preflight=existing_preflight,
         runtime_contract=runtime_contract,
@@ -1204,6 +1231,7 @@ def _run_rolling_optimizer_arm(
             optimizer_session_spec=session_spec,
             default_trials=int(args.trials_per_fold),
             timing_mode=False,
+            paramset_models_dir=str(active_param_output_dir.resolve()),
         )
         if int(exit_code) != 0:
             raise RuntimeError(
@@ -1214,7 +1242,7 @@ def _run_rolling_optimizer_arm(
         args, ranking_enabled=ranking_enabled
     )
     materialized_paths = _materialize_adapted_param_artifacts(
-        adapted_models_dir=models_dir,
+        adapted_models_dir=active_param_output_dir,
         fixed_strategy_param_overrides=fixed_overrides,
     )
     if params_path not in materialized_paths:
@@ -1263,7 +1291,7 @@ def _run_rolling_optimizer_arm(
         "ranking_enabled": bool(ranking_enabled),
         "dir": arm_dir,
         "preflight_path": preflight_path,
-        "models_dir": models_dir,
+        "models_dir": active_param_output_dir,
         "params_path": params_path,
         "params_payload": params_payload,
         "optimizer_summary_path": summary_path,
@@ -2312,6 +2340,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         pit_contract=pit_contract,
         args=args,
     )
+    pit_models_root = _resolve_selection_pit_models_root(pit_runtime_artifacts)
     baseline_contract = _load_baseline_rolling_contract(
         root=root, args=args, settings=settings
     )
@@ -2422,6 +2451,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         arm_name="score_adapted",
         arm_label="Score Adapted",
         ranking_enabled=True,
+        pit_models_root=pit_models_root,
     )
 
     optimizer_summary_path = output_dir / "rolling_optimizer_summary.json"

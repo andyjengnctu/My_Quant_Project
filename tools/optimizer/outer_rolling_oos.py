@@ -6006,6 +6006,10 @@ def _is_non_retryable_fold_failure(exc: BaseException | None) -> bool:
         "non_retryable_runtime_identity_error",
         "找不到 breakout quality 正式 manifest",
         "breakout quality manifest experiment_profile",
+        "找不到selection pit score",
+        "找不到selection pit manifest",
+        "找不到selection pit audit",
+        "selection pit runtime identity不一致",
         "runtime context不一致",
         "runtime identity",
     )
@@ -8959,6 +8963,7 @@ def run_outer_rolling_oos(
     optimizer_session_spec: dict | None = None,
     default_trials: int = OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     timing_mode: bool = False,
+    paramset_models_dir: str | None = None,
 ) -> int:
     from tools.optimizer.session import close_study_storage
     from tools.optimizer.session_factory import build_optimizer_session_from_spec
@@ -9507,7 +9512,11 @@ def run_outer_rolling_oos(
             rows=rows,
             config=config,
             chained_override=active_replay_chained_for_report,
-            models_dir=resolve_models_dir(project_root, environ=environ),
+            models_dir=(
+                str(paramset_models_dir)
+                if paramset_models_dir is not None
+                else resolve_models_dir(project_root, environ=environ)
+            ),
         )
     report_write_sec = max(0.0, time.perf_counter() - report_write_started)
     resource_sampler.stop()

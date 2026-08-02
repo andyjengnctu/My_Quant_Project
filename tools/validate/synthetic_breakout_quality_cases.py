@@ -11697,6 +11697,8 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         _load_current_pair_if_compatible,
         _optimizer_session_spec,
         _render_three_way_console,
+        _resolve_selection_pit_models_root,
+        _run_rolling_optimizer_arm,
         _validate_fixed_contract,
         _validate_selection_pit_runtime_artifacts,
         _write_current_pair_manifest,
@@ -11852,9 +11854,15 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        pit_manifest = root / "selection_point_in_time_manifest.json"
-        pit_scores = root / "selection_point_in_time_scores.csv"
-        pit_audit = root / "selection_point_in_time_audit.json"
+        pit_dir = (
+            root / "models" / "filters" / "breakout_quality"
+            / settings.filter_id / settings.model_architecture
+            / settings.experiment_profile / "point_in_time"
+        )
+        pit_dir.mkdir(parents=True, exist_ok=True)
+        pit_manifest = pit_dir / "selection_point_in_time_manifest.json"
+        pit_scores = pit_dir / "selection_point_in_time_scores.csv"
+        pit_audit = pit_dir / "selection_point_in_time_audit.json"
         for path, content in (
             (pit_manifest, "{}\n"),
             (pit_scores, "ticker,date,breakout_quality_score\n"),
@@ -11874,6 +11882,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             pit_contract=valid_contract,
             args=args,
         )
+        resolved_pit_models_root = _resolve_selection_pit_models_root(pit_artifacts)
         missing_contract = SimpleNamespace(
             **{**valid_contract.__dict__, "score_path": root / "missing_scores.csv"}
         )
@@ -11909,6 +11918,14 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             True,
         ),
         (set(pit_artifacts), missing_pit_artifact_rejected, wrong_profile_rejected),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "selection_pit_runtime_models_root_is_separate_from_adapted_param_output",
+        root / "models",
+        resolved_pit_models_root,
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -12069,6 +12086,10 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     manifest_error = RuntimeError(
         "portfolio replay 失敗 | FileNotFoundError: 找不到 breakout quality 正式 manifest"
     )
+    pit_path_error = RuntimeError(
+        "portfolio replay 失敗 | FileNotFoundError: 找不到Selection PIT score: "
+        "adapted/active_params/filters/breakout_quality/.../selection_point_in_time_scores.csv"
+    )
     generic_error = RuntimeError("process pool broken")
     try:
         _run_missing_parallel_fold_tasks_sequentially(
@@ -12087,9 +12108,10 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "runtime_identity_manifest_errors_are_non_retryable",
-        (True, False, True),
+        (True, True, False, True),
         (
             _is_non_retryable_fold_failure(manifest_error),
+            _is_non_retryable_fold_failure(pit_path_error),
             _is_non_retryable_fold_failure(generic_error),
             fallback_blocked,
         ),
@@ -12117,6 +12139,92 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         (
             compatible_study.user_attrs.get("optimizer_runtime_cache_identity"),
             stale_study_rejected,
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        arm_root = Path(tmp)
+        pit_models_root = arm_root / "models"
+        pit_models_root.mkdir(parents=True, exist_ok=True)
+        arm_output = arm_root / "adaptation"
+        arm_output.mkdir(parents=True, exist_ok=True)
+        arm_args = SimpleNamespace(**vars(args))
+        arm_args.trials_per_fold = 3
+        arm_baseline = {
+            "meta": {
+                "first_oos_date": "2014-01-01",
+                "last_oos_date": "2014-01-01",
+                "train_window_months": 120,
+                "oos_horizon_months": 12,
+            },
+            "summary": {"folds": 1},
+        }
+        arm_runtime = {
+            "runtime_identity_sha256": "synthetic-arm-path-runtime",
+            "rolling_policy": {
+                "trials_per_fold": 3,
+                "trials_per_fold_source": "synthetic",
+            },
+        }
+        captured_arm_paths = {}
+
+        def _fake_outer_rolling(**kwargs):
+            captured_arm_paths["runtime_models_dir"] = kwargs["environ"]["V16_MODELS_DIR"]
+            captured_arm_paths["paramset_models_dir"] = kwargs["paramset_models_dir"]
+            destination = Path(kwargs["paramset_models_dir"])
+            destination.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "meta": {**arm_baseline["meta"], "trials_per_fold": 3},
+                "summary": {"folds": 1},
+                "params_ensemble_by_effective_date": {
+                    "2014-01-01": [{"params": {"tp_percent": 0.0}}],
+                },
+            }
+            (destination / "roos_base_best.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+            return 0
+
+        with patch(
+            "tools.filters.breakout_quality.strategy_adapt.run_outer_rolling_oos",
+            side_effect=_fake_outer_rolling,
+        ), patch(
+            "tools.filters.breakout_quality.strategy_adapt.get_dataset_dir",
+            return_value=str(arm_root / "data"),
+        ):
+            arm_result = _run_rolling_optimizer_arm(
+                root=arm_root,
+                args=arm_args,
+                settings=SimpleNamespace(seed=42),
+                baseline_contract=arm_baseline,
+                base_policy={},
+                runtime_contract=arm_runtime,
+                output_dir=arm_output,
+                arm_name="score_adapted",
+                arm_label="Score Adapted",
+                ranking_enabled=True,
+                pit_models_root=pit_models_root,
+            )
+        active_param_dir = (arm_output / "score_adapted" / "active_params").resolve()
+        materialized_member = json.loads(
+            Path(arm_result["params_path"]).read_text(encoding="utf-8")
+        )["params_ensemble_by_effective_date"]["2014-01-01"][0]["params"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "score_adapted_runtime_models_root_and_paramset_output_are_separate",
+        (
+            pit_models_root.resolve(),
+            active_param_dir,
+            True,
+            False,
+        ),
+        (
+            Path(captured_arm_paths["runtime_models_dir"]),
+            Path(captured_arm_paths["paramset_models_dir"]),
+            materialized_member["use_breakout_quality_ranking"],
+            materialized_member["use_breakout_quality_filter"],
         ),
     )
 
@@ -12244,7 +12352,10 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         and 'params_path=adapted_arm["params_path"]' in adapt_source
         and "run_comparison(" not in adapt_source
         and 'OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"' in adapt_source
-        and 'OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = "1"' in adapt_source,
+        and 'OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = "1"' in adapt_source
+        and 'outer_environ["V16_MODELS_DIR"] = str(Path(pit_models_root).resolve())' in adapt_source
+        and 'paramset_models_dir=str(active_param_output_dir.resolve())' in adapt_source
+        and 'paramset_models_dir: str | None = None' in outer_source,
     )
     add_check(
         results,
