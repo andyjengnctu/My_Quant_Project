@@ -74,7 +74,7 @@ def canonical_param_items(params, *, omit_fields: Iterable[str] = ()):
     )
 
 
-def build_prep_cache_key(params):
+def build_prep_cache_key(params, *, runtime_identity=None):
     """Key for signal/execution artifacts.
 
     Selection-policy thresholds are intentionally omitted because they only
@@ -89,7 +89,10 @@ def build_prep_cache_key(params):
         *INFRASTRUCTURE_FIELDS,
         *_inactive_conditional_fields(payload),
     )
-    return ("prep", canonical_param_items(payload, omit_fields=omitted_fields))
+    params_key = canonical_param_items(payload, omit_fields=omitted_fields)
+    if runtime_identity is None:
+        return ("prep", params_key)
+    return ("prep", _normalize_cache_value(runtime_identity), params_key)
 
 
 def build_full_evaluation_cache_key(
@@ -102,8 +105,9 @@ def build_full_evaluation_cache_key(
     enable_rotation,
     train_start_date=None,
     search_train_end_date=None,
+    runtime_identity=None,
 ):
-    return (
+    base_key = (
         "evaluation",
         str(objective_mode),
         int(train_start_year),
@@ -113,4 +117,11 @@ def build_full_evaluation_cache_key(
         int(max_positions),
         bool(enable_rotation),
         canonical_param_items(params),
+    )
+    if runtime_identity is None:
+        return base_key
+    return (
+        base_key[0],
+        _normalize_cache_value(runtime_identity),
+        *base_key[1:],
     )

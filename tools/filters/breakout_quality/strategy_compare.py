@@ -151,6 +151,12 @@ def _parse_args(argv=None):
     parser.add_argument("--rotation", choices=("off", "on"), default="off")
     parser.add_argument("--fixed-risk", type=float, default=None, help="選填；兩組同時覆寫 fixed_risk。")
     parser.add_argument(
+        "--max-position-cap-pct",
+        type=float,
+        default=None,
+        help="選填；兩組同時覆寫 max_position_cap_pct。",
+    )
+    parser.add_argument(
         "--allow-static-diagnostic",
         action="store_true",
         help="允許以單一／static run_best 做非 OOS 診斷；不得視為無前視部署證據。",
@@ -439,7 +445,16 @@ def _load_param_source(path: Path) -> dict[str, Any]:
     return {"kind": "single_param", "params": load_params_from_json(str(path))}
 
 
-def _apply_scenario_overrides(params, *, active: bool, comparison_mode: str, filter_id: str, threshold: float, fixed_risk: float | None):
+def _apply_scenario_overrides(
+    params,
+    *,
+    active: bool,
+    comparison_mode: str,
+    filter_id: str,
+    threshold: float,
+    fixed_risk: float | None,
+    max_position_cap_pct: float | None = None,
+):
     _comparison_switch_spec(comparison_mode)
     overrides = {
         "use_breakout_quality_filter": bool(active and comparison_mode == COMPARISON_MODE_HARD_FILTER),
@@ -449,6 +464,8 @@ def _apply_scenario_overrides(params, *, active: bool, comparison_mode: str, fil
     }
     if fixed_risk is not None:
         overrides["fixed_risk"] = float(fixed_risk)
+    if max_position_cap_pct is not None:
+        overrides["max_position_cap_pct"] = float(max_position_cap_pct)
     return replace(params, **overrides)
 
 
@@ -475,18 +492,22 @@ def _rewrite_param_mapping(
     filter_id: str,
     threshold: float,
     fixed_risk: float | None,
+    max_position_cap_pct: float | None = None,
 ) -> dict:
     rewritten = {}
     for key, raw_params in dict(mapping or {}).items():
         base_params = build_params_from_mapping(raw_params)
-        rewritten[str(key)] = params_to_json_dict(_apply_scenario_overrides(
-            base_params,
-            active=active,
-            comparison_mode=comparison_mode,
-            filter_id=filter_id,
-            threshold=threshold,
-            fixed_risk=fixed_risk,
-        ))
+        rewritten[str(key)] = params_to_json_dict(
+            _apply_scenario_overrides(
+                base_params,
+                active=active,
+                comparison_mode=comparison_mode,
+                filter_id=filter_id,
+                threshold=threshold,
+                fixed_risk=fixed_risk,
+                max_position_cap_pct=max_position_cap_pct,
+            )
+        )
     return rewritten
 
 
@@ -498,6 +519,7 @@ def _rewrite_ensemble_mapping(
     filter_id: str,
     threshold: float,
     fixed_risk: float | None,
+    max_position_cap_pct: float | None = None,
 ) -> dict:
     rewritten = {}
     for key, raw_members in dict(mapping or {}).items():
@@ -508,14 +530,17 @@ def _rewrite_ensemble_mapping(
         for member in members:
             base_params = build_params_from_mapping(member["params"])
             output_member = copy.deepcopy(member)
-            output_member["params"] = params_to_json_dict(_apply_scenario_overrides(
-                base_params,
-                active=active,
-                comparison_mode=comparison_mode,
-                filter_id=filter_id,
-                threshold=threshold,
-                fixed_risk=fixed_risk,
-            ))
+            output_member["params"] = params_to_json_dict(
+                _apply_scenario_overrides(
+                    base_params,
+                    active=active,
+                    comparison_mode=comparison_mode,
+                    filter_id=filter_id,
+                    threshold=threshold,
+                    fixed_risk=fixed_risk,
+                    max_position_cap_pct=max_position_cap_pct,
+                )
+            )
             output_members.append(output_member)
         rewritten[str(key)] = output_members
     return rewritten
@@ -527,16 +552,29 @@ def _build_controlled_param_source_pair(
     filter_id: str,
     threshold: float,
     fixed_risk: float | None,
+    max_position_cap_pct: float | None = None,
     comparison_mode: str = COMPARISON_MODE_HARD_FILTER,
 ) -> tuple[str, Any, Any, Any, Any, dict[str, Any] | None]:
     kind = str(source["kind"])
     if kind == "single_param":
         base_params = source["params"]
         no_filter_params = _apply_scenario_overrides(
-            base_params, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            base_params,
+            active=False,
+            comparison_mode=comparison_mode,
+            filter_id=filter_id,
+            threshold=threshold,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
         )
         quality_params = _apply_scenario_overrides(
-            base_params, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            base_params,
+            active=True,
+            comparison_mode=comparison_mode,
+            filter_id=filter_id,
+            threshold=threshold,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
         )
         _assert_controlled_param_pair(no_filter_params, quality_params, comparison_mode=comparison_mode)
         return (
@@ -562,10 +600,22 @@ def _build_controlled_param_source_pair(
     if kind == "static_active_param_ensemble":
         base_mapping = {"static": base_payload.get("params_ensemble")}
         no_filter_payload["params_ensemble"] = _rewrite_ensemble_mapping(
-            base_mapping, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            base_mapping,
+            active=False,
+            comparison_mode=comparison_mode,
+            filter_id=filter_id,
+            threshold=threshold,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
         )["static"]
         quality_payload["params_ensemble"] = _rewrite_ensemble_mapping(
-            base_mapping, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            base_mapping,
+            active=True,
+            comparison_mode=comparison_mode,
+            filter_id=filter_id,
+            threshold=threshold,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
         )["static"]
         _assert_controlled_ensemble_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = get_active_param_ensemble_policy(base_payload)
@@ -574,19 +624,43 @@ def _build_controlled_param_source_pair(
             raw_mapping = base_payload.get(field)
             if isinstance(raw_mapping, dict) and raw_mapping:
                 no_filter_payload[field] = _rewrite_param_mapping(
-                    raw_mapping, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+                    raw_mapping,
+                    active=False,
+                    comparison_mode=comparison_mode,
+                    filter_id=filter_id,
+                    threshold=threshold,
+                    fixed_risk=fixed_risk,
+                    max_position_cap_pct=max_position_cap_pct,
                 )
                 quality_payload[field] = _rewrite_param_mapping(
-                    raw_mapping, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+                    raw_mapping,
+                    active=True,
+                    comparison_mode=comparison_mode,
+                    filter_id=filter_id,
+                    threshold=threshold,
+                    fixed_risk=fixed_risk,
+                    max_position_cap_pct=max_position_cap_pct,
                 )
         ensemble_mapping = base_payload.get("params_ensemble_by_effective_date")
         if not isinstance(ensemble_mapping, dict) or not ensemble_mapping:
             raise ValueError("rolling active-param ensemble 缺少 params_ensemble_by_effective_date")
         no_filter_payload["params_ensemble_by_effective_date"] = _rewrite_ensemble_mapping(
-            ensemble_mapping, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            ensemble_mapping,
+            active=False,
+            comparison_mode=comparison_mode,
+            filter_id=filter_id,
+            threshold=threshold,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
         )
         quality_payload["params_ensemble_by_effective_date"] = _rewrite_ensemble_mapping(
-            ensemble_mapping, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+            ensemble_mapping,
+            active=True,
+            comparison_mode=comparison_mode,
+            filter_id=filter_id,
+            threshold=threshold,
+            fixed_risk=fixed_risk,
+            max_position_cap_pct=max_position_cap_pct,
         )
         _assert_controlled_ensemble_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = get_active_param_ensemble_policy(base_payload)
@@ -597,10 +671,22 @@ def _build_controlled_param_source_pair(
             if isinstance(raw_mapping, dict) and raw_mapping:
                 updated_any = True
                 no_filter_payload[field] = _rewrite_param_mapping(
-                    raw_mapping, active=False, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+                    raw_mapping,
+                    active=False,
+                    comparison_mode=comparison_mode,
+                    filter_id=filter_id,
+                    threshold=threshold,
+                    fixed_risk=fixed_risk,
+                    max_position_cap_pct=max_position_cap_pct,
                 )
                 quality_payload[field] = _rewrite_param_mapping(
-                    raw_mapping, active=True, comparison_mode=comparison_mode, filter_id=filter_id, threshold=threshold, fixed_risk=fixed_risk
+                    raw_mapping,
+                    active=True,
+                    comparison_mode=comparison_mode,
+                    filter_id=filter_id,
+                    threshold=threshold,
+                    fixed_risk=fixed_risk,
+                    max_position_cap_pct=max_position_cap_pct,
                 )
         if not updated_any:
             raise ValueError("rolling OOS param schedule 缺少 params_by_effective_date / params_by_oos_year")
@@ -1639,12 +1725,13 @@ def _resolve_comparison_period(contract) -> tuple[str, str]:
 def run_comparison(
     *, project_root=PROJECT_ROOT, dataset="full", params_path=None,
     param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False,
-    fixed_risk=None, allow_static_diagnostic=False,
+    fixed_risk=None, max_position_cap_pct=None, allow_static_diagnostic=False,
     comparison_mode=COMPARISON_MODE_HARD_FILTER,
     filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
     model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+    output_dir_override=None,
     quiet=False,
 ):
     root = Path(project_root).resolve()
@@ -1737,6 +1824,8 @@ def run_comparison(
         )
     if fixed_risk is not None and not (0.0 < float(fixed_risk) <= 1.0):
         raise ValueError("fixed_risk必須介於0與1")
+    if max_position_cap_pct is not None and not (0.0 < float(max_position_cap_pct) <= 1.0):
+        raise ValueError("max_position_cap_pct必須介於0與1")
     param_source = _load_param_source(resolved_params_path)
     param_policy_contract = _validate_requested_param_policy(param_source, param_policy)
     (
@@ -1751,6 +1840,9 @@ def run_comparison(
         filter_id=filter_id,
         threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
         fixed_risk=None if fixed_risk is None else float(fixed_risk),
+        max_position_cap_pct=(
+            None if max_position_cap_pct is None else float(max_position_cap_pct)
+        ),
         comparison_mode=comparison_mode,
     )
 
@@ -1806,16 +1898,24 @@ def run_comparison(
             columns={"quality_filter_return_pct": "score_ranking_return_pct"}
         )
 
-    output_dir_name = _comparison_output_dir_name(
-        comparison_mode, labels, param_policy=param_policy
-    )
-    if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-        output_dir_name += "_selection_point_in_time"
-    output_dir = (
-        resolve_filter_model_output_dir(
-            str(root), filter_id, manifest_architecture, manifest_profile
-        ) / output_dir_name
-    )
+    if output_dir_override is None:
+        output_dir_name = _comparison_output_dir_name(
+            comparison_mode, labels, param_policy=param_policy
+        )
+        if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            output_dir_name += "_selection_point_in_time"
+        output_dir = (
+            resolve_filter_model_output_dir(
+                str(root), filter_id, manifest_architecture, manifest_profile
+            ) / output_dir_name
+        )
+        output_scope = "canonical"
+    else:
+        output_dir = Path(output_dir_override)
+        if not output_dir.is_absolute():
+            output_dir = root / output_dir
+        output_dir = output_dir.resolve()
+        output_scope = "caller_override"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     strategy_diagnostics = None
@@ -1967,6 +2067,11 @@ def run_comparison(
         "max_positions": int(max_positions),
         "enable_rotation": bool(enable_rotation),
         "fixed_risk_override": None if fixed_risk is None else float(fixed_risk),
+        "max_position_cap_pct_override": (
+            None if max_position_cap_pct is None else float(max_position_cap_pct)
+        ),
+        "output_scope": output_scope,
+        "output_dir": project_relative_display_path(output_dir, project_root=root),
         "comparison_period": {"start": start_date, "end": end_date},
         "score_signal_coverage": score_signal_coverage,
         "benchmark_ticker": PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
@@ -2109,6 +2214,7 @@ def main(argv=None):
         max_positions=args.max_positions,
         enable_rotation=args.rotation == "on",
         fixed_risk=args.fixed_risk,
+        max_position_cap_pct=args.max_position_cap_pct,
         allow_static_diagnostic=args.allow_static_diagnostic,
         comparison_mode=args.comparison_mode,
         filter_id=args.filter_id,

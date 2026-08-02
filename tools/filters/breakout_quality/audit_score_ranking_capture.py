@@ -27,7 +27,7 @@ from filters.breakout_quality.console_report import (
     render_title,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _BUY_PREFIX = "買進 ("
 _MISSED_BUY_PREFIX = "錯失買進"
 _FULL_EXIT_PREFIXES = ("全倉結算", "汰弱賣出", "期末強制結算")
@@ -239,10 +239,12 @@ def build_trade_lifecycle_rows(
     ) if not target.empty else out.assign(target_raw_r=float("nan"))
     out["target_raw_r"] = pd.to_numeric(out["target_raw_r"], errors="coerce")
     out["r_multiple"] = pd.to_numeric(out["r_multiple"], errors="coerce")
-    positive_target = out["target_raw_r"].map(lambda value: math.isfinite(value) and value > 0)
+    nonzero_target = out["target_raw_r"].map(
+        lambda value: math.isfinite(value) and not math.isclose(value, 0.0, abs_tol=1e-12)
+    )
     out["target_capture_ratio"] = float("nan")
-    out.loc[positive_target, "target_capture_ratio"] = (
-        out.loc[positive_target, "r_multiple"] / out.loc[positive_target, "target_raw_r"]
+    out.loc[nonzero_target, "target_capture_ratio"] = (
+        out.loc[nonzero_target, "r_multiple"] / out.loc[nonzero_target, "target_raw_r"]
     )
     out["target_realization_gap_r"] = out["target_raw_r"] - out["r_multiple"]
     return out.reindex(columns=columns)
@@ -258,6 +260,31 @@ def _safe_median(series: pd.Series) -> float | None:
     values = pd.to_numeric(series, errors="coerce")
     values = values[values.map(math.isfinite)]
     return float(values.median()) if not values.empty else None
+
+
+def _aggregate_capture_ratio(
+    lifecycle: pd.DataFrame,
+    *,
+    min_target_r: float | None = None,
+) -> float | None:
+    if lifecycle.empty:
+        return None
+    target = pd.to_numeric(lifecycle.get("target_raw_r"), errors="coerce")
+    realized = pd.to_numeric(lifecycle.get("r_multiple"), errors="coerce")
+    covered = target.map(math.isfinite) & realized.map(math.isfinite)
+    if min_target_r is not None:
+        covered &= target >= float(min_target_r)
+    if not covered.any():
+        return None
+    denominator = float(target.loc[covered].sum())
+    numerator = float(realized.loc[covered].sum())
+    if (
+        not math.isfinite(denominator)
+        or math.isclose(denominator, 0.0, abs_tol=1e-12)
+        or not math.isfinite(numerator)
+    ):
+        return None
+    return numerator / denominator
 
 
 def _concentration(series: pd.Series) -> tuple[float | None, float | None]:
@@ -341,8 +368,14 @@ def _scenario_summary(
         "median_realized_r": _safe_median(lifecycle.get("r_multiple", pd.Series(dtype=float))),
         "target_covered_trades": int(target_covered.sum()),
         "avg_target_r": _safe_mean(lifecycle.loc[target_covered, "target_raw_r"]),
-        "avg_target_capture_ratio": _safe_mean(lifecycle.loc[target_covered, "target_capture_ratio"]),
+        "aggregate_target_capture_ratio": _aggregate_capture_ratio(lifecycle),
         "median_target_capture_ratio": _safe_median(lifecycle.loc[target_covered, "target_capture_ratio"]),
+        "target_ge_0_5_capture_ratio": _aggregate_capture_ratio(
+            lifecycle, min_target_r=0.5
+        ),
+        "raw_mean_target_capture_ratio": _safe_mean(
+            lifecycle.loc[target_covered, "target_capture_ratio"]
+        ),
         "avg_target_realization_gap_r": _safe_mean(lifecycle.loc[target_covered, "target_realization_gap_r"]),
         "avg_capital_return_pct": _safe_mean(lifecycle.get("capital_return_pct", pd.Series(dtype=float))),
     }
@@ -362,7 +395,7 @@ def _yearly_rows(lifecycle: pd.DataFrame, scenario: str) -> pd.DataFrame:
     if lifecycle.empty:
         return pd.DataFrame(columns=[
             "entry_year", f"{scenario}_trade_count", f"{scenario}_avg_r",
-            f"{scenario}_avg_target_r", f"{scenario}_avg_capture_ratio",
+            f"{scenario}_avg_target_r", f"{scenario}_aggregate_capture_ratio",
             f"{scenario}_avg_invested_total", f"{scenario}_avg_holding_days",
         ])
     rows = []
@@ -373,7 +406,10 @@ def _yearly_rows(lifecycle: pd.DataFrame, scenario: str) -> pd.DataFrame:
             f"{scenario}_trade_count": int(len(group)),
             f"{scenario}_avg_r": _safe_mean(group["r_multiple"]),
             f"{scenario}_avg_target_r": _safe_mean(group.loc[covered, "target_raw_r"]),
-            f"{scenario}_avg_capture_ratio": _safe_mean(group.loc[covered, "target_capture_ratio"]),
+            f"{scenario}_aggregate_capture_ratio": _aggregate_capture_ratio(group),
+            f"{scenario}_raw_mean_capture_ratio": _safe_mean(
+                group.loc[covered, "target_capture_ratio"]
+            ),
             f"{scenario}_avg_invested_total": _safe_mean(group["invested_total"]),
             f"{scenario}_avg_holding_days": _safe_mean(group["holding_calendar_days"]),
         })
@@ -384,7 +420,14 @@ def _build_yearly(baseline_lifecycle: pd.DataFrame, score_lifecycle: pd.DataFram
     left = _yearly_rows(baseline_lifecycle, "baseline")
     right = _yearly_rows(score_lifecycle, "score_sort")
     merged = left.merge(right, on="entry_year", how="outer", validate="one_to_one").sort_values("entry_year")
-    for metric in ("trade_count", "avg_r", "avg_target_r", "avg_capture_ratio", "avg_invested_total", "avg_holding_days"):
+    for metric in (
+        "trade_count",
+        "avg_r",
+        "avg_target_r",
+        "aggregate_capture_ratio",
+        "avg_invested_total",
+        "avg_holding_days",
+    ):
         merged[f"delta_{metric}"] = merged[f"score_sort_{metric}"] - merged[f"baseline_{metric}"]
     return merged.reset_index(drop=True)
 
@@ -410,7 +453,9 @@ def _decision(
     )
     deployment_gap = (finite_number(delta.get("avg_exposure_pct")) or 0.0) <= -5.0
     capture_gap = (
-        (finite_number(delta.get("avg_target_capture_ratio")) or 0.0) <= -0.05
+        (finite_number(delta.get("aggregate_target_capture_ratio")) or 0.0) <= -0.05
+        or (finite_number(delta.get("median_target_capture_ratio")) or 0.0) <= -0.05
+        or (finite_number(delta.get("target_ge_0_5_capture_ratio")) or 0.0) <= -0.05
         or (finite_number(delta.get("avg_target_realization_gap_r")) or 0.0) >= 0.10
     )
     turnover_gap = (
@@ -542,7 +587,9 @@ _CAPTURE_ROWS = (
     ("半倉殘留交易slot-days", "partial_residual_slot_days", " 格日", "lower"),
     ("平均 Realized R", "avg_realized_r", " R", "higher"),
     ("平均 Target R", "avg_target_r", " R", "higher"),
-    ("平均 Target capture ratio", "avg_target_capture_ratio", "", "higher"),
+    ("Aggregate Target capture", "aggregate_target_capture_ratio", "", "higher"),
+    ("Median Target capture", "median_target_capture_ratio", "", "higher"),
+    ("Target ≥ 0.5R capture", "target_ge_0_5_capture_ratio", "", "higher"),
     ("平均 Target realization gap", "avg_target_realization_gap_r", " R", "lower"),
     ("平均投入資金報酬", "avg_capital_return_pct", "%", "higher"),
     ("Top 5進場日交易占比", "top_5_entry_dates_share_pct", "%", "attention"),
@@ -611,7 +658,7 @@ def render_capture_audit_markdown(result: dict[str, Any]) -> str:
         for row in yearly.to_dict("records"):
             r_signal = signal_for_delta(row.get("delta_avg_r"), preference="higher")
             capture_signal = signal_for_delta(
-                row.get("delta_avg_capture_ratio"), preference="higher"
+                row.get("delta_aggregate_capture_ratio"), preference="higher"
             )
             invested_signal = signal_for_delta(
                 row.get("delta_avg_invested_total"), preference="higher"
@@ -619,15 +666,16 @@ def render_capture_audit_markdown(result: dict[str, Any]) -> str:
             lines.append(
                 f"| {int(row['entry_year'])} | {_fmt(row.get('baseline_avg_r'))} | {_fmt(row.get('score_sort_avg_r'))} "
                 f"| {_fmt(row.get('delta_avg_r'), signed=True)} {signal_marker(r_signal, include_label=False)} "
-                f"| {_fmt(row.get('baseline_avg_capture_ratio'))} | {_fmt(row.get('score_sort_avg_capture_ratio'))} "
-                f"| {_fmt(row.get('delta_avg_capture_ratio'), signed=True)} {signal_marker(capture_signal, include_label=False)} "
+                f"| {_fmt(row.get('baseline_aggregate_capture_ratio'))} | {_fmt(row.get('score_sort_aggregate_capture_ratio'))} "
+                f"| {_fmt(row.get('delta_aggregate_capture_ratio'), signed=True)} {signal_marker(capture_signal, include_label=False)} "
                 f"| {_fmt(row.get('baseline_avg_invested_total'), 0)} | {_fmt(row.get('score_sort_avg_invested_total'), 0)} "
                 f"| {_fmt(row.get('delta_avg_invested_total'), 0, signed=True)} {signal_marker(invested_signal, include_label=False)} |"
             )
     lines += [
         "", "## 使用限制", "",
         "- 本報表是Selection內的read-only attribution，不改模型、Score、排序或策略參數。",
-        "- Target capture ratio = realized round-trip R / selected No-time Target R；只在Target為正且可對應時統計。",
+        "- Aggregate capture = Σ Realized R / Σ Target R；Median capture為逐筆ratio中位數；Target ≥ 0.5R capture只納入Target至少0.5R的交易。",
+        "- 逐筆 arithmetic mean ratio 僅保留在JSON的 raw_mean_target_capture_ratio 作診斷，不作主報表或adaptation gate。",
         "- 半倉後至結算平均日使用日曆日；半倉殘留slot-days則以該scenario每日capacity的交易日期，計算partial日（含）到full-exit日（不含）的尾倉占位。",
         "- 產業集中度只在交易買進列已有`產業`／`Industry`／`Sector`欄位時統計；沒有canonical產業欄位時顯示N/A，不自行推測類股。",
         "- 黃色指標（例如停損距離、集中度、exit mix）僅表示結構變化，不能單獨視為好或壞。",
@@ -725,7 +773,7 @@ def render_capture_audit_console(
         for row in yearly.to_dict("records"):
             r_signal = signal_for_delta(row.get("delta_avg_r"), preference="higher")
             capture_signal = signal_for_delta(
-                row.get("delta_avg_capture_ratio"), preference="higher"
+                row.get("delta_aggregate_capture_ratio"), preference="higher"
             )
             invested_signal = signal_for_delta(
                 row.get("delta_avg_invested_total"), preference="higher"
@@ -735,10 +783,10 @@ def render_capture_audit_console(
                 _fmt(row.get("baseline_avg_r")),
                 _fmt(row.get("score_sort_avg_r")),
                 terminal_signal(_fmt(row.get("delta_avg_r"), signed=True), r_signal, enabled=use_color),
-                _fmt(row.get("baseline_avg_capture_ratio")),
-                _fmt(row.get("score_sort_avg_capture_ratio")),
+                _fmt(row.get("baseline_aggregate_capture_ratio")),
+                _fmt(row.get("score_sort_aggregate_capture_ratio")),
                 terminal_signal(
-                    _fmt(row.get("delta_avg_capture_ratio"), signed=True),
+                    _fmt(row.get("delta_aggregate_capture_ratio"), signed=True),
                     capture_signal,
                     enabled=use_color,
                 ),
@@ -762,7 +810,7 @@ def render_capture_audit_console(
     lines.extend((
         render_section("使用限制", number=5),
         "- 本報表不改模型、Score、排序或策略參數。",
-        "- Target capture ratio 只在正 Target 且可對應時統計。",
+        "- Aggregate capture、Median capture與Target ≥ 0.5R capture為主口徑；逐筆mean ratio只保留於JSON診斷。",
         "- 半倉殘留 slot-days 使用每日 capacity 的交易日曆。",
         "- 無 canonical 產業欄位時，產業集中度顯示 N/A，不自行推測。",
         "- 黃色指標只表示結構變化，不可單獨解讀為好或壞。",

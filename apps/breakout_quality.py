@@ -117,6 +117,7 @@ COMMAND_MODULES = {
     "build-point-in-time-scores": "tools.filters.breakout_quality.build_point_in_time_scores",
     "audit-point-in-time-scores": "tools.filters.breakout_quality.audit_point_in_time_scores",
     "strategy-compare": "tools.filters.breakout_quality.strategy_compare",
+    "strategy-adapt": "tools.filters.breakout_quality.strategy_adapt",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -150,6 +151,7 @@ COMMAND_DESCRIPTIONS = {
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
     "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
     "strategy-compare": "執行breakout-quality策略績效比較",
+    "strategy-adapt": "執行Selection Score-ranking策略參數適應與三組績效比較",
 }
 
 
@@ -1572,6 +1574,12 @@ def _print_workflow_status() -> None:
         ("Strategy Param Policy", settings.strategy_param_policy),
         ("Strategy Score Source", settings.strategy_score_source),
         ("Strategy Buy Sort", settings.strategy_buy_sort),
+        ("Strategy Adapt Trials", settings.strategy_adapt_trials),
+        ("Strategy Adapt Fixed Risk", f"{settings.strategy_adapt_fixed_risk:.2%}"),
+        (
+            "Strategy Adapt Position Cap",
+            f"{settings.strategy_adapt_max_position_cap_pct:.2%}",
+        ),
     ]
 
     if settings.is_binary_classification:
@@ -1783,21 +1791,54 @@ def _interactive_strategy_validation(program_name: str) -> int:
         raise ValueError(
             f"不支援的 strategy score source: {settings.strategy_score_source!r}"
         )
-    return _run_command(
-        "strategy-compare",
-        [
-            "--dataset", settings.strategy_dataset,
-            "--comparison-mode", "score-ranking",
-            "--filter-id", settings.filter_id,
-            "--score-source", settings.strategy_score_source,
-            "--model-architecture", settings.model_architecture,
-            "--experiment-profile", settings.experiment_profile,
-            "--param-policy", settings.strategy_param_policy,
-            "--max-positions", str(settings.strategy_max_positions),
-            "--rotation", settings.strategy_rotation,
-        ],
-        program_name=program_name,
-    )
+    while True:
+        print("\n=== 策略績效驗證 ===")
+        print("[1/Enter] 比較目前策略")
+        print("[2] 策略參數適應與績效比較")
+        print("[0] 返回")
+        try:
+            raw_choice = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            print("\n輸入已結束。")
+            return 0
+        choice = "1" if raw_choice == "" else raw_choice
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        if choice == "1":
+            return _run_command(
+                "strategy-compare",
+                [
+                    "--dataset", settings.strategy_dataset,
+                    "--comparison-mode", "score-ranking",
+                    "--filter-id", settings.filter_id,
+                    "--score-source", settings.strategy_score_source,
+                    "--model-architecture", settings.model_architecture,
+                    "--experiment-profile", settings.experiment_profile,
+                    "--param-policy", settings.strategy_param_policy,
+                    "--max-positions", str(settings.strategy_max_positions),
+                    "--rotation", settings.strategy_rotation,
+                ],
+                program_name=program_name,
+            )
+        if choice == "2":
+            return _run_command(
+                "strategy-adapt",
+                [
+                    "--dataset", settings.strategy_dataset,
+                    "--filter-id", settings.filter_id,
+                    "--model-architecture", settings.model_architecture,
+                    "--experiment-profile", settings.experiment_profile,
+                    "--param-policy", settings.strategy_param_policy,
+                    "--trials", str(settings.strategy_adapt_trials),
+                    "--max-positions", str(settings.strategy_max_positions),
+                    "--rotation", settings.strategy_rotation,
+                    "--fixed-risk", str(settings.strategy_adapt_fixed_risk),
+                    "--max-position-cap-pct",
+                    str(settings.strategy_adapt_max_position_cap_pct),
+                ],
+                program_name=program_name,
+            )
+        print("無效選項，請重新輸入。")
 
 
 def _print_menu() -> None:

@@ -56,6 +56,16 @@ def _suggest_optimizer_switch(trial, field_name):
     return bool(trial.suggest_categorical(field_name, _resolve_optimizer_categorical_choices(field_name)))
 
 
+def _resolve_optimizer_switch(session, trial, field_name):
+    has_fixed = getattr(session, "has_fixed_strategy_param", None)
+    if callable(has_fixed) and has_fixed(field_name):
+        value = session.get_fixed_strategy_param(field_name)
+        if not isinstance(value, bool):
+            raise ValueError(f"固定 optimizer 開關 {field_name} 必須是 bool，收到 {value!r}")
+        return value
+    return _suggest_optimizer_switch(trial, field_name)
+
+
 def _suggest_optimizer_int(trial, field_name):
     spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
     return trial.suggest_int(
@@ -77,17 +87,17 @@ def _suggest_optimizer_float(trial, field_name):
 
 
 def build_trial_params(session, trial):
-    ai_use_breakout_buy = _suggest_optimizer_switch(trial, "use_breakout_buy")
-    ai_use_bb = _suggest_optimizer_switch(trial, "use_bb")
-    ai_use_kc = _suggest_optimizer_switch(trial, "use_kc")
-    ai_use_vol = _suggest_optimizer_switch(trial, "use_vol")
-    ai_use_breakout_return_filter = _suggest_optimizer_switch(trial, "use_breakout_return_filter")
-    ai_use_breakout_ema_filter = _suggest_optimizer_switch(trial, "use_breakout_ema_filter")
-    ai_use_breakout_false_filter = _suggest_optimizer_switch(trial, "use_breakout_false_filter")
-    ai_use_breakout_quality_filter = _suggest_optimizer_switch(trial, "use_breakout_quality_filter")
-    ai_use_breakout_quality_ranking = _suggest_optimizer_switch(trial, "use_breakout_quality_ranking")
-    ai_use_breakout_reclaim_reentry = _suggest_optimizer_switch(trial, "use_breakout_reclaim_reentry")
-    ai_use_history_threshold = _suggest_optimizer_switch(trial, "use_history_threshold")
+    ai_use_breakout_buy = _resolve_optimizer_switch(session, trial, "use_breakout_buy")
+    ai_use_bb = _resolve_optimizer_switch(session, trial, "use_bb")
+    ai_use_kc = _resolve_optimizer_switch(session, trial, "use_kc")
+    ai_use_vol = _resolve_optimizer_switch(session, trial, "use_vol")
+    ai_use_breakout_return_filter = _resolve_optimizer_switch(session, trial, "use_breakout_return_filter")
+    ai_use_breakout_ema_filter = _resolve_optimizer_switch(session, trial, "use_breakout_ema_filter")
+    ai_use_breakout_false_filter = _resolve_optimizer_switch(session, trial, "use_breakout_false_filter")
+    ai_use_breakout_quality_filter = _resolve_optimizer_switch(session, trial, "use_breakout_quality_filter")
+    ai_use_breakout_quality_ranking = _resolve_optimizer_switch(session, trial, "use_breakout_quality_ranking")
+    ai_use_breakout_reclaim_reentry = _resolve_optimizer_switch(session, trial, "use_breakout_reclaim_reentry")
+    ai_use_history_threshold = _resolve_optimizer_switch(session, trial, "use_history_threshold")
 
     if ai_use_vol:
         vol_long_len = _suggest_optimizer_int(trial, "vol_long_len")

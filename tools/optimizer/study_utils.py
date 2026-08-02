@@ -12,11 +12,12 @@ from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.runtime_utils import is_interactive_stdin, parse_int_strict, safe_prompt_choice
 from core.walk_forward_policy import normalize_optimizer_study_scope
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
+from config.training_policy import OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT
 
 OPTIMIZER_TRIALS_ENV_VAR = "V16_OPTIMIZER_TRIALS"
 OPTIMIZER_SEED_ENV_VAR = "V16_OPTIMIZER_SEED"
 OPTIMIZER_STUDY_SCOPE_ENV_VAR = "V16_OPTIMIZER_STUDY_SCOPE"
-DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = 1000
+DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT
 DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
 INVALID_TRIAL_VALUE = -9999.0
 MIN_QUALIFIED_TRIAL_VALUE = -9000.0

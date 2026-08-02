@@ -2,6 +2,7 @@ import copy
 import os
 import threading
 from collections import OrderedDict
+from contextlib import nullcontext
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
 from config.training_performance_policy import resolve_optimizer_rolling_parallel_prep_cache_max_items_default
@@ -102,6 +103,9 @@ class OptimizerSession:
         enable_optimizer_profiling,
         enable_profile_console_print,
         profile_print_every_n_trials,
+        fixed_strategy_param_overrides=None,
+        runtime_context_factory=None,
+        runtime_cache_identity=None,
     ):
         self.raw_data_cache = {}
         self._cache_lock = threading.RLock()
@@ -128,6 +132,9 @@ class OptimizerSession:
         self.train_start_year = train_start_year
         self.train_enable_rotation = train_enable_rotation
         self.default_max_workers = default_max_workers
+        self.fixed_strategy_param_overrides = dict(fixed_strategy_param_overrides or {})
+        self.runtime_context_factory = runtime_context_factory
+        self.runtime_cache_identity = runtime_cache_identity
         self.profile_recorder = profile_recorder_cls(
             output_dir=output_dir,
             session_ts=session_ts,
@@ -183,7 +190,25 @@ class OptimizerSession:
         self.master_dates = set()
         self.sorted_master_dates = []
 
-    
+    def has_fixed_strategy_param(self, field_name):
+        return str(field_name) in self.fixed_strategy_param_overrides
+
+    def get_fixed_strategy_param(self, field_name, default=None):
+        return self.fixed_strategy_param_overrides.get(str(field_name), default)
+
+    def apply_fixed_strategy_param_overrides(self, params):
+        if not self.fixed_strategy_param_overrides:
+            return params
+        from core.strategy_params import V16StrategyParams, strategy_params_to_dict
+
+        payload = strategy_params_to_dict(params)
+        payload.update(self.fixed_strategy_param_overrides)
+        return V16StrategyParams(**payload)
+
+    def optimizer_runtime_context(self):
+        factory = self.runtime_context_factory
+        return nullcontext() if not callable(factory) else factory()
+
     def _resolve_prepared_trial_input_cache_max_items(self):
         policy_default = resolve_optimizer_rolling_parallel_prep_cache_max_items_default()
         raw_value = os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS")

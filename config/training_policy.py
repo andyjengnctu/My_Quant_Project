@@ -101,6 +101,9 @@ _OPTIMIZER_RUNTIME_MODEL_MODE = None
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.01  # local_min_score finalist review 預設取訓練次數的比例
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 6  # local_min_score finalist review 的最小候選數
 
+# 單一 fold optimizer search 預設 trial 數；互動訓練與策略適應共用。
+OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT = 1000
+
 # Rolling OOS optimizer search 預設 trial 數。
 OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 100
 

@@ -16,6 +16,7 @@ from config.breakout_policy import (
     BREAKOUT_DEFAULT_HIGH_LEN,
     build_breakout_optimizer_high_len_values,
 )
+from config.training_policy import OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT
 
 
 # =============================================================================
@@ -184,6 +185,9 @@ BREAKOUT_QUALITY_STRATEGY_DATASET = "full"
 BREAKOUT_QUALITY_STRATEGY_PARAM_POLICY = "base-finalist-best"
 BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS = 10
 BREAKOUT_QUALITY_STRATEGY_ROTATION = "off"
+BREAKOUT_QUALITY_STRATEGY_ADAPT_TRIALS = OPTIMIZER_SINGLE_FOLD_TRIALS_DEFAULT
+BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK = 0.01
+BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT = 0.30
 
 # "auto" resolves from the selected experiment profile:
 # - binary classification -> hard-filter / canonical_runtime / original
@@ -805,6 +809,9 @@ class BreakoutQualityWorkflowSettings:
     strategy_param_policy: str
     strategy_max_positions: int
     strategy_rotation: str
+    strategy_adapt_trials: int
+    strategy_adapt_fixed_risk: float
+    strategy_adapt_max_position_cap_pct: float
     strategy_comparison_mode: str
     strategy_score_source: str
     strategy_buy_sort: str
@@ -846,6 +853,13 @@ class BreakoutQualityWorkflowSettings:
                 "param_policy": self.strategy_param_policy,
                 "max_positions": int(self.strategy_max_positions),
                 "rotation": self.strategy_rotation,
+                "adaptation": {
+                    "trials": int(self.strategy_adapt_trials),
+                    "fixed_risk": float(self.strategy_adapt_fixed_risk),
+                    "max_position_cap_pct": float(
+                        self.strategy_adapt_max_position_cap_pct
+                    ),
+                },
                 "comparison_mode": self.strategy_comparison_mode,
                 "score_source": self.strategy_score_source,
                 "buy_sort": self.strategy_buy_sort,
@@ -910,6 +924,12 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
         raise ValueError("strategy max positions 必須 >= 1")
     if BREAKOUT_QUALITY_STRATEGY_ROTATION not in {"off", "on"}:
         raise ValueError("strategy rotation 必須是 off 或 on")
+    if int(BREAKOUT_QUALITY_STRATEGY_ADAPT_TRIALS) < 1:
+        raise ValueError("strategy adaptation trials 必須 >= 1")
+    if not 0.0 < float(BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK) <= 1.0:
+        raise ValueError("strategy adaptation fixed risk 必須介於0與1")
+    if not 0.0 < float(BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT) <= 1.0:
+        raise ValueError("strategy adaptation max position cap pct 必須介於0與1")
 
     raw_comparison_mode = str(BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE).strip()
     if raw_comparison_mode not in SUPPORTED_WORKFLOW_STRATEGY_MODES:
@@ -1004,6 +1024,11 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
         strategy_param_policy=str(BREAKOUT_QUALITY_STRATEGY_PARAM_POLICY),
         strategy_max_positions=int(BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS),
         strategy_rotation=str(BREAKOUT_QUALITY_STRATEGY_ROTATION),
+        strategy_adapt_trials=int(BREAKOUT_QUALITY_STRATEGY_ADAPT_TRIALS),
+        strategy_adapt_fixed_risk=float(BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK),
+        strategy_adapt_max_position_cap_pct=float(
+            BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT
+        ),
         strategy_comparison_mode=strategy_comparison_mode,
         strategy_score_source=strategy_score_source,
         strategy_buy_sort=strategy_buy_sort,
@@ -1126,6 +1151,9 @@ __all__ = [
     'normalize_breakout_quality_experiment_profile',
     'normalize_breakout_quality_pretraining_profile',
     'BREAKOUT_QUALITY_STRATEGY_BUY_SORT',
+    'BREAKOUT_QUALITY_STRATEGY_ADAPT_TRIALS',
+    'BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK',
+    'BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT',
     'BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE',
     'BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE',
     'BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE',

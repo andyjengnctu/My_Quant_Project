@@ -59,6 +59,23 @@ def _get_progress_colors(session):
     return colors if isinstance(colors, dict) else {}
 
 
+def _apply_session_fixed_params(session, params):
+    apply_overrides = getattr(session, "apply_fixed_strategy_param_overrides", None)
+    return apply_overrides(params) if callable(apply_overrides) else params
+
+
+def _build_session_params_from_mapping(session, payload):
+    return _apply_session_fixed_params(session, build_params_from_mapping(payload))
+
+
+def _build_session_trial_payload(session, trial):
+    payload = build_best_params_payload_from_trial(
+        trial,
+        fixed_tp_percent=session.optimizer_fixed_tp_percent,
+    )
+    return params_to_json_dict(_build_session_params_from_mapping(session, payload))
+
+
 def _resolve_local_min_progress_min_interval_sec():
     raw_value = os.environ.get("OPTIMIZER_LOCAL_MIN_PROGRESS_MIN_INTERVAL_SEC", "1.0")
     try:
@@ -405,8 +422,11 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
         prep_cached = False
         if callable(has_prep_cache):
             try:
-                ai_params = build_params_from_mapping(payload)
-                prep_cached = bool(has_prep_cache(build_prep_cache_key(ai_params)))
+                ai_params = _build_session_params_from_mapping(session, payload)
+                prep_cached = bool(has_prep_cache(build_prep_cache_key(
+                    ai_params,
+                    runtime_identity=getattr(session, "runtime_cache_identity", None),
+                )))
             except (TypeError, ValueError, KeyError, AttributeError):
                 prep_cached = False
 
@@ -481,8 +501,11 @@ def _evaluate_local_min_neighbor_payload(session, payload: dict, payload_score_c
             "payload_score_cache_hit": True,
         }
 
-    ai_params = build_params_from_mapping(payload)
-    prep_cache_key = build_prep_cache_key(ai_params)
+    ai_params = _build_session_params_from_mapping(session, payload)
+    prep_cache_key = build_prep_cache_key(
+        ai_params,
+        runtime_identity=getattr(session, "runtime_cache_identity", None),
+    )
     get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
     prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
     if prep_result is None:
@@ -511,6 +534,7 @@ def _evaluate_local_min_neighbor_payload(session, payload: dict, payload_score_c
         search_train_end_date=search_scope.get("effective_search_train_end_date"),
         max_positions=session.train_max_positions,
         enable_rotation=session.train_enable_rotation,
+        runtime_identity=getattr(session, "runtime_cache_identity", None),
     )
     get_cached_evaluation = getattr(session, "get_full_evaluation_from_cache", None)
     evaluation = get_cached_evaluation(full_evaluation_cache_key) if callable(get_cached_evaluation) else None
@@ -722,10 +746,7 @@ def _seed_payload_score_cache_from_study(session, study, objective_mode: str):
         if trial_number in seeded_trial_numbers:
             continue
         try:
-            payload = build_best_params_payload_from_trial(
-                completed_trial,
-                fixed_tp_percent=session.optimizer_fixed_tp_percent,
-            )
+            payload = _build_session_trial_payload(session, completed_trial)
             cache[_build_payload_score_cache_key(payload)] = float(completed_trial.value)
             seeded_trial_numbers.add(trial_number)
         except (TypeError, ValueError, KeyError, AttributeError):
@@ -1270,7 +1291,7 @@ def _apply_step(field_name: str, current_value, step_value, direction: int, kind
 
 
 def _build_neighbor_candidates(session, trial):
-    center_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent)
+    center_payload = _build_session_trial_payload(session, trial)
     candidate_fields = get_breakout_local_min_candidate_fields(trial, center_payload=center_payload)
 
     neighbors = []
@@ -1285,7 +1306,7 @@ def _build_neighbor_candidates(session, trial):
             candidate_payload = dict(center_payload)
             candidate_payload[field_name] = candidate_value
             try:
-                build_params_from_mapping(candidate_payload)
+                _build_session_params_from_mapping(session, candidate_payload)
             except ValueError:
                 continue
             payload_key = tuple(sorted(candidate_payload.items()))
@@ -1344,7 +1365,7 @@ def compute_local_min_score(
         return float(local_min_score)
 
     total_neighbors = len(neighbor_payloads)
-    center_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent)
+    center_payload = _build_session_trial_payload(session, trial)
     neighbor_payloads, neighbor_rank_stats = _rank_local_min_neighbor_payloads(session, center_payload, neighbor_payloads, payload_score_cache)
     if on_start is not None:
         on_start(total_neighbors)
@@ -1468,17 +1489,14 @@ def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
     if existing is not None:
         return existing
 
-    payload = build_best_params_payload_from_trial(
-        trial,
-        fixed_tp_percent=session.optimizer_fixed_tp_percent,
-    )
+    payload = _build_session_trial_payload(session, trial)
     cache = _get_dominant_year_dependency_cache(session)
     cache_key = _build_payload_score_cache_key(payload)
     cached = _normalize_current_dependency_diagnostics(cache.get(cache_key))
     if cached is not None:
         return cached
 
-    ai_params = build_params_from_mapping(payload)
+    ai_params = _build_session_params_from_mapping(session, payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
     prep_result = prepare_trial_inputs(
         raw_data_cache=session.raw_data_cache,
@@ -1538,17 +1556,14 @@ def _normalize_inner_validate_diagnostics(value):
 
 
 def _resolve_trial_inner_validate_diagnostics(session, trial, objective_mode: str):
-    payload = build_best_params_payload_from_trial(
-        trial,
-        fixed_tp_percent=session.optimizer_fixed_tp_percent,
-    )
+    payload = _build_session_trial_payload(session, trial)
     cache = _get_inner_validate_cache(session)
     cache_key = _build_payload_score_cache_key(payload)
     cached = _normalize_inner_validate_diagnostics(cache.get(cache_key))
     if cached is not None:
         return cached
 
-    ai_params = build_params_from_mapping(payload)
+    ai_params = _build_session_params_from_mapping(session, payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
     prep_result = prepare_trial_inputs(
         raw_data_cache=session.raw_data_cache,
@@ -1597,17 +1612,14 @@ def _resolve_trial_oos_diagnostics(session, trial):
     if oos_start_year is None:
         return {'enabled': False, 'oos_score': float(INVALID_TRIAL_VALUE)}
 
-    payload = build_best_params_payload_from_trial(
-        trial,
-        fixed_tp_percent=session.optimizer_fixed_tp_percent,
-    )
+    payload = _build_session_trial_payload(session, trial)
     cache = _get_oos_cache(session)
     cache_key = _build_payload_score_cache_key(payload)
     cached = _normalize_oos_diagnostics(cache.get(cache_key))
     if cached is not None:
         return cached
 
-    ai_params = build_params_from_mapping(payload)
+    ai_params = _build_session_params_from_mapping(session, payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, 'optimizer_max_workers'))
     prep_result = prepare_trial_inputs(
         raw_data_cache=session.raw_data_cache,

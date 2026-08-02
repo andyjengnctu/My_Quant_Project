@@ -1843,3 +1843,22 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | Selection結果 | 使用者輸出仍為PASS-only global rho 0.3074、daily rho 0.2370、spread 2.3455R、7/7年度rho與spread為正、drift=False、Score vs PASS AUC 0.5620；與3.71相同，無新模型實驗差異 |
 | 採用判定 | 採用compact互動輸出；完整診斷移至既有Markdown／JSON，避免為可讀性刪除研究證據 |
 | 下一步 | 套用後重跑`python apps/test_suite.py`作本機formal double check；策略層仍依既定順序執行`[2] 策略績效驗證` |
+
+### 3.85 Selection Score-ranking策略參數適應與三組比較接線（2026-08-02）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`；完成Selection參數適應與Baseline／Sort Only／Adapted合併流程，尚未執行完整optimizer或宣稱Adapted有效 |
+| 程式基準 | `test-branch-1_20260802_170248_5bafacd.zip`；SHA256 `d995acfd7b0396501f232107a259c3724562877f489072f39c997d6b325c9932` |
+| Capture結果同步 | 既有3.78工件的正式read-only歸因為`ADAPTATION_DIAGNOSTIC_SUPPORTED`：平均曝險77.33%→54.20%、平均預留174,795.96→118,710.30、平均投入164,607.74→107,804.68、投入／預留93.36%→89.44%、初始停損6.39%→9.21%、持有41.94→44.66日、Realized R 0.28→0.35、Target R 0.99→1.15、投入資金報酬3.00%→3.87%。主要瓶頸為較寬停損使固定風險sizing縮小投入與曝險，符合啟動Selection參數適應的前置條件 |
+| 入口 | `python apps/breakout_quality.py strategy-adapt`與主選單`[2] 策略績效驗證 → [2] 策略參數適應與績效比較`共用同一實作；原`[1/Enter] 比較目前策略`仍可獨立執行Baseline／Sort Only，不新增第三個比較選項 |
+| 合併流程 | 先以相同固定風險與部位限制重建Baseline／Sort Only及capture gate，再固定Score Sort執行optimizer、選出`base-finalist-best`、回放Adapted，最後一次輸出三組績效、年度、Selection Target、capture與參數差異 |
+| Search space | 沿用目前正式`BREAKOUT_OPTIMIZER_SEARCH_SPACE`及既有objective／inner validation／local-min finalist流程，不新增新策略參數或改range。`use_breakout_quality_ranking=True`與`use_breakout_quality_filter=False`由adaptation session固定，不能成為Optuna trial；Score權重、threshold、混合比例、模型超參數、PIT fold、Future Target及OOS均不可搜尋 |
+| TP契約 | 完全沿用目前`OPTIMIZER_FIXED_TP_PERCENT=0.0`；第一輪固定關閉停利，不改為`None`，因此`tp_percent`不進trial search space |
+| 固定執行條件 | 預設由config解析：trials 1000、fixed risk 0.01、max position cap 0.30、max positions 10、rotation off、Seed 42；這些值在單次adaptation內固定且不可由optimizer搜尋，但仍遵守PROJECT_SETTINGS的config可調整性 |
+| PIT／optimizer identity | 首個trial前嚴格載入Selection PIT Score contract，並核對目前workflow凍結的filter／architecture／profile／continuous target／Seed／score start／PIT fold／inner validation；Score CSV、PIT manifest、PIT audit、Dataset、Selection期間、模型identity、search-space fingerprint與optimizer effective-policy fingerprint共同形成runtime identity。該identity寫入Optuna study user attrs、prep cache、full-evaluation cache、manifest與summary；已有trial但identity缺失或不一致時一律fail-fast，禁止續接舊study或跨PIT工件共用cache |
+| Capture口徑 | 主報表與adaptation gate改為`Σ Realized R / Σ Target R`、逐筆ratio中位數與Target≥0.5R aggregate capture；原arithmetic mean只保留為JSON欄位`raw_mean_target_capture_ratio`，不得作主判定 |
+| Adapted輸出 | `models/research/breakout_quality/score_ranking_adaptation/`輸出`adapted_best_params.json`、`adapted_manifest.json`、`optimizer_summary.json`、三組Markdown／JSON／CSV與Adapted replay／capture工件；前置Baseline／Sort Only隔離在`baseline_sort_only/`，不覆寫既有正式比較，只有runtime identity、相對路徑及全部必要工件SHA256一致時才沿用，任一檔案異動即重跑。相同identity重跑只補足尚缺trial，不重複追加完整trial數。Adapted Selection結果固定標記`FITTED_SELECTION_DIAGNOSTIC`，不代表泛化或正式採用 |
+| OOS邊界 | 本輪只建立Selection fitting流程；Future Target只可在replay後離線join。只有Adapted params與Score模型、Score工件、排序規則、search space、fixed risk及部位限制全部凍結後，才可執行正式OOS；OOS不得回頭調整任何項目 |
+| 驗證 | 已新增direct synthetic覆蓋固定ranking／filter不進trial、現行TP=0.0、目前模型／target／Seed／PIT fold凍結、PIT cache／study identity、缺少identity拒絕續跑、config固定值、前置工件隔離及identity／全工件hash重用、trial補足語意、Future Target／OOS隔離、合併選單／CLI、capture新口徑及`FITTED_SELECTION_DIAGNOSTIC`。正式`apps/test_suite.py`依專案規則未在本輪執行，須由使用者本機重跑 |
+| 下一步 | 套用patch後先執行`python apps/test_suite.py`；通過後執行主選單策略驗證的`[2]`或CLI `python apps/breakout_quality.py strategy-adapt`取得第一輪Selection結果 |

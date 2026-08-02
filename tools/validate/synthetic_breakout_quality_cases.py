@@ -11342,6 +11342,7 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
         strip_ansi,
     )
     from tools.filters.breakout_quality.audit_score_ranking_capture import (
+        _aggregate_capture_ratio,
         build_score_ranking_capture_audit,
         render_capture_audit_console,
         write_score_ranking_capture_audit_outputs,
@@ -11445,18 +11446,34 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "capture_audit_reconstructs_capital_partial_and_target_capture_metrics",
-        (100500.0, 80500.0, 6, 0.6, -0.35, 100.0, 100.0, 0.0, None),
+        (100500.0, 80500.0, 6, 0.6, -0.35, 0.6, -0.35, 100.0, 100.0, 0.0, None),
         (
             result["baseline"]["avg_invested_total"],
             result["score_sort"]["avg_invested_total"],
             result["baseline"]["partial_residual_slot_days"],
-            result["baseline"]["avg_target_capture_ratio"],
-            result["score_sort"]["avg_target_capture_ratio"],
+            result["baseline"]["aggregate_target_capture_ratio"],
+            result["score_sort"]["aggregate_target_capture_ratio"],
+            result["baseline"]["raw_mean_target_capture_ratio"],
+            result["score_sort"]["raw_mean_target_capture_ratio"],
             result["baseline"]["top_5_entry_dates_share_pct"],
             result["baseline"]["top_entry_month_share_pct"],
             result["baseline"]["industry_coverage_pct"],
             result["baseline"]["top_industry_share_pct"],
         ),
+    )
+    aggregate_all_targets = _aggregate_capture_ratio(pd.DataFrame({
+        "target_raw_r": [2.0, -1.0],
+        "r_multiple": [1.0, -0.25],
+    }))
+    aggregate_target_ge_0_5 = _aggregate_capture_ratio(pd.DataFrame({
+        "target_raw_r": [2.0, -1.0],
+        "r_multiple": [1.0, -0.25],
+    }), min_target_r=0.5)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "aggregate_capture_uses_sum_realized_over_sum_target_and_threshold_variant",
+        (0.75, 0.5),
+        (aggregate_all_targets, aggregate_target_ge_0_5),
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -11636,6 +11653,412 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
 
 
 
+def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_STRATEGY_ADAPTATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config import breakout_quality as breakout_quality_config
+    from strategies.breakout.search_space import build_trial_params
+    from tools.filters.breakout_quality.audit_score_ranking_capture import (
+        _CAPTURE_ROWS,
+        _decision,
+    )
+    from tools.filters.breakout_quality.strategy_adapt import (
+        _assert_study_identity,
+        _build_runtime_contract,
+        _current_pair_artifact_paths,
+        _load_current_pair_if_compatible,
+        _validate_fixed_contract,
+        _validate_pit_contract_against_settings,
+        _write_current_pair_manifest,
+    )
+    from tools.optimizer.param_cache import (
+        build_full_evaluation_cache_key,
+        build_prep_cache_key,
+    )
+    from config.training_policy import (
+        OPTIMIZER_FIXED_TP_PERCENT,
+    )
+
+    class FakeTrial:
+        def __init__(self):
+            self.params = {}
+
+        def suggest_categorical(self, name, choices):
+            value = list(choices)[0]
+            self.params[name] = value
+            return value
+
+        def suggest_int(self, name, low, high, step=1):
+            self.params[name] = int(low)
+            return int(low)
+
+        def suggest_float(self, name, low, high, step=None):
+            self.params[name] = float(low)
+            return float(low)
+
+    fixed = {
+        "use_breakout_quality_filter": False,
+        "use_breakout_quality_ranking": True,
+        "fixed_risk": 0.02,
+        "max_position_cap_pct": 0.40,
+    }
+    trial = FakeTrial()
+    session = SimpleNamespace(
+        fixed_strategy_param_overrides=fixed,
+        has_fixed_strategy_param=lambda name: name in fixed,
+        get_fixed_strategy_param=lambda name, default=None: fixed.get(name, default),
+        optimizer_fixed_tp_percent=0.0,
+        resolve_optimizer_tp_percent=lambda _trial, fixed_tp_percent: fixed_tp_percent,
+    )
+    params = build_trial_params(session, trial)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adaptation_fixed_score_switches_are_not_optuna_trial_dimensions",
+        (True, False, False, False, 0.0),
+        (
+            params.use_breakout_quality_ranking,
+            params.use_breakout_quality_filter,
+            "use_breakout_quality_ranking" in trial.params,
+            "use_breakout_quality_filter" in trial.params,
+            params.tp_percent,
+        ),
+    )
+
+    normal_trial = FakeTrial()
+    normal_session = SimpleNamespace(
+        fixed_strategy_param_overrides={},
+        has_fixed_strategy_param=lambda _name: False,
+        get_fixed_strategy_param=lambda _name, default=None: default,
+        optimizer_fixed_tp_percent=0.0,
+        resolve_optimizer_tp_percent=lambda _trial, fixed_tp_percent: fixed_tp_percent,
+    )
+    normal_params = build_trial_params(normal_session, normal_trial)
+    fixed_non_score_trial_params = {
+        key: value
+        for key, value in trial.params.items()
+        if key not in {
+            "use_breakout_quality_ranking",
+            "use_breakout_quality_filter",
+        }
+    }
+    normal_non_score_trial_params = {
+        key: value
+        for key, value in normal_trial.params.items()
+        if key not in {
+            "use_breakout_quality_ranking",
+            "use_breakout_quality_filter",
+        }
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adaptation_reuses_current_optimizer_search_space_except_fixed_score_switches",
+        (False, False, True),
+        (
+            normal_params.use_breakout_quality_ranking,
+            normal_params.use_breakout_quality_filter,
+            fixed_non_score_trial_params == normal_non_score_trial_params,
+        ),
+    )
+
+    prep_a = build_prep_cache_key(params, runtime_identity="pit-a")
+    prep_b = build_prep_cache_key(params, runtime_identity="pit-b")
+    eval_a = build_full_evaluation_cache_key(
+        params,
+        objective_mode="split_train_romd",
+        train_start_year=2014,
+        search_train_end_year=2020,
+        max_positions=7,
+        enable_rotation=True,
+        runtime_identity="pit-a",
+    )
+    eval_b = build_full_evaluation_cache_key(
+        params,
+        objective_mode="split_train_romd",
+        train_start_year=2014,
+        search_train_end_year=2020,
+        max_positions=7,
+        enable_rotation=True,
+        runtime_identity="pit-b",
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adaptation_optimizer_caches_are_partitioned_by_pit_identity",
+        (True, True),
+        (prep_a != prep_b, eval_a != eval_b),
+    )
+
+    settings = breakout_quality_config.get_breakout_quality_workflow_settings()
+    args = SimpleNamespace(
+        dataset="full",
+        filter_id=settings.filter_id,
+        model_architecture=settings.model_architecture,
+        experiment_profile=settings.experiment_profile,
+        param_policy="base-finalist-best",
+        trials=3,
+        max_positions=7,
+        rotation="on",
+        fixed_risk=0.02,
+        max_position_cap_pct=0.40,
+    )
+    _validate_fixed_contract(args, settings)
+    pit_settings_payload = {
+        "continuous_target_id": settings.continuous_target_id,
+        "seed": settings.seed,
+        "available_from": settings.point_in_time_score_start_date,
+        "available_through": "2020-12-31",
+        "manifest": {
+            "fold_months": settings.point_in_time_fold_months,
+            "inner_validation_months": settings.point_in_time_inner_validation_months,
+        },
+    }
+    _validate_pit_contract_against_settings(
+        SimpleNamespace(**pit_settings_payload), settings
+    )
+    target_mismatch_rejected = False
+    try:
+        _validate_pit_contract_against_settings(
+            SimpleNamespace(
+                **{
+                    **pit_settings_payload,
+                    "continuous_target_id": "different_target",
+                }
+            ),
+            settings,
+        )
+    except ValueError:
+        target_mismatch_rejected = True
+    fold_mismatch_rejected = False
+    try:
+        _validate_pit_contract_against_settings(
+            SimpleNamespace(
+                **{
+                    **pit_settings_payload,
+                    "manifest": {
+                        **pit_settings_payload["manifest"],
+                        "fold_months": settings.point_in_time_fold_months + 1,
+                    },
+                }
+            ),
+            settings,
+        )
+    except ValueError:
+        fold_mismatch_rejected = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adaptation_freezes_current_model_target_seed_and_pit_fold_contract",
+        (True, True),
+        (target_mismatch_rejected, fold_mismatch_rejected),
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        score_path = root / "scores.csv"
+        manifest_path = root / "manifest.json"
+        audit_path = root / "audit.json"
+        for path, content in (
+            (score_path, "score"),
+            (manifest_path, "manifest"),
+            (audit_path, "audit"),
+        ):
+            path.write_text(content, encoding="utf-8")
+        pit_contract = SimpleNamespace(
+            score_path=score_path,
+            manifest_path=manifest_path,
+            audit_path=audit_path,
+            available_from="2014-01-01",
+            available_through="2020-12-31",
+            continuous_target_id="strategy_aligned_opportunity_no_time_r_v1",
+        )
+        with patch(
+            "tools.filters.breakout_quality.strategy_adapt.build_source_data_inventory",
+            return_value={"identity": "synthetic"},
+        ):
+            runtime_contract = _build_runtime_contract(
+                root=root,
+                args=args,
+                settings=settings,
+                pit_contract=pit_contract,
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adaptation_runtime_contract_uses_current_configurable_fixed_values",
+        (
+            7, True, 0.02, 0.40, OPTIMIZER_FIXED_TP_PERCENT,
+            False, False, False, True,
+        ),
+        (
+            runtime_contract["fixed_runtime"]["max_positions"],
+            runtime_contract["fixed_runtime"]["rotation"],
+            runtime_contract["fixed_runtime"]["fixed_risk"],
+            runtime_contract["fixed_runtime"]["max_position_cap_pct"],
+            runtime_contract["fixed_runtime"]["tp_percent_policy"]["fixed_value"],
+            runtime_contract["runtime_restrictions"]["ranking_switch_searched"],
+            runtime_contract["runtime_restrictions"]["future_target_used_for_objective"],
+            runtime_contract["runtime_restrictions"]["oos_used_for_fitting"],
+            isinstance(settings.strategy_adapt_trials, int)
+            and settings.strategy_adapt_trials >= 1,
+        ),
+    )
+
+    class FakeStudy:
+        def __init__(self, *, identity="", trials=None):
+            self.user_attrs = {}
+            if identity:
+                self.user_attrs[
+                    "breakout_quality_strategy_adaptation_runtime_identity_sha256"
+                ] = identity
+            self.trials = list(trials or [])
+
+        def set_user_attr(self, key, value):
+            self.user_attrs[key] = value
+
+    fresh_study = FakeStudy()
+    _assert_study_identity(fresh_study, runtime_contract)
+    mismatch_rejected = False
+    try:
+        _assert_study_identity(
+            FakeStudy(identity="different", trials=[SimpleNamespace(number=0)]),
+            runtime_contract,
+        )
+    except RuntimeError:
+        mismatch_rejected = True
+    missing_identity_rejected = False
+    try:
+        _assert_study_identity(
+            FakeStudy(trials=[SimpleNamespace(number=0)]),
+            runtime_contract,
+        )
+    except RuntimeError:
+        missing_identity_rejected = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adaptation_study_identity_is_set_and_stale_pit_study_is_rejected",
+        (runtime_contract["runtime_identity_sha256"], True, True),
+        (
+            fresh_study.user_attrs[
+                "breakout_quality_strategy_adaptation_runtime_identity_sha256"
+            ],
+            mismatch_rejected,
+            missing_identity_rejected,
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        pair_dir = root / "models" / "research" / "breakout_quality" / "pair"
+        pair_dir.mkdir(parents=True, exist_ok=True)
+        pair_paths = _current_pair_artifact_paths(pair_dir)
+        for key, artifact_path in pair_paths.items():
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            if key == "strategy_comparison_json":
+                artifact_path.write_text(
+                    json.dumps({"metadata": {"synthetic": True}}) + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                artifact_path.write_text(f"{key}\n", encoding="utf-8")
+        _write_current_pair_manifest(
+            root=root,
+            output_dir=pair_dir,
+            runtime_identity_sha256="pit-identity-a",
+        )
+        compatible_payload = _load_current_pair_if_compatible(
+            root=root,
+            output_dir=pair_dir,
+            runtime_identity_sha256="pit-identity-a",
+        )
+        wrong_identity_payload = _load_current_pair_if_compatible(
+            root=root,
+            output_dir=pair_dir,
+            runtime_identity_sha256="pit-identity-b",
+        )
+        pair_paths["yearly_csv"].write_text("tampered\n", encoding="utf-8")
+        tampered_payload = _load_current_pair_if_compatible(
+            root=root,
+            output_dir=pair_dir,
+            runtime_identity_sha256="pit-identity-a",
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adaptation_current_pair_reuse_requires_identity_and_all_artifact_hashes",
+        (True, True, True),
+        (
+            isinstance(compatible_payload, dict),
+            wrong_identity_payload is None,
+            tampered_payload is None,
+        ),
+    )
+
+    decision = _decision(
+        baseline={"avg_invested_total": 100.0},
+        score_sort={"avg_invested_total": 100.0},
+        delta={
+            "total_return_pct": -10.0,
+            "return_over_max_drawdown": -1.0,
+            "avg_exposure_pct": 0.0,
+            "aggregate_target_capture_ratio": 0.0,
+            "median_target_capture_ratio": 0.0,
+            "target_ge_0_5_capture_ratio": 0.0,
+            "raw_mean_target_capture_ratio": -100.0,
+            "avg_target_realization_gap_r": 0.0,
+            "avg_holding_calendar_days": 0.0,
+            "avg_partial_to_exit_calendar_days": 0.0,
+            "reserved_buy_fill_rate_pct": 0.0,
+        },
+        selection_diagnostics={
+            "score_ranking_minus_no_filter": {
+                "selected_target_mean_r": 0.1,
+                "target_top_k_retention_mean": 0.1,
+            }
+        },
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "raw_mean_capture_is_json_diagnostic_only_and_not_adaptation_gate",
+        ("SORT_ONLY_REJECTED_NO_MECHANICAL_BOTTLENECK", False, False),
+        (
+            decision["status"],
+            decision["parameter_adaptation_candidate"],
+            any(row[1] == "raw_mean_target_capture_ratio" for row in _CAPTURE_ROWS),
+        ),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    app_source = (project_root / "apps" / "breakout_quality.py").read_text(
+        encoding="utf-8"
+    )
+    adapt_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "strategy_adapt.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "adaptation_has_one_canonical_cli_and_merged_interactive_flow",
+        True,
+        all(
+            token in app_source
+            for token in (
+                '"strategy-adapt": "tools.filters.breakout_quality.strategy_adapt"',
+                "[1/Enter] 比較目前策略",
+                "[2] 策略參數適應與績效比較",
+            )
+        )
+        and "FITTED_SELECTION_DIAGNOSTIC" in adapt_source
+        and "future_target_used_for_objective" in adapt_source
+        and 'current_pair_dir = output_dir / "baseline_sort_only"' in adapt_source
+        and "_load_or_run_current_pair(" in adapt_source
+        and "CURRENT_PAIR_MANIFEST_FILENAME" in adapt_source
+        and "output_dir_override=output_dir" in adapt_source
+        and "remaining_trials = max(0, int(args.trials) - existing_trial_count)"
+        in adapt_source,
+    )
+
+    summary["workflow"] = "selection_score_ranking_strategy_adaptation"
+    summary["result_status"] = "IMPLEMENTED_RESULT_NOT_AVAILABLE"
+    return results, summary
+
+
 def validate_breakout_quality_single_seed_single_entry_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_SINGLE_SEED_SINGLE_ENTRY"
     results = []
@@ -11729,7 +12152,8 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
             canonical_app_path.is_file()
             and '"strategy-compare": "tools.filters.breakout_quality.strategy_compare"'
             in canonical_app_source
-            and "_run_command(\n        \"strategy-compare\"" in canonical_app_source
+            and '"strategy-compare",' in canonical_app_source
+            and "_run_command(" in canonical_app_source
         ),
     )
 

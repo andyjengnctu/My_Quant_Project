@@ -58,7 +58,17 @@ def ensure_study_effective_policy_compatible(*, study, walk_forward_policy: dict
     )
 
 
-def build_optimizer_session(*, walk_forward_policy: dict):
+def build_optimizer_session(
+    *,
+    walk_forward_policy: dict,
+    output_dir=None,
+    fixed_strategy_param_overrides=None,
+    runtime_context_factory=None,
+    runtime_cache_identity=None,
+    optimizer_fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+    train_max_positions=TRAIN_MAX_POSITIONS,
+    train_enable_rotation=TRAIN_ENABLE_ROTATION,
+):
     from tools.optimizer.profile import OptimizerProfileRecorder
     from tools.optimizer.session import OptimizerSession
     from tools.optimizer.study_utils import (
@@ -70,7 +80,7 @@ def build_optimizer_session(*, walk_forward_policy: dict):
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
     objective_mode = str(walk_forward_policy.get("objective_mode", "split_train_romd"))
     return OptimizerSession(
-        output_dir=OUTPUT_DIR,
+        output_dir=OUTPUT_DIR if output_dir is None else output_dir,
         session_ts=session_ts,
         profile_recorder_cls=OptimizerProfileRecorder,
         build_optimizer_trial_params=build_optimizer_trial_params,
@@ -81,12 +91,15 @@ def build_optimizer_session(*, walk_forward_policy: dict):
         resolve_optimizer_tp_percent=resolve_optimizer_tp_percent,
         print_strategy_dashboard=print_strategy_dashboard,
         colors=COLORS,
-        optimizer_fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-        train_max_positions=TRAIN_MAX_POSITIONS,
+        optimizer_fixed_tp_percent=optimizer_fixed_tp_percent,
+        train_max_positions=int(train_max_positions),
         train_start_year=int(walk_forward_policy["train_start_year"]),
-        train_enable_rotation=TRAIN_ENABLE_ROTATION,
+        train_enable_rotation=bool(train_enable_rotation),
         default_max_workers=DEFAULT_OPTIMIZER_MAX_WORKERS,
         enable_optimizer_profiling=ENABLE_OPTIMIZER_PROFILING,
         enable_profile_console_print=ENABLE_PROFILE_CONSOLE_PRINT,
         profile_print_every_n_trials=PROFILE_PRINT_EVERY_N_TRIALS,
+        fixed_strategy_param_overrides=fixed_strategy_param_overrides,
+        runtime_context_factory=runtime_context_factory,
+        runtime_cache_identity=runtime_cache_identity,
     )

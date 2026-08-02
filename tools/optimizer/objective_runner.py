@@ -258,45 +258,46 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     # AI註: profile_stats=None 時仍保留 yearly/dependency 等統計輸出，但關閉細部計時以避免重複 perf_counter 成本。
     pf_profile = {"_timing_enabled": False} if profile_stats is None else profile_stats
 
-    (
-        ret_pct,
-        mdd,
-        trade_count,
-        final_eq,
-        avg_exp,
-        max_exp,
-        bm_ret,
-        bm_mdd,
-        win_rate,
-        pf_ev,
-        pf_payoff,
-        total_missed,
-        total_missed_sells,
-        r_sq,
-        m_win_rate,
-        bm_r_sq,
-        bm_m_win_rate,
-        normal_trade_count,
-        extended_trade_count,
-        annual_trades,
-        reserved_buy_fill_rate,
-        annual_return_pct,
-        bm_annual_return_pct,
-    ) = run_portfolio_timeline(
-        all_dfs_fast,
-        all_trade_logs,
-        list(search_scope["search_train_dates"]),
-        session.train_start_year,
-        ai_params,
-        session.train_max_positions,
-        session.train_enable_rotation,
-        benchmark_ticker="0050",
-        benchmark_data=benchmark_data,
-        is_training=True,
-        profile_stats=pf_profile,
-        verbose=False,
-        pit_stats_index=all_pit_stats_index,
-    )
+    with session.optimizer_runtime_context():
+        (
+            ret_pct,
+            mdd,
+            trade_count,
+            final_eq,
+            avg_exp,
+            max_exp,
+            bm_ret,
+            bm_mdd,
+            win_rate,
+            pf_ev,
+            pf_payoff,
+            total_missed,
+            total_missed_sells,
+            r_sq,
+            m_win_rate,
+            bm_r_sq,
+            bm_m_win_rate,
+            normal_trade_count,
+            extended_trade_count,
+            annual_trades,
+            reserved_buy_fill_rate,
+            annual_return_pct,
+            bm_annual_return_pct,
+        ) = run_portfolio_timeline(
+            all_dfs_fast,
+            all_trade_logs,
+            list(search_scope["search_train_dates"]),
+            session.train_start_year,
+            ai_params,
+            session.train_max_positions,
+            session.train_enable_rotation,
+            benchmark_ticker="0050",
+            benchmark_data=benchmark_data,
+            is_training=True,
+            profile_stats=pf_profile,
+            verbose=False,
+            pit_stats_index=all_pit_stats_index,
+        )
 
     full_year_count = int(pf_profile.get("full_year_count", 0))
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
@@ -482,45 +483,46 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
     validate_dates = list(validate_scope.get("validate_dates") or [])
     validate_start_year = int(policy.get("validate_start_year", policy.get("validate_year", 0)))
 
-    (
-        ret_pct,
-        mdd,
-        trade_count,
-        final_eq,
-        avg_exp,
-        max_exp,
-        bm_ret,
-        bm_mdd,
-        win_rate,
-        pf_ev,
-        pf_payoff,
-        total_missed,
-        total_missed_sells,
-        r_sq,
-        m_win_rate,
-        bm_r_sq,
-        bm_m_win_rate,
-        normal_trade_count,
-        extended_trade_count,
-        annual_trades,
-        reserved_buy_fill_rate,
-        annual_return_pct,
-        bm_annual_return_pct,
-    ) = run_portfolio_timeline(
-        all_dfs_fast,
-        all_trade_logs,
-        validate_dates,
-        validate_start_year,
-        ai_params,
-        session.train_max_positions,
-        session.train_enable_rotation,
-        benchmark_ticker="0050",
-        benchmark_data=benchmark_data,
-        is_training=True,
-        profile_stats=pf_profile,
-        verbose=False,
-        pit_stats_index=all_pit_stats_index,
-    )
+    with session.optimizer_runtime_context():
+        (
+            ret_pct,
+            mdd,
+            trade_count,
+            final_eq,
+            avg_exp,
+            max_exp,
+            bm_ret,
+            bm_mdd,
+            win_rate,
+            pf_ev,
+            pf_payoff,
+            total_missed,
+            total_missed_sells,
+            r_sq,
+            m_win_rate,
+            bm_r_sq,
+            bm_m_win_rate,
+            normal_trade_count,
+            extended_trade_count,
+            annual_trades,
+            reserved_buy_fill_rate,
+            annual_return_pct,
+            bm_annual_return_pct,
+        ) = run_portfolio_timeline(
+            all_dfs_fast,
+            all_trade_logs,
+            validate_dates,
+            validate_start_year,
+            ai_params,
+            session.train_max_positions,
+            session.train_enable_rotation,
+            benchmark_ticker="0050",
+            benchmark_data=benchmark_data,
+            is_training=True,
+            profile_stats=pf_profile,
+            verbose=False,
+            pit_stats_index=all_pit_stats_index,
+        )
     min_full_year_return_pct = float(pf_profile.get("min_full_year_return_pct", 0.0))
     min_month_return_pct = float(pf_profile.get("min_month_return_pct", 0.0))
     min_quarter_return_pct = float(pf_profile.get("min_quarter_return_pct", 0.0))
@@ -574,7 +576,10 @@ def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, v
 def run_optimizer_objective(session, trial):
     objective_start = time.perf_counter()
     ai_params = build_trial_params(session, trial)
-    prep_cache_key = build_prep_cache_key(ai_params)
+    ai_params = session.apply_fixed_strategy_param_overrides(ai_params)
+    prep_cache_key = build_prep_cache_key(
+        ai_params, runtime_identity=session.runtime_cache_identity
+    )
     get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
     prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
     if prep_result is None:
@@ -639,6 +644,7 @@ def run_optimizer_objective(session, trial):
         search_train_end_date=search_scope.get("effective_search_train_end_date"),
         max_positions=session.train_max_positions,
         enable_rotation=session.train_enable_rotation,
+        runtime_identity=session.runtime_cache_identity,
     )
     get_cached_evaluation = getattr(session, "get_full_evaluation_from_cache", None)
     evaluation = get_cached_evaluation(full_evaluation_cache_key) if callable(get_cached_evaluation) else None
