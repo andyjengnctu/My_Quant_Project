@@ -2480,7 +2480,7 @@ Coverage提升後的正式2×2已確認原始Score ranking在舊ROOS與新Adapte
 
 ### 狀態
 
-`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+`RESULT_AVAILABLE / R3_RANKING_CONFIRMED / R3_ADAPTED_PARAMS_REJECTED / FORMAL_BASELINE_UNCHANGED`
 
 使用者判定R3已在總報酬、EV、Target選擇、Target capture與平均投入資金報酬形成足夠的多項改善，不先投入專門最大回撤歸因；下一個單一實驗改為固定R3 ranking契約，執行與既有Score Adapted相同的rolling optimizer及四組2×2。此決定取代前一節「先做R3最大回撤read-only attribution」的下一步，但不改變R3目前尚未升格正式policy的判定。
 
@@ -2549,9 +2549,9 @@ python apps/breakout_quality.py strategy-adapt --dataset full --param-policy bas
 - adapted-params ranking capture audit
 - 年度報酬與參數差異
 
-### 採用判定
+### 原定採用判定
 
-本輪只有程式接線，尚無結果，不預判R3 Adapted有效。正式策略仍維持Baseline。取得本機結果後至少比較：
+本輪程式接線時預先設定以下判定維度；實際結果與正式結論記錄於後續「本機正式結果」與「對稱比較與判定」：
 
 1. R3 Adapted相較R3 Sort Only是否提高總報酬或Return／MDD。
 2. R3 Adapted相較Param Only的ranking效果是否仍為正。
@@ -2560,7 +2560,53 @@ python apps/breakout_quality.py strategy-adapt --dataset full --param-policy bas
 5. Param Only是否顯示R3 Adapted params本身破壞原策略。
 6. 改善是否跨年度，而非只來自單一年份。
 
-### 下一步
+### 原定本機執行
 
-由使用者本機先執行正式`apps/test_suite.py`；通過後執行上述R3 CLI。結果產生前維持`IMPLEMENTED / RESULT_NOT_AVAILABLE`。
+R3 CLI已由使用者本機完成；本機正式結果見下節。正式`apps/test_suite.py`仍由使用者本地執行，GPT未執行。
+
+### 本機正式結果
+
+- 結果程式基準：`test-branch-1_20260803_235424_5af0f20.zip`
+- SHA256：`2b5e23c783c506adc27660a7e5d7c48b077737fcadb3166f43aa7fe5a35542cd`
+- 比較期間：`2014-01-01～2020-12-31`
+- Ranking policy：`capital-bucket-then-score`
+- Rolling folds：7；train window 120個月；OOS horizon 12個月；300 trials／fold
+- PIT actual／reference start：`2011-01-01`／`2014-01-01`
+- Actual／reference weighted coverage：60.0%／30.0%；7 folds均提升30.0pp
+- Adapted search reused：False；新參數optimizer數：1
+- Future Target：只在portfolio replay完成後join，未進入optimizer或交易runtime
+
+| 指標 | Baseline | R3 Sort Only | Param Only | R3 Adapted |
+|---|---:|---:|---:|---:|
+| 淨總報酬 | 182.62% | 184.12% | 123.77% | 147.09% |
+| 最大回撤 | 13.18% | 19.20% | 14.22% | 12.92% |
+| Return／MDD | 13.86 | 9.59 | 8.71 | 11.38 |
+| 年化報酬 | 16.00% | 16.09% | 12.20% | 13.80% |
+| Log R² | 0.9349 | 0.9101 | 0.9418 | 0.9439 |
+| 月勝率 | 61.90% | 59.52% | 69.05% | 60.71% |
+| 平均曝險 | 77.33% | 70.68% | 82.61% | 74.96% |
+| 平均初始停損距離 | 6.39% | 7.62% | 5.36% | 6.85% |
+| 平均Realized R | 0.28R | 0.34R | 0.49R | 0.52R |
+| 平均投入資金報酬 | 3.00% | 3.74% | 1.96% | 2.20% |
+| 選中候選Target mean | 1.0912R | 1.1080R | 0.7013R | 0.9356R |
+| Aggregate Target capture | 0.30 | 0.33 | 0.69 | 0.60 |
+
+### 對稱比較與判定
+
+1. **R3 ranking效果再次成立。** 舊ROOS固定時，`R3 Sort Only − Baseline = +1.51pp`總報酬，但MDD增加6.02pp、Return／MDD下降4.27；同一套新Adapted params固定時，`R3 Adapted − Param Only = +23.33pp`總報酬、MDD降低1.30pp、Return／MDD提高2.68。R3在兩套參數下都提高總報酬，且在新參數下連風險調整績效也同步改善，因此ranking方向不是舊參數偶然。
+2. **R3 Adapted params拒絕。** 不使用R3時，`Param Only − Baseline = -58.85pp`；使用R3時，`R3 Adapted − R3 Sort Only = -37.03pp`。新參數雖把R3 MDD由19.20%降至12.92%、Return／MDD由9.59提高至11.38，但犧牲37.03pp總報酬，且仍未打敗Baseline的Return／MDD 13.86，不能升格正式參數。
+3. 新參數建立的候選母體品質較差：Param Only／R3 Adapted的Target mean為0.7013R／0.9356R，均低於舊ROOS的1.0912R／1.1080R。R3可在新候選池內把Target mean提高0.2343R，但無法恢復舊ROOS候選池品質；這比單純增加trials更值得關注。
+4. R3 Adapted的EV與Realized R為0.52R、MDD為12.92%，但平均投入資金報酬只有2.20%，低於Baseline 3.00%與R3 Sort Only 3.74%。新參數改善單筆R與風險路徑，卻沒有形成足夠的資本效率與總報酬。
+5. 正式策略與正式ROOS維持Baseline。R3保留`RESEARCH_DIRECTION_PASS / FORMAL_POLICY_NOT_ACCEPTED`；R3 Adapted params標記`REJECTED`。不再增加相同optimizer trials，也不再以同一search space重跑R3 adaptation。
+
+### 下一個單一研究方向
+
+直接測試先前保留的`R3 ranking × optional entry filters`交互作用，不先做最大回撤逐筆歸因。第一階段採一次粗粒度2×2 gate，固定舊正式ROOS、PIT Scores、R3三分桶、fixed risk、position cap、max positions、ATR entry／stop／trail、exit、rotation、交易成本與帳務：
+
+1. Current filters＋原buy-sort。
+2. Current filters＋R3。
+3. Optional entry filters全部關閉＋原buy-sort。
+4. Optional entry filters全部關閉＋R3。
+
+第一階段只強制關閉primary entry qualification中的`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；不關閉`high_len`事件定義、ATR buy／stop／trail、`use_kc` exit、reclaim re-entry、fixed risk或position cap。正式交互作用比較為`(4−3) − (2−1)`。若全部關閉後R3 ranking效果明顯改善，再逐一拆解五個filter；若沒有改善，停止filter-conflict假設，下一步才考慮重做strategy／capital-aligned Target。此gate不重訓模型、不重建PIT Scores、不執行optimizer。
 
