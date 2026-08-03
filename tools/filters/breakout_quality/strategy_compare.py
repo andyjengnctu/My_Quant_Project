@@ -28,6 +28,12 @@ from core.active_param_ensemble import (
     is_active_param_ensemble_payload,
     resolve_active_param_ensemble_mode,
 )
+from core.buy_sort import (
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
+)
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir
 from core.model_paths import resolve_default_primary_param_source_record
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
@@ -86,7 +92,7 @@ from tools.portfolio_sim.simulation_runner import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 COMPARISON_MODE_HARD_FILTER = "hard-filter"
 COMPARISON_MODE_SCORE_RANKING = "score-ranking"
 COMPARISON_MODES = (COMPARISON_MODE_HARD_FILTER, COMPARISON_MODE_SCORE_RANKING)
@@ -141,6 +147,16 @@ def _parse_args(argv=None):
         "--score-source", choices=SUPPORTED_RANKING_SCORE_SOURCES,
         default=SCORE_SOURCE_CANONICAL_RUNTIME,
         help="score-ranking使用的分數來源；hard-filter只接受canonical_runtime。",
+    )
+    parser.add_argument(
+        "--ranking-policy",
+        choices=SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
+        default=BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+        help=(
+            "score-ranking排序契約：score=原始Score；capital-adjusted-score="
+            "Score×正式預估部署率；capital-bucket-then-score="
+            "每日部署率三分桶後桶內按Score。"
+        ),
     )
     parser.add_argument("--model-architecture", default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
     parser.add_argument("--experiment-profile", default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE)
@@ -350,10 +366,23 @@ def _resolve_params_path(
         "只有非 OOS 敏感度診斷才可加 --allow-static-diagnostic 使用 run_best_params.json。"
     )
 
-def _comparison_output_dir_name(comparison_mode: str, labels: dict[str, str], *, param_policy: str) -> str:
+def _comparison_output_dir_name(
+    comparison_mode: str,
+    labels: dict[str, str],
+    *,
+    param_policy: str,
+    ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+) -> str:
     if param_policy != PARAM_POLICY_AUTO:
-        return f"{labels['output_dir']}_{PARAM_POLICY_SPECS[param_policy]['output_suffix']}"
-    return labels["output_dir"]
+        name = f"{labels['output_dir']}_{PARAM_POLICY_SPECS[param_policy]['output_suffix']}"
+    else:
+        name = labels["output_dir"]
+    if (
+        comparison_mode == COMPARISON_MODE_SCORE_RANKING
+        and ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+    ):
+        name += "_" + str(ranking_policy).replace("-", "_")
+    return name
 
 def canonical_strategy_compare_output_dir_names(
     comparison_mode: str | None = None,
@@ -876,7 +905,7 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
     lines = [
         ("# Breakout Quality Score 排序策略經濟效果對照" if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING else "# Breakout Quality 策略經濟效果對照"), "",
         f"- 期間：`{metadata['comparison_period']['start']}` ～ `{metadata['comparison_period']['end']}`",
-        f"- 參數檔：`{metadata['params_path']}`",
+        f"- 參數檔：`{project_relative_display_path(metadata['params_path'], project_root=PROJECT_ROOT)}`",
         f"- 參數型態：`{metadata['param_source_kind']}`",
         f"- 參數 selector：`{metadata.get('param_selector')}`",
         f"- Runtime members：`{metadata.get('runtime_member_count_min')}`～`{metadata.get('runtime_member_count_max')}`；min_agree=`{metadata.get('runtime_min_agree')}`",
@@ -884,6 +913,11 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
         f"- 歷史 active-param 無前視：`{metadata['lookahead_safe_active_param_schedule']}`",
         f"- Dataset：`{metadata['dataset']}`",
         f"- Score source：`{metadata.get('score_source')}`",
+        *(
+            [f"- Ranking policy：`{metadata.get('score_ranking_policy')}`"]
+            if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+            else []
+        ),
         f"- Benchmark：`{metadata['benchmark_ticker']}`",
         f"- 唯一差異：`{labels['difference_text']}`",
         (
@@ -1329,6 +1363,7 @@ def _render_flat_score_ranking_console_report(
             ("歷史 active-param 無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
             ("Dataset", metadata.get("dataset", "-")),
             ("Score source", metadata.get("score_source", "-")),
+            ("Ranking policy", metadata.get("score_ranking_policy", "-")),
             ("Benchmark", metadata.get("benchmark_ticker", "-")),
             ("唯一差異", _comparison_labels(COMPARISON_MODE_SCORE_RANKING)["difference_text"]),
             ("排序鍵", " → ".join(metadata.get("score_ranking_order") or [])),
@@ -1781,6 +1816,7 @@ def _render_strategy_console_report(
                 ("歷史 active-param 無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
                 ("Dataset", metadata.get("dataset", "-")),
                 ("Score source", metadata.get("score_source", "-")),
+                ("Ranking policy", metadata.get("score_ranking_policy", "-")),
                 ("Benchmark", metadata.get("benchmark_ticker", "-")),
                 ("唯一差異", labels["difference_text"]),
                 *(
@@ -2475,6 +2511,7 @@ def run_comparison(
     param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False,
     fixed_risk=None, max_position_cap_pct=None, allow_static_diagnostic=False,
     comparison_mode=COMPARISON_MODE_HARD_FILTER,
+    ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
     model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
@@ -2486,6 +2523,7 @@ def run_comparison(
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
+    ranking_policy = str(ranking_policy).strip()
     score_source = str(score_source)
     filter_id = str(filter_id)
     model_architecture = str(model_architecture)
@@ -2493,8 +2531,13 @@ def run_comparison(
     labels = _comparison_labels(comparison_mode)
     if score_source not in SUPPORTED_RANKING_SCORE_SOURCES:
         raise ValueError(f"不支援的 score source: {score_source!r}")
-    if comparison_mode == COMPARISON_MODE_HARD_FILTER and score_source != SCORE_SOURCE_CANONICAL_RUNTIME:
-        raise ValueError("hard-filter策略比較只接受canonical_runtime score source")
+    if ranking_policy not in SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES:
+        raise ValueError(f"不支援的 ranking policy: {ranking_policy!r}")
+    if comparison_mode == COMPARISON_MODE_HARD_FILTER:
+        if score_source != SCORE_SOURCE_CANONICAL_RUNTIME:
+            raise ValueError("hard-filter策略比較只接受canonical_runtime score source")
+        if ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+            raise ValueError("hard-filter策略比較不可指定capital-aware ranking policy")
 
     runtime_contract = None
     pit_contract = None
@@ -2524,6 +2567,7 @@ def run_comparison(
             "score_source": score_source,
             "model_architecture": manifest_architecture,
             "experiment_profile": manifest_profile,
+            "ranking_policy": ranking_policy,
         }
     else:
         try:
@@ -2556,6 +2600,7 @@ def run_comparison(
                 "score_source": SCORE_SOURCE_CANONICAL_RUNTIME,
                 "model_architecture": None,
                 "experiment_profile": None,
+                "ranking_policy": ranking_policy,
             }
 
     if (comparison_start_date is None) != (comparison_end_date is None):
@@ -2668,7 +2713,10 @@ def run_comparison(
 
     if output_dir_override is None:
         output_dir_name = _comparison_output_dir_name(
-            comparison_mode, labels, param_policy=param_policy
+            comparison_mode,
+            labels,
+            param_policy=param_policy,
+            ranking_policy=ranking_policy,
         )
         if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
             output_dir_name += "_selection_point_in_time"
@@ -2787,6 +2835,7 @@ def run_comparison(
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "comparison_mode": comparison_mode,
+        "score_ranking_policy": ranking_policy if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None,
         "score_source": score_source,
         "dataset": dataset,
         "data_dir": str(data_dir),
@@ -2823,13 +2872,32 @@ def run_comparison(
         "threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
         "threshold_used_as_gate": bool(comparison_mode == COMPARISON_MODE_HARD_FILTER),
         "score_ranking_order": (
-            ["breakout_quality_score_desc", "existing_buy_sort", "ticker_deterministic"]
+            (
+                []
+                if param_policy_contract["selector"] == "base_finalist_best"
+                else ["runtime_member_vote_count_desc"]
+            )
+            + (
+                ["breakout_quality_score_desc"]
+                if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+                else ["capital_adjusted_score_desc"]
+                if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED
+                else ["capital_deployment_bucket_desc", "breakout_quality_score_desc"]
+            )
+            + ["existing_buy_sort", "ticker_deterministic"]
+            if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+        ),
+        "capital_aware_ranking_contract": (
+            {
+                "projected_capital_fraction_source": "canonical_pretrade_proj_cost_div_sizing_capital",
+                "deployment_rate": "min(1, projected_capital_fraction / max_position_cap_pct)",
+                "capital_bucket_count": 3,
+                "capital_bucket_scope": "same_day_score_available_orderable_candidates",
+                "future_target_used": False,
+            }
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING
-            and param_policy_contract["selector"] == "base_finalist_best"
-            else [
-                "runtime_member_vote_count_desc", "breakout_quality_score_desc",
-                "existing_buy_sort", "ticker_deterministic",
-            ] if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+            and ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+            else None
         ),
         "unscorable_candidate_policy": "fallback_original_buy_sort_without_exclusion",
         "max_positions": int(max_positions),
@@ -2969,6 +3037,8 @@ def main(argv=None):
     if args.capture_audit_only:
         if args.comparison_mode != COMPARISON_MODE_SCORE_RANKING:
             raise ValueError("--capture-audit-only只支援score-ranking")
+        if args.ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+            raise ValueError("--capture-audit-only目前只讀取原始score ranking正式目錄")
         run_existing_score_ranking_capture_audit(
             filter_id=args.filter_id,
             model_architecture=args.model_architecture,
@@ -2996,6 +3066,7 @@ def main(argv=None):
         max_position_cap_pct=args.max_position_cap_pct,
         allow_static_diagnostic=args.allow_static_diagnostic,
         comparison_mode=args.comparison_mode,
+        ranking_policy=args.ranking_policy,
         filter_id=args.filter_id,
         score_source=args.score_source,
         model_architecture=args.model_architecture,
@@ -3017,6 +3088,9 @@ __all__ = [
     "_load_param_source", "_capacity_summary", "_normalize_yearly_completeness",
     "_to_json_native", "_resolve_comparison_period",
     "COMPARISON_MODE_HARD_FILTER", "COMPARISON_MODE_SCORE_RANKING",
+    "BREAKOUT_QUALITY_RANKING_POLICY_SCORE",
+    "BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED",
+    "BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET",
     "PARAM_POLICY_AUTO", "PARAM_POLICY_BASE_FINALIST_BEST", "PARAM_POLICY_BASE_FINALISTS_AGREE",
     "_resolve_params_path", "_resolve_param_selector", "_validate_requested_param_policy",
 ]

@@ -472,6 +472,26 @@ python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking
 
 此模式自動使用 `models/roos_base_finalists_agree.json`；候選先通過 `min_agree`，再依「finalist同意數由高到低 → 同票Quality Score由高到低 → 既有買入排序 → deterministic ticker」，輸出位於 `strategy_compare_score_ranking_base_finalists_agree/`。
 
+Capital-aware ranking為CLI-only研究消融，不加入互動選單、不重訓模型、不執行optimizer。固定既有`base-finalist-best` ROOS、交易規則、fixed risk、position cap、max positions與Selection PIT Score，只改排序政策：
+
+R2 `capital-adjusted-score`：
+
+```bash
+python apps/breakout_quality.py strategy-compare --dataset full --comparison-mode score-ranking --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --ranking-policy capital-adjusted-score --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
+```
+
+R2以正式盤前sizing結果計算`projected_capital_fraction = proj_cost / sizing_capital`，再計算`deployment_rate = min(1, projected_capital_fraction / max_position_cap_pct)`，排序鍵為「`Score × deployment_rate`由高到低 → 既有buy-sort → deterministic ticker」。不得另以停損距離近似`proj_cost`，也不得使用Future Target。輸出隔離於`strategy_compare_score_ranking_base_finalist_best_capital_adjusted_score_selection_point_in_time/`。
+
+R3 `capital-bucket-then-score`：
+
+```bash
+python apps/breakout_quality.py strategy-compare --dataset full --comparison-mode score-ranking --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --ranking-policy capital-bucket-then-score --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
+```
+
+R3只對當日具有有效PIT Score的可掛單候選，依正式`deployment_rate`的當日橫斷面1/3與2/3分位切成高／中／低三桶，先按部署桶高到低，再於桶內按Score高到低，最後沿用既有buy-sort。分桶只使用當日盤前已知候選與正式sizing，不使用Future Target或回放績效調整邊界；同部署率跨分位時保持同桶。輸出隔離於`strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score_selection_point_in_time/`。
+
+兩種政策都維持Score缺失契約：有效Score候選優先；缺分候選不排除、不填0，並完整回退原buy-sort。正式比較先看相較原始Score ranking能否恢復平均投入與曝險，再判斷總報酬、Return／MDD、Target mean、Realized R與capture；不得只因R2／R3優於原始Score就直接採用，仍須至少對照Baseline。
+
 - `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。
 - 可正常評分但低 Score 的候選仍保留，只是順位靠後。Hard-filter模式的正式不可評分事件仍保守REJECT；Score-ranking模式的缺分候選不得排除或填0，必須保存`available=false`與原始Score來源，排在有效Score後並完整回退既有buy-sort。Continuation與STOP後Re-entry沿用原始breakout Score及原始Score事件日期。
 - `[2] 策略績效驗證`完成score-ranking比較後，會直接在console依統一標題、段落、表格、判讀與工件清單格式完整顯示原策略比較及read-only capture attribution audit；改善、惡化、注意與中性分別以綠／紅／黃／灰呈現，非TTY或重新導向時自動退回純文字。Markdown仍以🟢／🔴／🟡／⚪保留相同語意，JSON／CSV保存完整資料；不產生HTML，若輸出目錄已有舊版HTML會在重建報表時刪除。

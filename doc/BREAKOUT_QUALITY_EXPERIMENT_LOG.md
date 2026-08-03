@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_210453_6f421c1(1).zip`；SHA256 `38d4f9799b89ebcaa4720d8ef5ae033917d5a68100c5723712502cd0a965a5a1`。Selection PIT實際起點已向前延伸至`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage由30.0%提高至60.0%，每fold均提高30.0pp |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_211701_c0cb6c3.zip`；SHA256 `1c8aa4144af00f7ae7696c90dbe649932650e89f16881da7a62b9d3382f6cc9e`。Selection PIT實際起點維持`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage為60.0%；本輪新增R2／R3 capital-aware ranking CLI-only消融，正式Baseline仍未變更 |
 | SHA256／最新結果 | 使用者提供coverage提升後正式2×2輸出：Baseline 182.62%、Sort Only 147.57%、Param Only 145.84%、Adapted 75.70%。固定舊參數與同一套新參數下，Score ranking分別使總報酬下降35.05pp與70.14pp；coverage不足不是主要失敗原因，Score Adapted params與完整Adapted系統均拒絕採用，正式策略維持Baseline。原始rolling輸出工件未包含於本ZIP，因此本文件記錄使用者提供結果，不宣稱於本輪重新計算 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score start=`auto`，由目前Dataset／Target／label completion與最小group契約解析最早合法月份，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
@@ -2396,4 +2396,59 @@ PIT builder既有`auto`最早合法日期、日期型fold identity與舊fold安�
 4. 依正式預估投入比例或初始停損距離作固定分桶，再於同桶內依Score排序；分桶邊界須由Selection train-only分布或固定可解釋契約決定，不得由2014～2020回放績效調參。
 
 第一階段只判斷能否在維持Target mean／Realized R優勢下恢復平均投入、曝險、總報酬與Return／MDD。Filter × Score分組消融維持第二順位；不再重跑相同原始Score Adapted optimizer，也不直接提高fixed risk、position cap或max positions。
+
+## 2026-08-03 — Capital-aware Ranking R2／R3 CLI-only消融
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260803_211701_c0cb6c3.zip`
+- SHA256：`1c8aa4144af00f7ae7696c90dbe649932650e89f16881da7a62b9d3382f6cc9e`
+- 本輪patch ZIP名稱與SHA256以交付回覆為準。
+
+### 實驗目的
+
+Coverage提升後的正式2×2已確認原始Score ranking在舊ROOS與新Adapted params下都降低投組報酬；共同機械鏈是Score偏好較寬初始停損候選，fixed-risk sizing使每slot投入與平均曝險下降。下一個單一變更固定舊正式ROOS與全部交易規則，只調整Score候選排序，使模型品質與正式可部署部位共同進入ranking。
+
+### 唯一變更
+
+新增`strategy-compare --ranking-policy`兩個CLI-only研究政策；正式預設仍為`score`，互動選單、optimizer、模型、Target與正式Baseline不變。
+
+1. R2 `capital-adjusted-score`：沿用正式候選已完成exact-accounting後的`proj_cost`，計算`projected_capital_fraction = proj_cost / sizing_capital`及`deployment_rate = min(1, projected_capital_fraction / max_position_cap_pct)`；有效Score候選依`Score × deployment_rate`降冪，再沿用既有buy-sort。
+2. R3 `capital-bucket-then-score`：只在當日有效PIT Score候選中，依正式`deployment_rate`的當日橫斷面1/3與2/3分位分成高／中／低三桶；先按桶別，再於桶內按Score，最後沿用既有buy-sort。相同部署率可落在同桶，不使用回放績效或Future Target決定邊界。
+3. Active-param ensemble仍先按vote count；同票候選使用指定policy。部署率使用member有限值中位數。PIT缺分候選不排除、不填0，並完整回退原buy-sort；全缺分日期不得因capital-aware欄位改變pre-PIT排序。
+4. 非原始policy輸出使用獨立目錄，避免覆蓋既有R1正式診斷。
+
+### 固定條件
+
+- 參數：既有`base_finalist_best` rolling active params。
+- Score：目前Selection PIT工件，實際起點`2011-01-01`。
+- 比較期間：預定固定`2014-01-01～2020-12-31`。
+- fixed risk、position cap、max positions、entry／stop／trail／exit、rotation、候選filters、交易成本、帳務與0050 benchmark全部不變。
+- 不重建Dataset、不relabel、不重建Continuous Target、不重訓模型、不執行rolling optimizer。
+- Future Target只可在portfolio replay完成後join作read-only診斷。
+
+### 實作與驗證
+
+- `core/buy_sort.py`集中管理三種ranking policy及正式部署率衍生公式，避免R2與R3各自重算sizing。
+- `core/portfolio_candidates.py`在候選形成後保存正式`projected_capital_fraction`、`deployment_rate`與policy；不修改股數或價格。
+- `core/portfolio_engine.py`將相同policy套用於active-param ensemble，同時保存候選replay診斷欄位。
+- `filters/breakout_quality/runtime.py`以ContextVar傳遞本次research ranking policy，預設仍為原始`score`。
+- `strategy_compare.py`新增`--ranking-policy`、policy-specific排序metadata與隔離輸出目錄。
+- T267既有direct synthetic case已擴充：驗證部署率公式、R2乘積排序、R3三分桶、全缺分fallback及ensemble vote優先；本輪不執行正式`apps/test_suite.py`。
+
+### Dataset／Label／模型工件需求
+
+本次程式變更不需要重建Dataset、Label、Continuous Target、PIT Scores或checkpoint。正式本機執行只需要既有完整市場資料、Selection PIT manifest／audit／scores及`roos_base_best.json`。
+
+### 結果與採用邊界
+
+尚未取得R2／R3完整portfolio replay結果，因此不得預判有效。正式判定需至少比較R0 Baseline、R1原始Score、R2與R3的總報酬、MDD、Return／MDD、平均曝險、平均實際投入、初始停損距離、Target mean、Realized R與Target capture。R2／R3只比R1好仍不足以採用；至少必須確認相較Baseline的主要投組指標與風險邊界。
+
+### 下一步
+
+使用本機完整資料依CLI分別執行R2與R3；取得輸出後回寫本節為`RESULT_AVAILABLE`，再決定是否保留其中一個ranking契約，或進入Filter × Score消融。
 

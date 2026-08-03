@@ -251,7 +251,14 @@ from filters.breakout_quality.market_set import (
 )
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from core.signal_utils import generate_signals
-from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD, sort_candidate_rows
+from core.buy_sort import (
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    BUY_LIMIT_OVERAGE_SORT_METHOD,
+    calc_projected_capital_metrics,
+    sort_candidate_rows,
+)
 from core.breakout_reentry import (
     create_breakout_reentry_signal_state,
     create_breakout_reentry_watch_state,
@@ -8629,6 +8636,107 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         ),
     )
 
+    projected_fraction, deployment_rate = calc_projected_capital_metrics(
+        proj_cost=150.0,
+        sizing_capital=1000.0,
+        max_position_cap_pct=0.30,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "capital_deployment_uses_canonical_projected_cost_and_position_cap",
+        (0.15, 0.50),
+        (round(projected_fraction, 6), round(deployment_rate, 6)),
+    )
+
+    capital_rows = [
+        {
+            "ticker": "A", "sort_value": 0.05, "proj_cost": 100.0,
+            "sizing_capital": 1000.0, "max_position_cap_pct": 0.30,
+            "projected_capital_deployment_rate": 1.0 / 3.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_score": 0.90,
+            "breakout_quality_rank": {"available": True},
+        },
+        {
+            "ticker": "B", "sort_value": 0.10, "proj_cost": 200.0,
+            "sizing_capital": 1000.0, "max_position_cap_pct": 0.30,
+            "projected_capital_deployment_rate": 2.0 / 3.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_score": 0.78,
+            "breakout_quality_rank": {"available": True},
+        },
+        {
+            "ticker": "C", "sort_value": 0.20, "proj_cost": 300.0,
+            "sizing_capital": 1000.0, "max_position_cap_pct": 0.30,
+            "projected_capital_deployment_rate": 1.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_score": 0.68,
+            "breakout_quality_rank": {"available": True},
+        },
+    ]
+    r2_rows = [
+        dict(row, breakout_quality_ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED)
+        for row in capital_rows
+    ]
+    r3_rows = [
+        dict(row, breakout_quality_ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET)
+        for row in capital_rows
+    ]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "capital_adjusted_score_multiplies_score_by_formal_deployment_rate",
+        ["C", "B", "A"],
+        [
+            row["ticker"]
+            for row in sort_candidate_rows(r2_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)
+        ],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "capital_bucket_policy_uses_daily_tercile_then_score",
+        ["C", "B", "A"],
+        [
+            row["ticker"]
+            for row in sort_candidate_rows(r3_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD)
+        ],
+    )
+
+    missing_capital_rows = [
+        {
+            "ticker": "A", "sort_value": 0.20, "proj_cost": 100.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
+            "breakout_quality_score": None,
+            "breakout_quality_rank": {"available": False},
+        },
+        {
+            "ticker": "B", "sort_value": 0.10, "proj_cost": 80.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
+            "breakout_quality_score": None,
+            "breakout_quality_rank": {"available": False},
+        },
+    ]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "capital_aware_missing_scores_preserve_original_buy_sort_fallback",
+        ["B", "A"],
+        [
+            row["ticker"]
+            for row in sort_candidate_rows(
+                missing_capital_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD
+            )
+        ],
+    )
+
     ensemble_rank_rows = []
     for ticker, votes, score, overage in (("A", 6, 0.20, 0.0), ("B", 5, 0.99, 0.0), ("C", 6, 0.80, 1.0)):
         for member_idx in range(votes):
@@ -8658,6 +8766,53 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         "ensemble_votes_remain_first_and_score_only_reorders_equal_vote_candidates",
         [("C", 6), ("A", 6), ("B", 5)],
         [(row["ticker"], row["ensemble_vote_count"]) for row in ensemble_ranked],
+    )
+
+
+    ensemble_capital_rows = []
+    for ticker, votes, score, deployment_rate in (
+        ("A", 2, 0.99, 0.10),
+        ("B", 2, 0.80, 0.80),
+        ("C", 3, 0.10, 1.00),
+    ):
+        for member_idx in range(votes):
+            ensemble_capital_rows.append({
+                "ticker": ticker,
+                "ensemble_member_key": f"m{member_idx}",
+                "params_obj": base,
+                "sort_value": 0.0,
+                "proj_cost": 100.0,
+                "sizing_capital": 1000.0,
+                "max_position_cap_pct": 0.30,
+                "projected_capital_fraction": deployment_rate * 0.30,
+                "projected_capital_deployment_rate": deployment_rate,
+                "use_breakout_quality_ranking": True,
+                "breakout_quality_ranking_policy": BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
+                "breakout_quality_score": score,
+                "breakout_quality_score_date": "2025-01-02",
+                "breakout_quality_rank": {
+                    "score": score,
+                    "available": True,
+                    "unavailable_reason": "",
+                    "score_date": "2025-01-02",
+                    "score_source": "selection_point_in_time",
+                    "shared_group_score": True,
+                    "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                },
+            })
+    ensemble_capital_ranked = _aggregate_ensemble_candidate_rows(
+        ensemble_capital_rows, min_agree=1
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ensemble_vote_precedes_capital_adjusted_score_and_equal_votes_use_r2",
+        [("C", 3), ("B", 2), ("A", 2)],
+        [
+            (row["ticker"], row["ensemble_vote_count"])
+            for row in ensemble_capital_ranked
+        ],
     )
     add_check(
         results,
@@ -9148,6 +9303,31 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 COMPARISON_MODE_SCORE_RANKING,
                 _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
                 param_policy=PARAM_POLICY_BASE_FINALISTS_AGREE,
+            ),
+        ),
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "capital_aware_ranking_policies_use_isolated_output_directories",
+        (
+            "strategy_compare_score_ranking_base_finalist_best_capital_adjusted_score",
+            "strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score",
+        ),
+        (
+            _comparison_output_dir_name(
+                COMPARISON_MODE_SCORE_RANKING,
+                _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+                ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
+            ),
+            _comparison_output_dir_name(
+                COMPARISON_MODE_SCORE_RANKING,
+                _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+                ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
             ),
         ),
     )
@@ -11440,7 +11620,10 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from core.buy_sort import BUY_LIMIT_OVERAGE_SORT_METHOD, sort_candidate_rows
+    from core.buy_sort import (
+        BUY_LIMIT_OVERAGE_SORT_METHOD,
+        sort_candidate_rows,
+    )
     from core.extended_signals import (
         attach_breakout_quality_rank,
         resolve_breakout_quality_rank,

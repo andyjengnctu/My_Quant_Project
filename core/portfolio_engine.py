@@ -9,8 +9,10 @@ from core.breakout_reentry import activate_breakout_reentry_signals_for_day
 from core.buy_sort import (
     BUY_LIMIT_OVERAGE_SORT_METHOD,
     ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD,
+    build_breakout_quality_ranking_prefixes,
     calc_buy_limit_overage_pct_from_row,
     calc_entry_type_priority_from_row,
+    resolve_breakout_quality_ranking_policy,
 )
 from core.config import get_buy_sort_method, get_ev_calc_method
 from core.portfolio_fast_data import (
@@ -398,6 +400,33 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         representative["ensemble_median_sort_value"] = float(median_sort)
         representative["sort_value"] = float(median_sort)
         representative["ensemble_member_keys"] = sorted(member_keys)
+        ranking_policies = {
+            str(row.get("breakout_quality_ranking_policy") or "score").strip()
+            for row in group_rows
+        }
+        if len(ranking_policies) > 1:
+            raise ValueError(
+                f"同一 ticker 的 ensemble members ranking policy不一致: ticker={ticker}"
+            )
+        representative["breakout_quality_ranking_policy"] = next(iter(ranking_policies), "score")
+        for metric_name in (
+            "projected_capital_fraction",
+            "projected_capital_deployment_rate",
+            "max_position_cap_pct",
+        ):
+            metric_values = []
+            for row in group_rows:
+                try:
+                    metric_value = float(row.get(metric_name))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(metric_value):
+                    metric_values.append(metric_value)
+            if metric_values:
+                metric_values.sort()
+                representative[metric_name] = float(
+                    metric_values[(len(metric_values) - 1) // 2]
+                )
         ranking_flags = {bool(row.get("use_breakout_quality_ranking", False)) for row in group_rows}
         if len(ranking_flags) > 1:
             raise ValueError(f"同一 ticker 的 ensemble members quality ranking 設定不一致: ticker={ticker}")
@@ -536,27 +565,20 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
     quality_ranking = bool(aggregated and aggregated[0].get("use_breakout_quality_ranking", False))
     if any(bool(item.get("use_breakout_quality_ranking", False)) != quality_ranking for item in aggregated):
         raise ValueError("同日 aggregated candidates 的 quality ranking 設定不一致")
+    if quality_ranking:
+        resolve_breakout_quality_ranking_policy(aggregated)
+        quality_prefixes = build_breakout_quality_ranking_prefixes(aggregated)
+    else:
+        quality_prefixes = {id(item): () for item in aggregated}
 
-    def _quality_key(item):
-        if not quality_ranking:
-            return (0, 0.0)
-        rank_payload = item.get("breakout_quality_rank")
-        if isinstance(rank_payload, dict) and not bool(rank_payload.get("available", False)):
-            return (1, 0.0)
-        raw_value = item.get("ensemble_median_quality_score", item.get("breakout_quality_score"))
-        try:
-            value = float(raw_value)
-        except (TypeError, ValueError):
-            return (1, 0.0)
-        if not math.isfinite(value):
-            return (1, 0.0)
-        return (0, -value)
+    def _quality_prefix(item):
+        return quality_prefixes.get(id(item), ())
 
     if active_sort_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         aggregated.sort(
             key=lambda item: (
                 -int(item.get("ensemble_vote_count", 0) or 0),
-                _quality_key(item),
+                *_quality_prefix(item),
                 float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0),
                 -float(item.get("proj_cost", 0.0) or 0.0),
                 str(item.get("ticker") or ""),
@@ -566,7 +588,7 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         aggregated.sort(
             key=lambda item: (
                 -int(item.get("ensemble_vote_count", 0) or 0),
-                _quality_key(item),
+                *_quality_prefix(item),
                 calc_entry_type_priority_from_row(item),
                 calc_buy_limit_overage_pct_from_row(item),
                 str(item.get("ticker") or ""),
@@ -576,7 +598,7 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
         aggregated.sort(
             key=lambda item: (
                 -int(item.get("ensemble_vote_count", 0) or 0),
-                _quality_key(item),
+                *_quality_prefix(item),
                 -float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0),
                 str(item.get("ticker") or ""),
             )
@@ -630,6 +652,16 @@ def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
         "breakout_quality_score": _optional_float(row.get("breakout_quality_score")),
         "breakout_quality_score_date": str(row.get("breakout_quality_score_date") or ""),
         "breakout_quality_score_source": str(row.get("breakout_quality_score_source") or ""),
+        "breakout_quality_ranking_policy": str(
+            row.get("breakout_quality_ranking_policy") or "score"
+        ),
+        "projected_capital_fraction": _optional_float(
+            row.get("projected_capital_fraction")
+        ),
+        "projected_capital_deployment_rate": _optional_float(
+            row.get("projected_capital_deployment_rate")
+        ),
+        "max_position_cap_pct": _optional_float(row.get("max_position_cap_pct")),
         "breakout_quality_score_available": bool(
             isinstance(row.get("breakout_quality_rank"), dict)
             and row["breakout_quality_rank"].get("available", False)

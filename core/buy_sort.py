@@ -6,6 +6,16 @@ from core.config import get_buy_sort_method
 BUY_LIMIT_OVERAGE_SORT_METHOD = 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST'
 ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD = 'ENTRY_TYPE_THEN_PROJ_COST'
 
+BREAKOUT_QUALITY_RANKING_POLICY_SCORE = 'score'
+BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED = 'capital-adjusted-score'
+BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET = 'capital-bucket-then-score'
+SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES = (
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
+)
+BREAKOUT_QUALITY_CAPITAL_BUCKET_COUNT = 3
+
 
 def _as_finite_float(value, *, default):
     try:
@@ -151,6 +161,25 @@ def format_buy_sort_metric_value(value, method=None):
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
 
 
+def calc_projected_capital_metrics(*, proj_cost, sizing_capital, max_position_cap_pct):
+    """Derive capital deployment from the canonical pre-trade sizing result."""
+
+    cost = _as_finite_float(proj_cost, default=math.nan)
+    capital = _as_finite_float(sizing_capital, default=math.nan)
+    cap_fraction = _as_finite_float(max_position_cap_pct, default=math.nan)
+    if (
+        not math.isfinite(cost)
+        or not math.isfinite(capital)
+        or not math.isfinite(cap_fraction)
+        or cost < 0.0
+        or capital <= 0.0
+        or cap_fraction <= 0.0
+    ):
+        return None, None
+    projected_fraction = cost / capital
+    deployment_rate = min(1.0, max(0.0, projected_fraction / cap_fraction))
+    return float(projected_fraction), float(deployment_rate)
+
 
 def _ranking_enabled_for_rows(rows):
     flags = {bool(item.get("use_breakout_quality_ranking", False)) for item in rows}
@@ -159,7 +188,23 @@ def _ranking_enabled_for_rows(rows):
     return bool(flags and True in flags)
 
 
-def _quality_score_desc_key(item):
+def resolve_breakout_quality_ranking_policy(rows):
+    policies = {
+        str(
+            item.get("breakout_quality_ranking_policy")
+            or BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+        ).strip()
+        for item in rows
+    }
+    if len(policies) > 1:
+        raise ValueError("同一候選集合的 breakout_quality_ranking_policy 不一致")
+    policy = next(iter(policies), BREAKOUT_QUALITY_RANKING_POLICY_SCORE)
+    if policy not in SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES:
+        raise ValueError(f"不支援的 breakout-quality ranking policy: {policy!r}")
+    return policy
+
+
+def _quality_score_parts(item):
     rank_payload = item.get("breakout_quality_rank")
     explicitly_unavailable = (
         isinstance(rank_payload, dict)
@@ -167,19 +212,109 @@ def _quality_score_desc_key(item):
     )
     score = _as_finite_float(item.get("breakout_quality_score"), default=math.nan)
     if explicitly_unavailable or not math.isfinite(score):
+        return False, 0.0
+    return True, float(score)
+
+
+def _quality_score_desc_key(item):
+    available, score = _quality_score_parts(item)
+    if not available:
         # (AI註: 缺少PIT Score不是REJECT，也不得填0；排在有效Score後再完整沿用原buy-sort。)
         return (1, 0.0)
     return (0, -score)
 
 
+def _capital_deployment_rate(item):
+    explicit = _as_finite_float(
+        item.get("projected_capital_deployment_rate"), default=math.nan
+    )
+    if math.isfinite(explicit) and 0.0 <= explicit <= 1.0:
+        return float(explicit)
+    projected_fraction, deployment_rate = calc_projected_capital_metrics(
+        proj_cost=item.get("proj_cost"),
+        sizing_capital=item.get("sizing_capital"),
+        max_position_cap_pct=item.get("max_position_cap_pct"),
+    )
+    if projected_fraction is None or deployment_rate is None:
+        raise ValueError(
+            "capital-aware ranking候選缺少正式sizing資本欄位："
+            f"ticker={item.get('ticker')}, proj_cost={item.get('proj_cost')}, "
+            f"sizing_capital={item.get('sizing_capital')}, "
+            f"max_position_cap_pct={item.get('max_position_cap_pct')}"
+        )
+    return float(deployment_rate)
+
+
+def _linear_quantile(values, quantile):
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        raise ValueError("quantile values不可為空")
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * float(quantile)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def build_breakout_quality_ranking_prefixes(rows):
+    """Build deterministic quality-ranking prefixes for one candidate set."""
+
+    rows = list(rows or [])
+    if not rows or not _ranking_enabled_for_rows(rows):
+        return {id(item): () for item in rows}
+    policy = resolve_breakout_quality_ranking_policy(rows)
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+        return {id(item): _quality_score_desc_key(item) for item in rows}
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED:
+        prefixes = {}
+        for item in rows:
+            available, score = _quality_score_parts(item)
+            prefixes[id(item)] = (
+                (1, 0.0)
+                if not available
+                else (0, -(score * _capital_deployment_rate(item)))
+            )
+        return prefixes
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET:
+        available_rows = [item for item in rows if _quality_score_parts(item)[0]]
+        rates = [_capital_deployment_rate(item) for item in available_rows]
+        if rates:
+            lower_boundary = _linear_quantile(rates, 1.0 / BREAKOUT_QUALITY_CAPITAL_BUCKET_COUNT)
+            upper_boundary = _linear_quantile(rates, 2.0 / BREAKOUT_QUALITY_CAPITAL_BUCKET_COUNT)
+        else:
+            lower_boundary = upper_boundary = 0.0
+        prefixes = {}
+        for item in rows:
+            available, score = _quality_score_parts(item)
+            if not available:
+                prefixes[id(item)] = (1, 0, 0.0)
+                continue
+            rate = _capital_deployment_rate(item)
+            bucket_priority = 0 if rate >= upper_boundary else 1 if rate >= lower_boundary else 2
+            prefixes[id(item)] = (0, bucket_priority, -score)
+        return prefixes
+    raise ValueError(f"不支援的 breakout-quality ranking policy: {policy!r}")
+
+
 def sort_candidate_rows(rows, method=None):
     active_method = get_buy_sort_method() if method is None else method
     quality_ranking = _ranking_enabled_for_rows(rows) if rows else False
+    quality_prefixes = (
+        build_breakout_quality_ranking_prefixes(rows) if quality_ranking else {}
+    )
+
+    def quality_prefix(item):
+        return quality_prefixes.get(id(item), ())
+
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
         if quality_ranking:
             rows.sort(
                 key=lambda item: (
-                    _quality_score_desc_key(item),
+                    *quality_prefix(item),
                     _as_finite_float(item.get('sort_value'), default=math.inf),
                     -_as_finite_float(item.get('proj_cost'), default=0.0),
                     _descending_text_key(item.get('ticker')),
@@ -198,7 +333,7 @@ def sort_candidate_rows(rows, method=None):
         if quality_ranking:
             rows.sort(
                 key=lambda item: (
-                    _quality_score_desc_key(item),
+                    *quality_prefix(item),
                     calc_entry_type_priority_from_row(item),
                     calc_buy_limit_overage_pct_from_row(item),
                     str(item.get('ticker') or ''),
@@ -216,7 +351,7 @@ def sort_candidate_rows(rows, method=None):
     if quality_ranking:
         rows.sort(
             key=lambda item: (
-                _quality_score_desc_key(item),
+                *quality_prefix(item),
                 -_as_finite_float(item.get('sort_value'), default=-math.inf),
                 _descending_text_key(item.get('ticker')),
             )
@@ -230,7 +365,6 @@ def sort_candidate_rows(rows, method=None):
             reverse=True,
         )
     return rows
-
 
 
 def is_sort_value_better(candidate_value, incumbent_value, method=None):

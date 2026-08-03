@@ -1,4 +1,8 @@
-from core.buy_sort import calc_buy_sort_value, sort_candidate_rows
+from core.buy_sort import (
+    calc_buy_sort_value,
+    calc_projected_capital_metrics,
+    sort_candidate_rows,
+)
 from core.config import get_buy_sort_method
 from core.exact_accounting import build_buy_ledger_from_price, milli_to_money
 from filters.breakout_quality.runtime import (
@@ -129,6 +133,15 @@ def _make_candidate_row(
         if quality_rank is None
         else normalize_breakout_quality_rank_payload(quality_rank)
     )
+    ranking_context = get_breakout_quality_ranking_source_context()
+    max_position_cap_pct = float(getattr(params, "max_position_cap_pct"))
+    projected_capital_fraction, projected_capital_deployment_rate = (
+        calc_projected_capital_metrics(
+            proj_cost=est_cost,
+            sizing_capital=sizing_capital,
+            max_position_cap_pct=max_position_cap_pct,
+        )
+    )
     row = {
         'ticker': ticker,
         'type': candidate_type,
@@ -159,12 +172,16 @@ def _make_candidate_row(
         'candidate_date': trade_date,
         'signal_date': signal_date,
         'sizing_capital': sizing_capital,
+        'max_position_cap_pct': max_position_cap_pct,
+        'projected_capital_fraction': projected_capital_fraction,
+        'projected_capital_deployment_rate': projected_capital_deployment_rate,
         'params_obj': params,
         'max_qty': max_qty,
         'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
         'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
         'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
         'use_breakout_quality_ranking': bool(normalized_quality_rank is not None),
+        'breakout_quality_ranking_policy': str(ranking_context.ranking_policy),
         'breakout_quality_score': (
             None
             if normalized_quality_rank is None

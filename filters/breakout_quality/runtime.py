@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID
+from core.buy_sort import (
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
+)
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -29,6 +33,7 @@ class BreakoutQualityRankingSourceContext:
     score_source: str = SCORE_SOURCE_CANONICAL_RUNTIME
     model_architecture: str | None = None
     experiment_profile: str | None = None
+    ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE
 
 
 _RANKING_SOURCE_CONTEXT: ContextVar[BreakoutQualityRankingSourceContext] = ContextVar(
@@ -51,6 +56,7 @@ def breakout_quality_ranking_source_context(
     score_source: str,
     model_architecture: str | None = None,
     experiment_profile: str | None = None,
+    ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 ) -> Iterator[BreakoutQualityRankingSourceContext]:
     source = str(score_source).strip()
     if source not in SUPPORTED_RANKING_SCORE_SOURCES:
@@ -58,10 +64,14 @@ def breakout_quality_ranking_source_context(
     if source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
         if not str(model_architecture or "").strip() or not str(experiment_profile or "").strip():
             raise ValueError("Selection PIT ranking source必須指定model architecture與experiment profile")
+    resolved_policy = str(ranking_policy).strip()
+    if resolved_policy not in SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES:
+        raise ValueError(f"不支援的breakout-quality ranking policy: {resolved_policy!r}")
     context = BreakoutQualityRankingSourceContext(
         score_source=source,
         model_architecture=None if model_architecture is None else str(model_architecture),
         experiment_profile=None if experiment_profile is None else str(experiment_profile),
+        ranking_policy=resolved_policy,
     )
     token = _RANKING_SOURCE_CONTEXT.set(context)
     try:
