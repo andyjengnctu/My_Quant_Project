@@ -2724,3 +2724,66 @@ python apps/breakout_quality.py strategy-filter-gate --dataset full --param-poli
 
 尚未取得本機A～E實際績效。此修正只排除錯誤profile路徑，狀態維持`IMPLEMENTED`；使用者須重新執行同一條`strategy-filter-gate`命令。
 
+
+## 2026-08-04 — Optional Entry Filters × Ranking A～E Gate 本機正式結果
+
+### 狀態
+
+`RESULT_AVAILABLE / FILTER_CONFLICT_HYPOTHESIS_REJECTED / OPTIONAL_FILTERS_REQUIRED / FORMAL_BASELINE_UNCHANGED`
+
+### 結果程式基準
+
+- ZIP：`test-branch-1_20260804_005030_da9891c.zip`
+- SHA256：`3b0d7bbdec8045c271cb635cee04e615d783e073442f3a5131736c9f59793cd7`
+- 比較期間：`2014-01-01～2020-12-31`
+- 參數：舊正式`base_finalist_best` rolling active params
+- Score source：Selection PIT `selection_point_in_time`
+- Future Target：只在portfolio replay完成後離線join，未進入候選、排序、資金配置或成交決策
+
+### A～E正式結果
+
+| 指標 | A 目前filters＋原排序 | B 目前filters＋R3 | C filters全關＋原排序 | D filters全關＋R3 | E filters全關＋raw Score |
+|---|---:|---:|---:|---:|---:|
+| 淨總報酬 | 182.62% | 184.12% | 92.73% | 104.51% | 71.20% |
+| 最大回撤 | 13.18% | 19.20% | 28.17% | 28.81% | 25.96% |
+| Return／MDD | 13.86 | 9.59 | 3.29 | 3.63 | 2.74 |
+| EV／平均Realized R | 0.28R | 0.34R | 0.43R | 0.41R | 0.19R |
+| 平均曝險 | 77.33% | 70.68% | 89.64% | 81.22% | 61.91% |
+| 平均實際投入 | 164,608 | 142,638 | 153,156 | 117,273 | 73,216 |
+| 平均初始停損距離 | 6.39% | 7.62% | 4.91% | 6.89% | 9.67% |
+| 選中候選Target mean | 1.09R | 1.11R | 0.60R | 0.98R | 1.15R |
+| Aggregate Target capture | 0.30 | 0.33 | 0.81 | 0.45 | 0.19 |
+| 平均投入資金報酬 | 3.00% | 3.74% | 1.89% | 2.50% | 1.88% |
+
+主要對稱差異：
+
+- `B−A`：總報酬`+1.51pp`、MDD`+6.02pp`、Return／MDD`−4.27`、Realized R`+0.07R`、Target mean`+0.02R`、capture`+0.03`。
+- `D−C`：總報酬`+11.78pp`、MDD`+0.64pp`、Return／MDD`+0.34`、Realized R`−0.02R`、Target mean`+0.38R`、capture`−0.35`。
+- `E−C`：總報酬`−21.53pp`、MDD`−2.21pp`、Return／MDD`−0.55`、Realized R`−0.24R`、Target mean`+0.55R`、capture`−0.61`。
+- `C−A`：總報酬`−89.89pp`、MDD`+14.99pp`、Return／MDD`−10.57`。
+- `D−B`：總報酬`−79.62pp`、MDD`+9.61pp`、Return／MDD`−5.96`。
+- `D−E`：總報酬`+33.31pp`、MDD`+2.84pp`、Return／MDD`+0.89`、Realized R`+0.22R`、Target mean`−0.17R`、capture`+0.26`。
+- R3 interaction `(D−C)−(B−A)`：總報酬`+10.27pp`，但不得脫離C／D的絕對績效解讀。
+
+### 正式判定
+
+1. **Optional entry filters是必要的候選品質層，不是壓制Score的主要衝突源。** 全關後原排序總報酬由182.62%降至92.73%、MDD由13.18%升至28.17%；R3由184.12%降至104.51%、MDD由19.20%升至28.81%。三種ranking在全關候選池的絕對績效都遠低於目前filters情境。
+2. **正向R3 interaction只表示R3對劣化候選池具有較強的相對補救能力，不代表關閉filters有利。** D相較C增加11.78pp，但D仍比B少79.62pp總報酬，且Return／MDD只有3.63。
+3. **原始Score在filters全關後沒有恢復，反而更差。** E雖把Target mean提高至1.15R，但平均投入只剩73,216、停損距離擴至9.67%、Realized R降至0.19R、capture降至0.19，總報酬只剩71.20%。這再次確認raw Score偏向高Future Target但低部署／低可實現性候選。
+4. **R3資金分桶機制仍有獨立價值。** 在相同filters全關候選池，D相較E增加33.31pp總報酬、0.22R Realized R與0.26 capture；R3以略低Target mean換取更高部署與可實現性。但此價值不足以補救filters全關造成的候選品質崩落。
+5. C的capture 0.81不可解讀為策略更佳；其平均Target只有0.58R／Target mean 0.60R，分母較低且平均投入資金報酬只有1.89%。採用判定仍以絕對報酬、MDD、Return／MDD與資本效率為主。
+6. **Filter-conflict粗粒度假設拒絕。** 不進入逐一關閉EMA、BB、Volume、Return與False-breakout filters的拆解；正式filters、正式ROOS與正式Baseline均維持不變。R3仍保留`RESEARCH_DIRECTION_PASS / FORMAL_POLICY_NOT_ACCEPTED`。
+
+### 下一個單一研究方向
+
+轉向`Capital-aligned Target feasibility audit`，不先重訓模型。固定目前optional filters、舊正式ROOS、Selection PIT Scores、R3與portfolio規則，使用既有orderable candidate／Future Target與正式盤前sizing欄位，建立只供離線稽核的：
+
+`capital_opportunity_proxy = no_time_target_R × deployment_rate`
+
+其中`deployment_rate`必須重用正式`proj_cost / sizing_capital / max_position_cap_pct`並截斷於1，不另寫近似sizing。先比較raw No-time Target與capital proxy對下列結果的日內排序能力：實際投入資金報酬、Realized R、`Realized R × deployment_rate`、top-k retention及年度穩定性。此audit不得進runtime、不得使用OOS結果調參、不得建立checkpoint或PIT Scores。
+
+只有capital proxy在多數年度與主要投組貢獻指標上穩定優於現行No-time Target，才建立新的versioned Continuous Target與PIT ranker；若未通過，停止目前continuous-target家族，不以不同乘方、權重或分桶數繼續Selection調參。
+
+### Dataset／Label／模型工件需求
+
+本次結果回寫不修改程式，不重建Dataset、Label、Continuous Target、PIT Scores或checkpoint。下一個feasibility audit可直接使用既有Selection策略比較候選工件、Future Target與正式sizing payload；只有audit通過後才評估新Target arrays與模型重訓。
