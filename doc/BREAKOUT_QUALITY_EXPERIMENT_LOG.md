@@ -22,7 +22,7 @@
 - 後續建議必須優先提供可立即執行的實驗、實作、診斷或修正；不得把等待新的 forward labeled period 當成主要下一步。
 - 本規則取代文件中所有「因 OOS 已查看而不得再研究」或「只能等待新資料」的概括性限制；個別已淘汰方向仍維持淘汰，除非提出本質不同的新機制。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-08-02**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-08-03**。
 
 ---
 
@@ -32,10 +32,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪來源 `test-branch-1_20260802_191150_34070ba(1).zip`，SHA256 `517d655859da3a4043702edc999c91b3fb602a49dfe3bf3bd40c51e8618a95c7`；沿用2014-01-01～2020-12-31 Selection PIT Baseline／Score Sort、read-only capture attribution與策略參數適應實作；本輪將`[2] 策略績效驗證 → [1/Enter] 比較目前策略`的兩份互動簡表合併為單一10區塊一階報表，完整保留既有數據且結論移至最後 |
-| SHA256 | 來源ZIP SHA256 `517d655859da3a4043702edc999c91b3fb602a49dfe3bf3bd40c51e8618a95c7`。既有3.78結果維持：Baseline淨總報酬182.62%、MDD 13.18%、RoMD 13.86；Score Sort淨總報酬144.80%、MDD 21.53%、RoMD 6.73。模型層通過、Sort Only拒絕；本輪只重組互動報表，不重算或改寫任何績效、capture或decision gate |
+| 基準 ZIP | `test-branch-1_20260803_122159_172cc87(1).zip`；SHA256 `5c8653168fe3e42d532275466e18e6e0fce839ae08adf35ecd09c18a518f9f5a`。目前策略參數適應只訓練一套Score Adapted rolling params，並以Baseline／Sort Only／Param Only／Adapted做正式2×2 Selection回放；Baseline／Sort Only直接載入`[1] 比較目前策略`正式工件，不重跑舊參數replay |
+| SHA256／最新結果 | 使用者提供的正式2×2輸出：Baseline 182.62%、Sort Only 144.80%、Param Only 65.46%、Adapted 59.71%；新Score Adapted params與完整Adapted系統均拒絕採用，正式策略維持Baseline。原始rolling輸出工件未包含於本ZIP，因此本文件記錄使用者提供結果，不宣稱於本輪重新計算 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
-| Policy 預設 | architecture=`inception_time_v1`、filter id=`breakout_quality_v1`；depth=`6`、kernels=`39/19/9`、RF=`229 bars`；experiment profile=`unique_group_sampling`；batch=`128 groups`、patience=`1`、final refit=`selected_epochs`；device=`auto`、mixed precision=`true/auto dtype`、deterministic=`true`、TF32=`false` |
+| Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score period自2014-01-01起，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | 正式policy退回既有 `breakout_quality_v1` 300×10 feature bank與固定百分比Label；不需重建Dataset、relabel、9A checkpoint或9A scores。10A Market Bank、checkpoint、manifest與research scores保留於獨立legacy路徑供歷史重現 |
 
@@ -2241,3 +2241,51 @@ ensemble以ticker聚合，但不同參數member可能在同一交易日承接不
 ### 驗證
 
 T267新增不同score date partial availability保留候選、回退原排序、逐member rank保存及同score date分叉fail-fast案例；T283新增deterministic ensemble契約錯誤不進sequential fallback案例。正式`apps/test_suite.py`依專案規定由使用者本機執行。
+
+## 2026-08-03 — Ranking × Parameter正式2×2結果與capital-aware ranking下一步
+
+### 狀態
+
+`RESULT_AVAILABLE / SCORE_ADAPTED_PARAMS_REJECTED / ADAPTED_SYSTEM_REJECTED`
+
+本節依使用者提供的完整正式輸出摘要回寫。原始`rolling_validation/`結果工件與完整console輸出未包含於本ZIP，故數值視為已提供的正式結果紀錄，本輪未重新執行optimizer或portfolio replay。
+
+### 程式基準
+
+- ZIP：`test-branch-1_20260803_122159_172cc87(1).zip`
+- SHA256：`5c8653168fe3e42d532275466e18e6e0fce839ae08adf35ecd09c18a518f9f5a`
+- 比較期間：2014-01-01～2020-12-31 Selection PIT
+- 正式2×2：Baseline＝舊ranking＋舊ROOS；Sort Only＝Score ranking＋舊ROOS；Param Only＝舊ranking＋同一套Score Adapted params；Adapted＝Score ranking＋同一套Score Adapted params
+
+### 固定條件
+
+Dataset、Continuous Target、Selection PIT Scores、PIT模型驗證、Score來源、候選filters、entry／stop／exit、fixed risk、position cap、max positions、rotation、交易帳務與Future Target post-replay-only契約不變。新參數只由Score-ranking rolling optimizer訓練一次；Param Only與Adapted使用完全相同的active-param schedule。
+
+### 主要結果
+
+| 指標 | Baseline | Sort Only | Param Only | Adapted |
+|---|---:|---:|---:|---:|
+| 淨總報酬 | 182.62% | 144.80% | 65.46% | 59.71% |
+| 最大回撤 | 13.18% | 21.53% | 14.57% | 12.64% |
+| Return／MDD | 13.86 | 6.73 | 4.49 | 4.72 |
+| 平均曝險 | 77.33% | 54.20% | 73.21% | 50.69% |
+| 平均初始停損距離 | 6.39% | 9.21% | 6.36% | 10.46% |
+| 平均實際投入金額 | 164,608 | 107,805 | 121,640 | 65,584 |
+| 平均Realized R | 0.28R | 0.35R | 0.34R | 0.38R |
+| 選中候選Target mean | 1.0868R | 1.2079R | 0.7571R | 1.2178R |
+
+補充：新參數使交易數由Baseline 527筆降至Param Only 355筆，平均持有日由41.94日升至59.25日。新參數本身即顯著劣於舊正式ROOS。
+
+### 歸因與判定
+
+- `Sort Only − Baseline`與`Adapted − Param Only`均顯示Score ranking提高Future Target與單筆Realized R，但降低資金投入、平均曝險及總報酬。
+- 共同機械鏈為：Score ranking偏好較寬初始停損候選；fixed-risk sizing下每股風險提高，買入股數與每slot投入金額隨之下降，平均曝險約降低22～23個百分點。
+- 現行No-time Target描述未來價格機會，未直接納入實際初始停損距離、固定風險後部位金額、剩餘現金或正式entry／stop／exit capture效率。因此「排序能力PASS」不等於「投組經濟效果PASS」。
+- PIT模型排序能力與較高Future Target選擇維持`PASS`；舊參數Score ranking、Score Adapted params與完整Adapted系統均為`REJECTED`；正式策略維持Baseline。
+
+### 下一個單一研究方向
+
+優先建立capital-aware ranking／停損距離消融的正式實驗契約，先固定舊正式ROOS與全部交易規則，只改候選排序：原ranking、原始Score ranking、Score加停損距離約束、停損距離分桶後桶內Score ranking。第一階段只做程式契約與可回放診斷，不重訓模型、不重新執行rolling optimizer，也不直接提高fixed risk、position cap或max positions。
+
+後續第二順位為Filter × Score分組消融；第三順位才是Selection PIT Score向前回補可行性。現有7 folds training calendar coverage為0%、10%、20%、30%、40%、50%、60%，目前不足以單獨證明coverage是Adapted失敗主因。
+

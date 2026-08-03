@@ -482,8 +482,15 @@ python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking
 ```
 
 - `--capture-audit-only`只支援score-ranking，並要求既有`strategy_comparison.json`、兩組transaction CSV及兩組selected-target diagnostics完整存在；缺工件時fail-fast，不會悄悄重跑或改用其他Score來源。
-- Optimizer search space 固定 ranking=`False`，不得把此機制放入參數搜尋。
-- 此實驗是在已查看舊 OOS 後進行的探索性機制比較；即使改善，也必須由全新 forward period 驗證後才可考慮部署。
+- 一般Optimizer search space固定ranking=`False`，不得把ranking開關設成trial維度。策略適應使用專用固定context，而不是搜尋ranking開關。
+- 完成並保存上述`[1]`正式比較工件後，可執行單一Score Adapted rolling驗證：
+
+```bash
+python apps/breakout_quality.py strategy-adapt --dataset full --param-policy base-finalist-best
+```
+
+  此流程只訓練一套固定`use_breakout_quality_ranking=True`、hard filter=False的新active params；接著輸出Baseline、Sort Only、Param Only、Adapted四組2×2回放。Param Only與Adapted共用完全相同的新active params，只有ranking不同；Baseline／Sort Only直接讀取既有正式比較工件，不重跑舊參數replay。結果只屬`ROLLING_SELECTION_DIAGNOSTIC`，不執行完整Selection final refit或正式OOS。
+- 此研究是在已查看既有OOS後進行的迭代證據；任何候選改法仍須凍結契約後再做無前視驗證，不能由Selection結果直接部署。
 
 ### `run_best_params.json` 的用途與產生方式
 
