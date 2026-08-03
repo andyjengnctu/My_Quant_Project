@@ -12236,6 +12236,8 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     )
     from strategies.breakout.search_space import build_trial_params
     from tools.filters.breakout_quality.strategy_adapt import (
+        _adaptation_arm_identity,
+        _adaptation_relative_dir,
         _build_improved_score_baseline_contract,
         _build_training_score_coverage_contract,
         _current_pair_artifact_paths,
@@ -12294,6 +12296,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         model_architecture=settings.model_architecture,
         experiment_profile=settings.experiment_profile,
         param_policy="base-finalist-best",
+        ranking_policy="score",
         trials_per_fold=OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
         max_positions=7,
         rotation="on",
@@ -12348,6 +12351,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             settings.model_architecture,
             settings.experiment_profile,
             "selection_point_in_time",
+            False,
             "synthetic-score-adapted-runtime",
         ),
         (
@@ -12356,7 +12360,40 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             runtime_kwargs["model_architecture"],
             runtime_kwargs["experiment_profile"],
             runtime_kwargs["score_source"],
+            "ranking_policy" in runtime_kwargs,
             session_spec["runtime_cache_identity"],
+        ),
+    )
+
+    r3_args = SimpleNamespace(**vars(args))
+    r3_args.ranking_policy = "capital-bucket-then-score"
+    r3_arm_name, r3_arm_label = _adaptation_arm_identity(r3_args)
+    r3_session_spec = _optimizer_session_spec(
+        output_dir=Path(tempfile.gettempdir()),
+        args=r3_args,
+        runtime_contract={"runtime_identity_sha256": "synthetic-r3-runtime"},
+        arm_name=r3_arm_name,
+        ranking_enabled=True,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "r3_adapted_uses_isolated_output_and_optimizer_runtime_policy",
+        (
+            "r3_adapted",
+            "R3 Capital-bucket Adapted",
+            "capital-bucket-then-score",
+            Path(
+                "models/research/breakout_quality/score_ranking_adaptation/"
+                "capital_bucket_then_score/rolling_validation"
+            ),
+        ),
+        (
+            r3_arm_name,
+            r3_arm_label,
+            r3_session_spec["runtime_context_spec"]["kwargs"]["ranking_policy"],
+            _adaptation_relative_dir(r3_args),
         ),
     )
 
@@ -13009,7 +13046,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             "Param Only" in compact_console and "Adapted" in compact_console,
             "Sort Only − Baseline" in compact_console,
             "Adapted − Param Only" in compact_console,
-            "新參數只由Score ranking rolling optimizer訓練一次" in compact_console,
+            "新參數只由指定ranking policy的rolling optimizer訓練一次" in compact_console,
         ),
     )
 
@@ -13036,9 +13073,12 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
                 "[2] 驗證策略參數適應",
             )
         )
-        and adapt_source.count('arm_name="score_adapted"') >= 2
+        and '"r3_adapted", "R3 Capital-bucket Adapted"' in adapt_source
+        and 'R3_ADAPTATION_RELATIVE_DIR' in adapt_source
         and 'arm_name="baseline_adapted"' not in adapt_source
         and '"optimizer_training_arm_count": 1' in adapt_source
+        and '"--ranking-policy", str(args.ranking_policy)' in adapt_source
+        and '"ranking_policy": str(args.ranking_policy)' in adapt_source
         and 'arm_name="param_only"' in adapt_source
         and 'arm_name="adapted"' in adapt_source
         and 'params_path=adapted_arm["params_path"]' in adapt_source
@@ -13067,7 +13107,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     summary["workflow"] = "selection_ranking_parameter_2x2_single_adapted_optimizer"
     summary["result_status"] = "IMPLEMENTED_RESULT_NOT_AVAILABLE"
     summary["trials_per_fold"] = int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
-    summary["optimization_arms"] = ["score_adapted"]
+    summary["optimization_arms"] = ["score_adapted", "r3_adapted_supported"]
     summary["replay_arms"] = ["baseline", "sort_only", "param_only", "adapted"]
     summary["final_selection_refit"] = False
     return results, summary

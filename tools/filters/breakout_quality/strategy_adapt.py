@@ -1,4 +1,4 @@
-"""Selection PIT Score-ranking rolling parameter-adaptation validation."""
+"""Selection PIT ranking-policy rolling parameter-adaptation validation."""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ from config.breakout_quality import (
     get_breakout_quality_workflow_settings,
 )
 from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
+from core.buy_sort import (
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+)
 from core.dataset_profiles import get_dataset_dir
 from core.raw_universe_contract import RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD
 from core.runtime_utils import get_taipei_now
@@ -96,15 +100,39 @@ ADAPTATION_STATUS = "ROLLING_SELECTION_DIAGNOSTIC"
 ADAPTATION_RELATIVE_DIR = Path(
     "models/research/breakout_quality/score_ranking_adaptation/rolling_validation"
 )
+R3_ADAPTATION_RELATIVE_DIR = Path(
+    "models/research/breakout_quality/score_ranking_adaptation/"
+    "capital_bucket_then_score/rolling_validation"
+)
+SUPPORTED_ADAPTATION_RANKING_POLICIES = (
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
+)
 CURRENT_PAIR_MANIFEST_FILENAME = "adaptation_pair_manifest.json"
+
+
+def _adaptation_relative_dir(args) -> Path:
+    if str(args.ranking_policy) == BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+        return ADAPTATION_RELATIVE_DIR
+    if str(args.ranking_policy) == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET:
+        return R3_ADAPTATION_RELATIVE_DIR
+    raise ValueError(f"不支援的strategy adaptation ranking policy: {args.ranking_policy!r}")
+
+
+def _adaptation_arm_identity(args) -> tuple[str, str]:
+    if str(args.ranking_policy) == BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+        return "score_adapted", "Score Adapted"
+    if str(args.ranking_policy) == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET:
+        return "r3_adapted", "R3 Capital-bucket Adapted"
+    raise ValueError(f"不支援的strategy adaptation ranking policy: {args.ranking_policy!r}")
 
 def _parse_args(argv=None):
     settings = get_breakout_quality_workflow_settings()
     parser = argparse.ArgumentParser(
         description=(
             "沿用正式Baseline ROOS與rolling fold schedule，由目前training policy提供"
-            "trials／fold，只在Selection PIT Score ranking下訓練一套Adapted params，"
-            "再以舊／Score ranking回放舊／新兩套參數，輸出四組2×2 Selection診斷。"
+            "trials／fold，只在指定Selection PIT ranking policy下訓練一套Adapted params，"
+            "再以舊／指定ranking回放舊／新兩套參數，輸出四組2×2 Selection診斷。"
         )
     )
     parser.add_argument("--dataset", choices=("reduced", "full"), default=settings.strategy_dataset)
@@ -124,6 +152,15 @@ def _parse_args(argv=None):
         help=(
             "每個rolling fold的optimizer trial數；預設讀取目前training policy。"
             "Baseline既有工件的歷史trial數只作診斷，不作硬性限制"
+        ),
+    )
+    parser.add_argument(
+        "--ranking-policy",
+        choices=SUPPORTED_ADAPTATION_RANKING_POLICIES,
+        default=BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+        help=(
+            "rolling optimizer與Sort Only／Adapted回放使用的ranking policy。"
+            "預設score保留既有流程；R3研究使用capital-bucket-then-score"
         ),
     )
     parser.add_argument("--max-positions", type=int, default=settings.strategy_max_positions)
@@ -176,9 +213,10 @@ def _current_pair_artifact_paths(output_dir: Path) -> dict[str, Path]:
 
 
 def _canonical_current_pair_output_dir(*, root: Path, args) -> Path:
-    del args
     return (
-        root / ADAPTATION_RELATIVE_DIR / "baseline_sort_only_improved_score_coverage"
+        root
+        / _adaptation_relative_dir(args)
+        / "baseline_sort_only_improved_score_coverage"
     ).resolve()
 
 
@@ -274,6 +312,7 @@ def _load_current_pair_if_compatible(
     expected = {
         "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
         "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        "score_ranking_policy": str(args.ranking_policy),
         "dataset": str(args.dataset),
         "params_file_sha256": str(baseline_contract["sha256"]),
         "requested_param_policy": str(args.param_policy),
@@ -287,6 +326,12 @@ def _load_current_pair_if_compatible(
     }
     for key, expected_value in expected.items():
         actual = metadata.get(key)
+        if (
+            key == "score_ranking_policy"
+            and actual is None
+            and str(expected_value) == BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+        ):
+            actual = BREAKOUT_QUALITY_RANKING_POLICY_SCORE
         if actual != expected_value:
             issues.append(f"{key}: artifact={actual!r}, expected={expected_value!r}")
 
@@ -417,6 +462,7 @@ def _load_or_run_current_pair(
             max_position_cap_pct=float(args.max_position_cap_pct),
             allow_static_diagnostic=False,
             comparison_mode=COMPARISON_MODE_SCORE_RANKING,
+            ranking_policy=str(args.ranking_policy),
             filter_id=str(args.filter_id),
             score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
             model_architecture=str(args.model_architecture),
@@ -477,6 +523,10 @@ def _validate_fixed_contract(args, settings) -> None:
         )
     if args.param_policy != PARAM_POLICY_BASE_FINALIST_BEST:
         raise ValueError("第一輪strategy adaptation固定使用base-finalist-best")
+    if str(args.ranking_policy) not in SUPPORTED_ADAPTATION_RANKING_POLICIES:
+        raise ValueError(
+            "strategy adaptation只支援原始Score或R3 capital-bucket ranking"
+        )
     if args.rotation not in {"off", "on"}:
         raise ValueError("rotation只接受off或on")
     if int(args.max_positions) < 1:
@@ -662,7 +712,7 @@ def _build_training_score_coverage_contract(
             raise ValueError(f"Baseline rolling fold日期不合法: fold={index}")
         if oos_start < score_start or oos_end > score_end:
             raise ValueError(
-                "Score Adapted的每個OOS replay都必須完整位於Selection PIT期間："
+                "Ranking Adapted的每個OOS replay都必須完整位於Selection PIT期間："
                 f"fold={index}, oos={oos_start.date()}~{oos_end.date()}, "
                 f"pit={score_start.date()}~{score_end.date()}"
             )
@@ -1013,13 +1063,21 @@ def _build_runtime_contract(
             "continuous_target_id": str(pit_contract.continuous_target_id),
         },
         "ranking_mode": (
-            "breakout_quality_score_desc"
+            str(args.ranking_policy)
             if bool(ranking_enabled)
             else "existing_buy_sort"
+        ),
+        "ranking_policy": (
+            str(args.ranking_policy)
+            if bool(ranking_enabled)
+            else None
         ),
         "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
         "fixed_runtime": {
             "use_breakout_quality_ranking": bool(ranking_enabled),
+            "breakout_quality_ranking_policy": (
+                str(args.ranking_policy) if bool(ranking_enabled) else None
+            ),
             "use_breakout_quality_filter": False,
             "fixed_risk": float(args.fixed_risk),
             "max_position_cap_pct": float(args.max_position_cap_pct),
@@ -1044,6 +1102,14 @@ def _build_runtime_contract(
             "score_gaps_inside_pit_period_allowed": False,
         },
     }
+    if str(args.ranking_policy) == BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+        # Preserve the historical raw-Score runtime identity so completed studies
+        # remain reusable after adding the CLI-only R3 policy.
+        contract["ranking_mode"] = "breakout_quality_score_desc"
+        contract.pop("ranking_policy", None)
+        contract["fixed_runtime"].pop(
+            "breakout_quality_ranking_policy", None
+        )
     contract["runtime_identity_sha256"] = _canonical_json_sha256(contract)
     return contract
 
@@ -1073,6 +1139,7 @@ def _build_current_pair_runtime_identity(
             "fixed_risk": float(args.fixed_risk),
             "max_position_cap_pct": float(args.max_position_cap_pct),
             "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+            "ranking_policy": str(args.ranking_policy),
         },
         "comparison_period": {
             "start": str(comparison_period["start"]),
@@ -1092,6 +1159,7 @@ def _canonical_execution_argv(args) -> list[str]:
         "--model-architecture", str(args.model_architecture),
         "--experiment-profile", str(args.experiment_profile),
         "--param-policy", str(args.param_policy),
+        "--ranking-policy", str(args.ranking_policy),
         "--trials-per-fold", str(int(args.trials_per_fold)),
         "--max-positions", str(int(args.max_positions)),
         "--rotation", str(args.rotation),
@@ -1165,7 +1233,7 @@ def _validate_selection_pit_runtime_artifacts(*, pit_contract, args) -> dict[str
     }
     if actual_identity != expected_identity:
         raise ValueError(
-            "Score Adapted Selection PIT runtime identity不一致；禁止開始rolling trials："
+            "Ranking Adapted Selection PIT runtime identity不一致；禁止開始rolling trials："
             f"expected={expected_identity}, actual={actual_identity}"
         )
 
@@ -1177,14 +1245,14 @@ def _validate_selection_pit_runtime_artifacts(*, pit_contract, args) -> dict[str
     for label, path in artifacts.items():
         if not path.is_file():
             raise FileNotFoundError(
-                "Score Adapted Selection PIT runtime工件不存在；"
+                "Ranking Adapted Selection PIT runtime工件不存在；"
                 f"禁止開始rolling trials：artifact={label}, path={path}"
             )
 
     gate = dict(getattr(pit_contract, "model_validation_gate", {}) or {})
     if str(gate.get("status") or "") != "PASS":
         raise ValueError(
-            "Score Adapted Selection PIT模型驗證未通過；禁止開始rolling trials："
+            "Ranking Adapted Selection PIT模型驗證未通過；禁止開始rolling trials："
             f"status={gate.get('status')!r}"
         )
     return artifacts
@@ -1289,6 +1357,13 @@ def _optimizer_session_spec(
     arm_name: str,
     ranking_enabled: bool,
 ) -> dict[str, Any]:
+    runtime_kwargs = {
+        "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        "model_architecture": str(args.model_architecture),
+        "experiment_profile": str(args.experiment_profile),
+    }
+    if str(args.ranking_policy) != BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+        runtime_kwargs["ranking_policy"] = str(args.ranking_policy)
     return {
         "output_dir": str(
             (output_dir / arm_name / "optimizer_runtime" / "sessions").resolve()
@@ -1299,11 +1374,7 @@ def _optimizer_session_spec(
         "runtime_context_spec": {
             "module": "filters.breakout_quality.runtime",
             "callable": "breakout_quality_ranking_source_context",
-            "kwargs": {
-                "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
-                "model_architecture": str(args.model_architecture),
-                "experiment_profile": str(args.experiment_profile),
-            },
+            "kwargs": runtime_kwargs,
         },
         "runtime_cache_identity": str(runtime_contract["runtime_identity_sha256"]),
         "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
@@ -1388,6 +1459,9 @@ def _validate_adapted_rolling_params(
         "runtime_identity_sha256": str(runtime_contract["runtime_identity_sha256"]),
         "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
         "use_breakout_quality_ranking": bool(ranking_enabled),
+        "ranking_policy": (
+            str(args.ranking_policy) if bool(ranking_enabled) else None
+        ),
         "future_target_used_for_runtime": False,
         "final_selection_refit": False,
     }
@@ -1506,6 +1580,9 @@ def _run_rolling_optimizer_arm(
         "optimization_arm": str(arm_name),
         "arm_label": str(arm_label),
         "ranking_enabled": bool(ranking_enabled),
+        "ranking_policy": (
+            str(args.ranking_policy) if bool(ranking_enabled) else None
+        ),
         "result_interpretation": ADAPTATION_STATUS,
         "folds": folds,
         "trials_per_fold": int(args.trials_per_fold),
@@ -1676,6 +1753,8 @@ def _run_optimized_arm_replay(
             "model_architecture": args.model_architecture,
             "experiment_profile": args.experiment_profile,
         }
+        if str(args.ranking_policy) != BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+            ranking_source["ranking_policy"] = str(args.ranking_policy)
     payload = _run_scenario(
         name=arm_name,
         data_dir=Path(get_dataset_dir(str(root), args.dataset)).resolve(),
@@ -1917,7 +1996,8 @@ def _run_four_way_comparison(
             "future_target_used_for_runtime": False,
             "oos_generalization_claimed": False,
             "final_selection_refit_executed": False,
-            "optimizer_training_arms": ["score_adapted"],
+            "optimizer_training_arms": [str(adapted_arm["arm_name"])],
+            "ranking_policy": str(args.ranking_policy),
         },
         "baseline": baseline,
         "sort_only": sort_only,
@@ -2218,7 +2298,14 @@ def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
         ("Baseline歷史工件 trials／fold", rolling.get("baseline_trials_per_fold", "-")),
         ("Train window", f"{rolling.get('train_window_months', '-')} months"),
         ("OOS horizon", f"{rolling.get('oos_horizon_months', '-')} months"),
-        ("Score Adapted search reused", rolling.get("score_adapted_search_reused", "-")),
+        (
+            "Adapted search reused",
+            rolling.get(
+                "adapted_search_reused",
+                rolling.get("score_adapted_search_reused", "-"),
+            ),
+        ),
+        ("Ranking policy", rolling.get("ranking_policy", "-")),
         ("新參數optimizer數", rolling.get("optimizer_training_arm_count", 1)),
     ))
     status_labels = {
@@ -2282,6 +2369,11 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
     _rows, values = _metric_rows(result)
     metadata = dict(result.get("metadata") or {})
     period = dict(metadata.get("comparison_period") or {})
+    ranking_policy = str(
+        metadata.get("score_ranking_policy")
+        or metadata.get("ranking_policy")
+        or BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+    )
     use_color = console_color_enabled()
     portfolio_specs = (
         ("淨總報酬", "total_return_pct", "%", "higher", 2),
@@ -2456,12 +2548,18 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
             use_color=use_color,
         ),
         render_section("Rolling 訓練與 Score coverage", number=10),
-        "定義：新參數只由Score ranking rolling optimizer訓練一次；Param Only與Adapted共用同一套active params。",
+        (
+            "定義：新參數只由指定ranking policy的rolling optimizer訓練一次；"
+            f"policy={ranking_policy}；Param Only與Adapted共用同一套active params。"
+        ),
         rolling_summary,
         rolling_table,
         "限制：四組保留相同rolling folds；只允許actual PIT起點之前回退原buy-sort，且延伸後coverage必須高於參考起點、任何fold不得退步，PIT期間內缺口仍禁止。",
         render_section("舊ROOS與新Adapted參數差異", number=11),
-        "定義：比較既有正式ROOS與新Score Adapted各fold finalist-best active params的中位數與範圍。",
+        (
+            "定義：比較既有正式ROOS與新ranking-adapted各fold "
+            "finalist-best active params的中位數與範圍。"
+        ),
         render_table(
             ("參數", "舊ROOS中位", "舊ROOS範圍", "Adapted中位", "Adapted範圍"),
             _param_comparison_table_rows(result),
@@ -2520,11 +2618,17 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
 
 def _render_four_way_markdown(result: dict[str, Any]) -> str:
     rows, values = _metric_rows(result)
+    metadata = dict(result.get("metadata") or {})
+    ranking_policy = str(
+        metadata.get("score_ranking_policy")
+        or metadata.get("ranking_policy")
+        or BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+    )
     lines = [
         "# Selection Ranking × Parameter 2×2 Rolling Validation",
         "",
         f"- 狀態：`{ADAPTATION_STATUS}`",
-        "- 新參數只由Score ranking rolling optimizer訓練一次。",
+        f"- 新參數只由`{ranking_policy}` rolling optimizer訓練一次。",
         "- 舊參數Ranking效果：Sort Only − Baseline。",
         "- 新參數Ranking效果：Adapted − Param Only；兩組使用完全相同的新Adapted params。",
         "- Future Target只在replay後離線join，未進runtime或optimizer。",
@@ -2571,7 +2675,7 @@ def _render_four_way_markdown(result: dict[str, Any]) -> str:
         "## 判讀邊界",
         "",
         "- Param Only不是舊ranking重新最佳化；它只是把同一套新Adapted params切回舊ranking做反事實回放。",
-        "- 本流程只訓練Score Adapted一套新參數，不重訓舊ranking。",
+        f"- 本流程只訓練`{ranking_policy}` Adapted一套新參數，不重訓舊ranking。",
         "- 本結果不是完整Selection final refit，也不是正式OOS。",
         "",
     ))
@@ -2637,14 +2741,21 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     comparison_period = dict(coverage_improvement["comparison_period"])
     baseline_meta = dict(baseline_contract["meta"])
 
+    arm_name, arm_label = _adaptation_arm_identity(args)
     adapted_policy = _build_base_policy(
         root=root, baseline_contract=baseline_contract
     )
     adapted_policy.update({
-        "adaptation_arm": "score_adapted",
-        "adaptation_scope": "selection_rolling_single_score_adapted_optimizer",
+        "adaptation_arm": str(arm_name),
+        "adaptation_scope": (
+            "selection_rolling_single_score_adapted_optimizer"
+            if str(args.ranking_policy) == BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+            else "selection_rolling_single_ranking_policy_adapted_optimizer"
+        ),
         "score_coverage_contract": "improved_vs_reference_all_common_folds",
     })
+    if str(args.ranking_policy) != BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+        adapted_policy["ranking_policy"] = str(args.ranking_policy)
     adapted_contract = _build_runtime_contract(
         root=root,
         args=args,
@@ -2652,7 +2763,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         pit_contract=pit_contract,
         baseline_contract=baseline_contract,
         base_policy=adapted_policy,
-        arm_name="score_adapted",
+        arm_name=arm_name,
         ranking_enabled=True,
         comparison_period=comparison_period,
     )
@@ -2671,7 +2782,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         f"共同比較期間={comparison_period['start']}～{comparison_period['end']}。"
     )
 
-    output_dir = (root / ADAPTATION_RELATIVE_DIR).resolve()
+    output_dir = (root / _adaptation_relative_dir(args)).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     preflight_path = output_dir / "rolling_preflight.json"
     _write_json(
@@ -2684,8 +2795,10 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             "comparison_period": comparison_period,
             "coverage_improvement": coverage_improvement,
             "all_baseline_fold_score_coverage": all_score_coverage,
+            "adapted_contract": adapted_contract,
             "score_adapted_contract": adapted_contract,
-            "optimizer_training_arms": ["score_adapted"],
+            "ranking_policy": str(args.ranking_policy),
+            "optimizer_training_arms": [str(arm_name)],
             "selection_pit_runtime_artifacts": {
                 key: {
                     "path": project_relative_display_path(path, project_root=root),
@@ -2736,10 +2849,14 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     current_decision = dict(
         current_payload.get("score_ranking_capture_audit", {})
     ).get("decision", {})
-    if str(current_decision.get("status") or "") != "ADAPTATION_DIAGNOSTIC_SUPPORTED":
+    supported_current_pair_statuses = {
+        "ADAPTATION_DIAGNOSTIC_SUPPORTED",
+        "SORT_ONLY_NOT_REJECTED",
+    }
+    if str(current_decision.get("status") or "") not in supported_current_pair_statuses:
         print(
-            "[警告] 延伸後Baseline／Sort Only capture audit未標示為"
-            "ADAPTATION_DIAGNOSTIC_SUPPORTED；仍依2×2實驗設計繼續執行，"
+            "[警告] 延伸後Baseline／Sort Only capture audit未形成可進入"
+            "參數適應的支持狀態；仍依2×2實驗設計繼續執行，"
             "由最終四組結果判定。"
         )
 
@@ -2751,8 +2868,8 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         base_policy=adapted_policy,
         runtime_contract=adapted_contract,
         output_dir=output_dir,
-        arm_name="score_adapted",
-        arm_label="Score Adapted",
+        arm_name=arm_name,
+        arm_label=arm_label,
         ranking_enabled=True,
         pit_models_root=pit_models_root,
     )
@@ -2778,7 +2895,9 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         "baseline_history_trial_count_match_required": False,
         "baseline_sort_only_reused": bool(current_pair_reused),
         "optimizer_training_arm_count": 1,
-        "optimizer_training_arms": ["score_adapted"],
+        "ranking_policy": str(args.ranking_policy),
+        "optimizer_training_arms": [str(arm_name)],
+        "adapted_arm": adapted_arm["optimizer_summary"],
         "score_adapted": adapted_arm["optimizer_summary"],
         "runtime_identity_sha256": adapted_contract["runtime_identity_sha256"],
         "final_selection_refit_executed": False,
@@ -2814,7 +2933,9 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             "train_window_months": int(baseline_meta["train_window_months"]),
             "oos_horizon_months": int(baseline_meta["oos_horizon_months"]),
             "optimizer_training_arm_count": 1,
-            "optimizer_training_arms": ["score_adapted"],
+            "ranking_policy": str(args.ranking_policy),
+            "optimizer_training_arms": [str(arm_name)],
+            "adapted_search_reused": bool(adapted_arm["search_reused"]),
             "score_adapted_search_reused": bool(adapted_arm["search_reused"]),
             "training_score_coverage": score_coverage,
             "coverage_improvement": coverage_improvement,
@@ -2863,7 +2984,9 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         "coverage_improvement": coverage_improvement,
         "result_interpretation": ADAPTATION_STATUS,
         "runtime_identity_sha256": adapted_contract["runtime_identity_sha256"],
+        "adapted_contract": adapted_contract,
         "score_adapted_contract": adapted_contract,
+        "ranking_policy": str(args.ranking_policy),
         "optimizer_summary": optimizer_summary,
         "baseline_sort_only_reused": bool(current_pair_reused),
         "execution_command": " ".join(execution_argv),
@@ -2882,7 +3005,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         (
             ("Rolling 2×2 preflight", preflight_path),
             ("Training Score coverage", coverage_path),
-            ("Score Adapted active params", adapted_arm["params_path"]),
+            (f"{arm_label} active params", adapted_arm["params_path"]),
             ("Rolling adaptation manifest", manifest_path),
             ("Rolling optimizer summary", optimizer_summary_path),
             ("四組比較 Markdown", output_dir / "strategy_adaptation_comparison.md"),

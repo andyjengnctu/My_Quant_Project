@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_211701_c0cb6c3.zip`；SHA256 `1c8aa4144af00f7ae7696c90dbe649932650e89f16881da7a62b9d3382f6cc9e`。Selection PIT實際起點維持`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage為60.0%；R2／R3 capital-aware ranking真實Selection replay結果已取得，正式Baseline仍未變更 |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_221024_d9ba32f.zip`；SHA256 `273d6257fcc42b403ec1c588b67a3f227bd5c02102576da256e0663c26dd99bc`。Selection PIT實際起點維持`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage為60.0%；R2／R3 Selection replay結果已取得，本輪完成R3 rolling parameter adaptation接線但尚無本機結果，正式Baseline未變更 |
 | SHA256／最新結果 | 使用者提供coverage提升後正式2×2輸出：Baseline 182.62%、Sort Only 147.57%、Param Only 145.84%、Adapted 75.70%。後續capital-aware消融：R2 `capital-adjusted-score`總報酬176.18%、MDD 14.15%、RoMD 12.45，仍低於Baseline且Target mean與保留買單成交率退步，判定拒絕目前乘積公式；R3 `capital-bucket-then-score`總報酬184.12%、EV 0.34R、Target capture 0.33，但MDD升至19.20%、RoMD降至9.59、Log R²與月勝率退步，僅保留為研究方向，不升格正式policy。正式策略維持Baseline |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score start=`auto`，由目前Dataset／Target／label completion與最小group契約解析最早合法月份，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
@@ -2475,4 +2475,92 @@ Coverage提升後的正式2×2已確認原始Score ranking在舊ROOS與新Adapte
 ### 下一步
 
 先執行R3最大回撤read-only attribution，不改ranking、不重訓模型、不跑optimizer：定位最大回撤起迄日期，逐日／逐交易比較Baseline與R3的獨有持倉、初始停損距離、deployment bucket、Score、Target、Realized R、持有期、損失聚集與產業／月份集中。先確認MDD惡化是由特定regime、跨桶硬排序、寬停損或損失時間聚集造成，再決定下一個單一變更。未完成此歸因前，不直接調整桶數、桶邊界、fixed risk、position cap或max positions；Filter × Score消融維持後續順位。
+
+## 2026-08-03 — R3 Capital-bucket Ranking Rolling Parameter Adaptation
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+
+使用者判定R3已在總報酬、EV、Target選擇、Target capture與平均投入資金報酬形成足夠的多項改善，不先投入專門最大回撤歸因；下一個單一實驗改為固定R3 ranking契約，執行與既有Score Adapted相同的rolling optimizer及四組2×2。此決定取代前一節「先做R3最大回撤read-only attribution」的下一步，但不改變R3目前尚未升格正式policy的判定。
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260803_221024_d9ba32f.zip`
+- SHA256：`273d6257fcc42b403ec1c588b67a3f227bd5c02102576da256e0663c26dd99bc`
+- 本輪patch ZIP名稱與SHA256以交付回覆為準。
+
+### 唯一主要變更
+
+`tools/filters/breakout_quality/strategy_adapt.py`新增CLI-only `--ranking-policy capital-bucket-then-score`。未指定時仍維持既有原始`score`流程與互動選單行為；R3不加入主選單、不改正式策略預設，也不把ranking policy、桶數或桶邊界放入optimizer搜尋。
+
+R3流程固定：
+
+1. Baseline：原buy-sort＋舊正式ROOS。
+2. R3 Sort Only：`capital-bucket-then-score`＋舊正式ROOS。
+3. Param Only：原buy-sort＋同一套R3 Adapted active params。
+4. R3 Adapted：`capital-bucket-then-score`＋同一套R3 Adapted active params。
+
+只訓練一套R3 Adapted rolling optimizer；Param Only不是第二套optimizer，而是把同一套新參數切回原ranking的反事實回放。
+
+### Runtime與工件隔離
+
+- R3 ranking policy進入optimizer runtime context、runtime cache identity、persistent study identity、Sort Only／Adapted replay context、preflight、summary與manifest。
+- 原始Score Adapted沿用`models/research/breakout_quality/score_ranking_adaptation/rolling_validation/`。
+- R3 Adapted使用獨立路徑`models/research/breakout_quality/score_ranking_adaptation/capital_bucket_then_score/rolling_validation/`。
+- 兩種policy不得互相resume、覆蓋active params或重用Baseline／Sort Only pair manifest。
+- Selection PIT正式models root與Adapted active-param輸出仍保持分離。
+- active params內固定`use_breakout_quality_ranking=True`、hard filter=False、fixed risk與position cap；實際R3 policy由同一Selection PIT runtime context提供，不成為策略參數trial。
+
+### 固定條件
+
+Dataset、Continuous Target、PIT Scores、PIT audit、9A模型、No-time Target、Seed 42、rolling fold schedule、120個月training window、12個月OOS horizon、300 trials／fold、search space、objective、sampler、TP、fixed risk、position cap、max positions、rotation、entry／stop／exit、交易成本、portfolio accounting與Future Target post-replay-only契約全部不變。
+
+Coverage契約維持：
+
+- actual PIT start=`2011-01-01`
+- reference start=`2014-01-01`
+- weighted coverage=`60.0%` vs `30.0%`
+- 7 folds全部保留
+- actual逐fold不得低於reference，至少一fold及加權總coverage必須提高
+- actual PIT起點以前允許原buy-sort fallback
+- PIT期間內缺分禁止
+- 全部OOS replay必須位於PIT期間
+
+### Dataset／Label／模型工件需求
+
+不重建Dataset、不relabel、不重建Continuous Target、不重訓breakout-quality模型、不重建PIT Scores。需要本機既有完整市場資料、Selection PIT score／manifest／audit、正式`roos_base_best.json`與optimizer runtime依賴。首次R3執行會建立全新的R3 studies及R3 Adapted active params；不得沿用原始Score Adapted的完成study。
+
+### 本機執行
+
+R3為CLI-only：
+
+```bash
+python apps/breakout_quality.py strategy-adapt --dataset full --param-policy base-finalist-best --ranking-policy capital-bucket-then-score
+```
+
+預期輸出：
+
+- R3 Baseline／Sort Only pair
+- R3 rolling preflight與training coverage
+- R3 Adapted active params
+- rolling optimizer summary與manifest
+- Baseline／R3 Sort Only／Param Only／R3 Adapted四組比較
+- adapted-params ranking capture audit
+- 年度報酬與參數差異
+
+### 採用判定
+
+本輪只有程式接線，尚無結果，不預判R3 Adapted有效。正式策略仍維持Baseline。取得本機結果後至少比較：
+
+1. R3 Adapted相較R3 Sort Only是否提高總報酬或Return／MDD。
+2. R3 Adapted相較Param Only的ranking效果是否仍為正。
+3. 最大回撤是否低於R3 Sort Only的19.20%，Return／MDD是否高於9.59。
+4. EV、Realized R、Target mean、三種capture與平均投入資金報酬是否保留R3優勢。
+5. Param Only是否顯示R3 Adapted params本身破壞原策略。
+6. 改善是否跨年度，而非只來自單一年份。
+
+### 下一步
+
+由使用者本機先執行正式`apps/test_suite.py`；通過後執行上述R3 CLI。結果產生前維持`IMPLEMENTED / RESULT_NOT_AVAILABLE`。
 

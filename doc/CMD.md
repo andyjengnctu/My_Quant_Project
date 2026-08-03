@@ -511,6 +511,14 @@ python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking
 python apps/breakout_quality.py strategy-adapt --dataset full --param-policy base-finalist-best
 ```
 
+  上述未指定`--ranking-policy`時維持既有原始Score Adapted流程。R3參數適應為CLI-only研究，不加入互動選單；執行：
+
+```bash
+python apps/breakout_quality.py strategy-adapt --dataset full --param-policy base-finalist-best --ranking-policy capital-bucket-then-score
+```
+
+  R3流程固定`capital-bucket-then-score`於optimizer trial外，不把ranking policy、桶數或桶邊界放入搜尋；Baseline／R3 Sort Only使用舊正式ROOS，Param Only／R3 Adapted共用同一套R3 Adapted active params。工件隔離於`models/research/breakout_quality/score_ranking_adaptation/capital_bucket_then_score/rolling_validation/`，不得重用或覆蓋原始Score Adapted study。
+
   流程先對原Baseline全部rolling folds輸出training Score coverage，並以`BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE`代表延伸前的正式PIT起點。全部Baseline folds與原OOS期間均保留；actual coverage必須逐fold不低於reference、至少一個fold嚴格改善且加權總coverage提高。實際PIT起點以前可依正式缺分契約回退existing buy-sort，實際PIT期間內缺口仍fail-fast，全部OOS replay必須完整位於PIT期間。接著在相同期間自動建立或重用Baseline／Sort Only，只訓練一套固定`use_breakout_quality_ranking=True`、hard filter=False的新active params，再輸出Param Only／Adapted。四組fold schedule、期間、PIT identity、risk、position cap與交易規則完全一致；Param Only與Adapted共用同一套新active params，只有ranking不同。結果只屬`ROLLING_SELECTION_DIAGNOSTIC`，不執行完整Selection final refit或正式OOS。未達100% coverage不會單獨構成拒絕，但若延伸後沒有提升、任何fold退步或PIT期間內缺分，流程會在optimizer前拒絕。
 - 此研究是在已查看既有OOS後進行的迭代證據；任何候選改法仍須凍結契約後再做無前視驗證，不能由Selection結果直接部署。
 
