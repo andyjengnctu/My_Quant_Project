@@ -12053,7 +12053,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     )
     from strategies.breakout.search_space import build_trial_params
     from tools.filters.breakout_quality.strategy_adapt import (
-        _build_pure_full_score_baseline_contract,
+        _build_improved_score_baseline_contract,
         _build_training_score_coverage_contract,
         _current_pair_artifact_paths,
         _fixed_strategy_param_overrides,
@@ -12357,8 +12357,9 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     all_coverage = _build_training_score_coverage_contract(
         baseline_contract=pure_baseline_source,
         pit_contract=pure_pit_contract,
+        reference_score_start="2014-01-01",
     )
-    pure_baseline, pure_selection = _build_pure_full_score_baseline_contract(
+    common_baseline, coverage_improvement = _build_improved_score_baseline_contract(
         baseline_contract=pure_baseline_source,
         coverage=all_coverage,
     )
@@ -12366,29 +12367,59 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "pure_adaptation_keeps_only_contiguous_100pct_score_training_folds",
+        "adaptation_keeps_all_common_folds_when_pit_coverage_improves",
         (
             ["partial_score_history", "partial_score_history", "full_score_history", "full_score_history"],
-            2,
-            "2007-01-01~2017-12-31",
-            ["1/2", "2/2"],
-            ["3/4", "4/4"],
-            "2017-01-01",
+            ["improved", "improved", "improved", "improved"],
+            4,
+            "2004-01-01~2017-12-31",
+            ["1/4", "2/4", "3/4", "4/4"],
+            "2014-01-01",
             "2018-01-01",
-            {"start": "2017-01-01", "end": "2018-12-31"},
-            False,
+            {"start": "2014-01-01", "end": "2018-12-31"},
+            True,
+            True,
+            0,
         ),
         (
             [row["status"] for row in all_coverage["folds"]],
-            pure_baseline["summary"]["folds"],
-            pure_baseline["summary"]["selection_period"],
-            [fold["fold"] for fold in pure_baseline["payload"]["folds"]],
-            [fold["source_baseline_fold"] for fold in pure_baseline["payload"]["folds"]],
-            pure_baseline["meta"]["first_oos_date"],
-            pure_baseline["meta"]["last_oos_date"],
-            pure_selection["comparison_period"],
-            pure_selection["pre_pit_fallback_allowed_in_pure_comparison"],
+            [row["coverage_change"] for row in all_coverage["folds"]],
+            common_baseline["summary"]["folds"],
+            common_baseline["summary"]["selection_period"],
+            [fold["fold"] for fold in common_baseline["payload"]["folds"]],
+            common_baseline["meta"]["first_oos_date"],
+            common_baseline["meta"]["last_oos_date"],
+            coverage_improvement["comparison_period"],
+            coverage_improvement["coverage_improvement_satisfied"],
+            coverage_improvement["pre_pit_fallback_allowed_before_actual_pit_start"],
+            coverage_improvement["excluded_fold_count"],
         ),
+    )
+
+    unchanged_coverage = _build_training_score_coverage_contract(
+        baseline_contract=pure_baseline_source,
+        pit_contract=SimpleNamespace(
+            available_from="2014-01-01",
+            available_through="2020-12-31",
+        ),
+        reference_score_start="2014-01-01",
+    )
+    try:
+        _build_improved_score_baseline_contract(
+            baseline_contract=pure_baseline_source,
+            coverage=unchanged_coverage,
+        )
+    except ValueError as exc:
+        unchanged_coverage_rejected = "沒有高於參考起點" in str(exc)
+    else:
+        unchanged_coverage_rejected = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_adapt_requires_strict_coverage_improvement_vs_reference",
+        True,
+        unchanged_coverage_rejected,
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -12761,15 +12792,23 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             "score_adapted_search_reused": False,
             "training_score_coverage": {
                 "fold_count": 1,
+                "pit_score_period": {"start": "2007-01-01", "end": "2020-12-31"},
+                "coverage_reference": {"score_start": "2014-01-01"},
+                "reference_weighted_calendar_coverage_ratio": 0.0,
+                "actual_weighted_calendar_coverage_ratio": 0.7,
+                "weighted_calendar_coverage_ratio_gain": 0.7,
+                "coverage_improved_folds": 1,
                 "bootstrap_fallback_only_folds": 0,
-                "partial_score_history_folds": 0,
-                "full_score_history_folds": 1,
+                "partial_score_history_folds": 1,
+                "full_score_history_folds": 0,
                 "folds": [{
                     "fold": "1/1",
                     "selection_period": "2004-01-01~2013-12-31",
                     "oos_period": "2014-01-01~2014-12-31",
-                    "calendar_coverage_ratio": 1.0,
-                    "status": "full_score_history",
+                    "reference_calendar_coverage_ratio": 0.0,
+                    "calendar_coverage_ratio": 0.7,
+                    "coverage_ratio_delta": 0.7,
+                    "status": "partial_score_history",
                 }],
             },
         },
@@ -12821,8 +12860,9 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         and 'arm_name="adapted"' in adapt_source
         and 'params_path=adapted_arm["params_path"]' in adapt_source
         and "run_comparison(" in adapt_source
-        and "100% PIT Score coverage" in adapt_source
-        and '"pre_pit_missing_scores_use_existing_buy_sort_fallback": False' in adapt_source
+        and "coverage提升" in adapt_source
+        and '"pre_pit_missing_scores_use_existing_buy_sort_fallback": True' in adapt_source
+        and '"optimizer_training_score_coverage_must_improve_vs_reference": True' in adapt_source
         and 'OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"' in adapt_source
         and 'OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = "1"' in adapt_source
         and 'outer_environ["V16_MODELS_DIR"] = str(Path(pit_models_root).resolve())' in adapt_source

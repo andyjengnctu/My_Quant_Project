@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from config.breakout_policy import (
@@ -169,6 +170,9 @@ BREAKOUT_QUALITY_PRETRAINING_STRIDE = 5  # Dataset sampling設定；每個ticker
 # Continuous Target, inner-validation window, and minimum group-count contract.
 # None for the end date means use the canonical Selection end from the outer split policy.
 BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "auto"
+# Strategy adaptation compares the extended PIT history against this prior official start.
+# It is only a coverage reference, not a lower bound for model training or scoring.
+BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE = "2014-01-01"
 BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = None
 BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS = 12
 BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24
@@ -798,6 +802,7 @@ class BreakoutQualityWorkflowSettings:
     training_label_scope: str
     seed: int
     point_in_time_score_start_date: str
+    point_in_time_coverage_reference_start_date: str
     point_in_time_score_end_date: str | None
     point_in_time_fold_months: int
     point_in_time_inner_validation_months: int
@@ -836,6 +841,9 @@ class BreakoutQualityWorkflowSettings:
             "point_in_time": {
                 "enabled": bool(self.is_continuous_ranker),
                 "score_start_date": self.point_in_time_score_start_date,
+                "coverage_reference_start_date": (
+                    self.point_in_time_coverage_reference_start_date
+                ),
                 "score_end_date": self.point_in_time_score_end_date,
                 "fold_months": int(self.point_in_time_fold_months),
                 "inner_validation_months": int(
@@ -901,6 +909,14 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
         raise ValueError(
             "workflow experiment profile必須是binary classification或continuous ranker"
         )
+    try:
+        coverage_reference_start = date.fromisoformat(
+            str(BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE).strip()
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "point-in-time coverage reference start date必須是YYYY-MM-DD合法日期"
+        ) from exc
     if int(BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS) < 1:
         raise ValueError("point-in-time fold months 必須 >= 1")
     if int(BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS) < 1:
@@ -1001,6 +1017,9 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
         seed=random_seed,
         point_in_time_score_start_date=str(
             BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE
+        ),
+        point_in_time_coverage_reference_start_date=(
+            coverage_reference_start.isoformat()
         ),
         point_in_time_score_end_date=(
             None

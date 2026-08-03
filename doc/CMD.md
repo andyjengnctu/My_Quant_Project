@@ -485,13 +485,13 @@ python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking
 
 - `--capture-audit-only`只支援score-ranking，並要求既有`strategy_comparison.json`、兩組transaction CSV及兩組selected-target diagnostics完整存在；缺工件時fail-fast，不會悄悄重跑或改用其他Score來源。
 - 一般Optimizer search space固定ranking=`False`，不得把ranking開關設成trial維度。策略適應使用專用固定context，而不是搜尋ranking開關。
-- PIT build與model audit完成後，可執行純化的單一Score Adapted rolling驗證：
+- PIT build與model audit完成後，正式操作以`python apps/breakout_quality.py`主選單的`[2] 策略績效驗證 → [2] 驗證策略參數適應（PIT coverage提升即可）`為主；CLI相容入口為：
 
 ```bash
 python apps/breakout_quality.py strategy-adapt --dataset full --param-policy base-finalist-best
 ```
 
-  流程先對原Baseline全部fold輸出training Score coverage，僅保留training window為100% PIT coverage的連續fold；bootstrap與partial-score folds不得進optimizer。接著在這些fold的共同OOS期間自動建立或重用Baseline／Sort Only，只訓練一套固定`use_breakout_quality_ranking=True`、hard filter=False的新active params，再輸出Param Only／Adapted。四組期間、PIT identity、risk、position cap與交易規則完全一致；Param Only與Adapted共用同一套新active params，只有ranking不同。結果只屬`ROLLING_SELECTION_DIAGNOSTIC`，不執行完整Selection final refit或正式OOS。若目前沒有任何100% coverage fold，流程會要求先向前延伸PIT Scores。
+  流程先對原Baseline全部rolling folds輸出training Score coverage，並以`BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE`代表延伸前的正式PIT起點。全部Baseline folds與原OOS期間均保留；actual coverage必須逐fold不低於reference、至少一個fold嚴格改善且加權總coverage提高。實際PIT起點以前可依正式缺分契約回退existing buy-sort，實際PIT期間內缺口仍fail-fast，全部OOS replay必須完整位於PIT期間。接著在相同期間自動建立或重用Baseline／Sort Only，只訓練一套固定`use_breakout_quality_ranking=True`、hard filter=False的新active params，再輸出Param Only／Adapted。四組fold schedule、期間、PIT identity、risk、position cap與交易規則完全一致；Param Only與Adapted共用同一套新active params，只有ranking不同。結果只屬`ROLLING_SELECTION_DIAGNOSTIC`，不執行完整Selection final refit或正式OOS。未達100% coverage不會單獨構成拒絕，但若延伸後沒有提升、任何fold退步或PIT期間內缺分，流程會在optimizer前拒絕。
 - 此研究是在已查看既有OOS後進行的迭代證據；任何候選改法仍須凍結契約後再做無前視驗證，不能由Selection結果直接部署。
 
 ### `run_best_params.json` 的用途與產生方式

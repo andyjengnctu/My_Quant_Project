@@ -1612,6 +1612,10 @@ def _print_workflow_status() -> None:
             f"{settings.point_in_time_fold_months}／"
             f"{settings.point_in_time_inner_validation_months} months",
         ),
+        (
+            "PIT Coverage Reference",
+            settings.point_in_time_coverage_reference_start_date,
+        ),
     ))
     print(render_key_values(base_rows))
     status_paths = {
@@ -1795,7 +1799,7 @@ def _interactive_strategy_validation(program_name: str) -> int:
     while True:
         print("\n=== 策略績效驗證 ===")
         print("[1/Enter] 比較目前策略")
-        print("[2] 驗證策略參數適應（僅100% PIT coverage folds）")
+        print("[2] 驗證策略參數適應（PIT coverage提升即可）")
         print("[0] 返回")
         try:
             raw_choice = input("👉 請選擇：").strip().lower()

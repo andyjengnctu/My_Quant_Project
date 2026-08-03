@@ -91,7 +91,7 @@ from tools.optimizer.session_factory import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ADAPTATION_STATUS = "ROLLING_SELECTION_DIAGNOSTIC"
 ADAPTATION_RELATIVE_DIR = Path(
     "models/research/breakout_quality/score_ranking_adaptation/rolling_validation"
@@ -178,7 +178,7 @@ def _current_pair_artifact_paths(output_dir: Path) -> dict[str, Path]:
 def _canonical_current_pair_output_dir(*, root: Path, args) -> Path:
     del args
     return (
-        root / ADAPTATION_RELATIVE_DIR / "baseline_sort_only_full_score_folds"
+        root / ADAPTATION_RELATIVE_DIR / "baseline_sort_only_improved_score_coverage"
     ).resolve()
 
 
@@ -450,7 +450,7 @@ def _load_or_run_current_pair(
     print(
         "\n[Baseline／Sort Only] "
         + ("已重用" if reused else "已重建")
-        + "100% Score coverage共同期間工件。"
+        + "延伸後共同rolling期間工件。"
     )
     return payload, reused
 
@@ -583,17 +583,32 @@ def _load_baseline_rolling_contract(*, root: Path, args, settings) -> dict[str, 
 
 
 def _build_training_score_coverage_contract(
-    *, baseline_contract: dict[str, Any], pit_contract
+    *,
+    baseline_contract: dict[str, Any],
+    pit_contract,
+    reference_score_start: str,
 ) -> dict[str, Any]:
-    """Audit PIT Score history for every baseline rolling training window.
+    """Compare actual PIT training coverage with the prior official score start.
 
-    Incomplete folds remain visible in the audit, but the formal pure adaptation flow
-    excludes them.  Every selected optimizer training window must have complete PIT
-    Score calendar coverage, and gaps inside the PIT period always fail fast.
+    All baseline rolling folds remain in the formal 2x2.  Missing scores before the
+    actual PIT start may use the existing-buy-sort fallback, but gaps on or after the
+    actual PIT start are forbidden.  The extended PIT history must improve aggregate
+    calendar coverage versus ``reference_score_start`` without regressing any fold.
     """
 
     score_start = pd.Timestamp(pit_contract.available_from).normalize()
     score_end = pd.Timestamp(pit_contract.available_through).normalize()
+    reference_start = pd.Timestamp(reference_score_start).normalize()
+    if pd.isna(reference_start):
+        raise ValueError("PIT coverage reference start不可為空")
+    if score_end < score_start:
+        raise ValueError("Selection PIT Score期間不合法")
+    if reference_start > score_end:
+        raise ValueError(
+            "PIT coverage reference start不得晚於Selection PIT Score結束日："
+            f"reference={reference_start.date()}, pit_end={score_end.date()}"
+        )
+
     raw_folds = list(baseline_contract["payload"].get("folds") or [])
     expected_fold_count = int(baseline_contract["summary"].get("folds", 0) or 0)
     if not raw_folds or len(raw_folds) != expected_fold_count:
@@ -601,6 +616,40 @@ def _build_training_score_coverage_contract(
             "Baseline rolling active params的fold明細不完整："
             f"rows={len(raw_folds)}, expected={expected_fold_count}"
         )
+
+    def _period_coverage(
+        *, selection_start: pd.Timestamp, selection_end: pd.Timestamp, start: pd.Timestamp
+    ) -> dict[str, Any]:
+        overlap_start = max(selection_start, start)
+        overlap_end = min(selection_end, score_end)
+        has_overlap = overlap_start <= overlap_end
+        if not has_overlap:
+            status = (
+                "bootstrap_fallback_only"
+                if selection_end < start
+                else "unexpected_score_gap"
+            )
+            score_days = 0
+            overlap_start_text = None
+            overlap_end_text = None
+        else:
+            status = (
+                "full_score_history"
+                if selection_start >= start and selection_end <= score_end
+                else "partial_score_history"
+            )
+            score_days = int((overlap_end - overlap_start).days) + 1
+            overlap_start_text = overlap_start.strftime("%Y-%m-%d")
+            overlap_end_text = overlap_end.strftime("%Y-%m-%d")
+        selection_days = int((selection_end - selection_start).days) + 1
+        return {
+            "status": status,
+            "score_days": int(score_days),
+            "selection_days": int(selection_days),
+            "coverage_ratio": float(score_days / selection_days),
+            "overlap_start": overlap_start_text,
+            "overlap_end": overlap_end_text,
+        }
 
     rows: list[dict[str, Any]] = []
     unexpected_gaps: list[str] = []
@@ -618,29 +667,29 @@ def _build_training_score_coverage_contract(
                 f"pit={score_start.date()}~{score_end.date()}"
             )
 
-        overlap_start = max(selection_start, score_start)
-        overlap_end = min(selection_end, score_end)
-        has_overlap = overlap_start <= overlap_end
-        if not has_overlap:
-            if selection_end < score_start:
-                status = "bootstrap_fallback_only"
-            else:
-                status = "unexpected_score_gap"
-                unexpected_gaps.append(str(index))
-            score_days = 0
-            overlap_start_text = None
-            overlap_end_text = None
-        else:
-            status = (
-                "full_score_history"
-                if selection_start >= score_start and selection_end <= score_end
-                else "partial_score_history"
-            )
-            score_days = int((overlap_end - overlap_start).days) + 1
-            overlap_start_text = overlap_start.strftime("%Y-%m-%d")
-            overlap_end_text = overlap_end.strftime("%Y-%m-%d")
+        actual = _period_coverage(
+            selection_start=selection_start,
+            selection_end=selection_end,
+            start=score_start,
+        )
+        reference = _period_coverage(
+            selection_start=selection_start,
+            selection_end=selection_end,
+            start=reference_start,
+        )
+        if actual["status"] == "unexpected_score_gap":
+            unexpected_gaps.append(str(index))
 
-        selection_days = int((selection_end - selection_start).days) + 1
+        coverage_delta = float(
+            actual["coverage_ratio"] - reference["coverage_ratio"]
+        )
+        if coverage_delta > 1e-12:
+            coverage_change = "improved"
+        elif coverage_delta < -1e-12:
+            coverage_change = "regressed"
+        else:
+            coverage_change = "unchanged"
+
         rows.append({
             "baseline_fold_index": int(index - 1),
             "fold": str(fold.get("fold") or f"{index}/{expected_fold_count}"),
@@ -652,12 +701,21 @@ def _build_training_score_coverage_contract(
             "selection_period": (
                 f"{selection_start:%Y-%m-%d}~{selection_end:%Y-%m-%d}"
             ),
-            "score_overlap_start": overlap_start_text,
-            "score_overlap_end": overlap_end_text,
-            "score_calendar_days": int(score_days),
-            "selection_calendar_days": int(selection_days),
-            "calendar_coverage_ratio": float(score_days / selection_days),
-            "status": status,
+            "score_overlap_start": actual["overlap_start"],
+            "score_overlap_end": actual["overlap_end"],
+            "score_calendar_days": int(actual["score_days"]),
+            "selection_calendar_days": int(actual["selection_days"]),
+            "calendar_coverage_ratio": float(actual["coverage_ratio"]),
+            "status": str(actual["status"]),
+            "reference_score_overlap_start": reference["overlap_start"],
+            "reference_score_overlap_end": reference["overlap_end"],
+            "reference_score_calendar_days": int(reference["score_days"]),
+            "reference_calendar_coverage_ratio": float(
+                reference["coverage_ratio"]
+            ),
+            "reference_status": str(reference["status"]),
+            "coverage_ratio_delta": coverage_delta,
+            "coverage_change": coverage_change,
             "missing_score_fallback_used_before_pit_start": bool(
                 selection_start < score_start
             ),
@@ -669,10 +727,34 @@ def _build_training_score_coverage_contract(
             + ",".join(unexpected_gaps)
         )
 
+    total_selection_days = sum(int(row["selection_calendar_days"]) for row in rows)
+    total_actual_days = sum(int(row["score_calendar_days"]) for row in rows)
+    total_reference_days = sum(
+        int(row["reference_score_calendar_days"]) for row in rows
+    )
+    actual_weighted_ratio = (
+        float(total_actual_days / total_selection_days) if total_selection_days else 0.0
+    )
+    reference_weighted_ratio = (
+        float(total_reference_days / total_selection_days)
+        if total_selection_days
+        else 0.0
+    )
+    improved_folds = sum(row["coverage_change"] == "improved" for row in rows)
+    regressed_folds = sum(row["coverage_change"] == "regressed" for row in rows)
+    improvement_satisfied = bool(
+        rows and regressed_folds == 0 and total_actual_days > total_reference_days
+    )
+
     return {
         "pit_score_period": {
             "start": score_start.strftime("%Y-%m-%d"),
             "end": score_end.strftime("%Y-%m-%d"),
+        },
+        "coverage_reference": {
+            "score_start": reference_start.strftime("%Y-%m-%d"),
+            "score_end": score_end.strftime("%Y-%m-%d"),
+            "purpose": "prior_official_pit_start_for_training_coverage_comparison",
         },
         "fold_count": len(rows),
         "bootstrap_fallback_only_folds": sum(
@@ -684,9 +766,32 @@ def _build_training_score_coverage_contract(
         "full_score_history_folds": sum(
             row["status"] == "full_score_history" for row in rows
         ),
+        "coverage_improved_folds": int(improved_folds),
+        "coverage_unchanged_folds": int(
+            sum(row["coverage_change"] == "unchanged" for row in rows)
+        ),
+        "coverage_regressed_folds": int(regressed_folds),
+        "actual_total_score_calendar_days": int(total_actual_days),
+        "reference_total_score_calendar_days": int(total_reference_days),
+        "score_calendar_days_gain": int(total_actual_days - total_reference_days),
+        "actual_weighted_calendar_coverage_ratio": actual_weighted_ratio,
+        "reference_weighted_calendar_coverage_ratio": reference_weighted_ratio,
+        "weighted_calendar_coverage_ratio_gain": float(
+            actual_weighted_ratio - reference_weighted_ratio
+        ),
+        "actual_mean_fold_calendar_coverage_ratio": float(
+            sum(float(row["calendar_coverage_ratio"]) for row in rows) / len(rows)
+        ),
+        "reference_mean_fold_calendar_coverage_ratio": float(
+            sum(float(row["reference_calendar_coverage_ratio"]) for row in rows)
+            / len(rows)
+        ),
+        "coverage_improvement_required": True,
+        "coverage_improvement_satisfied": improvement_satisfied,
+        "actual_score_start_precedes_reference": bool(score_start < reference_start),
         "missing_score_fallback_contract": (
-            "coverage audit only; pure adaptation excludes every fold that would "
-            "require pre-PIT fallback and forbids gaps inside the PIT period"
+            "pre-PIT fallback to existing buy-sort is allowed before the actual PIT "
+            "start; gaps on or after the actual PIT start are forbidden"
         ),
         "all_folds_have_full_score_history": bool(
             rows and all(row["status"] == "full_score_history" for row in rows)
@@ -695,76 +800,85 @@ def _build_training_score_coverage_contract(
     }
 
 
-def _build_pure_full_score_baseline_contract(
+def _build_improved_score_baseline_contract(
     *, baseline_contract: dict[str, Any], coverage: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     rows = list(coverage.get("folds") or [])
-    eligible = [row for row in rows if row.get("status") == "full_score_history"]
-    if not eligible:
+    if not rows:
+        raise ValueError("Baseline rolling active params沒有可比較fold")
+    expected_indexes = list(range(len(rows)))
+    actual_indexes = [int(row["baseline_fold_index"]) for row in rows]
+    if actual_indexes != expected_indexes:
         raise ValueError(
-            "沒有任何rolling fold的training window達到100% PIT Score coverage；"
-            "請先將Selection PIT Scores再向前延伸"
+            "共同rolling folds必須完整保留Baseline順序："
+            f"actual={actual_indexes}, expected={expected_indexes}"
         )
-    eligible_indexes = [int(row["baseline_fold_index"]) for row in eligible]
-    expected_indexes = list(range(min(eligible_indexes), max(eligible_indexes) + 1))
-    if eligible_indexes != expected_indexes:
+    if int(coverage.get("coverage_regressed_folds", 0) or 0) != 0:
+        raise ValueError("延伸後PIT training coverage不得有任何fold退步")
+    if not bool(coverage.get("coverage_improvement_satisfied")):
         raise ValueError(
-            "100% PIT Score coverage folds必須形成連續區段："
-            f"actual={eligible_indexes}, expected={expected_indexes}"
+            "延伸後PIT training coverage沒有高於參考起點："
+            f"actual={float(coverage.get('actual_weighted_calendar_coverage_ratio', 0.0)):.2%}, "
+            f"reference={float(coverage.get('reference_weighted_calendar_coverage_ratio', 0.0)):.2%}"
         )
-    if any(
-        row.get("status") != "full_score_history"
-        for row in rows[min(eligible_indexes) :]
-    ):
-        raise ValueError("完整Score folds之後仍出現非完整coverage，禁止建立純化比較")
 
     payload = deepcopy(dict(baseline_contract["payload"]))
     raw_folds = list(payload.get("folds") or [])
-    selected_folds = [deepcopy(raw_folds[index]) for index in eligible_indexes]
-    if len(selected_folds) != len(eligible):
-        raise ValueError("純化fold索引與Baseline fold明細不一致")
-    for pure_index, fold in enumerate(selected_folds, start=1):
-        source_fold = str(fold.get("fold") or "")
-        fold["source_baseline_fold"] = source_fold
-        fold["fold"] = f"{pure_index}/{len(selected_folds)}"
-    first = eligible[0]
-    last = eligible[-1]
-    meta = deepcopy(dict(payload.get("meta") or baseline_contract.get("meta") or {}))
-    summary = deepcopy(
-        dict(payload.get("summary") or baseline_contract.get("summary") or {})
-    )
-    meta["first_oos_date"] = str(first["oos_start_date"])
-    meta["last_oos_date"] = str(last["oos_start_date"])
-    summary["folds"] = int(len(selected_folds))
-    summary["selection_period"] = (
-        f"{first['selection_start_date']}~{last['selection_end_date']}"
-    )
-    payload["meta"] = meta
-    payload["summary"] = summary
-    payload["folds"] = selected_folds
-
-    pure = {
+    if len(raw_folds) != len(rows):
+        raise ValueError("共同fold數與Baseline fold明細不一致")
+    first = rows[0]
+    last = rows[-1]
+    common = {
         **baseline_contract,
         "payload": payload,
-        "meta": meta,
-        "summary": summary,
-        "pure_full_score_fold_indexes": eligible_indexes,
+        "meta": deepcopy(dict(payload.get("meta") or baseline_contract["meta"])),
+        "summary": deepcopy(
+            dict(payload.get("summary") or baseline_contract["summary"])
+        ),
+        "common_score_coverage_fold_indexes": actual_indexes,
     }
     selection = {
         "comparison_period": {
             "start": str(first["oos_start_date"]),
             "end": str(last["oos_end_date"]),
         },
-        "eligible_full_score_fold_count": int(len(eligible)),
-        "excluded_fold_count": int(len(rows) - len(eligible)),
-        "excluded_folds": [
-            row for row in rows if row.get("status") != "full_score_history"
-        ],
-        "eligible_folds": eligible,
-        "all_selected_training_windows_have_100pct_score_coverage": True,
-        "pre_pit_fallback_allowed_in_pure_comparison": False,
+        "common_fold_count": int(len(rows)),
+        "excluded_fold_count": 0,
+        "all_baseline_folds_included": True,
+        "coverage_improved_fold_count": int(
+            coverage.get("coverage_improved_folds", 0) or 0
+        ),
+        "coverage_unchanged_fold_count": int(
+            coverage.get("coverage_unchanged_folds", 0) or 0
+        ),
+        "coverage_regressed_fold_count": int(
+            coverage.get("coverage_regressed_folds", 0) or 0
+        ),
+        "reference_score_start": str(
+            dict(coverage.get("coverage_reference") or {}).get("score_start") or ""
+        ),
+        "actual_score_start": str(
+            dict(coverage.get("pit_score_period") or {}).get("start") or ""
+        ),
+        "reference_weighted_calendar_coverage_ratio": float(
+            coverage.get("reference_weighted_calendar_coverage_ratio", 0.0)
+        ),
+        "actual_weighted_calendar_coverage_ratio": float(
+            coverage.get("actual_weighted_calendar_coverage_ratio", 0.0)
+        ),
+        "weighted_calendar_coverage_ratio_gain": float(
+            coverage.get("weighted_calendar_coverage_ratio_gain", 0.0)
+        ),
+        "score_calendar_days_gain": int(
+            coverage.get("score_calendar_days_gain", 0) or 0
+        ),
+        "coverage_improvement_satisfied": True,
+        "all_selected_training_windows_have_identical_baseline_schedule": True,
+        "pre_pit_fallback_allowed_before_actual_pit_start": True,
+        "score_gaps_inside_actual_pit_period_allowed": False,
+        "common_folds": rows,
     }
-    return pure, selection
+    return common, selection
 
 
 def _build_base_policy(*, root: Path, baseline_contract: dict[str, Any]) -> dict[str, Any]:
@@ -820,7 +934,11 @@ def _build_runtime_contract(
     effective_policy = build_optimizer_effective_policy_fingerprint(base_policy)
     baseline_meta = dict(baseline_contract["meta"])
     training_score_coverage = _build_training_score_coverage_contract(
-        baseline_contract=baseline_contract, pit_contract=pit_contract
+        baseline_contract=baseline_contract,
+        pit_contract=pit_contract,
+        reference_score_start=(
+            settings.point_in_time_coverage_reference_start_date
+        ),
     )
     contract = {
         "schema_version": SCHEMA_VERSION,
@@ -920,8 +1038,9 @@ def _build_runtime_contract(
             "future_target_used_for_objective": False,
             "oos_used_for_fitting": False,
             "final_selection_refit_executed": False,
-            "pre_pit_missing_scores_use_existing_buy_sort_fallback": False,
-            "all_optimizer_training_windows_require_full_pit_score_coverage": True,
+            "pre_pit_missing_scores_use_existing_buy_sort_fallback": True,
+            "all_optimizer_training_windows_require_full_pit_score_coverage": False,
+            "optimizer_training_score_coverage_must_improve_vs_reference": True,
             "score_gaps_inside_pit_period_allowed": False,
         },
     }
@@ -2083,8 +2202,17 @@ def _capture_yearly_table(
 def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
     rolling = dict(result.get("rolling_validation") or {})
     coverage = dict(rolling.get("training_score_coverage") or {})
+    actual_weighted = coverage.get("actual_weighted_calendar_coverage_ratio")
+    reference_weighted = coverage.get("reference_weighted_calendar_coverage_ratio")
+    gain = coverage.get("weighted_calendar_coverage_ratio_gain")
     summary = render_key_values((
         ("Rolling folds", coverage.get("fold_count", rolling.get("fold_count", "-"))),
+        ("PIT actual start", dict(coverage.get("pit_score_period") or {}).get("start", "-")),
+        ("Coverage reference start", dict(coverage.get("coverage_reference") or {}).get("score_start", "-")),
+        ("Actual weighted coverage", "-" if actual_weighted is None else f"{float(actual_weighted):.1%}"),
+        ("Reference weighted coverage", "-" if reference_weighted is None else f"{float(reference_weighted):.1%}"),
+        ("Coverage gain", "-" if gain is None else f"{float(gain):+.1%}"),
+        ("Improved folds", coverage.get("coverage_improved_folds", "-")),
         ("Adapted trials／fold", rolling.get("trials_per_fold", "-")),
         ("Trials source", rolling.get("trials_per_fold_source", "-")),
         ("Baseline歷史工件 trials／fold", rolling.get("baseline_trials_per_fold", "-")),
@@ -2105,18 +2233,30 @@ def _compact_rolling_coverage(result: dict[str, Any]) -> tuple[str, str]:
             coverage_text = f"{coverage_pct:.1f}%"
         except (TypeError, ValueError):
             coverage_text = "N/A"
+        try:
+            reference_pct = float(row.get("reference_calendar_coverage_ratio")) * 100.0
+            reference_text = f"{reference_pct:.1f}%"
+        except (TypeError, ValueError):
+            reference_text = "N/A"
+        try:
+            delta_pct = float(row.get("coverage_ratio_delta")) * 100.0
+            delta_text = f"{delta_pct:+.1f}pp"
+        except (TypeError, ValueError):
+            delta_text = "N/A"
         rows.append((
             row.get("fold", "-"),
             row.get("selection_period", "-"),
             row.get("oos_period", "-"),
+            reference_text,
             coverage_text,
+            delta_text,
             status_labels.get(str(row.get("status")), str(row.get("status") or "-")),
         ))
     table = (
         render_table(
-            ("Fold", "Selection period", "OOS period", "Score coverage", "狀態"),
+            ("Fold", "Selection period", "OOS period", "Reference", "Actual", "提升", "狀態"),
             rows,
-            alignments=("left", "left", "left", "right", "left"),
+            alignments=("left", "left", "left", "right", "right", "right", "left"),
         )
         if rows else "無Rolling Score coverage資料。"
     )
@@ -2319,7 +2459,7 @@ def _render_four_way_console(result: dict[str, Any]) -> str:
         "定義：新參數只由Score ranking rolling optimizer訓練一次；Param Only與Adapted共用同一套active params。",
         rolling_summary,
         rolling_table,
-        "限制：正式2×2只納入training window具有100% PIT Score coverage的fold；任何fallback fold均排除。",
+        "限制：四組保留相同rolling folds；只允許actual PIT起點之前回退原buy-sort，且延伸後coverage必須高於參考起點、任何fold不得退步，PIT期間內缺口仍禁止。",
         render_section("舊ROOS與新Adapted參數差異", number=11),
         "定義：比較既有正式ROOS與新Score Adapted各fold finalist-best active params的中位數與範圍。",
         render_table(
@@ -2484,12 +2624,17 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     all_score_coverage = _build_training_score_coverage_contract(
         baseline_contract=original_baseline_contract,
         pit_contract=pit_contract,
+        reference_score_start=(
+            settings.point_in_time_coverage_reference_start_date
+        ),
     )
-    baseline_contract, full_score_selection = _build_pure_full_score_baseline_contract(
-        baseline_contract=original_baseline_contract,
-        coverage=all_score_coverage,
+    baseline_contract, coverage_improvement = (
+        _build_improved_score_baseline_contract(
+            baseline_contract=original_baseline_contract,
+            coverage=all_score_coverage,
+        )
     )
-    comparison_period = dict(full_score_selection["comparison_period"])
+    comparison_period = dict(coverage_improvement["comparison_period"])
     baseline_meta = dict(baseline_contract["meta"])
 
     adapted_policy = _build_base_policy(
@@ -2498,7 +2643,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     adapted_policy.update({
         "adaptation_arm": "score_adapted",
         "adaptation_scope": "selection_rolling_single_score_adapted_optimizer",
-        "score_coverage_contract": "100pct_training_window_only",
+        "score_coverage_contract": "improved_vs_reference_all_common_folds",
     })
     adapted_contract = _build_runtime_contract(
         root=root,
@@ -2512,19 +2657,17 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         comparison_period=comparison_period,
     )
     score_coverage = dict(adapted_contract["training_score_coverage"])
-    if not bool(score_coverage.get("all_folds_have_full_score_history")):
-        raise RuntimeError(
-            "純化後rolling folds仍存在非100% PIT Score coverage，禁止執行optimizer"
-        )
-    if int(score_coverage.get("bootstrap_fallback_only_folds", 0) or 0) != 0:
-        raise RuntimeError("純化比較禁止bootstrap fallback fold")
-    if int(score_coverage.get("partial_score_history_folds", 0) or 0) != 0:
-        raise RuntimeError("純化比較禁止partial-score fold")
+    if not bool(score_coverage.get("coverage_improvement_satisfied")):
+        raise RuntimeError("延伸後rolling training PIT Score coverage未高於參考起點")
+    if int(score_coverage.get("coverage_regressed_folds", 0) or 0) != 0:
+        raise RuntimeError("延伸後rolling training coverage存在退步fold")
 
     print(
-        "\n[Rolling Score coverage] 已建立100% PIT Score coverage共同folds："
-        f"保留={full_score_selection['eligible_full_score_fold_count']}，"
-        f"排除={full_score_selection['excluded_fold_count']}，"
+        "\n[Rolling Score coverage] 已保留全部共同folds並確認coverage提升："
+        f"folds={coverage_improvement['common_fold_count']}，"
+        f"reference={coverage_improvement['reference_weighted_calendar_coverage_ratio']:.1%}，"
+        f"actual={coverage_improvement['actual_weighted_calendar_coverage_ratio']:.1%}，"
+        f"提升={coverage_improvement['weighted_calendar_coverage_ratio_gain']:+.1%}，"
         f"共同比較期間={comparison_period['start']}～{comparison_period['end']}。"
     )
 
@@ -2535,11 +2678,11 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         preflight_path,
         {
             "schema_version": SCHEMA_VERSION,
-            "status": "ROLLING_2X2_PURE_FULL_SCORE_PREFLIGHT_PASS",
+            "status": "ROLLING_2X2_IMPROVED_SCORE_COVERAGE_PREFLIGHT_PASS",
             "comparison_design": "ranking_parameter_2x2_single_adapted_optimizer",
             "runtime_identity_sha256": adapted_contract["runtime_identity_sha256"],
             "comparison_period": comparison_period,
-            "full_score_fold_selection": full_score_selection,
+            "coverage_improvement": coverage_improvement,
             "all_baseline_fold_score_coverage": all_score_coverage,
             "score_adapted_contract": adapted_contract,
             "optimizer_training_arms": ["score_adapted"],
@@ -2554,14 +2697,17 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         },
     )
     coverage_path = output_dir / "rolling_training_score_coverage.csv"
-    eligible_indexes = set(
-        int(item) for item in baseline_contract.get("pure_full_score_fold_indexes", [])
+    common_indexes = set(
+        int(item)
+        for item in baseline_contract.get(
+            "common_score_coverage_fold_indexes", []
+        )
     )
     coverage_rows = []
     for row in list(all_score_coverage.get("folds") or []):
         item = dict(row)
-        item["included_in_pure_comparison"] = (
-            int(item["baseline_fold_index"]) in eligible_indexes
+        item["included_in_common_comparison"] = (
+            int(item["baseline_fold_index"]) in common_indexes
         )
         coverage_rows.append(item)
     pd.DataFrame(coverage_rows).to_csv(
@@ -2592,7 +2738,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     ).get("decision", {})
     if str(current_decision.get("status") or "") != "ADAPTATION_DIAGNOSTIC_SUPPORTED":
         print(
-            "[警告] 純化Baseline／Sort Only capture audit未標示為"
+            "[警告] 延伸後Baseline／Sort Only capture audit未標示為"
             "ADAPTATION_DIAGNOSTIC_SUPPORTED；仍依2×2實驗設計繼續執行，"
             "由最終四組結果判定。"
         )
@@ -2614,12 +2760,13 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     optimizer_summary_path = output_dir / "rolling_optimizer_summary.json"
     optimizer_summary = {
         "mode": "rolling_selection_2x2_single_adapted_optimizer",
-        "score_coverage_mode": "pure_full_training_window_only",
+        "score_coverage_mode": "improved_partial_training_coverage",
         "result_interpretation": ADAPTATION_STATUS,
         "comparison_period": comparison_period,
         "folds": int(score_coverage.get("fold_count", 0) or 0),
-        "excluded_incomplete_score_folds": int(
-            full_score_selection["excluded_fold_count"]
+        "common_fold_count": int(coverage_improvement["common_fold_count"]),
+        "coverage_improved_folds": int(
+            coverage_improvement["coverage_improved_fold_count"]
         ),
         "trials_per_fold": int(args.trials_per_fold),
         "trials_per_fold_source": str(
@@ -2651,8 +2798,9 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
         comparison_period=comparison_period,
         rolling_validation={
             "fold_count": int(score_coverage.get("fold_count", 0) or 0),
-            "excluded_incomplete_score_folds": int(
-                full_score_selection["excluded_fold_count"]
+            "common_fold_count": int(coverage_improvement["common_fold_count"]),
+            "coverage_improved_folds": int(
+                coverage_improvement["coverage_improved_fold_count"]
             ),
             "comparison_period": comparison_period,
             "trials_per_fold": int(args.trials_per_fold),
@@ -2669,7 +2817,7 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
             "optimizer_training_arms": ["score_adapted"],
             "score_adapted_search_reused": bool(adapted_arm["search_reused"]),
             "training_score_coverage": score_coverage,
-            "full_score_fold_selection": full_score_selection,
+            "coverage_improvement": coverage_improvement,
         },
     )
 
@@ -2708,11 +2856,11 @@ def run_adaptation(*, project_root=PROJECT_ROOT, argv=None) -> dict[str, Any]:
     execution_argv = _canonical_execution_argv(args)
     manifest = {
         "schema_version": SCHEMA_VERSION,
-        "status": "ROLLING_2X2_PURE_FULL_SCORE_COMPLETED",
+        "status": "ROLLING_2X2_IMPROVED_SCORE_COVERAGE_COMPLETED",
         "comparison_design": "ranking_parameter_2x2_single_adapted_optimizer",
-        "score_coverage_mode": "pure_full_training_window_only",
+        "score_coverage_mode": "improved_partial_training_coverage",
         "comparison_period": comparison_period,
-        "full_score_fold_selection": full_score_selection,
+        "coverage_improvement": coverage_improvement,
         "result_interpretation": ADAPTATION_STATUS,
         "runtime_identity_sha256": adapted_contract["runtime_identity_sha256"],
         "score_adapted_contract": adapted_contract,
