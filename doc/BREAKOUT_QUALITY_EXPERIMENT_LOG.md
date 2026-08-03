@@ -2610,3 +2610,85 @@ R3 CLI已由使用者本機完成；本機正式結果見下節。正式`apps/te
 
 第一階段只強制關閉primary entry qualification中的`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；不關閉`high_len`事件定義、ATR buy／stop／trail、`use_kc` exit、reclaim re-entry、fixed risk或position cap。正式交互作用比較為`(4−3) − (2−1)`。若全部關閉後R3 ranking效果明顯改善，再逐一拆解五個filter；若沒有改善，停止filter-conflict假設，下一步才考慮重做strategy／capital-aligned Target。此gate不重訓模型、不重建PIT Scores、不執行optimizer。
 
+
+## 2026-08-04 — Optional Entry Filters × Ranking A～E Gate
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260804_000824_eb63f9d.zip`
+- SHA256：`eaeb64f05a319e489b2fa263ca52b5753e195671dbe783999b62e97a2b6adcdf`
+- 本輪patch ZIP名稱與SHA256以交付回覆為準。
+
+### 實驗目的
+
+R3 ranking在舊ROOS與R3 Adapted params下都形成正向ranking效果，但R3 Adapted params整體弱於舊ROOS；下一步不再增加optimizer trials，而是固定舊正式ROOS，直接測試既有optional entry filters是否刪除或扭曲Score／R3較擅長的候選母體。使用者要求在原A～D粗粒度gate之外增加E「Optional entry filters全關＋原始Score sort」，用以判斷filters全關後原始Score是否恢復，以及R3資金分桶是否仍有必要。
+
+### 唯一主要變更
+
+新增CLI-only `strategy-filter-gate`，固定五組：
+
+1. A：目前active params filters＋原buy-sort。
+2. B：目前active params filters＋R3 `capital-bucket-then-score`。
+3. C：五個optional entry filters全部關閉＋原buy-sort。
+4. D：五個optional entry filters全部關閉＋R3。
+5. E：五個optional entry filters全部關閉＋原始`score` ranking。
+
+全關欄位只包含：
+
+- `use_breakout_ema_filter`
+- `use_bb`
+- `use_vol`
+- `use_breakout_return_filter`
+- `use_breakout_false_filter`
+
+不關閉`high_len`事件定義、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap或max positions。
+
+### Runtime與報表契約
+
+- Gate重用`strategy_compare.run_comparison`三次，不複製portfolio engine、sizing、成交、費用或統計：AB=current filters × R3、CD=filters all-off × R3、CE=filters all-off × raw Score。
+- C會在CD與CE各執行一次；兩次`no_filter_equity.csv`、`no_filter_trades.csv`與`no_filter_daily_capacity.csv`的SHA256必須完全相同，否則fail-fast。
+- 合併報表輸出A～E相同口徑的投組、資金、Target、capture與模型選股表，並固定列出：`B−A`、`D−C`、`E−C`、`C−A`、`D−B`、`D−E`及R3 filter interaction `(D−C)−(B−A)`。
+- E只回答filters全關後原始Score ranking效果；`D−E`回答在相同候選池下R3資金分桶相較原始Score是否仍有增益。
+- `strategy-compare --optional-entry-filters all-off`會對pair兩側同時固定五個filters為False，pair內仍只允許`use_breakout_quality_ranking`不同；all-off輸出identity與既有current-filter比較隔離。
+- Gate不加入互動選單，不修改正式Baseline與正式ranking policy。
+
+### 固定條件
+
+- 參數：舊正式`base_finalist_best` rolling active params。
+- Score：Selection PIT `selection_point_in_time`。
+- 預定期間：`2014-01-01～2020-12-31`。
+- R3三分桶、Score、fixed risk、position cap、max positions、ATR entry／stop／trail、exit、rotation、交易成本、portfolio accounting與0050 benchmark不變。
+- 不重建Dataset、不relabel、不重建Continuous Target、不重訓模型、不重建PIT Scores、不執行optimizer。
+- Future Target只在portfolio replay完成後離線join，未進入候選、排序、資金配置或成交決策。
+
+### Dataset／Label／模型工件需求
+
+本次程式變更不需要重建Dataset、Label、Continuous Target、PIT Scores或checkpoint。本機執行需要既有完整市場資料、Selection PIT score／manifest／audit與`models/research/breakout_quality/selection_strategy_realization/roos_base_best.json`。
+
+### 本機執行
+
+本Gate為臨時研究CLI，尚未納入正式選單：
+
+```bash
+python apps/breakout_quality.py strategy-filter-gate --dataset full --param-policy base-finalist-best --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
+```
+
+主要輸出位於：
+
+`outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/strategy_filter_gate_base_finalist_best_selection_point_in_time/`
+
+包含三個pair子目錄與合併`strategy_filter_gate.md`／`strategy_filter_gate.json`。
+
+### 採用判定
+
+尚未取得真實Selection replay結果，不預判有效。結果取得後依以下順序判讀：
+
+1. `D−C`是否明顯優於`B−A`；若是，表示filters全關後R3相對效果增加。
+2. `E−C`是否由既有raw Score負面結果轉正或大幅改善；若是，表示entry filters可能是原始Score失敗的重要交互因素。
+3. `D−E`是否仍為正；若是，R3資金分桶在filters全關候選池仍有額外價值；若接近零或為負，可能只需原始Score而不需R3。
+4. 同時檢查Baseline絕對效果：C、D、E不能只因相對差異改善就忽略總報酬、MDD、Return／MDD、資本效率與Target capture。
+5. 只有粗粒度全關gate為正，才逐一拆解五個filter；若D與E都沒有改善，停止filter-conflict假設，下一步轉向strategy／capital-aligned Target。

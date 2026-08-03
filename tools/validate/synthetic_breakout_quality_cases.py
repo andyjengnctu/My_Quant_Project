@@ -320,6 +320,8 @@ from tools.filters.breakout_quality.audit_qualified_candidate_set import (
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_HARD_FILTER,
     COMPARISON_MODE_SCORE_RANKING,
+    OPTIONAL_ENTRY_FILTER_FIELDS,
+    OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     PARAM_POLICY_BASE_FINALIST_BEST,
     PARAM_POLICY_BASE_FINALISTS_AGREE,
     _assert_controlled_ensemble_pair,
@@ -8616,6 +8618,59 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         ),
     )
 
+    all_off_pair = _build_controlled_param_source_pair(
+        {"kind": "single_param", "params": base},
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        fixed_risk=None,
+        comparison_mode=COMPARISON_MODE_SCORE_RANKING,
+        optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+    )
+    all_off_left = params_to_json_dict(all_off_pair[1])
+    all_off_right = params_to_json_dict(all_off_pair[2])
+    from tools.filters.breakout_quality.strategy_filter_gate import (
+        build_filter_gate_scenario_specs,
+    )
+    gate_specs = build_filter_gate_scenario_specs()
+    all_off_output_name = _comparison_output_dir_name(
+        COMPARISON_MODE_SCORE_RANKING,
+        _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
+        param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+        ranking_policy="score",
+        optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "optional_entry_filter_gate_adds_e_raw_score_with_all_five_filters_off",
+        (
+            (False, False, False, False, False),
+            (False, False, False, False, False),
+            (False, True),
+            ("all-off", "score"),
+            ("all-off", "capital-bucket-then-score"),
+            True,
+        ),
+        (
+            tuple(all_off_left[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+            tuple(all_off_right[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+            (
+                all_off_left["use_breakout_quality_ranking"],
+                all_off_right["use_breakout_quality_ranking"],
+            ),
+            (
+                gate_specs["E"]["optional_entry_filter_policy"],
+                gate_specs["E"]["ranking_policy"],
+            ),
+            (
+                gate_specs["D"]["optional_entry_filter_policy"],
+                gate_specs["D"]["ranking_policy"],
+            ),
+            all_off_output_name.endswith("_optional_entry_filters_all_off"),
+        ),
+    )
+
     baseline_sort_rows = [
         {"ticker": "A", "sort_value": 0.20, "proj_cost": 100.0, "use_breakout_quality_ranking": False},
         {"ticker": "B", "sort_value": 0.10, "proj_cost": 80.0, "use_breakout_quality_ranking": False},
@@ -9220,6 +9275,49 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
             fixed_risk=None,
         )
+    rolling_all_off_pair = _build_controlled_param_source_pair(
+        rolling_source,
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        fixed_risk=None,
+        comparison_mode=COMPARISON_MODE_SCORE_RANKING,
+        optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+    )
+    rolling_all_off_left = rolling_all_off_pair[1][
+        "params_ensemble_by_effective_date"
+    ]["2021-01-01"][0]["params"]
+    rolling_all_off_right = rolling_all_off_pair[2][
+        "params_ensemble_by_effective_date"
+    ]["2021-01-01"][0]["params"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rolling_optional_entry_filter_gate_keeps_schedule_and_forces_all_five_filters_off",
+        (
+            "rolling_active_param_ensemble",
+            (False, False, False, False, False),
+            (False, False, False, False, False),
+            (False, True),
+            2,
+        ),
+        (
+            rolling_all_off_pair[0],
+            tuple(
+                rolling_all_off_left[field]
+                for field in OPTIONAL_ENTRY_FILTER_FIELDS
+            ),
+            tuple(
+                rolling_all_off_right[field]
+                for field in OPTIONAL_ENTRY_FILTER_FIELDS
+            ),
+            (
+                rolling_all_off_left["use_breakout_quality_ranking"],
+                rolling_all_off_right["use_breakout_quality_ranking"],
+            ),
+            len(rolling_all_off_pair[1]["params_ensemble_by_effective_date"]),
+        ),
+    )
     finalist_best_payload = json.loads(json.dumps(rolling_payload))
     finalist_best_payload["selector"] = "base_finalist_best"
     finalist_best_payload["random_seed_ensemble"] = {

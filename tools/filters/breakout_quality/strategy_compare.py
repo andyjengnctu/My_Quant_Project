@@ -118,6 +118,20 @@ PARAM_POLICY_SPECS = {
 }
 PARAM_POLICIES = (PARAM_POLICY_AUTO, *PARAM_POLICY_SPECS.keys())
 
+OPTIONAL_ENTRY_FILTER_POLICY_CURRENT = "current"
+OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF = "all-off"
+SUPPORTED_OPTIONAL_ENTRY_FILTER_POLICIES = (
+    OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+)
+OPTIONAL_ENTRY_FILTER_FIELDS = (
+    "use_breakout_ema_filter",
+    "use_bb",
+    "use_vol",
+    "use_breakout_return_filter",
+    "use_breakout_false_filter",
+)
+
 _RESULT_FIELDS = (
     "equity_curve", "trade_history", "total_return_pct", "max_drawdown_pct",
     "trade_count", "win_rate_pct", "expected_value_r", "payoff_ratio",
@@ -156,6 +170,15 @@ def _parse_args(argv=None):
             "score-ranking排序契約：score=原始Score；capital-adjusted-score="
             "Score×正式預估部署率；capital-bucket-then-score="
             "每日部署率三分桶後桶內按Score。"
+        ),
+    )
+    parser.add_argument(
+        "--optional-entry-filters",
+        choices=SUPPORTED_OPTIONAL_ENTRY_FILTER_POLICIES,
+        default=OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+        help=(
+            "current=沿用active params；all-off=兩組都關閉EMA、BB、Volume、"
+            "breakout return與false-breakout五個optional entry filters。"
         ),
     )
     parser.add_argument("--model-architecture", default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
@@ -372,6 +395,7 @@ def _comparison_output_dir_name(
     *,
     param_policy: str,
     ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
 ) -> str:
     if param_policy != PARAM_POLICY_AUTO:
         name = f"{labels['output_dir']}_{PARAM_POLICY_SPECS[param_policy]['output_suffix']}"
@@ -382,6 +406,8 @@ def _comparison_output_dir_name(
         and ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_SCORE
     ):
         name += "_" + str(ranking_policy).replace("-", "_")
+    if optional_entry_filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF:
+        name += "_optional_entry_filters_all_off"
     return name
 
 def canonical_strategy_compare_output_dir_names(
@@ -482,6 +508,7 @@ def _apply_scenario_overrides(
     threshold: float,
     fixed_risk: float | None,
     max_position_cap_pct: float | None = None,
+    optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
 ):
     _comparison_switch_spec(comparison_mode)
     overrides = {
@@ -490,6 +517,13 @@ def _apply_scenario_overrides(
         "breakout_quality_filter_id": str(filter_id),
         "breakout_quality_score_threshold": float(threshold),
     }
+    optional_entry_filter_policy = str(optional_entry_filter_policy).strip()
+    if optional_entry_filter_policy not in SUPPORTED_OPTIONAL_ENTRY_FILTER_POLICIES:
+        raise ValueError(
+            f"不支援的 optional entry filter policy: {optional_entry_filter_policy!r}"
+        )
+    if optional_entry_filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF:
+        overrides.update({field: False for field in OPTIONAL_ENTRY_FILTER_FIELDS})
     if fixed_risk is not None:
         overrides["fixed_risk"] = float(fixed_risk)
     if max_position_cap_pct is not None:
@@ -519,6 +553,7 @@ def _rewrite_param_mapping(
     threshold: float,
     fixed_risk: float | None,
     max_position_cap_pct: float | None = None,
+    optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
 ) -> dict:
     rewritten = {}
     for key, raw_params in dict(mapping or {}).items():
@@ -532,6 +567,7 @@ def _rewrite_param_mapping(
                 threshold=threshold,
                 fixed_risk=fixed_risk,
                 max_position_cap_pct=max_position_cap_pct,
+                optional_entry_filter_policy=optional_entry_filter_policy,
             )
         )
     return rewritten
@@ -545,6 +581,7 @@ def _rewrite_ensemble_mapping(
     threshold: float,
     fixed_risk: float | None,
     max_position_cap_pct: float | None = None,
+    optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
 ) -> dict:
     rewritten = {}
     for key, raw_members in dict(mapping or {}).items():
@@ -564,6 +601,7 @@ def _rewrite_ensemble_mapping(
                     threshold=threshold,
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
+                    optional_entry_filter_policy=optional_entry_filter_policy,
                 )
             )
             output_members.append(output_member)
@@ -578,6 +616,7 @@ def _build_controlled_param_source_pair(
     fixed_risk: float | None,
     max_position_cap_pct: float | None = None,
     comparison_mode: str = COMPARISON_MODE_HARD_FILTER,
+    optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
 ) -> tuple[str, Any, Any, Any, Any, dict[str, Any] | None]:
     kind = str(source["kind"])
     if kind == "single_param":
@@ -590,6 +629,7 @@ def _build_controlled_param_source_pair(
             threshold=threshold,
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
+            optional_entry_filter_policy=optional_entry_filter_policy,
         )
         quality_params = _apply_scenario_overrides(
             base_params,
@@ -599,6 +639,7 @@ def _build_controlled_param_source_pair(
             threshold=threshold,
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
+            optional_entry_filter_policy=optional_entry_filter_policy,
         )
         _assert_controlled_param_pair(no_filter_params, quality_params, comparison_mode=comparison_mode)
         return (
@@ -631,6 +672,7 @@ def _build_controlled_param_source_pair(
             threshold=threshold,
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
+            optional_entry_filter_policy=optional_entry_filter_policy,
         )["static"]
         quality_payload["params_ensemble"] = _rewrite_ensemble_mapping(
             base_mapping,
@@ -640,6 +682,7 @@ def _build_controlled_param_source_pair(
             threshold=threshold,
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
+            optional_entry_filter_policy=optional_entry_filter_policy,
         )["static"]
         _assert_controlled_ensemble_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = get_active_param_ensemble_policy(base_payload)
@@ -655,6 +698,7 @@ def _build_controlled_param_source_pair(
                     threshold=threshold,
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
+                    optional_entry_filter_policy=optional_entry_filter_policy,
                 )
                 quality_payload[field] = _rewrite_param_mapping(
                     raw_mapping,
@@ -664,6 +708,7 @@ def _build_controlled_param_source_pair(
                     threshold=threshold,
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
+                    optional_entry_filter_policy=optional_entry_filter_policy,
                 )
         ensemble_mapping = base_payload.get("params_ensemble_by_effective_date")
         if not isinstance(ensemble_mapping, dict) or not ensemble_mapping:
@@ -676,6 +721,7 @@ def _build_controlled_param_source_pair(
             threshold=threshold,
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
+            optional_entry_filter_policy=optional_entry_filter_policy,
         )
         quality_payload["params_ensemble_by_effective_date"] = _rewrite_ensemble_mapping(
             ensemble_mapping,
@@ -685,6 +731,7 @@ def _build_controlled_param_source_pair(
             threshold=threshold,
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
+            optional_entry_filter_policy=optional_entry_filter_policy,
         )
         _assert_controlled_ensemble_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = get_active_param_ensemble_policy(base_payload)
@@ -702,6 +749,7 @@ def _build_controlled_param_source_pair(
                     threshold=threshold,
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
+                    optional_entry_filter_policy=optional_entry_filter_policy,
                 )
                 quality_payload[field] = _rewrite_param_mapping(
                     raw_mapping,
@@ -711,6 +759,7 @@ def _build_controlled_param_source_pair(
                     threshold=threshold,
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
+                    optional_entry_filter_policy=optional_entry_filter_policy,
                 )
         if not updated_any:
             raise ValueError("rolling OOS param schedule 缺少 params_by_effective_date / params_by_oos_year")
@@ -918,6 +967,7 @@ def _markdown_report(metadata, baseline, quality, delta, yearly, strategy_diagno
             if metadata["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
             else []
         ),
+        f"- Optional entry filters：`{metadata.get('optional_entry_filter_policy')}`",
         f"- Benchmark：`{metadata['benchmark_ticker']}`",
         f"- 唯一差異：`{labels['difference_text']}`",
         (
@@ -1364,6 +1414,7 @@ def _render_flat_score_ranking_console_report(
             ("Dataset", metadata.get("dataset", "-")),
             ("Score source", metadata.get("score_source", "-")),
             ("Ranking policy", metadata.get("score_ranking_policy", "-")),
+            ("Optional entry filters", metadata.get("optional_entry_filter_policy", "-")),
             ("Benchmark", metadata.get("benchmark_ticker", "-")),
             ("唯一差異", _comparison_labels(COMPARISON_MODE_SCORE_RANKING)["difference_text"]),
             ("排序鍵", " → ".join(metadata.get("score_ranking_order") or [])),
@@ -1817,6 +1868,7 @@ def _render_strategy_console_report(
                 ("Dataset", metadata.get("dataset", "-")),
                 ("Score source", metadata.get("score_source", "-")),
                 ("Ranking policy", metadata.get("score_ranking_policy", "-")),
+                ("Optional entry filters", metadata.get("optional_entry_filter_policy", "-")),
                 ("Benchmark", metadata.get("benchmark_ticker", "-")),
                 ("唯一差異", labels["difference_text"]),
                 *(
@@ -2512,6 +2564,7 @@ def run_comparison(
     fixed_risk=None, max_position_cap_pct=None, allow_static_diagnostic=False,
     comparison_mode=COMPARISON_MODE_HARD_FILTER,
     ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
     filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
     model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
@@ -2524,6 +2577,7 @@ def run_comparison(
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
     ranking_policy = str(ranking_policy).strip()
+    optional_entry_filter_policy = str(optional_entry_filter_policy).strip()
     score_source = str(score_source)
     filter_id = str(filter_id)
     model_architecture = str(model_architecture)
@@ -2533,6 +2587,10 @@ def run_comparison(
         raise ValueError(f"不支援的 score source: {score_source!r}")
     if ranking_policy not in SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES:
         raise ValueError(f"不支援的 ranking policy: {ranking_policy!r}")
+    if optional_entry_filter_policy not in SUPPORTED_OPTIONAL_ENTRY_FILTER_POLICIES:
+        raise ValueError(
+            f"不支援的 optional entry filter policy: {optional_entry_filter_policy!r}"
+        )
     if comparison_mode == COMPARISON_MODE_HARD_FILTER:
         if score_source != SCORE_SOURCE_CANONICAL_RUNTIME:
             raise ValueError("hard-filter策略比較只接受canonical_runtime score source")
@@ -2657,6 +2715,7 @@ def run_comparison(
             None if max_position_cap_pct is None else float(max_position_cap_pct)
         ),
         comparison_mode=comparison_mode,
+        optional_entry_filter_policy=optional_entry_filter_policy,
     )
 
     is_rolling_source = param_source_kind in {
@@ -2717,6 +2776,7 @@ def run_comparison(
             labels,
             param_policy=param_policy,
             ranking_policy=ranking_policy,
+            optional_entry_filter_policy=optional_entry_filter_policy,
         )
         if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
             output_dir_name += "_selection_point_in_time"
@@ -2836,6 +2896,13 @@ def run_comparison(
         "schema_version": SCHEMA_VERSION,
         "comparison_mode": comparison_mode,
         "score_ranking_policy": ranking_policy if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None,
+        "optional_entry_filter_policy": optional_entry_filter_policy,
+        "optional_entry_filter_fields": list(OPTIONAL_ENTRY_FILTER_FIELDS),
+        "optional_entry_filter_forced_values": (
+            {field: False for field in OPTIONAL_ENTRY_FILTER_FIELDS}
+            if optional_entry_filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
+            else None
+        ),
         "score_source": score_source,
         "dataset": dataset,
         "data_dir": str(data_dir),
@@ -3035,6 +3102,8 @@ def main(argv=None):
     if args.attribution_only and args.capture_audit_only:
         raise ValueError("--attribution-only 與 --capture-audit-only 不可同時使用")
     if args.capture_audit_only:
+        if args.optional_entry_filters != OPTIONAL_ENTRY_FILTER_POLICY_CURRENT:
+            raise ValueError("--capture-audit-only目前只支援沿用既有entry filters的正式目錄")
         if args.comparison_mode != COMPARISON_MODE_SCORE_RANKING:
             raise ValueError("--capture-audit-only只支援score-ranking")
         if args.ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
@@ -3067,6 +3136,7 @@ def main(argv=None):
         allow_static_diagnostic=args.allow_static_diagnostic,
         comparison_mode=args.comparison_mode,
         ranking_policy=args.ranking_policy,
+        optional_entry_filter_policy=args.optional_entry_filters,
         filter_id=args.filter_id,
         score_source=args.score_source,
         model_architecture=args.model_architecture,
@@ -3091,6 +3161,8 @@ __all__ = [
     "BREAKOUT_QUALITY_RANKING_POLICY_SCORE",
     "BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED",
     "BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET",
+    "OPTIONAL_ENTRY_FILTER_POLICY_CURRENT", "OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF",
+    "SUPPORTED_OPTIONAL_ENTRY_FILTER_POLICIES", "OPTIONAL_ENTRY_FILTER_FIELDS",
     "PARAM_POLICY_AUTO", "PARAM_POLICY_BASE_FINALIST_BEST", "PARAM_POLICY_BASE_FINALISTS_AGREE",
     "_resolve_params_path", "_resolve_param_selector", "_validate_requested_param_policy",
 ]

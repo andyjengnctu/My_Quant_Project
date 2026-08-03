@@ -118,6 +118,7 @@ COMMAND_MODULES = {
     "audit-point-in-time-scores": "tools.filters.breakout_quality.audit_point_in_time_scores",
     "strategy-compare": "tools.filters.breakout_quality.strategy_compare",
     "strategy-adapt": "tools.filters.breakout_quality.strategy_adapt",
+    "strategy-filter-gate": "tools.filters.breakout_quality.strategy_filter_gate",
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -152,6 +153,7 @@ COMMAND_DESCRIPTIONS = {
     "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
     "strategy-compare": "執行breakout-quality策略績效比較",
     "strategy-adapt": "驗證Selection rolling Ranking×Parameter 2×2策略適應",
+    "strategy-filter-gate": "執行Optional entry filters × Ranking A～E研究Gate",
 }
 
 

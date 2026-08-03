@@ -490,6 +490,14 @@ python apps/breakout_quality.py strategy-compare --dataset full --comparison-mod
 
 R3只對當日具有有效PIT Score的可掛單候選，依正式`deployment_rate`的當日橫斷面1/3與2/3分位切成高／中／低三桶，先按部署桶高到低，再於桶內按Score高到低，最後沿用既有buy-sort。分桶只使用當日盤前已知候選與正式sizing，不使用Future Target或回放績效調整邊界；同部署率跨分位時保持同桶。輸出隔離於`strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score_selection_point_in_time/`。
 
+Optional entry filters × Ranking A～E Gate為CLI-only研究，不加入互動選單。它固定舊正式ROOS與Selection PIT Scores，依序執行：A目前filters＋原buy-sort、B目前filters＋R3、C五個optional entry filters全關＋原buy-sort、D五個filters全關＋R3、E五個filters全關＋原始Score sort：
+
+```bash
+python apps/breakout_quality.py strategy-filter-gate --dataset full --param-policy base-finalist-best --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
+```
+
+全關欄位固定為`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；不關閉`high_len`、ATR buy／stop／trail、`use_kc` exit、reclaim re-entry、fixed risk或position cap。主要判讀為`B−A`、`D−C`、`E−C`、`D−E`及R3交互作用`(D−C)−(B−A)`。E用來確認關閉filters後原始Score是否恢復，D−E則判斷R3資金分桶是否仍有必要。Gate不重訓模型、不重建PIT Scores、不執行optimizer；三個pair工件與合併`strategy_filter_gate.md/json`均輸出至`strategy_filter_gate_base_finalist_best_selection_point_in_time/`隔離目錄。
+
 兩種政策都維持Score缺失契約：有效Score候選優先；缺分候選不排除、不填0，並完整回退原buy-sort。正式比較先看相較原始Score ranking能否恢復平均投入與曝險，再判斷總報酬、Return／MDD、Target mean、Realized R與capture；不得只因R2／R3優於原始Score就直接採用，仍須至少對照Baseline。
 
 - `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。
