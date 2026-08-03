@@ -2198,3 +2198,46 @@ Score Adapted為了把`roos_*.json`隔離到`rolling_validation/score_adapted/ac
 
 T283新增正式PIT models root解析、active-param獨立輸出、Selection PIT缺檔不可重試及source wiring案例。正式`apps/test_suite.py`依專案規定由使用者本機執行。
 
+
+## 2026-08-03 — Ensemble partial Score availability保守fallback修正
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / FORMAL_RERUN_PENDING`
+
+本輪只修正Score Adapted fold diagnostics的ensemble Score聚合與錯誤重試分類；未完成7-fold rolling、四組Selection replay或正式OOS，不得預判Adapted有效。
+
+### 程式基準
+
+- ZIP：`test-branch-1_20260803_021601_c5bd4b2.zip`
+- SHA256：`cbef176743f6351bc6fa388ad6b1000cff37924861244d41b662a096c60c1998`
+- 全新解壓：`/mnt/data/bq_ensemble_score_availability_fix_20260803_0300`
+
+### 問題
+
+使用者本機Score Adapted執行至fold diagnostics時，ticker `00655L`的ensemble共識members出現部分有Selection PIT Score、部分缺分，舊`_aggregate_ensemble_candidate_rows()`要求所有member availability完全一致，因此在`build_daily_ensemble_candidates`中拋出`同一 ticker 的 ensemble members Score availability不一致`。平行流程又把此deterministic契約錯誤當一般process失敗，進入必然同樣失敗的sequential fallback。
+
+### 根因
+
+ensemble以ticker聚合，但不同參數member可能在同一交易日承接不同原始normal／continuation／re-entry訊號，因此`score_date`可以不同。Selection PIT Score依`ticker／原始score_date`查詢；不同原始事件日期一邊有分、一邊缺分是合法partial availability，不代表同一PIT key回傳矛盾。
+
+### 修正
+
+- 只有全部共識members均有有效Score時，聚合候選才使用member Score中位數參與同票ranking。
+- 若不同原始score date造成partial availability，保留候選、保存完整`ensemble_member_quality_rank_by_key`，聚合rank標記`available=false`與`partial_ensemble_member_score_availability`，回退既有buy-sort；不得填0或排除候選。
+- 若全部members均缺分，維持既有缺分fallback。
+- 若同ticker且同一score date仍同時出現available與unavailable，視為真正資料／runtime契約分叉並fail-fast。
+- 聚合結果新增available／unavailable member數量、keys及`all_available / partial_available_fallback / none_available`診斷欄位。
+- deterministic ensemble ranking／Score source／score payload契約錯誤加入不可重試分類，不再啟動sequential fallback；一般process pool失敗仍保留fallback。
+
+### 既有執行與續跑
+
+本次已有4個fold完成diagnostics，其餘fold的SQLite studies已持久化接近或完成200 trials。套用修正後以相同runtime identity重新執行，應沿用既有studies、只補足缺少trials並重做未完成diagnostics；目前中斷輸出的OOS_AVG與部分fold表不得作正式結論。
+
+### 固定條件與結果邊界
+
+不改Dataset、Label、Continuous Target、PIT Scores、模型、Seed 42、fold schedule、trials、search space、objective、TP、fixed risk、position cap、max positions、rotation、Score排序鍵、交易／帳務、Future Target post-replay only或Selection／OOS邊界。單一Score Adapted訓練與Baseline／Sort Only／Param Only／Adapted四組回放契約不變。
+
+### 驗證
+
+T267新增不同score date partial availability保留候選、回退原排序、逐member rank保存及同score date分叉fail-fast案例；T283新增deterministic ensemble契約錯誤不進sequential fallback案例。正式`apps/test_suite.py`依專案規定由使用者本機執行。

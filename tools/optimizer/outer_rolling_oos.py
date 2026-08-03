@@ -6010,6 +6010,13 @@ def _is_non_retryable_fold_failure(exc: BaseException | None) -> bool:
         "找不到selection pit manifest",
         "找不到selection pit audit",
         "selection pit runtime identity不一致",
+        "同一 ticker／score_date 的 ensemble members score availability不一致",
+        "同一 ticker 的 ensemble members score availability不一致",
+        "同一 ticker 的 ensemble members score source不一致",
+        "同一 ticker 的 ensemble members quality ranking 設定不一致",
+        "同日 aggregated candidates 的 quality ranking 設定不一致",
+        "啟用 quality ranking 的 ensemble 候選分數不是有限數值",
+        "啟用 quality ranking 的 ensemble 候選缺少有效原始事件分數",
         "runtime context不一致",
         "runtime identity",
     )

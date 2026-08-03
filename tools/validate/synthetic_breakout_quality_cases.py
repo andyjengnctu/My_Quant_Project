@@ -8668,6 +8668,159 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         sorted(ensemble_ranked[0]["ensemble_member_quality_rank_by_key"]),
     )
 
+    partial_ensemble_rows = [
+        {
+            "ticker": "A",
+            "ensemble_member_key": "m0",
+            "params_obj": base,
+            "sort_value": 0.10,
+            "proj_cost": 100.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_rank": {
+                "score": 0.90,
+                "available": True,
+                "unavailable_reason": "",
+                "score_date": "2017-06-22",
+                "score_source": "selection_point_in_time",
+                "shared_group_score": True,
+                "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            },
+        },
+        {
+            "ticker": "A",
+            "ensemble_member_key": "m1",
+            "params_obj": base,
+            "sort_value": 0.10,
+            "proj_cost": 100.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_rank": {
+                "score": None,
+                "available": False,
+                "unavailable_reason": "missing_ticker_date_score",
+                "score_date": "2017-06-20",
+                "score_source": "selection_point_in_time",
+                "shared_group_score": True,
+                "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            },
+        },
+        {
+            "ticker": "B",
+            "ensemble_member_key": "m0",
+            "params_obj": base,
+            "sort_value": 0.20,
+            "proj_cost": 100.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_rank": {
+                "score": 0.50,
+                "available": True,
+                "unavailable_reason": "",
+                "score_date": "2017-06-22",
+                "score_source": "selection_point_in_time",
+                "shared_group_score": True,
+                "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            },
+        },
+        {
+            "ticker": "B",
+            "ensemble_member_key": "m1",
+            "params_obj": base,
+            "sort_value": 0.20,
+            "proj_cost": 100.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_rank": {
+                "score": 0.50,
+                "available": True,
+                "unavailable_reason": "",
+                "score_date": "2017-06-21",
+                "score_source": "selection_point_in_time",
+                "shared_group_score": True,
+                "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            },
+        },
+        {
+            "ticker": "C",
+            "ensemble_member_key": "m0",
+            "params_obj": base,
+            "sort_value": 0.05,
+            "proj_cost": 100.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_rank": {
+                "score": None,
+                "available": False,
+                "unavailable_reason": "missing_ticker_date_score",
+                "score_date": "2017-06-22",
+                "score_source": "selection_point_in_time",
+                "shared_group_score": True,
+                "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            },
+        },
+        {
+            "ticker": "C",
+            "ensemble_member_key": "m1",
+            "params_obj": base,
+            "sort_value": 0.05,
+            "proj_cost": 100.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_rank": {
+                "score": None,
+                "available": False,
+                "unavailable_reason": "missing_ticker_date_score",
+                "score_date": "2017-06-21",
+                "score_source": "selection_point_in_time",
+                "shared_group_score": True,
+                "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            },
+        },
+    ]
+    partial_ensemble_ranked = _aggregate_ensemble_candidate_rows(
+        partial_ensemble_rows, min_agree=2
+    )
+    partial_by_ticker = {row["ticker"]: row for row in partial_ensemble_ranked}
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "partial_ensemble_score_availability_falls_back_without_excluding_candidate",
+        (
+            ["B", "C", "A"],
+            False,
+            "partial_ensemble_member_score_availability",
+            "partial_available_fallback",
+            1,
+            1,
+            ["m0", "m1"],
+        ),
+        (
+            [row["ticker"] for row in partial_ensemble_ranked],
+            partial_by_ticker["A"]["breakout_quality_rank"]["available"],
+            partial_by_ticker["A"]["breakout_quality_rank"]["unavailable_reason"],
+            partial_by_ticker["A"]["ensemble_quality_score_availability"],
+            partial_by_ticker["A"]["ensemble_quality_score_available_member_count"],
+            partial_by_ticker["A"]["ensemble_quality_score_unavailable_member_count"],
+            sorted(partial_by_ticker["A"]["ensemble_member_quality_rank_by_key"]),
+        ),
+    )
+
+    same_date_inconsistent_rows = [dict(row) for row in partial_ensemble_rows[:2]]
+    same_date_inconsistent_rows[1] = dict(same_date_inconsistent_rows[1])
+    same_date_inconsistent_rows[1]["breakout_quality_rank"] = dict(
+        same_date_inconsistent_rows[1]["breakout_quality_rank"],
+        score_date="2017-06-22",
+    )
+    try:
+        _aggregate_ensemble_candidate_rows(same_date_inconsistent_rows, min_agree=2)
+        same_date_inconsistency_rejected = False
+    except ValueError as exc:
+        same_date_inconsistency_rejected = "ticker／score_date" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "same_ticker_same_score_date_availability_mismatch_remains_fail_fast",
+        True,
+        same_date_inconsistency_rejected,
+    )
+
     reentry_params = replace(
         base,
         use_breakout_reclaim_reentry=True,
@@ -12090,6 +12243,10 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         "portfolio replay 失敗 | FileNotFoundError: 找不到Selection PIT score: "
         "adapted/active_params/filters/breakout_quality/.../selection_point_in_time_scores.csv"
     )
+    ensemble_contract_error = RuntimeError(
+        "portfolio replay 失敗 | ValueError: "
+        "同一 ticker／score_date 的 ensemble members Score availability不一致"
+    )
     generic_error = RuntimeError("process pool broken")
     try:
         _run_missing_parallel_fold_tasks_sequentially(
@@ -12108,10 +12265,11 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "runtime_identity_manifest_errors_are_non_retryable",
-        (True, True, False, True),
+        (True, True, True, False, True),
         (
             _is_non_retryable_fold_failure(manifest_error),
             _is_non_retryable_fold_failure(pit_path_error),
+            _is_non_retryable_fold_failure(ensemble_contract_error),
             _is_non_retryable_fold_failure(generic_error),
             fallback_blocked,
         ),

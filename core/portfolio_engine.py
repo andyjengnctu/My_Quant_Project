@@ -455,14 +455,47 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
                 if member_key:
                     member_quality_rank_by_key[member_key] = dict(normalized_rank)
 
-            if len(availability_flags) > 1:
-                raise ValueError(f"同一 ticker 的 ensemble members Score availability不一致: ticker={ticker}")
             if len(score_sources) > 1:
                 raise ValueError(f"同一 ticker 的 ensemble members Score source不一致: ticker={ticker}")
+
+            availability_by_score_date = {}
+            for member_key, rank_payload in member_quality_rank_by_key.items():
+                score_date = str(rank_payload.get("score_date") or "").strip()
+                if not score_date:
+                    continue
+                availability_by_score_date.setdefault(score_date, set()).add(
+                    bool(rank_payload.get("available", False))
+                )
+            inconsistent_dates = sorted(
+                score_date
+                for score_date, flags in availability_by_score_date.items()
+                if len(flags) > 1
+            )
+            if inconsistent_dates:
+                raise ValueError(
+                    "同一 ticker／score_date 的 ensemble members Score availability不一致: "
+                    f"ticker={ticker}, score_dates={inconsistent_dates}"
+                )
+
+            available_member_keys = sorted(
+                member_key
+                for member_key, rank_payload in member_quality_rank_by_key.items()
+                if bool(rank_payload.get("available", False))
+            )
+            unavailable_member_keys = sorted(
+                member_key
+                for member_key, rank_payload in member_quality_rank_by_key.items()
+                if not bool(rank_payload.get("available", False))
+            )
+            representative["ensemble_quality_score_available_member_count"] = len(available_member_keys)
+            representative["ensemble_quality_score_unavailable_member_count"] = len(unavailable_member_keys)
+            representative["ensemble_quality_score_available_member_keys"] = available_member_keys
+            representative["ensemble_quality_score_unavailable_member_keys"] = unavailable_member_keys
 
             if availability_flags == {True}:
                 quality_rows.sort(key=lambda item: (item[0], item[1]))
                 median_score, median_score_date, median_rank = quality_rows[(len(quality_rows) - 1) // 2]
+                representative["ensemble_quality_score_availability"] = "all_available"
                 representative["ensemble_median_quality_score"] = float(median_score)
                 representative["ensemble_median_quality_score_date"] = median_score_date
                 representative["ensemble_quality_score_dates"] = sorted({item[1] for item in quality_rows if item[1]})
@@ -471,7 +504,20 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
                 representative["breakout_quality_score_source"] = str(median_rank.get("score_source") or "")
                 representative["breakout_quality_rank"] = dict(median_rank)
             else:
-                fallback_rank = next(iter(member_quality_rank_by_key.values()), {})
+                fallback_member_key = (unavailable_member_keys or sorted(member_quality_rank_by_key))[0]
+                fallback_rank = dict(member_quality_rank_by_key.get(fallback_member_key) or {})
+                partial_availability = bool(available_member_keys and unavailable_member_keys)
+                if partial_availability:
+                    fallback_rank.update({
+                        "score": None,
+                        "available": False,
+                        "unavailable_reason": "partial_ensemble_member_score_availability",
+                        "score_date": "",
+                        "shared_group_score": False,
+                    })
+                    representative["ensemble_quality_score_availability"] = "partial_available_fallback"
+                else:
+                    representative["ensemble_quality_score_availability"] = "none_available"
                 representative["ensemble_median_quality_score"] = None
                 representative["ensemble_median_quality_score_date"] = str(fallback_rank.get("score_date") or "")
                 representative["ensemble_quality_score_dates"] = sorted(
@@ -480,7 +526,7 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
                 representative["breakout_quality_score"] = None
                 representative["breakout_quality_score_date"] = str(fallback_rank.get("score_date") or "")
                 representative["breakout_quality_score_source"] = str(fallback_rank.get("score_source") or "")
-                representative["breakout_quality_rank"] = dict(fallback_rank)
+                representative["breakout_quality_rank"] = fallback_rank
             representative["ensemble_member_quality_rank_by_key"] = member_quality_rank_by_key
         # # (AI註: STOP 後 Re-entry 必須保留原始共識 member 的各自參數與原始 breakout score；
         # #        只保存代表 member 會讓 min_agree>1 的 re-entry 共識或 score 語意分叉。)
