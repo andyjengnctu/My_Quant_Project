@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_184631_c665cb2(1).zip`；SHA256 `e75d9295d50b117f71ac6541a75e26937db822ba9f886cd33f82e65fe7474e9e`。日期型穩定fold identity、auto最早合法PIT日期、舊fold安全遷移與合併coverage工件均維持；本輪依資料有限條件改為保留全部Baseline共同folds，只要求相較舊正式`2014-01-01`起點的training Score coverage整體提升且逐fold不得退步。完整PIT訓練、optimizer與四組replay仍待使用者本機正式資料執行 |
-| SHA256／最新結果 | 使用者提供的正式2×2輸出：Baseline 182.62%、Sort Only 144.80%、Param Only 65.46%、Adapted 59.71%；新Score Adapted params與完整Adapted系統均拒絕採用，正式策略維持Baseline。原始rolling輸出工件未包含於本ZIP，因此本文件記錄使用者提供結果，不宣稱於本輪重新計算 |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_210453_6f421c1(1).zip`；SHA256 `38d4f9799b89ebcaa4720d8ef5ae033917d5a68100c5723712502cd0a965a5a1`。Selection PIT實際起點已向前延伸至`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage由30.0%提高至60.0%，每fold均提高30.0pp |
+| SHA256／最新結果 | 使用者提供coverage提升後正式2×2輸出：Baseline 182.62%、Sort Only 147.57%、Param Only 145.84%、Adapted 75.70%。固定舊參數與同一套新參數下，Score ranking分別使總報酬下降35.05pp與70.14pp；coverage不足不是主要失敗原因，Score Adapted params與完整Adapted系統均拒絕採用，正式策略維持Baseline。原始rolling輸出工件未包含於本ZIP，因此本文件記錄使用者提供結果，不宣稱於本輪重新計算 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score start=`auto`，由目前Dataset／Target／label completion與最小group契約解析最早合法月份，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -2295,9 +2295,9 @@ Dataset、Continuous Target、Selection PIT Scores、PIT模型驗證、Score來�
 
 ### 狀態
 
-`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+`RESULT_AVAILABLE / COVERAGE_IMPROVEMENT_CONFIRMED / COVERAGE_NOT_PRIMARY_FAILURE / SCORE_ADAPTED_PARAMS_REJECTED / ADAPTED_SYSTEM_REJECTED`
 
-本輪依使用者決定先完成Selection PIT Scores向前延伸，再重跑Ranking × Parameter 2×2。由於早期資料有限，不再要求每個rolling training window達到100% coverage；改為保留全部Baseline rolling folds，要求延伸後coverage相較舊正式起點有實質提升。程式契約已完成；本交付ZIP不含完整`outputs/`、`models/`與本機完整股價資料，因此未實際訓練新增PIT folds、未重跑rolling optimizer，也未產生新的四組績效。
+使用者已在本機完整資料完成Selection PIT向前延伸、PIT audit、Score Adapted rolling optimizer及四組2×2 replay。實際PIT起點由`2014-01-01`向前延伸至`2011-01-01`；7個Baseline共同fold全部保留，weighted training calendar coverage由30.0%提高至60.0%，每fold均提高30.0pp。coverage提升目標已達成，但Score ranking在舊參數與新Adapted參數下仍明顯降低投組報酬，因此coverage不足不再列為主要失敗原因。
 
 ### 程式基準
 
@@ -2343,4 +2343,57 @@ PIT builder既有`auto`最早合法日期、日期型fold identity與舊fold安�
 - PIT builder既有日期型fold identity、auto最早合法日期、舊fold遷移與resume契約維持，未修改其模型／資料邏輯。
 - Strategy Adapt新增獨立synthetic契約：actual起點2007相較reference起點2014時，四個Baseline folds全部保留、逐foldcoverage均改善、共同比較期間維持2014～2018；actual與reference相同時必須拒絕。
 - Coverage報表同步輸出reference、actual、提升pp、加權coverage gain與各fold狀態；runtime identity明確記錄pre-PIT fallback允許、100%非必要及PIT期間gap禁止。
-- 完整PIT模型、rolling optimizer與績效結果仍須由使用者本機完整資料執行；正式`apps/test_suite.py`依專案規定未由GPT執行。
+- 上述程式契約已由使用者本機完整資料執行並取得以下正式結果；正式`apps/test_suite.py`是否已於本機通過，使用者本輪未另提供bundle。
+
+### 本機正式結果（coverage提升後）
+
+- 程式基準：`test-branch-1_20260803_210453_6f421c1(1).zip`
+- SHA256：`38d4f9799b89ebcaa4720d8ef5ae033917d5a68100c5723712502cd0a965a5a1`
+- 比較期間：2014-01-01～2020-12-31
+- PIT actual start：2011-01-01
+- Coverage reference start：2014-01-01
+- Actual／reference weighted coverage：60.0%／30.0%，提升30.0pp
+- Rolling folds：7；每fold coverage均提升30.0pp
+- Adapted trials／fold：300；Baseline歷史工件為100 trials／fold
+- Future Target：只在portfolio replay完成後join作診斷，未進入runtime、optimizer或交易決策
+
+| 指標 | Baseline | Sort Only | Param Only | Adapted |
+|---|---:|---:|---:|---:|
+| 淨總報酬 | 182.62% | 147.57% | 145.84% | 75.70% |
+| 最大回撤 | 13.18% | 21.56% | 15.79% | 18.40% |
+| Return／MDD | 13.86 | 6.85 | 9.24 | 4.11 |
+| 平均曝險 | 77.33% | 55.02% | 81.00% | 54.28% |
+| 平均初始停損距離 | 6.39% | 9.23% | 5.58% | 8.84% |
+| 平均實際投入金額 | 164,607.74 | 107,910.18 | 147,685.60 | 71,804.77 |
+| 平均Realized R | 0.28R | 0.30R | 0.53R | 0.37R |
+| 選中候選Target mean | 1.0912R | 1.2201R | 0.8217R | 1.0756R |
+| Aggregate Target capture | 0.30 | 0.26 | 0.77 | 0.35 |
+
+### 與原30% coverage結果比較
+
+舊結果為Baseline 182.62%、Sort Only 144.80%、Param Only 65.46%、Adapted 59.71%；本次分別為182.62%、147.57%、145.84%、75.70%。Param Only與Adapted數值明顯提高，但本次Adapted trials／fold為300，而舊執行紀錄使用200 trials／fold，因此兩次結果不是只改coverage的單一控制實驗，不能把全部差異歸因於coverage。可確定的正式結論應以本次同一2×2內的對稱比較為準：
+
+- 舊ROOS固定時，`Sort Only − Baseline = −35.05pp`，MDD增加8.38pp，Return／MDD下降7.01。
+- 新Adapted params固定時，`Adapted − Param Only = −70.14pp`，EV由0.53R降至0.37R，Aggregate capture由0.77降至0.35。
+- Score Adapted params本身亦未打敗舊ROOS：`Param Only − Baseline = −36.78pp`；在Score ranking下，`Adapted − Sort Only = −71.87pp`。
+- 因此coverage提升改善了optimizer可見的新ranking歷史比例，但沒有使Score ranking或Score Adapted params通過正式投組門檻。
+
+### 歸因與採用判定
+
+1. Score排序能力仍有效：兩套參數下，Target percentile、top-k retention、Target opportunity gap與Target mean均改善，表示模型確實挑到事後價格機會較高的候選。
+2. 固定舊參數時，Score ranking的平均Realized R由0.28R升至0.30R、平均投入資金報酬由3.00%升至3.85%，但初始停損距離由6.39%擴大至9.23%，平均投入由164,608降至107,910，平均曝險由77.33%降至55.02%。
+3. 同一套新Adapted params下，初始停損距離由5.58%擴大至8.84%，平均投入由147,686降至71,805，平均曝險由81.00%降至54.28%；同時Realized R、Payoff、勝率與capture亦下降，顯示不只資金利用率，策略capture契約也與Score排序不相容。
+4. Score ranking反而減少未滿倉日與持股缺口，但美元曝險仍大幅下降，證明主因不是候選供給或持倉格填不滿，而是每個slot因寬停損及fixed-risk sizing而配置過小。
+5. 正式策略維持Baseline；原始Score ranking、Score Adapted params及完整Adapted系統均`REJECTED`。Selection PIT向前延伸工件保留，供後續同一PIT source的研究重用。
+
+### 下一個單一研究方向
+
+下一步固定舊正式ROOS、fixed risk、position cap、max positions、entry／stop／exit、rotation與帳務，只做capital-aware ranking／停損距離消融，不重訓模型、不重新執行rolling optimizer。第一輪比較：
+
+1. 原正式buy-sort。
+2. 原始Score第一排序。
+3. `Score × projected capital fraction`，其中projected capital fraction必須沿用正式盤前sizing單一真理結果，不另寫近似公式。
+4. 依正式預估投入比例或初始停損距離作固定分桶，再於同桶內依Score排序；分桶邊界須由Selection train-only分布或固定可解釋契約決定，不得由2014～2020回放績效調參。
+
+第一階段只判斷能否在維持Target mean／Realized R優勢下恢復平均投入、曝險、總報酬與Return／MDD。Filter × Score分組消融維持第二順位；不再重跑相同原始Score Adapted optimizer，也不直接提高fixed risk、position cap或max positions。
+
