@@ -490,7 +490,7 @@ python apps/breakout_quality.py strategy-compare --dataset full --comparison-mod
 
 R3只對當日具有有效PIT Score的可掛單候選，依正式`deployment_rate`的當日橫斷面1/3與2/3分位切成高／中／低三桶，先按部署桶高到低，再於桶內按Score高到低，最後沿用既有buy-sort。分桶只使用當日盤前已知候選與正式sizing，不使用Future Target或回放績效調整邊界；同部署率跨分位時保持同桶。輸出隔離於`strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score_selection_point_in_time/`。
 
-Optional entry filters × Ranking A～E Gate為CLI-only研究，不加入互動選單。它固定舊正式ROOS與Selection PIT Scores，依序執行：A目前filters＋原buy-sort、B目前filters＋R3、C五個optional entry filters全關＋原buy-sort、D五個filters全關＋R3、E五個filters全關＋原始Score sort：
+Optional entry filters × Ranking A～E Gate為CLI-only研究，不加入互動選單。Gate預設filter／architecture／experiment profile／dataset／部位與rotation直接採用目前continuous-ranker workflow設定，不使用binary `unique_group_sampling`預設。它固定舊正式ROOS與Selection PIT Scores，依序執行：A目前filters＋原buy-sort、B目前filters＋R3、C五個optional entry filters全關＋原buy-sort、D五個filters全關＋R3、E五個filters全關＋原始Score sort：
 
 ```bash
 python apps/breakout_quality.py strategy-filter-gate --dataset full --param-policy base-finalist-best --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off

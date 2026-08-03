@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_221024_d9ba32f.zip`；SHA256 `273d6257fcc42b403ec1c588b67a3f227bd5c02102576da256e0663c26dd99bc`。Selection PIT實際起點維持`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage為60.0%；R2／R3 Selection replay結果已取得，本輪完成R3 rolling parameter adaptation接線但尚無本機結果，正式Baseline未變更 |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260804_003430_2259c60.zip`；SHA256 `c39b72722685988a420a8429ef01bb31d1eb506d5c46b0bd6717e6585f5ec0fd`。Selection PIT實際起點維持`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage為60.0%；R2／R3 Selection replay結果已取得，本輪完成R3 rolling parameter adaptation接線但尚無本機結果，正式Baseline未變更 |
 | SHA256／最新結果 | 使用者提供coverage提升後正式2×2輸出：Baseline 182.62%、Sort Only 147.57%、Param Only 145.84%、Adapted 75.70%。後續capital-aware消融：R2 `capital-adjusted-score`總報酬176.18%、MDD 14.15%、RoMD 12.45，仍低於Baseline且Target mean與保留買單成交率退步，判定拒絕目前乘積公式；R3 `capital-bucket-then-score`總報酬184.12%、EV 0.34R、Target capture 0.33，但MDD升至19.20%、RoMD降至9.59、Log R²與月勝率退步，僅保留為研究方向，不升格正式policy。正式策略維持Baseline |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score start=`auto`，由目前Dataset／Target／label completion與最小group契約解析最早合法月份，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
@@ -2692,3 +2692,35 @@ python apps/breakout_quality.py strategy-filter-gate --dataset full --param-poli
 3. `D−E`是否仍為正；若是，R3資金分桶在filters全關候選池仍有額外價值；若接近零或為負，可能只需原始Score而不需R3。
 4. 同時檢查Baseline絕對效果：C、D、E不能只因相對差異改善就忽略總報酬、MDD、Return／MDD、資本效率與Target capture。
 5. 只有粗粒度全關gate為正，才逐一拆解五個filter；若D與E都沒有改善，停止filter-conflict假設，下一步轉向strategy／capital-aligned Target。
+
+## 2026-08-04 — A～E Gate Selection PIT profile預設修正
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260804_003430_2259c60.zip`
+- SHA256：`c39b72722685988a420a8429ef01bb31d1eb506d5c46b0bd6717e6585f5ec0fd`
+
+### 問題與唯一變更
+
+使用者本機執行`strategy-filter-gate`時，Gate雖固定使用Selection PIT score source，CLI預設卻取用binary classification常數`BREAKOUT_QUALITY_EXPERIMENT_PROFILE=unique_group_sampling`，因此錯誤尋找：
+
+`models/filters/breakout_quality/breakout_quality_v1/inception_time_v1/unique_group_sampling/point_in_time/selection_point_in_time_scores.csv`
+
+實際Selection PIT continuous-ranker工件位於workflow profile`strategy_aligned_no_time_pass_magnitude_mse`。本輪只把Gate的filter id、model architecture、experiment profile、dataset、max positions與rotation預設改為直接讀取`get_breakout_quality_workflow_settings()`；A～E情境、舊ROOS、ranking、filters、PIT score內容、策略執行與報表口徑均未改變。
+
+### Dataset／Label／模型工件
+
+不重建Dataset、不relabel、不重訓模型、不重建Continuous Target或PIT Scores。修正後直接讀取既有workflow Selection PIT工件。
+
+### 驗證契約
+
+`validate_breakout_quality_strategy_comparison_contract_case`新增動態設定案例，確認Gate預設identity始終等於目前workflow設定；不得把任何當前profile值硬編碼為唯一合法答案。
+
+### 結果與判定
+
+尚未取得本機A～E實際績效。此修正只排除錯誤profile路徑，狀態維持`IMPLEMENTED`；使用者須重新執行同一條`strategy-filter-gate`命令。
+

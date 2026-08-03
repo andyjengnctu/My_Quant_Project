@@ -11,16 +11,11 @@ import math
 from pathlib import Path
 from typing import Any
 
-from config.breakout_quality import (
-    BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-    BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-)
+from config.breakout_quality import get_breakout_quality_workflow_settings
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
-from core.dataset_profiles import DEFAULT_DATASET_PROFILE
 from filters.breakout_quality.console_report import (
     print_artifact_paths,
     project_relative_display_path,
@@ -113,20 +108,21 @@ def build_filter_gate_scenario_specs() -> dict[str, dict[str, Any]]:
 
 
 def _parse_args(argv=None):
+    settings = get_breakout_quality_workflow_settings()
     parser = argparse.ArgumentParser(
         description=(
             "固定舊ROOS執行A～E Optional entry filters × Ranking Selection gate；"
             "不重訓模型、不執行optimizer。"
         )
     )
-    parser.add_argument("--dataset", choices=("reduced", "full"), default=DEFAULT_DATASET_PROFILE)
-    parser.add_argument("--filter-id", default=BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
-    parser.add_argument("--model-architecture", default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    parser.add_argument("--experiment-profile", default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE)
+    parser.add_argument("--dataset", choices=("reduced", "full"), default=settings.strategy_dataset)
+    parser.add_argument("--filter-id", default=settings.filter_id)
+    parser.add_argument("--model-architecture", default=settings.model_architecture)
+    parser.add_argument("--experiment-profile", default=settings.experiment_profile)
     parser.add_argument("--params", default=None)
     parser.add_argument("--param-policy", choices=PARAM_POLICIES, default=PARAM_POLICY_BASE_FINALIST_BEST)
-    parser.add_argument("--max-positions", type=int, default=10)
-    parser.add_argument("--rotation", choices=("off", "on"), default="off")
+    parser.add_argument("--max-positions", type=int, default=settings.strategy_max_positions)
+    parser.add_argument("--rotation", choices=("off", "on"), default=settings.strategy_rotation)
     parser.add_argument("--fixed-risk", type=float, default=None)
     parser.add_argument("--max-position-cap-pct", type=float, default=None)
     parser.add_argument("--start-date", default="2014-01-01")

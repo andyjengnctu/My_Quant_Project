@@ -8629,9 +8629,36 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     all_off_left = params_to_json_dict(all_off_pair[1])
     all_off_right = params_to_json_dict(all_off_pair[2])
     from tools.filters.breakout_quality.strategy_filter_gate import (
+        _parse_args as parse_filter_gate_args,
         build_filter_gate_scenario_specs,
     )
+    from config.breakout_quality import get_breakout_quality_workflow_settings
+
     gate_specs = build_filter_gate_scenario_specs()
+    gate_defaults = parse_filter_gate_args([])
+    workflow_settings = get_breakout_quality_workflow_settings()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_filter_gate_defaults_follow_continuous_ranker_workflow_identity",
+        (
+            workflow_settings.filter_id,
+            workflow_settings.model_architecture,
+            workflow_settings.experiment_profile,
+            workflow_settings.strategy_dataset,
+            workflow_settings.strategy_max_positions,
+            workflow_settings.strategy_rotation,
+        ),
+        (
+            gate_defaults.filter_id,
+            gate_defaults.model_architecture,
+            gate_defaults.experiment_profile,
+            gate_defaults.dataset,
+            gate_defaults.max_positions,
+            gate_defaults.rotation,
+        ),
+    )
     all_off_output_name = _comparison_output_dir_name(
         COMPARISON_MODE_SCORE_RANKING,
         _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
