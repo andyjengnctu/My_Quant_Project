@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_211701_c0cb6c3.zip`；SHA256 `1c8aa4144af00f7ae7696c90dbe649932650e89f16881da7a62b9d3382f6cc9e`。Selection PIT實際起點維持`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage為60.0%；本輪新增R2／R3 capital-aware ranking CLI-only消融，正式Baseline仍未變更 |
-| SHA256／最新結果 | 使用者提供coverage提升後正式2×2輸出：Baseline 182.62%、Sort Only 147.57%、Param Only 145.84%、Adapted 75.70%。固定舊參數與同一套新參數下，Score ranking分別使總報酬下降35.05pp與70.14pp；coverage不足不是主要失敗原因，Score Adapted params與完整Adapted系統均拒絕採用，正式策略維持Baseline。原始rolling輸出工件未包含於本ZIP，因此本文件記錄使用者提供結果，不宣稱於本輪重新計算 |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_211701_c0cb6c3.zip`；SHA256 `1c8aa4144af00f7ae7696c90dbe649932650e89f16881da7a62b9d3382f6cc9e`。Selection PIT實際起點維持`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage為60.0%；R2／R3 capital-aware ranking真實Selection replay結果已取得，正式Baseline仍未變更 |
+| SHA256／最新結果 | 使用者提供coverage提升後正式2×2輸出：Baseline 182.62%、Sort Only 147.57%、Param Only 145.84%、Adapted 75.70%。後續capital-aware消融：R2 `capital-adjusted-score`總報酬176.18%、MDD 14.15%、RoMD 12.45，仍低於Baseline且Target mean與保留買單成交率退步，判定拒絕目前乘積公式；R3 `capital-bucket-then-score`總報酬184.12%、EV 0.34R、Target capture 0.33，但MDD升至19.20%、RoMD降至9.59、Log R²與月勝率退步，僅保留為研究方向，不升格正式policy。正式策略維持Baseline |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score start=`auto`，由目前Dataset／Target／label completion與最小group契約解析最早合法月份，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -2401,7 +2401,7 @@ PIT builder既有`auto`最早合法日期、日期型fold identity與舊fold安�
 
 ### 狀態
 
-`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+`RESULT_AVAILABLE / R2_REJECTED / R3_DIRECTION_PASS_FORMAL_POLICY_NOT_ACCEPTED`
 
 ### 程式基準
 
@@ -2444,11 +2444,35 @@ Coverage提升後的正式2×2已確認原始Score ranking在舊ROOS與新Adapte
 
 本次程式變更不需要重建Dataset、Label、Continuous Target、PIT Scores或checkpoint。正式本機執行只需要既有完整市場資料、Selection PIT manifest／audit／scores及`roos_base_best.json`。
 
-### 結果與採用邊界
+### 真實 Selection replay 結果
 
-尚未取得R2／R3完整portfolio replay結果，因此不得預判有效。正式判定需至少比較R0 Baseline、R1原始Score、R2與R3的總報酬、MDD、Return／MDD、平均曝險、平均實際投入、初始停損距離、Target mean、Realized R與Target capture。R2／R3只比R1好仍不足以採用；至少必須確認相較Baseline的主要投組指標與風險邊界。
+固定Baseline為既有`base_finalist_best` rolling active params，期間`2014-01-01～2020-12-31`；R0 Baseline總報酬182.62%、MDD 13.18%、RoMD 13.86、平均曝險77.33%、平均實際投入164,607.74、平均初始停損距離6.39%、平均Realized R 0.28R、平均Target R 1.00R、Aggregate capture 0.30。
+
+| 指標 | R2 `capital-adjusted-score` | R3 `capital-bucket-then-score` | R2判讀 | R3判讀 |
+|---|---:|---:|---|---|
+| 淨總報酬 | 176.18% | 184.12% | 低於Baseline 6.44pp | 高於Baseline 1.51pp |
+| 最大回撤 | 14.15% | 19.20% | 輕微惡化0.98pp | 明顯惡化6.02pp |
+| Return／MDD | 12.45 | 9.59 | 低於Baseline 1.41 | 低於Baseline 4.27 |
+| Log R² | 0.9266 | 0.9101 | 退步 | 明顯退步 |
+| 月勝率 | 63.10% | 59.52% | 改善1.19pp | 退步2.38pp |
+| 平均曝險 | 77.44% | 70.68% | 已恢復至Baseline附近 | 仍低6.65pp |
+| 保留買單成交率 | 95.85% | 99.61% | 明顯下降3.77pp | 幾乎不變 |
+| 平均實際投入 | 158,831.07 | 142,637.68 | 低3.51% | 低13.35% |
+| 平均初始停損距離 | 6.58% | 7.62% | 接近Baseline | 仍偏寬 |
+| 平均Realized R | 0.29R | 0.34R | 微幅改善 | 明顯改善 |
+| 平均Target R | 0.98R | 1.05R | 低於Baseline | 高於Baseline |
+| Aggregate capture | 0.30 | 0.33 | 持平 | 改善 |
+| 平均投入資金報酬 | 2.79% | 3.74% | 退步 | 明顯改善 |
+
+### 歸因與採用判定
+
+1. **R2拒絕目前公式。** `Score × deployment_rate`成功把曝險由原始R1約55%恢復至77.44%，證明資金部署確實是原始Score ranking的重要瓶頸；但R2同時使保留買單成交率降至95.85%、Target mean降至1.0450R、平均投入資金報酬降至2.79%，最終總報酬仍低於Baseline且MDD略高。連續乘積把Score百分位當成可線性縮放的經濟價值，並把既有執行排序壓到後面，未形成可採用證據。
+2. **R3方向保留，但目前policy不採用。** 三分桶後桶內Score使Target percentile、top-k retention、Target mean、Realized R、Aggregate capture與平均投入資金報酬全部改善，總報酬184.12%亦略高於Baseline；這證明「先限制極小部位候選壟斷，再保留Score排序」是有效研究方向。
+3. R3仍未通過正式風險邊界：MDD由13.18%升至19.20%、RoMD由13.86降至9.59、Log R²由0.9349降至0.9101、月勝率由61.90%降至59.52%、最差年度由-0.35%惡化至-3.93%。R3較低勝率、較高Payoff／EV、較長持有期與較寬停損，形成較不平滑且更集中於少數贏家的報酬路徑；不能只因總報酬略高即升格正式policy。
+4. R2與R3都比原始R1總報酬147.57%大幅改善，確認capital-aware ranking修正方向成立；但正式策略仍維持R0 Baseline，R2標記`REJECTED`，R3標記`RESULT_AVAILABLE / RESEARCH_DIRECTION_PASS / FORMAL_POLICY_NOT_ACCEPTED`。
+5. 本次不重建Dataset、Label、Continuous Target、PIT Scores或checkpoint，也不執行optimizer；Future Target只於replay完成後join。
 
 ### 下一步
 
-使用本機完整資料依CLI分別執行R2與R3；取得輸出後回寫本節為`RESULT_AVAILABLE`，再決定是否保留其中一個ranking契約，或進入Filter × Score消融。
+先執行R3最大回撤read-only attribution，不改ranking、不重訓模型、不跑optimizer：定位最大回撤起迄日期，逐日／逐交易比較Baseline與R3的獨有持倉、初始停損距離、deployment bucket、Score、Target、Realized R、持有期、損失聚集與產業／月份集中。先確認MDD惡化是由特定regime、跨桶硬排序、寬停損或損失時間聚集造成，再決定下一個單一變更。未完成此歸因前，不直接調整桶數、桶邊界、fixed risk、position cap或max positions；Filter × Score消融維持後續順位。
 
