@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 from dataclasses import replace
 import ast
+import io
 import json
 import math
 import os
@@ -8698,6 +8700,213 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         ),
     )
 
+    from tools.filters.breakout_quality.strategy_dl_filter_gate import (
+        _parse_args as parse_dl_filter_gate_args,
+        build_dl_filter_gate_scenario_specs,
+        run_dl_filter_gate,
+    )
+    from tools.filters.breakout_quality.strategy_compare import (
+        OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    )
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_STRATEGY_DATASET,
+        BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS,
+        BREAKOUT_QUALITY_STRATEGY_PARAM_POLICY,
+        BREAKOUT_QUALITY_STRATEGY_ROTATION,
+    )
+
+    dl_gate_specs = build_dl_filter_gate_scenario_specs()
+    dl_gate_defaults = parse_dl_filter_gate_args([])
+    dl_all_off_pair = _build_controlled_param_source_pair(
+        {"kind": "single_param", "params": base},
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        fixed_risk=None,
+        comparison_mode=COMPARISON_MODE_HARD_FILTER,
+        optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+    )
+    dl_all_off_left = params_to_json_dict(dl_all_off_pair[1])
+    dl_all_off_right = params_to_json_dict(dl_all_off_pair[2])
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_filter_replacement_gate_defaults_and_scenarios_are_fixed",
+        (
+            BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+            BREAKOUT_QUALITY_STRATEGY_DATASET,
+            BREAKOUT_QUALITY_STRATEGY_PARAM_POLICY,
+            BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS,
+            BREAKOUT_QUALITY_STRATEGY_ROTATION,
+            None,
+            None,
+            ("current", False),
+            ("current", True),
+            ("all-off", False),
+            ("all-off", True),
+            (False, False, False, False, False),
+            (False, False, False, False, False),
+            (False, True),
+            (False, False),
+        ),
+        (
+            dl_gate_defaults.filter_id,
+            dl_gate_defaults.model_architecture,
+            dl_gate_defaults.experiment_profile,
+            dl_gate_defaults.dataset,
+            dl_gate_defaults.param_policy,
+            dl_gate_defaults.max_positions,
+            dl_gate_defaults.rotation,
+            dl_gate_defaults.start_date,
+            dl_gate_defaults.end_date,
+            (
+                dl_gate_specs["A"]["optional_entry_filter_policy"],
+                dl_gate_specs["A"]["dl_filter_enabled"],
+            ),
+            (
+                dl_gate_specs["B"]["optional_entry_filter_policy"],
+                dl_gate_specs["B"]["dl_filter_enabled"],
+            ),
+            (
+                dl_gate_specs["C"]["optional_entry_filter_policy"],
+                dl_gate_specs["C"]["dl_filter_enabled"],
+            ),
+            (
+                dl_gate_specs["F"]["optional_entry_filter_policy"],
+                dl_gate_specs["F"]["dl_filter_enabled"],
+            ),
+            tuple(dl_all_off_left[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+            tuple(dl_all_off_right[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+            (
+                dl_all_off_left["use_breakout_quality_filter"],
+                dl_all_off_right["use_breakout_quality_filter"],
+            ),
+            (
+                dl_all_off_left["use_breakout_quality_ranking"],
+                dl_all_off_right["use_breakout_quality_ranking"],
+            ),
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_root = Path(tmp_dir)
+        fake_args = parse_dl_filter_gate_args([])
+
+        def fake_dl_gate_comparison(**kwargs):
+            filter_policy = kwargs["optional_entry_filter_policy"]
+            output_dir = Path(kwargs["output_dir_override"])
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_CURRENT:
+                left_return, right_return = 100.0, 110.0
+                left_year, right_year = 10.0, 11.0
+                exclusive_delta = 2.0
+            else:
+                left_return, right_return = 70.0, 90.0
+                left_year, right_year = 7.0, 9.0
+                exclusive_delta = 5.0
+            metadata = {
+                "comparison_mode": COMPARISON_MODE_HARD_FILTER,
+                "score_source": "canonical_runtime",
+                "dataset": fake_args.dataset,
+                "params_file_sha256": "param-sha",
+                "param_source_kind": "rolling_active_param_ensemble",
+                "requested_param_policy": fake_args.param_policy,
+                "param_selector": "base_finalist_best",
+                "runtime_member_count_min": 1,
+                "runtime_member_count_max": 1,
+                "runtime_min_agree": 1,
+                "comparison_design": "historical_active_param_oos",
+                "lookahead_safe_active_param_schedule": True,
+                "filter_id": fake_args.filter_id,
+                "model_architecture": fake_args.model_architecture,
+                "experiment_profile": fake_args.experiment_profile,
+                "threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+                "benchmark_ticker": "0050",
+                "max_positions": fake_args.max_positions,
+                "enable_rotation": False,
+                "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},
+                "score_signal_coverage": {"required_start": "2020-12-31", "available_through": "2021-12-31"},
+                "runtime_manifest_path": "models/runtime_manifest.json",
+                "runtime_score_path": "models/scores.csv",
+                "optional_entry_filter_policy": filter_policy,
+                "optional_entry_filter_forced_values": (
+                    {field: False for field in OPTIONAL_ENTRY_FILTER_FIELDS}
+                    if filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
+                    else None
+                ),
+                "params_path": "models/roos_base_best.json",
+            }
+            base_summary = {
+                "total_return_pct": left_return,
+                "max_drawdown_pct": 10.0,
+                "return_over_max_drawdown": left_return / 10.0,
+                "expected_value_r": 0.2,
+                "avg_exposure_pct": 70.0,
+                "trade_count": 10,
+            }
+            active_summary = {
+                "total_return_pct": right_return,
+                "max_drawdown_pct": 9.0,
+                "return_over_max_drawdown": right_return / 9.0,
+                "expected_value_r": 0.3,
+                "avg_exposure_pct": 65.0,
+                "trade_count": 8,
+            }
+            (output_dir / "trade_attribution.json").write_text(
+                json.dumps({
+                    "r_attribution": {
+                        "reconstructed_total_r_delta": exclusive_delta,
+                        "exclusive_selection_delta_r": exclusive_delta,
+                        "excluded_winner_r": 3.0,
+                        "avoided_loser_r_abs": 4.0,
+                        "replacement_winner_r": 5.0,
+                        "replacement_loser_r_abs": 2.0,
+                        "direct_filter_reject_count": 4,
+                        "portfolio_path_displacement_count": 2,
+                    }
+                }),
+                encoding="utf-8",
+            )
+            return {
+                "metadata": metadata,
+                "no_filter": base_summary,
+                "quality_filter": active_summary,
+                "yearly": [{
+                    "year": 2021,
+                    "no_filter_return_pct": left_year,
+                    "quality_filter_return_pct": right_year,
+                    "is_full_year": True,
+                }],
+            }
+
+        with patch(
+            "tools.filters.breakout_quality.strategy_dl_filter_gate.run_comparison",
+            side_effect=fake_dl_gate_comparison,
+        ):
+            with redirect_stdout(io.StringIO()):
+                gate_result = run_dl_filter_gate(args=fake_args, project_root=tmp_root)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_filter_replacement_gate_runs_one_optimizer_free_ab_cf_matrix",
+        (10.0, 20.0, -10.0, 10.0, 2.0, 5.0, False, False, False),
+        (
+            gate_result["comparisons"]["B_minus_A"]["total_return_pct"],
+            gate_result["comparisons"]["F_minus_C"]["total_return_pct"],
+            gate_result["comparisons"]["F_minus_A"]["total_return_pct"],
+            gate_result["comparisons"]["replacement_interaction"]["total_return_pct"],
+            gate_result["pair_effects"]["B_minus_A"]["exclusive_selection_delta_r"],
+            gate_result["pair_effects"]["F_minus_C"]["exclusive_selection_delta_r"],
+            gate_result["metadata"]["future_target_runtime_used"],
+            gate_result["metadata"]["model_retrained"],
+            gate_result["metadata"]["optimizer_executed"],
+        ),
+    )
+
+
     baseline_sort_rows = [
         {"ticker": "A", "sort_value": 0.20, "proj_cost": 100.0, "use_breakout_quality_ranking": False},
         {"ticker": "B", "sort_value": 0.10, "proj_cost": 80.0, "use_breakout_quality_ranking": False},
@@ -9345,6 +9554,49 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             len(rolling_all_off_pair[1]["params_ensemble_by_effective_date"]),
         ),
     )
+    rolling_dl_filter_pair = _build_controlled_param_source_pair(
+        rolling_source,
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        fixed_risk=None,
+        comparison_mode=COMPARISON_MODE_HARD_FILTER,
+        optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+    )
+    rolling_dl_left = rolling_dl_filter_pair[1][
+        "params_ensemble_by_effective_date"
+    ]["2021-01-01"][0]["params"]
+    rolling_dl_right = rolling_dl_filter_pair[2][
+        "params_ensemble_by_effective_date"
+    ]["2021-01-01"][0]["params"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rolling_binary_dl_replacement_gate_keeps_original_sort_and_forces_optional_filters_off",
+        (
+            "rolling_active_param_ensemble",
+            (False, False, False, False, False),
+            (False, False, False, False, False),
+            (False, True),
+            (False, False),
+            2,
+        ),
+        (
+            rolling_dl_filter_pair[0],
+            tuple(rolling_dl_left[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+            tuple(rolling_dl_right[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+            (
+                rolling_dl_left["use_breakout_quality_filter"],
+                rolling_dl_right["use_breakout_quality_filter"],
+            ),
+            (
+                rolling_dl_left["use_breakout_quality_ranking"],
+                rolling_dl_right["use_breakout_quality_ranking"],
+            ),
+            len(rolling_dl_filter_pair[1]["params_ensemble_by_effective_date"]),
+        ),
+    )
+
     finalist_best_payload = json.loads(json.dumps(rolling_payload))
     finalist_best_payload["selector"] = "base_finalist_best"
     finalist_best_payload["random_seed_ensemble"] = {

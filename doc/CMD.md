@@ -498,6 +498,14 @@ python apps/breakout_quality.py strategy-filter-gate --dataset full --param-poli
 
 全關欄位固定為`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；不關閉`high_len`、ATR buy／stop／trail、`use_kc` exit、reclaim re-entry、fixed risk或position cap。主要判讀為`B−A`、`D−C`、`E−C`、`D−E`及R3交互作用`(D−C)−(B−A)`。E用來確認關閉filters後原始Score是否恢復，D−E則判斷R3資金分桶是否仍有必要。Gate不重訓模型、不重建PIT Scores、不執行optimizer；三個pair工件與合併`strategy_filter_gate.md/json`均輸出至`strategy_filter_gate_base_finalist_best_selection_point_in_time/`隔離目錄。
 
+Binary DL Filter Replacement A／B／C／F Gate同樣為CLI-only研究，但使用9A binary canonical runtime score與固定threshold，不使用continuous PIT Score或R3。它固定正式rolling params與原position-aware buy-sort，執行：A目前optional filters＋DL關、B目前optional filters＋DL開、C五個optional filters全關＋DL關、F五個optional filters全關＋DL開。未指定日期時自動使用9A runtime manifest宣告的正式execution start與available through：
+
+```bash
+python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-policy base-finalist-best --max-positions 10 --rotation off
+```
+
+Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；保留`high_len`突破事件、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap及原buy-sort。`B−A`檢查DL疊加現有filters，`F−C`檢查DL作唯一品質Gate，`F−A`才是DL-only replacement對目前正式策略的採用比較，interaction=`(F−C)−(B−A)`只作機制判讀。兩個hard-filter pair都固定threshold 0.5、canonical runtime score與相同active params；不重訓模型、不調threshold、不執行optimizer、不使用Future Target。輸出隔離於`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含A/B與C/F pair的完整策略比較、交易歸因及合併`strategy_dl_filter_gate.md/json`。
+
 兩種政策都維持Score缺失契約：有效Score候選優先；缺分候選不排除、不填0，並完整回退原buy-sort。正式比較先看相較原始Score ranking能否恢復平均投入與曝險，再判斷總報酬、Return／MDD、Target mean、Realized R與capture；不得只因R2／R3優於原始Score就直接採用，仍須至少對照Baseline。
 
 - `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。

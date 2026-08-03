@@ -2787,3 +2787,79 @@ python apps/breakout_quality.py strategy-filter-gate --dataset full --param-poli
 ### Dataset／Label／模型工件需求
 
 本次結果回寫不修改程式，不重建Dataset、Label、Continuous Target、PIT Scores或checkpoint。下一個feasibility audit可直接使用既有Selection策略比較候選工件、Future Target與正式sizing payload；只有audit通過後才評估新Target arrays與模型重訓。
+
+## 2026-08-04 — Binary DL Filter Replacement A／B／C／F Gate
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260804_010014_afebdd6.zip`
+- SHA256：`ce9e5b11fb2df28dde5c2410f12fcb71b303c9fc3c69ea067819596f59d15e70`
+- 本輪patch ZIP名稱與SHA256以交付回覆為準。
+
+### 實驗動機
+
+A～E Gate已證明直接關閉optional entry filters而沒有替代品質Gate會使候選池與絕對投組績效崩落；但該Gate只測原buy-sort、continuous raw Score與R3，沒有測「規則品質filters全關後，由既有9A Binary DL Filter作唯一買入品質確認」。本輪依使用者決定，不再要求DL Score取代position-aware ranking，而是保留原buy-sort、sizing、entry／stop／exit與portfolio accounting，只讓Binary DL Filter取代EMA、BB、Volume、breakout return及false-breakout五個rule-based品質filters。
+
+### 唯一主要變更
+
+新增CLI-only `strategy-dl-filter-gate`，固定四組：
+
+1. A：目前optional entry filters＋Binary DL filter關閉＋原buy-sort。
+2. B：目前optional entry filters＋Binary DL filter開啟＋原buy-sort。
+3. C：五個optional entry filters全關＋Binary DL filter關閉＋原buy-sort。
+4. F：五個optional entry filters全關＋Binary DL filter開啟＋原buy-sort。
+
+全關欄位只包含：
+
+- `use_breakout_ema_filter`
+- `use_bb`
+- `use_vol`
+- `use_breakout_return_filter`
+- `use_breakout_false_filter`
+
+不關閉`high_len`突破事件定義、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap、max positions或原position-aware buy-sort。四組均固定`use_breakout_quality_ranking=False`，不使用continuous Score或R3。
+
+### Runtime與報表契約
+
+- Gate重用`strategy_compare.run_comparison`兩次，不複製portfolio engine、成交、費用、統計或trade attribution：AB=current optional filters × binary hard filter；CF=all-off optional filters × binary hard filter。
+- Binary identity固定由`BREAKOUT_QUALITY_DEFAULT_FILTER_ID / BREAKOUT_QUALITY_MODEL_ARCHITECTURE / BREAKOUT_QUALITY_EXPERIMENT_PROFILE`解析，目前為`breakout_quality_v1 / inception_time_v1 / unique_group_sampling`；threshold固定使用OOS前鎖定的`BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD`，目前0.5，不提供Gate內threshold調整。
+- Score source固定`canonical_runtime`；未指定日期時使用runtime manifest宣告的`execution_start～available_through`，不得誤用continuous Selection PIT的2014～2020期間。
+- AB與CF必須共用相同runtime manifest／score、threshold、active-param來源與hash、rolling selector、member count、min_agree、期間、benchmark、max positions及rotation；唯一跨pair差異是五個optional filters是否全關。
+- 合併報表固定輸出A／B／C／F投組指標、年度報酬、`B−A`、`F−C`、`C−A`、`F−A`及replacement interaction `(F−C)−(B−A)`，並列AB與CF的trade attribution：被排除贏家R、避開輸家|R|、替代贏家／輸家R、直接DL拒絕與portfolio path displacement。
+- `F−C`回答Binary DL在沒有規則品質filters時能否單獨提供有效品質Gate；`B−A`回答疊加既有filters是否有效；`F−A`才是DL-only replacement相較目前正式策略的採用比較。正interaction只代表替代優於疊加，不等於F的絕對績效通過。
+- 輸出隔離於binary model output下`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含`pair_ab/`、`pair_cf/`、`strategy_dl_filter_gate.md`與`strategy_dl_filter_gate.json`。
+
+### 固定條件
+
+- 不重建Dataset、不relabel、不重訓9A、不重新匯出score、不調threshold、不執行optimizer。
+- 使用正式rolling active params、原position-aware buy-sort、相同fixed risk、position cap、max positions、rotation、交易成本、成交與portfolio accounting。
+- Future Target與continuous PIT Score完全不進入runtime或報表計算。
+- Hard-filter不可評分事件沿用既有保守REJECT契約；不得填0、改用PIT score或回退成ranking。
+
+### 本機執行
+
+此Gate為研究CLI，不加入互動選單：
+
+```bash
+python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-policy base-finalist-best --max-positions 10 --rotation off
+```
+
+若需縮短期間，`--start-date`與`--end-date`必須同時指定，且完整落在canonical runtime score coverage內。
+
+### 採用判定
+
+尚未取得真實策略結果，不預判有效。正式判讀順序：
+
+1. `F−C`是否顯示DL能從全突破候選中移除較多虧損、保留足夠大贏家，並改善總報酬、MDD、Return／MDD、EV與資金使用。
+2. `F−A`是否至少打平目前rule-based filters策略的總報酬與Return／MDD，且MDD、曝險、候選供給與年度穩定性沒有明顯惡化。
+3. AB與CF trade attribution中，被避免輸家與替代贏家的R總和是否大於被排除贏家與替代輸家的R總和；改善不得只來自共同交易微小執行差異。
+4. interaction若為正，只能證明DL作替代者比疊加者更合適；若F仍顯著低於A，replacement假設仍拒絕。
+5. 只有現有9A的F相較A形成合理改善，才進一步研究新的binary Label、architecture或固定Validation threshold；否則不得用同一OOS調threshold救援。
+
+### Dataset／Label／模型工件需求
+
+本次程式變更不需重建任何Dataset、Label、checkpoint或score。使用者本機需已有9A canonical `forward_oos` runtime manifest／scores與正式rolling active-param工件；缺少或identity不一致時fail-fast。
