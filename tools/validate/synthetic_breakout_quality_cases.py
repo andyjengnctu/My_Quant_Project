@@ -10631,14 +10631,19 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from tools.filters.breakout_quality.build_point_in_time_scores import (
         REQUIRED_SCORE_COLUMNS,
         _build_fold_periods,
+        _stable_fold_id,
         _combined_validation,
         _fold_group_ids,
+        _migrate_compatible_legacy_fold,
+        _resolve_score_start,
         _validate_score_frame,
         parse_args as parse_point_in_time_args,
     )
     from tools.filters.breakout_quality.continuous_ranker_pipeline import (
         _validate_group_consistency,
     )
+    from filters.breakout_quality.artifacts import build_file_manifest
+    from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME, LABEL_PASS
 
     consistent_terminal_events = pd.DataFrame(
         [
@@ -10756,6 +10761,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             settings.model_architecture,
             settings.experiment_profile,
             settings.seed,
+            settings.point_in_time_score_start_date,
             settings.point_in_time_fold_months,
             settings.point_in_time_inner_validation_months,
         ),
@@ -10764,6 +10770,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             parsed.model_architecture,
             parsed.experiment_profile,
             parsed.seed,
+            parsed.score_start_date,
             parsed.fold_months,
             parsed.inner_validation_months,
         ),
@@ -10780,14 +10787,194 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         case_id,
         "point_in_time_fold_periods_are_contiguous_and_calendar_month_based",
         [
-            ("2019-12-31", "2020-01-30"),
-            ("2020-01-31", "2020-02-28"),
-            ("2020-02-29", "2020-03-15"),
+            ("2019-12-31", "2019-12-31"),
+            ("2020-01-01", "2020-01-31"),
+            ("2020-02-01", "2020-02-29"),
+            ("2020-03-01", "2020-03-15"),
         ],
         [
             (str(item["score_start"].date()), str(item["score_end"].date()))
             for item in periods
         ],
+    )
+
+    original_annual_periods = _build_fold_periods(
+        pd.Timestamp("2014-01-01"),
+        pd.Timestamp("2015-12-31"),
+        fold_months=12,
+    )
+    earlier_periods = _build_fold_periods(
+        pd.Timestamp("2007-06-01"),
+        pd.Timestamp("2015-12-31"),
+        fold_months=12,
+    )
+    original_fold = next(
+        item for item in original_annual_periods
+        if item["score_start"] == pd.Timestamp("2014-01-01")
+    )
+    extended_fold = next(
+        item for item in earlier_periods
+        if item["score_start"] == pd.Timestamp("2014-01-01")
+    )
+    auto_group_dates = pd.date_range("2020-01-01", periods=8, freq="MS")
+    auto_bundle = SimpleNamespace(
+        group_table=pd.DataFrame({
+            "date": auto_group_dates,
+            "label_eval_end_date": auto_group_dates,
+            "label": np.full(len(auto_group_dates), LABEL_PASS, dtype=np.int64),
+        }),
+        target_valid=np.ones(len(auto_group_dates), dtype=bool),
+        profile=SimpleNamespace(training_label_scope=TRAINING_LABEL_SCOPE_PASS_ONLY),
+    )
+    auto_settings = SimpleNamespace(
+        point_in_time_min_train_groups=2,
+        point_in_time_min_validation_groups=2,
+        point_in_time_min_score_groups=1,
+    )
+    resolved_auto_start, auto_diagnostics = _resolve_score_start(
+        "auto",
+        bundle=auto_bundle,
+        settings=auto_settings,
+        selection_start=pd.Timestamp("2020-01-01"),
+        score_end=pd.Timestamp("2020-08-31"),
+        fold_months=1,
+        validation_months=2,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_auto_start_selects_earliest_month_meeting_real_split_counts",
+        ("2020-05-01", 5, {"inner_train": 2, "validation": 2, "score": 1}),
+        (
+            str(resolved_auto_start.date()),
+            auto_diagnostics["candidate_months_checked"],
+            auto_diagnostics["first_fold_group_counts"],
+        ),
+    )
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_fold_identity_is_date_stable_when_history_is_extended",
+        (
+            "fold_20140101_20141231",
+            "fold_20140101_20141231",
+            "fold_20140101_20141231",
+        ),
+        (
+            original_fold["fold_id"],
+            extended_fold["fold_id"],
+            _stable_fold_id(pd.Timestamp("2014-01-01"), pd.Timestamp("2014-12-31")),
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pit_root = Path(tmp) / "point_in_time"
+        legacy_dir = pit_root / "folds" / "fold_000"
+        target_dir = pit_root / "folds" / "fold_20140101_20141231"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        model_path = legacy_dir / DEFAULT_MODEL_FILENAME
+        score_path = legacy_dir / "scores.csv"
+        pd.DataFrame(
+            [{
+                "ticker": "2330",
+                "date": "2014-06-30",
+                "group_index": 7,
+                "breakout_quality_score": 0.75,
+                "fold_id": "fold_000",
+                "model_information_cutoff": "2013-12-31",
+            }]
+        ).to_csv(score_path, index=False, encoding="utf-8-sig")
+        common_contract = {
+            "filter_id": "breakout_quality_v1",
+            "model_architecture": "inception_time_v1",
+            "experiment_profile": "strategy_aligned_no_time_pass_magnitude_mse",
+            "continuous_target_id": "strategy_aligned_opportunity_no_time_r_v1",
+            "training_label_scope": "pass_only",
+            "seed": 42,
+            "planned_periods": {
+                "score_start": "2014-01-01",
+                "score_end": "2014-12-31",
+            },
+            "observed_periods": {},
+            "model_information_cutoff": "2013-12-31",
+            "group_counts": {},
+            "event_row_counts": {},
+            "model_spec": {},
+            "experiment_settings": {},
+            "training_settings": {},
+            "source_contract": {},
+            "lookahead_contract": {},
+        }
+        import torch
+
+        torch.save(
+            {
+                "model_state_dict": {"synthetic_weight": torch.tensor([1.0])},
+                "fold_contract": {
+                    **common_contract,
+                    "schema_version": 1,
+                    "fold_id": "fold_000",
+                },
+            },
+            model_path,
+        )
+        legacy_manifest = {
+            **common_contract,
+            "schema_version": 1,
+            "fold_id": "fold_000",
+            "contract_fingerprint": "legacy-fingerprint",
+            "artifacts": {
+                "checkpoint": build_file_manifest(model_path),
+                "scores": build_file_manifest(score_path),
+            },
+        }
+        (legacy_dir / "manifest.json").write_text(
+            json.dumps(legacy_manifest), encoding="utf-8"
+        )
+        target_contract = {
+            **common_contract,
+            "schema_version": 2,
+            "fold_id": "fold_20140101_20141231",
+        }
+        migrated = _migrate_compatible_legacy_fold(
+            point_in_time_dir=pit_root,
+            target_fold_dir=target_dir,
+            expected_fingerprint="stable-fingerprint",
+            fold_contract=target_contract,
+            torch_module=torch,
+        )
+        migrated_frame, migrated_manifest = migrated or (pd.DataFrame(), {})
+        migrated_checkpoint = (
+            torch.load(
+                target_dir / DEFAULT_MODEL_FILENAME,
+                map_location="cpu",
+                weights_only=True,
+            )
+            if migrated is not None
+            else {}
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "compatible_legacy_fold_is_hash_checked_and_migrated_to_stable_id",
+        (
+            True,
+            {"fold_20140101_20141231"},
+            "fold_20140101_20141231",
+            "fold_000",
+            "stable-fingerprint",
+        ),
+        (
+            migrated is not None,
+            set(migrated_frame.get("fold_id", pd.Series(dtype=str)).astype(str)),
+            dict(migrated_checkpoint.get("fold_contract") or {}).get("fold_id"),
+            dict(migrated_manifest.get("migration") or {}).get("source_fold_id"),
+            migrated_manifest.get("contract_fingerprint"),
+        ),
     )
 
     group_table = pd.DataFrame(
@@ -11175,12 +11362,33 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     pit_builder_source = (
         project_root / "tools" / "filters" / "breakout_quality" / "build_point_in_time_scores.py"
     ).read_text(encoding="utf-8")
+    pit_builder_tree = ast.parse(pit_builder_source)
+    pit_builder_call_keywords = {
+        node.func.id: {keyword.arg for keyword in node.keywords if keyword.arg}
+        for node in ast.walk(pit_builder_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"_load_reusable_fold", "_migrate_compatible_legacy_fold"}
+    }
     base_target_audit_source = (
         project_root / "tools" / "filters" / "breakout_quality" / "audit_continuous_target.py"
     ).read_text(encoding="utf-8")
     no_time_target_source = (
         project_root / "tools" / "filters" / "breakout_quality" / "audit_no_time_continuous_target.py"
     ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "point_in_time_resume_wires_torch_only_to_legacy_migration",
+        (False, True),
+        (
+            "torch_module" in pit_builder_call_keywords.get("_load_reusable_fold", set()),
+            "torch_module" in pit_builder_call_keywords.get(
+                "_migrate_compatible_legacy_fold", set()
+            ),
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -11845,6 +12053,8 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     )
     from strategies.breakout.search_space import build_trial_params
     from tools.filters.breakout_quality.strategy_adapt import (
+        _build_pure_full_score_baseline_contract,
+        _build_training_score_coverage_contract,
         _current_pair_artifact_paths,
         _fixed_strategy_param_overrides,
         _load_current_pair_if_compatible,
@@ -12081,6 +12291,106 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         resolved_pit_models_root,
     )
 
+    pure_baseline_source = {
+        "path": Path("models/research/breakout_quality/selection_strategy_realization/roos_base_best.json"),
+        "sha256": "synthetic-baseline-sha",
+        "source": {},
+        "policy_contract": {},
+        "meta": {
+            "window_mode": "fixed",
+            "first_oos_date": "2014-01-01",
+            "last_oos_date": "2018-01-01",
+            "train_window_months": 120,
+            "oos_horizon_months": 12,
+            "trials_per_fold": 100,
+            "active_param_policy": "base_finalist_best",
+        },
+        "summary": {"folds": 4, "selection_period": "2004-01-01~2017-12-31"},
+        "payload": {
+            "selector": "base_finalist_best",
+            "meta": {
+                "window_mode": "fixed",
+                "first_oos_date": "2014-01-01",
+                "last_oos_date": "2018-01-01",
+                "train_window_months": 120,
+                "oos_horizon_months": 12,
+                "trials_per_fold": 100,
+                "active_param_policy": "base_finalist_best",
+            },
+            "summary": {"folds": 4, "selection_period": "2004-01-01~2017-12-31"},
+            "folds": [
+                {
+                    "fold": "1/4",
+                    "selection_start_date": "2004-01-01",
+                    "selection_end_date": "2013-12-31",
+                    "oos_start_date": "2014-01-01",
+                    "oos_end_date": "2014-12-31",
+                },
+                {
+                    "fold": "2/4",
+                    "selection_start_date": "2005-01-01",
+                    "selection_end_date": "2014-12-31",
+                    "oos_start_date": "2015-01-01",
+                    "oos_end_date": "2015-12-31",
+                },
+                {
+                    "fold": "3/4",
+                    "selection_start_date": "2007-01-01",
+                    "selection_end_date": "2016-12-31",
+                    "oos_start_date": "2017-01-01",
+                    "oos_end_date": "2017-12-31",
+                },
+                {
+                    "fold": "4/4",
+                    "selection_start_date": "2008-01-01",
+                    "selection_end_date": "2017-12-31",
+                    "oos_start_date": "2018-01-01",
+                    "oos_end_date": "2018-12-31",
+                },
+            ],
+        },
+    }
+    pure_pit_contract = SimpleNamespace(
+        available_from="2007-01-01",
+        available_through="2020-12-31",
+    )
+    all_coverage = _build_training_score_coverage_contract(
+        baseline_contract=pure_baseline_source,
+        pit_contract=pure_pit_contract,
+    )
+    pure_baseline, pure_selection = _build_pure_full_score_baseline_contract(
+        baseline_contract=pure_baseline_source,
+        coverage=all_coverage,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pure_adaptation_keeps_only_contiguous_100pct_score_training_folds",
+        (
+            ["partial_score_history", "partial_score_history", "full_score_history", "full_score_history"],
+            2,
+            "2007-01-01~2017-12-31",
+            ["1/2", "2/2"],
+            ["3/4", "4/4"],
+            "2017-01-01",
+            "2018-01-01",
+            {"start": "2017-01-01", "end": "2018-12-31"},
+            False,
+        ),
+        (
+            [row["status"] for row in all_coverage["folds"]],
+            pure_baseline["summary"]["folds"],
+            pure_baseline["summary"]["selection_period"],
+            [fold["fold"] for fold in pure_baseline["payload"]["folds"]],
+            [fold["source_baseline_fold"] for fold in pure_baseline["payload"]["folds"]],
+            pure_baseline["meta"]["first_oos_date"],
+            pure_baseline["meta"]["last_oos_date"],
+            pure_selection["comparison_period"],
+            pure_selection["pre_pit_fallback_allowed_in_pure_comparison"],
+        ),
+    )
+
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         output_dir = root / "strategy_compare_score_ranking_base_finalist_best_selection_point_in_time"
@@ -12156,6 +12466,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             args=args,
             pit_contract=pair_pit_contract,
             baseline_contract={"sha256": "baseline-sha"},
+            comparison_period={"start": "2014-01-01", "end": "2020-12-31"},
         )
         _write_current_pair_manifest(
             root=root,
@@ -12178,6 +12489,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             args=args,
             pit_contract=pair_pit_contract,
             baseline_contract={"sha256": "baseline-sha"},
+            comparison_period={"start": "2014-01-01", "end": "2020-12-31"},
         )
     add_check(
         results,
@@ -12449,15 +12761,15 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             "score_adapted_search_reused": False,
             "training_score_coverage": {
                 "fold_count": 1,
-                "bootstrap_fallback_only_folds": 1,
+                "bootstrap_fallback_only_folds": 0,
                 "partial_score_history_folds": 0,
-                "full_score_history_folds": 0,
+                "full_score_history_folds": 1,
                 "folds": [{
                     "fold": "1/1",
                     "selection_period": "2004-01-01~2013-12-31",
                     "oos_period": "2014-01-01~2014-12-31",
-                    "calendar_coverage_ratio": 0.0,
-                    "status": "bootstrap_fallback_only",
+                    "calendar_coverage_ratio": 1.0,
+                    "status": "full_score_history",
                 }],
             },
         },
@@ -12508,7 +12820,9 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         and 'arm_name="param_only"' in adapt_source
         and 'arm_name="adapted"' in adapt_source
         and 'params_path=adapted_arm["params_path"]' in adapt_source
-        and "run_comparison(" not in adapt_source
+        and "run_comparison(" in adapt_source
+        and "100% PIT Score coverage" in adapt_source
+        and '"pre_pit_missing_scores_use_existing_buy_sort_fallback": False' in adapt_source
         and 'OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"' in adapt_source
         and 'OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = "1"' in adapt_source
         and 'outer_environ["V16_MODELS_DIR"] = str(Path(pit_models_root).resolve())' in adapt_source

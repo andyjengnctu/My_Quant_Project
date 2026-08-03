@@ -165,9 +165,10 @@ BREAKOUT_QUALITY_PRETRAINING_STRIDE = 5  # Dataset sampling設定；每個ticker
 # =============================================================================
 
 # These settings are used only when the selected experiment profile is a continuous ranker.
-# The first score date may be later than the model dataset Selection start so earlier history can
-# train the first fold. None means use the canonical Selection end from the outer split policy.
-BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "2014-01-01"
+# Use "auto" to resolve the earliest legal monthly score start from the current Dataset,
+# Continuous Target, inner-validation window, and minimum group-count contract.
+# None for the end date means use the canonical Selection end from the outer split policy.
+BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE = "auto"
 BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_END_DATE: str | None = None
 BREAKOUT_QUALITY_POINT_IN_TIME_FOLD_MONTHS = 12
 BREAKOUT_QUALITY_POINT_IN_TIME_INNER_VALIDATION_MONTHS = 24

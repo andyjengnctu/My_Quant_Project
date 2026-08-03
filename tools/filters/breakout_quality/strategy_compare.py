@@ -164,6 +164,16 @@ def _parse_args(argv=None):
         help="允許以單一／static run_best 做非 OOS 診斷；不得視為無前視部署證據。",
     )
     parser.add_argument(
+        "--start-date",
+        default=None,
+        help="選填；將比較期間縮限於Score與active params共同可用範圍內。",
+    )
+    parser.add_argument(
+        "--end-date",
+        default=None,
+        help="選填；必須與--start-date同時使用。",
+    )
+    parser.add_argument(
         "--attribution-only",
         action="store_true",
         help="只讀取既有 strategy_compare CSV/JSON 產生交易歸因，不重新執行 portfolio replay。",
@@ -2470,6 +2480,8 @@ def run_comparison(
     model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     output_dir_override=None,
+    comparison_start_date=None,
+    comparison_end_date=None,
     quiet=False,
 ):
     root = Path(project_root).resolve()
@@ -2545,6 +2557,24 @@ def run_comparison(
                 "model_architecture": None,
                 "experiment_profile": None,
             }
+
+    if (comparison_start_date is None) != (comparison_end_date is None):
+        raise ValueError("comparison_start_date與comparison_end_date必須同時提供")
+    if comparison_start_date is not None:
+        default_start = pd.Timestamp(start_date).normalize()
+        default_end = pd.Timestamp(end_date).normalize()
+        requested_start = pd.Timestamp(str(comparison_start_date)).normalize()
+        requested_end = pd.Timestamp(str(comparison_end_date)).normalize()
+        if pd.isna(requested_start) or pd.isna(requested_end) or requested_end < requested_start:
+            raise ValueError("指定策略比較期間不合法")
+        if requested_start < default_start or requested_end > default_end:
+            raise ValueError(
+                "指定策略比較期間超出Score可用範圍："
+                f"requested={requested_start.date()}~{requested_end.date()}, "
+                f"available={default_start.date()}~{default_end.date()}"
+            )
+        start_date = requested_start.strftime("%Y-%m-%d")
+        end_date = requested_end.strftime("%Y-%m-%d")
 
     param_policy = str(param_policy)
     resolved_params_path = _resolve_params_path(
@@ -2954,6 +2984,8 @@ def main(argv=None):
         return 0
     if args.max_positions < 1:
         raise ValueError("max_positions 必須 >= 1")
+    if (args.start_date is None) != (args.end_date is None):
+        raise ValueError("--start-date與--end-date必須同時使用")
     run_comparison(
         dataset=args.dataset,
         params_path=args.params,
@@ -2968,6 +3000,8 @@ def main(argv=None):
         score_source=args.score_source,
         model_architecture=args.model_architecture,
         experiment_profile=args.experiment_profile,
+        comparison_start_date=args.start_date,
+        comparison_end_date=args.end_date,
         quiet=args.quiet,
     )
     return 0

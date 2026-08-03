@@ -1604,7 +1604,7 @@ def _print_workflow_status() -> None:
         ("Continuous Target", settings.continuous_target_id),
         (
             "PIT Score Period",
-            f"{settings.point_in_time_score_start_date} ～ "
+            f"{'auto（最早合法）' if str(settings.point_in_time_score_start_date).lower() == 'auto' else settings.point_in_time_score_start_date} ～ "
             f"{settings.point_in_time_score_end_date or 'Selection end'}",
         ),
         (
@@ -1795,7 +1795,7 @@ def _interactive_strategy_validation(program_name: str) -> int:
     while True:
         print("\n=== 策略績效驗證 ===")
         print("[1/Enter] 比較目前策略")
-        print("[2] 驗證策略參數適應")
+        print("[2] 驗證策略參數適應（僅100% PIT coverage folds）")
         print("[0] 返回")
         try:
             raw_choice = input("👉 請選擇：").strip().lower()

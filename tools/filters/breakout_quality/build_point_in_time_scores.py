@@ -74,7 +74,9 @@ from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     select_epoch,
 )
 
-POINT_IN_TIME_SCHEMA_VERSION = 1
+POINT_IN_TIME_SCHEMA_VERSION = 2
+AUTO_SCORE_START_VALUE = "auto"
+FOLD_CALENDAR_ANCHOR = pd.Timestamp("2000-01-01")
 FOLD_MANIFEST_FILENAME = "manifest.json"
 FOLD_SCORE_FILENAME = "scores.csv"
 REQUIRED_SCORE_COLUMNS = (
@@ -98,7 +100,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--filter-id", default=settings.filter_id)
     parser.add_argument("--model-architecture", default=settings.model_architecture)
     parser.add_argument("--experiment-profile", default=settings.experiment_profile)
-    parser.add_argument("--score-start-date", default=settings.point_in_time_score_start_date)
+    parser.add_argument(
+        "--score-start-date",
+        default=settings.point_in_time_score_start_date,
+        help=(
+            "PIT Score起始日；使用auto時由Dataset／Target與目前最小group契約"
+            "自動找出最早合法月份"
+        ),
+    )
     parser.add_argument("--score-end-date", default=settings.point_in_time_score_end_date)
     parser.add_argument("--fold-months", type=int, default=settings.point_in_time_fold_months)
     parser.add_argument(
@@ -216,27 +225,59 @@ def _json_fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _stable_fold_id(score_start: pd.Timestamp, score_end: pd.Timestamp) -> str:
+    return f"fold_{score_start:%Y%m%d}_{score_end:%Y%m%d}"
+
+
 def _build_fold_periods(
     score_start: pd.Timestamp,
     score_end: pd.Timestamp,
     *,
     fold_months: int,
 ) -> list[dict[str, Any]]:
+    """Build calendar-anchored folds whose later boundaries never shift.
+
+    The first fold may be partial when the resolved earliest legal score date falls
+    inside an anchored bucket.  Every later fold follows the fixed 2000-01-01
+    calendar anchor, so prepending older history does not rename or retrain existing
+    periods such as the original 2014-01-01~2014-12-31 fold.
+    """
+
+    start = pd.Timestamp(score_start).normalize()
+    end = pd.Timestamp(score_end).normalize()
+    months = int(fold_months)
+    if months < 1:
+        raise ValueError("fold_months必須>=1")
+    if end < start:
+        raise ValueError("point-in-time score期間不合法")
+
+    month_delta = (start.year - FOLD_CALENDAR_ANCHOR.year) * 12 + (
+        start.month - FOLD_CALENDAR_ANCHOR.month
+    )
+    bucket_index = month_delta // months
+    bucket_start = (
+        FOLD_CALENDAR_ANCHOR + pd.DateOffset(months=bucket_index * months)
+    ).normalize()
+    bucket_end = (
+        bucket_start + pd.DateOffset(months=months) - pd.Timedelta(days=1)
+    ).normalize()
+
     folds: list[dict[str, Any]] = []
-    cursor = score_start
-    index = 0
-    while cursor <= score_end:
-        next_start = (cursor + pd.DateOffset(months=int(fold_months))).normalize()
-        fold_end = min(score_end, next_start - pd.Timedelta(days=1))
+    cursor = start
+    while cursor <= end:
+        fold_end = min(end, bucket_end)
         folds.append(
             {
-                "fold_id": f"fold_{index:03d}",
+                "fold_id": _stable_fold_id(cursor, fold_end),
                 "score_start": cursor,
                 "score_end": fold_end,
             }
         )
-        cursor = next_start
-        index += 1
+        cursor = (bucket_end + pd.Timedelta(days=1)).normalize()
+        bucket_start = cursor
+        bucket_end = (
+            bucket_start + pd.DateOffset(months=months) - pd.Timedelta(days=1)
+        ).normalize()
     if not folds:
         raise ValueError("point-in-time score期間沒有任何fold")
     return folds
@@ -244,6 +285,116 @@ def _build_fold_periods(
 
 def _group_event_count(event_group_index: np.ndarray, group_ids: np.ndarray) -> int:
     return int(np.isin(event_group_index, np.asarray(group_ids, dtype=np.int64)).sum())
+
+
+def _minimum_count_failures(settings, ids: dict[str, Any]) -> list[str]:
+    required = {
+        "inner_train": (len(ids["train_ids"]), settings.point_in_time_min_train_groups),
+        "validation": (
+            len(ids["validation_ids"]),
+            settings.point_in_time_min_validation_groups,
+        ),
+        "score": (len(ids["score_ids"]), settings.point_in_time_min_score_groups),
+    }
+    return [
+        f"{name}={actual}<{minimum}"
+        for name, (actual, minimum) in required.items()
+        if int(actual) < int(minimum)
+    ]
+
+
+def _candidate_month_starts(
+    selection_start: pd.Timestamp, selection_end: pd.Timestamp
+) -> list[pd.Timestamp]:
+    first = selection_start.normalize()
+    candidates = [first]
+    next_month = (first + pd.offsets.MonthBegin(1)).normalize()
+    while next_month <= selection_end:
+        if next_month != candidates[-1]:
+            candidates.append(next_month)
+        next_month = (next_month + pd.offsets.MonthBegin(1)).normalize()
+    return candidates
+
+
+def _resolve_score_start(
+    raw_value: Any,
+    *,
+    bundle,
+    settings,
+    selection_start: pd.Timestamp,
+    score_end: pd.Timestamp,
+    fold_months: int,
+    validation_months: int,
+) -> tuple[pd.Timestamp, dict[str, Any]]:
+    raw_text = str(raw_value or "").strip().lower()
+    if raw_text != AUTO_SCORE_START_VALUE:
+        configured = _iso_timestamp(raw_value, field_name="score_start_date")
+        return configured, {
+            "mode": "configured",
+            "configured_value": str(raw_value),
+            "resolved_score_start": str(configured.date()),
+        }
+
+    group_dates = pd.to_datetime(bundle.group_table["date"], errors="raise").dt.normalize()
+    label_end_dates = pd.to_datetime(
+        bundle.group_table["label_eval_end_date"], errors="raise"
+    ).dt.normalize()
+    labels = bundle.group_table["label"].to_numpy(dtype=np.int64)
+    target_valid = np.asarray(bundle.target_valid, dtype=bool)
+    if bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_PASS_ONLY:
+        scoped_target = target_valid & (labels == LABEL_PASS)
+    elif bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_ALL:
+        scoped_target = target_valid & np.isin(labels, [LABEL_REJECT, LABEL_PASS])
+    else:
+        raise ValueError(
+            f"不支援的continuous ranker training scope: {bundle.profile.training_label_scope}"
+        )
+
+    rejected: list[dict[str, Any]] = []
+    for candidate in _candidate_month_starts(selection_start, score_end):
+        fold = _build_fold_periods(
+            candidate,
+            score_end,
+            fold_months=int(fold_months),
+        )[0]
+        ids = _fold_group_ids(bundle, fold, validation_months=int(validation_months))
+        failures = _minimum_count_failures(settings, ids)
+        if not failures:
+            scoped_dates = group_dates[scoped_target]
+            scoped_label_ends = label_end_dates[scoped_target]
+            return candidate, {
+                "mode": "auto_earliest_legal",
+                "configured_value": AUTO_SCORE_START_VALUE,
+                "resolved_score_start": str(candidate.date()),
+                "selection_start": str(selection_start.date()),
+                "selection_end": str(score_end.date()),
+                "earliest_dataset_group_date": str(group_dates.min().date()),
+                "earliest_scoped_target_group_date": (
+                    str(scoped_dates.min().date()) if len(scoped_dates) else None
+                ),
+                "earliest_scoped_label_completion_date": (
+                    str(scoped_label_ends.min().date()) if len(scoped_label_ends) else None
+                ),
+                "candidate_months_checked": int(len(rejected) + 1),
+                "first_fold_group_counts": {
+                    "inner_train": int(len(ids["train_ids"])),
+                    "validation": int(len(ids["validation_ids"])),
+                    "score": int(len(ids["score_ids"])),
+                },
+                "rejected_candidate_count": int(len(rejected)),
+                "recent_rejected_candidates": rejected[-6:],
+            }
+        rejected.append(
+            {
+                "score_start": str(candidate.date()),
+                "failures": failures,
+            }
+        )
+    raise ValueError(
+        "無法在Selection內找到符合目前PIT最小group契約的score start；"
+        f"selection={selection_start.date()}~{score_end.date()}, "
+        f"last_failures={rejected[-1] if rejected else None}"
+    )
 
 
 def _fold_group_ids(bundle, fold: dict[str, Any], *, validation_months: int) -> dict[str, Any]:
@@ -395,19 +546,7 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
 
 
 def _validate_minimum_counts(settings, fold_id: str, ids: dict[str, Any]) -> None:
-    required = {
-        "inner_train": (len(ids["train_ids"]), settings.point_in_time_min_train_groups),
-        "validation": (
-            len(ids["validation_ids"]),
-            settings.point_in_time_min_validation_groups,
-        ),
-        "score": (len(ids["score_ids"]), settings.point_in_time_min_score_groups),
-    }
-    failed = [
-        f"{name}={actual}<{minimum}"
-        for name, (actual, minimum) in required.items()
-        if int(actual) < int(minimum)
-    ]
+    failed = _minimum_count_failures(settings, ids)
     if failed:
         raise ValueError(f"{fold_id} group coverage不足: {', '.join(failed)}")
 
@@ -480,6 +619,124 @@ def _load_reusable_fold(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
         return None
     return validated, manifest
+
+
+def _fold_contract_is_compatible(
+    manifest: dict[str, Any], *, expected_contract: dict[str, Any]
+) -> bool:
+    comparable_fields = (
+        "filter_id",
+        "model_architecture",
+        "experiment_profile",
+        "continuous_target_id",
+        "training_label_scope",
+        "seed",
+        "planned_periods",
+        "observed_periods",
+        "model_information_cutoff",
+        "group_counts",
+        "event_row_counts",
+        "model_spec",
+        "experiment_settings",
+        "training_settings",
+        "source_contract",
+        "lookahead_contract",
+    )
+    return all(manifest.get(field) == expected_contract.get(field) for field in comparable_fields)
+
+
+def _migrate_compatible_legacy_fold(
+    *,
+    point_in_time_dir: Path,
+    target_fold_dir: Path,
+    expected_fingerprint: str,
+    fold_contract: dict[str, Any],
+    torch_module,
+) -> tuple[pd.DataFrame, dict[str, Any]] | None:
+    folds_root = point_in_time_dir / "folds"
+    if not folds_root.is_dir():
+        return None
+    expected_fold_id = str(fold_contract["fold_id"])
+    for candidate_dir in sorted(path for path in folds_root.iterdir() if path.is_dir()):
+        if candidate_dir.resolve() == target_fold_dir.resolve():
+            continue
+        manifest_path = candidate_dir / FOLD_MANIFEST_FILENAME
+        model_path = candidate_dir / DEFAULT_MODEL_FILENAME
+        score_path = candidate_dir / FOLD_SCORE_FILENAME
+        if not (manifest_path.is_file() and model_path.is_file() and score_path.is_file()):
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict) or not _fold_contract_is_compatible(
+                manifest, expected_contract=fold_contract
+            ):
+                continue
+            artifacts = dict(manifest.get("artifacts") or {})
+            if build_file_manifest(model_path) != artifacts.get("checkpoint"):
+                continue
+            if build_file_manifest(score_path) != artifacts.get("scores"):
+                continue
+            checkpoint = torch_module.load(
+                model_path, map_location="cpu", weights_only=True
+            )
+            if not isinstance(checkpoint, dict):
+                continue
+            checkpoint_contract = dict(checkpoint.get("fold_contract") or {})
+            if str(checkpoint_contract.get("fold_id") or "") != str(
+                manifest.get("fold_id") or ""
+            ):
+                continue
+            if not _fold_contract_is_compatible(
+                checkpoint_contract, expected_contract=fold_contract
+            ):
+                continue
+            migrated_checkpoint = {
+                **checkpoint,
+                "fold_contract": dict(fold_contract),
+            }
+            frame = pd.read_csv(
+                score_path,
+                encoding="utf-8-sig",
+                dtype={
+                    "ticker": "string",
+                    "fold_id": "string",
+                    "model_information_cutoff": "string",
+                },
+            )
+            source_fold_ids = set(frame.get("fold_id", pd.Series(dtype=str)).astype(str).unique())
+            if source_fold_ids != {str(manifest.get("fold_id") or "")}:
+                continue
+            frame = frame.copy()
+            frame["fold_id"] = expected_fold_id
+            frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
+            frame = _validate_score_frame(frame, fold_contract=fold_contract)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+            continue
+
+        target_fold_dir.mkdir(parents=True, exist_ok=True)
+        target_model_path = target_fold_dir / DEFAULT_MODEL_FILENAME
+        target_score_path = target_fold_dir / FOLD_SCORE_FILENAME
+        torch_module.save(migrated_checkpoint, target_model_path)
+        frame.to_csv(target_score_path, index=False, encoding="utf-8-sig")
+        migrated_manifest = {
+            **manifest,
+            **fold_contract,
+            "schema_version": POINT_IN_TIME_SCHEMA_VERSION,
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "contract_fingerprint": expected_fingerprint,
+            "migration": {
+                "kind": "stable_date_fold_id",
+                "source_fold_id": str(manifest.get("fold_id") or candidate_dir.name),
+                "source_manifest": build_file_manifest(manifest_path),
+            },
+            "artifacts": {
+                "checkpoint": build_file_manifest(target_model_path),
+                "scores": build_file_manifest(target_score_path),
+            },
+        }
+        write_json(target_fold_dir / FOLD_MANIFEST_FILENAME, migrated_manifest)
+        return frame, migrated_manifest
+    return None
 
 
 def _train_fold(args, bundle, fold, ids, fold_contract, contract_fingerprint, *, torch, plan):
@@ -720,11 +977,25 @@ def main(argv=None) -> int:
     selection_end = _iso_timestamp(
         bundle.outer_policy.get("selection_end_date"), field_name="selection_end_date"
     )
-    score_start = _iso_timestamp(args.score_start_date, field_name="score_start_date")
     score_end = (
         selection_end
         if args.score_end_date is None or str(args.score_end_date).strip() == ""
         else _iso_timestamp(args.score_end_date, field_name="score_end_date")
+    )
+    if not selection_start <= score_end <= selection_end:
+        raise ValueError(
+            "PIT score end必須位於Selection內: "
+            f"selection={selection_start.date()}~{selection_end.date()}, "
+            f"score_end={score_end.date()}"
+        )
+    score_start, score_start_resolution = _resolve_score_start(
+        args.score_start_date,
+        bundle=bundle,
+        settings=settings,
+        selection_start=selection_start,
+        score_end=score_end,
+        fold_months=int(args.fold_months),
+        validation_months=int(args.inner_validation_months),
     )
     if not selection_start <= score_start <= score_end <= selection_end:
         raise ValueError(
@@ -740,6 +1011,17 @@ def main(argv=None) -> int:
     ]
     for fold, ids in zip(folds, fold_details):
         _validate_minimum_counts(settings, str(fold["fold_id"]), ids)
+    if score_start_resolution.get("mode") == "auto_earliest_legal":
+        print(
+            paint("最早合法 PIT Score 日期", "cyan", enabled=color_enabled, bold=True)
+            + f"：{score_start_resolution['resolved_score_start']}"
+            + f"｜檢查月份={score_start_resolution['candidate_months_checked']}"
+            + f"｜首fold train/val/score="
+            + "/".join(
+                f"{int(score_start_resolution['first_fold_group_counts'][key]):,}"
+                for key in ("inner_train", "validation", "score")
+            )
+        )
     _print_plan(folds, fold_details, color=color_enabled)
     if bool(args.plan_only):
         print(
@@ -796,6 +1078,7 @@ def main(argv=None) -> int:
     fold_manifests: list[dict[str, Any]] = []
     coverage_rows: list[dict[str, Any]] = []
     reused_fold_count = 0
+    migrated_fold_count = 0
     built_fold_count = 0
     fold_progress = InlineProgress()
     for fold_index, (fold, ids) in enumerate(zip(folds, fold_details), start=1):
@@ -817,15 +1100,33 @@ def main(argv=None) -> int:
             if bool(args.resume)
             else None
         )
+        migrated = False
+        if reused is None and bool(args.resume):
+            reused = _migrate_compatible_legacy_fold(
+                point_in_time_dir=point_in_time_dir,
+                target_fold_dir=fold_dir,
+                expected_fingerprint=fingerprint,
+                fold_contract=fold_contract,
+                torch_module=torch,
+            )
+            migrated = reused is not None
         if reused is not None:
             frame, manifest = reused
-            reused_fold_count += 1
+            if migrated:
+                migrated_fold_count += 1
+            else:
+                reused_fold_count += 1
             if not compact_console:
                 print(
                     "\n"
                     + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
                     + "："
-                    + paint("重用既有 fold 工件", "green", enabled=color_enabled, bold=True)
+                    + paint(
+                        "遷移舊fold並重用" if migrated else "重用既有 fold 工件",
+                        "green",
+                        enabled=color_enabled,
+                        bold=True,
+                    )
                 )
         else:
             built_fold_count += 1
@@ -920,6 +1221,13 @@ def main(argv=None) -> int:
             "start": str(score_start.date()),
             "end": str(score_end.date()),
         },
+        "score_start_resolution": score_start_resolution,
+        "fold_identity": {
+            "schema": "score_period_dates",
+            "format": "fold_YYYYMMDD_YYYYMMDD",
+            "stable_when_earlier_folds_are_added": True,
+            "legacy_fold_migration_supported": True,
+        },
         "selection_period": {
             "start": str(selection_start.date()),
             "end": str(selection_end.date()),
@@ -957,6 +1265,7 @@ def main(argv=None) -> int:
             paint("PIT Scores 完成", "green", enabled=color_enabled, bold=True)
             + f" | folds={len(folds)}"
             + f" | 重用={reused_fold_count}"
+            + f" | 遷移重用={migrated_fold_count}"
             + f" | 新建={built_fold_count}"
             + f" | groups={validation['scored_group_count']:,}"
             + f" | coverage={validation['coverage_rate']:.2%}"
@@ -977,6 +1286,9 @@ def main(argv=None) -> int:
             render_key_values(
                 (
                     ("Folds", len(folds)),
+                    ("Reused folds", reused_fold_count),
+                    ("Migrated legacy folds", migrated_fold_count),
+                    ("Built folds", built_fold_count),
                     ("Scored groups", f"{validation['scored_group_count']:,}"),
                     (
                         "Coverage",

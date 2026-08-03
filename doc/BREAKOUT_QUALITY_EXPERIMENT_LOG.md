@@ -32,10 +32,10 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | `test-branch-1_20260803_122159_172cc87(1).zip`；SHA256 `5c8653168fe3e42d532275466e18e6e0fce839ae08adf35ecd09c18a518f9f5a`。目前策略參數適應只訓練一套Score Adapted rolling params，並以Baseline／Sort Only／Param Only／Adapted做正式2×2 Selection回放；Baseline／Sort Only直接載入`[1] 比較目前策略`正式工件，不重跑舊參數replay |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260803_174456_7cd1b60(1).zip`；SHA256 `cb0577bb59835af33125728a0612186a9280ec2ab18adcd53abe8646ede0305a`。本輪已實作PIT最早合法日期自動解析、日期型穩定fold identity、舊fold安全遷移重用，以及只使用100% training Score coverage共同folds的純化2×2；完整PIT訓練、optimizer與四組replay仍待使用者本機正式資料執行 |
 | SHA256／最新結果 | 使用者提供的正式2×2輸出：Baseline 182.62%、Sort Only 144.80%、Param Only 65.46%、Adapted 59.71%；新Score Adapted params與完整Adapted系統均拒絕採用，正式策略維持Baseline。原始rolling輸出工件未包含於本ZIP，因此本文件記錄使用者提供結果，不宣稱於本輪重新計算 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
-| Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score period自2014-01-01起，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
+| Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score start=`auto`，由目前Dataset／Target／label completion與最小group契約解析最早合法月份，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
 | Dataset | 正式policy退回既有 `breakout_quality_v1` 300×10 feature bank與固定百分比Label；不需重建Dataset、relabel、9A checkpoint或9A scores。10A Market Bank、checkpoint、manifest與research scores保留於獨立legacy路徑供歷史重現 |
 
@@ -2130,7 +2130,7 @@ T283改為直接建立三個PIT runtime工件，驗證正常contract可通過、
 
 - ZIP：`test-branch-1_20260803_014347_0235c8f.zip`
 - SHA256：`0c05fbb9dcd3508648a3a280824c2ee8334e15f34e0dba2aafd20bcffd3e6f3c`
-- 全新解壓：`/mnt/data/bq_baseline_artifact_identity_fix_20260803_0144`
+- 全新解壓：本輪隔離暫存檢查目錄（不納入正式工件identity）
 
 ### 問題
 
@@ -2164,7 +2164,7 @@ T283新增：舊metadata未明確override但effective params一致時可載入�
 
 - ZIP：`test-branch-1_20260803_015534_cc59543.zip`
 - SHA256：`488db8f18f43b322564cbee0810c17fdf033303e1b3dcbe31267c6d659965ca0`
-- 全新解壓：`/mnt/data/bq_pit_path_resolution_fix_20260803_0156`
+- 全新解壓：本輪隔離暫存檢查目錄（不納入正式工件identity）
 
 ### 問題
 
@@ -2211,7 +2211,7 @@ T283新增正式PIT models root解析、active-param獨立輸出、Selection PIT
 
 - ZIP：`test-branch-1_20260803_021601_c5bd4b2.zip`
 - SHA256：`cbef176743f6351bc6fa388ad6b1000cff37924861244d41b662a096c60c1998`
-- 全新解壓：`/mnt/data/bq_ensemble_score_availability_fix_20260803_0300`
+- 全新解壓：本輪隔離暫存檢查目錄（不納入正式工件identity）
 
 ### 問題
 
@@ -2289,3 +2289,62 @@ Dataset、Continuous Target、Selection PIT Scores、PIT模型驗證、Score來�
 
 後續第二順位為Filter × Score分組消融；第三順位才是Selection PIT Score向前回補可行性。現有7 folds training calendar coverage為0%、10%、20%、30%、40%、50%、60%，目前不足以單獨證明coverage是Adapted失敗主因。
 
+
+
+## 2026-08-03 — Selection PIT向前延伸與100% coverage純化2×2
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_FULL_DATA_EXECUTION_REQUIRED`
+
+本輪依使用者決定，將Selection PIT Scores向前延伸與比較純化提前到capital-aware ranking之前。程式契約已完成；本交付ZIP不含完整`outputs/`、`models/`與本機完整股價資料，因此未實際訓練新增PIT folds、未重跑rolling optimizer，也未產生新的四組績效。
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260803_174456_7cd1b60(1).zip`
+- SHA256：`cb0577bb59835af33125728a0612186a9280ec2ab18adcd53abe8646ede0305a`
+- 本輪修改只以該ZIP全新解壓內容為基準。
+
+### 唯一主要變更
+
+將原本固定`2014-01-01`的Selection PIT score start改為`auto`，由實際Dataset group dates、Continuous Target valid、PASS-only training scope、`label_eval_end_date`、24個月Validation與目前最小train／validation／score group門檻逐月尋找最早合法日期。此變更只延伸無前視Score歷史，不改模型架構、Target公式、loss、Seed、fold長度或策略交易規則。
+
+### 實作內容
+
+1. PIT fold ID由序號`fold_000`改為穩定日期鍵`fold_YYYYMMDD_YYYYMMDD`；向前新增fold不會改變既有期間identity。
+2. Builder在resume時會掃描舊fold；只有日期、model information cutoff、資料來源、模型規格、training settings、group／event counts與lookahead契約完全相同，且checkpoint／Score SHA256通過時，才將舊工件遷移為日期型ID重用。
+3. `--score-start-date auto --plan-only`會輸出最早合法PIT日期、檢查月份數、首fold train／validation／score groups及完整fold計畫，不訓練或寫入正式Score。
+4. 正式build完成後仍由原流程重建合併Scores、coverage CSV與manifest；manifest新增`score_start_resolution`及fold identity契約。既有2014年後相容fold可重用，新增的較早fold必須實際訓練。
+5. Strategy Adapt先稽核原Baseline所有rolling training windows，只保留calendar coverage為100%的連續尾段；bootstrap／partial-score folds只保存在coverage CSV，禁止進optimizer。
+6. Baseline／Sort Only會在純化共同OOS期間自動重建或重用；Score Adapted只在同一組完整coverage folds訓練，Param Only／Adapted使用同一套新params。四組期間、PIT identity、risk、position cap、max positions、rotation與交易／帳務契約一致，正式比較不允許pre-PIT fallback。
+
+### Dataset／Target／模型工件需求
+
+- Dataset：不因程式變更重建；但本機必須存在目前完整`breakout_quality_v1` Dataset及與其SHA256一致的Continuous Target。
+- Label／Continuous Target：公式與arrays不變，不relabel；若本機Target已因Dataset更新而stale，仍由既有workflow先重建。
+- PIT模型：最早合法日期到既有2014前的fold需要新訓練；2014後舊fold只有在完整契約與hash完全一致時才遷移重用。
+- PIT audit：合併Scores／manifest改變後必須重新執行，舊audit因來源SHA256不同不得沿用。
+- Strategy optimizer：只在audit通過後執行；如果沒有任何Baseline fold達到100% training coverage，流程直接拒絕並要求再檢查PIT最早日期／資料範圍。
+
+### 固定條件與結果邊界
+
+不改9A架構、No-time Target、daily percentile regression、PASS-only scope、Seed 42、12個月PIT fold、24個月inner validation、optimizer search space、trials來源、fixed risk、position cap、max positions、rotation、原始Score ranking、entry／stop／exit、portfolio accounting或Future Target post-replay-only契約。此輪不判定新ranking有效或無效；先前2014～2020 Baseline／Sort Only與混合coverage 2×2結果仍保留為歷史證據，但新的純化2×2必須待本機完整執行後另行回寫。
+
+### 本機正式執行順序
+
+```bash
+python apps/breakout_quality.py build-point-in-time-scores --score-start-date auto --plan-only
+python apps/breakout_quality.py build-point-in-time-scores --score-start-date auto --resume
+python apps/breakout_quality.py audit-point-in-time-scores
+python apps/breakout_quality.py strategy-adapt --dataset full --param-policy base-finalist-best
+```
+
+主選單亦可依序執行`[1] 模型研究與驗證`及`[2] 策略績效驗證 → [2] 驗證策略參數適應（僅100% PIT coverage folds）`。
+
+### 獨立驗證
+
+- PIT builder direct synthetic：22項通過，涵蓋auto最早合法日期、固定月曆fold邊界、向前延伸identity不漂移、舊checkpoint／Score雜湊驗證、checkpoint內部fold contract改寫，以及resume主流程僅將`torch_module`傳給舊fold遷移函式。
+- Strategy Adapt direct synthetic：16項通過，涵蓋100% coverage連續fold選取、純化fold重新編號與來源追溯、共同OOS期間、禁止fallback、Baseline／Sort Only自動建立或重用及四組同期間2×2。
+- 全專案254個Python檔完成獨立AST檢查：語法錯誤、裸`except`、重複top-level definition、import cycle與禁止依賴方向均為0；同模組直接函式呼叫未發現keyword／參數簽章不一致。
+- `doc/TEST_SUITE_CHECKLIST.md`八個機械表格完成欄數、狀態、摘要、ID排序、G日期／ID排序、transition格式、連續性、重複`NEW`與主表／T／G最新狀態同步檢查，均通過。
+- 正式`apps/test_suite.py`依專案規定未由GPT執行；仍須由使用者本機於完整資料環境完成formal double check。

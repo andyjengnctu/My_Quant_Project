@@ -99,17 +99,19 @@ python apps/breakout_quality.py prepare-continuous-target --filter-id breakout_q
 
 ### Selection point-in-time continuous-ranker Scores
 
-批次建立 PIT Scores：
+先由目前Dataset／Target自動找出最早合法PIT日期並驗證fold計畫，不訓練或寫入正式Score：
 
 ```bash
-python apps/breakout_quality.py build-point-in-time-scores
+python apps/breakout_quality.py build-point-in-time-scores --score-start-date auto --plan-only
 ```
 
-只查看並驗證 fold 計畫，不訓練或寫入正式 Score：
+確認計畫後批次建立／向前補齊PIT Scores：
 
 ```bash
-python apps/breakout_quality.py build-point-in-time-scores --plan-only
+python apps/breakout_quality.py build-point-in-time-scores --score-start-date auto --resume
 ```
+
+`auto`會依實際group、Target valid、label completion、inner validation與最小group門檻逐月解析最早合法日期。Fold目錄採`fold_YYYYMMDD_YYYYMMDD`穩定日期ID；向前延伸時，既有相同日期與完整契約的舊`fold_000`類checkpoint／scores會先驗證hash，再自動遷移重用，不因前面新增fold而全部重訓。
 
 模型層 audit：
 
@@ -483,13 +485,13 @@ python apps/breakout_quality.py strategy-compare --comparison-mode score-ranking
 
 - `--capture-audit-only`只支援score-ranking，並要求既有`strategy_comparison.json`、兩組transaction CSV及兩組selected-target diagnostics完整存在；缺工件時fail-fast，不會悄悄重跑或改用其他Score來源。
 - 一般Optimizer search space固定ranking=`False`，不得把ranking開關設成trial維度。策略適應使用專用固定context，而不是搜尋ranking開關。
-- 完成並保存上述`[1]`正式比較工件後，可執行單一Score Adapted rolling驗證：
+- PIT build與model audit完成後，可執行純化的單一Score Adapted rolling驗證：
 
 ```bash
 python apps/breakout_quality.py strategy-adapt --dataset full --param-policy base-finalist-best
 ```
 
-  此流程只訓練一套固定`use_breakout_quality_ranking=True`、hard filter=False的新active params；接著輸出Baseline、Sort Only、Param Only、Adapted四組2×2回放。Param Only與Adapted共用完全相同的新active params，只有ranking不同；Baseline／Sort Only直接讀取既有正式比較工件，不重跑舊參數replay。結果只屬`ROLLING_SELECTION_DIAGNOSTIC`，不執行完整Selection final refit或正式OOS。
+  流程先對原Baseline全部fold輸出training Score coverage，僅保留training window為100% PIT coverage的連續fold；bootstrap與partial-score folds不得進optimizer。接著在這些fold的共同OOS期間自動建立或重用Baseline／Sort Only，只訓練一套固定`use_breakout_quality_ranking=True`、hard filter=False的新active params，再輸出Param Only／Adapted。四組期間、PIT identity、risk、position cap與交易規則完全一致；Param Only與Adapted共用同一套新active params，只有ranking不同。結果只屬`ROLLING_SELECTION_DIAGNOSTIC`，不執行完整Selection final refit或正式OOS。若目前沒有任何100% coverage fold，流程會要求先向前延伸PIT Scores。
 - 此研究是在已查看既有OOS後進行的迭代證據；任何候選改法仍須凍結契約後再做無前視驗證，不能由Selection結果直接部署。
 
 ### `run_best_params.json` 的用途與產生方式
