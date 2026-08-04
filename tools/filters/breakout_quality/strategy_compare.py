@@ -509,6 +509,7 @@ def _apply_scenario_overrides(
     fixed_risk: float | None,
     max_position_cap_pct: float | None = None,
     optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    shared_param_overrides: dict[str, Any] | None = None,
 ):
     _comparison_switch_spec(comparison_mode)
     overrides = {
@@ -524,6 +525,26 @@ def _apply_scenario_overrides(
         )
     if optional_entry_filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF:
         overrides.update({field: False for field in OPTIONAL_ENTRY_FILTER_FIELDS})
+    if shared_param_overrides:
+        reserved_fields = {
+            "use_breakout_quality_filter",
+            "use_breakout_quality_ranking",
+            "breakout_quality_filter_id",
+            "breakout_quality_score_threshold",
+            *OPTIONAL_ENTRY_FILTER_FIELDS,
+        }
+        invalid_reserved = sorted(set(shared_param_overrides) & reserved_fields)
+        if invalid_reserved:
+            raise ValueError(
+                "shared_param_overrides不可覆寫比較開關或optional filter policy: "
+                f"{invalid_reserved}"
+            )
+        unknown_fields = sorted(
+            set(shared_param_overrides) - set(params_to_json_dict(params))
+        )
+        if unknown_fields:
+            raise ValueError(f"shared_param_overrides含未知策略參數: {unknown_fields}")
+        overrides.update(dict(shared_param_overrides))
     if fixed_risk is not None:
         overrides["fixed_risk"] = float(fixed_risk)
     if max_position_cap_pct is not None:
@@ -554,6 +575,7 @@ def _rewrite_param_mapping(
     fixed_risk: float | None,
     max_position_cap_pct: float | None = None,
     optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    shared_param_overrides: dict[str, Any] | None = None,
 ) -> dict:
     rewritten = {}
     for key, raw_params in dict(mapping or {}).items():
@@ -568,6 +590,7 @@ def _rewrite_param_mapping(
                 fixed_risk=fixed_risk,
                 max_position_cap_pct=max_position_cap_pct,
                 optional_entry_filter_policy=optional_entry_filter_policy,
+                shared_param_overrides=shared_param_overrides,
             )
         )
     return rewritten
@@ -582,6 +605,7 @@ def _rewrite_ensemble_mapping(
     fixed_risk: float | None,
     max_position_cap_pct: float | None = None,
     optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    shared_param_overrides: dict[str, Any] | None = None,
 ) -> dict:
     rewritten = {}
     for key, raw_members in dict(mapping or {}).items():
@@ -602,6 +626,7 @@ def _rewrite_ensemble_mapping(
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
                     optional_entry_filter_policy=optional_entry_filter_policy,
+                    shared_param_overrides=shared_param_overrides,
                 )
             )
             output_members.append(output_member)
@@ -617,6 +642,7 @@ def _build_controlled_param_source_pair(
     max_position_cap_pct: float | None = None,
     comparison_mode: str = COMPARISON_MODE_HARD_FILTER,
     optional_entry_filter_policy: str = OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    shared_param_overrides: dict[str, Any] | None = None,
 ) -> tuple[str, Any, Any, Any, Any, dict[str, Any] | None]:
     kind = str(source["kind"])
     if kind == "single_param":
@@ -630,6 +656,7 @@ def _build_controlled_param_source_pair(
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
             optional_entry_filter_policy=optional_entry_filter_policy,
+            shared_param_overrides=shared_param_overrides,
         )
         quality_params = _apply_scenario_overrides(
             base_params,
@@ -640,6 +667,7 @@ def _build_controlled_param_source_pair(
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
             optional_entry_filter_policy=optional_entry_filter_policy,
+            shared_param_overrides=shared_param_overrides,
         )
         _assert_controlled_param_pair(no_filter_params, quality_params, comparison_mode=comparison_mode)
         return (
@@ -673,6 +701,7 @@ def _build_controlled_param_source_pair(
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
             optional_entry_filter_policy=optional_entry_filter_policy,
+            shared_param_overrides=shared_param_overrides,
         )["static"]
         quality_payload["params_ensemble"] = _rewrite_ensemble_mapping(
             base_mapping,
@@ -683,6 +712,7 @@ def _build_controlled_param_source_pair(
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
             optional_entry_filter_policy=optional_entry_filter_policy,
+            shared_param_overrides=shared_param_overrides,
         )["static"]
         _assert_controlled_ensemble_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = get_active_param_ensemble_policy(base_payload)
@@ -699,6 +729,7 @@ def _build_controlled_param_source_pair(
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
                     optional_entry_filter_policy=optional_entry_filter_policy,
+                    shared_param_overrides=shared_param_overrides,
                 )
                 quality_payload[field] = _rewrite_param_mapping(
                     raw_mapping,
@@ -709,6 +740,7 @@ def _build_controlled_param_source_pair(
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
                     optional_entry_filter_policy=optional_entry_filter_policy,
+                    shared_param_overrides=shared_param_overrides,
                 )
         ensemble_mapping = base_payload.get("params_ensemble_by_effective_date")
         if not isinstance(ensemble_mapping, dict) or not ensemble_mapping:
@@ -722,6 +754,7 @@ def _build_controlled_param_source_pair(
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
             optional_entry_filter_policy=optional_entry_filter_policy,
+            shared_param_overrides=shared_param_overrides,
         )
         quality_payload["params_ensemble_by_effective_date"] = _rewrite_ensemble_mapping(
             ensemble_mapping,
@@ -732,6 +765,7 @@ def _build_controlled_param_source_pair(
             fixed_risk=fixed_risk,
             max_position_cap_pct=max_position_cap_pct,
             optional_entry_filter_policy=optional_entry_filter_policy,
+            shared_param_overrides=shared_param_overrides,
         )
         _assert_controlled_ensemble_pair(no_filter_payload, quality_payload, comparison_mode=comparison_mode)
         policy = get_active_param_ensemble_policy(base_payload)
@@ -750,6 +784,7 @@ def _build_controlled_param_source_pair(
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
                     optional_entry_filter_policy=optional_entry_filter_policy,
+                    shared_param_overrides=shared_param_overrides,
                 )
                 quality_payload[field] = _rewrite_param_mapping(
                     raw_mapping,
@@ -760,6 +795,7 @@ def _build_controlled_param_source_pair(
                     fixed_risk=fixed_risk,
                     max_position_cap_pct=max_position_cap_pct,
                     optional_entry_filter_policy=optional_entry_filter_policy,
+                    shared_param_overrides=shared_param_overrides,
                 )
         if not updated_any:
             raise ValueError("rolling OOS param schedule 缺少 params_by_effective_date / params_by_oos_year")
@@ -2573,6 +2609,7 @@ def run_comparison(
     comparison_start_date=None,
     comparison_end_date=None,
     quiet=False,
+    shared_param_overrides=None,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -2716,6 +2753,7 @@ def run_comparison(
         ),
         comparison_mode=comparison_mode,
         optional_entry_filter_policy=optional_entry_filter_policy,
+        shared_param_overrides=shared_param_overrides,
     )
 
     is_rolling_source = param_source_kind in {
@@ -2903,6 +2941,7 @@ def run_comparison(
             if optional_entry_filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
             else None
         ),
+        "shared_param_overrides": dict(shared_param_overrides or {}),
         "score_source": score_source,
         "dataset": dataset,
         "data_dir": str(data_dir),

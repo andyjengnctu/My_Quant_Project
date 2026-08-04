@@ -1,4 +1,4 @@
-"""CLI-only A/B/C/F gate for replacing optional entry filters with the binary DL filter."""
+"""CLI-only rule-ablation matrix for the binary breakout-quality DL filter."""
 
 from __future__ import annotations
 
@@ -46,61 +46,62 @@ from tools.filters.breakout_quality.strategy_compare import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-SCENARIO_SPECS: dict[str, dict[str, Any]] = {
-    "A": {
-        "label": "目前 optional filters＋原 buy-sort",
+RULE_LEVEL_SPECS: dict[str, dict[str, Any]] = {
+    "0": {
+        "label": "原正式規則",
         "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
-        "dl_filter_enabled": False,
+        "shared_param_overrides": {},
     },
-    "B": {
-        "label": "目前 optional filters＋Binary DL filter＋原 buy-sort",
-        "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
-        "dl_filter_enabled": True,
-    },
-    "C": {
-        "label": "Optional entry filters 全關＋原 buy-sort",
+    "1": {
+        "label": "Optional entry filters 全關",
         "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
-        "dl_filter_enabled": False,
+        "shared_param_overrides": {},
     },
-    "F": {
-        "label": "Optional entry filters 全關＋Binary DL filter＋原 buy-sort",
+    "2": {
+        "label": "再關歷史門檻",
         "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
-        "dl_filter_enabled": True,
+        "shared_param_overrides": {"use_history_threshold": False},
+    },
+    "3": {
+        "label": "再關 Re-entry",
+        "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+        "shared_param_overrides": {
+            "use_history_threshold": False,
+            "use_breakout_reclaim_reentry": False,
+        },
+    },
+    "4": {
+        "label": "再關 KC 出場",
+        "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+        "shared_param_overrides": {
+            "use_history_threshold": False,
+            "use_breakout_reclaim_reentry": False,
+            "use_kc": False,
+        },
     },
 }
 
-PAIR_SPECS = (
-    ("AB", "A", "B", OPTIONAL_ENTRY_FILTER_POLICY_CURRENT),
-    ("CF", "C", "F", OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF),
-)
+SCENARIO_SPECS: dict[str, dict[str, Any]] = {}
+for _level_id, _level_spec in RULE_LEVEL_SPECS.items():
+    for _side, _enabled in (("A", False), ("B", True)):
+        _scenario_id = f"{_side}{_level_id}"
+        SCENARIO_SPECS[_scenario_id] = {
+            "level": _level_id,
+            "label": f"{_level_spec['label']}＋DL {'開' if _enabled else '關'}",
+            "optional_entry_filter_policy": _level_spec[
+                "optional_entry_filter_policy"
+            ],
+            "shared_param_overrides": dict(
+                _level_spec["shared_param_overrides"]
+            ),
+            "dl_filter_enabled": _enabled,
+        }
 
-_PORTFOLIO_METRICS = (
-    ("淨總報酬", "total_return_pct", "%"),
-    ("最大回撤", "max_drawdown_pct", "%"),
-    ("報酬／最大回撤", "return_over_max_drawdown", ""),
-    ("年化報酬", "annual_return_pct", "%"),
-    ("Log R²", "log_r_squared", ""),
-    ("月勝率", "monthly_win_rate_pct", "%"),
-    ("交易數", "trade_count", ""),
-    ("勝率", "win_rate_pct", "%"),
-    ("Payoff", "payoff_ratio", ""),
-    ("EV", "expected_value_r", " R"),
-    ("平均曝險", "avg_exposure_pct", "%"),
-    ("保留買單成交率", "reserved_buy_fill_rate_pct", "%"),
-    ("平均每日可掛單候選", "avg_orderable_candidates", ""),
-    ("候選供給不足日", "candidate_supply_gap_days", " 日"),
-    ("每日結束未滿倉日", "underfilled_end_days", " 日"),
-    ("每日結束持股缺口", "end_position_gap_slot_days", " 格日"),
-)
-
-_COMPARISON_SPECS = (
-    ("B−A：DL 疊加目前 filters", "B_minus_A"),
-    ("F−C：DL 取代 optional filters", "F_minus_C"),
-    ("C−A：只移除 optional filters", "C_minus_A"),
-    ("F−A：DL-only quality gate 對目前策略", "F_minus_A"),
-    ("DL replacement interaction：(F−C)−(B−A)", "replacement_interaction"),
+PAIR_SPECS = tuple(
+    (level_id, f"A{level_id}", f"B{level_id}")
+    for level_id in RULE_LEVEL_SPECS
 )
 
 _ATTRIBUTION_SPECS = (
@@ -116,13 +117,19 @@ _ATTRIBUTION_SPECS = (
 
 
 def build_dl_filter_gate_scenario_specs() -> dict[str, dict[str, Any]]:
-    return {key: dict(value) for key, value in SCENARIO_SPECS.items()}
+    return {
+        key: {
+            **value,
+            "shared_param_overrides": dict(value["shared_param_overrides"]),
+        }
+        for key, value in SCENARIO_SPECS.items()
+    }
 
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "固定正式rolling params執行A/B/C/F Binary DL filter replacement gate；"
+            "固定正式rolling params執行A0/B0至A4/B4 Binary DL rule-ablation gate；"
             "不重訓模型、不調threshold、不改原buy-sort。"
         )
     )
@@ -132,8 +139,12 @@ def _parse_args(argv=None):
         default=BREAKOUT_QUALITY_STRATEGY_DATASET,
     )
     parser.add_argument("--filter-id", default=BREAKOUT_QUALITY_DEFAULT_FILTER_ID)
-    parser.add_argument("--model-architecture", default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    parser.add_argument("--experiment-profile", default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE)
+    parser.add_argument(
+        "--model-architecture", default=BREAKOUT_QUALITY_MODEL_ARCHITECTURE
+    )
+    parser.add_argument(
+        "--experiment-profile", default=BREAKOUT_QUALITY_EXPERIMENT_PROFILE
+    )
     parser.add_argument("--params", default=None)
     parser.add_argument(
         "--param-policy",
@@ -189,7 +200,10 @@ def _discover_matching_binary_manifests(
     candidates.extend(sorted(architecture_dir.glob("*/manifest.json")))
     matched: list[Path] = []
     for candidate in candidates:
-        if not candidate.is_file() or candidate.resolve() == canonical_manifest_path.resolve():
+        if (
+            not candidate.is_file()
+            or candidate.resolve() == canonical_manifest_path.resolve()
+        ):
             continue
         try:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
@@ -199,9 +213,13 @@ def _discover_matching_binary_manifests(
             continue
         if str(payload.get("filter_id") or "").strip() != str(filter_id).strip():
             continue
-        if str(payload.get("model_architecture") or "").strip() != str(model_architecture).strip():
+        if str(payload.get("model_architecture") or "").strip() != str(
+            model_architecture
+        ).strip():
             continue
-        if str(payload.get("experiment_profile") or "").strip() != str(experiment_profile).strip():
+        if str(payload.get("experiment_profile") or "").strip() != str(
+            experiment_profile
+        ).strip():
             continue
         matched.append(candidate)
     return matched
@@ -269,10 +287,7 @@ def _validate_binary_runtime_preflight(*, project_root: Path, args) -> dict[str,
             f"python apps/breakout_quality.py export-scores --filter-id {args.filter_id} "
             f"--experiment-profile {args.experiment_profile} --scope forward_oos"
         )
-    return {
-        "paths": paths,
-        "present": present,
-    }
+    return {"paths": paths, "present": present}
 
 
 def _numeric_delta(right: dict[str, Any], left: dict[str, Any]) -> dict[str, float]:
@@ -292,16 +307,13 @@ def _numeric_delta(right: dict[str, Any], left: dict[str, Any]) -> dict[str, flo
     return output
 
 
-def _delta_of_deltas(
-    right_delta: dict[str, float], left_delta: dict[str, float]
-) -> dict[str, float]:
-    return {
-        key: float(right_delta[key]) - float(left_delta[key])
-        for key in sorted(set(right_delta) & set(left_delta))
-    }
-
-
-def _fmt(value: Any, *, digits: int = 2, unit: str = "", signed: bool = False) -> str:
+def _fmt(
+    value: Any,
+    *,
+    digits: int = 2,
+    unit: str = "",
+    signed: bool = False,
+) -> str:
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -316,7 +328,9 @@ def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"讀取{label}失敗: {path}｜{type(exc).__name__}: {exc}") from exc
+        raise RuntimeError(
+            f"讀取{label}失敗: {path}｜{type(exc).__name__}: {exc}"
+        ) from exc
     if not isinstance(payload, dict):
         raise ValueError(f"{label}根節點必須是object: {path}")
     return payload
@@ -325,13 +339,13 @@ def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
 def _run_pair(
     *,
     project_root: Path,
-    pair_id: str,
+    level_id: str,
     output_dir: Path,
-    optional_entry_filter_policy: str,
     args,
 ) -> dict[str, Any]:
-    label = "current" if optional_entry_filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_CURRENT else "all-off"
-    print(f"[{pair_id}] 執行 {label} optional filters × Binary DL hard filter")
+    spec = RULE_LEVEL_SPECS[level_id]
+    pair_label = f"A{level_id}/B{level_id}"
+    print(f"[{pair_label}] 執行 {spec['label']} × Binary DL hard filter")
     buffer = io.StringIO()
     try:
         with redirect_stdout(buffer):
@@ -346,7 +360,10 @@ def _run_pair(
                 max_position_cap_pct=args.max_position_cap_pct,
                 comparison_mode=COMPARISON_MODE_HARD_FILTER,
                 ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
-                optional_entry_filter_policy=optional_entry_filter_policy,
+                optional_entry_filter_policy=spec[
+                    "optional_entry_filter_policy"
+                ],
+                shared_param_overrides=spec["shared_param_overrides"],
                 filter_id=args.filter_id,
                 score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
                 model_architecture=args.model_architecture,
@@ -360,12 +377,13 @@ def _run_pair(
         captured = buffer.getvalue().strip()
         if captured:
             print(captured)
+        _ = exc
         raise
     attribution = _read_json_object(
         output_dir / "trade_attribution.json",
-        label=f"{pair_id} trade attribution",
+        label=f"{pair_label} trade attribution",
     )
-    print(f"[{pair_id}] 完成")
+    print(f"[{pair_label}] 完成")
     return {"comparison": comparison, "attribution": attribution}
 
 
@@ -375,9 +393,9 @@ def _scenario_from_pair(payload: dict[str, Any], *, active: bool) -> dict[str, A
     return dict(comparison.get(scenario_key) or {})
 
 
-def _assert_pair_compatibility(ab: dict[str, Any], cf: dict[str, Any]) -> None:
-    left = dict((ab.get("comparison") or {}).get("metadata") or {})
-    right = dict((cf.get("comparison") or {}).get("metadata") or {})
+def _assert_pair_matrix_compatibility(
+    pair_payloads: dict[str, dict[str, Any]],
+) -> None:
     shared_fields = (
         "comparison_mode",
         "score_source",
@@ -403,185 +421,301 @@ def _assert_pair_compatibility(ab: dict[str, Any], cf: dict[str, Any]) -> None:
         "runtime_manifest_path",
         "runtime_score_path",
     )
-    mismatched = [field for field in shared_fields if left.get(field) != right.get(field)]
-    if mismatched:
-        raise ValueError(f"A/B與C/F Gate共同契約不一致: {mismatched}")
-    if left.get("optional_entry_filter_policy") != OPTIONAL_ENTRY_FILTER_POLICY_CURRENT:
-        raise ValueError("A/B pair必須沿用目前optional entry filters")
-    if right.get("optional_entry_filter_policy") != OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF:
-        raise ValueError("C/F pair必須關閉五個optional entry filters")
-    forced = dict(right.get("optional_entry_filter_forced_values") or {})
-    expected_forced = {field: False for field in OPTIONAL_ENTRY_FILTER_FIELDS}
-    if forced != expected_forced:
-        raise ValueError(f"C/F optional filter override不完整: {forced}")
+    first_level = next(iter(RULE_LEVEL_SPECS))
+    reference = dict(
+        (pair_payloads[first_level].get("comparison") or {}).get("metadata") or {}
+    )
+    for level_id, level_spec in RULE_LEVEL_SPECS.items():
+        metadata = dict(
+            (pair_payloads[level_id].get("comparison") or {}).get("metadata") or {}
+        )
+        mismatched = [
+            field for field in shared_fields if metadata.get(field) != reference.get(field)
+        ]
+        if mismatched:
+            raise ValueError(
+                f"A{level_id}/B{level_id}與共同Gate契約不一致: {mismatched}"
+            )
+        expected_policy = level_spec["optional_entry_filter_policy"]
+        if metadata.get("optional_entry_filter_policy") != expected_policy:
+            raise ValueError(
+                f"A{level_id}/B{level_id} optional filter policy不一致"
+            )
+        expected_overrides = dict(level_spec["shared_param_overrides"])
+        if dict(metadata.get("shared_param_overrides") or {}) != expected_overrides:
+            raise ValueError(
+                f"A{level_id}/B{level_id} shared override不一致: "
+                f"{metadata.get('shared_param_overrides')}"
+            )
+        forced = metadata.get("optional_entry_filter_forced_values")
+        if expected_policy == OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF:
+            expected_forced = {field: False for field in OPTIONAL_ENTRY_FILTER_FIELDS}
+            if dict(forced or {}) != expected_forced:
+                raise ValueError(
+                    f"A{level_id}/B{level_id} optional filter override不完整: {forced}"
+                )
+        elif forced is not None:
+            raise ValueError(f"A{level_id}/B{level_id}不應強制關閉optional filters")
 
 
-def _scenario_table(
+def _state_text(level_id: str, field_name: str) -> str:
+    spec = RULE_LEVEL_SPECS[level_id]
+    if field_name == "optional":
+        return (
+            "目前"
+            if spec["optional_entry_filter_policy"]
+            == OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+            else "全關"
+        )
+    override_key = {
+        "history": "use_history_threshold",
+        "reentry": "use_breakout_reclaim_reentry",
+        "kc": "use_kc",
+    }[field_name]
+    return "關" if spec["shared_param_overrides"].get(override_key) is False else "依原參數"
+
+
+def _main_performance_rows(
     scenarios: dict[str, dict[str, Any]],
-    specs: tuple[tuple[str, str, str], ...],
+    pair_deltas: dict[str, dict[str, float]],
 ) -> list[tuple[str, ...]]:
     rows = []
-    for label, key, unit in specs:
-        digits = (
-            4
-            if key == "log_r_squared"
-            else 0
-            if key in {
-                "trade_count",
-                "candidate_supply_gap_days",
-                "underfilled_end_days",
-                "end_position_gap_slot_days",
-            }
-            else 2
-        )
+    for level_id in RULE_LEVEL_SPECS:
+        left = scenarios[f"A{level_id}"]
+        right = scenarios[f"B{level_id}"]
+        delta = pair_deltas[f"B{level_id}_minus_A{level_id}"]
         rows.append(
             (
-                label,
-                *(
-                    _fmt(scenarios[scenario].get(key), digits=digits, unit=unit)
-                    for scenario in ("A", "B", "C", "F")
-                ),
+                level_id,
+                _fmt(left.get("total_return_pct"), unit="%"),
+                _fmt(right.get("total_return_pct"), unit="%"),
+                _fmt(delta.get("total_return_pct"), unit="pp", signed=True),
+                _fmt(left.get("max_drawdown_pct"), unit="%"),
+                _fmt(right.get("max_drawdown_pct"), unit="%"),
+                _fmt(delta.get("max_drawdown_pct"), unit="pp", signed=True),
+                _fmt(left.get("return_over_max_drawdown")),
+                _fmt(right.get("return_over_max_drawdown")),
+                _fmt(delta.get("return_over_max_drawdown"), signed=True),
             )
         )
     return rows
 
 
-def _comparison_rows(comparisons: dict[str, dict[str, float]]) -> list[tuple[str, ...]]:
+def _trading_capital_rows(
+    scenarios: dict[str, dict[str, Any]],
+    pair_deltas: dict[str, dict[str, float]],
+) -> list[tuple[str, ...]]:
     rows = []
-    for label, key in _COMPARISON_SPECS:
-        delta = comparisons[key]
+    for level_id in RULE_LEVEL_SPECS:
+        left = scenarios[f"A{level_id}"]
+        right = scenarios[f"B{level_id}"]
+        delta = pair_deltas[f"B{level_id}_minus_A{level_id}"]
         rows.append(
             (
-                label,
-                _fmt(delta.get("total_return_pct"), digits=2, unit="pp", signed=True),
-                _fmt(delta.get("max_drawdown_pct"), digits=2, unit="pp", signed=True),
-                _fmt(delta.get("return_over_max_drawdown"), digits=2, signed=True),
-                _fmt(delta.get("expected_value_r"), digits=2, unit=" R", signed=True),
-                _fmt(delta.get("avg_exposure_pct"), digits=2, unit="pp", signed=True),
+                level_id,
+                _fmt(left.get("expected_value_r"), unit=" R"),
+                _fmt(right.get("expected_value_r"), unit=" R"),
+                _fmt(delta.get("expected_value_r"), unit=" R", signed=True),
+                _fmt(left.get("avg_exposure_pct"), unit="%"),
+                _fmt(right.get("avg_exposure_pct"), unit="%"),
+                _fmt(delta.get("avg_exposure_pct"), unit="pp", signed=True),
+                _fmt(left.get("trade_count"), digits=0),
+                _fmt(right.get("trade_count"), digits=0),
                 _fmt(delta.get("trade_count"), digits=0, signed=True),
             )
         )
     return rows
 
 
-def _attribution_rows(pair_effects: dict[str, dict[str, Any]]) -> list[tuple[str, ...]]:
+def _rule_ablation_rows(
+    scenarios: dict[str, dict[str, Any]],
+) -> list[tuple[str, ...]]:
+    baseline = scenarios["A0"]
     rows = []
-    for label, key, unit in _ATTRIBUTION_SPECS:
-        digits = 0 if key.endswith("_count") else 2
+    for level_id in ("1", "2", "3", "4"):
+        delta = _numeric_delta(scenarios[f"A{level_id}"], baseline)
         rows.append(
             (
-                label,
-                _fmt(pair_effects["B_minus_A"].get(key), digits=digits, unit=unit),
-                _fmt(pair_effects["F_minus_C"].get(key), digits=digits, unit=unit),
+                f"A{level_id}−A0",
+                RULE_LEVEL_SPECS[level_id]["label"],
+                _fmt(delta.get("total_return_pct"), unit="pp", signed=True),
+                _fmt(delta.get("max_drawdown_pct"), unit="pp", signed=True),
+                _fmt(delta.get("return_over_max_drawdown"), signed=True),
+                _fmt(delta.get("expected_value_r"), unit=" R", signed=True),
+                _fmt(delta.get("avg_exposure_pct"), unit="pp", signed=True),
+                _fmt(delta.get("trade_count"), digits=0, signed=True),
+            )
+        )
+    return rows
+
+
+def _attribution_rows(
+    pair_effects: dict[str, dict[str, Any]],
+) -> list[tuple[str, ...]]:
+    rows = []
+    for level_id in RULE_LEVEL_SPECS:
+        effect = pair_effects[f"B{level_id}_minus_A{level_id}"]
+        rows.append(
+            (
+                f"B{level_id}−A{level_id}",
+                *(
+                    _fmt(
+                        effect.get(key),
+                        digits=0 if key.endswith("_count") else 2,
+                        unit=unit,
+                    )
+                    for _label, key, unit in _ATTRIBUTION_SPECS
+                ),
             )
         )
     return rows
 
 
 def _yearly_rows(pair_payloads: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    ab_rows = list((pair_payloads["AB"].get("comparison") or {}).get("yearly") or [])
-    cf_rows = list((pair_payloads["CF"].get("comparison") or {}).get("yearly") or [])
-    ab_by_year = {int(row["year"]): dict(row) for row in ab_rows}
-    cf_by_year = {int(row["year"]): dict(row) for row in cf_rows}
-    years = sorted(set(ab_by_year) | set(cf_by_year))
-    output = []
-    for year in years:
-        ab = ab_by_year.get(year, {})
-        cf = cf_by_year.get(year, {})
-        output.append(
-            {
-                "year": year,
-                "A_return_pct": ab.get("no_filter_return_pct"),
-                "B_return_pct": ab.get("quality_filter_return_pct"),
-                "C_return_pct": cf.get("no_filter_return_pct"),
-                "F_return_pct": cf.get("quality_filter_return_pct"),
-                "F_minus_A_pct": (
-                    float(cf["quality_filter_return_pct"])
-                    - float(ab["no_filter_return_pct"])
-                    if "quality_filter_return_pct" in cf and "no_filter_return_pct" in ab
-                    else None
-                ),
-                "is_full_year": bool(ab.get("is_full_year", cf.get("is_full_year", False))),
-            }
+    by_level: dict[str, dict[int, dict[str, Any]]] = {}
+    years: set[int] = set()
+    for level_id in RULE_LEVEL_SPECS:
+        rows = list(
+            (pair_payloads[level_id].get("comparison") or {}).get("yearly") or []
         )
+        mapping = {int(row["year"]): dict(row) for row in rows}
+        by_level[level_id] = mapping
+        years.update(mapping)
+    output = []
+    for year in sorted(years):
+        row: dict[str, Any] = {"year": year, "is_full_year": True}
+        for level_id in RULE_LEVEL_SPECS:
+            source = by_level[level_id].get(year, {})
+            left_value = source.get("no_filter_return_pct")
+            right_value = source.get("quality_filter_return_pct")
+            row[f"A{level_id}_return_pct"] = left_value
+            row[f"B{level_id}_return_pct"] = right_value
+            row[f"B{level_id}_minus_A{level_id}_pct"] = (
+                float(right_value) - float(left_value)
+                if left_value is not None and right_value is not None
+                else None
+            )
+            row["is_full_year"] = bool(
+                row["is_full_year"] and source.get("is_full_year", False)
+            )
+        output.append(row)
     return output
 
 
 def _render_console(result: dict[str, Any]) -> str:
     metadata = result["metadata"]
     scenarios = result["scenarios"]
-    comparisons = result["comparisons"]
-    yearly = result["yearly"]
+    pair_deltas = result["pair_deltas"]
     lines = [
-        render_title("Binary DL Filter Replacement A／B／C／F Gate"),
+        render_title("Binary DL Filter Rule Ablation A0／B0 ～ A4／B4 Gate"),
         render_key_values(
             (
                 (
                     "期間",
-                    f"{metadata['comparison_period']['start']} ～ {metadata['comparison_period']['end']}",
+                    f"{metadata['comparison_period']['start']} ～ "
+                    f"{metadata['comparison_period']['end']}",
                 ),
                 ("參數", metadata["param_policy"]),
                 (
                     "Binary model",
-                    f"{metadata['model_architecture']} / {metadata['experiment_profile']}",
+                    f"{metadata['model_architecture']} / "
+                    f"{metadata['experiment_profile']}",
                 ),
                 ("Threshold", _fmt(metadata["threshold"], digits=2)),
                 ("Score source", SCORE_SOURCE_CANONICAL_RUNTIME),
-                ("Buy sort", "原 position-aware buy-sort（四組相同）"),
+                ("Buy sort", "原 position-aware buy-sort（十組相同）"),
             )
         ),
-        render_section("情境"),
+        render_section("情境矩陣"),
         render_table(
-            ["組別", "Optional filters", "Binary DL filter", "Ranking"],
+            [
+                "層級",
+                "A組",
+                "B組",
+                "Optional filters",
+                "歷史門檻",
+                "Re-entry",
+                "KC出場",
+            ],
             [
                 (
-                    key,
-                    "目前"
-                    if spec["optional_entry_filter_policy"]
-                    == OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
-                    else "全關",
-                    "開" if spec["dl_filter_enabled"] else "關",
-                    "原 buy-sort",
+                    level_id,
+                    f"A{level_id}：DL關",
+                    f"B{level_id}：DL開",
+                    _state_text(level_id, "optional"),
+                    _state_text(level_id, "history"),
+                    _state_text(level_id, "reentry"),
+                    _state_text(level_id, "kc"),
                 )
-                for key, spec in SCENARIO_SPECS.items()
+                for level_id in RULE_LEVEL_SPECS
             ],
         ),
-        render_section("投組報酬、風險與資金使用", number=1),
+        render_section("每層投組成效與DL增量", number=1),
         render_table(
-            ["指標", "A", "B", "C", "F"],
-            _scenario_table(scenarios, _PORTFOLIO_METRICS),
+            [
+                "層級",
+                "A報酬",
+                "B報酬",
+                "Δ報酬",
+                "A MDD",
+                "B MDD",
+                "ΔMDD",
+                "A RoMD",
+                "B RoMD",
+                "ΔRoMD",
+            ],
+            _main_performance_rows(scenarios, pair_deltas),
         ),
-        render_section("主要差異", number=2),
+        render_section("每層交易品質與資金使用", number=2),
         render_table(
-            ["比較", "總報酬", "MDD", "RoMD", "EV", "平均曝險", "交易數"],
-            _comparison_rows(comparisons),
+            [
+                "層級",
+                "A EV",
+                "B EV",
+                "ΔEV",
+                "A曝險",
+                "B曝險",
+                "Δ曝險",
+                "A交易",
+                "B交易",
+                "Δ交易",
+            ],
+            _trading_capital_rows(scenarios, pair_deltas),
         ),
-        render_section("DL Filter交易歸因", number=3),
+        render_section("逐步移除規則的影響（只看DL關閉的A系列）", number=3),
         render_table(
-            ["指標", "B−A 疊加", "F−C 替代"],
+            ["比較", "新增關閉", "報酬", "MDD", "RoMD", "EV", "曝險", "交易數"],
+            _rule_ablation_rows(scenarios),
+        ),
+        render_section("DL交易歸因（每層B−A）", number=4),
+        render_table(
+            ["比較", *(_label for _label, _key, _unit in _ATTRIBUTION_SPECS)],
             _attribution_rows(result["pair_effects"]),
         ),
-        render_section("年度報酬", number=4),
+        render_section("年度DL增量（B−A）", number=5),
         render_table(
-            ["年度", "A", "B", "C", "F", "F−A", "完整年度"],
+            ["年度", "B0−A0", "B1−A1", "B2−A2", "B3−A3", "B4−A4", "完整年度"],
             [
                 (
                     str(row["year"]),
-                    _fmt(row.get("A_return_pct"), digits=2, unit="%"),
-                    _fmt(row.get("B_return_pct"), digits=2, unit="%"),
-                    _fmt(row.get("C_return_pct"), digits=2, unit="%"),
-                    _fmt(row.get("F_return_pct"), digits=2, unit="%"),
-                    _fmt(row.get("F_minus_A_pct"), digits=2, unit="pp", signed=True),
+                    *(
+                        _fmt(
+                            row.get(f"B{level_id}_minus_A{level_id}_pct"),
+                            unit="pp",
+                            signed=True,
+                        )
+                        for level_id in RULE_LEVEL_SPECS
+                    ),
                     "是" if row.get("is_full_year") else "否",
                 )
-                for row in yearly
+                for row in result["yearly"]
             ],
         ),
-        render_section("判讀契約", number=5),
-        "- F−C回答Binary DL在沒有規則品質filters時，能否單獨提供有效買入確認。",
-        "- B−A回答Binary DL疊加目前filters後是否有效；F−A才是DL-only replacement的正式比較。",
-        "- interaction=(F−C)−(B−A)只判斷替代是否優於疊加，不可取代F相對A的絕對績效。",
-        "- 四組沿用原position-aware buy-sort；不使用continuous Score、R3、Future Target或optimizer。",
+        render_section("判讀契約", number=6),
+        "- 每一層只以同層 Bn−An 判斷Binary DL增量，避免把規則消融與DL效果混在一起。",
+        "- A1−A0至A4−A0只判斷逐步關閉規則本身的影響；不代表DL有效。",
+        "- A4／B4只關KC出場，不關半倉停利、ATR初始停損、trailing、fixed-risk sizing或原buy-sort。",
+        "- 十組不使用continuous Score、R3、Future Target或optimizer；threshold固定為OOS前0.5。",
     ]
     return "\n".join(lines)
 
@@ -589,61 +723,83 @@ def _render_console(result: dict[str, Any]) -> str:
 def _render_markdown(result: dict[str, Any]) -> str:
     metadata = result["metadata"]
     scenarios = result["scenarios"]
-    comparisons = result["comparisons"]
+    pair_deltas = result["pair_deltas"]
     lines = [
-        "# Binary DL Filter Replacement A／B／C／F Gate",
+        "# Binary DL Filter Rule Ablation A0／B0 ～ A4／B4 Gate",
         "",
-        f"- 期間：`{metadata['comparison_period']['start']}` ～ `{metadata['comparison_period']['end']}`",
+        f"- 期間：`{metadata['comparison_period']['start']}` ～ "
+        f"`{metadata['comparison_period']['end']}`",
         f"- 參數 policy：`{metadata['param_policy']}`",
-        f"- Binary model：`{metadata['model_architecture']} / {metadata['experiment_profile']}`",
+        f"- Binary model：`{metadata['model_architecture']} / "
+        f"{metadata['experiment_profile']}`",
         f"- Threshold：`{metadata['threshold']}`",
         "- Score source：`canonical_runtime`",
-        "- Ranking：四組均使用原 position-aware buy-sort。",
+        "- Ranking：十組均使用原 position-aware buy-sort。",
         "- Future Target：未進入本Gate。",
         "",
-        "## 情境",
+        "## 情境矩陣",
         "",
-        "| 組別 | Optional filters | Binary DL filter | Ranking |",
-        "|---|---|---|---|",
+        "| 層級 | A組 | B組 | Optional filters | 歷史門檻 | Re-entry | KC出場 |",
+        "|---:|---|---|---|---|---|---|",
     ]
-    for key, spec in SCENARIO_SPECS.items():
-        filter_text = (
-            "目前"
-            if spec["optional_entry_filter_policy"] == OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
-            else "全關"
-        )
+    for level_id in RULE_LEVEL_SPECS:
         lines.append(
-            f"| {key} | {filter_text} | {'開' if spec['dl_filter_enabled'] else '關'} | 原 buy-sort |"
+            "| "
+            + " | ".join(
+                (
+                    level_id,
+                    f"A{level_id}：DL關",
+                    f"B{level_id}：DL開",
+                    _state_text(level_id, "optional"),
+                    _state_text(level_id, "history"),
+                    _state_text(level_id, "reentry"),
+                    _state_text(level_id, "kc"),
+                )
+            )
+            + " |"
         )
     lines.extend(
         [
             "",
-            "## 投組報酬、風險與資金使用",
+            "## 每層投組成效與DL增量",
             "",
-            "| 指標 | A | B | C | F |",
-            "|---|---:|---:|---:|---:|",
+            "| 層級 | A報酬 | B報酬 | Δ報酬 | A MDD | B MDD | ΔMDD | A RoMD | B RoMD | ΔRoMD |",
+            "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
-    for row in _scenario_table(scenarios, _PORTFOLIO_METRICS):
+    for row in _main_performance_rows(scenarios, pair_deltas):
         lines.append("| " + " | ".join(row) + " |")
     lines.extend(
         [
             "",
-            "## 主要差異",
+            "## 每層交易品質與資金使用",
             "",
-            "| 比較 | 總報酬 | MDD | RoMD | EV | 平均曝險 | 交易數 |",
-            "|---|---:|---:|---:|---:|---:|---:|",
+            "| 層級 | A EV | B EV | ΔEV | A曝險 | B曝險 | Δ曝險 | A交易 | B交易 | Δ交易 |",
+            "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
-    for row in _comparison_rows(comparisons):
+    for row in _trading_capital_rows(scenarios, pair_deltas):
         lines.append("| " + " | ".join(row) + " |")
     lines.extend(
         [
             "",
-            "## DL Filter交易歸因",
+            "## 逐步移除規則的影響（只看DL關閉的A系列）",
             "",
-            "| 指標 | B−A 疊加 | F−C 替代 |",
-            "|---|---:|---:|",
+            "| 比較 | 新增關閉 | 報酬 | MDD | RoMD | EV | 曝險 | 交易數 |",
+            "|---|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in _rule_ablation_rows(scenarios):
+        lines.append("| " + " | ".join(row) + " |")
+    lines.extend(
+        [
+            "",
+            "## DL交易歸因（每層B−A）",
+            "",
+            "| 比較 | "
+            + " | ".join(label for label, _key, _unit in _ATTRIBUTION_SPECS)
+            + " |",
+            "|---|" + "---:|" * len(_ATTRIBUTION_SPECS),
         ]
     )
     for row in _attribution_rows(result["pair_effects"]):
@@ -651,9 +807,9 @@ def _render_markdown(result: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## 年度報酬",
+            "## 年度DL增量（B−A）",
             "",
-            "| 年度 | A | B | C | F | F−A | 完整年度 |",
+            "| 年度 | B0−A0 | B1−A1 | B2−A2 | B3−A3 | B4−A4 | 完整年度 |",
             "|---:|---:|---:|---:|---:|---:|:---:|",
         ]
     )
@@ -663,11 +819,14 @@ def _render_markdown(result: dict[str, Any]) -> str:
             + " | ".join(
                 (
                     str(row["year"]),
-                    _fmt(row.get("A_return_pct"), digits=2, unit="%"),
-                    _fmt(row.get("B_return_pct"), digits=2, unit="%"),
-                    _fmt(row.get("C_return_pct"), digits=2, unit="%"),
-                    _fmt(row.get("F_return_pct"), digits=2, unit="%"),
-                    _fmt(row.get("F_minus_A_pct"), digits=2, unit="pp", signed=True),
+                    *(
+                        _fmt(
+                            row.get(f"B{level_id}_minus_A{level_id}_pct"),
+                            unit="pp",
+                            signed=True,
+                        )
+                        for level_id in RULE_LEVEL_SPECS
+                    ),
                     "是" if row.get("is_full_year") else "否",
                 )
             )
@@ -678,10 +837,10 @@ def _render_markdown(result: dict[str, Any]) -> str:
             "",
             "## 判讀契約",
             "",
-            "- `F−C`回答Binary DL在沒有規則品質filters時，能否單獨提供有效買入確認。",
-            "- `B−A`回答Binary DL疊加目前filters後是否有效；`F−A`才是DL-only replacement的正式比較。",
-            "- `interaction=(F−C)−(B−A)`只判斷替代是否優於疊加，不可取代F相對A的絕對績效。",
-            "- 四組沿用原position-aware buy-sort；不使用continuous Score、R3、Future Target或optimizer。",
+            "- 每一層只以同層 `Bn−An` 判斷Binary DL增量，避免把規則消融與DL效果混在一起。",
+            "- `A1−A0`至`A4−A0`只判斷逐步關閉規則本身的影響；不代表DL有效。",
+            "- `A4／B4`只關KC出場，不關半倉停利、ATR初始停損、trailing、fixed-risk sizing或原buy-sort。",
+            "- 十組不使用continuous Score、R3、Future Target或optimizer；threshold固定為OOS前0.5。",
             "",
         ]
     )
@@ -697,10 +856,13 @@ def run_dl_filter_gate(*, args, project_root=PROJECT_ROOT) -> dict[str, Any]:
     _validate_binary_runtime_preflight(project_root=root, args=args)
     output_dir = (
         resolve_filter_model_output_dir(
-            str(root), args.filter_id, args.model_architecture, args.experiment_profile
+            str(root),
+            args.filter_id,
+            args.model_architecture,
+            args.experiment_profile,
         )
         / (
-            "strategy_dl_filter_gate_"
+            "strategy_dl_filter_rule_ablation_gate_"
             f"{str(args.param_policy).replace('-', '_')}_canonical_runtime"
         )
     )
@@ -708,58 +870,78 @@ def run_dl_filter_gate(*, args, project_root=PROJECT_ROOT) -> dict[str, Any]:
 
     pair_payloads: dict[str, dict[str, Any]] = {}
     pair_dirs: dict[str, Path] = {}
-    for pair_id, _left, _right, filter_policy in PAIR_SPECS:
-        pair_dir = output_dir / f"pair_{pair_id.lower()}"
-        pair_dirs[pair_id] = pair_dir
-        pair_payloads[pair_id] = _run_pair(
+    for level_id, left_id, right_id in PAIR_SPECS:
+        pair_dir = output_dir / f"pair_{left_id.lower()}_{right_id.lower()}"
+        pair_dirs[level_id] = pair_dir
+        pair_payloads[level_id] = _run_pair(
             project_root=root,
-            pair_id=pair_id,
+            level_id=level_id,
             output_dir=pair_dir,
-            optional_entry_filter_policy=filter_policy,
             args=args,
         )
 
-    _assert_pair_compatibility(pair_payloads["AB"], pair_payloads["CF"])
-    scenarios = {
-        "A": _scenario_from_pair(pair_payloads["AB"], active=False),
-        "B": _scenario_from_pair(pair_payloads["AB"], active=True),
-        "C": _scenario_from_pair(pair_payloads["CF"], active=False),
-        "F": _scenario_from_pair(pair_payloads["CF"], active=True),
-    }
-    comparisons = {
-        "B_minus_A": _numeric_delta(scenarios["B"], scenarios["A"]),
-        "F_minus_C": _numeric_delta(scenarios["F"], scenarios["C"]),
-        "C_minus_A": _numeric_delta(scenarios["C"], scenarios["A"]),
-        "F_minus_A": _numeric_delta(scenarios["F"], scenarios["A"]),
-    }
-    comparisons["replacement_interaction"] = _delta_of_deltas(
-        comparisons["F_minus_C"], comparisons["B_minus_A"]
+    _assert_pair_matrix_compatibility(pair_payloads)
+    scenarios: dict[str, dict[str, Any]] = {}
+    pair_deltas: dict[str, dict[str, float]] = {}
+    pair_effects: dict[str, dict[str, Any]] = {}
+    for level_id, left_id, right_id in PAIR_SPECS:
+        scenarios[left_id] = _scenario_from_pair(
+            pair_payloads[level_id], active=False
+        )
+        scenarios[right_id] = _scenario_from_pair(
+            pair_payloads[level_id], active=True
+        )
+        pair_key = f"{right_id}_minus_{left_id}"
+        pair_deltas[pair_key] = _numeric_delta(
+            scenarios[right_id], scenarios[left_id]
+        )
+        pair_effects[pair_key] = dict(
+            (pair_payloads[level_id].get("attribution") or {}).get(
+                "r_attribution"
+            )
+            or {}
+        )
+
+    first_meta = dict(
+        (pair_payloads["0"].get("comparison") or {}).get("metadata") or {}
     )
-    pair_effects = {
-        "B_minus_A": dict(
-            (pair_payloads["AB"].get("attribution") or {}).get("r_attribution") or {}
-        ),
-        "F_minus_C": dict(
-            (pair_payloads["CF"].get("attribution") or {}).get("r_attribution") or {}
-        ),
+    rule_ablation = {
+        f"A{level_id}_minus_A0": _numeric_delta(
+            scenarios[f"A{level_id}"], scenarios["A0"]
+        )
+        for level_id in ("1", "2", "3", "4")
     }
-    ab_meta = dict((pair_payloads["AB"].get("comparison") or {}).get("metadata") or {})
     result = {
         "schema_version": SCHEMA_VERSION,
         "metadata": {
-            "comparison_period": dict(ab_meta.get("comparison_period") or {}),
+            "comparison_period": dict(first_meta.get("comparison_period") or {}),
             "dataset": args.dataset,
             "filter_id": args.filter_id,
             "model_architecture": args.model_architecture,
             "experiment_profile": args.experiment_profile,
-            "threshold": float(ab_meta.get("threshold", BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD)),
+            "threshold": float(
+                first_meta.get(
+                    "threshold", BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
+                )
+            ),
             "param_policy": args.param_policy,
-            "params_path": ab_meta.get("params_path"),
-            "params_file_sha256": ab_meta.get("params_file_sha256"),
+            "params_path": first_meta.get("params_path"),
+            "params_file_sha256": first_meta.get("params_file_sha256"),
             "optional_entry_filter_fields": list(OPTIONAL_ENTRY_FILTER_FIELDS),
+            "rule_level_specs": {
+                key: {
+                    **value,
+                    "shared_param_overrides": dict(
+                        value["shared_param_overrides"]
+                    ),
+                }
+                for key, value in RULE_LEVEL_SPECS.items()
+            },
             "scenario_specs": build_dl_filter_gate_scenario_specs(),
             "pair_artifacts": {
-                key: project_relative_display_path(value, project_root=root)
+                f"A{key}/B{key}": project_relative_display_path(
+                    value, project_root=root
+                )
                 for key, value in pair_dirs.items()
             },
             "score_source": SCORE_SOURCE_CANONICAL_RUNTIME,
@@ -770,27 +952,31 @@ def run_dl_filter_gate(*, args, project_root=PROJECT_ROOT) -> dict[str, Any]:
             "optimizer_executed": False,
         },
         "scenarios": scenarios,
-        "comparisons": comparisons,
+        "pair_deltas": pair_deltas,
+        "rule_ablation": rule_ablation,
         "pair_effects": pair_effects,
         "yearly": _yearly_rows(pair_payloads),
     }
-    json_path = output_dir / "strategy_dl_filter_gate.json"
-    markdown_path = output_dir / "strategy_dl_filter_gate.md"
+    json_path = output_dir / "strategy_dl_filter_rule_ablation_gate.json"
+    markdown_path = output_dir / "strategy_dl_filter_rule_ablation_gate.md"
     json_path.write_text(
         json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     markdown_path.write_text(_render_markdown(result), encoding="utf-8")
     print("\n" + _render_console(result))
-    print_artifact_paths(
+    artifact_rows: list[tuple[str, Path]] = [
+        ("DL Filter Rule Ablation Markdown", markdown_path),
+        ("DL Filter Rule Ablation JSON", json_path),
+    ]
+    artifact_rows.extend(
         (
-            ("DL Filter Gate Markdown", markdown_path),
-            ("DL Filter Gate JSON", json_path),
-            ("A/B Trade Attribution", pair_dirs["AB"] / "trade_attribution.md"),
-            ("C/F Trade Attribution", pair_dirs["CF"] / "trade_attribution.md"),
-        ),
-        project_root=root,
+            f"A{level_id}/B{level_id} Trade Attribution",
+            pair_dirs[level_id] / "trade_attribution.md",
+        )
+        for level_id in RULE_LEVEL_SPECS
     )
+    print_artifact_paths(artifact_rows, project_root=root)
     return result
 
 
@@ -804,6 +990,7 @@ __all__ = [
     "main",
     "run_dl_filter_gate",
     "build_dl_filter_gate_scenario_specs",
+    "RULE_LEVEL_SPECS",
     "SCENARIO_SPECS",
     "PAIR_SPECS",
     "_validate_binary_runtime_preflight",

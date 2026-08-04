@@ -9055,6 +9055,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     )
 
     from tools.filters.breakout_quality.strategy_dl_filter_gate import (
+        RULE_LEVEL_SPECS,
         _parse_args as parse_dl_filter_gate_args,
         build_dl_filter_gate_scenario_specs,
         run_dl_filter_gate,
@@ -9071,21 +9072,28 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
 
     dl_gate_specs = build_dl_filter_gate_scenario_specs()
     dl_gate_defaults = parse_dl_filter_gate_args([])
-    dl_all_off_pair = _build_controlled_param_source_pair(
-        {"kind": "single_param", "params": base},
-        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
-        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
-        fixed_risk=None,
-        comparison_mode=COMPARISON_MODE_HARD_FILTER,
-        optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
-    )
-    dl_all_off_left = params_to_json_dict(dl_all_off_pair[1])
-    dl_all_off_right = params_to_json_dict(dl_all_off_pair[2])
+    dl_level_payloads = {}
+    for level_id, level_spec in RULE_LEVEL_SPECS.items():
+        pair = _build_controlled_param_source_pair(
+            {"kind": "single_param", "params": base},
+            filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+            fixed_risk=None,
+            comparison_mode=COMPARISON_MODE_HARD_FILTER,
+            optional_entry_filter_policy=level_spec[
+                "optional_entry_filter_policy"
+            ],
+            shared_param_overrides=level_spec["shared_param_overrides"],
+        )
+        dl_level_payloads[level_id] = (
+            params_to_json_dict(pair[1]),
+            params_to_json_dict(pair[2]),
+        )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_dl_filter_replacement_gate_defaults_and_scenarios_are_fixed",
+        "binary_dl_filter_rule_ablation_gate_defaults_and_levels_are_fixed",
         (
             BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
             BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
@@ -9096,12 +9104,34 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             BREAKOUT_QUALITY_STRATEGY_ROTATION,
             None,
             None,
-            ("current", False),
-            ("current", True),
-            ("all-off", False),
-            ("all-off", True),
-            (False, False, False, False, False),
-            (False, False, False, False, False),
+            tuple(f"{side}{level}" for level in "01234" for side in "AB"),
+            ("current", {}, False, bool(base.use_history_threshold), bool(base.use_breakout_reclaim_reentry), bool(base.use_kc)),
+            ("all-off", {}, False, bool(base.use_history_threshold), bool(base.use_breakout_reclaim_reentry), bool(base.use_kc)),
+            ("all-off", {"use_history_threshold": False}, False, False, bool(base.use_breakout_reclaim_reentry), bool(base.use_kc)),
+            (
+                "all-off",
+                {
+                    "use_history_threshold": False,
+                    "use_breakout_reclaim_reentry": False,
+                },
+                False,
+                False,
+                False,
+                bool(base.use_kc),
+            ),
+            (
+                "all-off",
+                {
+                    "use_history_threshold": False,
+                    "use_breakout_reclaim_reentry": False,
+                    "use_kc": False,
+                },
+                False,
+                False,
+                False,
+                False,
+            ),
+            tuple(False for _ in OPTIONAL_ENTRY_FILTER_FIELDS),
             (False, True),
             (False, False),
         ),
@@ -9115,31 +9145,58 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             dl_gate_defaults.rotation,
             dl_gate_defaults.start_date,
             dl_gate_defaults.end_date,
+            tuple(dl_gate_specs),
             (
-                dl_gate_specs["A"]["optional_entry_filter_policy"],
-                dl_gate_specs["A"]["dl_filter_enabled"],
+                RULE_LEVEL_SPECS["0"]["optional_entry_filter_policy"],
+                RULE_LEVEL_SPECS["0"]["shared_param_overrides"],
+                dl_level_payloads["0"][0]["use_breakout_quality_filter"],
+                dl_level_payloads["0"][0]["use_history_threshold"],
+                dl_level_payloads["0"][0]["use_breakout_reclaim_reentry"],
+                dl_level_payloads["0"][0]["use_kc"],
             ),
             (
-                dl_gate_specs["B"]["optional_entry_filter_policy"],
-                dl_gate_specs["B"]["dl_filter_enabled"],
+                RULE_LEVEL_SPECS["1"]["optional_entry_filter_policy"],
+                RULE_LEVEL_SPECS["1"]["shared_param_overrides"],
+                dl_level_payloads["1"][0]["use_breakout_quality_filter"],
+                dl_level_payloads["1"][0]["use_history_threshold"],
+                dl_level_payloads["1"][0]["use_breakout_reclaim_reentry"],
+                dl_level_payloads["1"][0]["use_kc"],
             ),
             (
-                dl_gate_specs["C"]["optional_entry_filter_policy"],
-                dl_gate_specs["C"]["dl_filter_enabled"],
+                RULE_LEVEL_SPECS["2"]["optional_entry_filter_policy"],
+                RULE_LEVEL_SPECS["2"]["shared_param_overrides"],
+                dl_level_payloads["2"][0]["use_breakout_quality_filter"],
+                dl_level_payloads["2"][0]["use_history_threshold"],
+                dl_level_payloads["2"][0]["use_breakout_reclaim_reentry"],
+                dl_level_payloads["2"][0]["use_kc"],
             ),
             (
-                dl_gate_specs["F"]["optional_entry_filter_policy"],
-                dl_gate_specs["F"]["dl_filter_enabled"],
-            ),
-            tuple(dl_all_off_left[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
-            tuple(dl_all_off_right[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
-            (
-                dl_all_off_left["use_breakout_quality_filter"],
-                dl_all_off_right["use_breakout_quality_filter"],
+                RULE_LEVEL_SPECS["3"]["optional_entry_filter_policy"],
+                RULE_LEVEL_SPECS["3"]["shared_param_overrides"],
+                dl_level_payloads["3"][0]["use_breakout_quality_filter"],
+                dl_level_payloads["3"][0]["use_history_threshold"],
+                dl_level_payloads["3"][0]["use_breakout_reclaim_reentry"],
+                dl_level_payloads["3"][0]["use_kc"],
             ),
             (
-                dl_all_off_left["use_breakout_quality_ranking"],
-                dl_all_off_right["use_breakout_quality_ranking"],
+                RULE_LEVEL_SPECS["4"]["optional_entry_filter_policy"],
+                RULE_LEVEL_SPECS["4"]["shared_param_overrides"],
+                dl_level_payloads["4"][0]["use_breakout_quality_filter"],
+                dl_level_payloads["4"][0]["use_history_threshold"],
+                dl_level_payloads["4"][0]["use_breakout_reclaim_reentry"],
+                dl_level_payloads["4"][0]["use_kc"],
+            ),
+            tuple(
+                dl_level_payloads["4"][0][field]
+                for field in OPTIONAL_ENTRY_FILTER_FIELDS
+            ),
+            (
+                dl_level_payloads["4"][0]["use_breakout_quality_filter"],
+                dl_level_payloads["4"][1]["use_breakout_quality_filter"],
+            ),
+            (
+                dl_level_payloads["4"][0]["use_breakout_quality_ranking"],
+                dl_level_payloads["4"][1]["use_breakout_quality_ranking"],
             ),
         ),
     )
@@ -9150,16 +9207,21 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
 
         def fake_dl_gate_comparison(**kwargs):
             filter_policy = kwargs["optional_entry_filter_policy"]
+            shared_overrides = dict(kwargs.get("shared_param_overrides") or {})
             output_dir = Path(kwargs["output_dir_override"])
             output_dir.mkdir(parents=True, exist_ok=True)
-            if filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_CURRENT:
-                left_return, right_return = 100.0, 110.0
-                left_year, right_year = 10.0, 11.0
-                exclusive_delta = 2.0
-            else:
-                left_return, right_return = 70.0, 90.0
-                left_year, right_year = 7.0, 9.0
-                exclusive_delta = 5.0
+            level_id = next(
+                level
+                for level, spec in RULE_LEVEL_SPECS.items()
+                if spec["optional_entry_filter_policy"] == filter_policy
+                and spec["shared_param_overrides"] == shared_overrides
+            )
+            level_number = float(level_id)
+            left_return = 100.0 + level_number * 5.0
+            right_return = left_return + (10.0 - level_number)
+            left_year = 10.0 + level_number
+            right_year = left_year + (1.0 - level_number * 0.1)
+            exclusive_delta = 2.0 + level_number
             metadata = {
                 "comparison_mode": COMPARISON_MODE_HARD_FILTER,
                 "score_source": "canonical_runtime",
@@ -9180,8 +9242,14 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 "benchmark_ticker": "0050",
                 "max_positions": fake_args.max_positions,
                 "enable_rotation": False,
-                "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},
-                "score_signal_coverage": {"required_start": "2020-12-31", "available_through": "2021-12-31"},
+                "comparison_period": {
+                    "start": "2021-01-01",
+                    "end": "2021-12-31",
+                },
+                "score_signal_coverage": {
+                    "required_start": "2020-12-31",
+                    "available_through": "2021-12-31",
+                },
                 "runtime_manifest_path": "models/runtime_manifest.json",
                 "runtime_score_path": "models/scores.csv",
                 "optional_entry_filter_policy": filter_policy,
@@ -9190,49 +9258,54 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                     if filter_policy == OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
                     else None
                 ),
+                "shared_param_overrides": shared_overrides,
                 "params_path": "models/roos_base_best.json",
             }
             base_summary = {
                 "total_return_pct": left_return,
-                "max_drawdown_pct": 10.0,
-                "return_over_max_drawdown": left_return / 10.0,
+                "max_drawdown_pct": 10.0 + level_number,
+                "return_over_max_drawdown": left_return / (10.0 + level_number),
                 "expected_value_r": 0.2,
                 "avg_exposure_pct": 70.0,
-                "trade_count": 10,
+                "trade_count": 10 + int(level_number),
             }
             active_summary = {
                 "total_return_pct": right_return,
-                "max_drawdown_pct": 9.0,
-                "return_over_max_drawdown": right_return / 9.0,
+                "max_drawdown_pct": 9.0 + level_number,
+                "return_over_max_drawdown": right_return / (9.0 + level_number),
                 "expected_value_r": 0.3,
                 "avg_exposure_pct": 65.0,
-                "trade_count": 8,
+                "trade_count": 8 + int(level_number),
             }
             (output_dir / "trade_attribution.json").write_text(
-                json.dumps({
-                    "r_attribution": {
-                        "reconstructed_total_r_delta": exclusive_delta,
-                        "exclusive_selection_delta_r": exclusive_delta,
-                        "excluded_winner_r": 3.0,
-                        "avoided_loser_r_abs": 4.0,
-                        "replacement_winner_r": 5.0,
-                        "replacement_loser_r_abs": 2.0,
-                        "direct_filter_reject_count": 4,
-                        "portfolio_path_displacement_count": 2,
+                json.dumps(
+                    {
+                        "r_attribution": {
+                            "reconstructed_total_r_delta": exclusive_delta,
+                            "exclusive_selection_delta_r": exclusive_delta,
+                            "excluded_winner_r": 3.0,
+                            "avoided_loser_r_abs": 4.0,
+                            "replacement_winner_r": 5.0,
+                            "replacement_loser_r_abs": 2.0,
+                            "direct_filter_reject_count": 4,
+                            "portfolio_path_displacement_count": 2,
+                        }
                     }
-                }),
+                ),
                 encoding="utf-8",
             )
             return {
                 "metadata": metadata,
                 "no_filter": base_summary,
                 "quality_filter": active_summary,
-                "yearly": [{
-                    "year": 2021,
-                    "no_filter_return_pct": left_year,
-                    "quality_filter_return_pct": right_year,
-                    "is_full_year": True,
-                }],
+                "yearly": [
+                    {
+                        "year": 2021,
+                        "no_filter_return_pct": left_year,
+                        "quality_filter_return_pct": right_year,
+                        "is_full_year": True,
+                    }
+                ],
             }
 
         with (
@@ -9246,20 +9319,41 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             ),
         ):
             with redirect_stdout(io.StringIO()):
-                gate_result = run_dl_filter_gate(args=fake_args, project_root=tmp_root)
+                gate_result = run_dl_filter_gate(
+                    args=fake_args,
+                    project_root=tmp_root,
+                )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_dl_filter_replacement_gate_runs_one_optimizer_free_ab_cf_matrix",
-        (10.0, 20.0, -10.0, 10.0, 2.0, 5.0, False, False, False),
+        "binary_dl_filter_rule_ablation_gate_runs_one_optimizer_free_five_level_matrix",
         (
-            gate_result["comparisons"]["B_minus_A"]["total_return_pct"],
-            gate_result["comparisons"]["F_minus_C"]["total_return_pct"],
-            gate_result["comparisons"]["F_minus_A"]["total_return_pct"],
-            gate_result["comparisons"]["replacement_interaction"]["total_return_pct"],
-            gate_result["pair_effects"]["B_minus_A"]["exclusive_selection_delta_r"],
-            gate_result["pair_effects"]["F_minus_C"]["exclusive_selection_delta_r"],
+            10.0,
+            9.0,
+            8.0,
+            7.0,
+            6.0,
+            20.0,
+            6.0,
+            5,
+            15,
+            False,
+            False,
+            False,
+        ),
+        (
+            gate_result["pair_deltas"]["B0_minus_A0"]["total_return_pct"],
+            gate_result["pair_deltas"]["B1_minus_A1"]["total_return_pct"],
+            gate_result["pair_deltas"]["B2_minus_A2"]["total_return_pct"],
+            gate_result["pair_deltas"]["B3_minus_A3"]["total_return_pct"],
+            gate_result["pair_deltas"]["B4_minus_A4"]["total_return_pct"],
+            gate_result["rule_ablation"]["A4_minus_A0"]["total_return_pct"],
+            gate_result["pair_effects"]["B4_minus_A4"][
+                "exclusive_selection_delta_r"
+            ],
+            len(gate_result["metadata"]["pair_artifacts"]),
+            len(gate_result["yearly"][0]) - 2,
             gate_result["metadata"]["future_target_runtime_used"],
             gate_result["metadata"]["model_retrained"],
             gate_result["metadata"]["optimizer_executed"],
@@ -9954,6 +10048,70 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 rolling_dl_right["use_breakout_quality_ranking"],
             ),
             len(rolling_dl_filter_pair[1]["params_ensemble_by_effective_date"]),
+        ),
+    )
+
+    rolling_rule_ablation_pair = _build_controlled_param_source_pair(
+        rolling_source,
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        fixed_risk=None,
+        comparison_mode=COMPARISON_MODE_HARD_FILTER,
+        optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+        shared_param_overrides={
+            "use_history_threshold": False,
+            "use_breakout_reclaim_reentry": False,
+            "use_kc": False,
+        },
+    )
+    rolling_rule_left = rolling_rule_ablation_pair[1][
+        "params_ensemble_by_effective_date"
+    ]["2021-01-01"][0]["params"]
+    rolling_rule_right = rolling_rule_ablation_pair[2][
+        "params_ensemble_by_effective_date"
+    ]["2021-01-01"][0]["params"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "rolling_binary_dl_rule_ablation_applies_same_history_reentry_kc_overrides_to_both_sides",
+        (
+            (False, False, False),
+            (False, False, False),
+            (False, True),
+            (False, False),
+            2,
+        ),
+        (
+            tuple(
+                rolling_rule_left[field]
+                for field in (
+                    "use_history_threshold",
+                    "use_breakout_reclaim_reentry",
+                    "use_kc",
+                )
+            ),
+            tuple(
+                rolling_rule_right[field]
+                for field in (
+                    "use_history_threshold",
+                    "use_breakout_reclaim_reentry",
+                    "use_kc",
+                )
+            ),
+            (
+                rolling_rule_left["use_breakout_quality_filter"],
+                rolling_rule_right["use_breakout_quality_filter"],
+            ),
+            (
+                rolling_rule_left["use_breakout_quality_ranking"],
+                rolling_rule_right["use_breakout_quality_ranking"],
+            ),
+            len(
+                rolling_rule_ablation_pair[1][
+                    "params_ensemble_by_effective_date"
+                ]
+            ),
         ),
     )
 

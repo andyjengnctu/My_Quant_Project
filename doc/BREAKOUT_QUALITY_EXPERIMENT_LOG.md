@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260804_145148_ef17394.zip`；SHA256 `00e6b0029b958bd3807868b772d65f0a1cf702277f781602e9e8bd437d15dd44`。9A Binary DL Filter正式OOS模型報表與目前optional filters下的hard-filter策略比較均已取得；Binary DL疊加現有filters正式拒絕。A／B／C／F replacement Gate已實作，下一步只測filters全關後由Binary DL作唯一品質Gate；正式Baseline未變更 |
-| SHA256／最新結果 | 最新Binary OOS：PASS Precision 62.99%、原始PASS 55.63%、Precision Lift +7.35pp，但PASS Recall 51.44%、模型PASS 45.43%。目前optional filters下的正式hard-filter策略：Baseline 129.08%／MDD 17.41%／RoMD 7.42／EV 0.53R，Binary DL 85.79%／MDD 26.34%／RoMD 3.26／EV 0.36R；總報酬−43.29pp、曝險−15.80pp，正式拒絕疊加Gate。此結果尚未測filters全關＋Binary DL的replacement F；A／B／C／F Gate待本機執行。歷史Selection PIT與R2／R3結果保留供研究重現，正式策略維持Baseline |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260804_182739_d9ddf41(2).zip`；SHA256 `bc1f9aa5409141ea527342ebe422fa36c222e5d3014e488e85b1337bb8353f01`。9A Binary DL A／B／C／F replacement結果已取得：A 129.08%／MDD 17.41%／RoMD 7.42，B 85.79%／26.34%／3.26，C 138.58%／13.35%／10.38，F 145.92%／18.31%／7.97。Binary DL疊加現有filters拒絕；F雖總報酬高於A與C，但相較C的MDD、RoMD、EV與直接交易選擇R惡化，故不採用。正式Baseline未變更。本輪已將Gate擴充為A0／B0至A4／B4五層規則消融矩陣，待本機執行 |
+| SHA256／最新結果 | 最新Binary OOS：PASS Precision 62.99%、原始PASS 55.63%、Precision Lift +7.35pp，但PASS Recall 51.44%、模型PASS 45.43%。A／B／C／F顯示只移除optional filters的C相較A總報酬+9.51pp、MDD−4.05pp、RoMD+2.96；F相較C總報酬+7.34pp，但MDD+4.95pp、RoMD−2.41、EV−0.11R、直接交易選擇差異−21.83R，且改善集中2023。現有9A hard filter不升級runtime；下一步在相同模型與threshold下逐步關閉歷史門檻、Re-entry及KC，分離DL本身與規則／出場交互作用。歷史Selection PIT與R2／R3結果保留供研究重現 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`unique_group_sampling`、objective=`binary_classification`、scope=`all_labels`、threshold 0.5、Seed 42；正式策略mode自動解析為`hard-filter / canonical_runtime / original buy-sort`。Selection PIT continuous-ranker設定與工件保留，但只由其CLI研究入口使用；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -3073,4 +3073,68 @@ python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-p
 ### Dataset／Label／模型工件需求
 
 本次結果回寫不修改程式、Dataset、Label、checkpoint或Scores。A／B／C／F Gate可直接使用目前完整工件執行；不需重訓、relabel、optimizer或PIT重建。
+
+## 2026-08-04 — Binary DL Rule Ablation A0／B0 ～ A4／B4 Matrix
+
+### 狀態
+
+`IMPLEMENTED / LOCAL_FULL_DATA_EXECUTION_REQUIRED / FORMAL_BASELINE_UNCHANGED`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260804_182739_d9ddf41(2).zip`
+- SHA256：`bc1f9aa5409141ea527342ebe422fa36c222e5d3014e488e85b1337bb8353f01`
+- 本輪patch ZIP名稱與SHA256以交付回覆為準。
+
+### 前一輪 A／B／C／F 結果
+
+固定期間`2021-01-01～2026-03-02`、`base-finalist-best` rolling active params、9A `inception_time_v1 / unique_group_sampling / threshold 0.5`、canonical runtime score及原position-aware buy-sort：
+
+| 組別 | Optional filters | Binary DL | 總報酬 | MDD | RoMD | EV | 平均曝險 |
+|---|---|---|---:|---:|---:|---:|---:|
+| A | 目前 | 關 | 129.08% | 17.41% | 7.42 | 0.53R | 84.02% |
+| B | 目前 | 開 | 85.79% | 26.34% | 3.26 | 0.36R | 68.22% |
+| C | 全關 | 關 | 138.58% | 13.35% | 10.38 | 0.47R | 92.02% |
+| F | 全關 | 開 | 145.92% | 18.31% | 7.97 | 0.35R | 79.04% |
+
+判定：B明確拒絕；C為本輪風險調整後最佳研究情境；F相較C雖總報酬+7.34pp，但MDD+4.95pp、RoMD−2.41、EV−0.11R、直接交易選擇差異−21.83R，且年度改善主要集中2023，因此現有9A DL-only gate不採用。A仍為正式基準；C只保留研究候選，不直接升級正式策略。
+
+### 唯一主要變更
+
+將原A／B／C／F重新命名並擴充為單一五層矩陣：
+
+| 層級 | A組 | B組 | Optional filters | 歷史門檻 | Re-entry | KC出場 |
+|---:|---|---|---|---|---|---|
+| 0 | A0：DL關 | B0：DL開 | 依原active params | 依原active params | 依原active params | 依原active params |
+| 1 | A1：DL關 | B1：DL開 | 五項全關 | 依原active params | 依原active params | 依原active params |
+| 2 | A2：DL關 | B2：DL開 | 五項全關 | 關 | 依原active params | 依原active params |
+| 3 | A3：DL關 | B3：DL開 | 五項全關 | 關 | 關 | 依原active params |
+| 4 | A4：DL關 | B4：DL開 | 五項全關 | 關 | 關 | 關 |
+
+使用者原訊息最後一列寫為「A3 B4」，依層級與成對比較契約正規化為`A4／B4`。A4／B4只關閉KC，不關閉半倉停利、ATR初始停損、trailing、fixed-risk sizing、position cap、成交／費稅或原buy-sort。
+
+### 架構與報表
+
+- 五層均重用`strategy_compare.run_comparison`與正式portfolio engine／trade attribution，不複製成交、帳務或統計。
+- `strategy_compare.run_comparison`新增內部`shared_param_overrides`，同時套用至同層A與B；同層仍只允許`use_breakout_quality_filter=False/True`一項差異。該參數不暴露為一般CLI，避免使用者任意建立未登錄組合。
+- 合併報表不再列大量跨組pair；固定輸出：情境矩陣、每層A／B與`Bn−An`投組增量、交易品質／資金使用、A系列相對A0的規則消融、五層trade attribution及年度`Bn−An`矩陣。
+- 新輸出目錄：`strategy_dl_filter_rule_ablation_gate_<param_policy>_canonical_runtime/`，內含五個pair目錄及單一Markdown／JSON摘要。
+
+### 固定條件
+
+- 不重建Dataset、不relabel、不重訓模型、不重新選epoch、不調threshold、不執行optimizer。
+- 模型、runtime scores、active-param來源、比較期間、benchmark、max positions、rotation、fixed risk、position cap、買入排序、交易成本及portfolio accounting全部固定。
+- 不使用continuous Score、R2、R3、Future Target或Selection PIT ranking。
+
+### 採用判讀
+
+1. 每層只以同層`Bn−An`判斷DL增量，避免將規則消融效果誤認為DL效果。
+2. A系列`A1−A0`至`A4−A0`只判斷逐步移除規則對基礎策略的影響。
+3. DL有效至少需同時改善Return／MDD、EV、直接交易選擇R及年度穩定性；總報酬單獨上升不足以通過。
+4. 若只有關閉規則的A系列改善，而各層`Bn−An`持續惡化，結論應是規則本身需簡化，而不是9A DL有效。
+5. 真實結果取得前，本實驗只標記`IMPLEMENTED`，不得預判A2／A3／A4或B2／B3／B4有效。
+
+### Dataset／Label／模型工件需求
+
+無需重建任何Dataset、Label、checkpoint或Score；直接沿用目前9A canonical forward-OOS工件與rolling active-param JSON執行CLI即可。
 
