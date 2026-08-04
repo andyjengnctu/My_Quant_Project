@@ -32,8 +32,8 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260804_015125_1e01efe.zip`；SHA256 `36a4cbe8e08dd81c62d45abb062493e4b60cb17ec8aab0b4505dfddc54948064`。目前正式研究主軸切回9A Binary DL Filter；主選單模型流程已改為先顯示OOS簡易模型報表，再匯出forward-OOS scores並與Baseline比較實際績效。Selection PIT／R2／R3歷史工件保留供研究重現，正式Baseline未變更 |
-| SHA256／最新結果 | 使用者提供coverage提升後正式2×2輸出：Baseline 182.62%、Sort Only 147.57%、Param Only 145.84%、Adapted 75.70%。後續capital-aware消融：R2 `capital-adjusted-score`總報酬176.18%、MDD 14.15%、RoMD 12.45，仍低於Baseline且Target mean與保留買單成交率退步，判定拒絕目前乘積公式；R3 `capital-bucket-then-score`總報酬184.12%、EV 0.34R、Target capture 0.33，但MDD升至19.20%、RoMD降至9.59、Log R²與月勝率退步，僅保留為研究方向，不升格正式policy。正式策略維持Baseline |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260804_145148_ef17394.zip`；SHA256 `00e6b0029b958bd3807868b772d65f0a1cf702277f781602e9e8bd437d15dd44`。9A Binary DL Filter正式OOS模型報表與目前optional filters下的hard-filter策略比較均已取得；Binary DL疊加現有filters正式拒絕。A／B／C／F replacement Gate已實作，下一步只測filters全關後由Binary DL作唯一品質Gate；正式Baseline未變更 |
+| SHA256／最新結果 | 最新Binary OOS：PASS Precision 62.99%、原始PASS 55.63%、Precision Lift +7.35pp，但PASS Recall 51.44%、模型PASS 45.43%。目前optional filters下的正式hard-filter策略：Baseline 129.08%／MDD 17.41%／RoMD 7.42／EV 0.53R，Binary DL 85.79%／MDD 26.34%／RoMD 3.26／EV 0.36R；總報酬−43.29pp、曝險−15.80pp，正式拒絕疊加Gate。此結果尚未測filters全關＋Binary DL的replacement F；A／B／C／F Gate待本機執行。歷史Selection PIT與R2／R3結果保留供研究重現，正式策略維持Baseline |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`unique_group_sampling`、objective=`binary_classification`、scope=`all_labels`、threshold 0.5、Seed 42；正式策略mode自動解析為`hard-filter / canonical_runtime / original buy-sort`。Selection PIT continuous-ranker設定與工件保留，但只由其CLI研究入口使用；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
@@ -2988,3 +2988,89 @@ Consistency唯一失敗為synthetic suite在`validate_breakout_quality_strategy_
 - `validate_breakout_quality_strategy_adaptation_contract_case`：19／19 PASS。
 - 完整synthetic registry：242 validators、4,169 checks、0 FAIL。
 - 正式`apps/test_suite.py`依專案規定未由GPT執行；使用者套用patch後只需重跑本地formal suite，預期consistency與coverage meta quality恢復。
+
+## 2026-08-04 — 9A Binary DL Hard Filter 正式 OOS 策略結果
+
+### 狀態
+
+`RESULT_AVAILABLE / CURRENT_FILTERS_PLUS_DL_REJECTED / DL_REPLACEMENT_GATE_PENDING / FORMAL_BASELINE_UNCHANGED`
+
+### 程式與模型基準
+
+- 程式ZIP：`test-branch-1_20260804_145148_ef17394.zip`
+- SHA256：`00e6b0029b958bd3807868b772d65f0a1cf702277f781602e9e8bd437d15dd44`
+- 模型：`breakout_quality_v1 / inception_time_v1 / unique_group_sampling`
+- Threshold：固定`0.5`；不得依本次OOS或策略結果回調。
+- 模型訓練：Epoch 2為最低Validation Loss `0.708591`；Epoch 3 early stop；完整Selection依2 epochs重訓。
+- Runtime score：`forward_oos`；candidate rows `665,528`，model-scored `646,382`，conservative reject `19,146`。
+
+### 固定條件與唯一差異
+
+- 比較期間：`2021-01-01～2026-03-02`。
+- 使用相同`base_finalist_best` rolling active params、原position-aware buy-sort、fixed risk、position cap、max positions、rotation、交易成本、成交與portfolio accounting。
+- Baseline固定`use_breakout_quality_filter=False`；Active quality filter固定`use_breakout_quality_filter=True`。
+- 現有EMA、BB、Volume、breakout return及false-breakout optional entry filters在兩組均依當期active params維持原設定。
+- 不使用continuous Score ranking、R2、R3、Future Target或optimizer。
+
+### 模型 OOS 結果
+
+| 指標 | Selection | OOS | 判讀 |
+|---|---:|---:|---|
+| 原始PASS | 54.81% | 55.63% | OOS基準略高0.83pp |
+| 模型PASS | 64.02% | 45.43% | OOS操作點明顯更保守 |
+| PASS Precision | 60.95% | 62.99% | OOS高於原始PASS `+7.35pp` |
+| PASS Recall | 71.19% | 51.44% | 錯殺48.56%的原始PASS |
+| Accuracy | 59.21% | 56.17% | 較Selection下降3.04pp |
+| PR-AUC | 0.6443 | 0.6257 | 仍有排序訊號但不足以保證策略效益 |
+| 平均Score | 0.5184 | 0.4842 | OOS分布向下漂移 |
+| ECE | 0.0308 | 0.0722 | OOS calibration惡化 |
+
+### 正式策略結果：A目前filters＋無DL vs B目前filters＋Binary DL
+
+| 指標 | A Baseline | B Binary DL | B−A |
+|---|---:|---:|---:|
+| 淨總報酬 | 129.08% | 85.79% | −43.29pp |
+| 最大回撤 | 17.41% | 26.34% | +8.93pp |
+| Return／MDD | 7.42 | 3.26 | −4.16 |
+| 年化報酬 | 17.43% | 12.76% | −4.67pp |
+| Log R² | 0.9436 | 0.7870 | −0.1567 |
+| 月勝率 | 63.49% | 53.97% | −9.52pp |
+| 交易數 | 407 | 396 | −11 |
+| 勝率 | 41.52% | 37.37% | −4.15pp |
+| Payoff | 2.95 | 2.80 | −0.16 |
+| EV | 0.53R | 0.36R | −0.18R |
+| 平均曝險 | 84.02% | 68.22% | −15.80pp |
+| 平均每日可掛單候選 | 50.55 | 20.98 | −29.57 |
+| 候選供給不足日 | 163日 | 383日 | +220日 |
+| 每日結束未滿倉日 | 745日 | 661日 | −84日 |
+| 每日結束持股缺口 | 1,871格日 | 2,360格日 | +489格日 |
+
+年度報酬只有2023與2026改善；2021、2022、2024及2025均落後，且2022由`+7.90%`降至`−6.86%`。結果不是單一年份噪音，而是多數年度及報酬、回撤、交易品質、候選供給與資金使用同步惡化。
+
+### 判定
+
+1. **9A在事件Label上具有OOS分類訊號，但目前filters下作第二層hard filter正式失敗。** Precision提升不能補償Recall、候選供給、曝險、勝率、Payoff與EV下降。
+2. 模型PASS由Selection 64.02%降至OOS 45.43%，而策略每日可掛單候選由50.55降至20.98；quality gate縮減候選池後造成更深的持股缺口與較低資金部署。
+3. 交易數只減少11筆，但候選池與曝險大幅下降，表示主要傷害包含portfolio path displacement與替代交易品質下降，不是單純少交易。
+4. **不得依本次OOS調threshold、epochs、learning rate、Label或模型。** Current-filters-plus-DL路徑標記`REJECTED`，正式runtime仍關閉Binary DL filter。
+5. 此結果只完成A／B，不能用來否定使用者提出的「移除optional filters、Binary DL作唯一品質Gate」。真正replacement假設仍必須看F相較A的絕對績效。
+
+### 下一步：執行 A／B／C／F Replacement Gate
+
+直接使用既有model、manifest與forward-OOS scores，不需重新訓練或重新export：
+
+```bash
+python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-policy base-finalist-best --max-positions 10 --rotation off
+```
+
+正式判讀順序：
+
+1. `F−C`：Binary DL在optional filters全關後是否能單獨改善完全不篩選的突破候選池。
+2. `F−A`：DL-only replacement能否至少打平目前正式rule-based filters策略；這是採用主判定。
+3. `(F−C)−(B−A)`只用來判斷DL作替代者是否比疊加者更有效；正值不代表F絕對績效通過。
+4. 若F仍顯著低於A，停止目前9A Binary DL Filter正式整合，不以同一OOS調threshold救援；下一個模型實驗必須提出本質不同的Label或representation機制。
+
+### Dataset／Label／模型工件需求
+
+本次結果回寫不修改程式、Dataset、Label、checkpoint或Scores。A／B／C／F Gate可直接使用目前完整工件執行；不需重訓、relabel、optimizer或PIT重建。
+
