@@ -31,7 +31,7 @@ from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 # This is the only setting normally changed to switch the main menu model workflow.
 # - 9A binary filter: "unique_group_sampling"
 # - continuous PIT ranker: "strategy_aligned_no_time_pass_magnitude_mse"
-BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_pass_magnitude_mse"
+BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42

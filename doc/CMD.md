@@ -59,7 +59,7 @@ python apps/workbench.py
 
 正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟唯一正式選單。主選單只保留完整工作流程，不顯示 Dataset、單獨 train、export、audit 或版本化研究名稱；這些低階與 research-only 功能仍使用明確 CLI 子命令。模型研究與策略驗證不強制串接。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟唯一正式選單。主選單只保留完整工作流程，不顯示 Dataset、單獨 train、export、audit 或版本化研究名稱；這些低階與 research-only 功能仍使用明確 CLI 子命令。Binary 正式模型流程會在模型報表後自動接續 Baseline 實際績效比較；continuous workflow仍維持模型與策略分開。
 
 ```bash
 python apps/breakout_quality.py
@@ -73,12 +73,23 @@ python apps/breakout_quality.py
 [0] 離開
 ```
 
+當目前 workflow 是 Binary classification 時，選擇 `[1/Enter] 模型研究與驗證` 後會顯示：
+
+```text
+=== Binary DL Filter 模型研究與驗證 ===
+[1/Enter] 重新訓練 → 簡易模型報表 → Baseline實際績效比較
+[2] 使用既有模型 → 更新research scores → 簡易模型報表 → Baseline實際績效比較
+[0] 返回
+```
+
+`[1]` 會依序執行 Dataset 檢查／必要重建、train、research score export、OOS 簡易模型報表、forward-OOS runtime score export、hard-filter Baseline策略比較。`[2]` 不重新訓練，直接使用既有 model／split／manifest 顯示相同簡易模型報表，再更新 forward-OOS scores 並比較 Baseline。Binary A／B／C／F replacement gate、Optional filters A～E Gate及其他臨時研究仍維持 CLI-only。
+
 Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
-模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／report流程；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。`[1/Enter]`與`[2]`仍彼此獨立。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
+模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／OOS簡易報表，接著匯出forward-OOS runtime scores並以同一套正式rolling params比較Binary hard filter與Baseline；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。Binary選單的完整訓練流程會自動接續正式策略比較；主選單`[2]`仍可獨立重跑相同比較。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
 
 
-切換至原9A binary workflow時，只需在 `config/breakout_quality.py` 指定既有classification profile，例如：
+目前正式 workflow 已切回9A binary classification。設定位置仍只有 `config/breakout_quality.py`：
 
 ```python
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
@@ -176,7 +187,7 @@ python -c "from importlib.metadata import version; from momentfm import MOMENTPi
 
 9E legacy runtime 契約固定為 `momentfm==0.1.4` 與 `transformers==5.5.0`。不要直接執行 `pip install momentfm==0.1.4`，否則 pip 可能嘗試把本專案的 NumPy／Hub／Transformers 降到該套件 metadata 所列的舊版本。由於採刻意隔離安裝，`pip check` 仍會依舊 metadata 報告版本不相容，不能用它取代上方版本檢查與正式 `apps/test_suite.py`。
 
-既有 `workflow` CLI相容流程會依active architecture分流：必要時建立 supervised dataset；目前policy已退回9A `inception_time_v1`，依序執行train → export research scores → 產生易讀研究報表；8F sequence-only保留高覆蓋基準。10A Candidate-conditioned Market Set與Stage 1 Global Market Set均為legacy read-only。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
+既有 `workflow` CLI相容流程會依active architecture分流：必要時建立 supervised dataset；目前policy使用9A `inception_time_v1`，CLI相容流程依序執行train → export research scores → 產生易讀研究報表；正式互動選單在此之後還會接續forward-OOS score export與Baseline策略比較；8F sequence-only保留高覆蓋基準。10A Candidate-conditioned Market Set與Stage 1 Global Market Set均為legacy read-only。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --epochs 200 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
@@ -490,7 +501,7 @@ python apps/breakout_quality.py strategy-compare --dataset full --comparison-mod
 
 R3只對當日具有有效PIT Score的可掛單候選，依正式`deployment_rate`的當日橫斷面1/3與2/3分位切成高／中／低三桶，先按部署桶高到低，再於桶內按Score高到低，最後沿用既有buy-sort。分桶只使用當日盤前已知候選與正式sizing，不使用Future Target或回放績效調整邊界；同部署率跨分位時保持同桶。輸出隔離於`strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score_selection_point_in_time/`。
 
-Optional entry filters × Ranking A～E Gate為CLI-only研究，不加入互動選單。Gate預設filter／architecture／experiment profile／dataset／部位與rotation直接採用目前continuous-ranker workflow設定，不使用binary `unique_group_sampling`預設。它固定舊正式ROOS與Selection PIT Scores，依序執行：A目前filters＋原buy-sort、B目前filters＋R3、C五個optional entry filters全關＋原buy-sort、D五個filters全關＋R3、E五個filters全關＋原始Score sort：
+Optional entry filters × Ranking A～E Gate為CLI-only研究，不加入互動選單。Gate固定使用continuous-ranker的filter／architecture／experiment profile；dataset／部位與rotation採正式config，不會因主workflow切回binary `unique_group_sampling`而改錯PIT profile。它固定舊正式ROOS與Selection PIT Scores，依序執行：A目前filters＋原buy-sort、B目前filters＋R3、C五個optional entry filters全關＋原buy-sort、D五個filters全關＋R3、E五個filters全關＋原始Score sort：
 
 ```bash
 python apps/breakout_quality.py strategy-filter-gate --dataset full --param-policy base-finalist-best --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
@@ -504,19 +515,7 @@ Binary DL Filter Replacement A／B／C／F Gate同樣為CLI-only研究，但使�
 python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-policy base-finalist-best --max-positions 10 --rotation off
 ```
 
-Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；保留`high_len`突破事件、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap及原buy-sort。`B−A`檢查DL疊加現有filters，`F−C`檢查DL作唯一品質Gate，`F−A`才是DL-only replacement對目前正式策略的採用比較，interaction=`(F−C)−(B−A)`只作機制判讀。兩個hard-filter pair都固定threshold 0.5、canonical runtime score與相同active params；不調threshold、不執行optimizer、不使用Future Target。輸出隔離於`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含A/B與C/F pair的完整策略比較、交易歸因及合併`strategy_dl_filter_gate.md/json`。
-
-Gate啟動前會先區分9A工件狀態。若`manifest.json`、`model.pt`或`split_assignments.csv`任一缺少，歷史研究報表或`research_scores.csv`不能替代模型identity；有完整備份時恢復整個`models/filters/breakout_quality/<filter_id>/<architecture>/<profile>/`資料夾，沒有備份時可沿用現有Dataset／Label，通常只需重新執行binary `train`，不先重建Dataset：
-
-```bash
-python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling
-```
-
-模型工件完整但只缺正式`scores.csv`時，不需重訓，只執行：
-
-```bash
-python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope forward_oos
-```
+Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；保留`high_len`突破事件、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap及原buy-sort。`B−A`檢查DL疊加現有filters，`F−C`檢查DL作唯一品質Gate，`F−A`才是DL-only replacement對目前正式策略的採用比較，interaction=`(F−C)−(B−A)`只作機制判讀。兩個hard-filter pair都固定threshold 0.5、canonical runtime score與相同active params；不重訓模型、不調threshold、不執行optimizer、不使用Future Target。輸出隔離於`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含A/B與C/F pair的完整策略比較、交易歸因及合併`strategy_dl_filter_gate.md/json`。
 
 兩種政策都維持Score缺失契約：有效Score候選優先；缺分候選不排除、不填0，並完整回退原buy-sort。正式比較先看相較原始Score ranking能否恢復平均投入與曝險，再判斷總報酬、Return／MDD、Target mean、Realized R與capture；不得只因R2／R3優於原始Score就直接採用，仍須至少對照Baseline。
 

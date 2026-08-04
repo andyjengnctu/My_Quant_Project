@@ -637,6 +637,46 @@ def _build_train_argv(args: argparse.Namespace) -> list[str]:
     return argv
 
 
+def _build_export_score_argv(
+    args: argparse.Namespace,
+    *,
+    scope: str,
+) -> list[str]:
+    argv = [
+        "--filter-id",
+        str(args.filter_id),
+        "--experiment-profile",
+        str(args.experiment_profile),
+        "--scope",
+        str(scope),
+        "--inference-batch-size",
+        str(int(args.evaluation_batch_size)),
+        "--inference-workers",
+        str(int(args.evaluation_workers)),
+        "--device",
+        str(args.device),
+        "--mixed-precision-dtype",
+        str(args.mixed_precision_dtype),
+    ]
+    argv.append(
+        "--mixed-precision"
+        if bool(args.mixed_precision)
+        else "--no-mixed-precision"
+    )
+    argv.append(
+        "--deterministic-algorithms"
+        if bool(args.deterministic_algorithms)
+        else "--no-deterministic-algorithms"
+    )
+    argv.append("--allow-tf32" if bool(args.allow_tf32) else "--no-allow-tf32")
+    argv.append(
+        "--preload-feature-bank"
+        if bool(args.preload_feature_bank)
+        else "--no-preload-feature-bank"
+    )
+    return argv
+
+
 def _pretraining_refresh_plan(
     *,
     filter_id: str,
@@ -960,29 +1000,7 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
             ("train", _build_train_argv(args), "訓練並產生正式模型"),
             (
                 "export-scores",
-                [
-                    "--filter-id",
-                    filter_id,
-                    "--experiment-profile",
-                    str(args.experiment_profile),
-                    "--scope",
-                    "research",
-                    "--device",
-                    str(args.device),
-                    "--mixed-precision-dtype",
-                    str(args.mixed_precision_dtype),
-                    (
-                        "--mixed-precision"
-                        if bool(args.mixed_precision)
-                        else "--no-mixed-precision"
-                    ),
-                    (
-                        "--deterministic-algorithms"
-                        if bool(args.deterministic_algorithms)
-                        else "--no-deterministic-algorithms"
-                    ),
-                    "--allow-tf32" if bool(args.allow_tf32) else "--no-allow-tf32",
-                ],
+                _build_export_score_argv(args, scope="research"),
                 "匯出 research scores",
             ),
             (
@@ -1333,6 +1351,74 @@ def _print_artifact_status(
             )))
 
 
+def _run_binary_post_train_validation(
+    request: argparse.Namespace,
+    *,
+    workflow_settings,
+    program_name: str,
+    step_start: int = 1,
+    total_steps: int = 2,
+) -> int:
+    if not workflow_settings.is_binary_classification:
+        return 0
+    if workflow_settings.strategy_comparison_mode != "hard-filter":
+        raise ValueError(
+            "Binary DL Filter正式驗證必須使用hard-filter策略比較"
+        )
+    if workflow_settings.strategy_score_source != "canonical_runtime":
+        raise ValueError(
+            "Binary DL Filter正式驗證必須使用canonical_runtime scores"
+        )
+
+    print("\n=== Binary DL Filter 正式策略驗證 ===")
+    print(
+        f"[{int(step_start)}/{int(total_steps)}] "
+        "匯出正式 forward-OOS runtime scores"
+    )
+    rc = _run_command(
+        "export-scores",
+        _build_export_score_argv(request, scope="forward_oos"),
+        program_name=program_name,
+    )
+    if rc != 0:
+        return int(rc)
+
+    print(
+        f"\n[{int(step_start) + 1}/{int(total_steps)}] "
+        "與 Baseline 比較實際投組績效"
+    )
+    compare_args = [
+        "--dataset",
+        str(workflow_settings.strategy_dataset),
+        "--comparison-mode",
+        "hard-filter",
+        "--filter-id",
+        str(workflow_settings.filter_id),
+        "--score-source",
+        "canonical_runtime",
+        "--model-architecture",
+        str(workflow_settings.model_architecture),
+        "--experiment-profile",
+        str(workflow_settings.experiment_profile),
+        "--param-policy",
+        str(workflow_settings.strategy_param_policy),
+        "--max-positions",
+        str(int(workflow_settings.strategy_max_positions)),
+        "--rotation",
+        str(workflow_settings.strategy_rotation),
+        "--fixed-risk",
+        str(float(workflow_settings.strategy_adapt_fixed_risk)),
+        "--max-position-cap-pct",
+        str(float(workflow_settings.strategy_adapt_max_position_cap_pct)),
+    ]
+    with _compact_console_scope():
+        return _run_command(
+            "strategy-compare",
+            compare_args,
+            program_name=program_name,
+        )
+
+
 def _interactive_workflow(program_name: str, *, workflow_settings=None) -> int:
     if workflow_settings is None:
         filter_id = _policy_filter_id()
@@ -1384,13 +1470,25 @@ def _interactive_workflow(program_name: str, *, workflow_settings=None) -> int:
         evaluate_oos=evaluate_oos,
         **train_payload,
     )
-    print("\n即將執行：Full dataset（全部股票）→ train → export research scores → OOS 易讀研究報表")
+    print(
+        "\n即將執行：Full dataset（全部股票）→ train → export research scores "
+        "→ OOS 簡易模型報表 → export forward-OOS scores → 與 Baseline 比較實際績效"
+    )
     if evaluate_oos:
-        print("報表將納入 OOS 最終泛化評估。")
+        print("模型報表將先顯示 OOS 最終泛化評估，再執行策略績效比較。")
     if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
-    return _run_workflow(request, program_name=program_name)
+    rc = _run_workflow(request, program_name=program_name)
+    if rc != 0:
+        return int(rc)
+    if workflow_settings is None:
+        workflow_settings = get_breakout_quality_workflow_settings()
+    return _run_binary_post_train_validation(
+        request,
+        workflow_settings=workflow_settings,
+        program_name=program_name,
+    )
 
 
 def _interactive_build_dataset(program_name: str) -> int:
@@ -1685,11 +1783,90 @@ def _print_workflow_status() -> None:
     print(render_table(("狀態", "項目"), status_rows))
 
 
+def _interactive_existing_binary_validation(
+    program_name: str,
+    *,
+    workflow_settings,
+) -> int:
+    filter_id = normalize_filter_id(workflow_settings.filter_id)
+    request = _policy_train_settings(filter_id)
+    request.experiment_profile = str(workflow_settings.experiment_profile)
+    request.seed = int(workflow_settings.seed)
+    _print_policy_defaults(filter_id, request)
+    print(
+        "\n即將使用既有模型：更新 research scores → OOS 簡易模型報表 "
+        "→ export forward-OOS scores → 與 Baseline 比較實際績效"
+    )
+    if not _prompt_bool("確認開始", True):
+        print("已取消。")
+        return 0
+    print("\n[1/4] 由既有模型更新 research scores")
+    rc = _run_command(
+        "export-scores",
+        _build_export_score_argv(request, scope="research"),
+        program_name=program_name,
+    )
+    if rc != 0:
+        return int(rc)
+    print("\n[2/4] 顯示 OOS 簡易模型報表")
+    rc = _run_command(
+        "report",
+        [
+            "--filter-id",
+            filter_id,
+            "--experiment-profile",
+            str(workflow_settings.experiment_profile),
+            "--include-oos",
+        ],
+        program_name=program_name,
+    )
+    if rc != 0:
+        return int(rc)
+    return _run_binary_post_train_validation(
+        request,
+        workflow_settings=workflow_settings,
+        program_name=program_name,
+        step_start=3,
+        total_steps=4,
+    )
+
+
+def _interactive_binary_model_research(
+    program_name: str,
+    *,
+    workflow_settings,
+) -> int:
+    while True:
+        print("\n=== Binary DL Filter 模型研究與驗證 ===")
+        print("[1/Enter] 重新訓練 → 簡易模型報表 → Baseline實際績效比較")
+        print("[2] 使用既有模型 → 更新Scores → 簡易模型報表 → Baseline實際績效比較")
+        print("[0] 返回")
+        try:
+            raw_choice = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            print("\n輸入已結束。")
+            return 0
+        choice = "1" if raw_choice == "" else raw_choice
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        if choice == "1":
+            return _interactive_workflow(
+                program_name,
+                workflow_settings=workflow_settings,
+            )
+        if choice == "2":
+            return _interactive_existing_binary_validation(
+                program_name,
+                workflow_settings=workflow_settings,
+            )
+        print("無效選項，請重新輸入。")
+
+
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_workflow_settings()
     color_enabled = console_color_enabled()
     if settings.is_binary_classification:
-        return _interactive_workflow(
+        return _interactive_binary_model_research(
             program_name,
             workflow_settings=settings,
         )
@@ -1777,9 +1954,16 @@ def _interactive_strategy_validation(program_name: str) -> int:
                 [
                     "--dataset", settings.strategy_dataset,
                     "--comparison-mode", "hard-filter",
+                    "--filter-id", settings.filter_id,
+                    "--score-source", settings.strategy_score_source,
+                    "--model-architecture", settings.model_architecture,
+                    "--experiment-profile", settings.experiment_profile,
                     "--param-policy", settings.strategy_param_policy,
                     "--max-positions", str(settings.strategy_max_positions),
                     "--rotation", settings.strategy_rotation,
+                    "--fixed-risk", str(settings.strategy_adapt_fixed_risk),
+                    "--max-position-cap-pct",
+                    str(settings.strategy_adapt_max_position_cap_pct),
                 ],
                 program_name=program_name,
             )

@@ -8634,23 +8634,26 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         _parse_args as parse_filter_gate_args,
         build_filter_gate_scenario_specs,
     )
-    from config.breakout_quality import get_breakout_quality_workflow_settings
+    from config.breakout_quality import (
+        BREAKOUT_QUALITY_STRATEGY_DATASET,
+        BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS,
+        BREAKOUT_QUALITY_STRATEGY_ROTATION,
+    )
 
     gate_specs = build_filter_gate_scenario_specs()
     gate_defaults = parse_filter_gate_args([])
-    workflow_settings = get_breakout_quality_workflow_settings()
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "strategy_filter_gate_defaults_follow_continuous_ranker_workflow_identity",
+        "strategy_filter_gate_keeps_continuous_ranker_identity_when_main_workflow_is_binary",
         (
-            workflow_settings.filter_id,
-            workflow_settings.model_architecture,
-            workflow_settings.experiment_profile,
-            workflow_settings.strategy_dataset,
-            workflow_settings.strategy_max_positions,
-            workflow_settings.strategy_rotation,
+            BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+            BREAKOUT_QUALITY_STRATEGY_DATASET,
+            BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS,
+            BREAKOUT_QUALITY_STRATEGY_ROTATION,
         ),
         (
             gate_defaults.filter_id,
@@ -8661,6 +8664,195 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             gate_defaults.rotation,
         ),
     )
+    from contextlib import nullcontext
+    breakout_quality_app = __import__(
+        "apps.breakout_quality", fromlist=["*"]
+    )
+    from config import breakout_quality as breakout_quality_config
+
+    with patch.object(
+        breakout_quality_config,
+        "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+        UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    ):
+        binary_menu_settings = (
+            breakout_quality_config.get_breakout_quality_workflow_settings()
+        )
+    export_request = SimpleNamespace(
+        filter_id=binary_menu_settings.filter_id,
+        experiment_profile=binary_menu_settings.experiment_profile,
+        evaluation_batch_size=4096,
+        evaluation_workers=4,
+        device="auto",
+        mixed_precision_dtype="auto",
+        mixed_precision=True,
+        deterministic_algorithms=True,
+        allow_tf32=False,
+        preload_feature_bank=True,
+    )
+    post_train_calls = []
+
+    def _capture_post_train_command(command, command_args, *, program_name):
+        post_train_calls.append((command, tuple(command_args), program_name))
+        return 0
+
+    with (
+        patch.object(
+            breakout_quality_app,
+            "_run_command",
+            side_effect=_capture_post_train_command,
+        ),
+        patch.object(
+            breakout_quality_app,
+            "_compact_console_scope",
+            side_effect=lambda: nullcontext(),
+        ),
+        redirect_stdout(io.StringIO()),
+    ):
+        post_train_rc = breakout_quality_app._run_binary_post_train_validation(
+            export_request,
+            workflow_settings=binary_menu_settings,
+            program_name="apps/breakout_quality.py",
+        )
+    export_call = post_train_calls[0]
+    compare_call = post_train_calls[1]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_menu_post_train_runs_forward_scores_before_baseline_strategy_compare",
+        (
+            0,
+            ("export-scores", "strategy-compare"),
+            True,
+            True,
+            True,
+        ),
+        (
+            post_train_rc,
+            tuple(call[0] for call in post_train_calls),
+            "forward_oos" in export_call[1]
+            and binary_menu_settings.experiment_profile in export_call[1],
+            "hard-filter" in compare_call[1]
+            and binary_menu_settings.experiment_profile in compare_call[1],
+            str(binary_menu_settings.strategy_adapt_fixed_risk) in compare_call[1]
+            and str(binary_menu_settings.strategy_adapt_max_position_cap_pct)
+            in compare_call[1],
+        ),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    app_source = (project_root / "apps" / "breakout_quality.py").read_text(
+        encoding="utf-8"
+    )
+    interactive_workflow_source = app_source.split(
+        "def _interactive_workflow", 1
+    )[1].split("def _interactive_build_dataset", 1)[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_menu_training_flow_shows_model_report_then_runs_post_train_strategy_validation",
+        True,
+        all(
+            token in interactive_workflow_source
+            for token in (
+                "OOS 簡易模型報表",
+                "rc = _run_workflow",
+                "_run_binary_post_train_validation",
+            )
+        )
+        and interactive_workflow_source.index("rc = _run_workflow")
+        < interactive_workflow_source.index("_run_binary_post_train_validation"),
+    )
+
+    existing_binary_source = app_source.split(
+        "def _interactive_existing_binary_validation", 1
+    )[1].split("def _interactive_binary_model_research", 1)[0]
+    binary_menu_source = app_source.split(
+        "def _interactive_binary_model_research", 1
+    )[1].split("def _interactive_model_research", 1)[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_model_menu_supports_existing_model_report_then_baseline_compare_without_retraining",
+        True,
+        all(
+            token in binary_menu_source
+            for token in (
+                "重新訓練",
+                "使用既有模型",
+                "_interactive_existing_binary_validation",
+            )
+        )
+        and '"export-scores"' in existing_binary_source
+        and 'scope="research"' in existing_binary_source
+        and '"report"' in existing_binary_source
+        and "--include-oos" in existing_binary_source
+        and "_run_binary_post_train_validation" in existing_binary_source
+        and existing_binary_source.index('"export-scores"')
+        < existing_binary_source.index('"report"')
+        < existing_binary_source.index("_run_binary_post_train_validation"),
+    )
+
+    existing_model_calls = []
+
+    def _capture_existing_model_command(command, command_args, *, program_name):
+        existing_model_calls.append((command, tuple(command_args), program_name))
+        return 0
+
+    with (
+        patch.object(
+            breakout_quality_app,
+            "_run_command",
+            side_effect=_capture_existing_model_command,
+        ),
+        patch.object(
+            breakout_quality_app,
+            "_prompt_bool",
+            return_value=True,
+        ),
+        patch.object(
+            breakout_quality_app,
+            "_print_policy_defaults",
+            return_value=None,
+        ),
+        patch.object(
+            breakout_quality_app,
+            "_compact_console_scope",
+            side_effect=lambda: nullcontext(),
+        ),
+        redirect_stdout(io.StringIO()),
+    ):
+        existing_model_rc = (
+            breakout_quality_app._interactive_existing_binary_validation(
+                "apps/breakout_quality.py",
+                workflow_settings=binary_menu_settings,
+            )
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_existing_model_menu_executes_research_export_report_forward_export_then_baseline_compare",
+        (
+            0,
+            ("export-scores", "report", "export-scores", "strategy-compare"),
+            True,
+            True,
+            True,
+        ),
+        (
+            existing_model_rc,
+            tuple(call[0] for call in existing_model_calls),
+            "research" in existing_model_calls[0][1],
+            "--include-oos" in existing_model_calls[1][1],
+            "forward_oos" in existing_model_calls[2][1]
+            and "hard-filter" in existing_model_calls[3][1],
+        ),
+    )
+
     all_off_output_name = _comparison_output_dir_name(
         COMPARISON_MODE_SCORE_RANKING,
         _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
@@ -8702,7 +8894,6 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
 
     from tools.filters.breakout_quality.strategy_dl_filter_gate import (
         _parse_args as parse_dl_filter_gate_args,
-        _validate_binary_runtime_preflight,
         build_dl_filter_gate_scenario_specs,
         run_dl_filter_gate,
     )
@@ -8788,51 +8979,6 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 dl_all_off_left["use_breakout_quality_ranking"],
                 dl_all_off_right["use_breakout_quality_ranking"],
             ),
-        ),
-    )
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        preflight_root = Path(tmp_dir)
-        preflight_args = parse_dl_filter_gate_args([])
-        try:
-            _validate_binary_runtime_preflight(
-                project_root=preflight_root,
-                args=preflight_args,
-            )
-            missing_model_message = ""
-        except FileNotFoundError as exc:
-            missing_model_message = str(exc)
-        canonical_preflight_paths = resolve_filter_artifact_paths(
-            preflight_root,
-            preflight_args.filter_id,
-            preflight_args.model_architecture,
-            preflight_args.experiment_profile,
-        )
-        canonical_preflight_paths.model_dir.mkdir(parents=True, exist_ok=True)
-        canonical_preflight_paths.manifest_path.write_text("{}", encoding="utf-8")
-        canonical_preflight_paths.model_path.write_bytes(b"model")
-        canonical_preflight_paths.split_path.write_text("ticker,date\n", encoding="utf-8")
-        try:
-            _validate_binary_runtime_preflight(
-                project_root=preflight_root,
-                args=preflight_args,
-            )
-            missing_score_message = ""
-        except FileNotFoundError as exc:
-            missing_score_message = str(exc)
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "binary_dl_filter_gate_preflight_distinguishes_missing_model_from_missing_runtime_score",
-        (True, True, True, True, True, True),
-        (
-            "缺少9A canonical模型工件" in missing_model_message,
-            "通常不必重新build-dataset" in missing_model_message,
-            " apps/breakout_quality.py train " in f" {missing_model_message} ",
-            "canonical模型工件完整" in missing_score_message,
-            "不需重訓" in missing_score_message,
-            "--scope forward_oos" in missing_score_message,
         ),
     )
 
@@ -8927,15 +9073,9 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 }],
             }
 
-        with (
-            patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_gate._validate_binary_runtime_preflight",
-                return_value={"present": {}},
-            ),
-            patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_gate.run_comparison",
-                side_effect=fake_dl_gate_comparison,
-            ),
+        with patch(
+            "tools.filters.breakout_quality.strategy_dl_filter_gate.run_comparison",
+            side_effect=fake_dl_gate_comparison,
         ):
             with redirect_stdout(io.StringIO()):
                 gate_result = run_dl_filter_gate(args=fake_args, project_root=tmp_root)

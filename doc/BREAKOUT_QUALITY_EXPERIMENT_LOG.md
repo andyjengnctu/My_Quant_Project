@@ -22,7 +22,7 @@
 - 後續建議必須優先提供可立即執行的實驗、實作、診斷或修正；不得把等待新的 forward labeled period 當成主要下一步。
 - 本規則取代文件中所有「因 OOS 已查看而不得再研究」或「只能等待新資料」的概括性限制；個別已淘汰方向仍維持淘汰，除非提出本質不同的新機制。
 
-本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-08-03**。
+本文件只記錄已知事實。歷史結果若缺少完整報表，會標記「精確值未保留」，不得自行補值。歷史資料整理截止日為 **2026-08-04**。
 
 ---
 
@@ -32,12 +32,12 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260804_003430_2259c60.zip`；SHA256 `c39b72722685988a420a8429ef01bb31d1eb506d5c46b0bd6717e6585f5ec0fd`。Selection PIT實際起點維持`2011-01-01`，7個既有rolling folds全部保留，training calendar weighted coverage為60.0%；R2／R3 Selection replay結果已取得，本輪完成R3 rolling parameter adaptation接線但尚無本機結果，正式Baseline未變更 |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260804_015125_1e01efe.zip`；SHA256 `36a4cbe8e08dd81c62d45abb062493e4b60cb17ec8aab0b4505dfddc54948064`。目前正式研究主軸切回9A Binary DL Filter；主選單模型流程已改為先顯示OOS簡易模型報表，再匯出forward-OOS scores並與Baseline比較實際績效。Selection PIT／R2／R3歷史工件保留供研究重現，正式Baseline未變更 |
 | SHA256／最新結果 | 使用者提供coverage提升後正式2×2輸出：Baseline 182.62%、Sort Only 147.57%、Param Only 145.84%、Adapted 75.70%。後續capital-aware消融：R2 `capital-adjusted-score`總報酬176.18%、MDD 14.15%、RoMD 12.45，仍低於Baseline且Target mean與保留買單成交率退步，判定拒絕目前乘積公式；R3 `capital-bucket-then-score`總報酬184.12%、EV 0.34R、Target capture 0.33，但MDD升至19.20%、RoMD降至9.59、Log R²與月勝率退步，僅保留為研究方向，不升格正式policy。正式策略維持Baseline |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
-| Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`strategy_aligned_no_time_pass_magnitude_mse`、objective=`daily_percentile_regression`、scope=`pass_only`、Seed 42；Selection PIT score start=`auto`，由目前Dataset／Target／label completion與最小group契約解析最早合法月份，fold／inner validation為12／24個月；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
+| Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`unique_group_sampling`、objective=`binary_classification`、scope=`all_labels`、threshold 0.5、Seed 42；正式策略mode自動解析為`hard-filter / canonical_runtime / original buy-sort`。Selection PIT continuous-ranker設定與工件保留，但只由其CLI研究入口使用；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
 | 當前最佳實證模型 | 9A `inception_time_v1 / unique_group_sampling / threshold 0.5` 為新的排序／高品質模型基準；8F `multiscale_cnn_sequence_only_v1` 保留為高覆蓋基準 |
-| Dataset | 正式policy退回既有 `breakout_quality_v1` 300×10 feature bank與固定百分比Label；不需重建Dataset、relabel、9A checkpoint或9A scores。10A Market Bank、checkpoint、manifest與research scores保留於獨立legacy路徑供歷史重現 |
+| Dataset | 沿用既有`breakout_quality_v1` 300×10 feature bank與固定百分比Label。使用者已於2026-08-04重新訓練`inception_time_v1 / unique_group_sampling`，產生新的model／split／manifest；research report、forward-OOS scores與正式策略比較仍待選單流程執行。10A Market Bank與其他legacy工件保留於獨立路徑供歷史重現 |
 
 使用者所稱「退回 v8 版本」是退回**尚未加入 v9 auxiliary head 的程式版本**，不是把 policy 預設改成 `multiscale_cnn_v8`。目前active architectures為已接受的9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A Candidate-conditioned Market Set與Stage 1 Global Market Set均已淘汰並轉為legacy read-only；9A-GN、9B ModernTCN、9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer只保留legacy read-only compatibility。
 
@@ -2864,47 +2864,46 @@ python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-p
 
 本次程式變更不需重建任何Dataset、Label、checkpoint或score。使用者本機需已有9A canonical `forward_oos` runtime manifest／scores與正式rolling active-param工件；缺少或identity不一致時fail-fast。
 
-## 2026-08-04 — Binary DL Replacement Gate 9A canonical artifact preflight修正
+## 2026-08-04 — Binary DL Filter 正式選單閉環
 
 ### 狀態
 
-`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_9A_MODEL_ARTIFACT_REQUIRED`
+`IMPLEMENTED / MODEL_TRAINED / REPORT_AND_STRATEGY_RESULT_NOT_AVAILABLE`
 
 ### 程式基準
 
 - 輸入ZIP：`test-branch-1_20260804_015125_1e01efe.zip`
 - SHA256：`36a4cbe8e08dd81c62d45abb062493e4b60cb17ec8aab0b4505dfddc54948064`
-- 本輪patch名稱與SHA256以交付回覆為準。
+- 本輪patch ZIP名稱與SHA256以交付回覆為準。
 
-### 問題與更正
+### 使用者已完成訓練
 
-使用者執行`strategy-dl-filter-gate`時，AB pair回報缺少9A正式forward-OOS score；依前次建議執行`export-scores --scope forward_oos`後，又回報canonical路徑缺少：
-
-`models/filters/breakout_quality/breakout_quality_v1/inception_time_v1/unique_group_sampling/manifest.json`
-
-這證明本機不只是缺少`scores.csv`，而是至少缺少canonical model manifest。前次「只需重新export、不需重訓」的判斷不成立，因`export-scores`必須先以`manifest.json + model.pt + split_assignments.csv`重建固定9A模型與OOS split identity；research scores、歷史分類報表與既有策略結果都不能取代checkpoint manifest。
+- Profile：`inception_time_v1 / unique_group_sampling`
+- Device：CUDA；mixed precision BF16；deterministic=True；TF32=False。
+- Epoch selection：Validation Loss；Epoch 2為最佳，最低Validation Loss 0.708591；Epoch 3 early stop。
+- Final Selection refit：2 epochs；Final Loss 0.671645。
+- Inner Train：538,887 rows／16,832 groups，2011-01-03～2018-11-05。
+- Validation：187,316 rows／6,065 groups，2019-01-02～2020-11-05。
+- Final Refit：729,654 rows／23,072 groups，2011-01-03～2020-11-05。
+- OOS未參與訓練：591,679 rows／17,346 groups，2021-01-04～2025-12-22。
+- 已產生`model.pt`、`split_assignments.csv`與`manifest.json`；尚未取得本次research report、forward-OOS score與策略績效結果。
 
 ### 唯一主要變更
 
-1. `strategy-dl-filter-gate`在建立輸出目錄及執行AB／CF pair前，先檢查canonical `manifest.json`、`model.pt`、`split_assignments.csv`與`scores.csv`。
-2. 缺少前三項任一模型工件時，列出相對路徑與存在狀態，搜尋architecture目錄下其他位置的同filter／architecture／profile manifest，但不自動搬移單檔或猜測identity；有完整備份時必須恢復整個profile資料夾，沒有備份時才重新train。
-3. 模型三件完整而只缺`scores.csv`時，明確標示「不需重訓」，只要求`export-scores --scope forward_oos`。
-4. 通用model artifact錯誤訊息改為：現有Dataset若仍相容，通常只需train；只有train另行回報Dataset缺失或不相容時才需要build-dataset，避免無條件要求重建Dataset。
+1. 正式workflow profile切回`unique_group_sampling`，主選單自動解析為Binary classification與hard-filter strategy comparison。
+2. Binary「模型研究與驗證」新增兩個正式選項：
+   - 重新訓練後，依序顯示OOS簡易模型報表、匯出forward-OOS runtime scores、與Baseline比較實際投組績效。
+   - 使用既有模型，不重新訓練；先自動更新research scores，再顯示報表並比較Baseline。
+3. 模型報表必須先於策略比較顯示；策略比較重用唯一`strategy-compare` hard-filter鏈，明確傳入filter／architecture／profile／canonical runtime score／fixed risk／position cap。
+4. A／B／C／F、Optional filters A～E及其他臨時研究仍維持CLI-only，不加入正式選單。
+5. 因主workflow切回Binary，CLI-only A～E continuous Ranking Gate的預設identity改為固定continuous-ranker profile，不再錯誤跟隨主workflow。
 
-### Dataset／Label／模型需求
+### 固定條件
 
-本輪程式修改本身不重建Dataset、不relabel、不改9A架構、profile、threshold或策略Gate。使用者目前的實際執行被9A canonical模型工件缺失阻擋：
+- Dataset、Label、9A architecture、training profile、threshold 0.5、正式rolling params、原position-aware buy-sort、fixed risk、position cap、交易成本與portfolio accounting不變。
+- 不新增threshold調整、optimizer、Score ranking、R3或新的模型實驗。
+- OOS仍只在模型凍結後用於簡易報表與策略經濟效果比較。
 
-- 若有原始`unique_group_sampling`完整profile備份，恢復`manifest.json`、`model.pt`與`split_assignments.csv`後，只需重新export forward-OOS scores。
-- 若沒有可恢復備份，現有`breakout_quality_v1` Dataset／binary Label可沿用，先以相同`inception_time_v1 / unique_group_sampling / Seed 42 / threshold 0.5`重新train，再export forward-OOS scores；不得由歷史OOS結果回調threshold或訓練設定。
+### 採用判定
 
-### 結果與判定
-
-尚未取得A／B／C／F真實策略結果。Gate實驗狀態維持`RESULT_NOT_AVAILABLE`；本輪只修正前置工件診斷與操作指示。正式Baseline、optional filters、R3與先前全部結果均不改變。
-
-### 下一步
-
-1. 先檢查本機是否有可恢復的9A完整profile備份。
-2. 無備份時執行binary 9A train；Dataset只有在train明確回報缺少／不相容時才重建。
-3. 執行forward-OOS score export。
-4. 重新執行`strategy-dl-filter-gate`取得A／B／C／F結果。
+本輪只完成正式操作閉環，不預判新模型有效。使用者應從主選單`[1] 模型研究與驗證`選擇「使用既有模型」，先取得OOS簡易模型報表，再取得hard-filter相對Baseline的實際績效；結果取得後回寫Selection／OOS分類指標、策略總報酬、MDD、Return／MDD、EV、曝險與採用判定。
