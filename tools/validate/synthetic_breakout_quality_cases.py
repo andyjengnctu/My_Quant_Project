@@ -13128,21 +13128,28 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
     summary = {"ticker": case_id, "synthetic": True}
     base = V16StrategyParams()
 
+    from filters.breakout_quality.binary_pit_score_store import (
+        BINARY_PIT_SCORE_SOURCE,
+        build_pass_condition_from_binary_point_in_time_scores,
+        load_binary_point_in_time_score_table,
+    )
+    from filters.breakout_quality.runtime import (
+        breakout_quality_filter_source_context,
+        build_breakout_quality_filter_pass_condition,
+    )
+    from strategies.breakout.search_space import build_trial_params
     from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
         ALL_RULE_FILTERS_OFF_OVERRIDES,
         RISK_SEARCH_FIELDS,
-        _materialize_formal_rule_variant,
         _parse_args as parse_dl_param_adapt_args,
+        _validate_binary_pit_optimizer_coverage,
         build_risk_only_fold_overrides,
+        run_param_adaptation_gate,
     )
     from tools.optimizer.outer_rolling_oos import (
         FOLD_FIXED_STRATEGY_OVERRIDES_KEY,
+        _validate_optimizer_runtime_context,
         resolve_optimizer_session_spec_for_fold,
-    )
-    from strategies.breakout.search_space import (
-        build_trial_params,
-        _resolve_optimizer_float,
-        _resolve_optimizer_int,
     )
 
     param_adapt_args = parse_dl_param_adapt_args([])
@@ -13168,21 +13175,57 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             }
         }
     }
-    risk_only_overrides = build_risk_only_fold_overrides(
+    p2_overrides = build_risk_only_fold_overrides(
         baseline_contract=synthetic_baseline_contract,
         args=param_adapt_args,
         training_dl_enabled=False,
     )
-    fold_fixed = risk_only_overrides["2021-01-01"]
+    p3_overrides = build_risk_only_fold_overrides(
+        baseline_contract=synthetic_baseline_contract,
+        args=param_adapt_args,
+        training_dl_enabled=True,
+    )
+    p2_fixed = p2_overrides["2021-01-01"]
+    p3_fixed = p3_overrides["2021-01-01"]
     resolved_fold_spec = resolve_optimizer_session_spec_for_fold(
         {
             "fixed_strategy_param_overrides": {"fixed_risk": 0.01},
-            FOLD_FIXED_STRATEGY_OVERRIDES_KEY: risk_only_overrides,
+            FOLD_FIXED_STRATEGY_OVERRIDES_KEY: p3_overrides,
         },
         oos_start_date="2021-01-01",
     )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_four_by_two_risk_only_fold_contract",
+        (
+            tuple(RISK_SEARCH_FIELDS),
+            False,
+            True,
+            True,
+            True,
+            True,
+            "unique_group_sampling",
+        ),
+        (
+            tuple(RISK_SEARCH_FIELDS),
+            p2_fixed["use_breakout_quality_filter"],
+            p3_fixed["use_breakout_quality_filter"],
+            all(not p2_fixed[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+            all(
+                p3_fixed.get(key) == value
+                for key, value in ALL_RULE_FILTERS_OFF_OVERRIDES.items()
+            ),
+            resolved_fold_spec["fixed_strategy_param_overrides"]
+            ["use_breakout_quality_filter"],
+            param_adapt_args.experiment_profile,
+        ),
+    )
 
-    class _FixedParamSession:
+    class _RiskOnlySession:
+        optimizer_fixed_tp_percent = 0.0
+
         def __init__(self, values):
             self.values = dict(values)
 
@@ -13191,58 +13234,6 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
 
         def get_fixed_strategy_param(self, field_name, default=None):
             return self.values.get(field_name, default)
-
-    class _NoSuggestTrial:
-        def suggest_int(self, *args, **kwargs):
-            raise AssertionError("fixed int should not call trial")
-
-        def suggest_float(self, *args, **kwargs):
-            raise AssertionError("fixed float should not call trial")
-
-    fixed_session = _FixedParamSession({"high_len": 220, "bb_mult": 2.0})
-    no_suggest_trial = _NoSuggestTrial()
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "binary_dl_risk_only_param_adapt_freezes_non_risk_fields_per_fold",
-        (
-            tuple(RISK_SEARCH_FIELDS),
-            False,
-            False,
-            False,
-            False,
-            False,
-            False,
-            220,
-            (220, 2.0),
-            True,
-            "unique_group_sampling",
-        ),
-        (
-            tuple(RISK_SEARCH_FIELDS),
-            any(field in fold_fixed for field in RISK_SEARCH_FIELDS),
-            any(fold_fixed[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
-            fold_fixed["use_history_threshold"],
-            fold_fixed["use_breakout_reclaim_reentry"],
-            fold_fixed["use_kc"],
-            fold_fixed["use_breakout_quality_filter"],
-            resolved_fold_spec["fixed_strategy_param_overrides"]["high_len"],
-            (
-                _resolve_optimizer_int(fixed_session, no_suggest_trial, "high_len"),
-                _resolve_optimizer_float(fixed_session, no_suggest_trial, "bb_mult"),
-            ),
-            all(
-                resolved_fold_spec["fixed_strategy_param_overrides"].get(key)
-                == value
-                for key, value in ALL_RULE_FILTERS_OFF_OVERRIDES.items()
-            ),
-            param_adapt_args.experiment_profile,
-        ),
-    )
-
-    class _RiskOnlySession(_FixedParamSession):
-        optimizer_fixed_tp_percent = 0.0
 
         def resolve_optimizer_tp_percent(self, trial, *, fixed_tp_percent):
             return fixed_tp_percent
@@ -13263,45 +13254,297 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             self.calls.append(field_name)
             return list(choices)[0]
 
-    risk_only_trial = _RiskOnlyTrial()
-    risk_only_params = build_trial_params(
-        _RiskOnlySession(fold_fixed),
-        risk_only_trial,
-    )
+    risk_trial = _RiskOnlyTrial()
+    risk_params = build_trial_params(_RiskOnlySession(p2_fixed), risk_trial)
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_dl_risk_only_search_suggests_only_four_atr_fields",
+        "binary_dl_four_by_two_searches_only_risk_fields",
+        (set(RISK_SEARCH_FIELDS), 220, False, False, False),
         (
-            set(RISK_SEARCH_FIELDS),
-            220,
-            False,
-            False,
-            False,
-            0.0,
+            set(risk_trial.calls),
+            risk_params.high_len,
+            risk_params.use_bb,
+            risk_params.use_kc,
+            risk_params.use_breakout_quality_filter,
         ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_root = Path(tmpdir)
+        manifest_path = tmp_root / "manifest.json"
+        scores_path = tmp_root / "scores.csv"
+        score_table = pd.DataFrame(
+            {
+                "ticker": ["2330", "2330"],
+                "date": ["2020-01-02", "2020-01-03"],
+                "group_index": [1, 2],
+                "dl_quality_score": [0.70, 0.30],
+                "fold_id": ["fold_1", "fold_1"],
+                "model_information_cutoff": ["2020-01-01", "2020-01-01"],
+            }
+        )
+        score_table.to_csv(scores_path, index=False, encoding="utf-8-sig")
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_type": "binary_point_in_time_scores",
+                    "score_table": {"row_count": 2},
+                    "score_period": {
+                        "start": "2020-01-02",
+                        "end": "2020-01-03",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        load_binary_point_in_time_score_table.cache_clear()
+        indexed, _manifest = load_binary_point_in_time_score_table(
+            str(manifest_path), str(scores_path)
+        )
+        frame = pd.DataFrame(
+            {"close": [9.0, 10.0, 11.0]},
+            index=pd.to_datetime(["2019-12-31", "2020-01-02", "2020-01-03"]),
+        )
+        candidate = np.array([True, True, True])
+        direct_pass = build_pass_condition_from_binary_point_in_time_scores(
+            frame,
+            ticker="2330",
+            score_threshold=0.5,
+            candidate_condition=candidate,
+            manifest_path=str(manifest_path),
+            scores_path=str(scores_path),
+        )
+        with breakout_quality_filter_source_context(
+            score_source=BINARY_PIT_SCORE_SOURCE,
+            manifest_path=str(manifest_path),
+            scores_path=str(scores_path),
+        ):
+            runtime_pass = build_breakout_quality_filter_pass_condition(
+                frame,
+                ticker="2330",
+                high_len=220,
+                score_threshold=0.5,
+                candidate_condition=candidate,
+                project_root=str(tmp_root),
+            )
+
+        class _ContextSession:
+            def optimizer_runtime_context(self):
+                return breakout_quality_filter_source_context(
+                    score_source=BINARY_PIT_SCORE_SOURCE,
+                    manifest_path=str(manifest_path),
+                    scores_path=str(scores_path),
+                )
+
+        runtime_spec = {
+            "runtime_context_spec": {
+                "module": "filters.breakout_quality.runtime",
+                "callable": "breakout_quality_filter_source_context",
+                "kwargs": {
+                    "score_source": BINARY_PIT_SCORE_SOURCE,
+                    "manifest_path": str(manifest_path),
+                    "scores_path": str(scores_path),
+                },
+            }
+        }
+        _validate_optimizer_runtime_context(_ContextSession(), runtime_spec)
+        mismatch_rejected = False
+        try:
+            bad_spec = json.loads(json.dumps(runtime_spec))
+            bad_spec["runtime_context_spec"]["kwargs"]["scores_path"] = str(
+                tmp_root / "wrong.csv"
+            )
+            _validate_optimizer_runtime_context(_ContextSession(), bad_spec)
+        except RuntimeError as exc:
+            mismatch_rejected = "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR" in str(exc)
+
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_pit_store_and_optimizer_runtime_identity",
+        (2, (True, True, False), (True, True, False), True),
+        (len(indexed), tuple(direct_pass), tuple(runtime_pass), mismatch_rejected),
+    )
+
+    coverage_contract = {
+        "meta": {
+            "first_oos_date": "2021-01-01",
+            "last_oos_date": "2026-01-01",
+            "train_window_months": 120,
+        }
+    }
+    covered_pit = _validate_binary_pit_optimizer_coverage(
+        binary_pit={
+            "ready": True,
+            "score_period": {"start": "2011-01-01", "end": "2025-12-31"},
+        },
+        baseline_contract=coverage_contract,
+    )
+    short_coverage_rejected = False
+    try:
+        _validate_binary_pit_optimizer_coverage(
+            binary_pit={
+                "ready": True,
+                "score_period": {"start": "2012-01-01", "end": "2025-12-31"},
+            },
+            baseline_contract=coverage_contract,
+        )
+    except ValueError as exc:
+        short_coverage_rejected = "未完整覆蓋" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_pit_covers_full_optimizer_selection_period",
+        ({"start": "2011-01-01", "end": "2025-12-31"}, True),
+        (covered_pit["optimizer_required_period"], short_coverage_rejected),
+    )
+
+    from tools.filters.breakout_quality.build_binary_point_in_time_scores import (
+        _train_fold as train_binary_pit_fold,
+    )
+
+    pit_events = pd.DataFrame(
+        {
+            "ticker": ["1101", "1101", "1101"],
+            "date": pd.to_datetime(["2018-01-02", "2019-01-02", "2020-01-02"]),
+        }
+    )
+    pit_group_table = pd.DataFrame(
+        {
+            "event_row": [0, 1, 2],
+            "ticker": ["1101", "1101", "1101"],
+            "date": pd.to_datetime(["2018-01-02", "2019-01-02", "2020-01-02"]),
+            "group_index": [0, 1, 2],
+            "label_eval_end_date": pd.to_datetime(
+                ["2018-02-28", "2019-12-31", "2020-02-28"]
+            ),
+        }
+    )
+    pit_bundle = SimpleNamespace(
+        features=np.zeros((3, 2, 1), dtype=np.float32),
+        context=np.zeros((3, 1), dtype=np.float32),
+        labels=np.array([0, 1, 1], dtype=np.int64),
+        events=pit_events,
+        group_table=pit_group_table,
+        profile=SimpleNamespace(
+            training_sampling_mode="unique_ticker_date",
+            augmentation_name="none",
+            augmentation_parameters=lambda: {},
+            lr_schedule_parameters=lambda: {},
+            optimizer_name="adam",
+            lr_schedule_name="none",
+            training_weight_reduction="batch_weight_sum",
+        ),
+        model_spec=SimpleNamespace(as_manifest_payload=lambda: {"name": "synthetic"}),
+    )
+    pit_args = SimpleNamespace(
+        evaluation_batch_size=4,
+        evaluation_workers=0,
+        epochs=2,
+        batch_size=2,
+        lr=0.001,
+        weight_decay=0.0,
+        gradient_clip_norm=1.0,
+        seed=42,
+        early_stopping_patience=1,
+        early_stopping_min_delta=0.0,
+        parallel_split_evaluation=False,
+        train_prefetch_batches=0,
+        experiment_profile="unique_group_sampling",
+    )
+
+    class _SyntheticModel:
+        def eval(self):
+            return self
+
+        def state_dict(self):
+            return {}
+
+    class _SyntheticTorch:
+        @staticmethod
+        def save(payload, path):
+            Path(path).write_text(json.dumps({"saved": True}), encoding="utf-8")
+
+    pit_ids = {
+        "train_ids": np.array([0], dtype=np.int64),
+        "validation_ids": np.array([1], dtype=np.int64),
+        "final_ids": np.array([0, 1], dtype=np.int64),
+        "score_ids": np.array([2], dtype=np.int64),
+    }
+    with (
+        tempfile.TemporaryDirectory() as tmpdir,
+        patch(
+            "tools.filters.breakout_quality.build_binary_point_in_time_scores.train_impl._resolve_training_sampling_indices",
+            side_effect=lambda events, labels, indices, **kwargs: (
+                np.asarray(indices, dtype=np.int64),
+                {"rows": len(indices)},
+            ),
+        ),
+        patch(
+            "tools.filters.breakout_quality.build_binary_point_in_time_scores.train_impl._select_epoch_with_inner_validation",
+            return_value={"best_epoch": 2, "best_validation_loss": 0.4},
+        ),
+        patch(
+            "tools.filters.breakout_quality.build_binary_point_in_time_scores.train_impl._fit_full_selection",
+            return_value={"model": _SyntheticModel()},
+        ),
+        patch(
+            "tools.filters.breakout_quality.build_binary_point_in_time_scores._predict_scores",
+            return_value=np.array([0.75], dtype=np.float32),
+        ),
+    ):
+        pit_fold_result = train_binary_pit_fold(
+            _SyntheticTorch(),
+            pit_bundle,
+            {
+                "fold_id": "fold_20200102_20201231",
+                "score_start": pd.Timestamp("2020-01-02"),
+                "score_end": pd.Timestamp("2020-12-31"),
+            },
+            pit_ids,
+            args=pit_args,
+            execution_plan=SimpleNamespace(),
+            fold_dir=Path(tmpdir),
+        )
+    pit_frame = pit_fold_result["frame"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_pit_fold_cutoff_precedes_score_and_exports_identity",
+        ("2019-12-31", "2020-01-02", 0.75, True),
         (
-            set(risk_only_trial.calls),
-            risk_only_params.high_len,
-            risk_only_params.use_bb,
-            risk_only_params.use_kc,
-            risk_only_params.use_breakout_quality_filter,
-            risk_only_params.min_history_win_rate,
+            pit_fold_result["model_information_cutoff"],
+            pit_frame.iloc[0]["date"],
+            round(float(pit_frame.iloc[0]["dl_quality_score"]), 2),
+            pd.Timestamp(pit_fold_result["model_information_cutoff"])
+            < pd.Timestamp(pit_frame.iloc[0]["date"]),
         ),
     )
 
     synthetic_adapted = {
+        "meta": {
+            "first_oos_date": "2021-01-01",
+            "last_oos_date": "2021-01-01",
+            "train_window_months": 120,
+            "oos_horizon_months": 12,
+            "trials_per_fold": 1,
+        },
+        "summary": {"folds": 1},
         "params_ensemble_by_effective_date": {
             "2021-01-01": [
                 {
                     "member_index": 1,
                     "params": {
-                        **fold_fixed,
+                        **p2_fixed,
                         "atr_len": 7,
                         "atr_buy_tol": 2.1,
-                        "atr_times_init": 2.2,
-                        "atr_times_trail": 2.3,
+                        "atr_times_init": 4.2,
+                        "atr_times_trail": 3.8,
                     },
                 }
             ]
@@ -13310,56 +13553,29 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         "params_by_oos_year": {},
     }
     with tempfile.TemporaryDirectory() as tmpdir:
-        adapted_path = Path(tmpdir) / "adapted.json"
-        formal_path = Path(tmpdir) / "formal.json"
-        adapted_path.write_text(json.dumps(synthetic_adapted), encoding="utf-8")
-        _materialize_formal_rule_variant(
-            baseline_contract=synthetic_baseline_contract,
-            adapted_params_path=adapted_path,
-            output_path=formal_path,
-            args=param_adapt_args,
-        )
-        formal_payload = json.loads(formal_path.read_text(encoding="utf-8"))
-    formal_params = formal_payload["params_ensemble_by_effective_date"][
-        "2021-01-01"
-    ][0]["params"]
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "binary_dl_risk_only_replay_compares_formal_rules_and_all_off_rules",
-        (
-            True,
-            True,
-            7,
-            2.1,
-            0.0,
-        ),
-        (
-            formal_params["use_breakout_reclaim_reentry"],
-            formal_params["use_kc"],
-            formal_params["atr_len"],
-            formal_params["atr_buy_tol"],
-            fold_fixed["min_history_win_rate"],
-        ),
-    )
-
-    from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
-        run_param_adaptation_gate,
-    )
-
-    with tempfile.TemporaryDirectory() as tmpdir:
         tmp_root = Path(tmpdir)
         baseline_path = tmp_root / "models" / "roos_base_best.json"
         baseline_path.parent.mkdir(parents=True, exist_ok=True)
-        baseline_path.write_text(
-            json.dumps(synthetic_baseline_contract["payload"]), encoding="utf-8"
-        )
-        adapted_path = tmp_root / "synthetic_a5.json"
-        adapted_path.write_text(json.dumps(synthetic_adapted), encoding="utf-8")
+        baseline_payload = {
+            **synthetic_adapted,
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [
+                    {"member_index": 1, "params": baseline_member_params}
+                ]
+            },
+        }
+        baseline_path.write_text(json.dumps(baseline_payload), encoding="utf-8")
+        p2_path = tmp_root / "p2.json"
+        p3_path = tmp_root / "p3.json"
+        p2_path.write_text(json.dumps(synthetic_adapted), encoding="utf-8")
+        p3_payload = json.loads(json.dumps(synthetic_adapted))
+        p3_payload["params_ensemble_by_effective_date"]["2021-01-01"][0][
+            "params"
+        ]["use_breakout_quality_filter"] = True
+        p3_path.write_text(json.dumps(p3_payload), encoding="utf-8")
         orchestration_contract = {
-            **synthetic_baseline_contract,
             "path": baseline_path,
+            "payload": baseline_payload,
             "sha256": "synthetic-baseline",
             "meta": {
                 "window_mode": "fixed",
@@ -13371,26 +13587,54 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             "summary": {"folds": 1},
         }
         comparison_calls = []
+        optimizer_calls = []
 
         def _fake_comparison(**kwargs):
             comparison_calls.append(kwargs)
+            index = len(comparison_calls)
             return {
                 "no_filter": {
-                    "total_return_pct": 10.0,
-                    "return_over_max_drawdown": 2.0,
+                    "total_return_pct": 100.0 + index,
+                    "max_drawdown_pct": 10.0,
+                    "return_over_max_drawdown": 10.0,
+                    "expected_value_r": 0.5,
+                    "avg_exposure_pct": 80.0,
+                    "trades": 100,
                 },
                 "quality_filter": {
-                    "total_return_pct": 12.0,
-                    "return_over_max_drawdown": 2.2,
-                },
-                "quality_filter_minus_no_filter": {
-                    "total_return_pct": 2.0,
-                    "return_over_max_drawdown": 0.2,
-                    "expected_value_r": 0.1,
-                    "avg_exposure_pct": -1.0,
+                    "total_return_pct": 102.0 + index,
+                    "max_drawdown_pct": 11.0,
+                    "return_over_max_drawdown": 9.0,
+                    "expected_value_r": 0.4,
+                    "avg_exposure_pct": 70.0,
+                    "trades": 90,
                 },
             }
 
+        def _fake_optimizer_arm(**kwargs):
+            optimizer_calls.append(kwargs)
+            is_p3 = bool(kwargs["training_dl_enabled"])
+            return {
+                "params_path": p3_path if is_p3 else p2_path,
+                "summary": {
+                    "status": "COMPLETED",
+                    "parameter_set": "P3" if is_p3 else "P2",
+                },
+                "contract": {},
+            }
+
+        binary_pit = {
+            "status": "READY",
+            "ready": True,
+            "manifest_path": "pit/manifest.json",
+            "scores_path": "pit/scores.csv",
+            "manifest_absolute": str(tmp_root / "pit" / "manifest.json"),
+            "scores_absolute": str(tmp_root / "pit" / "scores.csv"),
+            "manifest_sha256": "manifest-sha",
+            "scores_sha256": "scores-sha",
+            "score_period": {"start": "2011-01-01", "end": "2025-12-31"},
+            "error": "",
+        }
         with (
             patch(
                 "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.load_runtime_artifact_contract",
@@ -13401,14 +13645,15 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                 return_value=orchestration_contract,
             ),
             patch(
+                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate._ensure_binary_pit",
+                return_value=binary_pit,
+            ),
+            patch(
                 "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.configure_optuna_logging",
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate._run_a5_optimizer",
-                return_value={
-                    "params_path": adapted_path,
-                    "summary": {"status": "COMPLETED"},
-                },
+                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate._run_optimizer_arm",
+                side_effect=_fake_optimizer_arm,
             ),
             patch(
                 "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.run_comparison",
@@ -13431,45 +13676,45 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                     "off",
                 ],
             )
-        report_exists = (
+        report_path = (
             tmp_root
             / "models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling/strategy_dl_filter_param_adapt_gate.md"
-        ).is_file()
+        )
+        report_text = report_path.read_text(encoding="utf-8")
+
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_dl_risk_only_gate_runs_formal_and_all_off_pairs_without_a6_leakage",
+        "binary_dl_four_by_two_gate_orchestration_and_report",
         (
             2,
-            "current",
-            "all-off",
-            False,
-            True,
-            {"formal", "all_off"},
-            "BINARY_PIT_REQUIRED",
+            (False, True),
+            4,
+            ("current", "all-off", "all-off", "all-off"),
+            (False, True, True, True),
+            4,
+            "FOUR_BY_TWO_COMPLETE",
             True,
         ),
         (
+            len(optimizer_calls),
+            tuple(call["training_dl_enabled"] for call in optimizer_calls),
             len(comparison_calls),
-            comparison_calls[0]["optional_entry_filter_policy"],
-            comparison_calls[1]["optional_entry_filter_policy"],
-            bool(comparison_calls[0].get("shared_param_overrides")),
-            all(
-                comparison_calls[1]["shared_param_overrides"].get(key) is False
-                for key in ALL_RULE_FILTERS_OFF_OVERRIDES
+            tuple(call["optional_entry_filter_policy"] for call in comparison_calls),
+            tuple(
+                bool(call.get("shared_param_overrides"))
+                for call in comparison_calls
             ),
-            set(orchestration_result["a5_b5"]),
-            orchestration_result["a6_b6"]["status"],
-            report_exists,
+            len(orchestration_result["matrix"]),
+            orchestration_result["status"],
+            all(token in report_text for token in ("A0", "B0", "A3", "B3", "B3−A2")),
         ),
     )
 
-
-    summary["workflow"] = "binary_dl_filter_risk_only_param_adaptation"
-    summary["a6_b6"] = "BINARY_PIT_REQUIRED"
+    summary["workflow"] = "binary_dl_filter_four_parameters_by_two_states"
+    summary["binary_pit"] = "REQUIRED_AND_VALIDATED"
     return results, summary
-
 
 def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_STRATEGY_ADAPTATION"

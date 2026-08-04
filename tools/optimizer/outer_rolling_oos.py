@@ -5983,6 +5983,30 @@ def _validate_optimizer_runtime_context(session, session_spec: dict | None) -> N
                         "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: optimizer runtime context不一致："
                         f"actual={actual_payload}, expected={expected}"
                     )
+            elif (
+                module_name == "filters.breakout_quality.runtime"
+                and callable_name == "breakout_quality_filter_source_context"
+            ):
+                from filters.breakout_quality.runtime import (
+                    get_breakout_quality_filter_source_context,
+                )
+
+                actual = get_breakout_quality_filter_source_context()
+                expected = {
+                    "score_source": str(kwargs.get("score_source") or ""),
+                    "manifest_path": str(kwargs.get("manifest_path") or ""),
+                    "scores_path": str(kwargs.get("scores_path") or ""),
+                }
+                actual_payload = {
+                    "score_source": str(actual.score_source),
+                    "manifest_path": str(actual.manifest_path or ""),
+                    "scores_path": str(actual.scores_path or ""),
+                }
+                if actual_payload != expected:
+                    raise RuntimeError(
+                        "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: optimizer Binary PIT runtime context不一致："
+                        f"actual={actual_payload}, expected={expected}"
+                    )
     except Exception as exc:
         text = str(exc)
         if "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR" in text:
@@ -6010,6 +6034,9 @@ def _is_non_retryable_fold_failure(exc: BaseException | None) -> bool:
         "找不到selection pit manifest",
         "找不到selection pit audit",
         "selection pit runtime identity不一致",
+        "binary pit",
+        "binary_point_in_time",
+        "binary point-in-time",
         "同一 ticker／score_date 的 ensemble members score availability不一致",
         "同一 ticker 的 ensemble members score availability不一致",
         "同一 ticker 的 ensemble members score source不一致",

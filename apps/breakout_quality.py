@@ -115,6 +115,9 @@ COMMAND_MODULES = {
     "audit-candidate-counterfactual": "tools.filters.breakout_quality.audit_candidate_counterfactual_execution",
     "audit-selection-pressure": "tools.filters.breakout_quality.audit_portfolio_selection_pressure",
     "build-point-in-time-scores": "tools.filters.breakout_quality.build_point_in_time_scores",
+    "build-binary-point-in-time-scores": (
+        "tools.filters.breakout_quality.build_binary_point_in_time_scores"
+    ),
     "audit-point-in-time-scores": "tools.filters.breakout_quality.audit_point_in_time_scores",
     "strategy-compare": "tools.filters.breakout_quality.strategy_compare",
     "strategy-adapt": "tools.filters.breakout_quality.strategy_adapt",
@@ -154,13 +157,16 @@ COMMAND_DESCRIPTIONS = {
     "audit-candidate-counterfactual": "執行11J per-candidate counterfactual execution稽核；已停止、僅供歷史追溯",
     "audit-selection-pressure": "執行11K portfolio selection-pressure歸因；read-only、CLI-only",
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
+    "build-binary-point-in-time-scores": (
+        "建立Binary DL filter歷史 point-in-time scores；research-only、CLI-only"
+    ),
     "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
     "strategy-compare": "執行breakout-quality策略績效比較",
     "strategy-adapt": "驗證Selection rolling Ranking×Parameter 2×2策略適應",
     "strategy-filter-gate": "執行Optional entry filters × Ranking A～E研究Gate",
     "strategy-dl-filter-gate": "執行Binary DL filter規則消融矩陣Gate；research-only、CLI-only",
     "strategy-dl-filter-param-adapt-gate": (
-        "執行Binary DL filter風險參數適應A5/B5 Gate；research-only、CLI-only"
+        "執行Binary DL filter 4種參數×DL開關 4×2 Gate；research-only、CLI-only"
     ),
 }
 

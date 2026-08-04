@@ -78,7 +78,9 @@ def validate_dataset_cli_contract_case(_base_params):
     for command in (
         "menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain",
         "train", "export-scores", "report", "evaluate", "regime-audit",
-        "prepare-continuous-target", "build-point-in-time-scores", "audit-point-in-time-scores", "strategy-compare",
+        "prepare-continuous-target", "build-point-in-time-scores",
+        "build-binary-point-in-time-scores", "audit-point-in-time-scores",
+        "strategy-compare", "strategy-dl-filter-param-adapt-gate",
     ):
         add_check(
             results,

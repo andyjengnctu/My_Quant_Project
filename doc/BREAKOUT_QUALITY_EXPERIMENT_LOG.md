@@ -3198,3 +3198,55 @@ A6／B6代表optimizer訓練期間就開啟Binary DL，再用同一套新參數�
 目前只有實作與契約驗證，尚無本機完整rolling optimizer及replay結果，不得判定A5／B5有效或無效。正式策略仍維持A0與既有正式ROOS。
 
 A5／B5至少需同時檢查Return／MDD、EV、直接交易選擇R與年度穩定性；總報酬單獨改善不足以通過。A6／B6尚未執行，且不得在Binary PIT缺失時開始。
+
+## 2026-08-04 — Binary DL 4 Parameters × 2 DL States Risk Adaptation Gate
+
+### 狀態
+
+`IMPLEMENTED / LOCAL_BINARY_PIT_AND_ROLLING_EXECUTION_REQUIRED / FORMAL_BASELINE_UNCHANGED`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260804_213150_b044668(1).zip`
+- SHA256：`d6cb8e3e2fa4f47d6b56ae3d239ee80b867bfa54a71688b28444a1b9299cc866`
+- 本節取代前一節只做到A5／B5且將A6／B6停在`BINARY_PIT_REQUIRED`的暫時編排；歷史紀錄保留，但後續命名統一為P0～P3、A0／B0～A3／B3。
+
+### 最終比較矩陣
+
+| 參數組 | 參數來源 | Rule-based規則 | DL關 | DL開 |
+|---|---|---|---|---|
+| P0 | 原`base-finalist-best` ROOS | 原正式active-param設定 | A0 | B0 |
+| P1 | 原`base-finalist-best` ROOS | filters全關 | A1 | B1 |
+| P2 | filters全關、optimizer訓練時DL關 | filters全關 | A2 | B2 |
+| P3 | filters全關、optimizer訓練時DL開 | filters全關 | A3 | B3 |
+
+P2與P3只搜尋`atr_len`、`atr_buy_tol`、`atr_times_init`及`atr_times_trail`。`high_len`、TP、fixed risk、position cap、max positions、rotation、費稅、買入排序與其他非風險參數依Baseline各effective date固定，不得成為trial維度。
+
+### Binary PIT無前視契約
+
+新增`build-binary-point-in-time-scores` CLI與`binary_point_in_time` runtime source。P3每個optimizer歷史日期只能讀取expanding-window PIT Scores；每個fold的Train／Validation／完整refit均只包含score start前且`label_eval_end_date`已完成的groups，score period不得參與訓練或epoch selection。每列分數保存`fold_id`及`model_information_cutoff`，且必須滿足cutoff早於score date。
+
+PIT source同時傳入optimizer主process、fold session及平行workers，並在search前驗證manifest／scores identity。以下來源一律禁止替代：
+
+- 最終9A canonical forward-OOS scores。
+- `research_scores.csv`。
+- 最終模型Selection in-sample scores。
+
+缺少或identity不一致時fail-fast，不得靜默回退。
+
+### 報表與主要判讀
+
+單一報表固定包含：
+
+1. A0／B0至A3／B3八操作點。
+2. `B0−A0`至`B3−A3`的DL增量。
+3. `A1−A0`、`A2−A1`、`B2−B1`、`A3−A1`及`B3−B1`的規則／參數效果。
+4. 最終公平比較`B3−A2`。
+5. interaction=`(B3−A3)−(B2−A2)`，只判斷DL-aware參數是否改善DL增量。
+6. P0/P1、P2與P3逐年風險參數差異。
+
+`B3−A2`至少需同時改善Return／MDD、EV、直接交易選擇R及年度穩定性；總報酬或interaction單獨為正不足以採用。
+
+### 固定邊界
+
+本輪不重建Dataset、不relabel、不調9A threshold 0.5、不改原position-aware buy-sort、不改fixed risk／position cap值、不改max positions、rotation、成交／費稅或portfolio accounting。Binary PIT會逐fold訓練歷史模型，但不覆蓋正式9A checkpoint／manifest／scores。正式策略仍維持原ROOS且Binary DL runtime關閉，直到本機完整4×2結果通過。

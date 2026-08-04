@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -22,6 +23,10 @@ from filters.breakout_quality.ranking_score_store import (
     SUPPORTED_RANKING_SCORE_SOURCES,
     lookup_selection_point_in_time_candidate_score,
 )
+from filters.breakout_quality.binary_pit_score_store import (
+    BINARY_PIT_SCORE_SOURCE,
+    build_pass_condition_from_binary_point_in_time_scores,
+)
 from filters.breakout_quality.score_store import (
     build_pass_condition_from_score_table,
     lookup_breakout_quality_candidate_score,
@@ -35,6 +40,66 @@ class BreakoutQualityRankingSourceContext:
     experiment_profile: str | None = None
     ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE
 
+
+
+
+@dataclass(frozen=True)
+class BreakoutQualityFilterSourceContext:
+    score_source: str = SCORE_SOURCE_CANONICAL_RUNTIME
+    manifest_path: str | None = None
+    scores_path: str | None = None
+
+
+_FILTER_SOURCE_CONTEXT: ContextVar[BreakoutQualityFilterSourceContext] = ContextVar(
+    "breakout_quality_filter_source_context",
+    default=BreakoutQualityFilterSourceContext(),
+)
+
+
+def get_breakout_quality_filter_source_context() -> BreakoutQualityFilterSourceContext:
+    context = _FILTER_SOURCE_CONTEXT.get()
+    if context.score_source != SCORE_SOURCE_CANONICAL_RUNTIME:
+        return context
+    env_source = str(os.environ.get("BREAKOUT_QUALITY_FILTER_SCORE_SOURCE") or "").strip()
+    if not env_source:
+        return context
+    if env_source != BINARY_PIT_SCORE_SOURCE:
+        raise ValueError(f"不支援的breakout-quality filter score source: {env_source!r}")
+    manifest_path = str(os.environ.get("BREAKOUT_QUALITY_BINARY_PIT_MANIFEST") or "").strip()
+    scores_path = str(os.environ.get("BREAKOUT_QUALITY_BINARY_PIT_SCORES") or "").strip()
+    if not manifest_path or not scores_path:
+        raise ValueError("Binary PIT filter source缺少manifest／scores環境設定")
+    return BreakoutQualityFilterSourceContext(
+        score_source=env_source,
+        manifest_path=manifest_path,
+        scores_path=scores_path,
+    )
+
+
+@contextmanager
+def breakout_quality_filter_source_context(
+    *,
+    score_source: str,
+    manifest_path: str | None = None,
+    scores_path: str | None = None,
+) -> Iterator[BreakoutQualityFilterSourceContext]:
+    source = str(score_source).strip()
+    if source not in {SCORE_SOURCE_CANONICAL_RUNTIME, BINARY_PIT_SCORE_SOURCE}:
+        raise ValueError(f"不支援的breakout-quality filter score source: {source!r}")
+    if source == BINARY_PIT_SCORE_SOURCE and (
+        not str(manifest_path or "").strip() or not str(scores_path or "").strip()
+    ):
+        raise ValueError("Binary PIT filter source必須指定manifest_path與scores_path")
+    context = BreakoutQualityFilterSourceContext(
+        score_source=source,
+        manifest_path=None if manifest_path is None else str(manifest_path),
+        scores_path=None if scores_path is None else str(scores_path),
+    )
+    token = _FILTER_SOURCE_CONTEXT.set(context)
+    try:
+        yield context
+    finally:
+        _FILTER_SOURCE_CONTEXT.reset(token)
 
 _RANKING_SOURCE_CONTEXT: ContextVar[BreakoutQualityRankingSourceContext] = ContextVar(
     "breakout_quality_ranking_source_context",
@@ -91,6 +156,16 @@ def build_breakout_quality_filter_pass_condition(
     project_root: str | None = None,
 ) -> np.ndarray:
     root = resolve_project_root_from_runtime() if project_root is None else str(project_root)
+    context = get_breakout_quality_filter_source_context()
+    if context.score_source == BINARY_PIT_SCORE_SOURCE:
+        return build_pass_condition_from_binary_point_in_time_scores(
+            df,
+            ticker=ticker,
+            score_threshold=float(score_threshold),
+            candidate_condition=candidate_condition,
+            manifest_path=str(context.manifest_path),
+            scores_path=str(context.scores_path),
+        )
     return build_pass_condition_from_score_table(
         df,
         ticker=ticker,
@@ -136,9 +211,12 @@ def resolve_breakout_quality_candidate_rank(
 
 
 __all__ = [
+    "BreakoutQualityFilterSourceContext",
     "BreakoutQualityRankingSourceContext",
+    "breakout_quality_filter_source_context",
     "breakout_quality_ranking_source_context",
     "build_breakout_quality_filter_pass_condition",
+    "get_breakout_quality_filter_source_context",
     "get_breakout_quality_ranking_source_context",
     "resolve_breakout_quality_candidate_rank",
     "resolve_project_root_from_runtime",

@@ -517,7 +517,7 @@ python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-p
 
 Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；保留`high_len`突破事件、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap及原buy-sort。`B−A`檢查DL疊加現有filters，`F−C`檢查DL作唯一品質Gate，`F−A`才是DL-only replacement對目前正式策略的採用比較，interaction=`(F−C)−(B−A)`只作機制判讀。兩個hard-filter pair都固定threshold 0.5、canonical runtime score與相同active params；不重訓模型、不調threshold、不執行optimizer、不使用Future Target。輸出隔離於`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含A/B與C/F pair的完整策略比較、交易歸因及合併`strategy_dl_filter_gate.md/json`。
 
-Binary DL risk-only parameter adaptation同樣為CLI-only暫時研究，不加入互動選單。第一階段A5／B5固定Rule-based filters全關，只搜尋`atr_len`、`atr_buy_tol`、`atr_times_init`與`atr_times_trail`；`high_len`、fixed risk、position cap、TP、買入排序、費稅與其他非風險參數依各rolling effective date固定。完成後用同一套A5風險參數，同時輸出「原正式規則全套」與「Rule-based filters全關」兩列，每列只比較Binary DL關／開，不再逐項拆歷史門檻、Re-entry或KC：
+Binary DL risk-only parameter adaptation同樣為CLI-only暫時研究，不加入互動選單。正式比較固定為4種參數 × Binary DL關／開，共8個操作點：P0原ROOS＋原正式規則、P1原ROOS＋Rule-based filters全關、P2在rules全關／DL關環境只重訓四個風險參數、P3在rules全關／DL開環境以Binary PIT Scores只重訓同四個風險參數。每套參數各回放DL關／開，命名為A0／B0至A3／B3：
 
 ```powershell
 python apps/breakout_quality.py strategy-dl-filter-param-adapt-gate `
@@ -527,9 +527,19 @@ python apps/breakout_quality.py strategy-dl-filter-param-adapt-gate `
   --rotation off
 ```
 
-未指定`--trials-per-fold`時採目前正式training policy；Baseline歷史工件的trial數只作診斷，不要求與本次相等。A5訓練環境固定DL關閉；A5與B5回放使用完全相同的新active-param schedule，唯一差異為Binary DL hard filter。輸出位於`models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling/`。
+風險搜尋欄位固定為`atr_len`、`atr_buy_tol`、`atr_times_init`與`atr_times_trail`；`high_len`、TP、fixed risk、position cap、max positions、rotation、費稅、原position-aware buy-sort及其餘非風險值依各rolling effective date凍結。未指定`--trials-per-fold`時採目前正式training policy；原ROOS歷史trial數只作診斷，不要求與本次相等。
 
-A6／B6代表在optimizer訓練期就開啟Binary DL後再做相同回放。這一步不得使用最終9A `forward_oos scores.csv`、`research_scores.csv`或Selection in-sample score回灌2011～2020；必須先建立每個optimizer歷史日期均無前視的Binary PIT scores並接入optimizer runtime。現階段命令會明確輸出`BINARY_PIT_REQUIRED`，不會偷用final-model score執行A6／B6。A5／B5不需重訓9A模型、不重建Dataset／Label或重新匯出既有canonical runtime scores。
+P3訓練必須使用`build-binary-point-in-time-scores`建立的expanding-window Binary PIT Scores。每個score period的模型只可使用該期開始日前已完成Label的歷史資料；optimizer runtime與平行fold workers都必須驗證同一PIT manifest／scores identity。禁止使用最終9A forward-OOS、`research_scores.csv`或Selection in-sample score回灌歷史訓練。預設Gate在PIT缺失時自動建立；可用`--no-build-binary-pit`只做前置檢查。PIT獨立CLI為：
+
+```powershell
+python apps/breakout_quality.py build-binary-point-in-time-scores `
+  --filter-id breakout_quality_v1 `
+  --experiment-profile unique_group_sampling `
+  --score-start-date auto `
+  --score-end-date auto
+```
+
+報表固定包含八操作點總表、`B0−A0`至`B3−A3`的DL增量、`A1−A0`、`A2−A1`、`B2−B1`、`A3−A1`、`B3−B1`、最終公平比較`B3−A2`及interaction=`(B3−A3)−(B2−A2)`。輸出位於`models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling/`；Binary PIT位於`models/research/breakout_quality/binary_point_in_time_scores/<filter>/<architecture>/<profile>/`。
 
 兩種政策都維持Score缺失契約：有效Score候選優先；缺分候選不排除、不填0，並完整回退原buy-sort。正式比較先看相較原始Score ranking能否恢復平均投入與曝險，再判斷總報酬、Return／MDD、Target mean、Realized R與capture；不得只因R2／R3優於原始Score就直接採用，仍須至少對照Baseline。
 
