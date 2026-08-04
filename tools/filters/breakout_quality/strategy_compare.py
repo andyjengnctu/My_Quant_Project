@@ -3029,6 +3029,7 @@ def run_comparison(
         output_dir / "yearly_returns_comparison.csv", index=False,
         encoding="utf-8-sig"
     )
+    capture_result = None
     capture_audit_payload = None
     if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
         capture_result = build_score_ranking_capture_audit(

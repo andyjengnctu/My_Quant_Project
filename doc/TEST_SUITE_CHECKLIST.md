@@ -1795,3 +1795,7 @@
 | 2026-08-04 | T267 | 新增binary預設identity／canonical coverage、single與rolling C／F全關filters且只切hard filter、mocked AB／CF end-to-end與F−A／interaction／trade attribution直接案例後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
 | 2026-08-04 | T267 | 主workflow切回Binary後，原A～E Gate dynamic-default測試會誤期待Binary profile，且未覆蓋正式選單報表→runtime export→Baseline比較順序，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-04 | T267 | 改驗證A～E Gate固定continuous identity，並新增Binary重訓／既有模型選單與post-train command順序direct cases後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
+| 2026-08-04 | T267 | Binary正式hard-filter replay完成後，共用console renderer引用只在score-ranking分支建立的`capture_result`，策略報表於輸出末段發生`UnboundLocalError`，測試退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_compare.py` |
+| 2026-08-04 | T267 | `capture_result`於分支前初始化為None，並新增直接hard-filter `run_comparison` regression確認共用console與JSON輸出後重新收斂為DONE | PARTIAL -> DONE | `tools/filters/breakout_quality/strategy_compare.py`, `validate_breakout_quality_strategy_comparison_contract_case` |
+| 2026-08-04 | T267 | Mocked A／B／C／F Gate regression仍讀取本機9A canonical工件，使synthetic validator依賴外部checkpoint，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-04 | T267 | A／B／C／F end-to-end mock同步隔離runtime preflight，並保留專用preflight案例驗證正式缺檔分流後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |

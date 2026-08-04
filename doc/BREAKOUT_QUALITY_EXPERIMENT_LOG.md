@@ -2907,3 +2907,41 @@ python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-p
 ### 採用判定
 
 本輪只完成正式操作閉環，不預判新模型有效。使用者應從主選單`[1] 模型研究與驗證`選擇「使用既有模型」，先取得OOS簡易模型報表，再取得hard-filter相對Baseline的實際績效；結果取得後回寫Selection／OOS分類指標、策略總報酬、MDD、Return／MDD、EV、曝險與採用判定。
+
+## 2026-08-04 — Binary正式策略比較 console capture_result 修正
+
+### 狀態
+
+`IMPLEMENTED / MODEL_RESULT_AVAILABLE / STRATEGY_REPLAY_RERUN_REQUIRED_FOR_FINAL_REPORT`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260804_140456_3d88824.zip`
+- SHA256：`79a7e287aae8edc8a807e8556bbedf49eefab8307e1d74a1ee10a4f001950aee`
+- 本輪patch ZIP名稱與SHA256以交付回覆為準。
+
+### 本機模型結果
+
+- Profile：`inception_time_v1 / unique_group_sampling`；threshold固定`0.5`。
+- Epoch 2為最低Validation Loss `0.708591`；Epoch 3 early stop；完整Selection依2 epochs重訓。
+- Selection：PASS Precision `60.95%`、PASS Recall `71.19%`、模型PASS `64.02%`。
+- OOS：PASS Precision `62.99%`，相較原始PASS `55.63%`提升`+7.35pp`；PASS Recall `51.44%`、模型PASS `45.43%`、Accuracy `56.17%`、PR-AUC `0.6257`、ECE `0.0722`。
+- 模型報表判定維持：OOS precision提升，但Recall與模型PASS下降，正式部署須由策略經濟效果決定；不得用此OOS回調threshold或訓練設定。
+
+### 問題與唯一變更
+
+Binary hard-filter replay已完成Baseline與quality-filter兩組，但`strategy_compare.run_comparison`只在score-ranking分支建立`capture_result`；共用console renderer在hard-filter分支仍傳入該區域變數，因而於報表輸出階段發生`UnboundLocalError`。本輪只在分支前將`capture_result`初始化為`None`；score-ranking capture audit、hard-filter trade attribution、portfolio replay、策略參數、Scores、threshold與所有績效口徑均未改變。
+
+### 工件與重跑需求
+
+- 不需重新訓練模型、不需重新匯出research或forward-OOS Scores。
+- 錯誤發生前`strategy_comparison.json`、Markdown、equity／trades與trade attribution已進入寫出流程，但為取得完整console與確認工件閉環，套用patch後由正式選單重新執行「使用既有模型」策略驗證。
+- 重新執行會重做inference／replay，但不會重訓；最終策略採用判定待完整策略報表取得後回寫。
+
+### 驗證契約
+
+`validate_breakout_quality_strategy_comparison_contract_case`新增直接hard-filter `run_comparison`案例，mock正式runtime、參數與replay payload，確認共用console收到`capture_result=None`且hard-filter JSON正常回傳；不得以只測score-ranking或靜態字串搜尋取代。
+
+### 同輪額外檢查修正
+
+獨立執行`validate_breakout_quality_strategy_comparison_contract_case`時，既有mocked A／B／C／F Gate只替換`run_comparison`，未隔離canonical model preflight，會因GPT檢查環境沒有本機9A checkpoint而失敗。此為測試自足性問題，不影響正式Gate。測試現同步mock `_validate_binary_runtime_preflight`，仍保留另有專門案例驗證缺模型／只缺Scores的正式preflight分流。

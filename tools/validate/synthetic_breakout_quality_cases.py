@@ -8853,6 +8853,168 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         ),
     )
 
+    # Regression: hard-filter comparison has no score-ranking capture audit.
+    # The shared console renderer must receive None rather than an unbound local.
+    from datetime import date as _date
+    from tools.filters.breakout_quality import (
+        strategy_compare as strategy_compare_module,
+    )
+
+    with tempfile.TemporaryDirectory() as hard_filter_tmp_dir:
+        hard_filter_root = Path(hard_filter_tmp_dir)
+        hard_filter_params = hard_filter_root / "params.json"
+        hard_filter_params.write_text("{}\n", encoding="utf-8")
+        hard_filter_runtime = SimpleNamespace(
+            execution_start=_date(2021, 1, 1),
+            required_signal_start=_date(2020, 12, 31),
+            available_from=_date(2020, 12, 31),
+            available_through=_date(2021, 12, 31),
+            manifest={
+                "model_architecture": BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                "experiment_profile": BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+                "fixed_evaluation_threshold": float(
+                    BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
+                ),
+                "runtime_eligibility": {},
+                "score_table": {},
+            },
+            paths=SimpleNamespace(
+                manifest_path=hard_filter_root / "manifest.json",
+                score_path=hard_filter_root / "scores.csv",
+            ),
+        )
+        hard_filter_profile = {
+            "portfolio_capacity_rows": [],
+            "closed_trade_rows": [],
+        }
+        hard_filter_payload = {
+            "profile": hard_filter_profile,
+            "trade_history": pd.DataFrame(),
+            "equity_curve": pd.DataFrame(),
+        }
+        hard_filter_summary = {
+            "total_return_pct": 1.0,
+            "max_drawdown_pct": 1.0,
+            "return_over_max_drawdown": 1.0,
+            "trade_count": 0,
+        }
+        hard_filter_console_capture = []
+
+        def _capture_hard_filter_console(*args, **kwargs):
+            hard_filter_console_capture.append(kwargs.get("capture_result"))
+            return "hard-filter-report"
+
+        with (
+            patch.object(
+                strategy_compare_module,
+                "load_runtime_artifact_contract",
+                return_value=hard_filter_runtime,
+            ),
+            patch.object(
+                strategy_compare_module,
+                "_resolve_params_path",
+                return_value=hard_filter_params,
+            ),
+            patch.object(
+                strategy_compare_module,
+                "_load_param_source",
+                return_value={"kind": "single_param"},
+            ),
+            patch.object(
+                strategy_compare_module,
+                "_validate_requested_param_policy",
+                return_value={
+                    "selector": "single_param",
+                    "member_count_min": 1,
+                    "member_count_max": 1,
+                    "min_agree": 1,
+                },
+            ),
+            patch.object(
+                strategy_compare_module,
+                "_build_controlled_param_source_pair",
+                return_value=(
+                    "single_param",
+                    base,
+                    quality_filter,
+                    {},
+                    {},
+                    None,
+                ),
+            ),
+            patch.object(
+                strategy_compare_module,
+                "get_dataset_dir",
+                return_value=str(hard_filter_root),
+            ),
+            patch.object(
+                strategy_compare_module,
+                "_run_scenario",
+                side_effect=[hard_filter_payload, hard_filter_payload],
+            ),
+            patch.object(strategy_compare_module, "_assert_shared_benchmark"),
+            patch.object(
+                strategy_compare_module,
+                "_scenario_summary",
+                side_effect=[hard_filter_summary, hard_filter_summary],
+            ),
+            patch.object(
+                strategy_compare_module,
+                "_build_yearly_comparison",
+                return_value=pd.DataFrame(
+                    columns=[
+                        "year",
+                        "no_filter_return_pct",
+                        "quality_filter_return_pct",
+                        "is_full_year",
+                    ]
+                ),
+            ),
+            patch.object(
+                strategy_compare_module,
+                "_markdown_report",
+                return_value="# hard-filter\n",
+            ),
+            patch.object(strategy_compare_module, "_remove_legacy_html_outputs"),
+            patch.object(strategy_compare_module, "write_trade_attribution_outputs"),
+            patch.object(
+                strategy_compare_module,
+                "_render_strategy_console_report",
+                side_effect=_capture_hard_filter_console,
+            ),
+            patch.object(strategy_compare_module, "print_artifact_paths"),
+            redirect_stdout(io.StringIO()),
+        ):
+            hard_filter_result = strategy_compare_module.run_comparison(
+                project_root=hard_filter_root,
+                dataset="full",
+                params_path=hard_filter_params,
+                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
+                max_positions=10,
+                enable_rotation=False,
+                allow_static_diagnostic=True,
+                comparison_mode=COMPARISON_MODE_HARD_FILTER,
+                filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                score_source=strategy_compare_module.SCORE_SOURCE_CANONICAL_RUNTIME,
+                model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+                output_dir_override=hard_filter_root / "comparison",
+                quiet=True,
+            )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "hard_filter_strategy_compare_passes_none_capture_audit_to_shared_console",
+        (None, True),
+        (
+            hard_filter_console_capture[0]
+            if hard_filter_console_capture
+            else "console-not-called",
+            "quality_filter" in hard_filter_result,
+        ),
+    )
+
     all_off_output_name = _comparison_output_dir_name(
         COMPARISON_MODE_SCORE_RANKING,
         _comparison_labels(COMPARISON_MODE_SCORE_RANKING),
@@ -9073,9 +9235,15 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 }],
             }
 
-        with patch(
-            "tools.filters.breakout_quality.strategy_dl_filter_gate.run_comparison",
-            side_effect=fake_dl_gate_comparison,
+        with (
+            patch(
+                "tools.filters.breakout_quality.strategy_dl_filter_gate._validate_binary_runtime_preflight",
+                return_value=None,
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_dl_filter_gate.run_comparison",
+                side_effect=fake_dl_gate_comparison,
+            ),
         ):
             with redirect_stdout(io.StringIO()):
                 gate_result = run_dl_filter_gate(args=fake_args, project_root=tmp_root)
