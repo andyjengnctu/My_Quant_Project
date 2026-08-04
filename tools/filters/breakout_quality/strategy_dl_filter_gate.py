@@ -29,7 +29,11 @@ from filters.breakout_quality.console_report import (
     render_table,
     render_title,
 )
-from filters.breakout_quality.paths import resolve_filter_model_output_dir
+from filters.breakout_quality.paths import (
+    resolve_filter_artifact_paths,
+    resolve_filter_model_architecture_dir,
+    resolve_filter_model_output_dir,
+)
 from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_CANONICAL_RUNTIME
 from tools.filters.breakout_quality.strategy_compare import (
     COMPARISON_MODE_HARD_FILTER,
@@ -164,6 +168,111 @@ def _parse_args(argv=None):
     )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
+
+
+def _discover_matching_binary_manifests(
+    *,
+    project_root: Path,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    canonical_manifest_path: Path,
+) -> list[Path]:
+    architecture_dir = resolve_filter_model_architecture_dir(
+        project_root,
+        filter_id,
+        model_architecture,
+    )
+    if not architecture_dir.exists():
+        return []
+    candidates = [architecture_dir / "manifest.json"]
+    candidates.extend(sorted(architecture_dir.glob("*/manifest.json")))
+    matched: list[Path] = []
+    for candidate in candidates:
+        if not candidate.is_file() or candidate.resolve() == canonical_manifest_path.resolve():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("filter_id") or "").strip() != str(filter_id).strip():
+            continue
+        if str(payload.get("model_architecture") or "").strip() != str(model_architecture).strip():
+            continue
+        if str(payload.get("experiment_profile") or "").strip() != str(experiment_profile).strip():
+            continue
+        matched.append(candidate)
+    return matched
+
+
+def _validate_binary_runtime_preflight(*, project_root: Path, args) -> dict[str, Any]:
+    paths = resolve_filter_artifact_paths(
+        project_root,
+        args.filter_id,
+        args.model_architecture,
+        args.experiment_profile,
+    )
+    artifacts = {
+        "manifest": paths.manifest_path,
+        "model": paths.model_path,
+        "split": paths.split_path,
+        "runtime_score": paths.score_path,
+    }
+    present = {name: path.is_file() for name, path in artifacts.items()}
+    missing_model_artifacts = [
+        name for name in ("manifest", "model", "split") if not present[name]
+    ]
+    if missing_model_artifacts:
+        matching_manifests = _discover_matching_binary_manifests(
+            project_root=project_root,
+            filter_id=args.filter_id,
+            model_architecture=args.model_architecture,
+            experiment_profile=args.experiment_profile,
+            canonical_manifest_path=paths.manifest_path,
+        )
+        status_lines = [
+            f"[{('存在' if present[name] else '缺少')}] "
+            f"{name}: {project_relative_display_path(path, project_root=project_root)}"
+            for name, path in artifacts.items()
+        ]
+        recovery_note = ""
+        if matching_manifests:
+            recovery_note = (
+                "\n偵測到其他位置的相同identity manifest：\n- "
+                + "\n- ".join(
+                    project_relative_display_path(path, project_root=project_root)
+                    for path in matching_manifests
+                )
+                + "\n請從原始備份恢復完整profile資料夾（manifest.json、model.pt、split.csv）；"
+                "程式不會只搬單檔或猜測缺失identity。"
+            )
+        raise FileNotFoundError(
+            "Binary DL Filter Gate缺少9A canonical模型工件：\n"
+            + "\n".join(status_lines)
+            + recovery_note
+            + "\n歷史報表、research_scores.csv或策略結果不能替代checkpoint manifest。"
+            + "\n若沒有可恢復備份，現有Dataset／Label工件可沿用，通常不必重新build-dataset；"
+            + "請先執行：\n"
+            + f"python apps/breakout_quality.py train --filter-id {args.filter_id} "
+            + f"--experiment-profile {args.experiment_profile}\n"
+            + "訓練完成後再執行：\n"
+            + f"python apps/breakout_quality.py export-scores --filter-id {args.filter_id} "
+            + f"--experiment-profile {args.experiment_profile} --scope forward_oos"
+        )
+    if not present["runtime_score"]:
+        raise FileNotFoundError(
+            "9A canonical模型工件完整，但缺少正式forward-OOS scores.csv： "
+            f"{project_relative_display_path(paths.score_path, project_root=project_root)}。"
+            "不需重訓；請執行：\n"
+            f"python apps/breakout_quality.py export-scores --filter-id {args.filter_id} "
+            f"--experiment-profile {args.experiment_profile} --scope forward_oos"
+        )
+    return {
+        "paths": paths,
+        "present": present,
+    }
 
 
 def _numeric_delta(right: dict[str, Any], left: dict[str, Any]) -> dict[str, float]:
@@ -585,6 +694,7 @@ def run_dl_filter_gate(*, args, project_root=PROJECT_ROOT) -> dict[str, Any]:
         raise ValueError("max_positions必須>=1")
     if (args.start_date is None) != (args.end_date is None):
         raise ValueError("--start-date與--end-date必須同時提供")
+    _validate_binary_runtime_preflight(project_root=root, args=args)
     output_dir = (
         resolve_filter_model_output_dir(
             str(root), args.filter_id, args.model_architecture, args.experiment_profile
@@ -696,4 +806,5 @@ __all__ = [
     "build_dl_filter_gate_scenario_specs",
     "SCENARIO_SPECS",
     "PAIR_SPECS",
+    "_validate_binary_runtime_preflight",
 ]

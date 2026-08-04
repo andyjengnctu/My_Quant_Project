@@ -2863,3 +2863,48 @@ python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-p
 ### Dataset／Label／模型工件需求
 
 本次程式變更不需重建任何Dataset、Label、checkpoint或score。使用者本機需已有9A canonical `forward_oos` runtime manifest／scores與正式rolling active-param工件；缺少或identity不一致時fail-fast。
+
+## 2026-08-04 — Binary DL Replacement Gate 9A canonical artifact preflight修正
+
+### 狀態
+
+`IMPLEMENTED / RESULT_NOT_AVAILABLE / LOCAL_9A_MODEL_ARTIFACT_REQUIRED`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260804_015125_1e01efe.zip`
+- SHA256：`36a4cbe8e08dd81c62d45abb062493e4b60cb17ec8aab0b4505dfddc54948064`
+- 本輪patch名稱與SHA256以交付回覆為準。
+
+### 問題與更正
+
+使用者執行`strategy-dl-filter-gate`時，AB pair回報缺少9A正式forward-OOS score；依前次建議執行`export-scores --scope forward_oos`後，又回報canonical路徑缺少：
+
+`models/filters/breakout_quality/breakout_quality_v1/inception_time_v1/unique_group_sampling/manifest.json`
+
+這證明本機不只是缺少`scores.csv`，而是至少缺少canonical model manifest。前次「只需重新export、不需重訓」的判斷不成立，因`export-scores`必須先以`manifest.json + model.pt + split_assignments.csv`重建固定9A模型與OOS split identity；research scores、歷史分類報表與既有策略結果都不能取代checkpoint manifest。
+
+### 唯一主要變更
+
+1. `strategy-dl-filter-gate`在建立輸出目錄及執行AB／CF pair前，先檢查canonical `manifest.json`、`model.pt`、`split_assignments.csv`與`scores.csv`。
+2. 缺少前三項任一模型工件時，列出相對路徑與存在狀態，搜尋architecture目錄下其他位置的同filter／architecture／profile manifest，但不自動搬移單檔或猜測identity；有完整備份時必須恢復整個profile資料夾，沒有備份時才重新train。
+3. 模型三件完整而只缺`scores.csv`時，明確標示「不需重訓」，只要求`export-scores --scope forward_oos`。
+4. 通用model artifact錯誤訊息改為：現有Dataset若仍相容，通常只需train；只有train另行回報Dataset缺失或不相容時才需要build-dataset，避免無條件要求重建Dataset。
+
+### Dataset／Label／模型需求
+
+本輪程式修改本身不重建Dataset、不relabel、不改9A架構、profile、threshold或策略Gate。使用者目前的實際執行被9A canonical模型工件缺失阻擋：
+
+- 若有原始`unique_group_sampling`完整profile備份，恢復`manifest.json`、`model.pt`與`split_assignments.csv`後，只需重新export forward-OOS scores。
+- 若沒有可恢復備份，現有`breakout_quality_v1` Dataset／binary Label可沿用，先以相同`inception_time_v1 / unique_group_sampling / Seed 42 / threshold 0.5`重新train，再export forward-OOS scores；不得由歷史OOS結果回調threshold或訓練設定。
+
+### 結果與判定
+
+尚未取得A／B／C／F真實策略結果。Gate實驗狀態維持`RESULT_NOT_AVAILABLE`；本輪只修正前置工件診斷與操作指示。正式Baseline、optional filters、R3與先前全部結果均不改變。
+
+### 下一步
+
+1. 先檢查本機是否有可恢復的9A完整profile備份。
+2. 無備份時執行binary 9A train；Dataset只有在train明確回報缺少／不相容時才重建。
+3. 執行forward-OOS score export。
+4. 重新執行`strategy-dl-filter-gate`取得A／B／C／F結果。

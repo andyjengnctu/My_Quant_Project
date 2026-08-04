@@ -504,7 +504,19 @@ Binary DL Filter Replacement A／B／C／F Gate同樣為CLI-only研究，但使�
 python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-policy base-finalist-best --max-positions 10 --rotation off
 ```
 
-Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；保留`high_len`突破事件、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap及原buy-sort。`B−A`檢查DL疊加現有filters，`F−C`檢查DL作唯一品質Gate，`F−A`才是DL-only replacement對目前正式策略的採用比較，interaction=`(F−C)−(B−A)`只作機制判讀。兩個hard-filter pair都固定threshold 0.5、canonical runtime score與相同active params；不重訓模型、不調threshold、不執行optimizer、不使用Future Target。輸出隔離於`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含A/B與C/F pair的完整策略比較、交易歸因及合併`strategy_dl_filter_gate.md/json`。
+Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；保留`high_len`突破事件、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap及原buy-sort。`B−A`檢查DL疊加現有filters，`F−C`檢查DL作唯一品質Gate，`F−A`才是DL-only replacement對目前正式策略的採用比較，interaction=`(F−C)−(B−A)`只作機制判讀。兩個hard-filter pair都固定threshold 0.5、canonical runtime score與相同active params；不調threshold、不執行optimizer、不使用Future Target。輸出隔離於`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含A/B與C/F pair的完整策略比較、交易歸因及合併`strategy_dl_filter_gate.md/json`。
+
+Gate啟動前會先區分9A工件狀態。若`manifest.json`、`model.pt`或`split_assignments.csv`任一缺少，歷史研究報表或`research_scores.csv`不能替代模型identity；有完整備份時恢復整個`models/filters/breakout_quality/<filter_id>/<architecture>/<profile>/`資料夾，沒有備份時可沿用現有Dataset／Label，通常只需重新執行binary `train`，不先重建Dataset：
+
+```bash
+python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling
+```
+
+模型工件完整但只缺正式`scores.csv`時，不需重訓，只執行：
+
+```bash
+python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope forward_oos
+```
 
 兩種政策都維持Score缺失契約：有效Score候選優先；缺分候選不排除、不填0，並完整回退原buy-sort。正式比較先看相較原始Score ranking能否恢復平均投入與曝險，再判斷總報酬、Return／MDD、Target mean、Realized R與capture；不得只因R2／R3優於原始Score就直接採用，仍須至少對照Baseline。
 

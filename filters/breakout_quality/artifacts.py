@@ -379,7 +379,9 @@ def load_model_artifact_contract(
     if not paths.manifest_path.is_file():
         raise FileNotFoundError(
             f"找不到 breakout quality 正式 manifest: {paths.manifest_path}。"
-            "請先以同一 filter_id 完成 build_dataset 與 train。"
+            "正式model identity不能由research scores或歷史報表重建；"
+            "若現有Dataset工件仍相容，通常只需以相同filter_id／architecture／profile重新train，"
+            "只有train另行回報Dataset缺少或不相容時才需要build-dataset。"
         )
     manifest = _read_json_object(paths.manifest_path)
 
