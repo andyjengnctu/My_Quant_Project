@@ -3250,3 +3250,34 @@ PIT source同時傳入optimizer主process、fold session及平行workers，並�
 ### 固定邊界
 
 本輪不重建Dataset、不relabel、不調9A threshold 0.5、不改原position-aware buy-sort、不改fixed risk／position cap值、不改max positions、rotation、成交／費稅或portfolio accounting。Binary PIT會逐fold訓練歷史模型，但不覆蓋正式9A checkpoint／manifest／scores。正式策略仍維持原ROOS且Binary DL runtime關閉，直到本機完整4×2結果通過。
+
+## 2026-08-05 — 4×2 Binary DL Parameter Adaptation Formal Meta Quality 閉環
+
+### 狀態
+
+`IMPLEMENTED / FORMAL_QUICK_CONSISTENCY_CHAIN_ML_PASS / META_CHECKLIST_FIXED / LOCAL_FORMAL_RERUN_REQUIRED`
+
+### 程式與測試基準
+
+- 輸入程式ZIP：`test-branch-1_20260804_235803_1be64ec.zip`
+- 程式SHA256：`09142fb9c119bd3a59c7a86573956db8a9a5fecda9623152e15d633651a1c859`
+- Formal bundle：`to_chatgpt_bundle_20260804_235944_65c06eef.zip`
+- Bundle SHA256：`f4d7fea784bb08d47b581107554d0e36d5204ea135423363a2f9d0867787e52f`
+- Bundle結果：quick gate PASS、consistency PASS、chain checks PASS、ML smoke PASS；meta quality僅Checklist G兩項FAIL。
+
+### 根因與唯一變更
+
+- `B187`最新兩筆4×2 contract transition被附加在同日`T284`後方，違反Checklist G依日期再依ID排序。
+- `T284`另新增`DONE -> DONE`列，沒有實際狀態變更，違反收斂紀錄只能記錄真實transition的契約。
+- 本輪只將兩筆`B187` transition移回同日既有`B187`區塊，並移除`T284 DONE -> DONE` no-op列；不修改程式、Binary PIT、optimizer、Dataset、Label、model、Scores、策略參數或4×2報表。
+
+### 固定條件與結果邊界
+
+- 4種參數×DL關／開八操作點與P2／P3 optimizer實作維持不變。
+- `T284`最新有效狀態仍由既有`PARTIAL -> DONE`列表示；擴充coverage屬同一DONE契約的內容更新，不另創造狀態transition。
+- 本次只修正機械治理文件；不需重訓模型、重建Binary PIT或重跑4×2研究。
+
+### 驗證與下一步
+
+- GPT端獨立檢查須確認Checklist G排序、status chain、no-op guard、摘要映射與Markdown欄數全部通過。
+- 正式`apps/test_suite.py`依專案規定不由GPT執行；使用者套用patch後重跑本地formal suite，預期meta quality恢復PASS。

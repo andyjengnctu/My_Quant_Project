@@ -1793,6 +1793,8 @@
 | 2026-08-04 | B170 | Gate改為A0／B0至A4／B4五層同源hard-filter pair，並以單一矩陣合併績效、A系列消融、trade attribution與年度DL增量後重新收斂為DONE | PARTIAL -> DONE | `tools/filters/breakout_quality/strategy_dl_filter_gate.py`, `tools/filters/breakout_quality/strategy_compare.py`, `doc/CMD.md`, `doc/ARCHITECTURE.md` |
 | 2026-08-04 | B187 | 使用者要求以Rule-based filters全關重新訓練風險參數，並交叉比較參數訓練環境與Binary DL開關；既有optimizer無fold-specific非風險凍結與Binary PIT前視防線，新增契約為PARTIAL | NEW -> PARTIAL | `strategies/breakout/search_space.py`, `tools/optimizer/outer_rolling_oos.py`, `tools/filters/breakout_quality/strategy_dl_filter_param_adapt_gate.py` |
 | 2026-08-04 | B187 | 新增A5／B5 risk-only rolling Gate、每fold fixed overrides、原正式規則／全關矩陣與A6／B6 Binary PIT fail-fast；不使用final score回灌歷史optimizer後收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_binary_dl_param_adaptation_contract_case` |
+| 2026-08-04 | B187 | 使用者將比較契約收斂為四種參數×DL關／開八操作點，舊A5／B5與A6／B6編排不足，主表改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_dl_filter_param_adapt_gate.py` |
+| 2026-08-04 | B187 | 新增Binary PIT builder／runtime source、P2／P3雙optimizer與A0／B0至A3／B3矩陣後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_binary_dl_param_adaptation_contract_case` |
 | 2026-08-04 | T36 | 正式workflow切回Binary並新增模型子選單後，CLI synthetic仍以目前設定執行continuous流程、沿用舊輸入序列與舊hard-filter argv，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_cli_cases.py` |
 | 2026-08-04 | T36 | Continuous workflow改用隔離profile override；Binary子選單、工件狀態、完整hard-filter identity與訓練後驗證fixture同步更新後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-08-04 | T189 | A～E與A／B／C／F Gate的broad exception handler未綁定例外名稱，違反可追蹤性契約，測試退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_filter_gate.py`, `tools/filters/breakout_quality/strategy_dl_filter_gate.py` |
@@ -1815,6 +1817,3 @@
 | 2026-08-04 | T283 | Adaptation validator改以隔離continuous profile與auto strategy overrides建立固定案例，並直接驗證CLI risk／position-cap defaults且不修改正式config後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_adaptation_contract_case` |
 | 2026-08-04 | T284 | 新增Binary DL risk-only adaptation validator，需覆蓋fold固定值、四欄搜尋與全套／全關rule replay，測試契約為PARTIAL | NEW -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py`, `tools/validate/synthetic_cases.py` |
 | 2026-08-04 | T284 | direct驗證數值fixed resolver不呼叫trial、risk-only search只有四欄、正式rule variant保留同一風險值及Binary PIT前置狀態後收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_binary_dl_param_adaptation_contract_case` |
-| 2026-08-04 | B187 | 使用者將比較契約收斂為四種參數×DL關／開八操作點，舊A5／B5與A6／B6編排不足，主表改回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_dl_filter_param_adapt_gate.py` |
-| 2026-08-04 | B187 | 新增Binary PIT builder／runtime source、P2／P3雙optimizer與A0／B0至A3／B3矩陣後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_binary_dl_param_adaptation_contract_case` |
-| 2026-08-04 | T284 | Binary DL adaptation validator擴充Binary PIT store／runtime identity與完整4×2 orchestration後維持DONE | DONE -> DONE | `validate_breakout_quality_binary_dl_param_adaptation_contract_case` |
