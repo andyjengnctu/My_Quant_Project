@@ -8566,10 +8566,14 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
-        session_spec = dict(task.get("optimizer_session_spec") or {})
+        session_spec = resolve_optimizer_session_spec_for_fold(
+            dict(task.get("optimizer_session_spec") or {}),
+            oos_start_date=oos_start_date,
+        )
         session = (
             build_optimizer_session_from_spec(
-                walk_forward_policy=fold_policy, spec=session_spec
+                walk_forward_policy=fold_policy,
+                spec=session_spec,
             )
             if session_spec
             else build_optimizer_session(walk_forward_policy=fold_policy)
@@ -8951,6 +8955,58 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
 
 
 
+FOLD_FIXED_STRATEGY_OVERRIDES_KEY = (
+    "fixed_strategy_param_overrides_by_effective_date"
+)
+
+
+def resolve_optimizer_session_spec_for_fold(
+    optimizer_session_spec: dict | None,
+    *,
+    oos_start_date: str | None,
+) -> dict:
+    """Merge one fold's fixed strategy values into the process-safe session spec.
+
+    The generic optimizer session keeps one global fixed override mapping.  Research
+    workflows that freeze non-search parameters to an existing rolling policy need
+    values that may differ by effective date.  This resolver applies the matching
+    fold mapping before session creation, so the objective, local-min review, OOS
+    diagnostics and exported active params all see the same effective contract.
+    """
+
+    payload = dict(optimizer_session_spec or {})
+    raw_mapping = payload.pop(FOLD_FIXED_STRATEGY_OVERRIDES_KEY, None)
+    base_overrides = dict(payload.get("fixed_strategy_param_overrides") or {})
+    if raw_mapping is None:
+        if base_overrides:
+            payload["fixed_strategy_param_overrides"] = base_overrides
+        return payload
+    if not isinstance(raw_mapping, dict):
+        raise ValueError(
+            f"{FOLD_FIXED_STRATEGY_OVERRIDES_KEY} 必須是 effective-date mapping"
+        )
+    if oos_start_date is None:
+        if base_overrides:
+            payload["fixed_strategy_param_overrides"] = base_overrides
+        return payload
+
+    normalized_date = pd.Timestamp(str(oos_start_date)).normalize().strftime("%Y-%m-%d")
+    fold_overrides = raw_mapping.get(normalized_date)
+    if fold_overrides is None:
+        raise ValueError(
+            "optimizer 缺少 rolling fold 固定參數："
+            f"effective_date={normalized_date}"
+        )
+    if not isinstance(fold_overrides, dict):
+        raise ValueError(
+            "optimizer rolling fold 固定參數必須是 mapping："
+            f"effective_date={normalized_date}"
+        )
+    base_overrides.update(dict(fold_overrides))
+    payload["fixed_strategy_param_overrides"] = base_overrides
+    return payload
+
+
 def run_outer_rolling_oos(
     *,
     argv,
@@ -8977,10 +9033,15 @@ def run_outer_rolling_oos(
 
     session_spec = dict(optimizer_session_spec or {})
 
-    def _build_session(walk_forward_policy):
-        if session_spec:
+    def _build_session(walk_forward_policy, *, oos_start_date=None):
+        resolved_session_spec = resolve_optimizer_session_spec_for_fold(
+            session_spec,
+            oos_start_date=oos_start_date,
+        )
+        if resolved_session_spec:
             return build_optimizer_session_from_spec(
-                walk_forward_policy=walk_forward_policy, spec=session_spec
+                walk_forward_policy=walk_forward_policy,
+                spec=resolved_session_spec,
             )
         return build_optimizer_session(walk_forward_policy=walk_forward_policy)
 
@@ -9213,8 +9274,15 @@ def run_outer_rolling_oos(
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         fold_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
-        session = _build_session(fold_policy)
-        _validate_optimizer_runtime_context(session, session_spec)
+        resolved_session_spec = resolve_optimizer_session_spec_for_fold(
+            session_spec,
+            oos_start_date=oos_start_date,
+        )
+        session = _build_session(
+            fold_policy,
+            oos_start_date=oos_start_date,
+        )
+        _validate_optimizer_runtime_context(session, resolved_session_spec)
         attach_shared_executor = getattr(session, "attach_shared_trial_prep_executor_holder", None)
         if callable(attach_shared_executor):
             attach_shared_executor(rolling_shared_prep_executor_holder)

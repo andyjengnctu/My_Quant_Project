@@ -66,7 +66,15 @@ def _resolve_optimizer_switch(session, trial, field_name):
     return _suggest_optimizer_switch(trial, field_name)
 
 
-def _suggest_optimizer_int(trial, field_name):
+def _resolve_optimizer_int(session, trial, field_name):
+    has_fixed = getattr(session, "has_fixed_strategy_param", None)
+    if callable(has_fixed) and has_fixed(field_name):
+        value = session.get_fixed_strategy_param(field_name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"固定 optimizer 整數參數 {field_name} 必須是 int，收到 {value!r}"
+            )
+        return int(value)
     spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
     return trial.suggest_int(
         field_name,
@@ -76,13 +84,36 @@ def _suggest_optimizer_int(trial, field_name):
     )
 
 
-def _suggest_optimizer_float(trial, field_name):
+def _resolve_optimizer_float(session, trial, field_name):
+    has_fixed = getattr(session, "has_fixed_strategy_param", None)
+    if callable(has_fixed) and has_fixed(field_name):
+        value = session.get_fixed_strategy_param(field_name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"固定 optimizer 浮點參數 {field_name} 必須是數值，收到 {value!r}"
+            )
+        return float(value)
     spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
     return trial.suggest_float(
         field_name,
         float(spec["low"]),
         float(spec["high"]),
         step=spec.get("step"),
+    )
+
+
+def _resolve_optimizer_tp_percent(session, trial):
+    has_fixed = getattr(session, "has_fixed_strategy_param", None)
+    if callable(has_fixed) and has_fixed("tp_percent"):
+        value = session.get_fixed_strategy_param("tp_percent")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"固定 optimizer 浮點參數 tp_percent 必須是數值，收到 {value!r}"
+            )
+        return float(value)
+    return session.resolve_optimizer_tp_percent(
+        trial,
+        fixed_tp_percent=session.optimizer_fixed_tp_percent,
     )
 
 
@@ -100,53 +131,53 @@ def build_trial_params(session, trial):
     ai_use_history_threshold = _resolve_optimizer_switch(session, trial, "use_history_threshold")
 
     if ai_use_vol:
-        vol_long_len = _suggest_optimizer_int(trial, "vol_long_len")
-        vol_breakout_mult = _suggest_optimizer_float(trial, "vol_breakout_mult")
+        vol_long_len = _resolve_optimizer_int(session, trial, "vol_long_len")
+        vol_breakout_mult = _resolve_optimizer_float(session, trial, "vol_breakout_mult")
     else:
         vol_long_len = BREAKOUT_PARAM_SPECS["vol_long_len"]["default"]
         vol_breakout_mult = BREAKOUT_PARAM_SPECS["vol_breakout_mult"]["default"]
 
     breakout_return_min = (
-        _suggest_optimizer_float(trial, "breakout_return_min")
+        _resolve_optimizer_float(session, trial, "breakout_return_min")
         if ai_use_breakout_return_filter
         else BREAKOUT_PARAM_SPECS["breakout_return_min"]["default"]
     )
 
     breakout_ema_len = (
-        _suggest_optimizer_int(trial, "breakout_ema_len")
+        _resolve_optimizer_int(session, trial, "breakout_ema_len")
         if ai_use_breakout_ema_filter
         else BREAKOUT_PARAM_SPECS["breakout_ema_len"]["default"]
     )
 
     breakout_false_filter_atr_pct_min = (
-        _suggest_optimizer_float(trial, "breakout_false_filter_atr_pct_min")
+        _resolve_optimizer_float(session, trial, "breakout_false_filter_atr_pct_min")
         if ai_use_breakout_false_filter
         else BREAKOUT_PARAM_SPECS["breakout_false_filter_atr_pct_min"]["default"]
     )
     breakout_reclaim_window_bars = (
-        _suggest_optimizer_int(trial, "breakout_reclaim_window_bars")
+        _resolve_optimizer_int(session, trial, "breakout_reclaim_window_bars")
         if ai_use_breakout_reclaim_reentry
         else BREAKOUT_PARAM_SPECS["breakout_reclaim_window_bars"]["default"]
     )
     breakout_reclaim_confirm_atr = (
-        _suggest_optimizer_float(trial, "breakout_reclaim_confirm_atr")
+        _resolve_optimizer_float(session, trial, "breakout_reclaim_confirm_atr")
         if ai_use_breakout_reclaim_reentry
         else BREAKOUT_PARAM_SPECS["breakout_reclaim_confirm_atr"]["default"]
     )
-    min_history_trades = _suggest_optimizer_int(trial, "min_history_trades") if ai_use_history_threshold else 0
-    min_history_ev = _suggest_optimizer_float(trial, "min_history_ev") if ai_use_history_threshold else -1.0
-    min_history_win_rate = _suggest_optimizer_float(trial, "min_history_win_rate") if ai_use_history_threshold else 0.0
+    min_history_trades = _resolve_optimizer_int(session, trial, "min_history_trades") if ai_use_history_threshold else 0
+    min_history_ev = _resolve_optimizer_float(session, trial, "min_history_ev") if ai_use_history_threshold else -1.0
+    min_history_win_rate = _resolve_optimizer_float(session, trial, "min_history_win_rate") if ai_use_history_threshold else 0.0
 
     return build_breakout_strategy_params(
-        atr_len=_suggest_optimizer_int(trial, "atr_len"),
-        atr_times_init=_suggest_optimizer_float(trial, "atr_times_init"),
-        atr_times_trail=_suggest_optimizer_float(trial, "atr_times_trail"),
-        atr_buy_tol=_suggest_optimizer_float(trial, "atr_buy_tol"),
+        atr_len=_resolve_optimizer_int(session, trial, "atr_len"),
+        atr_times_init=_resolve_optimizer_float(session, trial, "atr_times_init"),
+        atr_times_trail=_resolve_optimizer_float(session, trial, "atr_times_trail"),
+        atr_buy_tol=_resolve_optimizer_float(session, trial, "atr_buy_tol"),
         use_breakout_buy=ai_use_breakout_buy,
-        high_len=_suggest_optimizer_int(trial, "high_len"),
+        high_len=_resolve_optimizer_int(session, trial, "high_len"),
         use_breakout_ema_filter=ai_use_breakout_ema_filter,
         breakout_ema_len=breakout_ema_len,
-        tp_percent=session.resolve_optimizer_tp_percent(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent),
+        tp_percent=_resolve_optimizer_tp_percent(session, trial),
         use_bb=ai_use_bb,
         use_kc=ai_use_kc,
         use_vol=ai_use_vol,
@@ -162,22 +193,22 @@ def build_trial_params(session, trial):
         breakout_reclaim_confirm_atr=breakout_reclaim_confirm_atr,
         use_history_threshold=ai_use_history_threshold,
         bb_len=(
-            _suggest_optimizer_int(trial, "bb_len")
+            _resolve_optimizer_int(session, trial, "bb_len")
             if ai_use_bb
             else BREAKOUT_PARAM_SPECS["bb_len"]["default"]
         ),
         bb_mult=(
-            _suggest_optimizer_float(trial, "bb_mult")
+            _resolve_optimizer_float(session, trial, "bb_mult")
             if ai_use_bb
             else BREAKOUT_PARAM_SPECS["bb_mult"]["default"]
         ),
         kc_len=(
-            _suggest_optimizer_int(trial, "kc_len")
+            _resolve_optimizer_int(session, trial, "kc_len")
             if ai_use_kc
             else BREAKOUT_PARAM_SPECS["kc_len"]["default"]
         ),
         kc_mult=(
-            _suggest_optimizer_float(trial, "kc_mult")
+            _resolve_optimizer_float(session, trial, "kc_mult")
             if ai_use_kc
             else BREAKOUT_PARAM_SPECS["kc_mult"]["default"]
         ),

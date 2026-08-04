@@ -9361,6 +9361,8 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     )
 
 
+
+
     baseline_sort_rows = [
         {"ticker": "A", "sort_value": 0.20, "proj_cost": 100.0, "use_breakout_quality_ranking": False},
         {"ticker": "B", "sort_value": 0.10, "proj_cost": 80.0, "use_breakout_quality_ranking": False},
@@ -13117,6 +13119,356 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     summary["future_target_runtime"] = False
     return results, summary
 
+
+
+
+def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_BINARY_DL_PARAM_ADAPTATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    base = V16StrategyParams()
+
+    from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
+        ALL_RULE_FILTERS_OFF_OVERRIDES,
+        RISK_SEARCH_FIELDS,
+        _materialize_formal_rule_variant,
+        _parse_args as parse_dl_param_adapt_args,
+        build_risk_only_fold_overrides,
+    )
+    from tools.optimizer.outer_rolling_oos import (
+        FOLD_FIXED_STRATEGY_OVERRIDES_KEY,
+        resolve_optimizer_session_spec_for_fold,
+    )
+    from strategies.breakout.search_space import (
+        build_trial_params,
+        _resolve_optimizer_float,
+        _resolve_optimizer_int,
+    )
+
+    param_adapt_args = parse_dl_param_adapt_args([])
+    baseline_member_params = params_to_json_dict(base)
+    baseline_member_params.update(
+        {
+            "high_len": 220,
+            "atr_len": 19,
+            "atr_buy_tol": 1.0,
+            "atr_times_init": 4.4,
+            "atr_times_trail": 3.7,
+            "use_history_threshold": False,
+            "use_breakout_reclaim_reentry": True,
+            "use_kc": True,
+        }
+    )
+    synthetic_baseline_contract = {
+        "payload": {
+            "params_ensemble_by_effective_date": {
+                "2021-01-01": [
+                    {"member_index": 1, "params": baseline_member_params}
+                ]
+            }
+        }
+    }
+    risk_only_overrides = build_risk_only_fold_overrides(
+        baseline_contract=synthetic_baseline_contract,
+        args=param_adapt_args,
+        training_dl_enabled=False,
+    )
+    fold_fixed = risk_only_overrides["2021-01-01"]
+    resolved_fold_spec = resolve_optimizer_session_spec_for_fold(
+        {
+            "fixed_strategy_param_overrides": {"fixed_risk": 0.01},
+            FOLD_FIXED_STRATEGY_OVERRIDES_KEY: risk_only_overrides,
+        },
+        oos_start_date="2021-01-01",
+    )
+
+    class _FixedParamSession:
+        def __init__(self, values):
+            self.values = dict(values)
+
+        def has_fixed_strategy_param(self, field_name):
+            return field_name in self.values
+
+        def get_fixed_strategy_param(self, field_name, default=None):
+            return self.values.get(field_name, default)
+
+    class _NoSuggestTrial:
+        def suggest_int(self, *args, **kwargs):
+            raise AssertionError("fixed int should not call trial")
+
+        def suggest_float(self, *args, **kwargs):
+            raise AssertionError("fixed float should not call trial")
+
+    fixed_session = _FixedParamSession({"high_len": 220, "bb_mult": 2.0})
+    no_suggest_trial = _NoSuggestTrial()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_risk_only_param_adapt_freezes_non_risk_fields_per_fold",
+        (
+            tuple(RISK_SEARCH_FIELDS),
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            220,
+            (220, 2.0),
+            True,
+            "unique_group_sampling",
+        ),
+        (
+            tuple(RISK_SEARCH_FIELDS),
+            any(field in fold_fixed for field in RISK_SEARCH_FIELDS),
+            any(fold_fixed[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
+            fold_fixed["use_history_threshold"],
+            fold_fixed["use_breakout_reclaim_reentry"],
+            fold_fixed["use_kc"],
+            fold_fixed["use_breakout_quality_filter"],
+            resolved_fold_spec["fixed_strategy_param_overrides"]["high_len"],
+            (
+                _resolve_optimizer_int(fixed_session, no_suggest_trial, "high_len"),
+                _resolve_optimizer_float(fixed_session, no_suggest_trial, "bb_mult"),
+            ),
+            all(
+                resolved_fold_spec["fixed_strategy_param_overrides"].get(key)
+                == value
+                for key, value in ALL_RULE_FILTERS_OFF_OVERRIDES.items()
+            ),
+            param_adapt_args.experiment_profile,
+        ),
+    )
+
+    class _RiskOnlySession(_FixedParamSession):
+        optimizer_fixed_tp_percent = 0.0
+
+        def resolve_optimizer_tp_percent(self, trial, *, fixed_tp_percent):
+            return fixed_tp_percent
+
+    class _RiskOnlyTrial:
+        def __init__(self):
+            self.calls = []
+
+        def suggest_int(self, field_name, low, high, step=1):
+            self.calls.append(field_name)
+            return int(low)
+
+        def suggest_float(self, field_name, low, high, step=None):
+            self.calls.append(field_name)
+            return float(low)
+
+        def suggest_categorical(self, field_name, choices):
+            self.calls.append(field_name)
+            return list(choices)[0]
+
+    risk_only_trial = _RiskOnlyTrial()
+    risk_only_params = build_trial_params(
+        _RiskOnlySession(fold_fixed),
+        risk_only_trial,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_risk_only_search_suggests_only_four_atr_fields",
+        (
+            set(RISK_SEARCH_FIELDS),
+            220,
+            False,
+            False,
+            False,
+            0.0,
+        ),
+        (
+            set(risk_only_trial.calls),
+            risk_only_params.high_len,
+            risk_only_params.use_bb,
+            risk_only_params.use_kc,
+            risk_only_params.use_breakout_quality_filter,
+            risk_only_params.min_history_win_rate,
+        ),
+    )
+
+    synthetic_adapted = {
+        "params_ensemble_by_effective_date": {
+            "2021-01-01": [
+                {
+                    "member_index": 1,
+                    "params": {
+                        **fold_fixed,
+                        "atr_len": 7,
+                        "atr_buy_tol": 2.1,
+                        "atr_times_init": 2.2,
+                        "atr_times_trail": 2.3,
+                    },
+                }
+            ]
+        },
+        "params_by_effective_date": {},
+        "params_by_oos_year": {},
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        adapted_path = Path(tmpdir) / "adapted.json"
+        formal_path = Path(tmpdir) / "formal.json"
+        adapted_path.write_text(json.dumps(synthetic_adapted), encoding="utf-8")
+        _materialize_formal_rule_variant(
+            baseline_contract=synthetic_baseline_contract,
+            adapted_params_path=adapted_path,
+            output_path=formal_path,
+            args=param_adapt_args,
+        )
+        formal_payload = json.loads(formal_path.read_text(encoding="utf-8"))
+    formal_params = formal_payload["params_ensemble_by_effective_date"][
+        "2021-01-01"
+    ][0]["params"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_risk_only_replay_compares_formal_rules_and_all_off_rules",
+        (
+            True,
+            True,
+            7,
+            2.1,
+            0.0,
+        ),
+        (
+            formal_params["use_breakout_reclaim_reentry"],
+            formal_params["use_kc"],
+            formal_params["atr_len"],
+            formal_params["atr_buy_tol"],
+            fold_fixed["min_history_win_rate"],
+        ),
+    )
+
+    from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
+        run_param_adaptation_gate,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_root = Path(tmpdir)
+        baseline_path = tmp_root / "models" / "roos_base_best.json"
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_text(
+            json.dumps(synthetic_baseline_contract["payload"]), encoding="utf-8"
+        )
+        adapted_path = tmp_root / "synthetic_a5.json"
+        adapted_path.write_text(json.dumps(synthetic_adapted), encoding="utf-8")
+        orchestration_contract = {
+            **synthetic_baseline_contract,
+            "path": baseline_path,
+            "sha256": "synthetic-baseline",
+            "meta": {
+                "window_mode": "fixed",
+                "first_oos_date": "2021-01-01",
+                "last_oos_date": "2021-01-01",
+                "train_window_months": 120,
+                "oos_horizon_months": 12,
+            },
+            "summary": {"folds": 1},
+        }
+        comparison_calls = []
+
+        def _fake_comparison(**kwargs):
+            comparison_calls.append(kwargs)
+            return {
+                "no_filter": {
+                    "total_return_pct": 10.0,
+                    "return_over_max_drawdown": 2.0,
+                },
+                "quality_filter": {
+                    "total_return_pct": 12.0,
+                    "return_over_max_drawdown": 2.2,
+                },
+                "quality_filter_minus_no_filter": {
+                    "total_return_pct": 2.0,
+                    "return_over_max_drawdown": 0.2,
+                    "expected_value_r": 0.1,
+                    "avg_exposure_pct": -1.0,
+                },
+            }
+
+        with (
+            patch(
+                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.load_runtime_artifact_contract",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate._load_baseline_contract",
+                return_value=orchestration_contract,
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.configure_optuna_logging",
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate._run_a5_optimizer",
+                return_value={
+                    "params_path": adapted_path,
+                    "summary": {"status": "COMPLETED"},
+                },
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.run_comparison",
+                side_effect=_fake_comparison,
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            orchestration_result = run_param_adaptation_gate(
+                project_root=tmp_root,
+                argv=[
+                    "--dataset",
+                    "full",
+                    "--param-policy",
+                    "base-finalist-best",
+                    "--trials-per-fold",
+                    "1",
+                    "--max-positions",
+                    "10",
+                    "--rotation",
+                    "off",
+                ],
+            )
+        report_exists = (
+            tmp_root
+            / "models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling/strategy_dl_filter_param_adapt_gate.md"
+        ).is_file()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_risk_only_gate_runs_formal_and_all_off_pairs_without_a6_leakage",
+        (
+            2,
+            "current",
+            "all-off",
+            False,
+            True,
+            {"formal", "all_off"},
+            "BINARY_PIT_REQUIRED",
+            True,
+        ),
+        (
+            len(comparison_calls),
+            comparison_calls[0]["optional_entry_filter_policy"],
+            comparison_calls[1]["optional_entry_filter_policy"],
+            bool(comparison_calls[0].get("shared_param_overrides")),
+            all(
+                comparison_calls[1]["shared_param_overrides"].get(key) is False
+                for key in ALL_RULE_FILTERS_OFF_OVERRIDES
+            ),
+            set(orchestration_result["a5_b5"]),
+            orchestration_result["a6_b6"]["status"],
+            report_exists,
+        ),
+    )
+
+
+    summary["workflow"] = "binary_dl_filter_risk_only_param_adaptation"
+    summary["a6_b6"] = "BINARY_PIT_REQUIRED"
+    return results, summary
 
 
 def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):

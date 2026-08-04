@@ -306,3 +306,11 @@ python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_
 ### 11K Portfolio Selection-pressure Attribution Audit
 
 11K是11I凍結工件的read-only歸因層。它不重播portfolio、不建立counterfactual，而是把orderable candidate occurrence依ticker＋trade date對齊actual entry，計算同日No-time Target percentile、top-k retention、Target opportunity gap及候選壓力分桶。未選候選不具realized R，保持缺值。正式入口為`apps/breakout_quality.py audit-selection-pressure`，CLI-only；依賴方向為apps薄路由→tools audit→11I artifact，禁止反向修改core或runtime。
+
+### Binary DL risk-only rolling parameter adaptation boundary
+
+`tools/filters/breakout_quality/strategy_dl_filter_param_adapt_gate.py`是CLI-only研究編排層。A5／B5固定Rule-based filters全關，僅讓`atr_len`、`atr_buy_tol`、`atr_times_init`與`atr_times_trail`進入既有rolling optimizer search；不複製objective、portfolio replay、active-param export或統計。`strategies/breakout/search_space.py`的數值參數解析器必須優先採用session fixed overrides，使被凍結的非風險欄位不再消耗trial維度。
+
+既有ROOS的非風險值依effective date不同。`tools/optimizer/outer_rolling_oos.py`因此只新增process-safe的fold-specific fixed override解析：session建立前以該fold的OOS起日合併對應固定值，objective、local-min review、OOS diagnostics與active-param輸出共用同一份effective contract。這是通用optimizer能力，不得在Breakout Quality工具中另寫第二套rolling loop。
+
+A5完成後，同一套風險參數會分別在「原正式規則全套」及「Rule-based filters全關」兩種規則政策下，各自比較Binary DL關／開；報表只保留全套／全關矩陣，不再延伸逐項History、Re-entry、KC消融。A6／B6需要optimizer訓練期間可用的Binary point-in-time score source；最終9A forward-OOS score、research score或Selection in-sample score均不得替代。缺少合法Binary PIT runtime時必須輸出`BINARY_PIT_REQUIRED`，不得降級為有前視執行。

@@ -3138,3 +3138,63 @@ python apps/breakout_quality.py strategy-dl-filter-gate --dataset full --param-p
 
 無需重建任何Dataset、Label、checkpoint或Score；直接沿用目前9A canonical forward-OOS工件與rolling active-param JSON執行CLI即可。
 
+
+## 2026-08-04 — Binary DL Risk-only Parameter Adaptation A5／B5 Stage Gate
+
+### 狀態
+
+`IMPLEMENTED / LOCAL_FULL_DATA_EXECUTION_REQUIRED / A6_B6_BINARY_PIT_REQUIRED / FORMAL_BASELINE_UNCHANGED`
+
+### 程式基準
+
+- 輸入ZIP：`test-branch-1_20260804_201536_24f4bed(1).zip`
+- SHA256：`18c91a1e36374212c3745fbb7dda1ce21900ac88caa9456201972848436a5c0e`
+- 使用者另提供目前`roos_base_best.json`內容供契約核對；2021～2026六個effective dates的`use_history_threshold`皆為False，Re-entry僅2026為True，KC僅2021為True。
+- 本輪patch ZIP名稱與SHA256以交付回覆為準。
+
+### 研究問題
+
+前一輪A0／B0～A4／B4顯示，歷史門檻本來全期關閉；再關Re-entry與KC的績效差異接近零。後續不再維護逐層規則消融，報表只比較：
+
+1. 原正式規則全套。
+2. Rule-based filters全關。
+
+使用者提出的下一個問題是：9A Binary DL失敗，是否因正式ROOS風險／執行參數是在DL關閉環境下訓練，未適應DL篩選後的候選與持倉分布。
+
+### A5／B5 唯一主要變更
+
+- 訓練規則固定Rule-based filters全關：五個optional entry filters、歷史門檻、Re-entry及KC均關閉。
+- optimizer只搜尋四個風險／執行參數：`atr_len`、`atr_buy_tol`、`atr_times_init`、`atr_times_trail`。
+- `high_len`、其他rule參數、TP、fixed risk、position cap、max positions、rotation、費稅與原position-aware buy-sort全部固定；非風險值依Baseline各effective date凍結。
+- A5為DL關閉環境訓練出的risk-only rolling active params，回放時DL關閉。
+- B5沿用A5完全相同的active-param schedule，回放時只開啟Binary DL hard filter。
+- 完成A5後，另將同一套新風險值合併回原Baseline rule設定，報表同時輸出「原正式規則全套」與「Rule-based filters全關」兩列；不再逐項比較History、Re-entry或KC。
+
+### 架構契約
+
+- `strategies/breakout/search_space.py`的int／float解析新增session fixed override支援，使凍結欄位不再消耗trial維度。
+- `tools/optimizer/outer_rolling_oos.py`新增fold-specific fixed override mapping；每個fold依OOS effective date建立session，objective、local-min、OOS diagnostics與active-param export共用同一固定契約。
+- 新CLI：`strategy-dl-filter-param-adapt-gate`，research-only、CLI-only，不加入正式選單。
+- 新輸出：`models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling/`。
+
+### A6／B6 無前視限制
+
+A6／B6代表optimizer訓練期間就開啟Binary DL，再用同一套新參數分別回放DL關／開。第一個rolling fold的訓練期包含2011～2020；目前9A canonical forward-OOS score只從2020-12-31後開始，不能回灌歷史Selection訓練。
+
+因此A6／B6必須先建立每個optimizer歷史日期可用、模型只讀取當時以前資料的Binary PIT scores，並將該PIT source接入optimizer runtime。以下均禁止作替代：
+
+- 最終9A canonical forward-OOS scores。
+- `research_scores.csv`。
+- 最終模型Selection in-sample scores。
+
+本輪只實作合法preflight與`BINARY_PIT_REQUIRED`狀態，不以缺分fallback或final model score偷跑A6／B6。只有A5／B5結果支持DL與風險參數可能存在協同作用時，才進入Binary PIT builder與A6／B6 runtime wiring。
+
+### 固定條件
+
+不重建Dataset、不relabel、不重訓9A模型、不調threshold 0.5、不改原buy-sort、不改fixed risk／position cap值、不改max positions、rotation、成交／費稅或portfolio accounting。A5／B5直接使用既有9A canonical runtime manifest／scores作OOS回放；optimizer訓練本身固定DL關閉，不讀該OOS score。
+
+### 結果與採用判定
+
+目前只有實作與契約驗證，尚無本機完整rolling optimizer及replay結果，不得判定A5／B5有效或無效。正式策略仍維持A0與既有正式ROOS。
+
+A5／B5至少需同時檢查Return／MDD、EV、直接交易選擇R與年度穩定性；總報酬單獨改善不足以通過。A6／B6尚未執行，且不得在Binary PIT缺失時開始。

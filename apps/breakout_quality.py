@@ -120,6 +120,9 @@ COMMAND_MODULES = {
     "strategy-adapt": "tools.filters.breakout_quality.strategy_adapt",
     "strategy-filter-gate": "tools.filters.breakout_quality.strategy_filter_gate",
     "strategy-dl-filter-gate": "tools.filters.breakout_quality.strategy_dl_filter_gate",
+    "strategy-dl-filter-param-adapt-gate": (
+        "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate"
+    ),
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -155,7 +158,10 @@ COMMAND_DESCRIPTIONS = {
     "strategy-compare": "執行breakout-quality策略績效比較",
     "strategy-adapt": "驗證Selection rolling Ranking×Parameter 2×2策略適應",
     "strategy-filter-gate": "執行Optional entry filters × Ranking A～E研究Gate",
-    "strategy-dl-filter-gate": "執行Binary DL filter取代Optional entry filters的A/B/C/F Gate",
+    "strategy-dl-filter-gate": "執行Binary DL filter規則消融矩陣Gate；research-only、CLI-only",
+    "strategy-dl-filter-param-adapt-gate": (
+        "執行Binary DL filter風險參數適應A5/B5 Gate；research-only、CLI-only"
+    ),
 }
 
 
