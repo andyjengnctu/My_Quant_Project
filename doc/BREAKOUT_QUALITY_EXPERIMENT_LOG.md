@@ -2945,3 +2945,46 @@ Binary hard-filter replay已完成Baseline與quality-filter兩組，但`strategy
 ### 同輪額外檢查修正
 
 獨立執行`validate_breakout_quality_strategy_comparison_contract_case`時，既有mocked A／B／C／F Gate只替換`run_comparison`，未隔離canonical model preflight，會因GPT檢查環境沒有本機9A checkpoint而失敗。此為測試自足性問題，不影響正式Gate。測試現同步mock `_validate_binary_runtime_preflight`，仍保留另有專門案例驗證缺模型／只缺Scores的正式preflight分流。
+
+## 2026-08-04 — Formal consistency／coverage synthetic 閉環修正
+
+### 狀態
+
+`IMPLEMENTED / INDEPENDENT_SYNTHETIC_PASS / LOCAL_FORMAL_RERUN_REQUIRED`
+
+### 程式與測試基準
+
+- 輸入程式ZIP：`test-branch-1_20260804_143233_f1d6807.zip`
+- 程式SHA256：`04e6bae036562c471b45d0ecbf00dd47f9ada3fec089b8b29fa0870e9d0db28b`
+- Formal bundle：`to_chatgpt_bundle_20260804_143322_bf24a8be.zip`
+- Bundle SHA256：`6bc34702d640a9d5503e190628268d7e925ccdec4b41f7656f08193ec327d893`
+- Bundle結果：quick gate PASS、chain checks PASS、ML smoke PASS；consistency 1項FAIL；meta quality 4項coverage FAIL。
+
+### 根因
+
+Consistency唯一失敗為synthetic suite在`validate_breakout_quality_strategy_adaptation_contract_case`中直接讀取目前正式Binary workflow；`strategy_adapt._validate_fixed_contract`正確拒絕Binary hard-filter identity，導致整個coverage synthetic suite提前中止。Meta quality的`coverage_synthetic_suite_runs_successfully`、line／branch minimum與key targets四項失敗均為同一中止事件的連鎖結果，不是實際coverage退步。
+
+完整registry往下執行另發現三類被首個例外遮蔽的測試問題：
+
+1. Continuous模型研究與strategy adaptation案例未使用隔離workflow override，會受目前Binary正式設定影響。
+2. Binary主選單新增子選單與訓練後正式策略驗證後，CLI fixture仍使用舊輸入序列、舊route、缺少`experiment_profile`及舊hard-filter argv。
+3. `strategy_filter_gate.py`與`strategy_dl_filter_gate.py`的broad exception handler雖原樣重拋，但未綁定例外名稱，不符合正式traceability meta contract。
+
+### 唯一變更
+
+- `validate_breakout_quality_strategy_adaptation_contract_case`在測試內隔離覆寫continuous profile及strategy auto欄位，直接驗證score-ranking／Selection PIT identity、CLI fixed risk與position cap；測試結束後正式Binary config保持原值。
+- `validate_dataset_cli_contract_case`將continuous流程改為隔離profile案例，並同步Binary子選單route、相對工件路徑、完整hard-filter identity及訓練後post-validation fixture。
+- 兩個研究Gate的`except Exception`改為綁定例外名稱，仍先輸出已捕捉console後原樣`raise`；錯誤處理語意不變。
+
+### 固定條件與工件需求
+
+- 正式workflow仍為`unique_group_sampling / binary_classification / hard-filter / canonical_runtime / original buy-sort`。
+- Continuous PIT ranking與strategy adaptation仍為CLI-only研究流程；runtime fixed contract沒有放寬。
+- 不修改Dataset、Label、model checkpoint、research／runtime Scores、threshold、rolling params、交易引擎或策略績效口徑。
+- 不需重訓模型、不需重新匯出Scores。
+
+### 獨立驗證
+
+- `validate_breakout_quality_strategy_adaptation_contract_case`：19／19 PASS。
+- 完整synthetic registry：242 validators、4,169 checks、0 FAIL。
+- 正式`apps/test_suite.py`依專案規定未由GPT執行；使用者套用patch後只需重跑本地formal suite，預期consistency與coverage meta quality恢復。

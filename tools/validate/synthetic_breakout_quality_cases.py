@@ -12981,6 +12981,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         _fixed_strategy_param_overrides,
         _load_current_pair_if_compatible,
         _optimizer_session_spec,
+        _parse_args as parse_strategy_adapt_args,
         _render_three_way_console,
         _resolve_selection_pit_models_root,
         _run_rolling_optimizer_arm,
@@ -13026,7 +13027,53 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         def set_user_attr(self, key, value):
             self.user_attrs[key] = value
 
-    settings = breakout_quality_config.get_breakout_quality_workflow_settings()
+    configured_workflow_profile = str(
+        breakout_quality_config.BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+    )
+    with (
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE",
+            "auto",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE",
+            "auto",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_BUY_SORT",
+            "auto",
+        ),
+    ):
+        settings = breakout_quality_config.get_breakout_quality_workflow_settings()
+    restored_workflow_profile = str(
+        breakout_quality_config.BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_adaptation_uses_isolated_continuous_workflow_without_mutating_config",
+        (
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+            "score-ranking",
+            "selection_point_in_time",
+            configured_workflow_profile,
+        ),
+        (
+            settings.experiment_profile,
+            settings.strategy_comparison_mode,
+            settings.strategy_score_source,
+            restored_workflow_profile,
+        ),
+    )
     args = SimpleNamespace(
         dataset="full",
         filter_id=settings.filter_id,
@@ -13494,23 +13541,49 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         ),
     )
 
+    with (
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE",
+            "auto",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE",
+            "auto",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_BUY_SORT",
+            "auto",
+        ),
+    ):
+        parsed_adapt_args = parse_strategy_adapt_args([])
     app_source = (Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py").read_text(
         encoding="utf-8"
     )
-    strategy_menu_choice_one = app_source.split('if choice == "1":', 1)[1].split(
-        'if choice == "2":', 1
-    )[0]
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "strategy_compare_menu_writes_same_fixed_risk_and_position_cap_contract",
-        (True, True),
+        "strategy_adapt_cli_uses_isolated_continuous_risk_and_position_cap_defaults",
         (
-            '"--fixed-risk"' in strategy_menu_choice_one
-            and "settings.strategy_adapt_fixed_risk" in strategy_menu_choice_one,
-            '"--max-position-cap-pct"' in strategy_menu_choice_one
-            and "settings.strategy_adapt_max_position_cap_pct" in strategy_menu_choice_one,
+            settings.strategy_adapt_fixed_risk,
+            settings.strategy_adapt_max_position_cap_pct,
+            settings.experiment_profile,
+            True,
+        ),
+        (
+            parsed_adapt_args.fixed_risk,
+            parsed_adapt_args.max_position_cap_pct,
+            parsed_adapt_args.experiment_profile,
+            '"strategy-adapt": "tools.filters.breakout_quality.strategy_adapt"'
+            in app_source,
         ),
     )
 

@@ -1787,6 +1787,10 @@
 | 2026-08-04 | B170 | 新增A／B／C／F canonical-runtime hard-filter Gate，固定原buy-sort、threshold、rolling params與AB／CF trade attribution，並以F−A及replacement interaction作判讀後重新收斂為DONE | PARTIAL -> DONE | `tools/filters/breakout_quality/strategy_dl_filter_gate.py`, `apps/breakout_quality.py`, `doc/CMD.md`, `doc/ARCHITECTURE.md` |
 | 2026-08-04 | B170 | 正式workflow切回Binary後，選單仍只提供訓練且未自動顯示模型報表／產生runtime scores／比較Baseline，也無法直接使用既有模型，契約退回PARTIAL | DONE -> PARTIAL | `config/breakout_quality.py`, `apps/breakout_quality.py` |
 | 2026-08-04 | B170 | Binary模型子選單新增重訓與既有模型兩路徑；既有模型路徑先自動更新research scores，兩路徑再固定依序執行OOS簡易報表、forward-OOS export與Baseline hard-filter比較；臨時Gate維持CLI-only後重新收斂為DONE | PARTIAL -> DONE | `apps/breakout_quality.py`, `config/breakout_quality.py`, `doc/CMD.md`, `doc/ARCHITECTURE.md` |
+| 2026-08-04 | T36 | 正式workflow切回Binary並新增模型子選單後，CLI synthetic仍以目前設定執行continuous流程、沿用舊輸入序列與舊hard-filter argv，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_cli_cases.py` |
+| 2026-08-04 | T36 | Continuous workflow改用隔離profile override；Binary子選單、工件狀態、完整hard-filter identity與訓練後驗證fixture同步更新後重新收斂為DONE | PARTIAL -> DONE | `validate_dataset_cli_contract_case` |
+| 2026-08-04 | T189 | A～E與A／B／C／F Gate的broad exception handler未綁定例外名稱，違反可追蹤性契約，測試退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_filter_gate.py`, `tools/filters/breakout_quality/strategy_dl_filter_gate.py` |
+| 2026-08-04 | T189 | 兩個Gate改為綁定例外後保留原console並原樣重拋，broad exception traceability重新收斂為DONE | PARTIAL -> DONE | `validate_broad_exception_traceability_contract_case` |
 | 2026-08-04 | T267 | Optional entry filters × Ranking粗粒度gate新增E情境，原validator未覆蓋五個filters全關、E原始Score及隔離輸出，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-04 | T267 | direct驗證single／rolling active-param下C／D／E五個optional filters全關、D使用R3、E使用原始Score與all-off輸出隔離後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
 | 2026-08-04 | T267 | 本機A～E Gate預設誤用binary `unique_group_sampling`，導致Selection PIT score路徑解析至錯誤profile，測試退回PARTIAL | DONE -> PARTIAL | `tools/filters/breakout_quality/strategy_filter_gate.py` |
@@ -1799,3 +1803,5 @@
 | 2026-08-04 | T267 | `capture_result`於分支前初始化為None，並新增直接hard-filter `run_comparison` regression確認共用console與JSON輸出後重新收斂為DONE | PARTIAL -> DONE | `tools/filters/breakout_quality/strategy_compare.py`, `validate_breakout_quality_strategy_comparison_contract_case` |
 | 2026-08-04 | T267 | Mocked A／B／C／F Gate regression仍讀取本機9A canonical工件，使synthetic validator依賴外部checkpoint，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-04 | T267 | A／B／C／F end-to-end mock同步隔離runtime preflight，並保留專用preflight案例驗證正式缺檔分流後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_comparison_contract_case` |
+| 2026-08-04 | T283 | 正式workflow切回Binary後，strategy adaptation synthetic仍直接讀取目前workflow並期待舊互動選單，continuous adaptation案例於coverage suite中止，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-04 | T283 | Adaptation validator改以隔離continuous profile與auto strategy overrides建立固定案例，並直接驗證CLI risk／position-cap defaults且不修改正式config後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_strategy_adaptation_contract_case` |

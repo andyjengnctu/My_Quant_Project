@@ -356,7 +356,7 @@ def _run_pair(
                 comparison_end_date=args.end_date,
                 quiet=args.quiet,
             )
-    except Exception:
+    except Exception as exc:
         captured = buffer.getvalue().strip()
         if captured:
             print(captured)

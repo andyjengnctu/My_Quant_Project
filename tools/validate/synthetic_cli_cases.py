@@ -19,6 +19,7 @@ from config.breakout_quality import (
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
 )
 from .checks import add_check
 
@@ -134,23 +135,46 @@ def validate_dataset_cli_contract_case(_base_params):
         )
         return 0
 
-    workflow_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
+    breakout_quality_config = importlib.import_module("config.breakout_quality")
     with (
-        patch("builtins.input", side_effect=["", "", "0"]),
-        patch("apps.breakout_quality._print_workflow_status"),
-        patch(
-            "apps.breakout_quality._run_command",
-            side_effect=_record_interactive_command,
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
         ),
-        patch(
-            "apps.breakout_quality._dataset_refresh_step",
-            return_value=("none", [], None),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE",
+            "auto",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE",
+            "auto",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_BUY_SORT",
+            "auto",
         ),
     ):
-        rc, interactive_text = _capture_stdout(
-            app_breakout_quality._run_interactive_menu,
-            "apps/breakout_quality.py",
-        )
+        workflow_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
+        with (
+            patch("builtins.input", side_effect=["", "", "0"]),
+            patch("apps.breakout_quality._print_workflow_status"),
+            patch(
+                "apps.breakout_quality._run_command",
+                side_effect=_record_interactive_command,
+            ),
+            patch(
+                "apps.breakout_quality._dataset_refresh_step",
+                return_value=("none", [], None),
+            ),
+        ):
+            rc, interactive_text = _capture_stdout(
+                app_breakout_quality._run_interactive_menu,
+                "apps/breakout_quality.py",
+            )
     add_check(
         results,
         "cli_contract",
@@ -163,7 +187,7 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_model_research_menu_route",
+        "breakout_quality_continuous_model_research_menu_route_uses_isolated_profile",
         True,
         (
             [item["command"] for item in interactive_commands]
@@ -263,16 +287,18 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_workflow_status_groups_artifacts_without_paths",
+        "breakout_quality_workflow_status_uses_current_binary_identity_and_relative_paths",
         True,
         (
-            "Workflow 狀態" in rendered_status
-            and "Continuous Target" in rendered_status
-            and "PIT Scores" in rendered_status
-            and "PIT 模型驗證" in rendered_status
-            and "路徑" not in rendered_status
-            and "outputs/" not in rendered_status
-            and "models/" not in rendered_status
+            "Current Breakout Quality Workflow" in rendered_status
+            and "unique_group_sampling" in rendered_status
+            and "binary_classification" in rendered_status
+            and "Breakout Quality 工件狀態" in rendered_status
+            and "runtime_scores" in rendered_status
+            and "outputs/filters/breakout_quality/" in rendered_status
+            and "models/filters/breakout_quality/" in rendered_status
+            and "C:\\Users\\" not in rendered_status
+            and "/mnt/data/" not in rendered_status
         ),
     )
 
@@ -297,6 +323,26 @@ def validate_dataset_cli_contract_case(_base_params):
         "完整建立 indexed feature bank dataset",
     )
     with (
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE",
+            "auto",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE",
+            "auto",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_STRATEGY_BUY_SORT",
+            "auto",
+        ),
         patch("builtins.input", return_value=""),
         patch("apps.breakout_quality._print_workflow_status"),
         patch(
@@ -438,7 +484,10 @@ def validate_dataset_cli_contract_case(_base_params):
             "apps.breakout_quality.get_breakout_quality_workflow_settings",
             return_value=binary_workflow_settings,
         ),
-        patch("apps.breakout_quality._interactive_workflow", return_value=41) as binary_route,
+        patch(
+            "apps.breakout_quality._interactive_binary_model_research",
+            return_value=41,
+        ) as binary_route,
     ):
         binary_rc = app_breakout_quality._interactive_model_research(
             "apps/breakout_quality.py"
@@ -447,7 +496,7 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_binary_profile_routes_to_classification_workflow",
+        "breakout_quality_binary_profile_routes_to_binary_model_submenu",
         (41, 1, binary_workflow_settings),
         (
             binary_rc,
@@ -493,9 +542,16 @@ def validate_dataset_cli_contract_case(_base_params):
                     [
                         "--dataset", binary_workflow_settings.strategy_dataset,
                         "--comparison-mode", "hard-filter",
+                        "--filter-id", binary_workflow_settings.filter_id,
+                        "--score-source", binary_workflow_settings.strategy_score_source,
+                        "--model-architecture", binary_workflow_settings.model_architecture,
+                        "--experiment-profile", binary_workflow_settings.experiment_profile,
                         "--param-policy", binary_workflow_settings.strategy_param_policy,
                         "--max-positions", str(binary_workflow_settings.strategy_max_positions),
                         "--rotation", binary_workflow_settings.strategy_rotation,
+                        "--fixed-risk", str(binary_workflow_settings.strategy_adapt_fixed_risk),
+                        "--max-position-cap-pct",
+                        str(binary_workflow_settings.strategy_adapt_max_position_cap_pct),
                     ],
                     "apps/breakout_quality.py",
                 )
@@ -1249,6 +1305,7 @@ def validate_dataset_cli_contract_case(_base_params):
 
     interactive_policy_settings = SimpleNamespace(
         filter_id="synthetic_quality",
+        experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
         epochs=7,
         batch_size=64,
         evaluation_batch_size=256,
@@ -1357,6 +1414,10 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
         patch("apps.breakout_quality._prompt_bool", side_effect=_fake_stale_workflow_bool),
         patch("apps.breakout_quality._run_workflow", return_value=0) as mocked_stale_workflow,
+        patch(
+            "apps.breakout_quality._run_binary_post_train_validation",
+            return_value=0,
+        ) as mocked_stale_post_validation,
     ):
         stale_workflow_rc = app_breakout_quality._interactive_workflow(
             "apps/breakout_quality.py"
@@ -1378,6 +1439,7 @@ def validate_dataset_cli_contract_case(_base_params):
             0,
             True,
             1,
+            1,
         ),
         (
             stale_workflow_rc,
@@ -1387,6 +1449,7 @@ def validate_dataset_cli_contract_case(_base_params):
             int(stale_request.max_tickers),
             bool(stale_request.evaluate_oos),
             mocked_stale_workflow.call_count,
+            mocked_stale_post_validation.call_count,
         ),
     )
 
