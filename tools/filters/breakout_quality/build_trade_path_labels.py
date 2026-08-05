@@ -176,6 +176,41 @@ def _write_ticker_shard(path: Path, rows: list[dict[str, Any]]) -> pd.DataFrame:
     return frame
 
 
+def _validate_historical_teacher_baseline_period(
+    *,
+    payload: dict[str, Any],
+    meta: dict[str, Any],
+) -> tuple[str, ...]:
+    first_oos = pd.Timestamp(str(meta["first_oos_date"])).normalize()
+    last_oos = pd.Timestamp(str(meta["last_oos_date"])).normalize()
+    expected_effective_dates = tuple(
+        pd.Timestamp(year=year, month=1, day=1)
+        for year in range(2014, 2021)
+    )
+    raw_schedule = dict(payload.get("params_ensemble_by_effective_date") or {})
+    try:
+        observed_effective_dates = tuple(
+            sorted(pd.Timestamp(str(value)).normalize() for value in raw_schedule)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("歷史teacher基準active-param生效日不合法") from exc
+    period_boundary_valid = (
+        first_oos == pd.Timestamp("2014-01-01")
+        and last_oos.year == 2020
+        and last_oos >= pd.Timestamp("2020-01-01")
+    )
+    if not period_boundary_valid or observed_effective_dates != expected_effective_dates:
+        observed_text = ",".join(
+            value.strftime("%Y-%m-%d") for value in observed_effective_dates
+        ) or "-"
+        raise ValueError(
+            "歷史teacher基準必須完整涵蓋2014～2020年度active params: "
+            f"meta={first_oos.date()}~{last_oos.date()}, "
+            f"effective_dates={observed_text}"
+        )
+    return tuple(value.strftime("%Y-%m-%d") for value in observed_effective_dates)
+
+
 def _load_selection_baseline_contract(root: Path) -> dict[str, Any]:
     path = root / TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH
     if not path.is_file():
@@ -200,13 +235,7 @@ def _load_selection_baseline_contract(root: Path) -> dict[str, Any]:
     missing = [name for name in required if meta.get(name) in (None, "")]
     if missing:
         raise ValueError(f"歷史teacher基準缺少meta: {missing}")
-    first_oos = pd.Timestamp(str(meta["first_oos_date"])).normalize()
-    last_oos = pd.Timestamp(str(meta["last_oos_date"])).normalize()
-    if first_oos != pd.Timestamp("2014-01-01") or last_oos != pd.Timestamp("2020-01-01"):
-        raise ValueError(
-            "歷史teacher基準期間必須為2014～2020: "
-            f"actual={first_oos.date()}~{last_oos.date()}"
-        )
+    _validate_historical_teacher_baseline_period(payload=payload, meta=meta)
     return {
         "path": path,
         "payload": payload,

@@ -3467,3 +3467,24 @@ Binary模型研究子選單改為：
 ### 採用限制
 
 本次只完成資料、模型與Gate流程，尚無新Label模型Prediction或策略結果。正式策略維持A0；A2維持無DL研究候選；9A Binary DL runtime維持關閉。不得依未執行結果宣稱新Label有效。
+
+## 2026-08-05 — A2 Trade-path Historical Teacher OOS Boundary Fix
+
+### 狀態
+
+`IMPLEMENTED / LABEL_BUILD_RETRY_REQUIRED / MODEL_RESULT_NOT_AVAILABLE / FORMAL_BASELINE_UNCHANGED`
+
+### 問題
+
+使用者由模型研究選單執行`建立新Label → 重新訓練 → 模型預測報表`時，歷史teacher前置檢查將Selection rolling baseline的`meta.last_oos_date=2020-12-01`誤當成最後active-param生效日，硬性要求`2020-01-01`，因此在建立Label前錯誤中止。rolling工件中的`last_oos_date`代表最後OOS可覆蓋月份；年度active params的最後生效日才是`2020-01-01`，兩者語意不同。
+
+### 唯一修正
+
+- 歷史teacher基準仍要求`meta.first_oos_date=2014-01-01`，且最後OOS邊界必須位於2020年並涵蓋`2020-01-01`。
+- 不再把`meta.last_oos_date`硬編碼為`2020-01-01`。
+- 改為直接驗證`params_ensemble_by_effective_date`必須恰好完整包含`2014-01-01`至`2020-01-01`七個年度生效日；缺少、增加或日期不合法均fail-fast。
+- 新增direct synthetic regression，確認`last_oos_date=2020-12-01`合法，且缺少2020年度active params仍會被拒絕。
+
+### Dataset／結果
+
+本修正只改teacher工件期間驗證，不改Dataset、Label公式、Feature、模型、threshold、策略參數或帳務。先前失敗發生在Label建置開始前，因此沒有可沿用的新Label模型結果；使用者需由原選單重新執行。正式策略維持A0，A2仍為無DL研究候選。

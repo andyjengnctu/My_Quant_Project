@@ -14995,7 +14995,54 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     from tools.filters.breakout_quality.build_trade_path_labels import (
         _load_valid_ticker_shard,
         _ticker_shard_path,
+        _validate_historical_teacher_baseline_period,
         _write_ticker_shard,
+    )
+
+    valid_teacher_payload = {
+        "params_ensemble_by_effective_date": {
+            f"{year}-01-01": [{"params": {"atr_len": 5}}]
+            for year in range(2014, 2021)
+        }
+    }
+    valid_teacher_meta = {
+        "first_oos_date": "2014-01-01",
+        "last_oos_date": "2020-12-01",
+    }
+    accepted_dates = _validate_historical_teacher_baseline_period(
+        payload=valid_teacher_payload,
+        meta=valid_teacher_meta,
+    )
+    incomplete_teacher_payload = {
+        "params_ensemble_by_effective_date": {
+            key: value
+            for key, value in valid_teacher_payload[
+                "params_ensemble_by_effective_date"
+            ].items()
+            if key != "2020-01-01"
+        }
+    }
+    try:
+        _validate_historical_teacher_baseline_period(
+            payload=incomplete_teacher_payload,
+            meta=valid_teacher_meta,
+        )
+    except ValueError as exc:
+        incomplete_schedule_rejected = "完整涵蓋2014～2020" in str(exc)
+    else:
+        incomplete_schedule_rejected = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_historical_teacher_accepts_2020_december_oos_boundary_and_validates_effective_schedule",
+        ("2014-01-01", "2020-01-01", 7, True),
+        (
+            accepted_dates[0],
+            accepted_dates[-1],
+            len(accepted_dates),
+            incomplete_schedule_rejected,
+        ),
     )
 
     policy = expected_label_policy_for_filter_id(TRADE_PATH_FILTER_ID)
