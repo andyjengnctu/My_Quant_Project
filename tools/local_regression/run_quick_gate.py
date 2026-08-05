@@ -31,6 +31,7 @@ HELP_TARGETS = [
     ([sys.executable, "apps/breakout_quality.py", "--help"], "python apps/breakout_quality.py"),
     ([sys.executable, "apps/breakout_quality.py", "workflow", "--help"], "python apps/breakout_quality.py workflow"),
     ([sys.executable, "apps/breakout_quality.py", "report", "--help"], "python apps/breakout_quality.py report"),
+    ([sys.executable, "apps/strategy_compare.py", "--help"], "python apps/strategy_compare.py"),
     ([sys.executable, "apps/workbench.py", "--help"], "python apps/workbench.py"),
     ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
     ([sys.executable, "apps/package_zip.py", "--help"], "python apps/package_zip.py"),
@@ -74,6 +75,7 @@ RUN_ALL_CLI_CASES = [
 ]
 INLINE_CLI_TARGETS = {
     "apps/breakout_quality.py",
+    "apps/strategy_compare.py",
     "apps/workbench.py",
     "apps/ml_optimizer.py",
     "apps/package_zip.py",

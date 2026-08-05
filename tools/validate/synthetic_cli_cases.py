@@ -53,6 +53,7 @@ def validate_dataset_cli_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     app_breakout_quality = importlib.import_module("apps.breakout_quality")
+    app_strategy_compare = importlib.import_module("apps.strategy_compare")
     moment_contract_module = importlib.import_module(
         "filters.breakout_quality.moment_contract"
     )
@@ -80,7 +81,6 @@ def validate_dataset_cli_contract_case(_base_params):
         "train", "export-scores", "report", "evaluate", "regime-audit",
         "prepare-continuous-target", "build-point-in-time-scores",
         "build-binary-point-in-time-scores", "audit-point-in-time-scores",
-        "strategy-compare", "strategy-dl-filter-param-adapt-gate",
     ):
         add_check(
             results,
@@ -103,7 +103,7 @@ def validate_dataset_cli_contract_case(_base_params):
         case_id,
         "breakout_quality_noninteractive_no_arg_help",
         True,
-        "Breakout quality filter" in no_arg_text,
+        "Breakout quality Dataset" in no_arg_text,
     )
 
     with (
@@ -228,8 +228,8 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "[1/Enter] 模型研究與驗證" in interactive_text
-            and "[2] 策略績效驗證" in interactive_text
-            and "[3] 查看目前設定與工件狀態" in interactive_text
+            and "[2] 查看模型設定與工件狀態" in interactive_text
+            and "策略績效驗證" not in interactive_text
         ),
     )
 
@@ -251,22 +251,6 @@ def validate_dataset_cli_contract_case(_base_params):
 
     with (
         patch("builtins.input", side_effect=["2", "0"]),
-        patch("apps.breakout_quality._interactive_strategy_validation", return_value=0) as strategy_menu,
-    ):
-        strategy_menu_rc = app_breakout_quality._run_interactive_menu(
-            "apps/breakout_quality.py"
-        )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_strategy_menu_route",
-        (0, 1),
-        (strategy_menu_rc, strategy_menu.call_count),
-    )
-
-    with (
-        patch("builtins.input", side_effect=["3", "0"]),
         patch("apps.breakout_quality._print_workflow_status") as status_menu,
     ):
         status_menu_rc = app_breakout_quality._run_interactive_menu(
@@ -507,130 +491,70 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     )
 
-    strategy_commands = []
-    strategy_compact_flags = []
-
-    def _record_strategy_command(command, args, *, program_name):
-        strategy_commands.append((str(command), list(args), str(program_name)))
-        strategy_compact_flags.append(
-            os.environ.get("BREAKOUT_QUALITY_COMPACT_CONSOLE") == "1"
-        )
-        return 0
-
-    with (
-        patch(
-            "apps.breakout_quality.get_breakout_quality_workflow_settings",
-            return_value=binary_workflow_settings,
-        ),
-        patch("apps.breakout_quality._print_workflow_status"),
-        patch(
-            "apps.breakout_quality._run_command",
-            side_effect=_record_strategy_command,
-        ),
-    ):
-        binary_strategy_rc = app_breakout_quality._interactive_strategy_validation(
-            "apps/breakout_quality.py"
-        )
-    add_check(
-        results,
-        "cli_contract",
-        case_id,
-        "breakout_quality_binary_strategy_routes_to_hard_filter",
-        (
-            0,
-            [
-                (
-                    "strategy-compare",
-                    [
-                        "--dataset", binary_workflow_settings.strategy_dataset,
-                        "--comparison-mode", "hard-filter",
-                        "--filter-id", binary_workflow_settings.filter_id,
-                        "--score-source", binary_workflow_settings.strategy_score_source,
-                        "--model-architecture", binary_workflow_settings.model_architecture,
-                        "--experiment-profile", binary_workflow_settings.experiment_profile,
-                        "--param-policy", binary_workflow_settings.strategy_param_policy,
-                        "--max-positions", str(binary_workflow_settings.strategy_max_positions),
-                        "--rotation", binary_workflow_settings.strategy_rotation,
-                        "--fixed-risk", str(binary_workflow_settings.strategy_adapt_fixed_risk),
-                        "--max-position-cap-pct",
-                        str(binary_workflow_settings.strategy_adapt_max_position_cap_pct),
-                    ],
-                    "apps/breakout_quality.py",
-                )
-            ],
-        ),
-        (binary_strategy_rc, strategy_commands),
+    strategy_rc, strategy_help = _capture_stdout(
+        app_strategy_compare.main,
+        ["apps/strategy_compare.py", "--help"],
     )
     add_check(
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_interactive_strategy_validation_enables_compact_console",
-        [True],
-        strategy_compact_flags,
+        "strategy_compare_app_help_is_generic_and_config_driven",
+        True,
+        strategy_rc == 0
+        and "[run|status]" in strategy_help
+        and "config/strategy_compare.py" in strategy_help
+        and "C1" not in strategy_help
+        and "TP1" not in strategy_help,
     )
 
-    score_strategy_commands = []
-    score_strategy_compact_flags = []
+    strategy_calls = []
 
-    def _record_score_strategy_command(command, args, *, program_name):
-        score_strategy_commands.append((str(command), list(args), str(program_name)))
-        score_strategy_compact_flags.append(
-            os.environ.get("BREAKOUT_QUALITY_COMPACT_CONSOLE") == "1"
-        )
-        return 0
+    def _record_strategy_run():
+        strategy_calls.append("run")
+        return {}
 
-    original_compact_value = os.environ.get("BREAKOUT_QUALITY_COMPACT_CONSOLE")
+    def _record_strategy_status():
+        strategy_calls.append("status")
+        return {}
+
     with (
         patch(
-            "apps.breakout_quality.get_breakout_quality_workflow_settings",
-            return_value=workflow_settings,
+            "apps.strategy_compare.run_strategy_comparison",
+            side_effect=_record_strategy_run,
         ),
-        patch("apps.breakout_quality._print_workflow_status"),
-        patch("builtins.input", return_value="1"),
         patch(
-            "apps.breakout_quality._run_command",
-            side_effect=_record_score_strategy_command,
+            "apps.strategy_compare.show_strategy_comparison_status",
+            side_effect=_record_strategy_status,
         ),
     ):
-        score_compare_rc = app_breakout_quality._interactive_strategy_validation(
-            "apps/breakout_quality.py"
+        strategy_run_rc = app_strategy_compare.main(
+            ["apps/strategy_compare.py", "run"]
         )
-    with (
-        patch(
-            "apps.breakout_quality.get_breakout_quality_workflow_settings",
-            return_value=workflow_settings,
-        ),
-        patch("apps.breakout_quality._print_workflow_status"),
-        patch("builtins.input", return_value="2"),
-        patch(
-            "apps.breakout_quality._run_command",
-            side_effect=_record_score_strategy_command,
-        ),
-    ):
-        score_adapt_rc = app_breakout_quality._interactive_strategy_validation(
-            "apps/breakout_quality.py"
+        strategy_status_rc = app_strategy_compare.main(
+            ["apps/strategy_compare.py", "status"]
         )
     add_check(
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_score_strategy_compare_and_adapt_enable_compact_console",
-        (0, 0, ["strategy-compare", "strategy-adapt"], [True, True]),
-        (
-            score_compare_rc,
-            score_adapt_rc,
-            [item[0] for item in score_strategy_commands],
-            score_strategy_compact_flags,
-        ),
+        "strategy_compare_app_separates_run_and_status",
+        (0, 0, ["run", "status"]),
+        (strategy_run_rc, strategy_status_rc, strategy_calls),
     )
+
+    with (
+        patch("builtins.input", side_effect=["2", "0"]),
+        patch("apps.strategy_compare.show_strategy_comparison_status") as compare_status,
+    ):
+        strategy_menu_rc = app_strategy_compare._interactive_menu()
     add_check(
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_compact_console_scope_restores_environment",
-        original_compact_value,
-        os.environ.get("BREAKOUT_QUALITY_COMPACT_CONSOLE"),
+        "strategy_compare_interactive_menu_is_generic",
+        (0, 1),
+        (strategy_menu_rc, compare_status.call_count),
     )
 
 

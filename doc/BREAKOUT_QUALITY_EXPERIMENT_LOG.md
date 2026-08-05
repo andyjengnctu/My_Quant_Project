@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260804_182739_d9ddf41(2).zip`；SHA256 `bc1f9aa5409141ea527342ebe422fa36c222e5d3014e488e85b1337bb8353f01`。9A Binary DL A／B／C／F replacement結果已取得：A 129.08%／MDD 17.41%／RoMD 7.42，B 85.79%／26.34%／3.26，C 138.58%／13.35%／10.38，F 145.92%／18.31%／7.97。Binary DL疊加現有filters拒絕；F雖總報酬高於A與C，但相較C的MDD、RoMD、EV與直接交易選擇R惡化，故不採用。正式Baseline未變更。本輪已將Gate擴充為A0／B0至A4／B4五層規則消融矩陣，待本機執行 |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260805_232145_20f7566.zip`；SHA256 `a0db0a6924664d20d85b0f8d6a89bd2516cf79a69872a1db9a0cc5e4394bf22f`。本輪只重構模型訓練與策略績效比較入口：模型維持`apps/breakout_quality.py`，比較改為獨立`apps/strategy_compare.py`，目前比較矩陣逐項設定於`config/strategy_compare.py`。Dataset、Label、模型、threshold、ROOS與正式策略結果均未改變 |
 | SHA256／最新結果 | 最新Binary OOS：PASS Precision 62.99%、原始PASS 55.63%、Precision Lift +7.35pp，但PASS Recall 51.44%、模型PASS 45.43%。A／B／C／F顯示只移除optional filters的C相較A總報酬+9.51pp、MDD−4.05pp、RoMD+2.96；F相較C總報酬+7.34pp，但MDD+4.95pp、RoMD−2.41、EV−0.11R、直接交易選擇差異−21.83R，且改善集中2023。現有9A hard filter不升級runtime；下一步在相同模型與threshold下逐步關閉歷史門檻、Re-entry及KC，分離DL本身與規則／出場交互作用。歷史Selection PIT與R2／R3結果保留供研究重現 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`unique_group_sampling`、objective=`binary_classification`、scope=`all_labels`、threshold 0.5、Seed 42；正式策略mode自動解析為`hard-filter / canonical_runtime / original buy-sort`。Selection PIT continuous-ranker設定與工件保留，但只由其CLI研究入口使用；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
@@ -3631,3 +3631,34 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 
 套用本修正後執行既有CLI-only `strategy-trade-path-label-gate`；不需重新建立Label或重新訓練。取得Gate結果前，不判定新Label有效。
 
+
+
+## 2026-08-06 — Config-driven獨立策略績效比較App
+
+### 狀態
+
+`IMPLEMENTED / PERFORMANCE_RESULT_PENDING / DATASET_LABEL_MODEL_REUSE / FORMAL_BASELINE_UNCHANGED`
+
+### 程式基準
+
+- 輸入：`test-branch-1_20260805_232145_20f7566.zip`
+- SHA256：`a0db0a6924664d20d85b0f8d6a89bd2516cf79a69872a1db9a0cc5e4394bf22f`
+- 唯一變更：模型訓練、策略參數訓練與策略績效比較入口分離；未修改TP1 Dataset、Label、模型架構、模型權重、threshold、P2／P3參數或策略交易語意。
+
+### 實作契約
+
+- `apps/breakout_quality.py`只負責Breakout Quality Dataset／Label／模型訓練與模型評估；模型流程完成research／forward-OOS score工件後停止，不執行portfolio replay。
+- 新增獨立正式入口`apps/strategy_compare.py`；選單只顯示「執行目前比較設定」與「查看目前比較設定與工件狀態」，不顯示C1～C6、TP1或其他特定版本名稱。
+- `apps/strategy_compare.py`已納入quick-gate的help與inline CLI正式入口registry，避免新增App未被入口檢查覆蓋。
+- `config/strategy_compare.py`逐項條列parameter sources、DL sources、arms及contrasts，每項以`enabled`獨立開關；已移除代表整套實驗的active comparison ID。
+- `core/strategy_comparison.py`提供泛用schema、跨欄驗證與config fingerprint；Breakout Quality orchestration與canonical engine位於`filters/breakout_quality/`。舊`tools/filters/breakout_quality/strategy_compare.py`只保留相容別名。
+- 比較流程只讀取既有模型、Scores與ROOS工件；缺件時於replay前fail-fast，不建立Label、不訓練模型、不匯出缺少Scores，也不執行optimizer。
+- 輸出自動使用enabled arm IDs與config fingerprint建立`outputs/strategy_compare/runs/`工件，並更新`outputs/strategy_compare/latest/`；manifest保存設定snapshot與輸入工件SHA256。
+
+### Dataset／Label／模型影響
+
+不需重建Dataset、不需重新Label、不需重新訓練TP1。此次只有App、config、模型score交付邊界與比較 orchestration 架構調整；不改Label、模型權重或策略交易語意。策略績效數值尚未執行，因此不得標記為有效或無效。
+
+### 下一步
+
+先由`apps/strategy_compare.py`查看目前設定與工件狀態；若目前config啟用的參數或DL工件缺失，回到各自的模型／optimizer入口建立，不由比較App代辦。工件完整後執行目前比較設定，取得實際績效結果，再依預先定義contrast回頭判斷TP1是否需要調整。

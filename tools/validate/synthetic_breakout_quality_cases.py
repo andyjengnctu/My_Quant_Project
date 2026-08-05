@@ -8717,29 +8717,18 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             program_name="apps/breakout_quality.py",
         )
     export_call = post_train_calls[0]
-    compare_call = post_train_calls[1]
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_menu_post_train_runs_forward_scores_before_baseline_strategy_compare",
-        (
-            0,
-            ("export-scores", "strategy-compare"),
-            True,
-            True,
-            True,
-        ),
+        "binary_model_post_train_exports_forward_scores_without_strategy_replay",
+        (0, ("export-scores",), True, True),
         (
             post_train_rc,
             tuple(call[0] for call in post_train_calls),
             "forward_oos" in export_call[1]
             and binary_menu_settings.experiment_profile in export_call[1],
-            "hard-filter" in compare_call[1]
-            and binary_menu_settings.experiment_profile in compare_call[1],
-            str(binary_menu_settings.strategy_adapt_fixed_risk) in compare_call[1]
-            and str(binary_menu_settings.strategy_adapt_max_position_cap_pct)
-            in compare_call[1],
+            "strategy-compare" not in tuple(call[0] for call in post_train_calls),
         ),
     )
 
@@ -8754,7 +8743,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_menu_training_flow_builds_trade_path_label_then_stops_after_model_report",
+        "binary_menu_training_flow_builds_trade_path_label_and_complete_model_artifacts_only",
         True,
         all(
             token in trade_path_train_source
@@ -8763,11 +8752,46 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 '"train"',
                 '"export-scores"',
                 '"report"',
+                'scope="forward_oos"',
                 "本流程不執行策略績效比較",
             )
         )
         and "_run_binary_post_train_validation" not in trade_path_train_source
         and "strategy-compare" not in trade_path_train_source,
+    )
+
+    report_calls = []
+
+    def _capture_trade_path_report(command, command_args, *, program_name):
+        report_calls.append((command, tuple(command_args), program_name))
+        return 0
+
+    with (
+        patch.object(
+            breakout_quality_app,
+            "_run_command",
+            side_effect=_capture_trade_path_report,
+        ),
+        redirect_stdout(io.StringIO()),
+    ):
+        trade_path_report_rc = breakout_quality_app._run_trade_path_model_report(
+            "apps/breakout_quality.py",
+            request=export_request,
+            export_research_scores=True,
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "existing_trade_path_model_report_exports_research_and_forward_scores_without_replay",
+        (0, ("export-scores", "report", "export-scores"), True, True),
+        (
+            trade_path_report_rc,
+            tuple(call[0] for call in report_calls),
+            "research" in report_calls[0][1]
+            and "forward_oos" in report_calls[2][1],
+            "strategy-compare" not in tuple(call[0] for call in report_calls),
+        ),
     )
 
     existing_binary_source = app_source.split(
@@ -8835,18 +8859,22 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_existing_trade_path_model_menu_executes_research_export_then_report_only",
+        "binary_existing_trade_path_model_menu_completes_research_report_and_forward_scores_only",
         (
             0,
-            ("export-scores", "report"),
+            ("export-scores", "report", "export-scores"),
             True,
             True,
         ),
         (
             existing_model_rc,
             tuple(call[0] for call in existing_model_calls),
-            "research" in existing_model_calls[0][1],
-            "--include-oos" in existing_model_calls[1][1],
+            "research" in existing_model_calls[0][1]
+            and "forward_oos" in existing_model_calls[2][1],
+            "--include-oos" in existing_model_calls[1][1]
+            and "strategy-compare" not in tuple(
+                call[0] for call in existing_model_calls
+            ),
         ),
     )
 
@@ -14628,7 +14656,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             settings.strategy_adapt_fixed_risk,
             settings.strategy_adapt_max_position_cap_pct,
             settings.experiment_profile,
-            True,
+            False,
         ),
         (
             parsed_adapt_args.fixed_risk,
@@ -14928,13 +14956,8 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         case_id,
         "strategy_adapt_runs_one_optimizer_and_four_controlled_replays",
         True,
-        all(
-            token in app_source
-            for token in (
-                '"strategy-adapt": "tools.filters.breakout_quality.strategy_adapt"',
-                "[2] 驗證策略參數適應",
-            )
-        )
+        '"strategy-adapt": "tools.filters.breakout_quality.strategy_adapt"' not in app_source
+        and "[2] 驗證策略參數適應" not in app_source
         and '"r3_adapted", "R3 Capital-bucket Adapted"' in adapt_source
         and 'R3_ADAPTATION_RELATIVE_DIR' in adapt_source
         and 'arm_name="baseline_adapted"' not in adapt_source
@@ -15586,7 +15609,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "trade_path_menu_stops_after_model_report_and_strategy_gate_stays_cli_only",
+        "trade_path_menu_completes_model_artifacts_and_strategy_comparison_stays_separate",
         True,
         all(
             token in app_source
@@ -15595,13 +15618,11 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
                 "[2] 使用既有模型 → 更新Scores → 模型預測報表",
                 "[3] 查看Label與事件生命週期摘要",
                 '"build-trade-path-labels"',
-                '"strategy-trade-path-label-gate"',
                 "本流程不執行策略績效比較",
+                "apps/strategy_compare.py",
             )
         )
-        and "strategy-trade-path-label-gate" not in app_source.split(
-            "def _interactive_binary_model_research", 1
-        )[1].split("def _interactive_model_research", 1)[0],
+        and "strategy-trade-path-label-gate" not in app_source,
     )
     add_check(
         results,
@@ -15673,7 +15694,8 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     canonical_source = canonical_config_path.read_text(encoding="utf-8")
     canonical_app_path = project_root / "apps" / "breakout_quality.py"
     canonical_app_source = canonical_app_path.read_text(encoding="utf-8")
-    legacy_app_path = project_root / "apps" / "breakout_quality_strategy_compare.py"
+    strategy_app_path = project_root / "apps" / "strategy_compare.py"
+    strategy_config_path = project_root / "config" / "strategy_compare.py"
 
     add_check(
         results,
@@ -15742,27 +15764,20 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         results,
         "synthetic_breakout_quality",
         case_id,
-        "single_entry_contract_removes_legacy_strategy_compare_app",
-        False,
-        legacy_app_path.exists(),
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "single_entry_contract_declares_canonical_strategy_compare_subcommand",
+        "model_and_strategy_apps_are_separate_entries",
         True,
-        bool(
-            canonical_app_path.is_file()
-            and '"strategy-compare": "tools.filters.breakout_quality.strategy_compare"'
-            in canonical_app_source
-            and '"strategy-compare",' in canonical_app_source
-            and "_run_command(" in canonical_app_source
-        ),
+        canonical_app_path.is_file()
+        and strategy_app_path.is_file()
+        and strategy_config_path.is_file()
+        and '"strategy-compare"' not in canonical_app_source
+        and "apps/strategy_compare.py" in canonical_app_source,
     )
 
     strategy_compare_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "strategy_compare.py"
+        project_root
+        / "filters"
+        / "breakout_quality"
+        / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
     add_check(
         results,
@@ -15780,5 +15795,225 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     )
 
     summary["seed_source"] = "config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED"
-    summary["strategy_compare_entry"] = "apps/breakout_quality.py strategy-compare"
+    summary["strategy_compare_entry"] = "apps/strategy_compare.py"
+    return results, summary
+
+
+def validate_strategy_compare_config_driven_app_contract_case(_base_params):
+    case_id = "STRATEGY_COMPARE_CONFIG_DRIVEN_APP"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    project_root = Path(__file__).resolve().parents[2]
+    config_path = project_root / "config" / "strategy_compare.py"
+    app_path = project_root / "apps" / "strategy_compare.py"
+    model_app_path = project_root / "apps" / "breakout_quality.py"
+    orchestration_path = (
+        project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
+    )
+    engine_path = (
+        project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
+    )
+    legacy_engine_path = (
+        project_root / "tools" / "filters" / "breakout_quality" / "strategy_compare.py"
+    )
+    config_source = config_path.read_text(encoding="utf-8")
+    app_source = app_path.read_text(encoding="utf-8")
+    model_app_source = model_app_path.read_text(encoding="utf-8")
+    orchestration_source = orchestration_path.read_text(encoding="utf-8")
+    engine_source = engine_path.read_text(encoding="utf-8")
+    legacy_engine_source = legacy_engine_path.read_text(encoding="utf-8")
+    quick_gate_source = (
+        project_root / "tools" / "local_regression" / "run_quick_gate.py"
+    ).read_text(encoding="utf-8")
+
+    from config import strategy_compare as strategy_config
+    from core.strategy_comparison import strategy_comparison_fingerprint
+    from filters.breakout_quality import strategy_comparison as comparison_module
+
+    settings = strategy_config.get_strategy_comparison_settings()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "comparison_config_lists_individual_arms_and_contrasts_without_active_id",
+        True,
+        "ACTIVE_STRATEGY_COMPARISON_ID" not in config_source
+        and len(settings.arms) >= 2
+        and all(isinstance(arm.enabled, bool) for arm in settings.arms.values())
+        and all(
+            isinstance(contrast.enabled, bool)
+            for contrast in settings.contrasts.values()
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_app_menu_is_generic_and_model_app_has_no_strategy_route",
+        True,
+        all(
+            token in app_source
+            for token in (
+                "執行目前比較設定",
+                "查看目前比較設定與工件狀態",
+                "config/strategy_compare.py",
+            )
+        )
+        and "C1" not in app_source
+        and "TP1" not in app_source
+        and '"strategy-compare"' not in model_app_source
+        and "策略績效驗證" not in model_app_source,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_compare_official_entry_is_in_quick_gate_help_registry",
+        True,
+        '([sys.executable, "apps/strategy_compare.py", "--help"]'
+        in quick_gate_source
+        and '"apps/strategy_compare.py",' in quick_gate_source.split(
+            "INLINE_CLI_TARGETS = {", 1
+        )[1],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "comparison_runtime_never_trains_or_exports_missing_artifacts",
+        True,
+        all(
+            token not in orchestration_source
+            for token in (
+                "train(",
+                "_run_optimizer_arm",
+                "build_binary_point_in_time_scores",
+                "export_scores_main",
+                "prepare_min_dl",
+            )
+        )
+        and "比較App不會自動訓練模型、匯出score或執行optimizer"
+        in orchestration_source,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "formal_engine_is_in_filter_layer_with_legacy_tool_alias_only",
+        True,
+        engine_path.is_file()
+        and "sys.modules[__name__] = _engine" in legacy_engine_source
+        and "from filters.breakout_quality import strategy_compare_engine"
+        in legacy_engine_source,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "comparison_threshold_is_config_driven_and_risk_overrides_are_disabled",
+        True,
+        "threshold=dl.threshold" in orchestration_source
+        and "fixed_risk=None" in orchestration_source
+        and "max_position_cap_pct=None" in orchestration_source
+        and "threshold=None" in engine_source
+        and "configured_threshold" in engine_source,
+    )
+
+    with (
+        patch.object(
+            comparison_module,
+            "collect_artifact_status",
+            return_value={
+                "comparison_ready": False,
+                "config_fingerprint": "synthetic",
+            },
+        ),
+        patch.object(comparison_module, "render_status", return_value="NOT READY"),
+        patch.object(comparison_module, "run_comparison") as replay,
+    ):
+        try:
+            comparison_module.run_strategy_comparison(
+                project_root=project_root,
+                quiet=True,
+            )
+        except FileNotFoundError:
+            failed_fast = True
+        else:
+            failed_fast = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "missing_artifacts_fail_before_replay",
+        True,
+        failed_fast and replay.call_count == 0,
+    )
+
+    original_c5 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C5"])
+    original_c6 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C6"])
+    original_contrasts = {
+        key: dict(value)
+        for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()
+    }
+    try:
+        strategy_config.STRATEGY_COMPARE_ARMS["C5"]["enabled"] = False
+        strategy_config.STRATEGY_COMPARE_ARMS["C6"]["enabled"] = False
+        for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
+            if contrast.get("left") in {"C5", "C6"} or contrast.get("right") in {
+                "C5",
+                "C6",
+            }:
+                contrast["enabled"] = False
+        reduced_settings = strategy_config.get_strategy_comparison_settings()
+    finally:
+        strategy_config.STRATEGY_COMPARE_ARMS["C5"].clear()
+        strategy_config.STRATEGY_COMPARE_ARMS["C5"].update(original_c5)
+        strategy_config.STRATEGY_COMPARE_ARMS["C6"].clear()
+        strategy_config.STRATEGY_COMPARE_ARMS["C6"].update(original_c6)
+        strategy_config.STRATEGY_COMPARE_CONTRASTS.clear()
+        strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "individual_arm_and_contrast_switches_are_runtime_effective",
+        ("C1", "C2", "C3", "C4"),
+        tuple(arm.arm_id for arm in reduced_settings.enabled_arms),
+    )
+
+    disabled_arms_changed = dict(reduced_settings.arms)
+    disabled_arms_changed["C5"] = replace(
+        disabled_arms_changed["C5"],
+        name="disabled definition must not affect active fingerprint",
+    )
+    disabled_definition_settings = replace(
+        reduced_settings,
+        arms=disabled_arms_changed,
+    )
+    enabled_arms_changed = dict(reduced_settings.arms)
+    enabled_arms_changed["C1"] = replace(
+        enabled_arms_changed["C1"],
+        name="enabled definition must affect active fingerprint",
+    )
+    enabled_definition_settings = replace(
+        reduced_settings,
+        arms=enabled_arms_changed,
+    )
+    base_fingerprint = strategy_comparison_fingerprint(reduced_settings)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "config_fingerprint_uses_effective_enabled_definitions_only",
+        True,
+        strategy_comparison_fingerprint(disabled_definition_settings)
+        == base_fingerprint
+        and strategy_comparison_fingerprint(enabled_definition_settings)
+        != base_fingerprint,
+    )
+
+    summary["config_path"] = "config/strategy_compare.py"
+    summary["app_path"] = "apps/strategy_compare.py"
+    summary["enabled_arms"] = [arm.arm_id for arm in settings.enabled_arms]
     return results, summary

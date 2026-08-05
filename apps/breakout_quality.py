@@ -126,16 +126,6 @@ COMMAND_MODULES = {
         "tools.filters.breakout_quality.build_trade_path_labels"
     ),
     "audit-point-in-time-scores": "tools.filters.breakout_quality.audit_point_in_time_scores",
-    "strategy-compare": "tools.filters.breakout_quality.strategy_compare",
-    "strategy-adapt": "tools.filters.breakout_quality.strategy_adapt",
-    "strategy-filter-gate": "tools.filters.breakout_quality.strategy_filter_gate",
-    "strategy-dl-filter-gate": "tools.filters.breakout_quality.strategy_dl_filter_gate",
-    "strategy-dl-filter-param-adapt-gate": (
-        "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate"
-    ),
-    "strategy-trade-path-label-gate": (
-        "tools.filters.breakout_quality.strategy_trade_path_label_gate"
-    ),
 }
 
 INTERACTIVE_DATASET_PROFILE = "full"
@@ -174,22 +164,12 @@ COMMAND_DESCRIPTIONS = {
         "建立A2 realized trade-path Label Dataset；research workflow"
     ),
     "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
-    "strategy-compare": "執行breakout-quality策略績效比較",
-    "strategy-adapt": "驗證Selection rolling Ranking×Parameter 2×2策略適應",
-    "strategy-filter-gate": "執行Optional entry filters × Ranking A～E研究Gate",
-    "strategy-dl-filter-gate": "執行Binary DL filter規則消融矩陣Gate；research-only、CLI-only",
-    "strategy-dl-filter-param-adapt-gate": (
-        "執行Binary DL filter 4種參數×DL開關 4×2 Gate；research-only、CLI-only"
-    ),
-    "strategy-trade-path-label-gate": (
-        "比較A2 no-DL、舊Label DL與新trade-path Label DL；research-only、CLI-only"
-    ),
 }
 
 
 def _print_help(program_name: str) -> None:
     print(f"用法: python {program_name} [menu|workflow|<command>] [options]")
-    print("說明: Breakout quality filter 的單一正式操作入口；互動終端不帶參數時直接開啟選單。")
+    print("說明: Breakout quality Dataset、Label、模型訓練與模型評估的正式入口；策略績效比較請使用 apps/strategy_compare.py。")
     print("command:")
     for command, description in COMMAND_DESCRIPTIONS.items():
         print(f"  {command:<30} {description}")
@@ -1385,20 +1365,11 @@ def _run_binary_post_train_validation(
     workflow_settings,
     program_name: str,
     step_start: int = 1,
-    total_steps: int = 2,
+    total_steps: int = 1,
 ) -> int:
     if not workflow_settings.is_binary_classification:
         return 0
-    if workflow_settings.strategy_comparison_mode != "hard-filter":
-        raise ValueError(
-            "Binary DL Filter正式驗證必須使用hard-filter策略比較"
-        )
-    if workflow_settings.strategy_score_source != "canonical_runtime":
-        raise ValueError(
-            "Binary DL Filter正式驗證必須使用canonical_runtime scores"
-        )
-
-    print("\n=== Binary DL Filter 正式策略驗證 ===")
+    print("\n=== Binary DL Filter 模型工件更新 ===")
     print(
         f"[{int(step_start)}/{int(total_steps)}] "
         "匯出正式 forward-OOS runtime scores"
@@ -1408,44 +1379,12 @@ def _run_binary_post_train_validation(
         _build_export_score_argv(request, scope="forward_oos"),
         program_name=program_name,
     )
-    if rc != 0:
-        return int(rc)
-
-    print(
-        f"\n[{int(step_start) + 1}/{int(total_steps)}] "
-        "與 Baseline 比較實際投組績效"
-    )
-    compare_args = [
-        "--dataset",
-        str(workflow_settings.strategy_dataset),
-        "--comparison-mode",
-        "hard-filter",
-        "--filter-id",
-        str(workflow_settings.filter_id),
-        "--score-source",
-        "canonical_runtime",
-        "--model-architecture",
-        str(workflow_settings.model_architecture),
-        "--experiment-profile",
-        str(workflow_settings.experiment_profile),
-        "--param-policy",
-        str(workflow_settings.strategy_param_policy),
-        "--max-positions",
-        str(int(workflow_settings.strategy_max_positions)),
-        "--rotation",
-        str(workflow_settings.strategy_rotation),
-        "--fixed-risk",
-        str(float(workflow_settings.strategy_adapt_fixed_risk)),
-        "--max-position-cap-pct",
-        str(float(workflow_settings.strategy_adapt_max_position_cap_pct)),
-    ]
-    with _compact_console_scope():
-        return _run_command(
-            "strategy-compare",
-            compare_args,
-            program_name=program_name,
+    if rc == 0:
+        print(
+            "\n模型工件更新完成。策略績效比較請另開 "
+            "python apps/strategy_compare.py。"
         )
-
+    return int(rc)
 
 def _interactive_workflow(program_name: str, *, workflow_settings=None) -> int:
     if workflow_settings is None:
@@ -1500,10 +1439,10 @@ def _interactive_workflow(program_name: str, *, workflow_settings=None) -> int:
     )
     print(
         "\n即將執行：Full dataset（全部股票）→ train → export research scores "
-        "→ OOS 簡易模型報表 → export forward-OOS scores → 與 Baseline 比較實際績效"
+        "→ OOS 簡易模型報表 → export forward-OOS scores"
     )
     if evaluate_oos:
-        print("模型報表將先顯示 OOS 最終泛化評估，再執行策略績效比較。")
+        print("模型報表將顯示 OOS 最終泛化評估；本入口不執行策略績效比較。")
     if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
@@ -1700,16 +1639,6 @@ def _print_workflow_status() -> None:
         ("Training Objective", settings.training_objective),
         ("Training Scope", settings.training_label_scope),
         ("Seed", settings.seed),
-        ("Strategy Comparison Mode", settings.strategy_comparison_mode),
-        ("Strategy Param Policy", settings.strategy_param_policy),
-        ("Strategy Score Source", settings.strategy_score_source),
-        ("Strategy Buy Sort", settings.strategy_buy_sort),
-        ("Strategy Adapt Trials / Fold", settings.strategy_adapt_trials_per_fold),
-        ("Strategy Adapt Fixed Risk", f"{settings.strategy_adapt_fixed_risk:.2%}"),
-        (
-            "Strategy Adapt Position Cap",
-            f"{settings.strategy_adapt_max_position_cap_pct:.2%}",
-        ),
     ]
 
     if settings.is_binary_classification:
@@ -1823,12 +1752,12 @@ def _interactive_existing_binary_validation(
     _print_policy_defaults(filter_id, request)
     print(
         "\n即將使用既有模型：更新 research scores → OOS 簡易模型報表 "
-        "→ export forward-OOS scores → 與 Baseline 比較實際績效"
+        "→ export forward-OOS scores"
     )
     if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
-    print("\n[1/4] 由既有模型更新 research scores")
+    print("\n[1/3] 由既有模型更新 research scores")
     rc = _run_command(
         "export-scores",
         _build_export_score_argv(request, scope="research"),
@@ -1836,7 +1765,7 @@ def _interactive_existing_binary_validation(
     )
     if rc != 0:
         return int(rc)
-    print("\n[2/4] 顯示 OOS 簡易模型報表")
+    print("\n[2/3] 顯示 OOS 簡易模型報表")
     rc = _run_command(
         "report",
         [
@@ -1855,7 +1784,7 @@ def _interactive_existing_binary_validation(
         workflow_settings=workflow_settings,
         program_name=program_name,
         step_start=3,
-        total_steps=4,
+        total_steps=3,
     )
 
 
@@ -1905,7 +1834,7 @@ def _run_trade_path_model_report(
         if code != 0:
             return int(code)
     print("\n[Report] 顯示Selection／OOS模型預測效果")
-    return _run_command(
+    code = _run_command(
         "report",
         [
             "--filter-id",
@@ -1914,6 +1843,14 @@ def _run_trade_path_model_report(
             str(request.experiment_profile),
             "--include-oos",
         ],
+        program_name=program_name,
+    )
+    if code != 0:
+        return int(code)
+    print("\n[Runtime Scores] 匯出正式forward-OOS scores")
+    return _run_command(
+        "export-scores",
+        _build_export_score_argv(request, scope="forward_oos"),
         program_name=program_name,
     )
 
@@ -1927,15 +1864,15 @@ def _interactive_trade_path_train_and_report(
     _print_trade_path_label_policy(request)
     print(
         "\n即將執行：建立／接續新Label Dataset → 重新訓練 → "
-        "更新research scores → 顯示Selection／OOS模型預測報表。"
+        "更新research scores → 顯示Selection／OOS模型預測報表 → 匯出forward-OOS scores。"
     )
-    print("本流程不執行策略績效比較；策略比較另由CLI Gate執行。")
+    print("本流程不執行策略績效比較；比較請另開 apps/strategy_compare.py。")
     if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
     steps = (
         (
-            "[1/4] 建立／接續A2 realized trade-path Label Dataset",
+            "[1/5] 建立／接續A2 realized trade-path Label Dataset",
             "build-trade-path-labels",
             [
                 "--dataset",
@@ -1946,17 +1883,17 @@ def _interactive_trade_path_train_and_report(
             ],
         ),
         (
-            "[2/4] 訓練新Label模型",
+            "[2/5] 訓練新Label模型",
             "train",
             _build_train_argv(request),
         ),
         (
-            "[3/4] 更新新Label research scores",
+            "[3/5] 更新新Label research scores",
             "export-scores",
             _build_export_score_argv(request, scope="research"),
         ),
         (
-            "[4/4] 顯示Selection／OOS模型預測報表",
+            "[4/5] 顯示Selection／OOS模型預測報表",
             "report",
             [
                 "--filter-id",
@@ -1966,13 +1903,18 @@ def _interactive_trade_path_train_and_report(
                 "--include-oos",
             ],
         ),
+        (
+            "[5/5] 匯出正式forward-OOS scores",
+            "export-scores",
+            _build_export_score_argv(request, scope="forward_oos"),
+        ),
     )
     for label, command, argv in steps:
         print("\n" + label)
         code = _run_command(command, list(argv), program_name=program_name)
         if code != 0:
             return int(code)
-    print("\n模型研究完成。策略績效請另執行 strategy-trade-path-label-gate。")
+    print("\n模型研究完成。策略績效比較請另開 python apps/strategy_compare.py。")
     return 0
 
 
@@ -1983,7 +1925,7 @@ def _interactive_trade_path_existing_report(
 ) -> int:
     request = _trade_path_train_request(workflow_settings)
     _print_trade_path_label_policy(request)
-    print("\n使用既有新Label模型更新research scores並顯示預測報表；不執行策略比較。")
+    print("\n使用既有新Label模型更新research／forward-OOS scores並顯示預測報表；不執行策略比較。")
     if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
@@ -2151,109 +2093,10 @@ def _interactive_model_research(program_name: str) -> int:
         )
 
 
-def _interactive_strategy_validation(program_name: str) -> int:
-    settings = get_breakout_quality_workflow_settings()
-    _print_workflow_status()
-
-    if settings.strategy_comparison_mode == "hard-filter":
-        if settings.strategy_score_source != "canonical_runtime":
-            raise ValueError("hard-filter策略驗證只接受canonical_runtime score source")
-        with _compact_console_scope():
-            return _run_command(
-                "strategy-compare",
-                [
-                    "--dataset", settings.strategy_dataset,
-                    "--comparison-mode", "hard-filter",
-                    "--filter-id", settings.filter_id,
-                    "--score-source", settings.strategy_score_source,
-                    "--model-architecture", settings.model_architecture,
-                    "--experiment-profile", settings.experiment_profile,
-                    "--param-policy", settings.strategy_param_policy,
-                    "--max-positions", str(settings.strategy_max_positions),
-                    "--rotation", settings.strategy_rotation,
-                    "--fixed-risk", str(settings.strategy_adapt_fixed_risk),
-                    "--max-position-cap-pct",
-                    str(settings.strategy_adapt_max_position_cap_pct),
-                ],
-                program_name=program_name,
-            )
-
-    if settings.strategy_comparison_mode != "score-ranking":
-        raise ValueError(
-            f"不支援的 strategy comparison mode: {settings.strategy_comparison_mode!r}"
-        )
-    if settings.strategy_score_source == "final_selection_model_oos":
-        print(
-            "[尚未開放] final Selection model OOS Score source尚未接入統一策略入口；"
-            "不得回退成canonical runtime score。"
-        )
-        return 0
-    if settings.strategy_score_source not in {
-        "selection_point_in_time", "canonical_runtime"
-    }:
-        raise ValueError(
-            f"不支援的 strategy score source: {settings.strategy_score_source!r}"
-        )
-    while True:
-        print("\n=== 策略績效驗證 ===")
-        print("[1/Enter] 比較目前策略")
-        print("[2] 驗證策略參數適應（PIT coverage提升即可）")
-        print("[0] 返回")
-        try:
-            raw_choice = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            print("\n輸入已結束。")
-            return 0
-        choice = "1" if raw_choice == "" else raw_choice
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        if choice == "1":
-            with _compact_console_scope():
-                return _run_command(
-                    "strategy-compare",
-                    [
-                        "--dataset", settings.strategy_dataset,
-                        "--comparison-mode", "score-ranking",
-                        "--filter-id", settings.filter_id,
-                        "--score-source", settings.strategy_score_source,
-                        "--model-architecture", settings.model_architecture,
-                        "--experiment-profile", settings.experiment_profile,
-                        "--param-policy", settings.strategy_param_policy,
-                        "--max-positions", str(settings.strategy_max_positions),
-                        "--rotation", settings.strategy_rotation,
-                        "--fixed-risk", str(settings.strategy_adapt_fixed_risk),
-                        "--max-position-cap-pct",
-                        str(settings.strategy_adapt_max_position_cap_pct),
-                    ],
-                    program_name=program_name,
-                )
-        if choice == "2":
-            with _compact_console_scope():
-                return _run_command(
-                    "strategy-adapt",
-                    [
-                        "--dataset", settings.strategy_dataset,
-                        "--filter-id", settings.filter_id,
-                        "--model-architecture", settings.model_architecture,
-                        "--experiment-profile", settings.experiment_profile,
-                        "--param-policy", settings.strategy_param_policy,
-                        "--trials-per-fold", str(settings.strategy_adapt_trials_per_fold),
-                        "--max-positions", str(settings.strategy_max_positions),
-                        "--rotation", settings.strategy_rotation,
-                        "--fixed-risk", str(settings.strategy_adapt_fixed_risk),
-                        "--max-position-cap-pct",
-                        str(settings.strategy_adapt_max_position_cap_pct),
-                    ],
-                    program_name=program_name,
-                )
-        print("無效選項，請重新輸入。")
-
-
 def _print_menu() -> None:
-    print("\n=== Breakout Quality ===")
+    print("\n=== Breakout Quality 模型研究與驗證 ===")
     print("[1/Enter] 模型研究與驗證")
-    print("[2] 策略績效驗證")
-    print("[3] 查看目前設定與工件狀態")
+    print("[2] 查看模型設定與工件狀態")
     print("[0] 離開")
 
 
@@ -2272,11 +2115,9 @@ def _run_interactive_menu(program_name: str) -> int:
             if choice == "1":
                 _interactive_model_research(program_name)
             elif choice == "2":
-                _interactive_strategy_validation(program_name)
-            elif choice == "3":
                 _print_workflow_status()
             else:
-                print("選項無效，請按 Enter 或輸入 0～3。")
+                print("選項無效，請按 Enter 或輸入 0～2。")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:

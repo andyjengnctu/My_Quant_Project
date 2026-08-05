@@ -42,7 +42,10 @@ from filters.breakout_quality.console_report import (
     render_title,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
-from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
+from filters.breakout_quality.strategy_rule_policies import (
+    ALL_OFF_INACTIVE_VALUE_OVERRIDES,
+    ALL_RULE_FILTERS_OFF_OVERRIDES,
+)
 from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows
 from tools.filters.breakout_quality.build_binary_point_in_time_scores import (
     build_binary_point_in_time_scores,
@@ -73,33 +76,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_VERSION = 2
 EXPERIMENT_STATUS = "FOUR_BY_TWO_COMPLETE"
 RISK_SEARCH_FIELDS = ("atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail")
-ALL_RULE_FILTERS_OFF_OVERRIDES = {
-    "use_history_threshold": False,
-    "use_breakout_reclaim_reentry": False,
-    "use_kc": False,
-}
-ALL_OFF_INACTIVE_VALUE_OVERRIDES = {
-    "breakout_ema_len": BREAKOUT_PARAM_SPECS["breakout_ema_len"]["default"],
-    "bb_len": BREAKOUT_PARAM_SPECS["bb_len"]["default"],
-    "bb_mult": BREAKOUT_PARAM_SPECS["bb_mult"]["default"],
-    "kc_len": BREAKOUT_PARAM_SPECS["kc_len"]["default"],
-    "kc_mult": BREAKOUT_PARAM_SPECS["kc_mult"]["default"],
-    "vol_long_len": BREAKOUT_PARAM_SPECS["vol_long_len"]["default"],
-    "vol_breakout_mult": BREAKOUT_PARAM_SPECS["vol_breakout_mult"]["default"],
-    "breakout_return_min": BREAKOUT_PARAM_SPECS["breakout_return_min"]["default"],
-    "breakout_false_filter_atr_pct_min": BREAKOUT_PARAM_SPECS[
-        "breakout_false_filter_atr_pct_min"
-    ]["default"],
-    "breakout_reclaim_window_bars": BREAKOUT_PARAM_SPECS[
-        "breakout_reclaim_window_bars"
-    ]["default"],
-    "breakout_reclaim_confirm_atr": BREAKOUT_PARAM_SPECS[
-        "breakout_reclaim_confirm_atr"
-    ]["default"],
-    "min_history_trades": 0,
-    "min_history_ev": -1.0,
-    "min_history_win_rate": 0.0,
-}
 EXPERIMENT_RELATIVE_DIR = Path(
     "models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling"
 )
