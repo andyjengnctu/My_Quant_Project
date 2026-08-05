@@ -3368,3 +3368,57 @@ P3 optimizer訓練與rolling OOS診斷使用`binary_point_in_time` Scores；但�
 ### 採用判定
 
 目前仍只接受A2為無DL研究候選；正式策略維持A0、Binary DL runtime關閉。取得process-worker一致的重新回放結果前，不採用任何B臂或`B3−A2`結論。
+
+## 2026-08-05 — 4×2 Binary PIT Process-worker Consistent Final Result
+
+### 狀態
+
+`RESULT_VALID / PROCESS_WORKER_BINARY_PIT_CONFIRMED / CURRENT_9A_BINARY_DL_REJECTED / A2_NO_DL_RESEARCH_CANDIDATE / FORMAL_BASELINE_UNCHANGED`
+
+### 程式與結果基準
+
+- 使用者結果ZIP：`test-branch-1_20260805_175702_4d89c30.zip`
+- SHA256：`d2089bb2e4cda0ddd539d2876d48db984e90f9154abc58c9061fe620945b19ce`
+- 使用者依process-worker source修正版重新執行`strategy-dl-filter-param-adapt-gate`。
+- 報表明示`DL replay source=binary_point_in_time（八操作點一致；process workers已傳遞）`。
+- A0～A3與前次完全一致；B0～B3相較前次canonical誤用結果明顯改變，確認Binary PIT source已實際進入建立訊號的spawned workers，而不只是metadata顯示改變。
+- 比較期間：`2021-01-01～2026-03-02`；Binary threshold固定`0.5`；原position-aware buy-sort、max positions 10、rotation off、資金帳務與交易成本固定。
+
+### 八操作點主要結果
+
+| 組別 | 參數／規則 | DL | 報酬 | MDD | RoMD | EV | 曝險 | 交易數 |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| A0 | P0原ROOS／原正式規則 | 關 | 129.08% | 17.41% | 7.42 | 0.53R | 84.02% | 407 |
+| B0 | P0原ROOS／原正式規則 | 開 | 143.73% | 25.96% | 5.54 | 0.44R | 66.52% | 399 |
+| A1 | P1原ROOS／rules全關 | 關 | 138.09% | 13.35% | 10.34 | 0.47R | 92.01% | 384 |
+| B1 | P1原ROOS／rules全關 | 開 | 184.32% | 19.22% | 9.59 | 0.54R | 76.00% | 454 |
+| A2 | P2 DL-off-trained／rules全關 | 關 | 166.69% | 15.41% | 10.82 | 0.73R | 92.13% | 336 |
+| B2 | P2 DL-off-trained／rules全關 | 開 | 150.25% | 27.03% | 5.56 | 0.65R | 77.98% | 385 |
+| A3 | P3 DL-on-trained／rules全關 | 關 | 119.77% | 11.83% | 10.12 | 1.16R | 92.06% | 275 |
+| B3 | P3 DL-on-trained／rules全關 | 開 | 99.78% | 18.27% | 5.46 | 0.59R | 76.16% | 289 |
+
+### Binary DL增量
+
+| 比較 | Δ報酬 | ΔMDD | ΔRoMD | ΔEV | Δ曝險 | 判定 |
+|---|---:|---:|---:|---:|---:|---|
+| B0−A0 | +14.65pp | +8.55pp | -1.88 | -0.09R | -17.50pp | 拒絕；總報酬增加不足以覆蓋MDD、RoMD、EV與年度穩定性惡化 |
+| B1−A1 | +46.23pp | +5.86pp | -0.75 | +0.07R | -16.01pp | 不採用；報酬與EV改善，但RoMD下降、MDD提高，且收益高度集中2023、2022為-12.16% |
+| B2−A2 | -16.44pp | +11.63pp | -5.26 | -0.08R | -14.16pp | 明確拒絕 |
+| B3−A3 | -20.00pp | +6.44pp | -4.66 | -0.57R | -15.91pp | 明確拒絕 |
+
+最終公平比較`B3−A2`為：報酬`-66.91pp`、MDD`+2.86pp`、RoMD`-5.36`、EV`-0.14R`、曝險`-15.98pp`。interaction=`(B3−A3)−(B2−A2)=-3.56pp`，表示在DL開啟環境重訓風險參數沒有形成正協同，反而使DL增量略為更差。
+
+### 採用判定
+
+1. 現有9A Binary DL模型、目前Label及threshold 0.5在PIT-consistent 4×2下正式拒絕；不得promote至正式runtime。
+2. B1雖為八組最高總報酬，但未通過既定採用契約：MDD及RoMD惡化、年度不穩定，且目前使用者貼出的總表未包含直接交易選擇R，不能以單一總報酬宣稱DL有效。
+3. A2是目前最有價值的無DL研究候選：相較A1報酬`+28.60pp`、RoMD`+0.48`、EV`+0.27R`，代價是MDD`+2.06pp`；仍屬研究候選，不直接取代正式A0。
+4. A3雖有最低MDD與最高EV，但總報酬及RoMD均低於A2；不作首選。
+5. 正式策略維持A0與原ROOS，Binary DL runtime維持關閉。
+
+### 後續順序
+
+1. 無DL策略線：先對A2／P2做參數選擇穩定性、fold／年度依賴與base-best／agree／ensemble一致性驗證，再決定是否進入正式promotion程序。
+2. DL研究線：停止對目前9A Label繼續調threshold或重訓風險參數；下一個模型改測chronological first-touch Binary Label。
+3. 新Label先固定使用A2／P2參數做`DL關 vs DL開`Gate；只有同時改善RoMD、EV、直接交易選擇R及年度穩定性，才投入Binary PIT與DL-on optimizer。不得一開始就重做P3型昂貴參數適應。
+4. 若要解釋B1的高總報酬來源，應讀取其`trade_attribution.json`／`trade_attribution.md`；該歸因未包含在使用者本次貼出的console，因此本節不推測獨有交易選擇R。
