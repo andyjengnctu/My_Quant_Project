@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260805_232145_20f7566.zip`；SHA256 `a0db0a6924664d20d85b0f8d6a89bd2516cf79a69872a1db9a0cc5e4394bf22f`。本輪只重構模型訓練與策略績效比較入口：模型維持`apps/breakout_quality.py`，比較改為獨立`apps/strategy_compare.py`，目前比較矩陣逐項設定於`config/strategy_compare.py`。Dataset、Label、模型、threshold、ROOS與正式策略結果均未改變 |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260806_011335_c378133.zip`；SHA256 `155f6784736f3da1366a181e5bfde51a8ac0e5211c99b5ac3ad841fcf5c32381`。Formal bundle為`to_chatgpt_bundle_20260806_011510_48e506c0.zip`；SHA256 `286ef4b5268a404f135ee9aaf341a380af93076872cc1caa2647fd58d4ef163f`。本輪只修正獨立策略比較App重構後兩個synthetic validator仍讀legacy alias的來源定位；Dataset、Label、模型、threshold、ROOS、策略執行與正式策略結果均未改變 |
 | SHA256／最新結果 | 最新Binary OOS：PASS Precision 62.99%、原始PASS 55.63%、Precision Lift +7.35pp，但PASS Recall 51.44%、模型PASS 45.43%。A／B／C／F顯示只移除optional filters的C相較A總報酬+9.51pp、MDD−4.05pp、RoMD+2.96；F相較C總報酬+7.34pp，但MDD+4.95pp、RoMD−2.41、EV−0.11R、直接交易選擇差異−21.83R，且改善集中2023。現有9A hard filter不升級runtime；下一步在相同模型與threshold下逐步關閉歷史門檻、Re-entry及KC，分離DL本身與規則／出場交互作用。歷史Selection PIT與R2／R3結果保留供研究重現 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`unique_group_sampling`、objective=`binary_classification`、scope=`all_labels`、threshold 0.5、Seed 42；正式策略mode自動解析為`hard-filter / canonical_runtime / original buy-sort`。Selection PIT continuous-ranker設定與工件保留，但只由其CLI研究入口使用；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
@@ -3662,3 +3662,15 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 ### 下一步
 
 先由`apps/strategy_compare.py`查看目前設定與工件狀態；若目前config啟用的參數或DL工件缺失，回到各自的模型／optimizer入口建立，不由比較App代辦。工件完整後執行目前比較設定，取得實際績效結果，再依預先定義contrast回頭判斷TP1是否需要調整。
+
+### 2026-08-06｜獨立策略比較 App formal bundle 閉環（ACCEPTED）
+
+| 項目 | 紀錄 |
+|---|---|
+| 狀態 | `ACCEPTED`；只修正 synthetic validator 對 canonical engine 的來源定位，不改 Dataset、Label、模型、Scores、threshold、ROOS、策略執行或報表數值 |
+| 程式基準 | 使用者本輪輸入 `test-branch-1_20260806_011335_c378133.zip`；formal bundle 為 `to_chatgpt_bundle_20260806_011510_48e506c0.zip` |
+| Formal 結果 | quick gate PASS、chain checks PASS、ml smoke PASS；consistency 5,165 PASS／30 SKIP／2 FAIL。兩個 FAIL 均因 validator 仍從 legacy alias `tools/filters/breakout_quality/strategy_compare.py` 搜尋 runtime token；canonical engine 已依新分層移至 `filters/breakout_quality/strategy_compare_engine.py`。Meta quality 的 coverage 行79.11%、分支61.11%均達標，唯一 FAIL 是 synthetic suite 連帶失敗 |
+| 唯一變更 | `qualified_candidate_audit_is_cli_only_and_reuses_canonical_replay` 與 `candidate_counterfactual_cli_only_and_sidecar_is_not_replay_counts` 改讀 canonical engine；synthetic registry 的相關 `impacted_modules` 也改指向 canonical engine，確保後續該檔異動會觸發既有策略契約。legacy alias 本身仍由獨立 config-driven App contract 驗證為相容轉接，不要求複製 runtime 實作 token |
+| Dataset／Label | 不重建、不 relabel |
+| Selection／OOS | 未重訓、未重跑模型或策略，無新 Selection／OOS 數值 |
+| 採用判定 | 修正 validator 架構定位；維持 `apps/strategy_compare.py`、`config/strategy_compare.py`、`filters/breakout_quality/strategy_compare_engine.py` 為正式分層 |

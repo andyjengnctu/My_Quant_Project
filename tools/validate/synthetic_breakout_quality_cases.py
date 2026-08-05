@@ -8088,10 +8088,10 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
         / "audit_qualified_candidate_set.py"
     ).read_text(encoding="utf-8")
     strategy_source = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "filters"
         / "breakout_quality"
-        / "strategy_compare.py"
+        / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
     engine_source = (
         Path(__file__).resolve().parents[2]
@@ -11505,7 +11505,9 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
     menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
     engine_source = (root / "core" / "portfolio_engine.py").read_text(encoding="utf-8")
     runner_source = (root / "tools" / "portfolio_sim" / "simulation_runner.py").read_text(encoding="utf-8")
-    compare_source = (root / "tools" / "filters" / "breakout_quality" / "strategy_compare.py").read_text(encoding="utf-8")
+    compare_source = (
+        root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
+    ).read_text(encoding="utf-8")
     entry_source = (root / "core" / "portfolio_entries.py").read_text(encoding="utf-8")
     audit_source = (
         root / "tools" / "filters" / "breakout_quality" / "audit_candidate_counterfactual_execution.py"
