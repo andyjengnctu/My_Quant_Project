@@ -7,6 +7,8 @@ import io
 import json
 import math
 import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -13134,6 +13136,9 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         load_binary_point_in_time_score_table,
     )
     from filters.breakout_quality.runtime import (
+        BREAKOUT_QUALITY_BINARY_PIT_MANIFEST_ENV,
+        BREAKOUT_QUALITY_BINARY_PIT_SCORES_ENV,
+        BREAKOUT_QUALITY_FILTER_SCORE_SOURCE_ENV,
         breakout_quality_filter_source_context,
         build_breakout_quality_filter_pass_condition,
         get_breakout_quality_filter_source_context,
@@ -13575,6 +13580,86 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         ),
     )
 
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        manifest_path = temp_root / "manifest.json"
+        scores_path = temp_root / "scores.csv"
+        manifest_path.write_text("{}", encoding="utf-8")
+        scores_path.write_text("synthetic", encoding="utf-8")
+        env_keys = (
+            BREAKOUT_QUALITY_FILTER_SCORE_SOURCE_ENV,
+            BREAKOUT_QUALITY_BINARY_PIT_MANIFEST_ENV,
+            BREAKOUT_QUALITY_BINARY_PIT_SCORES_ENV,
+        )
+        env_before = tuple(os.environ.get(key) for key in env_keys)
+        project_root = Path(__file__).resolve().parents[2]
+
+        def _probe_spawned_worker_environment(**_kwargs):
+            probe_code = (
+                "import json; "
+                "from filters.breakout_quality.runtime import "
+                "get_breakout_quality_filter_source_context; "
+                "c=get_breakout_quality_filter_source_context(); "
+                "print(json.dumps({'score_source': c.score_source, "
+                "'manifest_path': c.manifest_path, 'scores_path': c.scores_path}))"
+            )
+            probe_env = dict(os.environ)
+            existing_pythonpath = str(probe_env.get("PYTHONPATH") or "").strip()
+            probe_env["PYTHONPATH"] = (
+                str(project_root)
+                if not existing_pythonpath
+                else str(project_root) + os.pathsep + existing_pythonpath
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", probe_code],
+                cwd=str(project_root),
+                env=probe_env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return json.loads(completed.stdout.strip())
+
+        with patch(
+            "tools.filters.breakout_quality.strategy_compare._run_scenario_inside_source_context",
+            side_effect=_probe_spawned_worker_environment,
+        ):
+            worker_probe = run_strategy_comparison_scenario(
+                name="quality_filter",
+                data_dir=temp_root,
+                param_source_kind="rolling_active_param_ensemble",
+                params={},
+                start_date="2021-01-04",
+                end_date="2021-01-04",
+                max_positions=10,
+                enable_rotation=False,
+                quiet=True,
+                filter_source={
+                    "score_source": BINARY_PIT_SCORE_SOURCE,
+                    "manifest_path": str(manifest_path),
+                    "scores_path": str(scores_path),
+                },
+            )
+        env_after = tuple(os.environ.get(key) for key in env_keys)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_strategy_compare_propagates_pit_source_to_spawned_workers",
+        (
+            BINARY_PIT_SCORE_SOURCE,
+            str(manifest_path),
+            str(scores_path),
+            env_before,
+        ),
+        (
+            worker_probe["score_source"],
+            worker_probe["manifest_path"],
+            worker_probe["scores_path"],
+            env_after,
+        ),
+    )
+
     coverage_contract = {
         "meta": {
             "first_oos_date": "2021-01-01",
@@ -13925,7 +14010,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             len(orchestration_result["matrix"]),
             orchestration_result["status"],
             all(token in report_text for token in ("A0", "B0", "A3", "B3", "B3−A2")),
-            all(token in report_text for token in ("100", "90", "binary_point_in_time（八操作點一致）")),
+            all(token in report_text for token in ("100", "90", "binary_point_in_time（八操作點一致；process workers已傳遞）")),
         ),
     )
 

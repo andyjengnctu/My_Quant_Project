@@ -57,7 +57,7 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_score_table,
 )
 from filters.breakout_quality.runtime import (
-    breakout_quality_filter_source_context,
+    breakout_quality_filter_source_execution_context,
     breakout_quality_ranking_source_context,
 )
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
@@ -2063,7 +2063,7 @@ def _run_scenario(
         if ranking_source:
             stack.enter_context(breakout_quality_ranking_source_context(**ranking_source))
         if filter_source:
-            stack.enter_context(breakout_quality_filter_source_context(**filter_source))
+            stack.enter_context(breakout_quality_filter_source_execution_context(**filter_source))
         return _run_scenario_inside_source_context(
             name=name, data_dir=data_dir, param_source_kind=param_source_kind,
             params=params, start_date=start_date, end_date=end_date,
@@ -3022,6 +3022,9 @@ def run_comparison(
         ),
         "shared_param_overrides": dict(shared_param_overrides or {}),
         "score_source": effective_score_source,
+        "hard_filter_source_transport": (
+            "contextvar_and_process_environment" if hard_filter_source is not None else None
+        ),
         "dataset": dataset,
         "data_dir": str(data_dir),
         "params_path": str(resolved_params_path),

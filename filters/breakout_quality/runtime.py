@@ -50,6 +50,15 @@ class BreakoutQualityFilterSourceContext:
     scores_path: str | None = None
 
 
+BREAKOUT_QUALITY_FILTER_SCORE_SOURCE_ENV = "BREAKOUT_QUALITY_FILTER_SCORE_SOURCE"
+BREAKOUT_QUALITY_BINARY_PIT_MANIFEST_ENV = "BREAKOUT_QUALITY_BINARY_PIT_MANIFEST"
+BREAKOUT_QUALITY_BINARY_PIT_SCORES_ENV = "BREAKOUT_QUALITY_BINARY_PIT_SCORES"
+_FILTER_SOURCE_ENV_KEYS = (
+    BREAKOUT_QUALITY_FILTER_SCORE_SOURCE_ENV,
+    BREAKOUT_QUALITY_BINARY_PIT_MANIFEST_ENV,
+    BREAKOUT_QUALITY_BINARY_PIT_SCORES_ENV,
+)
+
 _FILTER_SOURCE_CONTEXT: ContextVar[BreakoutQualityFilterSourceContext] = ContextVar(
     "breakout_quality_filter_source_context",
     default=BreakoutQualityFilterSourceContext(),
@@ -60,13 +69,13 @@ def get_breakout_quality_filter_source_context() -> BreakoutQualityFilterSourceC
     context = _FILTER_SOURCE_CONTEXT.get()
     if context.score_source != SCORE_SOURCE_CANONICAL_RUNTIME:
         return context
-    env_source = str(os.environ.get("BREAKOUT_QUALITY_FILTER_SCORE_SOURCE") or "").strip()
+    env_source = str(os.environ.get(BREAKOUT_QUALITY_FILTER_SCORE_SOURCE_ENV) or "").strip()
     if not env_source:
         return context
     if env_source != BINARY_PIT_SCORE_SOURCE:
         raise ValueError(f"不支援的breakout-quality filter score source: {env_source!r}")
-    manifest_path = str(os.environ.get("BREAKOUT_QUALITY_BINARY_PIT_MANIFEST") or "").strip()
-    scores_path = str(os.environ.get("BREAKOUT_QUALITY_BINARY_PIT_SCORES") or "").strip()
+    manifest_path = str(os.environ.get(BREAKOUT_QUALITY_BINARY_PIT_MANIFEST_ENV) or "").strip()
+    scores_path = str(os.environ.get(BREAKOUT_QUALITY_BINARY_PIT_SCORES_ENV) or "").strip()
     if not manifest_path or not scores_path:
         raise ValueError("Binary PIT filter source缺少manifest／scores環境設定")
     return BreakoutQualityFilterSourceContext(
@@ -100,6 +109,42 @@ def breakout_quality_filter_source_context(
         yield context
     finally:
         _FILTER_SOURCE_CONTEXT.reset(token)
+
+
+@contextmanager
+def breakout_quality_filter_source_execution_context(
+    *,
+    score_source: str,
+    manifest_path: str | None = None,
+    scores_path: str | None = None,
+) -> Iterator[BreakoutQualityFilterSourceContext]:
+    """Propagate one filter source to the current process and spawned prep workers."""
+    source = str(score_source).strip()
+    manifest_text = str(manifest_path or "").strip()
+    scores_text = str(scores_path or "").strip()
+    if source == BINARY_PIT_SCORE_SOURCE and (not manifest_text or not scores_text):
+        raise ValueError("Binary PIT filter source必須指定manifest_path與scores_path")
+    before = {key: os.environ.get(key) for key in _FILTER_SOURCE_ENV_KEYS}
+    if source == BINARY_PIT_SCORE_SOURCE:
+        os.environ[BREAKOUT_QUALITY_FILTER_SCORE_SOURCE_ENV] = source
+        os.environ[BREAKOUT_QUALITY_BINARY_PIT_MANIFEST_ENV] = manifest_text
+        os.environ[BREAKOUT_QUALITY_BINARY_PIT_SCORES_ENV] = scores_text
+    else:
+        for key in _FILTER_SOURCE_ENV_KEYS:
+            os.environ.pop(key, None)
+    try:
+        with breakout_quality_filter_source_context(
+            score_source=source,
+            manifest_path=manifest_path,
+            scores_path=scores_path,
+        ) as context:
+            yield context
+    finally:
+        for key, prior in before.items():
+            if prior is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prior
 
 _RANKING_SOURCE_CONTEXT: ContextVar[BreakoutQualityRankingSourceContext] = ContextVar(
     "breakout_quality_ranking_source_context",

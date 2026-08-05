@@ -3330,3 +3330,41 @@ P3 optimizer訓練與rolling OOS診斷使用`binary_point_in_time` Scores；但�
 ### 採用判定
 
 目前只可判定A2是無DL研究候選；Binary DL是否在PIT-consistent 4×2下有效仍未取得合法結果。正式策略維持A0、Binary DL runtime關閉。修正版結果取得前，不以目前B0～B3或`B3−A2`作模型／參數採用結論。
+
+## 2026-08-05 — 4×2 Binary PIT Process-worker Source Propagation Correction
+
+### 狀態
+
+`RESULT_RERUN_RECEIVED / B_ARMS_INVALIDATED_AGAIN / WORKER_SOURCE_PROPAGATION_FIXED / LOCAL_REPLAY_RERUN_REQUIRED / FORMAL_BASELINE_UNCHANGED`
+
+### 程式與結果基準
+
+- 使用者結果ZIP：`test-branch-1_20260805_171121_f19c053.zip`
+- SHA256：`836bb3eb84a882e5f1b68dd670736235b438dcc56858946ddc4fc4046136ff50`
+- 使用者依前一版source修正重新執行4×2 Gate；報表已顯示`Score source=binary_point_in_time`，且八操作點交易數由錯誤的0修正為407／396、384／446、336／374、275／278。
+
+### 重新追查結果
+
+四個B臂的報酬、MDD、RoMD、EV、曝險、交易數及年度結果仍與前一版canonical replay逐項完全相同。這不是可直接接受的「PIT與canonical恰好一致」證據；程式追查確認實際source仍未傳入建立訊號的Windows process workers：
+
+1. `strategy_compare._run_scenario`只在主程序進入`breakout_quality_filter_source_context`的ContextVar。
+2. active-param replay透過`prepare_trial_inputs`建立`ProcessPoolExecutor`，Windows使用spawn；子程序不繼承主程序ContextVar。
+3. `filters/breakout_quality/runtime.py`雖已有process environment fallback，但strategy replay沒有設定`BREAKOUT_QUALITY_FILTER_SCORE_SOURCE`、`BREAKOUT_QUALITY_BINARY_PIT_MANIFEST`及`BREAKOUT_QUALITY_BINARY_PIT_SCORES`。
+4. 因此子程序在`generate_signals`時仍使用預設`canonical_runtime`；報表metadata只反映主程序指定來源，沒有證明worker實際使用來源。
+
+所以本次B0／B1／B2／B3及`B3−A2 = -88.01pp`再次失效，不得作最終4×2採用判定。A0～A3不啟用DL、不讀Score，結果仍有效；P3 optimizer原本已用受控environment傳遞Binary PIT，P3參數工件本身不需重訓。
+
+### 唯一修正
+
+- `filters/breakout_quality/runtime.py`新增統一execution context：同時設定主程序ContextVar與可由spawned workers繼承的三項受控environment，scenario結束後逐項還原原值。
+- `strategy_compare._run_scenario`改用統一execution context，確保portfolio signal-prep process workers與主程序讀取同一Binary PIT manifest／scores。
+- strategy comparison metadata新增`hard_filter_source_transport=contextvar_and_process_environment`；4×2報表明示`process workers已傳遞`。
+- Synthetic contract新增真實Python子程序探針，不再只mock函式參數；直接驗證worker看到`binary_point_in_time`及完全相同manifest／scores路徑，並驗證離開scenario後主程序environment完整還原。
+
+### 固定條件與重跑需求
+
+不重建Dataset、不relabel、不重建Binary PIT、不重跑P2／P3 rolling optimizer、不調threshold 0.5、不改風險搜尋欄位、原buy-sort、資金帳務或正式runtime。套用修正後只重新執行4×2 CLI；既有Binary PIT與P2／P3參數identity相同時應直接重用，只重跑四個strategy comparison pairs與合併報表。
+
+### 採用判定
+
+目前仍只接受A2為無DL研究候選；正式策略維持A0、Binary DL runtime關閉。取得process-worker一致的重新回放結果前，不採用任何B臂或`B3−A2`結論。

@@ -678,7 +678,7 @@ def _render_report(*, args, matrix, p2_arm, p3_arm, binary_pit, baseline_contrac
                 ("P2訓練", "rules全關／DL關"),
                 ("P3訓練", "rules全關／DL開／Binary PIT"),
                 ("Binary PIT", binary_pit["status"]),
-                ("DL replay source", "binary_point_in_time（八操作點一致）"),
+                ("DL replay source", "binary_point_in_time（八操作點一致；process workers已傳遞）"),
                 ("固定 Buy sort", "原 position-aware buy-sort"),
             )
         ),
