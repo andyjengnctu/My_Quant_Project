@@ -59,7 +59,7 @@ python apps/workbench.py
 
 正式操作統一由 `apps/breakout_quality.py` 進入；`tools/filters/breakout_quality/` 的直接 CLI 僅保留開發與相容用途。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟唯一正式選單。主選單只保留完整工作流程，不顯示 Dataset、單獨 train、export、audit 或版本化研究名稱；這些低階與 research-only 功能仍使用明確 CLI 子命令。Binary 正式模型流程會在模型報表後自動接續 Baseline 實際績效比較；continuous workflow仍維持模型與策略分開。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟唯一正式選單。主選單只保留完整工作流程，不顯示 Dataset、單獨 train、export、audit 或版本化研究名稱；這些低階與 research-only 功能仍使用明確 CLI 子命令。目前 Binary 模型研究選單固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果與舊Label／A2 no-DL組合比較維持CLI-only。continuous workflow仍維持模型與策略分開。
 
 ```bash
 python apps/breakout_quality.py
@@ -77,16 +77,18 @@ python apps/breakout_quality.py
 
 ```text
 === Binary DL Filter 模型研究與驗證 ===
-[1/Enter] 重新訓練 → 簡易模型報表 → Baseline實際績效比較
-[2] 使用既有模型 → 更新research scores → 簡易模型報表 → Baseline實際績效比較
+Active Research Label：a2_realized_trade_path_v1
+[1/Enter] 建立新Label → 重新訓練 → 模型預測報表
+[2] 使用既有模型 → 更新Scores → 模型預測報表
+[3] 查看Label與事件生命週期摘要
 [0] 返回
 ```
 
-`[1]` 會依序執行 Dataset 檢查／必要重建、train、research score export、OOS 簡易模型報表、forward-OOS runtime score export、hard-filter Baseline策略比較。`[2]` 不重新訓練，直接使用既有 model／split／manifest 顯示相同簡易模型報表，再更新 forward-OOS scores 並比較 Baseline。Binary A／B／C／F replacement gate、Optional filters A～E Gate及其他臨時研究仍維持 CLI-only。
+`[1]` 固定依序執行：建立／接續A2 realized trade-path Label Dataset、train、research score export、Selection／OOS模型預測報表；到此停止，不匯出runtime score、不執行策略回放。`[2]` 不重新訓練，只更新新Label模型的research scores並重建同一份預測報表。`[3]` 顯示PASS／REJECT／Excluded、事件group及初次miss buy／未成交終止契約。新Label使用獨立`filter_id=breakout_quality_a2_trade_path_v1`，不得覆蓋現有9A模型。策略經濟效果另以CLI-only `strategy-trade-path-label-gate`比較。
 
 Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
-模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：binary classification執行Dataset／train／research score／OOS簡易報表，接著匯出forward-OOS runtime scores並以同一套正式rolling params比較Binary hard filter與Baseline；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。Binary選單的完整訓練流程會自動接續正式策略比較；主選單`[2]`仍可獨立重跑相同比較。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
+模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：目前binary classification主選單固定執行A2 realized trade-path Label的Dataset／train／research score／Selection與OOS模型報表，策略比較不在選單自動執行；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。Binary新Label模型流程在Prediction報表後停止；策略經濟比較僅由明確CLI Gate執行。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
 
 
 目前正式 workflow 已切回9A binary classification。設定位置仍只有 `config/breakout_quality.py`：
@@ -97,6 +99,34 @@ BREAKOUT_QUALITY_RANDOM_SEED = 42  # 所有breakout-quality正式模型流程共
 ```
 
 若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`。Binary、continuous、pretraining與Selection PIT workflow全部共用`BREAKOUT_QUALITY_RANDOM_SEED`；目前值為42。只有單次重現特殊實驗時才用CLI `--seed`覆寫。PIT日期／fold設定只在continuous objective下生效。
+
+
+### A2 Realized Trade-path Label研究
+
+新Label以一個原始breakout event的完整生命週期為單位。初次`Low > orig_limit`只把事件留在pending／continuation，不下REJECT；後續回到原始limit成交後，直接重用正式initial stop、trailing、indicator exit與費稅帳務，只有終局`realized_net_r > 0`標PASS，其餘已成交完整交易標REJECT。新setup覆蓋舊延續訊號、shadow completion／invalidation、資料結尾仍未成交或成交後尚未結算者標INVALID並排除Binary訓練。同一ticker/date group只讓當日A2 active `high_len`事件取得有效Label，其餘high_len rows保持INVALID。Feature snapshot固定原始signal date，不因延續等待日重建。
+
+選單`[1/Enter]`會自動執行等價於：
+
+```powershell
+python apps/breakout_quality.py build-trade-path-labels `
+  --dataset full `
+  --filter-id breakout_quality_a2_trade_path_v1 `
+  --resume
+```
+
+Builder先以2014～2020 Selection rolling基準建立rules全關／DL關的risk-only A2 teacher，再合併既有2021～2026 P2 active params。每個Label日期只能使用當時已生效teacher params；衍生Dataset沿用9A 300×10 feature bank，但以獨立filter目錄保存Label、events與summary。
+
+確認新模型Prediction報表後，策略比較使用CLI-only：
+
+```powershell
+python apps/breakout_quality.py strategy-trade-path-label-gate `
+  --dataset full `
+  --param-policy base-finalist-best `
+  --max-positions 10 `
+  --rotation off
+```
+
+Gate不重新訓練，只更新兩個既有凍結模型的forward-OOS Scores，並在同一套A2／P2 active params、rules全關、原position-aware buy-sort與threshold 0.5下比較：A2 Base（DL關）、Old Label 9A（DL開）、New Trade-path Label（DL開）。主判定為`New−Base`，輔助判定為`New−Old`；不得依同一段OOS回頭調整threshold、Label或模型。輸出位於`models/research/breakout_quality/trade_path_label_gate/a2_realized_trade_path_v1/`。
 
 ### Continuous Target自動準備
 
@@ -187,7 +217,7 @@ python -c "from importlib.metadata import version; from momentfm import MOMENTPi
 
 9E legacy runtime 契約固定為 `momentfm==0.1.4` 與 `transformers==5.5.0`。不要直接執行 `pip install momentfm==0.1.4`，否則 pip 可能嘗試把本專案的 NumPy／Hub／Transformers 降到該套件 metadata 所列的舊版本。由於採刻意隔離安裝，`pip check` 仍會依舊 metadata 報告版本不相容，不能用它取代上方版本檢查與正式 `apps/test_suite.py`。
 
-既有 `workflow` CLI相容流程會依active architecture分流：必要時建立 supervised dataset；目前policy使用9A `inception_time_v1`，CLI相容流程依序執行train → export research scores → 產生易讀研究報表；正式互動選單在此之後還會接續forward-OOS score export與Baseline策略比較；8F sequence-only保留高覆蓋基準。10A Candidate-conditioned Market Set與Stage 1 Global Market Set均為legacy read-only。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
+既有 `workflow` CLI相容流程會依active architecture分流：必要時建立 supervised dataset；目前policy使用9A `inception_time_v1`，CLI相容流程依序執行train → export research scores → 產生易讀研究報表。Binary正式互動選單目前改為A2 realized trade-path Label研究，於Selection／OOS模型預測報表後停止；forward-OOS score export與A2 Base／舊Label／新Label策略比較只由明確CLI Gate執行。8F sequence-only保留高覆蓋基準。10A Candidate-conditioned Market Set與Stage 1 Global Market Set均為legacy read-only。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
 python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --epochs 200 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24

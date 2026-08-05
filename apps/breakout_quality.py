@@ -38,6 +38,10 @@ from core.runtime_utils import (
     run_cli_entrypoint,
 )
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
+from filters.breakout_quality.trade_path_label import (
+    TRADE_PATH_LABEL_ID,
+    TRADE_PATH_RESEARCH_FILTER_ID,
+)
 from filters.breakout_quality.continuous_target import (
     TARGET_AUDIT_MARKDOWN_FILENAME,
     TARGET_MANIFEST_FILENAME,
@@ -118,6 +122,9 @@ COMMAND_MODULES = {
     "build-binary-point-in-time-scores": (
         "tools.filters.breakout_quality.build_binary_point_in_time_scores"
     ),
+    "build-trade-path-labels": (
+        "tools.filters.breakout_quality.build_trade_path_labels"
+    ),
     "audit-point-in-time-scores": "tools.filters.breakout_quality.audit_point_in_time_scores",
     "strategy-compare": "tools.filters.breakout_quality.strategy_compare",
     "strategy-adapt": "tools.filters.breakout_quality.strategy_adapt",
@@ -125,6 +132,9 @@ COMMAND_MODULES = {
     "strategy-dl-filter-gate": "tools.filters.breakout_quality.strategy_dl_filter_gate",
     "strategy-dl-filter-param-adapt-gate": (
         "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate"
+    ),
+    "strategy-trade-path-label-gate": (
+        "tools.filters.breakout_quality.strategy_trade_path_label_gate"
     ),
 }
 
@@ -160,6 +170,9 @@ COMMAND_DESCRIPTIONS = {
     "build-binary-point-in-time-scores": (
         "建立Binary DL filter歷史 point-in-time scores；research-only、CLI-only"
     ),
+    "build-trade-path-labels": (
+        "建立A2 realized trade-path Label Dataset；research workflow"
+    ),
     "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
     "strategy-compare": "執行breakout-quality策略績效比較",
     "strategy-adapt": "驗證Selection rolling Ranking×Parameter 2×2策略適應",
@@ -167,6 +180,9 @@ COMMAND_DESCRIPTIONS = {
     "strategy-dl-filter-gate": "執行Binary DL filter規則消融矩陣Gate；research-only、CLI-only",
     "strategy-dl-filter-param-adapt-gate": (
         "執行Binary DL filter 4種參數×DL開關 4×2 Gate；research-only、CLI-only"
+    ),
+    "strategy-trade-path-label-gate": (
+        "比較A2 no-DL、舊Label DL與新trade-path Label DL；research-only、CLI-only"
     ),
 }
 
@@ -1843,6 +1859,178 @@ def _interactive_existing_binary_validation(
     )
 
 
+def _trade_path_train_request(workflow_settings) -> argparse.Namespace:
+    request = _policy_train_settings(TRADE_PATH_RESEARCH_FILTER_ID)
+    request.experiment_profile = str(workflow_settings.experiment_profile)
+    request.seed = int(workflow_settings.seed)
+    return request
+
+
+def _print_trade_path_label_policy(request: argparse.Namespace) -> None:
+    print("\n" + render_title("A2 Realized Trade-path Model Policy"))
+    print(
+        render_key_values(
+            (
+                ("Filter ID", TRADE_PATH_RESEARCH_FILTER_ID),
+                ("Label ID", TRADE_PATH_LABEL_ID),
+                ("Teacher Params", "DL-off-trained／A2 PIT active params"),
+                ("Event Scope", "original_breakout_lifecycle"),
+                ("Initial Miss Buy", "pending／continuation"),
+                ("Feature Snapshot", "original signal date"),
+                ("Filled Positive", "realized_net_r > 0"),
+                ("Unfilled Terminal", "excluded from binary training"),
+                ("Architecture", BREAKOUT_QUALITY_MODEL_ARCHITECTURE),
+                ("Experiment Profile", request.experiment_profile),
+                ("Threshold", f"{float(request.fixed_threshold):g}"),
+            )
+        )
+    )
+
+
+def _run_trade_path_model_report(
+    program_name: str,
+    *,
+    request: argparse.Namespace,
+    export_research_scores: bool,
+) -> int:
+    if export_research_scores:
+        print("\n[Scores] 更新新Label research scores")
+        code = _run_command(
+            "export-scores",
+            _build_export_score_argv(request, scope="research"),
+            program_name=program_name,
+        )
+        if code != 0:
+            return int(code)
+    print("\n[Report] 顯示Selection／OOS模型預測效果")
+    return _run_command(
+        "report",
+        [
+            "--filter-id",
+            TRADE_PATH_RESEARCH_FILTER_ID,
+            "--experiment-profile",
+            str(request.experiment_profile),
+            "--include-oos",
+        ],
+        program_name=program_name,
+    )
+
+
+def _interactive_trade_path_train_and_report(
+    program_name: str,
+    *,
+    workflow_settings,
+) -> int:
+    request = _trade_path_train_request(workflow_settings)
+    _print_trade_path_label_policy(request)
+    print(
+        "\n即將執行：建立／接續新Label Dataset → 重新訓練 → "
+        "更新research scores → 顯示Selection／OOS模型預測報表。"
+    )
+    print("本流程不執行策略績效比較；策略比較另由CLI Gate執行。")
+    if not _prompt_bool("確認開始", True):
+        print("已取消。")
+        return 0
+    steps = (
+        (
+            "[1/4] 建立／接續A2 realized trade-path Label Dataset",
+            "build-trade-path-labels",
+            [
+                "--dataset",
+                INTERACTIVE_DATASET_PROFILE,
+                "--filter-id",
+                TRADE_PATH_RESEARCH_FILTER_ID,
+                "--resume",
+            ],
+        ),
+        (
+            "[2/4] 訓練新Label模型",
+            "train",
+            _build_train_argv(request),
+        ),
+        (
+            "[3/4] 更新新Label research scores",
+            "export-scores",
+            _build_export_score_argv(request, scope="research"),
+        ),
+        (
+            "[4/4] 顯示Selection／OOS模型預測報表",
+            "report",
+            [
+                "--filter-id",
+                TRADE_PATH_RESEARCH_FILTER_ID,
+                "--experiment-profile",
+                str(request.experiment_profile),
+                "--include-oos",
+            ],
+        ),
+    )
+    for label, command, argv in steps:
+        print("\n" + label)
+        code = _run_command(command, list(argv), program_name=program_name)
+        if code != 0:
+            return int(code)
+    print("\n模型研究完成。策略績效請另執行 strategy-trade-path-label-gate。")
+    return 0
+
+
+def _interactive_trade_path_existing_report(
+    program_name: str,
+    *,
+    workflow_settings,
+) -> int:
+    request = _trade_path_train_request(workflow_settings)
+    _print_trade_path_label_policy(request)
+    print("\n使用既有新Label模型更新research scores並顯示預測報表；不執行策略比較。")
+    if not _prompt_bool("確認開始", True):
+        print("已取消。")
+        return 0
+    return _run_trade_path_model_report(
+        program_name,
+        request=request,
+        export_research_scores=True,
+    )
+
+
+def _interactive_trade_path_label_summary() -> int:
+    summary = _read_dataset_summary(TRADE_PATH_RESEARCH_FILTER_ID)
+    if summary is None:
+        print("尚未建立A2 realized trade-path Label Dataset。")
+        return 0
+    counts = dict(summary.get("label_counts") or {})
+    trade_path = dict(summary.get("trade_path_label") or {})
+    group_summary = dict(summary.get("event_group_summary") or {})
+    print("\n" + render_title("A2 Realized Trade-path Label Summary"))
+    print(
+        render_key_values(
+            (
+                ("Filter ID", summary.get("filter_id")),
+                ("Label ID", trade_path.get("label_id")),
+                ("Dataset", summary.get("dataset")),
+                ("Events", summary.get("event_count")),
+                ("PASS", counts.get("pass")),
+                ("REJECT", counts.get("reject")),
+                ("Excluded／Invalid", counts.get("invalid")),
+                ("Groups", group_summary.get("group_count")),
+                ("Valid Groups", group_summary.get("valid_group_count")),
+                ("Initial Miss Buy", trade_path.get("initial_miss_buy_status")),
+                ("Unfilled Terminal", trade_path.get("unfilled_terminal_rule")),
+                ("Label End", summary.get("label_information_end_date_range")),
+            )
+        )
+    )
+    print(
+        render_status_paths(
+            (
+                ("Dataset summary", _dataset_paths(TRADE_PATH_RESEARCH_FILTER_ID)["summary"]),
+                ("Events", _dataset_paths(TRADE_PATH_RESEARCH_FILTER_ID)["events"]),
+            ),
+            project_root=PROJECT_ROOT,
+        )
+    )
+    return 0
+
+
 def _interactive_binary_model_research(
     program_name: str,
     *,
@@ -1850,8 +2038,10 @@ def _interactive_binary_model_research(
 ) -> int:
     while True:
         print("\n=== Binary DL Filter 模型研究與驗證 ===")
-        print("[1/Enter] 重新訓練 → 簡易模型報表 → Baseline實際績效比較")
-        print("[2] 使用既有模型 → 更新Scores → 簡易模型報表 → Baseline實際績效比較")
+        print(f"Active Research Label：{TRADE_PATH_LABEL_ID}")
+        print("[1/Enter] 建立新Label → 重新訓練 → 模型預測報表")
+        print("[2] 使用既有模型 → 更新Scores → 模型預測報表")
+        print("[3] 查看Label與事件生命週期摘要")
         print("[0] 返回")
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -1862,15 +2052,17 @@ def _interactive_binary_model_research(
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            return _interactive_workflow(
+            return _interactive_trade_path_train_and_report(
                 program_name,
                 workflow_settings=workflow_settings,
             )
         if choice == "2":
-            return _interactive_existing_binary_validation(
+            return _interactive_trade_path_existing_report(
                 program_name,
                 workflow_settings=workflow_settings,
             )
+        if choice == "3":
+            return _interactive_trade_path_label_summary()
         print("無效選項，請重新輸入。")
 
 

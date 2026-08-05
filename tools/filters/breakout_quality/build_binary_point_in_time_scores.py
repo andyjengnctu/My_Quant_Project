@@ -52,7 +52,7 @@ from filters.breakout_quality.binary_pit_score_store import (
     load_binary_point_in_time_score_table,
 )
 from filters.breakout_quality.contract import (
-    DEFAULT_LABEL_POLICY,
+    expected_label_policy_for_filter_id,
     LABEL_PASS,
     LABEL_REJECT,
     SCORE_COLUMN,
@@ -222,7 +222,7 @@ def _load_bundle(args) -> BinaryPitBundle:
         raise ValueError("Binary PIT目前只支援sequence-only architecture")
     summary, features, context, labels, events = load_validated_dataset_bundle(
         str(args.filter_id),
-        expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+        expected_policy=expected_label_policy_for_filter_id(str(args.filter_id)),
         require_current_source=True,
     )
     features, context, labels = train_impl._preload_training_arrays(

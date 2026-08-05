@@ -26,6 +26,7 @@ from filters.breakout_quality.models.spec import normalize_model_architecture
 
 @dataclass(frozen=True)
 class BreakoutQualityArtifactPaths:
+    filter_id: str
     model_architecture: str
     experiment_profile: str
     model_dir: Path
@@ -88,11 +89,13 @@ def resolve_filter_model_dir(
 
 def _artifact_paths_from_dir(
     *,
+    filter_id: str,
     architecture: str,
     experiment_profile: str,
     model_dir: Path,
 ) -> BreakoutQualityArtifactPaths:
     return BreakoutQualityArtifactPaths(
+        filter_id=normalize_filter_id(filter_id),
         model_architecture=architecture,
         experiment_profile=experiment_profile,
         model_dir=model_dir,
@@ -112,6 +115,7 @@ def resolve_filter_artifact_paths(
     architecture = resolve_model_architecture(model_architecture)
     profile = resolve_experiment_profile(experiment_profile)
     return _artifact_paths_from_dir(
+        filter_id=filter_id,
         architecture=architecture,
         experiment_profile=profile,
         model_dir=resolve_filter_model_dir(
@@ -150,6 +154,7 @@ def resolve_existing_filter_artifact_paths(
     if not legacy_manifest.is_file():
         return canonical
     return _artifact_paths_from_dir(
+        filter_id=filter_id,
         architecture=canonical.model_architecture,
         experiment_profile=BASELINE_EXPERIMENT_PROFILE,
         model_dir=legacy_dir,

@@ -34,6 +34,7 @@ from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
     CONTEXT_COLUMNS,
     DEFAULT_LABEL_POLICY,
+    expected_label_policy_for_filter_id,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_SCORE_FILENAME,
     DEFAULT_UNAVAILABLE_SCORE_FILENAME,
@@ -598,10 +599,11 @@ def load_model_artifact_contract(
         ):
             raise ValueError("TS2Vec pretraining dataset fingerprint 不一致")
     model_policy = _require_mapping(manifest, "policy")
-    if dict(model_policy) != DEFAULT_LABEL_POLICY.as_manifest_payload():
+    expected_model_policy = expected_label_policy_for_filter_id(paths.filter_id)
+    if dict(model_policy) != expected_model_policy:
         raise ValueError(
-            "breakout quality model policy 與目前 config/breakout_quality.py 不一致；"
-            "請重新執行 workflow 以 relabel 並重訓模型"
+            "breakout quality model policy 與filter_id正式Label契約不一致；"
+            "請重新建立對應Dataset並重訓模型"
         )
     if int(manifest.get("sequence_length", -1)) != int(DEFAULT_LABEL_POLICY.feature_window_bars):
         raise ValueError("breakout quality manifest sequence_length 與 feature window 不一致")

@@ -46,6 +46,8 @@ ARTIFACT_CONTRACT_VERSION = 10
 SCORE_TABLE_SCHEMA_VERSION = 2
 SPLIT_ASSIGNMENT_SCHEMA_VERSION = 3
 LABEL_OBJECTIVE = "binary_risk_adjusted_opportunity_v2"
+TRADE_PATH_LABEL_OBJECTIVE = "binary_a2_realized_trade_path_v1"
+TRADE_PATH_FILTER_ID = "breakout_quality_a2_trade_path_v1"
 LEGACY_LABEL_OBJECTIVE = "binary_pass_vs_not_pass_v1"
 SCORE_COLUMN = "dl_quality_score"
 SCORE_COMPARISON = ">="
@@ -176,10 +178,44 @@ def label_manifest_payload_from_policy_manifest(policy: Mapping[str, object]) ->
             "min_reward_risk_ratio": policy.get("min_reward_risk_ratio"),
             "max_adverse_return": policy.get("max_adverse_return"),
         }
+    if objective == TRADE_PATH_LABEL_OBJECTIVE:
+        return {
+            "label_objective": TRADE_PATH_LABEL_OBJECTIVE,
+            "teacher_param_policy": policy.get("teacher_param_policy"),
+            "event_scope": policy.get("event_scope"),
+            "feature_snapshot": policy.get("feature_snapshot"),
+            "initial_miss_buy_status": policy.get("initial_miss_buy_status"),
+            "continuation_event_identity": policy.get("continuation_event_identity"),
+            "filled_positive_rule": policy.get("filled_positive_rule"),
+            "unfilled_terminal_rule": policy.get("unfilled_terminal_rule"),
+        }
     raise ValueError(f"不支援的 breakout quality label_objective: {objective or 'missing'}")
 
 
 DEFAULT_LABEL_POLICY = BreakoutQualityLabelPolicy()
+
+
+def trade_path_label_policy_payload() -> dict:
+    payload = DEFAULT_LABEL_POLICY.as_manifest_payload()
+    payload.update(
+        {
+            "label_objective": TRADE_PATH_LABEL_OBJECTIVE,
+            "teacher_param_policy": "a2_dl_off_trained_point_in_time",
+            "event_scope": "original_breakout_lifecycle",
+            "feature_snapshot": "original_signal_date",
+            "initial_miss_buy_status": "pending",
+            "continuation_event_identity": "reuse_original_event",
+            "filled_positive_rule": "realized_net_r_gt_zero",
+            "unfilled_terminal_rule": "exclude_from_binary_training",
+        }
+    )
+    return payload
+
+
+def expected_label_policy_for_filter_id(filter_id: str) -> dict:
+    if str(filter_id).strip() == TRADE_PATH_FILTER_ID:
+        return trade_path_label_policy_payload()
+    return DEFAULT_LABEL_POLICY.as_manifest_payload()
 
 LABEL_REJECT = 0
 LABEL_PASS = 1
@@ -243,6 +279,8 @@ __all__ = [
     "FILTER_FAMILY",
     "LABEL_INVALID",
     "LABEL_OBJECTIVE",
+    "TRADE_PATH_LABEL_OBJECTIVE",
+    "TRADE_PATH_FILTER_ID",
     "LEGACY_LABEL_OBJECTIVE",
     "LABEL_NAME_MAP",
     "LABEL_PASS",
@@ -273,5 +311,7 @@ __all__ = [
     "TRAINING_MODE_INNER_VALIDATION_FULL_REFIT",
     "SCORE_TABLE_SCHEMA_VERSION",
     "BreakoutQualityLabelPolicy",
+    "expected_label_policy_for_filter_id",
     "label_manifest_payload_from_policy_manifest",
+    "trade_path_label_policy_payload",
 ]

@@ -8747,30 +8747,32 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     app_source = (project_root / "apps" / "breakout_quality.py").read_text(
         encoding="utf-8"
     )
-    interactive_workflow_source = app_source.split(
-        "def _interactive_workflow", 1
-    )[1].split("def _interactive_build_dataset", 1)[0]
+    trade_path_train_source = app_source.split(
+        "def _interactive_trade_path_train_and_report", 1
+    )[1].split("def _interactive_trade_path_existing_report", 1)[0]
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_menu_training_flow_shows_model_report_then_runs_post_train_strategy_validation",
+        "binary_menu_training_flow_builds_trade_path_label_then_stops_after_model_report",
         True,
         all(
-            token in interactive_workflow_source
+            token in trade_path_train_source
             for token in (
-                "OOS 簡易模型報表",
-                "rc = _run_workflow",
-                "_run_binary_post_train_validation",
+                "build-trade-path-labels",
+                '"train"',
+                '"export-scores"',
+                '"report"',
+                "本流程不執行策略績效比較",
             )
         )
-        and interactive_workflow_source.index("rc = _run_workflow")
-        < interactive_workflow_source.index("_run_binary_post_train_validation"),
+        and "_run_binary_post_train_validation" not in trade_path_train_source
+        and "strategy-compare" not in trade_path_train_source,
     )
 
     existing_binary_source = app_source.split(
-        "def _interactive_existing_binary_validation", 1
-    )[1].split("def _interactive_binary_model_research", 1)[0]
+        "def _interactive_trade_path_existing_report", 1
+    )[1].split("def _interactive_trade_path_label_summary", 1)[0]
     binary_menu_source = app_source.split(
         "def _interactive_binary_model_research", 1
     )[1].split("def _interactive_model_research", 1)[0]
@@ -8778,24 +8780,20 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_model_menu_supports_existing_model_report_then_baseline_compare_without_retraining",
+        "binary_model_menu_supports_trade_path_existing_model_report_without_strategy_replay",
         True,
         all(
             token in binary_menu_source
             for token in (
-                "重新訓練",
+                "建立新Label",
                 "使用既有模型",
-                "_interactive_existing_binary_validation",
+                "查看Label與事件生命週期摘要",
+                "_interactive_trade_path_existing_report",
             )
         )
-        and '"export-scores"' in existing_binary_source
-        and 'scope="research"' in existing_binary_source
-        and '"report"' in existing_binary_source
-        and "--include-oos" in existing_binary_source
-        and "_run_binary_post_train_validation" in existing_binary_source
-        and existing_binary_source.index('"export-scores"')
-        < existing_binary_source.index('"report"')
-        < existing_binary_source.index("_run_binary_post_train_validation"),
+        and "_run_trade_path_model_report" in existing_binary_source
+        and "strategy-compare" not in existing_binary_source
+        and "_run_binary_post_train_validation" not in existing_binary_source,
     )
 
     existing_model_calls = []
@@ -8828,7 +8826,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         redirect_stdout(io.StringIO()),
     ):
         existing_model_rc = (
-            breakout_quality_app._interactive_existing_binary_validation(
+            breakout_quality_app._interactive_trade_path_existing_report(
                 "apps/breakout_quality.py",
                 workflow_settings=binary_menu_settings,
             )
@@ -8837,11 +8835,10 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_existing_model_menu_executes_research_export_report_forward_export_then_baseline_compare",
+        "binary_existing_trade_path_model_menu_executes_research_export_then_report_only",
         (
             0,
-            ("export-scores", "report", "export-scores", "strategy-compare"),
-            True,
+            ("export-scores", "report"),
             True,
             True,
         ),
@@ -8850,8 +8847,6 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             tuple(call[0] for call in existing_model_calls),
             "research" in existing_model_calls[0][1],
             "--include-oos" in existing_model_calls[1][1],
-            "forward_oos" in existing_model_calls[2][1]
-            and "hard-filter" in existing_model_calls[3][1],
         ),
     )
 
@@ -14979,6 +14974,249 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     summary["final_selection_refit"] = False
     return results, summary
 
+
+
+def validate_breakout_quality_trade_path_label_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_TRADE_PATH_LABEL"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from filters.breakout_quality.contract import (
+        TRADE_PATH_FILTER_ID,
+        TRADE_PATH_LABEL_OBJECTIVE,
+        expected_label_policy_for_filter_id,
+    )
+    from filters.breakout_quality.paths import resolve_filter_artifact_paths
+    from filters.breakout_quality.trade_path_label import (
+        TRADE_PATH_LABEL_ID,
+        TRADE_PATH_RESEARCH_FILTER_ID,
+        simulate_realized_trade_path_label,
+    )
+    from tools.filters.breakout_quality.build_trade_path_labels import (
+        _load_valid_ticker_shard,
+        _ticker_shard_path,
+        _write_ticker_shard,
+    )
+
+    policy = expected_label_policy_for_filter_id(TRADE_PATH_FILTER_ID)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_label_identity_and_policy_are_isolated_from_9a",
+        (
+            TRADE_PATH_FILTER_ID,
+            TRADE_PATH_LABEL_OBJECTIVE,
+            "pending",
+            "reuse_original_event",
+            "realized_net_r_gt_zero",
+            "exclude_from_binary_training",
+        ),
+        (
+            TRADE_PATH_RESEARCH_FILTER_ID,
+            policy.get("label_objective"),
+            policy.get("initial_miss_buy_status"),
+            policy.get("continuation_event_identity"),
+            policy.get("filled_positive_rule"),
+            policy.get("unfilled_terminal_rule"),
+        ),
+    )
+
+    params = V16StrategyParams(
+        use_breakout_ema_filter=False,
+        use_bb=False,
+        use_kc=False,
+        use_vol=False,
+        use_breakout_return_filter=False,
+        use_breakout_false_filter=False,
+        use_history_threshold=False,
+        use_breakout_reclaim_reentry=False,
+        use_breakout_quality_filter=False,
+        use_breakout_quality_ranking=False,
+        high_len=3,
+        atr_len=3,
+        atr_buy_tol=1.0,
+        atr_times_init=2.0,
+        atr_times_trail=2.0,
+        tp_percent=0.0,
+        initial_capital=1_000_000.0,
+        fixed_risk=0.01,
+        max_position_cap_pct=0.3,
+    )
+    dates = pd.date_range("2020-01-01", periods=7, freq="B")
+    frame = pd.DataFrame(
+        {
+            "Open": [95.0, 98.0, 100.0, 103.0, 101.0, 103.0, 104.0],
+            "High": [97.0, 100.0, 102.0, 103.5, 102.0, 105.0, 105.0],
+            "Low": [94.0, 97.0, 99.0, 102.0, 100.0, 102.0, 103.0],
+            "Close": [96.0, 99.0, 101.0, 103.0, 101.0, 104.0, 104.0],
+            "Volume": [1000.0] * 7,
+        },
+        index=dates,
+    )
+    frame.attrs["ticker"] = "2330"
+    atr = np.full(len(frame), 2.0, dtype=np.float64)
+    buy_condition = np.array([False, False, True, False, False, False, False])
+    sell_condition = np.array([False, False, False, False, True, False, False])
+    buy_limits = np.array([np.nan, np.nan, 101.0, np.nan, np.nan, np.nan, np.nan])
+    result = simulate_realized_trade_path_label(
+        frame,
+        ticker="2330",
+        signal_pos=2,
+        params=params,
+        teacher_effective_date="2020-01-01",
+        precomputed_signals=(atr, buy_condition, sell_condition, buy_limits),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_initial_miss_remains_pending_then_continuation_fill_gets_one_terminal_label",
+        (LABEL_PASS, "CONTINUATION_FILL", 1, "IND_SELL", True),
+        (
+            result.label,
+            result.fill_type,
+            result.continuation_wait_bars,
+            result.exit_reason,
+            bool(result.realized_net_r is not None and result.realized_net_r > 0.0),
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        shard_dir = Path(tmpdir) / "shards"
+        shard_path = _ticker_shard_path(shard_dir, "2330")
+        _write_ticker_shard(
+            shard_path,
+            [
+                {"_event_index": 2, "label": LABEL_PASS},
+                {"_event_index": 1, "label": LABEL_REJECT},
+            ],
+        )
+        valid_shard = _load_valid_ticker_shard(
+            shard_path, expected_event_indices={1, 2}
+        )
+        invalid_shard = _load_valid_ticker_shard(
+            shard_path, expected_event_indices={1, 2, 3}
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "trade_path_resume_reuses_only_complete_ticker_shards",
+            ([1, 2], True),
+            (
+                []
+                if valid_shard is None
+                else valid_shard["_event_index"].astype(int).tolist(),
+                invalid_shard is None,
+            ),
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        artifact_paths = resolve_filter_artifact_paths(
+            tmpdir,
+            TRADE_PATH_RESEARCH_FILTER_ID,
+            "inception_time_v1",
+            "unique_group_sampling",
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "trade_path_artifact_paths_keep_filter_identity",
+            (TRADE_PATH_RESEARCH_FILTER_ID, True),
+            (
+                artifact_paths.filter_id,
+                TRADE_PATH_RESEARCH_FILTER_ID in str(artifact_paths.model_dir),
+            ),
+        )
+
+    project_root = Path(__file__).resolve().parents[2]
+    app_source = (project_root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    builder_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "build_trade_path_labels.py"
+    ).read_text(encoding="utf-8")
+    gate_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "strategy_trade_path_label_gate.py"
+    ).read_text(encoding="utf-8")
+    binary_pit_source = (
+        project_root / "tools" / "filters" / "breakout_quality" / "build_binary_point_in_time_scores.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_menu_stops_after_model_report_and_strategy_gate_stays_cli_only",
+        True,
+        all(
+            token in app_source
+            for token in (
+                "[1/Enter] 建立新Label → 重新訓練 → 模型預測報表",
+                "[2] 使用既有模型 → 更新Scores → 模型預測報表",
+                "[3] 查看Label與事件生命週期摘要",
+                '"build-trade-path-labels"',
+                '"strategy-trade-path-label-gate"',
+                "本流程不執行策略績效比較",
+            )
+        )
+        and "strategy-trade-path-label-gate" not in app_source.split(
+            "def _interactive_binary_model_research", 1
+        )[1].split("def _interactive_model_research", 1)[0],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_builder_reuses_formal_lifecycle_and_never_overwrites_9a",
+        True,
+        all(
+            token in builder_source
+            for token in (
+                "source_filter_id == target_filter_id",
+                "TRADE_PATH_RESEARCH_FILTER_ID",
+                "derived_feature_bank_trade_path_relabel",
+                "initial_miss_buy_status",
+                "exclude_from_binary_training",
+                "build_signal_cache",
+                "simulate_realized_trade_path_label",
+            )
+        ),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_binary_pit_uses_filter_specific_label_policy",
+        True,
+        "expected_label_policy_for_filter_id(str(args.filter_id))" in binary_pit_source
+        and "expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload()" not in binary_pit_source,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_strategy_gate_compares_fixed_a2_base_old_and_new_labels",
+        True,
+        all(
+            token in gate_source
+            for token in (
+                "A2 no-DL",
+                "Old Label 9A",
+                "New Trade-path Label",
+                "New−Base",
+                "New−Old",
+                "ALL_RULE_FILTERS_OFF_OVERRIDES",
+                "TRADE_PATH_FORWARD_TEACHER_PARAMS_RELATIVE_PATH",
+                "只更新forward-OOS Scores並執行策略回放，不重新訓練",
+            )
+        ),
+    )
+
+    summary["label_id"] = TRADE_PATH_LABEL_ID
+    summary["research_filter_id"] = TRADE_PATH_RESEARCH_FILTER_ID
+    summary["menu_scope"] = "model_prediction_only"
+    summary["strategy_scope"] = "cli_only"
+    return results, summary
 
 def validate_breakout_quality_single_seed_single_entry_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_SINGLE_SEED_SINGLE_ENTRY"

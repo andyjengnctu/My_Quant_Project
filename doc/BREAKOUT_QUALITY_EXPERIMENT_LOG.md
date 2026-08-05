@@ -3422,3 +3422,48 @@ P3 optimizer訓練與rolling OOS診斷使用`binary_point_in_time` Scores；但�
 2. DL研究線：停止對目前9A Label繼續調threshold或重訓風險參數；下一個模型改測chronological first-touch Binary Label。
 3. 新Label先固定使用A2／P2參數做`DL關 vs DL開`Gate；只有同時改善RoMD、EV、直接交易選擇R及年度穩定性，才投入Binary PIT與DL-on optimizer。不得一開始就重做P3型昂貴參數適應。
 4. 若要解釋B1的高總報酬來源，應讀取其`trade_attribution.json`／`trade_attribution.md`；該歸因未包含在使用者本次貼出的console，因此本節不推測獨有交易選擇R。
+
+## 2026-08-05 — A2 Realized Trade-path Label Model Workflow Implementation
+
+### 狀態
+
+`IMPLEMENTED / MODEL_RESULT_NOT_AVAILABLE / STRATEGY_GATE_NOT_RUN / FORMAL_BASELINE_UNCHANGED`
+
+### 研究目的
+
+現有9A Binary Label只描述固定40 bars的MFE／MAE價格機會，未完整對齊A2正式買入限價、初次miss buy後延續候選、initial stop、trailing、indicator exit與淨額帳務。使用者要求先由互動選單確認新Label模型Prediction效果，再以CLI和A2 no-DL／舊Label DL比較策略績效。
+
+### 新Label契約
+
+- Label ID：`a2_realized_trade_path_v1`
+- 獨立filter ID：`breakout_quality_a2_trade_path_v1`，不得覆蓋9A `breakout_quality_v1`。
+- Event scope：一個原始breakout setup的完整生命週期；Feature snapshot固定原始signal date。
+- 初次miss buy只維持pending／continuation，不標REJECT；後續回到原始limit成交後沿用同一event。
+- 新setup會依正式策略覆蓋舊延續訊號；shadow completion／invalidation、永未成交、資料截止尚未結算均標INVALID並排除Binary訓練。
+- 已成交交易直接重用正式entry plan、extended shadow state、`execute_bar_step`與exact accounting；淨`realized_net_r > 0`標PASS，其餘完整已成交交易標REJECT。
+- 同一ticker/date group只有當日A2 active `high_len`事件取得有效Label，其餘high_len rows維持INVALID。
+
+### Teacher與資料鏈
+
+- 2014～2020：以既有Selection rolling baseline建立rules全關／DL關、只搜尋`atr_len / atr_buy_tol / atr_times_init / atr_times_trail`的歷史P2 teacher schedule。
+- 2021～2026：重用既有P2 DL-off-trained active params。
+- 每個事件只使用當日已生效teacher params；兩段schedule不得effective-date重複。
+- 衍生Dataset沿用9A 300×10 feature bank與group arrays，只重建event labels、events metadata與summary；source inventory與artifact SHA256仍須一致。
+
+### 選單與CLI
+
+Binary模型研究子選單改為：
+
+```text
+[1/Enter] 建立新Label → 重新訓練 → 模型預測報表
+[2] 使用既有模型 → 更新Scores → 模型預測報表
+[3] 查看Label與事件生命週期摘要
+```
+
+兩條模型路徑都在Selection／OOS Prediction報表後停止，不匯出runtime scores、不執行策略回放。
+
+策略比較改由CLI-only `strategy-trade-path-label-gate`執行；只使用既有凍結模型，更新forward-OOS scores後固定比較：A2 Base（DL關）、Old Label 9A（DL開）、New Trade-path Label（DL開）。主判定為`New−Base`，輔助為`New−Old`，兩個pair的A2 no-DL base必須逐指標一致。
+
+### 採用限制
+
+本次只完成資料、模型與Gate流程，尚無新Label模型Prediction或策略結果。正式策略維持A0；A2維持無DL研究候選；9A Binary DL runtime維持關閉。不得依未執行結果宣稱新Label有效。

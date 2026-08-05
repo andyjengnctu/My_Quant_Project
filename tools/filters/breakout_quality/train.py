@@ -87,6 +87,7 @@ from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
     DEFAULT_FILTER_ID,
     DEFAULT_LABEL_POLICY,
+    expected_label_policy_for_filter_id,
     DEFAULT_MANIFEST_FILENAME,
     DEFAULT_MODEL_FILENAME,
     DEFAULT_SCORE_FILENAME,
@@ -2137,9 +2138,10 @@ def main(argv=None) -> int:
     training_weight_reduction = experiment.training_weight_reduction
     validate_training_args(args)
 
+    expected_policy = expected_label_policy_for_filter_id(args.filter_id)
     dataset_summary, X, C, y, events = load_validated_dataset_bundle(
         args.filter_id,
-        expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+        expected_policy=expected_policy,
         require_current_source=True,
     )
     market_set_bank = (
