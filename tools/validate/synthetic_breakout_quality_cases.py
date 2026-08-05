@@ -13136,8 +13136,13 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
     from filters.breakout_quality.runtime import (
         breakout_quality_filter_source_context,
         build_breakout_quality_filter_pass_condition,
+        get_breakout_quality_filter_source_context,
     )
     from strategies.breakout.search_space import build_trial_params
+    from tools.filters.breakout_quality.strategy_compare import (
+        _run_scenario as run_strategy_comparison_scenario,
+        run_comparison as run_strategy_comparison,
+    )
     from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
         ALL_RULE_FILTERS_OFF_OVERRIDES,
         RISK_SEARCH_FIELDS,
@@ -13330,6 +13335,27 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                 project_root=str(tmp_root),
             )
 
+        with patch(
+            "tools.filters.breakout_quality.strategy_compare._run_scenario_inside_source_context",
+            side_effect=lambda **_kwargs: get_breakout_quality_filter_source_context(),
+        ):
+            scenario_context = run_strategy_comparison_scenario(
+                name="synthetic_binary_pit_replay",
+                data_dir=tmp_root,
+                param_source_kind="single_param",
+                params=base,
+                start_date="2020-01-02",
+                end_date="2020-01-03",
+                max_positions=10,
+                enable_rotation=False,
+                quiet=True,
+                filter_source={
+                    "score_source": BINARY_PIT_SCORE_SOURCE,
+                    "manifest_path": str(manifest_path),
+                    "scores_path": str(scores_path),
+                },
+            )
+
         class _ContextSession:
             def optimizer_runtime_context(self):
                 return breakout_quality_filter_source_context(
@@ -13365,8 +13391,188 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         "synthetic_breakout_quality",
         case_id,
         "binary_dl_pit_store_and_optimizer_runtime_identity",
-        (2, (True, True, False), (True, True, False), True),
-        (len(indexed), tuple(direct_pass), tuple(runtime_pass), mismatch_rejected),
+        (2, (True, True, False), (True, True, False), BINARY_PIT_SCORE_SOURCE, True),
+        (
+            len(indexed),
+            tuple(direct_pass),
+            tuple(runtime_pass),
+            scenario_context.score_source,
+            mismatch_rejected,
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_root = Path(tmpdir)
+        params_path = tmp_root / "params.json"
+        params_path.write_text("{}", encoding="utf-8")
+        manifest_path = tmp_root / "manifest.json"
+        scores_path = tmp_root / "scores.csv"
+        pd.DataFrame(
+            {
+                "ticker": ["2330"],
+                "date": ["2021-01-04"],
+                "group_index": [1],
+                "dl_quality_score": [0.7],
+                "fold_id": ["fold_2021"],
+                "model_information_cutoff": ["2020-12-31"],
+            }
+        ).to_csv(scores_path, index=False, encoding="utf-8-sig")
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_type": "binary_point_in_time_scores",
+                    "model_architecture": "inception_time_v1",
+                    "experiment_profile": "unique_group_sampling",
+                    "threshold": 0.5,
+                    "score_period": {"start": "2021-01-04", "end": "2021-01-04"},
+                    "score_table": {"row_count": 1},
+                    "information_contract": "synthetic",
+                }
+            ),
+            encoding="utf-8",
+        )
+        base_summary = {
+            "total_return_pct": 10.0,
+            "max_drawdown_pct": 5.0,
+            "return_over_max_drawdown": 2.0,
+            "annual_return_pct": 2.0,
+            "log_r_squared": 0.9,
+            "monthly_win_rate_pct": 60.0,
+            "trade_count": 2,
+            "win_rate_pct": 50.0,
+            "payoff_ratio": 2.0,
+            "expected_value_r": 0.5,
+            "final_equity": 1_100_000.0,
+            "avg_exposure_pct": 80.0,
+            "max_exposure_pct": 100.0,
+            "missed_buy_count": 0,
+            "missed_sell_count": 0,
+            "reserved_buy_fill_rate_pct": 100.0,
+            "normal_trade_count": 2,
+            "extended_trade_count": 0,
+            "annual_trade_count": 2,
+            "benchmark_return_pct": 1.0,
+            "benchmark_max_drawdown_pct": 1.0,
+            "benchmark_annual_return_pct": 1.0,
+        }
+        quality_summary = {**base_summary, "total_return_pct": 11.0, "trade_count": 1}
+        scenario_calls = []
+
+        def _fake_strategy_scenario(**kwargs):
+            scenario_calls.append(kwargs)
+            return {
+                "marker": kwargs["name"],
+                "equity_curve": pd.DataFrame(),
+                "trade_history": pd.DataFrame(),
+                "profile": {"portfolio_capacity_rows": [], "closed_trade_rows": []},
+            }
+
+        with (
+            patch(
+                "tools.filters.breakout_quality.strategy_compare._resolve_params_path",
+                return_value=params_path,
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare._load_param_source",
+                return_value={"kind": "rolling_active_param_ensemble", "payload": {}},
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare._validate_requested_param_policy",
+                return_value={
+                    "selector": "base_finalist_best",
+                    "member_count_min": 1,
+                    "member_count_max": 1,
+                    "min_agree": 1,
+                },
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare._build_controlled_param_source_pair",
+                return_value=(
+                    "rolling_active_param_ensemble",
+                    {},
+                    {},
+                    {},
+                    {},
+                    {"policy": "synthetic"},
+                ),
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare.get_active_param_ensemble_date_range",
+                return_value=("2021-01-01", "2021-12-31"),
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare._run_scenario",
+                side_effect=_fake_strategy_scenario,
+            ),
+            patch("tools.filters.breakout_quality.strategy_compare._assert_shared_benchmark"),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare._scenario_summary",
+                side_effect=lambda payload: (
+                    base_summary if payload["marker"] == "no_filter" else quality_summary
+                ),
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare._build_yearly_comparison",
+                return_value=pd.DataFrame(
+                    [
+                        {
+                            "year": 2021,
+                            "no_filter_return_pct": 10.0,
+                            "quality_filter_return_pct": 11.0,
+                            "delta_pct": 1.0,
+                            "is_full_year": True,
+                        }
+                    ]
+                ),
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare.write_trade_attribution_outputs"
+            ),
+            patch(
+                "tools.filters.breakout_quality.strategy_compare._render_strategy_console_report",
+                return_value="synthetic report",
+            ),
+            patch("tools.filters.breakout_quality.strategy_compare.print_artifact_paths"),
+            redirect_stdout(io.StringIO()),
+        ):
+            direct_comparison = run_strategy_comparison(
+                project_root=tmp_root,
+                dataset="full",
+                params_path=str(params_path),
+                param_policy="base-finalist-best",
+                comparison_mode="hard-filter",
+                filter_id="breakout_quality_v1",
+                model_architecture="inception_time_v1",
+                experiment_profile="unique_group_sampling",
+                output_dir_override=tmp_root / "out",
+                comparison_start_date="2021-01-04",
+                comparison_end_date="2021-01-04",
+                quiet=True,
+                hard_filter_source={
+                    "score_source": BINARY_PIT_SCORE_SOURCE,
+                    "manifest_path": str(manifest_path),
+                    "scores_path": str(scores_path),
+                },
+            )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_dl_strategy_compare_uses_pit_source_and_trade_count",
+        (
+            BINARY_PIT_SCORE_SOURCE,
+            None,
+            BINARY_PIT_SCORE_SOURCE,
+            2,
+            1,
+        ),
+        (
+            direct_comparison["metadata"]["score_source"],
+            scenario_calls[0].get("filter_source"),
+            scenario_calls[1]["filter_source"]["score_source"],
+            direct_comparison["no_filter"]["trade_count"],
+            direct_comparison["quality_filter"]["trade_count"],
+        ),
     )
 
     coverage_contract = {
@@ -13599,7 +13805,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                     "return_over_max_drawdown": 10.0,
                     "expected_value_r": 0.5,
                     "avg_exposure_pct": 80.0,
-                    "trades": 100,
+                    "trade_count": 100,
                 },
                 "quality_filter": {
                     "total_return_pct": 102.0 + index,
@@ -13607,7 +13813,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                     "return_over_max_drawdown": 9.0,
                     "expected_value_r": 0.4,
                     "avg_exposure_pct": 70.0,
-                    "trades": 90,
+                    "trade_count": 90,
                 },
             }
 
@@ -13693,8 +13899,12 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             4,
             ("current", "all-off", "all-off", "all-off"),
             (False, True, True, True),
+            (BINARY_PIT_SCORE_SOURCE,) * 4,
+            ("2021-01-01",) * 4,
+            ("2025-12-31",) * 4,
             4,
             "FOUR_BY_TWO_COMPLETE",
+            True,
             True,
         ),
         (
@@ -13706,9 +13916,16 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                 bool(call.get("shared_param_overrides"))
                 for call in comparison_calls
             ),
+            tuple(
+                str((call.get("hard_filter_source") or {}).get("score_source"))
+                for call in comparison_calls
+            ),
+            tuple(str(call.get("comparison_start_date")) for call in comparison_calls),
+            tuple(str(call.get("comparison_end_date")) for call in comparison_calls),
             len(orchestration_result["matrix"]),
             orchestration_result["status"],
             all(token in report_text for token in ("A0", "B0", "A3", "B3", "B3−A2")),
+            all(token in report_text for token in ("100", "90", "binary_point_in_time（八操作點一致）")),
         ),
     )
 

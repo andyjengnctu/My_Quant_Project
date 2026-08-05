@@ -533,7 +533,10 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, runtime_artif
     return {"params_path": params_path, "summary": summary, "contract": contract}
 
 
-def _run_pair(*, root, args, params_path, policy_name, output_dir):
+def _run_pair(
+    *, root, args, params_path, policy_name, output_dir,
+    binary_pit, comparison_start_date, comparison_end_date,
+):
     all_off = policy_name == "all_off"
     return run_comparison(
         project_root=root,
@@ -550,8 +553,15 @@ def _run_pair(*, root, args, params_path, policy_name, output_dir):
         model_architecture=str(args.model_architecture),
         experiment_profile=str(args.experiment_profile),
         output_dir_override=output_dir,
+        comparison_start_date=str(comparison_start_date),
+        comparison_end_date=str(comparison_end_date),
         quiet=bool(args.quiet),
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
+        hard_filter_source={
+            "score_source": BINARY_PIT_SCORE_SOURCE,
+            "manifest_path": str(binary_pit["manifest_absolute"]),
+            "scores_path": str(binary_pit["scores_absolute"]),
+        },
     )
 
 
@@ -587,7 +597,7 @@ def _operation_rows(matrix):
                     _fmt(_arm_metric(pair, dl, "return_over_max_drawdown")),
                     _fmt(_arm_metric(pair, dl, "expected_value_r"), " R"),
                     _fmt(_arm_metric(pair, dl, "avg_exposure_pct"), "%"),
-                    str(int(_arm_metric(pair, dl, "trades") or 0)),
+                    str(int(_arm_metric(pair, dl, "trade_count") or 0)),
                 )
             )
     return rows
@@ -668,6 +678,7 @@ def _render_report(*, args, matrix, p2_arm, p3_arm, binary_pit, baseline_contrac
                 ("P2訓練", "rules全關／DL關"),
                 ("P3訓練", "rules全關／DL開／Binary PIT"),
                 ("Binary PIT", binary_pit["status"]),
+                ("DL replay source", "binary_point_in_time（八操作點一致）"),
                 ("固定 Buy sort", "原 position-aware buy-sort"),
             )
         ),
@@ -752,11 +763,35 @@ def run_param_adaptation_gate(*, project_root=PROJECT_ROOT, argv=None):
         configure_optuna_logging()
         p2_arm = _run_optimizer_arm(root=root, args=args, settings=settings, baseline_contract=baseline_contract, runtime_artifact=runtime_artifact, output_dir=output_dir, arm_id="P2", training_dl_enabled=False, binary_pit=binary_pit)
         p3_arm = _run_optimizer_arm(root=root, args=args, settings=settings, baseline_contract=baseline_contract, runtime_artifact=runtime_artifact, output_dir=output_dir, arm_id="P3", training_dl_enabled=True, binary_pit=binary_pit)
+        comparison_start_date = str(baseline_contract["meta"]["first_oos_date"])
+        comparison_end_date = str((binary_pit.get("score_period") or {}).get("end") or "")
+        if not comparison_end_date:
+            raise ValueError("Binary PIT缺少score period end，無法建立4×2 replay")
         pairs = [
-            _run_pair(root=root, args=args, params_path=baseline_contract["path"], policy_name="formal", output_dir=output_dir / "replay" / "p0_original_roos_formal"),
-            _run_pair(root=root, args=args, params_path=baseline_contract["path"], policy_name="all_off", output_dir=output_dir / "replay" / "p1_original_roos_all_off"),
-            _run_pair(root=root, args=args, params_path=p2_arm["params_path"], policy_name="all_off", output_dir=output_dir / "replay" / "p2_dl_off_trained_all_off"),
-            _run_pair(root=root, args=args, params_path=p3_arm["params_path"], policy_name="all_off", output_dir=output_dir / "replay" / "p3_dl_on_trained_all_off"),
+            _run_pair(
+                root=root, args=args, params_path=baseline_contract["path"],
+                policy_name="formal", output_dir=output_dir / "replay" / "p0_original_roos_formal",
+                binary_pit=binary_pit, comparison_start_date=comparison_start_date,
+                comparison_end_date=comparison_end_date,
+            ),
+            _run_pair(
+                root=root, args=args, params_path=baseline_contract["path"],
+                policy_name="all_off", output_dir=output_dir / "replay" / "p1_original_roos_all_off",
+                binary_pit=binary_pit, comparison_start_date=comparison_start_date,
+                comparison_end_date=comparison_end_date,
+            ),
+            _run_pair(
+                root=root, args=args, params_path=p2_arm["params_path"],
+                policy_name="all_off", output_dir=output_dir / "replay" / "p2_dl_off_trained_all_off",
+                binary_pit=binary_pit, comparison_start_date=comparison_start_date,
+                comparison_end_date=comparison_end_date,
+            ),
+            _run_pair(
+                root=root, args=args, params_path=p3_arm["params_path"],
+                policy_name="all_off", output_dir=output_dir / "replay" / "p3_dl_on_trained_all_off",
+                binary_pit=binary_pit, comparison_start_date=comparison_start_date,
+                comparison_end_date=comparison_end_date,
+            ),
         ]
         labels = [
             ("P0 原ROOS", "原正式設定"),

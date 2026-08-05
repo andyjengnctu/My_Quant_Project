@@ -3281,3 +3281,52 @@ PIT source同時傳入optimizer主process、fold session及平行workers，並�
 
 - GPT端獨立檢查須確認Checklist G排序、status chain、no-op guard、摘要映射與Markdown欄數全部通過。
 - 正式`apps/test_suite.py`依專案規定不由GPT執行；使用者套用patch後重跑本地formal suite，預期meta quality恢復PASS。
+
+## 2026-08-05 — 4×2 Binary DL Result Source-Identity Correction
+
+### 狀態
+
+`RESULT_RECEIVED / B_ARMS_INVALID_FOR_FINAL_4X2 / REPLAY_SOURCE_FIXED / LOCAL_REPLAY_RERUN_REQUIRED / FORMAL_BASELINE_UNCHANGED`
+
+### 程式與結果基準
+
+- 使用者結果ZIP：`test-branch-1_20260805_063715_38f58a7.zip`
+- SHA256：`c07d449a8cdad96e39e2d87c60edb5613aeaf900df954d20742e2a1d28d75d9d`
+- 使用者提供完整Binary PIT建置、P3 DL-on rolling optimizer及A0／B0至A3／B3輸出。
+- Binary PIT期間：`2006-12-01～2026-03-02`；21 folds；P3 optimizer為200 trials／fold。
+
+### 已確認結果
+
+不使用DL的A系列不依賴Score source，因此下列結果有效：
+
+| 組別 | 參數 | 規則 | 報酬 | MDD | RoMD | EV | 曝險 |
+|---|---|---|---:|---:|---:|---:|---:|
+| A0 | P0原ROOS | 原正式規則 | 129.08% | 17.41% | 7.42 | 0.53R | 84.02% |
+| A1 | P1原ROOS | filters全關 | 138.09% | 13.35% | 10.34 | 0.47R | 92.01% |
+| A2 | P2 DL-off-trained | filters全關 | 166.69% | 15.41% | 10.82 | 0.73R | 92.13% |
+| A3 | P3 DL-on-trained | filters全關、replay時DL關 | 119.77% | 11.83% | 10.12 | 1.16R | 92.06% |
+
+A2相較A1：報酬`+28.60pp`、MDD`+2.06pp`、RoMD`+0.48`、EV`+0.27R`；顯示在DL關閉環境下重訓四個ATR風險／執行參數具有研究價值。A3具有最高EV與最低MDD，但總報酬及RoMD均低於A2。
+
+### 發現的source identity錯誤
+
+P3 optimizer訓練與rolling OOS診斷使用`binary_point_in_time` Scores；但後續四個strategy comparison pair仍由`strategy_compare`預設讀取`canonical_runtime`。因此目前B0／B1／B2／B3是「固定final 9A model」診斷，不是原4×2設計要求的同一Binary PIT DL state。
+
+尤其目前報表的`B3−A2 = -88.01pp`不可作最終公平比較，因B3並非使用P3 optimizer所看到的DL runtime。P3 optimizer的PIT OOS_CHAIN與canonical B3 replay之間的差異，不能解讀為參數失敗或模型失敗，必須先統一source後重跑。
+
+另4×2總表讀取不存在的`trades`欄位，八組交易數全部顯示0；個別strategy comparison中的`trade_count`仍正確，屬合併報表顯示錯誤。
+
+### 唯一修正
+
+- `strategy_compare.run_comparison`新增內部research-only `hard_filter_source`，可將Binary PIT manifest／scores透過正式`breakout_quality_filter_source_context`傳入portfolio replay；一般正式hard-filter CLI仍維持canonical runtime契約。
+- 4×2 Gate的四個pair均固定使用同一份Binary PIT source，DL關閉A臂雖不讀Score，DL開啟B臂則與P3 optimizer完全同源。
+- replay期間固定為Baseline first OOS date `2021-01-01`至Binary PIT `available-through`，不回放PIT早期但無active params的區間。
+- 4×2總表交易數改讀正式`trade_count`。
+
+### 固定條件
+
+不重建Dataset、不relabel、不調threshold、不重建已完成的Binary PIT、不重跑P2／P3 optimizer。只需在修正版上重跑4×2 CLI；既有PIT與P2／P3 active-param identity相同時應直接重用，重新執行四個pair replay與合併報表。
+
+### 採用判定
+
+目前只可判定A2是無DL研究候選；Binary DL是否在PIT-consistent 4×2下有效仍未取得合法結果。正式策略維持A0、Binary DL runtime關閉。修正版結果取得前，不以目前B0～B3或`B3−A2`作模型／參數採用結論。

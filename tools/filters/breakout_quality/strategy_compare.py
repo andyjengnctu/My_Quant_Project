@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
+from contextlib import ExitStack
 import copy
 import hashlib
 import json
@@ -45,6 +45,10 @@ from core.rolling_oos_params import (
 )
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
 from filters.breakout_quality.artifacts import load_runtime_artifact_contract
+from filters.breakout_quality.binary_pit_score_store import (
+    BINARY_PIT_SCORE_SOURCE,
+    load_binary_point_in_time_score_table,
+)
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -52,7 +56,10 @@ from filters.breakout_quality.ranking_score_store import (
     load_selection_point_in_time_ranking_contract,
     load_selection_point_in_time_score_table,
 )
-from filters.breakout_quality.runtime import breakout_quality_ranking_source_context
+from filters.breakout_quality.runtime import (
+    breakout_quality_filter_source_context,
+    breakout_quality_ranking_source_context,
+)
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from tools.filters.breakout_quality.audit_score_ranking_capture import (
     build_score_ranking_capture_audit,
@@ -2049,15 +2056,14 @@ def _remove_legacy_html_outputs(output_dir: Path) -> None:
 def _run_scenario(
     *, name, data_dir, param_source_kind, params, start_date, end_date,
     max_positions, enable_rotation, quiet, replay_counts=None,
-    replay_execution_rows=None, ranking_source=None,
+    replay_execution_rows=None, ranking_source=None, filter_source=None,
 ):
     print(f"\n[{name}] 建立市場與訊號快取")
-    source_context = (
-        nullcontext()
-        if not ranking_source
-        else breakout_quality_ranking_source_context(**ranking_source)
-    )
-    with source_context:
+    with ExitStack() as stack:
+        if ranking_source:
+            stack.enter_context(breakout_quality_ranking_source_context(**ranking_source))
+        if filter_source:
+            stack.enter_context(breakout_quality_filter_source_context(**filter_source))
         return _run_scenario_inside_source_context(
             name=name, data_dir=data_dir, param_source_kind=param_source_kind,
             params=params, start_date=start_date, end_date=end_date,
@@ -2610,6 +2616,7 @@ def run_comparison(
     comparison_end_date=None,
     quiet=False,
     shared_param_overrides=None,
+    hard_filter_source=None,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -2630,14 +2637,70 @@ def run_comparison(
         )
     if comparison_mode == COMPARISON_MODE_HARD_FILTER:
         if score_source != SCORE_SOURCE_CANONICAL_RUNTIME:
-            raise ValueError("hard-filter策略比較只接受canonical_runtime score source")
+            raise ValueError("hard-filter策略比較的score_source欄位必須維持canonical_runtime；研究用Binary PIT須透過hard_filter_source傳入")
         if ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
             raise ValueError("hard-filter策略比較不可指定capital-aware ranking policy")
+    elif hard_filter_source is not None:
+        raise ValueError("hard_filter_source只支援hard-filter策略比較")
 
     runtime_contract = None
     pit_contract = None
     ranking_source = None
-    if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+    filter_source = None
+    binary_filter_manifest = None
+    binary_filter_manifest_path = None
+    binary_filter_scores_path = None
+    effective_score_source = score_source
+    if hard_filter_source is not None:
+        source_payload = dict(hard_filter_source or {})
+        source_name = str(source_payload.get("score_source") or "").strip()
+        if source_name != BINARY_PIT_SCORE_SOURCE:
+            raise ValueError(
+                "hard_filter_source目前只接受binary_point_in_time: "
+                f"actual={source_name!r}"
+            )
+        binary_filter_manifest_path = Path(
+            str(source_payload.get("manifest_path") or "")
+        ).resolve()
+        binary_filter_scores_path = Path(
+            str(source_payload.get("scores_path") or "")
+        ).resolve()
+        _score_table, binary_filter_manifest = load_binary_point_in_time_score_table(
+            str(binary_filter_manifest_path), str(binary_filter_scores_path)
+        )
+        manifest_architecture = str(
+            binary_filter_manifest.get("model_architecture") or ""
+        )
+        manifest_profile = str(
+            binary_filter_manifest.get("experiment_profile") or ""
+        )
+        if manifest_architecture != model_architecture or manifest_profile != experiment_profile:
+            raise ValueError(
+                "Binary PIT artifact與指定模型identity不一致: "
+                f"artifact={manifest_architecture}/{manifest_profile}, "
+                f"requested={model_architecture}/{experiment_profile}"
+            )
+        artifact_threshold = float(binary_filter_manifest.get("threshold", float("nan")))
+        configured_threshold = float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD)
+        if not math.isclose(
+            artifact_threshold, configured_threshold, rel_tol=0.0, abs_tol=0.0
+        ):
+            raise ValueError(
+                "Binary PIT threshold與固定threshold不一致: "
+                f"artifact={artifact_threshold}, policy={configured_threshold}"
+            )
+        period = dict(binary_filter_manifest.get("score_period") or {})
+        start_date = str(period.get("start") or "")
+        end_date = str(period.get("end") or "")
+        if not start_date or not end_date:
+            raise ValueError("Binary PIT manifest缺少score_period")
+        filter_source = {
+            "score_source": BINARY_PIT_SCORE_SOURCE,
+            "manifest_path": str(binary_filter_manifest_path),
+            "scores_path": str(binary_filter_scores_path),
+        }
+        effective_score_source = BINARY_PIT_SCORE_SOURCE
+    elif score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
         if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
             raise ValueError("Selection PIT score source只支援score-ranking比較")
         pit_contract = load_selection_point_in_time_ranking_contract(
@@ -2794,6 +2857,7 @@ def run_comparison(
         start_date=start_date, end_date=end_date, max_positions=max_positions,
         enable_rotation=enable_rotation, quiet=quiet,
         replay_counts=quality_replay_counts, ranking_source=ranking_source,
+        filter_source=filter_source,
     )
     _assert_shared_benchmark(baseline_payload, quality_payload)
 
@@ -2903,7 +2967,22 @@ def run_comparison(
                 index=False, encoding="utf-8-sig"
             )
 
-    if pit_contract is not None:
+    if binary_filter_manifest is not None:
+        binary_period = dict(binary_filter_manifest.get("score_period") or {})
+        score_signal_coverage = {
+            "required_start": str(binary_period.get("start") or ""),
+            "first_scored_event": str(binary_period.get("start") or ""),
+            "available_through": str(binary_period.get("end") or ""),
+        }
+        score_artifact_metadata = {
+            "binary_pit_manifest_path": str(binary_filter_manifest_path),
+            "binary_pit_score_path": str(binary_filter_scores_path),
+            "score_table": dict(binary_filter_manifest.get("score_table") or {}),
+            "binary_pit_information_contract": str(
+                binary_filter_manifest.get("information_contract") or ""
+            ),
+        }
+    elif pit_contract is not None:
         score_signal_coverage = {
             "required_start": pit_contract.available_from,
             "first_scored_event": pit_contract.available_from,
@@ -2942,7 +3021,7 @@ def run_comparison(
             else None
         ),
         "shared_param_overrides": dict(shared_param_overrides or {}),
-        "score_source": score_source,
+        "score_source": effective_score_source,
         "dataset": dataset,
         "data_dir": str(data_dir),
         "params_path": str(resolved_params_path),
