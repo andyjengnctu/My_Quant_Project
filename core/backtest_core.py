@@ -239,7 +239,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 current_date=Dates[j],
                 y_high=H[j - 1],
                 return_milli=True,
-                record_exec_contexts=False,
+                record_exec_contexts=return_logs,
                 sync_display_fields=collect_stats or return_logs,
             )
             currentCapital_milli += freed_cash_milli
@@ -251,7 +251,28 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                     total_r_multiple += trade_r_mult
                     tradeCount += 1
                 if return_logs:
-                    trade_logs.append({'exit_date': Dates[j], 'pnl': total_pnl, 'r_mult': trade_r_mult})
+                    terminal_event = 'STOP' if 'STOP' in events else 'IND_SELL'
+                    terminal_context = next(
+                        (
+                            context
+                            for context in reversed(position.get('_last_exec_contexts', []))
+                            if str(context.get('event')) == terminal_event
+                        ),
+                        None,
+                    )
+                    trade_logs.append(
+                        {
+                            'signal_date': position.get('signal_date'),
+                            'entry_date': position.get('entry_trade_date'),
+                            'entry_price': position.get('entry_fill_price'),
+                            'entry_type': position.get('entry_type'),
+                            'exit_date': Dates[j],
+                            'exit_price': None if terminal_context is None else terminal_context.get('exec_price'),
+                            'exit_reason': terminal_event,
+                            'pnl': total_pnl,
+                            'r_mult': trade_r_mult,
+                        }
+                    )
                 if pit_stats_builder is not None:
                     _append_pit_trade(pit_stats_builder, exit_date=Dates[j], pnl=total_pnl, r_mult=trade_r_mult)
                 if 'STOP' in events:
@@ -362,6 +383,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 entry_count_as_missed_buy = False
             if entry_filled:
                 position = entry_result['position']
+                position['signal_date'] = Dates[j - 1]
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
@@ -403,6 +425,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 entry_count_as_missed_buy = False
             if entry_filled:
                 position = entry_result['position']
+                position['signal_date'] = active_extended_signal.get('signal_date')
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None

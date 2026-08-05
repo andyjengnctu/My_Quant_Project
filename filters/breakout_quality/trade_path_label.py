@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from core.backtest_finalize import finalize_open_position_at_end
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_entry_plan, execute_pre_market_entry_plan
 from core.exact_accounting import calc_ratio_from_milli, milli_to_money
@@ -24,7 +25,15 @@ from core.position_step import execute_bar_step
 from core.signal_utils import generate_signals
 from core.strategy_params import V16StrategyParams
 from filters.breakout_quality.artifacts import compute_file_sha256
-from filters.breakout_quality.contract import LABEL_INVALID, LABEL_PASS, LABEL_REJECT
+from filters.breakout_quality.contract import (
+    LABEL_INVALID,
+    LABEL_PASS,
+    LABEL_REJECT,
+    TRADE_PATH_LABEL_CONTRACT_VERSION,
+    TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_LABEL_STATUS_PASS,
+    TRADE_PATH_LABEL_STATUS_REJECT,
+)
 
 TRADE_PATH_BASE_FILTER_ID = "breakout_quality_v1"
 TRADE_PATH_RESEARCH_FILTER_ID = "breakout_quality_a2_trade_path_v1"
@@ -45,6 +54,32 @@ TRADE_PATH_FORWARD_TEACHER_PARAMS_RELATIVE_PATH = Path(
     "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
     "risk_only_rolling/p2_dl_off_trained/active_params/roos_base_best.json"
 )
+
+TRADE_PATH_REASON_REALIZED_NET_PROFIT = "realized_net_profit"
+TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE = "realized_net_nonpositive"
+TRADE_PATH_REASON_INSUFFICIENT_FUTURE = "insufficient_future"
+TRADE_PATH_REASON_NOT_FORMAL_SETUP = "not_a2_formal_setup"
+TRADE_PATH_REASON_INVALID_ENTRY_PLAN = "invalid_entry_plan"
+TRADE_PATH_REASON_UNFILLED_SUPERSEDED = "unfilled_superseded_by_new_setup"
+TRADE_PATH_REASON_UNFILLED_TERMINATED = "unfilled_terminated"
+TRADE_PATH_REASON_UNFILLED_DATA_END = "unfilled_censored_at_data_end"
+TRADE_PATH_REASON_TEACHER_UNAVAILABLE = "teacher_params_unavailable"
+TRADE_PATH_REASON_INACTIVE_HIGH_LEN = "inactive_high_len_for_teacher"
+TRADE_PATH_REASON_SIGNAL_DATE_MISSING = "signal_date_missing_from_source"
+
+TRADE_PATH_LABEL_REASON_STATUS = {
+    TRADE_PATH_REASON_REALIZED_NET_PROFIT: TRADE_PATH_LABEL_STATUS_PASS,
+    TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE: TRADE_PATH_LABEL_STATUS_REJECT,
+    TRADE_PATH_REASON_INSUFFICIENT_FUTURE: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_NOT_FORMAL_SETUP: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_INVALID_ENTRY_PLAN: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_UNFILLED_SUPERSEDED: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_UNFILLED_TERMINATED: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_UNFILLED_DATA_END: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_TEACHER_UNAVAILABLE: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_INACTIVE_HIGH_LEN: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_REASON_SIGNAL_DATE_MISSING: TRADE_PATH_LABEL_STATUS_EXCLUDED,
+}
 
 
 @dataclass(frozen=True)
@@ -74,30 +109,62 @@ class ActiveParamSchedule:
 @dataclass(frozen=True)
 class TradePathLabelResult:
     label: int
+    status: str
     reason: str
     label_eval_start_date: str | None
     label_eval_end_date: str | None
     teacher_effective_date: str | None
     fill_type: str | None
     fill_date: str | None
+    entry_price: float | None
     exit_date: str | None
+    exit_price: float | None
     exit_reason: str | None
     continuation_wait_bars: int | None
+    initial_missed_buy: bool
+    forced_closeout: bool
+    sizing_capital: float | None
     realized_net_pnl: float | None
     realized_net_r: float | None
+
+    def __post_init__(self) -> None:
+        expected_status = TRADE_PATH_LABEL_REASON_STATUS.get(str(self.reason))
+        if expected_status is None:
+            raise ValueError(f"未知trade-path label reason: {self.reason}")
+        if str(self.status) != expected_status:
+            raise ValueError(
+                "trade-path label status／reason不一致: "
+                f"status={self.status}, reason={self.reason}, expected={expected_status}"
+            )
+        expected_label = {
+            TRADE_PATH_LABEL_STATUS_PASS: LABEL_PASS,
+            TRADE_PATH_LABEL_STATUS_REJECT: LABEL_REJECT,
+            TRADE_PATH_LABEL_STATUS_EXCLUDED: LABEL_INVALID,
+        }[expected_status]
+        if int(self.label) != int(expected_label):
+            raise ValueError(
+                "trade-path label value／status不一致: "
+                f"label={self.label}, status={self.status}, expected={expected_label}"
+            )
 
     def as_event_update(self) -> dict[str, Any]:
         return {
             "label": int(self.label),
+            "label_status": str(self.status),
             "label_reason": str(self.reason),
             "label_eval_start_date": self.label_eval_start_date,
             "label_eval_end_date": self.label_eval_end_date,
             "teacher_effective_date": self.teacher_effective_date,
             "trade_path_fill_type": self.fill_type,
             "trade_path_fill_date": self.fill_date,
+            "trade_path_entry_price": self.entry_price,
             "trade_path_exit_date": self.exit_date,
+            "trade_path_exit_price": self.exit_price,
             "trade_path_exit_reason": self.exit_reason,
             "trade_path_continuation_wait_bars": self.continuation_wait_bars,
+            "trade_path_initial_missed_buy": bool(self.initial_missed_buy),
+            "trade_path_forced_closeout": bool(self.forced_closeout),
+            "trade_path_sizing_capital": self.sizing_capital,
             "trade_path_realized_net_pnl": self.realized_net_pnl,
             "trade_path_realized_net_r": self.realized_net_r,
         }
@@ -213,7 +280,7 @@ def _date_text(value: Any) -> str:
     return pd.Timestamp(value).strftime("%Y-%m-%d")
 
 
-def _invalid_result(
+def _excluded_result(
     reason: str,
     *,
     start_date: str | None,
@@ -221,21 +288,118 @@ def _invalid_result(
     teacher_effective_date: str | None,
     fill_type: str | None = None,
     fill_date: str | None = None,
+    entry_price: float | None = None,
     wait_bars: int | None = None,
+    initial_missed_buy: bool = False,
+    sizing_capital: float | None = None,
 ) -> TradePathLabelResult:
     return TradePathLabelResult(
         label=LABEL_INVALID,
+        status=TRADE_PATH_LABEL_STATUS_EXCLUDED,
         reason=reason,
         label_eval_start_date=start_date,
         label_eval_end_date=end_date,
         teacher_effective_date=teacher_effective_date,
         fill_type=fill_type,
         fill_date=fill_date,
+        entry_price=entry_price,
         exit_date=None,
+        exit_price=None,
         exit_reason=None,
         continuation_wait_bars=wait_bars,
+        initial_missed_buy=bool(initial_missed_buy),
+        forced_closeout=False,
+        sizing_capital=sizing_capital,
         realized_net_pnl=None,
         realized_net_r=None,
+    )
+
+
+def build_trade_path_excluded_event_update(
+    reason: str,
+    *,
+    end_date: str | None,
+    teacher_effective_date: str | None,
+) -> dict[str, Any]:
+    return _excluded_result(
+        reason,
+        start_date=None,
+        end_date=end_date,
+        teacher_effective_date=teacher_effective_date,
+    ).as_event_update()
+
+
+def _completed_result(
+    *,
+    realized_pnl: float,
+    realized_r: float,
+    eval_start_date: str,
+    exit_date: str,
+    exit_price: float | None,
+    exit_reason: str,
+    teacher_effective_date: str,
+    fill_type: str,
+    fill_date: str,
+    entry_price: float,
+    wait_bars: int,
+    initial_missed_buy: bool,
+    forced_closeout: bool,
+    sizing_capital: float,
+) -> TradePathLabelResult:
+    numeric_fields = {
+        "realized_pnl": realized_pnl,
+        "realized_r": realized_r,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "sizing_capital": sizing_capital,
+    }
+    invalid_numeric = {
+        name: value
+        for name, value in numeric_fields.items()
+        if value is None or not math.isfinite(float(value))
+    }
+    if invalid_numeric:
+        raise ValueError(f"trade-path完整交易含無效數值: {invalid_numeric}")
+    if float(entry_price) <= 0.0 or float(exit_price) <= 0.0:
+        raise ValueError(
+            "trade-path完整交易進出價格必須為正值: "
+            f"entry={entry_price}, exit={exit_price}"
+        )
+    if float(sizing_capital) <= 0.0:
+        raise ValueError(f"trade-path完整交易sizing capital必須為正值: {sizing_capital}")
+    if not all(str(value or "").strip() for value in (fill_type, fill_date, exit_date, exit_reason)):
+        raise ValueError("trade-path完整交易缺少fill／exit identity")
+
+    label = LABEL_PASS if float(realized_r) > 0.0 else LABEL_REJECT
+    status = (
+        TRADE_PATH_LABEL_STATUS_PASS
+        if label == LABEL_PASS
+        else TRADE_PATH_LABEL_STATUS_REJECT
+    )
+    reason = (
+        TRADE_PATH_REASON_REALIZED_NET_PROFIT
+        if label == LABEL_PASS
+        else TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE
+    )
+    return TradePathLabelResult(
+        label=label,
+        status=status,
+        reason=reason,
+        label_eval_start_date=eval_start_date,
+        label_eval_end_date=exit_date,
+        teacher_effective_date=teacher_effective_date,
+        fill_type=fill_type,
+        fill_date=fill_date,
+        entry_price=float(entry_price),
+        exit_date=exit_date,
+        exit_price=None if exit_price is None else float(exit_price),
+        exit_reason=exit_reason,
+        continuation_wait_bars=int(wait_bars),
+        initial_missed_buy=bool(initial_missed_buy),
+        forced_closeout=bool(forced_closeout),
+        sizing_capital=float(sizing_capital),
+        realized_net_pnl=float(realized_pnl),
+        realized_net_r=float(realized_r),
     )
 
 
@@ -247,10 +411,11 @@ def simulate_realized_trade_path_label(
     params: V16StrategyParams,
     teacher_effective_date: str,
     precomputed_signals,
+    sizing_capital: float | None = None,
 ) -> TradePathLabelResult:
     if signal_pos < 0 or signal_pos >= len(stock_df) - 1:
-        return _invalid_result(
-            "insufficient_future",
+        return _excluded_result(
+            TRADE_PATH_REASON_INSUFFICIENT_FUTURE,
             start_date=None,
             end_date=None,
             teacher_effective_date=teacher_effective_date,
@@ -259,8 +424,8 @@ def simulate_realized_trade_path_label(
     signal_date = stock_df.index[signal_pos]
     eval_start_date = _date_text(stock_df.index[signal_pos + 1])
     if not bool(buy_condition[signal_pos]) or not math.isfinite(float(atr[signal_pos])):
-        return _invalid_result(
-            "not_a2_formal_setup",
+        return _excluded_result(
+            TRADE_PATH_REASON_NOT_FORMAL_SETUP,
             start_date=eval_start_date,
             end_date=_date_text(signal_date),
             teacher_effective_date=teacher_effective_date,
@@ -275,8 +440,8 @@ def simulate_realized_trade_path_label(
         signal_date=signal_date,
     )
     if signal_state is None:
-        return _invalid_result(
-            "invalid_entry_plan",
+        return _excluded_result(
+            TRADE_PATH_REASON_INVALID_ENTRY_PLAN,
             start_date=eval_start_date,
             end_date=_date_text(signal_date),
             teacher_effective_date=teacher_effective_date,
@@ -288,12 +453,23 @@ def simulate_realized_trade_path_label(
     close_values = stock_df["Close"].to_numpy(dtype=np.float64, copy=False)
     volume_values = stock_df["Volume"].to_numpy(dtype=np.float64, copy=False)
     dates = stock_df.index
-    sizing_capital = resolve_single_backtest_sizing_capital(params, params.initial_capital)
+    resolved_sizing_capital = (
+        resolve_single_backtest_sizing_capital(params, params.initial_capital)
+        if sizing_capital is None
+        else float(sizing_capital)
+    )
+    if not math.isfinite(float(resolved_sizing_capital)) or float(resolved_sizing_capital) <= 0.0:
+        raise ValueError(
+            "trade-path sizing capital必須為有限正值: "
+            f"ticker={ticker}, signal_date={_date_text(signal_date)}, value={resolved_sizing_capital}"
+        )
     active_signal = signal_state
     position: dict[str, Any] = {"qty": 0}
     fill_type: str | None = None
     fill_date: str | None = None
+    entry_price: float | None = None
     wait_bars: int | None = None
+    initial_missed_buy = False
 
     for current_pos in range(signal_pos + 1, len(stock_df)):
         if int(position.get("qty", 0) or 0) > 0:
@@ -311,46 +487,58 @@ def simulate_realized_trade_path_label(
                 current_date=dates[current_pos],
                 y_high=high_values[current_pos - 1],
                 return_milli=True,
-                record_exec_contexts=False,
+                record_exec_contexts=True,
                 sync_display_fields=False,
             )
             terminal_events = [value for value in ("STOP", "IND_SELL") if value in events]
             if terminal_events:
+                terminal_event = terminal_events[0]
+                terminal_context = next(
+                    (
+                        context
+                        for context in reversed(position.get("_last_exec_contexts", []))
+                        if str(context.get("event")) == terminal_event
+                    ),
+                    None,
+                )
                 realized_pnl_milli = int(position.get("realized_pnl_milli", 0) or 0)
                 initial_risk_milli = int(position.get("initial_risk_total_milli", 0) or 0)
                 realized_r = calc_ratio_from_milli(realized_pnl_milli, initial_risk_milli)
-                label = LABEL_PASS if realized_pnl_milli > 0 else LABEL_REJECT
                 exit_date = _date_text(dates[current_pos])
-                return TradePathLabelResult(
-                    label=label,
-                    reason=("realized_net_profit" if label == LABEL_PASS else "realized_net_nonpositive"),
-                    label_eval_start_date=eval_start_date,
-                    label_eval_end_date=exit_date,
-                    teacher_effective_date=teacher_effective_date,
-                    fill_type=fill_type,
-                    fill_date=fill_date,
+                return _completed_result(
+                    realized_pnl=milli_to_money(realized_pnl_milli),
+                    realized_r=float(realized_r),
+                    eval_start_date=eval_start_date,
                     exit_date=exit_date,
-                    exit_reason=terminal_events[0],
-                    continuation_wait_bars=wait_bars,
-                    realized_net_pnl=milli_to_money(realized_pnl_milli),
-                    realized_net_r=float(realized_r),
+                    exit_price=None if terminal_context is None else terminal_context.get("exec_price"),
+                    exit_reason=terminal_event,
+                    teacher_effective_date=teacher_effective_date,
+                    fill_type=str(fill_type),
+                    fill_date=str(fill_date),
+                    entry_price=float(entry_price),
+                    wait_bars=int(wait_bars or 0),
+                    initial_missed_buy=initial_missed_buy,
+                    forced_closeout=False,
+                    sizing_capital=float(resolved_sizing_capital),
                 )
             continue
 
         if current_pos > signal_pos + 1 and bool(buy_condition[current_pos - 1]):
-            return _invalid_result(
-                "unfilled_superseded_by_new_setup",
+            return _excluded_result(
+                TRADE_PATH_REASON_UNFILLED_SUPERSEDED,
                 start_date=eval_start_date,
                 end_date=_date_text(dates[current_pos - 1]),
                 teacher_effective_date=teacher_effective_date,
                 wait_bars=current_pos - signal_pos - 1,
+                initial_missed_buy=initial_missed_buy,
+                sizing_capital=float(resolved_sizing_capital),
             )
 
         if current_pos == signal_pos + 1:
             entry_plan = build_normal_entry_plan(
                 buy_limits[signal_pos],
                 atr[signal_pos],
-                sizing_capital,
+                resolved_sizing_capital,
                 params,
                 ticker=ticker,
                 security_profile=stock_df.attrs.get("security_profile"),
@@ -360,7 +548,7 @@ def simulate_realized_trade_path_label(
         else:
             entry_plan = build_extended_entry_plan_from_signal(
                 active_signal,
-                sizing_capital,
+                resolved_sizing_capital,
                 params,
                 y_close=close_values[current_pos - 1],
                 ticker=ticker,
@@ -383,10 +571,14 @@ def simulate_realized_trade_path_label(
             security_profile=stock_df.attrs.get("security_profile"),
             trade_date=dates[current_pos],
         )
+        if current_pos == signal_pos + 1 and bool(entry_result.get("count_as_missed_buy")):
+            initial_missed_buy = True
         if bool(entry_result.get("filled")):
             position = dict(entry_result["position"])
+            position["signal_date"] = signal_date
             fill_type = "INITIAL_FILL" if current_pos == signal_pos + 1 else "CONTINUATION_FILL"
             fill_date = _date_text(dates[current_pos])
+            entry_price = float(entry_result["entry_fill_price"])
             wait_bars = current_pos - signal_pos - 1
             active_signal = None
             continue
@@ -402,27 +594,75 @@ def simulate_realized_trade_path_label(
             y_high=high_values[current_pos - 1],
             y_atr=atr[current_pos - 1],
             y_ind_sell=sell_condition[current_pos - 1],
-            sizing_capital=sizing_capital,
+            sizing_capital=resolved_sizing_capital,
             current_date=dates[current_pos],
             params=params,
             copy_shadow_position=False,
         ):
-            return _invalid_result(
-                "unfilled_terminated",
+            return _excluded_result(
+                TRADE_PATH_REASON_UNFILLED_TERMINATED,
                 start_date=eval_start_date,
                 end_date=_date_text(dates[current_pos]),
                 teacher_effective_date=teacher_effective_date,
                 wait_bars=current_pos - signal_pos,
+                initial_missed_buy=initial_missed_buy,
+                sizing_capital=float(resolved_sizing_capital),
             )
 
-    return _invalid_result(
-        "insufficient_future_after_fill" if fill_date else "unfilled_censored_at_data_end",
-        start_date=eval_start_date,
-        end_date=_date_text(dates[-1]),
+    if fill_date is None:
+        return _excluded_result(
+            TRADE_PATH_REASON_UNFILLED_DATA_END,
+            start_date=eval_start_date,
+            end_date=_date_text(dates[-1]),
+            teacher_effective_date=teacher_effective_date,
+            wait_bars=wait_bars,
+            initial_missed_buy=initial_missed_buy,
+            sizing_capital=float(resolved_sizing_capital),
+        )
+
+    final_state = finalize_open_position_at_end(
+        position=dict(position),
+        ticker=ticker,
+        final_close=close_values[-1],
+        final_date=dates[-1],
+        current_capital_milli=0,
+        current_equity_milli=0,
+        peak_capital_milli=0,
+        max_drawdown_pct=0.0,
+        trade_count=0,
+        full_wins=0,
+        total_profit_milli=0,
+        total_loss_milli=0,
+        total_r_multiple=0.0,
+        total_r_win=0.0,
+        total_r_loss=0.0,
+        trade_logs=[],
+        return_logs=False,
+        params=params,
+        collect_stats=False,
+    )
+    realized_pnl = final_state.get("final_trade_pnl")
+    realized_r = final_state.get("final_trade_r_mult")
+    if realized_pnl is None or realized_r is None:
+        raise RuntimeError(
+            "trade-path已成交但正式資料尾端結算未產生交易結果: "
+            f"ticker={ticker}, signal_date={_date_text(signal_date)}"
+        )
+    return _completed_result(
+        realized_pnl=float(realized_pnl),
+        realized_r=float(realized_r),
+        eval_start_date=eval_start_date,
+        exit_date=_date_text(dates[-1]),
+        exit_price=final_state.get("final_trade_exit_price"),
+        exit_reason=str(final_state.get("final_trade_exit_reason") or "FORCED_CLOSEOUT"),
         teacher_effective_date=teacher_effective_date,
-        fill_type=fill_type,
-        fill_date=fill_date,
-        wait_bars=wait_bars,
+        fill_type=str(fill_type),
+        fill_date=str(fill_date),
+        entry_price=float(entry_price),
+        wait_bars=int(wait_bars or 0),
+        initial_missed_buy=initial_missed_buy,
+        forced_closeout=True,
+        sizing_capital=float(resolved_sizing_capital),
     )
 
 
@@ -435,8 +675,25 @@ __all__ = [
     "TRADE_PATH_LABEL_ID",
     "TRADE_PATH_RESEARCH_FILTER_ID",
     "TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH",
+    "TRADE_PATH_LABEL_CONTRACT_VERSION",
+    "TRADE_PATH_LABEL_REASON_STATUS",
+    "TRADE_PATH_LABEL_STATUS_EXCLUDED",
+    "TRADE_PATH_LABEL_STATUS_PASS",
+    "TRADE_PATH_LABEL_STATUS_REJECT",
+    "TRADE_PATH_REASON_INACTIVE_HIGH_LEN",
+    "TRADE_PATH_REASON_INSUFFICIENT_FUTURE",
+    "TRADE_PATH_REASON_INVALID_ENTRY_PLAN",
+    "TRADE_PATH_REASON_NOT_FORMAL_SETUP",
+    "TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE",
+    "TRADE_PATH_REASON_REALIZED_NET_PROFIT",
+    "TRADE_PATH_REASON_SIGNAL_DATE_MISSING",
+    "TRADE_PATH_REASON_TEACHER_UNAVAILABLE",
+    "TRADE_PATH_REASON_UNFILLED_DATA_END",
+    "TRADE_PATH_REASON_UNFILLED_SUPERSEDED",
+    "TRADE_PATH_REASON_UNFILLED_TERMINATED",
     "TradePathLabelResult",
     "build_signal_cache",
+    "build_trade_path_excluded_event_update",
     "load_active_param_schedule",
     "merge_active_param_schedules",
     "simulate_realized_trade_path_label",

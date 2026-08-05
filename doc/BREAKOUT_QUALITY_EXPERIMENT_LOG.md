@@ -3439,8 +3439,8 @@ P3 optimizer訓練與rolling OOS診斷使用`binary_point_in_time` Scores；但�
 - 獨立filter ID：`breakout_quality_a2_trade_path_v1`，不得覆蓋9A `breakout_quality_v1`。
 - Event scope：一個原始breakout setup的完整生命週期；Feature snapshot固定原始signal date。
 - 初次miss buy只維持pending／continuation，不標REJECT；後續回到原始limit成交後沿用同一event。
-- 新setup會依正式策略覆蓋舊延續訊號；shadow completion／invalidation、永未成交、資料截止尚未結算均標INVALID並排除Binary訓練。
-- 已成交交易直接重用正式entry plan、extended shadow state、`execute_bar_step`與exact accounting；淨`realized_net_r > 0`標PASS，其餘完整已成交交易標REJECT。
+- 新setup會依正式策略覆蓋舊延續訊號；shadow completion／invalidation與永未成交均標EXCLUDED並排除Binary訓練。
+- 已成交交易直接重用正式entry plan、extended shadow state、`execute_bar_step`與exact accounting；淨`realized_net_r > 0`標PASS，其餘完整已成交交易標REJECT。若資料結尾仍持有已成交部位，必須沿用單股正式回測的最後交易日強制結算，不得另標未結算排除。
 - 同一ticker/date group只有當日A2 active `high_len`事件取得有效Label，其餘high_len rows維持INVALID。
 
 ### Teacher與資料鏈
@@ -3488,3 +3488,57 @@ Binary模型研究子選單改為：
 ### Dataset／結果
 
 本修正只改teacher工件期間驗證，不改Dataset、Label公式、Feature、模型、threshold、策略參數或帳務。先前失敗發生在Label建置開始前，因此沒有可沿用的新Label模型結果；使用者需由原選單重新執行。正式策略維持A0，A2仍為無DL研究候選。
+
+## 2026-08-05 — A2 Trade-path Single-stock Parity Contract v2
+
+### 狀態
+
+`IMPLEMENTED / DATASET_REBUILD_REQUIRED / MODEL_RETRAIN_REQUIRED / RESULT_NOT_AVAILABLE / FORMAL_BASELINE_UNCHANGED`
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260805_191236_8de0a17(1).zip`
+- SHA256：`409785c2860ba8301ef06063f493177726fbdb85c7c2e9c8799dd8d60453f1a3`
+- 本輪以全新解壓基準修改，交付只包含異動檔案。
+
+### 問題與契約澄清
+
+同一股票、同一原始signal date、相同OHLCV、相同策略參數及相同明示single-stock sizing capital下，TP1與單股正式回測必須取得完全相同的掛單、miss buy、pending／continuation、成交、停損／停利／trailing／indicator exit、最後交易日結算、進出價格、淨PnL與Realized R。差異只可存在於Dataset後處理：未成交終局不應被當作REJECT，而應以EXCLUDED排除Binary訓練。
+
+舊實作雖重用正式entry與bar-step核心，但仍有三項不足：
+
+1. TP1對已成交但資料結尾仍持倉的事件標記`insufficient_future_after_fill`，單股正式回測則以最後交易日收盤價強制結算，造成終局分叉。
+2. Dataset以`INVALID=-1`混合表示合法排除、資料錯誤與右設限，對外無清楚PASS／REJECT／EXCLUDED狀態契約。
+3. 正式成交紀錄未完整保存signal、entry與terminal execution context，無法對TP1逐筆比對entry date／price、exit date／price／reason、PnL及R。
+
+### 唯一變更
+
+- Label contract升級為version 2，正式狀態固定為`PASS=1`、`REJECT=0`、`EXCLUDED=-1`；既有數值`-1`保留相容，但使用者可見語意不再稱INVALID。
+- PASS只由完整交易的`realized_net_r > 0`產生；REJECT由完整交易的`realized_net_r <= 0`產生。首次miss buy本身永不直接產生REJECT。
+- 未成交事件被新setup覆蓋、shadow終止、資料結尾仍未成交，以及teacher／active high_len／source-date等不可形成合法Label的事件，均以具體`label_reason`寫入EXCLUDED。
+- 已成交但資料結尾仍持倉時，TP1直接重用正式`finalize_open_position_at_end()`，以與單股回測相同的最後交易日收盤價及exact accounting形成PASS或REJECT，並記錄`FORCED_CLOSEOUT`。
+- TP1與單股正式交易紀錄均保存signal date、entry type／date／price、exit date／price／reason、sizing capital、淨PnL與R，供逐事件parity檢查。
+- Dataset summary與loader新增status／reason count、contract version及完整欄位一致性驗證；未知reason、status與數值Label不一致、PASS／REJECT缺少進出路徑或EXCLUDED帶有realized結果均fail-fast。
+
+### 固定條件
+
+不改Feature、原始signal-date snapshot、teacher active-param schedule、模型architecture、experiment profile、threshold、PIT隔離、策略參數、正常進出規則、exact-accounting公式或正式策略基準。TP1 sizing使用同一筆事件明示的single-stock sizing capital；本輪不引入投組資金、持股上限或候選競爭語意。
+
+### Dataset／模型影響
+
+Label schema與已成交資料尾端終局已變更，既有trade-path Dataset及其模型不可直接視為contract v2工件。必須重新建立Label Dataset並重新訓練；尚未取得Selection／OOS Prediction或策略Gate結果，不得預判有效。正式策略仍維持A0，A2維持無DL研究候選，9A Binary DL runtime維持關閉。
+
+### 獨立驗證
+
+- Initial fill後STOP：TP1與單股正式回測逐項一致。
+- Initial miss後continuation fill再IND_SELL：entry／exit date與price、reason、淨PnL及R逐項一致。
+- Initial fill後先執行半倉停利，再由IND_SELL結束剩餘部位：最終淨PnL及R與單股正式結果一致。
+- 完整虧損交易：標REJECT，且與單股正式結果一致。
+- 首次miss後始終未成交：標EXCLUDED，不得標REJECT。
+- 已成交後資料結尾仍持倉：兩邊均走正式`FORCED_CLOSEOUT`並逐項一致。
+- 11種`label_reason`均映射到唯一PASS／REJECT／EXCLUDED狀態。
+
+### 下一步
+
+使用正式互動選單：`模型研究與驗證` → `Binary模型研究` → `建立新Label → 重新訓練 → 模型預測報表`。完成後先檢查Label狀態／原因摘要與Selection／OOS Prediction；策略比較仍只由既有CLI-only Gate進行。
+

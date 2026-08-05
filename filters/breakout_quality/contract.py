@@ -48,6 +48,10 @@ SPLIT_ASSIGNMENT_SCHEMA_VERSION = 3
 LABEL_OBJECTIVE = "binary_risk_adjusted_opportunity_v2"
 TRADE_PATH_LABEL_OBJECTIVE = "binary_a2_realized_trade_path_v1"
 TRADE_PATH_FILTER_ID = "breakout_quality_a2_trade_path_v1"
+TRADE_PATH_LABEL_CONTRACT_VERSION = 2
+TRADE_PATH_LABEL_STATUS_PASS = "PASS"
+TRADE_PATH_LABEL_STATUS_REJECT = "REJECT"
+TRADE_PATH_LABEL_STATUS_EXCLUDED = "EXCLUDED"
 LEGACY_LABEL_OBJECTIVE = "binary_pass_vs_not_pass_v1"
 SCORE_COLUMN = "dl_quality_score"
 SCORE_COMPARISON = ">="
@@ -186,7 +190,12 @@ def label_manifest_payload_from_policy_manifest(policy: Mapping[str, object]) ->
             "feature_snapshot": policy.get("feature_snapshot"),
             "initial_miss_buy_status": policy.get("initial_miss_buy_status"),
             "continuation_event_identity": policy.get("continuation_event_identity"),
+            "label_contract_version": policy.get("label_contract_version"),
+            "label_status_values": policy.get("label_status_values"),
             "filled_positive_rule": policy.get("filled_positive_rule"),
+            "filled_nonpositive_rule": policy.get("filled_nonpositive_rule"),
+            "filled_data_end_rule": policy.get("filled_data_end_rule"),
+            "sizing_capital_rule": policy.get("sizing_capital_rule"),
             "unfilled_terminal_rule": policy.get("unfilled_terminal_rule"),
         }
     raise ValueError(f"不支援的 breakout quality label_objective: {objective or 'missing'}")
@@ -205,7 +214,16 @@ def trade_path_label_policy_payload() -> dict:
             "feature_snapshot": "original_signal_date",
             "initial_miss_buy_status": "pending",
             "continuation_event_identity": "reuse_original_event",
+            "label_contract_version": TRADE_PATH_LABEL_CONTRACT_VERSION,
+            "label_status_values": {
+                TRADE_PATH_LABEL_STATUS_PASS: 1,
+                TRADE_PATH_LABEL_STATUS_REJECT: 0,
+                TRADE_PATH_LABEL_STATUS_EXCLUDED: -1,
+            },
             "filled_positive_rule": "realized_net_r_gt_zero",
+            "filled_nonpositive_rule": "realized_net_r_le_zero",
+            "filled_data_end_rule": "formal_single_stock_forced_closeout",
+            "sizing_capital_rule": "same_explicit_single_stock_sizing_capital",
             "unfilled_terminal_rule": "exclude_from_binary_training",
         }
     )
@@ -281,6 +299,10 @@ __all__ = [
     "LABEL_OBJECTIVE",
     "TRADE_PATH_LABEL_OBJECTIVE",
     "TRADE_PATH_FILTER_ID",
+    "TRADE_PATH_LABEL_CONTRACT_VERSION",
+    "TRADE_PATH_LABEL_STATUS_EXCLUDED",
+    "TRADE_PATH_LABEL_STATUS_PASS",
+    "TRADE_PATH_LABEL_STATUS_REJECT",
     "LEGACY_LABEL_OBJECTIVE",
     "LABEL_NAME_MAP",
     "LABEL_PASS",

@@ -1877,8 +1877,10 @@ def _print_trade_path_label_policy(request: argparse.Namespace) -> None:
                 ("Event Scope", "original_breakout_lifecycle"),
                 ("Initial Miss Buy", "pending／continuation"),
                 ("Feature Snapshot", "original signal date"),
-                ("Filled Positive", "realized_net_r > 0"),
-                ("Unfilled Terminal", "excluded from binary training"),
+                ("Filled Positive", "realized_net_r > 0 → PASS"),
+                ("Filled Nonpositive", "realized_net_r <= 0 → REJECT"),
+                ("Filled Data End", "formal single-stock forced closeout"),
+                ("Unfilled Terminal", "EXCLUDED from binary training"),
                 ("Architecture", BREAKOUT_QUALITY_MODEL_ARCHITECTURE),
                 ("Experiment Profile", request.experiment_profile),
                 ("Threshold", f"{float(request.fixed_threshold):g}"),
@@ -1998,6 +2000,8 @@ def _interactive_trade_path_label_summary() -> int:
         print("尚未建立A2 realized trade-path Label Dataset。")
         return 0
     counts = dict(summary.get("label_counts") or {})
+    status_counts = dict(summary.get("label_status_counts") or {})
+    reason_counts = dict(summary.get("label_reason_counts") or {})
     trade_path = dict(summary.get("trade_path_label") or {})
     group_summary = dict(summary.get("event_group_summary") or {})
     print("\n" + render_title("A2 Realized Trade-path Label Summary"))
@@ -2008,13 +2012,15 @@ def _interactive_trade_path_label_summary() -> int:
                 ("Label ID", trade_path.get("label_id")),
                 ("Dataset", summary.get("dataset")),
                 ("Events", summary.get("event_count")),
-                ("PASS", counts.get("pass")),
-                ("REJECT", counts.get("reject")),
-                ("Excluded／Invalid", counts.get("invalid")),
+                ("PASS", status_counts.get("PASS", counts.get("pass"))),
+                ("REJECT", status_counts.get("REJECT", counts.get("reject"))),
+                ("EXCLUDED", status_counts.get("EXCLUDED", counts.get("invalid"))),
                 ("Groups", group_summary.get("group_count")),
                 ("Valid Groups", group_summary.get("valid_group_count")),
                 ("Initial Miss Buy", trade_path.get("initial_miss_buy_status")),
+                ("Filled Data End", trade_path.get("filled_data_end_rule")),
                 ("Unfilled Terminal", trade_path.get("unfilled_terminal_rule")),
+                ("Label Reasons", len(reason_counts)),
                 ("Label End", summary.get("label_information_end_date_range")),
             )
         )

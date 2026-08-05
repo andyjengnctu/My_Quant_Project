@@ -14987,9 +14987,19 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         expected_label_policy_for_filter_id,
     )
     from filters.breakout_quality.paths import resolve_filter_artifact_paths
+    from core.backtest_core import run_v16_backtest
     from filters.breakout_quality.trade_path_label import (
+        TRADE_PATH_LABEL_CONTRACT_VERSION,
         TRADE_PATH_LABEL_ID,
+        TRADE_PATH_LABEL_REASON_STATUS,
+        TRADE_PATH_LABEL_STATUS_EXCLUDED,
+        TRADE_PATH_LABEL_STATUS_PASS,
+        TRADE_PATH_LABEL_STATUS_REJECT,
+        TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE,
+        TRADE_PATH_REASON_REALIZED_NET_PROFIT,
+        TRADE_PATH_REASON_UNFILLED_DATA_END,
         TRADE_PATH_RESEARCH_FILTER_ID,
+        build_trade_path_excluded_event_update,
         simulate_realized_trade_path_label,
     )
     from tools.filters.breakout_quality.build_trade_path_labels import (
@@ -15056,7 +15066,11 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
             TRADE_PATH_LABEL_OBJECTIVE,
             "pending",
             "reuse_original_event",
+            TRADE_PATH_LABEL_CONTRACT_VERSION,
             "realized_net_r_gt_zero",
+            "realized_net_r_le_zero",
+            "formal_single_stock_forced_closeout",
+            "same_explicit_single_stock_sizing_capital",
             "exclude_from_binary_training",
         ),
         (
@@ -15064,7 +15078,11 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
             policy.get("label_objective"),
             policy.get("initial_miss_buy_status"),
             policy.get("continuation_event_identity"),
+            policy.get("label_contract_version"),
             policy.get("filled_positive_rule"),
+            policy.get("filled_nonpositive_rule"),
+            policy.get("filled_data_end_rule"),
+            policy.get("sizing_capital_rule"),
             policy.get("unfilled_terminal_rule"),
         ),
     )
@@ -15119,13 +15137,291 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "trade_path_initial_miss_remains_pending_then_continuation_fill_gets_one_terminal_label",
-        (LABEL_PASS, "CONTINUATION_FILL", 1, "IND_SELL", True),
+        (
+            LABEL_PASS,
+            TRADE_PATH_LABEL_STATUS_PASS,
+            TRADE_PATH_REASON_REALIZED_NET_PROFIT,
+            "CONTINUATION_FILL",
+            1,
+            True,
+            "IND_SELL",
+            True,
+        ),
         (
             result.label,
+            result.status,
+            result.reason,
             result.fill_type,
             result.continuation_wait_bars,
+            result.initial_missed_buy,
             result.exit_reason,
             bool(result.realized_net_r is not None and result.realized_net_r > 0.0),
+        ),
+    )
+
+    _stats, single_trade_logs = run_v16_backtest(
+        frame,
+        params=params,
+        return_logs=True,
+        precomputed_signals=(atr, buy_condition, sell_condition, buy_limits),
+        ticker="2330",
+    )
+    single_trade = single_trade_logs[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_continuation_completed_path_matches_single_stock_entry_exit_and_accounting",
+        (
+            result.fill_date,
+            result.entry_price,
+            result.exit_date,
+            result.exit_price,
+            result.exit_reason,
+            result.realized_net_pnl,
+            result.realized_net_r,
+        ),
+        (
+            pd.Timestamp(single_trade["entry_date"]).strftime("%Y-%m-%d"),
+            float(single_trade["entry_price"]),
+            pd.Timestamp(single_trade["exit_date"]).strftime("%Y-%m-%d"),
+            float(single_trade["exit_price"]),
+            str(single_trade["exit_reason"]),
+            float(single_trade["pnl"]),
+            float(single_trade["r_mult"]),
+        ),
+    )
+
+    partial_tp_params = replace(params, tp_percent=0.5, atr_times_trail=1.0)
+    partial_tp_frame = pd.DataFrame(
+        {
+            "Open": [95.0, 98.0, 100.0, 98.0, 105.0, 105.0, 106.0],
+            "High": [97.0, 100.0, 102.0, 109.0, 106.0, 106.0, 107.0],
+            "Low": [94.0, 97.0, 99.0, 97.5, 104.5, 104.0, 105.0],
+            "Close": [96.0, 99.0, 101.0, 99.0, 105.5, 105.0, 106.0],
+            "Volume": [1000.0] * 7,
+        },
+        index=pd.date_range("2020-04-01", periods=7, freq="B"),
+    )
+    partial_tp_frame.attrs["ticker"] = "2330"
+    partial_tp_atr = np.full(len(partial_tp_frame), 5.0, dtype=np.float64)
+    partial_tp_buy = np.array([False, False, True, False, False, False, False])
+    partial_tp_sell = np.array([False, False, False, False, True, False, False])
+    partial_tp_limits = np.array(
+        [np.nan, np.nan, 100.0, np.nan, np.nan, np.nan, np.nan]
+    )
+    partial_tp_result = simulate_realized_trade_path_label(
+        partial_tp_frame,
+        ticker="2330",
+        signal_pos=2,
+        params=partial_tp_params,
+        teacher_effective_date="2020-01-01",
+        precomputed_signals=(
+            partial_tp_atr,
+            partial_tp_buy,
+            partial_tp_sell,
+            partial_tp_limits,
+        ),
+    )
+    _partial_tp_stats, partial_tp_logs = run_v16_backtest(
+        partial_tp_frame,
+        params=partial_tp_params,
+        return_logs=True,
+        precomputed_signals=(
+            partial_tp_atr,
+            partial_tp_buy,
+            partial_tp_sell,
+            partial_tp_limits,
+        ),
+        ticker="2330",
+    )
+    partial_tp_trade = partial_tp_logs[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_partial_take_profit_then_indicator_exit_matches_single_stock",
+        (
+            "INITIAL_FILL",
+            "IND_SELL",
+            float(partial_tp_trade["entry_price"]),
+            float(partial_tp_trade["exit_price"]),
+            float(partial_tp_trade["pnl"]),
+            float(partial_tp_trade["r_mult"]),
+        ),
+        (
+            partial_tp_result.fill_type,
+            partial_tp_result.exit_reason,
+            partial_tp_result.entry_price,
+            partial_tp_result.exit_price,
+            partial_tp_result.realized_net_pnl,
+            partial_tp_result.realized_net_r,
+        ),
+    )
+
+    reject_frame = pd.DataFrame(
+        {
+            "Open": [95.0, 98.0, 100.0, 100.0, 96.0],
+            "High": [97.0, 100.0, 102.0, 101.0, 97.0],
+            "Low": [94.0, 97.0, 99.0, 99.0, 95.0],
+            "Close": [96.0, 99.0, 101.0, 100.0, 96.0],
+            "Volume": [1000.0] * 5,
+        },
+        index=pd.date_range("2020-02-03", periods=5, freq="B"),
+    )
+    reject_frame.attrs["ticker"] = "2330"
+    reject_atr = np.full(len(reject_frame), 2.0, dtype=np.float64)
+    reject_buy = np.array([False, False, True, False, False])
+    reject_sell = np.zeros(len(reject_frame), dtype=bool)
+    reject_limits = np.array([np.nan, np.nan, 101.0, np.nan, np.nan])
+    reject_result = simulate_realized_trade_path_label(
+        reject_frame,
+        ticker="2330",
+        signal_pos=2,
+        params=params,
+        teacher_effective_date="2020-01-01",
+        precomputed_signals=(reject_atr, reject_buy, reject_sell, reject_limits),
+    )
+    _reject_stats, reject_logs = run_v16_backtest(
+        reject_frame,
+        params=params,
+        return_logs=True,
+        precomputed_signals=(reject_atr, reject_buy, reject_sell, reject_limits),
+        ticker="2330",
+    )
+    reject_trade = reject_logs[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_negative_completed_path_is_reject_and_matches_single_stock",
+        (
+            LABEL_REJECT,
+            TRADE_PATH_LABEL_STATUS_REJECT,
+            TRADE_PATH_REASON_REALIZED_NET_NONPOSITIVE,
+            "STOP",
+            float(reject_trade["pnl"]),
+            float(reject_trade["r_mult"]),
+        ),
+        (
+            reject_result.label,
+            reject_result.status,
+            reject_result.reason,
+            reject_result.exit_reason,
+            reject_result.realized_net_pnl,
+            reject_result.realized_net_r,
+        ),
+    )
+
+    data_end_frame = pd.DataFrame(
+        {
+            "Open": [95.0, 98.0, 100.0, 100.0, 103.0],
+            "High": [97.0, 100.0, 102.0, 103.0, 105.0],
+            "Low": [94.0, 97.0, 99.0, 99.0, 102.0],
+            "Close": [96.0, 99.0, 101.0, 102.0, 104.0],
+            "Volume": [1000.0] * 5,
+        },
+        index=pd.date_range("2020-03-02", periods=5, freq="B"),
+    )
+    data_end_frame.attrs["ticker"] = "2330"
+    data_end_atr = np.full(len(data_end_frame), 2.0, dtype=np.float64)
+    data_end_buy = np.array([False, False, True, False, False])
+    data_end_sell = np.zeros(len(data_end_frame), dtype=bool)
+    data_end_limits = np.array([np.nan, np.nan, 101.0, np.nan, np.nan])
+    data_end_result = simulate_realized_trade_path_label(
+        data_end_frame,
+        ticker="2330",
+        signal_pos=2,
+        params=params,
+        teacher_effective_date="2020-01-01",
+        precomputed_signals=(data_end_atr, data_end_buy, data_end_sell, data_end_limits),
+    )
+    _data_end_stats, data_end_logs = run_v16_backtest(
+        data_end_frame,
+        params=params,
+        return_logs=True,
+        precomputed_signals=(data_end_atr, data_end_buy, data_end_sell, data_end_limits),
+        ticker="2330",
+    )
+    data_end_trade = data_end_logs[0]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_filled_at_data_end_uses_formal_single_stock_forced_closeout",
+        (
+            True,
+            "FORCED_CLOSEOUT",
+            float(data_end_trade["exit_price"]),
+            float(data_end_trade["pnl"]),
+            float(data_end_trade["r_mult"]),
+        ),
+        (
+            data_end_result.forced_closeout,
+            data_end_result.exit_reason,
+            data_end_result.exit_price,
+            data_end_result.realized_net_pnl,
+            data_end_result.realized_net_r,
+        ),
+    )
+
+    unfilled_frame = data_end_frame.copy()
+    unfilled_frame[["Open", "High", "Low", "Close"]] = [
+        [95.0, 97.0, 94.0, 96.0],
+        [98.0, 100.0, 97.0, 99.0],
+        [100.0, 102.0, 99.0, 101.0],
+        [105.0, 106.0, 104.0, 105.0],
+        [106.0, 107.0, 105.0, 106.0],
+    ]
+    unfilled_frame.attrs["ticker"] = "2330"
+    unfilled_result = simulate_realized_trade_path_label(
+        unfilled_frame,
+        ticker="2330",
+        signal_pos=2,
+        params=params,
+        teacher_effective_date="2020-01-01",
+        precomputed_signals=(data_end_atr, data_end_buy, data_end_sell, data_end_limits),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_missed_buy_without_fill_is_excluded_not_reject",
+        (
+            LABEL_INVALID,
+            TRADE_PATH_LABEL_STATUS_EXCLUDED,
+            True,
+            True,
+            None,
+        ),
+        (
+            unfilled_result.label,
+            unfilled_result.status,
+            unfilled_result.reason in {
+                TRADE_PATH_REASON_UNFILLED_DATA_END,
+                "unfilled_terminated",
+            },
+            unfilled_result.initial_missed_buy,
+            unfilled_result.realized_net_r,
+        ),
+    )
+
+    excluded_update = build_trade_path_excluded_event_update(
+        "teacher_params_unavailable",
+        end_date="2020-01-01",
+        teacher_effective_date=None,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_reason_registry_covers_all_terminal_statuses_and_builder_exclusions",
+        (11, {"PASS", "REJECT", "EXCLUDED"}, LABEL_INVALID, "EXCLUDED"),
+        (
+            len(TRADE_PATH_LABEL_REASON_STATUS),
+            set(TRADE_PATH_LABEL_REASON_STATUS.values()),
+            excluded_update["label"],
+            excluded_update["label_status"],
         ),
     )
 
@@ -15223,6 +15519,8 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
                 "TRADE_PATH_RESEARCH_FILTER_ID",
                 "derived_feature_bank_trade_path_relabel",
                 "initial_miss_buy_status",
+                "formal_single_stock_forced_closeout",
+                "same_explicit_single_stock_sizing_capital",
                 "exclude_from_binary_training",
                 "build_signal_cache",
                 "simulate_realized_trade_path_label",

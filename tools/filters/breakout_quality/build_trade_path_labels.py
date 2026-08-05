@@ -32,7 +32,6 @@ from filters.breakout_quality.console_report import (
 from filters.breakout_quality.contract import (
     CONTEXT_COLUMNS,
     FEATURE_COLUMNS,
-    LABEL_INVALID,
     TRADE_PATH_FILTER_ID,
     label_manifest_payload_from_policy_manifest,
     trade_path_label_policy_payload,
@@ -49,10 +48,15 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_FORWARD_TEACHER_PARAMS_RELATIVE_PATH,
     TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH,
     TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR,
+    TRADE_PATH_LABEL_CONTRACT_VERSION,
     TRADE_PATH_LABEL_ID,
+    TRADE_PATH_REASON_INACTIVE_HIGH_LEN,
+    TRADE_PATH_REASON_SIGNAL_DATE_MISSING,
+    TRADE_PATH_REASON_TEACHER_UNAVAILABLE,
     TRADE_PATH_RESEARCH_FILTER_ID,
     TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH,
     build_signal_cache,
+    build_trade_path_excluded_event_update,
     load_active_param_schedule,
     merge_active_param_schedules,
     simulate_realized_trade_path_label,
@@ -92,7 +96,7 @@ from tools.optimizer.session_factory import (
     ensure_study_effective_policy_compatible,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_WORKERS = 4
 
 
@@ -432,13 +436,13 @@ def _ticker_worker(payload: dict[str, Any]) -> list[dict[str, Any]]:
         updates_by_event_index: dict[int, dict[str, Any]] = {}
         if schedule_item is None:
             for _, row in group_rows.iterrows():
-                updates_by_event_index[int(row["_event_index"])] = {
-                    "label": LABEL_INVALID,
-                    "label_reason": "teacher_params_unavailable",
-                    "label_eval_start_date": None,
-                    "label_eval_end_date": signal_date,
-                    "teacher_effective_date": None,
-                }
+                updates_by_event_index[int(row["_event_index"])] = (
+                    build_trade_path_excluded_event_update(
+                        TRADE_PATH_REASON_TEACHER_UNAVAILABLE,
+                        end_date=signal_date,
+                        teacher_effective_date=None,
+                    )
+                )
         else:
             effective_date, params = schedule_item
             matching = group_rows[
@@ -446,13 +450,13 @@ def _ticker_worker(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 == int(params.high_len)
             ]
             for _, row in group_rows.iterrows():
-                updates_by_event_index[int(row["_event_index"])] = {
-                    "label": LABEL_INVALID,
-                    "label_reason": "inactive_high_len_for_teacher",
-                    "label_eval_start_date": None,
-                    "label_eval_end_date": signal_date,
-                    "teacher_effective_date": effective_date,
-                }
+                updates_by_event_index[int(row["_event_index"])] = (
+                    build_trade_path_excluded_event_update(
+                        TRADE_PATH_REASON_INACTIVE_HIGH_LEN,
+                        end_date=signal_date,
+                        teacher_effective_date=effective_date,
+                    )
+                )
             if len(matching) > 1:
                 raise ValueError(
                     f"同一ticker/date有多筆teacher high_len: {ticker}/{signal_date}"
@@ -462,8 +466,12 @@ def _ticker_worker(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 selected = matching.iloc[0]
                 event_index = int(selected["_event_index"])
                 if signal_pos is None:
-                    updates_by_event_index[event_index].update(
-                        {"label_reason": "signal_date_missing_from_source"}
+                    updates_by_event_index[event_index] = (
+                        build_trade_path_excluded_event_update(
+                            TRADE_PATH_REASON_SIGNAL_DATE_MISSING,
+                            end_date=signal_date,
+                            teacher_effective_date=effective_date,
+                        )
                     )
                 else:
                     if effective_date not in signal_cache:
@@ -508,6 +516,7 @@ def _build_dataset(root: Path, args, historical_path: Path, forward_path: Path) 
     shard_dir = work_dir / "ticker_shards"
     identity = {
         "schema_version": SCHEMA_VERSION,
+        "label_contract_version": TRADE_PATH_LABEL_CONTRACT_VERSION,
         "label_id": TRADE_PATH_LABEL_ID,
         "dataset": str(args.dataset),
         "source_filter_id": source_filter_id,
@@ -649,8 +658,18 @@ def _build_dataset(root: Path, args, historical_path: Path, forward_path: Path) 
     for column in updates.columns:
         events[column] = updates[column].to_numpy()
     events["label"] = pd.to_numeric(events["label"], errors="raise").astype(np.int8)
+    events["label_status"] = events["label_status"].astype(str).str.strip()
+    events["label_reason"] = events["label_reason"].astype(str).str.strip()
     events.drop(columns=["_event_index"], inplace=True)
     event_labels = events["label"].to_numpy(dtype=np.int8)
+    label_status_counts = {
+        str(key): int(value)
+        for key, value in events["label_status"].value_counts(dropna=False).sort_index().items()
+    }
+    label_reason_counts = {
+        str(key): int(value)
+        for key, value in events["label_reason"].value_counts(dropna=False).sort_index().items()
+    }
 
     shared_arrays = (
         "feature_bank",
@@ -690,6 +709,8 @@ def _build_dataset(root: Path, args, historical_path: Path, forward_path: Path) 
             },
             "label_policy": label_manifest_payload_from_policy_manifest(policy),
             "label_counts": label_counts(event_labels),
+            "label_status_counts": label_status_counts,
+            "label_reason_counts": label_reason_counts,
             "event_count": int(len(events)),
             "event_group_summary": event_group_summary(events, event_labels),
             "label_information_end_date_range": _date_range(
@@ -702,6 +723,7 @@ def _build_dataset(root: Path, args, historical_path: Path, forward_path: Path) 
             "build_mode": "derived_feature_bank_trade_path_relabel",
             "trade_path_label": {
                 "label_id": TRADE_PATH_LABEL_ID,
+                "label_contract_version": TRADE_PATH_LABEL_CONTRACT_VERSION,
                 "source_filter_id": source_filter_id,
                 "source_dataset_summary_sha256": compute_file_sha256(source_paths.summary),
                 "historical_teacher_path": project_relative_display_path(
@@ -714,6 +736,8 @@ def _build_dataset(root: Path, args, historical_path: Path, forward_path: Path) 
                 "forward_teacher_sha256": compute_file_sha256(forward_path),
                 "event_scope": "original_breakout_lifecycle",
                 "initial_miss_buy_status": "pending",
+                "filled_data_end_rule": "formal_single_stock_forced_closeout",
+                "sizing_capital_rule": "same_explicit_single_stock_sizing_capital",
                 "unfilled_terminal_rule": "exclude_from_binary_training",
             },
         }
@@ -724,6 +748,7 @@ def _build_dataset(root: Path, args, historical_path: Path, forward_path: Path) 
 
 def _print_summary(summary: dict[str, Any]) -> None:
     counts = dict(summary.get("label_counts") or {})
+    status_counts = dict(summary.get("label_status_counts") or {})
     trade_path = dict(summary.get("trade_path_label") or {})
     print("\n" + render_title("A2 Realized Trade-path Label Dataset"))
     print(
@@ -733,11 +758,12 @@ def _print_summary(summary: dict[str, Any]) -> None:
                 ("Label ID", trade_path.get("label_id")),
                 ("Dataset", summary.get("dataset")),
                 ("Events", summary.get("event_count")),
-                ("PASS", counts.get("pass")),
-                ("REJECT", counts.get("reject")),
-                ("Excluded／Invalid", counts.get("invalid")),
+                ("PASS", status_counts.get("PASS", counts.get("pass"))),
+                ("REJECT", status_counts.get("REJECT", counts.get("reject"))),
+                ("EXCLUDED", status_counts.get("EXCLUDED", counts.get("invalid"))),
                 ("Label End", summary.get("label_information_end_date_range")),
                 ("Initial Miss Buy", trade_path.get("initial_miss_buy_status")),
+                ("Filled Data End", trade_path.get("filled_data_end_rule")),
                 ("Unfilled Terminal", trade_path.get("unfilled_terminal_rule")),
             )
         )

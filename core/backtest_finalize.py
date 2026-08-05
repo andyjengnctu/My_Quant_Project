@@ -59,6 +59,8 @@ def finalize_open_position_at_end(
             'end_position_qty': end_position_qty,
             'trade_logs': trade_logs,
             'final_trade_exit_date': None,
+            'final_trade_exit_price': None,
+            'final_trade_exit_reason': None,
             'final_trade_pnl': None,
             'final_trade_r_mult': None,
         }
@@ -82,7 +84,19 @@ def finalize_open_position_at_end(
     trade_count += 1
 
     if return_logs:
-        trade_logs.append({'exit_date': final_date, 'pnl': total_pnl, 'r_mult': trade_r_mult})
+        trade_logs.append(
+            {
+                'signal_date': position.get('signal_date'),
+                'entry_date': position.get('entry_trade_date'),
+                'entry_price': position.get('entry_fill_price'),
+                'entry_type': position.get('entry_type'),
+                'exit_date': final_date,
+                'exit_price': exec_price,
+                'exit_reason': 'FORCED_CLOSEOUT',
+                'pnl': total_pnl,
+                'r_mult': trade_r_mult,
+            }
+        )
 
     if collect_stats:
         if total_pnl_milli > 0:
@@ -119,6 +133,8 @@ def finalize_open_position_at_end(
         'end_position_qty': end_position_qty,
         'trade_logs': trade_logs,
         'final_trade_exit_date': final_date,
+        'final_trade_exit_price': exec_price,
+        'final_trade_exit_reason': 'FORCED_CLOSEOUT',
         'final_trade_pnl': total_pnl,
         'final_trade_r_mult': trade_r_mult,
     }

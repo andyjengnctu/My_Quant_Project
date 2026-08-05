@@ -21,6 +21,11 @@ from filters.breakout_quality.contract import (
     LABEL_INVALID,
     LABEL_PASS,
     LABEL_REJECT,
+    TRADE_PATH_LABEL_CONTRACT_VERSION,
+    TRADE_PATH_LABEL_OBJECTIVE,
+    TRADE_PATH_LABEL_STATUS_EXCLUDED,
+    TRADE_PATH_LABEL_STATUS_PASS,
+    TRADE_PATH_LABEL_STATUS_REJECT,
     BreakoutQualityLabelPolicy,
     label_manifest_payload_from_policy_manifest,
 )
@@ -368,6 +373,104 @@ def load_validated_dataset_bundle(
     observed_label_counts = label_counts(event_labels)
     if summary.get("label_counts") != observed_label_counts:
         raise ValueError("dataset_summary label_counts 與 event labels 不一致")
+    if str(policy.get("label_objective") or "") == TRADE_PATH_LABEL_OBJECTIVE:
+        from filters.breakout_quality.trade_path_label import TRADE_PATH_LABEL_REASON_STATUS
+
+        trade_path_required_columns = {
+            "label_status",
+            "label_reason",
+            "trade_path_fill_type",
+            "trade_path_fill_date",
+            "trade_path_entry_price",
+            "trade_path_exit_date",
+            "trade_path_exit_price",
+            "trade_path_exit_reason",
+            "trade_path_initial_missed_buy",
+            "trade_path_forced_closeout",
+            "trade_path_sizing_capital",
+            "trade_path_realized_net_pnl",
+            "trade_path_realized_net_r",
+        }
+        missing_trade_path_columns = sorted(trade_path_required_columns - set(events.columns))
+        if missing_trade_path_columns:
+            raise ValueError(
+                "trade-path events.csv缺少必要欄位: "
+                f"{missing_trade_path_columns}"
+            )
+        if int(policy.get("label_contract_version", -1)) != TRADE_PATH_LABEL_CONTRACT_VERSION:
+            raise ValueError("trade-path label contract版本不相容；請重建Dataset")
+        trade_path_meta = summary.get("trade_path_label")
+        if not isinstance(trade_path_meta, dict) or int(
+            trade_path_meta.get("label_contract_version", -1)
+        ) != TRADE_PATH_LABEL_CONTRACT_VERSION:
+            raise ValueError("dataset_summary.trade_path_label contract版本不一致")
+        observed_status = events["label_status"].astype(str).str.strip()
+        expected_status = pd.Series(
+            np.where(
+                event_labels == LABEL_PASS,
+                TRADE_PATH_LABEL_STATUS_PASS,
+                np.where(
+                    event_labels == LABEL_REJECT,
+                    TRADE_PATH_LABEL_STATUS_REJECT,
+                    TRADE_PATH_LABEL_STATUS_EXCLUDED,
+                ),
+            ),
+            index=events.index,
+        )
+        if not observed_status.equals(expected_status):
+            raise ValueError("trade-path label_status與label數值不一致")
+        observed_reason = events["label_reason"].astype(str).str.strip()
+        expected_reason_status = observed_reason.map(TRADE_PATH_LABEL_REASON_STATUS)
+        if expected_reason_status.isna().any():
+            unknown = sorted(set(observed_reason[expected_reason_status.isna()].tolist()))
+            raise ValueError(f"trade-path events含未知label_reason: {unknown}")
+        if not expected_reason_status.equals(observed_status):
+            raise ValueError("trade-path label_reason與label_status不一致")
+        status_counts = {
+            str(key): int(value)
+            for key, value in observed_status.value_counts(dropna=False).sort_index().items()
+        }
+        reason_counts = {
+            str(key): int(value)
+            for key, value in observed_reason.value_counts(dropna=False).sort_index().items()
+        }
+        if summary.get("label_status_counts") != status_counts:
+            raise ValueError("dataset_summary label_status_counts與events不一致")
+        if summary.get("label_reason_counts") != reason_counts:
+            raise ValueError("dataset_summary label_reason_counts與events不一致")
+        realized_r = pd.to_numeric(events["trade_path_realized_net_r"], errors="coerce")
+        realized_pnl = pd.to_numeric(events["trade_path_realized_net_pnl"], errors="coerce")
+        completed_mask = observed_status.isin(
+            {TRADE_PATH_LABEL_STATUS_PASS, TRADE_PATH_LABEL_STATUS_REJECT}
+        )
+        excluded_mask = observed_status == TRADE_PATH_LABEL_STATUS_EXCLUDED
+        if realized_r[completed_mask].isna().any() or realized_pnl[completed_mask].isna().any():
+            raise ValueError("trade-path PASS／REJECT必須有完整realized PnL與R")
+        if (realized_r[observed_status == TRADE_PATH_LABEL_STATUS_PASS] <= 0.0).any():
+            raise ValueError("trade-path PASS必須為正realized net R")
+        if (realized_r[observed_status == TRADE_PATH_LABEL_STATUS_REJECT] > 0.0).any():
+            raise ValueError("trade-path REJECT不得為正realized net R")
+        if (realized_pnl[observed_status == TRADE_PATH_LABEL_STATUS_PASS] <= 0.0).any():
+            raise ValueError("trade-path PASS必須同時為正realized net PnL")
+        if (realized_pnl[observed_status == TRADE_PATH_LABEL_STATUS_REJECT] > 0.0).any():
+            raise ValueError("trade-path REJECT不得為正realized net PnL")
+        if realized_r[excluded_mask].notna().any() or realized_pnl[excluded_mask].notna().any():
+            raise ValueError("trade-path EXCLUDED不得帶realized PnL或R")
+        completed_required = (
+            events.loc[completed_mask, [
+                "trade_path_fill_type",
+                "trade_path_fill_date",
+                "trade_path_entry_price",
+                "trade_path_exit_date",
+                "trade_path_exit_price",
+                "trade_path_exit_reason",
+                "trade_path_sizing_capital",
+            ]]
+            .isna()
+            .any(axis=1)
+        )
+        if bool(completed_required.any()):
+            raise ValueError("trade-path PASS／REJECT缺少完整進出路徑欄位")
     csv_group_index = pd.to_numeric(events["group_index"], errors="raise").to_numpy(dtype=np.int64)
     if not np.array_equal(csv_group_index, np.asarray(event_group_index, dtype=np.int64)):
         raise ValueError("events.csv group_index 與 event_group_index.npy 不一致")
