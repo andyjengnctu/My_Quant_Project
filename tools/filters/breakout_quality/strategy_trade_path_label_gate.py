@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 
 from config.breakout_quality import get_breakout_quality_workflow_settings
 from filters.breakout_quality.console_report import (
@@ -42,7 +42,13 @@ from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+DIRECT_SELECTION_R_KEY = "exclusive_selection_delta_r"
+BASE_IDENTITY_FILENAMES = (
+    "no_filter_equity.csv",
+    "no_filter_trades.csv",
+    "no_filter_daily_capacity.csv",
+)
 OUTPUT_RELATIVE_DIR = Path(
     "models/research/breakout_quality/trade_path_label_gate/a2_realized_trade_path_v1"
 )
@@ -125,6 +131,66 @@ def _metric(payload: dict[str, Any], key: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_trade_attribution(output_dir: Path) -> dict[str, Any]:
+    path = output_dir / "trade_attribution.json"
+    if not path.is_file():
+        raise FileNotFoundError(
+            "策略Gate缺少交易歸因工件: "
+            f"{project_relative_display_path(path, project_root=PROJECT_ROOT)}"
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    r_attribution = payload.get("r_attribution")
+    if not isinstance(r_attribution, dict):
+        raise ValueError(f"交易歸因工件缺少r_attribution: {path}")
+    direct_selection_r = _metric(r_attribution, DIRECT_SELECTION_R_KEY)
+    if direct_selection_r is None:
+        raise ValueError(
+            f"交易歸因工件缺少有限{DIRECT_SELECTION_R_KEY}: {path}"
+        )
+    return payload
+
+
+def _direct_selection_r(payload: dict[str, Any]) -> float:
+    value = _metric(dict(payload.get("r_attribution") or {}), DIRECT_SELECTION_R_KEY)
+    if value is None:
+        raise ValueError(f"交易歸因缺少有限{DIRECT_SELECTION_R_KEY}")
+    return float(value)
+
+
+def _assert_same_base_artifacts(
+    *, old_output_dir: Path, new_output_dir: Path
+) -> dict[str, str]:
+    identity: dict[str, str] = {}
+    mismatches: list[tuple[str, str, str]] = []
+    for filename in BASE_IDENTITY_FILENAMES:
+        old_path = old_output_dir / filename
+        new_path = new_output_dir / filename
+        if not old_path.is_file() or not new_path.is_file():
+            missing = [str(path) for path in (old_path, new_path) if not path.is_file()]
+            raise FileNotFoundError(
+                "Old／New Label比較缺少A2 no-DL base工件: " + ", ".join(missing)
+            )
+        old_sha = _sha256_file(old_path)
+        new_sha = _sha256_file(new_path)
+        if old_sha != new_sha:
+            mismatches.append((filename, old_sha, new_sha))
+        identity[filename] = old_sha
+    if mismatches:
+        raise ValueError(
+            "Old／New Label比較的A2 no-DL base工件不一致: "
+            f"{mismatches}"
+        )
+    return identity
+
+
 def _fmt(value: Any, *, digits: int = 2, unit: str = "") -> str:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return "N/A"
@@ -169,12 +235,18 @@ def _render_summary_table(
     base: dict[str, Any],
     old_dl: dict[str, Any],
     new_dl: dict[str, Any],
+    old_attribution: dict[str, Any],
+    new_attribution: dict[str, Any],
 ) -> str:
     rows = []
-    for label, payload in (
-        ("A2 Base（DL關）", base),
-        ("Old Label 9A（DL開）", old_dl),
-        ("New Trade-path Label（DL開）", new_dl),
+    for label, payload, direct_selection_r in (
+        ("A2 Base（DL關）", base, 0.0),
+        ("Old Label 9A（DL開）", old_dl, _direct_selection_r(old_attribution)),
+        (
+            "New Trade-path Label（DL開）",
+            new_dl,
+            _direct_selection_r(new_attribution),
+        ),
     ):
         rows.append(
             (
@@ -184,12 +256,23 @@ def _render_summary_table(
                 _fmt(payload.get("return_over_max_drawdown")),
                 _fmt(payload.get("annual_return_pct"), unit="%"),
                 _fmt(payload.get("expected_value_r"), unit=" R"),
+                _fmt(direct_selection_r, unit=" R"),
                 _fmt(payload.get("avg_exposure_pct"), unit="%"),
                 _fmt(payload.get("trade_count"), digits=0),
             )
         )
     return render_table(
-        ("組別", "報酬", "MDD", "RoMD", "年化", "EV", "曝險", "交易數"),
+        (
+            "組別",
+            "報酬",
+            "MDD",
+            "RoMD",
+            "年化",
+            "EV",
+            "直接選擇R",
+            "曝險",
+            "交易數",
+        ),
         rows,
     )
 
@@ -199,6 +282,8 @@ def _render_delta_table(
     base: dict[str, Any],
     old_dl: dict[str, Any],
     new_dl: dict[str, Any],
+    old_attribution: dict[str, Any],
+    new_attribution: dict[str, Any],
 ) -> str:
     metrics = (
         ("報酬", "total_return_pct", "pp"),
@@ -209,17 +294,45 @@ def _render_delta_table(
         ("曝險", "avg_exposure_pct", "pp"),
         ("交易數", "trade_count", ""),
     )
+    direct_old = _direct_selection_r(old_attribution)
+    direct_new = _direct_selection_r(new_attribution)
     rows = []
-    for label, newer, older in (
-        ("New−Base", new_dl, base),
-        ("New−Old", new_dl, old_dl),
-        ("Old−Base", old_dl, base),
+    for label, newer, older, direct_delta in (
+        ("New−Base", new_dl, base, direct_new),
+        ("New−Old", new_dl, old_dl, direct_new - direct_old),
+        ("Old−Base", old_dl, base, direct_old),
     ):
         values = []
         for _metric_label, key, unit in metrics:
-            values.append(_fmt(_delta(newer, older, key), digits=0 if key == "trade_count" else 2, unit=unit))
-        rows.append((label, *values))
-    return render_table(("比較", *(label for label, _key, _unit in metrics)), rows)
+            values.append(
+                _fmt(
+                    _delta(newer, older, key),
+                    digits=0 if key == "trade_count" else 2,
+                    unit=unit,
+                )
+            )
+        rows.append(
+            (
+                label,
+                *values[:5],
+                _fmt(direct_delta, unit=" R"),
+                *values[5:],
+            )
+        )
+    return render_table(
+        (
+            "比較",
+            "報酬",
+            "MDD",
+            "RoMD",
+            "年化",
+            "EV",
+            "直接選擇R",
+            "曝險",
+            "交易數",
+        ),
+        rows,
+    )
 
 
 def _yearly_table(
@@ -267,6 +380,8 @@ def _render_report(
     metadata: dict[str, Any],
     old_payload: dict[str, Any],
     new_payload: dict[str, Any],
+    old_attribution: dict[str, Any],
+    new_attribution: dict[str, Any],
 ) -> str:
     base = dict(old_payload.get("no_filter") or {})
     old_dl = dict(old_payload.get("quality_filter") or {})
@@ -286,13 +401,19 @@ def _render_report(
             )
         ),
         render_section("1. 三組策略結果"),
-        _render_summary_table(base=base, old_dl=old_dl, new_dl=new_dl),
+        _render_summary_table(
+            base=base, old_dl=old_dl, new_dl=new_dl,
+            old_attribution=old_attribution, new_attribution=new_attribution,
+        ),
         render_section("2. 關鍵差異"),
-        _render_delta_table(base=base, old_dl=old_dl, new_dl=new_dl),
+        _render_delta_table(
+            base=base, old_dl=old_dl, new_dl=new_dl,
+            old_attribution=old_attribution, new_attribution=new_attribution,
+        ),
         render_section("3. 年度結果"),
         _yearly_table(old_payload=old_payload, new_payload=new_payload),
         render_section("4. 判讀契約"),
-        "主判定看New−Base：新Label DL是否真正增加A2策略價值。New−Old只判斷Label alignment是否優於舊MFE／MAE Label。不得依本次OOS結果回頭調整threshold、Label或模型。",
+        "主判定看New−Base：新Label至少須同時改善RoMD、EV、直接交易選擇R及年度穩定性，才可進入Binary PIT與DL-on optimizer。New−Old只判斷Label alignment是否優於舊MFE／MAE Label。不得依本次OOS結果回頭調整threshold、Label或模型。",
     ]
     return "\n".join(lines).rstrip() + "\n"
 
@@ -349,17 +470,24 @@ def main(argv=None) -> int:
     }
     output_dir = root / OUTPUT_RELATIVE_DIR
     print("\n[3/3] 回放A2 Base／Old Label／New Label")
+    old_output_dir = output_dir / "old_label_pair"
+    new_output_dir = output_dir / "new_label_pair"
     old_payload = run_comparison(
         **common,
         filter_id=TRADE_PATH_BASE_FILTER_ID,
-        output_dir_override=output_dir / "old_label_pair",
+        output_dir_override=old_output_dir,
     )
     new_payload = run_comparison(
         **common,
         filter_id=TRADE_PATH_RESEARCH_FILTER_ID,
-        output_dir_override=output_dir / "new_label_pair",
+        output_dir_override=new_output_dir,
     )
     _assert_same_base(old_payload, new_payload)
+    base_artifact_sha256 = _assert_same_base_artifacts(
+        old_output_dir=old_output_dir, new_output_dir=new_output_dir
+    )
+    old_attribution = _load_trade_attribution(old_output_dir)
+    new_attribution = _load_trade_attribution(new_output_dir)
 
     old_meta = dict(old_payload.get("metadata") or {})
     new_meta = dict(new_payload.get("metadata") or {})
@@ -377,11 +505,16 @@ def main(argv=None) -> int:
         "new_score_source": new_meta.get("score_source"),
         "rule_policy": "all-off",
         "strategy_param_policy": str(args.param_policy),
+        "base_identity_contract": "exact_sha256_equity_trades_daily_capacity",
+        "base_artifact_sha256": base_artifact_sha256,
+        "direct_selection_r_contract": DIRECT_SELECTION_R_KEY,
     }
     report = _render_report(
         metadata=metadata,
         old_payload=old_payload,
         new_payload=new_payload,
+        old_attribution=old_attribution,
+        new_attribution=new_attribution,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "strategy_trade_path_label_gate.md"
@@ -396,6 +529,8 @@ def main(argv=None) -> int:
             "new_label": new_payload.get("quality_filter"),
             "old_pair": old_payload,
             "new_pair": new_payload,
+            "old_trade_attribution": old_attribution,
+            "new_trade_attribution": new_attribution,
         },
     )
     print("\n" + report)
@@ -403,8 +538,10 @@ def main(argv=None) -> int:
         (
             ("Gate Markdown", report_path),
             ("Gate JSON", json_path),
-            ("Old Label pair", output_dir / "old_label_pair" / "strategy_comparison.md"),
-            ("New Label pair", output_dir / "new_label_pair" / "strategy_comparison.md"),
+            ("Old Label pair", old_output_dir / "strategy_comparison.md"),
+            ("Old Label歸因", old_output_dir / "trade_attribution.md"),
+            ("New Label pair", new_output_dir / "strategy_comparison.md"),
+            ("New Label歸因", new_output_dir / "trade_attribution.md"),
         ),
         project_root=root,
     )

@@ -84,7 +84,7 @@ Active Research Label：a2_realized_trade_path_v1
 [0] 返回
 ```
 
-`[1]` 固定依序執行：建立／接續A2 realized trade-path Label Dataset、train、research score export、Selection／OOS模型預測報表；到此停止，不匯出runtime score、不執行策略回放。`[2]` 不重新訓練，只更新新Label模型的research scores並重建同一份預測報表。`[3]` 顯示PASS／REJECT／Excluded、事件group及初次miss buy／未成交終止契約。新Label使用獨立`filter_id=breakout_quality_a2_trade_path_v1`，不得覆蓋現有9A模型。策略經濟效果另以CLI-only `strategy-trade-path-label-gate`比較。
+`[1]` 固定依序執行：建立／接續A2 realized trade-path Label Dataset、train、research score export、Selection／OOS模型預測報表；到此停止，不匯出runtime score、不執行策略回放。`[2]` 不重新訓練，只更新新Label模型的research scores並重建同一份預測報表。`[3]` 顯示PASS／REJECT／EXCLUDED、事件group及初次miss buy／未成交終止契約。新Label使用獨立`filter_id=breakout_quality_a2_trade_path_v1`，不得覆蓋現有9A模型。策略經濟效果另以CLI-only `strategy-trade-path-label-gate`比較。
 
 Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
@@ -116,7 +116,7 @@ python apps/breakout_quality.py build-trade-path-labels `
 
 Builder先以2014～2020 Selection rolling基準建立rules全關／DL關的risk-only A2 teacher，再合併既有2021～2026 P2 active params。每個Label日期只能使用當時已生效teacher params；衍生Dataset沿用9A 300×10 feature bank，但以獨立filter目錄保存Label、events與summary。
 
-確認新模型Prediction報表後，策略比較使用CLI-only：
+確認新模型Prediction報表後，策略比較使用CLI-only。報表會同時列出RoMD、EV、直接交易選擇R與年度結果，並要求Old／New兩個pair的A2 no-DL equity／trades／daily-capacity工件SHA256完全一致：
 
 ```powershell
 python apps/breakout_quality.py strategy-trade-path-label-gate `

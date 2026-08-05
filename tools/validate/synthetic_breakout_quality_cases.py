@@ -15009,6 +15009,13 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         _write_ticker_shard,
     )
 
+    from tools.filters.breakout_quality.strategy_trade_path_label_gate import (
+        BASE_IDENTITY_FILENAMES,
+        _assert_same_base_artifacts,
+        _render_delta_table as _render_trade_path_gate_delta_table,
+        _render_summary_table as _render_trade_path_gate_summary_table,
+    )
+
     valid_teacher_payload = {
         "params_ensemble_by_effective_date": {
             f"{year}-01-01": [{"params": {"atr_len": 5}}]
@@ -15474,6 +15481,96 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
             ),
         )
 
+    gate_base = {
+        "total_return_pct": 100.0,
+        "max_drawdown_pct": 10.0,
+        "return_over_max_drawdown": 10.0,
+        "annual_return_pct": 12.0,
+        "expected_value_r": 0.50,
+        "avg_exposure_pct": 90.0,
+        "trade_count": 100,
+    }
+    gate_old = {
+        **gate_base,
+        "total_return_pct": 110.0,
+        "expected_value_r": 0.55,
+        "trade_count": 90,
+    }
+    gate_new = {
+        **gate_base,
+        "total_return_pct": 120.0,
+        "expected_value_r": 0.65,
+        "trade_count": 80,
+    }
+    gate_old_attribution = {
+        "r_attribution": {"exclusive_selection_delta_r": -2.50}
+    }
+    gate_new_attribution = {
+        "r_attribution": {"exclusive_selection_delta_r": 3.25}
+    }
+    gate_summary_text = _render_trade_path_gate_summary_table(
+        base=gate_base,
+        old_dl=gate_old,
+        new_dl=gate_new,
+        old_attribution=gate_old_attribution,
+        new_attribution=gate_new_attribution,
+    )
+    gate_delta_text = _render_trade_path_gate_delta_table(
+        base=gate_base,
+        old_dl=gate_old,
+        new_dl=gate_new,
+        old_attribution=gate_old_attribution,
+        new_attribution=gate_new_attribution,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_strategy_gate_surfaces_direct_trade_selection_r",
+        True,
+        all(
+            token in gate_summary_text + gate_delta_text
+            for token in (
+                "直接選擇R",
+                "3.25 R",
+                "-2.50 R",
+                "5.75 R",
+            )
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        old_output_dir = Path(tmpdir) / "old"
+        new_output_dir = Path(tmpdir) / "new"
+        old_output_dir.mkdir()
+        new_output_dir.mkdir()
+        for index, filename in enumerate(BASE_IDENTITY_FILENAMES):
+            payload = f"base-{index}\n".encode("utf-8")
+            (old_output_dir / filename).write_bytes(payload)
+            (new_output_dir / filename).write_bytes(payload)
+        identity = _assert_same_base_artifacts(
+            old_output_dir=old_output_dir, new_output_dir=new_output_dir
+        )
+        (new_output_dir / BASE_IDENTITY_FILENAMES[1]).write_text(
+            "different\n", encoding="utf-8"
+        )
+        try:
+            _assert_same_base_artifacts(
+                old_output_dir=old_output_dir, new_output_dir=new_output_dir
+            )
+        except ValueError:
+            base_difference_rejected = True
+        else:
+            base_difference_rejected = False
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "trade_path_strategy_gate_requires_exact_duplicate_base_artifacts",
+        (3, True),
+        (len(identity), base_difference_rejected),
+    )
+
     project_root = Path(__file__).resolve().parents[2]
     app_source = (project_root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
     builder_source = (
@@ -15553,6 +15650,9 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
                 "ALL_RULE_FILTERS_OFF_OVERRIDES",
                 "TRADE_PATH_FORWARD_TEACHER_PARAMS_RELATIVE_PATH",
                 "只更新forward-OOS Scores並執行策略回放，不重新訓練",
+                "exclusive_selection_delta_r",
+                "base_artifact_sha256",
+                "no_filter_trades.csv",
             )
         ),
     )

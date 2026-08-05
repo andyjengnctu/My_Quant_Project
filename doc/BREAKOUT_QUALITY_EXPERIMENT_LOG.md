@@ -3542,3 +3542,92 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 
 使用正式互動選單：`模型研究與驗證` → `Binary模型研究` → `建立新Label → 重新訓練 → 模型預測報表`。完成後先檢查Label狀態／原因摘要與Selection／OOS Prediction；策略比較仍只由既有CLI-only Gate進行。
 
+## 2026-08-05 — A2 Trade-path Label Model Prediction Result
+
+### 狀態
+
+`RESULT_VALID / MODEL_OOS_WEAK_AND_UNSTABLE / STRATEGY_GATE_PENDING / FORMAL_BASELINE_UNCHANGED`
+
+### 程式與結果基準
+
+- 使用者結果ZIP：`test-branch-1_20260805_230725_ff04a05.zip`
+- SHA256：`8a616fed6646360219c7acba214fe5753a9d043cbf09a9a8be3317e9713d22a0`
+- 使用者依trade-path single-stock parity contract v2重新建立Label、重新訓練`inception_time_v1 / unique_group_sampling`，並完成Selection／OOS Prediction報表。
+- Dataset、Label、模型、threshold及split均由本次console結果確認；策略Gate尚未執行。
+
+### P2 historical teacher穩定性資訊
+
+建立2014～2020 historical teacher schedule時，7-fold rolling optimizer同時輸出三種參數選擇：
+
+| Policy | Fold OOS AVG RoMD | 0050 | OOS_CHAIN RoMD | 0050 |
+|---|---:|---:|---:|---:|
+| base-finalist-best | 1.78 | 1.78 | 5.01 | 5.60 |
+| base-finalists-agree | 2.04 | 1.78 | 6.84 | 5.60 |
+| seed ensemble | 1.78 | 1.78 | 5.01 | 5.60 |
+
+`base-finalists-agree`在本段歷史teacher OOS_CHAIN較佳；但本次TP1 Label實驗的teacher identity已預先固定為`base-finalist-best`，不得在看到模型OOS後改換teacher並混稱同一實驗。這項結果只作A2／P2參數穩定性證據，不改變本次Label工件。
+
+### Dataset與訓練結果
+
+- Events：`1,793,028`
+- PASS：`7,573`
+- REJECT：`9,952`
+- EXCLUDED：`1,775,503`
+- Binary eligible：`17,525`；整體PASS率約`43.21%`。
+- Inner Train：`5,847` groups；Validation：`1,730` groups；Final Selection Refit：`7,628` groups；固定OOS：`9,263` groups。
+- Inner Validation最佳Epoch：`2`；最低Validation Loss：`0.648880`；完整Selection依selected epochs重訓2 epochs，Final Loss：`0.633495`。
+
+### Selection／OOS主要結果
+
+| 指標 | Selection | OOS | OOS判讀 |
+|---|---:|---:|---|
+| 原始PASS | 39.09% | 44.64% | OOS基準較高5.55pp |
+| 模型PASS | 20.02% | 11.93% | OOS通過量顯著下降 |
+| PASS Precision | 56.32% | 48.05% | OOS僅高於原始PASS 3.41pp |
+| PASS Recall | 28.84% | 12.84% | OOS錯殺87.16%的真PASS |
+| PR-AUC | 0.5240 | 0.4796 | 僅略高於OOS prevalence 0.4464，排序能力弱 |
+| Brier | 0.2220 | 0.3006 | OOS惡化 |
+| ECE | 0.0070 | 0.2082 | 明顯校準漂移 |
+| 平均Score | 0.3914 | 0.2613 | OOS分數整體下移 |
+
+年度模型PASS比例高度不穩定：2021 `0.16%`、2022 `53.73%`、2023 `13.57%`、2024 `0.20%`、2025 `21.65%`、2026 partial `0.00%`。這不是單純threshold略偏，而是明顯跨年度score distribution／calibration shift；不得使用同一OOS回頭調threshold、epochs、feature、Label或訓練設定。
+
+### 採用判定
+
+1. 模型層只取得微弱OOS Precision增益，且Recall、PR-AUC、校準與年度穩定性不足；不得直接promote。
+2. 仍依預先定義流程執行一次策略層Gate，確認硬篩選後是否意外形成RoMD、EV、直接交易選擇R與年度穩定性的共同改善。
+3. 若`New−Base`未同時通過上述四項，停止此trade-path Label模型線，不調OOS threshold，也不投入Binary PIT與DL-on optimizer。
+4. 正式策略維持A0；A2仍為無DL研究候選；現有9A Binary DL runtime仍關閉。
+
+## 2026-08-05 — Trade-path Label Strategy Gate Decision-contract Completion
+
+### 狀態
+
+`IMPLEMENTED / STRATEGY_GATE_RERUN_REQUIRED / DATASET_AND_MODEL_REUSE / FORMAL_BASELINE_UNCHANGED`
+
+### 問題
+
+預定採用契約要求`New−Base`同時改善RoMD、EV、直接交易選擇R及年度穩定性，但既有`strategy-trade-path-label-gate`合併報表未讀取pair內已產生的`trade_attribution.json`，因此沒有顯示`exclusive_selection_delta_r`。此外，兩個pair的A2 no-DL base只比較七個摘要數值，未驗證equity、trade history及daily capacity是否逐工件完全一致。直接執行舊Gate會得到不足以做最終判定的報表。
+
+### 唯一修正
+
+- Gate schema升級為version 2，讀取Old／New pair各自的`trade_attribution.json`並fail-fast驗證有限`exclusive_selection_delta_r`。
+- 三組策略總表新增「直接選擇R」；差異表固定輸出`New−Base`、`New−Old`與`Old−Base`的直接選擇R。
+- 判讀契約明示：只有`New−Base`同時改善RoMD、EV、直接交易選擇R及年度穩定性，才可進入Binary PIT與DL-on optimizer。
+- 兩個pair除既有base摘要一致性外，新增`no_filter_equity.csv`、`no_filter_trades.csv`與`no_filter_daily_capacity.csv`逐檔SHA256完全一致檢查；任何差異立即中止。
+- 合併JSON保存Old／New完整trade attribution及三個base identity SHA256；正式工件清單同時列出兩份歸因Markdown。
+
+### 固定條件與工件影響
+
+不改Dataset、Label、模型checkpoint、research scores、threshold 0.5、A2／P2 active params、rules全關、原buy-sort、max positions、rotation、risk、position cap、費稅或策略帳務。既有Dataset與模型可直接沿用；只需在修正版執行一次CLI-only strategy Gate。
+
+### 獨立驗證
+
+- Direct synthetic確認總表與差異表顯示Old `-2.50R`、New `+3.25R`及`New−Old=+5.75R`。
+- Direct synthetic確認三個duplicate base工件完全相同時接受，任一檔案內容不同即fail-fast。
+- 原trade-path single-stock parity 15項加上本次2項Gate contract，共17項全部通過。
+
+### 下一步
+
+套用本修正後執行既有CLI-only `strategy-trade-path-label-gate`；不需重新建立Label或重新訓練。取得Gate結果前，不判定新Label有效。
+
