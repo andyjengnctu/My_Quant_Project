@@ -577,7 +577,7 @@ python -m tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate `
 
 風險搜尋欄位固定為`atr_len`、`atr_buy_tol`、`atr_times_init`與`atr_times_trail`；`high_len`、TP、fixed risk、position cap、max positions、rotation、費稅、原position-aware buy-sort及其餘非風險值依各rolling effective date凍結。未指定`--trials-per-fold`時採目前正式training policy；原ROOS歷史trial數只作診斷，不要求與本次相等。
 
-P3訓練必須使用`build-binary-point-in-time-scores`建立的expanding-window Binary PIT Scores。每個score period的模型只可使用該期開始日前已完成Label的歷史資料；optimizer runtime與平行fold workers都必須驗證同一PIT manifest／scores identity。禁止使用最終9A forward-OOS、`research_scores.csv`或Selection in-sample score回灌歷史訓練。預設Gate在PIT缺失時自動建立；可用`--no-build-binary-pit`只做前置檢查。PIT獨立CLI為：
+P3訓練必須使用`build-binary-point-in-time-scores`建立的expanding-window Binary PIT Scores。每個score period的模型只可使用該期開始日前已完成Label的歷史資料；optimizer runtime與平行fold workers都必須驗證同一PIT manifest／scores identity。禁止使用最終9A forward-OOS、`research_scores.csv`或Selection in-sample score回灌歷史訓練。Binary PIT最早合法日期不必倒推覆蓋完整120個月Selection：PIT開始日前固定pass-through，等同DL-off；PIT期間內缺少候選分數採保守REJECT；PIT尾端早於optimizer最新Selection則fail-fast。P3 preflight會輸出逐fold bootstrap／partial／full coverage與`binary_pit_optimizer_coverage.csv`，並將coverage policy納入runtime identity。預設Gate在PIT缺失時自動建立；可用`--no-build-binary-pit`只做前置檢查。PIT獨立CLI為：
 
 ```powershell
 python apps/breakout_quality.py build-binary-point-in-time-scores `

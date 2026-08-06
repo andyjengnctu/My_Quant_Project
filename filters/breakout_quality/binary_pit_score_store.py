@@ -12,6 +12,9 @@ import pandas as pd
 from filters.breakout_quality.contract import SCORE_COLUMN
 
 BINARY_PIT_SCORE_SOURCE = "binary_point_in_time"
+BINARY_PIT_PRE_COVERAGE_POLICY = "pass_through_dl_off"
+BINARY_PIT_IN_COVERAGE_MISSING_POLICY = "conservative_reject"
+BINARY_PIT_POST_COVERAGE_POLICY = "fail_on_candidate"
 BINARY_PIT_REQUIRED_COLUMNS = (
     "ticker",
     "date",
@@ -140,6 +143,9 @@ def build_pass_condition_from_binary_point_in_time_scores(
 
 
 __all__ = [
+    "BINARY_PIT_IN_COVERAGE_MISSING_POLICY",
+    "BINARY_PIT_POST_COVERAGE_POLICY",
+    "BINARY_PIT_PRE_COVERAGE_POLICY",
     "BINARY_PIT_SCORE_SOURCE",
     "BINARY_PIT_REQUIRED_COLUMNS",
     "build_pass_condition_from_binary_point_in_time_scores",

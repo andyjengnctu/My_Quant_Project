@@ -3771,3 +3771,31 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 ### 採用判定與下一步
 
 本輪只關閉前置工件builder錯誤，尚無新策略績效結果，不得據此判定TP1有效。套用修正後由`python apps/strategy_compare.py`選擇`[1/Enter] 執行目前比較設定`；既有forward scores應顯示REUSE，Binary PIT與Min-DL參數依config自動建立／接續，完成後再產生正式比較報表。
+
+## 2026-08-06 — TP1 Binary PIT historical Selection coverage contract修正
+
+### 狀態
+
+`IMPLEMENTED / P3_PREPARATION_RERUN_REQUIRED / DATASET_LABEL_MODEL_REUSE / PERFORMANCE_RESULT_PENDING`
+
+### 程式與錯誤基準
+
+- 使用者ZIP：`test-branch-1_20260806_180934_7c85422.zip`
+- ZIP SHA256：`a20fb6f2bc38d0edb90f1cd7f33dc09f3c86a8b90242d19e0be84cb7e5e8d0e4`
+- 使用者已成功建立Binary PIT v2，合法score期間為`2016-03-01～2026-03-02`；P3前置隨後因validator要求完整覆蓋optimizer歷史Selection `2011-01-01～2025-12-31`而停止，尚未執行P3 optimizer或C1～C6績效比較。
+
+### 根因
+
+正式Binary PIT runtime原本就把score開始日前候選全部pass-through，語意等同DL-off；score期間內才依PIT score啟用hard filter，score尾端之後若出現候選則fail-fast。舊P3 preflight卻額外要求Binary PIT從120個月Selection最早日開始100%覆蓋，與runtime SSOT矛盾，也要求模型在尚無足夠Inner Train／Validation資料時產生不可能的歷史分數。
+
+### 唯一修正
+
+- P3不再要求不可能的完整歷史coverage；Binary PIT必須與optimizer Selection有實際重疊，且score尾端必須至少覆蓋最新Selection結束日。
+- PIT開始日前固定採`pass_through_dl_off`；PIT期間內無對應候選分數維持既有`conservative_reject`；PIT尾端過期維持`fail_on_candidate`。
+- 逐rolling fold輸出`bootstrap_fallback_only／partial_score_history／full_score_history`、Selection期間、PIT重疊期間與calendar coverage；本次`2016-03-01`起點相對2021～2026六個120月Selection folds皆為partial history，coverage約48.4%逐年提高至98.4%，加權約73.4%。
+- coverage policy、逐fold audit與score identity一併進入P3 runtime identity；P3目錄新增`binary_pit_optimizer_coverage.csv`，`rolling_preflight.json`與`rolling_optimizer_summary.json`保存同一coverage契約。
+- Binary PIT／TP1 Dataset、Label、模型權重、threshold、forward scores、交易規則與Full／Min ROOS均不修改。
+
+### 採用判定與下一步
+
+此修正只關閉前置契約矛盾，不能視為TP1有效。套用後由`apps/strategy_compare.py`選擇`[1/Enter] 執行目前比較設定`；既有Binary PIT應直接重用，P3 optimizer依config建立或接續，完成後才執行C1～C6並取得正式績效結果。

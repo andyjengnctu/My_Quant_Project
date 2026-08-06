@@ -13692,33 +13692,62 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             "first_oos_date": "2021-01-01",
             "last_oos_date": "2026-01-01",
             "train_window_months": 120,
+            "oos_horizon_months": 12,
         }
     }
-    covered_pit = _validate_binary_pit_optimizer_coverage(
+    partial_pit = _validate_binary_pit_optimizer_coverage(
         binary_pit={
             "ready": True,
-            "score_period": {"start": "2011-01-01", "end": "2025-12-31"},
+            "score_period": {"start": "2016-03-01", "end": "2026-03-02"},
         },
         baseline_contract=coverage_contract,
     )
-    short_coverage_rejected = False
+    partial_coverage = dict(partial_pit["optimizer_coverage"])
+    stale_tail_rejected = False
     try:
         _validate_binary_pit_optimizer_coverage(
             binary_pit={
                 "ready": True,
-                "score_period": {"start": "2012-01-01", "end": "2025-12-31"},
+                "score_period": {"start": "2016-03-01", "end": "2025-11-30"},
             },
             baseline_contract=coverage_contract,
         )
     except ValueError as exc:
-        short_coverage_rejected = "未完整覆蓋" in str(exc)
+        stale_tail_rejected = "尾端未覆蓋" in str(exc)
+    no_overlap_rejected = False
+    try:
+        _validate_binary_pit_optimizer_coverage(
+            binary_pit={
+                "ready": True,
+                "score_period": {"start": "2026-01-01", "end": "2026-03-02"},
+            },
+            baseline_contract=coverage_contract,
+        )
+    except ValueError as exc:
+        no_overlap_rejected = "完全沒有重疊" in str(exc)
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_dl_pit_covers_full_optimizer_selection_period",
-        ({"start": "2011-01-01", "end": "2025-12-31"}, True),
-        (covered_pit["optimizer_required_period"], short_coverage_rejected),
+        "binary_dl_pit_partial_optimizer_history_uses_audited_dl_off_fallback",
+        (
+            {"start": "2011-01-01", "end": "2025-12-31"},
+            "pass_through_dl_off",
+            {
+                "bootstrap_fallback_only": 0,
+                "partial_score_history": 6,
+                "full_score_history": 0,
+            },
+            True,
+            True,
+        ),
+        (
+            partial_pit["optimizer_required_period"],
+            partial_coverage["pre_coverage_policy"],
+            partial_coverage["coverage_mode_counts"],
+            stale_tail_rejected,
+            no_overlap_rejected,
+        ),
     )
 
     from tools.filters.breakout_quality.build_binary_point_in_time_scores import (

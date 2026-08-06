@@ -30,6 +30,9 @@ from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
 from filters.breakout_quality.artifacts import compute_file_sha256, load_model_artifact_contract
 from filters.breakout_quality.binary_pit_score_store import (
+    BINARY_PIT_IN_COVERAGE_MISSING_POLICY,
+    BINARY_PIT_POST_COVERAGE_POLICY,
+    BINARY_PIT_PRE_COVERAGE_POLICY,
     BINARY_PIT_SCORE_SOURCE,
     load_binary_point_in_time_score_table,
 )
@@ -76,7 +79,7 @@ from tools.optimizer.session_factory import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EXPERIMENT_STATUS = "FOUR_BY_TWO_COMPLETE"
 RISK_SEARCH_FIELDS = ("atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail")
 EXPERIMENT_RELATIVE_DIR = Path(
@@ -273,30 +276,134 @@ def _ensure_binary_pit(*, root: Path, args) -> dict[str, Any]:
 def _validate_binary_pit_optimizer_coverage(
     *, binary_pit: dict[str, Any], baseline_contract: dict[str, Any]
 ) -> dict[str, Any]:
+    """Validate Binary PIT against the rolling optimizer without demanding impossible history.
+
+    The runtime SSOT already defines three date regions:
+    - before PIT coverage: pass-through, which is exactly DL-off;
+    - inside PIT coverage: use the PIT score and conservatively reject a missing candidate;
+    - after PIT coverage: fail when a candidate appears.
+
+    Therefore an expanding-window model does not need to score dates that precede its
+    earliest legal training date.  It must, however, overlap the optimizer Selection
+    history and remain current through the latest Selection end.
+    """
+
     if not bool(binary_pit.get("ready")):
         return binary_pit
     meta = dict(baseline_contract.get("meta") or {})
     first_oos = pd.Timestamp(str(meta.get("first_oos_date"))).normalize()
     last_oos = pd.Timestamp(str(meta.get("last_oos_date"))).normalize()
     train_months = int(meta.get("train_window_months") or 0)
-    if train_months < 1:
-        raise ValueError("Baseline缺少合法train_window_months，無法驗證Binary PIT coverage")
+    horizon_months = int(meta.get("oos_horizon_months") or 0)
+    if train_months < 1 or horizon_months < 1:
+        raise ValueError(
+            "Baseline缺少合法train_window_months／oos_horizon_months，"
+            "無法驗證Binary PIT coverage"
+        )
+    if first_oos > last_oos:
+        raise ValueError("Baseline first_oos_date不可晚於last_oos_date")
+
     required_start = (first_oos - pd.DateOffset(months=train_months)).normalize()
     required_end = (last_oos - pd.Timedelta(days=1)).normalize()
     period = dict(binary_pit.get("score_period") or {})
-    actual_start = pd.Timestamp(str(period.get("start"))).normalize()
-    actual_end = pd.Timestamp(str(period.get("end"))).normalize()
-    if actual_start > required_start or actual_end < required_end:
+    try:
+        actual_start = pd.Timestamp(str(period.get("start"))).normalize()
+        actual_end = pd.Timestamp(str(period.get("end"))).normalize()
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Binary PIT score_period不合法") from exc
+    if pd.isna(actual_start) or pd.isna(actual_end) or actual_start > actual_end:
+        raise ValueError("Binary PIT score_period不合法")
+    if actual_end < required_end:
         raise ValueError(
-            "Binary PIT未完整覆蓋optimizer歷史Selection："
-            f"required={required_start.date()}~{required_end.date()}, "
-            f"actual={actual_start.date()}~{actual_end.date()}"
+            "Binary PIT尾端未覆蓋optimizer最新歷史Selection："
+            f"required_through={required_end.date()}, actual_through={actual_end.date()}"
         )
-    binary_pit = dict(binary_pit)
-    binary_pit["optimizer_required_period"] = {
-        "start": str(required_start.date()),
-        "end": str(required_end.date()),
+    if actual_start > required_end:
+        raise ValueError(
+            "Binary PIT與optimizer歷史Selection完全沒有重疊："
+            f"selection={required_start.date()}~{required_end.date()}, "
+            f"pit={actual_start.date()}~{actual_end.date()}"
+        )
+
+    folds: list[dict[str, Any]] = []
+    cursor = first_oos
+    while cursor <= last_oos:
+        selection_start = (cursor - pd.DateOffset(months=train_months)).normalize()
+        selection_end = (cursor - pd.Timedelta(days=1)).normalize()
+        total_days = int((selection_end - selection_start).days + 1)
+        overlap_start = max(selection_start, actual_start)
+        overlap_end = min(selection_end, actual_end)
+        scored_days = (
+            int((overlap_end - overlap_start).days + 1)
+            if overlap_start <= overlap_end
+            else 0
+        )
+        if scored_days == 0:
+            coverage_mode = "bootstrap_fallback_only"
+            overlap_period = {"start": None, "end": None}
+        elif scored_days == total_days:
+            coverage_mode = "full_score_history"
+            overlap_period = {
+                "start": str(overlap_start.date()),
+                "end": str(overlap_end.date()),
+            }
+        else:
+            coverage_mode = "partial_score_history"
+            overlap_period = {
+                "start": str(overlap_start.date()),
+                "end": str(overlap_end.date()),
+            }
+        folds.append(
+            {
+                "oos_start": str(cursor.date()),
+                "selection_start": str(selection_start.date()),
+                "selection_end": str(selection_end.date()),
+                "pit_overlap": overlap_period,
+                "calendar_days": total_days,
+                "pit_calendar_days": scored_days,
+                "pre_pit_fallback_days": int(total_days - scored_days),
+                "calendar_coverage_ratio": float(scored_days / total_days),
+                "coverage_mode": coverage_mode,
+            }
+        )
+        cursor = (cursor + pd.DateOffset(months=horizon_months)).normalize()
+
+    total_days = int(sum(int(row["calendar_days"]) for row in folds))
+    scored_days = int(sum(int(row["pit_calendar_days"]) for row in folds))
+    mode_counts = {
+        mode: int(sum(row["coverage_mode"] == mode for row in folds))
+        for mode in (
+            "bootstrap_fallback_only",
+            "partial_score_history",
+            "full_score_history",
+        )
     }
+    coverage = {
+        "contract_version": 2,
+        "full_history_required": False,
+        "optimizer_selection_period": {
+            "start": str(required_start.date()),
+            "end": str(required_end.date()),
+        },
+        "pit_score_period": {
+            "start": str(actual_start.date()),
+            "end": str(actual_end.date()),
+        },
+        "pre_coverage_policy": BINARY_PIT_PRE_COVERAGE_POLICY,
+        "in_coverage_missing_policy": BINARY_PIT_IN_COVERAGE_MISSING_POLICY,
+        "post_coverage_policy": BINARY_PIT_POST_COVERAGE_POLICY,
+        "fold_count": int(len(folds)),
+        "coverage_mode_counts": mode_counts,
+        "weighted_calendar_coverage_ratio": float(scored_days / total_days),
+        "folds": folds,
+    }
+    binary_pit = dict(binary_pit)
+    # Keep the historical key for artifact readers, but its meaning is now an
+    # audited Selection period rather than a 100% coverage requirement.
+    binary_pit["optimizer_required_period"] = dict(
+        coverage["optimizer_selection_period"]
+    )
+    binary_pit["optimizer_coverage"] = coverage
     return binary_pit
 
 
@@ -327,6 +434,7 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
                 "manifest_sha256": binary_pit["manifest_sha256"],
                 "scores_sha256": binary_pit["scores_sha256"],
                 "score_period": binary_pit["score_period"],
+                "optimizer_coverage": dict(binary_pit.get("optimizer_coverage") or {}),
             }
         ),
         "fixed_risk": float(args.fixed_risk),
@@ -438,9 +546,33 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
     )
     if migrated:
         reusable = True
+    coverage_path = arm_dir / "binary_pit_optimizer_coverage.csv"
+    if training_dl_enabled:
+        coverage_rows = []
+        for raw_row in list(
+            dict(binary_pit.get("optimizer_coverage") or {}).get("folds") or []
+        ):
+            row = dict(raw_row)
+            overlap = dict(row.pop("pit_overlap", {}) or {})
+            row["pit_overlap_start"] = overlap.get("start")
+            row["pit_overlap_end"] = overlap.get("end")
+            coverage_rows.append(row)
+        pd.DataFrame(coverage_rows).to_csv(
+            coverage_path, index=False, encoding="utf-8-sig"
+        )
     _write_json(
         preflight_path,
-        {**contract, "status": f"{arm_id}_PREFLIGHT_PASS", "legacy_p2_migrated": migrated, "created_at": get_taipei_now().isoformat()},
+        {
+            **contract,
+            "status": f"{arm_id}_PREFLIGHT_PASS",
+            "legacy_p2_migrated": migrated,
+            "binary_pit_optimizer_coverage_path": (
+                project_relative_display_path(coverage_path, project_root=root)
+                if training_dl_enabled
+                else None
+            ),
+            "created_at": get_taipei_now().isoformat(),
+        },
     )
     if not reusable:
         base_policy = build_rolling_base_policy(root=root, baseline_contract=baseline_contract)
@@ -516,6 +648,11 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
         "trials_per_fold": int(args.trials_per_fold),
         "optimizer_search_reused": bool(reusable),
         "runtime_identity_sha256": contract["runtime_identity_sha256"],
+        "binary_pit_optimizer_coverage": (
+            None
+            if not training_dl_enabled
+            else dict(binary_pit.get("optimizer_coverage") or {})
+        ),
     }
     _write_json(arm_dir / "rolling_optimizer_summary.json", summary)
     return {"params_path": params_path, "summary": summary, "contract": contract}
@@ -656,6 +793,69 @@ def _risk_param_rows(*, baseline_contract, p2_path, p3_path):
     return rows
 
 
+
+def _binary_pit_coverage_rows(binary_pit: dict[str, Any]) -> list[tuple[Any, ...]]:
+    coverage = dict(binary_pit.get("optimizer_coverage") or {})
+    rows = []
+    for row in list(coverage.get("folds") or []):
+        overlap = dict(row.get("pit_overlap") or {})
+        overlap_text = (
+            "-"
+            if overlap.get("start") in (None, "")
+            else f"{overlap.get('start')}～{overlap.get('end')}"
+        )
+        rows.append(
+            (
+                str(row.get("oos_start") or ""),
+                f"{row.get('selection_start')}～{row.get('selection_end')}",
+                overlap_text,
+                f"{float(row.get('calendar_coverage_ratio', 0.0)):.1%}",
+                str(row.get("coverage_mode") or ""),
+            )
+        )
+    return rows
+
+
+def _render_binary_pit_coverage(
+    binary_pit: dict[str, Any], *, section_title: str = "Binary PIT optimizer coverage"
+) -> str:
+    coverage = dict(binary_pit.get("optimizer_coverage") or {})
+    if not coverage:
+        return render_section(section_title) + "\n尚無coverage契約。"
+    counts = dict(coverage.get("coverage_mode_counts") or {})
+    selection_period = dict(coverage.get("optimizer_selection_period") or {})
+    pit_period = dict(coverage.get("pit_score_period") or {})
+    selection_text = (
+        "-"
+        if not selection_period
+        else f"{selection_period.get('start')}～{selection_period.get('end')}"
+    )
+    pit_text = (
+        "-" if not pit_period else f"{pit_period.get('start')}～{pit_period.get('end')}"
+    )
+    return "\n".join(
+        (
+            render_section(section_title),
+            render_key_values(
+                (
+                    ("Optimizer Selection", selection_text),
+                    ("PIT Score period", pit_text),
+                    ("Weighted coverage", f"{float(coverage.get('weighted_calendar_coverage_ratio', 0.0)):.1%}"),
+                    ("Bootstrap folds", int(counts.get("bootstrap_fallback_only", 0))),
+                    ("Partial folds", int(counts.get("partial_score_history", 0))),
+                    ("Full folds", int(counts.get("full_score_history", 0))),
+                    ("PIT開始日前", "DL-off pass-through"),
+                    ("PIT期間內缺分", "conservative REJECT"),
+                    ("PIT尾端過期", "candidate出現即fail-fast"),
+                )
+            ),
+            render_table(
+                ("OOS起點", "Selection", "PIT重疊", "Coverage", "模式"),
+                _binary_pit_coverage_rows(binary_pit),
+            ),
+        )
+    )
+
 def _render_report(*, args, matrix, p2_arm, p3_arm, binary_pit, baseline_contract, plan_only):
     lines = [
         render_title("Binary DL Filter 4 Parameters × 2 DL States Gate"),
@@ -695,7 +895,10 @@ def _render_report(*, args, matrix, p2_arm, p3_arm, binary_pit, baseline_contrac
         )
     lines.extend(
         (
-            render_section("5. 無前視契約"),
+            _render_binary_pit_coverage(
+                binary_pit, section_title="5. Binary PIT training coverage"
+            ),
+            render_section("6. 無前視契約"),
             render_key_values(
                 (
                     ("PIT Manifest", binary_pit["manifest_path"]),
@@ -753,6 +956,8 @@ def run_param_adaptation_gate(*, project_root=PROJECT_ROOT, argv=None):
         "created_at": get_taipei_now().isoformat(),
     }
     _write_json(plan_path, plan)
+    if binary_pit.get("ready"):
+        print("\n" + _render_binary_pit_coverage(binary_pit))
     p2_arm = p3_arm = matrix = None
     if not args.plan_only:
         configure_optuna_logging()
