@@ -16011,6 +16011,96 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and incomplete_post_prepare_rejected,
     )
 
+    execution_pairs = strategy_comparison_module._execution_pairs(settings)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "enabled_arms_build_canonical_execution_pairs_before_replay",
+        (
+            ("full_roos", "formal", "C1", "C2"),
+            ("min_roos", "all_off", "C3", "C4"),
+            ("min_dl_tp1_roos", "all_off", "C5", "C6"),
+        ),
+        tuple(
+            (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
+            for param_source, rule_policy, off_arm, on_arm in execution_pairs
+        ),
+    )
+
+    from core.strategy_comparison import StrategyPreparationPlan
+
+    mocked_pair_payload = {
+        "metadata": {
+            "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"}
+        },
+        "no_filter": {
+            "total_return_pct": 10.0,
+            "max_drawdown_pct": 5.0,
+            "return_over_max_drawdown": 2.0,
+            "annual_return_pct": 10.0,
+            "expected_value_r": 0.10,
+            "payoff_ratio": 1.20,
+            "avg_exposure_pct": 50.0,
+            "trade_count": 10,
+        },
+        "quality_filter": {
+            "total_return_pct": 11.0,
+            "max_drawdown_pct": 5.0,
+            "return_over_max_drawdown": 2.2,
+            "annual_return_pct": 11.0,
+            "expected_value_r": 0.12,
+            "payoff_ratio": 1.25,
+            "avg_exposure_pct": 48.0,
+            "trade_count": 8,
+        },
+        "yearly": [
+            {
+                "year": 2021,
+                "no_filter_return_pct": 10.0,
+                "quality_filter_return_pct": 11.0,
+            }
+        ],
+    }
+    ready_plan = StrategyPreparationPlan(overall_status="READY", actions=tuple())
+    ready_status = {
+        "overall_status": "READY",
+        "comparison_ready": True,
+        "config_fingerprint": "runtimepair123",
+        "artifact_identities": {},
+        "resolved_parameter_paths": {
+            source_id: f"models/{source_id}.json"
+            for source_id in {arm.param_source for arm in settings.enabled_arms}
+        },
+        "preparation_plan": ready_plan,
+    }
+    with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+        strategy_comparison_module,
+        "get_strategy_comparison_settings",
+        return_value=settings,
+    ), patch.object(
+        strategy_comparison_module,
+        "run_comparison",
+        return_value=dict(mocked_pair_payload),
+    ) as mocked_run, patch.object(
+        strategy_comparison_module,
+        "_load_direct_selection_r",
+        return_value=0.25,
+    ), redirect_stdout(io.StringIO()):
+        replay_payload = strategy_comparison_module.run_strategy_comparison(
+            project_root=Path(tmpdir),
+            quiet=True,
+            status=dict(ready_status),
+            auto_prepare=False,
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "ready_orchestration_executes_each_config_pair_and_writes_all_enabled_arms",
+        True,
+        mocked_run.call_count == len(execution_pairs)
+        and set(replay_payload["scenarios"])
+        == {arm.arm_id for arm in settings.enabled_arms}
+        and replay_payload["status"] == "COMPLETED",
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "parameter_preflight_identity_tracks_config_and_baseline",

@@ -3831,3 +3831,33 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 ### 採用判定與下一步
 
 尚未取得C1～C6實際績效，不得判定TP1有效或無效。套用修正後由`python apps/strategy_compare.py`進入選單並執行目前比較設定；若P3工件identity完整，計畫應顯示REUSE並直接進入C1～C6 replay與正式報表。
+
+## 2026-08-06 — Strategy Compare execution-pair runtime contract修正
+
+### 狀態
+
+`IMPLEMENTED / C1_C6_REPLAY_RERUN_REQUIRED / ALL_PREREQUISITE_ARTIFACTS_REUSE / PERFORMANCE_RESULT_PENDING`
+
+### 程式與錯誤基準
+
+- 使用者ZIP：`test-branch-1_20260806_195324_e5bfab8.zip`
+- ZIP SHA256：`0752a7163153bd168d7cea473409a787d53f02704d0596c485604735bf8baf88`
+- 使用者狀態頁與執行計畫均為`READY`，TP1 model／manifest／forward scores、Full ROOS、Min ROOS與Min-DL-TP1 ROOS皆可重用；按下執行後，在第一個正式pair replay前發生`NameError: _execution_pairs is not defined`，因此尚未產生C1～C6績效結果。
+
+### 根因
+
+config-driven策略比較重構後，`run_strategy_comparison()`保留對`_execution_pairs(settings)`的呼叫，但正式orchestration模組遺漏該helper本體。既有validator只驗證config、前置計畫、status refresh與fingerprint，沒有實際建立execution pairs或走完整mocked replay orchestration，因此compile／import與前置契約均通過，直到真實READY路徑才發生NameError。
+
+### 唯一修正
+
+- 在`filters/breakout_quality/strategy_comparison.py`新增通用`_execution_pairs()`，只依目前啟用arms，以config順序建立每個`param_source／rule_policy`的canonical DL-off／DL-on pair。
+- runtime再次檢查同group不得重複DL狀態、不得缺少off／on任一側，且DL-on arm必須有`dl_id`；停用arm不會被隱性執行。
+- `validate_strategy_compare_config_driven_app_contract_case`新增兩層直接回歸：一是驗證目前config產生三個正確pair；二是mock正式`run_comparison()`走完整READY orchestration，確認每個pair各執行一次、六個enabled arms皆進入正式payload並成功寫出報表／JSON／manifest。
+
+### Dataset／Label／模型／參數影響
+
+不重建Dataset、不重新Label、不重新訓練TP1模型、不改threshold、Binary PIT、forward scores、交易規則、帳務、Full ROOS、Min ROOS或Min-DL-TP1 ROOS。使用者已完成的所有前置工件可直接重用；本輪只修正正式比較pair建立與測試覆蓋。
+
+### 採用判定與下一步
+
+尚未取得C1～C6實際績效，不得判定TP1有效或無效。套用修正後由`python apps/strategy_compare.py`進入選單並執行目前比較設定；計畫應維持全部`REUSE`，隨後直接進入三個canonical pair replay與正式報表。

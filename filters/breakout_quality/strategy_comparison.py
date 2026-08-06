@@ -252,6 +252,49 @@ def _load_direct_selection_r(output_dir: Path, *, root: Path) -> float:
     return float(value)
 
 
+def _execution_pairs(
+    settings: StrategyComparisonSettings,
+) -> tuple[tuple[str, str, StrategyComparisonArm, StrategyComparisonArm], ...]:
+    """Return enabled canonical DL-off/DL-on replay pairs in config order.
+
+    Config validation guarantees that every enabled ``param_source`` /
+    ``rule_policy`` group has exactly one DL-off arm and one DL-on arm.  The
+    orchestration still rebuilds and validates the groups here so runtime does
+    not depend on an implicit config shape or execute a disabled arm.
+    """
+    grouped: dict[tuple[str, str], dict[bool, StrategyComparisonArm]] = {}
+    ordered_keys: list[tuple[str, str]] = []
+    for arm in settings.enabled_arms:
+        key = (arm.param_source, arm.rule_policy)
+        if key not in grouped:
+            grouped[key] = {}
+            ordered_keys.append(key)
+        state = bool(arm.dl_enabled)
+        if state in grouped[key]:
+            raise ValueError(
+                "啟用比較對象重複定義相同param_source／rule_policy／DL狀態: "
+                f"{arm.param_source}/{arm.rule_policy}/dl_enabled={state}"
+            )
+        grouped[key][state] = arm
+
+    pairs: list[
+        tuple[str, str, StrategyComparisonArm, StrategyComparisonArm]
+    ] = []
+    for param_source, rule_policy in ordered_keys:
+        states = grouped[(param_source, rule_policy)]
+        if False not in states or True not in states:
+            raise ValueError(
+                "啟用比較群組缺少canonical DL-off／DL-on pair: "
+                f"{param_source}/{rule_policy}"
+            )
+        off_arm = states[False]
+        on_arm = states[True]
+        if not on_arm.dl_id:
+            raise ValueError(f"DL-on arm缺少dl_id: {on_arm.arm_id}")
+        pairs.append((param_source, rule_policy, off_arm, on_arm))
+    return tuple(pairs)
+
+
 def _scenario_payloads(
     pair_payloads: dict[str, dict[str, Any]],
     direct_r: dict[str, float],
