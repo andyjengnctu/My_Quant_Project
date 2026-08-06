@@ -452,6 +452,37 @@ def _render_report(
     ).rstrip() + "\n"
 
 
+def _collect_ready_status_after_preparation(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    requested_plan: StrategyPreparationPlan,
+) -> dict[str, Any]:
+    """Refresh the full orchestration status after prerequisite builders finish.
+
+    The preparation layer owns artifact readiness only; config fingerprints and
+    replay-ready resolved paths belong to this orchestration layer. Recollecting
+    through the public wrapper prevents the low-level preparation payload from
+    replacing the richer status contract expected by report and output writers.
+    """
+    refreshed = collect_artifact_status(project_root=root, settings=settings)
+    refreshed["requested_preparation_plan"] = requested_plan
+    required_keys = (
+        "config_fingerprint",
+        "artifact_identities",
+        "resolved_parameter_paths",
+        "preparation_plan",
+    )
+    missing = [key for key in required_keys if key not in refreshed]
+    if missing:
+        raise RuntimeError(
+            "前置完成後狀態契約不完整: missing=" + ",".join(missing)
+        )
+    if not bool(refreshed.get("comparison_ready")) or refreshed.get("overall_status") != "READY":
+        raise RuntimeError("前置完成後正式比較狀態仍非READY")
+    return refreshed
+
+
 def _run_directory(
     *,
     root: Path,
@@ -486,10 +517,15 @@ def run_strategy_comparison(
     if status["overall_status"] == "PREPARABLE":
         if not auto_prepare:
             raise RuntimeError("目前工件可自動準備，但本次已停用auto_prepare")
-        status = prepare_strategy_comparison_artifacts(
+        prepare_strategy_comparison_artifacts(
             project_root=root,
             settings=settings,
             status=status,
+        )
+        status = _collect_ready_status_after_preparation(
+            root=root,
+            settings=settings,
+            requested_plan=requested_plan,
         )
 
     run_dir, latest_dir = _run_directory(

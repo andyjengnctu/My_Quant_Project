@@ -15960,6 +15960,57 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "render_execution_plan" in app_source,
     )
 
+    from filters.breakout_quality import strategy_comparison as strategy_comparison_module
+
+    requested_plan = SimpleNamespace(overall_status="PREPARABLE")
+    complete_post_prepare_status = {
+        "comparison_ready": True,
+        "overall_status": "READY",
+        "config_fingerprint": "postprepare123",
+        "artifact_identities": {"param:test": {"sha256": "abc"}},
+        "resolved_parameter_paths": {"test": "models/test.json"},
+        "preparation_plan": SimpleNamespace(overall_status="READY"),
+    }
+    with patch.object(
+        strategy_comparison_module,
+        "collect_artifact_status",
+        return_value=dict(complete_post_prepare_status),
+    ):
+        refreshed_post_prepare_status = (
+            strategy_comparison_module._collect_ready_status_after_preparation(
+                root=project_root,
+                settings=settings,
+                requested_plan=requested_plan,
+            )
+        )
+    with patch.object(
+        strategy_comparison_module,
+        "collect_artifact_status",
+        return_value={
+            key: value
+            for key, value in complete_post_prepare_status.items()
+            if key != "config_fingerprint"
+        },
+    ):
+        try:
+            strategy_comparison_module._collect_ready_status_after_preparation(
+                root=project_root,
+                settings=settings,
+                requested_plan=requested_plan,
+            )
+        except RuntimeError as exc:
+            incomplete_post_prepare_rejected = "config_fingerprint" in str(exc)
+        else:
+            incomplete_post_prepare_rejected = False
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "post_preparation_refresh_restores_full_orchestration_status_contract",
+        True,
+        refreshed_post_prepare_status["config_fingerprint"] == "postprepare123"
+        and refreshed_post_prepare_status["requested_preparation_plan"] is requested_plan
+        and incomplete_post_prepare_rejected,
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "parameter_preflight_identity_tracks_config_and_baseline",

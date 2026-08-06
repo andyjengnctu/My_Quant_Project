@@ -3799,3 +3799,35 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 ### 採用判定與下一步
 
 此修正只關閉前置契約矛盾，不能視為TP1有效。套用後由`apps/strategy_compare.py`選擇`[1/Enter] 執行目前比較設定`；既有Binary PIT應直接重用，P3 optimizer依config建立或接續，完成後才執行C1～C6並取得正式績效結果。
+
+## 2026-08-06 — Strategy Compare前置完成後status contract修正
+
+### 狀態
+
+`IMPLEMENTED / C1_C6_REPLAY_RERUN_REQUIRED / P3_ARTIFACT_REUSE / PERFORMANCE_RESULT_PENDING`
+
+### 程式與錯誤基準
+
+- 使用者ZIP：`test-branch-1_20260806_183741_032ae37.zip`
+- ZIP SHA256：`2824d9d5d48422a81f9c0f8c88e71a3fbd80b872c0d96166e85e1882933239f4`
+- 使用者已成功完成Binary PIT與Min-DL參數前置，並輸出P3相關計畫／報表；其後正式C1～C6 replay尚未開始，即於`filters/breakout_quality/strategy_comparison.py`建立run directory前發生`KeyError: config_fingerprint`。
+
+### 根因
+
+`run_strategy_comparison()`最初取得的是正式orchestration status，包含`config_fingerprint`、`artifact_identities`與`resolved_parameter_paths`。當前置builder完成後，程式卻直接採用`strategy_compare_preparation.collect_artifact_status()`回傳的低階readiness payload；該payload刻意不負責config fingerprint，因此覆蓋正式status contract，直到後續讀取`status["config_fingerprint"]`才失敗。
+
+### 唯一修正
+
+- 前置builder完成後，不再把低階preparation payload直接當成正式orchestration status。
+- 新增正式post-preparation refresh：透過`filters/breakout_quality/strategy_comparison.collect_artifact_status()`重新計算目前工件identity與最終config fingerprint，並恢復resolved parameter paths。
+- refresh後必須同時具備`config_fingerprint`、`artifact_identities`、`resolved_parameter_paths`與`preparation_plan`，且整體狀態必須為`READY`；缺欄位或仍非READY時在portfolio replay前以可追蹤RuntimeError停止，不再出現延遲KeyError。
+- 保留首次執行計畫與requested fingerprint，正式輸出仍同時記錄requested／final preparation plan及前後fingerprint。
+- `validate_strategy_compare_config_driven_app_contract_case`新增直接post-preparation狀態交接案例，覆蓋完整欄位恢復與缺少fingerprint拒絕。
+
+### Dataset／Label／模型／參數影響
+
+不重建Dataset、不重新Label、不重新訓練TP1模型、不改threshold、Binary PIT、forward scores、交易規則或帳務。使用者本輪已完成的P3／Min-DL工件可直接重用；本次只修正前置完成後的狀態交接與輸出identity閉環。
+
+### 採用判定與下一步
+
+尚未取得C1～C6實際績效，不得判定TP1有效或無效。套用修正後由`python apps/strategy_compare.py`進入選單並執行目前比較設定；若P3工件identity完整，計畫應顯示REUSE並直接進入C1～C6 replay與正式報表。
