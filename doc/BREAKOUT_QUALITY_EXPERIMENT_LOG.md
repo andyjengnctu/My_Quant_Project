@@ -3739,3 +3739,35 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 
 不重建Dataset、不重新Label、不重新訓練模型、不匯出新正式Scores、不改threshold、不改P2／P3 ROOS、不改交易或帳務語意，也沒有新Selection／OOS或策略績效結果。本輪只修正正式匯出參數契約與測試／coverage基礎設施。
 
+
+## 2026-08-06 — TP1 Binary PIT mixed-label前置失敗修正
+
+### 狀態
+
+`IMPLEMENTED / P3_PREPARATION_RERUN_REQUIRED / DATASET_LABEL_MODEL_REUSE / PERFORMANCE_RESULT_PENDING`
+
+### 程式與錯誤基準
+
+- 使用者ZIP：`test-branch-1_20260806_175431_9167541.zip`
+- ZIP SHA256：`8db2f114c86c96623d9492413c31a3c006806ba9e3cec81189061059f83925aa`
+- 使用者已由`apps/strategy_compare.py`成功自動匯出TP1 forward-OOS scores；後續重建`Min-DL-TP1 ROOS`時，Binary PIT前置於`continuous ranker發現同group混合binary label`停止，因此尚未執行C1～C6績效比較。
+
+### 根因
+
+`tools/filters/breakout_quality/build_binary_point_in_time_scores.py`錯誤重用continuous-ranker的`_group_table()`。該helper要求同一feature group的所有event rows具有完全相同Label；但TP1 trade-path Dataset刻意保留同一`ticker/date`下的一筆teacher-active PASS／REJECT，以及其他`inactive_high_len_for_teacher` EXCLUDED rows。EXCLUDED並非binary target，不應被判定為PASS／REJECT衝突。
+
+### 唯一修正
+
+- Binary PIT改用專用group representative契約，不再依賴continuous-ranker helper。
+- 每個feature group優先選擇第一筆eligible PASS／REJECT作為訓練代表；若沒有eligible binary row，使用第一筆event row並標為非target。
+- EXCLUDED rows不再造成mixed-label失敗；若同group真正同時存在互相衝突的eligible PASS與REJECT，仍立即fail-fast。
+- Binary PIT schema升級為version 2，fold fingerprint與manifest記錄新的group representative contract，避免重用舊語意工件。
+- Binary DL參數適應synthetic contract新增TP1 PASS／REJECT＋EXCLUDED group案例，並將Binary PIT builder納入該validator的impacted modules。
+
+### Dataset／Label／模型影響
+
+不重建Dataset、不重新Label、不重新訓練TP1模型、不改threshold、forward-OOS scores或交易語意。使用者剛匯出的正式forward scores可直接沿用；只需重新由策略比較選單執行目前設定，程式會重建Binary PIT、接續P3 optimizer並在工件完整後執行C1～C6。
+
+### 採用判定與下一步
+
+本輪只關閉前置工件builder錯誤，尚無新策略績效結果，不得據此判定TP1有效。套用修正後由`python apps/strategy_compare.py`選擇`[1/Enter] 執行目前比較設定`；既有forward scores應顯示REUSE，Binary PIT與Min-DL參數依config自動建立／接續，完成後再產生正式比較報表。

@@ -88,9 +88,8 @@ from tools.filters.breakout_quality.common import (
     load_validated_dataset_bundle,
 )
 from tools.filters.breakout_quality import train as train_impl
-from tools.filters.breakout_quality.train_continuous_ranker import _group_table
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 OUTPUT_RELATIVE_DIR = Path(
     "models/research/breakout_quality/binary_point_in_time_scores"
 )
@@ -110,6 +109,81 @@ class BinaryPitBundle:
     target_valid: np.ndarray
     profile: Any
     model_spec: Any
+
+
+def _build_binary_group_table(
+    events: pd.DataFrame,
+    event_group_index: np.ndarray,
+    labels: np.ndarray,
+) -> pd.DataFrame:
+    """Build one deterministic representative row per feature group.
+
+    Binary datasets may contain multiple event rows for the same ticker/date
+    feature group.  Trade-path datasets intentionally keep one teacher-active
+    PASS/REJECT row while marking the other high_len rows EXCLUDED.  EXCLUDED
+    rows are not binary targets and therefore must not be treated as a mixed
+    label conflict.  A group is invalid only when its eligible PASS/REJECT rows
+    disagree.
+    """
+
+    required = {"ticker", "date", "group_index"}
+    missing = sorted(required - set(events.columns))
+    if missing:
+        raise KeyError(f"Binary PIT group table缺少events欄位: {missing}")
+
+    normalized_group_index = np.asarray(event_group_index, dtype=np.int64)
+    normalized_labels = np.asarray(labels, dtype=np.int64)
+    if normalized_group_index.ndim != 1 or normalized_labels.ndim != 1:
+        raise ValueError("Binary PIT event_group_index與labels必須是1D")
+    if len(events) != normalized_group_index.size or len(events) != normalized_labels.size:
+        raise ValueError(
+            "Binary PIT events／event_group_index／labels長度不一致: "
+            f"events={len(events)}, group_index={normalized_group_index.size}, "
+            f"labels={normalized_labels.size}"
+        )
+    if len(events) == 0:
+        raise ValueError("Binary PIT dataset沒有event rows")
+
+    frame = events[["ticker", "date", "group_index"]].copy()
+    frame["event_row"] = np.arange(len(frame), dtype=np.int64)
+    frame["label"] = normalized_labels
+    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.normalize()
+    csv_group_index = pd.to_numeric(frame["group_index"], errors="raise").to_numpy(
+        dtype=np.int64
+    )
+    if not np.array_equal(csv_group_index, normalized_group_index):
+        raise ValueError("Binary PIT events group_index與event_group_index不一致")
+
+    representatives: list[pd.Series] = []
+    for group_index, group_rows in frame.groupby("group_index", sort=True):
+        if group_rows["ticker"].astype(str).nunique() != 1 or group_rows["date"].nunique() != 1:
+            raise ValueError(
+                "Binary PIT同group的ticker/date必須一致: "
+                f"group_index={int(group_index)}"
+            )
+        eligible = group_rows[group_rows["label"].isin((LABEL_REJECT, LABEL_PASS))]
+        eligible_labels = eligible["label"].drop_duplicates().tolist()
+        if len(eligible_labels) > 1:
+            raise ValueError(
+                "Binary PIT發現同group混合eligible binary label: "
+                f"group_index={int(group_index)}, labels={eligible_labels}"
+            )
+        representative = (
+            eligible.sort_values("event_row", kind="mergesort").iloc[0]
+            if not eligible.empty
+            else group_rows.sort_values("event_row", kind="mergesort").iloc[0]
+        )
+        representatives.append(representative)
+
+    group = pd.DataFrame(representatives).sort_values("group_index", kind="mergesort")
+    observed = group["group_index"].to_numpy(dtype=np.int64)
+    expected = np.arange(len(group), dtype=np.int64)
+    if not np.array_equal(observed, expected):
+        raise ValueError("Binary PIT要求group_index連續完整")
+    representative_rows = group["event_row"].to_numpy(dtype=np.int64)
+    if not np.array_equal(normalized_group_index[representative_rows], expected):
+        raise ValueError("Binary PIT representative與event_group_index不一致")
+    return group.reset_index(drop=True)
 
 
 def _parse_args(argv=None):
@@ -232,7 +306,7 @@ def _load_bundle(args) -> BinaryPitBundle:
         enabled=bool(args.preload_feature_bank),
     )
     event_group_index = np.asarray(features.event_group_index, dtype=np.int64)
-    group_table = _group_table(events, event_group_index, labels).copy()
+    group_table = _build_binary_group_table(events, event_group_index, labels)
     representative_rows = group_table["event_row"].to_numpy(dtype=np.int64)
     group_table["label_eval_end_date"] = pd.to_datetime(
         events.iloc[representative_rows]["label_eval_end_date"], errors="coerce"
@@ -684,6 +758,10 @@ def build_binary_point_in_time_scores(*, project_root=PROJECT_ROOT, argv=None) -
         "experiment_profile": str(args.experiment_profile),
         "training_objective": TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
         "shared_group_score_broadcast": True,
+        "group_representative_contract": (
+            "prefer_first_eligible_pass_reject_row_else_first_event_row; "
+            "excluded_rows_do_not_create_mixed_label_conflicts"
+        ),
         "threshold": 0.5,
         "score_period": {
             "start": str(pd.to_datetime(score_frame["date"]).min().date()),

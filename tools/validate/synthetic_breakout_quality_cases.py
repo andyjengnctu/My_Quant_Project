@@ -13722,7 +13722,46 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
     )
 
     from tools.filters.breakout_quality.build_binary_point_in_time_scores import (
+        _build_binary_group_table,
         _train_fold as train_binary_pit_fold,
+    )
+
+    trade_path_group_events = pd.DataFrame(
+        {
+            "ticker": ["1101", "1101", "2330", "2330", "2603", "2603"],
+            "date": [
+                "2020-01-02", "2020-01-02",
+                "2020-01-03", "2020-01-03",
+                "2020-01-06", "2020-01-06",
+            ],
+            "group_index": [0, 0, 1, 1, 2, 2],
+        }
+    )
+    trade_path_group_table = _build_binary_group_table(
+        trade_path_group_events,
+        np.array([0, 0, 1, 1, 2, 2], dtype=np.int64),
+        np.array([-1, 1, 0, -1, -1, -1], dtype=np.int64),
+    )
+    mixed_eligible_rejected = False
+    try:
+        _build_binary_group_table(
+            trade_path_group_events.iloc[:2].copy(),
+            np.array([0, 0], dtype=np.int64),
+            np.array([0, 1], dtype=np.int64),
+        )
+    except ValueError as exc:
+        mixed_eligible_rejected = "混合eligible binary label" in str(exc)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "binary_pit_trade_path_group_ignores_excluded_rows_but_rejects_eligible_conflicts",
+        ([1, 2, 4], [1, 0, -1], True),
+        (
+            trade_path_group_table["event_row"].astype(int).tolist(),
+            trade_path_group_table["label"].astype(int).tolist(),
+            mixed_eligible_rejected,
+        ),
     )
 
     pit_events = pd.DataFrame(
