@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 3
+STRATEGY_COMPARE_SCHEMA_VERSION = 4
 
 # =============================================================================
 # 1. 共用執行設定
@@ -138,13 +138,35 @@ STRATEGY_DL_SOURCES = {
             },
         },
     },
+    "A9": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "unique_group_sampling",
+        "threshold": 0.5,
+        "description": "既有MFE／MAE 9A Binary DL模型；只作runtime比較，不訓練A9-aware策略參數",
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "forward_oos_scores",
+            "options": {
+                "scope": "forward_oos",
+                "inference_batch_size": 4096,
+                "inference_workers": 4,
+                "device": "auto",
+                "mixed_precision": True,
+                "mixed_precision_dtype": "bfloat16",
+                "deterministic_algorithms": True,
+                "allow_tf32": False,
+                "preload_feature_bank": True,
+            },
+        },
+    },
 }
 
 # =============================================================================
 # 5. 要比較的對象：逐項用enabled開關
 # =============================================================================
-# 同一param_source／rule_policy的DL-off與DL-on是canonical controlled pair，
-# 必須一起開啟或一起關閉；不同pair及各contrast可獨立開關。
+# 同一param_source／rule_policy只定義一個共用DL-off基準，並可掛多個DL-on模型。
+# 各DL-on arm與contrast可獨立開關；只要仍有DL-on啟用，共用DL-off就必須啟用。
 
 STRATEGY_COMPARE_ARMS = {
     "C1": {
@@ -201,6 +223,33 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": True,
         "dl_id": "TP1",
     },
+    "C7": {
+        "enabled": True,
+        "name": "Full ROOS × DL-A9",
+        "description": "Full ROOS下加入既有A9 hard filter",
+        "param_source": "full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": True,
+        "dl_id": "A9",
+    },
+    "C8": {
+        "enabled": True,
+        "name": "Min ROOS × DL-A9",
+        "description": "Min ROOS下加入既有A9 hard filter",
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "A9",
+    },
+    "C9": {
+        "enabled": True,
+        "name": "Min-DL-TP1 ROOS × DL-A9",
+        "description": "在TP1-aware參數下直接比較A9與TP1 runtime filter",
+        "param_source": "min_dl_tp1_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "A9",
+    },
 }
 
 # =============================================================================
@@ -215,6 +264,12 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C5-C3": {"enabled": True, "left": "C5", "right": "C3", "description": "DL-aware參數本身效果"},
     "C6-C4": {"enabled": True, "left": "C6", "right": "C4", "description": "完整DL-aware組合的額外效果"},
     "C6-C1": {"enabled": True, "left": "C6", "right": "C1", "description": "完整方案相對正式基準"},
+    "C7-C1": {"enabled": True, "left": "C7", "right": "C1", "description": "Full ROOS下A9 DL效果"},
+    "C8-C3": {"enabled": True, "left": "C8", "right": "C3", "description": "Min ROOS下A9 DL效果"},
+    "C9-C5": {"enabled": True, "left": "C9", "right": "C5", "description": "Min-DL-TP1 ROOS下A9 DL效果"},
+    "C2-C7": {"enabled": True, "left": "C2", "right": "C7", "description": "Full ROOS下TP1相對A9"},
+    "C4-C8": {"enabled": True, "left": "C4", "right": "C8", "description": "Min ROOS下TP1相對A9"},
+    "C6-C9": {"enabled": True, "left": "C6", "right": "C9", "description": "Min-DL-TP1 ROOS下TP1相對A9"},
 }
 
 

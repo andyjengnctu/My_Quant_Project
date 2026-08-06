@@ -40,7 +40,7 @@ from filters.breakout_quality.strategy_compare_preparation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESULT_SCHEMA_VERSION = 3
+RESULT_SCHEMA_VERSION = 4
 
 
 def _json_native(value: Any) -> Any:
@@ -263,44 +263,100 @@ def _load_direct_selection_r(output_dir: Path, *, root: Path) -> float:
 def _execution_pairs(
     settings: StrategyComparisonSettings,
 ) -> tuple[tuple[str, str, StrategyComparisonArm, StrategyComparisonArm], ...]:
-    """Return enabled canonical DL-off/DL-on replay pairs in config order.
+    """Return one replay pair per enabled DL source in config order.
 
-    Config validation guarantees that every enabled ``param_source`` /
-    ``rule_policy`` group has exactly one DL-off arm and one DL-on arm.  The
-    orchestration still rebuilds and validates the groups here so runtime does
-    not depend on an implicit config shape or execute a disabled arm.
+    A ``param_source`` / ``rule_policy`` group owns one shared DL-off baseline
+    and may expose multiple DL-on arms.  Each DL-on arm is replayed against the
+    same baseline; downstream aggregation verifies that repeated baseline
+    summaries and yearly returns remain identical.
     """
-    grouped: dict[tuple[str, str], dict[bool, StrategyComparisonArm]] = {}
+    grouped: dict[
+        tuple[str, str],
+        dict[str, StrategyComparisonArm | list[StrategyComparisonArm] | None],
+    ] = {}
     ordered_keys: list[tuple[str, str]] = []
     for arm in settings.enabled_arms:
         key = (arm.param_source, arm.rule_policy)
         if key not in grouped:
-            grouped[key] = {}
+            grouped[key] = {"off": None, "on": []}
             ordered_keys.append(key)
-        state = bool(arm.dl_enabled)
-        if state in grouped[key]:
+        group = grouped[key]
+        if not arm.dl_enabled:
+            if group["off"] is not None:
+                raise ValueError(
+                    "啟用比較群組重複定義DL-off基準: "
+                    f"{arm.param_source}/{arm.rule_policy}"
+                )
+            group["off"] = arm
+            continue
+        on_arms = group["on"]
+        if not isinstance(on_arms, list):
+            raise TypeError("strategy comparison execution group contract錯誤")
+        if not arm.dl_id:
+            raise ValueError(f"DL-on arm缺少dl_id: {arm.arm_id}")
+        if any(existing.dl_id == arm.dl_id for existing in on_arms):
             raise ValueError(
-                "啟用比較對象重複定義相同param_source／rule_policy／DL狀態: "
-                f"{arm.param_source}/{arm.rule_policy}/dl_enabled={state}"
+                "啟用比較群組重複定義相同DL source: "
+                f"{arm.param_source}/{arm.rule_policy}/{arm.dl_id}"
             )
-        grouped[key][state] = arm
+        on_arms.append(arm)
 
     pairs: list[
         tuple[str, str, StrategyComparisonArm, StrategyComparisonArm]
     ] = []
     for param_source, rule_policy in ordered_keys:
-        states = grouped[(param_source, rule_policy)]
-        if False not in states or True not in states:
+        group = grouped[(param_source, rule_policy)]
+        off_arm = group["off"]
+        on_arms = group["on"]
+        if not isinstance(off_arm, StrategyComparisonArm) or not isinstance(on_arms, list):
             raise ValueError(
-                "啟用比較群組缺少canonical DL-off／DL-on pair: "
+                "啟用比較群組缺少共用DL-off基準: "
                 f"{param_source}/{rule_policy}"
             )
-        off_arm = states[False]
-        on_arm = states[True]
-        if not on_arm.dl_id:
-            raise ValueError(f"DL-on arm缺少dl_id: {on_arm.arm_id}")
-        pairs.append((param_source, rule_policy, off_arm, on_arm))
+        if not on_arms:
+            raise ValueError(
+                "啟用比較群組至少需要一個DL-on arm: "
+                f"{param_source}/{rule_policy}"
+            )
+        for on_arm in on_arms:
+            pairs.append((param_source, rule_policy, off_arm, on_arm))
     return tuple(pairs)
+
+
+def _assert_same_shared_baseline(
+    existing: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    arm_id: str,
+) -> None:
+    ignored = {
+        "arm_id",
+        "param_source",
+        "rule_policy",
+        "dl_enabled",
+        "dl_id",
+        "direct_selection_delta_r",
+    }
+    keys = (set(existing) | set(candidate)) - ignored
+    for key in sorted(keys):
+        left = existing.get(key)
+        right = candidate.get(key)
+        if (
+            isinstance(left, (int, float))
+            and not isinstance(left, bool)
+            and isinstance(right, (int, float))
+            and not isinstance(right, bool)
+        ):
+            if not math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=1e-10):
+                raise ValueError(
+                    f"多DL比較的共用基準不一致: arm={arm_id}, key={key}, "
+                    f"first={left}, repeated={right}"
+                )
+        elif left != right:
+            raise ValueError(
+                f"多DL比較的共用基準不一致: arm={arm_id}, key={key}, "
+                f"first={left!r}, repeated={right!r}"
+            )
 
 
 def _scenario_payloads(
@@ -314,14 +370,24 @@ def _scenario_payloads(
     for group_id, pair in pair_payloads.items():
         param_source, rule_policy, off_arm, on_arm = pair["arm_contract"]
         if off_arm.arm_id in enabled_ids:
-            output[off_arm.arm_id] = {
+            baseline = {
                 **dict(pair["payload"].get("no_filter") or {}),
                 "arm_id": off_arm.arm_id,
                 "param_source": param_source,
                 "rule_policy": rule_policy,
                 "dl_enabled": False,
+                "dl_id": None,
                 "direct_selection_delta_r": 0.0,
             }
+            existing = output.get(off_arm.arm_id)
+            if existing is None:
+                output[off_arm.arm_id] = baseline
+            else:
+                _assert_same_shared_baseline(
+                    existing,
+                    baseline,
+                    arm_id=off_arm.arm_id,
+                )
         if on_arm.arm_id in enabled_ids:
             output[on_arm.arm_id] = {
                 **dict(pair["payload"].get("quality_filter") or {}),
@@ -329,6 +395,7 @@ def _scenario_payloads(
                 "param_source": param_source,
                 "rule_policy": rule_policy,
                 "dl_enabled": True,
+                "dl_id": on_arm.dl_id,
                 "direct_selection_delta_r": float(direct_r[group_id]),
             }
     return output
@@ -436,7 +503,19 @@ def _yearly_table(
         for row in pair["payload"].get("yearly") or []:
             year = int(row["year"])
             if off_arm.arm_id in by_id:
-                by_id[off_arm.arm_id][year] = row.get("no_filter_return_pct")
+                value = row.get("no_filter_return_pct")
+                existing = by_id[off_arm.arm_id].get(year)
+                if existing is not None and value is not None:
+                    if not math.isclose(
+                        float(existing), float(value), rel_tol=0.0, abs_tol=1e-10
+                    ):
+                        raise ValueError(
+                            "多DL比較的共用基準年度報酬不一致: "
+                            f"arm={off_arm.arm_id}, year={year}, "
+                            f"first={existing}, repeated={value}"
+                        )
+                else:
+                    by_id[off_arm.arm_id][year] = value
             if on_arm.arm_id in by_id:
                 by_id[on_arm.arm_id][year] = row.get("quality_filter_return_pct")
     years = sorted({year for values in by_id.values() for year in values})

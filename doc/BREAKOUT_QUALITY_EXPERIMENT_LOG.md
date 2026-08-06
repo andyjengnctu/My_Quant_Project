@@ -3894,3 +3894,52 @@ config-driven策略比較重構後，`run_strategy_comparison()`保留對`_execu
 
 尚未取得完整C1～C6，不得判定TP1有效或無效。套用修正後由`python apps/strategy_compare.py`選擇`[2] 查看設定、工件與預計動作`，確認Min ROOS路徑位於`binary_dl_filter_param_adaptation/risk_only_rolling/p2_dl_off_trained`且整體為READY或PREPARABLE；再選`[1/Enter] 執行目前比較設定`。全部前置完成後重跑三個canonical pairs並產生頂層正式報表。
 
+
+## 2026-08-06 — TP1 C1～C6正式績效結果與A9 runtime比較擴充
+
+### 狀態
+
+`C1_C6_ACCEPTED / TP1_HARD_FILTER_REJECTED / MIN_DL_TP1_NOT_PROMOTED / A9_RUNTIME_COMPARISON_IMPLEMENTED / A9_RESULT_PENDING`
+
+### 程式與結果基準
+
+- 使用者ZIP：`test-branch-1_20260806_202837_283d61c(1).zip`
+- ZIP SHA256：`4ca1949169372cdab3bd3a55d0ec0813cd3406651ae4b399e85b67ba065944a9`
+- 正式比較期間：`2021-01-01～2026-03-02`
+- Dataset：`full`
+- Param policy：`base-finalist-best`
+- Max positions：10
+- Rotation：off
+- 固定條件：同一參數組內只切hard filter；原position-aware buy-sort、費稅、帳務與active-param無前視契約不變。
+
+### C1～C6主要結果
+
+| Arm | 組合 | 報酬 | MDD | RoMD | EV | 曝險 | 交易 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| C1 | Full ROOS × DL-off | 129.08% | 17.41% | 7.42 | 0.53R | 84.02% | 407 |
+| C2 | Full ROOS × DL-TP1 | 55.04% | 10.93% | 5.04 | 0.87R | 38.19% | 158 |
+| C3 | Min ROOS × DL-off | 166.69% | 15.41% | 10.82 | 0.73R | 92.13% | 336 |
+| C4 | Min ROOS × DL-TP1 | 88.85% | 16.58% | 5.36 | 0.96R | 46.52% | 163 |
+| C5 | Min-DL-TP1 ROOS × DL-off | 129.11% | 12.96% | 9.96 | 1.35R | 91.96% | 278 |
+| C6 | Min-DL-TP1 ROOS × DL-TP1 | 21.42% | 10.54% | 2.03 | 0.65R | 51.20% | 146 |
+
+- TP1同參數直接效果全部惡化：`C2−C1=-74.03pp / -2.38 RoMD / -79.90R直接選擇R`；`C4−C3=-77.84pp / -5.46 / -89.76R`；`C6−C5=-107.69pp / -7.93 / -280.31R`。
+- TP1造成候選、曝險與交易數大幅下降；C5→C6平均曝險`91.96%→51.20%`、交易`278→146`，直接選擇R為`-280.31R`，證明不是單純交易變少，而是排除方向本身為負。
+- C5相對C3降低MDD並提高單筆EV，但報酬`-37.58pp`、RoMD`-0.86`，因此Min-DL-TP1參數不晉升。
+- 目前研究基準改為`C3 = Min ROOS × DL-off`；TP1 Binary hard filter不部署，且不再用同一OOS回頭調threshold或訓練條件。
+
+### A9加入比較的唯一變更
+
+- `config/strategy_compare.py`新增第二個DL source：`A9 = breakout_quality_v1 / inception_time_v1 / unique_group_sampling / threshold 0.5`。
+- 新增三個runtime arms：`C7 Full ROOS × DL-A9`、`C8 Min ROOS × DL-A9`、`C9 Min-DL-TP1 ROOS × DL-A9`。
+- 新增A9相對同參數DL-off contrasts：`C7−C1`、`C8−C3`、`C9−C5`；以及TP1相對A9 contrasts：`C2−C7`、`C4−C8`、`C6−C9`。
+- 比較引擎由「每組只能一個DL-on」泛化為「一個共用DL-off基準可掛多個DL-on模型」；每個DL-on仍獨立執行controlled pair，重複基準的摘要與年度報酬必須完全一致，否則fail-fast。
+- A9只作runtime hard-filter比較；本輪不建立A9-aware Min-DL參數、不覆蓋TP1 P3、不重新訓練A9或TP1模型。
+
+### Dataset／Label／模型影響
+
+不重建Dataset、不重新Label、不重新訓練TP1或A9模型、不改threshold、不改P2／P3 ROOS、交易規則或帳務。若A9正式forward-OOS scores缺少或過期，`apps/strategy_compare.py`依config使用既有A9 checkpoint自動補匯出。
+
+### 下一步
+
+由`python apps/strategy_compare.py`選擇`[2] 查看設定、工件與預計動作`，確認A9 model／manifest／forward scores為READY或PREPARABLE；再選`[1/Enter] 執行目前比較設定`。取得C7～C9後，以同參數A9效果及TP1−A9 contrasts判定TP1問題是Label／模型特有，或Binary hard-filter共同結構問題。

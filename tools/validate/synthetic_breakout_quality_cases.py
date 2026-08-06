@@ -16019,14 +16019,37 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "enabled_arms_build_canonical_execution_pairs_before_replay",
         (
             ("full_roos", "formal", "C1", "C2"),
+            ("full_roos", "formal", "C1", "C7"),
             ("min_roos", "all_off", "C3", "C4"),
+            ("min_roos", "all_off", "C3", "C8"),
             ("min_dl_tp1_roos", "all_off", "C5", "C6"),
+            ("min_dl_tp1_roos", "all_off", "C5", "C9"),
         ),
         tuple(
             (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
             for param_source, rule_policy, off_arm, on_arm in execution_pairs
         ),
     )
+
+    a9_source = settings.dl_sources.get("A9")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "a9_is_configured_as_second_runtime_dl_source_without_a9_param_training",
+        True,
+        a9_source is not None
+        and a9_source.filter_id == "breakout_quality_v1"
+        and a9_source.model_architecture == "inception_time_v1"
+        and a9_source.experiment_profile == "unique_group_sampling"
+        and a9_source.forward_scores_builder is not None
+        and not any(
+            source.trained_with_dl_id == "A9"
+            for source in settings.parameter_sources.values()
+        )
+        and {"C7", "C8", "C9"}.issubset(
+            {arm.arm_id for arm in settings.enabled_arms}
+        ),
+    )
+
 
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
 
@@ -16109,6 +16132,43 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == {arm.arm_id for arm in settings.enabled_arms}
         and replay_payload["status"] == "COMPLETED",
     )
+
+    full_off = settings.arms["C1"]
+    full_tp1 = settings.arms["C2"]
+    full_a9 = settings.arms["C7"]
+    mismatched_pairs = {
+        "full__tp1": {
+            "arm_contract": ("full_roos", "formal", full_off, full_tp1),
+            "payload": dict(mocked_pair_payload),
+        },
+        "full__a9": {
+            "arm_contract": ("full_roos", "formal", full_off, full_a9),
+            "payload": {
+                **dict(mocked_pair_payload),
+                "no_filter": {
+                    **dict(mocked_pair_payload["no_filter"]),
+                    "total_return_pct": 9.0,
+                },
+            },
+        },
+    }
+    try:
+        strategy_comparison_module._scenario_payloads(
+            mismatched_pairs,
+            {"full__tp1": 0.1, "full__a9": 0.2},
+            settings=settings,
+        )
+    except ValueError as exc:
+        repeated_baseline_mismatch_rejected = "共用基準不一致" in str(exc)
+    else:
+        repeated_baseline_mismatch_rejected = False
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multiple_dl_sources_require_identical_replayed_shared_baseline",
+        True,
+        repeated_baseline_mismatch_rejected,
+    )
+
 
     min_roos_source = settings.parameter_sources["min_roos"]
     add_check(
@@ -16212,29 +16272,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )),
     )
 
-    original_c5 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C5"])
     original_c6 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C6"])
     original_contrasts = {key: dict(value) for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()}
     try:
-        strategy_config.STRATEGY_COMPARE_ARMS["C5"]["enabled"] = False
         strategy_config.STRATEGY_COMPARE_ARMS["C6"]["enabled"] = False
         for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
-            if contrast.get("left") in {"C5", "C6"} or contrast.get("right") in {"C5", "C6"}:
+            if contrast.get("left") == "C6" or contrast.get("right") == "C6":
                 contrast["enabled"] = False
         reduced_settings = strategy_config.get_strategy_comparison_settings()
     finally:
-        strategy_config.STRATEGY_COMPARE_ARMS["C5"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C5"].update(original_c5)
         strategy_config.STRATEGY_COMPARE_ARMS["C6"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C6"].update(original_c6)
         strategy_config.STRATEGY_COMPARE_CONTRASTS.clear(); strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "individual_arm_and_contrast_switches_are_runtime_effective",
-        ("C1", "C2", "C3", "C4"),
+        "individual_dl_arm_and_contrast_switches_are_runtime_effective",
+        ("C1", "C2", "C3", "C4", "C5", "C7", "C8", "C9"),
         tuple(arm.arm_id for arm in reduced_settings.enabled_arms),
     )
 
     disabled_arms_changed = dict(reduced_settings.arms)
-    disabled_arms_changed["C5"] = replace(disabled_arms_changed["C5"], name="disabled definition")
+    disabled_arms_changed["C6"] = replace(disabled_arms_changed["C6"], name="disabled definition")
     enabled_arms_changed = dict(reduced_settings.arms)
     enabled_arms_changed["C1"] = replace(enabled_arms_changed["C1"], name="enabled definition")
     base_fingerprint = strategy_comparison_fingerprint(reduced_settings)

@@ -344,29 +344,52 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 f"{contrast.left}, {contrast.right}"
             )
 
-    groups: dict[tuple[str, str], dict[bool, StrategyComparisonArm]] = {}
+    groups: dict[
+        tuple[str, str],
+        dict[str, StrategyComparisonArm | dict[str, StrategyComparisonArm] | None],
+    ] = {}
     for arm in settings.arms.values():
-        group = groups.setdefault((arm.param_source, arm.rule_policy), {})
-        if bool(arm.dl_enabled) in group:
+        group = groups.setdefault(
+            (arm.param_source, arm.rule_policy),
+            {"off": None, "on": {}},
+        )
+        if not arm.dl_enabled:
+            if group["off"] is not None:
+                raise ValueError(
+                    "同一param_source／rule_policy只能定義一個DL-off基準: "
+                    f"{arm.param_source}/{arm.rule_policy}"
+                )
+            group["off"] = arm
+            continue
+        on_arms = group["on"]
+        if not isinstance(on_arms, dict):
+            raise TypeError("strategy comparison group on-arm contract錯誤")
+        dl_id = str(arm.dl_id or "")
+        if dl_id in on_arms:
             raise ValueError(
-                "同一param_source／rule_policy不得重複定義相同DL狀態: "
-                f"{arm.param_source}/{arm.rule_policy}"
+                "同一param_source／rule_policy不得重複定義相同DL source: "
+                f"{arm.param_source}/{arm.rule_policy}/{dl_id}"
             )
-        group[bool(arm.dl_enabled)] = arm
+        on_arms[dl_id] = arm
+
     enabled_groups = {
         (arm.param_source, arm.rule_policy) for arm in settings.enabled_arms
     }
     for group_key in enabled_groups:
-        states = groups[group_key]
-        if False not in states or True not in states:
+        group = groups[group_key]
+        off_arm = group["off"]
+        on_arms = group["on"]
+        if not isinstance(on_arms, dict):
+            raise TypeError("strategy comparison group on-arm contract錯誤")
+        enabled_on = [arm for arm in on_arms.values() if arm.enabled]
+        if not isinstance(off_arm, StrategyComparisonArm) or not off_arm.enabled:
             raise ValueError(
-                "目前底層canonical replay以同參數DL-off／DL-on pair對帳；"
-                f"啟用群組必須同時在config定義兩種狀態: {group_key}"
+                "啟用的DL模型比較必須共用一個已啟用DL-off基準: "
+                f"{group_key}"
             )
-        if bool(states[False].enabled) != bool(states[True].enabled):
+        if not enabled_on:
             raise ValueError(
-                "同一param_source／rule_policy的DL-off與DL-on必須一起開啟或關閉，"
-                "避免停用arm仍被隱性執行: "
+                "啟用的DL-off基準至少需要一個已啟用DL-on比較對象: "
                 f"{group_key}"
             )
 
