@@ -182,7 +182,7 @@ def _resolve_forward_export_write_paths(
     canonical = resolve_filter_artifact_paths(
         project_root,
         filter_id,
-        model_architecture=loaded_paths.model_architecture,
+        model_architecture=model_architecture,
         experiment_profile=experiment_profile,
     )
     if loaded_paths.model_dir.resolve() != canonical.model_dir.resolve():
@@ -462,6 +462,7 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
     if args.scope == RUNTIME_SCOPE_FORWARD_OOS:
         writable_paths = _resolve_forward_export_write_paths(
             filter_id=str(args.filter_id),
+            model_architecture=str(args.model_architecture),
             experiment_profile=str(args.experiment_profile),
             loaded_paths=artifact_paths,
         )

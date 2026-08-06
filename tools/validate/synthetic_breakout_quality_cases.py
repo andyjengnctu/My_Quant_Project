@@ -5396,6 +5396,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             try:
                 breakout_quality_export_scores._resolve_forward_export_write_paths(
                     filter_id=filter_id,
+                    model_architecture=runtime_fixture_architecture,
                     experiment_profile=BASELINE_EXPERIMENT_PROFILE,
                     loaded_paths=legacy_loaded_paths,
                     project_root=project_root,
@@ -5411,6 +5412,7 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             )
             canonical_forward_paths = breakout_quality_export_scores._resolve_forward_export_write_paths(
                 filter_id=filter_id,
+                model_architecture=runtime_fixture_architecture,
                 experiment_profile=BASELINE_EXPERIMENT_PROFILE,
                 loaded_paths=canonical_baseline_paths,
                 project_root=project_root,
@@ -7555,7 +7557,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     ).read_text(encoding="utf-8")
     app_source = app_path.read_text(encoding="utf-8")
     export_source = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "filters"
         / "breakout_quality"
         / "export_scores.py"

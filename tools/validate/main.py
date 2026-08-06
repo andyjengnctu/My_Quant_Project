@@ -32,6 +32,7 @@ MAX_CONSOLE_FAIL_PREVIEW = 20
 HEADLESS_COVERAGE_OMIT_PATTERNS = [
     os.path.join(PROJECT_ROOT, "apps", "workbench.py"),
     os.path.join(PROJECT_ROOT, "tools", "workbench_ui", "*.py"),
+    os.path.join(PROJECT_ROOT, "_remote_module_*"),
 ]
 
 CSV_PATH_CACHE = None

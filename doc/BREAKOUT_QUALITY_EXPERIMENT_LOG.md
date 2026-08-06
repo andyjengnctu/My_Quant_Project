@@ -32,7 +32,7 @@
 
 | 項目 | 目前狀態 |
 |---|---|
-| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260806_011335_c378133.zip`；SHA256 `155f6784736f3da1366a181e5bfde51a8ac0e5211c99b5ac3ad841fcf5c32381`。Formal bundle為`to_chatgpt_bundle_20260806_011510_48e506c0.zip`；SHA256 `286ef4b5268a404f135ee9aaf341a380af93076872cc1caa2647fd58d4ef163f`。本輪只修正獨立策略比較App重構後兩個synthetic validator仍讀legacy alias的來源定位；Dataset、Label、模型、threshold、ROOS、策略執行與正式策略結果均未改變 |
+| 基準 ZIP | 本輪輸入基準為`test-branch-1_20260806_095542_dec6ccd.zip`；SHA256 `8327673830c90179f3639226729ef2b3b67110c3053ba7a5c39f998bd9bb6027`。Formal bundle為`to_chatgpt_bundle_20260806_095639_662f5f81.zip`；SHA256 `5f203a2a8d7fc96221b14807c823cc16e8e538f380c78f3ce1411105c53095a1`。本輪閉環修正forward score canonical write-path的architecture參數傳遞、continuous-ranker validator的canonical來源定位，以及coverage對Torch動態`_remote_module_*`來源的排除；Dataset、Label、模型、threshold、ROOS、策略執行與正式策略結果均未改變 |
 | SHA256／最新結果 | 最新Binary OOS：PASS Precision 62.99%、原始PASS 55.63%、Precision Lift +7.35pp，但PASS Recall 51.44%、模型PASS 45.43%。A／B／C／F顯示只移除optional filters的C相較A總報酬+9.51pp、MDD−4.05pp、RoMD+2.96；F相較C總報酬+7.34pp，但MDD+4.95pp、RoMD−2.41、EV−0.11R、直接交易選擇差異−21.83R，且改善集中2023。現有9A hard filter不升級runtime；下一步在相同模型與threshold下逐步關閉歷史門檻、Re-entry及KC，分離DL本身與規則／出場交互作用。歷史Selection PIT與R2／R3結果保留供研究重現 |
 | 程式版本範圍 | Active architectures為9A `inception_time_v1`排序／高品質基準與8F `multiscale_cnn_sequence_only_v1`高覆蓋基準；10A `inception_time_market_set_candidate_v1`與Global Stage 1 `inception_time_market_set_v1`均維持legacy read-only；9A-GN、9B、9C、9D、9E與9F同樣只供舊工件重建 |
 | Policy 預設 | workflow architecture=`inception_time_v1`、filter id=`breakout_quality_v1`、experiment profile=`unique_group_sampling`、objective=`binary_classification`、scope=`all_labels`、threshold 0.5、Seed 42；正式策略mode自動解析為`hard-filter / canonical_runtime / original buy-sort`。Selection PIT continuous-ranker設定與工件保留，但只由其CLI研究入口使用；底層9A結構維持depth 6、kernels 39／19／9、RF 229 bars |
@@ -3706,3 +3706,36 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 ### 採用判定與下一步
 
 本輪只完成操作與工件依賴閉環，尚未取得新策略績效，不能判定TP1有效或無效。套用後由`python apps/strategy_compare.py`進入選單，先查看預計動作，再執行目前設定；程式自動補齊可準備工件並完成實際比較，取得結果後再依config中的contrasts判讀TP1。
+
+## 2026-08-06 — Strategy Compare前置閉環 Formal Bundle修正
+
+### 狀態
+
+`ACCEPTED / FORMAL_FAILURE_ROOT_CAUSES_CLOSED / DATASET_LABEL_MODEL_REUSE / PERFORMANCE_RESULT_UNCHANGED`
+
+### 程式與Formal基準
+
+- 使用者ZIP：`test-branch-1_20260806_095542_dec6ccd.zip`
+- ZIP SHA256：`8327673830c90179f3639226729ef2b3b67110c3053ba7a5c39f998bd9bb6027`
+- Formal bundle：`to_chatgpt_bundle_20260806_095639_662f5f81.zip`
+- Bundle SHA256：`5f203a2a8d7fc96221b14807c823cc16e8e538f380c78f3ce1411105c53095a1`
+- 使用者本地結果：quick gate PASS、chain checks PASS、ml smoke PASS；consistency因synthetic suite TypeError失敗1項；meta quality的4項coverage失敗皆由同一synthetic suite提前中止連帶造成。
+
+### 根因與唯一修正
+
+1. `filters/breakout_quality/export_scores.py`的`_resolve_forward_export_write_paths()`新增必填`model_architecture`後，正式forward-OOS匯出呼叫與兩個runtime-artifact synthetic fixture仍沿用舊呼叫契約。已在三個呼叫點明確傳入architecture，且helper使用傳入值解析canonical writable path。
+2. continuous-ranker contract仍從legacy alias `tools/filters/breakout_quality/export_scores.py`搜尋binary-profile阻擋token；正式實作已移至`filters/breakout_quality/export_scores.py`。validator改讀canonical正式模組，不要求legacy alias複製runtime實作。
+3. 完整synthetic suite跑通後，Torch會在專案root產生後刪除動態JIT來源`_remote_module_non_scriptable`；coverage JSON生成會因已刪除來源拋出`NoSource`。consistency與meta-quality coverage均新增`_remote_module_*`omit契約，並以synthetic regression固定此行為。
+
+### 獨立驗證
+
+- Runtime artifact contract：65／65 PASS。
+- Continuous ranker contract：15／15 PASS。
+- 全部synthetic registry：245個validators、4,210個checks，0 FAIL。
+- Coverage target scope：line 78.68%（門檻55%）、branch 61.22%（門檻50%）；所有key targets均存在且有命中，critical files line／branch門檻全部通過。
+- 本輪未執行`apps/test_suite.py`或正式五步流程；使用者需在本機重新執行正式測試確認double check。
+
+### Dataset／模型／策略影響
+
+不重建Dataset、不重新Label、不重新訓練模型、不匯出新正式Scores、不改threshold、不改P2／P3 ROOS、不改交易或帳務語意，也沒有新Selection／OOS或策略績效結果。本輪只修正正式匯出參數契約與測試／coverage基礎設施。
+

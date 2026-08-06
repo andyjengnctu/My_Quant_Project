@@ -36,6 +36,7 @@ SYNTHETIC_OPTIMIZER_MIN_HISTORY_WIN_RATE = _optimizer_search_space_default("min_
 HEADLESS_COVERAGE_OMIT_PATTERNS = [
     str(PROJECT_ROOT / "apps" / "workbench.py"),
     str(PROJECT_ROOT / "tools" / "workbench_ui" / "*.py"),
+    str(PROJECT_ROOT / "_remote_module_*"),
 ]
 
 
