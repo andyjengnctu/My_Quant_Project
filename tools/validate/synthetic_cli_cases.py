@@ -510,23 +510,24 @@ def validate_dataset_cli_contract_case(_base_params):
 
     strategy_calls = []
 
-    def _record_strategy_run():
-        strategy_calls.append("run")
+    def _record_strategy_run(*, confirm):
+        strategy_calls.append(("run", bool(confirm)))
         return {}
 
     def _record_strategy_status():
-        strategy_calls.append("status")
+        strategy_calls.append(("status", None))
         return {}
 
     with (
         patch(
-            "apps.strategy_compare.run_strategy_comparison",
+            "apps.strategy_compare._run_current_comparison",
             side_effect=_record_strategy_run,
         ),
         patch(
             "apps.strategy_compare.show_strategy_comparison_status",
             side_effect=_record_strategy_status,
         ),
+        patch("apps.strategy_compare.is_interactive_console", return_value=False),
     ):
         strategy_run_rc = app_strategy_compare.main(
             ["apps/strategy_compare.py", "run"]
@@ -539,7 +540,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "strategy_compare_app_separates_run_and_status",
-        (0, 0, ["run", "status"]),
+        (0, 0, [("run", False), ("status", None)]),
         (strategy_run_rc, strategy_status_rc, strategy_calls),
     )
 

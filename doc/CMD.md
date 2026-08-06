@@ -81,11 +81,11 @@ python apps/strategy_compare.py
 ```text
 === 策略績效比較 ===
 [1/Enter] 執行目前比較設定
-[2] 查看目前比較設定與工件狀態
+[2] 查看設定、工件與預計動作
 [0] 離開
 ```
 
-目前比較對象、參數來源、DL來源及差異比較全部條列於`config/strategy_compare.py`，每一組均以`enabled`條列開關；同一param source／rule policy的DL-off與DL-on為canonical controlled pair，必須一起開或一起關。不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。比較App只讀取既有工件，缺件時fail-fast，不建立Label、不訓練模型、不匯出缺少的Scores，也不執行optimizer。
+目前比較對象、參數來源、DL來源、差異比較與前置建立政策全部條列於`config/strategy_compare.py`；arms與contrasts以`enabled`開關，同一param source／rule policy的DL-off與DL-on controlled pair必須一起開關，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。選擇執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；對可由既有正式工件確定產生的缺件，依config自動重用、重建或接續，包括既有模型的forward-OOS scores與比較所需的策略參數。App不建立Label、不選模型、不訓練模型權重；缺少模型等上游真理工件時才停止並導向模型正式入口。
 
 當目前 workflow 是 Binary classification 時，選擇 `[1/Enter] 模型研究與驗證` 後會顯示：
 
@@ -206,13 +206,13 @@ outputs/filters/breakout_quality/<filter_id>/<architecture>/<profile>/point_in_t
   selection_point_in_time_audit.json  # 完整結構化指標
 ```
 
-正式策略比較入口：
+正式策略比較以選單操作為主：
 
 ```bash
 python apps/strategy_compare.py
-python apps/strategy_compare.py status
-python apps/strategy_compare.py run
 ```
+
+先選`[2] 查看設定、工件與預計動作`，再選`[1/Enter] 執行目前比較設定`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
 
 舊score-ranking研究工具仍可直接執行`python -m tools.filters.breakout_quality.strategy_compare --help`，但不屬於正式比較App。
 

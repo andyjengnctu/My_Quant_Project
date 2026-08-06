@@ -13953,7 +13953,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         }
         with (
             patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.load_runtime_artifact_contract",
+                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.load_model_artifact_contract",
                 return_value=SimpleNamespace(),
             ),
             patch(
@@ -15810,212 +15810,133 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     config_path = project_root / "config" / "strategy_compare.py"
     app_path = project_root / "apps" / "strategy_compare.py"
     model_app_path = project_root / "apps" / "breakout_quality.py"
-    orchestration_path = (
-        project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
-    )
-    engine_path = (
-        project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
-    )
-    legacy_engine_path = (
-        project_root / "tools" / "filters" / "breakout_quality" / "strategy_compare.py"
-    )
+    orchestration_path = project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
+    preparation_path = project_root / "filters" / "breakout_quality" / "strategy_compare_preparation.py"
+    export_service_path = project_root / "filters" / "breakout_quality" / "export_scores.py"
+    param_service_path = project_root / "filters" / "breakout_quality" / "strategy_param_training.py"
+    workflow_io_path = project_root / "filters" / "breakout_quality" / "workflow_io.py"
+    optimizer_policy_path = project_root / "filters" / "breakout_quality" / "strategy_optimizer_policy.py"
+    legacy_export_path = project_root / "tools" / "filters" / "breakout_quality" / "export_scores.py"
+    legacy_param_path = project_root / "tools" / "filters" / "breakout_quality" / "strategy_dl_filter_param_adapt_gate.py"
+    quick_gate_source = (project_root / "tools" / "local_regression" / "run_quick_gate.py").read_text(encoding="utf-8")
+
     config_source = config_path.read_text(encoding="utf-8")
     app_source = app_path.read_text(encoding="utf-8")
     model_app_source = model_app_path.read_text(encoding="utf-8")
     orchestration_source = orchestration_path.read_text(encoding="utf-8")
-    engine_source = engine_path.read_text(encoding="utf-8")
-    legacy_engine_source = legacy_engine_path.read_text(encoding="utf-8")
-    quick_gate_source = (
-        project_root / "tools" / "local_regression" / "run_quick_gate.py"
-    ).read_text(encoding="utf-8")
+    preparation_source = preparation_path.read_text(encoding="utf-8")
+    legacy_export_source = legacy_export_path.read_text(encoding="utf-8")
+    legacy_param_source = legacy_param_path.read_text(encoding="utf-8")
 
     from config import strategy_compare as strategy_config
     from core.strategy_comparison import strategy_comparison_fingerprint
-    from filters.breakout_quality import strategy_comparison as comparison_module
 
     settings = strategy_config.get_strategy_comparison_settings()
     add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "comparison_config_lists_individual_arms_and_contrasts_without_active_id",
+        results, "synthetic_breakout_quality", case_id,
+        "comparison_config_lists_individual_arms_contrasts_and_preparation_without_active_id",
         True,
         "ACTIVE_STRATEGY_COMPARISON_ID" not in config_source
         and len(settings.arms) >= 2
         and all(isinstance(arm.enabled, bool) for arm in settings.arms.values())
-        and all(
-            isinstance(contrast.enabled, bool)
-            for contrast in settings.contrasts.values()
-        ),
+        and all(isinstance(item.enabled, bool) for item in settings.contrasts.values())
+        and isinstance(settings.preparation.auto_prepare, bool)
+        and any(source.builder is not None for source in settings.parameter_sources.values())
+        and any(source.forward_scores_builder is not None for source in settings.dl_sources.values()),
     )
     add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+        results, "synthetic_breakout_quality", case_id,
         "strategy_app_menu_is_generic_and_model_app_has_no_strategy_route",
         True,
-        all(
-            token in app_source
-            for token in (
-                "執行目前比較設定",
-                "查看目前比較設定與工件狀態",
-                "config/strategy_compare.py",
-            )
-        )
-        and "C1" not in app_source
-        and "TP1" not in app_source
+        all(token in app_source for token in (
+            "執行目前比較設定", "查看設定、工件與預計動作", "config/strategy_compare.py",
+        ))
+        and "C1" not in app_source and "TP1" not in app_source
         and '"strategy-compare"' not in model_app_source
         and "策略績效驗證" not in model_app_source,
     )
     add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+        results, "synthetic_breakout_quality", case_id,
         "strategy_compare_official_entry_is_in_quick_gate_help_registry",
         True,
-        '([sys.executable, "apps/strategy_compare.py", "--help"]'
-        in quick_gate_source
-        and '"apps/strategy_compare.py",' in quick_gate_source.split(
-            "INLINE_CLI_TARGETS = {", 1
-        )[1],
+        '([sys.executable, "apps/strategy_compare.py", "--help"]' in quick_gate_source
+        and '"apps/strategy_compare.py",' in quick_gate_source.split("INLINE_CLI_TARGETS = {", 1)[1],
     )
     add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "comparison_runtime_never_trains_or_exports_missing_artifacts",
+        results, "synthetic_breakout_quality", case_id,
+        "deterministic_prerequisites_use_formal_shared_services_without_model_training",
         True,
-        all(
-            token not in orchestration_source
-            for token in (
-                "train(",
-                "_run_optimizer_arm",
-                "build_binary_point_in_time_scores",
-                "export_scores_main",
-                "prepare_min_dl",
-            )
-        )
-        and "比較App不會自動訓練模型、匯出score或執行optimizer"
-        in orchestration_source,
+        all(path.is_file() for path in (
+            preparation_path, export_service_path, param_service_path, workflow_io_path, optimizer_policy_path,
+        ))
+        and "prepare_strategy_comparison_artifacts" in orchestration_source
+        and "export_forward_oos_scores" in preparation_source
+        and "prepare_strategy_parameter_source" in preparation_source
+        and all(token not in preparation_source for token in (
+            "build_trade_path_labels", "train_model", "build_dataset",
+        ))
+        and "sys.modules[__name__] = _impl" in legacy_export_source
+        and "sys.modules[__name__] = _impl" in legacy_param_source,
     )
     add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "formal_engine_is_in_filter_layer_with_legacy_tool_alias_only",
+        results, "synthetic_breakout_quality", case_id,
+        "preparation_plan_has_ready_preparable_blocked_and_single_confirmation_contract",
         True,
-        engine_path.is_file()
-        and "sys.modules[__name__] = _engine" in legacy_engine_source
-        and "from filters.breakout_quality import strategy_compare_engine"
-        in legacy_engine_source,
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "comparison_threshold_is_config_driven_and_risk_overrides_are_disabled",
-        True,
-        "threshold=dl.threshold" in orchestration_source
-        and "fixed_risk=None" in orchestration_source
-        and "max_position_cap_pct=None" in orchestration_source
-        and "threshold=None" in engine_source
-        and "configured_threshold" in engine_source,
+        all(token in preparation_source for token in (
+            'overall_status = "BLOCKED"', 'overall_status = "PREPARABLE"', 'overall_status = "READY"',
+            "前置步驟失敗:",
+        ))
+        and "按 Enter 執行；輸入 0 返回" in app_source
+        and "render_execution_plan" in app_source,
     )
 
-    with (
-        patch.object(
-            comparison_module,
-            "collect_artifact_status",
-            return_value={
-                "comparison_ready": False,
-                "config_fingerprint": "synthetic",
-            },
-        ),
-        patch.object(comparison_module, "render_status", return_value="NOT READY"),
-        patch.object(comparison_module, "run_comparison") as replay,
-    ):
-        try:
-            comparison_module.run_strategy_comparison(
-                project_root=project_root,
-                quiet=True,
-            )
-        except FileNotFoundError:
-            failed_fast = True
-        else:
-            failed_fast = False
     add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "missing_artifacts_fail_before_replay",
+        results, "synthetic_breakout_quality", case_id,
+        "parameter_preflight_identity_tracks_config_and_baseline",
         True,
-        failed_fast and replay.call_count == 0,
+        all(token in preparation_source for token in (
+            "TRAINING_CONFIG_MISMATCH", "BASELINE_PARAMS_IDENTITY_MISMATCH",
+            "BINARY_PIT_IDENTITY_MISSING", "trials_per_fold", "max_position_cap_pct",
+        )),
     )
 
     original_c5 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C5"])
     original_c6 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C6"])
-    original_contrasts = {
-        key: dict(value)
-        for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()
-    }
+    original_contrasts = {key: dict(value) for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()}
     try:
         strategy_config.STRATEGY_COMPARE_ARMS["C5"]["enabled"] = False
         strategy_config.STRATEGY_COMPARE_ARMS["C6"]["enabled"] = False
         for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
-            if contrast.get("left") in {"C5", "C6"} or contrast.get("right") in {
-                "C5",
-                "C6",
-            }:
+            if contrast.get("left") in {"C5", "C6"} or contrast.get("right") in {"C5", "C6"}:
                 contrast["enabled"] = False
         reduced_settings = strategy_config.get_strategy_comparison_settings()
     finally:
-        strategy_config.STRATEGY_COMPARE_ARMS["C5"].clear()
-        strategy_config.STRATEGY_COMPARE_ARMS["C5"].update(original_c5)
-        strategy_config.STRATEGY_COMPARE_ARMS["C6"].clear()
-        strategy_config.STRATEGY_COMPARE_ARMS["C6"].update(original_c6)
-        strategy_config.STRATEGY_COMPARE_CONTRASTS.clear()
-        strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
+        strategy_config.STRATEGY_COMPARE_ARMS["C5"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C5"].update(original_c5)
+        strategy_config.STRATEGY_COMPARE_ARMS["C6"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C6"].update(original_c6)
+        strategy_config.STRATEGY_COMPARE_CONTRASTS.clear(); strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
     add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+        results, "synthetic_breakout_quality", case_id,
         "individual_arm_and_contrast_switches_are_runtime_effective",
         ("C1", "C2", "C3", "C4"),
         tuple(arm.arm_id for arm in reduced_settings.enabled_arms),
     )
 
     disabled_arms_changed = dict(reduced_settings.arms)
-    disabled_arms_changed["C5"] = replace(
-        disabled_arms_changed["C5"],
-        name="disabled definition must not affect active fingerprint",
-    )
-    disabled_definition_settings = replace(
-        reduced_settings,
-        arms=disabled_arms_changed,
-    )
+    disabled_arms_changed["C5"] = replace(disabled_arms_changed["C5"], name="disabled definition")
     enabled_arms_changed = dict(reduced_settings.arms)
-    enabled_arms_changed["C1"] = replace(
-        enabled_arms_changed["C1"],
-        name="enabled definition must affect active fingerprint",
-    )
-    enabled_definition_settings = replace(
-        reduced_settings,
-        arms=enabled_arms_changed,
-    )
+    enabled_arms_changed["C1"] = replace(enabled_arms_changed["C1"], name="enabled definition")
     base_fingerprint = strategy_comparison_fingerprint(reduced_settings)
     add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
+        results, "synthetic_breakout_quality", case_id,
         "config_fingerprint_uses_effective_enabled_definitions_only",
         True,
-        strategy_comparison_fingerprint(disabled_definition_settings)
-        == base_fingerprint
-        and strategy_comparison_fingerprint(enabled_definition_settings)
-        != base_fingerprint,
+        strategy_comparison_fingerprint(replace(reduced_settings, arms=disabled_arms_changed)) == base_fingerprint
+        and strategy_comparison_fingerprint(replace(reduced_settings, arms=enabled_arms_changed)) != base_fingerprint,
     )
 
     summary["config_path"] = "config/strategy_compare.py"
     summary["app_path"] = "apps/strategy_compare.py"
     summary["enabled_arms"] = [arm.arm_id for arm in settings.enabled_arms]
+    summary["preparation"] = settings.preparation.as_dict()
     return results, summary
+

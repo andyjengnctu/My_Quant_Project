@@ -3674,3 +3674,35 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 | Dataset／Label | 不重建、不 relabel |
 | Selection／OOS | 未重訓、未重跑模型或策略，無新 Selection／OOS 數值 |
 | 採用判定 | 修正 validator 架構定位；維持 `apps/strategy_compare.py`、`config/strategy_compare.py`、`filters/breakout_quality/strategy_compare_engine.py` 為正式分層 |
+
+## 2026-08-06 — Strategy Compare選單前置工件閉環
+
+### 狀態
+
+`IMPLEMENTED / PERFORMANCE_RESULT_PENDING / DATASET_LABEL_MODEL_REUSE / FORMAL_BASELINE_UNCHANGED`
+
+### 程式基準
+
+- 輸入：`test-branch-1_20260806_012720_453c286(2).zip`
+- SHA256：`723851ac35ba95688a845ee13f2c4a5575724fcb03ccb108e97ab866fac7ae08`
+- 唯一變更：策略比較App依`config/strategy_compare.py`建立可稽核的前置依賴計畫，對可由既有正式工件確定產生的缺件自動重用、建立、重建或接續；不修改TP1 Dataset、Label、模型架構、模型權重、threshold、交易語意或既有ROOS。
+
+### 實作契約
+
+- `apps/strategy_compare.py`維持泛化常駐選單：「執行目前比較設定／查看設定、工件與預計動作」。一般操作不再要求先輸入零散CLI。
+- `config/strategy_compare.py`集中arms、contrasts、parameter／DL sources、forward score推論設定、Min-DL rolling trials與`auto_prepare／reuse／rebuild／resume／confirmation`政策，方便使用者直接檢視與調整。
+- 狀態分為`READY／PREPARABLE／BLOCKED`；執行前完整顯示`REUSE／BUILD／REBUILD／BLOCKED／RUN／REPORT`計畫並只確認一次。
+- 已有模型但缺少或過期正式forward-OOS scores時，透過正式`filters/breakout_quality/export_scores.py`共用服務依config補匯出，不重新訓練模型。
+- 比較所需Min-DL ROOS缺少或identity過期時，透過正式`filters/breakout_quality/strategy_param_training.py`共用服務建立或接續指定parameter set；不順帶執行舊4×2 replay。
+- 缺少模型checkpoint、模型identity不相容或缺少其他不可自行推導的上游真理工件時標記`BLOCKED`，不建立Label、不選模型、不訓練模型權重。
+- 任一前置步驟失敗即停止後續portfolio replay，錯誤回報包含artifact key、動作與專案相對路徑；已完成optimizer工件保留供下次接續，不產生不完整正式比較報表。
+- 正式比較JSON與manifest升級保存preparation policy／plan、config snapshot、啟用arms／contrasts與輸入工件SHA256。
+- `doc/PROJECT_SETTINGS.md`新增選單優先、config集中、前置工件閉環、入口分離及一次確認等長期泛化條款。
+
+### Dataset／Label／模型影響
+
+不需重建Dataset、不需重新Label、不需重新訓練TP1。若既有TP1 checkpoint完整，缺少forward-OOS scores只做推論匯出；Min-DL參數僅在目前config啟用且工件缺少／過期時執行策略參數optimizer。
+
+### 採用判定與下一步
+
+本輪只完成操作與工件依賴閉環，尚未取得新策略績效，不能判定TP1有效或無效。套用後由`python apps/strategy_compare.py`進入選單，先查看預計動作，再執行目前設定；程式自動補齊可準備工件並完成實際比較，取得結果後再依config中的contrasts判讀TP1。

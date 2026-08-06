@@ -14,9 +14,9 @@ from core.strategy_comparison import (
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
+    StrategyPreparationPlan,
     strategy_comparison_fingerprint,
 )
-from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.console_report import (
     print_artifact_paths,
     project_relative_display_path,
@@ -25,23 +25,22 @@ from filters.breakout_quality.console_report import (
     render_table,
     render_title,
 )
-from filters.breakout_quality.paths import resolve_filter_artifact_paths
 from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
-    PARAM_POLICY_SPECS,
-    _load_param_source,
-    _resolve_params_path,
-    _validate_requested_param_policy,
     run_comparison,
 )
 from filters.breakout_quality.strategy_rule_policies import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
+from filters.breakout_quality.strategy_compare_preparation import (
+    collect_artifact_status as collect_preparation_status,
+    prepare_strategy_comparison_artifacts,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESULT_SCHEMA_VERSION = 1
+RESULT_SCHEMA_VERSION = 2
 
 
 def _json_native(value: Any) -> Any:
@@ -87,227 +86,21 @@ def _resolve_relative_path(root: Path, value: str) -> Path:
     return (root / path).resolve()
 
 
-def _resolve_param_source_path(
-    root: Path,
-    settings: StrategyComparisonSettings,
-    source_id: str,
-) -> Path:
-    source = settings.parameter_sources[source_id]
-    if source.path_template in (None, ""):
-        return _resolve_params_path(
-            root=root,
-            params_path=None,
-            param_policy=settings.param_policy,
-            allow_static_diagnostic=False,
-        ).resolve()
-    filename = str(PARAM_POLICY_SPECS[settings.param_policy]["filename"])
-    try:
-        rendered = str(source.path_template).format(param_filename=filename)
-    except (KeyError, ValueError) as exc:
-        raise ValueError(
-            f"parameter source {source_id}路徑模板只支援{{param_filename}}"
-        ) from exc
-    return _resolve_relative_path(root, rendered)
-
-
-def _configured_groups(
-    settings: StrategyComparisonSettings,
-) -> dict[tuple[str, str], dict[bool, StrategyComparisonArm]]:
-    groups: dict[tuple[str, str], dict[bool, StrategyComparisonArm]] = {}
-    for arm in settings.arms.values():
-        groups.setdefault((arm.param_source, arm.rule_policy), {})[
-            bool(arm.dl_enabled)
-        ] = arm
-    return groups
-
-
-def _execution_pairs(
-    settings: StrategyComparisonSettings,
-) -> tuple[tuple[str, str, StrategyComparisonArm, StrategyComparisonArm], ...]:
-    enabled_groups = {
-        (arm.param_source, arm.rule_policy) for arm in settings.enabled_arms
-    }
-    groups = _configured_groups(settings)
-    pairs = []
-    for param_source, rule_policy in groups:
-        if (param_source, rule_policy) not in enabled_groups:
-            continue
-        states = groups[(param_source, rule_policy)]
-        off_arm = states[False]
-        on_arm = states[True]
-        pairs.append((param_source, rule_policy, off_arm, on_arm))
-    return tuple(pairs)
-
-
-def _validate_param_artifact(
-    path: Path,
-    *,
-    param_policy: str,
-) -> tuple[bool, str, dict[str, Any] | None]:
-    if not path.is_file():
-        return False, "MISSING", None
-    try:
-        source = _load_param_source(path)
-        policy = _validate_requested_param_policy(source, param_policy)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return False, f"INVALID: {type(exc).__name__}: {exc}", None
-    if str(source.get("kind") or "") != "rolling_active_param_ensemble":
-        return False, f"INVALID_KIND: {source.get('kind')}", None
-    return True, "READY", policy
-
-
-def _validate_param_training_identity(
-    *,
-    root: Path,
-    settings: StrategyComparisonSettings,
-    source_id: str,
-) -> tuple[bool, str, Path | None]:
-    source = settings.parameter_sources[source_id]
-    if not source.trained_with_dl_id:
-        return True, "NOT_REQUIRED", None
-    if not source.identity_manifest_path:
-        return False, "IDENTITY_MANIFEST_NOT_CONFIGURED", None
-    manifest_path = _resolve_relative_path(root, source.identity_manifest_path)
-    payload = _read_json(manifest_path)
-    if payload is None:
-        return False, "IDENTITY_MANIFEST_MISSING_OR_INVALID", manifest_path
-    dl = settings.dl_sources[source.trained_with_dl_id]
-    binary_runtime = dict(payload.get("binary_runtime") or {})
-    actual_filter = str(
-        binary_runtime.get("filter_id") or payload.get("filter_id") or ""
-    )
-    actual_architecture = str(
-        binary_runtime.get("model_architecture")
-        or payload.get("model_architecture")
-        or ""
-    )
-    actual_profile = str(
-        binary_runtime.get("experiment_profile")
-        or payload.get("experiment_profile")
-        or ""
-    )
-    training_dl_enabled = payload.get("training_dl_enabled")
-    if training_dl_enabled is not None and not bool(training_dl_enabled):
-        return False, "TRAINING_DL_DISABLED", manifest_path
-    if (
-        actual_filter != dl.filter_id
-        or actual_architecture != dl.model_architecture
-        or actual_profile != dl.experiment_profile
-    ):
-        return False, "DL_IDENTITY_MISMATCH", manifest_path
-    return True, "READY", manifest_path
-
-
 def collect_artifact_status(
     *,
     project_root: Path = PROJECT_ROOT,
     settings: StrategyComparisonSettings | None = None,
 ) -> dict[str, Any]:
-    root = Path(project_root).resolve()
     current = settings or get_strategy_comparison_settings()
-    required_param_sources = {
-        arm.param_source for arm in current.enabled_arms
-    }
-    required_dl_sources = {
-        arm.dl_id
-        for arm in current.enabled_arms
-        if arm.dl_enabled and arm.dl_id
-    }
-
-    parameter_rows: dict[str, Any] = {}
-    resolved_parameter_paths: dict[str, Path] = {}
-    artifact_identities: dict[str, Any] = {}
-    for source_id in current.parameter_sources:
-        if source_id not in required_param_sources:
-            continue
-        path = _resolve_param_source_path(root, current, source_id)
-        resolved_parameter_paths[source_id] = path
-        ready, status, policy = _validate_param_artifact(
-            path,
-            param_policy=current.param_policy,
-        )
-        identity_ready, identity_status, identity_path = _validate_param_training_identity(
-            root=root,
-            settings=current,
-            source_id=source_id,
-        )
-        ready = bool(ready and identity_ready)
-        if status == "READY" and not identity_ready:
-            status = identity_status
-        sha256 = compute_file_sha256(path) if path.is_file() else None
-        artifact_identities[f"param:{source_id}"] = {
-            "path": project_relative_display_path(path, project_root=root),
-            "sha256": sha256,
-            "identity_status": identity_status,
-        }
-        parameter_rows[source_id] = {
-            "ready": ready,
-            "status": status,
-            "path": project_relative_display_path(path, project_root=root),
-            "sha256": sha256,
-            "selector": None if policy is None else policy.get("selector"),
-            "identity_status": identity_status,
-            "identity_manifest_path": (
-                None
-                if identity_path is None
-                else project_relative_display_path(identity_path, project_root=root)
-            ),
-        }
-
-    dl_rows: dict[str, Any] = {}
-    for dl_id in current.dl_sources:
-        if dl_id not in required_dl_sources:
-            continue
-        source = current.dl_sources[dl_id]
-        artifacts = resolve_filter_artifact_paths(
-            root,
-            source.filter_id,
-            source.model_architecture,
-            source.experiment_profile,
-        )
-        files = {
-            "model": artifacts.model_path,
-            "manifest": artifacts.manifest_path,
-            "forward_scores": artifacts.score_path,
-        }
-        file_rows = {}
-        ready = True
-        for key, path in files.items():
-            exists = path.is_file()
-            ready = bool(ready and exists)
-            sha256 = compute_file_sha256(path) if exists else None
-            file_rows[key] = {
-                "ready": exists,
-                "status": "READY" if exists else "MISSING",
-                "path": project_relative_display_path(path, project_root=root),
-                "sha256": sha256,
-            }
-            artifact_identities[f"dl:{dl_id}:{key}"] = {
-                "path": file_rows[key]["path"],
-                "sha256": sha256,
-            }
-        dl_rows[dl_id] = {
-            "ready": ready,
-            "status": "READY" if ready else "MISSING",
-            "identity": source.as_dict(),
-            "files": file_rows,
-        }
-
-    comparison_ready = all(row["ready"] for row in parameter_rows.values()) and all(
-        row["ready"] for row in dl_rows.values()
+    status = collect_preparation_status(
+        project_root=Path(project_root).resolve(),
+        settings=current,
     )
-    fingerprint = strategy_comparison_fingerprint(
+    status["config_fingerprint"] = strategy_comparison_fingerprint(
         current,
-        artifact_identities=artifact_identities,
+        artifact_identities=status["artifact_identities"],
     )
-    return {
-        "comparison_ready": comparison_ready,
-        "parameters": parameter_rows,
-        "dl_sources": dl_rows,
-        "artifact_identities": artifact_identities,
-        "config_fingerprint": fingerprint,
-        "resolved_parameter_paths": resolved_parameter_paths,
-    }
+    return status
 
 
 def render_status(
@@ -346,19 +139,20 @@ def render_status(
     ]
     artifact_rows = []
     for source_id, row in current_status["parameters"].items():
-        artifact_rows.append((f"param:{source_id}", row["status"], row["path"]))
+        artifact_rows.append((f"param:{source_id}", row["status"], row["action"], row["path"]))
         if row.get("identity_manifest_path"):
             artifact_rows.append(
                 (
                     f"param:{source_id}:identity",
                     row["identity_status"],
+                    row["action"],
                     row["identity_manifest_path"],
                 )
             )
     for dl_id, row in current_status["dl_sources"].items():
         for key, file_row in row["files"].items():
             artifact_rows.append(
-                (f"dl:{dl_id}:{key}", file_row["status"], file_row["path"])
+                (f"dl:{dl_id}:{key}", file_row["status"], file_row["action"], file_row["path"])
             )
     return "\n\n".join(
         (
@@ -372,7 +166,8 @@ def render_status(
                     ("Max positions", current.max_positions),
                     ("Rotation", current.rotation),
                     ("Config fingerprint", current_status["config_fingerprint"]),
-                    ("比較狀態", "READY" if current_status["comparison_ready"] else "NOT READY"),
+                    ("比較狀態", current_status["overall_status"]),
+                    ("自動前置", "on" if current.preparation.auto_prepare else "off"),
                 )
             ),
             render_section("1. 比較對象"),
@@ -385,8 +180,40 @@ def render_status(
                 ("開關", "比較", "左側", "右側", "用途"),
                 contrast_rows,
             ),
-            render_section("3. 所需工件"),
-            render_table(("工件", "狀態", "路徑"), artifact_rows),
+            render_section("3. 前置工件與預計動作"),
+            render_table(("工件", "狀態", "預計動作", "路徑"), artifact_rows),
+        )
+    )
+
+
+def render_execution_plan(
+    *,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+) -> str:
+    plan: StrategyPreparationPlan = status["preparation_plan"]
+    rows = [
+        (item.action, item.artifact_key, item.description)
+        for item in plan.actions
+    ]
+    rows.extend(
+        ("RUN", arm.arm_id, arm.name) for arm in settings.enabled_arms
+    )
+    rows.extend(
+        ("REPORT", item.contrast_id, item.description)
+        for item in settings.enabled_contrasts
+    )
+    return "\n\n".join(
+        (
+            render_title("本次執行計畫"),
+            render_key_values(
+                (
+                    ("整體狀態", plan.overall_status),
+                    ("設定檔", "config/strategy_compare.py"),
+                    ("Config fingerprint", status["config_fingerprint"]),
+                )
+            ),
+            render_table(("動作", "項目", "說明"), rows),
         )
     )
 
@@ -617,8 +444,9 @@ def _render_report(
             render_section("4. 判讀原則"),
             (
                 "以config中啟用的contrast逐項判讀；不得用單一年份改善取代"
-                "全期RoMD、EV、直接交易選擇R與年度穩定性。比較流程只讀"
-                "既有模型、score與策略參數工件，不執行模型或optimizer訓練。"
+                "全期RoMD、EV、直接交易選擇R與年度穩定性。比較流程不建立Label、"
+                "不選模型也不訓練模型權重；可依config透過正式共用服務補建既有模型"
+                "的forward-OOS scores與比較所需策略參數工件。"
             ),
         )
     ).rstrip() + "\n"
@@ -642,14 +470,26 @@ def run_strategy_comparison(
     *,
     project_root: Path = PROJECT_ROOT,
     quiet: bool = False,
+    status: dict[str, Any] | None = None,
+    auto_prepare: bool = True,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     settings = get_strategy_comparison_settings()
-    status = collect_artifact_status(project_root=root, settings=settings)
-    if not status["comparison_ready"]:
+    status = status or collect_artifact_status(project_root=root, settings=settings)
+    requested_fingerprint = str(status["config_fingerprint"])
+    requested_plan = status["preparation_plan"]
+    if status["overall_status"] == "BLOCKED":
         print("\n" + render_status(project_root=root, settings=settings, status=status))
-        raise FileNotFoundError(
-            "目前啟用比較所需工件不完整；比較App不會自動訓練模型、匯出score或執行optimizer。"
+        raise RuntimeError(
+            "目前啟用比較缺少不可自動產生的上游工件；請依狀態頁使用正式模型入口處理。"
+        )
+    if status["overall_status"] == "PREPARABLE":
+        if not auto_prepare:
+            raise RuntimeError("目前工件可自動準備，但本次已停用auto_prepare")
+        status = prepare_strategy_comparison_artifacts(
+            project_root=root,
+            settings=settings,
+            status=status,
         )
 
     run_dir, latest_dir = _run_directory(
@@ -716,8 +556,11 @@ def run_strategy_comparison(
         "status": "COMPLETED",
         "created_at": get_taipei_now().isoformat(),
         "config_fingerprint": status["config_fingerprint"],
+        "requested_config_fingerprint": requested_fingerprint,
         "settings": settings.as_dict(),
         "artifact_identities": status["artifact_identities"],
+        "requested_preparation_plan": requested_plan.as_dict(),
+        "final_preparation_plan": status["preparation_plan"].as_dict(),
         "scenarios": scenarios,
         "contrasts": {
             item.contrast_id: {
@@ -739,11 +582,15 @@ def run_strategy_comparison(
             "created_at": payload["created_at"],
             "config_path": "config/strategy_compare.py",
             "config_fingerprint": status["config_fingerprint"],
+            "requested_config_fingerprint": requested_fingerprint,
             "enabled_arms": [arm.as_dict() for arm in settings.enabled_arms],
             "enabled_contrasts": [
                 item.as_dict() for item in settings.enabled_contrasts
             ],
             "artifact_identities": status["artifact_identities"],
+            "preparation_policy": settings.preparation.as_dict(),
+            "requested_preparation_plan": requested_plan.as_dict(),
+            "final_preparation_plan": status["preparation_plan"].as_dict(),
             "run_dir": project_relative_display_path(run_dir, project_root=root),
         },
     )
@@ -784,6 +631,7 @@ def show_strategy_comparison_status(
 
 __all__ = [
     "collect_artifact_status",
+    "render_execution_plan",
     "render_status",
     "run_strategy_comparison",
     "show_strategy_comparison_status",

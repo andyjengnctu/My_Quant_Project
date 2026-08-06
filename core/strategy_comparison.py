@@ -1,4 +1,4 @@
-"""通用策略績效比較設定契約與驗證。"""
+"""通用策略績效比較設定、前置工件計畫與驗證契約。"""
 
 from __future__ import annotations
 
@@ -10,12 +10,45 @@ from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
+class StrategyArtifactBuilder:
+    enabled: bool
+    builder_type: str
+    options: Mapping[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "builder_type": self.builder_type,
+            "options": dict(self.options),
+        }
+
+
+@dataclass(frozen=True)
+class StrategyPreparationPolicy:
+    auto_prepare: bool
+    reuse_ready_artifacts: bool
+    rebuild_stale_artifacts: bool
+    resume_parameter_training: bool
+    require_confirmation: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "auto_prepare": bool(self.auto_prepare),
+            "reuse_ready_artifacts": bool(self.reuse_ready_artifacts),
+            "rebuild_stale_artifacts": bool(self.rebuild_stale_artifacts),
+            "resume_parameter_training": bool(self.resume_parameter_training),
+            "require_confirmation": bool(self.require_confirmation),
+        }
+
+
+@dataclass(frozen=True)
 class StrategyParameterSource:
     source_id: str
     path_template: str | None
     description: str
     identity_manifest_path: str | None = None
     trained_with_dl_id: str | None = None
+    builder: StrategyArtifactBuilder | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -24,6 +57,7 @@ class StrategyParameterSource:
             "description": self.description,
             "identity_manifest_path": self.identity_manifest_path,
             "trained_with_dl_id": self.trained_with_dl_id,
+            "builder": None if self.builder is None else self.builder.as_dict(),
         }
 
 
@@ -35,6 +69,7 @@ class StrategyDLSource:
     experiment_profile: str
     threshold: float
     description: str
+    forward_scores_builder: StrategyArtifactBuilder | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +79,11 @@ class StrategyDLSource:
             "experiment_profile": self.experiment_profile,
             "threshold": float(self.threshold),
             "description": self.description,
+            "forward_scores_builder": (
+                None
+                if self.forward_scores_builder is None
+                else self.forward_scores_builder.as_dict()
+            ),
         }
 
 
@@ -99,6 +139,7 @@ class StrategyComparisonSettings:
     max_positions: int
     rotation: str
     output_root: str
+    preparation: StrategyPreparationPolicy
     parameter_sources: Mapping[str, StrategyParameterSource]
     dl_sources: Mapping[str, StrategyDLSource]
     arms: Mapping[str, StrategyComparisonArm]
@@ -122,6 +163,7 @@ class StrategyComparisonSettings:
             "max_positions": int(self.max_positions),
             "rotation": self.rotation,
             "output_root": self.output_root,
+            "preparation": self.preparation.as_dict(),
             "parameter_sources": {
                 key: value.as_dict() for key, value in self.parameter_sources.items()
             },
@@ -135,6 +177,46 @@ class StrategyComparisonSettings:
         }
 
 
+@dataclass(frozen=True)
+class StrategyPreparationAction:
+    action_id: str
+    artifact_key: str
+    action: str
+    builder_type: str | None
+    description: str
+    path: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "action_id": self.action_id,
+            "artifact_key": self.artifact_key,
+            "action": self.action,
+            "builder_type": self.builder_type,
+            "description": self.description,
+            "path": self.path,
+        }
+
+
+@dataclass(frozen=True)
+class StrategyPreparationPlan:
+    overall_status: str
+    actions: tuple[StrategyPreparationAction, ...]
+
+    @property
+    def blocked(self) -> bool:
+        return self.overall_status == "BLOCKED"
+
+    @property
+    def preparable(self) -> bool:
+        return self.overall_status == "PREPARABLE"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "overall_status": self.overall_status,
+            "actions": [item.as_dict() for item in self.actions],
+        }
+
+
 def _validate_relative_path(value: str | None, *, field_name: str) -> None:
     if value in (None, ""):
         return
@@ -143,9 +225,47 @@ def _validate_relative_path(value: str | None, *, field_name: str) -> None:
         raise ValueError(f"{field_name}必須是專案root相對路徑: {value}")
 
 
+def _validate_builder(
+    builder: StrategyArtifactBuilder | None,
+    *,
+    field_name: str,
+    allowed_types: set[str],
+) -> None:
+    if builder is None:
+        return
+    if builder.builder_type not in allowed_types:
+        raise ValueError(
+            f"{field_name}.builder_type不支援: {builder.builder_type}; "
+            f"allowed={sorted(allowed_types)}"
+        )
+    if not isinstance(builder.options, Mapping):
+        raise ValueError(f"{field_name}.options必須是mapping")
+    if builder.builder_type == "forward_oos_scores":
+        if str(builder.options.get("scope") or "") != "forward_oos":
+            raise ValueError(f"{field_name}.scope必須是forward_oos")
+        if int(builder.options.get("inference_batch_size") or 0) < 1:
+            raise ValueError(f"{field_name}.inference_batch_size必須>=1")
+        if int(builder.options.get("inference_workers") or 0) < 1:
+            raise ValueError(f"{field_name}.inference_workers必須>=1")
+    if builder.builder_type == "binary_dl_risk_only_rolling":
+        parameter_set = str(builder.options.get("parameter_set") or "").lower()
+        if parameter_set not in {"p2", "p3"}:
+            raise ValueError(f"{field_name}.parameter_set必須是p2或p3")
+        if int(builder.options.get("trials_per_fold") or 0) < 1:
+            raise ValueError(f"{field_name}.trials_per_fold必須>=1")
+        if float(builder.options.get("fixed_risk") or 0.0) <= 0.0:
+            raise ValueError(f"{field_name}.fixed_risk必須>0")
+        cap = float(builder.options.get("max_position_cap_pct") or 0.0)
+        if not 0.0 < cap <= 1.0:
+            raise ValueError(f"{field_name}.max_position_cap_pct必須介於0與1")
+        for option_name in ("resume", "build_binary_pit", "binary_pit_resume", "quiet"):
+            if option_name in builder.options and not isinstance(builder.options[option_name], bool):
+                raise ValueError(f"{field_name}.{option_name}必須是bool")
+
+
 def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) -> None:
-    if settings.schema_version < 1:
-        raise ValueError("strategy comparison schema_version必須>=1")
+    if settings.schema_version < 2:
+        raise ValueError("strategy comparison schema_version必須>=2")
     if settings.dataset not in {"reduced", "full"}:
         raise ValueError("strategy comparison dataset必須是reduced或full")
     if settings.param_policy not in {"base-finalist-best", "base-finalists-agree"}:
@@ -163,7 +283,10 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
     for key, source in settings.parameter_sources.items():
         if key != source.source_id or not key.strip():
             raise ValueError(f"parameter source key／source_id不一致: {key!r}")
-        _validate_relative_path(source.path_template, field_name=f"parameter_sources[{key}].path_template")
+        _validate_relative_path(
+            source.path_template,
+            field_name=f"parameter_sources[{key}].path_template",
+        )
         _validate_relative_path(
             source.identity_manifest_path,
             field_name=f"parameter_sources[{key}].identity_manifest_path",
@@ -173,6 +296,11 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 f"parameter source {key}引用不存在的trained_with_dl_id: "
                 f"{source.trained_with_dl_id}"
             )
+        _validate_builder(
+            source.builder,
+            field_name=f"parameter_sources[{key}].builder",
+            allowed_types={"binary_dl_risk_only_rolling"},
+        )
 
     for key, source in settings.dl_sources.items():
         if key != source.dl_id or not key.strip():
@@ -181,6 +309,11 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             raise ValueError(f"DL source identity不可空白: {key}")
         if not 0.0 <= float(source.threshold) <= 1.0:
             raise ValueError(f"DL source threshold必須介於0與1: {key}")
+        _validate_builder(
+            source.forward_scores_builder,
+            field_name=f"dl_sources[{key}].forward_scores_builder",
+            allowed_types={"forward_oos_scores"},
+        )
 
     if len(settings.enabled_arms) < 2:
         raise ValueError("至少必須啟用兩個策略比較對象")
@@ -262,6 +395,7 @@ def strategy_comparison_fingerprint(
         "max_positions": int(settings.max_positions),
         "rotation": settings.rotation,
         "output_root": settings.output_root,
+        "preparation": settings.preparation.as_dict(),
         "parameter_sources": {
             source_id: settings.parameter_sources[source_id].as_dict()
             for source_id in sorted(parameter_source_ids)
@@ -270,9 +404,7 @@ def strategy_comparison_fingerprint(
             dl_id: settings.dl_sources[dl_id].as_dict()
             for dl_id in sorted(dl_source_ids)
         },
-        "arms": {
-            arm.arm_id: arm.as_dict() for arm in enabled_arms
-        },
+        "arms": {arm.arm_id: arm.as_dict() for arm in enabled_arms},
         "contrasts": {
             item.contrast_id: item.as_dict() for item in enabled_contrasts
         },
@@ -292,11 +424,15 @@ def strategy_comparison_fingerprint(
 
 
 __all__ = [
+    "StrategyArtifactBuilder",
     "StrategyComparisonArm",
     "StrategyComparisonContrast",
     "StrategyComparisonSettings",
     "StrategyDLSource",
     "StrategyParameterSource",
+    "StrategyPreparationAction",
+    "StrategyPreparationPlan",
+    "StrategyPreparationPolicy",
     "strategy_comparison_fingerprint",
     "validate_strategy_comparison_settings",
 ]
