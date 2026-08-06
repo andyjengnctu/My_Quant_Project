@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
+from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
     StrategyComparisonSettings,
     StrategyPreparationAction,
@@ -76,17 +79,77 @@ def _validate_param_artifact(
     path: Path,
     *,
     param_policy: str,
+    comparison_start: str | None = None,
+    comparison_end: str | None = None,
 ) -> tuple[bool, str, dict[str, Any] | None]:
     if not path.is_file():
         return False, "MISSING", None
     try:
         source = _load_param_source(path)
-        policy = _validate_requested_param_policy(source, param_policy)
+        policy = dict(_validate_requested_param_policy(source, param_policy))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return False, f"INVALID: {type(exc).__name__}: {exc}", None
-    if str(source.get("kind") or "") != "rolling_active_param_ensemble":
+    kind = str(source.get("kind") or "")
+    if kind != "rolling_active_param_ensemble":
         return False, f"INVALID_KIND: {source.get('kind')}", None
+    try:
+        param_start, param_end = get_active_param_ensemble_date_range(source["payload"])
+    except (ValueError, KeyError, TypeError) as exc:
+        return False, f"INVALID_PERIOD: {type(exc).__name__}: {exc}", policy
+    policy["coverage_start"] = param_start
+    policy["coverage_end"] = param_end
+    if comparison_start is not None and comparison_end is not None:
+        required_start = pd.Timestamp(comparison_start).normalize()
+        required_end = pd.Timestamp(comparison_end).normalize()
+        actual_start = pd.Timestamp(param_start).normalize()
+        actual_end = pd.Timestamp(param_end).normalize()
+        if actual_start > required_start or actual_end < required_end:
+            return (
+                False,
+                "PARAM_PERIOD_MISMATCH: "
+                f"params={param_start}~{param_end}, "
+                f"comparison={required_start.date()}~{required_end.date()}",
+                policy,
+            )
     return True, "READY", policy
+
+
+def _resolve_comparison_period(
+    *,
+    settings: StrategyComparisonSettings,
+    runtime_periods: dict[str, tuple[str, str]],
+) -> tuple[str | None, str | None, str]:
+    if settings.start_date is not None and settings.end_date is not None:
+        requested_start = pd.Timestamp(settings.start_date).normalize()
+        requested_end = pd.Timestamp(settings.end_date).normalize()
+        if requested_end < requested_start:
+            raise ValueError("策略比較設定期間不合法")
+        for dl_id, (available_start, available_end) in runtime_periods.items():
+            if (
+                requested_start < pd.Timestamp(available_start).normalize()
+                or requested_end > pd.Timestamp(available_end).normalize()
+            ):
+                raise ValueError(
+                    "策略比較設定期間超出DL runtime可用範圍: "
+                    f"dl={dl_id}, requested={requested_start.date()}~{requested_end.date()}, "
+                    f"available={available_start}~{available_end}"
+                )
+        return str(requested_start.date()), str(requested_end.date()), "config_explicit"
+    if not runtime_periods:
+        return None, None, "runtime_pending"
+    starts = [pd.Timestamp(value[0]).normalize() for value in runtime_periods.values()]
+    ends = [pd.Timestamp(value[1]).normalize() for value in runtime_periods.values()]
+    common_start = max(starts)
+    common_end = min(ends)
+    if common_end < common_start:
+        raise ValueError(
+            "啟用DL工件沒有共同可比較期間: "
+            + ", ".join(
+                f"{dl_id}={period[0]}~{period[1]}"
+                for dl_id, period in sorted(runtime_periods.items())
+            )
+        )
+    return str(common_start.date()), str(common_end.date()), "dl_runtime_common_overlap"
 
 
 def _validate_param_training_identity(
@@ -96,36 +159,45 @@ def _validate_param_training_identity(
     source_id: str,
 ) -> tuple[bool, str, Path | None]:
     source = settings.parameter_sources[source_id]
-    if not source.trained_with_dl_id:
-        return True, "NOT_REQUIRED", None
     if not source.identity_manifest_path:
-        return False, "IDENTITY_MANIFEST_NOT_CONFIGURED", None
+        if source.trained_with_dl_id:
+            return False, "IDENTITY_MANIFEST_NOT_CONFIGURED", None
+        return True, "NOT_REQUIRED", None
     manifest_path = _resolve_relative_path(root, source.identity_manifest_path)
     payload = _read_json(manifest_path)
     if payload is None:
         return False, "IDENTITY_MANIFEST_MISSING_OR_INVALID", manifest_path
-    dl = settings.dl_sources[source.trained_with_dl_id]
-    binary_runtime = dict(payload.get("binary_runtime") or {})
-    actual_filter = str(binary_runtime.get("filter_id") or payload.get("filter_id") or "")
-    actual_architecture = str(
-        binary_runtime.get("model_architecture")
-        or payload.get("model_architecture")
-        or ""
-    )
-    actual_profile = str(
-        binary_runtime.get("experiment_profile")
-        or payload.get("experiment_profile")
-        or ""
-    )
+
     training_dl_enabled = payload.get("training_dl_enabled")
-    if training_dl_enabled is not None and not bool(training_dl_enabled):
-        return False, "TRAINING_DL_DISABLED", manifest_path
-    if (
-        actual_filter != dl.filter_id
-        or actual_architecture != dl.model_architecture
-        or actual_profile != dl.experiment_profile
-    ):
-        return False, "DL_IDENTITY_MISMATCH", manifest_path
+    expected_training_dl_enabled = bool(source.trained_with_dl_id)
+    if training_dl_enabled is None:
+        return False, "TRAINING_DL_IDENTITY_MISSING", manifest_path
+    if bool(training_dl_enabled) != expected_training_dl_enabled:
+        return False, (
+            "TRAINING_DL_ENABLED_MISMATCH" if expected_training_dl_enabled
+            else "TRAINING_DL_DISABLED_MISMATCH"
+        ), manifest_path
+
+    if source.trained_with_dl_id:
+        dl = settings.dl_sources[source.trained_with_dl_id]
+        binary_runtime = dict(payload.get("binary_runtime") or {})
+        actual_filter = str(binary_runtime.get("filter_id") or payload.get("filter_id") or "")
+        actual_architecture = str(
+            binary_runtime.get("model_architecture")
+            or payload.get("model_architecture")
+            or ""
+        )
+        actual_profile = str(
+            binary_runtime.get("experiment_profile")
+            or payload.get("experiment_profile")
+            or ""
+        )
+        if (
+            actual_filter != dl.filter_id
+            or actual_architecture != dl.model_architecture
+            or actual_profile != dl.experiment_profile
+        ):
+            return False, "DL_IDENTITY_MISMATCH", manifest_path
 
     builder = source.builder
     if builder is not None and builder.enabled:
@@ -157,7 +229,7 @@ def _validate_param_training_identity(
                 matched = str(actual) == expected
             if not matched:
                 return False, f"TRAINING_CONFIG_MISMATCH:{field_name}", manifest_path
-        if expected_parameter_set == "P3" and not isinstance(payload.get("binary_pit"), dict):
+        if expected_training_dl_enabled and not isinstance(payload.get("binary_pit"), dict):
             return False, "BINARY_PIT_IDENTITY_MISSING", manifest_path
 
         baseline_path = _resolve_params_path(
@@ -172,7 +244,6 @@ def _validate_param_training_identity(
         if str(payload.get("baseline_params_sha256") or "") != expected_baseline_sha:
             return False, "BASELINE_PARAMS_IDENTITY_MISMATCH", manifest_path
     return True, "READY", manifest_path
-
 
 def _preparation_action(
     *,
@@ -212,6 +283,7 @@ def collect_artifact_status(
     artifact_identities: dict[str, Any] = {}
     actions: list[StrategyPreparationAction] = []
     dl_model_ready: dict[str, bool] = {}
+    runtime_periods: dict[str, tuple[str, str]] = {}
 
     for dl_id in settings.dl_sources:
         if dl_id not in required_dl_sources:
@@ -243,7 +315,7 @@ def collect_artifact_status(
         runtime_ready = False
         runtime_status = "MISSING"
         try:
-            load_runtime_artifact_contract(
+            runtime_contract = load_runtime_artifact_contract(
                 str(root),
                 source.filter_id,
                 source.model_architecture,
@@ -251,6 +323,10 @@ def collect_artifact_status(
             )
             runtime_ready = True
             runtime_status = "READY"
+            runtime_periods[dl_id] = (
+                str(runtime_contract.execution_start),
+                str(runtime_contract.available_through),
+            )
         except (OSError, ValueError, KeyError, TypeError) as exc:
             runtime_status = f"MISSING_OR_STALE ({type(exc).__name__})"
 
@@ -339,6 +415,11 @@ def collect_artifact_status(
             "files": file_rows,
         }
 
+    comparison_start, comparison_end, comparison_period_source = _resolve_comparison_period(
+        settings=settings,
+        runtime_periods=runtime_periods,
+    )
+
     parameter_rows: dict[str, Any] = {}
     resolved_parameter_paths: dict[str, Path] = {}
     for source_id in settings.parameter_sources:
@@ -350,6 +431,8 @@ def collect_artifact_status(
         artifact_ready, artifact_status, policy = _validate_param_artifact(
             path,
             param_policy=settings.param_policy,
+            comparison_start=comparison_start,
+            comparison_end=comparison_end,
         )
         identity_ready, identity_status, identity_path = _validate_param_training_identity(
             root=root,
@@ -409,6 +492,9 @@ def collect_artifact_status(
             "path": display_path,
             "sha256": sha256,
             "identity_status": identity_status,
+            "coverage_start": None if policy is None else policy.get("coverage_start"),
+            "coverage_end": None if policy is None else policy.get("coverage_end"),
+            "coverage_status": artifact_status,
         }
         parameter_rows[source_id] = {
             "ready": ready,
@@ -418,6 +504,8 @@ def collect_artifact_status(
             "sha256": sha256,
             "selector": None if policy is None else policy.get("selector"),
             "identity_status": identity_status,
+            "coverage_start": None if policy is None else policy.get("coverage_start"),
+            "coverage_end": None if policy is None else policy.get("coverage_end"),
             "identity_manifest_path": (
                 None
                 if identity_path is None
@@ -454,6 +542,12 @@ def collect_artifact_status(
         "dl_sources": dl_rows,
         "artifact_identities": artifact_identities,
         "resolved_parameter_paths": resolved_parameter_paths,
+        "comparison_period": (
+            None
+            if comparison_start is None or comparison_end is None
+            else {"start": comparison_start, "end": comparison_end}
+        ),
+        "comparison_period_source": comparison_period_source,
     }
 
 
@@ -489,10 +583,15 @@ def _execute_preparation_action(
         _kind, source_id = action.artifact_key.split(":", 1)
         source = settings.parameter_sources[source_id]
         builder = source.builder
-        if builder is None or not source.trained_with_dl_id:
+        if builder is None:
             raise RuntimeError(f"參數來源builder設定不完整: {source_id}")
-        dl = settings.dl_sources[source.trained_with_dl_id]
         options = dict(builder.options)
+        model_source_id = str(
+            source.trained_with_dl_id or options.get("model_source_id") or ""
+        ).strip()
+        if not model_source_id or model_source_id not in settings.dl_sources:
+            raise RuntimeError(f"參數來源builder缺少合法model_source_id: {source_id}")
+        dl = settings.dl_sources[model_source_id]
         prepare_strategy_parameter_source(
             project_root=root,
             dataset=settings.dataset,
@@ -527,38 +626,81 @@ def prepare_strategy_comparison_artifacts(
     status: dict[str, Any],
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    plan: StrategyPreparationPlan = status["preparation_plan"]
-    if plan.blocked:
+    requested_plan: StrategyPreparationPlan = status["preparation_plan"]
+    if requested_plan.blocked:
         raise RuntimeError("策略比較前置計畫包含BLOCKED工件，無法自動完成")
-    if plan.overall_status == "READY":
+    if requested_plan.overall_status == "READY":
         return status
     if not settings.preparation.auto_prepare:
         raise RuntimeError("目前config已關閉auto_prepare")
 
-    for action in plan.actions:
-        if action.action not in {"BUILD", "REBUILD"}:
-            continue
-        print(f"\n[前置] {action.description}")
-        try:
-            _execute_preparation_action(root=root, settings=settings, action=action)
-        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+    current = status
+    executed_signatures: set[tuple[str, str, str | None, str]] = set()
+    max_waves = max(2, len(requested_plan.actions) + 2)
+    for _wave in range(max_waves):
+        plan: StrategyPreparationPlan = current["preparation_plan"]
+        if plan.overall_status == "READY":
+            current["requested_preparation_plan"] = requested_plan
+            return current
+        if plan.blocked:
+            blocked = [
+                item.artifact_key
+                for item in plan.actions
+                if item.action == "BLOCKED"
+            ]
             raise RuntimeError(
-                f"前置步驟失敗: {action.artifact_key} | action={action.action} | "
-                f"path={action.path} | {type(exc).__name__}: {exc}"
-            ) from exc
+                "策略比較前置依賴於重新規劃後變成BLOCKED: "
+                + ", ".join(blocked)
+            )
 
-    refreshed = collect_artifact_status(project_root=root, settings=settings)
-    refreshed["requested_preparation_plan"] = plan
-    if not refreshed["comparison_ready"]:
-        failed = [
-            f"{item.artifact_key}:{item.action}"
-            for item in refreshed["preparation_plan"].actions
-            if item.action != "REUSE"
+        wave_actions = [
+            item for item in plan.actions if item.action in {"BUILD", "REBUILD"}
         ]
-        raise RuntimeError(
-            "前置工件完成後仍未READY: " + ", ".join(failed)
-        )
-    return refreshed
+        if not wave_actions:
+            raise RuntimeError("策略比較前置狀態非READY，但沒有可執行BUILD／REBUILD動作")
+        executed_this_wave = 0
+        for action in wave_actions:
+            signature = (
+                action.artifact_key,
+                action.action,
+                action.builder_type,
+                action.path,
+            )
+            if signature in executed_signatures:
+                continue
+            print(f"\n[前置] {action.description}")
+            try:
+                _execute_preparation_action(root=root, settings=settings, action=action)
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+                raise RuntimeError(
+                    f"前置步驟失敗: {action.artifact_key} | action={action.action} | "
+                    f"path={action.path} | {type(exc).__name__}: {exc}"
+                ) from exc
+            executed_signatures.add(signature)
+            executed_this_wave += 1
+
+        current = collect_artifact_status(project_root=root, settings=settings)
+        current["requested_preparation_plan"] = requested_plan
+        if current["comparison_ready"]:
+            return current
+        if executed_this_wave == 0:
+            remaining = [
+                f"{item.artifact_key}:{item.action}"
+                for item in current["preparation_plan"].actions
+                if item.action != "REUSE"
+            ]
+            raise RuntimeError(
+                "前置工件重新規劃後沒有進展: " + ", ".join(remaining)
+            )
+
+    remaining = [
+        f"{item.artifact_key}:{item.action}"
+        for item in current["preparation_plan"].actions
+        if item.action != "REUSE"
+    ]
+    raise RuntimeError(
+        "前置工件超過最大依賴波次仍未READY: " + ", ".join(remaining)
+    )
 
 
 __all__ = [

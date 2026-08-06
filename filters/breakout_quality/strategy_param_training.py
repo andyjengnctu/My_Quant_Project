@@ -421,12 +421,16 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
         "trials_per_fold": int(args.trials_per_fold),
         "risk_search_fields": list(RISK_SEARCH_FIELDS),
         "fixed_overrides_by_effective_date": fold_overrides,
-        "binary_runtime": {
-            "filter_id": str(args.filter_id),
-            "model_architecture": str(args.model_architecture),
-            "experiment_profile": str(args.experiment_profile),
-            "manifest_sha256": compute_file_sha256(model_artifact.paths.manifest_path),
-        },
+        "binary_runtime": (
+            None
+            if not training_dl_enabled
+            else {
+                "filter_id": str(args.filter_id),
+                "model_architecture": str(args.model_architecture),
+                "experiment_profile": str(args.experiment_profile),
+                "manifest_sha256": compute_file_sha256(model_artifact.paths.manifest_path),
+            }
+        ),
         "binary_pit": (
             None
             if not training_dl_enabled
@@ -866,7 +870,14 @@ def _render_report(*, args, matrix, p2_arm, p3_arm, binary_pit, baseline_contrac
                 ("P2訓練", "rules全關／DL關"),
                 ("P3訓練", "rules全關／DL開／Binary PIT"),
                 ("Binary PIT", binary_pit["status"]),
-                ("DL replay source", "binary_point_in_time（八操作點一致；process workers已傳遞）"),
+                (
+                    "DL replay source",
+                    (
+                        "未執行（train-only參數建立）"
+                        if args.train_only
+                        else "binary_point_in_time（八操作點一致；process workers已傳遞）"
+                    ),
+                ),
                 ("固定 Buy sort", "原 position-aware buy-sort"),
             )
         ),
@@ -922,22 +933,31 @@ def run_param_adaptation_gate(*, project_root=PROJECT_ROOT, argv=None):
         raise ValueError("4×2 Gate固定使用base-finalist-best")
     if int(args.trials_per_fold) < 1 or int(args.max_positions) < 1:
         raise ValueError("trials-per-fold與max-positions必須>=1")
-    model_artifact = load_model_artifact_contract(
-        str(root),
-        str(args.filter_id),
-        str(args.model_architecture),
-        str(args.experiment_profile),
+    requires_binary_pit = str(args.parameter_set) in {"p3", "both"}
+    model_artifact = (
+        load_model_artifact_contract(
+            str(root),
+            str(args.filter_id),
+            str(args.model_architecture),
+            str(args.experiment_profile),
+        )
+        if requires_binary_pit
+        else None
     )
     baseline_contract = _load_baseline_contract(root=root, args=args)
-    binary_pit = _ensure_binary_pit(root=root, args=args)
-    if binary_pit["ready"]:
-        binary_pit = _validate_binary_pit_optimizer_coverage(
-            binary_pit=binary_pit, baseline_contract=baseline_contract
-        )
-    if not args.plan_only and not binary_pit["ready"]:
-        raise FileNotFoundError(
-            "P3需要Binary PIT scores；請保留預設--build-binary-pit，或先執行build-binary-point-in-time-scores"
-        )
+    if requires_binary_pit:
+        binary_pit = _ensure_binary_pit(root=root, args=args)
+        if binary_pit["ready"]:
+            binary_pit = _validate_binary_pit_optimizer_coverage(
+                binary_pit=binary_pit, baseline_contract=baseline_contract
+            )
+        if not args.plan_only and not binary_pit["ready"]:
+            raise FileNotFoundError(
+                "P3需要Binary PIT scores；請保留預設--build-binary-pit，或先執行build-binary-point-in-time-scores"
+            )
+    else:
+        binary_pit = _binary_pit_preflight(root=root, args=args)
+        binary_pit = {**binary_pit, "status": "NOT_REQUIRED_FOR_P2"}
     output_dir = root / EXPERIMENT_RELATIVE_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     plan_path = output_dir / "strategy_dl_filter_param_adapt_plan.json"

@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 2
+STRATEGY_COMPARE_SCHEMA_VERSION = 3
 
 # =============================================================================
 # 1. 共用執行設定
@@ -57,13 +57,30 @@ STRATEGY_PARAM_SOURCES = {
     },
     "min_roos": {
         "path_template": (
-            "models/research/breakout_quality/trade_path_label/"
-            "a2_teacher_params/p2_dl_off_trained/active_params/{param_filename}"
+            "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
+            "risk_only_rolling/p2_dl_off_trained/active_params/{param_filename}"
         ),
-        "description": "rule-based filters全關、DL-off訓練的Min ROOS",
-        "identity_manifest_path": None,
+        "description": "forward rolling期間、rule-based filters全關、DL-off訓練的Min ROOS",
+        "identity_manifest_path": (
+            "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
+            "risk_only_rolling/p2_dl_off_trained/rolling_preflight.json"
+        ),
         "trained_with_dl_id": None,
-        "builder": None,
+        "builder": {
+            "enabled": True,
+            "builder_type": "binary_dl_risk_only_rolling",
+            "options": {
+                "parameter_set": "p2",
+                "model_source_id": "TP1",
+                "trials_per_fold": 200,
+                "resume": True,
+                "fixed_risk": 0.01,
+                "max_position_cap_pct": 0.30,
+                "build_binary_pit": False,
+                "binary_pit_resume": True,
+                "quiet": False,
+            },
+        },
     },
     "min_dl_tp1_roos": {
         "path_template": (
@@ -81,6 +98,7 @@ STRATEGY_PARAM_SOURCES = {
             "builder_type": "binary_dl_risk_only_rolling",
             "options": {
                 "parameter_set": "p3",
+                "model_source_id": "TP1",
                 "trials_per_fold": 200,
                 "resume": True,
                 "fixed_risk": 0.01,

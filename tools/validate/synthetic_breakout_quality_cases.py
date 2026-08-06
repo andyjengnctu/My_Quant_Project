@@ -15970,6 +15970,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "artifact_identities": {"param:test": {"sha256": "abc"}},
         "resolved_parameter_paths": {"test": "models/test.json"},
         "preparation_plan": SimpleNamespace(overall_status="READY"),
+        "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+        "comparison_period_source": "dl_runtime_common_overlap",
     }
     with patch.object(
         strategy_comparison_module,
@@ -16026,7 +16028,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         ),
     )
 
-    from core.strategy_comparison import StrategyPreparationPlan
+    from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
 
     mocked_pair_payload = {
         "metadata": {
@@ -16071,6 +16073,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for source_id in {arm.param_source for arm in settings.enabled_arms}
         },
         "preparation_plan": ready_plan,
+        "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},
+        "comparison_period_source": "dl_runtime_common_overlap",
     }
     with tempfile.TemporaryDirectory() as tmpdir, patch.object(
         strategy_comparison_module,
@@ -16096,9 +16100,106 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "ready_orchestration_executes_each_config_pair_and_writes_all_enabled_arms",
         True,
         mocked_run.call_count == len(execution_pairs)
+        and all(
+            call.kwargs.get("comparison_start_date") == "2021-01-01"
+            and call.kwargs.get("comparison_end_date") == "2021-12-31"
+            for call in mocked_run.call_args_list
+        )
         and set(replay_payload["scenarios"])
         == {arm.arm_id for arm in settings.enabled_arms}
         and replay_payload["status"] == "COMPLETED",
+    )
+
+    min_roos_source = settings.parameter_sources["min_roos"]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "min_roos_uses_forward_p2_artifact_and_has_auto_builder",
+        True,
+        "binary_dl_filter_param_adaptation/risk_only_rolling/p2_dl_off_trained"
+        in str(min_roos_source.path_template)
+        and "trade_path_label/a2_teacher_params" not in str(min_roos_source.path_template)
+        and min_roos_source.identity_manifest_path is not None
+        and min_roos_source.builder is not None
+        and str(min_roos_source.builder.options.get("parameter_set")) == "p2",
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "parameter_coverage_is_preflighted_before_any_pair_replay",
+        True,
+        "PARAM_PERIOD_MISMATCH" in preparation_source
+        and "comparison_period" in preparation_source
+        and "comparison_start_date=comparison_start" in orchestration_source
+        and "comparison_end_date=comparison_end" in orchestration_source,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "preparation_supports_dependency_waves_after_score_period_becomes_known",
+        True,
+        "max_waves" in preparation_source
+        and "前置工件重新規劃後沒有進展" in preparation_source,
+    )
+
+    from filters.breakout_quality import strategy_compare_preparation as preparation_module
+    score_action = StrategyPreparationAction(
+        action_id="dl:TP1:forward_scores",
+        artifact_key="dl:TP1:forward_scores",
+        action="BUILD",
+        builder_type="forward_oos_scores",
+        description="build scores",
+        path="models/scores.csv",
+    )
+    p2_action = StrategyPreparationAction(
+        action_id="param:min_roos",
+        artifact_key="param:min_roos",
+        action="BUILD",
+        builder_type="binary_dl_risk_only_rolling",
+        description="build p2",
+        path="models/p2.json",
+    )
+    initial_wave_status = {
+        "comparison_ready": False,
+        "overall_status": "PREPARABLE",
+        "preparation_plan": StrategyPreparationPlan(
+            overall_status="PREPARABLE", actions=(score_action,)
+        ),
+    }
+    second_wave_status = {
+        "comparison_ready": False,
+        "overall_status": "PREPARABLE",
+        "preparation_plan": StrategyPreparationPlan(
+            overall_status="PREPARABLE", actions=(p2_action,)
+        ),
+    }
+    final_wave_status = {
+        "comparison_ready": True,
+        "overall_status": "READY",
+        "preparation_plan": StrategyPreparationPlan(
+            overall_status="READY", actions=tuple()
+        ),
+    }
+    with patch.object(
+        preparation_module,
+        "collect_artifact_status",
+        side_effect=(second_wave_status, final_wave_status),
+    ), patch.object(
+        preparation_module,
+        "_execute_preparation_action",
+    ) as mocked_prepare_action, redirect_stdout(io.StringIO()):
+        multi_wave_result = preparation_module.prepare_strategy_comparison_artifacts(
+            project_root=project_root,
+            settings=settings,
+            status=initial_wave_status,
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "preparation_executes_newly_revealed_dependencies_in_later_wave",
+        True,
+        multi_wave_result["comparison_ready"]
+        and mocked_prepare_action.call_count == 2
+        and [
+            call.kwargs["action"].artifact_key
+            for call in mocked_prepare_action.call_args_list
+        ] == ["dl:TP1:forward_scores", "param:min_roos"],
     )
 
     add_check(

@@ -40,7 +40,7 @@ from filters.breakout_quality.strategy_compare_preparation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESULT_SCHEMA_VERSION = 2
+RESULT_SCHEMA_VERSION = 3
 
 
 def _json_native(value: Any) -> Any:
@@ -161,7 +161,15 @@ def render_status(
                 (
                     ("設定檔", "config/strategy_compare.py"),
                     ("Dataset", current.dataset),
-                    ("期間", f"{current.start_date or 'artifact start'} ～ {current.end_date or 'artifact end'}"),
+                    (
+                        "期間",
+                        (
+                            f"{current_status['comparison_period']['start']} ～ "
+                            f"{current_status['comparison_period']['end']}"
+                            if current_status.get("comparison_period")
+                            else f"{current.start_date or 'artifact start'} ～ {current.end_date or 'artifact end'}"
+                        ),
+                    ),
                     ("Param policy", current.param_policy),
                     ("Max positions", current.max_positions),
                     ("Rotation", current.rotation),
@@ -515,6 +523,7 @@ def _collect_ready_status_after_preparation(
         "artifact_identities",
         "resolved_parameter_paths",
         "preparation_plan",
+        "comparison_period",
     )
     missing = [key for key in required_keys if key not in refreshed]
     if missing:
@@ -571,6 +580,12 @@ def run_strategy_comparison(
             requested_plan=requested_plan,
         )
 
+    comparison_period = dict(status.get("comparison_period") or {})
+    comparison_start = str(comparison_period.get("start") or "")
+    comparison_end = str(comparison_period.get("end") or "")
+    if not comparison_start or not comparison_end:
+        raise RuntimeError("正式比較缺少已解析的共同comparison period")
+
     run_dir, latest_dir = _run_directory(
         root=root,
         settings=settings,
@@ -606,8 +621,8 @@ def run_strategy_comparison(
             experiment_profile=dl.experiment_profile,
             threshold=dl.threshold,
             output_dir_override=pair_dir,
-            comparison_start_date=settings.start_date,
-            comparison_end_date=settings.end_date,
+            comparison_start_date=comparison_start,
+            comparison_end_date=comparison_end,
             quiet=quiet,
             shared_param_overrides=(
                 ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
@@ -638,6 +653,8 @@ def run_strategy_comparison(
         "requested_config_fingerprint": requested_fingerprint,
         "settings": settings.as_dict(),
         "artifact_identities": status["artifact_identities"],
+        "comparison_period": comparison_period,
+        "comparison_period_source": status.get("comparison_period_source"),
         "requested_preparation_plan": requested_plan.as_dict(),
         "final_preparation_plan": status["preparation_plan"].as_dict(),
         "scenarios": scenarios,
@@ -667,6 +684,8 @@ def run_strategy_comparison(
                 item.as_dict() for item in settings.enabled_contrasts
             ],
             "artifact_identities": status["artifact_identities"],
+            "comparison_period": comparison_period,
+            "comparison_period_source": status.get("comparison_period_source"),
             "preparation_policy": settings.preparation.as_dict(),
             "requested_preparation_plan": requested_plan.as_dict(),
             "final_preparation_plan": status["preparation_plan"].as_dict(),

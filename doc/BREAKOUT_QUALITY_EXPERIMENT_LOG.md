@@ -3861,3 +3861,36 @@ config-driven策略比較重構後，`run_strategy_comparison()`保留對`_execu
 ### 採用判定與下一步
 
 尚未取得C1～C6實際績效，不得判定TP1有效或無效。套用修正後由`python apps/strategy_compare.py`進入選單並執行目前比較設定；計畫應維持全部`REUSE`，隨後直接進入三個canonical pair replay與正式報表。
+
+## 2026-08-06 — Strategy Compare Min ROOS forward-source與期間coverage preflight修正
+
+### 狀態
+
+`IMPLEMENTED / C1_C6_REPLAY_RERUN_REQUIRED / FULL_PAIR_PRIOR_OUTPUT_DIAGNOSTIC_ONLY / DATASET_LABEL_MODEL_REUSE / PERFORMANCE_RESULT_PENDING`
+
+### 程式與錯誤基準
+
+- 使用者ZIP：`test-branch-1_20260806_200539_c64241b.zip`
+- ZIP SHA256：`8101c7d857ec0ad49b810b6d47a29bf4262a552c5dad1bd158bf1d53659cb6db`
+- 使用者所有前置工件顯示READY後開始C1～C6；第一組Full ROOS／formal pair已完成並輸出pair-level工件，第二組Min ROOS／all-off在正式replay前因active params只涵蓋`2014-01-01～2020-12-31`、比較期間為`2021-01-01～2026-03-02`而停止，尚未產生完整C1～C6頂層報表。
+
+### 根因
+
+`config/strategy_compare.py`的`min_roos`誤指向`trade_path_label/a2_teacher_params/p2_dl_off_trained`。該工件是TP1 Label建立使用的Selection歷史teacher，只涵蓋2014～2020；正式forward績效比較應使用`binary_dl_filter_param_adaptation/risk_only_rolling/p2_dl_off_trained`，其rolling schedule與正式Baseline同為2021～2026。原狀態頁只驗證JSON種類與selector，沒有在第一個pair前驗證所有參數來源是否完整覆蓋共同comparison period，因此錯誤被延遲到第二組replay才暴露。
+
+### 唯一修正
+
+- `min_roos`改指向forward P2 DL-off-trained active params與`rolling_preflight.json`，並在config配置P2正式builder；缺少、identity不符或期間不足時由策略比較選單自動建立／接續，不再要求臨時CLI。
+- 狀態服務由全部啟用DL runtime工件解析共同可比較期間；若config明確指定日期則驗證其位於所有runtime工件範圍內，否則使用共同交集。本次固定為`2021-01-01～2026-03-02`。
+- 每個rolling active-param來源在產生執行計畫時即驗證coverage；不完整者標為`PARAM_PERIOD_MISMATCH`並依builder轉為BUILD／REBUILD或BLOCKED。所有來源READY後才建立run directory並開始第一個pair replay。
+- 前置服務改為多波依賴重新規劃：例如先建立forward scores取得正式期間，再自動發現並建立因此顯露為缺少／過期的P2／P3，直到READY或明確無進展／BLOCKED。
+- P2-only參數建立不再把Binary PIT或模型checkpoint視為訓練必要條件；P3契約、Binary PIT、threshold與既有P3工件不變。
+
+### Dataset／Label／模型／參數影響
+
+不重建Dataset、不重新Label、不重新訓練TP1模型、不調threshold、不修改forward scores、Binary PIT、交易規則、帳務、Full ROOS或P3。若本機forward P2工件已存在且identity／coverage正確，重跑時直接REUSE；否則依config自動建立或接續P2。先前失敗run中的Full pair輸出只屬可追蹤pair診斷，不是完整C1～C6正式結果，不作採用判定。
+
+### 採用判定與下一步
+
+尚未取得完整C1～C6，不得判定TP1有效或無效。套用修正後由`python apps/strategy_compare.py`選擇`[2] 查看設定、工件與預計動作`，確認Min ROOS路徑位於`binary_dl_filter_param_adaptation/risk_only_rolling/p2_dl_off_trained`且整體為READY或PREPARABLE；再選`[1/Enter] 執行目前比較設定`。全部前置完成後重跑三個canonical pairs並產生頂層正式報表。
+
