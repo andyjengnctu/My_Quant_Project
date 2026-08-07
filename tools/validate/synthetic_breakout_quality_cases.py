@@ -16574,6 +16574,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     from tools.filters.breakout_quality.audit_pass_persistence import run_pass_persistence_audit
     from tools.filters.breakout_quality.audit_pass_quality import run_pass_quality_audit
+    from tools.filters.breakout_quality.audit_selection_confidence import run_selection_confidence_audit
 
     case_id = "AUDIT_FRAMEWORK"
     results = []
@@ -16588,14 +16589,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     persistence_definition = next(
         (item for item in all_definitions if item.audit_type == "pass_persistence"), None
     )
+    confidence_definition = next(
+        (item for item in all_definitions if item.audit_type == "selection_confidence"), None
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "audit_config_supports_quality_and_persistence_profiles_with_config_driven_enablement",
+        "audit_config_supports_quality_persistence_and_selection_confidence_profiles_with_config_driven_enablement",
         True,
         quality_definition is not None
         and persistence_definition is not None
+        and confidence_definition is not None
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("arm_id") or "").strip()) for item in all_definitions),
     )
@@ -16839,6 +16844,131 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and bool(persistence_payload["label_persistence_groups"])
             and (persistence_latest / "audit.md").is_file()
             and (persistence_latest / "event_persistence.csv").is_file(),
+        )
+
+
+        if confidence_definition is None:
+            raise AssertionError("selection confidence audit definition missing")
+        confidence_run_dir = root / "outputs" / "strategy_compare" / "runs" / "confidence_synthetic"
+        confidence_pair_dir = (
+            confidence_run_dir
+            / "pairs"
+            / "min_roos__all_off__A9__resource_aware_binary_basket"
+        )
+        confidence_pair_dir.mkdir(parents=True, exist_ok=True)
+        (confidence_run_dir / "strategy_comparison.json").write_text(
+            json.dumps(result_payload), encoding="utf-8"
+        )
+        (latest_dir / "manifest.json").write_text(
+            json.dumps({"run_dir": "outputs/strategy_compare/runs/confidence_synthetic"}),
+            encoding="utf-8",
+        )
+        confidence_orderable = pd.DataFrame(
+            [
+                {"ticker": "F", "trade_date": "2026-02-02", "candidate_date": "2026-02-02", "signal_date": "2026-02-01", "candidate_type": "normal", "high_len": 200, "breakout_quality_score": 0.51},
+                {"ticker": "G", "trade_date": "2026-02-02", "candidate_date": "2026-02-02", "signal_date": "2026-02-01", "candidate_type": "normal", "high_len": 205, "breakout_quality_score": 0.61},
+                {"ticker": "H", "trade_date": "2026-02-02", "candidate_date": "2026-02-02", "signal_date": "2026-02-01", "candidate_type": "normal", "high_len": 210, "breakout_quality_score": 0.71},
+                {"ticker": "I", "trade_date": "2026-02-03", "candidate_date": "2026-02-03", "signal_date": "2026-02-02", "candidate_type": "extended", "high_len": 215, "breakout_quality_score": 0.52},
+                {"ticker": "J", "trade_date": "2026-02-03", "candidate_date": "2026-02-03", "signal_date": "2026-02-02", "candidate_type": "extended", "high_len": 220, "breakout_quality_score": 0.62},
+                {"ticker": "K", "trade_date": "2026-02-03", "candidate_date": "2026-02-03", "signal_date": "2026-02-02", "candidate_type": "extended", "high_len": 225, "breakout_quality_score": 0.72},
+                {"ticker": "L", "trade_date": "2026-02-04", "candidate_date": "2026-02-04", "signal_date": "2026-02-03", "candidate_type": "normal", "high_len": 230, "breakout_quality_score": 0.99},
+                {"ticker": "M", "trade_date": "2026-02-04", "candidate_date": "2026-02-04", "signal_date": "2026-02-03", "candidate_type": "normal", "high_len": 235, "breakout_quality_score": 0.98},
+            ]
+        )
+        confidence_orderable.to_csv(
+            confidence_pair_dir / "score_ranking_orderable_candidates.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame(
+            [
+                {"ticker": "G", "trade_date": "2026-02-02", "signal_date": "2026-02-01", "type": "買進 (normal)"},
+                {"ticker": "H", "trade_date": "2026-02-02", "signal_date": "2026-02-01", "type": "買進 (normal)"},
+                {"ticker": "J", "trade_date": "2026-02-03", "signal_date": "2026-02-02", "type": "買進 (extended)"},
+                {"ticker": "K", "trade_date": "2026-02-03", "signal_date": "2026-02-02", "type": "買進 (extended)"},
+            ]
+        ).to_csv(
+            confidence_pair_dir / "score_ranking_selected_buys.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame(
+            [
+                {"Date": "2026-02-02", "Ticker": "G", "Type": "買進 (normal)", "買訊日": "2026-02-01", "成交價": 100.0, "該筆總損益": 0.0, "R_Multiple": 0.0},
+                {"Date": "2026-02-10", "Ticker": "G", "Type": "全倉結算", "成交價": 110.0, "該筆總損益": 10000.0, "R_Multiple": 1.0},
+                {"Date": "2026-02-02", "Ticker": "H", "Type": "買進 (normal)", "買訊日": "2026-02-01", "成交價": 100.0, "該筆總損益": 0.0, "R_Multiple": 0.0},
+                {"Date": "2026-02-11", "Ticker": "H", "Type": "全倉結算", "成交價": 120.0, "該筆總損益": 20000.0, "R_Multiple": 2.0},
+                {"Date": "2026-02-03", "Ticker": "J", "Type": "買進 (extended)", "買訊日": "2026-02-02", "成交價": 100.0, "該筆總損益": 0.0, "R_Multiple": 0.0},
+                {"Date": "2026-02-12", "Ticker": "J", "Type": "全倉結算", "成交價": 105.0, "該筆總損益": 5000.0, "R_Multiple": 0.5},
+                {"Date": "2026-02-03", "Ticker": "K", "Type": "買進 (extended)", "買訊日": "2026-02-02", "成交價": 100.0, "該筆總損益": 0.0, "R_Multiple": 0.0},
+                {"Date": "2026-02-13", "Ticker": "K", "Type": "全倉結算", "成交價": 115.0, "該筆總損益": 15000.0, "R_Multiple": 1.5},
+            ]
+        ).to_csv(
+            confidence_pair_dir / "score_ranking_trades.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame(
+            [
+                {"Date": "2026-02-02", "Resource_Aware_Mode": "dl-selection"},
+                {"Date": "2026-02-03", "Resource_Aware_Mode": "dl-selection"},
+                {"Date": "2026-02-04", "Resource_Aware_Mode": "capital-utilization"},
+            ]
+        ).to_csv(
+            confidence_pair_dir / "score_ranking_daily_capacity.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame(
+            [
+                {"ticker": "F", "date": "2026-02-01", "high_len": 200, "label": 0, "decision_mfe_return": 0.02, "decision_mae_return": 0.04},
+                {"ticker": "G", "date": "2026-02-01", "high_len": 205, "label": 1, "decision_mfe_return": 0.08, "decision_mae_return": 0.02},
+                {"ticker": "H", "date": "2026-02-01", "high_len": 210, "label": 1, "decision_mfe_return": 0.10, "decision_mae_return": 0.01},
+                {"ticker": "I", "date": "2026-02-02", "high_len": 215, "label": 0, "decision_mfe_return": 0.02, "decision_mae_return": 0.05},
+                {"ticker": "J", "date": "2026-02-02", "high_len": 220, "label": 1, "decision_mfe_return": 0.07, "decision_mae_return": 0.02},
+                {"ticker": "K", "date": "2026-02-02", "high_len": 225, "label": 1, "decision_mfe_return": 0.09, "decision_mae_return": 0.01},
+                {"ticker": "L", "date": "2026-02-03", "high_len": 230, "label": 0, "decision_mfe_return": 0.01, "decision_mae_return": 0.05},
+                {"ticker": "M", "date": "2026-02-03", "high_len": 235, "label": 1, "decision_mfe_return": 0.08, "decision_mae_return": 0.02},
+            ]
+        ).to_csv(events_dir / "events.csv", index=False, encoding="utf-8-sig")
+
+        confidence_synthetic = type(confidence_definition)(
+            module_id=confidence_definition.module_id,
+            audit_id=confidence_definition.audit_id,
+            enabled=True,
+            audit_type="selection_confidence",
+            description=confidence_definition.description,
+            source={"kind": "strategy_compare", "run": "latest", "arm_id": "C12"},
+            dimensions=dict(confidence_definition.dimensions),
+            outcomes=dict(confidence_definition.outcomes),
+            output_subdir=confidence_definition.output_subdir,
+        )
+        confidence_payload = run_selection_confidence_audit(
+            confidence_synthetic, project_root=root, quiet=True
+        )
+        confidence_latest = (
+            root
+            / Path(AUDIT_OUTPUT_ROOT)
+            / Path(confidence_synthetic.output_subdir)
+            / "latest"
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "selection_confidence_audit_scopes_to_dl_selection_competition_and_measures_within_day_label_and_realized_r_ordering",
+            True,
+            confidence_payload["overview"]["dl_selection_day_count"] == 2
+            and confidence_payload["overview"]["competition_day_count"] == 2
+            and confidence_payload["overview"]["competition_pass_candidate_count"] == 6
+            and confidence_payload["overview"]["selected_pass_count"] == 4
+            and confidence_payload["label_pairwise"]["comparable_pair_count"] == 4
+            and math.isclose(confidence_payload["label_pairwise"]["pair_weighted_concordance_pct"], 100.0)
+            and confidence_payload["realized_r_pairwise"]["comparable_pair_count"] == 2
+            and math.isclose(confidence_payload["realized_r_pairwise"]["pair_weighted_concordance_pct"], 100.0)
+            and confidence_payload["semantic_contract"]["extended_candidate_is_not_rescored_as_breakout"] is True
+            and (confidence_latest / "audit.md").is_file()
+            and (confidence_latest / "competition_pass_candidates.csv").is_file(),
         )
 
     app_source = (Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py").read_text(encoding="utf-8")

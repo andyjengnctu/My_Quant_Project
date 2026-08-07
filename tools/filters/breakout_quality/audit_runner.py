@@ -21,6 +21,10 @@ from tools.filters.breakout_quality.audit_pass_quality import (
     collect_pass_quality_status,
     run_pass_quality_audit,
 )
+from tools.filters.breakout_quality.audit_selection_confidence import (
+    collect_selection_confidence_status,
+    run_selection_confidence_audit,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MODULE_ID = "breakout_quality"
@@ -31,6 +35,8 @@ def _status_for_definition(definition, *, project_root: Path) -> dict[str, Any]:
         return collect_pass_quality_status(definition, project_root=project_root)
     if definition.audit_type == "pass_persistence":
         return collect_pass_persistence_status(definition, project_root=project_root)
+    if definition.audit_type == "selection_confidence":
+        return collect_selection_confidence_status(definition, project_root=project_root)
     raise ValueError(f"不支援的Breakout Quality audit type: {definition.audit_type}")
 
 
@@ -128,6 +134,10 @@ def run_enabled_audits(
             )
         elif definition.audit_type == "pass_persistence":
             outputs[definition.audit_id] = run_pass_persistence_audit(
+                definition, project_root=root, quiet=quiet
+            )
+        elif definition.audit_type == "selection_confidence":
+            outputs[definition.audit_id] = run_selection_confidence_audit(
                 definition, project_root=root, quiet=quiet
             )
         else:

@@ -4439,3 +4439,61 @@ Persistence以`ticker / signal_date / high_len`作原breakout event identity，�
 
 下一步先實作`SR-C13` candidate-day re-score runtime與其必要推論工件，不修改A9 training pipeline。核心問題是：在固定C12最大化PASS資源契約下，**只改score refresh timing**是否能降低candidate-day false-positive persistence amplification，並把更多PASS使用轉化為更好的selection R／EV／RoMD，而不重新出現資金利用率下降。若SR-C13失敗，再根據結果判斷是否需要真正的candidate-state模型訓練；該模型屆時另行取得新的`MR-*` ID。
 
+
+## 2026-08-07 — AUD-a9-selection-confidence 實作：只驗證DL Selection Mode內原Event confidence排序力
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / READ_ONLY_AUDIT / NO_RUNTIME_CHANGE`
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260807_221137_3b983d3(1).zip`
+- SHA256：`79ddc403b353c3a6580b3a408fa5d5656517f637338aa2b92a930d59d9c361b8`
+- 本輪依`PROJECT_SETTINGS → Experiment Registry → Experiment Log`完成identity reconciliation後實作；不修改`SR-C12`、`DL-A9`、threshold、Min ROOS、candidate lifecycle或任何模型權重。
+
+### 前一個SR-C13規劃的更正
+
+`SR-C13`先前正式規劃為「同一DL-A9對每個candidate-day最新snapshot重新評分」。進一步核對A9 training semantics後，這個方向在實作前取消：A9是breakout-event classifier，而extended candidate-day通常不是breakout線型；直接把非breakout state送回A9會產生輸入distribution與score語意改變。依Registry已使用ID永久保留規則，`SR-C13`標記`CANCELLED_BEFORE_IMPLEMENTATION`且不得重用；未來下一個strategy runtime ID從`SR-C14`開始，但目前不預先分配其identity。
+
+### 本輪唯一研究問題
+
+使用者方向固定為「在資源契約下最大化PASS使用，再提高PASS品質」，不最佳化Min ROOS／DL混合比例。現有PASS Quality Audit顯示全體selected PASS中`Score ↔ Realized R Spearman=0.096`且Q5 mean R較高，但該結果包含沒有真正PASS競爭的日期，不能直接回答confidence能否用於DL Selection Mode排序。
+
+因此新增`AUD-a9-selection-confidence / audit_type=selection_confidence`，來源固定為`SR-C12 / DL-A9`既有正式strategy-compare工件，只取：
+
+1. `Resource_Aware_Mode = dl-selection`；
+2. 同一trade date至少有config設定的`minimum_competing_pass_candidates`個A9 PASS（目前config為2；validator只檢查>=2，不把目前值硬編碼成唯一合法值）；
+3. A9 confidence固定沿用原breakout event score，不對extended candidate當日線型重新推論。
+
+### 診斷口徑
+
+- Competition candidate-day `Score ↔ 原Event Label Spearman`。
+- 同一批曾參與競爭的unique breakout events之`Score ↔ Event Label Spearman`，用來辨識candidate-day persistence weighting是否改變整體關係。
+- 實際selected PASS中`Score ↔ Realized R Spearman`；未成交PASS不填補或估計反事實R。
+- 同日PASS pairwise Event Label concordance：只比較Label不同的candidate pair，confidence較高者若為Event Label PASS則concordant；score tie按0.5計入。
+- 同日已買PASS pairwise Realized R concordance：只比較同日兩筆都有有限Realized R且R不同的pair；confidence較高者R較高則concordant。
+- Competition PASS的config-driven score quantile只做read-only分層，輸出候選數、unique event數、selected數、Label PASS rate、selected mean／median R；不得直接轉成runtime threshold。
+
+### 固定限制
+
+- Strategy唯一擁有candidate validity；本Audit不建立DL expiry或age cutoff。
+- DL-A9仍只代表原breakout event quality；extended candidate不是新的breakout event，不做candidate-day A9 re-score。
+- Realized R只存在於實際成交者，故R相關與pairwise結果存在portfolio selection bias；不得宣稱是所有未選PASS的counterfactual。
+- Audit結果若支持confidence priority，才在下一輪依Registry建立新的`SR-C14` controlled arm；不得把`SR-C13`改名重用，也不得加入Min ROOS／DL比例權重。
+
+### Dataset／Label／模型重建需求
+
+- Dataset：不重建。
+- Label：不重建。
+- DL-A9：不重訓。
+- threshold：不調整。
+- Strategy replay：Audit不重跑；只讀既有C12 orderable／selected／trades／daily-capacity與Dataset events工件。
+
+### GPT獨立固定案例
+
+以隔離strategy-compare工件建立兩個`dl-selection`日，每日3個A9 PASS，其中低confidence event為Label REJECT、高confidence events為Label PASS；同日各選2個高confidence PASS並給定較高score對較高Realized R。另加入一個`capital-utilization`日作排除案例。Audit得到competition days=2、competition PASS=6、selected PASS=4、Event Label pairwise comparable pairs=4且concordance=100%、selected Realized R pairwise comparable pairs=2且concordance=100%，並確認capital-utilization日不進competition scope、`extended_candidate_is_not_rescored_as_breakout=True`。
+
+### 下一步
+
+本輪只能標記`IMPLEMENTED / RESULT_PENDING`。正式下一步由`python apps/breakout_quality.py → [2] Audit／診斷`執行目前config。只有正式結果在真正DL-selection competition場景顯示A9 confidence對Event Label及／或selected Realized R具有足夠且方向一致的排序證據，才定義`SR-C14 = C12 max-PASS + confidence priority`候選設計；若證據不足，保留C12，不新增confidence sorting。

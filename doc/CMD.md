@@ -83,7 +83,7 @@ python apps/breakout_quality.py
 [0] 返回
 ```
 
-Audit對象、來源arm、分層維度與輸出政策全部集中於`config/audit.py`；App不硬編碼A9／C12等研究名稱。Audit只讀既有正式工件，不重跑策略、不建立Label、不訓練模型、不修改runtime。`a9_pass_quality`保留為可重跑的PASS品質診斷profile，目前預設關閉；目前預設啟用`a9_pass_persistence`，以同一正式strategy-compare PASS來源比較unique event、candidate-day與selected層的原Event false-positive放大，並輸出Label別candidate-days／max age／extended days。Persistence只表示策略VALID pool的重複權重，不得建立DL expiry或age cutoff；PASS quality的quantile與persistence amplification都只供診斷，不得直接轉為runtime threshold或Min ROOS／DL混合比例。Candidate是否存在／continuation／失效仍由原策略唯一決定；DL只描述quality，REJECT不得使仍屬策略VALID的candidate失效；portfolio selector只負責資源配置。來源工件缺少時Audit顯示`BLOCKED`，不偷偷補跑。
+Audit對象、來源arm、分層維度與輸出政策全部集中於`config/audit.py`；App不硬編碼A9／C12等研究名稱。Audit只讀既有正式工件，不重跑策略、不建立Label、不訓練模型、不修改runtime。`a9_pass_quality`與`a9_pass_persistence`保留為可重跑profile，目前預設關閉；目前預設啟用`a9_selection_confidence`，只分析`SR-C12`中`Resource_Aware_Mode=dl-selection`且同日至少兩個A9 PASS的真正競爭日，使用原breakout event confidence檢查Event Label與實際selected Realized R的Spearman、同日pairwise concordance及Score分組。它不對extended candidate的當日線型重新推論A9，也不替未成交PASS假造Realized R；結果只用來判斷是否值得建立新的strategy runtime arm，不得直接轉成runtime threshold、Min ROOS／DL混合比例或candidate失效規則。Candidate是否存在／continuation／失效仍由原策略唯一決定；DL只描述quality；portfolio selector只負責資源配置。來源工件缺少時Audit顯示`BLOCKED`，不偷偷補跑。
 
 模型訓練與策略比較使用分離入口。正式策略比較執行：
 

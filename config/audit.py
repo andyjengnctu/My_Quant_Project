@@ -39,7 +39,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/a9_pass_quality",
             },
             "a9_pass_persistence": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "pass_persistence",
                 "description": "A9 PASS persistence：unique event、candidate-day與selected false-positive放大",
                 "source": {
@@ -55,6 +55,25 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "realized_r": True,
                 },
                 "output_subdir": "breakout_quality/a9_pass_persistence",
+            },
+            "a9_selection_confidence": {
+                "enabled": True,
+                "audit_type": "selection_confidence",
+                "description": "A9 confidence在DL Selection Mode多PASS競爭時對Event Label／Realized R的排序力",
+                "source": {
+                    "kind": "strategy_compare",
+                    "run": "latest",
+                    "arm_id": "C12",
+                },
+                "dimensions": {
+                    "minimum_competing_pass_candidates": 2,
+                    "score_quantile_groups": 5,
+                },
+                "outcomes": {
+                    "label_quality": True,
+                    "realized_r": True,
+                },
+                "output_subdir": "breakout_quality/a9_selection_confidence",
             },
         },
     },
@@ -96,7 +115,7 @@ def _validate_relative_path(value: str, *, field_name: str) -> None:
 def _validate_definition(definition: AuditDefinition) -> None:
     if not definition.module_id or not definition.audit_id:
         raise ValueError("audit module_id／audit_id不可空白")
-    if definition.audit_type not in {"pass_quality", "pass_persistence"}:
+    if definition.audit_type not in {"pass_quality", "pass_persistence", "selection_confidence"}:
         raise ValueError(f"不支援的audit_type: {definition.audit_type}")
     source = dict(definition.source)
     if str(source.get("kind") or "") != "strategy_compare":
@@ -120,9 +139,22 @@ def _validate_definition(definition: AuditDefinition) -> None:
                 raise ValueError(f"{definition.audit_id}.{key}必須>=2")
         if not isinstance(dimensions.get("candidate_type"), bool):
             raise ValueError(f"{definition.audit_id}.candidate_type必須是bool")
-    else:
+    elif definition.audit_type == "pass_persistence":
         if not isinstance(dimensions.get("selected_amplification"), bool):
             raise ValueError(f"{definition.audit_id}.selected_amplification必須是bool")
+    else:
+        try:
+            minimum_competing = int(dimensions.get("minimum_competing_pass_candidates"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{definition.audit_id}.minimum_competing_pass_candidates必須是整數") from exc
+        if minimum_competing < 2:
+            raise ValueError(f"{definition.audit_id}.minimum_competing_pass_candidates必須>=2")
+        try:
+            score_groups = int(dimensions.get("score_quantile_groups"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{definition.audit_id}.score_quantile_groups必須是整數") from exc
+        if score_groups < 2:
+            raise ValueError(f"{definition.audit_id}.score_quantile_groups必須>=2")
 
     outcomes = dict(definition.outcomes)
     for key in ("label_quality", "realized_r"):

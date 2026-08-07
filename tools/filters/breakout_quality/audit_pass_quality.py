@@ -402,6 +402,15 @@ def _spearman(frame: pd.DataFrame, left: str, right: str) -> float | None:
     value = float(pair[left].corr(pair[right], method="spearman"))
     return value if math.isfinite(value) else None
 
+def audit_quantile_labels(series: pd.Series, groups: int, prefix: str) -> pd.Series:
+    """Shared config-driven quantile labels for formal Audit modules."""
+    return _quantile_labels(series, groups, prefix)
+
+
+def audit_spearman(frame: pd.DataFrame, left: str, right: str) -> float | None:
+    """Shared finite Spearman diagnostic for formal Audit modules."""
+    return _spearman(frame, left, right)
+
 
 def _group_sort_key(value: Any) -> tuple[str, int, str]:
     text = str(value)
@@ -668,6 +677,8 @@ def run_pass_quality_audit(
 
 
 __all__ = [
+    "audit_quantile_labels",
+    "audit_spearman",
     "collect_pass_quality_status",
     "json_native_audit_value",
     "prepare_pass_candidate_audit_frame",
