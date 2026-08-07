@@ -448,6 +448,25 @@ def _delta(left: dict[str, Any], right: dict[str, Any], key: str) -> float | Non
     return None if a is None or b is None else a - b
 
 
+def _same_param_direct_selection_delta(
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> float | None:
+    """Return DL selection attribution only within one parameter/runtime universe.
+
+    ``direct_selection_delta_r`` is defined against the DL-off baseline that
+    shares the same ``param_source`` and ``rule_policy``.  Subtracting values
+    across different parameter sources or rule policies mixes two different
+    attribution universes and has no controlled physical interpretation.
+    """
+    if (
+        left.get("param_source") != right.get("param_source")
+        or left.get("rule_policy") != right.get("rule_policy")
+    ):
+        return None
+    return _delta(left, right, "direct_selection_delta_r")
+
+
 def _contrast_table(
     scenarios: dict[str, dict[str, Any]],
     *,
@@ -469,7 +488,7 @@ def _contrast_table(
                 _fmt(_delta(left, right, "avg_exposure_pct"), unit="pp"),
                 _fmt(_delta(left, right, "trade_count"), digits=0),
                 _fmt(
-                    _delta(left, right, "direct_selection_delta_r"),
+                    _same_param_direct_selection_delta(left, right),
                     unit=" R",
                 ),
             )
@@ -485,7 +504,7 @@ def _contrast_table(
             "ΔEV",
             "Δ曝險",
             "Δ交易",
-            "Δ直接選擇R",
+            "Δ同參數DL選擇R",
         ),
         rows,
     )
@@ -574,9 +593,10 @@ def _render_report(
             render_section("4. 判讀原則"),
             (
                 "以config中啟用的contrast逐項判讀；不得用單一年份改善取代"
-                "全期RoMD、EV、直接交易選擇R與年度穩定性。比較流程不建立Label、"
-                "不選模型也不訓練模型權重；可依config透過正式共用服務補建既有模型"
-                "的forward-OOS scores與比較所需策略參數工件。"
+                "全期RoMD、EV、同參數DL選擇R與年度穩定性。同參數DL選擇R只可在"
+                "param_source與rule_policy皆相同的arms之間比較；跨參數contrast固定顯示-。"
+                "比較流程不建立Label、不選模型也不訓練模型權重；可依config透過正式"
+                "共用服務補建既有模型的forward-OOS scores與比較所需策略參數工件。"
             ),
         )
     ).rstrip() + "\n"

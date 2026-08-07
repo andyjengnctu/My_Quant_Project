@@ -16087,6 +16087,37 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         all(settings.arms[arm_id].name == name for arm_id, name in expected_display_names.items()),
     )
 
+    same_param_direct_delta = strategy_comparison_module._same_param_direct_selection_delta(
+        {
+            "param_source": "min_roos",
+            "rule_policy": "all_off",
+            "direct_selection_delta_r": -6.12,
+        },
+        {
+            "param_source": "min_roos",
+            "rule_policy": "all_off",
+            "direct_selection_delta_r": 0.0,
+        },
+    )
+    cross_param_direct_delta = strategy_comparison_module._same_param_direct_selection_delta(
+        {
+            "param_source": "min_dl_a9_roos",
+            "rule_policy": "all_off",
+            "direct_selection_delta_r": -166.38,
+        },
+        {
+            "param_source": "min_roos",
+            "rule_policy": "all_off",
+            "direct_selection_delta_r": -6.12,
+        },
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "direct_selection_r_is_only_comparable_within_same_parameter_runtime_universe",
+        (-6.12, None),
+        (same_param_direct_delta, cross_param_direct_delta),
+    )
+
 
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
 

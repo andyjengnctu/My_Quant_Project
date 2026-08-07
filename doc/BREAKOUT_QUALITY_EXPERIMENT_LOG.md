@@ -3990,3 +3990,61 @@ config-driven策略比較重構後，`run_strategy_comparison()`保留對`_execu
 
 由`python apps/strategy_compare.py`進入正式選單，先選`[2] 查看設定、工件與預計動作`確認Min-A9 P3為READY或PREPARABLE，再以`[1/Enter] 執行目前比較設定`取得六個合法controlled pairs。
 
+
+## 2026-08-07 — C1～C10正式結果：TP1／A9 hard filter與matched Min-DL參數適應結案
+
+### 狀態
+
+`C1_C10_ACCEPTED / TP1_HARD_FILTER_REJECTED / A9_HARD_FILTER_REJECTED / MIN_TP1_NOT_PROMOTED / MIN_A9_NOT_PROMOTED / MIN_ROOS_REMAINS_RESEARCH_BASELINE / NEXT_ROBUSTNESS_AND_CAPACITY_PRESERVING_A9`
+
+### 程式與結果基準
+
+- 使用者ZIP：`test-branch-1_20260807_140716_a6358d3.zip`
+- ZIP SHA256：`de9916b323d141422a9a695a7fc2fcdc46853317d692fc2cfdd5fd2ad26e2fa0`
+- 正式比較期間：`2021-01-01～2026-03-02`
+- Dataset：`full`
+- Param policy：`base-finalist-best`
+- Max positions：10
+- Rotation：off
+- Config fingerprint：`62b4dfabe42a`
+- 固定條件：同一參數組內只切指定DL runtime；原position-aware buy-sort、費稅、帳務、active-param無前視與盤前資金鎖定契約不變。
+
+### Dataset／Label／模型／參數重建需求
+
+- Dataset：不重建。
+- Label：不重建；A9沿用既有MFE／MAE Label，TP1沿用既有realized trade-path Label。
+- A9／TP1模型權重與threshold：不重訓、不調整；固定既有forward-OOS scores與threshold `0.5`。
+- Min ROOS、Min-TP1 ROOS、Min-A9 ROOS：重用本次正式比較已建立且identity／coverage通過的rolling active-param工件；本節只記錄實際forward-OOS策略結果與採用判定。
+
+### C1～C10主要結果
+
+| Arm | 組合 | 報酬 | MDD | RoMD | 年化 | EV | 曝險 | 交易 | 同參數DL選擇R |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| C1 | Full ROOS | 129.08% | 17.41% | 7.42 | 17.43% | 0.53R | 84.02% | 407 | 0.00R |
+| C2 | Full ROOS: TP1-on | 55.04% | 10.93% | 5.04 | 8.87% | 0.87R | 38.19% | 158 | -79.90R |
+| C3 | Min ROOS | 166.69% | 15.41% | 10.82 | 20.95% | 0.73R | 92.13% | 336 | 0.00R |
+| C4 | Min ROOS: TP1-on | 88.85% | 16.58% | 5.36 | 13.12% | 0.96R | 46.52% | 163 | -89.76R |
+| C5 | Min-TP1 ROOS | 129.11% | 12.96% | 9.96 | 17.44% | 1.35R | 91.96% | 278 | 0.00R |
+| C6 | Min-TP1 ROOS: DL-on | 21.42% | 10.54% | 2.03 | 3.83% | 0.65R | 51.20% | 146 | -280.31R |
+| C7 | Full ROOS: A9-on | 85.79% | 26.34% | 3.26 | 12.76% | 0.36R | 68.22% | 396 | -76.47R |
+| C8 | Min ROOS: A9-on | 142.70% | 21.75% | 6.56 | 18.76% | 0.64R | 78.24% | 374 | -6.12R |
+| C9 | Min-A9 ROOS | 119.77% | 11.83% | 10.12 | 16.49% | 1.16R | 92.06% | 275 | 0.00R |
+| C10 | Min-A9 ROOS: DL-on | 78.67% | 21.53% | 3.65 | 11.91% | 0.55R | 76.79% | 278 | -166.38R |
+
+### Controlled判定
+
+- TP1 hard filter正式否決：`C2−C1=-74.03pp / -2.38 RoMD / -79.90R`、`C4−C3=-77.84pp / -5.46 / -89.76R`、`C6−C5=-107.69pp / -7.93 / -280.31R`。三套參數下直接選擇R皆大幅為負，不再做TP1 threshold、TP1-aware optimizer或TP1 capacity-preserving延伸。
+- A9 hard filter同樣不得部署：`C7−C1=-43.29pp / -4.16 RoMD / -76.47R`；`C8−C3=-23.99pp / -4.26 / -6.12R`；`C10−C9=-41.10pp / -6.47 / -166.38R`。matched A9-aware參數未能修復hard-filter結構，C10相對C8報酬再差`64.03pp`、RoMD再差`2.91`，因此不再做A9-aware risk optimizer。
+- `C3 = Min ROOS`仍是全期最高報酬與最高RoMD arm，且相對C1為`+37.61pp報酬 / -2.00pp MDD / +3.40 RoMD`；但年度優勢高度集中於2023：C3在2023為`80.22%`，其餘年度為`23.08% / 0.84% / 11.21% / 2.25% / 4.85%`。作為只讀診斷，排除2023後逐年報酬鏈結約為C3 `47.98%`、C1 `70.71%`、C9 `81.53%`，因此C3尚不得直接晉升正式策略，下一步先做selector／fold／年度集中度穩定性Gate。
+- C9雖總報酬低於C3，但MDD `11.83%`、RoMD `10.12`且六個年度皆為正；這只視為參數穩定性線索，不視為Min-A9部署證據，因其參數是在A9-on訓練環境下選得而runtime為DL-off。
+- A9唯一保留的研究理由位於Min ROOS：C8相對C3的同參數直接選擇R只有`-6.12R`，但曝險下降`13.90pp`且總報酬下降`23.99pp`，顯示主要損失可能來自hard filter刪除候選後的資金／持股路徑，而非強烈反向的單筆選擇。後續若繼續DL，只測A9的capacity-preserving使用方式；不再測TP1。
+
+### 報表語意修正
+
+本次正式報表暴露一個attribution顯示問題：`direct_selection_delta_r`只在相同`param_source`與`rule_policy`的DL-off基準／DL-on arms之間有共同物理基準。舊報表對`C6-C4`、`C10-C8`、`C6-C1`、`C10-C1`等跨參數contrast仍直接相減兩個不同attribution，數值雖可算但沒有controlled direct-selection意義。正式報表已改為只對同參數／同rule-policy contrasts顯示`Δ同參數DL選擇R`；跨參數contrast固定顯示`-`。原C1～C10策略績效本身不受此修正影響。
+
+### 下一步順序
+
+1. 先做`Min ROOS` promotion robustness gate：重用既有rolling optimizer工件，比較正式selector／seed ensemble／fold與年度集中度，不重新調參；若優勢只由2023或單一selector造成，維持C1正式基準。
+2. 只有A9保留DL研究：以C3為固定基準，實作capacity-preserving A9。A9不得再作eligibility hard reject；只在盤前候選數超過可掛單容量時影響候選優先序，必須保持正式slot／資金／盤前掛單與盤中不可換股契約，不得以OOS回調threshold。
+3. 若capacity-preserving A9的同參數直接選擇效果仍不為正，Binary DL策略線停止；若轉正但總績效仍差，再做exact-accounting資金路徑歸因，不直接進新Label／新架構。
