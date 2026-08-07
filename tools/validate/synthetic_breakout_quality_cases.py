@@ -36,9 +36,11 @@ from config.breakout_quality import (
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
+    TRAINING_LABEL_SCOPE_ALL,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     TIME_WEIGHT_MODE_DATE_BALANCED,
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
@@ -492,6 +494,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ):
             continuous_workflow_seed = (
                 breakout_quality_config.get_breakout_quality_workflow_settings().seed
@@ -8655,6 +8658,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
             BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
             BREAKOUT_QUALITY_STRATEGY_DATASET,
             BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS,
             BREAKOUT_QUALITY_STRATEGY_ROTATION,
@@ -11706,6 +11710,7 @@ __all__ = [
     "validate_breakout_quality_continuous_target_contract_case",
     "validate_breakout_quality_continuous_ranker_contract_case",
     "validate_breakout_quality_pass_conditional_ranker_contract_case",
+    "validate_breakout_quality_all_event_no_time_ranker_contract_case",
     "validate_breakout_quality_pass_realization_gap_attribution_contract_case",
     "validate_breakout_quality_qualified_candidate_set_audit_contract_case",
     "validate_breakout_quality_target_component_attribution_contract_case",
@@ -11719,6 +11724,96 @@ __all__ = [
     "validate_breakout_quality_strategy_comparison_contract_case",
 ]
 
+
+
+def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_ALL_EVENT_NO_TIME_RANKER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from tools.filters.breakout_quality.train_continuous_ranker import (
+        _profile_contract,
+        _scope_group_ids,
+        build_daily_percentile_targets,
+        parse_args as parse_continuous_ranker_args,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "all_event_no_time_profile_uses_existing_target_and_all_label_scope",
+        (
+            TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_ALL,
+            "mse",
+            "mean_daily_spearman",
+            False,
+        ),
+        (
+            profile.training_objective,
+            profile.continuous_target_id,
+            profile.training_label_scope,
+            profile.loss_name,
+            profile.epoch_selection_metric,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
+            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+        ),
+    )
+
+    group_table = pd.DataFrame(
+        {
+            "label": [LABEL_PASS, LABEL_REJECT, LABEL_PASS],
+            "date": pd.to_datetime(["2020-01-02"] * 3),
+        }
+    )
+    ids = _scope_group_ids(
+        np.arange(3, dtype=np.int64),
+        group_table,
+        label_scope=TRAINING_LABEL_SCOPE_ALL,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "all_event_scope_keeps_pass_and_reject_groups",
+        (0, 1, 2),
+        tuple(int(value) for value in ids),
+    )
+
+    raw = np.asarray([1.0, 9.0, 5.0], dtype=np.float32)
+    pct = build_daily_percentile_targets(
+        raw, np.ones(3, dtype=bool), group_table["date"]
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "all_event_daily_percentile_ranks_across_binary_labels",
+        (0.0, 1.0, 0.5),
+        tuple(float(value) for value in pct),
+    )
+
+    args = parse_continuous_ranker_args(
+        ["--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE]
+    )
+    contract = _profile_contract(profile)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12a_cli_profile_identity_is_explicit_and_research_only",
+        (STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE, "12A", "all_labels"),
+        (args.experiment_profile, contract["phase"], contract["metric_scope"]),
+    )
+
+    summary["profile"] = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
+    summary["training_label_scope"] = TRAINING_LABEL_SCOPE_ALL
+    return results, summary
 
 def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_BUILDER"
@@ -11834,6 +11929,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         workflow_config,
         "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
         STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     ):
         continuous_settings = workflow_config.get_breakout_quality_workflow_settings()
     add_check(
@@ -14188,6 +14284,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ),
         patch.object(
             breakout_quality_config,
@@ -14216,6 +14313,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         "strategy_adaptation_uses_isolated_continuous_workflow_without_mutating_config",
         (
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
             "score-ranking",
             "selection_point_in_time",
             configured_workflow_profile,
@@ -14699,6 +14797,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ),
         patch.object(
             breakout_quality_config,
@@ -15806,6 +15905,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ):
             continuous_seed = breakout_quality_config.get_breakout_quality_workflow_settings().seed
     add_check(
@@ -16068,12 +16168,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14"}.issubset(set(settings.arms))
+        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15"}.issubset(set(settings.arms))
         and all(arm.enabled for arm in settings.enabled_arms)
         and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
         and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
         and settings.dl_sources["CONT11G"].threshold is None
-        and settings.dl_sources["CONT11G"].experiment_profile == "strategy_aligned_no_time_pass_magnitude_mse",
+        and settings.dl_sources["CONT11G"].experiment_profile == "strategy_aligned_no_time_pass_magnitude_mse"
+        and settings.dl_sources["CONT12A"].score_source == "continuous_ranker_oos"
+        and settings.dl_sources["CONT12A"].threshold is None
+        and settings.dl_sources["CONT12A"].experiment_profile == "strategy_aligned_no_time_all_event_mse",
     )
 
     from dataclasses import replace as _replace_strategy_arm
@@ -16106,6 +16209,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C11": "Min ROOS: A9 resource-aware",
         "C12": "Min ROOS: A9 resource-aware basket",
         "C14": "Min ROOS: Continuous resource-aware",
+        "C15": "Min ROOS: All-event Continuous resource-aware",
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,

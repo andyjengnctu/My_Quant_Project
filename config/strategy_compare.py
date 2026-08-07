@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 7
+STRATEGY_COMPARE_SCHEMA_VERSION = 8
 
 # =============================================================================
 # 1. 共用執行設定
@@ -200,6 +200,15 @@ STRATEGY_DL_SOURCES = {
         "description": "MR-11G frozen OOS continuous ranker；只允許受控strategy research replay",
         "forward_scores_builder": None,
     },
+    "CONT12A": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "strategy_aligned_no_time_all_event_mse",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": "MR-12A all-event no-time frozen OOS continuous ranker；只允許受控strategy research replay",
+        "forward_scores_builder": None,
+    },
 }
 
 # =============================================================================
@@ -330,13 +339,23 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-binary-basket",
     },
     "C14": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: Continuous resource-aware",
-        "description": "Min ROOS先維持資本利用；只有cash-binding的DL Selection Mode才使用MR-11G frozen OOS continuous score排序",
+        "description": "歷史對照；capital-utilization first + MR-11G PASS-only continuous score",
         "param_source": "min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT11G",
+        "dl_runtime_mode": "resource-aware-continuous",
+    },
+    "C15": {
+        "enabled": True,
+        "name": "Min ROOS: All-event Continuous resource-aware",
+        "description": "Min ROOS先維持資本利用；只有cash-binding的DL Selection Mode才使用MR-12A all-event frozen OOS continuous score排序",
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12A",
         "dl_runtime_mode": "resource-aware-continuous",
     },
 }
@@ -349,8 +368,10 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C8-C3": {"enabled": False, "left": "C8", "right": "C3", "description": "Min ROOS下A9 hard-filter效果（既有對照重現）"},
     "C11-C3": {"enabled": False, "left": "C11", "right": "C3", "description": "Min ROOS下A9 resource-aware first-improvement效果"},
     "C12-C3": {"enabled": True, "left": "C12", "right": "C3", "description": "Min ROOS下A9 resource-aware best-improvement效果"},
-    "C14-C3": {"enabled": True, "left": "C14", "right": "C3", "description": "Capital-utilization first下MR-11G continuous排序效果"},
-    "C14-C12": {"enabled": True, "left": "C14", "right": "C12", "description": "Continuous resource-aware相對A9 max-PASS resource-aware效果"},
+    "C14-C3": {"enabled": False, "left": "C14", "right": "C3", "description": "Capital-utilization first下MR-11G continuous排序效果"},
+    "C14-C12": {"enabled": False, "left": "C14", "right": "C12", "description": "MR-11G Continuous resource-aware相對A9 max-PASS resource-aware效果"},
+    "C15-C3": {"enabled": True, "left": "C15", "right": "C3", "description": "Capital-utilization first下MR-12A all-event continuous排序效果"},
+    "C15-C12": {"enabled": True, "left": "C15", "right": "C12", "description": "All-event continuous resource-aware相對A9 max-PASS resource-aware效果"},
     "C12-C11": {"enabled": False, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
     "C11-C8": {"enabled": False, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
     "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},

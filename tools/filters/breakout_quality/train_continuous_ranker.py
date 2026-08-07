@@ -17,6 +17,7 @@ import pandas as pd
 from config.breakout_quality import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
@@ -125,6 +126,7 @@ def parse_args(argv=None):
         choices=(
             STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ),
     )
     parser.add_argument("--epochs", type=int, default=BREAKOUT_QUALITY_DEFAULT_EPOCHS)
@@ -224,6 +226,10 @@ def _validate_args(args) -> None:
             STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_PASS_ONLY,
         ),
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE: (
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_ALL,
+        ),
     }
     expected = expected_targets.get(args.experiment_profile)
     if expected is None or (profile.continuous_target_id, profile.training_label_scope) != expected:
@@ -288,6 +294,14 @@ def _profile_contract(profile) -> dict[str, str]:
             "target_description": "same_date_pass_only_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
             "objective_description": "同日PASS-only 11F No-time target percentile的MSE",
             "metric_scope": "pass_only",
+        }
+    if profile.name == STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE:
+        return {
+            "experiment": "MR-12A All-event No-time Continuous Ranker",
+            "phase": "12A",
+            "target_description": "same_date_all_event_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
+            "objective_description": "同日all-event No-time target percentile的MSE",
+            "metric_scope": "all_labels",
         }
     raise ValueError(f"不支援的continuous ranker profile: {profile.name}")
 
@@ -1163,7 +1177,7 @@ def main(argv=None) -> int:
         "runtime_eligibility": {
             "eligible": False,
             "scope": "research_only",
-            "reason": f"{contract['phase']} is a conditional magnitude research objective without a deployment combination contract",
+            "reason": f"{contract['phase']} is a research continuous-ranking objective pending controlled strategy deployment validation",
         },
         "artifacts": {
             "model": build_file_manifest(artifact_paths.model_path),

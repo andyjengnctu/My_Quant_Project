@@ -4754,3 +4754,88 @@ Resource-aware每日診斷除既有mode／改單／reserved-capital外，新增�
 ### 下一步
 
 若繼續continuous方向，下一步應是**新的model research**，而不是再改SR-C14：建立真正以`all-events`為training scope的continuous breakout-event quality ranker，再用相同capital-utilization-first runtime作受控比較。開始實作前須重新查Registry分配新的`MR-*`／`DL-*`／`SR-C*` identity；本輪不預先占用新ID，也不依本次OOS結果調任何target係數或runtime權重。
+
+## 2026-08-08 — MR-12A / DL-CONT12A / SR-C15：No-time All-event Continuous Ranker + Capital-utilization first
+
+### 狀態
+
+`IMPLEMENTED / ARTIFACT_PENDING / RESULT_PENDING`
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260808_003228_5f69112.zip`
+- SHA256：`056229e0608bdff039a61d14154459ba5ea7f2352e5dbb79755cdee965d73a68`
+- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 實驗 identity
+
+- Model research：`MR-12A`
+- Architecture：`ARCH-inception_time_v1`
+- Training profile：`PROFILE-strategy_aligned_no_time_all_event_mse`
+- Continuous Target：`strategy_aligned_opportunity_no_time_r_v1`
+- Training label scope：`all_labels`
+- Runtime research DL source：`DL-CONT12A`（alias=`CONT12A`）
+- Strategy arm：`SR-C15 / C15 Min ROOS: All-event Continuous resource-aware`
+
+### 研究假說與唯一模型變更
+
+SR-C14已正式證明capital-utilization-first可把舊raw continuous score sort的macro曝險問題大幅消除，但`MR-11G`的PASS-only score在all-event deployment仍未勝過C12。MR-12A因此只測一個新的模型語意：
+
+`MR-11G training scope=pass_only → MR-12A training scope=all_labels`
+
+其餘固定：
+
+- Dataset仍為`DATA-breakout_quality_v1`，不重建資料語意。
+- Target仍為既有`strategy_aligned_opportunity_no_time_r_v1`，不修改公式、不依C14 OOS結果調Target係數。
+- Architecture仍為`inception_time_v1`。
+- Objective仍為`daily_percentile_regression`、loss=`mse`、epoch selection=`mean_daily_spearman`。
+- Sampling仍為`unique_ticker_date`，同一event不因事件列數取得額外訓練權重。
+- Seed沿用config正式Seed；CLI可顯式`--seed 42`作本次重現。
+- OOS不參與gradient、epoch selection或Target percentile擬合；OOS percentile與推論仍只在checkpoint寫入後建立。
+
+MR-12A的同日percentile以**全部有效breakout events**的No-time Target共同排名，因此模型正式學習的是all-event continuous quality ordering，而不是先假定Binary PASS後再排Magnitude。
+
+### Strategy runtime：SR-C15
+
+SR-C15完全重用SR-C14已固定的capital-utilization-first契約；沒有新的portfolio tuning：
+
+1. 所有策略VALID candidates先維持Min ROOS原排序。
+2. 以正式exact cash-capped sizing判斷binding resource。
+3. position／free slots先成瓶頸時，quality model完全不介入。
+4. 只有cash在free slots尚未用滿前先成瓶頸時進入DL-selection。
+5. DL-selection使用`DL-CONT12A` frozen OOS continuous score高→低排序；若完整score order破壞cash-binding，沿用既有cash-binding constrained promotion fallback。
+6. 不使用A9 PASS／REJECT、不新增score threshold、不新增Min ROOS／Continuous blending weight、不改candidate validity或extended lifecycle。
+7. continuation／re-entry只沿用原breakout event的continuous score，不把extended當日非breakout線型重新送入模型。
+
+因此`SR-C15 − SR-C14`的模型層唯一差異是`PASS-only trained score → all-event trained score`；`SR-C15 − SR-C12`則比較完整continuous all-event ranking與A9 max-PASS allocation。
+
+### 工件依賴與建立政策
+
+- `strategy_aligned_opportunity_no_time_r_v1` Target：已有且current時REUSE；缺少／stale才由正式`prepare-continuous-target`重建。
+- MR-12A model／manifest／report／`continuous_ranker_scores.csv`：屬新模型研究工件，**策略比較不得自動訓練**。
+- `DL-CONT12A` score-source contract沿用泛用`continuous_ranker_oos` loader，但現在由experiment profile本身驗證`continuous_target_id / training_objective / training_label_scope`，不再把`pass_only`硬編碼成唯一合法scope；因此既有`DL-CONT11G`與新`DL-CONT12A`仍共用同一工件驗證單一真理。
+- Strategy params：重用`PARAM-P2 / Min ROOS`。
+
+### 正式比較矩陣
+
+目前`config/strategy_compare.py`聚焦：
+
+- `SR-C3`：Min ROOS
+- `SR-C12`：A9 max-PASS resource-aware basket
+- `SR-C15`：MR-12A all-event continuous resource-aware
+
+Contrasts：`C12-C3`、`C15-C3`、`C15-C12`。`SR-C14`保留歷史結果但本輪disabled，避免重跑已完成的PASS-only deployment。
+
+### 執行順序
+
+MR-12A為模型研究CLI-only，先建立／確認Target，再訓練：
+
+`python apps/breakout_quality.py prepare-continuous-target --filter-id breakout_quality_v1 --target-id strategy_aligned_opportunity_no_time_r_v1`
+
+`python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1 --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_all_event_mse --seed 42`
+
+完成後回到正式`apps/strategy_compare.py`選單；狀態頁必須顯示`DL-CONT12A`四個research工件READY，才可執行C3/C12/C15 replay。
+
+### 採用判定
+
+本輪尚未訓練／尚未取得OOS與策略結果，只能標記`IMPLEMENTED / RESULT_PENDING`。不得預先宣稱MR-12A或SR-C15有效；後續先看MR-12A OOS all-event daily/global Spearman、pair concordance與actual Round-trip R，再看SR-C15相對C3/C12的RoMD、EV、曝險與同參數DL選擇R。不得依結果回頭新增score cutoff或blending weight。

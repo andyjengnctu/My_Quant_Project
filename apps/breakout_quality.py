@@ -147,7 +147,7 @@ COMMAND_DESCRIPTIONS = {
     "regime-audit": "稽核 Selection／OOS 的市場狀態與 breakout event 覆蓋",
     "audit-continuous-target": "建立11A連續target arrays並稽核分布、同日排序與實際R方向",
     "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
-    "train-continuous-ranker": "執行11B／11G continuous ranker研究；research-only、CLI-only",
+    "train-continuous-ranker": "執行continuous ranker模型研究（含MR-12A）；research-only、CLI-only",
     "audit-qualified-candidate-set": "執行11C策略qualified candidate-set失敗歸因；research-only",
     "audit-target-attribution": "執行11D Target成分與Label條件失敗歸因；research-only",
     "audit-target-time-ablation": "執行11E固定移除time penalty的Target稽核；research-only",

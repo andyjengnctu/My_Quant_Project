@@ -227,7 +227,7 @@ python apps/strategy_compare.py
 
 先選`[2] 查看設定、工件與預計動作`，再選`[1/Enter] 執行目前比較設定`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
 
-目前策略研究比較聚焦`C3 Min ROOS`、`C12 Min ROOS: A9 resource-aware basket`與`C14 Min ROOS: Continuous resource-aware`。C12維持A9最大化PASS方向；C14則完全不使用A9 PASS／REJECT，而是檢驗舊continuous ranker在新的capital-utilization-first部署下是否仍有經濟價值。兩者都先以Min ROOS原順序和正式cash-capped sizing判斷盤前binding resource：position/free slots先成瓶頸時quality ranking完全不介入；只有cash在free slots尚未用滿前先成瓶頸時才進DL-selection。C14只讀既有`MR-11G` frozen OOS `continuous_ranker_scores.csv`，先嘗試continuous score完整排序；若會破壞cash-binding資源契約則回退為cash-binding constrained promotions。C14不重訓MR-11G、不設score threshold、不加Min ROOS／DL混合權重；若既有model／manifest／report／OOS score缺失或identity/hash不一致，正式比較顯示`BLOCKED`而不得自動重訓。由於MR-11G歷史training scope為PASS-only，C14把其frozen score用於全部orderable breakout events屬本次controlled deployment hypothesis，不代表MR-11G歷史REJECTED判定被翻案。正式比較設定只重跑C3／C12／C14。
+目前策略研究比較聚焦`C3 Min ROOS`、`C12 Min ROOS: A9 resource-aware basket`與`C15 Min ROOS: All-event Continuous resource-aware`。C15完全沿用C14已驗證的capital-utilization-first runtime：先以Min ROOS原順序和正式cash-capped sizing判斷盤前binding resource；position/free slots先成瓶頸時quality ranking完全不介入，只有cash在free slots尚未用滿前先成瓶頸時才進DL-selection。C15只把score source改為`DL-CONT12A / MR-12A`，其training scope為`all_labels`且Target仍為`strategy_aligned_opportunity_no_time_r_v1`；不設score threshold、不加Min ROOS／DL混合權重。若MR-12A model／manifest／report／OOS score缺失或identity/hash不一致，正式策略比較顯示`BLOCKED`而不得自動訓練模型。C14保留歷史對照但目前disabled；正式比較設定只重跑C3／C12／C15。
 
 舊score-ranking研究工具仍可直接執行`python -m tools.filters.breakout_quality.strategy_compare --help`，但不屬於正式比較App。
 
@@ -285,6 +285,23 @@ outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned
 
 
 ```bash
+
+MR-12A No-time All-event Continuous Ranker 使用同一No-time Target與InceptionTime，只把training scope改為all-labels；此研究仍為CLI-only：
+
+```powershell
+python apps/breakout_quality.py prepare-continuous-target `
+  --filter-id breakout_quality_v1 `
+  --target-id strategy_aligned_opportunity_no_time_r_v1
+
+python apps/breakout_quality.py train-continuous-ranker `
+  --filter-id breakout_quality_v1 `
+  --model-architecture inception_time_v1 `
+  --experiment-profile strategy_aligned_no_time_all_event_mse `
+  --seed 42
+```
+
+完成後由`apps/strategy_compare.py`正式選單執行`C3 / C12 / C15`；策略比較只重用frozen OOS score，不會自動重訓MR-12A。
+
 python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1
 ```
 

@@ -356,12 +356,16 @@ def collect_artifact_status(
                     model_status if key in {"model", "manifest", "report"} else runtime_status
                 )
                 action = "REUSE" if ready and settings.preparation.reuse_ready_artifacts else "BLOCKED"
+                research_label = f"{dl_id}/{source.experiment_profile}"
                 description = (
-                    "重用既有MR-11G research工件"
+                    f"重用既有{research_label} continuous research工件"
                     if ready and key in {"model", "manifest", "report"}
-                    else "重用既有MR-11G frozen OOS continuous scores"
+                    else f"重用既有{research_label} frozen OOS continuous scores"
                     if ready
-                    else "缺少或無效；請由模型研究入口重建MR-11G工件，策略比較不得自動重訓"
+                    else (
+                        f"缺少或無效；請由模型研究入口建立{research_label}工件，"
+                        "策略比較不得自動重訓"
+                    )
                 )
                 file_rows[key] = {
                     "ready": ready,

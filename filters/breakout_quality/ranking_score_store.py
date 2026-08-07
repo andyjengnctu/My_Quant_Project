@@ -17,6 +17,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality import (
+    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    get_breakout_quality_experiment_profile,
+)
+
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
@@ -409,16 +414,36 @@ def load_continuous_ranker_oos_contract(
                 f"Continuous ranker report identity不一致: field={field}, "
                 f"expected={expected}, actual={report.get(field)!r}"
             )
-    if str(manifest.get("training_objective") or "") != "daily_percentile_regression":
-        raise ValueError("Continuous ranker OOS source只接受daily_percentile_regression工件")
-    if str(manifest.get("training_label_scope") or "") != "pass_only":
-        raise ValueError("Continuous ranker OOS source目前只接受既有MR-11G pass_only工件")
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    if profile.training_objective != TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+        raise ValueError("Continuous ranker OOS source只接受daily_percentile_regression profile")
+    manifest_objective = str(manifest.get("training_objective") or "")
+    if manifest_objective != profile.training_objective:
+        raise ValueError(
+            "Continuous ranker manifest training_objective與profile不一致: "
+            f"expected={profile.training_objective}, actual={manifest_objective!r}"
+        )
+    manifest_scope = str(manifest.get("training_label_scope") or "")
+    if manifest_scope != profile.training_label_scope:
+        raise ValueError(
+            "Continuous ranker manifest training_label_scope與profile不一致: "
+            f"expected={profile.training_label_scope}, actual={manifest_scope!r}"
+        )
     target_id = str(manifest.get("continuous_target_id") or "")
     if not target_id:
         raise ValueError("Continuous ranker manifest缺少continuous_target_id")
-    report_target = str((report.get("experiment_settings") or {}).get("continuous_target_id") or "")
+    if target_id != str(profile.continuous_target_id or ""):
+        raise ValueError(
+            "Continuous ranker manifest continuous_target_id與profile不一致: "
+            f"expected={profile.continuous_target_id}, actual={target_id!r}"
+        )
+    report_settings = dict(report.get("experiment_settings") or {})
+    report_target = str(report_settings.get("continuous_target_id") or "")
     if report_target and report_target != target_id:
         raise ValueError("Continuous ranker report／manifest continuous_target_id不一致")
+    report_scope = str((report.get("training") or {}).get("training_label_scope") or "")
+    if report_scope and report_scope != manifest_scope:
+        raise ValueError("Continuous ranker report／manifest training_label_scope不一致")
     if str(report.get("status") or "") not in {
         "RESULT_AVAILABLE_PENDING_REVIEW",
         "RESULT_AVAILABLE",
@@ -457,7 +482,7 @@ def load_continuous_ranker_oos_contract(
     available_from = str(table.index.get_level_values("date").min())
     available_through = str(table.index.get_level_values("date").max())
     if available_from < execution_start:
-        # OOS score可包含execution_start前一個signal anchor時才合理；MR-11G標準輸出通常不會。
+        # OOS score可包含execution_start前一個signal anchor時才合理；標準輸出通常不會。
         if pd.Timestamp(available_from) < pd.Timestamp(information_cutoff):
             raise ValueError("Continuous ranker OOS scores包含model information cutoff之前事件")
     if configured_end and pd.Timestamp(available_through) > pd.Timestamp(configured_end):

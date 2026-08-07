@@ -30,7 +30,8 @@ from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 
 # This is the only setting normally changed to switch the main menu model workflow.
 # - 9A binary filter: "unique_group_sampling"
-# - continuous PIT ranker: "strategy_aligned_no_time_pass_magnitude_mse"
+# - continuous PIT ranker (PASS-only): "strategy_aligned_no_time_pass_magnitude_mse"
+# - MR-12A all-event continuous: "strategy_aligned_no_time_all_event_mse"
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
@@ -213,6 +214,7 @@ UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE = "unique_group_sampling"
 UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE = "unique_group_date_balanced"
 STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE = "strategy_aligned_daily_percentile_mse"
 STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE = "strategy_aligned_no_time_pass_magnitude_mse"
+STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE = "strategy_aligned_no_time_all_event_mse"
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
@@ -633,6 +635,16 @@ _EXPERIMENT_PROFILES = {
         loss_name="mse",
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_PASS_ONLY,
+    ),
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE: BreakoutQualityExperimentProfile(
+        name=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+        continuous_target_id="strategy_aligned_opportunity_no_time_r_v1",
+        loss_name="mse",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
     ),
 }
 
@@ -1139,6 +1151,7 @@ __all__ = [
     'UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE',
     'STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE',
     'STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE',
+    'STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE',
     'TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE',
     'BreakoutQualityExperimentProfile',
     'BreakoutQualityPretrainingProfile',
