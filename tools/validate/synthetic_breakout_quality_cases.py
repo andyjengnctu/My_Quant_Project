@@ -16320,6 +16320,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
 
+    continuous_presort_rows = [
+        {
+            "ticker": "M1",
+            "sort_value": 0.10,
+            "proj_cost": 100_000.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": "resource-aware-continuous",
+            "breakout_quality_score": 0.10,
+            "breakout_quality_rank": {"available": True, "score": 0.10},
+        },
+        {
+            "ticker": "M2",
+            "sort_value": 0.20,
+            "proj_cost": 200_000.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": "resource-aware-continuous",
+            "breakout_quality_score": 0.95,
+            "breakout_quality_rank": {"available": True, "score": 0.95},
+        },
+    ]
+    continuous_presort = sort_candidate_rows(
+        continuous_presort_rows, method=BUY_LIMIT_OVERAGE_SORT_METHOD
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "resource_aware_continuous_presort_preserves_min_roos_before_resource_gate",
+        ["M1", "M2"],
+        [row["ticker"] for row in continuous_presort],
+    )
+
     continuous_rows = [
         _resource_candidate_fixed("R1", 1000.0, 110, 0.10, "resource-aware-continuous"),
         _resource_candidate_fixed("R2", 1000.0, 70, 0.20, "resource-aware-continuous"),

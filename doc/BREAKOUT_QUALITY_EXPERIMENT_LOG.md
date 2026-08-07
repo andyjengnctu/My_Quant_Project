@@ -4669,3 +4669,40 @@ Resource-aware每日診斷除既有mode／改單／reserved-capital外，新增�
 不執行 `apps/test_suite.py`。GPT 以 direct synthetic 執行 `validate_strategy_compare_config_driven_app_contract_case`，目前 config 下 23 checks 全部通過；另以隔離 override 的不同 enabled-arm matrix 再驗證 config-driven 行為，確保測試不依賴目前 `C3/C12/C14` 選擇。
 
 本修正不改 SR-C14 scientific variable；SR-C14 仍維持 `IMPLEMENTED / RESULT_PENDING`。
+
+## 2026-08-08 — SR-C14 runtime blocker：resource-aware-continuous pre-sort dispatch 補登錄
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING`（SR-C14 scientific variable 不變；僅修正候選建立階段 policy dispatch 漏登錄）。
+
+### 使用者實際錯誤
+
+正式 `apps/strategy_compare.py` 在 `score_ranking` replay 的第一個交易日 `2021-01-04`，於 `phase=build_daily_candidates` 發生：
+
+`ValueError: 不支援的 breakout-quality ranking policy: 'resource-aware-continuous'`
+
+### Root cause
+
+`core/buy_sort.py` 的 `SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES` 已包含 `resource-aware-continuous`，且 `core/portfolio_entries.py` 已完成 C14 的盤前 resource-aware continuous selector；但候選建立階段的 `build_breakout_quality_ranking_prefixes()` 與 `sort_candidate_rows()` 只把 `resource-aware-binary`／`resource-aware-binary-basket` 視為「盤前 resource gate 前不得 quality-sort」的特殊 policy。
+
+因此 `resource-aware-continuous` 被誤送進一般 quality-prefix dispatch，最終落入 unsupported-policy exception。這是 runtime dispatch 漏登錄，不是 MR-11G score、工件 identity、cash-binding 或 C14 selector 邏輯錯誤。
+
+### 修正
+
+- 在 `core/buy_sort.py` 建立單一 `RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES` 真理集合，統一包含 Binary、Binary Basket 與 Continuous 三種 resource-aware policy。
+- `build_breakout_quality_ranking_prefixes()` 對全部 resource-aware policy 回傳空 prefix，候選建立階段完整保留原 Min ROOS sort semantics。
+- `sort_candidate_rows()` 同樣以該集合判定 resource-aware，禁止在 resource bottleneck 尚未決定前預先套 Continuous score。
+- `core/portfolio_entries.py` 的 resource-aware policy acceptance 改共用同一集合，避免 supported list 與盤前 selector 再次分叉。
+- synthetic contract 新增 `resource_aware_continuous_presort_preserves_min_roos_before_resource_gate`，直接覆蓋本次正式 runtime 漏洞。
+
+### 不變條件
+
+- `DL-CONT11G / MR-11G` model、target、score、threshold semantics均未改。
+- `SR-C14` 仍只在 Min ROOS exact cash-capped replay 已判定 cash-binding 後才使用 continuous ranking。
+- slot／capital-utilization mode 仍完全保留 Min ROOS。
+- 不新增 score threshold、Min ROOS／Continuous blending weight 或 candidate invalidation 規則。
+
+### 下一步
+
+套用本修正後重跑正式 `apps/strategy_compare.py`；SR-C14 仍維持 `RESULT_PENDING`，不得在取得 C3／C12／C14 正式結果前預先判定有效或無效。

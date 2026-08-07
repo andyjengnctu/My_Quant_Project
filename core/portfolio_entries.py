@@ -4,6 +4,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
+    RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES,
     resolve_breakout_quality_ranking_policy,
 )
 from core.exact_accounting import (
@@ -237,11 +238,7 @@ def _resource_aware_quality_policy(candidate_rows):
     if flags != {True}:
         return None
     policy = resolve_breakout_quality_ranking_policy(rows)
-    if policy not in {
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
-    }:
+    if policy not in RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES:
         return None
     return policy
 

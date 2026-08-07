@@ -12,13 +12,16 @@ BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET = 'capital-bucket-then-score'
 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY = 'resource-aware-binary'
 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET = 'resource-aware-binary-basket'
 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS = 'resource-aware-continuous'
+RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES = frozenset({
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
+})
 SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES = (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
+    *sorted(RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES),
 )
 BREAKOUT_QUALITY_CAPITAL_BUCKET_COUNT = 3
 
@@ -285,11 +288,8 @@ def build_breakout_quality_ranking_prefixes(rows):
                 else (0, -(score * _capital_deployment_rate(item)))
             )
         return prefixes
-    if policy in {
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
-    }:
-        # (AI註: Resource-aware Binary只在盤前資源瓶頸判定後介入；候選建立階段必須完整保留原Min ROOS順序。)
+    if policy in RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES:
+        # (AI註: Resource-aware quality只在盤前資源瓶頸判定後介入；候選建立階段必須完整保留原Min ROOS順序。)
         return {id(item): () for item in rows}
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET:
         available_rows = [item for item in rows if _quality_score_parts(item)[0]]
@@ -318,16 +318,15 @@ def sort_candidate_rows(rows, method=None):
     ranking_policy = (
         resolve_breakout_quality_ranking_policy(rows) if quality_ranking else None
     )
-    resource_aware_binary = ranking_policy in {
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
-    }
+    resource_aware_quality = (
+        ranking_policy in RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES
+    )
     quality_prefixes = (
         build_breakout_quality_ranking_prefixes(rows)
-        if quality_ranking and not resource_aware_binary
+        if quality_ranking and not resource_aware_quality
         else {}
     )
-    quality_ranking_for_sort = bool(quality_ranking and not resource_aware_binary)
+    quality_ranking_for_sort = bool(quality_ranking and not resource_aware_quality)
 
     def quality_prefix(item):
         return quality_prefixes.get(id(item), ())
