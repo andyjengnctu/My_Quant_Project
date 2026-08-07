@@ -192,7 +192,6 @@ def collect_pass_quality_status(
 
 
 def _load_orderable(path: Path) -> pd.DataFrame:
-    frame = pd.read_csv(path, encoding="utf-8-sig")
     required = {
         "ticker",
         "trade_date",
@@ -202,9 +201,17 @@ def _load_orderable(path: Path) -> pd.DataFrame:
         "high_len",
         "breakout_quality_score",
     }
-    missing = sorted(required - set(frame.columns))
+    available_columns = pd.read_csv(path, nrows=0, encoding="utf-8-sig").columns.tolist()
+    missing = sorted(required - set(available_columns))
     if missing:
         raise ValueError(f"orderable candidate工件缺少欄位: {missing}")
+    frame = pd.read_csv(
+        path,
+        usecols=[column for column in available_columns if column in required],
+        dtype={"ticker": "string", "candidate_type": "string"},
+        encoding="utf-8-sig",
+        low_memory=False,
+    )
     out = frame.copy()
     out["ticker"] = out["ticker"].fillna("").astype(str).str.strip()
     for column in ("trade_date", "candidate_date", "signal_date"):
@@ -288,7 +295,13 @@ def _attach_label_quality(pass_candidates: pd.DataFrame, path: Path) -> pd.DataF
             "Dataset events不足以做PASS quality audit: missing="
             + ",".join(sorted(required - set(usecols)))
         )
-    events = pd.read_csv(path, usecols=usecols, encoding="utf-8-sig")
+    events = pd.read_csv(
+        path,
+        usecols=usecols,
+        dtype={"ticker": "string"},
+        encoding="utf-8-sig",
+        low_memory=False,
+    )
     events["ticker"] = events["ticker"].fillna("").astype(str).str.strip()
     events["date"] = pd.to_datetime(events["date"], errors="coerce")
     events["high_len"] = pd.to_numeric(events["high_len"], errors="coerce").astype("Int64")

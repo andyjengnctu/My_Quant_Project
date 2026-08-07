@@ -4255,3 +4255,65 @@ Resource-aware盤前診斷：C11為`DL選股131日 / 資金利用優先563日 / 
 
 套用修正後以本地正式`apps/test_suite.py`做double check；預期consistency的specific pass-only exception synthetic與meta quality的coverage synthetic-run gate恢復PASS。之後才執行`[2] Audit／診斷`取得A9 PASS Quality正式結果。
 
+
+## 2026-08-07 — A9 PASS Quality正式Audit結果：Score整體單調性弱、Age cutoff不成立、下一步檢查PASS persistence amplification
+
+### 狀態
+
+`RESULT_AVAILABLE / SCORE_GLOBAL_RANK_NOT_SUPPORTED / AGE_CUTOFF_NOT_SUPPORTED / PASS_PERSISTENCE_AUDIT_NEXT`
+
+### 結果來源與固定條件
+
+- 使用者以正式`[2] Audit／診斷`執行`a9_pass_quality`；來源arm=`C12`、DL=`A9`、runtime=`resource-aware-binary-basket`、threshold=`0.5`。
+- Audit只讀既有strategy-compare、A9 PASS candidates、Dataset event Label與已發生selected trades；沒有重播策略、建立Label、重訓模型、改threshold或改candidate lifecycle。
+- Strategy validity／DL quality／Selector allocation三層契約維持不變；本節所有Label／MFE／MAE／Realized R只供事後研究診斷。
+
+### PASS總覽
+
+- Orderable candidates：`102,859`
+- A9 PASS candidate-days：`51,885`，PASS share=`50.44%`
+- Selected PASS：`223`；Selected PASS mean Realized R=`0.89R`
+- 原Event Label coverage=`98.17%`；candidate-day weighted原Event Label PASS rate=`51.73%`
+
+### Score診斷
+
+| Score quantile | PASS candidate-days | Selected | 原Event Label PASS | Selected mean Realized R |
+|---|---:|---:|---:|---:|
+| Q1 0.500～0.518 | 10,830 | 75 | 47.77% | 0.57R |
+| Q2 0.518～0.533 | 10,272 | 46 | 50.60% | 0.52R |
+| Q3 0.534～0.551 | 10,208 | 31 | 56.09% | 0.69R |
+| Q4 0.551～0.576 | 10,373 | 41 | 46.27% | 1.03R |
+| Q5 0.577～0.703 | 10,202 | 30 | 58.27% | 2.28R |
+
+- `Score ↔ 原Event Label Spearman = 0.049`：A9 raw score在全部PASS candidate-days內沒有足夠整體單調排序力；Q4 Label rate回落亦違反簡單單調排序假設。
+- `Score ↔ selected Realized R Spearman = 0.096`：只有弱正相關；Q5 mean Realized R雖明顯較高，但只有30筆selected，且selected trades存在portfolio selection bias，不能據此直接把raw score變成全域PASS ranking。
+- 因此目前不啟動「C12 + raw score全域排序」；也不依Q5邊界建立新threshold。
+
+### Candidate age／type診斷
+
+| Age quantile | PASS candidate-days | Selected | 原Event Label PASS | MFE | MAE | Selected mean Realized R |
+|---|---:|---:|---:|---:|---:|---:|
+| A1，平均2.7日 | 12,202 | 84 | 61.35% | 7.16% | 4.77% | 0.26R |
+| A2，平均7.6日 | 9,567 | 41 | 55.74% | 6.92% | 5.29% | 0.28R |
+| A3，平均14.1日 | 9,593 | 37 | 51.11% | 6.62% | 5.73% | 2.03R |
+| A4，平均24.9日 | 10,252 | 39 | 47.43% | 6.19% | 5.90% | -0.35R |
+| A5，平均56.2日 | 10,271 | 22 | 41.93% | 5.52% | 6.11% | 4.73R |
+
+- `Age ↔ 原Event Label Spearman = -0.113`，且candidate-day weighted Label rate由A1 `61.35%`單調降至A5 `41.93%`，MFE同步下降、MAE同步上升；這表示較老的可掛單PASS pool含較高比例的原Event false-positive events。
+- 但`Age ↔ selected Realized R Spearman = -0.067`，實際selected mean R高度非單調，A5甚至為`4.73R`且只有22筆。因此不能把上述組成差異解讀成「candidate越老就一定越差」，也不得建立age cutoff或DL第二套expiry。
+- Candidate type：extended=`47,268 / 51,885 = 91.1%`的PASS candidate-days，原Event Label PASS=`50.81%`、selected mean R=`1.23R`；normal=`4,617`、Label PASS=`61.38%`、selected mean R=`-0.05R`。這同樣不支持直接淘汰extended candidate。
+
+### 目前最重要的新假設
+
+A9是在原signal event評分一次，但同一策略VALID event可在後續多個candidate days重複出現。Audit顯示extended佔PASS candidate-days約91.1%，而candidate age越高時原Event Label PASS composition越低。下一步先驗證是否存在**PASS persistence amplification**：A9 false-positive PASS events是否平均比true-positive PASS events存活更久，因而在可掛單pool中被重複放大。這是candidate-pool weighting問題，不是另一套candidate invalidation規則。
+
+下一個只讀Audit應比較：
+
+1. unique PASS event-level Label precision vs candidate-day weighted Label precision；
+2. 原Event Label PASS／REJECT各自的candidate-days per event、max candidate age、extended-day數；
+3. false-positive events對全部PASS candidate-days與C12 selected PASS的占比放大倍率；
+4. 不使用Future Target改runtime，不建立age threshold；只有確認persistence amplification後，才設計「DL quality每日更新或加入合法current-state資訊」的模型實驗。
+
+### Audit讀檔警告修正
+
+正式執行出現兩個`pandas DtypeWarning`，分別來自orderable candidates中本Audit不使用的mixed-type欄位，以及Dataset events的ticker型別推斷。本輪只把Audit CSV讀取改為讀取所需欄位、ticker／candidate_type明確string dtype與`low_memory=False`；不改任何Audit數值口徑、策略、Dataset、Label、模型或runtime。
