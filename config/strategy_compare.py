@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 6
+STRATEGY_COMPARE_SCHEMA_VERSION = 7
 
 # =============================================================================
 # 1. 共用執行設定
@@ -150,6 +150,7 @@ STRATEGY_DL_SOURCES = {
         "model_architecture": "inception_time_v1",
         "experiment_profile": "unique_group_sampling",
         "threshold": 0.5,
+        "score_source": "canonical_runtime",
         "description": "A2 realized trade-path Binary DL模型",
         "forward_scores_builder": {
             "enabled": True,
@@ -172,6 +173,7 @@ STRATEGY_DL_SOURCES = {
         "model_architecture": "inception_time_v1",
         "experiment_profile": "unique_group_sampling",
         "threshold": 0.5,
+        "score_source": "canonical_runtime",
         "description": "既有MFE／MAE 9A Binary DL模型",
         "forward_scores_builder": {
             "enabled": True,
@@ -188,6 +190,15 @@ STRATEGY_DL_SOURCES = {
                 "preload_feature_bank": True,
             },
         },
+    },
+    "CONT11G": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "strategy_aligned_no_time_pass_magnitude_mse",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": "MR-11G frozen OOS continuous ranker；只允許受控strategy research replay",
+        "forward_scores_builder": None,
     },
 }
 
@@ -299,7 +310,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "hard-filter",
     },
     "C11": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: A9 resource-aware",
         "description": "Min ROOS參數；A9只在盤前cash先成瓶頸時以first-improvement改善PASS預留資金",
         "param_source": "min_roos",
@@ -318,6 +329,16 @@ STRATEGY_COMPARE_ARMS = {
         "dl_id": "A9",
         "dl_runtime_mode": "resource-aware-binary-basket",
     },
+    "C14": {
+        "enabled": True,
+        "name": "Min ROOS: Continuous resource-aware",
+        "description": "Min ROOS先維持資本利用；只有cash-binding的DL Selection Mode才使用MR-11G frozen OOS continuous score排序",
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT11G",
+        "dl_runtime_mode": "resource-aware-continuous",
+    },
 }
 
 # =============================================================================
@@ -326,9 +347,11 @@ STRATEGY_COMPARE_ARMS = {
 
 STRATEGY_COMPARE_CONTRASTS = {
     "C8-C3": {"enabled": False, "left": "C8", "right": "C3", "description": "Min ROOS下A9 hard-filter效果（既有對照重現）"},
-    "C11-C3": {"enabled": True, "left": "C11", "right": "C3", "description": "Min ROOS下A9 resource-aware first-improvement效果"},
+    "C11-C3": {"enabled": False, "left": "C11", "right": "C3", "description": "Min ROOS下A9 resource-aware first-improvement效果"},
     "C12-C3": {"enabled": True, "left": "C12", "right": "C3", "description": "Min ROOS下A9 resource-aware best-improvement效果"},
-    "C12-C11": {"enabled": True, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
+    "C14-C3": {"enabled": True, "left": "C14", "right": "C3", "description": "Capital-utilization first下MR-11G continuous排序效果"},
+    "C14-C12": {"enabled": True, "left": "C14", "right": "C12", "description": "Continuous resource-aware相對A9 max-PASS resource-aware效果"},
+    "C12-C11": {"enabled": False, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
     "C11-C8": {"enabled": False, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
     "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},
     "C7-C1": {"enabled": False, "left": "C7", "right": "C1", "description": "Full ROOS下A9 runtime效果"},
@@ -388,8 +411,9 @@ def get_strategy_comparison_settings() -> StrategyComparisonSettings:
             filter_id=str(raw.get("filter_id") or "").strip(),
             model_architecture=str(raw.get("model_architecture") or "").strip(),
             experiment_profile=str(raw.get("experiment_profile") or "").strip(),
-            threshold=float(raw.get("threshold")),
+            threshold=(None if raw.get("threshold") in (None, "") else float(raw.get("threshold"))),
             description=str(raw.get("description") or "").strip(),
+            score_source=str(raw.get("score_source") or "canonical_runtime").strip(),
             forward_scores_builder=_builder(raw.get("forward_scores_builder")),
         )
         for dl_id, raw in STRATEGY_DL_SOURCES.items()

@@ -16044,8 +16044,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11", "C12"}.issubset(set(settings.arms))
-        and {arm.arm_id for arm in settings.enabled_arms} == {"C3", "C11", "C12"},
+        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14"}.issubset(set(settings.arms))
+        and {arm.arm_id for arm in settings.enabled_arms} == {"C3", "C12", "C14"}
+        and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
+        and settings.dl_sources["CONT11G"].threshold is None
+        and settings.dl_sources["CONT11G"].experiment_profile == "strategy_aligned_no_time_pass_magnitude_mse",
     )
 
     from dataclasses import replace as _replace_strategy_arm
@@ -16077,6 +16080,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C6": "Min-TP1 ROOS: DL-on",
         "C11": "Min ROOS: A9 resource-aware",
         "C12": "Min ROOS: A9 resource-aware basket",
+        "C14": "Min ROOS: Continuous resource-aware",
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -16290,6 +16294,47 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
 
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
+
+    continuous_rows = [
+        _resource_candidate_fixed("R1", 1000.0, 110, 0.10, "resource-aware-continuous"),
+        _resource_candidate_fixed("R2", 1000.0, 70, 0.20, "resource-aware-continuous"),
+        _resource_candidate_fixed("Q1", 1000.0, 80, 0.95, "resource-aware-continuous"),
+    ]
+    continuous_order, continuous_diag = reorder_candidates_for_resource_aware_binary(
+        continuous_rows,
+        available_cash=180_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=7,
+        max_positions=10,
+        params=resource_params,
+    )
+    continuous_selected = _simulate_reserved_candidate_order(
+        continuous_order,
+        available_cash=180_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=3,
+        params=resource_params,
+    )
+    continuous_slot_order, continuous_slot_diag = reorder_candidates_for_resource_aware_binary(
+        continuous_rows,
+        available_cash=180_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=9,
+        max_positions=10,
+        params=resource_params,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "resource_aware_continuous_only_ranks_on_cash_binding_days_and_preserves_capital_utilization_first",
+        True,
+        continuous_diag["mode"] == "dl-selection"
+        and continuous_selected["cash_is_binding"]
+        and continuous_diag["selected_score_sum"] >= continuous_diag["baseline_selected_score_sum"]
+        and continuous_diag["promoted_pass_count"] == 0
+        and continuous_slot_diag["mode"] == "capital-utilization"
+        and not continuous_slot_diag["changed"]
+        and [row["ticker"] for row in continuous_slot_order] == ["R1", "R2", "Q1"],
+    )
 
     mocked_pair_payload = {
         "metadata": {

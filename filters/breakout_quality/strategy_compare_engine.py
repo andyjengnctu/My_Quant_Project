@@ -33,6 +33,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
@@ -53,8 +54,10 @@ from filters.breakout_quality.binary_pit_score_store import (
 )
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CANONICAL_RUNTIME,
+    SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     SUPPORTED_RANKING_SCORE_SOURCES,
+    load_continuous_ranker_oos_contract,
     load_selection_point_in_time_ranking_contract,
     load_selection_point_in_time_score_table,
 )
@@ -881,6 +884,21 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
             frame.get("Resource_Aware_PASS_Reserved_Milli", pd.Series(0, index=frame.index)),
             errors="coerce",
         ).fillna(0)
+        promoted_score_orders = pd.to_numeric(
+            frame.get("Resource_Aware_Promoted_Score_Orders", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        baseline_score_sum = pd.to_numeric(
+            frame.get("Resource_Aware_Baseline_Score_Sum", pd.Series(0.0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0.0)
+        selected_score_sum = pd.to_numeric(
+            frame.get("Resource_Aware_Score_Sum", pd.Series(0.0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0.0)
+        direct_score_feasible = frame.get(
+            "Resource_Aware_Direct_Score_Order_Feasible", pd.Series(False, index=frame.index)
+        ).fillna(False).astype(bool)
         selection_mask = mode == "dl-selection"
         summary.update({
             "resource_aware_dl_selection_days": int(selection_mask.sum()),
@@ -892,6 +910,9 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
             "resource_aware_pass_reserved_non_improving_days": int(
                 (selection_mask & changed & (selected_pass_reserved <= baseline_pass_reserved)).sum()
             ),
+            "resource_aware_promoted_score_orders": int(promoted_score_orders.sum()),
+            "resource_aware_selected_score_sum_gain": float((selected_score_sum - baseline_score_sum).sum()),
+            "resource_aware_direct_score_order_days": int((selection_mask & direct_score_feasible).sum()),
         })
     return summary
 
@@ -2693,6 +2714,7 @@ def run_comparison(
 
     runtime_contract = None
     pit_contract = None
+    continuous_contract = None
     ranking_source = None
     filter_source = None
     binary_filter_manifest = None
@@ -2747,6 +2769,24 @@ def run_comparison(
             "scores_path": str(binary_filter_scores_path),
         }
         effective_score_source = BINARY_PIT_SCORE_SOURCE
+    elif score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+        if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
+            raise ValueError("Continuous ranker OOS source只支援score-ranking比較")
+        if ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS:
+            raise ValueError("Continuous ranker OOS source只允許resource-aware-continuous policy")
+        continuous_contract = load_continuous_ranker_oos_contract(
+            str(root), filter_id, model_architecture, experiment_profile
+        )
+        manifest_architecture = continuous_contract.model_architecture
+        manifest_profile = continuous_contract.experiment_profile
+        start_date = continuous_contract.execution_start
+        end_date = continuous_contract.available_through
+        ranking_source = {
+            "score_source": SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+            "model_architecture": manifest_architecture,
+            "experiment_profile": manifest_profile,
+            "ranking_policy": ranking_policy,
+        }
     elif score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
         if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
             raise ValueError("Selection PIT score source只支援score-ranking比較")
@@ -3042,6 +3082,20 @@ def run_comparison(
             "runtime_eligibility": dict(pit_contract.manifest.get("runtime_eligibility") or {}),
             "score_table": dict(pit_contract.manifest.get("artifacts", {}).get("scores") or {}),
         }
+    elif continuous_contract is not None:
+        score_signal_coverage = {
+            "required_start": continuous_contract.execution_start,
+            "first_scored_event": continuous_contract.available_from,
+            "available_through": continuous_contract.available_through,
+        }
+        score_artifact_metadata = {
+            "score_manifest_path": str(continuous_contract.manifest_path),
+            "score_path": str(continuous_contract.score_path),
+            "continuous_ranker_report_path": str(continuous_contract.report_path),
+            "continuous_target_id": continuous_contract.continuous_target_id,
+            "training_label_scope": str(continuous_contract.manifest.get("training_label_scope") or ""),
+            "runtime_eligibility": "research_strategy_replay_only",
+        }
     else:
         score_signal_coverage = {
             "required_start": runtime_contract.required_signal_start.isoformat(),
@@ -3091,6 +3145,8 @@ def run_comparison(
         "comparison_design": (
             "selection_point_in_time_active_param_replay"
             if score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+            else "continuous_ranker_oos_capital_utilization_first_replay"
+            if score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS
             else "historical_active_param_oos" if is_rolling_source
             else "static_param_diagnostic"
         ),
@@ -3103,7 +3159,7 @@ def run_comparison(
         "filter_id": filter_id,
         "model_architecture": manifest_architecture,
         "experiment_profile": manifest_profile,
-        "threshold": configured_threshold,
+        "threshold": (None if score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS else configured_threshold),
         "threshold_used_as_gate": bool(comparison_mode == COMPARISON_MODE_HARD_FILTER),
         "score_ranking_order": (
             (
@@ -3120,20 +3176,28 @@ def run_comparison(
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
                 else ["resource_bottleneck_gate", "best_improvement_pass_basket", "existing_buy_sort"]
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+                else ["resource_bottleneck_gate", "continuous_score_desc_if_cash_binding", "existing_buy_sort_fallback"]
+                if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
                 else ["capital_deployment_bucket_desc", "breakout_quality_score_desc"]
             )
-            + (["ticker_deterministic"] if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET} else ["existing_buy_sort", "ticker_deterministic"])
+            + (["ticker_deterministic"] if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS} else ["existing_buy_sort", "ticker_deterministic"])
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
         ),
         "capital_aware_ranking_contract": (
             {
                 "resource_gate": "canonical_min_roos_exact_cash_cap_baseline",
                 "dl_intervention": "only_when_baseline_stops_before_free_slots_with_unselected_candidates",
-                "binary_objective": "increase_reserved_capital_assigned_to_pass_candidates",
+                "quality_objective": (
+                    "maximize_selected_continuous_score_without_breaking_cash_binding"
+                    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
+                    else "increase_reserved_capital_assigned_to_pass_candidates"
+                ),
                 "resource_feasibility": "cash remains the binding pre-market resource after the selected basket",
                 "selection_objective": (
                     "best_improvement_pass_reserved_then_pass_count_then_min_roos_rank"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+                    else "continuous_score_desc_with_cash_binding_constrained_promotions"
+                    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
                     else "first_improving_pass_reserved_promotion"
                 ),
                 "fallback": "canonical_min_roos_order",
@@ -3144,6 +3208,7 @@ def run_comparison(
             and ranking_policy in {
                 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
                 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
             }
             else {
                 "projected_capital_fraction_source": "canonical_pretrade_proj_cost_div_sizing_capital",

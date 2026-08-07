@@ -55,8 +55,9 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | Strategy params baseline | `PARAM-P2 / Min ROOS` | DL-off-trained rolling active params | ACTIVE strategy parameter baseline |
 | Resource-aware 最佳已知經濟結果 | `SR-C11` | A9 resource-aware first-improvement | 目前 resource-aware variants 中已知經濟績效最佳 |
 | 最大化 PASS 研究基準 | `SR-C12` | A9 resource-aware best-improvement basket | ACTIVE；研究方向固定為「最大化 PASS 使用，再提高 PASS 品質」 |
-| 下一個Audit | `AUD-a9-selection-confidence` | 只看`SR-C12`的DL Selection Mode多PASS競爭日，驗證原breakout A9 confidence對Event Label／selected Realized R的排序力 | IMPLEMENTED／RESULT_PENDING |
-| 下一個策略Arm | `SR-C14` | 尚未分配；只有confidence Audit結果支持新的策略使用方式後才定義identity | UNALLOCATED |
+| 最新Audit結果 | `AUD-a9-selection-confidence` | `SR-C12` DL Selection Mode內A9 confidence排序力 | RESULT_AVAILABLE；整體排序力弱，不採用confidence-priority |
+| Continuous research DL source | `DL-CONT11G` | `MR-11G / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse` frozen OOS continuous score | ACTIVE controlled-replay source；不得裸接正式scanner/filter runtime |
+| 下一個策略Arm | `SR-C14` | Capital-utilization first；只有cash-binding的DL Selection Mode才使用`DL-CONT11G` continuous score排序 | IMPLEMENTED／RESULT_PENDING |
 
 ### `MR-9A` 與 `DL-A9` 必須分開
 
@@ -112,6 +113,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 |---|---|---|---|---|
 | `DL-A9` | `A9` | `MR-9A / ARCH-inception_time_v1 / PROFILE-unique_group_sampling` | Binary breakout-quality score，threshold 0.5 | ACTIVE research source |
 | `DL-TP1` | `TP1` | `LABEL-a2_realized_trade_path_v1` training line | Realized trade-path binary score，threshold 0.5 | Hard-filter use rejected；歷史保留 |
+| `DL-CONT11G` | `CONT11G` | `MR-11G / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse` | Frozen OOS continuous breakout-event score；只供capital-utilization-first controlled strategy research。歷史training scope為PASS-only，SR-C14在全部orderable breakout events上的使用屬受控deployment hypothesis | ACTIVE research-only score source；不代表MR-11G歷史reject判定被翻案 |
 
 **改變 DL-A9 的策略使用方式不會自動產生 `DL-A10`，也不會自動成為新 `MR-*`。**只有模型權重、training target、architecture 或 training-data semantics 真正改變，才需要另立 model research identity。
 
@@ -134,6 +136,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `SR-C11` | Min ROOS: A9 resource-aware | Cash-bottleneck gate + first-improvement PASS promotion | POSITIVE；目前 resource-aware 已知經濟結果最佳 |
 | `SR-C12` | Min ROOS: A9 resource-aware basket | 相同 resource gate + best-improvement／最大化 PASS basket 方向 | ACTIVE max-PASS research base；PASS 使用增加，但經濟結果低於 C11 |
 | `SR-C13` | Min ROOS: A9 resource-aware basket + candidate-day re-score | 同一DL-A9權重／threshold與C12 allocation，把A9 quality改為每個策略VALID candidate day重新計算 | **CANCELLED_BEFORE_IMPLEMENTATION**；A9是breakout-event classifier，extended candidate-day通常不是breakout形態，直接re-score語意／distribution不成立；ID永久保留不得重用 |
+| `SR-C14` | Min ROOS: Continuous resource-aware | Min ROOS exact cash-cap先判resource mode；capital-utilization mode完全維持Min ROOS，只有cash-binding的DL Selection Mode才使用`DL-CONT11G` frozen OOS continuous score，且排序不得破壞cash-binding資源契約 | IMPLEMENTED／RESULT_PENDING |
 
 ### `SR-C13` identity boundary
 
@@ -149,7 +152,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 |---|---|---|---|---|
 | `AUD-a9-pass-quality` | `a9_pass_quality` | `SR-C12 / DL-A9` | RESULT_AVAILABLE | Raw A9 PASS score 整體單調性弱；不支持直接 score sorting 或 age cutoff |
 | `AUD-a9-pass-persistence` | `a9_pass_persistence` | `SR-C12 / DL-A9` | RESULT_AVAILABLE | False PASS persistence=1.60×；candidate-day FP amplification=1.33×；selector 不是主要放大來源 |
-| `AUD-a9-selection-confidence` | `a9_selection_confidence` | `SR-C12 / DL-A9` | IMPLEMENTED／RESULT_PENDING | 只在DL Selection Mode且同日至少兩個PASS真正競爭時，檢查原breakout A9 confidence對Event Label與selected Realized R的同日排序力 |
+| `AUD-a9-selection-confidence` | `a9_selection_confidence` | `SR-C12 / DL-A9` | RESULT_AVAILABLE／NOT_USED_FOR_PRIMARY_RANK | Candidate-day rho=0.071、unique-event rho=0.102、selected R rho=0.082；每日平均Label concordance=49.18%，不支持A9 confidence作主排序 |
 
 Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Audit 自己不占用這兩種 ID。
 
@@ -178,8 +181,10 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 5. 因此 `SR-C12` 雖經濟績效低於 C11，仍是「最大化 PASS」方向的 runtime research base。
 6. `AUD-a9-pass-persistence` 已確認 false PASS 平均存活較久，並在 candidate-day pool 被放大。
 7. `SR-C13` candidate-day re-score 已在實作前取消並永久保留ID，原因是extended candidate通常不是A9的breakout-event訓練分布。
-8. 下一步先執行 `AUD-a9-selection-confidence`：固定C12最大化PASS原則，只驗證同一DL Selection Mode競爭場景中原breakout A9 confidence是否具有額外排序力。
-9. 若Audit支持confidence priority，下一個策略arm使用`SR-C14`；若不支持，`SR-C14`不預先占用定義。
+8. `AUD-a9-selection-confidence`已完成；A9 confidence在真正DL Selection Mode競爭場景的整體排序力弱，不建立confidence-priority arm。
+9. 舊continuous ranker曾有正向Target排序能力，但歷史raw score sort同時顯著降低資金利用；因此不能把舊策略失敗直接等同模型無效。
+10. `SR-C14`已分配並實作為capital-utilization-first continuous controlled arm：Min ROOS先決定資源模式；capital-utilization mode完全不改，只有cash-binding的DL Selection Mode才使用`DL-CONT11G` frozen OOS continuous score。
+11. `SR-C14`不使用A9 PASS／REJECT、不重訓`MR-11G`、不新增score threshold或Min ROOS／DL混合權重；若本機缺MR-11G既有research OOS工件，策略比較必須BLOCKED而不是自動重訓。
 
 ---
 

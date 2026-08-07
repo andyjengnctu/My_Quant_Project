@@ -24,6 +24,8 @@ from filters.breakout_quality.continuous_target import (
 )
 from filters.breakout_quality.csv_io import read_breakout_quality_csv
 from filters.breakout_quality.paths import (
+    resolve_filter_artifact_paths,
+    resolve_filter_model_output_dir,
     resolve_selection_point_in_time_audit_json_path,
     resolve_selection_point_in_time_coverage_path,
     resolve_selection_point_in_time_manifest_path,
@@ -32,10 +34,15 @@ from filters.breakout_quality.paths import (
 
 SCORE_SOURCE_CANONICAL_RUNTIME = "canonical_runtime"
 SCORE_SOURCE_SELECTION_POINT_IN_TIME = "selection_point_in_time"
+SCORE_SOURCE_CONTINUOUS_RANKER_OOS = "continuous_ranker_oos"
 SUPPORTED_RANKING_SCORE_SOURCES = (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
 )
+
+CONTINUOUS_RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
+CONTINUOUS_RANKER_REPORT_FILENAME = "continuous_ranker_report.json"
 
 PIT_REQUIRED_SCORE_COLUMNS = (
     "ticker",
@@ -324,6 +331,241 @@ def load_selection_point_in_time_score_table(
     return table.set_index(["ticker", "date"]).sort_index()
 
 
+@dataclass(frozen=True)
+class ContinuousRankerOOSContract:
+    score_path: Path
+    manifest_path: Path
+    report_path: Path
+    manifest: dict[str, Any]
+    report: dict[str, Any]
+    filter_id: str
+    model_architecture: str
+    experiment_profile: str
+    continuous_target_id: str
+    seed: int
+    model_information_cutoff: str
+    execution_start: str
+    available_from: str
+    available_through: str
+
+
+def _validate_file_record_simple(record: Any, *, path: Path, label: str) -> None:
+    if not isinstance(record, dict):
+        raise ValueError(f"{label}缺少檔案identity")
+    if str(record.get("filename") or "") != path.name:
+        raise ValueError(f"{label} filename不一致")
+    expected_hash = str(record.get("sha256") or "").lower()
+    actual_hash = compute_file_sha256(path).lower()
+    if not expected_hash or expected_hash != actual_hash:
+        raise ValueError(
+            f"{label} SHA256不一致: expected={expected_hash or '<missing>'}, actual={actual_hash}"
+        )
+    if int(record.get("size_bytes", -1)) != int(path.stat().st_size):
+        raise ValueError(f"{label} size不一致")
+
+
+@lru_cache(maxsize=16)
+def load_continuous_ranker_oos_contract(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> ContinuousRankerOOSContract:
+    root = Path(project_root).resolve()
+    artifacts = resolve_filter_artifact_paths(
+        root, filter_id, model_architecture, experiment_profile
+    )
+    output_dir = resolve_filter_model_output_dir(
+        root, filter_id, model_architecture, experiment_profile
+    )
+    score_path = (output_dir / CONTINUOUS_RANKER_SCORE_FILENAME).resolve()
+    report_path = (output_dir / CONTINUOUS_RANKER_REPORT_FILENAME).resolve()
+    manifest_path = artifacts.manifest_path.resolve()
+    model_path = artifacts.model_path.resolve()
+    for label, path in (
+        ("Continuous ranker model", model_path),
+        ("Continuous ranker manifest", manifest_path),
+        ("Continuous ranker report", report_path),
+        ("Continuous ranker OOS scores", score_path),
+    ):
+        if not path.is_file():
+            raise FileNotFoundError(f"找不到{label}: {path}")
+
+    manifest = _read_json_object(manifest_path, label="Continuous ranker manifest")
+    report = _read_json_object(report_path, label="Continuous ranker report")
+    expected_identity = {
+        "filter_id": str(filter_id),
+        "model_architecture": str(model_architecture),
+        "experiment_profile": str(experiment_profile),
+    }
+    for field, expected in expected_identity.items():
+        if str(manifest.get(field) or "") != expected:
+            raise ValueError(
+                f"Continuous ranker manifest identity不一致: field={field}, "
+                f"expected={expected}, actual={manifest.get(field)!r}"
+            )
+        if str(report.get(field) or "") != expected:
+            raise ValueError(
+                f"Continuous ranker report identity不一致: field={field}, "
+                f"expected={expected}, actual={report.get(field)!r}"
+            )
+    if str(manifest.get("training_objective") or "") != "daily_percentile_regression":
+        raise ValueError("Continuous ranker OOS source只接受daily_percentile_regression工件")
+    if str(manifest.get("training_label_scope") or "") != "pass_only":
+        raise ValueError("Continuous ranker OOS source目前只接受既有MR-11G pass_only工件")
+    target_id = str(manifest.get("continuous_target_id") or "")
+    if not target_id:
+        raise ValueError("Continuous ranker manifest缺少continuous_target_id")
+    report_target = str((report.get("experiment_settings") or {}).get("continuous_target_id") or "")
+    if report_target and report_target != target_id:
+        raise ValueError("Continuous ranker report／manifest continuous_target_id不一致")
+    if str(report.get("status") or "") not in {
+        "RESULT_AVAILABLE_PENDING_REVIEW",
+        "RESULT_AVAILABLE",
+    }:
+        raise ValueError(f"Continuous ranker report尚無可用結果: status={report.get('status')!r}")
+
+    _validate_file_record_simple(manifest.get("model"), path=model_path, label="Continuous ranker model")
+    research_outputs = dict(manifest.get("research_outputs") or {})
+    _validate_file_record_simple(
+        research_outputs.get("scores"), path=score_path, label="Continuous ranker scores"
+    )
+    report_artifacts = dict(report.get("artifacts") or {})
+    _validate_file_record_simple(
+        report_artifacts.get("scores"), path=score_path, label="Continuous ranker report scores"
+    )
+
+    outer = dict(manifest.get("outer_oos_policy") or {})
+    execution_start = pd.Timestamp(str(outer.get("oos_start_date") or "")).strftime("%Y-%m-%d")
+    configured_end = str(outer.get("configured_oos_end_date") or outer.get("effective_oos_end_date") or "").strip()
+    information_cutoff = pd.Timestamp(str(manifest.get("model_information_cutoff") or "")).strftime("%Y-%m-%d")
+    if information_cutoff >= execution_start:
+        raise ValueError(
+            "Continuous ranker model_information_cutoff必須早於OOS execution_start: "
+            f"cutoff={information_cutoff}, start={execution_start}"
+        )
+    training = dict(report.get("training") or {})
+    seed = int(training.get("seed", -1))
+    if seed < 0:
+        raise ValueError("Continuous ranker report缺少合法training seed")
+
+    table = load_continuous_ranker_oos_score_table(
+        str(root), str(filter_id), str(model_architecture), str(experiment_profile)
+    )
+    if table.empty:
+        raise ValueError("Continuous ranker OOS score table不可為空")
+    available_from = str(table.index.get_level_values("date").min())
+    available_through = str(table.index.get_level_values("date").max())
+    if available_from < execution_start:
+        # OOS score可包含execution_start前一個signal anchor時才合理；MR-11G標準輸出通常不會。
+        if pd.Timestamp(available_from) < pd.Timestamp(information_cutoff):
+            raise ValueError("Continuous ranker OOS scores包含model information cutoff之前事件")
+    if configured_end and pd.Timestamp(available_through) > pd.Timestamp(configured_end):
+        raise ValueError("Continuous ranker OOS scores超出outer OOS configured end")
+    return ContinuousRankerOOSContract(
+        score_path=score_path,
+        manifest_path=manifest_path,
+        report_path=report_path,
+        manifest=manifest,
+        report=report,
+        filter_id=str(filter_id),
+        model_architecture=str(model_architecture),
+        experiment_profile=str(experiment_profile),
+        continuous_target_id=target_id,
+        seed=seed,
+        model_information_cutoff=information_cutoff,
+        execution_start=execution_start,
+        available_from=available_from,
+        available_through=available_through,
+    )
+
+
+@lru_cache(maxsize=16)
+def load_continuous_ranker_oos_score_table(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> pd.DataFrame:
+    root = Path(project_root).resolve()
+    path = (
+        resolve_filter_model_output_dir(root, filter_id, model_architecture, experiment_profile)
+        / CONTINUOUS_RANKER_SCORE_FILENAME
+    ).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"找不到Continuous ranker scores: {path}")
+    frame = read_breakout_quality_csv(path).copy()
+    required = {"ticker", "date", "group_index", "split", "model_score"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"Continuous ranker scores缺少欄位: {missing}")
+    frame = frame[frame["split"].astype(str) == "oos"].copy()
+    if frame.empty:
+        raise ValueError("Continuous ranker scores沒有OOS rows")
+    frame["ticker"] = frame["ticker"].astype(str)
+    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.strftime("%Y-%m-%d")
+    frame["group_index"] = pd.to_numeric(frame["group_index"], errors="raise").astype(int)
+    frame["model_score"] = pd.to_numeric(frame["model_score"], errors="raise").astype(float)
+    scores = frame["model_score"].to_numpy(dtype=np.float64, copy=False)
+    if not np.isfinite(scores).all() or ((scores < 0.0) | (scores > 1.0)).any():
+        raise ValueError("Continuous ranker OOS model_score必須為0~1有限數值")
+    if frame.duplicated(["ticker", "date"]).any():
+        raise ValueError("Continuous ranker OOS score同ticker/date必須唯一")
+    return frame.set_index(["ticker", "date"]).sort_index()
+
+
+def lookup_continuous_ranker_oos_candidate_score(
+    *,
+    project_root: str,
+    ticker: str,
+    signal_date,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> dict[str, Any]:
+    contract = load_continuous_ranker_oos_contract(
+        project_root, filter_id, model_architecture, experiment_profile
+    )
+    ticker_text = str(ticker or "").strip()
+    if not ticker_text:
+        raise ValueError("Continuous ranker OOS lookup必須提供ticker")
+    date_text = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+    reason = ""
+    score: float | None = None
+    group_index: int | None = None
+    if date_text < contract.available_from or date_text > contract.available_through:
+        reason = "outside_score_period"
+    else:
+        table = load_continuous_ranker_oos_score_table(
+            project_root, filter_id, model_architecture, experiment_profile
+        )
+        key = (ticker_text, date_text)
+        if key not in table.index:
+            reason = "missing_ticker_date_score"
+        else:
+            row = table.loc[key]
+            if isinstance(row, pd.DataFrame):
+                raise ValueError(
+                    f"Continuous ranker OOS lookup非唯一: ticker={ticker_text}, date={date_text}"
+                )
+            score = float(row["model_score"])
+            group_index = int(row["group_index"])
+    return {
+        "score": score,
+        "available": not bool(reason),
+        "unavailable_reason": reason,
+        "score_date": date_text,
+        "shared_group_score": True,
+        "filter_id": str(filter_id),
+        "score_source": SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+        "model_architecture": str(model_architecture),
+        "experiment_profile": str(experiment_profile),
+        "continuous_target_id": contract.continuous_target_id,
+        "model_information_cutoff": contract.model_information_cutoff,
+        "group_index": group_index,
+    }
+
+
 def lookup_selection_point_in_time_candidate_score(
     *,
     project_root: str,
@@ -381,7 +623,12 @@ def lookup_selection_point_in_time_candidate_score(
 __all__ = [
     "SCORE_SOURCE_CANONICAL_RUNTIME",
     "SCORE_SOURCE_SELECTION_POINT_IN_TIME",
+    "SCORE_SOURCE_CONTINUOUS_RANKER_OOS",
     "SUPPORTED_RANKING_SCORE_SOURCES",
+    "ContinuousRankerOOSContract",
+    "load_continuous_ranker_oos_contract",
+    "load_continuous_ranker_oos_score_table",
+    "lookup_continuous_ranker_oos_candidate_score",
     "SelectionPointInTimeRankingContract",
     "derive_point_in_time_model_validation_gate",
     "load_selection_point_in_time_ranking_contract",

@@ -12,10 +12,12 @@ from typing import Any, Mapping
 STRATEGY_DL_RUNTIME_MODE_HARD_FILTER = 'hard-filter'
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY = 'resource-aware-binary'
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET = 'resource-aware-binary-basket'
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS = 'resource-aware-continuous'
 SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
 )
 
 
@@ -77,8 +79,9 @@ class StrategyDLSource:
     filter_id: str
     model_architecture: str
     experiment_profile: str
-    threshold: float
+    threshold: float | None
     description: str
+    score_source: str = "canonical_runtime"
     forward_scores_builder: StrategyArtifactBuilder | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -87,8 +90,9 @@ class StrategyDLSource:
             "filter_id": self.filter_id,
             "model_architecture": self.model_architecture,
             "experiment_profile": self.experiment_profile,
-            "threshold": float(self.threshold),
+            "threshold": None if self.threshold is None else float(self.threshold),
             "description": self.description,
+            "score_source": self.score_source,
             "forward_scores_builder": (
                 None
                 if self.forward_scores_builder is None
@@ -340,8 +344,18 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             raise ValueError(f"DL source key／dl_id不一致: {key!r}")
         if not source.filter_id or not source.model_architecture or not source.experiment_profile:
             raise ValueError(f"DL source identity不可空白: {key}")
-        if not 0.0 <= float(source.threshold) <= 1.0:
-            raise ValueError(f"DL source threshold必須介於0與1: {key}")
+        if not str(source.score_source).strip():
+            raise ValueError(f"DL source score_source不可空白: {key}")
+        if source.score_source == "canonical_runtime":
+            if source.threshold is None or not 0.0 <= float(source.threshold) <= 1.0:
+                raise ValueError(f"canonical DL source threshold必須介於0與1: {key}")
+        elif source.score_source == "continuous_ranker_oos":
+            if source.threshold is not None:
+                raise ValueError(f"continuous DL source不得設定binary threshold: {key}")
+            if source.forward_scores_builder is not None:
+                raise ValueError(f"continuous DL source不得由策略比較自動訓練／重建score: {key}")
+        else:
+            raise ValueError(f"DL source score_source不支援: {key}/{source.score_source}")
         _validate_builder(
             source.forward_scores_builder,
             field_name=f"dl_sources[{key}].forward_scores_builder",

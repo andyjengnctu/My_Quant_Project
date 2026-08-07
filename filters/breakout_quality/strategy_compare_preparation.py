@@ -21,7 +21,12 @@ from filters.breakout_quality.artifacts import (
 )
 from filters.breakout_quality.console_report import project_relative_display_path
 from filters.breakout_quality.export_scores import export_forward_oos_scores
-from filters.breakout_quality.paths import resolve_filter_artifact_paths
+from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_model_output_dir
+from filters.breakout_quality.ranking_score_store import (
+    CONTINUOUS_RANKER_REPORT_FILENAME,
+    SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    load_continuous_ranker_oos_contract,
+)
 from filters.breakout_quality.strategy_compare_engine import (
     PARAM_POLICY_SPECS,
     _load_param_source,
@@ -295,6 +300,94 @@ def collect_artifact_status(
             source.model_architecture,
             source.experiment_profile,
         )
+
+        if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            model_ready = False
+            runtime_ready = False
+            model_status = "MISSING"
+            runtime_status = "MISSING"
+            continuous_contract = None
+            try:
+                continuous_contract = load_continuous_ranker_oos_contract(
+                    root,
+                    source.filter_id,
+                    source.model_architecture,
+                    source.experiment_profile,
+                )
+                model_ready = True
+                runtime_ready = True
+                model_status = "READY"
+                runtime_status = "READY"
+                runtime_periods[dl_id] = (
+                    str(continuous_contract.execution_start),
+                    str(continuous_contract.available_through),
+                )
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                model_status = f"CONTINUOUS_MODEL_OR_REPORT_INVALID ({type(exc).__name__})"
+                runtime_status = f"CONTINUOUS_OOS_SCORES_INVALID ({type(exc).__name__})"
+            dl_model_ready[dl_id] = model_ready
+            score_path = (
+                continuous_contract.score_path
+                if continuous_contract is not None
+                else resolve_filter_model_output_dir(root, source.filter_id, source.model_architecture, source.experiment_profile) / "continuous_ranker_scores.csv"
+            )
+            report_path = (
+                continuous_contract.report_path
+                if continuous_contract is not None
+                else resolve_filter_model_output_dir(
+                    root, source.filter_id, source.model_architecture, source.experiment_profile
+                ) / CONTINUOUS_RANKER_REPORT_FILENAME
+            )
+            files = {
+                "model": artifacts.model_path,
+                "manifest": artifacts.manifest_path,
+                "report": report_path,
+                "forward_scores": score_path,
+            }
+            file_rows: dict[str, Any] = {}
+            for key, path in files.items():
+                sha256 = compute_file_sha256(path) if path.is_file() else None
+                artifact_identities[f"dl:{dl_id}:{key}"] = {
+                    "path": project_relative_display_path(path, project_root=root),
+                    "sha256": sha256,
+                }
+                ready = model_ready if key in {"model", "manifest", "report"} else runtime_ready
+                status = "READY" if ready else (
+                    model_status if key in {"model", "manifest", "report"} else runtime_status
+                )
+                action = "REUSE" if ready and settings.preparation.reuse_ready_artifacts else "BLOCKED"
+                description = (
+                    "重用既有MR-11G research工件"
+                    if ready and key in {"model", "manifest", "report"}
+                    else "重用既有MR-11G frozen OOS continuous scores"
+                    if ready
+                    else "缺少或無效；請由模型研究入口重建MR-11G工件，策略比較不得自動重訓"
+                )
+                file_rows[key] = {
+                    "ready": ready,
+                    "status": status,
+                    "action": action,
+                    "path": project_relative_display_path(path, project_root=root),
+                    "sha256": sha256,
+                }
+                actions.append(
+                    _preparation_action(
+                        action_id=f"dl:{dl_id}:{key}",
+                        artifact_key=f"dl:{dl_id}:{key}",
+                        action=action,
+                        builder_type=None,
+                        description=description,
+                        path=file_rows[key]["path"],
+                    )
+                )
+            dl_rows[dl_id] = {
+                "ready": bool(model_ready and runtime_ready),
+                "status": "READY" if model_ready and runtime_ready else "NOT_READY",
+                "identity": source.as_dict(),
+                "files": file_rows,
+            }
+            continue
+
         model_ready = False
         model_status = "MISSING"
         try:

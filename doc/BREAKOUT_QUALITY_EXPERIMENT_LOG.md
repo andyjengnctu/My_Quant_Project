@@ -4497,3 +4497,129 @@ Persistence以`ticker / signal_date / high_len`作原breakout event identity，�
 ### 下一步
 
 本輪只能標記`IMPLEMENTED / RESULT_PENDING`。正式下一步由`python apps/breakout_quality.py → [2] Audit／診斷`執行目前config。只有正式結果在真正DL-selection competition場景顯示A9 confidence對Event Label及／或selected Realized R具有足夠且方向一致的排序證據，才定義`SR-C14 = C12 max-PASS + confidence priority`候選設計；若證據不足，保留C12，不新增confidence sorting。
+
+## 2026-08-07 — AUD-a9-selection-confidence正式結果：A9 confidence不適合作為DL Selection Mode主排序
+
+### 狀態
+
+`RESULT_AVAILABLE / WEAK_RANKING_SIGNAL / CONFIDENCE_PRIORITY_NOT_ADOPTED`
+
+### 正式結果
+
+使用者以正式Audit選單執行`AUD-a9-selection-confidence`，來源=`SR-C12 / DL-A9`、runtime=`resource-aware-binary-basket`、threshold=`0.5`。Competition限定`Resource_Aware_Mode=dl-selection`且同日至少2個A9 PASS，extended沿用原breakout event A9 score，不做candidate-day re-score。
+
+| 指標 | 結果 |
+|---|---:|
+| DL Selection days | 146 |
+| PASS competition days | 142 |
+| Competition PASS candidate-days | 6,619 |
+| Competition unique events | 2,111 |
+| Selected PASS with Realized R | 161 |
+| Candidate-day Score ↔ Event Label | 0.071 |
+| Unique-event Score ↔ Event Label | 0.102 |
+| Selected Score ↔ Realized R | 0.082 |
+| Label pair-weighted concordance | 53.66% |
+| Label daily mean concordance | 49.18% |
+| Realized R pair-weighted concordance | 55.17% |
+| Realized R daily mean concordance | 58.49% |
+| Realized R comparable pairs / days | 58 / 29 |
+
+Score Q5（`0.574～0.691`）的11筆實際買入mean R=`7.16R`、median=`1.00R`，但Q1～Q5的Event Label PASS rate並非單調，且Q5 selected樣本僅11筆。不得依此建立新的confidence cutoff。
+
+### 判讀與採用
+
+1. A9 confidence在真正多PASS競爭日的整體排序力弱；尤其每日平均Event Label concordance=`49.18%`，不支持把A9 confidence作為PASS主排序。
+2. Q5尾端可能存在訊號，但樣本太少且整體不單調；依既有OOS結果設定score threshold會引入新的result-driven tuning，不採用。
+3. 因此不建立`SR-C14 = A9 confidence priority`。`SR-C14`仍可依Registry分配給其他新的策略runtime identity，但不得重用`SR-C13`。
+
+
+## 2026-08-07 — SR-C14實作：Capital-utilization first + Frozen Continuous Rank
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / STRATEGY_RUNTIME_ONLY / NO_MODEL_RETRAIN`
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260807_224112_5781bc1.zip`
+- SHA256：`718cd8432ec87b24340d971291f2118248656e4308a8cfa43b3e74cbe9e153c7`
+- 本輪依`PROJECT_SETTINGS → Experiment Registry → Experiment Log`確認`MR-11G`與既有continuous score歷史後實作。
+
+### 研究假說
+
+歷史continuous ranker不能因舊raw Score Sort策略績效差就直接判定模型本身無效。舊策略把continuous score直接放在全域buy-sort前方，曾明顯降低相對Min ROOS的資金利用／曝險；而目前resource-aware runtime已能先由Min ROOS exact cash-capped replay判定當日真正binding resource。因此本輪只隔離「continuous score在capital-utilization-first使用方式下是否有經濟價值」。
+
+### Canonical identity
+
+- Model research來源：`MR-11G`（歷史status仍為REJECTED；本輪不翻案、不重訓）。
+- Runtime score source：新增`DL-CONT11G`，程式alias=`CONT11G`。
+- Backing：`ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse`。
+- Score source：`continuous_ranker_oos`，只讀既有MR-11G frozen OOS `continuous_ranker_scores.csv`的`split=oos` rows。
+- Strategy arm：`SR-C14 = Min ROOS: Continuous resource-aware`。
+
+### 唯一策略使用變更
+
+`SR-C14`完全不使用`DL-A9`的PASS／REJECT，也沒有binary threshold。每天盤前先以原Min ROOS排序與正式cash-capped sizing建立baseline：
+
+1. 若Min ROOS需要用滿free slots，或資金利用／position slots先成為限制，mode=`capital-utilization`：**完全維持Min ROOS排序，continuous score不介入**。
+2. 若Min ROOS在free slots尚未用滿前即到達cash-binding狀態，mode=`dl-selection`：才使用`DL-CONT11G` frozen event-level continuous score作quality ordering。
+3. 先嘗試`continuous_score desc`完整排序；若exact cash-capped replay仍維持cash-binding，直接採用。
+4. 若完整score order會破壞cash-binding資源契約，回到Min ROOS baseline，按score由高到低嘗試promotion；只接受promotion後仍cash-binding、被提升candidate實際進入selected basket，且selected continuous-score lexicographic quality改善的變更。
+5. 缺score candidate不排除，保留Min ROOS fallback。Continuation／re-entry沿用原breakout event score；不把extended當日線型重新送進MR-11G。
+
+### 不變條件
+
+- `PARAM-P2 / Min ROOS`、all-off rules、max positions、cash-cap sizing與全部candidate lifecycle不變。
+- 不調MR-11G權重、target、training profile、seed或任何模型超參數。
+- 不新增continuous score threshold。
+- 不新增Min ROOS／DL blending weight。
+- 不建立PASS／REJECT；continuous score只在DL-selection mode提供完整quality ranking。
+- Strategy comparison不得自行重訓MR-11G。若model／manifest／report／OOS score缺少或hash／identity不一致，preparation直接`BLOCKED`並導向模型研究入口。
+
+### Research score-source contract
+
+新增`continuous_ranker_oos` read-only contract，要求：
+
+- model／manifest／`continuous_ranker_report.json`／`continuous_ranker_scores.csv`全部存在；
+- filter／architecture／profile identity一致；
+- objective=`daily_percentile_regression`；training label scope=`pass_only`；
+- model與scores hash／size符合manifest／report；
+- model information cutoff早於OOS execution start；
+- 只載入`split=oos`，`ticker/date`唯一，score為0～1有限值；
+- comparison period只能落在frozen OOS score可用期間。
+
+這個contract只允許controlled strategy research replay，不把MR-11G歷史research-only工件升格成正式scanner/filter runtime。
+
+另需明確保留一項deployment風險：MR-11G的training label scope為`pass_only`，但其OOS score工件可對OOS breakout events輸出model score；SR-C14刻意在全部orderable breakout events上評估這個frozen score。這不是既有模型已證明的all-event ranking能力，而是本次controlled strategy deployment hypothesis的一部分。若C14失敗，不得用結果回頭改score threshold或宣稱資本契約失效；需分開判讀「pass-only trained score對all-event extrapolation」與portfolio allocation效果。
+
+### 正式比較矩陣
+
+本輪config聚焦：
+
+- `SR-C3`：Min ROOS。
+- `SR-C12`：A9 max-PASS resource-aware basket，保留作目前最大化PASS comparator。
+- `SR-C14`：Continuous resource-aware。
+
+Contrasts：`C12-C3`、`C14-C3`、`C14-C12`。
+
+### 診斷
+
+Resource-aware每日診斷除既有mode／改單／reserved-capital外，新增：
+
+- selected continuous score count／sum／mean及相對Min ROOS baseline差；
+- continuous新選入單數；
+- direct score order仍符合cash-binding的天數。
+
+不得只用score改善判定成功；正式採用仍以報酬、MDD、RoMD、EV、曝險、資金使用與同參數direct-selection R綜合判讀。
+
+### Dataset／Label／模型重建需求
+
+- Dataset：不重建。
+- Label／continuous target：不重建。
+- MR-11G：不重訓。
+- Strategy params：重用既有`PARAM-P2 / Min ROOS`。
+- Continuous scores：只重用既有frozen OOS research工件；策略比較沒有auto builder。
+
+### 下一步
+
+本輪只能標記`IMPLEMENTED / RESULT_PENDING`。使用正式`apps/strategy_compare.py`選單先查看工件計畫；若`DL-CONT11G`既有MR-11G OOS工件READY，再執行`SR-C3 / SR-C12 / SR-C14`比較。核心判定是：capital-utilization-first是否能消除舊continuous raw sort的資金利用缺陷，使continuous ranking的模型層排序訊號轉化為更好的portfolio RoMD／EV／direct-selection R；不得依本次結果回頭調continuous score cutoff或混合權重。

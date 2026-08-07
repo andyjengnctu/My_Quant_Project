@@ -227,7 +227,7 @@ python apps/strategy_compare.py
 
 先選`[2] 查看設定、工件與預計動作`，再選`[1/Enter] 執行目前比較設定`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
 
-目前DL研究聚焦`C3 Min ROOS`、`C11 Min ROOS: A9 resource-aware`與`C12 Min ROOS: A9 resource-aware basket`。C11／C12都不重新訓練A9，也不新增資金利用Threshold：先以Min ROOS原順序和正式cash-capped sizing判斷盤前binding resource；position slots先成瓶頸時DL不介入，只有cash在free slots尚未用滿前先成瓶頸時才允許A9介入。C11採first-improvement；C12每輪評估全部可行PASS promotion後採用當輪最佳改善，再重算下一輪。正式比較設定只重跑C3／C11／C12，舊C8 hard-filter結果已結案而停用。
+目前策略研究比較聚焦`C3 Min ROOS`、`C12 Min ROOS: A9 resource-aware basket`與`C14 Min ROOS: Continuous resource-aware`。C12維持A9最大化PASS方向；C14則完全不使用A9 PASS／REJECT，而是檢驗舊continuous ranker在新的capital-utilization-first部署下是否仍有經濟價值。兩者都先以Min ROOS原順序和正式cash-capped sizing判斷盤前binding resource：position/free slots先成瓶頸時quality ranking完全不介入；只有cash在free slots尚未用滿前先成瓶頸時才進DL-selection。C14只讀既有`MR-11G` frozen OOS `continuous_ranker_scores.csv`，先嘗試continuous score完整排序；若會破壞cash-binding資源契約則回退為cash-binding constrained promotions。C14不重訓MR-11G、不設score threshold、不加Min ROOS／DL混合權重；若既有model／manifest／report／OOS score缺失或identity/hash不一致，正式比較顯示`BLOCKED`而不得自動重訓。由於MR-11G歷史training scope為PASS-only，C14把其frozen score用於全部orderable breakout events屬本次controlled deployment hypothesis，不代表MR-11G歷史REJECTED判定被翻案。正式比較設定只重跑C3／C12／C14。
 
 舊score-ranking研究工具仍可直接執行`python -m tools.filters.breakout_quality.strategy_compare --help`，但不屬於正式比較App。
 

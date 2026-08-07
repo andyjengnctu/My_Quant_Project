@@ -47,7 +47,7 @@ from core.portfolio_ops import (
     cleanup_extended_signals_for_day,
     closeout_open_positions,
     execute_reserved_entries_for_day,
-    reorder_candidates_for_resource_aware_binary,
+    reorder_candidates_for_resource_aware_quality,
     settle_portfolio_positions,
     try_rotate_weakest_position,
 )
@@ -1093,6 +1093,14 @@ def run_portfolio_timeline(
             'reserved_cost_milli': 0,
             'promoted_pass_count': 0,
             'changed': False,
+            'baseline_scored_selected_count': 0,
+            'selected_scored_count': 0,
+            'baseline_selected_score_sum': 0.0,
+            'selected_score_sum': 0.0,
+            'baseline_selected_score_mean': None,
+            'selected_score_mean': None,
+            'promoted_score_orders': 0,
+            'direct_score_order_feasible': False,
         }
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
@@ -1256,7 +1264,7 @@ def run_portfolio_timeline(
                 orderable_candidates_today, resource_selection_diag = _run_portfolio_replay_phase(
                     today,
                     "resource_aware_binary_order",
-                    reorder_candidates_for_resource_aware_binary,
+                    reorder_candidates_for_resource_aware_quality,
                     orderable_candidates_today,
                     available_cash=available_cash,
                     sizing_equity=sizing_equity,
@@ -1481,6 +1489,14 @@ def run_portfolio_timeline(
                 'Resource_Aware_Reserved_Milli': int(resource_selection_diag.get('reserved_cost_milli', 0) or 0),
                 'Resource_Aware_Baseline_PASS_Reserved_Milli': int(resource_selection_diag.get('baseline_pass_reserved_cost_milli', 0) or 0),
                 'Resource_Aware_PASS_Reserved_Milli': int(resource_selection_diag.get('pass_reserved_cost_milli', 0) or 0),
+                'Resource_Aware_Baseline_Scored_Selected': int(resource_selection_diag.get('baseline_scored_selected_count', 0) or 0),
+                'Resource_Aware_Selected_Scored': int(resource_selection_diag.get('selected_scored_count', 0) or 0),
+                'Resource_Aware_Baseline_Score_Sum': float(resource_selection_diag.get('baseline_selected_score_sum', 0.0) or 0.0),
+                'Resource_Aware_Score_Sum': float(resource_selection_diag.get('selected_score_sum', 0.0) or 0.0),
+                'Resource_Aware_Baseline_Score_Mean': resource_selection_diag.get('baseline_selected_score_mean'),
+                'Resource_Aware_Score_Mean': resource_selection_diag.get('selected_score_mean'),
+                'Resource_Aware_Promoted_Score_Orders': int(resource_selection_diag.get('promoted_score_orders', 0) or 0),
+                'Resource_Aware_Direct_Score_Order_Feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
             })
 
         current_equity = today_equity

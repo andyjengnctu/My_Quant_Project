@@ -20,7 +20,9 @@ from core.buy_sort import (
 from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CANONICAL_RUNTIME,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SUPPORTED_RANKING_SCORE_SOURCES,
+    lookup_continuous_ranker_oos_candidate_score,
     lookup_selection_point_in_time_candidate_score,
 )
 from filters.breakout_quality.binary_pit_score_store import (
@@ -171,9 +173,9 @@ def breakout_quality_ranking_source_context(
     source = str(score_source).strip()
     if source not in SUPPORTED_RANKING_SCORE_SOURCES:
         raise ValueError(f"不支援的breakout-quality ranking score source: {source!r}")
-    if source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+    if source in {SCORE_SOURCE_SELECTION_POINT_IN_TIME, SCORE_SOURCE_CONTINUOUS_RANKER_OOS}:
         if not str(model_architecture or "").strip() or not str(experiment_profile or "").strip():
-            raise ValueError("Selection PIT ranking source必須指定model architecture與experiment profile")
+            raise ValueError("研究ranking source必須指定model architecture與experiment profile")
     resolved_policy = str(ranking_policy).strip()
     if resolved_policy not in SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES:
         raise ValueError(f"不支援的breakout-quality ranking policy: {resolved_policy!r}")
@@ -245,6 +247,15 @@ def resolve_breakout_quality_candidate_rank(
         return payload
     if context.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
         return lookup_selection_point_in_time_candidate_score(
+            project_root=root,
+            ticker=str(ticker),
+            signal_date=signal_date,
+            filter_id=str(filter_id),
+            model_architecture=str(context.model_architecture),
+            experiment_profile=str(context.experiment_profile),
+        )
+    if context.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+        return lookup_continuous_ranker_oos_candidate_score(
             project_root=root,
             ticker=str(ticker),
             signal_date=signal_date,

@@ -1,7 +1,9 @@
+import math
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     resolve_breakout_quality_ranking_policy,
 )
 from core.exact_accounting import (
@@ -101,6 +103,11 @@ def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_b
 
 
 def _candidate_binary_pass(candidate_row):
+    if candidate_row.get('breakout_quality_ranking_policy') not in {
+        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+    }:
+        return False
     rank_payload = candidate_row.get('breakout_quality_rank')
     if not isinstance(rank_payload, dict) or not bool(rank_payload.get('available', False)):
         return False
@@ -116,6 +123,45 @@ def _candidate_binary_pass(candidate_row):
         raise ValueError('resource-aware Binary候選缺少params_obj，無法解析正式threshold')
     threshold = float(getattr(candidate_params, 'breakout_quality_score_threshold'))
     return numeric_score >= threshold
+
+
+def _candidate_continuous_score(candidate_row):
+    rank_payload = candidate_row.get('breakout_quality_rank')
+    if not isinstance(rank_payload, dict) or not bool(rank_payload.get('available', False)):
+        return None
+    score = candidate_row.get('breakout_quality_score')
+    try:
+        numeric_score = float(score)
+    except (TypeError, ValueError):
+        return None
+    if numeric_score != numeric_score or not math.isfinite(numeric_score):
+        return None
+    return numeric_score
+
+
+def _selected_continuous_score_metrics(result):
+    scores = [
+        score
+        for row in result.get('selected_rows', [])
+        if (score := _candidate_continuous_score(row)) is not None
+    ]
+    return {
+        'scored_count': int(len(scores)),
+        'score_sum': float(sum(scores)),
+        'score_mean': (None if not scores else float(sum(scores) / len(scores))),
+    }
+
+
+def _continuous_selected_quality_key(result, *, free_slots):
+    scores = sorted(
+        [
+            -1.0 if (score := _candidate_continuous_score(row)) is None else float(score)
+            for row in result.get('selected_rows', [])
+        ],
+        reverse=True,
+    )
+    padded = scores + [-1.0] * max(0, int(free_slots) - len(scores))
+    return tuple(padded[: int(free_slots)])
 
 
 def _simulate_reserved_candidate_order(
@@ -183,7 +229,7 @@ def _simulate_reserved_candidate_order(
     }
 
 
-def _resource_aware_binary_policy(candidate_rows):
+def _resource_aware_quality_policy(candidate_rows):
     rows = list(candidate_rows or [])
     if not rows:
         return None
@@ -194,6 +240,7 @@ def _resource_aware_binary_policy(candidate_rows):
     if policy not in {
         BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
         BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     }:
         return None
     return policy
@@ -219,10 +266,20 @@ def _resource_aware_default_diag(rows, free_slots, *, selector):
         'basket_search_states': 0,
         'basket_search_pruned': 0,
         'basket_feasible_count': 0,
+        'baseline_scored_selected_count': 0,
+        'selected_scored_count': 0,
+        'baseline_selected_score_sum': 0.0,
+        'selected_score_sum': 0.0,
+        'baseline_selected_score_mean': None,
+        'selected_score_mean': None,
+        'promoted_score_orders': 0,
+        'direct_score_order_feasible': False,
     }
 
 
 def _resource_aware_diag_from_result(default_diag, baseline, selected, *, changed, promoted_pass_count, selector):
+    baseline_score = _selected_continuous_score_metrics(baseline)
+    selected_score = _selected_continuous_score_metrics(selected)
     return {
         **default_diag,
         'enabled': True,
@@ -237,6 +294,12 @@ def _resource_aware_diag_from_result(default_diag, baseline, selected, *, change
         'pass_reserved_cost_milli': int(selected['pass_reserved_cost_milli']),
         'promoted_pass_count': int(max(0, promoted_pass_count)),
         'changed': bool(changed),
+        'baseline_scored_selected_count': int(baseline_score['scored_count']),
+        'selected_scored_count': int(selected_score['scored_count']),
+        'baseline_selected_score_sum': float(baseline_score['score_sum']),
+        'selected_score_sum': float(selected_score['score_sum']),
+        'baseline_selected_score_mean': baseline_score['score_mean'],
+        'selected_score_mean': selected_score['score_mean'],
     }
 
 
@@ -440,7 +503,130 @@ def _reorder_resource_aware_binary_basket(
     })
     return current_order, diag
 
-def reorder_candidates_for_resource_aware_binary(
+def _reorder_resource_aware_continuous(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """Use frozen continuous quality only when cash is already the binding resource.
+
+    The Min ROOS order owns the resource bottleneck decision.  If Min ROOS needs
+    all available position slots, quality ranking is not allowed to intervene.
+    When cash binds first, the selector first tries the pure continuous-score order.
+    If that order would turn the day into a slot-bottleneck day, it falls back to
+    score-descending promotions and accepts only promotions whose exact cash-capped
+    replay remains cash-binding.  No score threshold or Min-ROOS/score weight exists.
+    """
+    diag = _resource_aware_diag_from_result(
+        default_diag, baseline, baseline, changed=False, promoted_pass_count=0,
+        selector='continuous-score-constrained',
+    )
+    if not bool(baseline['cash_is_binding']):
+        diag['mode'] = 'capital-utilization'
+        return list(rows), diag
+
+    diag['mode'] = 'dl-selection'
+    base_rank = {id(row): idx for idx, row in enumerate(rows)}
+    score_rows = [row for row in rows if _candidate_continuous_score(row) is not None]
+    score_rows.sort(key=lambda row: (-float(_candidate_continuous_score(row)), base_rank[id(row)]))
+    scored_ids = {id(row) for row in score_rows}
+    direct_order = score_rows + [row for row in rows if id(row) not in scored_ids]
+    direct = _simulate_reserved_candidate_order(
+        direct_order,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+    )
+    if bool(direct['cash_is_binding']):
+        baseline_selected_ids = {id(row) for row in baseline['selected_rows']}
+        promoted_count = len([row for row in direct['selected_rows'] if id(row) not in baseline_selected_ids])
+        diag.update(_resource_aware_diag_from_result(
+            default_diag, baseline, direct,
+            changed=bool([id(row) for row in direct_order] != [id(row) for row in rows]),
+            promoted_pass_count=0,
+            selector='continuous-score-direct',
+        ))
+        diag.update({
+            'mode': 'dl-selection',
+            'promoted_score_orders': int(promoted_count),
+            'direct_score_order_feasible': True,
+            'basket_search_states': 1,
+            'basket_feasible_count': 1,
+        })
+        return direct_order, diag
+
+    promoted_ids = set()
+    current_order = list(rows)
+    current = baseline
+    current_key = _continuous_selected_quality_key(current, free_slots=free_slots)
+    evaluated = 1
+    feasible = 0
+    for candidate in score_rows:
+        candidate_id = id(candidate)
+        trial_promoted = set(promoted_ids)
+        trial_promoted.add(candidate_id)
+        trial_order = sorted(
+            rows,
+            key=lambda row: (
+                0 if id(row) in trial_promoted else 1,
+                -(
+                    _candidate_continuous_score(row)
+                    if _candidate_continuous_score(row) is not None
+                    else -1.0
+                ) if id(row) in trial_promoted else 0.0,
+                base_rank[id(row)],
+            ),
+        )
+        if [id(row) for row in trial_order] == [id(row) for row in current_order]:
+            continue
+        evaluated += 1
+        trial = _simulate_reserved_candidate_order(
+            trial_order,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+        )
+        if not bool(trial['cash_is_binding']):
+            continue
+        if candidate_id not in {id(row) for row in trial['selected_rows']}:
+            continue
+        feasible += 1
+        trial_key = _continuous_selected_quality_key(trial, free_slots=free_slots)
+        if trial_key <= current_key:
+            continue
+        promoted_ids = trial_promoted
+        current_order = trial_order
+        current = trial
+        current_key = trial_key
+
+    if not bool(current['cash_is_binding']):
+        raise RuntimeError('resource-aware Continuous違反盤前cash-bottleneck資源契約')
+    baseline_selected_ids = {id(row) for row in baseline['selected_rows']}
+    promoted_count = len([row for row in current['selected_rows'] if id(row) not in baseline_selected_ids])
+    diag.update(_resource_aware_diag_from_result(
+        default_diag, baseline, current,
+        changed=bool([id(row) for row in current_order] != [id(row) for row in rows]),
+        promoted_pass_count=0,
+        selector='continuous-score-constrained',
+    ))
+    diag.update({
+        'mode': 'dl-selection',
+        'promoted_score_orders': int(promoted_count),
+        'direct_score_order_feasible': False,
+        'basket_search_states': int(evaluated),
+        'basket_feasible_count': int(feasible),
+    })
+    return current_order, diag
+
+
+def reorder_candidates_for_resource_aware_quality(
     orderable_candidates_today,
     *,
     available_cash,
@@ -449,22 +635,23 @@ def reorder_candidates_for_resource_aware_binary(
     max_positions,
     params,
 ):
-    """Apply the configured resource-aware Binary selector before reservation.
+    """Apply the configured resource-aware quality selector before reservation.
 
-    Both selectors preserve the complete Min ROOS candidate lifecycle and first
-    establish the same exact cash-capped Min ROOS baseline.  C11 keeps the
-    historical first-improvement promotion rule.  C12 evaluates every feasible next PASS promotion at each step, accepts the
-    best exact cash-capped improvement, and repeats under the same resource
-    contract.  Neither selector reads
-    future bars or introduces a numeric utilization threshold.
+    Min ROOS always owns the exact cash-capped resource-bottleneck decision.
+    Binary variants optimize PASS use only on cash-binding days.  The continuous
+    variant instead uses frozen event-level quality scores only on those same
+    DL-selection days.  No selector may turn a cash-binding baseline into a
+    slot-binding order plan or introduce a numeric utilization threshold.
     """
 
     rows = list(orderable_candidates_today or [])
     free_slots = max(0, int(max_positions) - int(pre_market_occupied))
-    policy = _resource_aware_binary_policy(rows)
+    policy = _resource_aware_quality_policy(rows)
     selector = (
         'best-improvement-basket'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+        else 'continuous-score-constrained'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
         else 'greedy-first-improvement'
     )
     default_diag = _resource_aware_default_diag(rows, free_slots, selector=selector)
@@ -478,6 +665,16 @@ def reorder_candidates_for_resource_aware_binary(
         free_slots=free_slots,
         params=params,
     )
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS:
+        return _reorder_resource_aware_continuous(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+        )
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET:
         return _reorder_resource_aware_binary_basket(
             rows,
@@ -497,6 +694,10 @@ def reorder_candidates_for_resource_aware_binary(
         baseline=baseline,
         default_diag=default_diag,
     )
+
+# Backward-compatible import alias; all logic lives in the generic quality selector.
+reorder_candidates_for_resource_aware_binary = reorder_candidates_for_resource_aware_quality
+
 
 def execute_reserved_entries_for_day(
     portfolio,

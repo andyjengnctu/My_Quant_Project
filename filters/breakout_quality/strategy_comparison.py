@@ -16,6 +16,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
@@ -40,6 +41,7 @@ from filters.breakout_quality.strategy_compare_engine import (
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
 from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
@@ -268,11 +270,14 @@ def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
     if mode in {
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
     }:
         return {
             "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
             "ranking_policy": (
-                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET
                 else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
             ),
@@ -618,6 +623,7 @@ def _resource_aware_table(
         if arm.dl_runtime_mode not in {
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
         }:
             continue
         payload = scenarios[arm.arm_id]
@@ -629,10 +635,13 @@ def _resource_aware_table(
             _fmt(payload.get("resource_aware_changed_days"), digits=0),
             _fmt(payload.get("resource_aware_promoted_pass_orders"), digits=0),
             _fmt_money_milli(payload.get("resource_aware_pass_reserved_gain_milli")),
+            _fmt(payload.get("resource_aware_promoted_score_orders"), digits=0),
+            _fmt(payload.get("resource_aware_selected_score_sum_gain"), digits=3),
+            _fmt(payload.get("resource_aware_direct_score_order_days"), digits=0),
             _fmt_money_milli(payload.get("resource_aware_reserved_delta_milli")),
         ))
     if not rows:
-        return "本次沒有啟用Resource-aware Binary arm。"
+        return "本次沒有啟用Resource-aware arm。"
     return render_table(
         (
             "編號",
@@ -642,6 +651,9 @@ def _resource_aware_table(
             "實際改單日",
             "新增PASS單",
             "PASS預留資金增量",
+            "Continuous新選入單",
+            "Selected Score總和增量",
+            "直接Score排序可行日",
             "總預留資金增量",
         ),
         rows,
@@ -739,7 +751,8 @@ def _render_report(
                 "比較流程不建立Label、不選模型也不訓練模型權重；可依config透過正式"
                 "共用服務補建既有模型的forward-OOS scores與比較所需策略參數工件。"
                 "Resource-aware只在盤前cash先成瓶頸時介入，且不得新增資金利用Threshold；"
-                "其核心診斷是PASS預留資金是否增加、總曝險與策略績效是否改善。"
+                "Binary arm看PASS資源配置，Continuous arm看selected score改善；兩者都必須同時檢查"
+                "總曝險、預留資金與策略績效，不能只看模型分數。"
             ),
         )
     ).rstrip() + "\n"
@@ -864,6 +877,7 @@ def run_strategy_comparison(
                 else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
             ),
             filter_id=dl.filter_id,
+            score_source=dl.score_source,
             model_architecture=dl.model_architecture,
             experiment_profile=dl.experiment_profile,
             threshold=dl.threshold,
