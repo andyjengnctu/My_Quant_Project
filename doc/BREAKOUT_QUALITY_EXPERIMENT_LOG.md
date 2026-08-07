@@ -4174,3 +4174,57 @@ Dataset不重建、Label不重建、A9不重訓、threshold不調整、forward-O
 ### 採用判定與下一步
 
 C11結果已接受為新的DL runtime研究基準；C12尚未取得正式forward-OOS結果，只標記`IMPLEMENTED`。下一步由`python apps/strategy_compare.py`進入選單，先`[2] 查看設定、工件與預計動作`確認只含C3／C11／C12，再`[1/Enter] 執行目前比較設定`。C12只有在相對C11維持接近相同曝險、且RoMD／EV／同參數DL選擇R至少一項有實質增量且年度穩定性未明顯惡化時才保留；否則維持較簡單的C11。
+
+## 2026-08-07 — C12正式結果、最大化PASS研究方向與正式PASS Quality Audit框架
+
+### 狀態
+
+`C12_RESULT_AVAILABLE / MAX_PASS_USAGE_DIRECTION_RETAINED / PASS_QUALITY_AUDIT_IMPLEMENTED_RESULT_PENDING`
+
+### C12正式結果
+
+正式期間`2021-01-01～2026-03-02`、Dataset=`full`、Param policy=`base-finalist-best`、Max positions=10、Rotation=off；A9模型、threshold、Min ROOS P2與forward-OOS scores均不變。
+
+| Arm | 報酬 | MDD | RoMD | 年化 | EV | Payoff | 曝險 | 交易 | 同參數DL選擇R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| C3 Min ROOS | 166.69% | 15.41% | 10.82 | 20.95% | 0.73R | 3.62 | 92.13% | 336 | 0.00R |
+| C11 A9 resource-aware first-improvement | 184.69% | 15.67% | 11.79 | 22.49% | 0.87R | 3.26 | 92.26% | 373 | +79.95R |
+| C12 A9 resource-aware best-improvement | 172.59% | 16.47% | 10.48 | 21.46% | 0.88R | 3.25 | 92.49% | 388 | +94.59R |
+
+`C12−C11 = -12.11pp報酬 / +0.80pp MDD / -1.31 RoMD / -1.03pp年化 / 約0.00R EV / +0.22pp曝險 / +15交易 / +14.64R同參數DL選擇R`。
+
+Resource-aware盤前診斷：C11為`DL選股131日 / 資金利用優先563日 / 實際改單92日 / 新增PASS 111 / PASS預留資金+16,324,574 / 總預留-44,794`；C12為`146 / 601 / 119 / 143 / +22,169,986 / +493,750`。C12確實提高PASS使用與同參數DL選擇R，但策略報酬／RoMD未同步改善。
+
+### 使用者研究決策
+
+不把C12較差的策略績效解讀成「應降低PASS使用」；後續固定研究原則為：**在既有資源契約下最大化PASS使用，改善PASS本身的品質**。不得新增Min ROOS sorting與PASS sorting的混合權重、比例或依OOS結果調整的折衷參數，避免多出一層selector比例最佳化問題。
+
+### Candidate validity／DL quality／allocation單一責任契約
+
+1. Strategy唯一擁有candidate validity：建立、normal／continuation／Re-entry、expiry／invalidation全部沿用原策略SSOT。
+2. DL只擁有quality：PASS／REJECT描述當下或既定snapshot的品質，不得使仍屬策略VALID的candidate失效。
+3. Portfolio selector只擁有allocation：只在策略已判VALID的candidate pool內依盤前cash／slots／正式cash-capped sizing分配資源。
+4. 因此未來若做candidate-day DL，語意只能是每日更新quality；不得建立第二套DL candidate expiry。Future Label／MFE／MAE／Realized R只能事後Audit，不得回流當日runtime。
+
+### 正式Audit framework
+
+本輪以使用者ZIP`test-branch-1_20260807_194217_8fbe28b(1).zip`為基準，SHA256=`d47b5209b477b3c739479c5a0851ea9a81d3d70bf7b9241016a52df4de32c34a`，實作config-driven正式Audit框架：
+
+- 新增`config/audit.py`，各模組Audit對象、source、dimensions、outcomes與output policy集中管理；正式App不得硬編碼C11／C12等研究名稱。
+- `apps/breakout_quality.py`正式主選單新增`Audit／診斷`，子選單固定為執行目前設定、查看設定／工件／預計動作、查看最近結果。
+- 第一個正式Audit為`a9_pass_quality`，預設只讀最新strategy-compare的C12 arm，分析A9 PASS內部的raw score、candidate age、candidate type、既有Label／MFE／MAE與實際selected trades Realized R。
+- Audit只讀既有正式工件；缺件顯示BLOCKED，不重跑策略、不建立Label、不train模型、不改runtime。
+- Score／age分組以config指定quantile groups產生，只供read-only診斷；不得直接變成runtime threshold、age cutoff、Min ROOS／DL混合比例或其他OOS調參。
+- 輸出固定於`outputs/audit/<module>/<audit>/runs/<timestamp>/`並維護`latest/`，包含Markdown、JSON、PASS candidate明細與各分組CSV。
+
+### Dataset／Label／模型重建需求
+
+- Dataset：不重建。
+- Label：不重建。
+- A9模型／threshold：不修改、不重訓。
+- Strategy replay：Audit不重跑；只讀既有正式strategy-compare工件。
+- 本節Audit僅為`IMPLEMENTED`，尚未取得正式真實資料Audit結果，不得預判score／age／candidate type哪一項是PASS品質主因。
+
+### 下一步
+
+由`python apps/breakout_quality.py`進入`[2] Audit／診斷`，先`[2] 查看 Audit 設定、工件與預計動作`，確認`a9_pass_quality`來源READY，再`[1/Enter] 執行目前 Audit 設定`。依正式Audit結果判斷PASS品質改善方向；在結果前不新增candidate-day失效規則、不新增score threshold或排序混合權重。

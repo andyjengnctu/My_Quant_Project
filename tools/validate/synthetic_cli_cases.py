@@ -228,7 +228,8 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "[1/Enter] 模型研究與驗證" in interactive_text
-            and "[2] 查看模型設定與工件狀態" in interactive_text
+            and "[2] Audit／診斷" in interactive_text
+            and "[3] 查看模型設定與工件狀態" in interactive_text
             and "策略績效驗證" not in interactive_text
         ),
     )
@@ -250,7 +251,23 @@ def validate_dataset_cli_contract_case(_base_params):
     )
 
     with (
-        patch("builtins.input", side_effect=["2", "0"]),
+        patch("builtins.input", side_effect=["2", "0", "0"]),
+        patch("apps.breakout_quality._interactive_audit_menu", return_value=0) as audit_menu,
+    ):
+        audit_menu_rc = app_breakout_quality._run_interactive_menu(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_audit_menu_route",
+        (0, 1),
+        (audit_menu_rc, audit_menu.call_count),
+    )
+
+    with (
+        patch("builtins.input", side_effect=["3", "0"]),
         patch("apps.breakout_quality._print_workflow_status") as status_menu,
     ):
         status_menu_rc = app_breakout_quality._run_interactive_menu(

@@ -2093,10 +2093,54 @@ def _interactive_model_research(program_name: str) -> int:
         )
 
 
+def _interactive_audit_menu() -> int:
+    from tools.filters.breakout_quality.audit_runner import (
+        render_audit_status,
+        render_latest_audit_summary,
+        run_enabled_audits,
+    )
+
+    while True:
+        print("\n=== Breakout Quality Audit／診斷 ===")
+        print("[1/Enter] 執行目前 Audit 設定")
+        print("[2] 查看 Audit 設定、工件與預計動作")
+        print("[3] 查看最近 Audit 結果")
+        print("[0] 返回")
+        try:
+            raw_choice = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            print("\n輸入已結束。")
+            return 0
+        choice = "1" if raw_choice == "" else raw_choice
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        if choice == "1":
+            print("\n" + render_audit_status())
+            try:
+                confirm = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
+            except EOFError:
+                print("\n輸入已結束，本次不執行。")
+                return 0
+            if confirm in {"0", "q", "quit", "exit"}:
+                print("已取消本次Audit。")
+                continue
+            if confirm not in {"", "1"}:
+                print("輸入無效，本次不執行。")
+                continue
+            run_enabled_audits()
+        elif choice == "2":
+            print("\n" + render_audit_status())
+        elif choice == "3":
+            print("\n" + render_latest_audit_summary())
+        else:
+            print("無效選項，請按 Enter 或輸入 0～3。")
+
+
 def _print_menu() -> None:
-    print("\n=== Breakout Quality 模型研究與驗證 ===")
+    print("\n=== Breakout Quality ===")
     print("[1/Enter] 模型研究與驗證")
-    print("[2] 查看模型設定與工件狀態")
+    print("[2] Audit／診斷")
+    print("[3] 查看模型設定與工件狀態")
     print("[0] 離開")
 
 
@@ -2115,9 +2159,11 @@ def _run_interactive_menu(program_name: str) -> int:
             if choice == "1":
                 _interactive_model_research(program_name)
             elif choice == "2":
+                _interactive_audit_menu()
+            elif choice == "3":
                 _print_workflow_status()
             else:
-                print("選項無效，請按 Enter 或輸入 0～2。")
+                print("選項無效，請按 Enter 或輸入 0～3。")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:

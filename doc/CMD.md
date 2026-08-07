@@ -57,20 +57,33 @@ python apps/workbench.py
 
 ## 研究資料、訓練與評估
 
-模型研究與訓練由`apps/breakout_quality.py`進入；策略績效比較由獨立`apps/strategy_compare.py`進入。`tools/filters/breakout_quality/`的直接CLI只保留開發、歷史研究與相容用途。
+模型研究與訓練、正式Audit／診斷由`apps/breakout_quality.py`進入；策略績效比較由獨立`apps/strategy_compare.py`進入。`tools/filters/breakout_quality/`的直接CLI只保留開發、歷史研究與相容用途。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟唯一正式選單。主選單只保留完整工作流程，不顯示 Dataset、單獨 train、export、audit 或版本化研究名稱；這些低階與 research-only 功能仍使用明確 CLI 子命令。目前 Binary 模型研究選單固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由獨立策略比較App依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟唯一正式選單。主選單只保留完整模型工作流程、config-driven Audit與模型設定／工件狀態；Dataset、單獨 train、export及歷史版本化research audit仍使用明確 CLI 子命令。目前 Binary 模型研究選單固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由獨立策略比較App依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
 
 ```bash
 python apps/breakout_quality.py
 ```
 
 ```text
-=== Breakout Quality 模型研究與驗證 ===
+=== Breakout Quality ===
 [1/Enter] 模型研究與驗證
-[2] 查看模型設定與工件狀態
+[2] Audit／診斷
+[3] 查看模型設定與工件狀態
 [0] 離開
 ```
+
+選擇 `[2] Audit／診斷` 會進入固定Audit子選單：
+
+```text
+=== Audit／診斷 ===
+[1/Enter] 執行目前 Audit 設定
+[2] 查看 Audit 設定、工件與預計動作
+[3] 查看最近 Audit 結果
+[0] 返回
+```
+
+Audit對象、來源arm、分層維度與輸出政策全部集中於`config/audit.py`；App不硬編碼A9／C12等研究名稱。Audit只讀既有正式工件，不重跑策略、不建立Label、不訓練模型、不修改runtime。第一個正式Audit為`a9_pass_quality`，用既有strategy-compare arm的orderable／selected／trades與既有Dataset Label，診斷PASS內的Score、candidate age、candidate type與Label／Realized R。其分位只供診斷，不得直接轉為runtime threshold或Min ROOS／DL混合比例。Candidate是否存在／continuation／失效仍由原策略唯一決定；DL只描述quality，REJECT不得使仍屬策略VALID的candidate失效；portfolio selector只負責資源配置。來源工件缺少時Audit顯示`BLOCKED`，不偷偷補跑。
 
 模型訓練與策略比較使用分離入口。正式策略比較執行：
 
@@ -100,7 +113,7 @@ Active Research Label：a2_realized_trade_path_v1
 
 `[1]` 固定依序執行：建立／接續A2 realized trade-path Label Dataset、train、research score export、Selection／OOS模型預測報表、forward-OOS runtime score export；到此停止，不執行策略回放。`[2]` 不重新訓練，只更新research scores、重建同一份預測報表並更新forward-OOS runtime scores。`[3]` 顯示PASS／REJECT／EXCLUDED、事件group及初次miss buy／未成交終止契約。新Label使用獨立`filter_id=breakout_quality_a2_trade_path_v1`，不得覆蓋現有9A模型。策略經濟效果由`apps/strategy_compare.py`依目前啟用arms與contrasts比較；舊`strategy-trade-path-label-gate`只保留歷史研究診斷。
 
-Breakout-quality 所有使用者設定只編輯 `config/breakout_quality.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
+Breakout-quality 模型／Label／training／workflow設定只編輯 `config/breakout_quality.py`；正式Audit對象與診斷設定集中於 `config/audit.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
 模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：目前binary classification主選單固定執行A2 realized trade-path Label的Dataset／train／research score／Selection與OOS模型報表／forward-OOS score，策略比較不在選單自動執行；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。Binary新Label模型流程在Prediction報表與forward-OOS模型score工件完成後停止；策略經濟比較僅由獨立`apps/strategy_compare.py`執行。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
 
