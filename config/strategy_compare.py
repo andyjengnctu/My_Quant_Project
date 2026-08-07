@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 4
+STRATEGY_COMPARE_SCHEMA_VERSION = 5
 
 # =============================================================================
 # 1. 共用執行設定
@@ -87,7 +87,7 @@ STRATEGY_PARAM_SOURCES = {
             "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
             "risk_only_rolling/p3_dl_on_trained/active_params/{param_filename}"
         ),
-        "description": "rule-based filters全關、指定DL模型訓練的Min-DL ROOS",
+        "description": "rule-based filters全關、TP1-on環境訓練的Min-TP1 ROOS",
         "identity_manifest_path": (
             "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
             "risk_only_rolling/p3_dl_on_trained/rolling_preflight.json"
@@ -99,6 +99,35 @@ STRATEGY_PARAM_SOURCES = {
             "options": {
                 "parameter_set": "p3",
                 "model_source_id": "TP1",
+                "p3_variant": None,
+                "trials_per_fold": 200,
+                "resume": True,
+                "fixed_risk": 0.01,
+                "max_position_cap_pct": 0.30,
+                "build_binary_pit": True,
+                "binary_pit_resume": True,
+                "quiet": False,
+            },
+        },
+    },
+    "min_dl_a9_roos": {
+        "path_template": (
+            "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
+            "risk_only_rolling/p3_dl_on_trained/A9/active_params/{param_filename}"
+        ),
+        "description": "rule-based filters全關、A9-on環境訓練的Min-A9 ROOS",
+        "identity_manifest_path": (
+            "models/research/breakout_quality/binary_dl_filter_param_adaptation/"
+            "risk_only_rolling/p3_dl_on_trained/A9/rolling_preflight.json"
+        ),
+        "trained_with_dl_id": "A9",
+        "builder": {
+            "enabled": True,
+            "builder_type": "binary_dl_risk_only_rolling",
+            "options": {
+                "parameter_set": "p3",
+                "model_source_id": "A9",
+                "p3_variant": "A9",
                 "trials_per_fold": 200,
                 "resume": True,
                 "fixed_risk": 0.01,
@@ -143,7 +172,7 @@ STRATEGY_DL_SOURCES = {
         "model_architecture": "inception_time_v1",
         "experiment_profile": "unique_group_sampling",
         "threshold": 0.5,
-        "description": "既有MFE／MAE 9A Binary DL模型；只作runtime比較，不訓練A9-aware策略參數",
+        "description": "既有MFE／MAE 9A Binary DL模型",
         "forward_scores_builder": {
             "enabled": True,
             "builder_type": "forward_oos_scores",
@@ -171,7 +200,7 @@ STRATEGY_DL_SOURCES = {
 STRATEGY_COMPARE_ARMS = {
     "C1": {
         "enabled": True,
-        "name": "Full ROOS × DL-off",
+        "name": "Full ROOS",
         "description": "原正式基準",
         "param_source": "full_roos",
         "rule_policy": "formal",
@@ -180,8 +209,8 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C2": {
         "enabled": True,
-        "name": "Full ROOS × DL-TP1",
-        "description": "DL套用於原正式參數",
+        "name": "Full ROOS: TP1-on",
+        "description": "Full ROOS參數，runtime開TP1",
         "param_source": "full_roos",
         "rule_policy": "formal",
         "dl_enabled": True,
@@ -189,8 +218,8 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C3": {
         "enabled": True,
-        "name": "Min ROOS × DL-off",
-        "description": "最小規則基準",
+        "name": "Min ROOS",
+        "description": "rules全關、DL-off環境訓練的Min基準",
         "param_source": "min_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
@@ -198,8 +227,8 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C4": {
         "enabled": True,
-        "name": "Min ROOS × DL-TP1",
-        "description": "純DL執行效果",
+        "name": "Min ROOS: TP1-on",
+        "description": "Min ROOS參數，runtime開TP1",
         "param_source": "min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
@@ -207,8 +236,8 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C5": {
         "enabled": True,
-        "name": "Min-DL-TP1 ROOS × DL-off",
-        "description": "單看DL-aware參數效果",
+        "name": "Min-TP1 ROOS",
+        "description": "TP1-on環境訓練參數，runtime DL-off",
         "param_source": "min_dl_tp1_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
@@ -216,8 +245,8 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C6": {
         "enabled": True,
-        "name": "Min-DL-TP1 ROOS × DL-TP1",
-        "description": "DL模型與對應參數完整組合",
+        "name": "Min-TP1 ROOS: DL-on",
+        "description": "TP1-on環境訓練參數，runtime開其配對TP1",
         "param_source": "min_dl_tp1_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
@@ -225,8 +254,8 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C7": {
         "enabled": True,
-        "name": "Full ROOS × DL-A9",
-        "description": "Full ROOS下加入既有A9 hard filter",
+        "name": "Full ROOS: A9-on",
+        "description": "Full ROOS參數，runtime開A9",
         "param_source": "full_roos",
         "rule_policy": "formal",
         "dl_enabled": True,
@@ -234,8 +263,8 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C8": {
         "enabled": True,
-        "name": "Min ROOS × DL-A9",
-        "description": "Min ROOS下加入既有A9 hard filter",
+        "name": "Min ROOS: A9-on",
+        "description": "Min ROOS參數，runtime開A9",
         "param_source": "min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
@@ -243,9 +272,18 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C9": {
         "enabled": True,
-        "name": "Min-DL-TP1 ROOS × DL-A9",
-        "description": "在TP1-aware參數下直接比較A9與TP1 runtime filter",
-        "param_source": "min_dl_tp1_roos",
+        "name": "Min-A9 ROOS",
+        "description": "A9-on環境訓練參數，runtime DL-off",
+        "param_source": "min_dl_a9_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": False,
+        "dl_id": None,
+    },
+    "C10": {
+        "enabled": True,
+        "name": "Min-A9 ROOS: DL-on",
+        "description": "A9-on環境訓練參數，runtime開其配對A9",
+        "param_source": "min_dl_a9_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "A9",
@@ -257,19 +295,19 @@ STRATEGY_COMPARE_ARMS = {
 # =============================================================================
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C2-C1": {"enabled": True, "left": "C2", "right": "C1", "description": "Full ROOS下的DL效果"},
-    "C4-C3": {"enabled": True, "left": "C4", "right": "C3", "description": "Min ROOS下的DL效果"},
-    "C6-C5": {"enabled": True, "left": "C6", "right": "C5", "description": "Min-DL ROOS下的DL效果"},
-    "C3-C1": {"enabled": True, "left": "C3", "right": "C1", "description": "最小規則相對正式基準"},
-    "C5-C3": {"enabled": True, "left": "C5", "right": "C3", "description": "DL-aware參數本身效果"},
-    "C6-C4": {"enabled": True, "left": "C6", "right": "C4", "description": "完整DL-aware組合的額外效果"},
-    "C6-C1": {"enabled": True, "left": "C6", "right": "C1", "description": "完整方案相對正式基準"},
-    "C7-C1": {"enabled": True, "left": "C7", "right": "C1", "description": "Full ROOS下A9 DL效果"},
-    "C8-C3": {"enabled": True, "left": "C8", "right": "C3", "description": "Min ROOS下A9 DL效果"},
-    "C9-C5": {"enabled": True, "left": "C9", "right": "C5", "description": "Min-DL-TP1 ROOS下A9 DL效果"},
-    "C2-C7": {"enabled": True, "left": "C2", "right": "C7", "description": "Full ROOS下TP1相對A9"},
-    "C4-C8": {"enabled": True, "left": "C4", "right": "C8", "description": "Min ROOS下TP1相對A9"},
-    "C6-C9": {"enabled": True, "left": "C6", "right": "C9", "description": "Min-DL-TP1 ROOS下TP1相對A9"},
+    "C2-C1": {"enabled": True, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},
+    "C7-C1": {"enabled": True, "left": "C7", "right": "C1", "description": "Full ROOS下A9 runtime效果"},
+    "C4-C3": {"enabled": True, "left": "C4", "right": "C3", "description": "Min ROOS下TP1 runtime效果"},
+    "C8-C3": {"enabled": True, "left": "C8", "right": "C3", "description": "Min ROOS下A9 runtime效果"},
+    "C6-C5": {"enabled": True, "left": "C6", "right": "C5", "description": "Min-TP1 ROOS下配對DL效果"},
+    "C10-C9": {"enabled": True, "left": "C10", "right": "C9", "description": "Min-A9 ROOS下配對DL效果"},
+    "C3-C1": {"enabled": True, "left": "C3", "right": "C1", "description": "Min ROOS相對Full ROOS"},
+    "C5-C3": {"enabled": True, "left": "C5", "right": "C3", "description": "TP1-aware參數本身效果"},
+    "C9-C3": {"enabled": True, "left": "C9", "right": "C3", "description": "A9-aware參數本身效果"},
+    "C6-C4": {"enabled": True, "left": "C6", "right": "C4", "description": "TP1-on下參數適應效果"},
+    "C10-C8": {"enabled": True, "left": "C10", "right": "C8", "description": "A9-on下參數適應效果"},
+    "C6-C1": {"enabled": True, "left": "C6", "right": "C1", "description": "Min-TP1完整方案相對正式基準"},
+    "C10-C1": {"enabled": True, "left": "C10", "right": "C1", "description": "Min-A9完整方案相對正式基準"},
 }
 
 

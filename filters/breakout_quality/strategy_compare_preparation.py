@@ -605,6 +605,11 @@ def _execute_preparation_action(
             rotation=str(settings.rotation),
             fixed_risk=float(options.get("fixed_risk", 0.01)),
             max_position_cap_pct=float(options.get("max_position_cap_pct", 0.30)),
+            p3_variant=(
+                None
+                if options.get("p3_variant") in (None, "")
+                else str(options.get("p3_variant"))
+            ),
             build_binary_pit=bool(options.get("build_binary_pit", True)),
             binary_pit_resume=bool(options.get("binary_pit_resume", True)),
             resume_parameter_training=bool(

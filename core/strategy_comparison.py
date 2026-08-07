@@ -258,6 +258,11 @@ def _validate_builder(
         cap = float(builder.options.get("max_position_cap_pct") or 0.0)
         if not 0.0 < cap <= 1.0:
             raise ValueError(f"{field_name}.max_position_cap_pct必須介於0與1")
+        p3_variant = builder.options.get("p3_variant")
+        if p3_variant not in (None, ""):
+            _validate_relative_path(str(p3_variant), field_name=f"{field_name}.p3_variant")
+            if "/" in str(p3_variant) or "\\" in str(p3_variant):
+                raise ValueError(f"{field_name}.p3_variant只允許單一資料夾名稱")
         for option_name in ("resume", "build_binary_pit", "binary_pit_resume", "quiet"):
             if option_name in builder.options and not isinstance(builder.options[option_name], bool):
                 raise ValueError(f"{field_name}.{option_name}必須是bool")
@@ -301,6 +306,22 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             field_name=f"parameter_sources[{key}].builder",
             allowed_types={"binary_dl_risk_only_rolling"},
         )
+        if source.builder is not None and source.builder.enabled:
+            options = dict(source.builder.options)
+            parameter_set = str(options.get("parameter_set") or "").lower()
+            configured_model_source = str(options.get("model_source_id") or "").strip() or None
+            if parameter_set == "p3":
+                if not source.trained_with_dl_id:
+                    raise ValueError(f"parameter source {key}的P3 builder必須設定trained_with_dl_id")
+                if (
+                    configured_model_source is not None
+                    and configured_model_source != source.trained_with_dl_id
+                ):
+                    raise ValueError(
+                        f"parameter source {key}的model_source_id必須與trained_with_dl_id一致"
+                    )
+            elif parameter_set == "p2" and source.trained_with_dl_id is not None:
+                raise ValueError(f"parameter source {key}的P2 builder不得設定trained_with_dl_id")
 
     for key, source in settings.dl_sources.items():
         if key != source.dl_id or not key.strip():
@@ -324,9 +345,16 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
             raise ValueError(f"arm {key}引用不存在的param_source: {arm.param_source}")
         if arm.rule_policy not in {"formal", "all_off"}:
             raise ValueError(f"arm {key} rule_policy不支援: {arm.rule_policy}")
+        parameter_source = settings.parameter_sources[arm.param_source]
         if arm.dl_enabled:
             if not arm.dl_id or arm.dl_id not in settings.dl_sources:
                 raise ValueError(f"arm {key}啟用DL但dl_id無效: {arm.dl_id}")
+            trained_with = parameter_source.trained_with_dl_id
+            if trained_with is not None and arm.dl_id != trained_with:
+                raise ValueError(
+                    "DL-aware參數只能搭配訓練時相同的DL runtime: "
+                    f"arm={key}, trained_with={trained_with}, runtime={arm.dl_id}"
+                )
         elif arm.dl_id is not None:
             raise ValueError(f"arm {key}關閉DL時dl_id必須為None")
 

@@ -121,6 +121,11 @@ def _parse_args(argv=None):
         help="是否接續既有rolling optimizer studies",
     )
     parser.add_argument("--parameter-set", choices=("p2", "p3", "both"), default="both")
+    parser.add_argument(
+        "--p3-variant",
+        default=None,
+        help="P3工件子目錄名稱；留空維持既有canonical P3路徑",
+    )
     parser.add_argument("--train-only", action="store_true", help="只建立指定參數工件，不執行4×2 replay")
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--quiet", action="store_true")
@@ -521,6 +526,8 @@ def _temporary_environment(values: dict[str, str]):
 
 def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifact, output_dir, arm_id, training_dl_enabled, binary_pit):
     arm_dir = output_dir / ("p3_dl_on_trained" if training_dl_enabled else "p2_dl_off_trained")
+    if training_dl_enabled and args.p3_variant not in (None, ""):
+        arm_dir = arm_dir / str(args.p3_variant)
     active_param_dir = arm_dir / "active_params"
     optimizer_output_dir = arm_dir / "optimizer_runtime"
     active_param_dir.mkdir(parents=True, exist_ok=True)
@@ -933,6 +940,10 @@ def run_param_adaptation_gate(*, project_root=PROJECT_ROOT, argv=None):
         raise ValueError("4×2 Gate固定使用base-finalist-best")
     if int(args.trials_per_fold) < 1 or int(args.max_positions) < 1:
         raise ValueError("trials-per-fold與max-positions必須>=1")
+    if args.p3_variant not in (None, ""):
+        variant = Path(str(args.p3_variant))
+        if variant.is_absolute() or len(variant.parts) != 1 or variant.parts[0] in {".", ".."}:
+            raise ValueError("p3-variant只允許單一安全資料夾名稱")
     requires_binary_pit = str(args.parameter_set) in {"p3", "both"}
     model_artifact = (
         load_model_artifact_contract(
@@ -960,11 +971,16 @@ def run_param_adaptation_gate(*, project_root=PROJECT_ROOT, argv=None):
         binary_pit = {**binary_pit, "status": "NOT_REQUIRED_FOR_P2"}
     output_dir = root / EXPERIMENT_RELATIVE_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
-    plan_path = output_dir / "strategy_dl_filter_param_adapt_plan.json"
+    metadata_dir = output_dir
+    if str(args.parameter_set) == "p3" and args.p3_variant not in (None, ""):
+        metadata_dir = output_dir / "p3_dl_on_trained" / str(args.p3_variant)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+    plan_path = metadata_dir / "strategy_dl_filter_param_adapt_plan.json"
     plan = {
         "schema_version": SCHEMA_VERSION,
         "status": "PLAN_ONLY" if args.plan_only else "TRAINING" if args.train_only else "RUNNING",
         "parameter_set": str(args.parameter_set),
+        "p3_variant": None if args.p3_variant in (None, "") else str(args.p3_variant),
         "train_only": bool(args.train_only),
         "matrix": [
             {"index": 0, "parameter_set": "P0", "params": "original_roos", "rules": "formal"},
@@ -1041,8 +1057,8 @@ def run_param_adaptation_gate(*, project_root=PROJECT_ROOT, argv=None):
             ]
     report = _render_report(args=args, matrix=matrix, p2_arm=p2_arm, p3_arm=p3_arm, binary_pit=binary_pit, baseline_contract=baseline_contract, plan_only=bool(args.plan_only))
     print("\n" + report)
-    markdown_path = output_dir / "strategy_dl_filter_param_adapt_gate.md"
-    json_path = output_dir / "strategy_dl_filter_param_adapt_gate.json"
+    markdown_path = metadata_dir / "strategy_dl_filter_param_adapt_gate.md"
+    json_path = metadata_dir / "strategy_dl_filter_param_adapt_gate.json"
     markdown_path.write_text(report + "\n", encoding="utf-8")
     result = {
         **plan,
@@ -1073,6 +1089,7 @@ def prepare_strategy_parameter_source(
     rotation: str,
     fixed_risk: float,
     max_position_cap_pct: float,
+    p3_variant: str | None = None,
     build_binary_pit: bool = True,
     binary_pit_resume: bool = True,
     resume_parameter_training: bool = True,
@@ -1097,6 +1114,8 @@ def prepare_strategy_parameter_source(
         "--resume-parameter-training" if resume_parameter_training else "--no-resume-parameter-training",
         "--train-only",
     ]
+    if p3_variant not in (None, ""):
+        argv.extend(("--p3-variant", str(p3_variant)))
     if quiet:
         argv.append("--quiet")
     return run_param_adaptation_gate(project_root=project_root, argv=argv)

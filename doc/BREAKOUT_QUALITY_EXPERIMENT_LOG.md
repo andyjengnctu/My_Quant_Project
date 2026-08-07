@@ -3943,3 +3943,50 @@ config-driven策略比較重構後，`run_strategy_comparison()`保留對`_execu
 ### 下一步
 
 由`python apps/strategy_compare.py`選擇`[2] 查看設定、工件與預計動作`，確認A9 model／manifest／forward scores為READY或PREPARABLE；再選`[1/Enter] 執行目前比較設定`。取得C7～C9後，以同參數A9效果及TP1−A9 contrasts判定TP1問題是Label／模型特有，或Binary hard-filter共同結構問題。
+
+## 2026-08-07｜Min-DL identity與顯示名稱收斂（IMPLEMENTED）
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING`
+
+### 唯一變更
+
+- 使用者要求移除沒有物理意義的跨版本組合：DL-aware參數若在某一DL版本開啟環境下訓練，runtime DL-on時必須使用同一版本。
+- 使用者可見名稱簡化為：`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`。
+- `Full ROOS`同樣採`Full ROOS`、`Full ROOS: TP1-on`、`Full ROOS: A9-on`顯示。
+- 移除原本`Min-DL-TP1 ROOS × DL-A9`這類`trained_with_dl_id != runtime dl_id` arm及其contrasts。
+- 新增A9專屬`Min-A9 ROOS` P3來源；A9 P3工件獨立存於`models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling/p3_dl_on_trained/A9/`，既有TP1 P3路徑不變。
+- `core/strategy_comparison.py`新增硬性identity guard，任何DL-aware參數與不同DL runtime配對會在replay前fail-fast。
+
+### 固定條件
+
+不重建Dataset、不重新Label、不重新訓練TP1或A9模型、不改threshold、交易規則、帳務、position-aware buy-sort或既有TP1 P3。A9若缺少專屬Min-A9 P3，`apps/strategy_compare.py`依config透過既有正式策略參數builder建立／接續，不由策略比較App訓練模型權重。
+
+### 新正式比較矩陣
+
+| DL-off基準 | DL-on比較 | 物理意義 |
+|---|---|---|
+| Full ROOS | Full ROOS: TP1-on | 同Full參數，只切TP1 runtime |
+| Full ROOS | Full ROOS: A9-on | 同Full參數，只切A9 runtime |
+| Min ROOS | Min ROOS: TP1-on | 同Min參數，只切TP1 runtime |
+| Min ROOS | Min ROOS: A9-on | 同Min參數，只切A9 runtime |
+| Min-TP1 ROOS | Min-TP1 ROOS: DL-on | TP1-trained參數只配TP1 |
+| Min-A9 ROOS | Min-A9 ROOS: DL-on | A9-trained參數只配A9 |
+
+### Dataset／Label／模型重建需求
+
+- Dataset：不需。
+- Label：不需。
+- TP1／A9模型：不需。
+- A9 forward-OOS scores：缺少或過期時依既有模型自動補匯出。
+- Min-A9 P3：缺少或identity／coverage不符時依config建立或接續。
+
+### 結果與採用判定
+
+本輪只有程式與契約修改，尚未取得新的策略績效，因此不得預先判定A9-aware參數有效或無效。既有C1～C6結果不變。
+
+### 下一步
+
+由`python apps/strategy_compare.py`進入正式選單，先選`[2] 查看設定、工件與預計動作`確認Min-A9 P3為READY或PREPARABLE，再以`[1/Enter] 執行目前比較設定`取得六個合法controlled pairs。
+

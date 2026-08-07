@@ -16023,7 +16023,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             ("min_roos", "all_off", "C3", "C4"),
             ("min_roos", "all_off", "C3", "C8"),
             ("min_dl_tp1_roos", "all_off", "C5", "C6"),
-            ("min_dl_tp1_roos", "all_off", "C5", "C9"),
+            ("min_dl_a9_roos", "all_off", "C9", "C10"),
         ),
         tuple(
             (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
@@ -16032,22 +16032,59 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     a9_source = settings.dl_sources.get("A9")
+    a9_param_source = settings.parameter_sources.get("min_dl_a9_roos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "a9_is_configured_as_second_runtime_dl_source_without_a9_param_training",
+        "a9_has_matched_runtime_and_separate_min_a9_parameter_source",
         True,
         a9_source is not None
         and a9_source.filter_id == "breakout_quality_v1"
         and a9_source.model_architecture == "inception_time_v1"
         and a9_source.experiment_profile == "unique_group_sampling"
         and a9_source.forward_scores_builder is not None
-        and not any(
-            source.trained_with_dl_id == "A9"
-            for source in settings.parameter_sources.values()
-        )
-        and {"C7", "C8", "C9"}.issubset(
+        and a9_param_source is not None
+        and a9_param_source.trained_with_dl_id == "A9"
+        and a9_param_source.builder is not None
+        and a9_param_source.builder.options.get("p3_variant") == "A9"
+        and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
+        and {"C7", "C8", "C9", "C10"}.issubset(
             {arm.arm_id for arm in settings.enabled_arms}
         ),
+    )
+
+    from dataclasses import replace as _replace_strategy_arm
+    mismatched_arms = dict(settings.arms)
+    mismatched_arms["C10"] = _replace_strategy_arm(
+        mismatched_arms["C10"], param_source="min_dl_tp1_roos", dl_id="A9"
+    )
+    try:
+        from core.strategy_comparison import validate_strategy_comparison_settings
+        validate_strategy_comparison_settings(replace(settings, arms=mismatched_arms))
+    except ValueError as exc:
+        mismatched_dl_aware_runtime_rejected = "訓練時相同的DL runtime" in str(exc)
+    else:
+        mismatched_dl_aware_runtime_rejected = False
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "dl_aware_parameters_reject_cross_version_runtime_pairing",
+        True,
+        mismatched_dl_aware_runtime_rejected,
+    )
+
+    expected_display_names = {
+        "C3": "Min ROOS",
+        "C4": "Min ROOS: TP1-on",
+        "C8": "Min ROOS: A9-on",
+        "C9": "Min-A9 ROOS",
+        "C10": "Min-A9 ROOS: DL-on",
+        "C5": "Min-TP1 ROOS",
+        "C6": "Min-TP1 ROOS: DL-on",
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "min_roos_display_names_follow_training_identity_then_runtime_suffix_contract",
+        True,
+        all(settings.arms[arm_id].name == name for arm_id, name in expected_display_names.items()),
     )
 
 
@@ -16272,26 +16309,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )),
     )
 
-    original_c6 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C6"])
+    original_c2 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C2"])
     original_contrasts = {key: dict(value) for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()}
     try:
-        strategy_config.STRATEGY_COMPARE_ARMS["C6"]["enabled"] = False
+        strategy_config.STRATEGY_COMPARE_ARMS["C2"]["enabled"] = False
         for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
-            if contrast.get("left") == "C6" or contrast.get("right") == "C6":
+            if contrast.get("left") == "C2" or contrast.get("right") == "C2":
                 contrast["enabled"] = False
         reduced_settings = strategy_config.get_strategy_comparison_settings()
     finally:
-        strategy_config.STRATEGY_COMPARE_ARMS["C6"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C6"].update(original_c6)
+        strategy_config.STRATEGY_COMPARE_ARMS["C2"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C2"].update(original_c2)
         strategy_config.STRATEGY_COMPARE_CONTRASTS.clear(); strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "individual_dl_arm_and_contrast_switches_are_runtime_effective",
-        ("C1", "C2", "C3", "C4", "C5", "C7", "C8", "C9"),
+        ("C1", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10"),
         tuple(arm.arm_id for arm in reduced_settings.enabled_arms),
     )
 
     disabled_arms_changed = dict(reduced_settings.arms)
-    disabled_arms_changed["C6"] = replace(disabled_arms_changed["C6"], name="disabled definition")
+    disabled_arms_changed["C2"] = replace(disabled_arms_changed["C2"], name="disabled definition")
     enabled_arms_changed = dict(reduced_settings.arms)
     enabled_arms_changed["C1"] = replace(enabled_arms_changed["C1"], name="enabled definition")
     base_fingerprint = strategy_comparison_fingerprint(reduced_settings)
