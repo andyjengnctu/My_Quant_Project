@@ -528,6 +528,10 @@ python -m tools.filters.breakout_quality.strategy_compare --attribution-only
 
 ### Breakout Quality Score 候選排序探索性比較
 
+### 實驗編號／版本 Registry
+
+Breakout Quality 的實驗 ID、namespace、model architecture、DL source、策略 arm、Audit 與參數 stage 統一登錄於 `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`。任何新實驗或新編號都必須先查 Registry；`MR-9A`（模型研究）、`DL-A9`（runtime source）、`SR-C12`（策略使用方式）屬不同 namespace。`MR-10A` 已被歷史 Candidate-conditioned Query 永久占用，不得重用。詳細結果與理由仍記錄於 `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`。
+
 固定 threshold 0.5 hard filter 已由策略 OOS 淘汰；若要測試 9A 的相對排序能力，只使用下列隔離模式：
 
 以 `base_finalist_best` 單一 runtime member 做較純的 Score Ranking ablation：

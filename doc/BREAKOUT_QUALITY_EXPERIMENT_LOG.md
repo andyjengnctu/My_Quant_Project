@@ -4364,4 +4364,78 @@ Persistence以`ticker / signal_date / high_len`作原breakout event identity，�
 
 ### 採用判定與下一步
 
-本輪只標記`IMPLEMENTED`，不得預先判定真實A9是否存在persistence amplification。下一步由`python apps/breakout_quality.py`進入`[2] Audit／診斷`，先`[2] 查看 Audit 設定、工件與預計動作`確認`a9_pass_persistence`為READY，再`[1/Enter] 執行目前 Audit 設定`。只有正式結果顯示false-positive candidate-days／event明顯高於true-positive且candidate-day precision相對unique-event顯著被稀釋，才把candidate-state／daily quality更新列為下一個模型實驗；否則改查其他PASS品質來源，不建立age-based invalidation。
+本輪只標記`IMPLEMENTED`，不得預先判定真實A9是否存在persistence amplification。下一步由`python apps/breakout_quality.py`進入`[2] Audit／診斷`，先`[2] 查看 Audit 設定、工件與預計動作`確認`a9_pass_persistence`為READY，再`[1/Enter] 執行目前 Audit 設定`。只有正式結果顯示false-positive candidate-days／event明顯高於true-positive且candidate-day precision相對unique-event顯著被稀釋，才把candidate-state／daily quality更新列為下一個策略使用方式實驗候選；若未來需要重訓模型，再依Experiment Registry另行配置新的`MR-*`。否則改查其他PASS品質來源，不建立age-based invalidation。
+
+## 2026-08-07 — A9 PASS Persistence正式Audit結果：false-positive persistence amplification成立；下一步改為C13策略使用語意
+
+### 狀態
+
+`RESULT_AVAILABLE / FALSE_PASS_PERSISTENCE_AMPLIFICATION_CONFIRMED / SELECTOR_NOT_PRIMARY_CAUSE / SR-C13_CANDIDATE_DAY_RESCORE_PLANNED`
+
+### 結果來源與固定條件
+
+- 使用者以正式`[2] Audit／診斷`執行`a9_pass_persistence`；來源arm=`SR-C12`、DL=`DL-A9`、runtime=`resource-aware-binary-basket`、threshold=`0.5`。
+- Event identity=`ticker / signal_date / high_len`；Audit只讀A9已判PASS且策略仍屬VALID／orderable的candidate-days、原Event Label與selected trades。
+- Strategy validity／DL quality／Selector allocation三層契約不變；本Audit不建立expiry、不改candidate lifecycle、不改C12、不重播策略、不重訓模型。
+
+### 正式結果
+
+| 指標 | 結果 |
+|---|---:|
+| PASS candidate-days | 51,885 |
+| Unique PASS events | 4,706 |
+| Event Label coverage | 94.35% |
+| Candidate-day Label coverage | 96.40% |
+| Unique-event Label PASS | 65.27% |
+| Candidate-day weighted Label PASS | 53.96% |
+| Candidate-day − Event precision | -11.31pp |
+| Selected known-label PASS | 56.02% |
+| False-positive unique-event share | 34.73% |
+| False-positive candidate-day share | 46.04% |
+| Candidate-day amplification | 1.33x |
+| False-positive selected share | 43.98% |
+| Selected amplification | 1.27x |
+| True PASS days/event | 9.3 |
+| False PASS days/event | 14.9 |
+| False / True persistence | 1.60x |
+
+原Event Label PASS events為`2,898`個、`26,990` candidate-days、平均`9.3 days/event`、max age平均`17.0日`、extended days/event=`8.3`、selected=`121`、selected mean Realized R=`1.43R`。原Event Label REJECT但A9判PASS的false-positive events為`1,542`個、`23,028` candidate-days、平均`14.9 days/event`、max age平均`28.5日`、extended days/event=`14.0`、selected=`95`、selected mean Realized R=`0.24R`。
+
+### 判讀
+
+1. Persistence amplification正式成立：false PASS比true PASS平均多存活`5.6` candidate-days，即約`+60%`；false-positive share由unique-event層`34.73%`放大到candidate-day層`46.04%`，使Label precision由`65.27%`稀釋至`53.96%`，下降`11.31pp`。
+2. C12不是主要放大來源：selected false-positive share=`43.98%`低於candidate-day pool的`46.04%`，selected precision=`56.02%`亦比candidate-day precision高`2.06pp`。因此Resource-aware basket selector略為抑制而非進一步放大false positives；主要結構問題位於`DL-A9` breakout-event單次quality被後續candidate-days重複沿用。
+3. false PASS被選後的mean Realized R=`0.24R`，顯著低於true PASS selected的`1.43R`，差`1.19R`；因此false-positive persistence不只是Label組成差異，亦與實際selected經濟品質一致。
+4. 本結果不得解讀為candidate age本身就是失效條件；candidate validity仍完全由原策略SSOT決定。Persistence只證明「一次性event quality在daily candidate pool的權重會失真」。不建立age cutoff或第二套DL expiry。
+
+### 編號／研究層級更正
+
+- 先前草案將下一步稱為`A10 Candidate-State Quality`是錯誤分類，現已取消。
+- `MR-10A`早已由2026-07-29的Candidate-conditioned Query使用並永久占用；不得重用或以`A10`作模糊別名。
+- 本次要測的是**既有DL-A9在策略中的score refresh timing**，不是模型訓練／architecture／Label升級，因此應進入策略runtime namespace，正式規劃為`SR-C13`。
+- `MR-9A`（模型研究實驗）與`DL-A9`（runtime DL source）為不同namespace；完整定義以`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`為準。
+
+### 下一個策略runtime實驗：SR-C13 A9 Candidate-day Re-score
+
+`SR-C13`保持`SR-C12`「在既有資源契約下最大化PASS使用」的allocation原則，唯一研究變更是：**同一個策略VALID candidate在每個decision day重新用既有DL-A9模型與最新合法盤前snapshot計算quality，而不是整段lifecycle永久沿用原breakout日score。**
+
+固定設計原則：
+
+1. **模型不升級**：沿用同一`DL-A9 = MR-9A / ARCH-inception_time_v1 / PROFILE-unique_group_sampling`checkpoint、權重與threshold `0.5`；不重新訓練、不新建model experiment ID。
+2. **策略validity不變**：normal／continuation／Re-entry／expiry仍由原策略唯一決定；每日A9 REJECT只代表當日quality，不得刪除仍屬策略VALID的candidate。
+3. **盤前無前視**：decision day D 的candidate-day re-score只可使用D盤前合法可知資料；若特徵定義依收盤bar，最晚為D-1 close。
+4. **allocation不變**：沿用`SR-C12` resource-aware basket／最大化PASS資源契約；唯一差異是PASS／REJECT使用「當日重新計算的DL-A9 quality」而非原event靜態quality。
+5. **不新增混合比例**：不加入Min ROOS／DL weight、不加入age cutoff、不調A9 threshold、不依OOS建立score bucket。
+6. **這是runtime distribution-shift實驗**：A9原本由breakout-event snapshot訓練，直接套到candidate-day state可能失效；是否能降低persistence amplification正是SR-C13要驗證的策略使用問題。若SR-C13顯示既有A9無法泛化到candidate-day snapshot，之後才另立真正的model-training experiment，並依Registry重新分配新的`MR-*` ID，不能預先占用或重用`MR-10A`。
+
+### Dataset／Label／模型重建需求
+
+- Dataset／Label：本階段不重建、不relabel；SR-C13不進行模型訓練。
+- A9模型／threshold：不重訓、不調整。
+- Candidate-day inference artifact：需要新增或擴充正式推論工件，使每個策略VALID candidate decision day可取得合法snapshot下的DL-A9 score；它是推論／runtime工件，不是新Dataset Label或新model version。
+- Strategy compare：待SR-C13實作後，以`SR-C12`為主要controlled comparator，另保留`SR-C3`作絕對Min ROOS基準；不得把SR-C11／SR-C12混合比例變成新參數。
+
+### 採用判定與下一步
+
+下一步先實作`SR-C13` candidate-day re-score runtime與其必要推論工件，不修改A9 training pipeline。核心問題是：在固定C12最大化PASS資源契約下，**只改score refresh timing**是否能降低candidate-day false-positive persistence amplification，並把更多PASS使用轉化為更好的selection R／EV／RoMD，而不重新出現資金利用率下降。若SR-C13失敗，再根據結果判斷是否需要真正的candidate-state模型訓練；該模型屆時另行取得新的`MR-*` ID。
+
