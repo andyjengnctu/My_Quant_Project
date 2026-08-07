@@ -32,6 +32,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
@@ -178,7 +179,8 @@ def _parse_args(argv=None):
             "score-ranking排序契約：score=原始Score；capital-adjusted-score="
             "Score×正式預估部署率；capital-bucket-then-score="
             "每日部署率三分桶後桶內按Score；resource-aware-binary="
-            "只在盤前cash先成瓶頸時，以Binary PASS改善組合且維持Min ROOS預留資金。"
+            "只在盤前cash先成瓶頸時，以Binary PASS做first-improvement；"
+            "resource-aware-binary-basket=相同資源Gate下每輪評估全部可行PASS promotion並採用最佳改善。"
         ),
     )
     parser.add_argument(
@@ -3116,9 +3118,11 @@ def run_comparison(
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED
                 else ["resource_bottleneck_gate", "binary_pass_promotions", "existing_buy_sort"]
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
+                else ["resource_bottleneck_gate", "best_improvement_pass_basket", "existing_buy_sort"]
+                if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
                 else ["capital_deployment_bucket_desc", "breakout_quality_score_desc"]
             )
-            + (["ticker_deterministic"] if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY else ["existing_buy_sort", "ticker_deterministic"])
+            + (["ticker_deterministic"] if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET} else ["existing_buy_sort", "ticker_deterministic"])
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
         ),
         "capital_aware_ranking_contract": (
@@ -3126,14 +3130,21 @@ def run_comparison(
                 "resource_gate": "canonical_min_roos_exact_cash_cap_baseline",
                 "dl_intervention": "only_when_baseline_stops_before_free_slots_with_unselected_candidates",
                 "binary_objective": "increase_reserved_capital_assigned_to_pass_candidates",
-                "resource_feasibility": "cash remains the binding pre-market resource after every accepted overlay",
-                "selection_objective": "increase actually reservable capital assigned to Binary PASS candidates",
+                "resource_feasibility": "cash remains the binding pre-market resource after the selected basket",
+                "selection_objective": (
+                    "best_improvement_pass_reserved_then_pass_count_then_min_roos_rank"
+                    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+                    else "first_improving_pass_reserved_promotion"
+                ),
                 "fallback": "canonical_min_roos_order",
                 "future_target_used": False,
                 "additional_numeric_thresholds": [],
             }
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING
-            and ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
+            and ranking_policy in {
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+            }
             else {
                 "projected_capital_fraction_source": "canonical_pretrade_proj_cost_div_sizing_capital",
                 "deployment_rate": "min(1, projected_capital_fraction / max_position_cap_pct)",

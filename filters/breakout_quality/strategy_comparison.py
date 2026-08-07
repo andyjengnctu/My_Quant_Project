@@ -15,6 +15,7 @@ from core.runtime_utils import get_taipei_now
 from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
@@ -38,6 +39,7 @@ from filters.breakout_quality.strategy_compare_engine import (
 )
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
 from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
@@ -263,10 +265,17 @@ def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
             "yearly_key": "quality_filter_return_pct",
             "active_trades_filename": "quality_filter_trades.csv",
         }
-    if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY:
+    if mode in {
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
+    }:
         return {
             "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
-            "ranking_policy": BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+            "ranking_policy": (
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
+            ),
             "active_key": "score_ranking",
             "yearly_key": "score_ranking_return_pct",
             "active_trades_filename": "score_ranking_trades.csv",
@@ -606,7 +615,10 @@ def _resource_aware_table(
 ) -> str:
     rows = []
     for arm in settings.enabled_arms:
-        if arm.dl_runtime_mode != STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY:
+        if arm.dl_runtime_mode not in {
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
+        }:
             continue
         payload = scenarios[arm.arm_id]
         rows.append((

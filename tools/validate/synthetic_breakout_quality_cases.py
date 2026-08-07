@@ -16019,8 +16019,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "enabled_arms_build_canonical_execution_pairs_before_replay",
         (
-            ("min_roos", "all_off", "C3", "C8"),
             ("min_roos", "all_off", "C3", "C11"),
+            ("min_roos", "all_off", "C3", "C12"),
         ),
         tuple(
             (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
@@ -16044,8 +16044,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11"}.issubset(set(settings.arms))
-        and {arm.arm_id for arm in settings.enabled_arms} == {"C3", "C8", "C11"},
+        and {"C7", "C8", "C9", "C10", "C11", "C12"}.issubset(set(settings.arms))
+        and {arm.arm_id for arm in settings.enabled_arms} == {"C3", "C11", "C12"},
     )
 
     from dataclasses import replace as _replace_strategy_arm
@@ -16076,6 +16076,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C5": "Min-TP1 ROOS",
         "C6": "Min-TP1 ROOS: DL-on",
         "C11": "Min ROOS: A9 resource-aware",
+        "C12": "Min ROOS: A9 resource-aware basket",
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -16168,6 +16169,92 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and slot_diag["mode"] == "capital-utilization"
         and not slot_diag["changed"]
         and [row["ticker"] for row in slot_order] == ["R1", "R2", "P1"],
+    )
+
+
+    def _resource_candidate_fixed(ticker, price, qty, score, policy):
+        cost_milli = build_buy_ledger_from_price(price, qty, resource_params)["net_buy_total_milli"]
+        return {
+            "ticker": ticker,
+            "type": "normal",
+            "limit_px": price,
+            "init_sl": price * 0.95,
+            "init_trail": price * 0.95,
+            "target_price": price * 1.10,
+            "entry_atr": price * 0.05,
+            "qty": qty,
+            "max_qty": qty,
+            "proj_cost_milli": cost_milli,
+            "proj_cost": cost_milli / 1000.0,
+            "is_orderable": True,
+            "params_obj": resource_params,
+            "sizing_capital": 2_000_000.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": policy,
+            "breakout_quality_score": score,
+            "breakout_quality_rank": {"available": True, "score": score},
+        }
+
+    basket_seed = (
+        ("R1", 300.0, 293, 0.20),
+        ("R2", 1000.0, 281, 0.30),
+        ("P1", 1000.0, 147, 0.70),
+        ("P2", 300.0, 289, 0.71),
+        ("P3", 300.0, 239, 0.72),
+        ("P4", 1000.0, 351, 0.73),
+        ("P5", 300.0, 396, 0.74),
+        ("P6", 1000.0, 176, 0.75),
+    )
+    greedy_rows = [
+        _resource_candidate_fixed(*row, "resource-aware-binary")
+        for row in basket_seed
+    ]
+    basket_rows = [
+        _resource_candidate_fixed(*row, "resource-aware-binary-basket")
+        for row in basket_seed
+    ]
+    greedy_order, greedy_diag = reorder_candidates_for_resource_aware_binary(
+        greedy_rows,
+        available_cash=548_426.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=6,
+        max_positions=10,
+        params=resource_params,
+    )
+    basket_order, basket_diag = reorder_candidates_for_resource_aware_binary(
+        basket_rows,
+        available_cash=548_426.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=6,
+        max_positions=10,
+        params=resource_params,
+    )
+    greedy_selected = _simulate_reserved_candidate_order(
+        greedy_order,
+        available_cash=548_426.0,
+        sizing_equity=2_000_000.0,
+        free_slots=4,
+        params=resource_params,
+    )
+    basket_selected = _simulate_reserved_candidate_order(
+        basket_order,
+        available_cash=548_426.0,
+        sizing_equity=2_000_000.0,
+        free_slots=4,
+        params=resource_params,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "resource_aware_best_improvement_evaluates_all_current_promotions_and_beats_first_improvement_case",
+        True,
+        greedy_diag["selector"] == "greedy-first-improvement"
+        and basket_diag["selector"] == "best-improvement-basket"
+        and greedy_diag["mode"] == basket_diag["mode"] == "dl-selection"
+        and basket_diag["basket_search_states"] > 0
+        and basket_selected["cash_is_binding"]
+        and basket_selected["pass_reserved_cost_milli"] > greedy_selected["pass_reserved_cost_milli"]
+        and [row["ticker"] for row in greedy_selected["selected_rows"]] == ["P1", "P2", "P4"]
+        and [row["ticker"] for row in basket_selected["selected_rows"]] == ["P2", "P4", "P5"],
     )
 
     same_param_direct_delta = strategy_comparison_module._same_param_direct_selection_delta(
@@ -16439,26 +16526,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )),
     )
 
-    original_c11 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C11"])
+    original_c12 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C12"])
     original_contrasts = {key: dict(value) for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()}
     try:
-        strategy_config.STRATEGY_COMPARE_ARMS["C11"]["enabled"] = False
+        strategy_config.STRATEGY_COMPARE_ARMS["C12"]["enabled"] = False
         for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
-            if contrast.get("left") == "C11" or contrast.get("right") == "C11":
+            if contrast.get("left") == "C12" or contrast.get("right") == "C12":
                 contrast["enabled"] = False
         reduced_settings = strategy_config.get_strategy_comparison_settings()
     finally:
-        strategy_config.STRATEGY_COMPARE_ARMS["C11"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C11"].update(original_c11)
+        strategy_config.STRATEGY_COMPARE_ARMS["C12"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C12"].update(original_c12)
         strategy_config.STRATEGY_COMPARE_CONTRASTS.clear(); strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "individual_dl_arm_and_contrast_switches_are_runtime_effective",
-        ("C3", "C8"),
+        ("C3", "C11"),
         tuple(arm.arm_id for arm in reduced_settings.enabled_arms),
     )
 
     disabled_arms_changed = dict(reduced_settings.arms)
-    disabled_arms_changed["C11"] = replace(disabled_arms_changed["C11"], name="disabled definition")
+    disabled_arms_changed["C12"] = replace(disabled_arms_changed["C12"], name="disabled definition")
     enabled_arms_changed = dict(reduced_settings.arms)
     enabled_arms_changed["C3"] = replace(enabled_arms_changed["C3"], name="enabled definition")
     base_fingerprint = strategy_comparison_fingerprint(reduced_settings)

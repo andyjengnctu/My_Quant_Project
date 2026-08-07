@@ -4110,3 +4110,67 @@ C8相對C3的交易數由336增加至374，但平均曝險由92.13%降至78.24%�
 ### 下一步
 
 `python apps/strategy_compare.py` → `[2] 查看設定、工件與預計動作` → `[1/Enter] 執行目前比較設定`，取得C3／C8／C11固定forward-OOS結果。
+
+## 2026-08-07 — C11 Resource-aware正式結果與C12 best-improvement basket實作
+
+### 狀態
+
+`C11_ACCEPTED_AS_DL_RUNTIME_RESEARCH_BASELINE / LOW_EXPOSURE_PROBLEM_RESOLVED / A9_SELECTION_SIGNAL_POSITIVE / C12_IMPLEMENTED_RESULT_PENDING`
+
+### C11正式結果基準
+
+- 使用者正式輸出期間：`2021-01-01～2026-03-02`
+- Dataset：`full`
+- Param policy：`base-finalist-best`
+- Max positions：10
+- Rotation：off
+- Config fingerprint：`bdf346da83e7`
+- 固定模型：A9 `breakout_quality_v1 / inception_time_v1 / unique_group_sampling`；不重訓、不調threshold。
+- 固定策略參數：`C3 = Min ROOS`，同一P2 rolling active params；C11只改盤前resource-aware runtime。
+
+### C11主要結果
+
+| Arm | 報酬 | MDD | RoMD | 年化 | EV | 曝險 | 交易 | 同參數DL選擇R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| C3 Min ROOS | 166.69% | 15.41% | 10.82 | 20.95% | 0.73R | 92.13% | 336 | 0.00R |
+| C8 Min ROOS: A9-on hard filter | 142.70% | 21.75% | 6.56 | 18.76% | 0.64R | 78.24% | 374 | -6.12R |
+| C11 Min ROOS: A9 resource-aware | 184.69% | 15.67% | 11.79 | 22.49% | 0.87R | 92.26% | 373 | +79.95R |
+
+- `C11−C3 = +18.01pp報酬 / +0.26pp MDD / +0.97 RoMD / +0.14R EV / +0.13pp曝險 / +79.95R同參數DL選擇R`。
+- C11把C8的`-13.90pp`曝險缺口完全消除；平均曝險由C3 `92.13%`微升至`92.26%`，證明A9先前低資金運用的主要問題是hard-filter部署，而不是必然需要預測成交率或持有期。
+- Resource-aware盤前診斷：`dl-selection=131日`、`capital-utilization=563日`、`實際改單=92日`、`新增PASS單=111`、`PASS預留資金增量=16,324,574`、`總預留資金增量=-44,794`。A9幾乎不改變總盤前資金配置，就把更多資金重新分配到PASS候選。
+- 年度C11為`2021 18.80% / 2022 5.00% / 2023 83.87% / 2024 18.37% / 2025 -3.73% / 2026 8.92%`；2021與2025低於C3，最差完整年度由C3 `0.84%`變為`-3.73%`，因此C11仍是研究基準而非正式部署晉升。
+- 只讀集中度診斷：排除2023後逐年鏈結約為C3 `47.98%`、C11 `54.83%`，C11仍約領先`6.85pp`；改善並非只由2023單一年份造成。
+
+### C12唯一變更
+
+C11在`dl-selection` mode內依Min ROOS原順位掃描PASS候選，遇到第一個能提高PASS reserved capital的promotion就立即接受，因此結果可能受first-improvement路徑影響。C12新增`resource-aware-binary-basket` runtime，但保持以下全部不變：
+
+- Min ROOS cash-binding Gate不變；slot先binding時DL完全不介入。
+- A9模型、threshold、score日期語意、normal／continuation／Re-entry lifecycle不變。
+- exact accounting、cash-capped sizing、盤前鎖定、max positions、rotation與Min ROOS初始buy-sort不變。
+- 不新增距限價Threshold、利用率百分比、DL權重、Future Target、fill prediction或holding prediction。
+
+C12只把`dl-selection`內的promotion選擇由first-improvement改為best-improvement：每一輪對所有尚未promotion的A9 PASS候選各自做完整exact cash-cap trial，只保留仍為cash-binding且使`PASS reserved capital`增加，或在PASS reserved相同時使PASS數增加的trial；當輪選擇PASS reserved最高、其次PASS數較多、再依Min ROOS順位決勝的trial，接受後重新評估下一輪，直到沒有改善。
+
+精確窮舉所有PASS子集合雖可作理論global search，但候選數與free slots增加時呈指數複雜度，與專案「架構調整不得明顯犧牲效率」原則衝突，因此不納入正式runtime。C12是零新增Threshold、每輪全候選best-improvement的可執行改進，不宣稱數學全域最優。
+
+### 新比較設定
+
+只啟用：
+
+| Arm | Runtime | 目的 |
+|---|---|---|
+| C3 | Min ROOS | 同參數資金利用基準 |
+| C11 | A9 resource-aware first-improvement | 已證明有效的新DL runtime基準 |
+| C12 | A9 resource-aware best-improvement basket | 驗證去除first-candidate順序偏誤是否仍有額外價值 |
+
+啟用contrasts固定為`C11-C3`、`C12-C3`、`C12-C11`；C8 hard-filter停用，不需重跑已結案失敗對照。
+
+### Dataset／Label／模型重建需求
+
+Dataset不重建、Label不重建、A9不重訓、threshold不調整、forward-OOS scores重用、Min ROOS P2重用。C12只是策略runtime排序變更。
+
+### 採用判定與下一步
+
+C11結果已接受為新的DL runtime研究基準；C12尚未取得正式forward-OOS結果，只標記`IMPLEMENTED`。下一步由`python apps/strategy_compare.py`進入選單，先`[2] 查看設定、工件與預計動作`確認只含C3／C11／C12，再`[1/Enter] 執行目前比較設定`。C12只有在相對C11維持接近相同曝險、且RoMD／EV／同參數DL選擇R至少一項有實質增量且年度穩定性未明顯惡化時才保留；否則維持較簡單的C11。

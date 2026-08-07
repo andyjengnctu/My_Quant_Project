@@ -269,7 +269,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "hard-filter",
     },
     "C8": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: A9-on",
         "description": "Min ROOS參數，runtime開A9",
         "param_source": "min_roos",
@@ -301,12 +301,22 @@ STRATEGY_COMPARE_ARMS = {
     "C11": {
         "enabled": True,
         "name": "Min ROOS: A9 resource-aware",
-        "description": "Min ROOS參數；A9只在盤前cash先成瓶頸時改善可預留PASS組合，不作eligibility hard reject",
+        "description": "Min ROOS參數；A9只在盤前cash先成瓶頸時以first-improvement改善PASS預留資金",
         "param_source": "min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "A9",
         "dl_runtime_mode": "resource-aware-binary",
+    },
+    "C12": {
+        "enabled": True,
+        "name": "Min ROOS: A9 resource-aware basket",
+        "description": "Min ROOS參數；沿用相同cash-binding Gate，每輪評估全部可行PASS promotion並採用最佳改善",
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "A9",
+        "dl_runtime_mode": "resource-aware-binary-basket",
     },
 }
 
@@ -315,9 +325,11 @@ STRATEGY_COMPARE_ARMS = {
 # =============================================================================
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C8-C3": {"enabled": True, "left": "C8", "right": "C3", "description": "Min ROOS下A9 hard-filter效果（既有對照重現）"},
-    "C11-C3": {"enabled": True, "left": "C11", "right": "C3", "description": "Min ROOS下A9 resource-aware效果"},
-    "C11-C8": {"enabled": True, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
+    "C8-C3": {"enabled": False, "left": "C8", "right": "C3", "description": "Min ROOS下A9 hard-filter效果（既有對照重現）"},
+    "C11-C3": {"enabled": True, "left": "C11", "right": "C3", "description": "Min ROOS下A9 resource-aware first-improvement效果"},
+    "C12-C3": {"enabled": True, "left": "C12", "right": "C3", "description": "Min ROOS下A9 resource-aware best-improvement效果"},
+    "C12-C11": {"enabled": True, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
+    "C11-C8": {"enabled": False, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
     "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},
     "C7-C1": {"enabled": False, "left": "C7", "right": "C1", "description": "Full ROOS下A9 runtime效果"},
     "C4-C3": {"enabled": False, "left": "C4", "right": "C3", "description": "Min ROOS下TP1 runtime效果"},

@@ -1,6 +1,7 @@
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     resolve_breakout_quality_ranking_policy,
 )
 from core.exact_accounting import (
@@ -182,45 +183,27 @@ def _simulate_reserved_candidate_order(
     }
 
 
-def _resource_aware_binary_enabled(candidate_rows):
+def _resource_aware_binary_policy(candidate_rows):
     rows = list(candidate_rows or [])
     if not rows:
-        return False
+        return None
     flags = {bool(row.get('use_breakout_quality_ranking', False)) for row in rows}
     if flags != {True}:
-        return False
-    return (
-        resolve_breakout_quality_ranking_policy(rows)
-        == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
-    )
+        return None
+    policy = resolve_breakout_quality_ranking_policy(rows)
+    if policy not in {
+        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
+    }:
+        return None
+    return policy
 
 
-def reorder_candidates_for_resource_aware_binary(
-    orderable_candidates_today,
-    *,
-    available_cash,
-    sizing_equity,
-    pre_market_occupied,
-    max_positions,
-    params,
-):
-    """Overlay Binary DL only when cash is the current pre-market bottleneck.
-
-    The incoming order is the canonical Min ROOS buy-sort.  We first simulate
-    that order with the same cash-capped entry-plan builder used by execution.
-    DL is allowed to promote an otherwise unselected PASS candidate only when
-    the baseline stops before all free slots are consumed and there are still
-    unselected candidates.  Every accepted promotion must keep cash as the
-    binding pre-market resource and increase the amount of actually reservable
-    capital assigned to PASS candidates.  No future bar data or tunable
-    utilization threshold is used.
-    """
-
-    rows = list(orderable_candidates_today or [])
-    free_slots = max(0, int(max_positions) - int(pre_market_occupied))
-    default_diag = {
+def _resource_aware_default_diag(rows, free_slots, *, selector):
+    return {
         'enabled': False,
         'mode': 'inactive',
+        'selector': str(selector),
         'free_slots': int(free_slots),
         'candidate_count': int(len(rows)),
         'baseline_selected_count': 0,
@@ -233,35 +216,52 @@ def reorder_candidates_for_resource_aware_binary(
         'pass_reserved_cost_milli': 0,
         'promoted_pass_count': 0,
         'changed': False,
+        'basket_search_states': 0,
+        'basket_search_pruned': 0,
+        'basket_feasible_count': 0,
     }
-    if free_slots <= 0 or not rows or not _resource_aware_binary_enabled(rows):
-        return rows, default_diag
 
-    baseline = _simulate_reserved_candidate_order(
-        rows,
-        available_cash=available_cash,
-        sizing_equity=sizing_equity,
-        free_slots=free_slots,
-        params=params,
-    )
-    diag = {
+
+def _resource_aware_diag_from_result(default_diag, baseline, selected, *, changed, promoted_pass_count, selector):
+    return {
         **default_diag,
         'enabled': True,
+        'selector': str(selector),
         'baseline_selected_count': int(baseline['selected_count']),
         'baseline_pass_count': int(baseline['pass_count']),
         'baseline_reserved_cost_milli': int(baseline['reserved_cost_milli']),
         'baseline_pass_reserved_cost_milli': int(baseline['pass_reserved_cost_milli']),
-        'selected_count': int(baseline['selected_count']),
-        'selected_pass_count': int(baseline['pass_count']),
-        'reserved_cost_milli': int(baseline['reserved_cost_milli']),
-        'pass_reserved_cost_milli': int(baseline['pass_reserved_cost_milli']),
+        'selected_count': int(selected['selected_count']),
+        'selected_pass_count': int(selected['pass_count']),
+        'reserved_cost_milli': int(selected['reserved_cost_milli']),
+        'pass_reserved_cost_milli': int(selected['pass_reserved_cost_milli']),
+        'promoted_pass_count': int(max(0, promoted_pass_count)),
+        'changed': bool(changed),
     }
+
+
+def _reorder_resource_aware_binary_greedy(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    diag = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        baseline,
+        changed=False,
+        promoted_pass_count=0,
+        selector='greedy-first-improvement',
+    )
     if not bool(baseline['cash_is_binding']):
         diag['mode'] = 'capital-utilization'
-        return rows, diag
+        return list(rows), diag
 
-    # Baseline used less than all free slots while candidates remain: cash is
-    # the binding pre-market resource under the canonical Min ROOS order.
     diag['mode'] = 'dl-selection'
     base_rank = {id(row): idx for idx, row in enumerate(rows)}
     promoted_ids = set()
@@ -307,15 +307,196 @@ def reorder_candidates_for_resource_aware_binary(
     if not bool(current['cash_is_binding']):
         raise RuntimeError('resource-aware Binary違反盤前cash-bottleneck資源契約')
 
+    diag.update(_resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        current,
+        changed=bool([id(row) for row in current_order] != [id(row) for row in rows]),
+        promoted_pass_count=int(current['pass_count'] - baseline['pass_count']),
+        selector='greedy-first-improvement',
+    ))
+    diag['mode'] = 'dl-selection'
+    return current_order, diag
+
+
+def _resource_aware_trial_rank_key(trial_order, trial_result, base_rank):
+    promoted_pass_ranks = tuple(
+        base_rank[id(row)]
+        for row in trial_result['selected_rows']
+        if _candidate_binary_pass(row)
+    )
+    return (
+        -int(trial_result['pass_reserved_cost_milli']),
+        -int(trial_result['pass_count']),
+        promoted_pass_ranks,
+        tuple(base_rank[id(row)] for row in trial_order),
+    )
+
+
+def _reorder_resource_aware_binary_basket(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """Use best-improvement PASS promotion under the C11 resource contract.
+
+    C11 accepts the first improving PASS promotion in Min ROOS order.  C12
+    evaluates every not-yet-promoted PASS candidate at each step, chooses the
+    best exact cash-capped improvement, then repeats from that new basket.  It
+    removes first-candidate path dependence without an exponential exhaustive
+    subset search or any additional numeric threshold.
+    """
+
+    diag = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        baseline,
+        changed=False,
+        promoted_pass_count=0,
+        selector='best-improvement-basket',
+    )
+    if not bool(baseline['cash_is_binding']):
+        diag['mode'] = 'capital-utilization'
+        return list(rows), diag
+
+    diag['mode'] = 'dl-selection'
+    base_rank = {id(row): idx for idx, row in enumerate(rows)}
+    promoted_ids = set()
+    current_order = list(rows)
+    current = baseline
+    evaluated_trials = 0
+    feasible_trials = 0
+
+    while True:
+        best_trial = None
+        best_key = None
+        for candidate in rows:
+            candidate_id = id(candidate)
+            if candidate_id in promoted_ids or not _candidate_binary_pass(candidate):
+                continue
+            trial_promoted = set(promoted_ids)
+            trial_promoted.add(candidate_id)
+            trial_order = sorted(
+                rows,
+                key=lambda row: (
+                    0 if id(row) in trial_promoted else 1,
+                    base_rank[id(row)],
+                ),
+            )
+            if [id(row) for row in trial_order] == [id(row) for row in current_order]:
+                continue
+            evaluated_trials += 1
+            trial = _simulate_reserved_candidate_order(
+                trial_order,
+                available_cash=available_cash,
+                sizing_equity=sizing_equity,
+                free_slots=free_slots,
+                params=params,
+            )
+            if not bool(trial['cash_is_binding']):
+                continue
+            feasible_trials += 1
+            current_pass_reserved = int(current['pass_reserved_cost_milli'])
+            trial_pass_reserved = int(trial['pass_reserved_cost_milli'])
+            current_pass_count = int(current['pass_count'])
+            trial_pass_count = int(trial['pass_count'])
+            if trial_pass_reserved < current_pass_reserved:
+                continue
+            if (
+                trial_pass_reserved == current_pass_reserved
+                and trial_pass_count <= current_pass_count
+            ):
+                continue
+            trial_key = _resource_aware_trial_rank_key(trial_order, trial, base_rank)
+            if best_key is None or trial_key < best_key:
+                best_key = trial_key
+                best_trial = (trial_promoted, trial_order, trial)
+
+        if best_trial is None:
+            break
+        promoted_ids, current_order, current = best_trial
+
+    if not bool(current['cash_is_binding']):
+        raise RuntimeError('resource-aware Binary basket違反盤前cash-bottleneck資源契約')
+
+    diag.update(_resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        current,
+        changed=bool([id(row) for row in current_order] != [id(row) for row in rows]),
+        promoted_pass_count=int(current['pass_count'] - baseline['pass_count']),
+        selector='best-improvement-basket',
+    ))
     diag.update({
-        'selected_count': int(current['selected_count']),
-        'selected_pass_count': int(current['pass_count']),
-        'reserved_cost_milli': int(current['reserved_cost_milli']),
-        'pass_reserved_cost_milli': int(current['pass_reserved_cost_milli']),
-        'promoted_pass_count': int(max(0, current['pass_count'] - baseline['pass_count'])),
-        'changed': bool([id(row) for row in current_order] != [id(row) for row in rows]),
+        'mode': 'dl-selection',
+        'basket_search_states': int(evaluated_trials),
+        'basket_search_pruned': 0,
+        'basket_feasible_count': int(feasible_trials),
     })
     return current_order, diag
+
+def reorder_candidates_for_resource_aware_binary(
+    orderable_candidates_today,
+    *,
+    available_cash,
+    sizing_equity,
+    pre_market_occupied,
+    max_positions,
+    params,
+):
+    """Apply the configured resource-aware Binary selector before reservation.
+
+    Both selectors preserve the complete Min ROOS candidate lifecycle and first
+    establish the same exact cash-capped Min ROOS baseline.  C11 keeps the
+    historical first-improvement promotion rule.  C12 evaluates every feasible next PASS promotion at each step, accepts the
+    best exact cash-capped improvement, and repeats under the same resource
+    contract.  Neither selector reads
+    future bars or introduces a numeric utilization threshold.
+    """
+
+    rows = list(orderable_candidates_today or [])
+    free_slots = max(0, int(max_positions) - int(pre_market_occupied))
+    policy = _resource_aware_binary_policy(rows)
+    selector = (
+        'best-improvement-basket'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+        else 'greedy-first-improvement'
+    )
+    default_diag = _resource_aware_default_diag(rows, free_slots, selector=selector)
+    if free_slots <= 0 or not rows or policy is None:
+        return rows, default_diag
+
+    baseline = _simulate_reserved_candidate_order(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+    )
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET:
+        return _reorder_resource_aware_binary_basket(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+        )
+    return _reorder_resource_aware_binary_greedy(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+    )
 
 def execute_reserved_entries_for_day(
     portfolio,

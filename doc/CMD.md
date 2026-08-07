@@ -214,7 +214,7 @@ python apps/strategy_compare.py
 
 先選`[2] 查看設定、工件與預計動作`，再選`[1/Enter] 執行目前比較設定`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
 
-目前DL研究聚焦`C3 Min ROOS`、`C8 Min ROOS: A9-on`與`C11 Min ROOS: A9 resource-aware`。C11不重新訓練A9，也不新增資金利用Threshold：先以Min ROOS原順序和正式cash-capped sizing判斷盤前binding resource；position slots先成瓶頸時DL不介入，只有cash在free slots尚未用滿前先成瓶頸時，才允許A9把未選PASS候選提前，且每次改善都必須維持cash-binding並增加實際可預留在PASS候選上的資金。
+目前DL研究聚焦`C3 Min ROOS`、`C11 Min ROOS: A9 resource-aware`與`C12 Min ROOS: A9 resource-aware basket`。C11／C12都不重新訓練A9，也不新增資金利用Threshold：先以Min ROOS原順序和正式cash-capped sizing判斷盤前binding resource；position slots先成瓶頸時DL不介入，只有cash在free slots尚未用滿前先成瓶頸時才允許A9介入。C11採first-improvement；C12每輪評估全部可行PASS promotion後採用當輪最佳改善，再重算下一輪。正式比較設定只重跑C3／C11／C12，舊C8 hard-filter結果已結案而停用。
 
 舊score-ranking研究工具仍可直接執行`python -m tools.filters.breakout_quality.strategy_compare --help`，但不屬於正式比較App。
 
