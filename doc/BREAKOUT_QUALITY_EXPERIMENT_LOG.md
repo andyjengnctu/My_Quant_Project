@@ -4228,3 +4228,30 @@ Resource-aware盤前診斷：C11為`DL選股131日 / 資金利用優先563日 / 
 ### 下一步
 
 由`python apps/breakout_quality.py`進入`[2] Audit／診斷`，先`[2] 查看 Audit 設定、工件與預計動作`，確認`a9_pass_quality`來源READY，再`[1/Enter] 執行目前 Audit 設定`。依正式Audit結果判斷PASS品質改善方向；在結果前不新增candidate-day失效規則、不新增score threshold或排序混合權重。
+
+## 2026-08-07 — Audit framework formal double-check例外契約修正
+
+### 狀態
+
+`AUDIT_FRAMEWORK_FORMAL_BLOCKER_FIXED / RESULT_PENDING`
+
+### Formal bundle根因
+
+使用者在`test-branch-1_20260807_205701_5d16129.zip`執行正式suite後，quick gate／chain checks／ml smoke通過；consistency唯一FAIL為`META_SPECIFIC_PASS_ONLY_EXCEPTION_TRACEABILITY_CONTRACT`，指出`tools/filters/breakout_quality/audit_pass_quality.py`的`_json_native()`使用`except (TypeError, ValueError): pass`。meta quality的`coverage_synthetic_suite_runs_successfully`亦僅因同一synthetic FAIL連帶失敗；coverage本身不是不足。
+
+### 唯一修正
+
+`_json_native()`在`pd.isna(value)`無法判定特殊物件時，明確`return value`，保留原本「無法判空值就交給後續序列化」的control-flow語意，不再使用pass-only specific exception handler。Audit資料來源、PASS判定、candidate validity／DL quality／allocation契約、分組、Label／Realized R口徑、strategy runtime與模型全部不變。
+
+### Dataset／Label／模型重建需求
+
+- Dataset：不重建。
+- Label：不重建。
+- A9模型／threshold：不修改、不重訓。
+- Strategy replay：不重跑。
+- Audit真實資料結果：仍為`RESULT_PENDING`。
+
+### 下一步
+
+套用修正後以本地正式`apps/test_suite.py`做double check；預期consistency的specific pass-only exception synthetic與meta quality的coverage synthetic-run gate恢復PASS。之後才執行`[2] Audit／診斷`取得A9 PASS Quality正式結果。
+

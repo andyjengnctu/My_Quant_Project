@@ -45,7 +45,7 @@ def _json_native(value: Any) -> Any:
         if pd.isna(value):
             return None
     except (TypeError, ValueError):
-        pass
+        return value
     return value
 
 
