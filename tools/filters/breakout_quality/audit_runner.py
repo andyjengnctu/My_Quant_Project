@@ -13,6 +13,10 @@ from filters.breakout_quality.console_report import (
     render_table,
     render_title,
 )
+from tools.filters.breakout_quality.audit_pass_persistence import (
+    collect_pass_persistence_status,
+    run_pass_persistence_audit,
+)
 from tools.filters.breakout_quality.audit_pass_quality import (
     collect_pass_quality_status,
     run_pass_quality_audit,
@@ -25,6 +29,8 @@ MODULE_ID = "breakout_quality"
 def _status_for_definition(definition, *, project_root: Path) -> dict[str, Any]:
     if definition.audit_type == "pass_quality":
         return collect_pass_quality_status(definition, project_root=project_root)
+    if definition.audit_type == "pass_persistence":
+        return collect_pass_persistence_status(definition, project_root=project_root)
     raise ValueError(f"不支援的Breakout Quality audit type: {definition.audit_type}")
 
 
@@ -118,6 +124,10 @@ def run_enabled_audits(
     for definition in definitions:
         if definition.audit_type == "pass_quality":
             outputs[definition.audit_id] = run_pass_quality_audit(
+                definition, project_root=root, quiet=quiet
+            )
+        elif definition.audit_type == "pass_persistence":
+            outputs[definition.audit_id] = run_pass_persistence_audit(
                 definition, project_root=root, quiet=quiet
             )
         else:

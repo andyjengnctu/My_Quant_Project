@@ -49,6 +49,11 @@ def _json_native(value: Any) -> Any:
     return value
 
 
+
+def json_native_audit_value(value: Any) -> Any:
+    """Return JSON-safe native values shared by formal Audit outputs."""
+    return _json_native(value)
+
 def _read_json(path: Path, *, project_root: Path = PROJECT_ROOT) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(
@@ -334,6 +339,41 @@ def _attach_label_quality(pass_candidates: pd.DataFrame, path: Path) -> pd.DataF
     return out
 
 
+
+def prepare_pass_candidate_audit_frame(
+    definition: AuditDefinition,
+    *,
+    project_root: Path = PROJECT_ROOT,
+) -> tuple[dict[str, Path | str | float], float, pd.DataFrame, pd.DataFrame]:
+    """Load one formal strategy-compare arm and enrich its DL PASS candidate-days.
+
+    This is the shared read-only source path for PASS quality/persistence audits.
+    It never reruns strategy, rebuilds labels, changes candidate validity, or mutates runtime.
+    """
+    root = Path(project_root).resolve()
+    status = collect_pass_quality_status(definition, project_root=root)
+    if status["status"] != "READY":
+        raise RuntimeError(status["reason"])
+    paths = _source_paths(root=root, definition=definition)
+    threshold = float(paths["threshold"])
+    orderable = _load_orderable(Path(paths["orderable"]))
+    pass_candidates = orderable[
+        orderable["breakout_quality_score"] >= threshold
+    ].copy()
+    if pass_candidates.empty:
+        raise RuntimeError("Audit來源沒有任何DL PASS orderable candidates")
+    pass_candidates = _mark_selected(pass_candidates, Path(paths["selected"]))
+    if bool(definition.outcomes.get("realized_r", False)):
+        pass_candidates = _attach_realized_r(pass_candidates, Path(paths["trades"]))
+    else:
+        pass_candidates["realized_r"] = np.nan
+    if bool(definition.outcomes.get("label_quality", False)):
+        pass_candidates = _attach_label_quality(pass_candidates, Path(paths["events"]))
+    else:
+        for column in ("label", "decision_mfe_return", "decision_mae_return"):
+            pass_candidates[column] = np.nan
+    return paths, threshold, orderable, pass_candidates
+
 def _quantile_labels(series: pd.Series, groups: int, prefix: str) -> pd.Series:
     numeric = pd.to_numeric(series, errors="coerce")
     result = pd.Series(pd.NA, index=series.index, dtype="object")
@@ -516,25 +556,9 @@ def run_pass_quality_audit(
     quiet: bool = False,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    status = collect_pass_quality_status(definition, project_root=root)
-    if status["status"] != "READY":
-        raise RuntimeError(status["reason"])
-    paths = _source_paths(root=root, definition=definition)
-    threshold = float(paths["threshold"])
-    orderable = _load_orderable(Path(paths["orderable"]))
-    pass_candidates = orderable[orderable["breakout_quality_score"] >= threshold].copy()
-    if pass_candidates.empty:
-        raise RuntimeError("Audit來源沒有任何DL PASS orderable candidates")
-    pass_candidates = _mark_selected(pass_candidates, Path(paths["selected"]))
-    if bool(definition.outcomes.get("realized_r", False)):
-        pass_candidates = _attach_realized_r(pass_candidates, Path(paths["trades"]))
-    else:
-        pass_candidates["realized_r"] = np.nan
-    if bool(definition.outcomes.get("label_quality", False)):
-        pass_candidates = _attach_label_quality(pass_candidates, Path(paths["events"]))
-    else:
-        for column in ("label", "decision_mfe_return", "decision_mae_return"):
-            pass_candidates[column] = np.nan
+    paths, threshold, orderable, pass_candidates = prepare_pass_candidate_audit_frame(
+        definition, project_root=root
+    )
 
     score_groups_n = int(definition.dimensions["score_quantile_groups"])
     age_groups_n = int(definition.dimensions["candidate_age_quantile_groups"])
@@ -643,4 +667,9 @@ def run_pass_quality_audit(
     return payload
 
 
-__all__ = ["collect_pass_quality_status", "run_pass_quality_audit"]
+__all__ = [
+    "collect_pass_quality_status",
+    "json_native_audit_value",
+    "prepare_pass_candidate_audit_frame",
+    "run_pass_quality_audit",
+]

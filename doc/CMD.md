@@ -83,7 +83,7 @@ python apps/breakout_quality.py
 [0] 返回
 ```
 
-Audit對象、來源arm、分層維度與輸出政策全部集中於`config/audit.py`；App不硬編碼A9／C12等研究名稱。Audit只讀既有正式工件，不重跑策略、不建立Label、不訓練模型、不修改runtime。第一個正式Audit為`a9_pass_quality`，用既有strategy-compare arm的orderable／selected／trades與既有Dataset Label，診斷PASS內的Score、candidate age、candidate type與Label／Realized R。其分位只供診斷，不得直接轉為runtime threshold或Min ROOS／DL混合比例。Candidate是否存在／continuation／失效仍由原策略唯一決定；DL只描述quality，REJECT不得使仍屬策略VALID的candidate失效；portfolio selector只負責資源配置。來源工件缺少時Audit顯示`BLOCKED`，不偷偷補跑。
+Audit對象、來源arm、分層維度與輸出政策全部集中於`config/audit.py`；App不硬編碼A9／C12等研究名稱。Audit只讀既有正式工件，不重跑策略、不建立Label、不訓練模型、不修改runtime。`a9_pass_quality`保留為可重跑的PASS品質診斷profile，目前預設關閉；目前預設啟用`a9_pass_persistence`，以同一正式strategy-compare PASS來源比較unique event、candidate-day與selected層的原Event false-positive放大，並輸出Label別candidate-days／max age／extended days。Persistence只表示策略VALID pool的重複權重，不得建立DL expiry或age cutoff；PASS quality的quantile與persistence amplification都只供診斷，不得直接轉為runtime threshold或Min ROOS／DL混合比例。Candidate是否存在／continuation／失效仍由原策略唯一決定；DL只描述quality，REJECT不得使仍屬策略VALID的candidate失效；portfolio selector只負責資源配置。來源工件缺少時Audit顯示`BLOCKED`，不偷偷補跑。
 
 模型訓練與策略比較使用分離入口。正式策略比較執行：
 

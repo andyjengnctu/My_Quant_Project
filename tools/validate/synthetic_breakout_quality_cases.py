@@ -16566,7 +16566,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
 
 def validate_breakout_quality_audit_framework_contract_case(_base_params):
-    from config.audit import AUDIT_OUTPUT_ROOT, get_enabled_audit_definitions, validate_audit_config
+    from config.audit import (
+        AUDIT_OUTPUT_ROOT,
+        get_audit_definitions,
+        get_enabled_audit_definitions,
+        validate_audit_config,
+    )
+    from tools.filters.breakout_quality.audit_pass_persistence import run_pass_persistence_audit
     from tools.filters.breakout_quality.audit_pass_quality import run_pass_quality_audit
 
     case_id = "AUDIT_FRAMEWORK"
@@ -16574,16 +16580,24 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     validate_audit_config()
-    definitions = get_enabled_audit_definitions("breakout_quality")
+    all_definitions = get_audit_definitions("breakout_quality")
+    enabled_definitions = get_enabled_audit_definitions("breakout_quality")
+    quality_definition = next(
+        (item for item in all_definitions if item.audit_type == "pass_quality"), None
+    )
+    persistence_definition = next(
+        (item for item in all_definitions if item.audit_type == "pass_persistence"), None
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "audit_config_has_enabled_breakout_quality_pass_quality_definition",
+        "audit_config_supports_quality_and_persistence_profiles_with_config_driven_enablement",
         True,
-        bool(definitions)
-        and definitions[0].audit_type == "pass_quality"
-        and bool(str(definitions[0].source.get("arm_id") or "").strip()),
+        quality_definition is not None
+        and persistence_definition is not None
+        and bool(enabled_definitions)
+        and all(bool(str(item.source.get("arm_id") or "").strip()) for item in all_definitions),
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -16645,6 +16659,24 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                     "candidate_date": "2026-01-02",
                     "signal_date": "2026-01-01",
                     "candidate_type": "normal",
+                    "high_len": 200,
+                    "breakout_quality_score": 0.55,
+                },
+                {
+                    "ticker": "A",
+                    "trade_date": "2026-01-03",
+                    "candidate_date": "2026-01-03",
+                    "signal_date": "2026-01-01",
+                    "candidate_type": "extended",
+                    "high_len": 200,
+                    "breakout_quality_score": 0.55,
+                },
+                {
+                    "ticker": "A",
+                    "trade_date": "2026-01-04",
+                    "candidate_date": "2026-01-04",
+                    "signal_date": "2026-01-01",
+                    "candidate_type": "extended",
                     "high_len": 200,
                     "breakout_quality_score": 0.55,
                 },
@@ -16723,16 +16755,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             ]
         ).to_csv(events_dir / "events.csv", index=False, encoding="utf-8-sig")
 
-        synthetic_definition = type(definitions[0])(
-            module_id=definitions[0].module_id,
-            audit_id=definitions[0].audit_id,
+        if quality_definition is None or persistence_definition is None:
+            raise AssertionError("synthetic audit definitions missing")
+        synthetic_definition = type(quality_definition)(
+            module_id=quality_definition.module_id,
+            audit_id=quality_definition.audit_id,
             enabled=True,
             audit_type="pass_quality",
-            description=definitions[0].description,
+            description=quality_definition.description,
             source={"kind": "strategy_compare", "run": "latest", "arm_id": "C12"},
-            dimensions=dict(definitions[0].dimensions),
-            outcomes=dict(definitions[0].outcomes),
-            output_subdir=definitions[0].output_subdir,
+            dimensions=dict(quality_definition.dimensions),
+            outcomes=dict(quality_definition.outcomes),
+            output_subdir=quality_definition.output_subdir,
         )
         payload = run_pass_quality_audit(
             synthetic_definition, project_root=root, quiet=True
@@ -16749,8 +16783,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             case_id,
             "pass_quality_audit_is_read_only_config_driven_and_outputs_expected_diagnostics",
             True,
-            payload["overview"]["orderable_candidate_count"] == 5
-            and payload["overview"]["pass_candidate_count"] == 4
+            payload["overview"]["orderable_candidate_count"] == 7
+            and payload["overview"]["pass_candidate_count"] == 6
             and payload["overview"]["selected_pass_count"] == 2
             and math.isclose(payload["overview"]["selected_pass_realized_r_mean"], 1.5)
             and payload["semantic_contract"]["strategy_owns_candidate_validity"] is True
@@ -16760,6 +16794,51 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and bool(payload["candidate_type_groups"])
             and (latest_audit / "audit.md").is_file()
             and (latest_audit / "pass_candidates.csv").is_file(),
+        )
+
+        persistence_synthetic = type(persistence_definition)(
+            module_id=persistence_definition.module_id,
+            audit_id=persistence_definition.audit_id,
+            enabled=True,
+            audit_type="pass_persistence",
+            description=persistence_definition.description,
+            source={"kind": "strategy_compare", "run": "latest", "arm_id": "C12"},
+            dimensions=dict(persistence_definition.dimensions),
+            outcomes=dict(persistence_definition.outcomes),
+            output_subdir=persistence_definition.output_subdir,
+        )
+        persistence_payload = run_pass_persistence_audit(
+            persistence_synthetic, project_root=root, quiet=True
+        )
+        persistence_latest = (
+            root
+            / Path(AUDIT_OUTPUT_ROOT)
+            / Path(persistence_synthetic.output_subdir)
+            / "latest"
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "pass_persistence_audit_detects_false_positive_candidate_day_amplification_without_expiry_semantics",
+            True,
+            persistence_payload["overview"]["unique_pass_event_count"] == 4
+            and persistence_payload["overview"]["pass_candidate_day_count"] == 6
+            and math.isclose(
+                persistence_payload["overview"]["unique_event_label_pass_rate_pct"], 75.0
+            )
+            and math.isclose(
+                persistence_payload["overview"]["candidate_day_weighted_label_pass_rate_pct"],
+                50.0,
+            )
+            and math.isclose(
+                persistence_payload["amplification"]["false_positive_candidate_day_amplification_ratio"],
+                2.0,
+            )
+            and persistence_payload["semantic_contract"]["persistence_does_not_define_candidate_expiry"] is True
+            and bool(persistence_payload["label_persistence_groups"])
+            and (persistence_latest / "audit.md").is_file()
+            and (persistence_latest / "event_persistence.csv").is_file(),
         )
 
     app_source = (Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
@@ -16775,5 +16854,5 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "查看最近 Audit 結果" in app_source,
     )
 
-    summary["audit_id"] = definitions[0].audit_id if definitions else None
+    summary["enabled_audit_ids"] = [item.audit_id for item in enabled_definitions]
     return results, summary

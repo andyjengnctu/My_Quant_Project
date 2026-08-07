@@ -4317,3 +4317,51 @@ A9是在原signal event評分一次，但同一策略VALID event可在後續多�
 ### Audit讀檔警告修正
 
 正式執行出現兩個`pandas DtypeWarning`，分別來自orderable candidates中本Audit不使用的mixed-type欄位，以及Dataset events的ticker型別推斷。本輪只把Audit CSV讀取改為讀取所需欄位、ticker／candidate_type明確string dtype與`low_memory=False`；不改任何Audit數值口徑、策略、Dataset、Label、模型或runtime。
+
+## 2026-08-07 — A9 PASS Persistence Audit實作：驗證false-positive candidate-day amplification
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / NO_RUNTIME_CHANGE`
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260807_212852_3d5d0bc.zip`
+- SHA256：`5c12b8302a318eb15c254864a60fa970d34eb40c6418dc5e54581d2b585469e3`
+- 本輪只擴充正式Audit framework；C3／C11／C12策略runtime、A9模型、threshold、Min ROOS參數、candidate lifecycle與正式策略結果全部不變。
+
+### 唯一變更
+
+在既有`config/audit.py`中保留已完成的`a9_pass_quality` profile但預設`enabled=False`，新增並預設啟用`a9_pass_persistence / audit_type=pass_persistence`。正式Audit選單不新增專用項目，仍只執行config中enabled的Audit。Persistence與PASS Quality共用同一正式strategy-compare來源解析、A9 PASS threshold、selected buys、trades與Dataset event Label讀取鏈，避免第二套資料口徑。
+
+Persistence以`ticker / signal_date / high_len`作原breakout event identity，只讀A9已判PASS且策略仍屬orderable的candidate-days，輸出：
+
+1. unique PASS event-level Label precision；
+2. candidate-day weighted Label precision與相對event-level precision差；
+3. 原Event Label PASS／REJECT各自的candidate-days per event、max candidate age、extended candidate-days及selected Realized R；
+4. A9 false-positive（模型PASS但原Event Label REJECT）在unique-event、candidate-day及C12 selected層的share；
+5. candidate-day false-positive amplification ratio、selected amplification ratio，以及REJECT／PASS candidate-days per event ratio。
+
+### 固定語意與限制
+
+- Strategy唯一擁有candidate validity；Persistence只量化仍屬策略VALID／orderable pool的重複權重。
+- `DL REJECT`仍不等於candidate invalid；Persistence結果不得建立第二套DL expiry。
+- 不新增age cutoff、score threshold、Min ROOS／DL混合比例或其他runtime參數。
+- 原Event Label／MFE／MAE／Realized R只供事後read-only Audit，不得回流當日runtime。
+- selected amplification存在portfolio selection bias，只用來判斷C12 allocation有沒有進一步放大／抑制原Event false positives，不當作所有未選candidate的反事實。
+
+### Dataset／Label／模型重建需求
+
+- Dataset：不重建。
+- Label：不重建。
+- A9模型：不重訓。
+- A9 threshold：不調整。
+- Strategy replay：Audit不重跑；只讀既有正式strategy-compare C12工件。
+
+### GPT獨立固定案例
+
+以隔離臨時工件建立4個A9 PASS unique events：3個原Event Label PASS各只出現1個candidate-day，1個原Event Label REJECT連續出現3個candidate-days。Audit得到unique-event Label PASS=`75%`、candidate-day weighted Label PASS=`50%`、false-positive event share=`25%`、candidate-day false-positive share=`50%`、candidate-day amplification=`2.0x`、REJECT／PASS candidate-days per event=`3.0x`；同時`persistence_does_not_define_candidate_expiry=True`。此案例只驗證計算與語意，不是正式研究結果。
+
+### 採用判定與下一步
+
+本輪只標記`IMPLEMENTED`，不得預先判定真實A9是否存在persistence amplification。下一步由`python apps/breakout_quality.py`進入`[2] Audit／診斷`，先`[2] 查看 Audit 設定、工件與預計動作`確認`a9_pass_persistence`為READY，再`[1/Enter] 執行目前 Audit 設定`。只有正式結果顯示false-positive candidate-days／event明顯高於true-positive且candidate-day precision相對unique-event顯著被稀釋，才把candidate-state／daily quality更新列為下一個模型實驗；否則改查其他PASS品質來源，不建立age-based invalidation。
