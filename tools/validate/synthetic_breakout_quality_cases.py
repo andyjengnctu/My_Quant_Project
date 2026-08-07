@@ -494,7 +494,6 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ):
             continuous_workflow_seed = (
                 breakout_quality_config.get_breakout_quality_workflow_settings().seed
@@ -8658,7 +8657,6 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
             BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
             BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
             BREAKOUT_QUALITY_STRATEGY_DATASET,
             BREAKOUT_QUALITY_STRATEGY_MAX_POSITIONS,
             BREAKOUT_QUALITY_STRATEGY_ROTATION,
@@ -11929,7 +11927,6 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         workflow_config,
         "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
         STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     ):
         continuous_settings = workflow_config.get_breakout_quality_workflow_settings()
     add_check(
@@ -14284,7 +14281,6 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ),
         patch.object(
             breakout_quality_config,
@@ -14313,7 +14309,6 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         "strategy_adaptation_uses_isolated_continuous_workflow_without_mutating_config",
         (
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
             "score-ranking",
             "selection_point_in_time",
             configured_workflow_profile,
@@ -14797,7 +14792,6 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ),
         patch.object(
             breakout_quality_config,
@@ -15905,7 +15899,6 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
         ):
             continuous_seed = breakout_quality_config.get_breakout_quality_workflow_settings().seed
     add_check(

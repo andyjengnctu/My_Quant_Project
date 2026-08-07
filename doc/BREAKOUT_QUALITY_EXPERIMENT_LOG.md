@@ -4839,3 +4839,102 @@ MR-12A為模型研究CLI-only，先建立／確認Target，再訓練：
 ### 採用判定
 
 本輪尚未訓練／尚未取得OOS與策略結果，只能標記`IMPLEMENTED / RESULT_PENDING`。不得預先宣稱MR-12A或SR-C15有效；後續先看MR-12A OOS all-event daily/global Spearman、pair concordance與actual Round-trip R，再看SR-C15相對C3/C12的RoMD、EV、曝險與同參數DL選擇R。不得依結果回頭新增score cutoff或blending weight。
+
+## 2026-08-08 — MR-12A formal synthetic isolation blocker修正
+
+### 狀態
+
+`MR-12A / DL-CONT12A / SR-C15 scientific semantics unchanged`；本輪只修正式synthetic validator污染。
+
+### 正式bundle
+
+- 使用者程式ZIP：`test-branch-1_20260808_010913_f46cb91.zip`；SHA256=`0b1b6d4bc2d5947247d954ed78197aeb6da057e47fe6c0b2eda6a3648657eeb2`。
+- Formal bundle：`to_chatgpt_bundle_20260808_011057_1aa1a900.zip`；SHA256=`c1890dea909fed18c4b2c7bd24408c105260c389d9cc12f996a8097a2c5d29da`。
+- consistency：2 FAIL；meta quality唯一FAIL=`coverage_synthetic_suite_runs_successfully`，由相同2個synthetic FAIL連帶造成。Coverage本身Line=`79.32%`、Branch=`61.54%`，均高於正式門檻。
+
+### Root cause
+
+MR-12A新增`STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE`時，`tools/validate/synthetic_breakout_quality_cases.py`有7處把該常數誤插在既有`STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE`之後。其中5處位於`patch.object(...)`，成為第4個positional `spec` argument；另外2處污染expected tuple。因`patch.object`實際仍只把workflow profile設為PASS-only，兩個expected卻多期待all-event profile，正式suite因此得到2個FAIL：
+
+- `strategy_filter_gate_keeps_continuous_ranker_identity_when_main_workflow_is_binary`
+- `strategy_adaptation_uses_isolated_continuous_workflow_without_mutating_config`
+
+這是synthetic test patch污染；MR-12A profile、CONT12A artifact contract、C15 runtime及strategy config本身沒有變更。
+
+### 修正
+
+- 移除全部7處相鄰誤插的all-event profile常數。
+- 既有PASS-only isolated workflow tests恢復單一`strategy_aligned_no_time_pass_magnitude_mse` override；MR-12A all-event測試仍由專用`validate_breakout_quality_all_event_no_time_ranker_contract_case`獨立覆蓋。
+- 獨立AST檢查確認該synthetic檔內`patch.object`不存在超過3個positional arguments。
+- 直接regression確認strategy filter gate預設identity仍為PASS-only continuous profile，strategy adaptation隔離override仍解析`score-ranking / selection_point_in_time`且離開context後不修改正式config。
+
+### 研究語意不變
+
+`MR-12A`仍為`IMPLEMENTED / ARTIFACT_PENDING`；`DL-CONT12A`仍為`ARTIFACT_PENDING`；`SR-C15`仍為`IMPLEMENTED / RESULT_PENDING`。本輪不訓練模型、不改Target、scope、architecture、resource gate或comparison matrix。
+
+
+
+## 2026-08-08 — MR-12A / SR-C15 正式結果：All-event Continuous在相同capital-first runtime下明顯優於PASS-only，但尚不直接promote
+
+### 狀態
+
+`RESULT_AVAILABLE / ALL_EVENT_TRAINING_SUPPORTED / STRATEGY_PROMISING_NOT_PROMOTED`
+
+### 正式結果範圍
+
+- 期間：`2021-01-01～2025-12-22`。
+- Dataset=`full`、Param=`PARAM-P2 / Min ROOS`、param policy=`base-finalist-best`、max positions=10、rotation=off。
+- 正式比較：`SR-C3 / SR-C12 / SR-C15`；config fingerprint=`4da3217c83bd`。
+- `SR-C15`完全沿用`SR-C14`的capital-utilization-first、exact cash-cap、cash-binding與fallback契約；唯一模型差異是`DL-CONT11G / MR-11G pass_only → DL-CONT12A / MR-12A all_labels`。
+- 本輪使用既有forward/OOS score；Future Target未進runtime。
+
+### 正式策略結果
+
+| Arm | Return | MDD | RoMD | Annual | EV | Exposure | Trades | Same-param DL selection R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `SR-C3` | 156.34% | 15.41% | 10.15 | 20.87% | 0.65R | 91.99% | 329 | 0.00R |
+| `SR-C12` | 162.59% | 16.47% | 9.87 | 21.46% | 0.82R | 92.38% | 375 | +94.60R |
+| `SR-C15` | **168.69%** | **14.81%** | **11.39** | **22.02%** | 0.64R | 91.71% | 379 | +26.78R |
+
+- `C15−C3 = +12.35pp Return / -0.60pp MDD / +1.24 RoMD / +1.15pp annual / -0.02R EV / -0.28pp exposure / +50 trades / +26.78R same-param DL selection R`。
+- `C15−C12 = +6.10pp Return / -1.66pp MDD / +1.51 RoMD / +0.56pp annual / -0.19R EV / -0.67pp exposure / +4 trades / -67.82R same-param DL selection R`。
+- C15 Log R²=`0.9039`、月勝率=`71.67%`，均優於C3；勝率=`42.48%`、Payoff=`3.21`、EV=`0.64R`則未改善。
+
+### All-event training的乾淨受控證據：C15 vs C14
+
+SR-C14與SR-C15使用同一期間、同一Min ROOS參數與同一capital-utilization-first runtime；核心差異是PASS-only trained score改成all-event trained score。歷史SR-C14為Return=`157.07%`、MDD=`17.17%`、RoMD=`9.15`、EV=`0.58R`、Exposure=`91.74%`、Trades=`395`、same-param selection R=`+14.62R`。因此：
+
+- `C15−C14 = +11.62pp Return / -2.36pp MDD / +2.24 RoMD / +0.06R EV / -0.03pp Exposure / -16 Trades / +12.16R same-param selection R`。
+- 曝險幾乎完全相同，故這個改善不能再用macro capital utilization差異解釋；它支持`all_labels` training semantics相對MR-11G PASS-only extrapolation更適合all-event deployment。
+
+### 年度與集中度
+
+C15年度為：`2021 22.70% / 2022 -3.59% / 2023 75.93% / 2024 31.33% / 2025 -1.71%`。
+
+- 相對C3只有2024明顯勝出；2021、2022、2023、2025均略差或明顯較差。
+- 以年度報酬鏈結做read-only concentration check，排除2024後：C3約`130.50%`、C12約`122.83%`、C15約`104.56%`；因此C15相對C3/C12的全期報酬優勢高度依賴2024。此計算只用已完成年度結果做歸因，不回流任何runtime或training。
+- 相對C14則年度改善較分散：2021 +3.85pp、2022 +3.26pp、2023 -3.73pp、2024 +4.37pp、2025 -3.51pp；5年中3年改善，故「all-event優於PASS-only deployment」的證據比「C15已穩定勝過C3/C12」更強。
+
+### Capital geometry / per-trade品質
+
+- C15平均曝險`91.71%`，與C3 `91.99%`接近；capital-utilization-first仍成功守住macro exposure。
+- 平均實際投入由C3 `194,644.57`降至C15 `172,080.46`，平均初始停損距離由`4.44%`升至`5.68%`，但平均投入資金報酬由`2.22%`升至`3.16%`。
+- 期末未滿倉日`890→590`、持股缺口總和`2499→872`，顯示C15雖單筆部位較小，卻能更常填滿portfolio slots／降低持股缺口。
+- 同時EV只`0.64R`、same-param DL selection R只有`+26.78R`，遠低於C12 `+94.60R`；因此C15的portfolio優勢不能簡化成「每筆交易R更好」，更可能同時包含position geometry、slot utilization、timing／diversification與compounding效果。
+
+### 採用判定
+
+1. **模型研究層**：`MR-12A all-event training semantics`獲得正面支持；在完全相同capital-first runtime下明顯優於`MR-11G pass_only` deployment。
+2. **策略層**：`SR-C15`目前標記`PROMISING_NOT_PROMOTED`，不立即取代C3/C12。理由不是全期績效不足，而是年度集中度高，且EV／same-param selection R與portfolio總報酬給出不同訊號。
+3. 不依本輪OOS結果新增score threshold、blending weight、年份/regime條件或Target係數。
+
+### 下一步
+
+先做read-only attribution，而不是再訓練或調runtime。下一個診斷應回答：
+
+- C15對C3/C12的超額PnL是否集中在少數月份／少數entry cohorts／少數交易；
+- 2024的+20.12pp相對C3改善由哪些已成交selection changes、position sizing與持有重疊造成；
+- C15為何在EV與same-param selection R較弱時仍能得到較高portfolio Return與較低MDD；
+- 將selection improvement拆成`per-trade R`、`capital return`、`position size / stop distance`、`slot occupancy`與`compounding path`，但全部保持read-only，不新增OOS調參。
+
+取得上述歸因後，再決定是否把SR-C15升格為新的continuous research baseline。
