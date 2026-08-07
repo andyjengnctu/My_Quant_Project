@@ -4623,3 +4623,49 @@ Resource-aware每日診斷除既有mode／改單／reserved-capital外，新增�
 ### 下一步
 
 本輪只能標記`IMPLEMENTED / RESULT_PENDING`。使用正式`apps/strategy_compare.py`選單先查看工件計畫；若`DL-CONT11G`既有MR-11G OOS工件READY，再執行`SR-C3 / SR-C12 / SR-C14`比較。核心判定是：capital-utilization-first是否能消除舊continuous raw sort的資金利用缺陷，使continuous ranking的模型層排序訊號轉化為更好的portfolio RoMD／EV／direct-selection R；不得依本次結果回頭調continuous score cutoff或混合權重。
+
+
+## 2026-08-07 — SR-C14 formal double-check：config-driven validator 硬編碼修正
+
+### 狀態
+
+`IMPLEMENTED`（測試契約／文件閉環；SR-C14 runtime、DL-CONT11G、策略參數與比較設定均未改變）。
+
+### Formal bundle
+
+- Project ZIP：`test-branch-1_20260807_234329_7f2698a.zip`
+- Project SHA256：`b39875038ed055988530a7aaa27bbf410cc7e502867bfa28b8d8661fc6a6fe5d`
+- Formal bundle：`to_chatgpt_bundle_20260807_234520_14c1f84e.zip`
+- Bundle SHA256：`07afaa632a12be203f62ca1c1ff08a7768abcc63f3296d0b31f34db5360b7f85`
+
+### Formal 結果與 root cause
+
+使用者本機正式 suite：
+
+- quick gate：PASS
+- consistency：FAIL，2 checks
+- chain checks：PASS
+- ml smoke：PASS
+- meta quality：FAIL；唯一 failure=`coverage_synthetic_suite_runs_successfully`
+
+兩個 consistency FAIL 均位於 `STRATEGY_COMPARE_CONFIG_DRIVEN_APP`：
+
+1. `enabled_arms_build_canonical_execution_pairs_before_replay` 的 expected 仍寫死舊 focused matrix `C3/C11/C12`，實際 config 已合法為 `C3/C12/C14`。
+2. `individual_dl_arm_and_contrast_switches_are_runtime_effective` 在停用 C12 後仍固定期待 `C3/C11`，實際 current config 正確得到 `C3/C14`。
+
+因此 root cause 是 **validator 把可由使用者調整的 `config/strategy_compare.py` 目前值硬編碼成唯一合法 expected**，違反 `PROJECT_SETTINGS` C8；不是 SR-C14 runtime、continuous score、cash-binding 邏輯或 coverage 百分比失敗。Meta quality 的 coverage synthetic failure 只是上述 2 個 synthetic FAIL 的連帶結果；正式 coverage 本身 Line 79.28% / Branch 61.47% 已高於門檻。
+
+### 修正
+
+`validate_strategy_compare_config_driven_app_contract_case` 改為：
+
+- execution-pair expected 依當前 `settings.enabled_arms`、`param_source`、`rule_policy` 動態推導；
+- individual arm switch 從目前 enabled DL arms 中隔離選一個 target，停用其相關 contrasts 後，expected enabled set 由原 settings 動態計算；
+- fingerprint 測試動態尋找一個 enabled definition 與一個 disabled definition，不再釘死 `C3`／`C12`；
+- CONT11G／C14 的**功能 identity 與受控 runtime semantics**仍可直接驗證，但不得把目前 enabled matrix 當成固定合法答案。
+
+### 獨立驗證
+
+不執行 `apps/test_suite.py`。GPT 以 direct synthetic 執行 `validate_strategy_compare_config_driven_app_contract_case`，目前 config 下 23 checks 全部通過；另以隔離 override 的不同 enabled-arm matrix 再驗證 config-driven 行為，確保測試不依賴目前 `C3/C12/C14` 選擇。
+
+本修正不改 SR-C14 scientific variable；SR-C14 仍維持 `IMPLEMENTED / RESULT_PENDING`。

@@ -16015,13 +16015,37 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     execution_pairs = strategy_comparison_module._execution_pairs(settings)
+    expected_pairs_by_group: dict[
+        tuple[str, str],
+        dict[str, object],
+    ] = {}
+    expected_group_order: list[tuple[str, str]] = []
+    for arm in settings.enabled_arms:
+        key = (arm.param_source, arm.rule_policy)
+        if key not in expected_pairs_by_group:
+            expected_pairs_by_group[key] = {"off": None, "on": []}
+            expected_group_order.append(key)
+        group = expected_pairs_by_group[key]
+        if arm.dl_enabled:
+            group["on"].append(arm)
+        else:
+            group["off"] = arm
+    expected_execution_pairs = tuple(
+        (
+            param_source,
+            rule_policy,
+            group["off"].arm_id,
+            on_arm.arm_id,
+        )
+        for param_source, rule_policy in expected_group_order
+        for group in (expected_pairs_by_group[(param_source, rule_policy)],)
+        if group["off"] is not None
+        for on_arm in group["on"]
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "enabled_arms_build_canonical_execution_pairs_before_replay",
-        (
-            ("min_roos", "all_off", "C3", "C11"),
-            ("min_roos", "all_off", "C3", "C12"),
-        ),
+        expected_execution_pairs,
         tuple(
             (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
             for param_source, rule_policy, off_arm, on_arm in execution_pairs
@@ -16045,7 +16069,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
         and {"C7", "C8", "C9", "C10", "C11", "C12", "C14"}.issubset(set(settings.arms))
-        and {arm.arm_id for arm in settings.enabled_arms} == {"C3", "C12", "C14"}
+        and all(arm.enabled for arm in settings.enabled_arms)
+        and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
         and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
         and settings.dl_sources["CONT11G"].threshold is None
         and settings.dl_sources["CONT11G"].experiment_profile == "strategy_aligned_no_time_pass_magnitude_mse",
@@ -16571,35 +16596,94 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )),
     )
 
-    original_c12 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C12"])
-    original_contrasts = {key: dict(value) for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()}
-    try:
-        strategy_config.STRATEGY_COMPARE_ARMS["C12"]["enabled"] = False
-        for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
-            if contrast.get("left") == "C12" or contrast.get("right") == "C12":
-                contrast["enabled"] = False
-        reduced_settings = strategy_config.get_strategy_comparison_settings()
-    finally:
-        strategy_config.STRATEGY_COMPARE_ARMS["C12"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C12"].update(original_c12)
-        strategy_config.STRATEGY_COMPARE_CONTRASTS.clear(); strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
+    enabled_dl_arm_ids = [
+        arm.arm_id for arm in settings.enabled_arms if arm.dl_enabled
+    ]
+    switch_target_arm_id = enabled_dl_arm_ids[0] if len(enabled_dl_arm_ids) >= 2 else None
+    original_switch_target = (
+        dict(strategy_config.STRATEGY_COMPARE_ARMS[switch_target_arm_id])
+        if switch_target_arm_id is not None
+        else None
+    )
+    original_contrasts = {
+        key: dict(value)
+        for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()
+    }
+    reduced_settings = settings
+    if switch_target_arm_id is not None:
+        try:
+            strategy_config.STRATEGY_COMPARE_ARMS[switch_target_arm_id]["enabled"] = False
+            for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
+                if (
+                    contrast.get("left") == switch_target_arm_id
+                    or contrast.get("right") == switch_target_arm_id
+                ):
+                    contrast["enabled"] = False
+            reduced_settings = strategy_config.get_strategy_comparison_settings()
+        finally:
+            strategy_config.STRATEGY_COMPARE_ARMS[switch_target_arm_id].clear()
+            strategy_config.STRATEGY_COMPARE_ARMS[switch_target_arm_id].update(
+                original_switch_target
+            )
+            strategy_config.STRATEGY_COMPARE_CONTRASTS.clear()
+            strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
+    expected_reduced_arm_ids = tuple(
+        arm.arm_id
+        for arm in settings.enabled_arms
+        if arm.arm_id != switch_target_arm_id
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "individual_dl_arm_and_contrast_switches_are_runtime_effective",
-        ("C3", "C11"),
+        expected_reduced_arm_ids,
         tuple(arm.arm_id for arm in reduced_settings.enabled_arms),
+        note=(
+            "SKIP: fewer than two enabled DL arms"
+            if switch_target_arm_id is None
+            else ""
+        ),
     )
 
+    reduced_enabled_ids = {
+        arm.arm_id for arm in reduced_settings.enabled_arms
+    }
+    disabled_definition_arm_id = next(
+        (
+            arm_id
+            for arm_id in reduced_settings.arms
+            if arm_id not in reduced_enabled_ids
+        ),
+        None,
+    )
+    enabled_definition_arm_id = next(
+        (arm.arm_id for arm in reduced_settings.enabled_arms),
+        None,
+    )
     disabled_arms_changed = dict(reduced_settings.arms)
-    disabled_arms_changed["C12"] = replace(disabled_arms_changed["C12"], name="disabled definition")
+    if disabled_definition_arm_id is not None:
+        disabled_arms_changed[disabled_definition_arm_id] = replace(
+            disabled_arms_changed[disabled_definition_arm_id],
+            name="disabled definition",
+        )
     enabled_arms_changed = dict(reduced_settings.arms)
-    enabled_arms_changed["C3"] = replace(enabled_arms_changed["C3"], name="enabled definition")
+    if enabled_definition_arm_id is not None:
+        enabled_arms_changed[enabled_definition_arm_id] = replace(
+            enabled_arms_changed[enabled_definition_arm_id],
+            name="enabled definition",
+        )
     base_fingerprint = strategy_comparison_fingerprint(reduced_settings)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "config_fingerprint_uses_effective_enabled_definitions_only",
         True,
-        strategy_comparison_fingerprint(replace(reduced_settings, arms=disabled_arms_changed)) == base_fingerprint
-        and strategy_comparison_fingerprint(replace(reduced_settings, arms=enabled_arms_changed)) != base_fingerprint,
+        disabled_definition_arm_id is not None
+        and enabled_definition_arm_id is not None
+        and strategy_comparison_fingerprint(
+            replace(reduced_settings, arms=disabled_arms_changed)
+        ) == base_fingerprint
+        and strategy_comparison_fingerprint(
+            replace(reduced_settings, arms=enabled_arms_changed)
+        ) != base_fingerprint,
     )
 
     summary["config_path"] = "config/strategy_compare.py"
