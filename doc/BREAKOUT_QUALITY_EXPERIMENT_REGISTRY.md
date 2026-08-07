@@ -57,7 +57,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | 最大化 PASS 研究基準 | `SR-C12` | A9 resource-aware best-improvement basket | ACTIVE；研究方向固定為「最大化 PASS 使用，再提高 PASS 品質」 |
 | 最新Audit結果 | `AUD-a9-selection-confidence` | `SR-C12` DL Selection Mode內A9 confidence排序力 | RESULT_AVAILABLE；整體排序力弱，不採用confidence-priority |
 | Continuous research DL source | `DL-CONT11G` | `MR-11G / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse` frozen OOS continuous score | ACTIVE controlled-replay source；不得裸接正式scanner/filter runtime |
-| 下一個策略Arm | `SR-C14` | Capital-utilization first；只有cash-binding的DL Selection Mode才使用`DL-CONT11G` continuous score排序 | IMPLEMENTED／RESULT_PENDING |
+| 最新策略結果 | `SR-C14` | Capital-utilization first + `DL-CONT11G` continuous score | RESULT_AVAILABLE；macro資金利用問題已大幅消除，但經濟排序未勝過C12，不採用目前CONT11G deployment |
 
 ### `MR-9A` 與 `DL-A9` 必須分開
 
@@ -136,7 +136,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `SR-C11` | Min ROOS: A9 resource-aware | Cash-bottleneck gate + first-improvement PASS promotion | POSITIVE；目前 resource-aware 已知經濟結果最佳 |
 | `SR-C12` | Min ROOS: A9 resource-aware basket | 相同 resource gate + best-improvement／最大化 PASS basket 方向 | ACTIVE max-PASS research base；PASS 使用增加，但經濟結果低於 C11 |
 | `SR-C13` | Min ROOS: A9 resource-aware basket + candidate-day re-score | 同一DL-A9權重／threshold與C12 allocation，把A9 quality改為每個策略VALID candidate day重新計算 | **CANCELLED_BEFORE_IMPLEMENTATION**；A9是breakout-event classifier，extended candidate-day通常不是breakout形態，直接re-score語意／distribution不成立；ID永久保留不得重用 |
-| `SR-C14` | Min ROOS: Continuous resource-aware | Min ROOS exact cash-cap先判resource mode；capital-utilization mode完全維持Min ROOS，只有cash-binding的DL Selection Mode才使用`DL-CONT11G` frozen OOS continuous score，且排序不得破壞cash-binding資源契約 | IMPLEMENTED／RESULT_PENDING |
+| `SR-C14` | Min ROOS: Continuous resource-aware | Min ROOS exact cash-cap先判resource mode；capital-utilization mode完全維持Min ROOS，只有cash-binding的DL Selection Mode才使用`DL-CONT11G` frozen OOS continuous score，且排序不得破壞cash-binding資源契約 | RESULT_AVAILABLE／NOT_ADOPTED；曝險接近C3，但RoMD／EV／同參數DL選擇R明顯低於C12；MR-11G PASS-only score的all-event deployment不成立 |
 
 ### `SR-C13` identity boundary
 
@@ -185,6 +185,7 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 9. 舊continuous ranker曾有正向Target排序能力，但歷史raw score sort同時顯著降低資金利用；因此不能把舊策略失敗直接等同模型無效。
 10. `SR-C14`已分配並實作為capital-utilization-first continuous controlled arm：Min ROOS先決定資源模式；capital-utilization mode完全不改，只有cash-binding的DL Selection Mode才使用`DL-CONT11G` frozen OOS continuous score。
 11. `SR-C14`不使用A9 PASS／REJECT、不重訓`MR-11G`、不新增score threshold或Min ROOS／DL混合權重；若本機缺MR-11G既有research OOS工件，策略比較必須BLOCKED而不是自動重訓。
+12. `SR-C14`正式結果期間為2021-01-01～2025-12-22（受DL-CONT11G frozen OOS coverage限制）：相對SR-C3報酬+0.73pp、MDD+1.76pp、RoMD-1.00、EV-0.07R、曝險-0.25pp、同參數DL選擇R+14.62R；相對SR-C12報酬-5.52pp、RoMD-0.73、EV-0.24R、同參數DL選擇R-79.99R。判定capital-utilization-first已大幅消除舊raw continuous sort的macro曝險問題，但現有MR-11G score在此deployment仍未形成足夠經濟排序力。
 
 ---
 

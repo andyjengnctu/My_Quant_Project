@@ -4706,3 +4706,51 @@ Resource-aware每日診斷除既有mode／改單／reserved-capital外，新增�
 ### 下一步
 
 套用本修正後重跑正式 `apps/strategy_compare.py`；SR-C14 仍維持 `RESULT_PENDING`，不得在取得 C3／C12／C14 正式結果前預先判定有效或無效。
+
+
+## 2026-08-08 — SR-C14正式結果：Capital-utilization first消除macro曝險問題，但CONT11G排序仍不採用
+
+### 狀態
+
+`RESULT_AVAILABLE / CAPITAL_UTILIZATION_HYPOTHESIS_PARTIALLY_CONFIRMED / CONT11G_DEPLOYMENT_NOT_ADOPTED`
+
+### 正式結果基準
+
+- 使用者結果ZIP：`test-branch-1_20260808_002357_b220cbb.zip`；SHA256=`eb872749778055d480fa4b3ba9038feacedcce92b4e941d859443f5e2aa7c3be`。
+- 正式比較期間：`2021-01-01～2025-12-22`。結束日受`DL-CONT11G / MR-11G` frozen OOS score coverage限制，因此不得直接把本輪C3／C12數值與先前延伸到2026-03-02的C11／C12絕對值混比；本輪C3／C12／C14三者同期間、同Min ROOS P2 active params，可作受控contrast。
+- Dataset=`full`、param policy=`base-finalist-best`、max positions=10、rotation=off、config fingerprint=`902c90b40dc2`。
+- C14唯一變更維持既定契約：Min ROOS exact cash-cap先判resource mode；capital-utilization mode完全維持Min ROOS；只有cash-binding的DL Selection Mode才使用frozen `DL-CONT11G` continuous score。A9 PASS／REJECT不用於C14。
+
+### 主要結果
+
+| Arm | 報酬 | MDD | RoMD | 年化 | EV | 曝險 | 交易 | 同參數DL選擇R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| SR-C3 Min ROOS | 156.34% | 15.41% | 10.15 | 20.87% | 0.65R | 91.99% | 329 | 0.00R |
+| SR-C12 A9 max-PASS resource-aware | 162.59% | 16.47% | 9.87 | 21.46% | 0.82R | 92.38% | 375 | +94.60R |
+| SR-C14 Continuous resource-aware | 157.07% | 17.17% | 9.15 | 20.94% | 0.58R | 91.74% | 395 | +14.62R |
+
+- `C14−C3 = +0.73pp報酬 / +1.76pp MDD / -1.00 RoMD / +0.07pp年化 / -0.07R EV / -0.25pp曝險 / +66交易 / +14.62R同參數DL選擇R`。
+- `C14−C12 = -5.52pp報酬 / +0.70pp MDD / -0.73 RoMD / -0.52pp年化 / -0.24R EV / -0.64pp曝險 / +20交易 / -79.99R同參數DL選擇R`。
+- 年度C14為`2021 18.85% / 2022 -6.85% / 2023 79.66% / 2024 26.96% / 2025 1.80%`；只有2024明顯優於C3，年度方向不穩定。
+
+### Capital-utilization判讀
+
+1. 使用者假說「舊continuous直接排序失敗可能主要因破壞資金利用率」獲得**部分確認**。C14平均曝險`91.74%`只比C3 `91.99%`低`0.25pp`，與舊raw Score Sort的大幅曝險下降不同，證明capital-utilization-first確實幾乎消除了macro exposure問題。
+2. 但micro sizing結構仍改變：平均預留`201,347.89→159,732.00`、平均實際投入`194,644.57→153,067.87`，平均初始停損距離`4.44%→6.36%`；C14實際改單116日、continuous新選入147單、selected score sum增加41.748，但總預留資金增量仍為`-1,861,230`。因此resource gate能守住總曝險，不能保證continuous選到的個別position具有與Min ROOS相同的capital geometry。
+3. 更重要的是經濟排序本身不足：C14 EV降至`0.58R`、勝率降至`39.24%`、同參數DL選擇R只有`+14.62R`；相較C12的`+94.60R`明顯較弱。故在macro資金利用問題被大幅控制後，現有`MR-11G` score仍未形成足夠的portfolio selection value。
+
+### 模型語意限制
+
+- `MR-11G`歷史training scope=`PASS-only`。SR-C14把其frozen OOS continuous score用於全部orderable breakout events，是刻意的controlled deployment hypothesis，不代表模型原本具有all-event ranking語意。
+- 因此本結果只能否決「直接把現有PASS-only MR-11G接到capital-first即可」；**不能否決「真正以all-event continuous quality為training semantics的模型 + capital-utilization first」這個較一般的方向**。
+- 歷史11F已證明`strategy_aligned_opportunity_no_time_r_v1`在all-label上與binary label高度可分（AUC約0.99），且11E actual Target↔R約0.4875；若後續建立新的all-event continuous ranker，必須將「全事件排序」明確定義成新的model research semantics，不可把MR-11G改名或重用其identity。
+
+### 採用判定
+
+- `SR-C14 / DL-CONT11G`目前deployment：`NOT_ADOPTED`。
+- `SR-C12`仍是「最大化PASS使用」的active research base；`SR-C11`仍保留較佳已知resource-aware經濟結果的歷史地位。
+- 不再對MR-11G做runtime sorting微調、score threshold或Min ROOS／continuous混合權重。
+
+### 下一步
+
+若繼續continuous方向，下一步應是**新的model research**，而不是再改SR-C14：建立真正以`all-events`為training scope的continuous breakout-event quality ranker，再用相同capital-utilization-first runtime作受控比較。開始實作前須重新查Registry分配新的`MR-*`／`DL-*`／`SR-C*` identity；本輪不預先占用新ID，也不依本次OOS結果調任何target係數或runtime權重。
