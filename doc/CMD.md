@@ -214,6 +214,8 @@ python apps/strategy_compare.py
 
 先選`[2] 查看設定、工件與預計動作`，再選`[1/Enter] 執行目前比較設定`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
 
+目前DL研究聚焦`C3 Min ROOS`、`C8 Min ROOS: A9-on`與`C11 Min ROOS: A9 resource-aware`。C11不重新訓練A9，也不新增資金利用Threshold：先以Min ROOS原順序和正式cash-capped sizing判斷盤前binding resource；position slots先成瓶頸時DL不介入，只有cash在free slots尚未用滿前先成瓶頸時，才允許A9把未選PASS候選提前，且每次改善都必須維持cash-binding並增加實際可預留在PASS候選上的資金。
+
 舊score-ranking研究工具仍可直接執行`python -m tools.filters.breakout_quality.strategy_compare --help`，但不屬於正式比較App。
 
 只有需要重建9D MantisV2 legacy工件時才需安裝固定相依套件。官方 `mantis-tsfm==1.0.0` 宣告 `pandas<3.0`，而本專案鎖定 pandas 3.x，因此必須先安裝相容依賴，再以 `--no-deps` 安裝 Mantis，避免 pip 降級既有資料鏈：

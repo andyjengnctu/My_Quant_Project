@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 5
+STRATEGY_COMPARE_SCHEMA_VERSION = 6
 
 # =============================================================================
 # 1. 共用執行設定
@@ -199,22 +199,24 @@ STRATEGY_DL_SOURCES = {
 
 STRATEGY_COMPARE_ARMS = {
     "C1": {
-        "enabled": True,
+        "enabled": False,
         "name": "Full ROOS",
         "description": "原正式基準",
         "param_source": "full_roos",
         "rule_policy": "formal",
         "dl_enabled": False,
         "dl_id": None,
+        "dl_runtime_mode": None,
     },
     "C2": {
-        "enabled": True,
+        "enabled": False,
         "name": "Full ROOS: TP1-on",
         "description": "Full ROOS參數，runtime開TP1",
         "param_source": "full_roos",
         "rule_policy": "formal",
         "dl_enabled": True,
         "dl_id": "TP1",
+        "dl_runtime_mode": "hard-filter",
     },
     "C3": {
         "enabled": True,
@@ -224,42 +226,47 @@ STRATEGY_COMPARE_ARMS = {
         "rule_policy": "all_off",
         "dl_enabled": False,
         "dl_id": None,
+        "dl_runtime_mode": None,
     },
     "C4": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: TP1-on",
         "description": "Min ROOS參數，runtime開TP1",
         "param_source": "min_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "TP1",
+        "dl_runtime_mode": "hard-filter",
     },
     "C5": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min-TP1 ROOS",
         "description": "TP1-on環境訓練參數，runtime DL-off",
         "param_source": "min_dl_tp1_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
         "dl_id": None,
+        "dl_runtime_mode": None,
     },
     "C6": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min-TP1 ROOS: DL-on",
         "description": "TP1-on環境訓練參數，runtime開其配對TP1",
         "param_source": "min_dl_tp1_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "TP1",
+        "dl_runtime_mode": "hard-filter",
     },
     "C7": {
-        "enabled": True,
+        "enabled": False,
         "name": "Full ROOS: A9-on",
         "description": "Full ROOS參數，runtime開A9",
         "param_source": "full_roos",
         "rule_policy": "formal",
         "dl_enabled": True,
         "dl_id": "A9",
+        "dl_runtime_mode": "hard-filter",
     },
     "C8": {
         "enabled": True,
@@ -269,24 +276,37 @@ STRATEGY_COMPARE_ARMS = {
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "A9",
+        "dl_runtime_mode": "hard-filter",
     },
     "C9": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min-A9 ROOS",
         "description": "A9-on環境訓練參數，runtime DL-off",
         "param_source": "min_dl_a9_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
         "dl_id": None,
+        "dl_runtime_mode": None,
     },
     "C10": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min-A9 ROOS: DL-on",
         "description": "A9-on環境訓練參數，runtime開其配對A9",
         "param_source": "min_dl_a9_roos",
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "A9",
+        "dl_runtime_mode": "hard-filter",
+    },
+    "C11": {
+        "enabled": True,
+        "name": "Min ROOS: A9 resource-aware",
+        "description": "Min ROOS參數；A9只在盤前cash先成瓶頸時改善可預留PASS組合，不作eligibility hard reject",
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "A9",
+        "dl_runtime_mode": "resource-aware-binary",
     },
 }
 
@@ -295,19 +315,21 @@ STRATEGY_COMPARE_ARMS = {
 # =============================================================================
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C2-C1": {"enabled": True, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},
-    "C7-C1": {"enabled": True, "left": "C7", "right": "C1", "description": "Full ROOS下A9 runtime效果"},
-    "C4-C3": {"enabled": True, "left": "C4", "right": "C3", "description": "Min ROOS下TP1 runtime效果"},
-    "C8-C3": {"enabled": True, "left": "C8", "right": "C3", "description": "Min ROOS下A9 runtime效果"},
-    "C6-C5": {"enabled": True, "left": "C6", "right": "C5", "description": "Min-TP1 ROOS下配對DL效果"},
-    "C10-C9": {"enabled": True, "left": "C10", "right": "C9", "description": "Min-A9 ROOS下配對DL效果"},
-    "C3-C1": {"enabled": True, "left": "C3", "right": "C1", "description": "Min ROOS相對Full ROOS"},
-    "C5-C3": {"enabled": True, "left": "C5", "right": "C3", "description": "TP1-aware參數本身效果"},
-    "C9-C3": {"enabled": True, "left": "C9", "right": "C3", "description": "A9-aware參數本身效果"},
-    "C6-C4": {"enabled": True, "left": "C6", "right": "C4", "description": "TP1-on下參數適應效果"},
-    "C10-C8": {"enabled": True, "left": "C10", "right": "C8", "description": "A9-on下參數適應效果"},
-    "C6-C1": {"enabled": True, "left": "C6", "right": "C1", "description": "Min-TP1完整方案相對正式基準"},
-    "C10-C1": {"enabled": True, "left": "C10", "right": "C1", "description": "Min-A9完整方案相對正式基準"},
+    "C8-C3": {"enabled": True, "left": "C8", "right": "C3", "description": "Min ROOS下A9 hard-filter效果（既有對照重現）"},
+    "C11-C3": {"enabled": True, "left": "C11", "right": "C3", "description": "Min ROOS下A9 resource-aware效果"},
+    "C11-C8": {"enabled": True, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
+    "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},
+    "C7-C1": {"enabled": False, "left": "C7", "right": "C1", "description": "Full ROOS下A9 runtime效果"},
+    "C4-C3": {"enabled": False, "left": "C4", "right": "C3", "description": "Min ROOS下TP1 runtime效果"},
+    "C6-C5": {"enabled": False, "left": "C6", "right": "C5", "description": "Min-TP1 ROOS下配對DL效果"},
+    "C10-C9": {"enabled": False, "left": "C10", "right": "C9", "description": "Min-A9 ROOS下配對DL效果"},
+    "C3-C1": {"enabled": False, "left": "C3", "right": "C1", "description": "Min ROOS相對Full ROOS"},
+    "C5-C3": {"enabled": False, "left": "C5", "right": "C3", "description": "TP1-aware參數本身效果"},
+    "C9-C3": {"enabled": False, "left": "C9", "right": "C3", "description": "A9-aware參數本身效果"},
+    "C6-C4": {"enabled": False, "left": "C6", "right": "C4", "description": "TP1-on下參數適應效果"},
+    "C10-C8": {"enabled": False, "left": "C10", "right": "C8", "description": "A9-on下參數適應效果"},
+    "C6-C1": {"enabled": False, "left": "C6", "right": "C1", "description": "Min-TP1完整方案相對正式基準"},
+    "C10-C1": {"enabled": False, "left": "C10", "right": "C1", "description": "Min-A9完整方案相對正式基準"},
 }
 
 
@@ -370,6 +392,11 @@ def get_strategy_comparison_settings() -> StrategyComparisonSettings:
             rule_policy=str(raw.get("rule_policy") or "").strip(),
             dl_enabled=bool(raw.get("dl_enabled")),
             dl_id=(None if raw.get("dl_id") in (None, "") else str(raw.get("dl_id"))),
+            dl_runtime_mode=(
+                None
+                if raw.get("dl_runtime_mode") in (None, "")
+                else str(raw.get("dl_runtime_mode")).strip()
+            ),
         )
         for arm_id, raw in STRATEGY_COMPARE_ARMS.items()
     }

@@ -1,4 +1,8 @@
 from core.capital_policy import resolve_portfolio_entry_budget
+from core.buy_sort import (
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+    resolve_breakout_quality_ranking_policy,
+)
 from core.exact_accounting import (
     coerce_money_like_to_milli,
     milli_to_money,
@@ -93,6 +97,225 @@ def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_b
         params,
     )
 
+
+
+def _candidate_binary_pass(candidate_row):
+    rank_payload = candidate_row.get('breakout_quality_rank')
+    if not isinstance(rank_payload, dict) or not bool(rank_payload.get('available', False)):
+        return False
+    score = candidate_row.get('breakout_quality_score')
+    try:
+        numeric_score = float(score)
+    except (TypeError, ValueError):
+        return False
+    if numeric_score != numeric_score:
+        return False
+    candidate_params = candidate_row.get('params_obj')
+    if candidate_params is None:
+        raise ValueError('resource-aware Binary候選缺少params_obj，無法解析正式threshold')
+    threshold = float(getattr(candidate_params, 'breakout_quality_score_threshold'))
+    return numeric_score >= threshold
+
+
+def _simulate_reserved_candidate_order(
+    candidate_rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+):
+    remaining_cash_milli = coerce_money_like_to_milli(available_cash)
+    initial_cash_milli = int(remaining_cash_milli)
+    selected_rows = []
+    selected_plans = []
+    for cand in list(candidate_rows or []):
+        if len(selected_rows) >= int(free_slots):
+            break
+        if cand.get('is_orderable') is False:
+            continue
+        candidate_params = cand.get('params_obj') or params
+        effective_entry_budget = resolve_portfolio_entry_budget(
+            milli_to_money(remaining_cash_milli),
+            candidate_params.initial_capital,
+            candidate_params,
+        )
+        effective_entry_budget_milli = coerce_money_like_to_milli(effective_entry_budget)
+        plan = _build_cash_capped_entry_plan_for_candidate(
+            cand,
+            effective_entry_budget,
+            effective_entry_budget_milli,
+            candidate_params,
+            sizing_equity,
+        )
+        if plan is None:
+            continue
+        reserved_cost_milli = int(plan.get('reserved_cost_milli', 0) or 0)
+        if reserved_cost_milli <= 0 or reserved_cost_milli > int(remaining_cash_milli):
+            continue
+        selected_rows.append(cand)
+        selected_plans.append(plan)
+        remaining_cash_milli -= reserved_cost_milli
+    selected_pass_flags = [_candidate_binary_pass(row) for row in selected_rows]
+    pass_reserved_cost_milli = sum(
+        int(plan.get('reserved_cost_milli', 0) or 0)
+        for row, plan, is_pass in zip(selected_rows, selected_plans, selected_pass_flags)
+        if is_pass
+    )
+    selected_ids = {id(row) for row in selected_rows}
+    has_unselected_candidates = any(id(row) not in selected_ids for row in list(candidate_rows or []))
+    cash_is_binding = bool(
+        len(selected_rows) < int(free_slots)
+        and has_unselected_candidates
+        and int(initial_cash_milli - remaining_cash_milli) > 0
+    )
+    return {
+        'selected_rows': selected_rows,
+        'selected_plans': selected_plans,
+        'selected_count': int(len(selected_rows)),
+        'pass_count': int(sum(selected_pass_flags)),
+        'pass_reserved_cost_milli': int(pass_reserved_cost_milli),
+        'reserved_cost_milli': int(initial_cash_milli - remaining_cash_milli),
+        'remaining_cash_milli': int(remaining_cash_milli),
+        'has_unselected_candidates': bool(has_unselected_candidates),
+        'cash_is_binding': bool(cash_is_binding),
+    }
+
+
+def _resource_aware_binary_enabled(candidate_rows):
+    rows = list(candidate_rows or [])
+    if not rows:
+        return False
+    flags = {bool(row.get('use_breakout_quality_ranking', False)) for row in rows}
+    if flags != {True}:
+        return False
+    return (
+        resolve_breakout_quality_ranking_policy(rows)
+        == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
+    )
+
+
+def reorder_candidates_for_resource_aware_binary(
+    orderable_candidates_today,
+    *,
+    available_cash,
+    sizing_equity,
+    pre_market_occupied,
+    max_positions,
+    params,
+):
+    """Overlay Binary DL only when cash is the current pre-market bottleneck.
+
+    The incoming order is the canonical Min ROOS buy-sort.  We first simulate
+    that order with the same cash-capped entry-plan builder used by execution.
+    DL is allowed to promote an otherwise unselected PASS candidate only when
+    the baseline stops before all free slots are consumed and there are still
+    unselected candidates.  Every accepted promotion must keep cash as the
+    binding pre-market resource and increase the amount of actually reservable
+    capital assigned to PASS candidates.  No future bar data or tunable
+    utilization threshold is used.
+    """
+
+    rows = list(orderable_candidates_today or [])
+    free_slots = max(0, int(max_positions) - int(pre_market_occupied))
+    default_diag = {
+        'enabled': False,
+        'mode': 'inactive',
+        'free_slots': int(free_slots),
+        'candidate_count': int(len(rows)),
+        'baseline_selected_count': 0,
+        'baseline_pass_count': 0,
+        'baseline_reserved_cost_milli': 0,
+        'baseline_pass_reserved_cost_milli': 0,
+        'selected_count': 0,
+        'selected_pass_count': 0,
+        'reserved_cost_milli': 0,
+        'pass_reserved_cost_milli': 0,
+        'promoted_pass_count': 0,
+        'changed': False,
+    }
+    if free_slots <= 0 or not rows or not _resource_aware_binary_enabled(rows):
+        return rows, default_diag
+
+    baseline = _simulate_reserved_candidate_order(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+    )
+    diag = {
+        **default_diag,
+        'enabled': True,
+        'baseline_selected_count': int(baseline['selected_count']),
+        'baseline_pass_count': int(baseline['pass_count']),
+        'baseline_reserved_cost_milli': int(baseline['reserved_cost_milli']),
+        'baseline_pass_reserved_cost_milli': int(baseline['pass_reserved_cost_milli']),
+        'selected_count': int(baseline['selected_count']),
+        'selected_pass_count': int(baseline['pass_count']),
+        'reserved_cost_milli': int(baseline['reserved_cost_milli']),
+        'pass_reserved_cost_milli': int(baseline['pass_reserved_cost_milli']),
+    }
+    if not bool(baseline['cash_is_binding']):
+        diag['mode'] = 'capital-utilization'
+        return rows, diag
+
+    # Baseline used less than all free slots while candidates remain: cash is
+    # the binding pre-market resource under the canonical Min ROOS order.
+    diag['mode'] = 'dl-selection'
+    base_rank = {id(row): idx for idx, row in enumerate(rows)}
+    promoted_ids = set()
+    current_order = list(rows)
+    current = baseline
+
+    while True:
+        current_selected_ids = {id(row) for row in current['selected_rows']}
+        improving_trial = None
+        for candidate in rows:
+            candidate_id = id(candidate)
+            if candidate_id in current_selected_ids or candidate_id in promoted_ids:
+                continue
+            if not _candidate_binary_pass(candidate):
+                continue
+            trial_promoted = set(promoted_ids)
+            trial_promoted.add(candidate_id)
+            trial_order = sorted(
+                rows,
+                key=lambda row: (
+                    0 if id(row) in trial_promoted else 1,
+                    base_rank[id(row)],
+                ),
+            )
+            trial = _simulate_reserved_candidate_order(
+                trial_order,
+                available_cash=available_cash,
+                sizing_equity=sizing_equity,
+                free_slots=free_slots,
+                params=params,
+            )
+            if not bool(trial['cash_is_binding']):
+                continue
+            if int(trial['pass_reserved_cost_milli']) <= int(current['pass_reserved_cost_milli']):
+                continue
+            improving_trial = (trial_promoted, trial_order, trial)
+            break
+
+        if improving_trial is None:
+            break
+        promoted_ids, current_order, current = improving_trial
+
+    if not bool(current['cash_is_binding']):
+        raise RuntimeError('resource-aware Binary違反盤前cash-bottleneck資源契約')
+
+    diag.update({
+        'selected_count': int(current['selected_count']),
+        'selected_pass_count': int(current['pass_count']),
+        'reserved_cost_milli': int(current['reserved_cost_milli']),
+        'pass_reserved_cost_milli': int(current['pass_reserved_cost_milli']),
+        'promoted_pass_count': int(max(0, current['pass_count'] - baseline['pass_count'])),
+        'changed': bool([id(row) for row in current_order] != [id(row) for row in rows]),
+    })
+    return current_order, diag
 
 def execute_reserved_entries_for_day(
     portfolio,

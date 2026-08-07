@@ -13551,6 +13551,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                             "year": 2021,
                             "no_filter_return_pct": 10.0,
                             "quality_filter_return_pct": 11.0,
+                "score_ranking_return_pct": 12.0,
                             "delta_pct": 1.0,
                             "is_full_year": True,
                         }
@@ -16018,12 +16019,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "enabled_arms_build_canonical_execution_pairs_before_replay",
         (
-            ("full_roos", "formal", "C1", "C2"),
-            ("full_roos", "formal", "C1", "C7"),
-            ("min_roos", "all_off", "C3", "C4"),
             ("min_roos", "all_off", "C3", "C8"),
-            ("min_dl_tp1_roos", "all_off", "C5", "C6"),
-            ("min_dl_a9_roos", "all_off", "C9", "C10"),
+            ("min_roos", "all_off", "C3", "C11"),
         ),
         tuple(
             (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
@@ -16047,9 +16044,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10"}.issubset(
-            {arm.arm_id for arm in settings.enabled_arms}
-        ),
+        and {"C7", "C8", "C9", "C10", "C11"}.issubset(set(settings.arms))
+        and {arm.arm_id for arm in settings.enabled_arms} == {"C3", "C8", "C11"},
     )
 
     from dataclasses import replace as _replace_strategy_arm
@@ -16079,12 +16075,99 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C10": "Min-A9 ROOS: DL-on",
         "C5": "Min-TP1 ROOS",
         "C6": "Min-TP1 ROOS: DL-on",
+        "C11": "Min ROOS: A9 resource-aware",
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "min_roos_display_names_follow_training_identity_then_runtime_suffix_contract",
         True,
         all(settings.arms[arm_id].name == name for arm_id, name in expected_display_names.items()),
+    )
+
+    from core.exact_accounting import build_buy_ledger_from_price
+    from core.portfolio_entries import (
+        _simulate_reserved_candidate_order,
+        reorder_candidates_for_resource_aware_binary,
+    )
+    from core.strategy_params import V16StrategyParams
+    from core.trade_plans import build_normal_candidate_plan
+
+    resource_params = V16StrategyParams()
+    resource_params.use_breakout_quality_ranking = True
+    resource_params.breakout_quality_score_threshold = 0.5
+
+    def _resource_candidate(ticker, score):
+        plan = build_normal_candidate_plan(100.0, 5.0, 1_000_000.0, resource_params, ticker=ticker)
+        qty = int(plan["qty"])
+        cost_milli = build_buy_ledger_from_price(100.0, qty, resource_params)["net_buy_total_milli"]
+        return {
+            "ticker": ticker,
+            "type": "normal",
+            "limit_px": 100.0,
+            "init_sl": plan["init_sl"],
+            "init_trail": plan["init_trail"],
+            "target_price": plan.get("target_price"),
+            "entry_atr": 5.0,
+            "qty": qty,
+            "proj_cost_milli": cost_milli,
+            "proj_cost": cost_milli / 1000.0,
+            "is_orderable": True,
+            "params_obj": resource_params,
+            "sizing_capital": 1_000_000.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": "resource-aware-binary",
+            "breakout_quality_score": score,
+            "breakout_quality_rank": {"available": True, "score": score},
+        }
+
+    resource_rows = [
+        _resource_candidate("R1", 0.20),
+        _resource_candidate("R2", 0.30),
+        _resource_candidate("P1", 0.90),
+    ]
+    resource_baseline = _simulate_reserved_candidate_order(
+        resource_rows,
+        available_cash=180_000.0,
+        sizing_equity=1_000_000.0,
+        free_slots=3,
+        params=resource_params,
+    )
+    resource_order, resource_diag = reorder_candidates_for_resource_aware_binary(
+        resource_rows,
+        available_cash=180_000.0,
+        sizing_equity=1_000_000.0,
+        pre_market_occupied=7,
+        max_positions=10,
+        params=resource_params,
+    )
+    resource_selected = _simulate_reserved_candidate_order(
+        resource_order,
+        available_cash=180_000.0,
+        sizing_equity=1_000_000.0,
+        free_slots=3,
+        params=resource_params,
+    )
+    slot_order, slot_diag = reorder_candidates_for_resource_aware_binary(
+        resource_rows,
+        available_cash=180_000.0,
+        sizing_equity=1_000_000.0,
+        pre_market_occupied=9,
+        max_positions=10,
+        params=resource_params,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "resource_aware_a9_only_intervenes_when_cash_is_binding_and_increases_pass_reserved_capital",
+        True,
+        resource_diag["mode"] == "dl-selection"
+        and resource_diag["changed"]
+        and resource_baseline["cash_is_binding"]
+        and resource_selected["cash_is_binding"]
+        and resource_selected["pass_reserved_cost_milli"] > resource_baseline["pass_reserved_cost_milli"]
+        and resource_order[0]["ticker"] == "P1"
+        and slot_diag["mode"] == "capital-utilization"
+        and not slot_diag["changed"]
+        and [row["ticker"] for row in slot_order] == ["R1", "R2", "P1"],
     )
 
     same_param_direct_delta = strategy_comparison_module._same_param_direct_selection_delta(
@@ -16145,6 +16228,22 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "avg_exposure_pct": 48.0,
             "trade_count": 8,
         },
+        "score_ranking": {
+            "total_return_pct": 12.0,
+            "max_drawdown_pct": 5.0,
+            "return_over_max_drawdown": 2.4,
+            "annual_return_pct": 12.0,
+            "expected_value_r": 0.13,
+            "payoff_ratio": 1.30,
+            "avg_exposure_pct": 50.0,
+            "trade_count": 10,
+            "resource_aware_dl_selection_days": 3,
+            "resource_aware_capital_utilization_days": 7,
+            "resource_aware_changed_days": 2,
+            "resource_aware_promoted_pass_orders": 2,
+            "resource_aware_pass_reserved_gain_milli": 1000000,
+            "resource_aware_reserved_delta_milli": -500000,
+        },
         "yearly": [
             {
                 "year": 2021,
@@ -16201,16 +16300,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and replay_payload["status"] == "COMPLETED",
     )
 
-    full_off = settings.arms["C1"]
-    full_tp1 = settings.arms["C2"]
-    full_a9 = settings.arms["C7"]
+    min_off = settings.arms["C3"]
+    min_a9_hard = settings.arms["C8"]
+    min_a9_resource = settings.arms["C11"]
     mismatched_pairs = {
-        "full__tp1": {
-            "arm_contract": ("full_roos", "formal", full_off, full_tp1),
+        "min__a9_hard": {
+            "arm_contract": ("min_roos", "all_off", min_off, min_a9_hard),
             "payload": dict(mocked_pair_payload),
         },
-        "full__a9": {
-            "arm_contract": ("full_roos", "formal", full_off, full_a9),
+        "min__a9_resource": {
+            "arm_contract": ("min_roos", "all_off", min_off, min_a9_resource),
             "payload": {
                 **dict(mocked_pair_payload),
                 "no_filter": {
@@ -16223,7 +16322,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     try:
         strategy_comparison_module._scenario_payloads(
             mismatched_pairs,
-            {"full__tp1": 0.1, "full__a9": 0.2},
+            {"min__a9_hard": 0.1, "min__a9_resource": 0.2},
             settings=settings,
         )
     except ValueError as exc:
@@ -16340,28 +16439,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )),
     )
 
-    original_c2 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C2"])
+    original_c11 = dict(strategy_config.STRATEGY_COMPARE_ARMS["C11"])
     original_contrasts = {key: dict(value) for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()}
     try:
-        strategy_config.STRATEGY_COMPARE_ARMS["C2"]["enabled"] = False
+        strategy_config.STRATEGY_COMPARE_ARMS["C11"]["enabled"] = False
         for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
-            if contrast.get("left") == "C2" or contrast.get("right") == "C2":
+            if contrast.get("left") == "C11" or contrast.get("right") == "C11":
                 contrast["enabled"] = False
         reduced_settings = strategy_config.get_strategy_comparison_settings()
     finally:
-        strategy_config.STRATEGY_COMPARE_ARMS["C2"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C2"].update(original_c2)
+        strategy_config.STRATEGY_COMPARE_ARMS["C11"].clear(); strategy_config.STRATEGY_COMPARE_ARMS["C11"].update(original_c11)
         strategy_config.STRATEGY_COMPARE_CONTRASTS.clear(); strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "individual_dl_arm_and_contrast_switches_are_runtime_effective",
-        ("C1", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10"),
+        ("C3", "C8"),
         tuple(arm.arm_id for arm in reduced_settings.enabled_arms),
     )
 
     disabled_arms_changed = dict(reduced_settings.arms)
-    disabled_arms_changed["C2"] = replace(disabled_arms_changed["C2"], name="disabled definition")
+    disabled_arms_changed["C11"] = replace(disabled_arms_changed["C11"], name="disabled definition")
     enabled_arms_changed = dict(reduced_settings.arms)
-    enabled_arms_changed["C1"] = replace(enabled_arms_changed["C1"], name="enabled definition")
+    enabled_arms_changed["C3"] = replace(enabled_arms_changed["C3"], name="enabled definition")
     base_fingerprint = strategy_comparison_fingerprint(reduced_settings)
     add_check(
         results, "synthetic_breakout_quality", case_id,

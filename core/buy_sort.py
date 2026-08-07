@@ -9,10 +9,12 @@ ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD = 'ENTRY_TYPE_THEN_PROJ_COST'
 BREAKOUT_QUALITY_RANKING_POLICY_SCORE = 'score'
 BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED = 'capital-adjusted-score'
 BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET = 'capital-bucket-then-score'
+BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY = 'resource-aware-binary'
 SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES = (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
 )
 BREAKOUT_QUALITY_CAPITAL_BUCKET_COUNT = 3
 
@@ -279,6 +281,9 @@ def build_breakout_quality_ranking_prefixes(rows):
                 else (0, -(score * _capital_deployment_rate(item)))
             )
         return prefixes
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY:
+        # (AI註: Resource-aware Binary只在盤前資源瓶頸判定後介入；候選建立階段必須完整保留原Min ROOS順序。)
+        return {id(item): () for item in rows}
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET:
         available_rows = [item for item in rows if _quality_score_parts(item)[0]]
         rates = [_capital_deployment_rate(item) for item in available_rows]
@@ -303,15 +308,24 @@ def build_breakout_quality_ranking_prefixes(rows):
 def sort_candidate_rows(rows, method=None):
     active_method = get_buy_sort_method() if method is None else method
     quality_ranking = _ranking_enabled_for_rows(rows) if rows else False
-    quality_prefixes = (
-        build_breakout_quality_ranking_prefixes(rows) if quality_ranking else {}
+    ranking_policy = (
+        resolve_breakout_quality_ranking_policy(rows) if quality_ranking else None
     )
+    resource_aware_binary = (
+        ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
+    )
+    quality_prefixes = (
+        build_breakout_quality_ranking_prefixes(rows)
+        if quality_ranking and not resource_aware_binary
+        else {}
+    )
+    quality_ranking_for_sort = bool(quality_ranking and not resource_aware_binary)
 
     def quality_prefix(item):
         return quality_prefixes.get(id(item), ())
 
     if active_method == BUY_LIMIT_OVERAGE_SORT_METHOD:
-        if quality_ranking:
+        if quality_ranking_for_sort:
             rows.sort(
                 key=lambda item: (
                     *quality_prefix(item),
@@ -330,7 +344,7 @@ def sort_candidate_rows(rows, method=None):
             )
         return rows
     if active_method == ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD:
-        if quality_ranking:
+        if quality_ranking_for_sort:
             rows.sort(
                 key=lambda item: (
                     *quality_prefix(item),
@@ -348,7 +362,7 @@ def sort_candidate_rows(rows, method=None):
                 )
             )
         return rows
-    if quality_ranking:
+    if quality_ranking_for_sort:
         rows.sort(
             key=lambda item: (
                 *quality_prefix(item),

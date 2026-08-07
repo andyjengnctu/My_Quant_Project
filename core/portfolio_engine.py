@@ -47,6 +47,7 @@ from core.portfolio_ops import (
     cleanup_extended_signals_for_day,
     closeout_open_positions,
     execute_reserved_entries_for_day,
+    reorder_candidates_for_resource_aware_binary,
     settle_portfolio_positions,
     try_rotate_weakest_position,
 )
@@ -1079,6 +1080,20 @@ def run_portfolio_timeline(
         daily_missed_buy_count_before = int(total_missed_buys)
         candidate_sources_today = False
         orderable_candidates_today = []
+        resource_selection_diag = {
+            'enabled': False,
+            'mode': 'inactive',
+            'free_slots': max(0, int(max_positions) - int(pre_market_position_count)),
+            'candidate_count': 0,
+            'baseline_selected_count': 0,
+            'baseline_pass_count': 0,
+            'baseline_reserved_cost_milli': 0,
+            'selected_count': 0,
+            'selected_pass_count': 0,
+            'reserved_cost_milli': 0,
+            'promoted_pass_count': 0,
+            'changed': False,
+        }
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
             has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
@@ -1237,6 +1252,18 @@ def run_portfolio_timeline(
                     )
                 if profile_timing_enabled:
                     candidate_scan_sec += time.perf_counter() - t0
+
+                orderable_candidates_today, resource_selection_diag = _run_portfolio_replay_phase(
+                    today,
+                    "resource_aware_binary_order",
+                    reorder_candidates_for_resource_aware_binary,
+                    orderable_candidates_today,
+                    available_cash=available_cash,
+                    sizing_equity=sizing_equity,
+                    pre_market_occupied=pre_market_occupied,
+                    max_positions=max_positions,
+                    params=day_params,
+                )
 
                 qualified_candidate_snapshots_today = []
                 orderable_candidate_snapshots_today = []
@@ -1442,6 +1469,18 @@ def run_portfolio_timeline(
                 'End_Position_Gap': max(0, int(max_positions) - post_execution_position_count),
                 'Filled_Buys_Today': max(0, int(portfolio_entry_stats.get('filled_buy_count', 0) or 0) - daily_filled_buy_count_before),
                 'Missed_Buys_Today': max(0, int(total_missed_buys) - daily_missed_buy_count_before),
+                'Resource_Aware_DL_Enabled': bool(resource_selection_diag.get('enabled', False)),
+                'Resource_Aware_Mode': str(resource_selection_diag.get('mode') or 'inactive'),
+                'Resource_Aware_Changed': bool(resource_selection_diag.get('changed', False)),
+                'Resource_Aware_Baseline_Selected': int(resource_selection_diag.get('baseline_selected_count', 0) or 0),
+                'Resource_Aware_Baseline_PASS': int(resource_selection_diag.get('baseline_pass_count', 0) or 0),
+                'Resource_Aware_Selected': int(resource_selection_diag.get('selected_count', 0) or 0),
+                'Resource_Aware_Selected_PASS': int(resource_selection_diag.get('selected_pass_count', 0) or 0),
+                'Resource_Aware_Promoted_PASS': int(resource_selection_diag.get('promoted_pass_count', 0) or 0),
+                'Resource_Aware_Baseline_Reserved_Milli': int(resource_selection_diag.get('baseline_reserved_cost_milli', 0) or 0),
+                'Resource_Aware_Reserved_Milli': int(resource_selection_diag.get('reserved_cost_milli', 0) or 0),
+                'Resource_Aware_Baseline_PASS_Reserved_Milli': int(resource_selection_diag.get('baseline_pass_reserved_cost_milli', 0) or 0),
+                'Resource_Aware_PASS_Reserved_Milli': int(resource_selection_diag.get('pass_reserved_cost_milli', 0) or 0),
             })
 
         current_equity = today_equity

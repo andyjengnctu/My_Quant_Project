@@ -9,6 +9,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+STRATEGY_DL_RUNTIME_MODE_HARD_FILTER = 'hard-filter'
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY = 'resource-aware-binary'
+SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
+    STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
+)
+
+
 @dataclass(frozen=True)
 class StrategyArtifactBuilder:
     enabled: bool
@@ -97,6 +105,7 @@ class StrategyComparisonArm:
     rule_policy: str
     dl_enabled: bool
     dl_id: str | None
+    dl_runtime_mode: str | None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -108,6 +117,7 @@ class StrategyComparisonArm:
             "rule_policy": self.rule_policy,
             "dl_enabled": bool(self.dl_enabled),
             "dl_id": self.dl_id,
+            "dl_runtime_mode": self.dl_runtime_mode,
         }
 
 
@@ -349,14 +359,22 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         if arm.dl_enabled:
             if not arm.dl_id or arm.dl_id not in settings.dl_sources:
                 raise ValueError(f"arm {key}啟用DL但dl_id無效: {arm.dl_id}")
+            if arm.dl_runtime_mode not in SUPPORTED_STRATEGY_DL_RUNTIME_MODES:
+                raise ValueError(
+                    f"arm {key}的dl_runtime_mode不支援: {arm.dl_runtime_mode}; "
+                    f"allowed={SUPPORTED_STRATEGY_DL_RUNTIME_MODES}"
+                )
             trained_with = parameter_source.trained_with_dl_id
             if trained_with is not None and arm.dl_id != trained_with:
                 raise ValueError(
                     "DL-aware參數只能搭配訓練時相同的DL runtime: "
                     f"arm={key}, trained_with={trained_with}, runtime={arm.dl_id}"
                 )
-        elif arm.dl_id is not None:
-            raise ValueError(f"arm {key}關閉DL時dl_id必須為None")
+        else:
+            if arm.dl_id is not None:
+                raise ValueError(f"arm {key}關閉DL時dl_id必須為None")
+            if arm.dl_runtime_mode is not None:
+                raise ValueError(f"arm {key}關閉DL時dl_runtime_mode必須為None")
 
     enabled_ids = {arm.arm_id for arm in settings.enabled_arms}
     for key, contrast in settings.contrasts.items():
@@ -374,7 +392,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
 
     groups: dict[
         tuple[str, str],
-        dict[str, StrategyComparisonArm | dict[str, StrategyComparisonArm] | None],
+        dict[str, StrategyComparisonArm | dict[tuple[str, str], StrategyComparisonArm] | None],
     ] = {}
     for arm in settings.arms.values():
         group = groups.setdefault(
@@ -393,12 +411,14 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         if not isinstance(on_arms, dict):
             raise TypeError("strategy comparison group on-arm contract錯誤")
         dl_id = str(arm.dl_id or "")
-        if dl_id in on_arms:
+        runtime_mode = str(arm.dl_runtime_mode or "")
+        runtime_key = (dl_id, runtime_mode)
+        if runtime_key in on_arms:
             raise ValueError(
-                "同一param_source／rule_policy不得重複定義相同DL source: "
-                f"{arm.param_source}/{arm.rule_policy}/{dl_id}"
+                "同一param_source／rule_policy不得重複定義相同DL source/runtime mode: "
+                f"{arm.param_source}/{arm.rule_policy}/{dl_id}/{runtime_mode}"
             )
-        on_arms[dl_id] = arm
+        on_arms[runtime_key] = arm
 
     enabled_groups = {
         (arm.param_source, arm.rule_policy) for arm in settings.enabled_arms

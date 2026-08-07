@@ -31,6 +31,7 @@ from core.active_param_ensemble import (
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
@@ -176,7 +177,8 @@ def _parse_args(argv=None):
         help=(
             "score-ranking排序契約：score=原始Score；capital-adjusted-score="
             "Score×正式預估部署率；capital-bucket-then-score="
-            "每日部署率三分桶後桶內按Score。"
+            "每日部署率三分桶後桶內按Score；resource-aware-binary="
+            "只在盤前cash先成瓶頸時，以Binary PASS改善組合且維持Min ROOS預留資金。"
         ),
     )
     parser.add_argument(
@@ -843,7 +845,7 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
             "avg_end_positions": 0.0,
             "full_position_days": 0,
         }
-    return {
+    summary = {
         "sim_day_count": int(len(frame)),
         "avg_orderable_candidates": float(frame["Orderable_Candidates"].mean()),
         "zero_orderable_candidate_days": int((frame["Orderable_Candidates"] == 0).sum()),
@@ -854,6 +856,42 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
         "avg_end_positions": float(frame["Post_Execution_Positions"].mean()),
         "full_position_days": int((frame["End_Position_Gap"] == 0).sum()),
     }
+    if "Resource_Aware_Mode" in frame.columns:
+        mode = frame["Resource_Aware_Mode"].fillna("inactive").astype(str)
+        changed = frame.get("Resource_Aware_Changed", pd.Series(False, index=frame.index)).astype(bool)
+        promoted = pd.to_numeric(
+            frame.get("Resource_Aware_Promoted_PASS", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        baseline_reserved = pd.to_numeric(
+            frame.get("Resource_Aware_Baseline_Reserved_Milli", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        selected_reserved = pd.to_numeric(
+            frame.get("Resource_Aware_Reserved_Milli", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        baseline_pass_reserved = pd.to_numeric(
+            frame.get("Resource_Aware_Baseline_PASS_Reserved_Milli", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        selected_pass_reserved = pd.to_numeric(
+            frame.get("Resource_Aware_PASS_Reserved_Milli", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        selection_mask = mode == "dl-selection"
+        summary.update({
+            "resource_aware_dl_selection_days": int(selection_mask.sum()),
+            "resource_aware_capital_utilization_days": int((mode == "capital-utilization").sum()),
+            "resource_aware_changed_days": int(changed.sum()),
+            "resource_aware_promoted_pass_orders": int(promoted.sum()),
+            "resource_aware_reserved_delta_milli": int((selected_reserved - baseline_reserved).sum()),
+            "resource_aware_pass_reserved_gain_milli": int((selected_pass_reserved - baseline_pass_reserved).sum()),
+            "resource_aware_pass_reserved_non_improving_days": int(
+                (selection_mask & changed & (selected_pass_reserved <= baseline_pass_reserved)).sum()
+            ),
+        })
+    return summary
 
 def _to_json_native(value: Any) -> Any:
     """Convert pandas/numpy scalars and timestamps to stable JSON-native values."""
@@ -3076,13 +3114,27 @@ def run_comparison(
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_SCORE
                 else ["capital_adjusted_score_desc"]
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED
+                else ["resource_bottleneck_gate", "binary_pass_promotions", "existing_buy_sort"]
+                if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
                 else ["capital_deployment_bucket_desc", "breakout_quality_score_desc"]
             )
-            + ["existing_buy_sort", "ticker_deterministic"]
+            + (["ticker_deterministic"] if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY else ["existing_buy_sort", "ticker_deterministic"])
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
         ),
         "capital_aware_ranking_contract": (
             {
+                "resource_gate": "canonical_min_roos_exact_cash_cap_baseline",
+                "dl_intervention": "only_when_baseline_stops_before_free_slots_with_unselected_candidates",
+                "binary_objective": "increase_reserved_capital_assigned_to_pass_candidates",
+                "resource_feasibility": "cash remains the binding pre-market resource after every accepted overlay",
+                "selection_objective": "increase actually reservable capital assigned to Binary PASS candidates",
+                "fallback": "canonical_min_roos_order",
+                "future_target_used": False,
+                "additional_numeric_thresholds": [],
+            }
+            if comparison_mode == COMPARISON_MODE_SCORE_RANKING
+            and ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
+            else {
                 "projected_capital_fraction_source": "canonical_pretrade_proj_cost_div_sizing_capital",
                 "deployment_rate": "min(1, projected_capital_fraction / max_position_cap_pct)",
                 "capital_bucket_count": 3,

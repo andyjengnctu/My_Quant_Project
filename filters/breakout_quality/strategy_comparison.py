@@ -8,9 +8,13 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+import pandas as pd
+
 from config.strategy_compare import get_strategy_comparison_settings
 from core.runtime_utils import get_taipei_now
 from core.strategy_comparison import (
+    STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
@@ -27,10 +31,16 @@ from filters.breakout_quality.console_report import (
 )
 from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
+    COMPARISON_MODE_SCORE_RANKING,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
     run_comparison,
 )
+from core.buy_sort import (
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+    BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+)
+from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_rule_policies import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
@@ -40,7 +50,7 @@ from filters.breakout_quality.strategy_compare_preparation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESULT_SCHEMA_VERSION = 4
+RESULT_SCHEMA_VERSION = 5
 
 
 def _json_native(value: Any) -> Any:
@@ -243,21 +253,83 @@ def _fmt(value: Any, *, unit: str = "", digits: int = 2) -> str:
     return f"{number:.{digits}f}{unit}"
 
 
-def _load_direct_selection_r(output_dir: Path, *, root: Path) -> float:
-    path = output_dir / "trade_attribution.json"
-    payload = _read_json(path)
-    if payload is None:
+def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
+    mode = str(arm.dl_runtime_mode or "")
+    if mode == STRATEGY_DL_RUNTIME_MODE_HARD_FILTER:
+        return {
+            "comparison_mode": COMPARISON_MODE_HARD_FILTER,
+            "ranking_policy": BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+            "active_key": "quality_filter",
+            "yearly_key": "quality_filter_return_pct",
+            "active_trades_filename": "quality_filter_trades.csv",
+        }
+    if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY:
+        return {
+            "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
+            "ranking_policy": BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
+            "active_key": "score_ranking",
+            "yearly_key": "score_ranking_return_pct",
+            "active_trades_filename": "score_ranking_trades.csv",
+        }
+    raise ValueError(f"不支援的DL runtime mode: arm={arm.arm_id}, mode={mode!r}")
+
+
+def _exclusive_selection_r_from_trade_files(
+    pair_dir: Path,
+    *,
+    active_trades_filename: str,
+) -> float:
+    baseline_path = pair_dir / "no_filter_trades.csv"
+    active_path = pair_dir / active_trades_filename
+    if not baseline_path.is_file() or not active_path.is_file():
         raise FileNotFoundError(
-            "缺少交易歸因工件: "
-            + project_relative_display_path(path, project_root=root)
+            "缺少直接選擇R所需交易工件: "
+            f"{baseline_path.name}, {active_path.name}"
         )
-    value = _metric(
-        dict(payload.get("r_attribution") or {}),
-        "exclusive_selection_delta_r",
+    baseline = reconstruct_round_trips(
+        pd.read_csv(baseline_path, encoding="utf-8-sig"),
+        scenario="no_filter",
     )
-    if value is None:
-        raise ValueError("交易歸因缺少exclusive_selection_delta_r")
-    return float(value)
+    active = reconstruct_round_trips(
+        pd.read_csv(active_path, encoding="utf-8-sig"),
+        scenario="active",
+    )
+    left = baseline.set_index("match_key", drop=False) if not baseline.empty else baseline
+    right = active.set_index("match_key", drop=False) if not active.empty else active
+    left_keys = set(left.index.astype(str)) if not left.empty else set()
+    right_keys = set(right.index.astype(str)) if not right.empty else set()
+    left_only = left.loc[list(sorted(left_keys - right_keys))] if left_keys - right_keys else baseline.iloc[0:0]
+    right_only = right.loc[list(sorted(right_keys - left_keys))] if right_keys - left_keys else active.iloc[0:0]
+    left_r = pd.to_numeric(left_only.get("r_multiple"), errors="coerce").fillna(0.0).sum() if not left_only.empty else 0.0
+    right_r = pd.to_numeric(right_only.get("r_multiple"), errors="coerce").fillna(0.0).sum() if not right_only.empty else 0.0
+    return float(right_r - left_r)
+
+
+def _load_direct_selection_r(
+    pair_dir: Path,
+    *,
+    root: Path,
+    active_trades_filename: str,
+) -> float:
+    path = pair_dir / "trade_attribution.json"
+    if path.is_file():
+        payload = _read_json(path)
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "交易歸因工件格式無效: "
+                + project_relative_display_path(path, project_root=root)
+            )
+        value = _metric(
+            dict(payload.get("r_attribution") or {}),
+            "exclusive_selection_delta_r",
+        )
+        if value is None:
+            raise ValueError("交易歸因缺少exclusive_selection_delta_r")
+        return float(value)
+    return _exclusive_selection_r_from_trade_files(
+        pair_dir,
+        active_trades_filename=active_trades_filename,
+    )
 
 
 def _execution_pairs(
@@ -294,10 +366,14 @@ def _execution_pairs(
             raise TypeError("strategy comparison execution group contract錯誤")
         if not arm.dl_id:
             raise ValueError(f"DL-on arm缺少dl_id: {arm.arm_id}")
-        if any(existing.dl_id == arm.dl_id for existing in on_arms):
+        if any(
+            existing.dl_id == arm.dl_id
+            and existing.dl_runtime_mode == arm.dl_runtime_mode
+            for existing in on_arms
+        ):
             raise ValueError(
-                "啟用比較群組重複定義相同DL source: "
-                f"{arm.param_source}/{arm.rule_policy}/{arm.dl_id}"
+                "啟用比較群組重複定義相同DL source/runtime mode: "
+                f"{arm.param_source}/{arm.rule_policy}/{arm.dl_id}/{arm.dl_runtime_mode}"
             )
         on_arms.append(arm)
 
@@ -335,6 +411,7 @@ def _assert_same_shared_baseline(
         "rule_policy",
         "dl_enabled",
         "dl_id",
+        "dl_runtime_mode",
         "direct_selection_delta_r",
     }
     keys = (set(existing) | set(candidate)) - ignored
@@ -377,6 +454,7 @@ def _scenario_payloads(
                 "rule_policy": rule_policy,
                 "dl_enabled": False,
                 "dl_id": None,
+                "dl_runtime_mode": None,
                 "direct_selection_delta_r": 0.0,
             }
             existing = output.get(off_arm.arm_id)
@@ -389,13 +467,15 @@ def _scenario_payloads(
                     arm_id=off_arm.arm_id,
                 )
         if on_arm.arm_id in enabled_ids:
+            runtime_spec = _arm_runtime_spec(on_arm)
             output[on_arm.arm_id] = {
-                **dict(pair["payload"].get("quality_filter") or {}),
+                **dict(pair["payload"].get(runtime_spec["active_key"]) or {}),
                 "arm_id": on_arm.arm_id,
                 "param_source": param_source,
                 "rule_policy": rule_policy,
                 "dl_enabled": True,
                 "dl_id": on_arm.dl_id,
+                "dl_runtime_mode": on_arm.dl_runtime_mode,
                 "direct_selection_delta_r": float(direct_r[group_id]),
             }
     return output
@@ -510,6 +590,52 @@ def _contrast_table(
     )
 
 
+def _fmt_money_milli(value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "-"
+    number = float(value) / 1000.0
+    if not math.isfinite(number):
+        return "-"
+    return f"{number:,.0f}"
+
+
+def _resource_aware_table(
+    scenarios: dict[str, dict[str, Any]],
+    *,
+    settings: StrategyComparisonSettings,
+) -> str:
+    rows = []
+    for arm in settings.enabled_arms:
+        if arm.dl_runtime_mode != STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY:
+            continue
+        payload = scenarios[arm.arm_id]
+        rows.append((
+            arm.arm_id,
+            arm.name,
+            _fmt(payload.get("resource_aware_dl_selection_days"), digits=0),
+            _fmt(payload.get("resource_aware_capital_utilization_days"), digits=0),
+            _fmt(payload.get("resource_aware_changed_days"), digits=0),
+            _fmt(payload.get("resource_aware_promoted_pass_orders"), digits=0),
+            _fmt_money_milli(payload.get("resource_aware_pass_reserved_gain_milli")),
+            _fmt_money_milli(payload.get("resource_aware_reserved_delta_milli")),
+        ))
+    if not rows:
+        return "本次沒有啟用Resource-aware Binary arm。"
+    return render_table(
+        (
+            "編號",
+            "比較對象",
+            "DL選股日",
+            "資金利用優先日",
+            "實際改單日",
+            "新增PASS單",
+            "PASS預留資金增量",
+            "總預留資金增量",
+        ),
+        rows,
+    )
+
+
 def _yearly_table(
     pair_payloads: dict[str, dict[str, Any]],
     *,
@@ -536,7 +662,8 @@ def _yearly_table(
                 else:
                     by_id[off_arm.arm_id][year] = value
             if on_arm.arm_id in by_id:
-                by_id[on_arm.arm_id][year] = row.get("quality_filter_return_pct")
+                runtime_spec = _arm_runtime_spec(on_arm)
+                by_id[on_arm.arm_id][year] = row.get(runtime_spec["yearly_key"])
     years = sorted({year for values in by_id.values() for year in values})
     rows = [
         (
@@ -590,13 +717,17 @@ def _render_report(
             _contrast_table(scenarios, settings=settings),
             render_section("3. 年度結果"),
             _yearly_table(pair_payloads, settings=settings),
-            render_section("4. 判讀原則"),
+            render_section("4. Resource-aware盤前診斷"),
+            _resource_aware_table(scenarios, settings=settings),
+            render_section("5. 判讀原則"),
             (
                 "以config中啟用的contrast逐項判讀；不得用單一年份改善取代"
                 "全期RoMD、EV、同參數DL選擇R與年度穩定性。同參數DL選擇R只可在"
                 "param_source與rule_policy皆相同的arms之間比較；跨參數contrast固定顯示-。"
                 "比較流程不建立Label、不選模型也不訓練模型權重；可依config透過正式"
                 "共用服務補建既有模型的forward-OOS scores與比較所需策略參數工件。"
+                "Resource-aware只在盤前cash先成瓶頸時介入，且不得新增資金利用Threshold；"
+                "其核心診斷是PASS預留資金是否增加、總曝險與策略績效是否改善。"
             ),
         )
     ).rstrip() + "\n"
@@ -697,7 +828,11 @@ def run_strategy_comparison(
         if not on_arm.dl_id:
             raise ValueError(f"DL-on arm缺少dl_id: {on_arm.arm_id}")
         dl: StrategyDLSource = settings.dl_sources[on_arm.dl_id]
-        group_id = f"{param_source}__{rule_policy}__{on_arm.dl_id}"
+        runtime_spec = _arm_runtime_spec(on_arm)
+        group_id = (
+            f"{param_source}__{rule_policy}__{on_arm.dl_id}__"
+            f"{str(on_arm.dl_runtime_mode).replace('-', '_')}"
+        )
         pair_dir = run_dir / "pairs" / group_id
         all_off = rule_policy == "all_off"
         pair_payload = run_comparison(
@@ -709,7 +844,8 @@ def run_strategy_comparison(
             enable_rotation=settings.rotation == "on",
             fixed_risk=None,
             max_position_cap_pct=None,
-            comparison_mode=COMPARISON_MODE_HARD_FILTER,
+            comparison_mode=runtime_spec["comparison_mode"],
+            ranking_policy=runtime_spec["ranking_policy"],
             optional_entry_filter_policy=(
                 OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
                 if all_off
@@ -731,7 +867,11 @@ def run_strategy_comparison(
             "arm_contract": (param_source, rule_policy, off_arm, on_arm),
             "payload": pair_payload,
         }
-        direct_r[group_id] = _load_direct_selection_r(pair_dir, root=root)
+        direct_r[group_id] = _load_direct_selection_r(
+            pair_dir,
+            root=root,
+            active_trades_filename=runtime_spec["active_trades_filename"],
+        )
 
     scenarios = _scenario_payloads(pair_payloads, direct_r, settings=settings)
     report = _render_report(

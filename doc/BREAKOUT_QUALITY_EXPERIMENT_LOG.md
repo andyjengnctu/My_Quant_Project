@@ -4048,3 +4048,65 @@ config-driven策略比較重構後，`run_strategy_comparison()`保留對`_execu
 1. 先做`Min ROOS` promotion robustness gate：重用既有rolling optimizer工件，比較正式selector／seed ensemble／fold與年度集中度，不重新調參；若優勢只由2023或單一selector造成，維持C1正式基準。
 2. 只有A9保留DL研究：以C3為固定基準，實作capacity-preserving A9。A9不得再作eligibility hard reject；只在盤前候選數超過可掛單容量時影響候選優先序，必須保持正式slot／資金／盤前掛單與盤中不可換股契約，不得以OOS回調threshold。
 3. 若capacity-preserving A9的同參數直接選擇效果仍不為正，Binary DL策略線停止；若轉正但總績效仍差，再做exact-accounting資金路徑歸因，不直接進新Label／新架構。
+
+## 2026-08-07 — A9 Resource-aware Binary：盤前資源瓶頸介入實作
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / C3_C8_C11_FOCUSED_GATE`
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260807_153958_8da250a.zip`
+- ZIP SHA256：`56667bca105a0772973f5a2697007ec048995cafbf45ef94c3508c6de190157d`
+- 固定研究基準：`C3 = Min ROOS`
+- 既有hard-filter對照：`C8 = Min ROOS: A9-on`
+- 新arm：`C11 = Min ROOS: A9 resource-aware`
+
+### 研究動機
+
+C8相對C3的交易數由336增加至374，但平均曝險由92.13%降至78.24%，顯示A9低曝險不能只用「補回被hard filter刪掉的候選」解釋。使用者要求Binary DL先維持與Min ROOS相同的盤前資訊哲學：只使用當下持股、free slots、可用現金、正式cash-capped sizing、原Min ROOS順序與既有A9 Binary判定，不預測成交率、持有期或未來曝險，也不新增距限價bucket、資金利用率百分比或加權係數。
+
+### Resource-aware正式契約
+
+1. A9不再作setup eligibility hard reject；normal／continuation／合法Re-entry候選生命週期保留，沿用原始breakout日canonical A9 score payload。
+2. 候選建立與初始順序保持Min ROOS原position-aware buy-sort；`resource-aware-binary`不得在candidate construction階段先按Score重排。
+3. 每日盤前在真正reserve前，以正式`build_cash_capped_entry_plan()`與exact accounting模擬Min ROOS順序；1% risk sizing是最大部位，不是最低部位，剩餘現金不足時允許正式縮單。
+4. 若Min ROOS模擬會先用滿free slots，或沒有仍可競爭的未選候選，判定為`capital-utilization`：DL完全不介入。
+5. 只有Min ROOS在free slots尚未用滿時就因現金／正式最低下單契約無法再建立任何剩餘候選單，才判定為`dl-selection`；此時cash是盤前binding resource。
+6. DL overlay由Min ROOS基準開始，依原Min ROOS順位逐一嘗試提前尚未選中的A9 PASS候選；每次trial都重新走相同cash-capped exact-accounting模擬。
+7. trial只有在cash仍為binding resource，且「實際可預留在PASS候選上的資金」嚴格增加時才接受；不再要求總預留資金必須大於等於Min ROOS的精確金額，避免把DL空間鎖死。
+8. 同等可行改善依Min ROOS原順位決定；找不到改善即回退Min ROOS。不得使用Future Target、當日尚未完成OHLCV或任何新增數值Threshold。
+
+### 新盤前診斷
+
+正式daily-capacity新增Resource-aware mode、baseline／selected掛單數與PASS數、總預留資金、PASS預留資金及promotion狀態。策略比較報表新增：DL選股日、資金利用優先日、實際改單日、新增PASS單、PASS預留資金增量與總預留資金增量。
+
+### 目前比較設定
+
+只啟用C3、C8、C11，避免重跑已結案的C1～C10其他arms：
+
+| Arm | Runtime | 目的 |
+|---|---|---|
+| C3 | Min ROOS | 原資金利用基準 |
+| C8 | Min ROOS: A9-on | 既有A9 hard-filter失敗對照 |
+| C11 | Min ROOS: A9 resource-aware | 驗證只在cash先成瓶頸時介入是否能保住資金利用並改善選股 |
+
+啟用contrasts固定為`C8-C3`、`C11-C3`、`C11-C8`。
+
+### Dataset／Label／模型重建需求
+
+- Dataset：不重建。
+- Label：不重建。
+- A9模型權重：不重訓。
+- A9 threshold：不調整，沿用既有正式threshold。
+- forward-OOS scores：沿用既有A9 canonical runtime工件；缺少或過期才由正式共用服務補匯出。
+- Min ROOS active params：沿用既有P2工件，不重新optimizer。
+
+### 結果採用規則
+
+本節只有runtime實作，尚無C11正式績效。先看C11相對C3是否恢復接近Min ROOS的曝險與RoMD，再看同參數DL選擇R、EV及年度穩定性；不得依C11結果回頭新增資金利用Threshold或調A9 threshold。
+
+### 下一步
+
+`python apps/strategy_compare.py` → `[2] 查看設定、工件與預計動作` → `[1/Enter] 執行目前比較設定`，取得C3／C8／C11固定forward-OOS結果。
