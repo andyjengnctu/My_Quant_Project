@@ -1564,7 +1564,7 @@ def main(argv=None) -> int:
     }
     write_json(artifact_paths.manifest_path, manifest)
 
-    print(f"\n{contract['phase']} continuous ranker完成")
+    print("\nContinuous ranker完成")
     print(
         f"selected_epoch={selected_epoch} "
         f"epoch_selection_validation_daily_spearman={epoch_selection['best_validation_mean_daily_spearman']:.4f}"

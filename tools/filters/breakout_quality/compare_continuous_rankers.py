@@ -369,8 +369,8 @@ def _resolve_reference_pair_dir(
         if all(path.is_file() for path in required):
             return pair_dir, run_dir, payload
     raise FileNotFoundError(
-        f"找不到符合目前{reference_arm_id}語意的已完成Strategy Compare pair；"
-        "請先確認C17/C18/C19/C20/C21/C22既有正式結果仍在 outputs/strategy_compare/runs/"
+        f"找不到符合目前設定 reference arm={reference_arm_id} 語意的已完成 Strategy Compare pair；"
+        "請確認目前 config 指定的比較對象已有正式結果，且工件仍在 outputs/strategy_compare/runs/"
     )
 
 

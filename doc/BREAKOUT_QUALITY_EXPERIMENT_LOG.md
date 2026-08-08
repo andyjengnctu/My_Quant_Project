@@ -5999,3 +5999,17 @@ P2初版正式model menu直接顯示`MR-12A/B/C`，App簡易摘要與比較rende
 - `doc/TEST_SUITE_CHECKLIST.md` B16已補config-driven menu contract；主表B16狀態仍為DONE且與最近`PARTIAL -> DONE` transition一致，該列Markdown欄數合法。
 - formal synthetic registry仍註冊`validate_dataset_cli_contract_case`與`validate_breakout_quality_pairwise_ranker_contract_case`，可在使用者本機正式suite覆蓋本輪UI/config與P2比較契約。
 - GPT未執行`apps/test_suite.py`或formal pipeline；正式double check仍由使用者本機正式入口執行。
+
+## 2026-08-09 — Config-driven UI follow-up：移除非選單使用者可見的研究 ID 殘留
+
+狀態：Infrastructure/UI consistency fix completed；不占用新的 `MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，既有 MR-12A/B/C、C17～C22、P1/P2 診斷算法與研究結果均不變。
+
+程式基準：使用者 ZIP `test-branch-1_20260809_020312_f38483f.zip`，SHA256 `be668fcd1262e296db4d377be6406191a534169ce8542e2ea10bfee0b92e72aa`。
+
+本輪只修使用者可見文字的一致性：
+
+1. `train_continuous_ranker.py` 完成訊息不再輸出硬編碼 phase（例如 `12B continuous ranker完成`），統一為泛化 `Continuous ranker完成`；正式 profile／experiment identity 仍由 canonical report/manifest 保存，不改模型語意。
+2. `compare_continuous_rankers.py` 找不到 Dynamic-K reference pair 時，不再列出固定 `C17/C18/C19/C20/C21/C22`；錯誤訊息改為顯示目前 config 的 `reference_arm_id`，並泛化指向 `outputs/strategy_compare/runs/`。
+3. `PROJECT_SETTINGS.md` B18 已是正式 UI 契約，本輪不重複新增條款；互動選單仍由 `comparison_settings.menu_label` 與 config-driven enable/profile/reference/summary settings 驅動。
+
+不修改 Dataset／Target、training objective、optimizer、epoch selection、checkpoint、frozen score、Top-K／K-boundary、random baseline、Dynamic-K join、selector、Strategy Compare、sizing／accounting／execution。
