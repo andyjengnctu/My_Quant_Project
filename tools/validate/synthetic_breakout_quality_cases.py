@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 from dataclasses import replace
 import ast
+from importlib.util import find_spec
 import io
 import json
 import math
@@ -16,6 +17,21 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
+
+
+def _read_audit_source(audit_type: str) -> str:
+    """Resolve Audit source through the project-wide catalog SSOT."""
+    from tools.audit.catalog import get_audit_entry
+
+    entry = get_audit_entry(audit_type)
+    spec = find_spec(entry.module)
+    source_path = Path(spec.origin) if spec is not None and spec.origin else None
+    if source_path is None or not source_path.is_file():
+        raise FileNotFoundError(
+            f"Audit catalog module找不到source: audit_type={audit_type}, module={entry.module}"
+        )
+    return source_path.read_text(encoding="utf-8")
+
 
 from core.active_param_ensemble import build_static_active_param_ensemble_payload
 from core.params_io import params_to_json_dict
@@ -8085,12 +8101,7 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
         if any(isinstance(target, ast.Name) and target.id == "COMMAND_MODULES" for target in node.targets):
             command_modules = ast.literal_eval(node.value)
             break
-    audit_source = (
-        Path(__file__).resolve().parents[1]
-        / "filters"
-        / "breakout_quality"
-        / "audit_qualified_candidate_set.py"
-    ).read_text(encoding="utf-8")
+    audit_source = _read_audit_source("qualified_candidate_set")
     strategy_source = (
         Path(__file__).resolve().parents[2]
         / "filters"
@@ -8245,13 +8256,7 @@ def validate_breakout_quality_target_component_attribution_contract_case(_base_p
         if any(isinstance(target_node, ast.Name) and target_node.id == "COMMAND_MODULES" for target_node in node.targets):
             command_modules = ast.literal_eval(node.value)
             break
-    audit_path = (
-        Path(__file__).resolve().parents[1]
-        / "filters"
-        / "breakout_quality"
-        / "audit_target_component_attribution.py"
-    )
-    audit_source = audit_path.read_text(encoding="utf-8")
+    audit_source = _read_audit_source("target_component_attribution")
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -8470,13 +8475,7 @@ def validate_breakout_quality_target_time_penalty_ablation_contract_case(_base_p
         ):
             command_modules = ast.literal_eval(node.value)
             break
-    audit_path = (
-        Path(__file__).resolve().parents[1]
-        / "filters"
-        / "breakout_quality"
-        / "audit_target_time_penalty_ablation.py"
-    )
-    audit_source = audit_path.read_text(encoding="utf-8")
+    audit_source = _read_audit_source("target_time_penalty_ablation")
     menu_source = app_source[
         app_source.find("def _run_interactive_menu") : app_source.find("def main")
     ]
@@ -10744,13 +10743,7 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
     menu_source = app_source[
         app_source.find("def _run_interactive_menu") : app_source.find("def main")
     ]
-    audit_path = (
-        Path(__file__).resolve().parents[1]
-        / "filters"
-        / "breakout_quality"
-        / "audit_no_time_continuous_target.py"
-    )
-    audit_source = audit_path.read_text(encoding="utf-8")
+    audit_source = _read_audit_source("no_time_continuous_target")
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -10910,8 +10903,7 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
     menu_source = app_source[
         app_source.find("def _run_interactive_menu") : app_source.find("def main")
     ]
-    audit_path = root / "tools" / "filters" / "breakout_quality" / "audit_pass_realization_gap.py"
-    audit_source = audit_path.read_text(encoding="utf-8")
+    audit_source = _read_audit_source("pass_realization_gap")
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -11098,8 +11090,7 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
             command_modules = ast.literal_eval(node.value)
             break
     menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
-    audit_path = root / "tools" / "filters" / "breakout_quality" / "audit_selection_strategy_realization.py"
-    audit_source = audit_path.read_text(encoding="utf-8")
+    audit_source = _read_audit_source("selection_strategy_realization")
     optimizer_path = root / "tools" / "optimizer" / "outer_rolling_oos.py"
     optimizer_source = optimizer_path.read_text(encoding="utf-8")
     add_check(
@@ -11511,9 +11502,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
         root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
     entry_source = (root / "core" / "portfolio_entries.py").read_text(encoding="utf-8")
-    audit_source = (
-        root / "tools" / "filters" / "breakout_quality" / "audit_candidate_counterfactual_execution.py"
-    ).read_text(encoding="utf-8")
+    audit_source = _read_audit_source("candidate_counterfactual_execution")
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "candidate_counterfactual_cli_only_and_sidecar_is_not_replay_counts",
@@ -11675,9 +11664,7 @@ def validate_breakout_quality_portfolio_selection_pressure_contract_case(_base_p
             command_modules = ast.literal_eval(node.value)
             break
     menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
-    audit_source = (
-        root / "tools" / "filters" / "breakout_quality" / "audit_portfolio_selection_pressure.py"
-    ).read_text(encoding="utf-8")
+    audit_source = _read_audit_source("portfolio_selection_pressure")
     args = parse_selection_pressure_args([])
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -12567,12 +12554,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         and isinstance(node.func, ast.Name)
         and node.func.id in {"_load_reusable_fold", "_migrate_compatible_legacy_fold"}
     }
-    base_target_audit_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "audit_continuous_target.py"
-    ).read_text(encoding="utf-8")
-    no_time_target_source = (
-        project_root / "tools" / "filters" / "breakout_quality" / "audit_no_time_continuous_target.py"
-    ).read_text(encoding="utf-8")
+    base_target_audit_source = _read_audit_source("continuous_target")
+    no_time_target_source = _read_audit_source("no_time_continuous_target")
     add_check(
         results,
         "synthetic_breakout_quality",

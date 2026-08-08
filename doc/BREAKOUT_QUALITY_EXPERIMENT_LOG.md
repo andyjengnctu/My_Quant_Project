@@ -5047,3 +5047,52 @@ metadata固定標示：`read_only=true`、`portfolio_replay_executed=false`、`t
 - `tools.validate.synthetic_cases`完整import成功；所有本輪已刪除Breakout Quality legacy module的AST import引用=0。
 - 全專案282個Python檔AST parse與`compileall`通過；bare except=0、pass-only exception handler=0、internal import cycle=0、`core/filters → tools.audit`=0、legacy wrapper=0。
 - `apps/test_suite.py`僅做靜態可信度檢查，未由GPT執行；formal結果仍須由使用者本機重新執行確認。
+
+## 2026-08-08 — Audit migration physical-path formal-regression閉環
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / FORMAL_RETEST_PENDING / AUD-c15-strategy-attribution RESULT_PENDING`
+
+### 程式與formal bundle基準
+
+- 使用者ZIP：`test-branch-1_20260808_121033_c482ac9.zip`
+- ZIP SHA256：`30e99cd6f59386b96b13fa8168620ac4886656c4b08503191cc0b52dfb0b8cf4`
+- Formal bundle：`to_chatgpt_bundle_20260808_121126_4140bb87.zip`
+- Bundle SHA256：`fb327c5bbf606bd8cc7d72ab08c391f44529a9a2aad37956decd85dc0609b2dc`
+- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### Formal結果與根因
+
+使用者本機結果：quick gate PASS、chain checks PASS、ml smoke PASS；consistency只有1個failure，meta quality有4個failure。Bundle顯示四個meta failure並非四個獨立產品問題：
+
+1. consistency在`validate_breakout_quality_pass_realization_gap_attribution_contract_case`讀取已刪除的`tools/filters/breakout_quality/audit_pass_realization_gap.py`時`FileNotFoundError`，synthetic suite中止；
+2. meta quality的`coverage_synthetic_suite_runs_successfully`由同一例外失敗；
+3. line／branch coverage與key-target coverage因此只量到提前中止前的22%左右，屬連帶失敗，不是runtime coverage本身突然退化。
+
+進一步獨立掃描沒有停在formal首先撞到的11H路徑，又找到9個同類latent stale physical-path references：11C、11D、11E、11F、11I、11J、11K各1處，PIT builder另對11A／11F各1處。合計10個舊實體路徑讀取、影響T270～T273與T275～T279九個synthetic tests；若只修formal第一個FileNotFound，下一次suite會繼續在後續案例逐一失敗。
+
+### 修正
+
+`tools/validate/synthetic_breakout_quality_cases.py`新增`_read_audit_source(audit_type)`，所有上述10個Audit source inspection均不再保存physical path，而是：
+
+`audit_type → tools/audit/catalog.py → canonical module → module source`
+
+因此Audit catalog繼續作project-wide inventory SSOT；未來Audit實體位置再調整時，validator不需要同步第二份路徑mapping。沒有恢復任何legacy wrapper或舊檔。
+
+### 語意邊界
+
+- 不修改Dataset、Label、MR-12A、DL-CONT12A、SR-C15、selector、strategy replay或任何正式研究結果。
+- `AUD-c15-strategy-attribution`仍為`IMPLEMENTED / RESULT_PENDING`；本輪沒有產生正式C15 Audit結果。
+- meta quality coverage門檻／target清單沒有為了通過測試而下修；本輪只修復synthetic suite提前中止的來源解析。
+
+### GPT獨立驗證
+
+未執行`apps/test_suite.py`或其formal step。獨立驗證確認：
+
+- 9個受影響Audit type皆可由catalog解析到存在的canonical source；
+- 原各synthetic所檢查的11H／11I／11J／11K／11A／11F關鍵source token在canonical module中仍存在；
+- validator source中已無`tools/filters/breakout_quality/audit_*.py`硬編讀取；
+- 全專案283個Python檔AST parse與`compileall`通過；bare except=0、pass-only exception handler=0、internal import cycle=0；
+- `apps/test_suite.py`與Checklist僅做靜態可信度／覆蓋治理核對，正式double-check仍由使用者本機重跑確認。
+

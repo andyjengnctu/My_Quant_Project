@@ -1913,6 +1913,24 @@
 | 2026-08-08 | B191 | 分配MR-12A／DL-CONT12A／SR-C15，新增No-time all-label continuous profile、profile-driven OOS artifact contract與完全沿用C14 resource gate的C15後收斂為DONE | PARTIAL -> DONE | `config/breakout_quality.py`, `tools/filters/breakout_quality/train_continuous_ranker.py`, `filters/breakout_quality/ranking_score_store.py`, `filters/breakout_quality/strategy_compare_preparation.py`, `config/strategy_compare.py` |
 | 2026-08-08 | B191 | 正式suite發現MR-12A profile加入synthetic時誤插到既有PASS-only `patch.object`的第4 positional argument，且兩個expected tuple多塞all-event profile；產品runtime未受影響但模型語意隔離測試失真，契約退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-08 | B191 | 移除7處誤插profile、恢復PASS-only workflow override單一profile語意，並以獨立gate／adaptation direct regression確認MR-12A不污染舊continuous workflow後重新收斂為DONE | PARTIAL -> DONE | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T270 | Audit搬遷後11C synthetic仍硬編已刪除的舊Audit實體路徑，獨立掃描確認存在latent `FileNotFoundError`，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T270 | 11C source inspection改由`tools/audit/catalog.py`的canonical module identity解析實作檔，不再保存第二份physical-path真理後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
+| 2026-08-08 | T271 | Audit搬遷後11D synthetic仍硬編已刪除的舊Audit實體路徑，獨立掃描確認存在latent `FileNotFoundError`，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T271 | 11D source inspection改由Audit catalog canonical module解析後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
+| 2026-08-08 | T272 | Audit搬遷後11E synthetic仍硬編已刪除的舊Audit實體路徑，獨立掃描確認存在latent `FileNotFoundError`，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T272 | 11E source inspection改由Audit catalog canonical module解析後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
+| 2026-08-08 | T273 | Audit搬遷後11F synthetic仍硬編已刪除的舊Audit實體路徑，獨立掃描確認存在latent `FileNotFoundError`，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T273 | 11F source inspection改由Audit catalog canonical module解析後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
+| 2026-08-08 | T275 | 正式consistency在11H synthetic讀取已刪除的舊Audit實體路徑時`FileNotFoundError`，project-wide Audit搬遷後validator仍保存第二份physical-path真理，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T275 | 11H source inspection改由`tools/audit/catalog.py`的canonical module identity解析實作檔，不再硬編`tools/filters/.../audit_*.py`後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
+| 2026-08-08 | T276 | 同輪獨立掃描發現11I synthetic仍硬編已刪除的舊Audit實體路徑，若前項不中止將同樣`FileNotFoundError`，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T276 | 11I source inspection改由Audit catalog canonical module解析後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
+| 2026-08-08 | T277 | 同輪獨立掃描發現11J synthetic仍硬編已刪除的舊Audit實體路徑，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T277 | 11J source inspection改由Audit catalog canonical module解析後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
+| 2026-08-08 | T278 | 同輪獨立掃描發現11K synthetic仍硬編已刪除的舊Audit實體路徑，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T278 | 11K source inspection改由Audit catalog canonical module解析後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
+| 2026-08-08 | T279 | 同輪獨立掃描發現PIT builder synthetic仍硬編已搬遷的11A／11F Audit實體路徑兩處，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
+| 2026-08-08 | T279 | 11A／11F source inspection改由Audit catalog canonical module解析後重新收斂為DONE | PARTIAL -> DONE | `_read_audit_source`, `tools/audit/catalog.py` |
 | 2026-08-08 | T282 | capture從strategy engine拆成獨立Audit materializer後，原synthetic仍驗自動內嵌與capture-only CLI，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
 | 2026-08-08 | T282 | validator改驗strategy／Audit報表分離、既有pair read-only materialization與Future Target post-replay隔離後重新收斂為DONE | PARTIAL -> DONE | `validate_breakout_quality_score_ranking_capture_audit_contract_case` |
 | 2026-08-08 | T286 | 原C14 synthetic直接呼叫盤前resource-aware selector，未經`sort_candidate_rows`候選pre-sort，因此無法攔截Continuous policy在候選建立階段漏登錄，測試退回PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_breakout_quality_cases.py` |
