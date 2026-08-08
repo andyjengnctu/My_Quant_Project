@@ -513,6 +513,7 @@ def _simple_report_details(
                     else []
                 ),
                 ("Dynamic-K common-complete日", coverage.get("full_score_coverage_date_count")),
+                ("Dynamic Target基準", "原始score-event-date（非trade-date剩餘機會）"),
                 (f"{summary_left} Dynamic raw-score Boundary", _fmt_simple_metric(dynamic_summary.get("boundary_concordance"), percent=True)),
                 (
                     f"{summary_left}−{summary_right} Dynamic raw-score Boundary Δ",

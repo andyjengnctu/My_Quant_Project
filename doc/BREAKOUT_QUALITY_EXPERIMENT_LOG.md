@@ -6300,3 +6300,52 @@ MR-12B training objective為**within-day RankNet**：pair只在相同event date�
 - 若same-score-date與cross-score-date皆轉負，則orderable universe還有其他candidate-lifecycle／portfolio-state conditioning，下一步拆score age、candidate type、fresh/continuation與C17/C19 native planned basket action。
 - 在上述診斷完成前，不建立MR-12D、不修改C17/C18。
 
+## 2026-08-09 — P2 score-date comparability結果：跨date尺度失配排除；orderable event-target語意邊界確認
+
+### 狀態
+
+`P2_SCORE_DATE_COMPARABILITY_RESULT_AVAILABLE / CROSS_DATE_MISMATCH_REJECTED`。此為read-only模型品質／候選語意歸因，不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity；`MR-12B / DL-CONT12B`維持current model research anchor，`MR-12C`維持REJECTED。不得依本輪orderable原始event-target診斷修改Pairwise loss。
+
+### 本輪基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_043045_8dbc562.zip`。
+- SHA256：`2e4383cb7eef5f9a83e27b18a891476df63291e47f51e037ff674e7e4e02861e`。
+- GPT fresh extract：`/mnt/data/stock_review_20260809_043045`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 使用者本機結果
+
+在C17 reference common-complete orderable universe：
+
+- score-age>0候選=`3246 / 3246 = 100%`；score age mean=`20.22`天、median=`14`天、max=`288`天。
+- mixed score-date日=`92/94 = 97.87%`；K=1 mixed score-date日=`70/71 = 98.59%`。
+- All pairs：MR-12B Pair=`54.89%` vs MR-12A=`52.50%`，Δ=`+2.39pp`；mean-daily Δ=`+1.38pp`。
+- Same score-date：Pair Δ=`+0.67pp`；mean-daily Δ=`+2.79pp`。
+- Cross score-date：Pair Δ=`+2.49pp`；mean-daily Δ=`+1.38pp`。
+- K=1 same score-date：Pair Δ=`+0.45pp`；mean-daily Δ=`+2.46pp`。
+- K=1 cross score-date：Pair Δ=`+2.14pp`；mean-daily Δ=`+1.48pp`。
+
+因此上一輪「MR-12B within-day RankNet缺乏跨score-event-date absolute comparability，導致C17 orderable K=1反轉」假說被直接否定：MR-12B在same-date與cross-date pair ordering都不弱於MR-12A，且cross-date優勢更大。
+
+### 新確認的語意邊界
+
+P2 Dynamic-K / score-date comparability目前使用的方向真值仍是每個候選**原始score-event-date**對應的`strategy_aligned_opportunity_no_time_r_v1 target_raw_r`。該Target由原始事件日後固定future horizon建立；當候選在較晚trade date仍orderable時，P2並沒有重新錨定到當下trade date，也沒有重建剩餘可實現strategy R。
+
+本輪orderable候選全部`score_age>0`，且median 14天、mean 20.22天，故：
+
+1. P2仍可回答「frozen score對原始事件Target ordering保留多少」；
+2. 但Dynamic-K Top-K Lift／Boundary不得解讀成「在當下trade date買入後的counterfactual realized R」；
+3. C17 K=1的Event `B>A`、Orderable原始event-target `B<A`與正式C19/C20經濟結果`B>A`並不形成模型採用矛盾；目前缺的是trade-date action outcome attribution，而不是更多原始event-target切片。
+
+### 本輪報表契約修正
+
+- P2 JSON schema提升為5；Dynamic-K與score-date comparability明確保存`target_anchor=original_score_event_date_target`與`trade_date_remaining_opportunity_evaluated=false`。
+- console／Markdown新增score-age bucket顯示，並明確註記原始event-target不是trade-date remaining opportunity / counterfactual realized R。
+- 不修改任何score、Target建置、模型、selector、Strategy Compare、accounting或execution。
+
+### 下一步
+
+1. **模型研究主線回到MR-12B Selection PIT**：由正式選單建立／更新Selection PIT Scores並做PIT模型驗證，確認Pairwise ranking優勢是否跨歷史fold穩定；PIT只使用其合法Selection／Validation時間窗，不讀Forward-OOS作訓練或選模。
+2. P2到此不再因C17 K=1原始event-target反轉設計新loss；MR-12D暫不建立。
+3. 若仍要解釋C17/C19、C18/C20的portfolio action差異，下一個診斷必須以**orderable trade date的canonical counterfactual／realized strategy outcome**為真值，並直接對planned basket／repair／feasible-ascent action做歸因；不得再用原始score-event-date Target冒充當下剩餘機會。
+

@@ -38,7 +38,7 @@ from filters.breakout_quality.paths import resolve_filter_output_dir
 from filters.breakout_quality.ranking_score_store import load_continuous_ranker_oos_contract
 from filters.breakout_quality.workflow_io import PROJECT_ROOT
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 REPORT_JSON_FILENAME = "continuous_ranker_comparison.json"
 REPORT_MARKDOWN_FILENAME = "continuous_ranker_comparison.md"
 OUTPUT_DIRNAME = "continuous_ranker_comparison"
@@ -852,6 +852,8 @@ def _evaluate_score_event_date_comparability(
         "age_6_plus": int((age_days >= 6).sum()),
     }
     return {
+        "target_anchor": "original_score_event_date_target",
+        "trade_date_remaining_opportunity_evaluated": False,
         "candidate_row_count": int(len(frame)),
         "score_age_days_mean": float(age_days.mean()) if len(age_days) else None,
         "score_age_days_median": float(age_days.median()) if len(age_days) else None,
@@ -1299,6 +1301,15 @@ def render_console(payload: dict[str, Any]) -> str:
                 (
                     ("score-age>0候選", score_date_diag.get("carried_candidate_row_count")),
                     ("score-age>0比例", _fmt_pct(score_date_diag.get("carried_candidate_row_rate"))),
+                    (
+                        "score age buckets",
+                        (
+                            f"0日={int((score_date_diag.get('age_bucket_counts') or {}).get('age_0', 0) or 0)}, "
+                            f"1–2日={int((score_date_diag.get('age_bucket_counts') or {}).get('age_1_to_2', 0) or 0)}, "
+                            f"3–5日={int((score_date_diag.get('age_bucket_counts') or {}).get('age_3_to_5', 0) or 0)}, "
+                            f"6日以上={int((score_date_diag.get('age_bucket_counts') or {}).get('age_6_plus', 0) or 0)}"
+                        ),
+                    ),
                     ("mixed score-date日", score_date_diag.get("mixed_score_event_date_count")),
                     ("mixed score-date比例", _fmt_pct(score_date_diag.get("mixed_score_event_date_rate"))),
                     ("K=1 mixed score-date日", score_date_diag.get("k1_mixed_score_event_date_count")),
@@ -1307,6 +1318,7 @@ def render_console(payload: dict[str, Any]) -> str:
                 )
             ),
             "Same score-date pairs接近MR-12B訓練pair scope；Cross score-date pairs只在runtime混合不同歷史score cohort時出現。",
+            "注意：本段方向真值仍是原始score-event-date的target raw R，沒有依orderable trade date重算剩餘機會；不得把此處Top-K／Boundary直接解讀為當日counterfactual realized R。",
             _render_score_event_date_comparability_table(
                 score_date_diag,
                 summary_pair=prefix_summary_pair,
@@ -1506,13 +1518,15 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         )
     score_date_diag = dict(dynamic.get("score_event_date_comparability") or {})
     score_scopes = dict(score_date_diag.get("pair_scopes") or {})
+    age_buckets = dict(score_date_diag.get("age_bucket_counts") or {})
     lines += [
         "",
         "## Orderable score-date comparability",
         "",
-        "MR-12B的pairwise loss只在同一score-event-date內建立pair；但策略orderable pool可同時含不同歷史score cohort。以下用trade-date內target raw R比較same-score-date與cross-score-date pair concordance，僅作部署語意歸因。",
+        "MR-12B的pairwise loss只在同一score-event-date內建立pair；但策略orderable pool可同時含不同歷史score cohort。以下pair concordance仍以**原始score-event-date的target raw R**作方向真值；它沒有把Target重新錨定到orderable trade date，因此只作模型／候選語意歸因，不代表當日剩餘可實現機會。",
         "",
         f"- score-age>0候選：`{score_date_diag.get('carried_candidate_row_count')}` / `{score_date_diag.get('candidate_row_count')}`（`{_fmt_pct(score_date_diag.get('carried_candidate_row_rate'))}`）。",
+        f"- score age buckets：0日 `{int(age_buckets.get('age_0', 0) or 0)}`；1–2日 `{int(age_buckets.get('age_1_to_2', 0) or 0)}`；3–5日 `{int(age_buckets.get('age_3_to_5', 0) or 0)}`；6日以上 `{int(age_buckets.get('age_6_plus', 0) or 0)}`。",
         f"- mixed score-date days：`{score_date_diag.get('mixed_score_event_date_count')}`（`{_fmt_pct(score_date_diag.get('mixed_score_event_date_rate'))}`）；K=1 mixed score-date days：`{score_date_diag.get('k1_mixed_score_event_date_count')}` / `{score_date_diag.get('k1_date_count')}`（`{_fmt_pct(score_date_diag.get('k1_mixed_score_event_date_rate'))}`）。",
         f"- score age days：mean `{_fmt(score_date_diag.get('score_age_days_mean'), 2)}`；median `{_fmt(score_date_diag.get('score_age_days_median'), 2)}`；max `{score_date_diag.get('score_age_days_max')}`。",
         "",
@@ -1545,6 +1559,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         "",
         "- 所有比較均為checkpoint後描述性評估；OOS不進loss、gradient、epoch selection或任何模型擬合。",
         f"- Dynamic-K的K與orderable candidate universe來自既有{reference_arm} replay；Future Target只在replay後離線join作模型品質診斷。",
+        "- Dynamic-K使用的`target_raw_r`錨定原始score-event date，沒有依orderable trade date重算剩餘機會；因此Top-K Lift／Boundary只描述原始事件Target排序，不得解讀成當日counterfactual realized R。",
         "- Dynamic-K目前只對所有比較模型score與target皆完整的候選日計算raw-score Top-K；正式max-DL selector允許partial-score、還會套K/R0 exact-reservation repair／feasible-ascent，因此本段不得標示或解讀成實際selector basket品質。",
         f"- 本報表不修改config設定的比較模型、{reference_arm} reference selector、策略參數或既有策略結果。",
         "",
@@ -1666,6 +1681,8 @@ def run_comparison(
             "candidate_universe": "reference_arm_score_ranking_orderable_candidates",
             "k_source": "Resource_Aware_Pre_Market_Order_Limit_on_Max_DL_Eligible_days",
             "score_join": "ticker + score_event_date (runtime breakout_quality_score_date, fallback signal_date)",
+            "target_anchor": "original_score_event_date_target",
+            "trade_date_remaining_opportunity_evaluated": False,
             "diagnostic_scope": "reference_path_common_complete_raw_score_not_runtime_selector_basket",
             "coverage": coverage,
             "evaluation": dynamic_evaluation,
