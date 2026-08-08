@@ -5590,3 +5590,35 @@ Manifest/report明確保存pair scope、pair weighting、margin、whole-date bat
 - MR-12A、PIT builder與config-driven strategy compare相關direct regression持續通過。
 - GPT未執行`apps/test_suite.py`，亦未執行正式模型訓練；正式結果待使用者本機執行。
 
+
+## 2026-08-08 — MR-12B formal consistency CLI regression closure
+
+### 狀態
+
+`MR-12B IMPLEMENTED / RESULT_PENDING` 不變；本輪只修formal synthetic CLI contract，未修改pairwise loss、whole-date batching、artifact semantics、C17/C18 selector或C19/C20策略矩陣。
+
+### 使用者正式bundle
+
+- 程式基準：`test-branch-1_20260808_162301_1defb21.zip`，SHA256=`d53c626ff7f8a34e921ed8eb3a7c8dba42ea4980726846b9a65c104fb878257b`。
+- Debug bundle：`to_chatgpt_bundle_20260808_162439_7a2ae34f.zip`，SHA256=`439a04c6af18538a8901b6e3428189e8deb73c5c815810f98847f2ae93797f4e`。
+- formal摘要：quick gate PASS、chain checks PASS、ml smoke PASS；consistency執行約91秒後因未產生summary被wrapper標記`missing_summary_file`；meta quality FAIL為`coverage_synthetic_suite_runs_successfully`、`coverage_key_targets_hit`與`performance_required_step_summaries_present`三項。
+
+### 根因
+
+`consistency.log`顯示真正第一個例外發生於`validate_dataset_cli_contract_case`：MR-12B實作後Continuous模型子選單正式將`[1/Enter]`定義為「訓練目前模型 → forward-OOS模型報表」，原synthetic仍使用歷史輸入`[Enter main, Enter submenu, 0]`並期待PIT route。第二個`0`實際被full-train確認提示消耗，返回主選單後mock input耗盡而拋`StopIteration`，因此`tools/validate/cli.py`未完成summary輸出。另同一validator的Workflow status expected仍硬編`unique_group_sampling / binary_classification`與Binary artifact表，與目前config-driven MR-12B continuous workflow不符。
+
+### 修正
+
+1. PIT route synthetic改為明確輸入`2`，確認後再返回主選單；不再依子選單預設項的歷史位置碰巧路由。
+2. 新增獨立案例直接驗證Continuous模型子選單`Enter`會進`_interactive_continuous_full_train`，因此full-train與PIT兩條正式入口都有直接contract。
+3. Missing-dataset PIT preparation案例同樣改為明確`2` route，保留`build-dataset → prepare-continuous-target → build-point-in-time-scores → audit-point-in-time-scores`原契約。
+4. Workflow status測項改由當前`get_breakout_quality_workflow_settings()`派生profile／training objective／scope；Binary與Continuous各驗自己的正式status surface，兩者共同禁止使用者本機絕對路徑。validator不再把目前config某個歷史值硬編成唯一合法答案。
+
+### 獨立驗證
+
+- `validate_dataset_cli_contract_case`：171/171 PASS。
+- MR-12B pairwise direct contract：7/7 PASS。
+- MR-12A regression：4/4 PASS。
+- PIT builder：22/22 PASS。
+- config-driven Strategy Compare：33/33 PASS。
+- 本輪未執行`apps/test_suite.py`或formal consistency/meta-quality step；正式閉環待使用者套patch後以單一正式入口重跑。

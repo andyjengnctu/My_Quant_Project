@@ -162,7 +162,7 @@ def validate_dataset_cli_contract_case(_base_params):
     ):
         workflow_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
         with (
-            patch("builtins.input", side_effect=["", "", "0"]),
+            patch("builtins.input", side_effect=["", "2", "", "0"]),
             patch("apps.breakout_quality._print_workflow_status"),
             patch(
                 "apps.breakout_quality._run_command",
@@ -228,6 +228,8 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "[1/Enter] 模型研究與驗證" in interactive_text
+            and "[1/Enter] 訓練目前模型 → forward-OOS模型報表" in interactive_text
+            and "[2] 建立／更新 Selection PIT Scores → PIT模型驗證" in interactive_text
             and "[2] Audit／診斷" in interactive_text
             and "[3] 查看模型設定與工件狀態" in interactive_text
             and "策略績效驗證" not in interactive_text
@@ -248,6 +250,25 @@ def validate_dataset_cli_contract_case(_base_params):
         "breakout_quality_numbered_model_menu_route",
         (0, 1),
         (numbered_model_rc, model_menu.call_count),
+    )
+
+    with (
+        patch("builtins.input", side_effect=[""]),
+        patch(
+            "apps.breakout_quality._interactive_continuous_full_train",
+            return_value=47,
+        ) as continuous_train_route,
+    ):
+        continuous_default_rc = app_breakout_quality._interactive_model_research(
+            "apps/breakout_quality.py"
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_continuous_model_menu_default_routes_to_full_train",
+        (47, 1),
+        (continuous_default_rc, continuous_train_route.call_count),
     )
 
     with (
@@ -286,20 +307,35 @@ def validate_dataset_cli_contract_case(_base_params):
     with redirect_stdout(status_output):
         app_breakout_quality._print_workflow_status()
     rendered_status = status_output.getvalue()
+    current_workflow_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
+    if current_workflow_settings.is_binary_classification:
+        workflow_status_contract_ok = (
+            "Breakout Quality 工件狀態" in rendered_status
+            and "runtime_scores" in rendered_status
+            and "outputs/filters/breakout_quality/" in rendered_status
+            and "models/filters/breakout_quality/" in rendered_status
+        )
+    else:
+        workflow_status_contract_ok = (
+            current_workflow_settings.is_continuous_ranker
+            and "Workflow 狀態" in rendered_status
+            and "Continuous Target" in rendered_status
+            and "Full Model / Forward OOS" in rendered_status
+            and "PIT Scores" in rendered_status
+            and "PIT 模型驗證" in rendered_status
+        )
     add_check(
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_workflow_status_uses_current_binary_identity_and_relative_paths",
+        "breakout_quality_workflow_status_reflects_current_config_without_absolute_paths",
         True,
         (
             "Current Breakout Quality Workflow" in rendered_status
-            and "unique_group_sampling" in rendered_status
-            and "binary_classification" in rendered_status
-            and "Breakout Quality 工件狀態" in rendered_status
-            and "runtime_scores" in rendered_status
-            and "outputs/filters/breakout_quality/" in rendered_status
-            and "models/filters/breakout_quality/" in rendered_status
+            and str(current_workflow_settings.experiment_profile) in rendered_status
+            and str(current_workflow_settings.training_objective) in rendered_status
+            and str(current_workflow_settings.training_label_scope) in rendered_status
+            and workflow_status_contract_ok
             and "C:\\Users\\" not in rendered_status
             and "/mnt/data/" not in rendered_status
         ),
@@ -346,7 +382,7 @@ def validate_dataset_cli_contract_case(_base_params):
             "BREAKOUT_QUALITY_STRATEGY_BUY_SORT",
             "auto",
         ),
-        patch("builtins.input", return_value=""),
+        patch("builtins.input", side_effect=["2", ""]),
         patch("apps.breakout_quality._print_workflow_status"),
         patch(
             "apps.breakout_quality._dataset_refresh_step",
