@@ -692,10 +692,6 @@ def reorder_candidates_for_resource_aware_quality(
         default_diag=default_diag,
     )
 
-# Backward-compatible import alias; all logic lives in the generic quality selector.
-reorder_candidates_for_resource_aware_binary = reorder_candidates_for_resource_aware_quality
-
-
 def execute_reserved_entries_for_day(
     portfolio,
     active_extended_signals,

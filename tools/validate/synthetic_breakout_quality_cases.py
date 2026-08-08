@@ -16127,7 +16127,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from core.exact_accounting import build_buy_ledger_from_price
     from core.portfolio_entries import (
         _simulate_reserved_candidate_order,
-        reorder_candidates_for_resource_aware_binary,
+        reorder_candidates_for_resource_aware_quality,
     )
     from core.strategy_params import V16StrategyParams
     from core.trade_plans import build_normal_candidate_plan
@@ -16172,7 +16172,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         free_slots=3,
         params=resource_params,
     )
-    resource_order, resource_diag = reorder_candidates_for_resource_aware_binary(
+    resource_order, resource_diag = reorder_candidates_for_resource_aware_quality(
         resource_rows,
         available_cash=180_000.0,
         sizing_equity=1_000_000.0,
@@ -16187,7 +16187,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         free_slots=3,
         params=resource_params,
     )
-    slot_order, slot_diag = reorder_candidates_for_resource_aware_binary(
+    slot_order, slot_diag = reorder_candidates_for_resource_aware_quality(
         resource_rows,
         available_cash=180_000.0,
         sizing_equity=1_000_000.0,
@@ -16252,7 +16252,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         _resource_candidate_fixed(*row, "resource-aware-binary-basket")
         for row in basket_seed
     ]
-    greedy_order, greedy_diag = reorder_candidates_for_resource_aware_binary(
+    greedy_order, greedy_diag = reorder_candidates_for_resource_aware_quality(
         greedy_rows,
         available_cash=548_426.0,
         sizing_equity=2_000_000.0,
@@ -16260,7 +16260,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         max_positions=10,
         params=resource_params,
     )
-    basket_order, basket_diag = reorder_candidates_for_resource_aware_binary(
+    basket_order, basket_diag = reorder_candidates_for_resource_aware_quality(
         basket_rows,
         available_cash=548_426.0,
         sizing_equity=2_000_000.0,
@@ -16365,7 +16365,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         _resource_candidate_fixed("R2", 1000.0, 70, 0.20, "resource-aware-continuous"),
         _resource_candidate_fixed("Q1", 1000.0, 80, 0.95, "resource-aware-continuous"),
     ]
-    continuous_order, continuous_diag = reorder_candidates_for_resource_aware_binary(
+    continuous_order, continuous_diag = reorder_candidates_for_resource_aware_quality(
         continuous_rows,
         available_cash=180_000.0,
         sizing_equity=2_000_000.0,
@@ -16380,7 +16380,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         free_slots=3,
         params=resource_params,
     )
-    continuous_slot_order, continuous_slot_diag = reorder_candidates_for_resource_aware_binary(
+    continuous_slot_order, continuous_slot_diag = reorder_candidates_for_resource_aware_quality(
         continuous_rows,
         available_cash=180_000.0,
         sizing_equity=2_000_000.0,
