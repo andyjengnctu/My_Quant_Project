@@ -6013,3 +6013,31 @@ P2初版正式model menu直接顯示`MR-12A/B/C`，App簡易摘要與比較rende
 3. `PROJECT_SETTINGS.md` B18 已是正式 UI 契約，本輪不重複新增條款；互動選單仍由 `comparison_settings.menu_label` 與 config-driven enable/profile/reference/summary settings 驅動。
 
 不修改 Dataset／Target、training objective、optimizer、epoch selection、checkpoint、frozen score、Top-K／K-boundary、random baseline、Dynamic-K join、selector、Strategy Compare、sizing／accounting／execution。
+
+## 2026-08-09 — P2 Dynamic-K repeated-signal occurrence merge fix
+
+### 狀態
+
+Infrastructure/diagnostic bug fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity。MR-12A/B/C frozen score、C17/C18 selector、Top-K／K-boundary公式與既有策略結果均不變。
+
+### 程式基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_021303_cfb6d8e.zip`
+- SHA256：`de4f6714d95742e2aca0060942be543b14b8b7b479210224fec0287e9fbd35ce`
+- 全新解壓工作目錄：`/mnt/data/p2_merge_fix`
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 使用者實跑揭露與根因
+
+`apps/research.py → 模型訓練 → 比較設定中的 Continuous Rankers`進入Dynamic-K時，`score_ranking_orderable_candidates.csv`可合法包含同一`(ticker, signal_date)`在不同`trade_date`持續orderable的occurrence；P2初版卻以`validate="one_to_one"`把orderable occurrence對 frozen score，因而對正常continuation/pending資料拋出`MergeError: Merge keys are not unique in left dataset`。
+
+### 修正
+
+1. Dynamic-K join改為明確的`many_to_one`：左側允許同一signal跨不同trade date重複成為orderable occurrence；右側每個模型的frozen score仍強制`(ticker, signal_date)`唯一，若右側重複則fail-fast並輸出sample，禁止many-to-many。
+2. `score_ranking_orderable_candidates.csv`只讀Dynamic-K需要的`ticker / trade_date / signal_date`三欄，並改用既有`read_breakout_quality_csv`，同時避免未使用mixed-type欄造成`DtypeWarning`，並保留`0050 / 00643`等前導零ticker。
+3. synthetic regression加入「相同signal在兩個後續trade dates持續orderable」案例，驗證兩天occurrence都保留、同一frozen score可合法重用且full-score coverage正確。
+
+### 固定研究／runtime條件
+
+不修改Dataset／Continuous Target、模型訓練、checkpoint、frozen score值、PIT、Strategy Compare replay、C17/C18 selector、Dynamic-K的每日K來源、候選membership、random baseline、Top-K／boundary公式、策略參數、sizing、accounting或execution。
+

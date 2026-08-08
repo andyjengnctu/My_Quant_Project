@@ -381,8 +381,11 @@ def _dynamic_orderable_frame(
     model_ids: tuple[str, ...],
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     capacity = pd.read_csv(pair_dir / "score_ranking_daily_capacity.csv", encoding="utf-8-sig")
-    orderable = pd.read_csv(
-        pair_dir / "score_ranking_orderable_candidates.csv", encoding="utf-8-sig"
+    required_orderable = {"ticker", "trade_date", "signal_date"}
+    orderable = read_breakout_quality_csv(
+        pair_dir / "score_ranking_orderable_candidates.csv",
+        encoding="utf-8-sig",
+        usecols=lambda column: column in required_orderable,
     )
     required_capacity = {
         "Date",
@@ -392,7 +395,6 @@ def _dynamic_orderable_frame(
     missing = sorted(required_capacity - set(capacity.columns))
     if missing:
         raise ValueError(f"Dynamic-K capacity缺少欄位: {missing}")
-    required_orderable = {"ticker", "trade_date", "signal_date"}
     missing = sorted(required_orderable - set(orderable.columns))
     if missing:
         raise ValueError(f"Dynamic-K orderable candidates缺少欄位: {missing}")
@@ -454,11 +456,21 @@ def _dynamic_orderable_frame(
                 "model_score": f"score__{model_id}",
             }
         )
+        lookup_duplicate = lookup.duplicated(["ticker", "signal_date"], keep=False)
+        if bool(lookup_duplicate.any()):
+            sample = (
+                lookup.loc[lookup_duplicate, ["ticker", "signal_date"]]
+                .head(8)
+                .to_dict("records")
+            )
+            raise ValueError(
+                f"Dynamic-K {model_id} frozen score同ticker/signal_date必須唯一: sample={sample}"
+            )
         result = result.merge(
             lookup,
             how="left",
             on=["ticker", "signal_date"],
-            validate="one_to_one",
+            validate="many_to_one",
         )
 
     score_columns = [f"score__{model_id}" for model_id in model_ids]

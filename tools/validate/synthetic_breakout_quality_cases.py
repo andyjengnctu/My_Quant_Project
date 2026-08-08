@@ -12102,6 +12102,11 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
                 },
                 {
                     "Date": "2024-03-05",
+                    "Resource_Aware_Max_DL_Eligible": True,
+                    "Resource_Aware_Pre_Market_Order_Limit": 2,
+                },
+                {
+                    "Date": "2024-03-06",
                     "Resource_Aware_Max_DL_Eligible": False,
                     "Resource_Aware_Pre_Market_Order_Limit": 2,
                 },
@@ -12109,7 +12114,8 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         ).to_csv(pair_dir / "score_ranking_daily_capacity.csv", index=False)
         pd.DataFrame(
             [
-                {"ticker": ticker, "trade_date": "2024-03-04", "signal_date": "2024-03-01"}
+                {"ticker": ticker, "trade_date": trade_date, "signal_date": "2024-03-01"}
+                for trade_date in ("2024-03-04", "2024-03-05")
                 for ticker in ("A", "B", "C", "D")
             ]
         ).to_csv(pair_dir / "score_ranking_orderable_candidates.csv", index=False)
@@ -12141,8 +12147,8 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "continuous_ranker_dynamic_k_reads_actual_c17_orderable_universe_and_signal_date_scores",
-        (4, (2,), 1, 1.0),
+        "continuous_ranker_dynamic_k_allows_same_signal_to_remain_orderable_on_later_trade_dates",
+        (8, (2,), 2, 1.0),
         (
             int(len(dynamic_frame)),
             tuple(sorted(set(int(value) for value in dynamic_frame["dynamic_k"]))),
