@@ -6041,3 +6041,42 @@ Infrastructure/diagnostic bug fix completed；不占用新的`MR-*`／`DL-*`／`
 
 不修改Dataset／Continuous Target、模型訓練、checkpoint、frozen score值、PIT、Strategy Compare replay、C17/C18 selector、Dynamic-K的每日K來源、候選membership、random baseline、Top-K／boundary公式、策略參數、sizing、accounting或execution。
 
+
+## 2026-08-09 — P2首輪實跑：Fixed-K結果成立；Dynamic-K score-event-date join bug
+
+### 狀態
+
+`P2 FIXED_K_RESULT_AVAILABLE / DYNAMIC_K_INVALIDATED_PENDING_RERUN`。不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity；MR-12B仍為current model research anchor，MR-12C仍維持REJECTED。此輪只修read-only診斷join，不修改任何模型、score、selector或策略replay。
+
+### 程式基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_022059_051c97b(2).zip`
+- SHA256：`afb1556a6374db8e5f5f0f08e982896cddabce4f9ae4e119ad59ea5797e05178`
+- 全新解壓工作目錄：`/mnt/data/stock_p2_review`
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`或formal pipeline。
+
+### 使用者本機P2結果
+
+Fixed K=10的Forward OOS共有603個competition days。MR-12B相對MR-12A：NDCG `0.6905 vs 0.6615`（paired mean Δ `+0.0290`）、Top-K raw-target lift `0.4089R vs 0.2488R`（Δ `+0.1601R`）、Oracle overlap `59.80% vs 57.20%`（Δ `+2.60pp`）、Boundary concordance `52.98% vs 49.96%`（Δ `+3.02pp`）、Boundary gap `+0.2121R vs -0.0489R`（Δ `+0.2610R`）。此結果與C19/C20相對C17/C18的controlled replay方向一致，支持MR-12B broad OOS ranking quality改善。
+
+Selection fixed-K則MR-12B略弱於MR-12A，而MR-12C在Selection描述性指標較高但正式策略經濟結果已被淘汰；Selection rows屬final-refit已見資料，僅保留描述性用途，不作新模型採用依據。
+
+首輪Dynamic-K顯示C17 eligible=223日、三模型完整score僅94日、coverage `42.15%`、K=1～8且mean `1.34`；在該94日子集MR-12B Boundary=`43.94%`、相對MR-12A `-12.53pp`。此數字後續查明受diagnostic join bug污染，不得作MR-12D設計或MR-12B否定證據。
+
+### 根因
+
+正式Strategy Compare對continuation／re-entry已有canonical契約：交易候選的`signal_date`可能晚於最初breakout事件；runtime score與Future Target都必須優先使用candidate保存的`breakout_quality_score_date`（canonical `score_event_date`）對回模型／PIT工件，只有該欄缺少時才fallback `signal_date`。`strategy_compare_engine._strategy_selection_diagnostics()`已正確實作此契約。
+
+P2 `_dynamic_orderable_frame()`卻只讀`ticker / trade_date / signal_date`，並以`ticker + signal_date`對MR-12A/B/C frozen OOS score。對沿用原始breakout score的continuation／re-entry occurrence會錯失合法score，造成大量partial-score days與錯誤的Dynamic-K paired樣本。
+
+### 修正
+
+1. P2仍以reference arm既有`score_ranking_orderable_candidates.csv`作共同候選集合，但額外讀取`breakout_quality_score_date`；若非空則解析成`score_event_date`，缺少時才fallback `signal_date`，非法日期fail-fast。
+2. MR-12A/B/C frozen score lookup改為`ticker + score_event_date` many-to-one；右側每個模型仍強制該key唯一，禁止many-to-many。
+3. coverage新增runtime score-event-date列數、fallback signal-date列數、以及`score_event_date != signal_date`列數，讓後續可直接確認continuation/re-entry映射是否被正確使用。
+4. synthetic contract補入`signal_date`晚於原始`breakout_quality_score_date`的later occurrence案例，確保仍能取得原始frozen score。
+5. 同輪移除`tools/validate/synthetic_breakout_quality_cases.py`直接讀`doc/PROJECT_SETTINGS.md`文字的反向政策測試，遵守`PROJECT_SETTINGS A7`；保留對實際strategy readable-report程式行為的contract檢查。
+
+### 下一步
+
+先用同一正式選單重新執行`apps/research.py → 模型訓練 → 比較設定中的 Continuous Rankers`。在修正後Dynamic-K coverage與結果取得前，不新增MR-12D、不改Pairwise loss、不改C17/C18 selector。若修正後coverage顯著提高且MR-12B在Dynamic-K仍弱於MR-12A，再做K-stratified（尤其K=1/2/3）與C18 feasible-swap attribution，判斷是否為top-prefix極前段排序問題；只有歸因成立後才設計新的model experiment。

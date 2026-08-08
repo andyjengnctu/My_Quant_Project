@@ -12114,8 +12114,16 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         ).to_csv(pair_dir / "score_ranking_daily_capacity.csv", index=False)
         pd.DataFrame(
             [
-                {"ticker": ticker, "trade_date": trade_date, "signal_date": "2024-03-01"}
-                for trade_date in ("2024-03-04", "2024-03-05")
+                {
+                    "ticker": ticker,
+                    "trade_date": trade_date,
+                    "signal_date": signal_date,
+                    "breakout_quality_score_date": "2024-03-01",
+                }
+                for trade_date, signal_date in (
+                    ("2024-03-04", "2024-03-01"),
+                    ("2024-03-05", "2024-03-02"),
+                )
                 for ticker in ("A", "B", "C", "D")
             ]
         ).to_csv(pair_dir / "score_ranking_orderable_candidates.csv", index=False)
@@ -12147,13 +12155,15 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         results,
         "synthetic_breakout_quality",
         case_id,
-        "continuous_ranker_dynamic_k_allows_same_signal_to_remain_orderable_on_later_trade_dates",
-        (8, (2,), 2, 1.0),
+        "continuous_ranker_dynamic_k_uses_runtime_score_event_date_for_later_occurrences",
+        (8, (2,), 2, 1.0, 8, 4),
         (
             int(len(dynamic_frame)),
             tuple(sorted(set(int(value) for value in dynamic_frame["dynamic_k"]))),
             int(dynamic_coverage["full_score_coverage_date_count"]),
             float(dynamic_coverage["full_score_coverage_rate"]),
+            int(dynamic_coverage["runtime_score_event_date_row_count"]),
+            int(dynamic_coverage["score_event_date_differs_from_signal_date_row_count"]),
         ),
     )
 
@@ -19128,19 +19138,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and 'pair_dir / "strategy_comparison.md"' in comparison_source,
     )
 
-    settings_text = (project_root / "doc/PROJECT_SETTINGS.md").read_text(
-        encoding="utf-8"
-    )
-    add_check(
-        results,
-        "synthetic_breakout_quality",
-        case_id,
-        "project_policy_requires_strategy_result_simple_report_without_per_artifact_duplication",
-        True,
-        "策略層正式結果" in settings_text
-        and "簡易報表" in settings_text
-        and "JSON／CSV／manifest" in settings_text,
-    )
     summary["strategy_output_contracts"] = [row[0] for row in contract_rows]
     return results, summary
 

@@ -382,10 +382,11 @@ def _dynamic_orderable_frame(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     capacity = pd.read_csv(pair_dir / "score_ranking_daily_capacity.csv", encoding="utf-8-sig")
     required_orderable = {"ticker", "trade_date", "signal_date"}
+    optional_orderable = {"breakout_quality_score_date"}
     orderable = read_breakout_quality_csv(
         pair_dir / "score_ranking_orderable_candidates.csv",
         encoding="utf-8-sig",
-        usecols=lambda column: column in required_orderable,
+        usecols=lambda column: column in (required_orderable | optional_orderable),
     )
     required_capacity = {
         "Date",
@@ -425,8 +426,28 @@ def _dynamic_orderable_frame(
     orderable["signal_date"] = pd.to_datetime(
         orderable["signal_date"], errors="coerce"
     ).dt.strftime("%Y-%m-%d")
+    raw_score_event_date = orderable.get(
+        "breakout_quality_score_date",
+        pd.Series("", index=orderable.index, dtype="object"),
+    ).fillna("").astype(str).str.strip()
+    parsed_score_event_date = pd.to_datetime(raw_score_event_date, errors="coerce")
+    invalid_score_event_date = raw_score_event_date.ne("") & parsed_score_event_date.isna()
+    if bool(invalid_score_event_date.any()):
+        bad_index = invalid_score_event_date[invalid_score_event_date].index[0]
+        bad = orderable.loc[bad_index]
+        raise ValueError(
+            "Dynamic-K orderable candidate保存的breakout_quality_score_date無法解析: "
+            f"ticker={bad.get('ticker')}, trade_date={bad.get('trade_date')}, "
+            f"signal_date={bad.get('signal_date')}, "
+            f"score_date={raw_score_event_date.loc[bad_index]!r}"
+        )
+    normalized_score_event_date = parsed_score_event_date.dt.strftime("%Y-%m-%d")
+    orderable["score_event_date"] = normalized_score_event_date.where(
+        raw_score_event_date.ne(""), orderable["signal_date"]
+    )
     orderable = orderable[orderable["date"].isin(k_by_date)].copy()
     orderable = orderable[orderable["signal_date"].notna()].copy()
+    orderable = orderable[orderable["score_event_date"].notna()].copy()
     duplicate = orderable.duplicated(["date", "ticker"], keep=False)
     if duplicate.any():
         sample = (
@@ -439,7 +460,17 @@ def _dynamic_orderable_frame(
             f"無法建立唯一selector候選集合: sample={sample}"
         )
 
-    result = orderable[["date", "ticker", "signal_date"]].copy()
+    runtime_score_event_date_row_count = int(
+        raw_score_event_date.loc[orderable.index].ne("").sum()
+    )
+    score_event_date_fallback_signal_date_row_count = int(
+        raw_score_event_date.loc[orderable.index].eq("").sum()
+    )
+    score_event_date_differs_from_signal_date_row_count = int(
+        (orderable["score_event_date"] != orderable["signal_date"]).sum()
+    )
+
+    result = orderable[["date", "ticker", "signal_date", "score_event_date"]].copy()
     result["dynamic_k"] = result["date"].map(k_by_date).astype(int)
 
     target_reference_id = model_ids[0]
@@ -450,26 +481,26 @@ def _dynamic_orderable_frame(
             ["ticker", "date", "target_raw_r", "target_daily_percentile", "model_score"]
         ].rename(
             columns={
-                "date": "signal_date",
+                "date": "score_event_date",
                 "target_raw_r": f"target_raw_r__{model_id}",
                 "target_daily_percentile": f"target_daily_percentile__{model_id}",
                 "model_score": f"score__{model_id}",
             }
         )
-        lookup_duplicate = lookup.duplicated(["ticker", "signal_date"], keep=False)
+        lookup_duplicate = lookup.duplicated(["ticker", "score_event_date"], keep=False)
         if bool(lookup_duplicate.any()):
             sample = (
-                lookup.loc[lookup_duplicate, ["ticker", "signal_date"]]
+                lookup.loc[lookup_duplicate, ["ticker", "score_event_date"]]
                 .head(8)
                 .to_dict("records")
             )
             raise ValueError(
-                f"Dynamic-K {model_id} frozen score同ticker/signal_date必須唯一: sample={sample}"
+                f"Dynamic-K {model_id} frozen score同ticker/score_event_date必須唯一: sample={sample}"
             )
         result = result.merge(
             lookup,
             how="left",
-            on=["ticker", "signal_date"],
+            on=["ticker", "score_event_date"],
             validate="many_to_one",
         )
 
@@ -513,6 +544,9 @@ def _dynamic_orderable_frame(
         "orderable_strategy_date_count": int(len(observed_dates)),
         "missing_orderable_date_count": int(len(missing_orderable_dates)),
         "orderable_candidate_row_count": int(len(result)),
+        "runtime_score_event_date_row_count": runtime_score_event_date_row_count,
+        "score_event_date_fallback_signal_date_row_count": score_event_date_fallback_signal_date_row_count,
+        "score_event_date_differs_from_signal_date_row_count": score_event_date_differs_from_signal_date_row_count,
         "full_score_coverage_date_count": int(len(full_coverage_dates)),
         "partial_score_coverage_date_count": int(len(partial_dates)),
         "full_score_coverage_rate": (
@@ -675,6 +709,8 @@ def render_console(payload: dict[str, Any]) -> str:
                     ("部分score日", coverage.get("partial_score_coverage_date_count")),
                     ("缺orderable日", coverage.get("missing_orderable_date_count")),
                     ("完整score coverage", _fmt_pct(coverage.get("full_score_coverage_rate"))),
+                    ("沿用runtime score date列", coverage.get("runtime_score_event_date_row_count")),
+                    ("score date≠signal date列", coverage.get("score_event_date_differs_from_signal_date_row_count")),
                     ("Dynamic K", f"{coverage.get('dynamic_k_min')}～{coverage.get('dynamic_k_max')}；mean={_fmt(coverage.get('dynamic_k_mean'), 2)}"),
                     ("實際競爭日", dyn_section.get("competition_date_count")),
                 )
@@ -749,6 +785,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         "",
         f"- {reference_arm} max-DL eligible days：`{cov.get('eligible_strategy_date_count')}`；有orderable candidates日：`{cov.get('orderable_strategy_date_count')}`。",
         f"- {len(model_ids)}模型完整score日：`{cov.get('full_score_coverage_date_count')}`；部分score日：`{cov.get('partial_score_coverage_date_count')}`；缺orderable日：`{cov.get('missing_orderable_date_count')}`；coverage：`{_fmt_pct(cov.get('full_score_coverage_rate'))}`。",
+        f"- runtime score-event date列：`{cov.get('runtime_score_event_date_row_count')}`；fallback signal-date列：`{cov.get('score_event_date_fallback_signal_date_row_count')}`；score-event date與signal date不同列：`{cov.get('score_event_date_differs_from_signal_date_row_count')}`。",
         f"- Dynamic K：`{cov.get('dynamic_k_min')}～{cov.get('dynamic_k_max')}`；mean `{_fmt(cov.get('dynamic_k_mean'), 2)}`。",
         f"- paired competition days：`{dyn.get('competition_date_count')}`。",
         "",
@@ -881,7 +918,7 @@ def run_comparison(
             "pair_dir": project_relative_display_path(pair_dir, project_root=root),
             "candidate_universe": "reference_arm_score_ranking_orderable_candidates",
             "k_source": "Resource_Aware_Pre_Market_Order_Limit_on_Max_DL_Eligible_days",
-            "score_join": "ticker + signal_date",
+            "score_join": "ticker + score_event_date (runtime breakout_quality_score_date, fallback signal_date)",
             "coverage": coverage,
             "evaluation": dynamic_evaluation,
         },
