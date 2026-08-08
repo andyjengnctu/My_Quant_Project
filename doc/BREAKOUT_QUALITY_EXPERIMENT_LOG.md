@@ -5886,3 +5886,33 @@ Infrastructure fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*
 - 全專案282個Python檔AST parse／compile PASS；裸`except:`=0、pass-only exception handler=0、local import cycle=0、`core/`／`filters/`反向import `apps`或`tools.audit`=0；現行DONE checklist宣告Python path缺件=0，`PROJECT_SETTINGS.md`／`ARCHITECTURE.md`／`CMD.md`舊Research wrapper引用=0。
 - `G`表1461筆狀態鏈、日期／ID排序、重複`NEW`、no-op transition均為0異常，B23最新狀態為DONE；既有歷史列未改寫，只新增本輪B23兩筆收斂紀錄。
 - GPT未執行`apps/test_suite.py`或formal pipeline；formal suite結果須由使用者套用patch後於本機正式入口重跑確認。
+
+## 2026-08-08 — Continuous ranker簡易報表P1口徑修正：Competition-day Top-K與Validation標示
+
+### 狀態
+
+Infrastructure/reporting fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，`MR-12B / DL-CONT12B`研究身份、模型objective、權重、selector與既有策略判定均不變。
+
+### 程式基準
+
+- 當前GPT交付基準：`p1_topk_console_report_patch_20260808.zip`
+- SHA256：`591bcf33890aa97dda13efdb5617a3782b784ca2423f716f775d6c860a26bd10`
+- 全專案檢查使用使用者最新版`test-branch-1_20260808_195246_d2960ce.zip`解壓後覆蓋上述P1 patch的完整工作樹。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 使用者實跑揭露與修正
+
+1. 原P1的`NDCG@K / Top-K Target / Lift / Oracle overlap`把`candidate_count <= K`的交易日也納入；這些日子全部候選本來就會進Top-K，排序不影響實際選股，且Oracle overlap／NDCG會被結構性灌高。修正後Top-K主指標固定只統計`candidate_count > K`的competition days；JSON新增`all_date_count / competition_date_count / excluded_non_competition_date_count / competition_rule / top_k_scope`，K-boundary仍在同一competition scope計算。
+2. 使用者同次執行看到epoch selection的Validation Daily Spearman `0.1169`，以及完整Selection refit checkpoint對原Validation rows再評估的`0.1516`。後者的rows已納入final refit，不能再被解讀成選模Validation。Console／Markdown改為明確分開`選模 Validation rho`與`重訓後原 Validation rho`，並標示checkpoint後split metrics不再參與選模。
+3. `trade R: not found:`原本直接輸出本機絕對路徑；改以`project_relative_display_path`顯示專案相對路徑，canonical path仍可留在JSON metadata。
+
+### 固定研究／runtime條件
+
+不修改Dataset／Target、MR-12B pairwise logistic、whole-date batching、optimizer／LR、epoch selection規則、模型權重語意、PIT scores、C17/C18 selector、C19/C20策略arm、sizing／accounting／execution。Top-K／K-boundary仍只屬checkpoint後描述性評估，不進loss、gradient、epoch selection或selector。
+
+### GPT獨立驗證
+
+- `validate_breakout_quality_pairwise_ranker_contract_case`：9項、0 failure；新增非競爭日排除與缺trade工件相對路徑契約。
+- `validate_breakout_quality_app_simple_report_contract_case`：6項、0 failure；`validate_dataset_cli_contract_case`：163項、0 failure，確認既有簡易報表仍保留並加入competition-day Top-K／K-boundary與清楚Validation標示。
+- `apps/research.py --help`與`apps/research.py model --help`可正常解析；全專案282個Python檔AST parse／compile PASS，裸`except:`=0、pass-only handler=0、簡單local import cycle=0、`core/filters`反向依賴`apps`或`tools.audit`=0；現行DONE checklist建議落點147個具體Python path缺件=0。
+- GPT未執行`apps/test_suite.py`或formal pipeline；正式double check仍由使用者本機單一正式入口執行。

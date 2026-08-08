@@ -105,6 +105,7 @@ from filters.breakout_quality.workflow_io import (
 from core.console_report import (
     compact_console_enabled,
     print_artifact_paths,
+    project_relative_display_path,
 )
 
 RANKER_SCHEMA_VERSION = 2
@@ -520,15 +521,25 @@ def _daily_top_k_metrics(
     boundary_inside_target_values: list[float] = []
     boundary_outside_target_values: list[float] = []
     boundary_gap_values: list[float] = []
+    all_date_count = 0
+    excluded_non_competition_date_count = 0
 
     for _date, day in frame.groupby("date", sort=True):
         if day.empty:
             continue
+        all_date_count += 1
         score_values = day["score"].to_numpy(dtype=np.float64)
         raw_values = day["raw_target"].to_numpy(dtype=np.float64)
         percentile_values = day["percentile_target"].to_numpy(dtype=np.float64)
         count = int(len(day))
-        k = min(requested_k, count)
+
+        # Top-K只在候選數>K時才會改變實際選股；候選數<=K時全部候選都會進入Top-K，
+        # NDCG／Oracle overlap會被結構性灌高，因此主Top-K品質固定排除這些非競爭日。
+        if count <= requested_k:
+            excluded_non_competition_date_count += 1
+            continue
+
+        k = requested_k
         score_order = np.argsort(-score_values, kind="mergesort")
         target_order = np.argsort(-raw_values, kind="mergesort")
         selected = score_order[:k]
@@ -550,9 +561,6 @@ def _daily_top_k_metrics(
             float(len(set(int(i) for i in selected).intersection(int(i) for i in oracle)) / k)
         )
 
-        # A true K-boundary exists only when the day has more than K candidates.
-        if count <= requested_k:
-            continue
         width = min(requested_boundary_width, requested_k, count - requested_k)
         if width < 1:
             continue
@@ -574,10 +582,15 @@ def _daily_top_k_metrics(
     def mean_or_none(values: list[float]) -> float | None:
         return float(np.mean(values)) if values else None
 
+    competition_date_count = int(len(top_k_target_values))
     return {
         "top_k": requested_k,
         "boundary_width": requested_boundary_width,
-        "top_k_date_count": int(len(top_k_target_values)),
+        "all_date_count": int(all_date_count),
+        "top_k_date_count": competition_date_count,
+        "competition_date_count": competition_date_count,
+        "excluded_non_competition_date_count": int(excluded_non_competition_date_count),
+        "competition_rule": "candidate_count_gt_top_k",
         "ndcg_at_k": mean_or_none(ndcg_values),
         "top_k_raw_target_mean": mean_or_none(top_k_target_values),
         "candidate_raw_target_mean": mean_or_none(candidate_target_values),
@@ -589,6 +602,7 @@ def _daily_top_k_metrics(
         "boundary_outside_raw_target_mean": mean_or_none(boundary_outside_target_values),
         "boundary_raw_target_gap": mean_or_none(boundary_gap_values),
         "date_weighting": "equal_date_weight",
+        "top_k_scope": "competition_days_only",
         "ndcg_relevance": "same_day_percentile_target",
         "economic_target": "raw_strategy_aligned_r",
     }
@@ -1119,7 +1133,12 @@ def _trade_metric_block(valid: pd.DataFrame) -> dict[str, Any]:
 def _trade_alignment_metrics(score_frame: pd.DataFrame, target_dir: Path) -> dict[str, Any]:
     path = target_dir / TARGET_TRADE_MATCHES_CSV_FILENAME
     if not path.is_file():
-        return {"available": False, "reason": f"not found: {path}"}
+        display_path = project_relative_display_path(path, project_root=PROJECT_ROOT)
+        return {
+            "available": False,
+            "reason": f"not found: {display_path}",
+            "path": str(path),
+        }
     trades = pd.read_csv(path, encoding="utf-8-sig")
     missing = sorted({"ticker", "target_date", "r_multiple"} - set(trades.columns))
     if missing:
@@ -1179,8 +1198,10 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         f"- Training label scope：`{scope}`。",
         "- Runtime：research-only；不得匯出forward-OOS runtime scores。",
         f"- Selected epoch：`{payload['training']['selected_epoch']}`",
+        f"- Epoch-selection Validation Mean Daily Spearman：`{fmt((payload['training'].get('epoch_selection') or {}).get('best_validation_mean_daily_spearman'))}`",
+        "- 下列 split metrics 均為完整 Selection refit checkpoint 建立後的描述性評估；原 Validation rows 已納入完整 Selection 重訓，不再具有選模 Validation 身分。",
         "",
-        f"## 1. Primary split metrics（{scope}）",
+        f"## 1. 完整 Selection 重訓後 split metrics（{scope}）",
         "",
         "| Split | Groups | MSE | Global Spearman | Mean Daily Spearman | Pair Concordance | Top10 Target | Bottom10 Target |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -1203,7 +1224,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         "",
         f"## 2. Top-K / K-boundary quality（K={top_k}, boundary width={boundary_width}）",
         "",
-        "| Split | Days | NDCG@K | Top-K Target | Candidate Target | Lift | Oracle overlap | Boundary days | Boundary concordance | Boundary gap |",
+        "| Split | Competition days | NDCG@K | Top-K Target | Candidate Target | Lift | Oracle overlap | Boundary days | Boundary concordance | Boundary gap |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ])
     for name in ("inner_train", "validation", "selection", "oos"):
@@ -1219,6 +1240,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         )
     lines.extend([
         "",
+        "- Top-K主指標只統計candidate_count > K的competition days；candidate_count <= K時排序不會改變入選集合，因此排除以避免NDCG／Oracle overlap結構性偏高。",
         "- NDCG@K 使用同日 percentile target 作 relevance；其餘 Top-K／boundary 經濟指標使用 raw strategy-aligned R。",
         "- Top-K 與 K-boundary 採 equal-date weighting；K-boundary 比較 score 排名 K 內側與 K 外側各 boundary width 名。",
     ])
@@ -1659,8 +1681,9 @@ def main(argv=None) -> int:
     print(f"\n{contract['phase']} continuous ranker完成")
     print(
         f"selected_epoch={selected_epoch} "
-        f"validation_daily_spearman={epoch_selection['best_validation_mean_daily_spearman']:.4f}"
+        f"epoch_selection_validation_daily_spearman={epoch_selection['best_validation_mean_daily_spearman']:.4f}"
     )
+    print("checkpoint後split metrics（原Validation rows已納入完整Selection重訓；以下不再用於選模）")
     for name in ("inner_train", "validation", "selection", "oos"):
         metrics = split_metrics[name]
         print(

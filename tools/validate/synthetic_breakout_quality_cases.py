@@ -11840,6 +11840,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         _pairwise_logistic_loss,
         _profile_contract,
         _training_semantics,
+        _trade_alignment_metrics,
         parse_args as parse_continuous_ranker_args,
     )
 
@@ -11946,12 +11947,12 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         ),
     )
 
-    report_dates = np.asarray(["2024-02-01"] * 6 + ["2024-02-02"] * 6)
-    report_raw_target = np.asarray([6, 5, 4, 3, 2, 1, 12, 10, 8, 6, 4, 2], dtype=np.float64)
-    report_percentile = np.tile(
-        np.asarray([1.0, 0.8, 0.6, 0.4, 0.2, 0.0], dtype=np.float64),
-        2,
-    )
+    report_dates = np.asarray(["2024-02-01"] * 6 + ["2024-02-02"] * 6 + ["2024-02-05"] * 2)
+    report_raw_target = np.asarray([6, 5, 4, 3, 2, 1, 12, 10, 8, 6, 4, 2, 100, -100], dtype=np.float64)
+    report_percentile = np.concatenate([
+        np.tile(np.asarray([1.0, 0.8, 0.6, 0.4, 0.2, 0.0], dtype=np.float64), 2),
+        np.asarray([0.0, 1.0], dtype=np.float64),
+    ])
     report_metrics = _daily_top_k_metrics(
         report_dates,
         report_raw_target / float(report_raw_target.max()),
@@ -11965,13 +11966,33 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "continuous_ranker_top_k_report_measures_perfect_order_and_k_boundary",
-        (1.0, 1.0, 1.0, 2, True),
+        (1.0, 1.0, 1.0, 2, 2, 1, True),
         (
             round(float(report_metrics["ndcg_at_k"]), 6),
             round(float(report_metrics["oracle_top_k_overlap"]), 6),
             round(float(report_metrics["boundary_concordance"]), 6),
+            int(report_metrics["competition_date_count"]),
             int(report_metrics["boundary_date_count"]),
+            int(report_metrics["excluded_non_competition_date_count"]),
             bool(float(report_metrics["boundary_raw_target_gap"]) > 0.0),
+        ),
+    )
+
+    from filters.breakout_quality.workflow_io import PROJECT_ROOT as breakout_project_root
+    missing_trade = _trade_alignment_metrics(
+        pd.DataFrame(),
+        breakout_project_root / "outputs" / "filters" / "breakout_quality" / "synthetic_missing_trade",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_missing_trade_reason_uses_project_relative_display_path",
+        (False, True, False),
+        (
+            bool(missing_trade.get("available")),
+            str(missing_trade.get("reason", "")).startswith("not found: outputs/"),
+            str(breakout_project_root).replace("\\", "/") in str(missing_trade.get("reason", "")),
         ),
     )
 
@@ -12022,6 +12043,7 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
         _profile_contract,
         _listnet_top_one_loss,
         _training_semantics,
+        _trade_alignment_metrics,
         parse_args as parse_continuous_ranker_args,
     )
 

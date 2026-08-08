@@ -116,12 +116,19 @@ def validate_dataset_cli_contract_case(_base_params):
                 "boundary_concordance": 0.58,
                 "boundary_raw_target_gap": 0.17,
                 "boundary_date_count": 88,
+                "top_k_date_count": 88,
+                "competition_date_count": 88,
+                "excluded_non_competition_date_count": 12,
+                "competition_rule": "candidate_count_gt_top_k",
             },
         }
         (ranker_output / app_breakout_quality.CONTINUOUS_RANKER_REPORT_FILENAME).write_text(
             json.dumps(
                 {
-                    "training": {"selected_epoch": 2},
+                    "training": {
+                    "selected_epoch": 2,
+                    "epoch_selection": {"best_validation_mean_daily_spearman": 0.1169},
+                },
                     "split_metrics": {
                         name: dict(ranker_row)
                         for name in ("validation", "selection", "oos")
@@ -166,12 +173,14 @@ def validate_dataset_cli_contract_case(_base_params):
             "continuous_ranker_simple_report_keeps_existing_metrics_and_adds_top_k_boundary",
             (True, True, True, True, True),
             (
-                "Validation daily rho" in ranker_stdout,
-                "既有排序品質" in ranker_stdout and "Pair" in ranker_stdout,
+                "選模 Validation rho" in ranker_stdout and "0.1169" in ranker_stdout
+                and "重訓後原 Validation rho" in ranker_stdout,
+                "完整 Selection 重訓後排序品質" in ranker_stdout and "Pair" in ranker_stdout,
                 "Top-K / K-boundary" in ranker_stdout and "NDCG@K" in ranker_stdout,
                 "Actual Round-trip R" in ranker_stdout,
-                "## 既有排序品質" in ranker_markdown
+                "## 完整 Selection 重訓後排序品質" in ranker_markdown
                 and "## Top-K / K-boundary" in ranker_markdown
+                and "只看候選數>K" in ranker_markdown
                 and "## Actual Round-trip R" in ranker_markdown,
             ),
         )

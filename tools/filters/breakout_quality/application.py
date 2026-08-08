@@ -265,7 +265,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
 
     split_names = ("validation", "selection", "oos")
     lines = [
-        render_section("既有排序品質"),
+        render_section("完整 Selection 重訓後排序品質"),
         render_table(
             ("Split", "Groups", "Daily rho", "Global rho", "Pair", "Top 10% Target", "Bottom 10% Target"),
             [split_row(name) for name in split_names],
@@ -288,13 +288,13 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
                 _fmt_simple_metric(quality.get("oracle_top_k_overlap"), percent=True),
                 _fmt_simple_metric(quality.get("boundary_concordance"), percent=True),
                 _fmt_simple_metric(quality.get("boundary_raw_target_gap")),
-                f"{int(quality.get('boundary_date_count', 0) or 0):,}",
+                f"{int(quality.get('competition_date_count', quality.get('top_k_date_count', 0)) or 0):,}",
             )
 
         lines.extend([
-            render_section(f"Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}）"),
+            render_section(f"Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；只看候選數>K）"),
             render_table(
-                ("Split", "NDCG@K", "Top-K Target", "Lift", "Oracle overlap", "Boundary", "Boundary gap", "Days"),
+                ("Split", "NDCG@K", "Top-K Target", "Lift", "Oracle overlap", "Boundary", "Boundary gap", "競爭日"),
                 [top_k_row(name) for name in split_names],
                 alignments=("left", "right", "right", "right", "right", "right", "right", "right"),
             ),
@@ -323,7 +323,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         return []
     lines = [
         "",
-        "## 既有排序品質",
+        "## 完整 Selection 重訓後排序品質",
         "",
         "| Split | Groups | Daily rho | Global rho | Pair | Top 10% Target | Bottom 10% Target |",
         "|---|---:|---:|---:|---:|---:|---:|",
@@ -344,9 +344,9 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         boundary_width = int(sample.get("boundary_width", 0) or 0)
         lines.extend([
             "",
-            f"## Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}）",
+            f"## Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；只看候選數>K）",
             "",
-            "| Split | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | Boundary days |",
+            "| Split | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | 競爭日 |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
         ])
         for name in ("validation", "selection", "oos"):
@@ -358,7 +358,7 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
                 f"| {_fmt_simple_metric(quality.get('oracle_top_k_overlap'), percent=True)} "
                 f"| {_fmt_simple_metric(quality.get('boundary_concordance'), percent=True)} "
                 f"| {_fmt_simple_metric(quality.get('boundary_raw_target_gap'))} "
-                f"| {int(quality.get('boundary_date_count', 0) or 0):,} |"
+                f"| {int(quality.get('competition_date_count', quality.get('top_k_date_count', 0)) or 0):,} |"
             )
     trade = dict(payload.get("trade_alignment") or {})
     if trade.get("available"):
@@ -409,13 +409,15 @@ def _simple_report_details(
             profile=profile,
         )
         training = dict(payload.get("training") or {})
+        epoch_selection = dict(training.get("epoch_selection") or {})
         metrics = dict(payload.get("split_metrics") or {})
         rows.extend(
             [
                 ("Selected epoch", training.get("selected_epoch")),
-                ("Validation daily rho", _fmt_simple_metric((metrics.get("validation") or {}).get("mean_daily_spearman"))),
-                ("Selection daily rho", _fmt_simple_metric((metrics.get("selection") or {}).get("mean_daily_spearman"))),
-                ("OOS daily rho", _fmt_simple_metric((metrics.get("oos") or {}).get("mean_daily_spearman"))),
+                ("選模 Validation rho", _fmt_simple_metric(epoch_selection.get("best_validation_mean_daily_spearman"))),
+                ("重訓後原 Validation rho", _fmt_simple_metric((metrics.get("validation") or {}).get("mean_daily_spearman"))),
+                ("重訓後 Selection rho", _fmt_simple_metric((metrics.get("selection") or {}).get("mean_daily_spearman"))),
+                ("Forward OOS rho", _fmt_simple_metric((metrics.get("oos") or {}).get("mean_daily_spearman"))),
             ]
         )
         candidate = output_dir / "continuous_ranker_report.md"
