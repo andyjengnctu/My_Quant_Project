@@ -653,7 +653,7 @@ def render_capture_audit_markdown(result: dict[str, Any]) -> str:
             )
     lines += [
         "", "## 使用限制", "",
-        "- 本報表是Selection內的read-only attribution，不改模型、Score、排序或策略參數。",
+        "- 本報表是策略回放完成後的read-only attribution；分析期間以本次comparison metadata為準，不改模型、Score、排序或策略參數。",
         "- Aggregate capture = Σ Realized R / Σ Target R；Median capture為逐筆ratio中位數；Target ≥ 0.5R capture只納入Target至少0.5R的交易。",
         "- 逐筆 arithmetic mean ratio 僅保留在JSON的 raw_mean_target_capture_ratio 作診斷，不作主報表或adaptation gate。",
         "- 半倉後至結算平均日使用日曆日；半倉殘留slot-days則以該scenario每日capacity的交易日期，計算partial日（含）到full-exit日（不含）的尾倉占位。",
@@ -717,7 +717,7 @@ def _render_compact_capture_audit_console(
         render_title("Score Sort 資金配置與 Target Capture 診斷"),
         render_key_values((
             ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
-            ("報表性質", "Selection事後歸因；不改策略"),
+            ("報表性質", "策略回放後事後歸因；期間依comparison metadata；不改策略"),
             ("Future Target runtime", "未使用"),
         )),
         render_section("綜合判定", number=1),
@@ -920,8 +920,8 @@ def _render_compact_capture_audit_console(
 
     lines.extend((
         render_section("判讀限制", number=8),
-        "本報表是Selection事後歸因；Future Target未參與runtime。",
-        "黃色只表示結構變化；正式採用仍須凍結後OOS驗證。",
+        "本報表是策略回放完成後的事後歸因；分析期間以本次comparison metadata為準，Future Target未參與runtime。",
+        "黃色只表示結構變化；正式採用依該實驗既定驗證契約判定，本歸因不得回流runtime或training。",
     ))
     return "\n".join(lines)
 
@@ -948,7 +948,7 @@ def render_capture_audit_console(
         render_key_values((
             ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
             ("Score source", metadata.get("score_source", "-")),
-            ("報表性質", "Selection read-only attribution"),
+            ("報表性質", "策略回放後 read-only attribution；期間依 comparison metadata"),
             ("Future Target runtime", "未使用"),
         )),
         render_section("綜合判定", number=1),
