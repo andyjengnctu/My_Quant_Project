@@ -11855,7 +11855,9 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         _evaluate_dynamic_k_strata,
         _evaluate_fixed_k_sweep,
         _evaluate_paired_frame,
+        _evaluate_reference_subset_attribution,
         _render_dynamic_k_strata_table,
+        _render_reference_subset_attribution_table,
     )
 
     profile = get_breakout_quality_experiment_profile(
@@ -12229,6 +12231,34 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             bool(dynamic_strata_table.strip()),
             "MR-12B NDCG" in dynamic_strata_table,
             "Boundary Δ" in dynamic_strata_table,
+        ),
+    )
+    reference_subset = _evaluate_reference_subset_attribution(
+        dynamic_frame,
+        dynamic_frame,
+        model_ids=("MR-12A", "MR-12B", "MR-12C"),
+        boundary_width=2,
+    )
+    reference_subset_table = _render_reference_subset_attribution_table(
+        reference_subset,
+        summary_pair=("MR-12B", "MR-12A"),
+    )
+    reference_k2 = dict(reference_subset.get("2") or {})
+    reference_event_k2 = dict(reference_k2.get("event_universe") or {})
+    reference_orderable_k2 = dict(reference_k2.get("orderable_universe") or {})
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_reference_subset_attribution_holds_dates_and_k_constant_across_universes",
+        (("2",), 2, 2, 2, True, True),
+        (
+            tuple(sorted(reference_subset)),
+            int(reference_k2.get("reference_common_complete_date_count", 0)),
+            int(reference_event_k2.get("competition_date_count", 0)),
+            int(reference_orderable_k2.get("competition_date_count", 0)),
+            bool(reference_subset_table.strip()),
+            "Orderable NDCG Δ" in reference_subset_table,
         ),
     )
 

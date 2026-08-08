@@ -469,6 +469,22 @@ def _simple_report_details(
         dynamic_boundary_delta = dict(
             (dynamic_contrast.get("metrics") or {}).get("boundary_concordance") or {}
         )
+        reference_attribution = dict(dynamic.get("reference_subset_attribution") or {})
+        first_reference_k = min((int(value) for value in reference_attribution), default=None)
+        first_reference = (
+            dict(reference_attribution.get(str(first_reference_k)) or {})
+            if first_reference_k is not None
+            else {}
+        )
+        first_reference_event = dict(first_reference.get("event_universe") or {})
+        first_reference_orderable = dict(first_reference.get("orderable_universe") or {})
+
+        def _reference_delta(section: dict, metric: str):
+            contrast = dict(
+                (section.get("paired_contrasts") or {}).get(contrast_id) or {}
+            )
+            return dict((contrast.get("metrics") or {}).get(metric) or {}).get("mean_delta")
+
         rows.extend(
             [
                 ("Fixed OOS競爭日", fixed_oos.get("competition_date_count")),
@@ -495,6 +511,24 @@ def _simple_report_details(
                     "-"
                     if dynamic_boundary_delta.get("mean_delta") is None
                     else f"{float(dynamic_boundary_delta.get('mean_delta')) * 100.0:+.2f}pp",
+                ),
+                *(
+                    [
+                        (
+                            f"Ref K={first_reference_k} Event NDCG Δ ({summary_left}−{summary_right})",
+                            "-"
+                            if _reference_delta(first_reference_event, "ndcg_at_k") is None
+                            else f"{float(_reference_delta(first_reference_event, 'ndcg_at_k')):+.4f}",
+                        ),
+                        (
+                            f"Ref K={first_reference_k} Orderable NDCG Δ ({summary_left}−{summary_right})",
+                            "-"
+                            if _reference_delta(first_reference_orderable, "ndcg_at_k") is None
+                            else f"{float(_reference_delta(first_reference_orderable, 'ndcg_at_k')):+.4f}",
+                        ),
+                    ]
+                    if first_reference_k is not None
+                    else []
                 ),
             ]
         )

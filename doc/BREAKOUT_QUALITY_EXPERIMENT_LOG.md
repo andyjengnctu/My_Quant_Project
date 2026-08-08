@@ -6194,3 +6194,55 @@ K=2與K=3的NDCG／Boundary反而偏向MR-12B：K=2 NDCG Δ `+0.0588`、Boundary
 ### 科學約束
 
 此prefix sweep只作已查看OOS上的迭代研究歸因，符合`PROJECT_SETTINGS E7`；不得進loss、gradient、epoch selection、normalization、sample weighting或hyperparameter optimization。只有先確認弱點的範圍與selector interaction後，才允許提出新的model experiment。
+
+
+## 2026-08-09 — P2完整Forward-OOS prefix sweep：一般Top-1弱點排除；reference-subset attribution實作
+
+### 狀態
+
+`P2_PREFIX_SWEEP_RESULT_AVAILABLE / REFERENCE_SUBSET_ATTRIBUTION_IMPLEMENTED`。此為read-only模型品質歸因，不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity；`MR-12B / DL-CONT12B`維持current model research anchor，`MR-12C`維持REJECTED。
+
+### 本輪基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_040310_a2c253e.zip`。
+- SHA256：`f07c982725c40f517e8b76986544f8ab4f24c51bcba87b3ce5f1723925c11552`。
+- GPT fresh extract：`/mnt/data/stock_review_040310`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 使用者本機P2結果
+
+完整Forward-OOS共同候選只改K的prefix sweep：
+
+- K=1：Days=`1133`；MR-12B vs MR-12A NDCG `0.5779 vs 0.5302`（Δ `+0.0477`）、Boundary `52.69% vs 47.48%`（Δ `+5.21pp`）、Top-1 Lift `0.8244R vs 0.5069R`（Δ `+0.3175R`）。
+- K=2：NDCG Δ `+0.0327`、Boundary Δ `-0.14pp`、Lift `0.6915R vs 0.4404R`。
+- K=3：NDCG Δ `+0.0309`、Boundary Δ `+2.27pp`、Lift `0.6168R vs 0.4124R`。
+- K=5：NDCG Δ `+0.0281`、Boundary Δ `-0.09pp`、Lift `0.5233R vs 0.3567R`。
+- K=10：NDCG Δ `+0.0290`、Boundary Δ `+3.02pp`、Lift `0.4089R vs 0.2488R`。
+
+因此MR-12B在完整Forward-OOS從Top-1到Top-10的NDCG與raw-target lift皆優於MR-12A，K=1本身亦有明顯Boundary優勢；上一輪「Pairwise可能改善broad ranking但犧牲extreme Top-1」假說被本輪完整OOS結果否定，不得據此設計top-1-aware loss。
+
+### 與C17-reference K=1子集的矛盾
+
+C17 reference path仍有eligible K=1 `179/223`日；common-complete K=1為`71/94`日。該71日orderable raw-score診斷中MR-12B相對MR-12A NDCG `-0.0886`、Boundary `-19.72pp`、Top-1 Lift `-0.4478R`，方向與完整OOS K=1相反。candidate-level score coverage仍為`97.52%`，故此矛盾不能由「一般Top-1能力不足」或大量缺分直接解釋。
+
+目前最小可辨識的兩個來源為：
+
+1. **reference-date / regime conditioning**：C17 max-DL eligible、尤其K=1日期本身是否是一群MR-12B相對弱勢的市場／訊號日期。
+2. **orderable candidate / portfolio-state conditioning**：即使固定同一天，經正式策略候選形成、持倉／現金／continuation狀態後留下的orderable universe，是否把MR-12B優勢反轉。
+
+### 本輪新增read-only attribution
+
+P2新增`reference_subset_attribution`，對每個實際Dynamic-K值固定**同一批common-complete reference dates與同一個K**，同時計算：
+
+- `event_universe`：完整Forward-OOS canonical same-day event-group共同候選；
+- `orderable_universe`：既有reference arm盤前orderable candidates。
+
+console／Markdown直接列出MR-12B−MR-12A的NDCG、Boundary與Top-K Lift差異。判讀契約：若同一批K=1 reference dates的Event Δ仍為正，但Orderable Δ轉負，弱勢主要來自candidate/path conditioning；若Event Δ也已轉負，則reference-date/regime conditioning已足以解釋至少部分反轉。此診斷仍不等同resource-feasible最終basket，不重訓模型、不重跑Strategy Compare、不修改selector。
+
+### 下一步
+
+1. 原樣執行`apps/research.py → 模型訓練 → 比較設定中的 Continuous Rankers`取得新的Reference-path子集歸因表。
+2. 若K=1 Event Δ為正而Orderable Δ為負，下一步補C17/C19與C18/C20盤前planned basket／repair／feasible-ascent action attribution；現有持久工件若不足，先在canonical replay diagnostics保存planned action rank/membership，再由正式Strategy Compare產生。
+3. 若K=1 Event Δ已為負，先做reference dates的year/regime／candidate-set特徵歸因，再決定是否需要PIT fold stability；不得直接修改loss。
+4. 在上述歸因完成前，不建立MR-12D。
+

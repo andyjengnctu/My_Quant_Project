@@ -38,7 +38,7 @@ from filters.breakout_quality.paths import resolve_filter_output_dir
 from filters.breakout_quality.ranking_score_store import load_continuous_ranker_oos_contract
 from filters.breakout_quality.workflow_io import PROJECT_ROOT
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 REPORT_JSON_FILENAME = "continuous_ranker_comparison.json"
 REPORT_MARKDOWN_FILENAME = "continuous_ranker_comparison.md"
 OUTPUT_DIRNAME = "continuous_ranker_comparison"
@@ -683,6 +683,157 @@ def _evaluate_dynamic_k_strata(
     return output
 
 
+def _evaluate_reference_subset_attribution(
+    paired_oos: pd.DataFrame,
+    dynamic_frame: pd.DataFrame,
+    *,
+    model_ids: tuple[str, ...],
+    boundary_width: int,
+) -> dict[str, Any]:
+    """Separate reference-date conditioning from orderable-universe conditioning.
+
+    For each actual Dynamic-K value, evaluate the exact same common-complete
+    reference dates twice: once on the canonical full OOS event-group universe,
+    and once on the reference arm's orderable candidate universe.  This is a
+    read-only attribution diagnostic; neither side represents the final
+    resource-feasible selector basket.
+    """
+
+    output: dict[str, Any] = {}
+    if dynamic_frame.empty:
+        return output
+    oos = pd.DataFrame(paired_oos).copy()
+    if oos.empty:
+        return output
+    for raw_k, orderable_subset in dynamic_frame.groupby("dynamic_k", sort=True):
+        k = int(raw_k)
+        dates = tuple(sorted(str(value) for value in orderable_subset["date"].unique()))
+        k_by_date = {date: k for date in dates}
+        event_subset = oos[oos["date"].astype(str).isin(dates)].copy()
+        output[str(k)] = {
+            "reference_common_complete_date_count": int(len(dates)),
+            "event_universe": _evaluate_paired_frame(
+                event_subset,
+                model_ids=model_ids,
+                k_by_date=k_by_date,
+                boundary_width=boundary_width,
+            ),
+            "orderable_universe": _evaluate_paired_frame(
+                orderable_subset,
+                model_ids=model_ids,
+                k_by_date=k_by_date,
+                boundary_width=boundary_width,
+            ),
+        }
+    return output
+
+
+def _paired_metric_delta(
+    section: dict[str, Any],
+    *,
+    left_id: str,
+    right_id: str,
+    metric: str,
+) -> Any:
+    contrast = dict(
+        (section.get("paired_contrasts") or {}).get(f"{left_id}_minus_{right_id}") or {}
+    )
+    metric_row = dict((contrast.get("metrics") or {}).get(metric) or {})
+    return metric_row.get("mean_delta")
+
+
+def _render_reference_subset_attribution_table(
+    attribution: dict[str, Any],
+    *,
+    summary_pair: tuple[str, str],
+) -> str:
+    left_id, right_id = summary_pair
+    rows = []
+    for key in sorted(attribution, key=lambda value: int(value)):
+        item = dict(attribution.get(key) or {})
+        event = dict(item.get("event_universe") or {})
+        orderable = dict(item.get("orderable_universe") or {})
+        rows.append(
+            (
+                key,
+                int(item.get("reference_common_complete_date_count", 0) or 0),
+                int(event.get("competition_date_count", 0) or 0),
+                int(orderable.get("competition_date_count", 0) or 0),
+                _fmt(
+                    _paired_metric_delta(
+                        event, left_id=left_id, right_id=right_id, metric="ndcg_at_k"
+                    )
+                ),
+                _fmt(
+                    _paired_metric_delta(
+                        orderable, left_id=left_id, right_id=right_id, metric="ndcg_at_k"
+                    )
+                ),
+                _fmt_delta_pct(
+                    _paired_metric_delta(
+                        event,
+                        left_id=left_id,
+                        right_id=right_id,
+                        metric="boundary_concordance",
+                    ),
+                    0.0,
+                ),
+                _fmt_delta_pct(
+                    _paired_metric_delta(
+                        orderable,
+                        left_id=left_id,
+                        right_id=right_id,
+                        metric="boundary_concordance",
+                    ),
+                    0.0,
+                ),
+                _fmt(
+                    _paired_metric_delta(
+                        event,
+                        left_id=left_id,
+                        right_id=right_id,
+                        metric="top_k_raw_target_lift",
+                    )
+                ),
+                _fmt(
+                    _paired_metric_delta(
+                        orderable,
+                        left_id=left_id,
+                        right_id=right_id,
+                        metric="top_k_raw_target_lift",
+                    )
+                ),
+            )
+        )
+    return render_table(
+        (
+            "K",
+            "Ref days",
+            "Event days",
+            "Orderable days",
+            f"Event NDCG Δ {left_id}-{right_id}",
+            "Orderable NDCG Δ",
+            "Event Boundary Δ",
+            "Orderable Boundary Δ",
+            "Event Lift Δ",
+            "Orderable Lift Δ",
+        ),
+        rows,
+        alignments=(
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+        ),
+    )
+
+
 def _render_dynamic_k_strata_table(
     strata: dict[str, Any],
     *,
@@ -898,6 +1049,7 @@ def render_console(payload: dict[str, Any]) -> str:
 
     dyn_section = dict(dynamic.get("evaluation") or {})
     coverage = dict(dynamic.get("coverage") or {})
+    reference_attribution = dict(dynamic.get("reference_subset_attribution") or {})
     lines.extend(
         (
             render_section(f"Dynamic-K｜{dynamic.get('reference_arm')} reference path・common-complete raw-score診斷"),
@@ -929,6 +1081,12 @@ def render_console(payload: dict[str, Any]) -> str:
                     str(value)
                     for value in (payload.get("comparison_settings") or {}).get("summary_pair") or model_ids[:2]
                 ),
+            ),
+            render_section("Reference-path子集歸因｜同日期 Event universe vs Orderable universe"),
+            "同一批common-complete reference dates固定實際K：Event欄使用完整OOS event-group候選；Orderable欄使用reference arm盤前orderable候選。若Event Δ仍正而Orderable Δ轉負，弱勢來自candidate/path conditioning，而不是一般Top-K能力。",
+            _render_reference_subset_attribution_table(
+                reference_attribution,
+                summary_pair=prefix_summary_pair,
             ),
         )
     )
@@ -1101,6 +1259,30 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         )
     lines += [
         "",
+        "## Reference-path子集歸因",
+        "",
+        "以下固定Dynamic-K common-complete的**同一批日期與同一個K**，分別用完整Forward-OOS event-group universe與reference arm orderable universe評估。這一步只用來區分日期／regime conditioning與盤前candidate-universe conditioning，仍不是resource-feasible最終basket。",
+        "",
+        f"| K | Ref days | Event days | Orderable days | Event NDCG Δ {left_id}-{right_id} | Orderable NDCG Δ | Event Boundary Δ | Orderable Boundary Δ | Event Lift Δ | Orderable Lift Δ |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for key in sorted((dynamic.get("reference_subset_attribution") or {}), key=lambda value: int(value)):
+        item = dict((dynamic.get("reference_subset_attribution") or {}).get(key) or {})
+        event = dict(item.get("event_universe") or {})
+        orderable = dict(item.get("orderable_universe") or {})
+        lines.append(
+            f"| {key} | {int(item.get('reference_common_complete_date_count', 0) or 0)} "
+            f"| {int(event.get('competition_date_count', 0) or 0)} "
+            f"| {int(orderable.get('competition_date_count', 0) or 0)} "
+            f"| {_fmt(_paired_metric_delta(event, left_id=left_id, right_id=right_id, metric='ndcg_at_k'))} "
+            f"| {_fmt(_paired_metric_delta(orderable, left_id=left_id, right_id=right_id, metric='ndcg_at_k'))} "
+            f"| {_fmt_delta_pct(_paired_metric_delta(event, left_id=left_id, right_id=right_id, metric='boundary_concordance'), 0.0)} "
+            f"| {_fmt_delta_pct(_paired_metric_delta(orderable, left_id=left_id, right_id=right_id, metric='boundary_concordance'), 0.0)} "
+            f"| {_fmt(_paired_metric_delta(event, left_id=left_id, right_id=right_id, metric='top_k_raw_target_lift'))} "
+            f"| {_fmt(_paired_metric_delta(orderable, left_id=left_id, right_id=right_id, metric='top_k_raw_target_lift'))} |"
+        )
+    lines += [
+        "",
         "## 契約",
         "",
         "- 所有比較均為checkpoint後描述性評估；OOS不進loss、gradient、epoch selection或任何模型擬合。",
@@ -1180,6 +1362,12 @@ def run_comparison(
         k_by_date=dynamic_k_by_date,
         boundary_width=boundary_width,
     )
+    reference_subset_attribution = _evaluate_reference_subset_attribution(
+        paired_splits["oos"],
+        dynamic_frame,
+        model_ids=model_ids,
+        boundary_width=boundary_width,
+    )
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -1224,6 +1412,7 @@ def run_comparison(
                 model_ids=model_ids,
                 boundary_width=boundary_width,
             ),
+            "reference_subset_attribution": reference_subset_attribution,
         },
         "random_baseline": {
             "method": "exact_uniform_random_order_expectation",
