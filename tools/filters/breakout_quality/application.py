@@ -20,6 +20,7 @@ from config.breakout_quality import (
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     build_breakout_quality_pretraining_profile_payload,
+    get_breakout_quality_continuous_ranker_comparison_settings,
     get_breakout_quality_experiment_profile,
 )
 from config.breakout_quality import (
@@ -117,6 +118,7 @@ COMMAND_MODULES = {
     "evaluate": "tools.filters.breakout_quality.evaluate",
     "prepare-continuous-target": "tools.filters.breakout_quality.prepare_continuous_target",
     "train-continuous-ranker": "tools.filters.breakout_quality.train_continuous_ranker",
+    "compare-continuous-rankers": "tools.filters.breakout_quality.compare_continuous_rankers",
     "build-point-in-time-scores": "tools.filters.breakout_quality.build_point_in_time_scores",
     "build-binary-point-in-time-scores": (
         "tools.filters.breakout_quality.build_binary_point_in_time_scores"
@@ -149,6 +151,9 @@ COMMAND_DESCRIPTIONS = {
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
     "train-continuous-ranker": "執行continuous ranker模型研究（MR-12系列）；正式選單亦可使用",
+    "compare-continuous-rankers": (
+        "只讀config設定的continuous-ranker frozen scores，做paired／random baseline／Dynamic-K品質比較"
+    ),
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
     "build-binary-point-in-time-scores": (
         "建立Binary DL filter歷史 point-in-time scores；research-only、CLI-only"
@@ -422,6 +427,55 @@ def _simple_report_details(
         )
         candidate = output_dir / "continuous_ranker_report.md"
         detail_report = candidate if candidate.is_file() else None
+    elif command == "compare-continuous-rankers":
+        output_dir = (
+            resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
+            / "continuous_ranker_comparison"
+        )
+        payload = _safe_json_object(output_dir / "continuous_ranker_comparison.json")
+        configured = dict(payload.get("comparison_settings") or {})
+        model_ids = tuple(str(value) for value in configured.get("model_ids") or ())
+        summary_pair = tuple(str(value) for value in configured.get("summary_pair") or ())
+        if len(summary_pair) != 2:
+            comparison_settings = get_breakout_quality_continuous_ranker_comparison_settings()
+            summary_pair = comparison_settings.summary_pair
+        summary_left, summary_right = summary_pair
+        if not model_ids:
+            model_ids = tuple(
+                str(item.get("model_id"))
+                for item in payload.get("models") or []
+                if str(item.get("model_id") or "").strip()
+            )
+        fixed_oos = dict(((payload.get("fixed_k") or {}).get("splits") or {}).get("oos") or {})
+        fixed_summary = dict((fixed_oos.get("models") or {}).get(summary_left) or {})
+        dynamic = dict(payload.get("dynamic_k") or {})
+        coverage = dict(dynamic.get("coverage") or {})
+        dynamic_eval = dict(dynamic.get("evaluation") or {})
+        dynamic_summary = dict((dynamic_eval.get("models") or {}).get(summary_left) or {})
+        contrast_id = f"{summary_left}_minus_{summary_right}"
+        dynamic_contrast = dict(
+            (dynamic_eval.get("paired_contrasts") or {}).get(contrast_id) or {}
+        )
+        dynamic_boundary_delta = dict(
+            (dynamic_contrast.get("metrics") or {}).get("boundary_concordance") or {}
+        )
+        rows.extend(
+            [
+                ("Fixed OOS競爭日", fixed_oos.get("competition_date_count")),
+                (f"{summary_left} OOS NDCG", _fmt_simple_metric(fixed_summary.get("ndcg_at_k"))),
+                (f"{summary_left} OOS Boundary", _fmt_simple_metric(fixed_summary.get("boundary_concordance"), percent=True)),
+                ("Dynamic-K完整score日", coverage.get("full_score_coverage_date_count")),
+                (f"{summary_left} Dynamic Boundary", _fmt_simple_metric(dynamic_summary.get("boundary_concordance"), percent=True)),
+                (
+                    f"{summary_left}−{summary_right} Dynamic Boundary Δ",
+                    "-"
+                    if dynamic_boundary_delta.get("mean_delta") is None
+                    else f"{float(dynamic_boundary_delta.get('mean_delta')) * 100.0:+.2f}pp",
+                ),
+            ]
+        )
+        candidate = output_dir / "continuous_ranker_comparison.md"
+        detail_report = candidate if candidate.is_file() else None
     elif command in {"build-point-in-time-scores", "audit-point-in-time-scores"}:
         audit_json = resolve_selection_point_in_time_audit_json_path(
             PROJECT_ROOT, filter_id, architecture, profile
@@ -499,6 +553,22 @@ def _emit_breakout_quality_simple_report(
 ) -> Path:
     filter_id, architecture, profile = _simple_report_context(command, args)
     experiment = get_breakout_quality_experiment_profile(profile)
+    profile_label = profile
+    objective_label = experiment.training_objective
+    if command == "compare-continuous-rankers":
+        output_dir = (
+            resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
+            / "continuous_ranker_comparison"
+        )
+        comparison_payload = _safe_json_object(
+            output_dir / "continuous_ranker_comparison.json"
+        )
+        configured = dict(comparison_payload.get("comparison_settings") or {})
+        model_ids = tuple(str(value) for value in configured.get("model_ids") or ())
+        if not model_ids:
+            model_ids = get_breakout_quality_continuous_ranker_comparison_settings().model_ids
+        profile_label = " / ".join(model_ids)
+        objective_label = "paired ranking-quality comparison (read-only)"
     detail_rows, detail_report = _simple_report_details(
         command,
         list(args),
@@ -512,8 +582,8 @@ def _emit_breakout_quality_simple_report(
         ("狀態", status),
         ("Filter ID", filter_id),
         ("Architecture", architecture),
-        ("Profile", profile),
-        ("Objective", experiment.training_objective),
+        ("Profile", profile_label),
+        ("Objective", objective_label),
         ("耗時", render_elapsed(float(elapsed_sec))),
         *detail_rows,
     ]
@@ -2529,11 +2599,14 @@ def _interactive_model_research(program_name: str) -> int:
         )
 
     while True:
+        comparison_settings = get_breakout_quality_continuous_ranker_comparison_settings()
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
         print("[1/Enter] 訓練目前模型 → forward-OOS模型報表")
         print("[2] 建立／更新 Selection PIT Scores → PIT模型驗證")
         print("[3] 查看目前Workflow與工件狀態")
+        if comparison_settings.enabled:
+            print(f"[4] {comparison_settings.menu_label}")
         print("[0] 返回")
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -2550,6 +2623,17 @@ def _interactive_model_research(program_name: str) -> int:
         if choice == "3":
             _print_workflow_status()
             continue
+        if choice == "4" and comparison_settings.enabled:
+            return int(
+                _run_command(
+                    "compare-continuous-rankers",
+                    [
+                        "--filter-id", settings.filter_id,
+                        "--model-architecture", settings.model_architecture,
+                    ],
+                    program_name=program_name,
+                )
+            )
         print("無效選項，請重新輸入。")
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:

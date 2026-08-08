@@ -5916,3 +5916,86 @@ Infrastructure/reporting fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*
 - `validate_breakout_quality_app_simple_report_contract_case`：6項、0 failure；`validate_dataset_cli_contract_case`：163項、0 failure，確認既有簡易報表仍保留並加入competition-day Top-K／K-boundary與清楚Validation標示。
 - `apps/research.py --help`與`apps/research.py model --help`可正常解析；全專案282個Python檔AST parse／compile PASS，裸`except:`=0、pass-only handler=0、簡單local import cycle=0、`core/filters`反向依賴`apps`或`tools.audit`=0；現行DONE checklist建議落點147個具體Python path缺件=0。
 - GPT未執行`apps/test_suite.py`或formal pipeline；正式double check仍由使用者本機單一正式入口執行。
+
+## 2026-08-08 — Continuous ranker P2：MR-12A/B/C paired、Random baseline、Dynamic-K
+
+### 狀態
+
+Infrastructure/diagnostic implementation completed；實際研究結果待使用者本機既有工件執行。此輪不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity；MR-12A/B/C frozen model identity、C17/C18 selector與C17～C22既有策略結果均不變。
+
+### 程式基準
+
+- 使用者指定最新版ZIP：`test-branch-1_20260808_202244_4926c2c(1).zip`
+- SHA256：`0305b59118a41c81df2b3364e380476bfe763ec800af9fc7655f315690b6c8af`
+- 全新解壓工作目錄：`/mnt/data/p2_work`
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`，並另檢視`TEST_SUITE_CHECKLIST.md`與`apps/test_suite.py`覆蓋邊界；未執行formal suite。
+
+### P2目的與固定比較
+
+P1已證明MR-12B在fixed K=10 competition days存在Top-K lift，但K-boundary concordance只小幅高於50%。P2不開新模型、不重訓、不重跑Strategy Compare，而是只讀MR-12A／MR-12B／MR-12C既有canonical frozen score，補齊三種描述性比較：
+
+1. **Fixed-K paired**：Selection與Forward OOS都要求三模型`ticker/date/group_index/split`候選row identity完全一致，且raw／daily-percentile target bit-semantic一致後才允許同日比較；K沿用正式策略max positions設定。
+2. **Exact random baseline**：不使用Monte Carlo。每交易日解析計算uniform random ordering的期望NDCG、Oracle Top-K overlap=`K/N`、Top-K lift=`0`、Boundary concordance=`0.5`與Boundary gap=`0`，再以交易日等權聚合。
+3. **Dynamic-K paired**：以目前C17 frozen constrained selector既有Strategy Compare pair作reference；只讀`score_ranking_daily_capacity.csv`與`score_ranking_orderable_candidates.csv`。K固定取C17 `Resource_Aware_Max_DL_Eligible`日的`Resource_Aware_Pre_Market_Order_Limit`，候選集合取當日實際orderable candidates，再以`ticker + signal_date`對回MR-12A/B/C OOS frozen score。只有三模型score與target完整覆蓋的日期才進paired品質統計，另明列eligible／orderable／partial／missing／full-score coverage。
+
+同日paired contrast固定至少輸出`MR-12B−MR-12A`與`MR-12C−MR-12B`的平均Δ、median Δ、左側較佳日比例與同日數；指標包含NDCG@K、Top-K Target/Lift、Oracle overlap、K-boundary concordance與Boundary raw-target gap。
+
+### 正式入口與輸出
+
+Research model menu新增：`[4] 比較 MR-12A/B/C → paired／random／Dynamic-K`。正式路徑仍為`apps/research.py → 模型訓練`，比較命令為read-only provider command `compare-continuous-rankers`。輸出集中於：
+
+- `outputs/filters/breakout_quality/<filter_id>/continuous_ranker_comparison/continuous_ranker_comparison.json`
+- `outputs/filters/breakout_quality/<filter_id>/continuous_ranker_comparison/continuous_ranker_comparison.md`
+- 既有`simple_reports/compare-continuous-rankers.md`持續提供console簡易摘要；Profile明列`MR-12A / MR-12B / MR-12C`，Objective明列read-only paired quality comparison，避免誤標成目前active單一training profile。
+
+### 固定研究／runtime條件
+
+不修改Dataset／Continuous Target、MR-12A MSE／MR-12B pairwise logistic／MR-12C ListNet、training sampling、optimizer、epoch selection、checkpoint、forward score、PIT score、C17/C18 selector、Strategy Compare fingerprint/cache、策略參數、replay、sizing、accounting或execution。P2的Selection/OOS Target只在checkpoint後作描述性診斷，不進loss、gradient、epoch selection、模型選擇或selector調整。
+
+### GPT獨立驗證
+
+- MR-12A all-event direct contract：4/4 PASS；MR-12B/P2 extended contract：13/13 PASS；MR-12C contract：8/8 PASS。
+- Dataset／Research CLI contract：165/165 PASS；Breakout Quality簡易報表contract：7/7 PASS；P2 option 4 route、custom comparison identity與相對路徑均已直接驗證。
+- Synthetic registry metadata：8/8 PASS；Registry／Checklist一致性：1217/1217 PASS。上述直接檢查合計1422項、0 failure。
+- 全專案284個Python檔`py_compile`／AST parse PASS；裸`except:`=0、pass-only exception handler=0、`core/filters`反向依賴`apps`或`tools.audit`=0、簡單local import cycle=0。
+- GPT未執行`apps/test_suite.py`或formal pipeline；P2實際A/B/C比較結果與formal double check待使用者本機執行。
+
+## 2026-08-09 — P2 config-driven menu／comparison identity infrastructure fix
+
+### 狀態
+
+Infrastructure/UI contract fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，MR-12A/B/C frozen model identity、C17/C18 selector與P2診斷算法不變。
+
+### 程式基準
+
+- 使用者最新版完整ZIP：`test-branch-1_20260808_202244_4926c2c(1).zip`
+- ZIP SHA256：`0305b59118a41c81df2b3364e380476bfe763ec800af9fc7655f315690b6c8af`
+- 上輪P2 patch：`p2_paired_random_dynamic_k_patch_20260808.zip`
+- P2 patch SHA256：`199e575b1d7576c673378e24fe75994efea2d97713db5e017cdde3db0cf7ba39`
+- 本輪工作樹：以上完整ZIP全新解壓後覆蓋P2 patch，再進行config-driven修正。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 問題與修正
+
+P2初版正式model menu直接顯示`MR-12A/B/C`，App簡易摘要與比較renderer亦固定假設MR-12B為摘要模型、MR-12A為baseline、C17為Dynamic-K reference。這違反既有config-driven原則，也會讓後續只改config時UI／摘要與實際比較對象分叉。
+
+本輪修正：
+
+1. `doc/PROJECT_SETTINGS.md`新增永久條款：互動選單不得硬編碼特定experiment／model／arm／ID或目前設定值；可用項目、顯示label、reference、比較組合與摘要對象必須由`config/`／Registry／active settings驅動，validator不得鎖死目前config值。
+2. `config/breakout_quality.py`把continuous-ranker comparison完整移到USER SETTINGS：`enabled`、`menu label`、`model_profiles`、`reference_arm`、`summary_pair`，並提供集中驗證／解析getter。
+3. `tools/filters/breakout_quality/application.py`的`[4]`選單只顯示config提供的泛化label；enabled=false時不顯示。比較簡易報表的Profile、摘要模型與Δ比較名稱均由canonical comparison JSON/config動態生成，不再固定MR-12B／MR-12A。
+4. `compare_continuous_rankers.py`的model specs、Dynamic-K reference、console／Markdown標題與契約文字全部由config設定與canonical payload生成；不再硬編碼MR-12A/B/C或C17。
+5. synthetic validator改用隔離config override驗證runtime忠實採用設定，不再把目前MR/C ID或menu字串當唯一合法答案。
+
+### 固定研究／runtime條件
+
+不修改Dataset／Continuous Target、MR-12A MSE、MR-12B pairwise logistic、MR-12C ListNet、模型checkpoint／scores、PIT、Top-K／K-boundary公式、exact random baseline、Dynamic-K join語意、C17/C18 selector、Strategy Compare replay／fingerprint、策略參數、sizing、accounting或execution。
+
+### GPT獨立驗證
+
+- 全專案284個Python檔`py_compile`／AST parse PASS；裸`except:`=0、pass-only exception handler=0、`core/filters`反向依賴`apps`或`tools.audit`=0、local import cycle=0。
+- 全專案互動選單literal掃描：含`[n]`之menu項目中硬編`MR-*`／`DL-*`／`SR-C*`／`Cxx`／`Axx`數量=0。
+- 隔離config override直接驗證：menu label可改為任意泛化設定文字、comparison model IDs/order／reference arm／summary pair皆由`config/breakout_quality.py`解析；`enabled=False`時正式model menu不顯示比較項目；renderer亦只讀canonical payload identity。
+- `doc/TEST_SUITE_CHECKLIST.md` B16已補config-driven menu contract；主表B16狀態仍為DONE且與最近`PARTIAL -> DONE` transition一致，該列Markdown欄數合法。
+- formal synthetic registry仍註冊`validate_dataset_cli_contract_case`與`validate_breakout_quality_pairwise_ranker_contract_case`，可在使用者本機正式suite覆蓋本輪UI/config與P2比較契約。
+- GPT未執行`apps/test_suite.py`或formal pipeline；正式double check仍由使用者本機正式入口執行。

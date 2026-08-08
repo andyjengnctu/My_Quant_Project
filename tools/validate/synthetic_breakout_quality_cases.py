@@ -11843,6 +11843,17 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         _trade_alignment_metrics,
         parse_args as parse_continuous_ranker_args,
     )
+    import config.breakout_quality as breakout_quality_config
+    from config.breakout_quality import (
+        get_breakout_quality_continuous_ranker_comparison_settings,
+    )
+    from filters.breakout_quality.continuous_ranker_quality import (
+        exact_random_top_k_baseline,
+    )
+    from tools.filters.breakout_quality.compare_continuous_rankers import (
+        _dynamic_orderable_frame,
+        _evaluate_paired_frame,
+    )
 
     profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
@@ -11975,6 +11986,168 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             int(report_metrics["boundary_date_count"]),
             int(report_metrics["excluded_non_competition_date_count"]),
             bool(float(report_metrics["boundary_raw_target_gap"]) > 0.0),
+        ),
+    )
+
+    random_baseline = exact_random_top_k_baseline(
+        np.asarray([1.0, 0.8, 0.6, 0.4, 0.2, 0.0], dtype=np.float64),
+        np.asarray([6, 5, 4, 3, 2, 1], dtype=np.float64),
+        top_k=3,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_random_baseline_is_exact_not_monte_carlo",
+        (True, 0.0, 0.5, 0.5, 0.0),
+        (
+            bool(0.0 < float(random_baseline["ndcg_at_k"]) < 1.0),
+            float(random_baseline["top_k_raw_target_lift"]),
+            float(random_baseline["oracle_top_k_overlap"]),
+            float(random_baseline["boundary_concordance"]),
+            float(random_baseline["boundary_raw_target_gap"]),
+        ),
+    )
+    with (
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES",
+            (
+                ("CFG-A", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE),
+                ("CFG-B", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE),
+                ("CFG-C", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE),
+            ),
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM",
+            "CFG-REFERENCE",
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR",
+            ("CFG-B", "CFG-A"),
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL",
+            "Config comparison",
+        ),
+    ):
+        configured_comparison = (
+            get_breakout_quality_continuous_ranker_comparison_settings()
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_p2_comparison_settings_follow_isolated_config_override",
+        (
+            ("CFG-A", "CFG-B", "CFG-C"),
+            "CFG-REFERENCE",
+            ("CFG-B", "CFG-A"),
+            "Config comparison",
+        ),
+        (
+            configured_comparison.model_ids,
+            configured_comparison.reference_arm,
+            configured_comparison.summary_pair,
+            configured_comparison.menu_label,
+        ),
+    )
+
+    paired_frame = pd.DataFrame(
+        {
+            "date": ["2024-03-01"] * 6,
+            "ticker": [f"T{i}" for i in range(6)],
+            "group_index": np.arange(6, dtype=np.int64),
+            "split": ["oos"] * 6,
+            "target_raw_r": np.asarray([6, 5, 4, 3, 2, 1], dtype=np.float64),
+            "target_daily_percentile": np.asarray([1.0, 0.8, 0.6, 0.4, 0.2, 0.0], dtype=np.float64),
+            "score__MR-12A": np.asarray([6, 4, 5, 3, 2, 1], dtype=np.float64),
+            "score__MR-12B": np.asarray([6, 5, 4, 3, 2, 1], dtype=np.float64),
+            "score__MR-12C": np.asarray([1, 2, 3, 4, 5, 6], dtype=np.float64),
+        }
+    )
+    paired_eval = _evaluate_paired_frame(
+        paired_frame,
+        model_ids=("MR-12A", "MR-12B", "MR-12C"),
+        k_by_date={"2024-03-01": 3},
+        boundary_width=2,
+    )
+    ba = paired_eval["paired_contrasts"]["MR-12B_minus_MR-12A"]["metrics"]
+    cb = paired_eval["paired_contrasts"]["MR-12C_minus_MR-12B"]["metrics"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_p2_uses_same_day_paired_deltas",
+        (1, True, True, 1.0),
+        (
+            int(paired_eval["competition_date_count"]),
+            bool(float(ba["ndcg_at_k"]["mean_delta"]) > 0.0),
+            bool(float(cb["ndcg_at_k"]["mean_delta"]) < 0.0),
+            float(paired_eval["models"]["MR-12B"]["boundary_concordance"]),
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        pair_dir = Path(td)
+        pd.DataFrame(
+            [
+                {
+                    "Date": "2024-03-04",
+                    "Resource_Aware_Max_DL_Eligible": True,
+                    "Resource_Aware_Pre_Market_Order_Limit": 2,
+                },
+                {
+                    "Date": "2024-03-05",
+                    "Resource_Aware_Max_DL_Eligible": False,
+                    "Resource_Aware_Pre_Market_Order_Limit": 2,
+                },
+            ]
+        ).to_csv(pair_dir / "score_ranking_daily_capacity.csv", index=False)
+        pd.DataFrame(
+            [
+                {"ticker": ticker, "trade_date": "2024-03-04", "signal_date": "2024-03-01"}
+                for ticker in ("A", "B", "C", "D")
+            ]
+        ).to_csv(pair_dir / "score_ranking_orderable_candidates.csv", index=False)
+        dynamic_models = {}
+        target_raw = [4.0, 3.0, 2.0, 1.0]
+        target_pct = [1.0, 2.0 / 3.0, 1.0 / 3.0, 0.0]
+        for model_id, scores in {
+            "MR-12A": [0.8, 0.7, 0.6, 0.5],
+            "MR-12B": [0.9, 0.8, 0.7, 0.6],
+            "MR-12C": [0.6, 0.7, 0.8, 0.9],
+        }.items():
+            dynamic_models[model_id] = pd.DataFrame(
+                {
+                    "ticker": ["A", "B", "C", "D"],
+                    "date": ["2024-03-01"] * 4,
+                    "group_index": [1, 2, 3, 4],
+                    "split": ["oos"] * 4,
+                    "target_raw_r": target_raw,
+                    "target_daily_percentile": target_pct,
+                    "model_score": scores,
+                }
+            )
+        dynamic_frame, dynamic_coverage = _dynamic_orderable_frame(
+            pair_dir=pair_dir,
+            model_frames=dynamic_models,
+            model_ids=("MR-12A", "MR-12B", "MR-12C"),
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_dynamic_k_reads_actual_c17_orderable_universe_and_signal_date_scores",
+        (4, (2,), 1, 1.0),
+        (
+            int(len(dynamic_frame)),
+            tuple(sorted(set(int(value) for value in dynamic_frame["dynamic_k"]))),
+            int(dynamic_coverage["full_score_coverage_date_count"]),
+            float(dynamic_coverage["full_score_coverage_rate"]),
         ),
     )
 

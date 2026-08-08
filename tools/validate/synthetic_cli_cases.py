@@ -21,6 +21,7 @@ from config.breakout_quality import (
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
 )
 from .checks import add_check
 
@@ -189,6 +190,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain",
         "train", "export-scores", "report", "evaluate", "regime-audit",
         "prepare-continuous-target", "build-point-in-time-scores",
+        "compare-continuous-rankers",
         "build-binary-point-in-time-scores", "audit-point-in-time-scores",
     ):
         add_check(
@@ -247,11 +249,17 @@ def validate_dataset_cli_contract_case(_base_params):
         return 0
 
     breakout_quality_config = importlib.import_module("config.breakout_quality")
+    configured_ranker_menu_label = "執行設定中的 Ranker 品質比較"
     with (
         patch.object(
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL",
+            configured_ranker_menu_label,
         ),
         patch.object(
             breakout_quality_config,
@@ -340,8 +348,62 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[1/Enter] 訓練目前模型 → forward-OOS模型報表" in interactive_text
             and "[2] 建立／更新 Selection PIT Scores → PIT模型驗證" in interactive_text
             and "[3] 查看目前Workflow與工件狀態" in interactive_text
+            and f"[4] {configured_ranker_menu_label}" in interactive_text
+            and "MR-12A/B/C" not in interactive_text
             and "Audit／診斷" not in interactive_text
             and "策略組合比較" not in interactive_text
+        ),
+    )
+
+    comparison_commands = []
+
+    def _record_comparison_command(command, args, *, program_name):
+        comparison_commands.append((str(command), list(args), str(program_name)))
+        return 0
+
+    configured_comparison_menu_label = "執行 config 指定的比較"
+    with (
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL",
+            configured_comparison_menu_label,
+        ),
+    ):
+        comparison_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
+        with (
+            patch("builtins.input", side_effect=["4"]),
+            patch(
+                "tools.filters.breakout_quality.application._run_command",
+                side_effect=_record_comparison_command,
+            ),
+        ):
+            comparison_rc, comparison_text = _capture_stdout(
+                app_breakout_quality._interactive_model_research,
+                "apps/research.py model",
+            )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_continuous_menu_option_4_routes_read_only_ranker_comparison",
+        (0, [(
+            "compare-continuous-rankers",
+            [
+                "--filter-id", comparison_settings.filter_id,
+                "--model-architecture", comparison_settings.model_architecture,
+            ],
+            "apps/research.py model",
+        )], True),
+        (
+            comparison_rc,
+            comparison_commands,
+            f"[4] {configured_comparison_menu_label}" in comparison_text
+            and "MR-12A/B/C" not in comparison_text,
         ),
     )
 
@@ -2229,6 +2291,80 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             results, "output_contract", case_id,
             "breakout_quality_app_simple_report_contains_active_identity", True,
             "synthetic_quality" in markdown and "Objective" in markdown,
+        )
+
+        compare_dir = (
+            simple_root / "outputs" / "filters" / "breakout_quality"
+            / "synthetic_quality" / "continuous_ranker_comparison"
+        )
+        compare_dir.mkdir(parents=True, exist_ok=True)
+        (compare_dir / "continuous_ranker_comparison.json").write_text(
+            json.dumps(
+                {
+                    "comparison_settings": {
+                        "model_ids": ["CFG-BASE", "CFG-CURRENT"],
+                        "reference_arm": "CFG-REF",
+                        "summary_pair": ["CFG-CURRENT", "CFG-BASE"],
+                    },
+                    "fixed_k": {
+                        "splits": {
+                            "oos": {
+                                "competition_date_count": 20,
+                                "models": {
+                                    "CFG-CURRENT": {
+                                        "ndcg_at_k": 0.71,
+                                        "boundary_concordance": 0.54,
+                                    }
+                                },
+                            }
+                        }
+                    },
+                    "dynamic_k": {
+                        "coverage": {"full_score_coverage_date_count": 18},
+                        "evaluation": {
+                            "models": {
+                                "CFG-CURRENT": {"boundary_concordance": 0.56}
+                            },
+                            "paired_contrasts": {
+                                "CFG-CURRENT_minus_CFG-BASE": {
+                                    "metrics": {
+                                        "boundary_concordance": {"mean_delta": 0.03}
+                                    }
+                                }
+                            },
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (compare_dir / "continuous_ranker_comparison.md").write_text(
+            "# comparison\n", encoding="utf-8"
+        )
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", simple_root):
+            compare_report_path, compare_console = _capture_stdout(
+                app_breakout_quality._emit_breakout_quality_simple_report,
+                "compare-continuous-rankers",
+                [
+                    "--filter-id", "synthetic_quality",
+                    "--model-architecture", BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                ],
+                returncode=0,
+                elapsed_sec=0.5,
+            )
+        compare_markdown = compare_report_path.read_text(encoding="utf-8")
+        add_check(
+            results, "output_contract", case_id,
+            "breakout_quality_ranker_comparison_simple_report_is_readable_and_not_single_profile_misleading",
+            (True, True, True),
+            (
+                "CFG-BASE / CFG-CURRENT" in compare_console
+                and "paired ranking-quality comparison (read-only)" in compare_console,
+                "CFG-CURRENT Dynamic Boundary" in compare_console
+                and "CFG-CURRENT−CFG-BASE Dynamic Boundary Δ" in compare_console,
+                "continuous_ranker_comparison.md" in compare_markdown
+                and str(simple_root) not in compare_console,
+            ),
         )
 
     source = Path(app_breakout_quality.__file__).read_text(encoding="utf-8")

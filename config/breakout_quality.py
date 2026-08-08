@@ -200,6 +200,20 @@ BREAKOUT_QUALITY_STRATEGY_ROTATION = "off"
 BREAKOUT_QUALITY_STRATEGY_ADAPT_FIXED_RISK = 0.01
 BREAKOUT_QUALITY_STRATEGY_ADAPT_MAX_POSITION_CAP_PCT = 0.30
 
+# Continuous-ranker read-only comparison is config-driven.  The interactive menu must
+# never hard-code experiment/model/arm IDs; it only renders this configured work item.
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_ENABLED = True
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL = "比較設定中的 Continuous Rankers"
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES = (
+    ("MR-12A", "strategy_aligned_no_time_all_event_mse"),
+    ("MR-12B", "strategy_aligned_no_time_all_event_pairwise"),
+    ("MR-12C", "strategy_aligned_no_time_all_event_listwise"),
+)
+# Dynamic-K candidate universe / daily K source.
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM = "C17"
+# Short console summary compares left minus right.  The pair must be adjacent in the model order above.
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR = ("MR-12B", "MR-12A")
+
 # "auto" resolves from the selected experiment profile:
 # - binary classification -> hard-filter / canonical_runtime / original
 # - continuous ranker     -> score-ranking / selection_point_in_time /
@@ -223,6 +237,7 @@ STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE = "strategy_aligned_no_time_
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE = "strategy_aligned_no_time_all_event_mse"
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE = "strategy_aligned_no_time_all_event_listwise"
+
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
@@ -819,6 +834,73 @@ def resolve_breakout_quality_inception_receptive_field_bars() -> int:
     kernels = build_breakout_quality_inception_kernel_sizes()
     return 1 + int(BREAKOUT_QUALITY_INCEPTION_DEPTH) * (max(kernels) - 1)
 
+@dataclass(frozen=True)
+class BreakoutQualityContinuousRankerComparisonSettings:
+    enabled: bool
+    menu_label: str
+    model_profiles: tuple[tuple[str, str], ...]
+    reference_arm: str
+    summary_pair: tuple[str, str]
+
+    @property
+    def model_ids(self) -> tuple[str, ...]:
+        return tuple(model_id for model_id, _profile in self.model_profiles)
+
+
+def get_breakout_quality_continuous_ranker_comparison_settings(
+) -> BreakoutQualityContinuousRankerComparisonSettings:
+    model_profiles = tuple(
+        (str(model_id).strip(), str(profile).strip())
+        for model_id, profile in BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES
+    )
+    if len(model_profiles) < 2:
+        raise ValueError("continuous ranker comparison至少需要兩個model profile")
+    model_ids = tuple(model_id for model_id, _profile in model_profiles)
+    profiles = tuple(profile for _model_id, profile in model_profiles)
+    if any(not model_id for model_id in model_ids) or any(not profile for profile in profiles):
+        raise ValueError("continuous ranker comparison model id/profile不得為空")
+    if len(set(model_ids)) != len(model_ids) or len(set(profiles)) != len(profiles):
+        raise ValueError("continuous ranker comparison model id/profile不可重複")
+    for profile in profiles:
+        experiment = get_breakout_quality_experiment_profile(profile)
+        if experiment.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+            raise ValueError(
+                "continuous ranker comparison只允許continuous ranker profile: "
+                f"{profile}"
+            )
+
+    menu_label = str(BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL).strip()
+    if not menu_label:
+        raise ValueError("continuous ranker comparison menu label不得為空")
+    reference_arm = str(
+        BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM
+    ).strip()
+    if not reference_arm:
+        raise ValueError("continuous ranker comparison reference arm不得為空")
+
+    raw_summary_pair = tuple(
+        str(value).strip()
+        for value in BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR
+    )
+    if len(raw_summary_pair) != 2 or raw_summary_pair[0] == raw_summary_pair[1]:
+        raise ValueError("continuous ranker comparison summary pair必須是兩個不同model id")
+    if any(model_id not in model_ids for model_id in raw_summary_pair):
+        raise ValueError("continuous ranker comparison summary pair必須存在於model profiles")
+    available_contrasts = tuple(zip(model_ids[1:], model_ids[:-1]))
+    if raw_summary_pair not in available_contrasts:
+        raise ValueError(
+            "continuous ranker comparison summary pair必須符合model profiles的相鄰比較順序"
+        )
+
+    return BreakoutQualityContinuousRankerComparisonSettings(
+        enabled=bool(BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_ENABLED),
+        menu_label=menu_label,
+        model_profiles=model_profiles,
+        reference_arm=reference_arm,
+        summary_pair=(raw_summary_pair[0], raw_summary_pair[1]),
+    )
+
+
 # =============================================================================
 # WORKFLOW RESOLUTION AND VALIDATION — do not edit unless changing implementation
 # =============================================================================
@@ -1134,6 +1216,11 @@ __all__ = [
     'BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_ENABLED',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR',
     'BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK',
     'BREAKOUT_QUALITY_PRETRAINING_PROFILE',
     'BREAKOUT_QUALITY_PRETRAINING_FAMILY',
@@ -1241,6 +1328,7 @@ __all__ = [
     'BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE',
     'BREAKOUT_QUALITY_STRATEGY_SCORE_SOURCE',
     'BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE',
+    'BreakoutQualityContinuousRankerComparisonSettings',
     'BreakoutQualityWorkflowSettings',
     'SUPPORTED_WORKFLOW_SCORE_SOURCES',
     'SUPPORTED_WORKFLOW_STRATEGY_MODES',
@@ -1254,5 +1342,6 @@ __all__ = [
     'WORKFLOW_STRATEGY_MODE_AUTO',
     'WORKFLOW_STRATEGY_MODE_HARD_FILTER',
     'WORKFLOW_STRATEGY_MODE_SCORE_RANKING',
+    'get_breakout_quality_continuous_ranker_comparison_settings',
     'get_breakout_quality_workflow_settings',
 ]
