@@ -2360,8 +2360,10 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             (
                 "CFG-BASE / CFG-CURRENT" in compare_console
                 and "paired ranking-quality comparison (read-only)" in compare_console,
-                "CFG-CURRENT Dynamic Boundary" in compare_console
-                and "CFG-CURRENT−CFG-BASE Dynamic Boundary Δ" in compare_console,
+                "Dynamic Target基準" in compare_console
+                and "原始score-event-date（非trade-date剩餘機會）" in compare_console
+                and "CFG-CURRENT Dynamic raw-score Boundary" in compare_console
+                and "CFG-CURRENT−CFG-BASE Dynamic raw-score Boundary Δ" in compare_console,
                 "continuous_ranker_comparison.md" in compare_markdown
                 and str(simple_root) not in compare_console,
             ),
