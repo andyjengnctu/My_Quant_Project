@@ -5492,3 +5492,31 @@ Strategy Compare summary新增selector CPU timing：calls、total ms、median ms
 目前direct synthetic共32項全部PASS。GPT未執行`apps/test_suite.py`。
 
 C18狀態固定`IMPLEMENTED / RESULT_PENDING`。取得正式forward結果前不得把engineering timing、random benchmark或C17 headline績效當成C18採用證據；也不得依forward結果調single-swap規則、score cutoff、resource floor或任何numeric selector參數。
+
+## 2026-08-08 — SR-C18 pair-level結果與多DL共用baseline timing聚合修正
+
+### 狀態
+
+`SR-C18 PAIR_RESULT_OBSERVED / FINAL_REPORT_RERUN_REQUIRED`
+
+### 程式／正式執行證據
+
+- 使用者本地`apps/strategy_compare.py`：config fingerprint=`4621173de22d`，期間`2021-01-01 ～ 2025-12-22`。
+- 固定`PARAM-P2 / Min ROOS`、`DL-CONT12A / MR-12A`、max positions=10、rotation=off；本輪不修改selector、score、Target、resource floor或任何numeric gate。
+- C17 pair-level重現：Return=164.13%、MDD=14.38%、RoMD=11.42、EV=0.72R、Exposure=92.04%。
+- C18 pair-level：Return=140.56%、MDD=14.73%、RoMD=9.54、Annual Return=19.33%、Log R²=0.8810、月勝率=60.00%、EV=0.57R、Exposure=91.98%、trades=333。相對C3：Return -15.78pp、MDD -0.68pp、RoMD -0.61、EV -0.09R。此pair-level結果只作迭代研究OOS證據，不回流修改C18搜尋規則。
+- 最終多arm summary尚未完成，因聚合C17／C18兩個pair的重複C3 baseline時拋出：`ValueError: 多DL比較的共用基準不一致: arm=C3, key=resource_aware_selector_timing_max_ms, first=0.088, repeated=0.0352`。因此正式C17／C18 selector timing table尚未取得，不把pair console的整體elapsed秒數當selector CPU比較。
+
+### 根因
+
+`filters/breakout_quality/strategy_comparison.py::_assert_same_shared_baseline()`原本把所有summary key都當成deterministic baseline identity；SR-C18加入`resource_aware_selector_timing_total/median/p95/max_ms`後，C3在不同controlled pair被重播時會產生正常CPU jitter，因此錯把非決定性runtime measurement當策略結果差異。另`core/portfolio_entries.py`即使`policy is None`也量到wrapper執行時間，使DL-off C3帶有沒有語意的selector timing。
+
+### 修正
+
+1. `policy is None`時直接回傳canonical default diagnostics，`selector_elapsed_ns=0`；DL-off baseline不再宣稱執行Max-DL selector。
+2. shared-baseline equality明確排除全部`resource_aware_selector_timing_*`；Return／MDD／EV／trade count／resource deterministic diagnostics仍維持exact一致性檢查。
+3. direct synthetic新增timing-only mismatch可聚合案例，並保留`total_return_pct`不同必須拒絕的原案例；目前`validate_strategy_compare_config_driven_app_contract_case`為33/33 PASS。
+
+### 下一步
+
+套用修正後以相同`config/strategy_compare.py`正式選單重跑，不改C18 selector。重跑目的只完成final summary與同run C17／C18 selector total／median／p95／max CPU time比較；在正式summary完成前Registry維持`FINAL_REPORT_RERUN_REQUIRED`。

@@ -443,7 +443,11 @@ def _assert_same_shared_baseline(
         "dl_runtime_mode",
         "direct_selection_delta_r",
     }
-    keys = (set(existing) | set(candidate)) - ignored
+    keys = {
+        key
+        for key in (set(existing) | set(candidate)) - ignored
+        if not str(key).startswith("resource_aware_selector_timing_")
+    }
     for key in sorted(keys):
         left = existing.get(key)
         right = candidate.get(key)

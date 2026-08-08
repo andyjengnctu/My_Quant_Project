@@ -1417,7 +1417,11 @@ def reorder_candidates_for_resource_aware_quality(
         out['selector_elapsed_ns'] = int(max(0, time.perf_counter_ns() - started_ns))
         return order, out
 
-    if free_slots <= 0 or not rows or policy is None:
+    if policy is None:
+        # DL-off / non-resource-aware baseline does not execute a selector.
+        # Keep selector timing at the canonical zero instead of measuring wrapper jitter.
+        return rows, default_diag
+    if free_slots <= 0 or not rows:
         return finish(rows, default_diag)
 
     baseline = _simulate_reserved_candidate_order(

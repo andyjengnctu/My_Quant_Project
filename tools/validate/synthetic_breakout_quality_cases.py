@@ -16949,6 +16949,53 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         repeated_baseline_mismatch_rejected,
     )
 
+    timing_only_pairs = {
+        "min__a9_hard": {
+            "arm_contract": ("min_roos", "all_off", min_off, min_a9_hard),
+            "payload": {
+                **dict(mocked_pair_payload),
+                "no_filter": {
+                    **dict(mocked_pair_payload["no_filter"]),
+                    "resource_aware_selector_timing_calls": 1,
+                    "resource_aware_selector_timing_total_ms": 0.050,
+                    "resource_aware_selector_timing_median_ms": 0.050,
+                    "resource_aware_selector_timing_p95_ms": 0.050,
+                    "resource_aware_selector_timing_max_ms": 0.050,
+                },
+            },
+        },
+        "min__a9_resource": {
+            "arm_contract": ("min_roos", "all_off", min_off, min_a9_resource),
+            "payload": {
+                **dict(mocked_pair_payload),
+                "no_filter": {
+                    **dict(mocked_pair_payload["no_filter"]),
+                    "resource_aware_selector_timing_calls": 1,
+                    "resource_aware_selector_timing_total_ms": 0.091,
+                    "resource_aware_selector_timing_median_ms": 0.091,
+                    "resource_aware_selector_timing_p95_ms": 0.091,
+                    "resource_aware_selector_timing_max_ms": 0.091,
+                },
+            },
+        },
+    }
+    try:
+        timing_scenarios = strategy_comparison_module._scenario_payloads(
+            timing_only_pairs,
+            {"min__a9_hard": 0.1, "min__a9_resource": 0.2},
+            settings=settings,
+        )
+    except ValueError:
+        volatile_timing_ignored = False
+    else:
+        volatile_timing_ignored = timing_scenarios.get("C3", {}).get("total_return_pct") == 10.0
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "shared_baseline_consistency_ignores_only_volatile_selector_cpu_timing",
+        True,
+        volatile_timing_ignored,
+    )
+
 
     min_roos_source = settings.parameter_sources["min_roos"]
     add_check(
