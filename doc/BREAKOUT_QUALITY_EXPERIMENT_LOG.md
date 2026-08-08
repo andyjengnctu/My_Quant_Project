@@ -5520,3 +5520,33 @@ C18狀態固定`IMPLEMENTED / RESULT_PENDING`。取得正式forward結果前不�
 ### 下一步
 
 套用修正後以相同`config/strategy_compare.py`正式選單重跑，不改C18 selector。重跑目的只完成final summary與同run C17／C18 selector total／median／p95／max CPU time比較；在正式summary完成前Registry維持`FINAL_REPORT_RERUN_REQUIRED`。
+
+
+## 2026-08-08 — SR-C18正式closure：Selector freeze，研究主線轉回DL品質
+
+### 正式結果
+
+使用者本地`apps/strategy_compare.py`以config fingerprint=`4621173de22d`完成`C3 / C17 / C18`正式summary；期間`2021-01-01 ～ 2025-12-22`，固定`PARAM-P2 / Min ROOS`、`DL-CONT12A / MR-12A`、max positions=10、rotation=off。
+
+C18：Return=140.56%、MDD=14.73%、RoMD=9.54、Annual Return=19.33%、Log R²=0.8810、月勝率=60.00%、EV=0.57R、Exposure=91.98%、trades=333、same-param DL selection R=-26.25R。相對C17：Return -23.57pp、MDD +0.36pp、RoMD -1.88、Annual Return -2.27pp、EV -0.15R、Exposure -0.05pp、same-param DL selection R -46.57R。相對C3：Return -15.78pp、MDD -0.68pp、RoMD -0.61、EV -0.09R。
+
+### Max-DL selector完整度
+
+C18 Max-DL eligible=242日、repair=232日、seed原為fallback=34日、final fallback=0、feasible-ascent improvement=23日、1-swap local optimum=242日、K violation=0、resource-preservation violation=0。相對Min ROOS planned selected-count delta=0、reserved-capital delta=+1,019,846。
+
+因此C18已完成本研究階段要求：所有可介入日皆取得合法K/R0 basket，且搜尋停止點皆為deterministic 1-swap local optimum；不再因C18當前MR-12A績效不佳而修改capital floor、K、repair/ascent規則、score cutoff、blend或其他selector語意。Global exact search先前已因N≈30～80 difficult cases超過10秒而排除production。
+
+### 正式計算時間
+
+同一正式run：
+- C17 selector total=1306.82ms、median=0.660ms、p95=3.431ms、max=15.414ms、repair eval=22,605。
+- C18 selector total=1668.23ms、median=0.829ms、p95=4.065ms、max=29.897ms、repair eval=23,456、feasible-ascent eval=25,803。
+- C18/C17 slowdown：total=1.277×、median=1.256×、p95=1.185×、max=1.940×；絕對增量total僅361.41ms。整段score-ranking replay console仍約12秒，因此selector額外成本不構成後續反覆模型策略驗證的主要瓶頸。
+
+### 判定
+
+`SR-C18 RESULT_AVAILABLE / SELECTOR_FROZEN_FOR_MODEL_RESEARCH / NOT_PROMOTED_AS_STRATEGY`。
+
+C18績效顯著低於C17，同時C18把DL objective推得更完整（selected score gain=+14.441 vs C17 +11.826，final fallback=0），卻使same-param DL selection R由C17 +20.31R降至C18 -26.25R。此證據定位為**現有MR-12A ranking品質不足以支撐更強DL主導**，而不是再調selector的理由。後續所有新continuous DL source固定使用SR-C18作策略驗證harness，讓模型差異直接暴露在相同K/R0、execution order、sizing與accounting下。
+
+另核對目前程式：`MR-12A / PROFILE-strategy_aligned_no_time_all_event_mse`本身已使用`daily_percentile_regression`，Target為同日all-event `strategy_aligned_opportunity_no_time_r_v1` percentile，loss=MSE、epoch selection=`mean_daily_spearman`。因此下一個模型研究不得把「daily percentile regression」當新變數；較乾淨的下一步是固定同一Target／all-label scope／ARCH-inception_time_v1，改研究pairwise或listwise ranking loss。
