@@ -41,6 +41,8 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
@@ -105,7 +107,7 @@ from core.console_report import (
     print_artifact_paths,
 )
 
-RANKER_SCHEMA_VERSION = 1
+RANKER_SCHEMA_VERSION = 2
 RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
 RANKER_REPORT_JSON_FILENAME = "continuous_ranker_report.json"
 RANKER_REPORT_MARKDOWN_FILENAME = "continuous_ranker_report.md"
@@ -470,6 +472,128 @@ def _daily_rank_metrics(dates: np.ndarray, scores: np.ndarray, targets: np.ndarr
     }
 
 
+def _daily_top_k_metrics(
+    dates: np.ndarray,
+    scores: np.ndarray,
+    raw_targets: np.ndarray,
+    percentile_targets: np.ndarray,
+    *,
+    top_k: int,
+    boundary_width: int,
+) -> dict[str, Any]:
+    """Measure same-day Top-K and score-boundary quality with equal date weighting.
+
+    NDCG uses the canonical same-day percentile target as non-negative relevance.
+    Economic lift/gap metrics use the raw strategy-aligned R target.  The K-boundary
+    compares the score ranks immediately inside K against the same number immediately
+    outside K, so it measures the ordering most likely to change a portfolio decision.
+    """
+
+    requested_k = int(top_k)
+    requested_boundary_width = int(boundary_width)
+    if requested_k < 1:
+        raise ValueError("continuous ranker report top_k必須>=1")
+    if requested_boundary_width < 1:
+        raise ValueError("continuous ranker report boundary_width必須>=1")
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(dates),
+            "score": np.asarray(scores, dtype=np.float64),
+            "raw_target": np.asarray(raw_targets, dtype=np.float64),
+            "percentile_target": np.asarray(percentile_targets, dtype=np.float64),
+        }
+    )
+    finite = (
+        np.isfinite(frame["score"].to_numpy(dtype=np.float64))
+        & np.isfinite(frame["raw_target"].to_numpy(dtype=np.float64))
+        & np.isfinite(frame["percentile_target"].to_numpy(dtype=np.float64))
+    )
+    frame = frame.loc[finite].copy()
+
+    ndcg_values: list[float] = []
+    top_k_target_values: list[float] = []
+    candidate_target_values: list[float] = []
+    top_k_lift_values: list[float] = []
+    oracle_overlap_values: list[float] = []
+    boundary_concordance_values: list[float] = []
+    boundary_inside_target_values: list[float] = []
+    boundary_outside_target_values: list[float] = []
+    boundary_gap_values: list[float] = []
+
+    for _date, day in frame.groupby("date", sort=True):
+        if day.empty:
+            continue
+        score_values = day["score"].to_numpy(dtype=np.float64)
+        raw_values = day["raw_target"].to_numpy(dtype=np.float64)
+        percentile_values = day["percentile_target"].to_numpy(dtype=np.float64)
+        count = int(len(day))
+        k = min(requested_k, count)
+        score_order = np.argsort(-score_values, kind="mergesort")
+        target_order = np.argsort(-raw_values, kind="mergesort")
+        selected = score_order[:k]
+        oracle = target_order[:k]
+
+        discounts = 1.0 / np.log2(np.arange(k, dtype=np.float64) + 2.0)
+        actual_dcg = float(np.sum(percentile_values[selected] * discounts))
+        ideal_relevance = np.sort(percentile_values)[::-1][:k]
+        ideal_dcg = float(np.sum(ideal_relevance * discounts))
+        if ideal_dcg > 0.0:
+            ndcg_values.append(float(actual_dcg / ideal_dcg))
+
+        selected_mean = float(raw_values[selected].mean())
+        candidate_mean = float(raw_values.mean())
+        top_k_target_values.append(selected_mean)
+        candidate_target_values.append(candidate_mean)
+        top_k_lift_values.append(float(selected_mean - candidate_mean))
+        oracle_overlap_values.append(
+            float(len(set(int(i) for i in selected).intersection(int(i) for i in oracle)) / k)
+        )
+
+        # A true K-boundary exists only when the day has more than K candidates.
+        if count <= requested_k:
+            continue
+        width = min(requested_boundary_width, requested_k, count - requested_k)
+        if width < 1:
+            continue
+        inside = score_order[requested_k - width : requested_k]
+        outside = score_order[requested_k : requested_k + width]
+        inside_targets = raw_values[inside]
+        outside_targets = raw_values[outside]
+        target_diff = inside_targets[:, None] - outside_targets[None, :]
+        comparable_count = int(target_diff.size)
+        if comparable_count:
+            concordant = float((target_diff > 0.0).sum()) + 0.5 * float((target_diff == 0.0).sum())
+            boundary_concordance_values.append(float(concordant / comparable_count))
+        inside_mean = float(inside_targets.mean())
+        outside_mean = float(outside_targets.mean())
+        boundary_inside_target_values.append(inside_mean)
+        boundary_outside_target_values.append(outside_mean)
+        boundary_gap_values.append(float(inside_mean - outside_mean))
+
+    def mean_or_none(values: list[float]) -> float | None:
+        return float(np.mean(values)) if values else None
+
+    return {
+        "top_k": requested_k,
+        "boundary_width": requested_boundary_width,
+        "top_k_date_count": int(len(top_k_target_values)),
+        "ndcg_at_k": mean_or_none(ndcg_values),
+        "top_k_raw_target_mean": mean_or_none(top_k_target_values),
+        "candidate_raw_target_mean": mean_or_none(candidate_target_values),
+        "top_k_raw_target_lift": mean_or_none(top_k_lift_values),
+        "oracle_top_k_overlap": mean_or_none(oracle_overlap_values),
+        "boundary_date_count": int(len(boundary_gap_values)),
+        "boundary_concordance": mean_or_none(boundary_concordance_values),
+        "boundary_inside_raw_target_mean": mean_or_none(boundary_inside_target_values),
+        "boundary_outside_raw_target_mean": mean_or_none(boundary_outside_target_values),
+        "boundary_raw_target_gap": mean_or_none(boundary_gap_values),
+        "date_weighting": "equal_date_weight",
+        "ndcg_relevance": "same_day_percentile_target",
+        "economic_target": "raw_strategy_aligned_r",
+    }
+
+
 def _average_precision(labels: np.ndarray, scores: np.ndarray) -> float | None:
     y = np.asarray(labels, dtype=np.int64)
     s = np.asarray(scores, dtype=np.float64)
@@ -504,6 +628,8 @@ def _split_metrics(
     raw_target: np.ndarray,
     percentile_target: np.ndarray,
     scores: np.ndarray,
+    *,
+    include_top_k_quality: bool = False,
 ) -> dict[str, Any]:
     ids = np.asarray(group_ids, dtype=np.int64)
     score_values = np.asarray(scores, dtype=np.float64)
@@ -518,6 +644,18 @@ def _split_metrics(
     bottom = order[:decile_count]
     top = order[-decile_count:]
     daily = _daily_rank_metrics(dates, score_values, raw_values)
+    top_k_quality = (
+        _daily_top_k_metrics(
+            dates,
+            score_values,
+            raw_values,
+            pct_values,
+            top_k=BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
+            boundary_width=BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH,
+        )
+        if include_top_k_quality
+        else None
+    )
     finite_percentile = np.isfinite(pct_values) & np.isfinite(score_values)
     return {
         "group_count": int(len(ids)),
@@ -533,6 +671,7 @@ def _split_metrics(
             pct_values[finite_percentile],
         ),
         **daily,
+        "top_k_quality": top_k_quality,
         "score_mean": float(score_values.mean()),
         "score_std": float(score_values.std(ddof=1)) if len(score_values) > 1 else 0.0,
         "top_score_decile_raw_target_mean": float(raw_values[top].mean()),
@@ -1026,6 +1165,9 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     def fmt(value, digits=4):
         return "-" if value is None else f"{float(value):.{digits}f}"
 
+    def fmt_pct(value, digits=2):
+        return "-" if value is None else f"{float(value) * 100.0:.{digits}f}%"
+
     phase = payload["phase"]
     scope = payload["training"]["training_label_scope"]
     lines = [
@@ -1051,10 +1193,41 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             f"| {fmt(row['pairwise_concordance'])} | {fmt(row['top_score_decile_raw_target_mean'])} "
             f"| {fmt(row['bottom_score_decile_raw_target_mean'])} |"
         )
+
+    sample_top_k = dict((payload["split_metrics"].get("oos") or {}).get("top_k_quality") or {})
+    top_k = int(sample_top_k.get("top_k") or BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K)
+    boundary_width = int(
+        sample_top_k.get("boundary_width") or BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH
+    )
+    lines.extend([
+        "",
+        f"## 2. Top-K / K-boundary quality（K={top_k}, boundary width={boundary_width}）",
+        "",
+        "| Split | Days | NDCG@K | Top-K Target | Candidate Target | Lift | Oracle overlap | Boundary days | Boundary concordance | Boundary gap |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ])
+    for name in ("inner_train", "validation", "selection", "oos"):
+        quality = dict((payload["split_metrics"][name] or {}).get("top_k_quality") or {})
+        lines.append(
+            f"| {name} | {int(quality.get('top_k_date_count', 0) or 0):,} "
+            f"| {fmt(quality.get('ndcg_at_k'))} | {fmt(quality.get('top_k_raw_target_mean'))} "
+            f"| {fmt(quality.get('candidate_raw_target_mean'))} | {fmt(quality.get('top_k_raw_target_lift'))} "
+            f"| {fmt_pct(quality.get('oracle_top_k_overlap'))} "
+            f"| {int(quality.get('boundary_date_count', 0) or 0):,} "
+            f"| {fmt_pct(quality.get('boundary_concordance'))} "
+            f"| {fmt(quality.get('boundary_raw_target_gap'))} |"
+        )
+    lines.extend([
+        "",
+        "- NDCG@K 使用同日 percentile target 作 relevance；其餘 Top-K／boundary 經濟指標使用 raw strategy-aligned R。",
+        "- Top-K 與 K-boundary 採 equal-date weighting；K-boundary 比較 score 排名 K 內側與 K 外側各 boundary width 名。",
+    ])
+
+    next_section = 3
     if scope == TRAINING_LABEL_SCOPE_PASS_ONLY:
         lines.extend([
             "",
-            "## 2. All-label diagnostic metrics",
+            f"## {next_section}. All-label diagnostic metrics",
             "",
             "| Split | Groups | Score↔Target | Mean Daily Spearman | Binary PR-AUC | P@50% | P@60% | P@70% |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -1066,8 +1239,9 @@ def _render_markdown(payload: dict[str, Any]) -> str:
                 f"| {fmt(row['mean_daily_spearman'])} | {fmt(row['binary_pr_auc'])} "
                 f"| {fmt(row['p_at_50pct'])} | {fmt(row['p_at_60pct'])} | {fmt(row['p_at_70pct'])} |"
             )
-    trade_section = 3 if scope == TRAINING_LABEL_SCOPE_PASS_ONLY else 2
-    lines.extend(["", f"## {trade_section}. Actual Round-trip R", ""])
+        next_section += 1
+
+    lines.extend(["", f"## {next_section}. Actual Round-trip R", ""])
     trade = payload.get("trade_alignment") or {}
     if trade.get("available"):
         coverage_rate = trade.get("coverage_rate")
@@ -1095,13 +1269,15 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             )
     else:
         lines.append(f"- 未取得實際R診斷：`{trade.get('reason')}`。")
-    boundary_section = trade_section + 1
+
+    next_section += 1
     lines.extend([
         "",
-        f"## {boundary_section}. Boundary",
+        f"## {next_section}. Boundary",
         "",
         "- Epoch、loss與gradient只使用Selection內Inner Train／Validation及profile指定label scope。",
         "- OOS percentile與推論只在完整Selection重訓、模型checkpoint寫入後建立。",
+        "- Top-K／K-boundary只屬checkpoint後評估指標，不參與epoch選擇、loss、gradient或selector。",
         "- 本模型不設threshold、不提供runtime gate、不覆蓋9A正式模型。",
     ])
     if phase == "11G":
@@ -1311,6 +1487,7 @@ def main(argv=None) -> int:
             raw_target,
             percentile_target,
             scores,
+            include_top_k_quality=True,
         )
         scoped_ids = scoped_split_ids[name]
         split_metrics[name] = _split_metrics(
@@ -1319,6 +1496,7 @@ def main(argv=None) -> int:
             raw_target,
             percentile_target,
             score_by_group[scoped_ids],
+            include_top_k_quality=True,
         )
 
     role_by_group = np.full((group_count,), "selection_other", dtype=object)

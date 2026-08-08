@@ -234,6 +234,147 @@ def _fmt_simple_metric(value, *, digits: int = 4, percent: bool = False) -> str:
     return f"{number:.{digits}f}"
 
 
+def _continuous_ranker_simple_report_payload(
+    *,
+    filter_id: str,
+    architecture: str,
+    profile: str,
+) -> dict:
+    output_dir = resolve_filter_model_output_dir(
+        PROJECT_ROOT, filter_id, architecture, profile
+    )
+    return _safe_json_object(output_dir / CONTINUOUS_RANKER_REPORT_FILENAME)
+
+
+def _render_continuous_ranker_simple_console(payload: dict) -> str:
+    metrics = dict(payload.get("split_metrics") or {})
+    if not metrics:
+        return ""
+
+    def split_row(name: str) -> tuple[str, ...]:
+        row = dict(metrics.get(name) or {})
+        return (
+            name,
+            f"{int(row.get('group_count', 0) or 0):,}",
+            _fmt_simple_metric(row.get("mean_daily_spearman")),
+            _fmt_simple_metric(row.get("global_spearman_vs_raw_target")),
+            _fmt_simple_metric(row.get("pairwise_concordance"), percent=True),
+            _fmt_simple_metric(row.get("top_score_decile_raw_target_mean")),
+            _fmt_simple_metric(row.get("bottom_score_decile_raw_target_mean")),
+        )
+
+    split_names = ("validation", "selection", "oos")
+    lines = [
+        render_section("既有排序品質"),
+        render_table(
+            ("Split", "Groups", "Daily rho", "Global rho", "Pair", "Top 10% Target", "Bottom 10% Target"),
+            [split_row(name) for name in split_names],
+            alignments=("left", "right", "right", "right", "right", "right", "right"),
+        ),
+    ]
+
+    sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
+    if sample:
+        top_k = int(sample.get("top_k", 0) or 0)
+        boundary_width = int(sample.get("boundary_width", 0) or 0)
+
+        def top_k_row(name: str) -> tuple[str, ...]:
+            quality = dict((metrics.get(name) or {}).get("top_k_quality") or {})
+            return (
+                name,
+                _fmt_simple_metric(quality.get("ndcg_at_k")),
+                _fmt_simple_metric(quality.get("top_k_raw_target_mean")),
+                _fmt_simple_metric(quality.get("top_k_raw_target_lift")),
+                _fmt_simple_metric(quality.get("oracle_top_k_overlap"), percent=True),
+                _fmt_simple_metric(quality.get("boundary_concordance"), percent=True),
+                _fmt_simple_metric(quality.get("boundary_raw_target_gap")),
+                f"{int(quality.get('boundary_date_count', 0) or 0):,}",
+            )
+
+        lines.extend([
+            render_section(f"Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}）"),
+            render_table(
+                ("Split", "NDCG@K", "Top-K Target", "Lift", "Oracle overlap", "Boundary", "Boundary gap", "Days"),
+                [top_k_row(name) for name in split_names],
+                alignments=("left", "right", "right", "right", "right", "right", "right", "right"),
+            ),
+        ])
+
+    trade = dict(payload.get("trade_alignment") or {})
+    if trade.get("available"):
+        pass_trade = dict((trade.get("label_conditional") or {}).get("PASS") or {})
+        coverage = trade.get("coverage_rate")
+        lines.extend([
+            render_section("Actual Round-trip R"),
+            render_key_values((
+                ("Matched trades", f"{int(trade.get('matched_trade_count', 0) or 0):,} / {int(trade.get('trade_count', 0) or 0):,}"),
+                ("Coverage", _fmt_simple_metric(coverage, percent=True)),
+                ("Overall Score↔R", _fmt_simple_metric(trade.get("spearman_model_score_vs_r_multiple"))),
+                ("PASS Score↔R", _fmt_simple_metric(pass_trade.get("spearman_model_score_vs_r_multiple"))),
+                ("Score Top/Bottom 10% R", f"{_fmt_simple_metric(trade.get('top_model_score_decile_average_r'))} / {_fmt_simple_metric(trade.get('bottom_model_score_decile_average_r'))}"),
+            )),
+        ])
+    return "\n".join(line for line in lines if line)
+
+
+def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
+    metrics = dict(payload.get("split_metrics") or {})
+    if not metrics:
+        return []
+    lines = [
+        "",
+        "## 既有排序品質",
+        "",
+        "| Split | Groups | Daily rho | Global rho | Pair | Top 10% Target | Bottom 10% Target |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for name in ("validation", "selection", "oos"):
+        row = dict(metrics.get(name) or {})
+        lines.append(
+            f"| {name} | {int(row.get('group_count', 0) or 0):,} "
+            f"| {_fmt_simple_metric(row.get('mean_daily_spearman'))} "
+            f"| {_fmt_simple_metric(row.get('global_spearman_vs_raw_target'))} "
+            f"| {_fmt_simple_metric(row.get('pairwise_concordance'), percent=True)} "
+            f"| {_fmt_simple_metric(row.get('top_score_decile_raw_target_mean'))} "
+            f"| {_fmt_simple_metric(row.get('bottom_score_decile_raw_target_mean'))} |"
+        )
+    sample = dict((metrics.get("oos") or {}).get("top_k_quality") or {})
+    if sample:
+        top_k = int(sample.get("top_k", 0) or 0)
+        boundary_width = int(sample.get("boundary_width", 0) or 0)
+        lines.extend([
+            "",
+            f"## Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}）",
+            "",
+            "| Split | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | Boundary days |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for name in ("validation", "selection", "oos"):
+            quality = dict((metrics.get(name) or {}).get("top_k_quality") or {})
+            lines.append(
+                f"| {name} | {_fmt_simple_metric(quality.get('ndcg_at_k'))} "
+                f"| {_fmt_simple_metric(quality.get('top_k_raw_target_mean'))} "
+                f"| {_fmt_simple_metric(quality.get('top_k_raw_target_lift'))} "
+                f"| {_fmt_simple_metric(quality.get('oracle_top_k_overlap'), percent=True)} "
+                f"| {_fmt_simple_metric(quality.get('boundary_concordance'), percent=True)} "
+                f"| {_fmt_simple_metric(quality.get('boundary_raw_target_gap'))} "
+                f"| {int(quality.get('boundary_date_count', 0) or 0):,} |"
+            )
+    trade = dict(payload.get("trade_alignment") or {})
+    if trade.get("available"):
+        pass_trade = dict((trade.get("label_conditional") or {}).get("PASS") or {})
+        lines.extend([
+            "",
+            "## Actual Round-trip R",
+            "",
+            f"- Matched trades：`{int(trade.get('matched_trade_count', 0) or 0):,} / {int(trade.get('trade_count', 0) or 0):,}`",
+            f"- Coverage：`{_fmt_simple_metric(trade.get('coverage_rate'), percent=True)}`",
+            f"- Overall Score↔R：`{_fmt_simple_metric(trade.get('spearman_model_score_vs_r_multiple'))}`",
+            f"- PASS Score↔R：`{_fmt_simple_metric(pass_trade.get('spearman_model_score_vs_r_multiple'))}`",
+        ])
+    return lines
+
+
 def _simple_report_details(
     command: str,
     args: list[str],
@@ -262,7 +403,11 @@ def _simple_report_details(
             PROJECT_ROOT, filter_id, architecture, profile
         )
         report_json = output_dir / CONTINUOUS_RANKER_REPORT_FILENAME
-        payload = _safe_json_object(report_json)
+        payload = _continuous_ranker_simple_report_payload(
+            filter_id=filter_id,
+            architecture=architecture,
+            profile=profile,
+        )
         training = dict(payload.get("training") or {})
         metrics = dict(payload.get("split_metrics") or {})
         rows.extend(
@@ -375,6 +520,16 @@ def _emit_breakout_quality_simple_report(
 
     print("\n" + render_title("Breakout Quality 簡易報表"))
     print(render_key_values(rows))
+    ranker_payload: dict = {}
+    if command == "train-continuous-ranker":
+        ranker_payload = _continuous_ranker_simple_report_payload(
+            filter_id=filter_id,
+            architecture=architecture,
+            profile=profile,
+        )
+        ranker_console = _render_continuous_ranker_simple_console(ranker_payload)
+        if ranker_console:
+            print(ranker_console)
 
     report_dir = resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id) / "simple_reports"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -387,6 +542,8 @@ def _emit_breakout_quality_simple_report(
     ]
     for label, value in rows:
         markdown_lines.append(f"- **{label}**：{value}")
+    if ranker_payload:
+        markdown_lines.extend(_render_continuous_ranker_simple_markdown(ranker_payload))
     report_path.write_text("\n".join(markdown_lines) + "\n", encoding="utf-8")
     print(render_status_paths((("簡易報表", report_path, True),), project_root=PROJECT_ROOT))
     return report_path

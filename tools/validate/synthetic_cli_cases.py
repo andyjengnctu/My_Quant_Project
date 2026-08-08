@@ -16,6 +16,7 @@ import zipfile
 
 from config.breakout_quality import (
     ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
+    BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
@@ -90,6 +91,90 @@ def validate_dataset_cli_contract_case(_base_params):
         add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_console", True, "Breakout Quality 簡易報表" in simple_stdout)
         add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_markdown", True, simple_rc.is_file() and "# Breakout Quality 簡易報表" in simple_text)
         add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_uses_relative_path", True, "outputs/filters/breakout_quality/synthetic_quality/simple_reports/evaluate.md" in simple_stdout and str(simple_root) not in simple_stdout)
+
+        ranker_output = app_breakout_quality.resolve_filter_model_output_dir(
+            simple_root,
+            "synthetic_quality",
+            BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        )
+        ranker_output.mkdir(parents=True, exist_ok=True)
+        ranker_row = {
+            "group_count": 120,
+            "mean_daily_spearman": 0.1568,
+            "global_spearman_vs_raw_target": 0.1632,
+            "pairwise_concordance": 0.5640,
+            "top_score_decile_raw_target_mean": 2.0339,
+            "bottom_score_decile_raw_target_mean": 0.4839,
+            "top_k_quality": {
+                "top_k": 10,
+                "boundary_width": 3,
+                "ndcg_at_k": 0.7123,
+                "top_k_raw_target_mean": 1.82,
+                "top_k_raw_target_lift": 0.55,
+                "oracle_top_k_overlap": 0.42,
+                "boundary_concordance": 0.58,
+                "boundary_raw_target_gap": 0.17,
+                "boundary_date_count": 88,
+            },
+        }
+        (ranker_output / app_breakout_quality.CONTINUOUS_RANKER_REPORT_FILENAME).write_text(
+            json.dumps(
+                {
+                    "training": {"selected_epoch": 2},
+                    "split_metrics": {
+                        name: dict(ranker_row)
+                        for name in ("validation", "selection", "oos")
+                    },
+                    "trade_alignment": {
+                        "available": True,
+                        "matched_trade_count": 42,
+                        "trade_count": 50,
+                        "coverage_rate": 0.84,
+                        "spearman_model_score_vs_r_multiple": 0.12,
+                        "top_model_score_decile_average_r": 1.5,
+                        "bottom_model_score_decile_average_r": 0.2,
+                        "label_conditional": {
+                            "PASS": {"spearman_model_score_vs_r_multiple": 0.18}
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (ranker_output / "continuous_ranker_report.md").write_text(
+            "# synthetic ranker report\n",
+            encoding="utf-8",
+        )
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", simple_root):
+            ranker_report_path, ranker_stdout = _capture_stdout(
+                app_breakout_quality._emit_breakout_quality_simple_report,
+                "train-continuous-ranker",
+                [
+                    "--filter-id", "synthetic_quality",
+                    "--model-architecture", BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
+                    "--experiment-profile", STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+                ],
+                returncode=0,
+                elapsed_sec=2.5,
+            )
+        ranker_markdown = ranker_report_path.read_text(encoding="utf-8")
+        add_check(
+            results,
+            "cli_contract",
+            case_id,
+            "continuous_ranker_simple_report_keeps_existing_metrics_and_adds_top_k_boundary",
+            (True, True, True, True, True),
+            (
+                "Validation daily rho" in ranker_stdout,
+                "既有排序品質" in ranker_stdout and "Pair" in ranker_stdout,
+                "Top-K / K-boundary" in ranker_stdout and "NDCG@K" in ranker_stdout,
+                "Actual Round-trip R" in ranker_stdout,
+                "## 既有排序品質" in ranker_markdown
+                and "## Top-K / K-boundary" in ranker_markdown
+                and "## Actual Round-trip R" in ranker_markdown,
+            ),
+        )
 
     for command in (
         "menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain",

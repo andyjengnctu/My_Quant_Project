@@ -11835,6 +11835,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     from config.strategy_compare import get_strategy_comparison_settings
     from tools.filters.breakout_quality.train_continuous_ranker import (
         PAIRWISE_TRAINING_CONTRACT,
+        _daily_top_k_metrics,
         _date_coherent_batches,
         _pairwise_logistic_loss,
         _profile_contract,
@@ -11942,6 +11943,35 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             int(good_pairs),
             int(bad_pairs),
             bool(torch.isfinite(good_margin.grad).all().item()),
+        ),
+    )
+
+    report_dates = np.asarray(["2024-02-01"] * 6 + ["2024-02-02"] * 6)
+    report_raw_target = np.asarray([6, 5, 4, 3, 2, 1, 12, 10, 8, 6, 4, 2], dtype=np.float64)
+    report_percentile = np.tile(
+        np.asarray([1.0, 0.8, 0.6, 0.4, 0.2, 0.0], dtype=np.float64),
+        2,
+    )
+    report_metrics = _daily_top_k_metrics(
+        report_dates,
+        report_raw_target / float(report_raw_target.max()),
+        report_raw_target,
+        report_percentile,
+        top_k=3,
+        boundary_width=2,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_top_k_report_measures_perfect_order_and_k_boundary",
+        (1.0, 1.0, 1.0, 2, True),
+        (
+            round(float(report_metrics["ndcg_at_k"]), 6),
+            round(float(report_metrics["oracle_top_k_overlap"]), 6),
+            round(float(report_metrics["boundary_concordance"]), 6),
+            int(report_metrics["boundary_date_count"]),
+            bool(float(report_metrics["boundary_raw_target_gap"]) > 0.0),
         ),
     )
 
