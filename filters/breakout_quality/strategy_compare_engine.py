@@ -2161,6 +2161,110 @@ def _resolve_comparison_period(contract) -> tuple[str, str]:
         )
     return start.isoformat(), end.isoformat()
 
+
+def _load_reusable_no_filter_baseline(
+    source_dir: Path,
+    *,
+    comparison_mode: str,
+    expected_dataset: str,
+    expected_params_sha256: str,
+    expected_param_policy: str,
+    expected_optional_entry_filter_policy: str,
+    expected_shared_param_overrides: dict[str, Any],
+    expected_max_positions: int,
+    expected_enable_rotation: bool,
+    expected_start_date: str,
+    expected_end_date: str,
+) -> tuple[dict[str, Any], dict[str, Any], pd.DataFrame]:
+    """Rehydrate one completed no-filter replay for a new controlled pair.
+
+    This is intentionally limited to score-ranking comparisons.  The baseline
+    economic summary is read from the completed pair JSON while date/equity,
+    trades, capacity and orderable-candidate artifacts are loaded from the
+    canonical CSV outputs.  The new DL arm still executes normally.
+    """
+    if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
+        raise ValueError("shared baseline reuse目前只支援score-ranking比較")
+    source_dir = Path(source_dir).resolve()
+    payload = _load_existing_comparison_payload(source_dir)
+    metadata = dict(payload.get("metadata") or {})
+    baseline_summary = dict(payload.get("no_filter") or {})
+    if not baseline_summary:
+        raise ValueError("可重用baseline缺少no_filter summary")
+
+    expected_contract = {
+        "dataset": str(expected_dataset),
+        "params_file_sha256": str(expected_params_sha256),
+        "requested_param_policy": str(expected_param_policy),
+        "optional_entry_filter_policy": str(expected_optional_entry_filter_policy),
+        "shared_param_overrides": dict(expected_shared_param_overrides or {}),
+        "max_positions": int(expected_max_positions),
+        "enable_rotation": bool(expected_enable_rotation),
+        "comparison_period": {
+            "start": str(expected_start_date),
+            "end": str(expected_end_date),
+        },
+    }
+    actual_contract = {
+        "dataset": str(metadata.get("dataset") or ""),
+        "params_file_sha256": str(metadata.get("params_file_sha256") or ""),
+        "requested_param_policy": str(metadata.get("requested_param_policy") or ""),
+        "optional_entry_filter_policy": str(
+            metadata.get("optional_entry_filter_policy") or ""
+        ),
+        "shared_param_overrides": dict(metadata.get("shared_param_overrides") or {}),
+        "max_positions": int(metadata.get("max_positions") or 0),
+        "enable_rotation": bool(metadata.get("enable_rotation")),
+        "comparison_period": dict(metadata.get("comparison_period") or {}),
+    }
+    if actual_contract != expected_contract:
+        raise ValueError(
+            "可重用baseline與目前replay contract不一致: "
+            f"expected={expected_contract}, actual={actual_contract}"
+        )
+
+    required_paths = {
+        "equity": source_dir / "no_filter_equity.csv",
+        "trades": source_dir / "no_filter_trades.csv",
+        "capacity": source_dir / "no_filter_daily_capacity.csv",
+        "orderable": source_dir / "no_filter_orderable_candidates.csv",
+        "yearly": source_dir / "yearly_returns_comparison.csv",
+    }
+    missing = [path.name for path in required_paths.values() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "可重用baseline缺少正式工件: " + ", ".join(sorted(missing))
+        )
+
+    equity = pd.read_csv(required_paths["equity"], encoding="utf-8-sig")
+    trades = pd.read_csv(required_paths["trades"], encoding="utf-8-sig")
+    capacity = pd.read_csv(required_paths["capacity"], encoding="utf-8-sig")
+    orderable = pd.read_csv(required_paths["orderable"], encoding="utf-8-sig")
+    yearly = pd.read_csv(required_paths["yearly"], encoding="utf-8-sig")
+
+    yearly_rows: list[dict[str, Any]] = []
+    if not yearly.empty and "year" in yearly.columns:
+        for row in yearly.to_dict("records"):
+            yearly_rows.append({
+                "year": row.get("year"),
+                "year_return_pct": row.get("no_filter_return_pct"),
+                "is_full_year": bool(row.get("is_full_year", False)),
+                "start_date": row.get("start_date"),
+                "end_date": row.get("end_date"),
+            })
+
+    baseline_payload: dict[str, Any] = {
+        **baseline_summary,
+        "equity_curve": equity,
+        "trade_history": trades,
+        "profile": {
+            "yearly_return_rows": yearly_rows,
+            "portfolio_capacity_rows": capacity.to_dict("records"),
+        },
+    }
+    return baseline_payload, baseline_summary, orderable
+
+
 def run_comparison(
     *, project_root=PROJECT_ROOT, dataset="full", params_path=None,
     param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False,
@@ -2179,6 +2283,7 @@ def run_comparison(
     quiet=False,
     shared_param_overrides=None,
     hard_filter_source=None,
+    baseline_reuse_dir=None,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -2437,13 +2542,41 @@ def run_comparison(
         )
 
     baseline_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
+    baseline_summary_override = None
+    baseline_orderable_reused = None
+    if baseline_reuse_dir is not None:
+        baseline_payload, baseline_summary_override, baseline_orderable_reused = (
+            _load_reusable_no_filter_baseline(
+                Path(baseline_reuse_dir),
+                comparison_mode=comparison_mode,
+                expected_dataset=dataset,
+                expected_params_sha256=_sha256_file(resolved_params_path),
+                expected_param_policy=param_policy,
+                expected_optional_entry_filter_policy=optional_entry_filter_policy,
+                expected_shared_param_overrides=dict(shared_param_overrides or {}),
+                expected_max_positions=max_positions,
+                expected_enable_rotation=enable_rotation,
+                expected_start_date=start_date,
+                expected_end_date=end_date,
+            )
+        )
+        baseline_replay_counts = None
+        if not quiet:
+            print(
+                "[no_filter] 重用既有正式baseline replay："
+                + project_relative_display_path(
+                    Path(baseline_reuse_dir).resolve(),
+                    project_root=root,
+                )
+            )
+    else:
+        baseline_payload = _run_scenario(
+            name="no_filter", data_dir=data_dir, param_source_kind=param_source_kind,
+            params=no_filter_params, start_date=start_date, end_date=end_date,
+            max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
+            replay_counts=baseline_replay_counts,
+        )
     quality_replay_counts = {} if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
-    baseline_payload = _run_scenario(
-        name="no_filter", data_dir=data_dir, param_source_kind=param_source_kind,
-        params=no_filter_params, start_date=start_date, end_date=end_date,
-        max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
-        replay_counts=baseline_replay_counts,
-    )
     quality_payload = _run_scenario(
         name=labels["active_name"], data_dir=data_dir,
         param_source_kind=param_source_kind, params=quality_params,
@@ -2454,7 +2587,11 @@ def run_comparison(
     )
     _assert_shared_benchmark(baseline_payload, quality_payload)
 
-    baseline = _scenario_summary(baseline_payload)
+    baseline = (
+        dict(baseline_summary_override)
+        if baseline_summary_override is not None
+        else _scenario_summary(baseline_payload)
+    )
     quality = _scenario_summary(quality_payload)
     deltas = _delta(quality, baseline)
     yearly = _build_yearly_comparison(
@@ -2493,8 +2630,12 @@ def run_comparison(
     baseline_selected_joined = pd.DataFrame()
     quality_selected_joined = pd.DataFrame()
     if comparison_mode == COMPARISON_MODE_SCORE_RANKING:
-        baseline_orderable = _flatten_candidate_replay_rows(
-            baseline_replay_counts or {}, "orderable_rows"
+        baseline_orderable = (
+            pd.DataFrame(baseline_orderable_reused).copy()
+            if baseline_orderable_reused is not None
+            else _flatten_candidate_replay_rows(
+                baseline_replay_counts or {}, "orderable_rows"
+            )
         )
         quality_orderable = _flatten_candidate_replay_rows(
             quality_replay_counts or {}, "orderable_rows"
@@ -2791,6 +2932,15 @@ def run_comparison(
             None if max_position_cap_pct is None else float(max_position_cap_pct)
         ),
         "output_scope": output_scope,
+        "baseline_reused": baseline_reuse_dir is not None,
+        "baseline_reuse_source": (
+            None
+            if baseline_reuse_dir is None
+            else project_relative_display_path(
+                Path(baseline_reuse_dir).resolve(),
+                project_root=root,
+            )
+        ),
         "output_dir": project_relative_display_path(output_dir, project_root=root),
         "comparison_period": {"start": start_date, "end": end_date},
         "score_signal_coverage": score_signal_coverage,

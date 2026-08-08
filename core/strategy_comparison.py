@@ -54,6 +54,8 @@ class StrategyPreparationPolicy:
     rebuild_stale_artifacts: bool
     resume_parameter_training: bool
     require_confirmation: bool
+    reuse_completed_results: bool = True
+    reuse_shared_baseline: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +64,8 @@ class StrategyPreparationPolicy:
             "rebuild_stale_artifacts": bool(self.rebuild_stale_artifacts),
             "resume_parameter_training": bool(self.resume_parameter_training),
             "require_confirmation": bool(self.require_confirmation),
+            "reuse_completed_results": bool(self.reuse_completed_results),
+            "reuse_shared_baseline": bool(self.reuse_shared_baseline),
         }
 
 

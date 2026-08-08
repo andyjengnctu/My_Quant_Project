@@ -17070,6 +17070,354 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and replay_payload["status"] == "COMPLETED",
     )
 
+    seen_baseline_groups = set()
+    baseline_reuse_contract_ok = True
+    for pair_contract, call in zip(execution_pairs, mocked_run.call_args_list):
+        param_source, rule_policy, _off_arm, _on_arm = pair_contract
+        group_key = (param_source, rule_policy)
+        baseline_reuse_dir = call.kwargs.get("baseline_reuse_dir")
+        if (
+            settings.preparation.reuse_shared_baseline
+            and group_key in seen_baseline_groups
+        ):
+            baseline_reuse_contract_ok = (
+                baseline_reuse_contract_ok
+                and baseline_reuse_dir is not None
+            )
+        else:
+            baseline_reuse_contract_ok = (
+                baseline_reuse_contract_ok
+                and baseline_reuse_dir is None
+            )
+        seen_baseline_groups.add(group_key)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "same_run_multiple_dl_arms_reuse_one_shared_baseline_after_first_pair",
+        True,
+        baseline_reuse_contract_ok,
+    )
+
+    cache_off = settings.arms.get("C3")
+    cache_on = settings.arms.get("C17")
+    if cache_off is not None and cache_on is not None and cache_on.dl_id:
+        cache_period = {"start": "2021-01-01", "end": "2025-12-22"}
+        cache_artifacts = {
+            "param:min_roos": {"path": "models/min.json", "sha256": "param-sha"},
+            "dl:CONT12A:model": {"path": "models/cont12a.pt", "sha256": "model-sha"},
+            "dl:CONT12A:manifest": {"path": "models/cont12a.json", "sha256": "manifest-sha"},
+            "dl:CONT12A:forward_scores": {"path": "models/cont12a.csv", "sha256": "scores-sha"},
+        }
+        stored_settings = settings.as_dict()
+        pair_group = strategy_comparison_module._pair_group_id(
+            param_source=cache_on.param_source,
+            rule_policy=cache_on.rule_policy,
+            dl_id=cache_on.dl_id,
+            dl_runtime_mode=str(cache_on.dl_runtime_mode or ""),
+        )
+        cached_pair_payload = {
+            "metadata": {
+                "schema_version": strategy_comparison_module.STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+                "comparison_period": cache_period,
+            },
+            "no_filter": {},
+            "score_ranking": {},
+            "yearly": [],
+        }
+        with tempfile.TemporaryDirectory() as cache_tmp:
+            cache_root = Path(cache_tmp)
+            cached_run = (
+                cache_root
+                / settings.output_root
+                / "runs"
+                / "20260808_000000_C3-C17_cache"
+            )
+            cached_pair_dir = cached_run / "pairs" / pair_group
+            cached_pair_dir.mkdir(parents=True, exist_ok=True)
+            (cached_pair_dir / "strategy_comparison.json").write_text(
+                json.dumps(cached_pair_payload),
+                encoding="utf-8",
+            )
+            for filename in (
+                "yearly_returns_comparison.csv",
+                "no_filter_equity.csv",
+                "score_ranking_equity.csv",
+                "no_filter_trades.csv",
+                "score_ranking_trades.csv",
+                "no_filter_daily_capacity.csv",
+                "score_ranking_daily_capacity.csv",
+                "no_filter_orderable_candidates.csv",
+                "score_ranking_orderable_candidates.csv",
+                "no_filter_selected_buys.csv",
+                "score_ranking_selected_buys.csv",
+            ):
+                (cached_pair_dir / filename).write_text("x\n", encoding="utf-8")
+            (cached_run / "strategy_comparison.json").write_text(
+                json.dumps({
+                    "status": "COMPLETED",
+                    "settings": stored_settings,
+                    "artifact_identities": cache_artifacts,
+                    "comparison_period": cache_period,
+                    "pairs": {pair_group: cached_pair_payload},
+                }),
+                encoding="utf-8",
+            )
+            cache_status = {
+                "artifact_identities": cache_artifacts,
+                "comparison_period": cache_period,
+            }
+            cache_hit = strategy_comparison_module._find_reusable_pair(
+                root=cache_root,
+                settings=settings,
+                status=cache_status,
+                off_arm=cache_off,
+                on_arm=cache_on,
+            )
+            changed_artifacts = dict(cache_artifacts)
+            changed_artifacts["dl:CONT12A:forward_scores"] = {
+                "path": "models/cont12a.csv",
+                "sha256": "scores-sha-changed",
+            }
+            cache_miss_after_score_change = (
+                strategy_comparison_module._find_reusable_pair(
+                    root=cache_root,
+                    settings=settings,
+                    status={
+                        "artifact_identities": changed_artifacts,
+                        "comparison_period": cache_period,
+                    },
+                    off_arm=cache_off,
+                    on_arm=cache_on,
+                )
+                is None
+            )
+        settings_without_report_identity = settings.as_dict()
+        settings_without_report_identity["contrasts"] = {
+            "synthetic-only": {
+                "enabled": True,
+                "left": "C17",
+                "right": "C3",
+                "description": "report-only change",
+            }
+        }
+        current_fp = strategy_comparison_module._pair_cache_fingerprint_from_payload(
+            settings_payload=settings.as_dict(),
+            artifact_identities=cache_artifacts,
+            comparison_period=cache_period,
+            off_arm_payload=cache_off.as_dict(),
+            on_arm_payload=cache_on.as_dict(),
+            engine_schema_version=strategy_comparison_module.STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+        )
+        report_changed_fp = strategy_comparison_module._pair_cache_fingerprint_from_payload(
+            settings_payload=settings_without_report_identity,
+            artifact_identities=cache_artifacts,
+            comparison_period=cache_period,
+            off_arm_payload=cache_off.as_dict(),
+            on_arm_payload=cache_on.as_dict(),
+            engine_schema_version=strategy_comparison_module.STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+        )
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "completed_pair_cache_uses_replay_identity_not_whole_config_and_invalidates_on_score_sha",
+            True,
+            cache_hit is not None
+            and current_fp == report_changed_fp
+            and cache_miss_after_score_change,
+        )
+
+        if all(arm_id in settings.arms for arm_id in ("C17", "C18", "C19", "C20")):
+            with tempfile.TemporaryDirectory() as reuse_tmp:
+                reuse_root = Path(reuse_tmp)
+                reusable_pair_dir = reuse_root / "historical_pair"
+                reusable_pair_dir.mkdir(parents=True, exist_ok=True)
+                (reusable_pair_dir / "strategy_comparison.json").write_text(
+                    json.dumps(mocked_pair_payload),
+                    encoding="utf-8",
+                )
+                reuse_status = dict(ready_status)
+                reuse_status["replay_cache"] = {
+                    "pairs": {
+                        "C17": {
+                            "source_pair_dir": reusable_pair_dir,
+                            "fingerprint": "c17-cache",
+                        },
+                        "C18": {
+                            "source_pair_dir": reusable_pair_dir,
+                            "fingerprint": "c18-cache",
+                        },
+                        "C19": None,
+                        "C20": None,
+                    },
+                    "baseline_groups": {
+                        "min_roos::all_off": {
+                            "off_arm_id": "C3",
+                            "source_pair_dir": reusable_pair_dir,
+                        }
+                    },
+                }
+                with patch.object(
+                    strategy_comparison_module,
+                    "get_strategy_comparison_settings",
+                    return_value=settings,
+                ), patch.object(
+                    strategy_comparison_module,
+                    "run_comparison",
+                    return_value=dict(mocked_pair_payload),
+                ) as cache_run, patch.object(
+                    strategy_comparison_module,
+                    "_load_direct_selection_r",
+                    return_value=0.25,
+                ), redirect_stdout(io.StringIO()):
+                    cached_execution_payload = (
+                        strategy_comparison_module.run_strategy_comparison(
+                            project_root=reuse_root,
+                            quiet=True,
+                            status=reuse_status,
+                            auto_prepare=False,
+                        )
+                    )
+                cache_actions = {
+                    key: value["action"]
+                    for key, value in cached_execution_payload[
+                        "pair_execution"
+                    ].items()
+                }
+                only_new_model_pairs_run = (
+                    cache_run.call_count == 2
+                    and cache_actions.get("C17") == "REUSE"
+                    and cache_actions.get("C18") == "REUSE"
+                    and cache_actions.get("C19") == "RUN"
+                    and cache_actions.get("C20") == "RUN"
+                    and all(
+                        call.kwargs.get("baseline_reuse_dir") is not None
+                        for call in cache_run.call_args_list
+                    )
+                )
+            add_check(
+                results, "synthetic_breakout_quality", case_id,
+                "mr12b_matrix_reuses_c17_c18_and_runs_only_c19_c20_with_shared_baseline",
+                True,
+                only_new_model_pairs_run,
+            )
+
+    from filters.breakout_quality.strategy_compare_engine import (
+        _load_reusable_no_filter_baseline,
+        COMPARISON_MODE_SCORE_RANKING as _CACHE_SCORE_RANKING_MODE,
+    )
+    with tempfile.TemporaryDirectory() as baseline_tmp:
+        baseline_dir = Path(baseline_tmp)
+        baseline_metadata = {
+            "schema_version": strategy_comparison_module.STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+            "dataset": "full",
+            "params_file_sha256": "param-sha",
+            "requested_param_policy": "base-finalist-best",
+            "optional_entry_filter_policy": "all-off",
+            "shared_param_overrides": {"use_bb": False},
+            "max_positions": 10,
+            "enable_rotation": False,
+            "comparison_period": {
+                "start": "2021-01-01",
+                "end": "2021-12-31",
+            },
+        }
+        (baseline_dir / "strategy_comparison.json").write_text(
+            json.dumps({
+                "metadata": baseline_metadata,
+                "no_filter": {
+                    "total_return_pct": 10.0,
+                    "benchmark_return_pct": 5.0,
+                    "benchmark_max_drawdown_pct": 4.0,
+                    "benchmark_annual_return_pct": 5.0,
+                },
+            }),
+            encoding="utf-8",
+        )
+        pd.DataFrame({
+            "Date": ["2021-01-04", "2021-01-05"],
+            "Equity": [1_000_000.0, 1_001_000.0],
+        }).to_csv(
+            baseline_dir / "no_filter_equity.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame({
+            "Date": ["2021-01-05"],
+            "Ticker": ["2330"],
+        }).to_csv(
+            baseline_dir / "no_filter_trades.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame({
+            "Date": ["2021-01-04"],
+            "Positions": [1],
+        }).to_csv(
+            baseline_dir / "no_filter_daily_capacity.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame({
+            "date": ["2021-01-04"],
+            "ticker": ["2330"],
+        }).to_csv(
+            baseline_dir / "no_filter_orderable_candidates.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame({
+            "year": [2021],
+            "no_filter_return_pct": [10.0],
+            "score_ranking_return_pct": [12.0],
+            "is_full_year": [True],
+            "start_date": ["2021-01-01"],
+            "end_date": ["2021-12-31"],
+        }).to_csv(
+            baseline_dir / "yearly_returns_comparison.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        baseline_payload, baseline_summary, baseline_orderable = (
+            _load_reusable_no_filter_baseline(
+                baseline_dir,
+                comparison_mode=_CACHE_SCORE_RANKING_MODE,
+                expected_dataset="full",
+                expected_params_sha256="param-sha",
+                expected_param_policy="base-finalist-best",
+                expected_optional_entry_filter_policy="all-off",
+                expected_shared_param_overrides={"use_bb": False},
+                expected_max_positions=10,
+                expected_enable_rotation=False,
+                expected_start_date="2021-01-01",
+                expected_end_date="2021-12-31",
+            )
+        )
+        try:
+            _load_reusable_no_filter_baseline(
+                baseline_dir,
+                comparison_mode=_CACHE_SCORE_RANKING_MODE,
+                expected_dataset="full",
+                expected_params_sha256="changed-param-sha",
+                expected_param_policy="base-finalist-best",
+                expected_optional_entry_filter_policy="all-off",
+                expected_shared_param_overrides={"use_bb": False},
+                expected_max_positions=10,
+                expected_enable_rotation=False,
+                expected_start_date="2021-01-01",
+                expected_end_date="2021-12-31",
+            )
+        except ValueError:
+            mismatched_baseline_rejected = True
+        else:
+            mismatched_baseline_rejected = False
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "shared_baseline_reuse_rehydrates_canonical_artifacts_and_rejects_contract_mismatch",
+        True,
+        baseline_summary.get("total_return_pct") == 10.0
+        and len(baseline_payload["equity_curve"]) == 2
+        and len(baseline_orderable) == 1
+        and mismatched_baseline_rejected,
+    )
+
     min_off = settings.arms["C3"]
     min_a9_hard = settings.arms["C8"]
     min_a9_resource = settings.arms["C11"]

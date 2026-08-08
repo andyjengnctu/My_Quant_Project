@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 9
+STRATEGY_COMPARE_SCHEMA_VERSION = 10
 
 # =============================================================================
 # 1. 共用執行設定
@@ -41,6 +41,10 @@ STRATEGY_COMPARE_PREPARATION = {
     "rebuild_stale_artifacts": True,
     "resume_parameter_training": True,
     "require_confirmation": True,
+    # 已完成且replay identity完全相同的pair直接重用歷史正式結果。
+    "reuse_completed_results": True,
+    # 同一param_source/rule_policy的新pair只執行一次DL-off baseline。
+    "reuse_shared_baseline": True,
 }
 
 # =============================================================================
@@ -500,6 +504,12 @@ def get_strategy_comparison_settings() -> StrategyComparisonSettings:
         ),
         require_confirmation=bool(
             STRATEGY_COMPARE_PREPARATION.get("require_confirmation")
+        ),
+        reuse_completed_results=bool(
+            STRATEGY_COMPARE_PREPARATION.get("reuse_completed_results", True)
+        ),
+        reuse_shared_baseline=bool(
+            STRATEGY_COMPARE_PREPARATION.get("reuse_shared_baseline", True)
         ),
     )
     parameter_sources = {

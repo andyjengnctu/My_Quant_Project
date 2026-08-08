@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -35,6 +36,7 @@ from core.console_report import (
     render_title,
 )
 from filters.breakout_quality.strategy_compare_engine import (
+    SCHEMA_VERSION as STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
     COMPARISON_MODE_HARD_FILTER,
     COMPARISON_MODE_SCORE_RANKING,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
@@ -106,6 +108,262 @@ def _resolve_relative_path(root: Path, value: str) -> Path:
     return (root / path).resolve()
 
 
+
+PAIR_CACHE_SCHEMA_VERSION = 1
+
+
+def _pair_group_id(
+    *,
+    param_source: str,
+    rule_policy: str,
+    dl_id: str,
+    dl_runtime_mode: str,
+) -> str:
+    return (
+        f"{param_source}__{rule_policy}__{dl_id}__"
+        f"{str(dl_runtime_mode).replace('-', '_')}"
+    )
+
+
+def _replay_arm_contract(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "param_source": str(raw.get("param_source") or ""),
+        "rule_policy": str(raw.get("rule_policy") or ""),
+        "dl_enabled": bool(raw.get("dl_enabled")),
+        "dl_id": raw.get("dl_id"),
+        "dl_runtime_mode": raw.get("dl_runtime_mode"),
+    }
+
+
+def _pair_cache_fingerprint_from_payload(
+    *,
+    settings_payload: dict[str, Any],
+    artifact_identities: dict[str, Any],
+    comparison_period: dict[str, Any],
+    off_arm_payload: dict[str, Any],
+    on_arm_payload: dict[str, Any],
+    engine_schema_version: int,
+) -> str:
+    param_source = str(on_arm_payload.get("param_source") or "")
+    dl_id = str(on_arm_payload.get("dl_id") or "")
+    parameter_sources = dict(settings_payload.get("parameter_sources") or {})
+    dl_sources = dict(settings_payload.get("dl_sources") or {})
+    param_payload = dict(parameter_sources.get(param_source) or {})
+    dl_payload = dict(dl_sources.get(dl_id) or {})
+
+    artifact_keys = [f"param:{param_source}"]
+    trained_with = str(param_payload.get("trained_with_dl_id") or "")
+    if trained_with:
+        artifact_keys.extend(
+            f"dl:{trained_with}:{name}"
+            for name in ("model", "manifest", "forward_scores")
+        )
+    if dl_id:
+        artifact_keys.extend(
+            f"dl:{dl_id}:{name}"
+            for name in ("model", "manifest", "forward_scores")
+        )
+    selected_artifacts = {
+        key: artifact_identities.get(key)
+        for key in sorted(set(artifact_keys))
+    }
+
+    payload = {
+        "cache_schema_version": PAIR_CACHE_SCHEMA_VERSION,
+        "engine_schema_version": int(engine_schema_version),
+        "dataset": settings_payload.get("dataset"),
+        "comparison_period": dict(comparison_period or {}),
+        "param_policy": settings_payload.get("param_policy"),
+        "max_positions": settings_payload.get("max_positions"),
+        "rotation": settings_payload.get("rotation"),
+        "parameter_source": {
+            "source_id": param_source,
+            "path_template": param_payload.get("path_template"),
+            "identity_manifest_path": param_payload.get("identity_manifest_path"),
+            "trained_with_dl_id": param_payload.get("trained_with_dl_id"),
+        },
+        "dl_source": {
+            "dl_id": dl_id,
+            "filter_id": dl_payload.get("filter_id"),
+            "model_architecture": dl_payload.get("model_architecture"),
+            "experiment_profile": dl_payload.get("experiment_profile"),
+            "threshold": dl_payload.get("threshold"),
+            "score_source": dl_payload.get("score_source"),
+        },
+        "off_arm": _replay_arm_contract(off_arm_payload),
+        "on_arm": _replay_arm_contract(on_arm_payload),
+        "artifact_identities": selected_artifacts,
+    }
+    raw = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _current_pair_cache_fingerprint(
+    *,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    off_arm: StrategyComparisonArm,
+    on_arm: StrategyComparisonArm,
+) -> str:
+    return _pair_cache_fingerprint_from_payload(
+        settings_payload=settings.as_dict(),
+        artifact_identities=dict(status.get("artifact_identities") or {}),
+        comparison_period=dict(status.get("comparison_period") or {}),
+        off_arm_payload=off_arm.as_dict(),
+        on_arm_payload=on_arm.as_dict(),
+        engine_schema_version=STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+    )
+
+
+def _pair_cache_required_files(
+    pair_dir: Path,
+    *,
+    on_arm: StrategyComparisonArm,
+) -> tuple[Path, ...]:
+    runtime_spec = _arm_runtime_spec(on_arm)
+    required = [
+        pair_dir / "strategy_comparison.json",
+        pair_dir / "yearly_returns_comparison.csv",
+        pair_dir / "no_filter_equity.csv",
+        pair_dir / "no_filter_trades.csv",
+        pair_dir / runtime_spec["active_trades_filename"],
+    ]
+    if runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING:
+        required.extend([
+            pair_dir / "score_ranking_equity.csv",
+            pair_dir / "no_filter_daily_capacity.csv",
+            pair_dir / "score_ranking_daily_capacity.csv",
+            pair_dir / "no_filter_orderable_candidates.csv",
+            pair_dir / "score_ranking_orderable_candidates.csv",
+            pair_dir / "no_filter_selected_buys.csv",
+            pair_dir / "score_ranking_selected_buys.csv",
+        ])
+    return tuple(required)
+
+
+def _find_reusable_pair(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    off_arm: StrategyComparisonArm,
+    on_arm: StrategyComparisonArm,
+) -> dict[str, Any] | None:
+    if not settings.preparation.reuse_completed_results:
+        return None
+    output_root = _resolve_relative_path(root, settings.output_root)
+    runs_root = output_root / "runs"
+    if not runs_root.is_dir():
+        return None
+    expected = _current_pair_cache_fingerprint(
+        settings=settings,
+        status=status,
+        off_arm=off_arm,
+        on_arm=on_arm,
+    )
+    current_group_id = _pair_group_id(
+        param_source=on_arm.param_source,
+        rule_policy=on_arm.rule_policy,
+        dl_id=str(on_arm.dl_id or ""),
+        dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
+    )
+    for run_dir in sorted(
+        (path for path in runs_root.iterdir() if path.is_dir()),
+        key=lambda path: path.name,
+        reverse=True,
+    ):
+        run_payload = _read_json(run_dir / "strategy_comparison.json")
+        if not isinstance(run_payload, dict):
+            continue
+        if str(run_payload.get("status") or "") != "COMPLETED":
+            continue
+        stored_settings = dict(run_payload.get("settings") or {})
+        stored_arms = dict(stored_settings.get("arms") or {})
+        stored_off = dict(stored_arms.get(off_arm.arm_id) or {})
+        stored_on = dict(stored_arms.get(on_arm.arm_id) or {})
+        if not stored_off or not stored_on:
+            continue
+        stored_group_id = _pair_group_id(
+            param_source=str(stored_on.get("param_source") or ""),
+            rule_policy=str(stored_on.get("rule_policy") or ""),
+            dl_id=str(stored_on.get("dl_id") or ""),
+            dl_runtime_mode=str(stored_on.get("dl_runtime_mode") or ""),
+        )
+        pairs = dict(run_payload.get("pairs") or {})
+        pair_payload = pairs.get(stored_group_id)
+        if not isinstance(pair_payload, dict):
+            continue
+        metadata = dict(pair_payload.get("metadata") or {})
+        try:
+            actual = _pair_cache_fingerprint_from_payload(
+                settings_payload=stored_settings,
+                artifact_identities=dict(run_payload.get("artifact_identities") or {}),
+                comparison_period=dict(run_payload.get("comparison_period") or {}),
+                off_arm_payload=stored_off,
+                on_arm_payload=stored_on,
+                engine_schema_version=int(
+                    metadata.get("schema_version")
+                    or STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION
+                ),
+            )
+        except (TypeError, ValueError):
+            continue
+        if actual != expected:
+            continue
+        pair_dir = run_dir / "pairs" / stored_group_id
+        if not all(
+            path.is_file()
+            for path in _pair_cache_required_files(pair_dir, on_arm=on_arm)
+        ):
+            continue
+        return {
+            "fingerprint": expected,
+            "source_run_dir": run_dir,
+            "source_pair_dir": pair_dir,
+            "source_group_id": stored_group_id,
+            "current_group_id": current_group_id,
+        }
+    return None
+
+
+def _collect_replay_cache_status(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+) -> dict[str, Any]:
+    pairs: dict[str, Any] = {}
+    baseline_groups: dict[str, Any] = {}
+    if status.get("comparison_period"):
+        for param_source, rule_policy, off_arm, on_arm in _execution_pairs(settings):
+            entry = _find_reusable_pair(
+                root=root,
+                settings=settings,
+                status=status,
+                off_arm=off_arm,
+                on_arm=on_arm,
+            )
+            pairs[on_arm.arm_id] = entry
+            if entry is not None:
+                baseline_groups.setdefault(
+                    f"{param_source}::{rule_policy}",
+                    {
+                        "off_arm_id": off_arm.arm_id,
+                        "source_pair_dir": entry["source_pair_dir"],
+                    },
+                )
+    return {
+        "pairs": pairs,
+        "baseline_groups": baseline_groups,
+    }
+
+
 def collect_artifact_status(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -119,6 +377,11 @@ def collect_artifact_status(
     status["config_fingerprint"] = strategy_comparison_fingerprint(
         current,
         artifact_identities=status["artifact_identities"],
+    )
+    status["replay_cache"] = _collect_replay_cache_status(
+        root=Path(project_root).resolve(),
+        settings=current,
+        status=status,
     )
     return status
 
@@ -224,9 +487,26 @@ def render_execution_plan(
         (item.action, item.artifact_key, item.description)
         for item in plan.actions
     ]
-    rows.extend(
-        ("RUN", arm.arm_id, arm.name) for arm in settings.enabled_arms
-    )
+    replay_cache = dict(status.get("replay_cache") or {})
+    cached_pairs = dict(replay_cache.get("pairs") or {})
+    cached_baselines = dict(replay_cache.get("baseline_groups") or {})
+    for arm in settings.enabled_arms:
+        if arm.dl_enabled:
+            action = "REUSE" if cached_pairs.get(arm.arm_id) is not None else "RUN"
+            description = (
+                f"{arm.name}｜重用已完成且identity一致的正式pair結果"
+                if action == "REUSE"
+                else arm.name
+            )
+        else:
+            group_key = f"{arm.param_source}::{arm.rule_policy}"
+            action = "REUSE" if cached_baselines.get(group_key) is not None else "RUN"
+            description = (
+                f"{arm.name}｜重用既有正式shared baseline"
+                if action == "REUSE"
+                else arm.name
+            )
+        rows.append((action, arm.arm_id, description))
     rows.extend(
         ("REPORT", item.contrast_id, item.description)
         for item in settings.enabled_contrasts
@@ -925,6 +1205,15 @@ def run_strategy_comparison(
     if not comparison_start or not comparison_end:
         raise RuntimeError("正式比較缺少已解析的共同comparison period")
 
+    replay_cache = dict(status.get("replay_cache") or {})
+    if not replay_cache:
+        replay_cache = _collect_replay_cache_status(
+            root=root,
+            settings=settings,
+            status=status,
+        )
+        status["replay_cache"] = replay_cache
+
     run_dir, latest_dir = _run_directory(
         root=root,
         settings=settings,
@@ -933,17 +1222,91 @@ def run_strategy_comparison(
     run_dir.mkdir(parents=True, exist_ok=False)
     pair_payloads: dict[str, dict[str, Any]] = {}
     direct_r: dict[str, float] = {}
+    pair_execution: dict[str, dict[str, Any]] = {}
+    cached_pairs = dict(replay_cache.get("pairs") or {})
+    cached_baseline_groups = dict(replay_cache.get("baseline_groups") or {})
+    baseline_sources: dict[str, Path] = {
+        str(group_key): Path(str(row["source_pair_dir"])).resolve()
+        for group_key, row in cached_baseline_groups.items()
+        if isinstance(row, dict) and row.get("source_pair_dir")
+    }
+
     for param_source, rule_policy, off_arm, on_arm in _execution_pairs(settings):
         if not on_arm.dl_id:
             raise ValueError(f"DL-on arm缺少dl_id: {on_arm.arm_id}")
         dl: StrategyDLSource = settings.dl_sources[on_arm.dl_id]
         runtime_spec = _arm_runtime_spec(on_arm)
-        group_id = (
-            f"{param_source}__{rule_policy}__{on_arm.dl_id}__"
-            f"{str(on_arm.dl_runtime_mode).replace('-', '_')}"
+        group_id = _pair_group_id(
+            param_source=param_source,
+            rule_policy=rule_policy,
+            dl_id=on_arm.dl_id,
+            dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
         )
         pair_dir = run_dir / "pairs" / group_id
+        baseline_group_key = f"{param_source}::{rule_policy}"
+        cache_entry = cached_pairs.get(on_arm.arm_id)
+
+        if isinstance(cache_entry, dict) and cache_entry.get("source_pair_dir"):
+            source_pair_dir = Path(str(cache_entry["source_pair_dir"])).resolve()
+            if pair_dir.exists():
+                shutil.rmtree(pair_dir)
+            shutil.copytree(source_pair_dir, pair_dir)
+            pair_payload = _read_json(pair_dir / "strategy_comparison.json")
+            if not isinstance(pair_payload, dict):
+                raise RuntimeError(
+                    "已命中Strategy Compare cache但pair JSON無法讀取: "
+                    + project_relative_display_path(pair_dir, project_root=root)
+                )
+            pair_metadata = dict(pair_payload.get("metadata") or {})
+            pair_metadata.update({
+                "output_scope": "reused_pair_cache",
+                "output_dir": project_relative_display_path(
+                    pair_dir, project_root=root
+                ),
+                "cache_reused_from": project_relative_display_path(
+                    source_pair_dir, project_root=root
+                ),
+            })
+            pair_payload["metadata"] = pair_metadata
+            _write_json(pair_dir / "strategy_comparison.json", pair_payload)
+            pair_payloads[group_id] = {
+                "arm_contract": (param_source, rule_policy, off_arm, on_arm),
+                "payload": pair_payload,
+            }
+            direct_r[group_id] = _load_direct_selection_r(
+                pair_dir,
+                root=root,
+                active_trades_filename=runtime_spec["active_trades_filename"],
+            )
+            baseline_sources[baseline_group_key] = pair_dir
+            pair_execution[on_arm.arm_id] = {
+                "action": "REUSE",
+                "pair_fingerprint": cache_entry.get("fingerprint"),
+                "source_pair_dir": project_relative_display_path(
+                    source_pair_dir, project_root=root
+                ),
+                "current_pair_dir": project_relative_display_path(
+                    pair_dir, project_root=root
+                ),
+                "shared_baseline_reused": True,
+            }
+            if not quiet:
+                print(
+                    f"[{on_arm.arm_id}] REUSE 已完成正式pair："
+                    + project_relative_display_path(
+                        source_pair_dir,
+                        project_root=root,
+                    )
+                )
+            continue
+
         all_off = rule_policy == "all_off"
+        baseline_reuse_source = (
+            baseline_sources.get(baseline_group_key)
+            if settings.preparation.reuse_shared_baseline
+            and runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING
+            else None
+        )
         pair_payload = run_comparison(
             project_root=root,
             dataset=settings.dataset,
@@ -972,6 +1335,7 @@ def run_strategy_comparison(
             shared_param_overrides=(
                 ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
             ),
+            baseline_reuse_dir=baseline_reuse_source,
         )
         pair_payloads[group_id] = {
             "arm_contract": (param_source, rule_policy, off_arm, on_arm),
@@ -982,6 +1346,29 @@ def run_strategy_comparison(
             root=root,
             active_trades_filename=runtime_spec["active_trades_filename"],
         )
+        baseline_sources[baseline_group_key] = pair_dir
+        pair_execution[on_arm.arm_id] = {
+            "action": "RUN",
+            "pair_fingerprint": _current_pair_cache_fingerprint(
+                settings=settings,
+                status=status,
+                off_arm=off_arm,
+                on_arm=on_arm,
+            ),
+            "source_pair_dir": None,
+            "current_pair_dir": project_relative_display_path(
+                pair_dir, project_root=root
+            ),
+            "shared_baseline_reused": baseline_reuse_source is not None,
+            "shared_baseline_source": (
+                None
+                if baseline_reuse_source is None
+                else project_relative_display_path(
+                    baseline_reuse_source,
+                    project_root=root,
+                )
+            ),
+        }
 
     scenarios = _scenario_payloads(pair_payloads, direct_r, settings=settings)
     report = _render_report(
@@ -1018,6 +1405,15 @@ def run_strategy_comparison(
         "pairs": {
             key: value["payload"] for key, value in pair_payloads.items()
         },
+        "pair_execution": pair_execution,
+        "replay_reuse_policy": {
+            "reuse_completed_results": bool(
+                settings.preparation.reuse_completed_results
+            ),
+            "reuse_shared_baseline": bool(
+                settings.preparation.reuse_shared_baseline
+            ),
+        },
     }
     _write_json(json_path, payload)
     _write_json(
@@ -1038,6 +1434,8 @@ def run_strategy_comparison(
             "preparation_policy": settings.preparation.as_dict(),
             "requested_preparation_plan": requested_plan.as_dict(),
             "final_preparation_plan": status["preparation_plan"].as_dict(),
+            "pair_execution": pair_execution,
+            "replay_reuse_policy": payload["replay_reuse_policy"],
             "run_dir": project_relative_display_path(run_dir, project_root=root),
         },
     )

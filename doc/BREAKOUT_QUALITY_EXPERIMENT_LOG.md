@@ -5622,3 +5622,43 @@ Manifest/report明確保存pair scope、pair weighting、margin、whole-date bat
 - PIT builder：22/22 PASS。
 - config-driven Strategy Compare：33/33 PASS。
 - 本輪未執行`apps/test_suite.py`或formal consistency/meta-quality step；正式閉環待使用者套patch後以單一正式入口重跑。
+
+## 2026-08-08 — Strategy Compare completed-pair／shared-baseline reuse infrastructure
+
+### 狀態
+
+Infrastructure completed；`MR-12B / DL-CONT12B / SR-C19 / SR-C20`仍維持`IMPLEMENTED / RESULT_PENDING`。本輪不修改MR-12B pairwise loss／batching／artifact semantics，也不修改SR-C17／SR-C18 selector。
+
+### 程式基準
+
+- 使用者指定ZIP：`test-branch-1_20260808_163726_2c8a0b5.zip`
+- SHA256：`d43b07a46472b574f4125b95e01f3b3f700308c119c2528ea39d7ba8d3195ea8`
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 唯一變更
+
+`config/strategy_compare.py`新增兩個正式execution policy：
+
+- `reuse_completed_results=True`：跨run搜尋已完成pair，只有pair replay fingerprint完全一致才可直接重用。
+- `reuse_shared_baseline=True`：同一`param_source / rule_policy`下，DL-off baseline最多執行一次；若已有compatible歷史pair可直接從該pair重建baseline，否則本次run第一個新pair建立baseline後供後續新pair共用。
+
+Pair fingerprint不使用整份config fingerprint，而只包含會影響replay的dataset、comparison period、param policy、max positions、rotation、param-source contract、DL source identity、off/on runtime contract、strategy engine schema與對應`param / model / manifest / forward_scores` SHA256。Contrast、arm顯示名稱、description與report-only設定不參與pair identity；因此新增MR-12B contrasts不會讓C17/C18歷史結果失效。任何param／model／manifest／forward-score SHA或period/runtime contract變更都必須cache miss並重新replay。
+
+歷史pair命中後會複製完整pair正式工件到本次run並在top-level payload／manifest記錄`pair_execution=REUSE`與來源；新pair記錄`RUN`。Shared baseline只支援score-ranking path，重用前engine再次驗證dataset、param SHA、param policy、optional-filter policy、shared overrides、max positions、rotation與comparison period一致，不只依orchestrator cache判斷。
+
+### MR-12B預期執行矩陣
+
+若C17/C18既有正式工件與目前CONT12A／PARAM-P2 identity仍一致，MR-12B模型工件完成後正式計畫應為：
+
+- `REUSE C3`
+- `REUSE C17`
+- `REUSE C18`
+- `RUN C19`
+- `RUN C20`
+
+C19與C20都重用同一C3 baseline；因此本輪只需執行兩條新的MR-12B DL-on replay，不再重算既有MR-12A arms。
+
+### GPT獨立驗證
+
+`validate_strategy_compare_config_driven_app_contract_case`新增completed-pair cache、score SHA invalidation、report-only config independence、same-run shared-baseline及baseline contract rehydration／mismatch rejection案例；direct contract共37項全部PASS。另以完整orchestration mock確認C17/C18命中cache而C19/C20未命中時，canonical engine實際只呼叫2次，兩次皆收到`baseline_reuse_dir`。GPT未執行`apps/test_suite.py`。
+
