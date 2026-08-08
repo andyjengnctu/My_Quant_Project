@@ -1160,7 +1160,8 @@ def _build_current_pair_runtime_identity(
 def _canonical_execution_argv(args) -> list[str]:
     argv = [
         "python",
-        "apps/breakout_quality.py",
+        "apps/research.py",
+        "model",
         "strategy-adapt",
         "--dataset", str(args.dataset),
         "--filter-id", str(args.filter_id),

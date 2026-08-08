@@ -287,7 +287,7 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         before_profile_summaries = _collect_optimizer_profile_summaries()
 
         outcome = run_command(
-            [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
+            [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced"],
             timeout=int(manifest["ml_smoke_timeout_sec"]),
             env={
                 "V16_OPTIMIZER_TRIALS": str(int(manifest["ml_smoke_trials"])),

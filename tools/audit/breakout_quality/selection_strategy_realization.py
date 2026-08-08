@@ -114,7 +114,7 @@ def _write_prepare_script(*, output_dir: Path, trials: int, dataset_profile: str
         "$ErrorActionPreference = 'Stop'",
         f"$env:V16_MODELS_DIR = '{str(research_models).replace('/', '\\')}'",
         "try {",
-        f"  python apps/ml_optimizer.py --outer-oos --dataset {str(dataset_profile)} "
+        f"  python apps/research.py optimizer --outer-oos --dataset {str(dataset_profile)} "
         f"--trials {int(trials)} --outer-first-oos-date {DEFAULT_START_DATE} "
         f"--outer-last-oos-date {DEFAULT_NESTED_OOS_END_DATE} "
         f"--outer-train-window-months {DEFAULT_TRAIN_WINDOW_MONTHS} "

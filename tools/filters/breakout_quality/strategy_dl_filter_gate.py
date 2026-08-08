@@ -273,10 +273,10 @@ def _validate_binary_runtime_preflight(*, project_root: Path, args) -> dict[str,
             + "\n歷史報表、research_scores.csv或策略結果不能替代checkpoint manifest。"
             + "\n若沒有可恢復備份，現有Dataset／Label工件可沿用，通常不必重新build-dataset；"
             + "請先執行：\n"
-            + f"python apps/breakout_quality.py train --filter-id {args.filter_id} "
+            + f"python apps/research.py model train --filter-id {args.filter_id} "
             + f"--experiment-profile {args.experiment_profile}\n"
             + "訓練完成後再執行：\n"
-            + f"python apps/breakout_quality.py export-scores --filter-id {args.filter_id} "
+            + f"python apps/research.py model export-scores --filter-id {args.filter_id} "
             + f"--experiment-profile {args.experiment_profile} --scope forward_oos"
         )
     if not present["runtime_score"]:
@@ -284,7 +284,7 @@ def _validate_binary_runtime_preflight(*, project_root: Path, args) -> dict[str,
             "9A canonical模型工件完整，但缺少正式forward-OOS scores.csv： "
             f"{project_relative_display_path(paths.score_path, project_root=project_root)}。"
             "不需重訓；請執行：\n"
-            f"python apps/breakout_quality.py export-scores --filter-id {args.filter_id} "
+            f"python apps/research.py model export-scores --filter-id {args.filter_id} "
             f"--experiment-profile {args.experiment_profile} --scope forward_oos"
         )
     return {"paths": paths, "present": present}

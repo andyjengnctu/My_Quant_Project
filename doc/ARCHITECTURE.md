@@ -7,9 +7,7 @@
 ```text
 project/
 ├─ apps/
-│  ├─ audit.py                        # 全專案正式Audit入口
-│  ├─ breakout_quality.py             # Breakout quality 正式入口（選單／workflow／子命令分派）
-│  ├─ ml_optimizer.py                 # 參數最佳化正式入口（薄入口）
+│  ├─ research.py                     # 研究單一正式入口：模型訓練／策略參數最佳化／策略組合比較／Audit
 │  ├─ portfolio_sim.py                # 投組模擬正式入口（薄入口）
 │  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
 │  ├─ package_zip.py                  # 專案打包正式入口
@@ -18,8 +16,9 @@ project/
 │  └─ workbench.py                    # GUI 工作台正式入口（薄入口）
 ├─ config/
 │  ├─ breakout_policy.py              # breakout 策略預設與 optimizer high_len 範圍
+│  ├─ research.py                     # active model與model provider設定
 │  ├─ breakout_quality.py             # 唯一可編輯設定：模型／Label／training／profiles／PIT／策略workflow
-│  ├─ audit.py                        # 各模組正式Audit對象／來源／維度／輸出政策
+│  ├─ audit.py                        # active Audit module與各Audit對象／來源／維度／輸出政策
 │  ├─ training_policy.py              # 訓練政策與 selection gate
 │  ├─ display_policy.py               # console/report 顯示政策
 │  └─ execution_policy.py             # 資金、費用與 runtime 執行預設
@@ -40,7 +39,7 @@ project/
 │  ├─ ARCHITECTURE.md                 # 本檔
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ filters/
-│  └─ breakout_quality/               # quality feature、shared split、artifact contract、model factory、正式 runtime score lookup
+│  └─ breakout_quality/               # quality feature/label、shared split、artifact contract、model factory、正式 runtime score lookup
 ├─ models/
 │  ├─ filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/
 │  │  ├─ model.pt                     # architecture/profile-scoped canonical model artifact
@@ -71,7 +70,7 @@ project/
    │  ├─ session.py                   # optimizer session 狀態 façade
 ```
 
-- `tools/optimizer/`：參數最佳化子系統；由 `apps/ml_optimizer.py` 進入。
+- `tools/optimizer/`：參數最佳化子系統；由 `apps/research.py` 的「策略參數最佳化」工作類型進入，原optimizer互動流程維持不變。
 
 ### `tools/trade_analysis/`
 
@@ -82,9 +81,9 @@ project/
 - `tools/trade_analysis/`：單股 trade-analysis 子系統；由 `apps/workbench.py` 經 `tools/workbench_ui/` 觸發，`tools/trade_analysis/trade_log.py` 提供共用 backend / 開發輔助 CLI。
 - 為維持相容性，保留 legacy `run_debug_*` API 名稱，同時提供 canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases。
 
-### `apps/breakout_quality.py`、`filters/breakout_quality/` 與 `tools/filters/breakout_quality/`
+### `apps/research.py`、`tools/filters/breakout_quality/application.py` 與 Breakout Quality domain
 
-- `apps/audit.py`是全專案正式Audit入口；`tools/audit/catalog.py`是Audit inventory／handler／domain／mode／read-only contract的單一真理，`config/audit.py`只保存目前active formal policy，`tools/audit/runner.py`依兩者派送。`tools/audit/`可承接filter、portfolio、optimizer、data與跨domain診斷；formal handler必須`mode=formal`且`read_only=true`，缺工件即BLOCKED，不得重跑策略、建立Label、訓練模型或修改runtime。`apps/breakout_quality.py`的Audit子選單只是同一backend的`breakout_quality` domain facade，不保存個別Audit module mapping。歷史research／historical Audit亦由catalog統一登記，但不能被formal runner誤執行。`core/`與`filters/`不得反向import `tools/audit/`；若runtime與Audit共用計算，純計算真理必須留在正式domain／core，由兩者共同引用。
+- `apps/research.py`是研究單一正式入口；Audit工作類型由`config/audit.py`的active module指定，`tools/audit/catalog.py`是Audit inventory／handler／domain／mode／read-only contract的單一真理，`config/audit.py`只保存目前active formal policy，`tools/audit/runner.py`依兩者派送。`tools/audit/`可承接filter、portfolio、optimizer、data與跨domain診斷；formal handler必須`mode=formal`且`read_only=true`，缺工件即BLOCKED，不得重跑策略、建立Label、訓練模型或修改runtime。`apps/research.py`的Audit子選單只呼叫同一backend，不提供Audit module選擇。歷史research／historical Audit亦由catalog統一登記，但不能被formal runner誤執行。`core/`與`filters/`不得反向import `tools/audit/`；若runtime與Audit共用計算，純計算真理必須留在正式domain／core，由兩者共同引用。
 
 - Candidate生命週期採單一責任契約：**Strategy owns validity / DL owns quality / Portfolio selector owns allocation**。只有原策略可決定candidate建立、continuation、Re-entry與失效；DL PASS／REJECT只代表quality，不得刪除仍屬策略VALID的candidate；selector只在既有合法candidate pool中依當下資源配置。Audit可用Future Label／MFE／MAE／Realized R做事後診斷，但不得回流當日runtime或產生第二套candidate-invalid語意。
 - `filters/breakout_quality/trade_path_label.py` 與 `tools/filters/breakout_quality/build_trade_path_labels.py` 組成A2 realized trade-path Label鏈。Label identity與9A MFE／MAE契約隔離；Builder hardlink／copy既有300×10 feature bank，只重建event labels與events metadata。Teacher params由2014～2020 Selection rolling risk-only no-DL schedule與2021～2026既有P2 schedule合併，每日只解析當時已生效參數。模擬器直接重用`generate_signals`、normal／extended pre-market entry plan、shadow continuation cleanup、`execute_bar_step`及exact-accounting；初次miss buy只維持pending，同一原始event後續成交只產生一個終局Label，已成交淨Realized R正值為PASS、非正為REJECT；永未成交、shadow終止、新setup覆蓋或資料結尾仍未成交均為EXCLUDED並排除訓練。已成交但資料結尾仍持倉時，直接重用單股正式最後交易日強制結算，形成PASS或REJECT。`train.py`、Binary PIT builder與artifact validator依filter_id解析Label policy，禁止新模型與9A Dataset／manifest混接。
@@ -96,7 +95,7 @@ project/
 - Active `inception_time_market_set_candidate_v1` 沿用既有point-in-time Market Set Bank與Shared Stock Temporal Encoder，但不再使用與候選無關的Global Learned Queries。每個候選128維embedding會投影成可設定數量的candidate-conditioned query（目前1個），對該事件日期的全市場32維stock embeddings做masked multi-head cross-attention，再形成128維candidate-specific market embedding與候選表示融合。Market Bank仍依日期microbatch物化，候選encoder仍對完整logical batch只forward一次；因此`max_dates_per_batch`只影響記憶體，不改batch=128、optimizer step、loss denominator或epoch語意。此架構目前只允許research score export，`forward_oos`與scanner仍fail-fast。
 - 正式 `forward_oos` score export 不得只重播訓練 Dataset 內「成功建立特徵」的事件；它必須重新使用目前 canonical OHLCV 清洗與突破 crossover 規則建立當前 runtime 候選全集。每一個 `ticker/date/high_len` 候選必須二擇一：可建立完整模型輸入者寫入模型 probability；因 benchmark 日期缺失、歷史窗不足或非有限特徵而不可評分者，明確寫入同目錄 `unavailable_scores.csv`，並在 canonical `scores.csv` 以固定 `0.0` 保守映射為 REJECT。manifest 必須保存 current source CSV inventory、候選總數、模型評分數、保守拒絕數及原因統計；runtime 必須驗證 audit rows 與 `scores.csv` 的 0.0 一致。只有已被正式記錄的不可評分事件可保守拒絕，任何未記錄缺分仍須 fail-fast。
 - Selection point-in-time Score 子系統由 `tools/filters/breakout_quality/continuous_ranker_pipeline.py`、`build_point_in_time_scores.py` 與 `audit_point_in_time_scores.py` 組成。共用 pipeline 重用既有 continuous-ranker 的資料載入、percentile target、Validation epoch selection、final refit、checkpoint 與 inference，不複製 loss 或訓練語意。Builder 使用 expanding-window folds；train／validation／refit 資料除事件日期早於 score period 外，還必須滿足 `label_eval_end_date < score_start`，每個 score group只能由一個尚未看過該事件的凍結模型評分。PIT起始日預設為`auto`：依實際Dataset、Target、label completion、24個月Validation與最小train／validation／score groups契約逐月尋找最早合法日期；`--plan-only`可先輸出解析日期與fold計畫。Fold identity固定為`fold_YYYYMMDD_YYYYMMDD`，向前延伸歷史不會改變既有期間的ID；若舊`fold_000`類工件的日期、模型、資料、訓練與來源契約完全相同，builder會驗證checkpoint／Score hash後遷移為穩定日期ID並直接重用。每 fold 保存日期、rows/groups、selected epoch、checkpoint hash及Score hash；串接後 fail-fast 檢查 coverage、重複、缺失、cutoff、identity與有限值。正式串接 Score CSV不含 Future Target，初始 manifest 明確 `eligible=false`、只可做Selection模型驗證；audit才離線 join continuous target計算Spearman、daily Spearman、年度與decile spread、fold drift、PASS分類重疊及orderable coverage。Audit以單一payload同時產生表格化終端摘要、`selection_point_in_time_audit.md`易讀報表與完整JSON；JSON以SHA256綁定產生它的PIT manifest、Scores、coverage與Continuous Target manifest，策略gate只接受完全相同來源工件；報表固定揭露設定、Score coverage、逐年與逐fold結果、研究邊界及工件路徑，不另算第二套指標。主選單狀態頁另列Target與PIT Markdown報表。PIT工件不是 forward-OOS runtime score，不得自動進入scanner或策略排序。
-- `apps/strategy_compare.py` 是正式策略績效比較入口；選單固定為「執行目前比較設定／查看設定、工件與預計動作」，不得出現特定arm ID、TP1、A9或其他實驗版本名稱。`config/strategy_compare.py`逐項定義parameter sources、DL sources、arms、contrasts與preparation policy；每項以`enabled`或明確欄位調整，不存在整套實驗ID。同一param source／rule policy只定義一個共用DL-off基準，可掛一個或多個DL-on模型；各DL-on arm可獨立開關，runtime必須逐一與同一DL-off基準形成controlled pair，並驗證重複回放的基準摘要與年度報酬完全一致。`core/strategy_comparison.py`只提供泛用設定、驗證、依賴計畫與fingerprint；`filters/breakout_quality/strategy_compare_preparation.py`依config判定`READY／PREPARABLE／BLOCKED`，並透過`filters/breakout_quality/export_scores.py`、`strategy_optimizer_policy.py`與`strategy_param_training.py`正式共用服務補建既有模型的forward-OOS scores或比較所需策略參數；不建立Label、不選模型、不訓練模型權重。`filters/breakout_quality/strategy_comparison.py`完成一次確認後的前置編排與Breakout Quality replay；唯一canonical比較引擎位於`filters/breakout_quality/strategy_compare_engine.py`，不再保留`filters/breakout_quality/strategy_compare_engine.py` legacy alias。任一前置步驟失敗即停止回放、保留可接續工件並回報步驟與相對路徑。正式回放前須先由全部啟用DL runtime工件解析共同可比較期間，並驗證每個rolling active-param來源完整覆蓋該期間；歷史Label teacher params不得冒充forward績效比較參數。Min ROOS使用forward P2 DL-off-trained工件，Min-DL ROOS使用forward P3 DL-on-trained工件；缺少或identity／coverage不符時依config自動建立或接續。前置允許分波重新規劃，例如先建立forward scores取得正式期間，再建立因此顯露為缺少／過期的參數工件；所有來源READY後才開始第一個pair replay。目前config把TP1與既有A9列為兩個runtime DL sources。DL-off訓練的Full／Min參數可分別搭配TP1或A9作runtime比較；任何`trained_with_dl_id`非空的Min-DL參數，只允許搭配訓練時相同的DL runtime，禁止TP1-trained參數搭A9或A9-trained參數搭TP1。使用者可見名稱採`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`；內部identity仍保存完整DL版本。A9-aware P3工件獨立落在`models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling/p3_dl_on_trained/A9/`，不覆蓋既有TP1 P3。`direct_selection_delta_r`是相對同一param source／rule policy之DL-off基準的attribution，只能在相同參數與規則宇宙內比較；跨參數或跨rule-policy contrast不得把兩個不同baseline attribution相減後顯示為直接選擇效果。每次輸出以啟用arm IDs與config fingerprint建立`outputs/strategy_compare/runs/<timestamp>_<arms>_<fingerprint>/`並更新`latest/`，manifest保存設定snapshot、共同比較期間、前置計畫與工件SHA256。Strategy Compare另以pair-level replay fingerprint重用跨run已完成結果；fingerprint只包含會改變replay的dataset／period／param policy／max positions／rotation／param source／DL source／runtime mode、engine schema與對應param/model/manifest/forward-score SHA256，不包含contrast或報表文字，因此新增比較項不會使既有arm失效。同一run若仍需建立新DL arm，`reuse_shared_baseline`會把同一param source／rule policy的DL-off replay視為shared baseline：歷史compatible pair可直接提供baseline，否則第一個新pair只算一次，後續pair只執行DL-on path；baseline重用前仍須逐項驗證dataset、param SHA、param policy、rules、shared overrides、max positions、rotation與period完全一致。
+- `apps/research.py`的「策略組合比較」是正式策略比較入口；選單固定為「執行目前比較設定／查看設定、工件與預計動作」，不得出現特定arm ID、TP1、A9或其他實驗版本名稱。`config/strategy_compare.py`逐項定義parameter sources、DL sources、arms、contrasts與preparation policy；每項以`enabled`或明確欄位調整，不存在整套實驗ID。同一param source／rule policy只定義一個共用DL-off基準，可掛一個或多個DL-on模型；各DL-on arm可獨立開關，runtime必須逐一與同一DL-off基準形成controlled pair，並驗證重複回放的基準摘要與年度報酬完全一致。`core/strategy_comparison.py`只提供泛用設定、驗證、依賴計畫與fingerprint；`filters/breakout_quality/strategy_compare_preparation.py`依config判定`READY／PREPARABLE／BLOCKED`，並透過`filters/breakout_quality/export_scores.py`、`strategy_optimizer_policy.py`與`strategy_param_training.py`正式共用服務補建既有模型的forward-OOS scores或比較所需策略參數；不建立Label、不選模型、不訓練模型權重。`filters/breakout_quality/strategy_comparison.py`完成一次確認後的前置編排與Breakout Quality replay；唯一canonical比較引擎位於`filters/breakout_quality/strategy_compare_engine.py`，不再保留`filters/breakout_quality/strategy_compare_engine.py` legacy alias。任一前置步驟失敗即停止回放、保留可接續工件並回報步驟與相對路徑。正式回放前須先由全部啟用DL runtime工件解析共同可比較期間，並驗證每個rolling active-param來源完整覆蓋該期間；歷史Label teacher params不得冒充forward績效比較參數。Min ROOS使用forward P2 DL-off-trained工件，Min-DL ROOS使用forward P3 DL-on-trained工件；缺少或identity／coverage不符時依config自動建立或接續。前置允許分波重新規劃，例如先建立forward scores取得正式期間，再建立因此顯露為缺少／過期的參數工件；所有來源READY後才開始第一個pair replay。目前config把TP1與既有A9列為兩個runtime DL sources。DL-off訓練的Full／Min參數可分別搭配TP1或A9作runtime比較；任何`trained_with_dl_id`非空的Min-DL參數，只允許搭配訓練時相同的DL runtime，禁止TP1-trained參數搭A9或A9-trained參數搭TP1。使用者可見名稱採`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`；內部identity仍保存完整DL版本。A9-aware P3工件獨立落在`models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling/p3_dl_on_trained/A9/`，不覆蓋既有TP1 P3。`direct_selection_delta_r`是相對同一param source／rule policy之DL-off基準的attribution，只能在相同參數與規則宇宙內比較；跨參數或跨rule-policy contrast不得把兩個不同baseline attribution相減後顯示為直接選擇效果。每次輸出以啟用arm IDs與config fingerprint建立`outputs/strategy_compare/runs/<timestamp>_<arms>_<fingerprint>/`並更新`latest/`，manifest保存設定snapshot、共同比較期間、前置計畫與工件SHA256。Strategy Compare另以pair-level replay fingerprint重用跨run已完成結果；fingerprint只包含會改變replay的dataset／period／param policy／max positions／rotation／param source／DL source／runtime mode、engine schema與對應param/model/manifest/forward-score SHA256，不包含contrast或報表文字，因此新增比較項不會使既有arm失效。同一run若仍需建立新DL arm，`reuse_shared_baseline`會把同一param source／rule policy的DL-off replay視為shared baseline：歷史compatible pair可直接提供baseline，否則第一個新pair只算一次，後續pair只執行DL-on path；baseline重用前仍須逐項驗證dataset、param SHA、param policy、rules、shared overrides、max positions、rotation與period完全一致。
 - Resource-aware quality是candidate ranking的盤前overlay，不是第三套signal filter。所有resource-aware policy都保留完整setup lifecycle與Min ROOS初始buy-sort；`core/portfolio_entries.py`在正式reserve前重用同一`build_cash_capped_entry_plan()`／exact-accounting建立Min ROOS盤前baseline。C11 `resource-aware-binary`沿Min ROOS順位接受第一個維持cash-binding且提高PASS reserved capital的promotion；C12 `resource-aware-binary-basket`每輪評估全部尚未promotion的A9 PASS候選，以exact cash-cap結果做best-improvement；C14/C15 `resource-aware-continuous`仍只在Min ROOS cash-binding日讓frozen continuous score介入，slot-binding日完全保留Min ROOS。C16 `resource-aware-continuous-capital-preserving`改以basket-level resource floor取代cash-binding feasibility：cash或slot-binding日都可評估MR-12A score，但任何接受basket都必須同時滿足`selected_count >= Min ROOS baseline`與`exact reserved capital >= Min ROOS baseline`；完整score order不合法時只接受符合雙resource floor的deterministic best-improvement promotions。C17 `resource-aware-continuous-max-dl`再把研究變數收斂成stock membership：Min ROOS只固定每日預留單數K與reserved-capital floor R0，DL score先取Top-K；不合法時最多K步minimum-repair，每一步只替換一個原Top-K成員並重跑canonical exact reservation；已選basket內的執行順序仍沿用Min ROOS rank，正式action prefix限制為K筆，因此不把stock selection與allocation priority混成同一變數。C12/C16/C17都刻意不做指數級全子集合窮舉，避免明顯犧牲正式replay效率；所有resource-aware policy都不得新增利用率百分比、距限價bucket、score cutoff、Min ROOS／DL權重、Future Target或candidate-day重新打分。
 - Breakout-quality candidate ranking 是 hard filter 之外的獨立策略機制。`use_breakout_quality_ranking=True` 時不得同時啟用 `use_breakout_quality_filter`；signal generation 不以 threshold 刪除可評分候選，`core/portfolio_candidates.py` 只在候選形成後讀取原始 breakout signal date 的 canonical runtime score。Continuation 與 STOP 後 Re-entry 沿用同一 setup 的原始 breakout Score payload；Re-entry 的重新站回確認日只作新的交易訊號日，不得拿確認日重新查 score table。Ensemble 成交持倉必須逐 member 保存原始 Score payload，STOP 後各 member 的 watch state 與再次形成的 Re-entry 共識都沿用各自原始 `score_date`；Selection PIT或canonical ranking分數缺失時不得刪除候選、不得填0；候選保留並回退原buy-sort。Continuation／Re-entry必須沿用相同score source，source identity不一致時fail-fast。單一參數候選的正式原始排序為 Quality Score 降冪後接既有 buy-sort；active-param ensemble 則先以 `min_agree` 決定資格，再固定依 vote count 降冪、同票候選的 median Quality Score 降冪、既有 buy-sort、ticker deterministic 排序。`legacy strategy-compare --ranking-policy`另提供兩個CLI-only、輸出隔離的capital-aware研究政策，不改正式策略預設：R2 `capital-adjusted-score`使用正式盤前exact-accounting後的`proj_cost`與該候選`sizing_capital / max_position_cap_pct`計算部署率，以`Score × deployment_rate`排序；R3 `capital-bucket-then-score`只對同日有效Score候選依部署率橫斷面三分位分成高／中／低桶，再於桶內按Score排序。兩者在ensemble中仍維持vote count第一，部署率取共識members有限值的中位數；缺分候選保持原buy-sort fallback。這些政策不得另算第二套sizing、不得使用Future Target、不得成為optimizer trial維度，也不加入互動選單。一般Optimizer search space仍將ranking固定為False，不允許把ranking開關當trial維度；`strategy-compare --comparison-mode score-ranking`建立舊ROOS下的Baseline／Sort Only隔離對照。專用`python -m tools.filters.breakout_quality.strategy_adapt`則先稽核既有Baseline所有rolling training windows的PIT Score coverage，使用`BREAKOUT_QUALITY_POINT_IN_TIME_COVERAGE_REFERENCE_START_DATE`建立延伸前reference，並完整保留全部Baseline folds及原OOS期間。actual coverage須逐fold不低於reference、至少一fold嚴格改善且加權總coverage提高；實際PIT起點以前可依正式缺分契約回退existing buy-sort，實際PIT期間內缺口仍fail-fast，全部OOS replay必須位於PIT期間。流程會在相同期間自動建立或重用Baseline／Sort Only，再於trial外固定`use_breakout_quality_ranking=True`、hard filter=False，只訓練一套ranking-adapted rolling active params，最後以同一套新參數切換ranking形成Param Only／Adapted反事實回放；它不得重新訓練舊ranking，四組必須共享完全相同fold schedule、期間與PIT identity。未指定`--ranking-policy`時維持原始`score`契約；CLI-only R3可指定`capital-bucket-then-score`，其policy必須進入optimizer runtime context、study identity、replay identity與manifest，並使用`models/research/breakout_quality/score_ranking_adaptation/capital_bucket_then_score/rolling_validation/`獨立工件路徑，禁止與原始Score Adapted互相resume或覆蓋。R3的桶數與三分位契約固定於trial外，不得成為optimizer搜尋維度或由Future Target／回放績效調整。`--param-policy base-finalist-best` 會自動解析 `roos_base_best.json`、驗證每期 `1 member / min_agree=1`，此時所有票數相同，Quality Score 是第一個有效排序欄位，輸出置於 `strategy_compare_score_ranking_base_finalist_best/`；`--param-policy base-finalists-agree` 則保留 finalist 同意數第一、Score只重排同票候選，輸出置於 `strategy_compare_score_ranking_base_finalists_agree/`。參數 selector 或 member/min_agree 契約不一致時必須 fail-fast。該比較是在已查看舊 OOS 後的探索性機制診斷，不得直接作部署證據。 正式 Score 工件的日期語意分成兩層：`required_signal_start` 等於 `model_information_cutoff`，代表模型可於 cutoff 當日收盤後用同日訊號建立下一交易日盤前訂單，必須涵蓋 OOS 首個執行日前一交易日的盤前訊號 anchor；`execution_start` 則固定等於 `outer_oos_policy.oos_start_date`。策略回放不得因補齊 signal score 而提前，亦不得改用執行日收盤 Score。
 - `python -m tools.filters.breakout_quality.strategy_filter_gate` 是CLI-only的Optional entry filters × Ranking A～E研究入口。它不複製portfolio replay，而是三次重用`strategy_compare.run_comparison`：A／B沿用目前filters並比較原buy-sort與R3；C／D同時把`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`、`use_breakout_false_filter`固定為False後比較原buy-sort與R3；C／E在相同filters全關候選池比較原buy-sort與原始Score。C在兩個pair的equity、trades與daily-capacity工件hash必須完全一致。合併報表固定輸出`B−A`、`D−C`、`E−C`、`D−E`與R3交互作用`(D−C)−(B−A)`；不關閉`high_len`、ATR entry／stop／trail、`use_kc` exit或reclaim re-entry，不重訓模型、不執行optimizer、不使用Future Target作runtime決策，並以獨立`strategy_filter_gate_<param_policy>_selection_point_in_time/`目錄保存三個pair與A～E摘要。
@@ -120,7 +119,7 @@ project/
 11A第一階段是獨立research-target子系統，不是新的model architecture。`filters/breakout_quality/continuous_target.py`以既有canonical event anchor與future high／low path cache建立group-level `strategy_aligned_opportunity_r_v1`；`tools/audit/breakout_quality/continuous_target.py`負責固定split分布、同日排序可學性及可選Round-trip R方向診斷，正式入口為：
 
 ```bash
-python apps/breakout_quality.py audit-continuous-target
+python apps/research.py model audit-continuous-target
 ```
 
 target固定使用40-bar horizon與10% risk budget：首次風險觸發前最大有利漲幅R，扣除到達高點前最大不利跌幅R及最多0.5R的時間懲罰。同日High／Low歧義採adverse-first，風險觸發日High不計；首日觸發輸出−1R。公式不讀取split統計、OOS、模型score或actual trade R，不做normalization／clipping。實際R診斷在active 9A正式模型輸出樹依語意優先序搜尋hard-filter與score-ranking的`strategy_compare*`工件；有metadata時只接受目前filter／architecture／profile及`historical_active_param_oos`結果。每個目錄優先讀`no_filter_round_trips.csv`，若只有交易歷史則重用`trade_attribution.reconstruct_round_trips`從`no_filter_trades.csv`在記憶體重建；亦可用`--round-trips`或`--trade-history`明確指定，禁止另寫第二套Round-trip口徑。
@@ -134,7 +133,7 @@ target固定使用40-bar horizon與10% risk budget：首次風險觸發前最大
 正式入口為：
 
 ```bash
-python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1
+python apps/research.py model train-continuous-ranker --filter-id breakout_quality_v1
 ```
 
 Inner Train只負責gradient更新，Validation以mean daily Spearman最大化選epoch、相同Spearman時才比較較低MSE；完整Selection依`selected_epochs`重新初始化重訓。checkpoint寫入前只建立Selection percentile target，OOS percentile、OOS metrics與actual-R診斷均在模型凍結後執行。11B工件寫入`inception_time_v1/strategy_aligned_daily_percentile_mse/`獨立profile路徑，research scores每個group只保留唯一一列並以`selection_role`標示Inner Train／Validation；manifest固定`runtime_eligible=false`；binary runtime loader、classification workflow與forward-OOS score export均拒絕此profile，不覆蓋9A `unique_group_sampling`正式模型。11B是已淘汰的research-only實驗，只保留`train-continuous-ranker` CLI子命令供歷史重現；臨時研究不加入互動選單，也不另行複製訓練邏輯。
@@ -146,7 +145,7 @@ Inner Train只負責gradient更新，Validation以mean daily Spearman最大化�
 正式入口為：
 
 ```bash
-python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breakout_quality_v1
+python apps/research.py model audit-qualified-candidate-set --filter-id breakout_quality_v1
 ```
 
 11C只提供`audit-qualified-candidate-set` CLI入口，不加入互動選單。Audit以原始`signal_date`對齊11A target及11B research score，保留candidate occurrence並另建立ticker／signal-date唯一group口徑；固定比較全部OOS breakouts、qualified candidates、orderable candidates與actual round trips。輸出包含qualified／orderable occurrence與ticker-signal-date unique-group工件、每日coverage、Score↔Target排序，以及actual signals對qualified／orderable的membership與Target／Score↔R診斷，寫入11B profile下的`qualified_candidate_set_audit/`。它不建立optimizer、loss、epoch、normalization、threshold或部署工件，也不授權qualified-candidate training；是否建立新sampling profile必須等正式audit結果後另行決定。
@@ -156,7 +155,7 @@ python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breako
 11C結果顯示qualified／orderable層的Score↔Target沒有崩落，因此11D不新增sampling profile，而是直接分解既有11A target。正式CLI為：
 
 ```bash
-python apps/breakout_quality.py audit-target-attribution --filter-id breakout_quality_v1
+python apps/research.py model audit-target-attribution --filter-id breakout_quality_v1
 ```
 
 `filters.breakout_quality.continuous_target.load_validated_continuous_target_component_arrays`以11A manifest的filename、size與SHA256 strict載入raw target、valid mask、favorable return、adverse return、opportunity bar與first risk breach bar。11D以11B OOS score的唯一group index對齊qualified unique groups與actual trades，固定推導favorable R、adverse R與time penalty R，逐筆驗證三成分可重建11A target；再輸出整體及PASS／REJECT條件下的Score↔Target成分與各成分↔realized R。
@@ -168,7 +167,7 @@ python apps/breakout_quality.py audit-target-attribution --filter-id breakout_qu
 11D顯示time penalty與actual R方向相反，因此11E只做單一固定消融：
 
 ```bash
-python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_quality_v1
+python apps/research.py model audit-target-time-ablation --filter-id breakout_quality_v1
 ```
 
 11E strict讀取11D報表及兩份attribution CSV的SHA256，固定推導`target_no_time_r=favorable_r-adverse_r`，並逐筆驗證`target_raw_r=target_no_time_r-time_penalty_r`。Audit比較qualified與actual trades的原Target／No-time Target，另輸出PASS／REJECT條件Spearman與top-bottom decile realized R差距。
@@ -204,11 +203,9 @@ python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_
 
 ## 正式入口
 
-- `apps/audit.py`：全專案formal Audit單一正式入口；各domain App可提供同一backend的facade。
-- `apps/breakout_quality.py`：Breakout quality 互動選單、完整 research workflow、dataset、training、score export、易讀 report 與詳細 evaluation 單一正式入口。
-- `apps/strategy_compare.py`：依`config/strategy_compare.py`目前啟用的arms與contrasts執行固定工件策略比較；特定比較矩陣不得硬編碼於App或validator。
+- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化直接重用既有`tools.optimizer`互動流程；策略組合比較依`config/strategy_compare.py`執行；Audit依`config/audit.py`指定active module。
+- `tools/filters/breakout_quality/application.py`：Breakout Quality model provider，承接原完整model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。
 - `apps/test_suite.py`：日常一鍵測試正式入口。
-- `apps/ml_optimizer.py`：optimizer 正式入口。
 - `apps/package_zip.py`：打包正式入口。
 - `apps/portfolio_sim.py`：投組模擬正式入口。
 - `apps/smart_downloader.py`：下載器正式入口。
@@ -252,7 +249,7 @@ python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_
 
 ### Continuous Target preparation boundary
 
-`tools/filters/breakout_quality/prepare_continuous_target.py`是continuous workflow的泛用前置層。它不定義Target公式，只依active profile的`continuous_target_id`驗證或轉呼叫既有Target builder。Target manifest除Dataset policy與group count外，必須綁定產生它的Dataset artifact SHA256；衍生Target另綁定來源Target manifest SHA256。`apps/breakout_quality.py`的continuous完整流程固定為Dataset preparation → Continuous Target preparation → PIT Score build → PIT model audit；低階research audit仍維持CLI-only。
+`tools/filters/breakout_quality/prepare_continuous_target.py`是continuous workflow的泛用前置層。它不定義Target公式，只依active profile的`continuous_target_id`驗證或轉呼叫既有Target builder。Target manifest除Dataset policy與group count外，必須綁定產生它的Dataset artifact SHA256；衍生Target另綁定來源Target manifest SHA256。`tools/filters/breakout_quality/application.py`的continuous完整流程固定為Dataset preparation → Continuous Target preparation → PIT Score build → PIT model audit；低階research audit仍維持CLI-only。
 
 ### 11F No-time Target Arrays＋Selection-only Learnability Audit
 
@@ -266,7 +263,7 @@ target_raw_r = favorable_return / risk_budget - adverse_return_to_peak / risk_bu
 入口：
 
 ```bash
-python apps/breakout_quality.py audit-no-time-target --filter-id breakout_quality_v1
+python apps/research.py model audit-no-time-target --filter-id breakout_quality_v1
 ```
 
 `filters.breakout_quality.continuous_target`重用11A strict component arrays，保留valid mask、opportunity bar、risk-breach bar與adverse-first語意。11F先驗證11E overall、PASS與decile spread均改善及來源artifact SHA256，再寫入獨立`continuous_targets/strategy_aligned_opportunity_no_time_r_v1/`。
@@ -290,7 +287,7 @@ Checkpoint寫入前不得建立OOS percentile；模型凍結後才輸出OOS PASS
 11G結果顯示模型能學到PASS-only No-time Target，卻無法排序actual PASS realized R。11H不新增模型或Target，正式CLI為：
 
 ```bash
-python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_quality_v1
+python apps/research.py model audit-pass-realization-gap --filter-id breakout_quality_v1
 ```
 
 `tools.audit.breakout_quality.pass_realization_gap`strict驗證11G report／score SHA256、11F No-time component arrays與11A canonical trade-match SHA256；以group index逐筆驗證`target_raw_r=favorable_r-adverse_r`，聚焦OOS PASS與actual PASS。Audit固定輸出Score對Favorable／Adverse的偏好、`Target−realized R`實現落差、`realized R÷Favorable R`捕捉率、控制Target或兩成分後的partial Spearman，以及Score／Target decile的Target、成分、realized R與落差。
@@ -315,7 +312,7 @@ python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_
 
 ### 11K Portfolio Selection-pressure Attribution Audit
 
-11K是11I凍結工件的read-only歸因層。它不重播portfolio、不建立counterfactual，而是把orderable candidate occurrence依ticker＋trade date對齊actual entry，計算同日No-time Target percentile、top-k retention、Target opportunity gap及候選壓力分桶。未選候選不具realized R，保持缺值。正式入口為`apps/breakout_quality.py audit-selection-pressure`，CLI-only；依賴方向為apps薄路由→tools audit→11I artifact，禁止反向修改core或runtime。
+11K是11I凍結工件的read-only歸因層。它不重播portfolio、不建立counterfactual，而是把orderable candidate occurrence依ticker＋trade date對齊actual entry，計算同日No-time Target percentile、top-k retention、Target opportunity gap及候選壓力分桶。未選候選不具realized R，保持缺值。正式入口為`apps/research.py model audit-selection-pressure`，CLI-only；依賴方向為apps薄路由→tools audit→11I artifact，禁止反向修改core或runtime。
 
 ### Binary DL 4×2 risk-only rolling parameter adaptation boundary
 

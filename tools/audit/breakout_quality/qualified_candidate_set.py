@@ -150,7 +150,7 @@ def _load_ranker_scores(filter_id: str, ranker_profile: str) -> tuple[pd.DataFra
     if not score_path.is_file() or not report_path.is_file():
         raise FileNotFoundError(
             "11C需要既有11B research scores與report；請先執行 "
-            f"`python apps/breakout_quality.py train-continuous-ranker --filter-id {filter_id}`"
+            f"`python apps/research.py model train-continuous-ranker --filter-id {filter_id}`"
         )
     report = _read_json(report_path)
     if str(report.get("experiment_profile") or "") != ranker_profile:

@@ -14,6 +14,7 @@ from typing import Any, Mapping
 
 AUDIT_SCHEMA_VERSION = 3
 AUDIT_OUTPUT_ROOT = "outputs/audit"
+AUDIT_ACTIVE_MODULE_ID = "breakout_quality"
 
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
@@ -183,6 +184,19 @@ def _validate_definition(definition: AuditDefinition) -> None:
     )
 
 
+
+
+def get_active_audit_module_id() -> str:
+    module_id = str(AUDIT_ACTIVE_MODULE_ID).strip()
+    if not module_id:
+        raise ValueError("AUDIT_ACTIVE_MODULE_ID不可空白")
+    raw = AUDIT_MODULES.get(module_id)
+    if not isinstance(raw, dict):
+        raise ValueError(f"AUDIT_ACTIVE_MODULE_ID不存在: {module_id}")
+    if not bool(raw.get("enabled", False)):
+        raise ValueError(f"AUDIT_ACTIVE_MODULE_ID目前未啟用: {module_id}")
+    return module_id
+
 def get_audit_module_ids(*, enabled_only: bool = True) -> tuple[str, ...]:
     module_ids: list[str] = []
     for module_id, raw in AUDIT_MODULES.items():
@@ -243,10 +257,12 @@ def validate_audit_config() -> None:
 validate_audit_config()
 
 __all__ = [
+    "AUDIT_ACTIVE_MODULE_ID",
     "AUDIT_MODULES",
     "AUDIT_OUTPUT_ROOT",
     "AUDIT_SCHEMA_VERSION",
     "AuditDefinition",
+    "get_active_audit_module_id",
     "get_audit_definitions",
     "get_audit_module_ids",
     "get_enabled_audit_definitions",

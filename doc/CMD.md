@@ -1,7 +1,7 @@
 # 常用指令
 
-python apps/ml_optimizer.py --dataset full --timing --trials 10 `效能驗證`
-python apps\ml_optimizer.py --dataset full --outer-oos --timing --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes `rolling效能驗證`
+python apps/research.py optimizer --dataset full --timing --trials 10 `效能驗證`
+python apps/research.py optimizer --dataset full --outer-oos --timing --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes `rolling效能驗證`
 
 ## 環境 / 測試
 
@@ -28,7 +28,7 @@ python apps/package_zip.py --commit-message "chore: package before delivery" --r
 ## 主工具入口
 
 ```bash
-python apps/ml_optimizer.py
+python apps/research.py optimizer
 python apps/portfolio_sim.py
 python apps/smart_downloader.py
 python apps/vip_scanner.py
@@ -57,23 +57,27 @@ python apps/workbench.py
 
 ## 研究資料、訓練與評估
 
-模型研究與訓練由`apps/breakout_quality.py`進入；全專案正式Audit由`apps/audit.py`進入，Breakout Quality主選單的`Audit／診斷`只是同一個project-wide backend的domain facade；策略績效比較由獨立`apps/strategy_compare.py`進入。`tools/filters/breakout_quality/`的直接CLI只保留開發與歷史研究用途，不保留Audit或strategy-compare legacy相容入口。
+研究工作統一由`apps/research.py`進入；主選單只選工作類型。模型標的由`config/research.py`指定，Audit module由`config/audit.py`指定，策略比較arms／contrasts由`config/strategy_compare.py`指定。`tools/filters/breakout_quality/`的直接CLI只保留開發與歷史研究用途，不保留Audit或strategy-compare legacy相容入口。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟 Breakout Quality 正式模型選單。主選單只保留完整模型工作流程、config-driven Audit與模型設定／工件狀態；Dataset、單獨 train、export及歷史版本化research audit仍使用明確 CLI 子命令。目前 Binary 模型研究選單固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由獨立策略比較App依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟 Research 單一正式入口；主選單只選工作類型。選擇 `[1/Enter] 模型訓練` 後，才進入 `config/research.py` 指定 active model 的既有模型選單。Dataset、單獨 train、export及歷史版本化research audit仍可透過 `python apps/research.py model <command>` 執行。目前 Binary 模型研究固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由「策略組合比較」工作類型依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
 
 ```bash
-python apps/breakout_quality.py
+python apps/research.py
 ```
 
 ```text
-=== Breakout Quality ===
-[1/Enter] 模型研究與驗證
-[2] Audit／診斷
-[3] 查看模型設定與工件狀態
-[0] 離開
+====================================================================================================
+ Research
+====================================================================================================
+[1/Enter] 模型訓練
+[2]       策略參數最佳化
+[3]       策略組合比較
+[4]       Audit／診斷
+[5]       查看目前設定與工件狀態
+[0]       離開
 ```
 
-選擇 `[2] Audit／診斷` 會進入固定Audit子選單：
+選擇 `[4] Audit／診斷` 會進入固定Audit子選單；Audit module由`config/audit.py`指定，不在選單中選擇：
 
 ```text
 === Audit／診斷 ===
@@ -83,28 +87,28 @@ python apps/breakout_quality.py
 [0] 返回
 ```
 
-全專案Audit inventory與dispatch的單一真理位於`tools/audit/catalog.py`；`config/audit.py`只保存目前反覆執行的正式active policy，不再承擔所有歷史Audit命令的inventory。正式入口可直接執行`python apps/audit.py`；Breakout Quality主選單的Audit子選單呼叫完全相同的`tools/audit/runner.py`，App本身不硬編碼A9／C15或個別Audit module。`tools/audit/`可跨filter、portfolio、optimizer、data與其他domain；正式`core/`／`filters/`不得反向依賴Audit。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，只讀既有正式工件；缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。歷史research audit仍由catalog統一登記，但可明確標示`research`／`historical`與`read_only=false`，不會被formal runner誤執行。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
+全專案Audit inventory與dispatch的單一真理位於`tools/audit/catalog.py`；`config/audit.py`只保存目前反覆執行的正式active policy，不再承擔所有歷史Audit命令的inventory。正式入口可直接執行`python apps/research.py audit`；`apps/research.py`的Audit子選單呼叫`tools/audit/runner.py`，App本身不硬編碼A9／C15或個別Audit module。`tools/audit/`可跨filter、portfolio、optimizer、data與其他domain；正式`core/`／`filters/`不得反向依賴Audit。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，只讀既有正式工件；缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。歷史research audit仍由catalog統一登記，但可明確標示`research`／`historical`與`read_only=false`，不會被formal runner誤執行。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
 
 
-全專案Audit也可由獨立正式入口執行：
+Audit也可直接由Research CLI子命令執行：
 
 ```bash
-python apps/audit.py
+python apps/research.py audit
 ```
 
-目前`config/audit.py`預設啟用`c15-strategy-attribution`。它只讀`outputs/strategy_compare/latest/manifest.json`所指向的最新正式比較工件，比較`C15 vs C3`與`C15 vs C12`，使用exact daily `Δ log wealth`做可加總的portfolio wealth-path attribution，並拆解changed selection days、common／exclusive trades、reserved／invested／stop-distance capital geometry、slot occupancy與2024集中度。它不重新replay、不重建score、不訓練模型，trade R／PnL只作診斷，正式portfolio超額wealth以`Δ log wealth`為主。輸出位於`outputs/audit/breakout_quality/c15_strategy_attribution/`的`runs/<timestamp>/`與`latest/`。
+目前`config/audit.py`的active module為`breakout_quality`，其中啟用Audit由各audit的`enabled`設定決定；目前啟用`c15-source-attribution`。它只讀既有Strategy Compare正式工件，比較`C15 vs C14`，以跨run同runtime source attribution隔離MR-12A all-label與MR-11G pass-only score source差異；`focus_year=2024`。它不重新replay、不重建score、不訓練模型。輸出位於`outputs/audit/breakout_quality/c15_source_attribution/`的`runs/<timestamp>/`與`latest/`。
 
-模型訓練與策略比較使用分離入口。正式策略比較執行：
+模型訓練與策略比較維持不同工作類型與service責任。正式策略組合比較可由主選單 `[3]` 進入，或執行：
 
 ```bash
-python apps/strategy_compare.py
+python apps/research.py compare
 ```
 
 ```text
-=== 策略績效比較 ===
+=== 策略組合比較 ===
 [1/Enter] 執行目前比較設定
 [2] 查看設定、工件與預計動作
-[0] 離開
+[0] 返回
 ```
 
 目前比較對象、參數來源、DL來源、差異比較與前置建立政策全部條列於`config/strategy_compare.py`；arms與contrasts以`enabled`開關，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。同一param source／rule policy使用一個共用DL-off基準，可同時掛多個DL-on模型；各DL-on arm可獨立開關，執行引擎會逐一與同一基準形成controlled pair，並驗證重複基準結果一致。選擇執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；對可由既有正式工件確定產生的缺件，依config自動重用、重建或接續，包括既有模型的forward-OOS scores與比較所需的策略參數。App不建立Label、不選模型、不訓練模型權重；缺少模型等上游真理工件時才停止並導向模型正式入口。執行前會由全部啟用DL runtime工件解析共同比較期間，先驗證Full／Min／Min-DL rolling active params是否完整覆蓋；Min ROOS固定使用forward P2 DL-off-trained工件，不得使用只涵蓋Selection的歷史Label teacher params。若forward scores建立後才得知正式期間，App會重新規劃下一波前置並自動建立／接續缺少或過期的P2／P3，全部READY後才開始第一組replay。DL-aware參數必須與訓練時相同的DL版本配對：TP1-trained只允許TP1-on，A9-trained只允許A9-on；跨版本runtime組合在config驗證階段直接拒絕。A9 P3使用獨立`p3_dl_on_trained/A9/`工件，不覆蓋TP1 P3。console／報表採簡稱`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`。報表的`同參數DL選擇R`只在相同`param_source`與`rule_policy`的arms間具共同attribution基準；跨參數contrast的`Δ同參數DL選擇R`固定顯示`-`。預設`reuse_completed_results=True`與`reuse_shared_baseline=True`：選單的執行計畫會把replay identity與目前工件SHA完全一致的既有arm顯示為`REUSE`，只有新／失效arm顯示`RUN`；同一param/rules群組的DL-off baseline最多執行一次。例如新增MR-12B的C19/C20時，若C3/C17/C18已有compatible正式結果，計畫應直接重用C3/C17/C18，只執行C19/C20，再組合全部contrasts。修改contrast或報表說明不會使cache失效；param、model、manifest、forward score、期間或runtime contract任何一項改變都必須重新replay。
@@ -120,11 +124,11 @@ Active Research Label：a2_realized_trade_path_v1
 [0] 返回
 ```
 
-`[1]` 固定依序執行：建立／接續A2 realized trade-path Label Dataset、train、research score export、Selection／OOS模型預測報表、forward-OOS runtime score export；到此停止，不執行策略回放。`[2]` 不重新訓練，只更新research scores、重建同一份預測報表並更新forward-OOS runtime scores。`[3]` 顯示PASS／REJECT／EXCLUDED、事件group及初次miss buy／未成交終止契約。新Label使用獨立`filter_id=breakout_quality_a2_trade_path_v1`，不得覆蓋現有9A模型。策略經濟效果由`apps/strategy_compare.py`依目前啟用arms與contrasts比較；舊`strategy-trade-path-label-gate`只保留歷史研究診斷。
+`[1]` 固定依序執行：建立／接續A2 realized trade-path Label Dataset、train、research score export、Selection／OOS模型預測報表、forward-OOS runtime score export；到此停止，不執行策略回放。`[2]` 不重新訓練，只更新research scores、重建同一份預測報表並更新forward-OOS runtime scores。`[3]` 顯示PASS／REJECT／EXCLUDED、事件group及初次miss buy／未成交終止契約。新Label使用獨立`filter_id=breakout_quality_a2_trade_path_v1`，不得覆蓋現有9A模型。策略經濟效果由`apps/research.py`的「策略組合比較」依目前啟用arms與contrasts比較；舊`strategy-trade-path-label-gate`只保留歷史研究診斷。
 
 Breakout-quality 模型／Label／training／workflow設定只編輯 `config/breakout_quality.py`；正式Audit對象與診斷設定集中於 `config/audit.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
-模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：目前binary classification主選單固定執行A2 realized trade-path Label的Dataset／train／research score／Selection與OOS模型報表／forward-OOS score，策略比較不在選單自動執行；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。Binary新Label模型流程在Prediction報表與forward-OOS模型score工件完成後停止；策略經濟比較僅由獨立`apps/strategy_compare.py`執行。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
+模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：目前binary classification主選單固定執行A2 realized trade-path Label的Dataset／train／research score／Selection與OOS模型報表／forward-OOS score，策略比較不在選單自動執行；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。Binary新Label模型流程在Prediction報表與forward-OOS模型score工件完成後停止；策略經濟比較僅由獨立`apps/research.py`的「策略組合比較」執行。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
 
 
 目前正式 workflow 已切回9A binary classification。設定位置仍只有 `config/breakout_quality.py`：
@@ -144,7 +148,7 @@ BREAKOUT_QUALITY_RANDOM_SEED = 42  # 所有breakout-quality正式模型流程共
 選單`[1/Enter]`會自動執行等價於：
 
 ```powershell
-python apps/breakout_quality.py build-trade-path-labels `
+python apps/research.py model build-trade-path-labels `
   --dataset full `
   --filter-id breakout_quality_a2_trade_path_v1 `
   --resume
@@ -169,7 +173,7 @@ Gate不重新訓練，只更新兩個既有凍結模型的forward-OOS Scores，�
 主選單會自動執行；CLI-only入口如下：
 
 ```bash
-python apps/breakout_quality.py prepare-continuous-target --filter-id breakout_quality_v1 --target-id strategy_aligned_opportunity_no_time_r_v1
+python apps/research.py model prepare-continuous-target --filter-id breakout_quality_v1 --target-id strategy_aligned_opportunity_no_time_r_v1
 ```
 
 此命令只依目前Dataset與profile準備Target，不訓練模型。已存在Target必須與目前Dataset artifact SHA256一致才會跳過；Dataset重新掃描或group排列改變時會重建。No-time Target為目前active workflow已接受的固定公式時，可直接重建既定arrays，不要求每次重新執行歷史11E研究gate；原`audit-no-time-target`未帶workflow rebuild flag時仍保留原research-only gate語意。命令完成或確認Target已是current時，終端會顯示既有`continuous_target_audit.md`易讀報表路徑；主選單狀態頁同時列出Target manifest與Target audit Markdown。
@@ -179,13 +183,13 @@ python apps/breakout_quality.py prepare-continuous-target --filter-id breakout_q
 先由目前Dataset／Target自動找出最早合法PIT日期並驗證fold計畫，不訓練或寫入正式Score：
 
 ```bash
-python apps/breakout_quality.py build-point-in-time-scores --score-start-date auto --plan-only
+python apps/research.py model build-point-in-time-scores --score-start-date auto --plan-only
 ```
 
 確認計畫後批次建立／向前補齊PIT Scores：
 
 ```bash
-python apps/breakout_quality.py build-point-in-time-scores --score-start-date auto --resume
+python apps/research.py model build-point-in-time-scores --score-start-date auto --resume
 ```
 
 `auto`會依實際group、Target valid、label completion、inner validation與最小group門檻逐月解析最早合法日期。Fold目錄採`fold_YYYYMMDD_YYYYMMDD`穩定日期ID；向前延伸時，既有相同日期與完整契約的舊`fold_000`類checkpoint／scores會先驗證hash，再自動遷移重用，不因前面新增fold而全部重訓。
@@ -193,7 +197,7 @@ python apps/breakout_quality.py build-point-in-time-scores --score-start-date au
 模型層 audit：
 
 ```bash
-python apps/breakout_quality.py audit-point-in-time-scores
+python apps/research.py model audit-point-in-time-scores
 ```
 
 模型audit通過且Seed／identity一致後，執行Selection策略比較：
@@ -231,14 +235,14 @@ outputs/filters/breakout_quality/<filter_id>/<architecture>/<profile>/point_in_t
 正式策略比較以選單操作為主：
 
 ```bash
-python apps/strategy_compare.py
+python apps/research.py compare
 ```
 
 先選`[2] 查看設定、工件與預計動作`，再選`[1/Enter] 執行目前比較設定`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
 
 目前策略研究比較聚焦`C3 Min ROOS`、`C16 Min ROOS: All-event Continuous capital-preserving`與`C17 Min ROOS: All-event Continuous max-DL constrained basket`。C16保留既有capital-preserving heuristic作同source selector comparator；C17固定相同`DL-CONT12A / MR-12A` frozen OOS score與Min ROOS參數，Min ROOS只提供每日K筆預留單數與exact reserved-capital floor，stock membership先由DL score Top-K決定，不合法時才作deterministic minimum-repair；basket內執行順序仍沿用Min ROOS rank，且正式action只允許K筆盤前預留單。C17不設score threshold、不加Min ROOS／DL混合權重、不使用Future Target。若MR-12A model／manifest／report／OOS score缺失或identity/hash不一致，正式策略比較顯示`BLOCKED`而不得自動訓練模型。正式比較設定只重跑C3／C16／C17，核心contrast為C17-C16與C17-C3；C12/C14/C15保留歷史對照但目前disabled。
 
-低階研究如需直接檢查canonical engine，可執行`python -m filters.breakout_quality.strategy_compare_engine --help`；正式比較仍一律使用`apps/strategy_compare.py`。
+低階研究如需直接檢查canonical engine，可執行`python -m filters.breakout_quality.strategy_compare_engine --help`；正式比較仍一律使用`apps/research.py`的「策略組合比較」。
 
 只有需要重建9D MantisV2 legacy工件時才需安裝固定相依套件。官方 `mantis-tsfm==1.0.0` 宣告 `pandas<3.0`，而本專案鎖定 pandas 3.x，因此必須先安裝相容依賴，再以 `--no-deps` 安裝 Mantis，避免 pip 降級既有資料鏈：
 
@@ -262,7 +266,7 @@ python -c "from importlib.metadata import version; from momentfm import MOMENTPi
 既有 `workflow` CLI相容流程會依active architecture分流：必要時建立 supervised dataset；目前policy使用9A `inception_time_v1`，CLI相容流程依序執行train → export research scores → 產生易讀研究報表。Binary正式互動選單目前改為A2 realized trade-path Label研究，於Selection／OOS模型預測報表後停止；forward-OOS score export與A2 Base／舊Label／新Label策略比較只由明確CLI Gate執行。8F sequence-only保留高覆蓋基準。10A Candidate-conditioned Market Set與Stage 1 Global Market Set均為legacy read-only。9C TS2Vec、9D MantisV2、9E MOMENT與9F Patch Transformer已轉為legacy read-only：Selection-only pretraining chain與外部checkpoint下載／驗證只供歷史工件重建，不再由正式新實驗workflow啟動；報表預設納入 OOS。互動式「產生易讀研究報表」固定讀取最終 OOS 並納入報表，不再詢問；讀取後不得依同一段 OOS 回頭調整 threshold、epochs、learning rate、feature、label 或模型。報表開頭將 Filter ID、統計口徑、Selection/OOS 日期與固定訓練參數合併顯示；後續依序呈現 Epoch 選擇、Selection Confusion Matrix、OOS Confusion Matrix、各資料區段比較、排序與校準診斷、OOS 年度診斷及 OOS 綜合判定。排序診斷固定包含PR-AUC、Precision@50/60/70% coverage、Recall@60% Precision、Brier與ECE，診斷threshold不得用於回頭調整OOS。OOS 綜合判定合併原本的 Selection/OOS 差異與部署判定，依「主要成效、過度篩選防線、輔助診斷」三類編排，並新增逐項判讀欄。資料區段與日期分欄；第 4 區固定精簡為「原始 PASS、模型 PASS、PASS Precision、Precision 絕對、PASS Recall、平均 Score」，依此順序呈現。REJECT Specificity、REJECT NPV、Accuracy 與 Precision 相對僅保留在 Confusion Matrix 下方或 OOS 綜合判定。Confusion Matrix 中央只保留 TP／FN／FP／TN；右側依序顯示「原始PASS → TP + FN」與「原始REJECT → FP + TN」，底部依序顯示「TP + FP → 模型PASS」與「FN + TN → 模型REJECT」。分類品質另以「指標、公式、結果、解釋」表呈現；Precision 絕對／相對另以「指標、公式、結果」表呈現。Confusion Matrix 前不再重複顯示統計口徑或列／欄說明。終端會以淡藍、綠、黃、紅標示重點；Confusion Matrix 僅以綠色標示 TP／TN、紅色標示 FP／FN，原始／模型類別與合計維持中性色，且每一行獨立重設 ANSI 色碼，避免跨格污染。重新導向或測試輸出不插入 ANSI 色碼。Markdown 以相同語意顏色呈現，完整 metrics JSON 會寫入 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/reports/`。批次或需要可重現命令時使用 `workflow`：
 
 ```bash
-python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --epochs 200 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/research.py model workflow --filter-id breakout_quality_v1 --dataset full --experiment-profile unique_group_sampling --epochs 200 --batch-size 128 --evaluation-batch-size 4096 --evaluation-workers 4 --no-parallel-split-evaluation --train-prefetch-batches 0 --preload-feature-bank --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
 ```
 
 ### 11A連續目標可學性稽核
@@ -270,14 +274,14 @@ python apps/breakout_quality.py workflow --filter-id breakout_quality_v1 --datas
 11A第一階段只由既有future-path cache建立固定連續target與稽核報表，不訓練模型、不選epoch、不調threshold，也不重建feature bank或Label：
 
 ```bash
-python apps/breakout_quality.py audit-continuous-target
+python apps/research.py model audit-continuous-target
 ```
 
 預設會在active 9A的正式模型輸出樹依序搜尋hard-filter `strategy_compare`、`base_finalists_agree`／`base_finalist_best` score-ranking及其他`strategy_compare*`目錄；有metadata時只接受目前filter／architecture／experiment profile且`comparison_design=historical_active_param_oos`的工件。每個目錄先讀`no_filter_round_trips.csv`，若只有`no_filter_trades.csv`則重用canonical交易歸因邏輯在記憶體重建round trips。hard-filter標準目錄優先，避免因舊版只查單一路徑而漏掉既有正式比較工件。也可顯式指定任一來源：
 
 ```bash
-python apps/breakout_quality.py audit-continuous-target --round-trips <no_filter_round_trips.csv>
-python apps/breakout_quality.py audit-continuous-target --trade-history <no_filter_trades.csv>
+python apps/research.py model audit-continuous-target --round-trips <no_filter_round_trips.csv>
+python apps/research.py model audit-continuous-target --trade-history <no_filter_trades.csv>
 ```
 
 輸出固定在：
@@ -298,20 +302,20 @@ outputs/filters/breakout_quality/<filter_id>/continuous_targets/strategy_aligned
 MR-12A No-time All-event Continuous Ranker 使用同一No-time Target與InceptionTime，只把training scope改為all-labels；此研究仍為CLI-only：
 
 ```powershell
-python apps/breakout_quality.py prepare-continuous-target `
+python apps/research.py model prepare-continuous-target `
   --filter-id breakout_quality_v1 `
   --target-id strategy_aligned_opportunity_no_time_r_v1
 
-python apps/breakout_quality.py train-continuous-ranker `
+python apps/research.py model train-continuous-ranker `
   --filter-id breakout_quality_v1 `
   --model-architecture inception_time_v1 `
   --experiment-profile strategy_aligned_no_time_all_event_mse `
   --seed 42
 ```
 
-完成後由`apps/strategy_compare.py`正式選單執行`C3 / C12 / C15`；策略比較只重用frozen OOS score，不會自動重訓MR-12A。
+完成後由`apps/research.py`的「策略組合比較」正式選單執行`C3 / C12 / C15`；策略比較只重用frozen OOS score，不會自動重訓MR-12A。
 
-python apps/breakout_quality.py train-continuous-ranker --filter-id breakout_quality_v1
+python apps/research.py model train-continuous-ranker --filter-id breakout_quality_v1
 ```
 
 預設profile固定為`strategy_aligned_daily_percentile_mse`，保留9A `inception_time_v1`與2-logit head，以PASS softmax probability回歸同日11A target percentile。訓練與epoch選擇只使用Selection內Inner Train／Validation；OOS在完整Selection重訓與checkpoint寫入後才評估。此命令不重建Dataset、不relabel、不設定threshold，也不產生可供scanner使用的`forward_oos scores.csv`；research scores每個group唯一一列，Selection內另以`selection_role`標示Inner Train／Validation。
@@ -334,7 +338,7 @@ outputs/filters/breakout_quality/<filter_id>/inception_time_v1/strategy_aligned_
 
 
 ```bash
-python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breakout_quality_v1
+python apps/research.py model audit-qualified-candidate-set --filter-id breakout_quality_v1
 ```
 
 前置工件：
@@ -348,7 +352,7 @@ outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy
 若strategy comparison位於其他明確目錄，可使用：
 
 ```bash
-python apps/breakout_quality.py audit-qualified-candidate-set --filter-id breakout_quality_v1 --strategy-compare-dir <目錄>
+python apps/research.py model audit-qualified-candidate-set --filter-id breakout_quality_v1 --strategy-compare-dir <目錄>
 ```
 
 輸出位於：
@@ -364,7 +368,7 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 11C完成後，使用既有11A component arrays、11B OOS scores與11C qualified／actual-trade工件做Label條件分解。此命令只提供CLI，不加入互動選單：
 
 ```bash
-python apps/breakout_quality.py audit-target-attribution --filter-id breakout_quality_v1
+python apps/research.py model audit-target-attribution --filter-id breakout_quality_v1
 ```
 
 輸出位於：
@@ -389,7 +393,7 @@ actual_trade_target_component_attribution.csv
 11D完成後，只移除11A固定time penalty，檢查`target_no_time_r=favorable_r-adverse_r`是否更貼近actual R。此命令只提供CLI，不加入互動選單：
 
 ```bash
-python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_quality_v1
+python apps/research.py model audit-target-time-ablation --filter-id breakout_quality_v1
 ```
 
 輸出位於：
@@ -460,31 +464,31 @@ outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_pr
 也可逐步執行：
 
 ```bash
-python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1
+python apps/research.py model build-dataset --dataset full --filter-id breakout_quality_v1
 
 # 9C TS2Vec已淘汰；build-pretrain-dataset／pretrain只保留歷史工件重建，active 9A workflow不執行。
 
 # 只更新 label；通常由 workflow 自動偵測，不需手動執行
-python apps/breakout_quality.py build-dataset --dataset full --filter-id breakout_quality_v1 --relabel-only
+python apps/research.py model build-dataset --dataset full --filter-id breakout_quality_v1 --relabel-only
 # 預設關閉 inner validation：epochs 是完整 Selection 的正式固定訓練次數
-python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --epochs 20 --lr 0.001 --time-weight-mode none --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
+python apps/research.py model train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --epochs 20 --lr 0.001 --time-weight-mode none --seed 42 --fixed-threshold 0.50 --no-use-inner-validation
 # 開啟時：epochs 是搜尋上限；以 Selection 尾端 N 個月選 best epoch，之後依 final-refit-mode 直接採用 best checkpoint 或進行完整 Selection 重訓
-python apps/breakout_quality.py train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --epochs 200 --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
-python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope research --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --inference-batch-size 4096 --inference-workers 4 --preload-feature-bank
+python apps/research.py model train --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --epochs 200 --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --lr 0.0003 --weight-decay 0.0001 --gradient-clip-norm 1.0 --final-refit-mode selected_epochs --class-weight-mode none --time-weight-mode none --seed 42 --fixed-threshold 0.50 --use-inner-validation --inner-validation-months 24
+python apps/research.py model export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope research --device auto --mixed-precision --mixed-precision-dtype auto --deterministic-algorithms --no-allow-tf32 --inference-batch-size 4096 --inference-workers 4 --preload-feature-bank
 # 建議日常使用：終端表格報表 + Markdown 解釋報表 + 完整 metrics JSON
-python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --no-include-oos
+python apps/research.py model report --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --no-include-oos
 # 參數與模型已鎖定後，才把最終 OOS 納入報表
-python apps/breakout_quality.py report --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --include-oos
+python apps/research.py model report --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --include-oos
 # 需要稽核單一 split 的完整原始 JSON 時才使用 evaluate
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split train
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split validation
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split selection
-python apps/breakout_quality.py evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split oos
+python apps/research.py model evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split train
+python apps/research.py model evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split validation
+python apps/research.py model evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split selection
+python apps/research.py model evaluate --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --split oos
 # 稽核 Selection 是否涵蓋 OOS 的市場狀態，並歸因指定年度；不重建 Dataset、不重訓、不改 Label
-python apps/breakout_quality.py regime-audit --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --focus-year 2022 --min-selection-groups 100 --min-support-share-ratio 0.5
+python apps/research.py model regime-audit --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --focus-year 2022 --min-selection-groups 100 --min-support-share-ratio 0.5
 ```
 
-`regime-audit` 也可由 `python apps/breakout_quality.py` 的互動選單執行。它以 canonical 300-bar feature bank 中的0050序列，在每個 `ticker/date` breakout group只計算一次事件日可觀測市場狀態。Trend使用0050相對200日均線與60日報酬；Drawdown使用距252日高點；Volatility只以Selection的20日年化波動率三分位數定義low／medium／high，OOS不得參與分箱。輸出固定包含年度覆蓋、各regime的Selection/OOS event share、PASS率、Precision、Recall、PR-AUC、combined-regime支撐數與低代表性標記；`--focus-year` 另輸出該年度各combined regime的TP／FP／TN／FN、年度錯誤貢獻，以及描述性排除low-support事件後的指標。排除比較只作歸因，不得回頭建立年度／regime gate或調整threshold。
+`regime-audit` 也可由 `python apps/research.py model` 的互動選單執行。它以 canonical 300-bar feature bank 中的0050序列，在每個 `ticker/date` breakout group只計算一次事件日可觀測市場狀態。Trend使用0050相對200日均線與60日報酬；Drawdown使用距252日高點；Volatility只以Selection的20日年化波動率三分位數定義low／medium／high，OOS不得參與分箱。輸出固定包含年度覆蓋、各regime的Selection/OOS event share、PASS率、Precision、Recall、PR-AUC、combined-regime支撐數與低代表性標記；`--focus-year` 另輸出該年度各combined regime的TP／FP／TN／FN、年度錯誤貢獻，以及描述性排除low-support事件後的指標。排除比較只作歸因，不得回頭建立年度／regime gate或調整threshold。
 
 - Dataset 與 future-path cache 固定在 `outputs/filters/breakout_quality/<filter_id>/`；research scores 與易讀報表依架構及實驗放在 `outputs/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/`。一般評估固定輸出 `reports/evaluation_report.md` 與 `reports/evaluation_metrics.json`；regime稽核固定輸出 `reports/regime_coverage_audit.md`、`reports/regime_coverage_audit.json`、`reports/regime_coverage_cells.csv`、`reports/regime_focus_year_cells.csv` 與 `reports/regime_event_groups.csv`。
 - Model、manifest 與 `split_assignments.csv` 依架構及實驗固定在 `models/filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/`；固定 threshold 也寫入 manifest，OOS 評估不得改用其他值；正式啟用時 active `breakout_quality_score_threshold` 應與該固定值一致。
@@ -504,7 +508,7 @@ python apps/breakout_quality.py regime-audit --filter-id breakout_quality_v1 --e
 3. 執行：
 
 ```bash
-python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope forward_oos
+python apps/research.py model export-scores --filter-id breakout_quality_v1 --experiment-profile unique_group_sampling --scope forward_oos
 ```
 
 - `forward_oos` 的策略執行期仍使用同一份 walk-forward OOS window；但盤前下單使用前一交易日訊號，因此 Score 匯出會從 `model_information_cutoff` 當日開始建立訊號 coverage，包含 OOS 首個執行日前必要的 signal anchor。這些前置 Score 只供首日盤前排序／過濾，不會把策略回放或 OOS 評估提前。
@@ -521,7 +525,7 @@ python apps/breakout_quality.py export-scores --filter-id breakout_quality_v1 --
 正式比較不能拿「今天才訓練完成」的單一 `models/run_best_params.json` 回放整段 2021～2025；該參數已看過後期資料，不符合歷史交易日使用當時已生效 active param 的原則。應先由 Rolling OOS Optimizer 產生按生效日切換的參數組。不要加 `--timing`，因 timing mode 不寫出正式 `roos_*.json`：
 
 ```bash
-python apps/ml_optimizer.py --dataset full --outer-oos --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes
+python apps/research.py optimizer --dataset full --outer-oos --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 120 --outer-oos-months 12 --yes
 ```
 
 目前 Trade selector 對應的正式參數組為：
@@ -625,7 +629,7 @@ python -m filters.breakout_quality.strategy_param_training `
 P3訓練必須使用`build-binary-point-in-time-scores`建立的expanding-window Binary PIT Scores。每個score period的模型只可使用該期開始日前已完成Label的歷史資料；optimizer runtime與平行fold workers都必須驗證同一PIT manifest／scores identity。禁止使用最終9A forward-OOS、`research_scores.csv`或Selection in-sample score回灌歷史訓練。Binary PIT最早合法日期不必倒推覆蓋完整120個月Selection：PIT開始日前固定pass-through，等同DL-off；PIT期間內缺少候選分數採保守REJECT；PIT尾端早於optimizer最新Selection則fail-fast。P3 preflight會輸出逐fold bootstrap／partial／full coverage與`binary_pit_optimizer_coverage.csv`，並將coverage policy納入runtime identity。預設Gate在PIT缺失時自動建立；可用`--no-build-binary-pit`只做前置檢查。PIT獨立CLI為：
 
 ```powershell
-python apps/breakout_quality.py build-binary-point-in-time-scores `
+python apps/research.py model build-binary-point-in-time-scores `
   --filter-id breakout_quality_v1 `
   --experiment-profile unique_group_sampling `
   --score-start-date auto `
@@ -665,7 +669,7 @@ python -m tools.filters.breakout_quality.strategy_adapt --dataset full --param-p
 Trade Mode 會先輸出 `models/candidate_best_params.json`；目前 `TRADE_MODE_AUTO_PROMOTE_RUN_BEST=True`，候選通過正式 promotion 契約時才建立或更新 `models/run_best_params.json`：
 
 ```bash
-python apps/ml_optimizer.py --dataset full --model trade --trials 10
+python apps/research.py optimizer --dataset full --model trade --trials 10
 ```
 
 目前 random-seed ensemble 已啟用，因此 `run_best_params.json` 可能是 static active-param ensemble，而不是單一參數 JSON；策略對照工具支援此格式，但僅可明確標記為非 OOS 敏感度診斷：
@@ -699,7 +703,7 @@ python -m filters.breakout_quality.strategy_compare_engine --dataset full --para
 11E固定消融通過後，建立獨立No-time Target version arrays，並只稽核Selection內分布與同日可排序性。CLI-only，不加入互動選單：
 
 ```bash
-python apps/breakout_quality.py audit-no-time-target --filter-id breakout_quality_v1
+python apps/research.py model audit-no-time-target --filter-id breakout_quality_v1
 ```
 
 Target ID：
@@ -721,7 +725,7 @@ outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy
 11F Selection-only稽核通過後，11G使用既有continuous-ranker CLI與新的research profile；不加入互動選單：
 
 ```bash
-python apps/breakout_quality.py train-continuous-ranker \
+python apps/research.py model train-continuous-ranker \
   --filter-id breakout_quality_v1 \
   --experiment-profile strategy_aligned_no_time_pass_magnitude_mse
 ```
@@ -748,7 +752,7 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 11G已能排序PASS-only No-time Target，但actual PASS trades的Score↔R為負，因此11H只做凍結工件歸因；CLI-only，不加入互動選單：
 
 ```bash
-python apps/breakout_quality.py audit-pass-realization-gap --filter-id breakout_quality_v1
+python apps/research.py model audit-pass-realization-gap --filter-id breakout_quality_v1
 ```
 
 固定輸入：
@@ -775,7 +779,7 @@ outputs/filters/breakout_quality/breakout_quality_v1/inception_time_v1/strategy_
 先輸出準備腳本：
 
 ```powershell
-python apps/breakout_quality.py audit-selection-strategy-realization --filter-id breakout_quality_v1 --prepare-only
+python apps/research.py model audit-selection-strategy-realization --filter-id breakout_quality_v1 --prepare-only
 ```
 
 未指定`--optimizer-trials`時，trial數直接讀取`config/training_policy.py`的`OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`；不再維護11I專屬硬編碼預設。需要單次覆蓋時可明確加上`--optimizer-trials 100`。每次修改config或CLI值後都必須重新執行`--prepare-only`，因為既有`.ps1`是已生成的靜態腳本。
@@ -783,7 +787,7 @@ python apps/breakout_quality.py audit-selection-strategy-realization --filter-id
 執行產生的`prepare_selection_nested_roos.ps1`後，再執行：
 
 ```powershell
-python apps/breakout_quality.py audit-selection-strategy-realization --filter-id breakout_quality_v1 --quiet
+python apps/research.py model audit-selection-strategy-realization --filter-id breakout_quality_v1 --quiet
 ```
 
 預設以2014-01-01～2020-12-31、120個月固定訓練窗、12個月OOS建立research-only nested參數鏈；策略replay固定只跑2014-01-01～2020-11-05，並由11F manifest的`final_refit_date_range`再次驗證，避免年底事件Target跨入2021。`V16_MODELS_DIR`隔離到`models/research/breakout_quality/selection_strategy_realization`，不得覆蓋正式2021～2026 rolling params。11I不訓練、不建立Target arrays，且不得把未交易候選標成0R。
@@ -793,7 +797,7 @@ python apps/breakout_quality.py audit-selection-strategy-realization --filter-id
 11I確認Selection nested-OOS No-time Target方向成立、但actual portfolio trade coverage不足後，使用同一nested params與canonical candidate replay，對每個qualified訊號建立獨立counterfactual execution：
 
 ```bash
-python apps/breakout_quality.py audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet
+python apps/research.py model audit-candidate-counterfactual --filter-id breakout_quality_v1 --quiet
 ```
 
 11J採plain replay-counts＋execution sidecar：只以11I相同的2014-01-01～2020-11-05執行一次canonical replay，`replay_counts`固定使用普通dict，再用相同flatten／target-date／unique流程精確核對2,003筆。Orderable成交資料由獨立`replay_execution_rows` sidecar保存；不得把observer、自訂dict或counterfactual狀態機傳入canonical replay。Sidecar不遞迴複製`signal_state`或`params_obj`，只保留成交必要欄位、params reference、cloned shadow與單一ticker market array參照。通過2,003 guard後才離線執行counterfactual；每日只推進open positions，2020-11-06～2020-12-31由sidecar market calendars延伸，不重跑portfolio。
@@ -813,7 +817,7 @@ outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy
 直接讀取11I既有orderable candidates與actual trade matches，不重播市場：
 
 ```bash
-python apps/breakout_quality.py audit-selection-pressure --filter-id breakout_quality_v1
+python apps/research.py model audit-selection-pressure --filter-id breakout_quality_v1
 ```
 
 輸出位於：

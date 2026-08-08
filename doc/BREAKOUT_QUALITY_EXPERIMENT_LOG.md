@@ -5817,42 +5817,34 @@ MR-12B pairwise objective相對MR-12A MSE的模型經濟改善成立。更重要
 - MR-12B pairwise direct contract持續通過。
 - GPT未執行`apps/test_suite.py`；正式結果待使用者本機執行。
 
-## 2026-08-08 — MR-12C正式策略驗證：ListNet不如Pairwise，較Max-DL harness放大失配
+
+## 2026-08-08 — Research單一正式入口與config-driven dispatch
 
 ### 狀態
 
-`MR-12C / DL-CONT12C = RESULT_AVAILABLE / REJECTED_FOR_MODEL_RESEARCH`；`SR-C21 / SR-C22 = RESULT_AVAILABLE / MODEL_VALIDATION_ARM / NOT_ADOPTED`。`MR-12B / DL-CONT12B`恢復為current model research anchor。C17/C18 selector維持凍結，不依本次OOS結果調整。
+Infrastructure completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity。既有MR-12C／DL-CONT12C與C17～C22研究語意、模型工件、selector與策略結果狀態均不變。
 
-### 程式與結果基準
+### 程式基準
 
-- 使用者結果ZIP：`test-branch-1_20260808_182645_c736a49.zip`
+- 使用者指定ZIP：`test-branch-1_20260808_182645_c736a49(2).zip`
 - SHA256：`9ed8580d4ad2697cc36417086f08d595e72b327cdc4fec3c82696cb3f9f9c8b2`
-- Strategy Compare fingerprint：`35230a3d71e0`
-- 期間：2021-01-01～2025-12-22
-- Dataset：full
-- Params：`PARAM-P2 / Min ROOS`
-- `C21`與`C19`共用C17-style minimum-repair selector；`C22`與`C20`共用C18-style feasible-ascent selector。
-- 唯一模型差異：`DL-CONT12B / MR-12B Pairwise RankNet → DL-CONT12C / MR-12C ListNet top-one`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
 
-### 主要結果
+### 使用者要求與唯一變更
 
-- C21：Return 178.68%、MDD 16.22%、RoMD 11.02、Annual 22.92%、EV 0.67R、Exposure 92.18%、same-param DL selection R +14.09R。
-- C22：Return 116.51%、MDD 16.49%、RoMD 7.07、Annual 16.83%、EV 0.45R、Exposure 91.91%、same-param DL selection R -59.48R。
-- C21-C19：Return -3.08pp、MDD +0.03pp、RoMD -0.21、Annual -0.27pp、EV -0.02R、selection R -10.95R。
-- C22-C20：Return -63.03pp、MDD +2.00pp、RoMD -5.33、Annual -6.17pp、EV -0.39R、selection R -114.79R。
-- C22-C21：Return -62.16pp、MDD +0.27pp、RoMD -3.95、Annual -6.09pp、EV -0.22R、selection R -73.57R。
+研究功能改由單一`apps/research.py`作為使用者正式入口，主選單只選工作類型：`模型訓練／策略參數最佳化／策略組合比較／Audit／診斷／查看目前設定與工件狀態`。特定model、實驗標的、比較arm與Audit module不得成為選單項目；active model/provider由`config/research.py`指定，Audit module由`config/audit.py`指定，Strategy Compare仍由`config/strategy_compare.py`指定。
 
-### Selector／score診斷
+`[2] 策略參數最佳化`直接dispatch至既有`tools.optimizer`，保留原optimizer互動選單與runtime policy，不建立第二套optimizer UI。原`apps/breakout_quality.py`的完整model workflow移至既有`tools/filters/breakout_quality/application.py`作為Breakout Quality model provider；Strategy Compare與Audit繼續重用既有正式service。`apps/research.py`只負責menu、config resolution與dispatch，不承擔模型／策略計算。
 
-- C21：Max-DL eligible 236日、repair 225日、fallback 33日、K/resource violation 0；Selected Score總和增量 +5.870。
-- C22：Max-DL eligible 251日、repair 238日、final fallback 0、251/251日達1-swap local optimum、K/resource violation 0；Selected Score總和增量 +15.028。
-- C22相對C20雖更完整提高其自身模型score，但realized same-param DL selection R由+55.31R降至-59.48R。故失敗不能歸因於C18沒有最大化score；相反地，C18成功放大了MR-12C score與實現策略品質的失配。
+舊研究wrapper `apps/breakout_quality.py`、`apps/ml_optimizer.py`、`apps/strategy_compare.py`、`apps/audit.py`退出正式入口；因patch ZIP無法表達刪除，套用patch後需依交付命令移除。`PROJECT_SETTINGS C9`同步明確化為「單一physical Research入口、工作類型與application/service責任仍分離」。
 
-### 判定
+### 固定研究／runtime條件
 
-MR-12C ListNet top-one objective不取代MR-12B Pairwise RankNet。C17-style較保守harness下12C只是小幅落後，但C18-style較Max-DL harness下全面且大幅退步，支持「較Max-DL selector可作模型ranking品質放大器」的既有研究假說。C17/C18兩個固定harness都保留：C17提供較保守轉化參考，C18用來檢查模型score被更積極使用時是否仍具經濟品質。
+本輪不修改Dataset／Label、MR-12B/MR-12C objective、模型權重、PIT score、DL source identity、C17/C18 selector、C19～C22 validation arms、策略參數搜尋空間、replay、sizing、accounting、execution、Strategy Compare fingerprint/cache或Audit算法。
 
-### 結構性解釋與後續邊界
+### GPT獨立驗證
 
-12C固定設計把daily percentile（範圍0～1）直接送入`softmax`形成ListNet top-one target distribution，因此單日最高／最低target的未正規化權重比最多只有`e^1:e^0 ≈ 2.718:1`；對數十個候選的完整list而言，target mass相對平坦，loss會把大量權重分配到整張榜單，而非直接強化portfolio真正關心的Top-K boundary。這是12C objective本身的數學性質，可作下一個模型假設來源，但不得依本次OOS去調temperature、Top-K weight或其他12C數值超參數。若續做新模型實驗，應另立新`MR-*`並固定C17/C18雙harness。
-
+- `apps/research.py --help`、`model --help`、`optimizer --help`、`compare --help`、`audit --help`均可直接執行；主選單文字與`[2] → 原optimizer backend` dispatch另以mock直接驗證。
+- 受入口遷移影響的CLI、local-regression、architecture與Breakout Quality／Strategy Compare／Audit synthetic contracts合計480項直接檢查全部PASS；其中Dataset／CLI 162項、17組Breakout Quality source/runtime contract 252項均為0 failure。
+- 全專案281個Python檔`py_compile` PASS；裸`except:`=0，`core/`／`filters/`反向import `apps`或`tools.audit`=0，current code／operational docs舊Research entry引用=0。
+- GPT未執行`apps/test_suite.py`或formal pipeline；正式double check仍由使用者本機單一正式入口執行。

@@ -52,12 +52,12 @@ def validate_dataset_cli_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    app_breakout_quality = importlib.import_module("apps.breakout_quality")
-    app_strategy_compare = importlib.import_module("apps.strategy_compare")
+    app_breakout_quality = importlib.import_module("tools.filters.breakout_quality.application")
+    app_strategy_compare = importlib.import_module("apps.research")
     moment_contract_module = importlib.import_module(
         "filters.breakout_quality.moment_contract"
     )
-    app_ml_optimizer = importlib.import_module("apps.ml_optimizer")
+    app_ml_optimizer = importlib.import_module("apps.research")
     app_portfolio_sim = importlib.import_module("apps.portfolio_sim")
     app_vip_scanner = importlib.import_module("apps.vip_scanner")
     scanner_main_module = importlib.import_module("tools.scanner.main")
@@ -65,7 +65,7 @@ def validate_dataset_cli_contract_case(_base_params):
 
     rc, help_text = _capture_stdout(
         app_breakout_quality.main,
-        ["apps/breakout_quality.py", "--help"],
+        ["apps/research.py model", "--help"],
     )
     add_check(results, "cli_contract", case_id, "breakout_quality_app_help_rc", 0, rc)
     add_check(
@@ -74,7 +74,7 @@ def validate_dataset_cli_contract_case(_base_params):
         case_id,
         "breakout_quality_app_help_usage",
         True,
-        "用法: python apps/breakout_quality.py [menu|workflow|<command>] [options]" in help_text,
+        "用法: python apps/research.py model [menu|workflow|<command>] [options]" in help_text,
     )
     with TemporaryDirectory() as tmp_dir:
         simple_root = Path(tmp_dir)
@@ -106,10 +106,10 @@ def validate_dataset_cli_contract_case(_base_params):
             command in help_text,
         )
 
-    with patch("apps.breakout_quality.is_interactive_console", return_value=False):
+    with patch("tools.filters.breakout_quality.application.is_interactive_console", return_value=False):
         rc, no_arg_text = _capture_stdout(
             app_breakout_quality.main,
-            ["apps/breakout_quality.py"],
+            ["apps/research.py model"],
         )
     add_check(results, "cli_contract", case_id, "breakout_quality_noninteractive_no_arg_help_rc", 0, rc)
     add_check(
@@ -122,18 +122,18 @@ def validate_dataset_cli_contract_case(_base_params):
     )
 
     with (
-        patch("apps.breakout_quality.is_interactive_console", return_value=True),
-        patch("apps.breakout_quality._run_interactive_menu", return_value=31) as mocked_menu,
+        patch("tools.filters.breakout_quality.application.is_interactive_console", return_value=True),
+        patch("tools.filters.breakout_quality.application.run_model_training_menu", return_value=31) as mocked_menu,
     ):
-        rc = app_breakout_quality.main(["apps/breakout_quality.py"])
+        rc = app_breakout_quality.main(["apps/research.py model"])
     add_check(results, "cli_contract", case_id, "breakout_quality_interactive_no_arg_menu_rc", 31, rc)
     add_check(results, "cli_contract", case_id, "breakout_quality_interactive_no_arg_menu_called", 1, mocked_menu.call_count)
 
     with (
-        patch("apps.breakout_quality.is_interactive_console", return_value=True),
-        patch("apps.breakout_quality._run_interactive_menu", return_value=32) as mocked_menu,
+        patch("tools.filters.breakout_quality.application.is_interactive_console", return_value=True),
+        patch("tools.filters.breakout_quality.application.run_model_training_menu", return_value=32) as mocked_menu,
     ):
-        rc = app_breakout_quality.main(["apps/breakout_quality.py", "menu"])
+        rc = app_breakout_quality.main(["apps/research.py model", "menu"])
     add_check(results, "cli_contract", case_id, "breakout_quality_explicit_menu_rc", 32, rc)
     add_check(results, "cli_contract", case_id, "breakout_quality_explicit_menu_called", 1, mocked_menu.call_count)
 
@@ -177,20 +177,20 @@ def validate_dataset_cli_contract_case(_base_params):
     ):
         workflow_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
         with (
-            patch("builtins.input", side_effect=["", "2", "", "0"]),
-            patch("apps.breakout_quality._print_workflow_status"),
+            patch("builtins.input", side_effect=["2", ""]),
+            patch("tools.filters.breakout_quality.application._print_workflow_status"),
             patch(
-                "apps.breakout_quality._run_command",
+                "tools.filters.breakout_quality.application._run_command",
                 side_effect=_record_interactive_command,
             ),
             patch(
-                "apps.breakout_quality._dataset_refresh_step",
+                "tools.filters.breakout_quality.application._dataset_refresh_step",
                 return_value=("none", [], None),
             ),
         ):
             rc, interactive_text = _capture_stdout(
-                app_breakout_quality._run_interactive_menu,
-                "apps/breakout_quality.py",
+                app_breakout_quality._interactive_model_research,
+                "apps/research.py model",
             )
     add_check(
         results,
@@ -242,40 +242,40 @@ def validate_dataset_cli_contract_case(_base_params):
             and "偵測到 PIT 模型所需 Dataset 尚未就緒" not in interactive_text
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
-            and "[1/Enter] 模型研究與驗證" in interactive_text
+            and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
             and "[1/Enter] 訓練目前模型 → forward-OOS模型報表" in interactive_text
             and "[2] 建立／更新 Selection PIT Scores → PIT模型驗證" in interactive_text
-            and "[2] Audit／診斷" in interactive_text
-            and "[3] 查看模型設定與工件狀態" in interactive_text
-            and "策略績效驗證" not in interactive_text
+            and "[3] 查看目前Workflow與工件狀態" in interactive_text
+            and "Audit／診斷" not in interactive_text
+            and "策略組合比較" not in interactive_text
         ),
     )
 
-    with (
-        patch("builtins.input", side_effect=["1", "0"]),
-        patch("apps.breakout_quality._interactive_model_research", return_value=0) as model_menu,
-    ):
-        numbered_model_rc = app_breakout_quality._run_interactive_menu(
-            "apps/breakout_quality.py"
+    with patch(
+        "tools.filters.breakout_quality.application._interactive_model_research",
+        return_value=37,
+    ) as model_menu:
+        numbered_model_rc = app_breakout_quality.run_model_training_menu(
+            "apps/research.py model"
         )
     add_check(
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_numbered_model_menu_route",
-        (0, 1),
+        "breakout_quality_model_provider_delegates_to_model_menu",
+        (37, 1),
         (numbered_model_rc, model_menu.call_count),
     )
 
     with (
         patch("builtins.input", side_effect=[""]),
         patch(
-            "apps.breakout_quality._interactive_continuous_full_train",
+            "tools.filters.breakout_quality.application._interactive_continuous_full_train",
             return_value=47,
         ) as continuous_train_route,
     ):
         continuous_default_rc = app_breakout_quality._interactive_model_research(
-            "apps/breakout_quality.py"
+            "apps/research.py model"
         )
     add_check(
         results,
@@ -286,34 +286,31 @@ def validate_dataset_cli_contract_case(_base_params):
         (continuous_default_rc, continuous_train_route.call_count),
     )
 
+    research_app = importlib.import_module("apps.research")
     with (
-        patch("builtins.input", side_effect=["2", "0", "0"]),
-        patch("apps.breakout_quality._interactive_audit_menu", return_value=0) as audit_menu,
+        patch("builtins.input", side_effect=["4", "0", "0"]),
+        patch("apps.research._audit_menu", return_value=0) as audit_menu,
     ):
-        audit_menu_rc = app_breakout_quality._run_interactive_menu(
-            "apps/breakout_quality.py"
-        )
+        audit_menu_rc = research_app._interactive_menu()
     add_check(
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_audit_menu_route",
+        "research_audit_menu_route",
         (0, 1),
         (audit_menu_rc, audit_menu.call_count),
     )
 
     with (
-        patch("builtins.input", side_effect=["3", "0"]),
-        patch("apps.breakout_quality._print_workflow_status") as status_menu,
+        patch("builtins.input", side_effect=["5", "0"]),
+        patch("apps.research._show_research_status", return_value=0) as status_menu,
     ):
-        status_menu_rc = app_breakout_quality._run_interactive_menu(
-            "apps/breakout_quality.py"
-        )
+        status_menu_rc = research_app._interactive_menu()
     add_check(
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_status_menu_route",
+        "research_status_menu_route",
         (0, 1),
         (status_menu_rc, status_menu.call_count),
     )
@@ -398,18 +395,18 @@ def validate_dataset_cli_contract_case(_base_params):
             "auto",
         ),
         patch("builtins.input", side_effect=["2", ""]),
-        patch("apps.breakout_quality._print_workflow_status"),
+        patch("tools.filters.breakout_quality.application._print_workflow_status"),
         patch(
-            "apps.breakout_quality._dataset_refresh_step",
+            "tools.filters.breakout_quality.application._dataset_refresh_step",
             return_value=("rebuild", ["dataset_summary.json 缺少"], dataset_step),
         ),
         patch(
-            "apps.breakout_quality._run_command",
+            "tools.filters.breakout_quality.application._run_command",
             side_effect=_record_dataset_prepare_command,
         ),
     ):
         dataset_prepare_rc = app_breakout_quality._interactive_model_research(
-            "apps/breakout_quality.py"
+            "apps/research.py model"
         )
     add_check(
         results,
@@ -535,16 +532,16 @@ def validate_dataset_cli_contract_case(_base_params):
     )
     with (
         patch(
-            "apps.breakout_quality.get_breakout_quality_workflow_settings",
+            "tools.filters.breakout_quality.application.get_breakout_quality_workflow_settings",
             return_value=binary_workflow_settings,
         ),
         patch(
-            "apps.breakout_quality._interactive_binary_model_research",
+            "tools.filters.breakout_quality.application._interactive_binary_model_research",
             return_value=41,
         ) as binary_route,
     ):
         binary_rc = app_breakout_quality._interactive_model_research(
-            "apps/breakout_quality.py"
+            "apps/research.py model"
         )
     add_check(
         results,
@@ -561,7 +558,7 @@ def validate_dataset_cli_contract_case(_base_params):
 
     strategy_rc, strategy_help = _capture_stdout(
         app_strategy_compare.main,
-        ["apps/strategy_compare.py", "--help"],
+        ["apps/research.py", "compare", "--help"],
     )
     add_check(
         results,
@@ -588,20 +585,20 @@ def validate_dataset_cli_contract_case(_base_params):
 
     with (
         patch(
-            "apps.strategy_compare._run_current_comparison",
+            "apps.research._run_current_comparison",
             side_effect=_record_strategy_run,
         ),
         patch(
-            "apps.strategy_compare.show_strategy_comparison_status",
+            "apps.research.show_strategy_comparison_status",
             side_effect=_record_strategy_status,
         ),
-        patch("apps.strategy_compare.is_interactive_console", return_value=False),
+        patch("apps.research.is_interactive_console", return_value=False),
     ):
         strategy_run_rc = app_strategy_compare.main(
-            ["apps/strategy_compare.py", "run"]
+            ["apps/research.py", "compare", "run"]
         )
         strategy_status_rc = app_strategy_compare.main(
-            ["apps/strategy_compare.py", "status"]
+            ["apps/research.py", "compare", "status"]
         )
     add_check(
         results,
@@ -614,9 +611,9 @@ def validate_dataset_cli_contract_case(_base_params):
 
     with (
         patch("builtins.input", side_effect=["2", "0"]),
-        patch("apps.strategy_compare.show_strategy_comparison_status") as compare_status,
+        patch("apps.research.show_strategy_comparison_status") as compare_status,
     ):
-        strategy_menu_rc = app_strategy_compare._interactive_menu()
+        strategy_menu_rc = app_strategy_compare._strategy_compare_menu()
     add_check(
         results,
         "cli_contract",
@@ -629,11 +626,11 @@ def validate_dataset_cli_contract_case(_base_params):
 
     fake_workflow_args = SimpleNamespace(filter_id="synthetic_quality")
     with (
-        patch("apps.breakout_quality._parse_workflow_args", return_value=fake_workflow_args) as mocked_parse,
-        patch("apps.breakout_quality._run_workflow", return_value=33) as mocked_workflow,
+        patch("tools.filters.breakout_quality.application._parse_workflow_args", return_value=fake_workflow_args) as mocked_parse,
+        patch("tools.filters.breakout_quality.application._run_workflow", return_value=33) as mocked_workflow,
     ):
         rc = app_breakout_quality.main(
-            ["apps/breakout_quality.py", "workflow", "--filter-id", "synthetic_quality"]
+            ["apps/research.py model", "workflow", "--filter-id", "synthetic_quality"]
         )
     add_check(results, "cli_contract", case_id, "breakout_quality_workflow_rc", 33, rc)
     add_check(
@@ -690,19 +687,19 @@ def validate_dataset_cli_contract_case(_base_params):
 
     workflow_output = StringIO()
     with (
-        patch("apps.breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE", "ts2vec_frozen_linear_v1"),
-        patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
-        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
+        patch("tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE", "ts2vec_frozen_linear_v1"),
+        patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
+        patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
         patch(
-            "apps.breakout_quality._pretraining_refresh_plan",
+            "tools.filters.breakout_quality.application._pretraining_refresh_plan",
             return_value=(True, True, ["synthetic pretraining refresh"]),
         ),
-        patch("apps.breakout_quality._run_command", side_effect=_fake_run_command),
+        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_run_command),
         redirect_stdout(workflow_output),
     ):
         workflow_rc = app_breakout_quality._run_workflow(
             workflow_args,
-            program_name="apps/breakout_quality.py",
+            program_name="apps/research.py model",
         )
     workflow_console = workflow_output.getvalue()
     workflow_calls_by_command = {
@@ -821,26 +818,26 @@ def validate_dataset_cli_contract_case(_base_params):
     patch_workflow_output = StringIO()
     with (
         patch(
-            "apps.breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+            "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
             "patch_transformer_v1",
         ),
         patch(
-            "apps.breakout_quality.require_mantis_v2_class",
+            "tools.filters.breakout_quality.application.require_mantis_v2_class",
             side_effect=AssertionError("9F 不得載入 Mantis"),
         ),
         patch(
-            "apps.breakout_quality.require_moment_pipeline_class",
+            "tools.filters.breakout_quality.application.require_moment_pipeline_class",
             side_effect=AssertionError("9F 不得載入 MOMENT"),
         ),
-        patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
-        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
-        patch("apps.breakout_quality._pretraining_refresh_plan") as mocked_patch_pretraining_plan,
-        patch("apps.breakout_quality._run_command", side_effect=_fake_run_patch_command),
+        patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
+        patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
+        patch("tools.filters.breakout_quality.application._pretraining_refresh_plan") as mocked_patch_pretraining_plan,
+        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_run_patch_command),
         redirect_stdout(patch_workflow_output),
     ):
         patch_workflow_rc = app_breakout_quality._run_workflow(
             workflow_args,
-            program_name="apps/breakout_quality.py",
+            program_name="apps/research.py model",
         )
     patch_commands = [call[0] for call in patch_workflow_calls]
     patch_console = patch_workflow_output.getvalue()
@@ -888,19 +885,19 @@ def validate_dataset_cli_contract_case(_base_params):
     mantis_workflow_output = StringIO()
     with (
         patch(
-            "apps.breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+            "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
             "mantis_v2_frozen_linear_v1",
         ),
-        patch("apps.breakout_quality.require_mantis_v2_class", return_value=object),
-        patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
-        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
-        patch("apps.breakout_quality._pretraining_refresh_plan") as mocked_mantis_pretraining_plan,
-        patch("apps.breakout_quality._run_command", side_effect=_fake_run_mantis_command),
+        patch("tools.filters.breakout_quality.application.require_mantis_v2_class", return_value=object),
+        patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
+        patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
+        patch("tools.filters.breakout_quality.application._pretraining_refresh_plan") as mocked_mantis_pretraining_plan,
+        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_run_mantis_command),
         redirect_stdout(mantis_workflow_output),
     ):
         mantis_workflow_rc = app_breakout_quality._run_workflow(
             workflow_args,
-            program_name="apps/breakout_quality.py",
+            program_name="apps/research.py model",
         )
     mantis_commands = [call[0] for call in mantis_workflow_calls]
     add_check(
@@ -939,19 +936,19 @@ def validate_dataset_cli_contract_case(_base_params):
     moment_workflow_output = StringIO()
     with (
         patch(
-            "apps.breakout_quality.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
+            "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_MODEL_ARCHITECTURE",
             "moment_1_base_frozen_linear_v1",
         ),
-        patch("apps.breakout_quality.require_moment_pipeline_class", return_value=object),
-        patch("apps.breakout_quality._load_command_module", return_value=fake_train_module),
-        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
-        patch("apps.breakout_quality._pretraining_refresh_plan") as mocked_moment_pretraining_plan,
-        patch("apps.breakout_quality._run_command", side_effect=_fake_run_moment_command),
+        patch("tools.filters.breakout_quality.application.require_moment_pipeline_class", return_value=object),
+        patch("tools.filters.breakout_quality.application._load_command_module", return_value=fake_train_module),
+        patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
+        patch("tools.filters.breakout_quality.application._pretraining_refresh_plan") as mocked_moment_pretraining_plan,
+        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_run_moment_command),
         redirect_stdout(moment_workflow_output),
     ):
         moment_workflow_rc = app_breakout_quality._run_workflow(
             workflow_args,
-            program_name="apps/breakout_quality.py",
+            program_name="apps/research.py model",
         )
     moment_commands = [call[0] for call in moment_workflow_calls]
     add_check(
@@ -1331,26 +1328,26 @@ def validate_dataset_cli_contract_case(_base_params):
         return next(workflow_bool_answers)
 
     with (
-        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
+        patch("tools.filters.breakout_quality.application._policy_filter_id", return_value="synthetic_quality"),
         patch(
-            "apps.breakout_quality._policy_train_settings",
+            "tools.filters.breakout_quality.application._policy_train_settings",
             return_value=interactive_policy_settings,
         ),
-        patch("apps.breakout_quality._print_policy_defaults") as mocked_policy_print,
+        patch("tools.filters.breakout_quality.application._print_policy_defaults") as mocked_policy_print,
         patch(
-            "apps.breakout_quality._prompt_choice",
+            "tools.filters.breakout_quality.application._prompt_choice",
             side_effect=AssertionError("unexpected dataset profile prompt"),
         ) as mocked_choice,
         patch(
-            "apps.breakout_quality._prompt_int",
+            "tools.filters.breakout_quality.application._prompt_int",
             side_effect=AssertionError("unexpected ticker coverage prompt"),
         ) as mocked_int,
-        patch("apps.breakout_quality._dataset_refresh_plan", return_value=("none", [])),
-        patch("apps.breakout_quality._prompt_bool", side_effect=_fake_workflow_bool),
-        patch("apps.breakout_quality._run_workflow") as mocked_interactive_workflow,
+        patch("tools.filters.breakout_quality.application._dataset_refresh_plan", return_value=("none", [])),
+        patch("tools.filters.breakout_quality.application._prompt_bool", side_effect=_fake_workflow_bool),
+        patch("tools.filters.breakout_quality.application._run_workflow") as mocked_interactive_workflow,
     ):
         interactive_workflow_rc = app_breakout_quality._interactive_workflow(
-            "apps/breakout_quality.py"
+            "apps/research.py model"
         )
     add_check(
         results,
@@ -1389,33 +1386,33 @@ def validate_dataset_cli_contract_case(_base_params):
         return next(stale_bool_answers)
 
     with (
-        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
+        patch("tools.filters.breakout_quality.application._policy_filter_id", return_value="synthetic_quality"),
         patch(
-            "apps.breakout_quality._policy_train_settings",
+            "tools.filters.breakout_quality.application._policy_train_settings",
             return_value=interactive_policy_settings,
         ),
-        patch("apps.breakout_quality._print_policy_defaults"),
+        patch("tools.filters.breakout_quality.application._print_policy_defaults"),
         patch(
-            "apps.breakout_quality._prompt_choice",
+            "tools.filters.breakout_quality.application._prompt_choice",
             side_effect=AssertionError("unexpected dataset profile prompt"),
         ),
         patch(
-            "apps.breakout_quality._prompt_int",
+            "tools.filters.breakout_quality.application._prompt_int",
             side_effect=AssertionError("unexpected ticker coverage prompt"),
         ),
         patch(
-            "apps.breakout_quality._dataset_refresh_plan",
+            "tools.filters.breakout_quality.application._dataset_refresh_plan",
             return_value=("rebuild", ["來源 CSV inventory 已變更"]),
         ),
-        patch("apps.breakout_quality._prompt_bool", side_effect=_fake_stale_workflow_bool),
-        patch("apps.breakout_quality._run_workflow", return_value=0) as mocked_stale_workflow,
+        patch("tools.filters.breakout_quality.application._prompt_bool", side_effect=_fake_stale_workflow_bool),
+        patch("tools.filters.breakout_quality.application._run_workflow", return_value=0) as mocked_stale_workflow,
         patch(
-            "apps.breakout_quality._run_binary_post_train_validation",
+            "tools.filters.breakout_quality.application._run_binary_post_train_validation",
             return_value=0,
         ) as mocked_stale_post_validation,
     ):
         stale_workflow_rc = app_breakout_quality._interactive_workflow(
-            "apps/breakout_quality.py"
+            "apps/research.py model"
         )
     stale_request = mocked_stale_workflow.call_args.args[0]
     add_check(
@@ -1455,21 +1452,21 @@ def validate_dataset_cli_contract_case(_base_params):
         return 0
 
     with (
-        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
-        patch("apps.breakout_quality._print_policy_defaults"),
+        patch("tools.filters.breakout_quality.application._policy_filter_id", return_value="synthetic_quality"),
+        patch("tools.filters.breakout_quality.application._print_policy_defaults"),
         patch(
-            "apps.breakout_quality._prompt_choice",
+            "tools.filters.breakout_quality.application._prompt_choice",
             side_effect=AssertionError("unexpected dataset profile prompt"),
         ) as mocked_build_choice,
         patch(
-            "apps.breakout_quality._prompt_int",
+            "tools.filters.breakout_quality.application._prompt_int",
             side_effect=AssertionError("unexpected ticker coverage prompt"),
         ) as mocked_build_int,
-        patch("apps.breakout_quality._prompt_bool", return_value=True),
-        patch("apps.breakout_quality._run_command", side_effect=_fake_build_dataset_run),
+        patch("tools.filters.breakout_quality.application._prompt_bool", return_value=True),
+        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_build_dataset_run),
     ):
         build_dataset_rc = app_breakout_quality._interactive_build_dataset(
-            "apps/breakout_quality.py"
+            "apps/research.py model"
         )
     add_check(
         results,
@@ -1494,18 +1491,18 @@ def validate_dataset_cli_contract_case(_base_params):
 
 
     with (
-        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
+        patch("tools.filters.breakout_quality.application._policy_filter_id", return_value="synthetic_quality"),
         patch(
-            "apps.breakout_quality._policy_train_settings",
+            "tools.filters.breakout_quality.application._policy_train_settings",
             return_value=interactive_policy_settings,
         ),
-        patch("apps.breakout_quality._print_policy_defaults") as mocked_policy_print,
-        patch("apps.breakout_quality._prompt_bool", return_value=False) as mocked_confirm,
+        patch("tools.filters.breakout_quality.application._print_policy_defaults") as mocked_policy_print,
+        patch("tools.filters.breakout_quality.application._prompt_bool", return_value=False) as mocked_confirm,
         patch("builtins.input", side_effect=AssertionError("unexpected policy prompt")),
-        patch("apps.breakout_quality._run_command") as mocked_train_command,
+        patch("tools.filters.breakout_quality.application._run_command") as mocked_train_command,
     ):
         interactive_train_rc = app_breakout_quality._interactive_train(
-            "apps/breakout_quality.py"
+            "apps/research.py model"
         )
     add_check(
         results,
@@ -1528,19 +1525,19 @@ def validate_dataset_cli_contract_case(_base_params):
         return 0
 
     with (
-        patch("apps.breakout_quality._policy_filter_id", return_value="synthetic_quality"),
+        patch("tools.filters.breakout_quality.application._policy_filter_id", return_value="synthetic_quality"),
         patch(
-            "apps.breakout_quality.BREAKOUT_QUALITY_EXPERIMENT_PROFILE",
+            "tools.filters.breakout_quality.application.BREAKOUT_QUALITY_EXPERIMENT_PROFILE",
             "baseline",
         ),
         patch(
-            "apps.breakout_quality._prompt_bool",
+            "tools.filters.breakout_quality.application._prompt_bool",
             side_effect=AssertionError("interactive report must not prompt for OOS"),
         ) as mocked_prompt,
-        patch("apps.breakout_quality._run_command", side_effect=_fake_report_run),
+        patch("tools.filters.breakout_quality.application._run_command", side_effect=_fake_report_run),
     ):
         report_with_oos_rc = app_breakout_quality._interactive_report(
-            "apps/breakout_quality.py"
+            "apps/research.py model"
         )
     add_check(
         results,
@@ -1745,9 +1742,9 @@ def validate_dataset_cli_contract_case(_base_params):
             return 23
 
         fake_module = SimpleNamespace(main=_fake_command_main)
-        with patch("apps.breakout_quality.importlib.import_module", return_value=fake_module) as mocked_import:
+        with patch("tools.filters.breakout_quality.application.importlib.import_module", return_value=fake_module) as mocked_import:
             rc = app_breakout_quality.main(
-                ["apps/breakout_quality.py", command, "--filter-id", "synthetic_quality"]
+                ["apps/research.py model", command, "--filter-id", "synthetic_quality"]
             )
         metric_command = command.replace("-", "_")
         add_check(results, "cli_contract", case_id, f"breakout_quality_app_{metric_command}_rc", 23, rc)
@@ -1773,7 +1770,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_app_unknown_command_rejected",
-        lambda: app_breakout_quality.main(["apps/breakout_quality.py", "unknown"]),
+        lambda: app_breakout_quality.main(["apps/research.py model", "unknown"]),
         "不支援的 breakout quality command",
     )
     _assert_value_error(
@@ -1781,17 +1778,26 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_app_unknown_top_level_flag_rejected",
-        lambda: app_breakout_quality.main(["apps/breakout_quality.py", "--bad"]),
+        lambda: app_breakout_quality.main(["apps/research.py model", "--bad"]),
         "不支援的參數",
     )
 
+    optimizer_rc, optimizer_help = _capture_stdout(
+        app_ml_optimizer.main,
+        ["apps/research.py", "optimizer", "--help"],
+    )
+    add_check(results, "cli_contract", case_id, "research_optimizer_help_rc", 0, optimizer_rc)
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "research_optimizer_help_preserves_original_contract",
+        True,
+        "用法: python apps/research.py optimizer" in optimizer_help
+        and "reduced|full" in optimizer_help,
+    )
+
     wrapper_cases = [
-        {
-            "program": "apps/ml_optimizer.py",
-            "module": app_ml_optimizer,
-            "patch_target": "tools.optimizer.main",
-            "env_kw": "environ",
-        },
         {
             "program": "apps/vip_scanner.py",
             "module": app_vip_scanner,
@@ -2096,7 +2102,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_APP_SIMPLE_REPORT_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
-    app_breakout_quality = importlib.import_module("apps.breakout_quality")
+    app_breakout_quality = importlib.import_module("tools.filters.breakout_quality.application")
 
     with TemporaryDirectory() as tmp_dir:
         simple_root = Path(tmp_dir)

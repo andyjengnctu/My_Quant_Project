@@ -28,13 +28,14 @@ from tools.validate.meta_contracts import summarize_synthetic_cases_import_targe
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
-    ([sys.executable, "apps/audit.py", "--help"], "python apps/audit.py"),
-    ([sys.executable, "apps/breakout_quality.py", "--help"], "python apps/breakout_quality.py"),
-    ([sys.executable, "apps/breakout_quality.py", "workflow", "--help"], "python apps/breakout_quality.py workflow"),
-    ([sys.executable, "apps/breakout_quality.py", "report", "--help"], "python apps/breakout_quality.py report"),
-    ([sys.executable, "apps/strategy_compare.py", "--help"], "python apps/strategy_compare.py"),
+    ([sys.executable, "apps/research.py", "--help"], "python apps/research.py"),
+    ([sys.executable, "apps/research.py", "model", "--help"], "python apps/research.py model"),
+    ([sys.executable, "apps/research.py", "model", "workflow", "--help"], "python apps/research.py model workflow"),
+    ([sys.executable, "apps/research.py", "model", "report", "--help"], "python apps/research.py model report"),
+    ([sys.executable, "apps/research.py", "compare", "--help"], "python apps/research.py compare"),
+    ([sys.executable, "apps/research.py", "audit", "--help"], "python apps/research.py audit"),
+    ([sys.executable, "apps/research.py", "optimizer", "--help"], "python apps/research.py optimizer"),
     ([sys.executable, "apps/workbench.py", "--help"], "python apps/workbench.py"),
-    ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
     ([sys.executable, "apps/package_zip.py", "--help"], "python apps/package_zip.py"),
     ([sys.executable, "apps/portfolio_sim.py", "--help"], "python apps/portfolio_sim.py"),
     ([sys.executable, "apps/smart_downloader.py", "--help"], "python apps/smart_downloader.py"),
@@ -75,11 +76,8 @@ RUN_ALL_CLI_CASES = [
     (["--bad"], "不支援的參數"),
 ]
 INLINE_CLI_TARGETS = {
-    "apps/audit.py",
-    "apps/breakout_quality.py",
-    "apps/strategy_compare.py",
+    "apps/research.py",
     "apps/workbench.py",
-    "apps/ml_optimizer.py",
     "apps/package_zip.py",
     "apps/portfolio_sim.py",
     "apps/smart_downloader.py",
@@ -694,7 +692,7 @@ def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
         "tools/validate/cli.py",
         "apps/portfolio_sim.py",
         "apps/vip_scanner.py",
-        "apps/ml_optimizer.py",
+        "apps/research.py",
     ]
     cases = [
         (["--dataset", "bad"], "不支援的資料集模式"),
@@ -702,8 +700,11 @@ def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
         (["--dataset="], "不能為空"),
     ]
     for target in targets:
+        prefix = [sys.executable, target]
+        if target == "apps/research.py":
+            prefix.append("optimizer")
         for suffix_args, expected in cases:
-            outcome = _run_python_cli_probe([sys.executable, target, *suffix_args], timeout=timeout)
+            outcome = _run_python_cli_probe([*prefix, *suffix_args], timeout=timeout)
             combined = f"{outcome['stdout']}\n{outcome['stderr']}"
             ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
             results.append(summarize_result(f"dataset_cli::{Path(target).name}::{" ".join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
@@ -786,7 +787,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
 
     sandbox_db_path.write_text("not-a-sqlite-db", encoding="utf-8")
     outcome = _run_python_cli_probe(
-        [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
+        [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced"],
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
     )
@@ -798,7 +799,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
 
     sandbox_db_path.unlink(missing_ok=True)
     outcome = _run_python_cli_probe(
-        [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
+        [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced"],
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
     )
@@ -812,7 +813,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
 
     sqlite3.connect(sandbox_db_path).close()
     outcome = _run_python_cli_probe(
-        [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
+        [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced"],
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir), RUN_BEST_PARAMS_PATH_ENV_VAR: str(broken_db_models_dir / "run_best_params.json")},
     )

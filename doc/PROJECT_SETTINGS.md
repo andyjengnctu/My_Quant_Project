@@ -35,7 +35,7 @@
 14. 正式功能已有互動選單時，正式操作流程不得要求使用者先執行可由程式確定完成的零散CLI；實驗對象、開關、工件來源、前置建立政策與訓練參數必須集中於`config/`，方便使用者檢視與自行調整，不得硬編碼於選單。
 15. 正式App執行前必須建立工件依賴計畫；對於可由既有真理工件確定性產生、或已有正式builder的缺少／過期工件，應依config自動重用、建立、重建或接續。只有涉及新Label、新模型訓練、研究選擇或缺少上游真理工件時，才能停止並導向對應正式入口。
 16. Breakout Quality 的策略層正式結果輸出（包含 Strategy Compare、策略參數適應與 strategy gate 類流程）只要產生持久工件，就必須同時提供可直接閱讀的簡易報表：互動執行時輸出console摘要，並保存Markdown報表；RUN與REUSE／cache重用必須使用同一份canonical結果與renderer，不能因重用而只剩JSON／CSV。JSON／CSV／manifest等詳細工件由同一份結果補充即可，不要求每個支援檔再複製一份簡易報表。
-17. `apps/breakout_quality.py`本身的正式研究／驗證輸出也必須有App層簡易報表：成功完成的子命令在既有詳細console／JSON／CSV／Markdown工件之外，固定再輸出短版console摘要並保存`outputs/filters/breakout_quality/<filter_id>/simple_reports/<command>.md`；摘要只讀取既有canonical工件補充核心指標，不得另算第二套模型／PIT指標。完整workflow必須另有最終總結；Audit選單執行完成後必須直接顯示最近Audit摘要。
+17. `apps/research.py`的模型訓練工作類型及其model provider正式研究／驗證輸出必須有App層簡易報表：成功完成的子命令在既有詳細console／JSON／CSV／Markdown工件之外，固定再輸出短版console摘要並保存`outputs/filters/breakout_quality/<filter_id>/simple_reports/<command>.md`；摘要只讀取既有canonical工件補充核心指標，不得另算第二套模型／PIT指標。完整workflow必須另有最終總結；Audit選單執行完成後必須直接顯示最近Audit摘要。
 
 
 ## C. Coding 與架構原則
@@ -48,7 +48,7 @@
 6. 正式入口集中於 `apps/`；`core/` 只放核心規則與共用計算；`tools/` 只放驗證、除錯與開發輔助工具。
 7. 拆分、合併、移動或重新命名檔案時，必須遵守單一職責、分層呼叫、禁止反向依賴、禁止循環依賴、禁止規則分叉與禁止重複實作。
 8. `config/` 下的正式參數均屬使用者可自行調整的設定；GPT、validator 與 formal suite 不得把任何目前值、預設值或特定值硬編碼成唯一合法答案，也不得為了讓測試通過而擅自修改、覆寫、還原或限制使用者設定。測試僅可驗證欄位存在、型別、合法範圍、跨欄一致性、衍生結果與 runtime 是否忠實採用當前設定；若測試需要固定案例，必須在測試內使用隔離 override，不得限制實際 `config/`。此規則包含但不限於 `training_policy`、`search_space` 與 `display_policy`。
-9. 模型訓練、策略參數訓練與策略績效比較必須維持入口分離；策略比較App不得自行建立Label、選擇模型或訓練模型權重，但可依config透過正式共用服務匯出既有模型的推論工件，以及建立比較所需的策略參數工件。各入口不得複製核心訓練邏輯。
+9. 研究工作可由單一`apps/research.py`作為使用者正式入口，但模型訓練、策略參數最佳化與策略組合比較必須維持獨立工作類型與application/service責任分離；策略組合比較不得自行建立Label、選擇模型或訓練模型權重，但可依config透過正式共用服務匯出既有模型的推論工件，以及建立比較所需的策略參數工件。各工作類型不得複製核心訓練邏輯；特定model、實驗標的、比較arm與Audit module不得由選單選擇，必須由`config/`指定。
 10. 前置工件自動建立必須先顯示可稽核計畫並只確認一次；任一步驟失敗時立即停止後續回放、保留可接續工件、回報失敗步驟與相對路徑，不得產生不完整的正式比較報表。
 
 

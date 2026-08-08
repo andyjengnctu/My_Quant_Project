@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -164,7 +164,7 @@ COMMAND_DESCRIPTIONS.update(
 
 def _print_help(program_name: str) -> None:
     print(f"用法: python {program_name} [menu|workflow|<command>] [options]")
-    print("說明: Breakout quality Dataset、Label、模型訓練與模型評估的正式入口；策略績效比較請使用 apps/strategy_compare.py。")
+    print("說明: Breakout quality Dataset、Label、模型訓練與模型評估的正式模型服務；正式入口為 apps/research.py。")
     print("command:")
     for command, description in COMMAND_DESCRIPTIONS.items():
         print(f"  {command:<30} {description}")
@@ -646,7 +646,7 @@ def _dataset_matches_request(filter_id: str, dataset: str, *, max_tickers: int) 
     return mode == "none"
 
 
-def _parse_workflow_args(argv=None, *, program_name: str = "apps/breakout_quality.py") -> argparse.Namespace:
+def _parse_workflow_args(argv=None, *, program_name: str = "apps/research.py model") -> argparse.Namespace:
     defaults = _train_defaults()
     parser = argparse.ArgumentParser(
         prog=f"{program_name} workflow",
@@ -1601,7 +1601,7 @@ def _run_binary_post_train_validation(
     if rc == 0:
         print(
             "\n模型工件更新完成。策略績效比較請另開 "
-            "python apps/strategy_compare.py。"
+            "python apps/research.py compare。"
         )
     return int(rc)
 
@@ -2104,7 +2104,7 @@ def _interactive_trade_path_train_and_report(
         "\n即將執行：建立／接續新Label Dataset → 重新訓練 → "
         "更新research scores → 顯示Selection／OOS模型預測報表 → 匯出forward-OOS scores。"
     )
-    print("本流程不執行策略績效比較；比較請另開 apps/strategy_compare.py。")
+    print("本流程不執行策略績效比較；比較請另開 apps/research.py compare。")
     if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
@@ -2152,7 +2152,7 @@ def _interactive_trade_path_train_and_report(
         code = _run_command(command, list(argv), program_name=program_name)
         if code != 0:
             return int(code)
-    print("\n模型研究完成。策略績效比較請另開 python apps/strategy_compare.py。")
+    print("\n模型研究完成。策略績效比較請另開 python apps/research.py compare。")
     return 0
 
 
@@ -2294,7 +2294,7 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
         f"Profile={profile.name}｜Objective={profile.training_objective}｜"
         f"Loss={profile.loss_name}｜Epoch metric={profile.epoch_selection_metric}"
     )
-    print("本流程不執行策略比較；模型完成後請另開 apps/strategy_compare.py。")
+    print("本流程不執行策略比較；模型完成後請另開 apps/research.py compare。")
     if not _prompt_bool("確認開始", True):
         print("已取消。")
         return 0
@@ -2393,92 +2393,28 @@ def _interactive_model_research(program_name: str) -> int:
             continue
         print("無效選項，請重新輸入。")
 
-def _interactive_audit_menu() -> int:
-    from tools.audit.runner import (
-        render_audit_status,
-        render_latest_audit_summary,
-        run_enabled_audits,
-    )
+def run_model_training_menu(program_name: str = "apps/research.py model") -> int:
+    """Run the active Breakout Quality model-training menu.
 
-    while True:
-        print("\n=== Breakout Quality Audit／診斷 ===")
-        print("[1/Enter] 執行目前 Audit 設定")
-        print("[2] 查看 Audit 設定、工件與預計動作")
-        print("[3] 查看最近 Audit 結果")
-        print("[0] 返回")
-        try:
-            raw_choice = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            print("\n輸入已結束。")
-            return 0
-        choice = "1" if raw_choice == "" else raw_choice
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        if choice == "1":
-            print("\n" + render_audit_status("breakout_quality"))
-            try:
-                confirm = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
-            except EOFError:
-                print("\n輸入已結束，本次不執行。")
-                return 0
-            if confirm in {"0", "q", "quit", "exit"}:
-                print("已取消本次Audit。")
-                continue
-            if confirm not in {"", "1"}:
-                print("輸入無效，本次不執行。")
-                continue
-            run_enabled_audits("breakout_quality")
-            print("\n" + render_latest_audit_summary("breakout_quality"))
-        elif choice == "2":
-            print("\n" + render_audit_status("breakout_quality"))
-        elif choice == "3":
-            print("\n" + render_latest_audit_summary("breakout_quality"))
-        else:
-            print("無效選項，請按 Enter 或輸入 0～3。")
+    The project-level work type is selected by ``apps/research.py``; this function
+    only owns the model-specific training/validation flow.
+    """
+    return _interactive_model_research(program_name)
 
 
-def _print_menu() -> None:
-    print("\n=== Breakout Quality ===")
-    print("[1/Enter] 模型研究與驗證")
-    print("[2] Audit／診斷")
-    print("[3] 查看模型設定與工件狀態")
-    print("[0] 離開")
-
-
-def _run_interactive_menu(program_name: str) -> int:
-    while True:
-        _print_menu()
-        try:
-            raw_choice = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            print("\n輸入已結束。")
-            return 0
-        choice = "1" if raw_choice == "" else raw_choice
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        try:
-            if choice == "1":
-                _interactive_model_research(program_name)
-            elif choice == "2":
-                _interactive_audit_menu()
-            elif choice == "3":
-                _print_workflow_status()
-            else:
-                print("選項無效，請按 Enter 或輸入 0～3。")
-        except (FileNotFoundError, ValueError, RuntimeError) as exc:
-            print(f"[錯誤] {type(exc).__name__}: {exc}")
-        except KeyboardInterrupt:
-            print("\n目前操作已中止，返回主選單。")
+def show_model_status() -> None:
+    """Render current Breakout Quality workflow and artifact status."""
+    _print_workflow_status()
 
 
 def main(argv=None) -> int:
     raw_argv = list(sys.argv if argv is None else argv)
-    program_name = resolve_cli_program_name(raw_argv, "apps/breakout_quality.py")
+    program_name = resolve_cli_program_name(raw_argv, "apps/research.py model")
     args = raw_argv[1:]
 
     if not args:
         if is_interactive_console():
-            return _run_interactive_menu(program_name)
+            return run_model_training_menu(program_name)
         _print_help(program_name)
         return 0
 
@@ -2497,7 +2433,7 @@ def main(argv=None) -> int:
             raise ValueError("menu 不接受其他參數")
         if not is_interactive_console():
             raise RuntimeError("menu 需要互動式終端；批次執行請使用 workflow 或其他子命令")
-        return _run_interactive_menu(program_name)
+        return run_model_training_menu(program_name)
 
     if command == "workflow":
         return _run_workflow(
@@ -2516,6 +2452,8 @@ __all__ = [
     "COMMAND_DESCRIPTIONS",
     "COMMAND_MODULES",
     "main",
+    "run_model_training_menu",
+    "show_model_status",
 ]
 
 

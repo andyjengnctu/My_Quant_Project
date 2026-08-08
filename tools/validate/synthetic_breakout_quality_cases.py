@@ -7264,7 +7264,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         ),
     )
 
-    breakout_quality_app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    breakout_quality_app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
     breakout_quality_app_tree = ast.parse(
         breakout_quality_app_path.read_text(encoding="utf-8"),
         filename=str(breakout_quality_app_path),
@@ -7514,7 +7514,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
             tamper_rejected,
         )
 
-    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
     tree = ast.parse(app_path.read_text(encoding="utf-8"), filename=str(app_path))
     command_modules = {}
     for node in tree.body:
@@ -7632,7 +7632,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         (
             "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE" in ranker_source,
             'choices=(' in ranker_source,
-            "11G" not in app_source[app_source.index("def _run_interactive_menu"):],
+            "11G" not in app_source[app_source.index("def _interactive_model_research"):app_source.index("def run_model_training_menu")],
             command_modules.get("train-continuous-ranker")
             == "tools.filters.breakout_quality.train_continuous_ranker",
         ),
@@ -7717,7 +7717,7 @@ def validate_breakout_quality_pass_conditional_ranker_contract_case(_base_params
     )
 
     root = Path(__file__).resolve().parents[2]
-    app_path = root / "apps" / "breakout_quality.py"
+    app_path = root / "tools" / "filters" / "breakout_quality" / "application.py"
     app_source = app_path.read_text(encoding="utf-8")
     tree = ast.parse(app_source, filename=str(app_path))
     command_modules = {}
@@ -7729,7 +7729,7 @@ def validate_breakout_quality_pass_conditional_ranker_contract_case(_base_params
             command_modules = ast.literal_eval(node.value)
             break
     menu_source = app_source[
-        app_source.find("def _run_interactive_menu") : app_source.find("def main")
+        app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")
     ]
     ranker_path = root / "tools" / "filters" / "breakout_quality" / "train_continuous_ranker.py"
     ranker_source = ranker_path.read_text(encoding="utf-8")
@@ -8087,7 +8087,7 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
         (valid_metadata_accepted, *invalid_metadata_rejected),
     )
 
-    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
     app_source = app_path.read_text(encoding="utf-8")
     app_tree = ast.parse(app_source, filename=str(app_path))
     command_modules = {}
@@ -8247,7 +8247,7 @@ def validate_breakout_quality_target_component_attribution_contract_case(_base_p
         all(token in markdown for token in ("PASS", "REJECT", "Target↔R", "停止連續排序線")),
     )
 
-    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
     app_source = app_path.read_text(encoding="utf-8")
     app_tree = ast.parse(app_source, filename=str(app_path))
     command_modules = {}
@@ -8273,7 +8273,7 @@ def validate_breakout_quality_target_component_attribution_contract_case(_base_p
         (
             _registered_breakout_quality_audit_module("audit-target-attribution")
             == "tools.audit.breakout_quality.target_component_attribution",
-            "11D" not in app_source[app_source.find("def _run_interactive_menu"):app_source.find("def main")],
+            "11D" not in app_source[app_source.find("def _interactive_model_research"):app_source.find("def run_model_training_menu")],
             'choice == "12"' not in app_source,
         ),
     )
@@ -8469,7 +8469,7 @@ def validate_breakout_quality_target_time_penalty_ablation_contract_case(_base_p
         )),
     )
 
-    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
     app_source = app_path.read_text(encoding="utf-8")
     app_tree = ast.parse(app_source, filename=str(app_path))
     command_modules = {}
@@ -8490,7 +8490,7 @@ def validate_breakout_quality_target_time_penalty_ablation_contract_case(_base_p
     )
     audit_source = audit_path.read_text(encoding="utf-8")
     menu_source = app_source[
-        app_source.find("def _run_interactive_menu") : app_source.find("def main")
+        app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")
     ]
     add_check(
         results,
@@ -8684,7 +8684,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     )
     from contextlib import nullcontext
     breakout_quality_app = __import__(
-        "apps.breakout_quality", fromlist=["*"]
+        "tools.filters.breakout_quality.application", fromlist=["*"]
     )
     from config import breakout_quality as breakout_quality_config
 
@@ -8730,7 +8730,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         post_train_rc = breakout_quality_app._run_binary_post_train_validation(
             export_request,
             workflow_settings=binary_menu_settings,
-            program_name="apps/breakout_quality.py",
+            program_name="apps/research.py model",
         )
     export_call = post_train_calls[0]
     add_check(
@@ -8749,7 +8749,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     )
 
     project_root = Path(__file__).resolve().parents[2]
-    app_source = (project_root / "apps" / "breakout_quality.py").read_text(
+    app_source = (project_root / "tools" / "filters" / "breakout_quality" / "application.py").read_text(
         encoding="utf-8"
     )
     trade_path_train_source = app_source.split(
@@ -8791,7 +8791,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         redirect_stdout(io.StringIO()),
     ):
         trade_path_report_rc = breakout_quality_app._run_trade_path_model_report(
-            "apps/breakout_quality.py",
+            "apps/research.py model",
             request=export_request,
             export_research_scores=True,
         )
@@ -8867,7 +8867,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     ):
         existing_model_rc = (
             breakout_quality_app._interactive_trade_path_existing_report(
-                "apps/breakout_quality.py",
+                "apps/research.py model",
                 workflow_settings=binary_menu_settings,
             )
         )
@@ -10742,7 +10742,7 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
         (accepted_ok, tamper_rejected),
     )
 
-    app_path = Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py"
+    app_path = Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py"
     app_source = app_path.read_text(encoding="utf-8")
     app_tree = ast.parse(app_source, filename=str(app_path))
     command_modules = {}
@@ -10754,7 +10754,7 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
             command_modules = ast.literal_eval(node.value)
             break
     menu_source = app_source[
-        app_source.find("def _run_interactive_menu") : app_source.find("def main")
+        app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")
     ]
     audit_path = (
         Path(__file__).resolve().parents[1]
@@ -10908,7 +10908,7 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
     )
 
     root = Path(__file__).resolve().parents[2]
-    app_path = root / "apps" / "breakout_quality.py"
+    app_path = root / "tools" / "filters" / "breakout_quality" / "application.py"
     app_source = app_path.read_text(encoding="utf-8")
     tree = ast.parse(app_source, filename=str(app_path))
     command_modules = {}
@@ -10920,7 +10920,7 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
             command_modules = ast.literal_eval(node.value)
             break
     menu_source = app_source[
-        app_source.find("def _run_interactive_menu") : app_source.find("def main")
+        app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")
     ]
     audit_path = root / "tools" / "audit" / "breakout_quality" / "pass_realization_gap.py"
     audit_source = audit_path.read_text(encoding="utf-8")
@@ -11098,7 +11098,7 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
     )
 
     root = Path(__file__).resolve().parents[2]
-    app_path = root / "apps" / "breakout_quality.py"
+    app_path = root / "tools" / "filters" / "breakout_quality" / "application.py"
     app_source = app_path.read_text(encoding="utf-8")
     tree = ast.parse(app_source, filename=str(app_path))
     command_modules = {}
@@ -11109,7 +11109,7 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
         ):
             command_modules = ast.literal_eval(node.value)
             break
-    menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
+    menu_source = app_source[app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")]
     audit_path = root / "tools" / "audit" / "breakout_quality" / "selection_strategy_realization.py"
     audit_source = audit_path.read_text(encoding="utf-8")
     optimizer_path = root / "tools" / "optimizer" / "outer_rolling_oos.py"
@@ -11507,7 +11507,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
     )
 
     root = Path(__file__).resolve().parents[2]
-    app_source = (root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    app_source = (root / "tools" / "filters" / "breakout_quality" / "application.py").read_text(encoding="utf-8")
     app_tree = ast.parse(app_source)
     command_modules = {}
     for node in app_tree.body:
@@ -11516,7 +11516,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
         ):
             command_modules = ast.literal_eval(node.value)
             break
-    menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
+    menu_source = app_source[app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")]
     engine_source = (root / "core" / "portfolio_engine.py").read_text(encoding="utf-8")
     runner_source = (root / "tools" / "portfolio_sim" / "simulation_runner.py").read_text(encoding="utf-8")
     compare_source = (
@@ -11677,7 +11677,7 @@ def validate_breakout_quality_portfolio_selection_pressure_contract_case(_base_p
     )
 
     root = Path(__file__).resolve().parents[2]
-    app_source = (root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    app_source = (root / "tools" / "filters" / "breakout_quality" / "application.py").read_text(encoding="utf-8")
     app_tree = ast.parse(app_source)
     command_modules = {}
     for node in app_tree.body:
@@ -11686,7 +11686,7 @@ def validate_breakout_quality_portfolio_selection_pressure_contract_case(_base_p
         ):
             command_modules = ast.literal_eval(node.value)
             break
-    menu_source = app_source[app_source.find("def _run_interactive_menu") : app_source.find("def main")]
+    menu_source = app_source[app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")]
     audit_source = (
         root / "tools" / "audit" / "breakout_quality" / "portfolio_selection_pressure.py"
     ).read_text(encoding="utf-8")
@@ -15171,7 +15171,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
         ),
     ):
         parsed_adapt_args = parse_strategy_adapt_args([])
-    app_source = (Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py").read_text(
+    app_source = (Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py").read_text(
         encoding="utf-8"
     )
     add_check(
@@ -15468,7 +15468,7 @@ def validate_breakout_quality_strategy_adaptation_contract_case(_base_params):
     )
 
     project_root = Path(__file__).resolve().parents[2]
-    app_source = (project_root / "apps" / "breakout_quality.py").read_text(
+    app_source = (project_root / "tools" / "filters" / "breakout_quality" / "application.py").read_text(
         encoding="utf-8"
     )
     adapt_source = (
@@ -16122,7 +16122,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     )
 
     project_root = Path(__file__).resolve().parents[2]
-    app_source = (project_root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    app_source = (project_root / "tools" / "filters" / "breakout_quality" / "application.py").read_text(encoding="utf-8")
     builder_source = (
         project_root / "tools" / "filters" / "breakout_quality" / "build_trade_path_labels.py"
     ).read_text(encoding="utf-8")
@@ -16146,7 +16146,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
                 "[3] 查看Label與事件生命週期摘要",
                 '"build-trade-path-labels"',
                 "本流程不執行策略績效比較",
-                "apps/strategy_compare.py",
+                "apps/research.py compare",
             )
         )
         and "strategy-trade-path-label-gate" not in app_source,
@@ -16219,9 +16219,9 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     project_root = Path(__file__).resolve().parents[2]
     canonical_config_path = project_root / "config" / "breakout_quality.py"
     canonical_source = canonical_config_path.read_text(encoding="utf-8")
-    canonical_app_path = project_root / "apps" / "breakout_quality.py"
+    canonical_app_path = project_root / "tools" / "filters" / "breakout_quality" / "application.py"
     canonical_app_source = canonical_app_path.read_text(encoding="utf-8")
-    strategy_app_path = project_root / "apps" / "strategy_compare.py"
+    strategy_app_path = project_root / "apps" / "research.py"
     strategy_config_path = project_root / "config" / "strategy_compare.py"
 
     add_check(
@@ -16297,7 +16297,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
         and strategy_app_path.is_file()
         and strategy_config_path.is_file()
         and '"strategy-compare"' not in canonical_app_source
-        and "apps/strategy_compare.py" in canonical_app_source,
+        and "apps/research.py compare" in canonical_app_source,
     )
 
     strategy_compare_source = (
@@ -16322,7 +16322,7 @@ def validate_breakout_quality_single_seed_single_entry_contract_case(_base_param
     )
 
     summary["seed_source"] = "config.breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED"
-    summary["strategy_compare_entry"] = "apps/strategy_compare.py"
+    summary["strategy_compare_entry"] = "apps/research.py compare"
     return results, summary
 
 
@@ -16333,8 +16333,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     project_root = Path(__file__).resolve().parents[2]
     config_path = project_root / "config" / "strategy_compare.py"
-    app_path = project_root / "apps" / "strategy_compare.py"
-    model_app_path = project_root / "apps" / "breakout_quality.py"
+    app_path = project_root / "apps" / "research.py"
+    model_app_path = project_root / "tools" / "filters" / "breakout_quality" / "application.py"
     orchestration_path = project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
     preparation_path = project_root / "filters" / "breakout_quality" / "strategy_compare_preparation.py"
     export_service_path = project_root / "filters" / "breakout_quality" / "export_scores.py"
@@ -16382,8 +16382,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "strategy_compare_official_entry_is_in_quick_gate_help_registry",
         True,
-        '([sys.executable, "apps/strategy_compare.py", "--help"]' in quick_gate_source
-        and '"apps/strategy_compare.py",' in quick_gate_source.split("INLINE_CLI_TARGETS = {", 1)[1],
+        '([sys.executable, "apps/research.py", "compare", "--help"]' in quick_gate_source
+        and '"apps/research.py",' in quick_gate_source.split("INLINE_CLI_TARGETS = {", 1)[1],
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -18078,7 +18078,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     summary["config_path"] = "config/strategy_compare.py"
-    summary["app_path"] = "apps/strategy_compare.py"
+    summary["app_path"] = "apps/research.py"
     summary["enabled_arms"] = [arm.arm_id for arm in settings.enabled_arms]
     summary["preparation"] = settings.preparation.as_dict()
     return results, summary
@@ -18126,8 +18126,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
-    audit_app_source = (project_root / "apps" / "audit.py").read_text(encoding="utf-8")
-    model_app_source = (project_root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    audit_app_source = (project_root / "apps" / "research.py").read_text(encoding="utf-8")
+    model_app_source = (project_root / "tools" / "filters" / "breakout_quality" / "application.py").read_text(encoding="utf-8")
     quick_gate_source = (project_root / "tools" / "local_regression" / "run_quick_gate.py").read_text(encoding="utf-8")
     add_check(
         results,
@@ -18136,10 +18136,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "project_audit_app_and_breakout_quality_facade_share_catalog_runner_and_cli_smoke_registry",
         True,
         "from tools.audit.runner import" in audit_app_source
-        and "from tools.audit.runner import" in model_app_source
+        and "get_active_audit_module_id" in audit_app_source
         and "get_domain_cli_commands" in model_app_source
-        and '([sys.executable, "apps/audit.py", "--help"]' in quick_gate_source
-        and '"apps/audit.py",' in quick_gate_source.split("INLINE_CLI_TARGETS = {", 1)[1],
+        and "_interactive_audit_menu" not in model_app_source
+        and '([sys.executable, "apps/research.py", "audit", "--help"]' in quick_gate_source
+        and '"apps/research.py",' in quick_gate_source.split("INLINE_CLI_TARGETS = {", 1)[1],
     )
     add_check(
         results,
@@ -18781,18 +18782,19 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and source_payload["metadata"]["portfolio_replay_executed"] is False,
         )
 
-    app_source = (Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
-    project_audit_source = (Path(__file__).resolve().parents[2] / "apps" / "audit.py").read_text(encoding="utf-8")
+    app_source = (Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py").read_text(encoding="utf-8")
+    project_audit_source = (Path(__file__).resolve().parents[2] / "apps" / "research.py").read_text(encoding="utf-8")
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
         "project_audit_entry_and_breakout_quality_facade_share_one_config_driven_backend",
         True,
-        "[2] Audit／診斷" in app_source
-        and 'render_audit_status("breakout_quality")' in app_source
-        and "=== Project Audit ===" in project_audit_source
-        and "get_audit_module_ids" in project_audit_source
+        "get_domain_cli_commands" in app_source
+        and "Audit／診斷" not in app_source[app_source.find("def _interactive_model_research"):app_source.find("def run_model_training_menu")]
+        and "[4]       Audit／診斷" in project_audit_source
+        and "get_active_audit_module_id" in project_audit_source
+        and "get_audit_module_ids" not in project_audit_source
         and "run_enabled_audits" in project_audit_source,
     )
 
