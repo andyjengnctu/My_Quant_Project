@@ -12333,31 +12333,43 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     )
 
     strategy = get_strategy_comparison_settings()
-    enabled = {arm.arm_id: arm for arm in strategy.enabled_arms}
+    historical_arm_contract = (
+        ("C17", "CONT12A", "resource-aware-continuous-max-dl"),
+        ("C18", "CONT12A", "resource-aware-continuous-max-dl-feasible-ascent"),
+        ("C19", "CONT12B", "resource-aware-continuous-max-dl"),
+        ("C20", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr12a_and_mr12b_are_compared_under_both_c17_c18_selector_semantics",
-        (
-            ("C17", "CONT12A", "resource-aware-continuous-max-dl"),
-            ("C18", "CONT12A", "resource-aware-continuous-max-dl-feasible-ascent"),
-            ("C19", "CONT12B", "resource-aware-continuous-max-dl"),
-            ("C20", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
-        ),
+        "mr12a_and_mr12b_historical_c17_c18_selector_matrix_remains_registered",
+        historical_arm_contract,
         tuple(
-            (arm_id, enabled[arm_id].dl_id, enabled[arm_id].dl_runtime_mode)
-            for arm_id in ("C17", "C18", "C19", "C20")
+            (
+                arm_id,
+                strategy.arms.get(arm_id).dl_id if strategy.arms.get(arm_id) is not None else None,
+                strategy.arms.get(arm_id).dl_runtime_mode if strategy.arms.get(arm_id) is not None else None,
+            )
+            for arm_id, _dl_id, _runtime_mode in historical_arm_contract
         ),
     )
-    enabled_contrasts = {item.contrast_id for item in strategy.enabled_contrasts}
+    required_contrasts = {
+        "C19-C17": ("C19", "C17"),
+        "C20-C18": ("C20", "C18"),
+        "C20-C19": ("C20", "C19"),
+    }
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr12b_strategy_matrix_isolates_model_gain_and_selector_conversion",
-        {"C19-C17", "C20-C18", "C20-C19"},
-        enabled_contrasts & {"C19-C17", "C20-C18", "C20-C19"},
+        "mr12b_historical_strategy_matrix_is_registered_independent_of_active_config",
+        required_contrasts,
+        {
+            contrast_id: (strategy.contrasts[contrast_id].left, strategy.contrasts[contrast_id].right)
+            for contrast_id in required_contrasts
+            if contrast_id in strategy.contrasts
+        },
     )
 
     summary["profile"] = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
@@ -12616,32 +12628,43 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
     )
 
     strategy = get_strategy_comparison_settings()
-    enabled = {arm.arm_id: arm for arm in strategy.enabled_arms}
+    historical_arm_contract = (
+        ("C19", "CONT12B", "resource-aware-continuous-max-dl"),
+        ("C20", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
+        ("C21", "CONT12C", "resource-aware-continuous-max-dl"),
+        ("C22", "CONT12C", "resource-aware-continuous-max-dl-feasible-ascent"),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr12b_and_mr12c_are_compared_under_both_fixed_selector_semantics",
-        (
-            ("C19", "CONT12B", "resource-aware-continuous-max-dl"),
-            ("C20", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
-            ("C21", "CONT12C", "resource-aware-continuous-max-dl"),
-            ("C22", "CONT12C", "resource-aware-continuous-max-dl-feasible-ascent"),
-        ),
+        "mr12b_and_mr12c_historical_selector_matrix_remains_registered",
+        historical_arm_contract,
         tuple(
-            (arm_id, enabled[arm_id].dl_id, enabled[arm_id].dl_runtime_mode)
-            for arm_id in ("C19", "C20", "C21", "C22")
+            (
+                arm_id,
+                strategy.arms.get(arm_id).dl_id if strategy.arms.get(arm_id) is not None else None,
+                strategy.arms.get(arm_id).dl_runtime_mode if strategy.arms.get(arm_id) is not None else None,
+            )
+            for arm_id, _dl_id, _runtime_mode in historical_arm_contract
         ),
     )
-    enabled_contrasts = {item.contrast_id for item in strategy.enabled_contrasts}
-    required = {"C21-C19", "C22-C20", "C22-C21"}
+    required_contrasts = {
+        "C21-C19": ("C21", "C19"),
+        "C22-C20": ("C22", "C20"),
+        "C22-C21": ("C22", "C21"),
+    }
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "mr12c_strategy_matrix_isolates_pairwise_vs_listwise_and_selector_conversion",
-        required,
-        enabled_contrasts & required,
+        "mr12c_historical_strategy_matrix_is_registered_independent_of_active_config",
+        required_contrasts,
+        {
+            contrast_id: (strategy.contrasts[contrast_id].left, strategy.contrasts[contrast_id].right)
+            for contrast_id in required_contrasts
+            if contrast_id in strategy.contrasts
+        },
     )
 
     summary["profile"] = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE
