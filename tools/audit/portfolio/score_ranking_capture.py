@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from tools.filters.breakout_quality.strategy_report_style import (
+from filters.breakout_quality.strategy_report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_NEUTRAL,
     SIGNAL_POSITIVE,
@@ -19,7 +19,7 @@ from tools.filters.breakout_quality.strategy_report_style import (
     signal_marker,
     terminal_signal,
 )
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
     render_key_values,
@@ -1116,8 +1116,57 @@ def write_score_ranking_capture_audit_outputs(*, result: dict[str, Any], output_
     return payload
 
 
+def materialize_score_ranking_capture_from_pair(
+    output_dir: str | Path,
+) -> dict[str, Any]:
+    """Build the read-only capture report from an existing score-ranking pair.
+
+    The canonical strategy engine deliberately does not import Audit code. Research
+    tools that still need this attribution call this helper explicitly after replay.
+    The helper never reruns portfolio logic and never mutates strategy_comparison.json.
+    """
+
+    out_dir = Path(output_dir)
+    comparison_path = out_dir / "strategy_comparison.json"
+    if not comparison_path.is_file():
+        raise FileNotFoundError(f"capture audit缺少strategy_comparison.json: {comparison_path}")
+    payload = json.loads(comparison_path.read_text(encoding="utf-8"))
+    metadata = dict(payload.get("metadata") or {})
+    if str(metadata.get("comparison_mode") or "") != "score-ranking":
+        raise ValueError("capture audit只接受既有score-ranking策略比較工件")
+
+    def _csv(name: str, *, required: bool = True) -> pd.DataFrame:
+        path = out_dir / name
+        if not path.is_file():
+            if required:
+                raise FileNotFoundError(f"capture audit缺少既有工件: {path}")
+            return pd.DataFrame()
+        return pd.read_csv(path, encoding="utf-8-sig")
+
+    baseline_trades = _csv("no_filter_trades.csv")
+    score_trades = _csv("score_ranking_trades.csv")
+    baseline_capacity = _csv("no_filter_daily_capacity.csv")
+    score_capacity = _csv("score_ranking_daily_capacity.csv")
+    baseline_selected = _csv("no_filter_selected_target_diagnostics.csv", required=False)
+    score_selected = _csv("score_ranking_selected_target_diagnostics.csv", required=False)
+    result = build_score_ranking_capture_audit(
+        metadata=metadata,
+        baseline_summary=dict(payload.get("no_filter") or {}),
+        score_sort_summary=dict(payload.get("score_ranking") or {}),
+        baseline_trade_history=baseline_trades,
+        score_sort_trade_history=score_trades,
+        baseline_selected_target_diagnostics=baseline_selected,
+        score_sort_selected_target_diagnostics=score_selected,
+        selection_diagnostics=payload.get("selection_diagnostics"),
+        baseline_daily_capacity=baseline_capacity,
+        score_sort_daily_capacity=score_capacity,
+    )
+    return write_score_ranking_capture_audit_outputs(result=result, output_dir=out_dir)
+
+
 __all__ = [
     "SCHEMA_VERSION", "build_trade_lifecycle_rows", "build_score_ranking_capture_audit",
     "render_capture_audit_markdown", "render_capture_audit_console",
+    "materialize_score_ranking_capture_from_pair",
     "write_score_ranking_capture_audit_outputs",
 ]

@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 from core.display import C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW
-from filters.breakout_quality.console_report import console_color_enabled
+from core.console_report import console_color_enabled
 
 SIGNAL_POSITIVE = "positive"
 SIGNAL_NEGATIVE = "negative"

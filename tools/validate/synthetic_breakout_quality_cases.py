@@ -280,7 +280,7 @@ from tools.filters.breakout_quality import common as breakout_quality_common
 from tools.filters.breakout_quality import evaluate as breakout_quality_evaluate
 from tools.filters.breakout_quality import export_scores as breakout_quality_export_scores
 from tools.filters.breakout_quality import train as breakout_quality_train
-from tools.filters.breakout_quality.audit_continuous_target import (
+from tools.audit.breakout_quality.continuous_target import (
     _load_round_trip_source,
     _resolve_round_trip_path,
     build_continuous_target_audit,
@@ -291,30 +291,30 @@ from tools.filters.breakout_quality.report import (
     render_console_summary,
     render_markdown_report,
 )
-from tools.filters.breakout_quality.regime_audit import (
+from tools.audit.breakout_quality.regime import (
     assign_market_regimes,
     build_regime_audit_payload,
     derive_benchmark_regime_features,
     render_regime_audit_markdown,
 )
-from tools.filters.breakout_quality.audit_target_component_attribution import (
+from tools.audit.breakout_quality.target_component_attribution import (
     attach_target_components as target_attribution_attach_components,
     attribution_metrics as target_attribution_metrics,
     render_markdown as render_target_attribution_markdown,
 )
-from tools.filters.breakout_quality.audit_target_time_penalty_ablation import (
+from tools.audit.breakout_quality.target_time_penalty_ablation import (
     _validated_source_csv as time_ablation_validated_source_csv,
     attach_time_penalty_ablation,
     render_markdown as render_time_penalty_ablation_markdown,
     time_penalty_ablation_metrics,
 )
-from tools.filters.breakout_quality.audit_no_time_continuous_target import (
+from tools.audit.breakout_quality.no_time_continuous_target import (
     _approved_workflow_rebuild_gate as approved_no_time_workflow_rebuild_gate,
     _selection_metrics as no_time_target_selection_metrics,
     _validated_11e_report as validated_11e_report_for_no_time_target,
     render_markdown as render_no_time_target_markdown,
 )
-from tools.filters.breakout_quality.audit_qualified_candidate_set import (
+from tools.audit.breakout_quality.qualified_candidate_set import (
     _actual_trade_metrics as qualified_audit_actual_trade_metrics,
     _assert_replay_matches_strategy_summary as assert_qualified_replay_matches_summary,
     _attach_ranker_scores as qualified_audit_attach_ranker_scores,
@@ -323,7 +323,7 @@ from tools.filters.breakout_quality.audit_qualified_candidate_set import (
     _unique_groups as qualified_audit_unique_groups,
     _validate_strategy_metadata as validate_qualified_audit_strategy_metadata,
 )
-from tools.filters.breakout_quality.strategy_compare import (
+from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
     COMPARISON_MODE_SCORE_RANKING,
     OPTIONAL_ENTRY_FILTER_FIELDS,
@@ -345,7 +345,7 @@ from tools.filters.breakout_quality.strategy_compare import (
     _validate_requested_param_policy,
     _to_json_native,
 )
-from tools.filters.breakout_quality.trade_attribution import build_trade_attribution
+from filters.breakout_quality.trade_attribution import build_trade_attribution
 from tools.filters.breakout_quality.train_continuous_ranker import (
     _scope_group_ids as continuous_ranker_scope_group_ids,
     _trade_alignment_metrics as continuous_ranker_trade_alignment_metrics,
@@ -7050,7 +7050,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
             encoding="utf-8",
         )
         with patch(
-            "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
+            "tools.audit.breakout_quality.continuous_target.PROJECT_ROOT",
             Path(temp_dir),
         ):
             resolved_round_trip_path, resolved_path_source = _resolve_round_trip_path(
@@ -7098,7 +7098,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         )
         trade_history_frame.to_csv(trade_history_path, index=False, encoding="utf-8-sig")
         with patch(
-            "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
+            "tools.audit.breakout_quality.continuous_target.PROJECT_ROOT",
             Path(temp_dir),
         ):
             rebuilt_round_trips, rebuilt_source = _load_round_trip_source(
@@ -7179,7 +7179,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
             encoding="utf-8-sig",
         )
         with patch(
-            "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
+            "tools.audit.breakout_quality.continuous_target.PROJECT_ROOT",
             Path(temp_dir),
         ):
             discovered_round_trips, discovered_source = _load_round_trip_source(
@@ -7212,7 +7212,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
             encoding="utf-8-sig",
         )
         with patch(
-            "tools.filters.breakout_quality.audit_continuous_target.PROJECT_ROOT",
+            "tools.audit.breakout_quality.continuous_target.PROJECT_ROOT",
             Path(temp_dir),
         ):
             explicit_round_trips, explicit_source = _load_round_trip_source(
@@ -7274,7 +7274,7 @@ def validate_breakout_quality_continuous_target_contract_case(_base_params):
         "synthetic_breakout_quality",
         case_id,
         "continuous_target_audit_command_is_registered",
-        "tools.filters.breakout_quality.audit_continuous_target",
+        "tools.audit.breakout_quality.continuous_target",
         command_modules.get("audit-continuous-target"),
     )
 
@@ -8115,7 +8115,7 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
         (True, True, True, True, True, True),
         (
             command_modules.get("audit-qualified-candidate-set")
-            == "tools.filters.breakout_quality.audit_qualified_candidate_set",
+            == "tools.audit.breakout_quality.qualified_candidate_set",
             'print("[11] 11C Qualified Candidate-set Audit（research-only）")' not in app_source,
             'elif choice == "11":' not in app_source,
             "run_no_filter_candidate_replay_from_metadata" in audit_source,
@@ -8260,7 +8260,7 @@ def validate_breakout_quality_target_component_attribution_contract_case(_base_p
         (True, True, True),
         (
             command_modules.get("audit-target-attribution")
-            == "tools.filters.breakout_quality.audit_target_component_attribution",
+            == "tools.audit.breakout_quality.target_component_attribution",
             "11D" not in app_source[app_source.find("def _run_interactive_menu"):app_source.find("def main")],
             'choice == "12"' not in app_source,
         ),
@@ -8488,7 +8488,7 @@ def validate_breakout_quality_target_time_penalty_ablation_contract_case(_base_p
         (True, True, True),
         (
             command_modules.get("audit-target-time-ablation")
-            == "tools.filters.breakout_quality.audit_target_time_penalty_ablation",
+            == "tools.audit.breakout_quality.target_time_penalty_ablation",
             "11E" not in menu_source,
             "audit-target-time-ablation" not in menu_source,
         ),
@@ -9089,7 +9089,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         build_dl_filter_gate_scenario_specs,
         run_dl_filter_gate,
     )
-    from tools.filters.breakout_quality.strategy_compare import (
+    from filters.breakout_quality.strategy_compare_engine import (
         OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
     )
     from config.breakout_quality import (
@@ -10500,7 +10500,7 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
         continuous_target_id=STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     )
     with patch(
-        "tools.filters.breakout_quality.audit_no_time_continuous_target.get_breakout_quality_workflow_settings",
+        "tools.audit.breakout_quality.no_time_continuous_target.get_breakout_quality_workflow_settings",
         return_value=approved_settings,
     ):
         approved_gate = approved_no_time_workflow_rebuild_gate(filter_id="synthetic")
@@ -10706,7 +10706,7 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
         report_path = audit_dir / "target_time_penalty_ablation_audit.json"
         report_path.write_text(json.dumps(report), encoding="utf-8")
         with patch(
-            "tools.filters.breakout_quality.audit_no_time_continuous_target._ranker_dir",
+            "tools.audit.breakout_quality.no_time_continuous_target._ranker_dir",
             return_value=ranker_dir,
         ):
             accepted, accepted_path = validated_11e_report_for_no_time_target(
@@ -10761,7 +10761,7 @@ def validate_breakout_quality_no_time_target_selection_audit_contract_case(_base
         (True, True, True, True, True),
         (
             command_modules.get("audit-no-time-target")
-            == "tools.filters.breakout_quality.audit_no_time_continuous_target",
+            == "tools.audit.breakout_quality.no_time_continuous_target",
             "11F" not in menu_source,
             "audit-no-time-target" not in menu_source,
             "torch.save(" not in audit_source,
@@ -10791,7 +10791,7 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from tools.filters.breakout_quality.audit_pass_realization_gap import (
+    from tools.audit.breakout_quality.pass_realization_gap import (
         attach_no_time_components,
         partial_spearman,
         realization_gap_metrics,
@@ -10922,7 +10922,7 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
         (True, True, True, True),
         (
             command_modules.get("audit-pass-realization-gap")
-            == "tools.filters.breakout_quality.audit_pass_realization_gap",
+            == "tools.audit.breakout_quality.pass_realization_gap",
             "11H" not in menu_source,
             "audit-pass-realization-gap" not in menu_source,
             "STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE" in audit_source,
@@ -10962,13 +10962,13 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
 
 def validate_breakout_quality_selection_strategy_realization_contract_case(_base_params):
     from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
-    from tools.filters.breakout_quality.audit_selection_strategy_realization import parse_args as parse_selection_strategy_realization_args
+    from tools.audit.breakout_quality.selection_strategy_realization import parse_args as parse_selection_strategy_realization_args
 
     case_id = "BREAKOUT_QUALITY_SELECTION_STRATEGY_REALIZATION"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from tools.filters.breakout_quality.audit_selection_strategy_realization import (
+    from tools.audit.breakout_quality.selection_strategy_realization import (
         _attach_targets,
         _trade_metrics,
         _unique_signals,
@@ -11112,7 +11112,7 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
         (True, True, True),
         (
             command_modules.get("audit-selection-strategy-realization")
-            == "tools.filters.breakout_quality.audit_selection_strategy_realization",
+            == "tools.audit.breakout_quality.selection_strategy_realization",
             "audit-selection-strategy-realization" not in menu_source,
             "11I" not in menu_source,
         ),
@@ -11219,7 +11219,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
 
     from core.portfolio_engine import _candidate_execution_replay_snapshot
     from core.strategy_params import V16StrategyParams
-    from tools.filters.breakout_quality.audit_candidate_counterfactual_execution import (
+    from tools.audit.breakout_quality.candidate_counterfactual_execution import (
         CandidateCounterfactualReplay,
         _execution_market_dates,
         _metrics as counterfactual_metrics,
@@ -11522,7 +11522,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
         (True, True, True, True, True, True, True, True),
         (
             command_modules.get("audit-candidate-counterfactual")
-            == "tools.filters.breakout_quality.audit_candidate_counterfactual_execution",
+            == "tools.audit.breakout_quality.candidate_counterfactual_execution",
             "11J" not in menu_source,
             "audit-candidate-counterfactual" not in menu_source,
             'getattr(replay_counts, "begin_replay_day", None)' not in engine_source,
@@ -11594,7 +11594,7 @@ def validate_breakout_quality_portfolio_selection_pressure_contract_case(_base_p
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from tools.filters.breakout_quality.audit_portfolio_selection_pressure import (
+    from tools.audit.breakout_quality.portfolio_selection_pressure import (
         _build_selection_pressure_tables,
         _render_markdown as render_selection_pressure_markdown,
         parse_args as parse_selection_pressure_args,
@@ -11687,7 +11687,7 @@ def validate_breakout_quality_portfolio_selection_pressure_contract_case(_base_p
         (True, True, True, True, True, True, True, True),
         (
             command_modules.get("audit-selection-pressure")
-            == "tools.filters.breakout_quality.audit_portfolio_selection_pressure",
+            == "tools.audit.breakout_quality.portfolio_selection_pressure",
             "11K" not in menu_source,
             "audit-selection-pressure" not in menu_source,
             args.filter_id == BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
@@ -11820,7 +11820,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
 
     from config import breakout_quality as workflow_config
     from config.breakout_quality import get_breakout_quality_workflow_settings
-    from tools.filters.breakout_quality.audit_point_in_time_scores import (
+    from tools.audit.breakout_quality.point_in_time_scores import (
         _direction_summary,
         _orderable_coverage,
         _render_markdown as render_point_in_time_markdown,
@@ -12656,7 +12656,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         breakout_quality_ranking_source_context,
         get_breakout_quality_ranking_source_context,
     )
-    from tools.filters.breakout_quality.strategy_compare import (
+    from filters.breakout_quality.strategy_compare_engine import (
         _strategy_selection_diagnostics,
     )
 
@@ -12900,21 +12900,20 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    from filters.breakout_quality.console_report import (
+    from core.console_report import (
         project_relative_display_path,
         strip_ansi,
     )
-    from tools.filters.breakout_quality.audit_score_ranking_capture import (
+    from tools.audit.portfolio.score_ranking_capture import (
         _aggregate_capture_ratio,
         build_score_ranking_capture_audit,
         render_capture_audit_console,
         write_score_ranking_capture_audit_outputs,
     )
-    from tools.filters.breakout_quality.strategy_compare import (
+    from filters.breakout_quality.strategy_compare_engine import (
         COMPARISON_MODE_SCORE_RANKING,
         _markdown_report,
         _render_strategy_console_report,
-        run_existing_score_ranking_capture_audit,
     )
 
     baseline_history = pd.DataFrame([
@@ -13075,7 +13074,7 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     with patch.dict(os.environ, {"BREAKOUT_QUALITY_COMPACT_CONSOLE": "1"}):
         compact_comparison_console = _render_strategy_console_report(
             metadata, baseline_summary, score_summary, comparison_delta, yearly,
-            selection_diagnostics, capture_result=result, color=True,
+            selection_diagnostics, color=True,
         )
         compact_capture_console = render_capture_audit_console(result, color=True)
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -13097,21 +13096,13 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     compact_strategy_text = strip_ansi(compact_comparison_console)
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "interactive_strategy_report_is_one_flat_ten_section_decision_report",
-        (True, True, True, True, True, True, True, True, True, True, True, True),
+        "strategy_compare_and_audit_are_separate_read_only_reports",
+        (True, True, True),
         (
-            "1. 投組報酬與風險" in compact_strategy_text,
-            "2. 單筆交易結果" in compact_strategy_text,
-            "3. 資金投入與部位大小" in compact_strategy_text,
-            "4. 候選供給與持倉容量" in compact_strategy_text,
-            "5. 模型選股能力" in compact_strategy_text,
-            "6. Target 到實際報酬的轉換" in compact_strategy_text,
-            "7. 資金周轉與進場集中" in compact_strategy_text,
-            "8. 出場結構" in compact_strategy_text,
-            "9. 年度結果與年度歸因" in compact_strategy_text,
-            "10. 綜合判定、限制與下一步" in compact_strategy_text,
-            "Score Sort 資金配置與 Target Capture 診斷" not in compact_strategy_text,
-            "參數檔" not in compact_strategy_text,
+            "Breakout Quality" in compact_strategy_text,
+            "Target Capture" not in compact_strategy_text,
+            "Breakout Quality Score 排序資本效率／Target Capture 歸因"
+            in strip_ansi(compact_capture_console),
         ),
     )
 
@@ -13137,88 +13128,6 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
             ),
             payload["decision"]["status"] == "ADAPTATION_DIAGNOSTIC_SUPPORTED",
         ),
-    )
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        output_root = Path(temp_dir) / "model_output"
-        labels = _comparison_labels(COMPARISON_MODE_SCORE_RANKING)
-        output_name = _comparison_output_dir_name(
-            COMPARISON_MODE_SCORE_RANKING,
-            labels,
-            param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
-        ) + "_selection_point_in_time"
-        existing_dir = output_root / output_name
-        existing_dir.mkdir(parents=True, exist_ok=True)
-        existing_payload = {
-            "metadata": metadata,
-            "no_filter": baseline_summary,
-            "score_ranking": score_summary,
-            "score_ranking_minus_no_filter": comparison_delta,
-            "yearly": yearly.to_dict("records"),
-            "selection_diagnostics": selection_diagnostics,
-        }
-        (existing_dir / "strategy_comparison.json").write_text(
-            json.dumps(existing_payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        baseline_history.to_csv(
-            existing_dir / "no_filter_trades.csv", index=False, encoding="utf-8-sig"
-        )
-        score_history.to_csv(
-            existing_dir / "score_ranking_trades.csv", index=False, encoding="utf-8-sig"
-        )
-        selected.to_csv(
-            existing_dir / "no_filter_selected_target_diagnostics.csv",
-            index=False, encoding="utf-8-sig",
-        )
-        selected.to_csv(
-            existing_dir / "score_ranking_selected_target_diagnostics.csv",
-            index=False, encoding="utf-8-sig",
-        )
-        baseline_capacity.to_csv(
-            existing_dir / "no_filter_daily_capacity.csv",
-            index=False, encoding="utf-8-sig",
-        )
-        score_capacity.to_csv(
-            existing_dir / "score_ranking_daily_capacity.csv",
-            index=False, encoding="utf-8-sig",
-        )
-        (existing_dir / "strategy_comparison.html").write_text("legacy", encoding="utf-8")
-        (existing_dir / "score_ranking_capture_audit.html").write_text("legacy", encoding="utf-8")
-        with (
-            patch(
-                "tools.filters.breakout_quality.strategy_compare.resolve_filter_model_output_dir",
-                return_value=output_root,
-            ),
-            patch(
-                "tools.filters.breakout_quality.strategy_compare.run_comparison",
-                side_effect=AssertionError("capture-audit-only不得重跑portfolio"),
-            ),
-        ):
-            reused_payload = run_existing_score_ranking_capture_audit(
-                project_root=temp_dir,
-                filter_id="synthetic",
-                model_architecture="inception_time_v1",
-                experiment_profile="synthetic",
-                param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
-                score_source="selection_point_in_time",
-            )
-        reuse_outputs_complete = all(
-            (existing_dir / name).is_file()
-            for name in (
-                "strategy_comparison.md", "strategy_comparison.json",
-                "score_ranking_capture_audit.json", "score_ranking_capture_audit.md",
-            )
-        )
-        reuse_has_no_html = not any(
-            (existing_dir / name).exists()
-            for name in ("strategy_comparison.html", "score_ranking_capture_audit.html")
-        )
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "capture_audit_only_reuses_existing_artifacts_without_portfolio_replay_or_html",
-        (True, True, "ADAPTATION_DIAGNOSTIC_SUPPORTED"),
-        (reuse_outputs_complete, reuse_has_no_html, reused_payload["decision"]["status"]),
     )
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -13264,11 +13173,11 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         get_breakout_quality_filter_source_context,
     )
     from strategies.breakout.search_space import build_trial_params
-    from tools.filters.breakout_quality.strategy_compare import (
+    from filters.breakout_quality.strategy_compare_engine import (
         _run_scenario as run_strategy_comparison_scenario,
         run_comparison as run_strategy_comparison,
     )
-    from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
+    from filters.breakout_quality.strategy_param_training import (
         ALL_RULE_FILTERS_OFF_OVERRIDES,
         RISK_SEARCH_FIELDS,
         _parse_args as parse_dl_param_adapt_args,
@@ -13461,7 +13370,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             )
 
         with patch(
-            "tools.filters.breakout_quality.strategy_compare._run_scenario_inside_source_context",
+            "filters.breakout_quality.strategy_compare_engine._run_scenario_inside_source_context",
             side_effect=lambda **_kwargs: get_breakout_quality_filter_source_context(),
         ):
             scenario_context = run_strategy_comparison_scenario(
@@ -13594,15 +13503,15 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
 
         with (
             patch(
-                "tools.filters.breakout_quality.strategy_compare._resolve_params_path",
+                "filters.breakout_quality.strategy_compare_engine._resolve_params_path",
                 return_value=params_path,
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_compare._load_param_source",
+                "filters.breakout_quality.strategy_compare_engine._load_param_source",
                 return_value={"kind": "rolling_active_param_ensemble", "payload": {}},
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_compare._validate_requested_param_policy",
+                "filters.breakout_quality.strategy_compare_engine._validate_requested_param_policy",
                 return_value={
                     "selector": "base_finalist_best",
                     "member_count_min": 1,
@@ -13611,7 +13520,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                 },
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_compare._build_controlled_param_source_pair",
+                "filters.breakout_quality.strategy_compare_engine._build_controlled_param_source_pair",
                 return_value=(
                     "rolling_active_param_ensemble",
                     {},
@@ -13622,22 +13531,22 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                 ),
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_compare.get_active_param_ensemble_date_range",
+                "filters.breakout_quality.strategy_compare_engine.get_active_param_ensemble_date_range",
                 return_value=("2021-01-01", "2021-12-31"),
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_compare._run_scenario",
+                "filters.breakout_quality.strategy_compare_engine._run_scenario",
                 side_effect=_fake_strategy_scenario,
             ),
-            patch("tools.filters.breakout_quality.strategy_compare._assert_shared_benchmark"),
+            patch("filters.breakout_quality.strategy_compare_engine._assert_shared_benchmark"),
             patch(
-                "tools.filters.breakout_quality.strategy_compare._scenario_summary",
+                "filters.breakout_quality.strategy_compare_engine._scenario_summary",
                 side_effect=lambda payload: (
                     base_summary if payload["marker"] == "no_filter" else quality_summary
                 ),
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_compare._build_yearly_comparison",
+                "filters.breakout_quality.strategy_compare_engine._build_yearly_comparison",
                 return_value=pd.DataFrame(
                     [
                         {
@@ -13652,13 +13561,13 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
                 ),
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_compare.write_trade_attribution_outputs"
+                "filters.breakout_quality.strategy_compare_engine.write_trade_attribution_outputs"
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_compare._render_strategy_console_report",
+                "filters.breakout_quality.strategy_compare_engine._render_strategy_console_report",
                 return_value="synthetic report",
             ),
-            patch("tools.filters.breakout_quality.strategy_compare.print_artifact_paths"),
+            patch("filters.breakout_quality.strategy_compare_engine.print_artifact_paths"),
             redirect_stdout(io.StringIO()),
         ):
             direct_comparison = run_strategy_comparison(
@@ -13742,7 +13651,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             return json.loads(completed.stdout.strip())
 
         with patch(
-            "tools.filters.breakout_quality.strategy_compare._run_scenario_inside_source_context",
+            "filters.breakout_quality.strategy_compare_engine._run_scenario_inside_source_context",
             side_effect=_probe_spawned_worker_environment,
         ):
             worker_probe = run_strategy_comparison_scenario(
@@ -14117,26 +14026,26 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         }
         with (
             patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.load_model_artifact_contract",
+                "filters.breakout_quality.strategy_param_training.load_model_artifact_contract",
                 return_value=SimpleNamespace(),
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate._load_baseline_contract",
+                "filters.breakout_quality.strategy_param_training._load_baseline_contract",
                 return_value=orchestration_contract,
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate._ensure_binary_pit",
+                "filters.breakout_quality.strategy_param_training._ensure_binary_pit",
                 return_value=binary_pit,
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.configure_optuna_logging",
+                "filters.breakout_quality.strategy_param_training.configure_optuna_logging",
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate._run_optimizer_arm",
+                "filters.breakout_quality.strategy_param_training._run_optimizer_arm",
                 side_effect=_fake_optimizer_arm,
             ),
             patch(
-                "tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate.run_comparison",
+                "filters.breakout_quality.strategy_param_training.run_comparison",
                 side_effect=_fake_comparison,
             ),
             redirect_stdout(io.StringIO()),
@@ -15989,8 +15898,6 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     model_app_source = model_app_path.read_text(encoding="utf-8")
     orchestration_source = orchestration_path.read_text(encoding="utf-8")
     preparation_source = preparation_path.read_text(encoding="utf-8")
-    legacy_export_source = legacy_export_path.read_text(encoding="utf-8")
-    legacy_param_source = legacy_param_path.read_text(encoding="utf-8")
 
     from config import strategy_compare as strategy_config
     from core.strategy_comparison import strategy_comparison_fingerprint
@@ -16039,8 +15946,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and all(token not in preparation_source for token in (
             "build_trade_path_labels", "train_model", "build_dataset",
         ))
-        and "sys.modules[__name__] = _impl" in legacy_export_source
-        and "sys.modules[__name__] = _impl" in legacy_param_source,
+        and not legacy_export_path.exists()
+        and not legacy_param_path.exists()
+        and '"export-scores": "filters.breakout_quality.export_scores"' in model_app_source,
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -16825,12 +16733,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from config.audit import (
         AUDIT_OUTPUT_ROOT,
         get_audit_definitions,
+        get_audit_module_ids,
         get_enabled_audit_definitions,
         validate_audit_config,
     )
-    from tools.filters.breakout_quality.audit_pass_persistence import run_pass_persistence_audit
-    from tools.filters.breakout_quality.audit_pass_quality import run_pass_quality_audit
-    from tools.filters.breakout_quality.audit_selection_confidence import run_selection_confidence_audit
+    from tools.audit.breakout_quality.pass_persistence import run_pass_persistence_audit
+    from tools.audit.breakout_quality.pass_quality import run_pass_quality_audit
+    from tools.audit.breakout_quality.selection_confidence import run_selection_confidence_audit
+    from tools.audit.breakout_quality.c15_strategy_attribution import (
+        collect_strategy_attribution_status,
+        run_strategy_attribution_audit,
+    )
+    from tools.audit.catalog import validate_audit_catalog
 
     case_id = "AUDIT_FRAMEWORK"
     results = []
@@ -16848,17 +16762,39 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     confidence_definition = next(
         (item for item in all_definitions if item.audit_type == "selection_confidence"), None
     )
+    strategy_attribution_definition = next(
+        (item for item in all_definitions if item.audit_type == "strategy_attribution"), None
+    )
+    validate_audit_catalog(all_definitions)
+    project_root = Path(__file__).resolve().parents[2]
+    audit_app_source = (project_root / "apps" / "audit.py").read_text(encoding="utf-8")
+    model_app_source = (project_root / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    quick_gate_source = (project_root / "tools" / "local_regression" / "run_quick_gate.py").read_text(encoding="utf-8")
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "audit_config_supports_quality_persistence_and_selection_confidence_profiles_with_config_driven_enablement",
+        "project_audit_app_and_breakout_quality_facade_share_catalog_runner_and_cli_smoke_registry",
+        True,
+        "from tools.audit.runner import" in audit_app_source
+        and "from tools.audit.runner import" in model_app_source
+        and "get_domain_cli_commands" in model_app_source
+        and '([sys.executable, "apps/audit.py", "--help"]' in quick_gate_source
+        and '"apps/audit.py",' in quick_gate_source.split("INLINE_CLI_TARGETS = {", 1)[1],
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "audit_config_and_catalog_support_project_modules_and_config_driven_handlers",
         True,
         quality_definition is not None
         and persistence_definition is not None
         and confidence_definition is not None
+        and strategy_attribution_definition is not None
+        and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
-        and all(bool(str(item.source.get("arm_id") or "").strip()) for item in all_definitions),
+        and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -16882,6 +16818,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         events_dir.mkdir(parents=True, exist_ok=True)
 
         result_payload = {
+            "status": "COMPLETED",
             "settings": {
                 "arms": {
                     "C12": {
@@ -17227,17 +17164,145 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and (confidence_latest / "competition_pass_candidates.csv").is_file(),
         )
 
+    if strategy_attribution_definition is None:
+        raise AssertionError("strategy attribution audit definition missing")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        run_dir = root / "outputs" / "strategy_compare" / "runs" / "c15_synthetic"
+        latest_dir = root / "outputs" / "strategy_compare" / "latest"
+        c12_pair = run_dir / "pairs" / "min_roos__all_off__A9__resource_aware_binary_basket"
+        c15_pair = run_dir / "pairs" / "min_roos__all_off__CONT12A__resource_aware_continuous"
+        c12_pair.mkdir(parents=True, exist_ok=True)
+        c15_pair.mkdir(parents=True, exist_ok=True)
+        latest_dir.mkdir(parents=True, exist_ok=True)
+        synthetic_result = {
+            "status": "COMPLETED",
+            "config_fingerprint": "synthetic-c15",
+            "comparison_period": {"start": "2024-01-01", "end": "2024-01-05"},
+            "settings": {
+                "arms": {
+                    "C3": {"arm_id": "C3", "enabled": True, "param_source": "min_roos", "rule_policy": "all_off", "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None},
+                    "C12": {"arm_id": "C12", "enabled": True, "param_source": "min_roos", "rule_policy": "all_off", "dl_enabled": True, "dl_id": "A9", "dl_runtime_mode": "resource-aware-binary-basket"},
+                    "C15": {"arm_id": "C15", "enabled": True, "param_source": "min_roos", "rule_policy": "all_off", "dl_enabled": True, "dl_id": "CONT12A", "dl_runtime_mode": "resource-aware-continuous"},
+                }
+            },
+            "scenarios": {
+                "C3": {"total_return_pct": 10.0, "max_drawdown_pct": 8.0, "return_over_max_drawdown": 1.25, "expected_value_r": 1.0, "avg_exposure_pct": 90.0},
+                "C12": {"total_return_pct": 12.0, "max_drawdown_pct": 9.0, "return_over_max_drawdown": 1.33, "expected_value_r": 1.2, "avg_exposure_pct": 91.0},
+                "C15": {"total_return_pct": 15.0, "max_drawdown_pct": 7.0, "return_over_max_drawdown": 2.14, "expected_value_r": 0.8, "avg_exposure_pct": 90.5},
+            },
+        }
+        (run_dir / "strategy_comparison.json").parent.mkdir(parents=True, exist_ok=True)
+        (run_dir / "strategy_comparison.json").write_text(json.dumps(synthetic_result), encoding="utf-8")
+        (latest_dir / "manifest.json").write_text(
+            json.dumps({"run_dir": "outputs/strategy_compare/runs/c15_synthetic"}), encoding="utf-8"
+        )
+        dates = ["2024-01-02", "2024-01-03", "2024-01-04"]
+
+        def _audit_trade_rows(ticker, realized_r, pnl, invested, reserved, stop, *, signal_date="2024-01-01"):
+            return pd.DataFrame([
+                {"Date": "2024-01-02", "Ticker": ticker, "Type": "買進 (新訊號)", "買訊日": signal_date, "候選類型": "新訊號", "進場類型": "normal", "成交價": 100.0, "停損價": stop, "股數": 1000, "預留總金額": reserved, "投入總金額": invested},
+                {"Date": "2024-01-04", "Ticker": ticker, "Type": "全倉結算(指標)", "成交價": 110.0, "該筆總損益": pnl, "R_Multiple": realized_r},
+            ])
+
+        def _audit_capacity(gaps, positions, *, resource=False):
+            data = {
+                "Date": dates,
+                "Post_Execution_Positions": positions,
+                "End_Position_Gap": gaps,
+                "Filled_Buys_Today": [1, 0, 0],
+                "Missed_Buys_Today": [0, 0, 0],
+            }
+            if resource:
+                data.update({
+                    "Resource_Aware_Mode": ["dl-selection", "inactive", "inactive"],
+                    "Resource_Aware_Changed": [True, False, False],
+                    "Resource_Aware_Baseline_Reserved_Milli": [100000, 0, 0],
+                    "Resource_Aware_Reserved_Milli": [100000, 0, 0],
+                    "Resource_Aware_Baseline_Score_Sum": [0.5, 0.0, 0.0],
+                    "Resource_Aware_Score_Sum": [0.8, 0.0, 0.0],
+                })
+            return pd.DataFrame(data)
+
+        def _audit_selected(ticker, *, signal_date="2024-01-01"):
+            return pd.DataFrame([{"ticker": ticker, "trade_date": "2024-01-02", "signal_date": signal_date, "type": "買進"}])
+
+        def _audit_equity(values):
+            return pd.DataFrame({"Date": dates, "Equity": values})
+
+        _audit_trade_rows("AAA", 1.0, 10000.0, 100000.0, 110000.0, 90.0).to_csv(c15_pair / "no_filter_trades.csv", index=False, encoding="utf-8-sig")
+        _audit_trade_rows("BBB", 0.8, 12000.0, 80000.0, 100000.0, 88.0).to_csv(c15_pair / "score_ranking_trades.csv", index=False, encoding="utf-8-sig")
+        _audit_equity([100.0, 105.0, 110.0]).to_csv(c15_pair / "no_filter_equity.csv", index=False, encoding="utf-8-sig")
+        _audit_equity([100.0, 108.0, 115.0]).to_csv(c15_pair / "score_ranking_equity.csv", index=False, encoding="utf-8-sig")
+        _audit_capacity([1, 1, 0], [9, 9, 10]).to_csv(c15_pair / "no_filter_daily_capacity.csv", index=False, encoding="utf-8-sig")
+        _audit_capacity([0, 0, 0], [10, 10, 10], resource=True).to_csv(c15_pair / "score_ranking_daily_capacity.csv", index=False, encoding="utf-8-sig")
+        _audit_selected("AAA").to_csv(c15_pair / "no_filter_selected_buys.csv", index=False, encoding="utf-8-sig")
+        _audit_selected("BBB").to_csv(c15_pair / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
+        _audit_trade_rows("BBB", 1.2, 11000.0, 95000.0, 105000.0, 89.0, signal_date="2023-12-29").to_csv(c12_pair / "score_ranking_trades.csv", index=False, encoding="utf-8-sig")
+        _audit_equity([100.0, 106.0, 112.0]).to_csv(c12_pair / "score_ranking_equity.csv", index=False, encoding="utf-8-sig")
+        _audit_capacity([1, 0, 0], [9, 10, 10], resource=True).to_csv(c12_pair / "score_ranking_daily_capacity.csv", index=False, encoding="utf-8-sig")
+        _audit_selected("BBB", signal_date="2023-12-29").to_csv(c12_pair / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
+
+        c15_definition = type(strategy_attribution_definition)(
+            module_id=strategy_attribution_definition.module_id,
+            audit_id=strategy_attribution_definition.audit_id,
+            enabled=True,
+            audit_type=strategy_attribution_definition.audit_type,
+            description=strategy_attribution_definition.description,
+            source={"kind": "strategy_compare", "run": "latest", "candidate_arm_id": "C15", "comparator_arm_ids": ["C3", "C12"]},
+            dimensions={"focus_year": 2024, "top_month_count": 2, "top_trade_count": 5},
+            outcomes=dict(strategy_attribution_definition.outcomes),
+            output_subdir="breakout_quality/c15_strategy_attribution_synthetic",
+        )
+        c15_status = collect_strategy_attribution_status(c15_definition, project_root=root)
+        c15_payload = run_strategy_attribution_audit(c15_definition, project_root=root, quiet=True)
+        c15_latest = root / Path(AUDIT_OUTPUT_ROOT) / c15_definition.output_subdir / "latest"
+        exact_paths = []
+        for comparison in c15_payload["comparisons"]:
+            daily = pd.read_csv(
+                c15_latest / f"C15_vs_{comparison['comparator_arm_id']}_daily_log_wealth.csv",
+                encoding="utf-8-sig",
+            )
+            exact_paths.append(
+                math.isclose(
+                    float(daily["delta_log_wealth"].sum()),
+                    float(comparison["wealth_path"]["target_delta_log_wealth"]),
+                    rel_tol=0.0,
+                    abs_tol=1e-12,
+                )
+            )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "c15_attribution_is_read_only_exact_wealth_path_and_cross_arm_capital_geometry_audit",
+            True,
+            c15_status["status"] == "READY"
+            and [item["comparator_arm_id"] for item in c15_payload["comparisons"]] == ["C3", "C12"]
+            and all(exact_paths)
+            and all(item["selection"]["changed_days"] == 1 for item in c15_payload["comparisons"])
+            and next(item for item in c15_payload["comparisons"] if item["comparator_arm_id"] == "C12")["trade_contribution"]["common_trade_count"] == 0
+            and next(item for item in c15_payload["comparisons"] if item["comparator_arm_id"] == "C12")["trade_contribution"]["candidate_only_trade_count"] == 1
+            and next(item for item in c15_payload["comparisons"] if item["comparator_arm_id"] == "C12")["trade_contribution"]["comparator_only_trade_count"] == 1
+            and c15_payload["metadata"]["read_only"] is True
+            and c15_payload["metadata"]["portfolio_replay_executed"] is False
+            and (c15_latest / "audit.md").is_file()
+            and (c15_latest / "audit.json").is_file(),
+        )
+
     app_source = (Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
+    project_audit_source = (Path(__file__).resolve().parents[2] / "apps" / "audit.py").read_text(encoding="utf-8")
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "breakout_quality_menu_has_formal_audit_submenu_and_config_path",
+        "project_audit_entry_and_breakout_quality_facade_share_one_config_driven_backend",
         True,
         "[2] Audit／診斷" in app_source
-        and "執行目前 Audit 設定" in app_source
-        and "查看 Audit 設定、工件與預計動作" in app_source
-        and "查看最近 Audit 結果" in app_source,
+        and 'render_audit_status("breakout_quality")' in app_source
+        and "=== Project Audit ===" in project_audit_source
+        and "get_audit_module_ids" in project_audit_source
+        and "run_enabled_audits" in project_audit_source,
     )
 
     summary["enabled_audit_ids"] = [item.audit_id for item in enabled_definitions]

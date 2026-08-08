@@ -28,9 +28,9 @@ from filters.breakout_quality.continuous_target import (
 )
 from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
 from filters.breakout_quality.paths import resolve_filter_output_dir
-from filters.breakout_quality.console_report import print_artifact_paths, project_relative_display_path
-from tools.filters.breakout_quality.common import PROJECT_ROOT, load_validated_dataset_bundle, write_json
-from tools.filters.breakout_quality.strategy_compare import (
+from core.console_report import print_artifact_paths, project_relative_display_path
+from filters.breakout_quality.workflow_io import PROJECT_ROOT, load_validated_dataset_bundle, write_json
+from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
     _build_controlled_param_source_pair,
     _flatten_candidate_replay_rows,
@@ -38,7 +38,7 @@ from tools.filters.breakout_quality.strategy_compare import (
     _run_scenario,
     _scenario_summary,
 )
-from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
+from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from tools.filters.breakout_quality.train_continuous_ranker import _spearman
 
 AUDIT_SCHEMA_VERSION = 1

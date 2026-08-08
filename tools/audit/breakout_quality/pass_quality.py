@@ -14,7 +14,7 @@ import pandas as pd
 
 from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
 from core.runtime_utils import get_taipei_now
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -23,7 +23,7 @@ from filters.breakout_quality.console_report import (
     render_title,
 )
 from filters.breakout_quality.paths import resolve_filter_output_dir
-from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
+from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 AUDIT_RESULT_SCHEMA_VERSION = 1

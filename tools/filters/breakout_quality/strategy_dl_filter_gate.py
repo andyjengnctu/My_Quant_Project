@@ -21,7 +21,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_STRATEGY_ROTATION,
 )
 from core.buy_sort import BREAKOUT_QUALITY_RANKING_POLICY_SCORE
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -35,7 +35,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_model_output_dir,
 )
 from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_CANONICAL_RUNTIME
-from tools.filters.breakout_quality.strategy_compare import (
+from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
     OPTIONAL_ENTRY_FILTER_FIELDS,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,

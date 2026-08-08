@@ -85,7 +85,9 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
-from filters.breakout_quality.console_report import (
+from tools.audit.catalog import get_domain_cli_commands
+
+from core.console_report import (
     COMPACT_CONSOLE_ENV,
     console_color_enabled,
     paint,
@@ -103,21 +105,11 @@ COMMAND_MODULES = {
     "build-pretrain-dataset": "tools.filters.breakout_quality.build_pretraining_dataset",
     "pretrain": "tools.filters.breakout_quality.pretrain",
     "train": "tools.filters.breakout_quality.train",
-    "export-scores": "tools.filters.breakout_quality.export_scores",
+    "export-scores": "filters.breakout_quality.export_scores",
     "report": "tools.filters.breakout_quality.report",
     "evaluate": "tools.filters.breakout_quality.evaluate",
-    "regime-audit": "tools.filters.breakout_quality.regime_audit",
-    "audit-continuous-target": "tools.filters.breakout_quality.audit_continuous_target",
     "prepare-continuous-target": "tools.filters.breakout_quality.prepare_continuous_target",
     "train-continuous-ranker": "tools.filters.breakout_quality.train_continuous_ranker",
-    "audit-qualified-candidate-set": "tools.filters.breakout_quality.audit_qualified_candidate_set",
-    "audit-target-attribution": "tools.filters.breakout_quality.audit_target_component_attribution",
-    "audit-target-time-ablation": "tools.filters.breakout_quality.audit_target_time_penalty_ablation",
-    "audit-no-time-target": "tools.filters.breakout_quality.audit_no_time_continuous_target",
-    "audit-pass-realization-gap": "tools.filters.breakout_quality.audit_pass_realization_gap",
-    "audit-selection-strategy-realization": "tools.filters.breakout_quality.audit_selection_strategy_realization",
-    "audit-candidate-counterfactual": "tools.filters.breakout_quality.audit_candidate_counterfactual_execution",
-    "audit-selection-pressure": "tools.filters.breakout_quality.audit_portfolio_selection_pressure",
     "build-point-in-time-scores": "tools.filters.breakout_quality.build_point_in_time_scores",
     "build-binary-point-in-time-scores": (
         "tools.filters.breakout_quality.build_binary_point_in_time_scores"
@@ -125,8 +117,12 @@ COMMAND_MODULES = {
     "build-trade-path-labels": (
         "tools.filters.breakout_quality.build_trade_path_labels"
     ),
-    "audit-point-in-time-scores": "tools.filters.breakout_quality.audit_point_in_time_scores",
 }
+
+_AUDIT_CLI_COMMANDS = get_domain_cli_commands("breakout_quality")
+COMMAND_MODULES.update(
+    {command: entry.module for command, entry in _AUDIT_CLI_COMMANDS.items()}
+)
 
 INTERACTIVE_DATASET_PROFILE = "full"
 INTERACTIVE_MAX_TICKERS = 0
@@ -144,18 +140,8 @@ COMMAND_DESCRIPTIONS = {
     "export-scores": "匯出 research 或 forward-OOS score table",
     "report": "產生表格化終端報表、Markdown 報表與完整 metrics JSON",
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
-    "regime-audit": "稽核 Selection／OOS 的市場狀態與 breakout event 覆蓋",
-    "audit-continuous-target": "建立11A連續target arrays並稽核分布、同日排序與實際R方向",
     "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
     "train-continuous-ranker": "執行continuous ranker模型研究（含MR-12A）；research-only、CLI-only",
-    "audit-qualified-candidate-set": "執行11C策略qualified candidate-set失敗歸因；research-only",
-    "audit-target-attribution": "執行11D Target成分與Label條件失敗歸因；research-only",
-    "audit-target-time-ablation": "執行11E固定移除time penalty的Target稽核；research-only",
-    "audit-no-time-target": "建立11F No-time Target arrays並做Selection-only可學性稽核；research-only",
-    "audit-pass-realization-gap": "執行11H PASS-only實現落差歸因；research-only、CLI-only",
-    "audit-selection-strategy-realization": "執行11I Selection nested-OOS策略實現覆蓋稽核；research-only、CLI-only",
-    "audit-candidate-counterfactual": "執行11J per-candidate counterfactual execution稽核；已停止、僅供歷史追溯",
-    "audit-selection-pressure": "執行11K portfolio selection-pressure歸因；read-only、CLI-only",
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
     "build-binary-point-in-time-scores": (
         "建立Binary DL filter歷史 point-in-time scores；research-only、CLI-only"
@@ -163,8 +149,10 @@ COMMAND_DESCRIPTIONS = {
     "build-trade-path-labels": (
         "建立A2 realized trade-path Label Dataset；research workflow"
     ),
-    "audit-point-in-time-scores": "驗證point-in-time Score的Target排序能力與fold穩定性",
 }
+COMMAND_DESCRIPTIONS.update(
+    {command: entry.description for command, entry in _AUDIT_CLI_COMMANDS.items()}
+)
 
 
 def _print_help(program_name: str) -> None:
@@ -1584,7 +1572,7 @@ def _interactive_export_forward_oos(program_name: str) -> int:
 
 
 def _interactive_regime_audit(program_name: str) -> int:
-    from tools.filters.breakout_quality.regime_audit import (
+    from tools.audit.breakout_quality.regime import (
         DEFAULT_FOCUS_YEAR,
         DEFAULT_MIN_SELECTION_GROUPS,
         DEFAULT_MIN_SUPPORT_SHARE_RATIO,
@@ -2094,7 +2082,7 @@ def _interactive_model_research(program_name: str) -> int:
 
 
 def _interactive_audit_menu() -> int:
-    from tools.filters.breakout_quality.audit_runner import (
+    from tools.audit.runner import (
         render_audit_status,
         render_latest_audit_summary,
         run_enabled_audits,
@@ -2115,7 +2103,7 @@ def _interactive_audit_menu() -> int:
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "1":
-            print("\n" + render_audit_status())
+            print("\n" + render_audit_status("breakout_quality"))
             try:
                 confirm = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
             except EOFError:
@@ -2127,11 +2115,11 @@ def _interactive_audit_menu() -> int:
             if confirm not in {"", "1"}:
                 print("輸入無效，本次不執行。")
                 continue
-            run_enabled_audits()
+            run_enabled_audits("breakout_quality")
         elif choice == "2":
-            print("\n" + render_audit_status())
+            print("\n" + render_audit_status("breakout_quality"))
         elif choice == "3":
-            print("\n" + render_latest_audit_summary())
+            print("\n" + render_latest_audit_summary("breakout_quality"))
         else:
             print("無效選項，請按 Enter 或輸入 0～3。")
 

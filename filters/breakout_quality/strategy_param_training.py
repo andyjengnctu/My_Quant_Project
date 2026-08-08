@@ -36,7 +36,7 @@ from filters.breakout_quality.binary_pit_score_store import (
     BINARY_PIT_SCORE_SOURCE,
     load_binary_point_in_time_score_table,
 )
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,

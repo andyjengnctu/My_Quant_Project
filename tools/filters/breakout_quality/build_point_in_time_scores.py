@@ -54,8 +54,8 @@ from filters.breakout_quality.torch_runtime import (
     SUPPORTED_MIXED_PRECISION_DTYPES,
     SUPPORTED_TORCH_DEVICES,
 )
-from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
-from filters.breakout_quality.console_report import (
+from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
+from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
     paint,

@@ -23,7 +23,7 @@ from core.strategy_comparison import (
     StrategyPreparationPlan,
     strategy_comparison_fingerprint,
 )
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -44,7 +44,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
-from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
+from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_rule_policies import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )

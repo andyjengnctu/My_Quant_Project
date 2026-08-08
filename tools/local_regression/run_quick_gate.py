@@ -28,6 +28,7 @@ from tools.validate.meta_contracts import summarize_synthetic_cases_import_targe
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
+    ([sys.executable, "apps/audit.py", "--help"], "python apps/audit.py"),
     ([sys.executable, "apps/breakout_quality.py", "--help"], "python apps/breakout_quality.py"),
     ([sys.executable, "apps/breakout_quality.py", "workflow", "--help"], "python apps/breakout_quality.py workflow"),
     ([sys.executable, "apps/breakout_quality.py", "report", "--help"], "python apps/breakout_quality.py report"),
@@ -43,7 +44,7 @@ HELP_TARGETS = [
     ([sys.executable, "tools/downloader/main.py", "--help"], "python tools/downloader/main.py"),
     ([sys.executable, "tools/filters/breakout_quality/build_dataset.py", "--help"], "python tools/filters/breakout_quality/build_dataset.py"),
     ([sys.executable, "tools/filters/breakout_quality/evaluate.py", "--help"], "python tools/filters/breakout_quality/evaluate.py"),
-    ([sys.executable, "tools/filters/breakout_quality/export_scores.py", "--help"], "python tools/filters/breakout_quality/export_scores.py"),
+    ([sys.executable, "filters/breakout_quality/export_scores.py", "--help"], "python filters/breakout_quality/export_scores.py"),
     ([sys.executable, "tools/filters/breakout_quality/report.py", "--help"], "python tools/filters/breakout_quality/report.py"),
     ([sys.executable, "tools/filters/breakout_quality/train.py", "--help"], "python tools/filters/breakout_quality/train.py"),
     ([sys.executable, "tools/local_regression/run_all.py", "--help"], "python tools/local_regression/run_all.py"),
@@ -74,6 +75,7 @@ RUN_ALL_CLI_CASES = [
     (["--bad"], "不支援的參數"),
 ]
 INLINE_CLI_TARGETS = {
+    "apps/audit.py",
     "apps/breakout_quality.py",
     "apps/strategy_compare.py",
     "apps/workbench.py",
@@ -87,7 +89,7 @@ INLINE_CLI_TARGETS = {
     "tools/downloader/main.py",
     "tools/filters/breakout_quality/build_dataset.py",
     "tools/filters/breakout_quality/evaluate.py",
-    "tools/filters/breakout_quality/export_scores.py",
+    "filters/breakout_quality/export_scores.py",
     "tools/filters/breakout_quality/report.py",
     "tools/filters/breakout_quality/train.py",
     "tools/local_regression/run_all.py",

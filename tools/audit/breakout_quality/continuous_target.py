@@ -55,17 +55,17 @@ from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     resolve_breakout_quality_outer_policy,
 )
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     compact_console_enabled,
     print_artifact_paths,
     project_relative_display_path,
 )
-from tools.filters.breakout_quality.common import (
+from filters.breakout_quality.workflow_io import (
     dataset_paths,
     load_validated_dataset_bundle,
 )
-from tools.filters.breakout_quality.strategy_compare import canonical_strategy_compare_output_dir_names
-from tools.filters.breakout_quality.trade_attribution import reconstruct_round_trips
+from filters.breakout_quality.strategy_compare_engine import canonical_strategy_compare_output_dir_names
+from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 TARGET_AUDIT_SCHEMA_VERSION = 1
 _SPLIT_ORDER = ("inner_train", "validation", "selection", "oos")

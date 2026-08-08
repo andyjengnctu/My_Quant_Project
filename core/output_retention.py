@@ -53,7 +53,7 @@ def _remove_path(path: Path) -> int:
                 try:
                     total += sub.stat().st_size
                 except FileNotFoundError:
-                    pass
+                    continue
         shutil.rmtree(path, ignore_errors=True)
         return total
     try:

@@ -1759,7 +1759,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 | 狀態 | `IMPLEMENTED / CAPTURE_AUDIT_RESULT_NOT_AVAILABLE`；程式與報表契約完成，實際歸因結果待使用者從既有replay工件執行 |
 | 程式基準 | `test-branch-1_20260802_022643_9c4f83a.zip`；SHA256 `fd8e4d0e3b04e03fc47ce610d869f24499cb937a1b38c4f98dfd057e2ff1b032` |
 | 前置結果 | 3.78已確認PIT模型與selected Target方向通過，但Sort Only總報酬、MDD、RoMD、年化與平均曝險惡化；正式runtime維持Baseline，下一步只允許read-only capture attribution判斷是否有參數適應的機械瓶頸 |
-| 新增audit | `tools/filters/breakout_quality/audit_score_ranking_capture.py`只讀既有Baseline／Score Sort transaction history、策略summary及post-replay selected-target diagnostics，逐筆重建entry到full exit lifecycle；不重播portfolio、不改candidate、Score、params、成交、帳務或optimizer |
+| 新增audit | `tools/audit/portfolio/score_ranking_capture.py`只讀既有Baseline／Score Sort transaction history、策略summary及post-replay selected-target diagnostics，逐筆重建entry到full exit lifecycle；不重播portfolio、不改candidate、Score、params、成交、帳務或optimizer |
 | 歸因指標 | 平均預留與實際投入、投入／預留比例、初始stop distance、保留買單fill rate、持有日、首次partial時間、partial到full exit日曆日、依daily-capacity交易日曆計算的尾倉slot-days、partial比例、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap、capital return及年度差異；交易列沒有canonical產業欄位時產業指標為N/A，不自行推測 |
 | 決策邊界 | 只有Target選擇改善、經濟效果失敗且audit確認曝險／sizing／capture／turnover／fill至少一項可觀測瓶頸，才標記`ADAPTATION_DIAGNOSTIC_SUPPORTED`；否則Sort Only維持淘汰且不得直接啟動optimizer。這只是Selection內是否值得做參數適應的診斷，不是OOS採用證據 |
 | Future Target | 只讀兩組replay完成後輸出的selected-target diagnostics；不得進runtime排序、資金配置、成交或optimizer，payload明確保存`future_target_used_for_runtime=false` |
@@ -1787,7 +1787,7 @@ Score-ranking OOS邊界閉環（2026-07-26 22:45；23:13更正）：第一次執
 |---|---|
 | 狀態 | `IMPLEMENTED / RESULT_NOT_APPLICABLE`；只調整breakout-quality使用者可見輸出，不改模型、Score、策略、Target或績效計算 |
 | 程式基準 | `test-branch-1_20260802_031330_46cfab1.zip`；SHA256 `15b26d3fc08ae0b80fd003cde47ba98e2935e665f4e200e2ccc206b1b8455697` |
-| Console SSOT | 新增`filters/breakout_quality/console_report.py`，統一標題、段落、key-value、表格、狀態、ANSI-safe欄寬與工件清單；`apps/breakout_quality.py`狀態頁及主要build／train／audit／strategy報表共用，不再各自拼接不同格式 |
+| Console SSOT | 新增`core/console_report.py`，統一標題、段落、key-value、表格、狀態、ANSI-safe欄寬與工件清單；`apps/breakout_quality.py`狀態頁及主要build／train／audit／strategy報表共用，不再各自拼接不同格式 |
 | 易讀報表 | 策略比較與capture audit的完整易讀內容直接寫入console；TTY使用綠／紅／黃／灰，重新導向或非TTY自動退回純文字。Markdown／JSON／CSV仍作正式持久工件，不新增HTML |
 | HTML處理 | 停止產生`strategy_comparison.html`與`score_ranking_capture_audit.html`；重建主報表或capture audit時會刪除同目錄舊版HTML，避免使用者誤讀過期檔案 |
 | 路徑規則 | 所有breakout-quality console工件／狀態路徑以專案根目錄為基準顯示`/`分隔相對路徑；manifest、hash identity與runtime canonical path不變。此通用顯示規則已寫入`doc/PROJECT_SETTINGS.md` |
@@ -3651,7 +3651,7 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 - 新增獨立正式入口`apps/strategy_compare.py`；選單只顯示「執行目前比較設定」與「查看目前比較設定與工件狀態」，不顯示C1～C6、TP1或其他特定版本名稱。
 - `apps/strategy_compare.py`已納入quick-gate的help與inline CLI正式入口registry，避免新增App未被入口檢查覆蓋。
 - `config/strategy_compare.py`逐項條列parameter sources、DL sources、arms及contrasts，每項以`enabled`獨立開關；已移除代表整套實驗的active comparison ID。
-- `core/strategy_comparison.py`提供泛用schema、跨欄驗證與config fingerprint；Breakout Quality orchestration與canonical engine位於`filters/breakout_quality/`。舊`tools/filters/breakout_quality/strategy_compare.py`只保留相容別名。
+- `core/strategy_comparison.py`提供泛用schema、跨欄驗證與config fingerprint；Breakout Quality orchestration與canonical engine位於`filters/breakout_quality/`。舊`filters/breakout_quality/strategy_compare_engine.py`只保留相容別名。
 - 比較流程只讀取既有模型、Scores與ROOS工件；缺件時於replay前fail-fast，不建立Label、不訓練模型、不匯出缺少Scores，也不執行optimizer。
 - 輸出自動使用enabled arm IDs與config fingerprint建立`outputs/strategy_compare/runs/`工件，並更新`outputs/strategy_compare/latest/`；manifest保存設定snapshot與輸入工件SHA256。
 
@@ -3669,7 +3669,7 @@ Label schema與已成交資料尾端終局已變更，既有trade-path Dataset�
 |---|---|
 | 狀態 | `ACCEPTED`；只修正 synthetic validator 對 canonical engine 的來源定位，不改 Dataset、Label、模型、Scores、threshold、ROOS、策略執行或報表數值 |
 | 程式基準 | 使用者本輪輸入 `test-branch-1_20260806_011335_c378133.zip`；formal bundle 為 `to_chatgpt_bundle_20260806_011510_48e506c0.zip` |
-| Formal 結果 | quick gate PASS、chain checks PASS、ml smoke PASS；consistency 5,165 PASS／30 SKIP／2 FAIL。兩個 FAIL 均因 validator 仍從 legacy alias `tools/filters/breakout_quality/strategy_compare.py` 搜尋 runtime token；canonical engine 已依新分層移至 `filters/breakout_quality/strategy_compare_engine.py`。Meta quality 的 coverage 行79.11%、分支61.11%均達標，唯一 FAIL 是 synthetic suite 連帶失敗 |
+| Formal 結果 | quick gate PASS、chain checks PASS、ml smoke PASS；consistency 5,165 PASS／30 SKIP／2 FAIL。兩個 FAIL 均因 validator 仍從 legacy alias `filters/breakout_quality/strategy_compare_engine.py` 搜尋 runtime token；canonical engine 已依新分層移至 `filters/breakout_quality/strategy_compare_engine.py`。Meta quality 的 coverage 行79.11%、分支61.11%均達標，唯一 FAIL 是 synthetic suite 連帶失敗 |
 | 唯一變更 | `qualified_candidate_audit_is_cli_only_and_reuses_canonical_replay` 與 `candidate_counterfactual_cli_only_and_sidecar_is_not_replay_counts` 改讀 canonical engine；synthetic registry 的相關 `impacted_modules` 也改指向 canonical engine，確保後續該檔異動會觸發既有策略契約。legacy alias 本身仍由獨立 config-driven App contract 驗證為相容轉接，不要求複製 runtime 實作 token |
 | Dataset／Label | 不重建、不 relabel |
 | Selection／OOS | 未重訓、未重跑模型或策略，無新 Selection／OOS 數值 |
@@ -4237,7 +4237,7 @@ Resource-aware盤前診斷：C11為`DL選股131日 / 資金利用優先563日 / 
 
 ### Formal bundle根因
 
-使用者在`test-branch-1_20260807_205701_5d16129.zip`執行正式suite後，quick gate／chain checks／ml smoke通過；consistency唯一FAIL為`META_SPECIFIC_PASS_ONLY_EXCEPTION_TRACEABILITY_CONTRACT`，指出`tools/filters/breakout_quality/audit_pass_quality.py`的`_json_native()`使用`except (TypeError, ValueError): pass`。meta quality的`coverage_synthetic_suite_runs_successfully`亦僅因同一synthetic FAIL連帶失敗；coverage本身不是不足。
+使用者在`test-branch-1_20260807_205701_5d16129.zip`執行正式suite後，quick gate／chain checks／ml smoke通過；consistency唯一FAIL為`META_SPECIFIC_PASS_ONLY_EXCEPTION_TRACEABILITY_CONTRACT`，指出`tools/audit/breakout_quality/pass_quality.py`的`_json_native()`使用`except (TypeError, ValueError): pass`。meta quality的`coverage_synthetic_suite_runs_successfully`亦僅因同一synthetic FAIL連帶失敗；coverage本身不是不足。
 
 ### 唯一修正
 
@@ -4938,3 +4938,83 @@ C15年度為：`2021 22.70% / 2022 -3.59% / 2023 75.93% / 2024 31.33% / 2025 -1.
 - 將selection improvement拆成`per-trade R`、`capital return`、`position size / stop distance`、`slot occupancy`與`compounding path`，但全部保持read-only，不新增OOS調參。
 
 取得上述歸因後，再決定是否把SR-C15升格為新的continuous research baseline。
+
+## 2026-08-08 — Project-wide Audit framework收斂＋AUD-c15-strategy-attribution實作
+
+### 狀態
+
+`INFRASTRUCTURE_IMPLEMENTED / AUD-c15-strategy-attribution IMPLEMENTED / FORMAL_RESULT_PENDING`
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260808_111855_e2b93d1.zip`
+- SHA256：`19a571ba739f071214f9bfd649931142738c00a85f9b946764f263ed617c717c`
+- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### Audit framework架構變更
+
+使用者確認後續Audit不只服務Breakout Quality，也可能涵蓋其他filter、portfolio、optimizer、data或非filter模組，因此Audit由Breakout-Quality局部工具提升為project-wide subsystem：
+
+- `tools/audit/catalog.py`：所有Audit implementation／domain／mode／read-only／CLI metadata的單一inventory。
+- `config/audit.py`：只保存目前active formal Audit policy，不再兼任全Audit inventory。
+- `tools/audit/runner.py`：只依config＋catalog派送formal read-only Audit。
+- `apps/audit.py`：全專案正式Audit入口；`apps/breakout_quality.py`的Audit選單只是相同backend的Breakout Quality facade。
+- 原`tools/filters/breakout_quality/audit_*.py`與`regime_audit.py`已實體搬至`tools/audit/breakout_quality/`；portfolio-generic score-ranking capture移至`tools/audit/portfolio/`。
+- 共用console/path renderer由`filters/breakout_quality/console_report.py`提升為`core/console_report.py`，避免project-wide Audit依賴Breakout Quality namespace。
+- 不保留舊Audit相容wrapper；原`tools/filters/breakout_quality/strategy_compare.py` legacy alias亦刪除，研究工具直接import canonical `filters.breakout_quality.strategy_compare_engine`。
+- 本輪再清除其餘Breakout Quality純相容alias：`tools/filters/breakout_quality/common.py`、`export_scores.py`與`strategy_dl_filter_param_adapt_gate.py`；呼叫端分別直接使用`filters.breakout_quality.workflow_io`、`filters.breakout_quality.export_scores`與`filters.breakout_quality.strategy_param_training`，不留轉接殼。
+- 正式strategy comparison共用的trade attribution與判讀style由tools提升到`filters/breakout_quality/trade_attribution.py`及`filters/breakout_quality/strategy_report_style.py`；另新增`filters/breakout_quality/continuous_ranker_data.py`，讓正式strategy diagnostics讀continuous dataset／Target時不需要import training orchestration tool。
+
+Formal runtime依賴方向同步收斂：`core/`與`filters/`不得反向import `tools/audit/`。原score-ranking capture不再由`strategy_compare_engine`在replay/report流程內自動執行；`tools/audit/portfolio/score_ranking_capture.py`只可由既有completed pair工件read-only materialize。需要該歷史研究診斷的Gate／adaptation工具在pair完成或重用後顯式呼叫，不改正式strategy-comparison JSON，也不重跑portfolio。
+
+### AUD-c15-strategy-attribution
+
+Registry identity：`AUD-c15-strategy-attribution`；config ID=`c15-strategy-attribution`。
+
+目的只回答SR-C15既有OOS結果的歸因問題，不建立新strategy arm、不訓練模型、不改selector：
+
+1. `C15 vs C3`及`C15 vs C12`的超額wealth是否集中於少數月份／2024；
+2. 哪些trade dates真正改變selected basket；
+3. common／candidate-only／comparator-only trades的PnL／R診斷；
+4. reserved capital、invested capital、initial stop distance、holding days、capital return等capital geometry；
+5. underfilled days、end-position gap slot-days、平均持股與changed-day capacity；
+6. 為何C15即使EV與same-param selection R不突出，仍可能得到更好的portfolio Return／MDD。
+
+正式portfolio歸因採每日exact log-wealth差：
+
+`Δ_t = log(1+r_C15,t) - log(1+r_comparator,t)`
+
+並以正式summary total return校正首日純輸出邊界，使`sum(Δ_t)`精確等於：
+
+`log((1 + Return_C15) / (1 + Return_comparator))`
+
+因此monthly／yearly contributions可加總回完整relative wealth path。Trade PnL／R只作mechanism diagnosis，不宣稱其加總等於最終portfolio return，因position sizing、cash timing、持有重疊與compounding均會改變portfolio path。
+
+Trade identity在cross-arm attribution使用`ticker + entry_date + entry_type + signal_date + occurrence`，避免同ticker／同進場日但不同原始breakout event被誤配為common trade。Selection-day identity則使用`ticker + signal_date`。
+
+### 資料與輸出契約
+
+Audit只讀`outputs/strategy_compare/latest/manifest.json`指向的completed正式run，依arm metadata解析C15、C3、C12各自pair與scenario，不重新執行strategy replay。必要來源包含comparison summary、trades、equity、daily capacity及selected buys；缺任一必要工件即`BLOCKED`。
+
+輸出固定於：
+
+`outputs/audit/breakout_quality/c15_strategy_attribution/runs/<timestamp>/`
+
+並更新：
+
+`outputs/audit/breakout_quality/c15_strategy_attribution/latest/`
+
+主工件為`audit.md`與`audit.json`；每個comparator另保存daily/monthly/yearly log wealth、selection days、trade contributions、capacity days及兩臂trade lifecycle CSV。
+
+metadata固定標示：`read_only=true`、`portfolio_replay_executed=false`、`training_performed=false`、`future_target_used_for_runtime=false`。任何結果不得回流runtime threshold、年份/regime gate、Target係數、training scope或selector policy。
+
+### 本輪驗證邊界
+
+本輪沒有執行`apps/test_suite.py`。另以兩層獨立測試驗證實作：
+
+- focused trade-identity case：同ticker／同entry date／同entry type但不同`signal_date`，必須拆成1筆candidate-only＋1筆comparator-only，不得誤配common；
+- end-to-end臨時C3／C12／C15 completed strategy-compare fixture：從latest manifest、pair resolver、trades／equity／capacity／selected一路產生`audit.md/json`與16個pair CSV；兩個contrast的`sum(Δ log wealth)`皆在`1e-12`內等於正式total-return導出的relative log wealth，metadata確認read-only且未replay／training。
+
+全專案獨立靜態檢查另確認282個Python檔AST可解析、`compileall`通過、無bare except、無pass-only except handler、無internal import cycle，且`core/`／`filters/`沒有`tools.audit`反向依賴。新`apps/audit.py`已直接執行`--help`與status smoke；本ZIP未包含`outputs/strategy_compare/latest/manifest.json`，因此正式C15 Audit status正確顯示`BLOCKED`。上述synthetic只證明實作契約，**不是SR-C15正式Audit結果**。
+
+因此`AUD-c15-strategy-attribution`目前仍為`IMPLEMENTED / RESULT_PENDING`。下一步由使用者在含正式`outputs/strategy_compare`工件的專案以`python apps/audit.py`進入正式選單執行Audit，再據此決定是否需要capital-preserving basket selector研究；不得在結果前先建立新的C16或回頭修改MR-12A。

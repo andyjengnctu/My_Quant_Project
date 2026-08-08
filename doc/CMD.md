@@ -57,9 +57,9 @@ python apps/workbench.py
 
 ## 研究資料、訓練與評估
 
-模型研究與訓練、正式Audit／診斷由`apps/breakout_quality.py`進入；策略績效比較由獨立`apps/strategy_compare.py`進入。`tools/filters/breakout_quality/`的直接CLI只保留開發、歷史研究與相容用途。
+模型研究與訓練由`apps/breakout_quality.py`進入；全專案正式Audit由`apps/audit.py`進入，Breakout Quality主選單的`Audit／診斷`只是同一個project-wide backend的domain facade；策略績效比較由獨立`apps/strategy_compare.py`進入。`tools/filters/breakout_quality/`的直接CLI只保留開發與歷史研究用途，不保留Audit或strategy-compare legacy相容入口。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟唯一正式選單。主選單只保留完整模型工作流程、config-driven Audit與模型設定／工件狀態；Dataset、單獨 train、export及歷史版本化research audit仍使用明確 CLI 子命令。目前 Binary 模型研究選單固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由獨立策略比較App依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟 Breakout Quality 正式模型選單。主選單只保留完整模型工作流程、config-driven Audit與模型設定／工件狀態；Dataset、單獨 train、export及歷史版本化research audit仍使用明確 CLI 子命令。目前 Binary 模型研究選單固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由獨立策略比較App依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
 
 ```bash
 python apps/breakout_quality.py
@@ -83,7 +83,16 @@ python apps/breakout_quality.py
 [0] 返回
 ```
 
-Audit對象、來源arm、分層維度與輸出政策全部集中於`config/audit.py`；App不硬編碼A9／C12等研究名稱。Audit只讀既有正式工件，不重跑策略、不建立Label、不訓練模型、不修改runtime。`a9_pass_quality`與`a9_pass_persistence`保留為可重跑profile，目前預設關閉；目前預設啟用`a9_selection_confidence`，只分析`SR-C12`中`Resource_Aware_Mode=dl-selection`且同日至少兩個A9 PASS的真正競爭日，使用原breakout event confidence檢查Event Label與實際selected Realized R的Spearman、同日pairwise concordance及Score分組。它不對extended candidate的當日線型重新推論A9，也不替未成交PASS假造Realized R；結果只用來判斷是否值得建立新的strategy runtime arm，不得直接轉成runtime threshold、Min ROOS／DL混合比例或candidate失效規則。Candidate是否存在／continuation／失效仍由原策略唯一決定；DL只描述quality；portfolio selector只負責資源配置。來源工件缺少時Audit顯示`BLOCKED`，不偷偷補跑。
+全專案Audit inventory與dispatch的單一真理位於`tools/audit/catalog.py`；`config/audit.py`只保存目前反覆執行的正式active policy，不再承擔所有歷史Audit命令的inventory。正式入口可直接執行`python apps/audit.py`；Breakout Quality主選單的Audit子選單呼叫完全相同的`tools/audit/runner.py`，App本身不硬編碼A9／C15或個別Audit module。`tools/audit/`可跨filter、portfolio、optimizer、data與其他domain；正式`core/`／`filters/`不得反向依賴Audit。Formal Audit只能使用catalog中`mode=formal`且`read_only=true`的handler，只讀既有正式工件；缺件顯示`BLOCKED`，不得自行重跑策略、建立Label、訓練模型或修改runtime。歷史research audit仍由catalog統一登記，但可明確標示`research`／`historical`與`read_only=false`，不會被formal runner誤執行。Candidate validity仍維持Strategy owns validity / DL owns quality / Portfolio selector owns allocation。
+
+
+全專案Audit也可由獨立正式入口執行：
+
+```bash
+python apps/audit.py
+```
+
+目前`config/audit.py`預設啟用`c15-strategy-attribution`。它只讀`outputs/strategy_compare/latest/manifest.json`所指向的最新正式比較工件，比較`C15 vs C3`與`C15 vs C12`，使用exact daily `Δ log wealth`做可加總的portfolio wealth-path attribution，並拆解changed selection days、common／exclusive trades、reserved／invested／stop-distance capital geometry、slot occupancy與2024集中度。它不重新replay、不重建score、不訓練模型，trade R／PnL只作診斷，正式portfolio超額wealth以`Δ log wealth`為主。輸出位於`outputs/audit/breakout_quality/c15_strategy_attribution/`的`runs/<timestamp>/`與`latest/`。
 
 模型訓練與策略比較使用分離入口。正式策略比較執行：
 
@@ -190,7 +199,7 @@ python apps/breakout_quality.py audit-point-in-time-scores
 模型audit通過且Seed／identity一致後，執行Selection策略比較：
 
 ```bash
-python -m tools.filters.breakout_quality.strategy_compare --dataset full --comparison-mode score-ranking --filter-id breakout_quality_v1 --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --max-positions 10 --rotation off
+python -m filters.breakout_quality.strategy_compare_engine --dataset full --comparison-mode score-ranking --filter-id breakout_quality_v1 --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --max-positions 10 --rotation off
 ```
 
 此流程使用`models/research/breakout_quality/selection_strategy_realization/roos_base_best.json`的歷史active params，期間由PIT manifest決定。Score缺失不排除候選、不填0，改為回退原buy-sort；Future Target只在兩組replay完成後離線join，輸出orderable coverage、selected Target percentile、top-k retention與opportunity gap。
@@ -229,7 +238,7 @@ python apps/strategy_compare.py
 
 目前策略研究比較聚焦`C3 Min ROOS`、`C12 Min ROOS: A9 resource-aware basket`與`C15 Min ROOS: All-event Continuous resource-aware`。C15完全沿用C14已驗證的capital-utilization-first runtime：先以Min ROOS原順序和正式cash-capped sizing判斷盤前binding resource；position/free slots先成瓶頸時quality ranking完全不介入，只有cash在free slots尚未用滿前先成瓶頸時才進DL-selection。C15只把score source改為`DL-CONT12A / MR-12A`，其training scope為`all_labels`且Target仍為`strategy_aligned_opportunity_no_time_r_v1`；不設score threshold、不加Min ROOS／DL混合權重。若MR-12A model／manifest／report／OOS score缺失或identity/hash不一致，正式策略比較顯示`BLOCKED`而不得自動訓練模型。C14保留歷史對照但目前disabled；正式比較設定只重跑C3／C12／C15。
 
-舊score-ranking研究工具仍可直接執行`python -m tools.filters.breakout_quality.strategy_compare --help`，但不屬於正式比較App。
+低階研究如需直接檢查canonical engine，可執行`python -m filters.breakout_quality.strategy_compare_engine --help`；正式比較仍一律使用`apps/strategy_compare.py`。
 
 只有需要重建9D MantisV2 legacy工件時才需安裝固定相依套件。官方 `mantis-tsfm==1.0.0` 宣告 `pandas<3.0`，而本專案鎖定 pandas 3.x，因此必須先安裝相容依賴，再以 `--no-deps` 安裝 Mantis，避免 pip 降級既有資料鏈：
 
@@ -524,7 +533,7 @@ models/roos_base_finalists_agree.json
 完成上方 `forward_oos` score 匯出與 Rolling OOS 參數組後執行：
 
 ```bash
-python -m tools.filters.breakout_quality.strategy_compare --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off
+python -m filters.breakout_quality.strategy_compare_engine --dataset full --params models/roos_base_finalists_agree.json --max-positions 10 --rotation off
 ```
 
 - 比較期間固定為 runtime manifest 的 `execution_start` ～ `available_through`；Score table 可從更早的 `required_signal_start` 開始，只用來供應首個執行日前的原始 breakout signal Score。Rolling active-param 生效期間只需完整覆蓋實際策略執行期，不需覆蓋前置 Score anchor。
@@ -537,7 +546,7 @@ python -m tools.filters.breakout_quality.strategy_compare --dataset full --param
 - 若策略比較已經跑完，只需重建歸因與修正部分年度標記，不必再次執行 replay：
 
 ```bash
-python -m tools.filters.breakout_quality.strategy_compare --attribution-only
+python -m filters.breakout_quality.strategy_compare_engine --attribution-only
 ```
 
 - `--attribution-only` 只讀取既有 `strategy_comparison.json`、`no_filter_trades.csv`、`quality_filter_trades.csv` 與正式 runtime score；它會把只到 2026-03-02 的 2026 年標為非完整年度，再輸出交易歸因。
@@ -554,7 +563,7 @@ Breakout Quality 的實驗 ID、namespace、model architecture、DL source、策
 以 `base_finalist_best` 單一 runtime member 做較純的 Score Ranking ablation：
 
 ```bash
-python -m tools.filters.breakout_quality.strategy_compare --comparison-mode score-ranking --param-policy base-finalist-best --dataset full --max-positions 10 --rotation off
+python -m filters.breakout_quality.strategy_compare_engine --comparison-mode score-ranking --param-policy base-finalist-best --dataset full --max-positions 10 --rotation off
 ```
 
 工具會自動使用 `models/roos_base_best.json`，並驗證每個生效日恰有 1 個 member、`min_agree=1`。Baseline 與 score-ranking 兩組都固定 `use_breakout_quality_filter=False`；唯一差異為 `use_breakout_quality_ranking=False/True`。因所有候選票數皆為 1，實際有效排序為「Quality Score 由高到低 → 既有買入排序 → deterministic ticker」。輸出位於 `strategy_compare_score_ranking_base_finalist_best/`。
@@ -562,7 +571,7 @@ python -m tools.filters.breakout_quality.strategy_compare --comparison-mode scor
 保留 `base_finalists_agree` 的既有探索性比較時使用：
 
 ```bash
-python -m tools.filters.breakout_quality.strategy_compare --comparison-mode score-ranking --param-policy base-finalists-agree --dataset full --max-positions 10 --rotation off
+python -m filters.breakout_quality.strategy_compare_engine --comparison-mode score-ranking --param-policy base-finalists-agree --dataset full --max-positions 10 --rotation off
 ```
 
 此模式自動使用 `models/roos_base_finalists_agree.json`；候選先通過 `min_agree`，再依「finalist同意數由高到低 → 同票Quality Score由高到低 → 既有買入排序 → deterministic ticker」，輸出位於 `strategy_compare_score_ranking_base_finalists_agree/`。
@@ -572,7 +581,7 @@ Capital-aware ranking為CLI-only研究消融，不加入互動選單、不重訓
 R2 `capital-adjusted-score`：
 
 ```bash
-python -m tools.filters.breakout_quality.strategy_compare --dataset full --comparison-mode score-ranking --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --ranking-policy capital-adjusted-score --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
+python -m filters.breakout_quality.strategy_compare_engine --dataset full --comparison-mode score-ranking --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --ranking-policy capital-adjusted-score --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
 ```
 
 R2以正式盤前sizing結果計算`projected_capital_fraction = proj_cost / sizing_capital`，再計算`deployment_rate = min(1, projected_capital_fraction / max_position_cap_pct)`，排序鍵為「`Score × deployment_rate`由高到低 → 既有buy-sort → deterministic ticker」。不得另以停損距離近似`proj_cost`，也不得使用Future Target。輸出隔離於`strategy_compare_score_ranking_base_finalist_best_capital_adjusted_score_selection_point_in_time/`。
@@ -580,7 +589,7 @@ R2以正式盤前sizing結果計算`projected_capital_fraction = proj_cost / siz
 R3 `capital-bucket-then-score`：
 
 ```bash
-python -m tools.filters.breakout_quality.strategy_compare --dataset full --comparison-mode score-ranking --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --ranking-policy capital-bucket-then-score --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
+python -m filters.breakout_quality.strategy_compare_engine --dataset full --comparison-mode score-ranking --score-source selection_point_in_time --model-architecture inception_time_v1 --experiment-profile strategy_aligned_no_time_pass_magnitude_mse --param-policy base-finalist-best --ranking-policy capital-bucket-then-score --start-date 2014-01-01 --end-date 2020-12-31 --max-positions 10 --rotation off
 ```
 
 R3只對當日具有有效PIT Score的可掛單候選，依正式`deployment_rate`的當日橫斷面1/3與2/3分位切成高／中／低三桶，先按部署桶高到低，再於桶內按Score高到低，最後沿用既有buy-sort。分桶只使用當日盤前已知候選與正式sizing，不使用Future Target或回放績效調整邊界；同部署率跨分位時保持同桶。輸出隔離於`strategy_compare_score_ranking_base_finalist_best_capital_bucket_then_score_selection_point_in_time/`。
@@ -604,7 +613,7 @@ Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_re
 Binary DL risk-only parameter adaptation同樣為CLI-only暫時研究，不加入互動選單。正式比較固定為4種參數 × Binary DL關／開，共8個操作點：P0原ROOS＋原正式規則、P1原ROOS＋Rule-based filters全關、P2在rules全關／DL關環境只重訓四個風險參數、P3在rules全關／DL開環境以Binary PIT Scores只重訓同四個風險參數。每套參數各回放DL關／開，命名為A0／B0至A3／B3：
 
 ```powershell
-python -m tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate `
+python -m filters.breakout_quality.strategy_param_training `
   --dataset full `
   --param-policy base-finalist-best `
   --max-positions 10 `
@@ -629,16 +638,10 @@ python apps/breakout_quality.py build-binary-point-in-time-scores `
 
 - `--param-policy` 與參數檔內 `selector` 不一致時直接拒絕；`base-finalist-best` 另要求每期 `1 member / min_agree=1`。
 - 可正常評分但低 Score 的候選仍保留，只是順位靠後。Hard-filter模式的正式不可評分事件仍保守REJECT；Score-ranking模式的缺分候選不得排除或填0，必須保存`available=false`與原始Score來源，排在有效Score後並完整回退既有buy-sort。Continuation與STOP後Re-entry沿用原始breakout Score及原始Score事件日期。
-- Legacy score-ranking研究工具完成比較後，會直接在console依統一標題、段落、表格、判讀與工件清單格式完整顯示原策略比較及read-only capture attribution audit；改善、惡化、注意與中性分別以綠／紅／黃／灰呈現，非TTY或重新導向時自動退回純文字。Markdown仍以🟢／🔴／🟡／⚪保留相同語意，JSON／CSV保存完整資料；不產生HTML，若輸出目錄已有舊版HTML會在重建報表時刪除。
-- 原策略比較主要工件：`strategy_comparison.md`、`strategy_comparison.json`。Capture audit主要工件：`score_ranking_capture_audit.md`、`score_ranking_capture_audit.json`，另輸出兩組trade lifecycle、年度比較與scenario summary CSV。所有console工件路徑只顯示從專案根目錄開始的相對路徑，manifest與runtime identity仍可保存canonical path。
-- Capture audit只讀已完成replay工件，分解平均實際投入、預留／投入比例、stop distance、保留買單成交率、持有期、首次半倉時間、半倉至結算日曆日、依daily-capacity交易日曆計算的尾倉slot-days、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap與年度差異。若交易列沒有canonical產業欄位則顯示N/A，不自行推測類股。Future Target只在兩組replay完成後join，不進候選排序、資金配置、成交或optimizer。
-- 若策略比較已完成，只重建console／Markdown主報表與capture audit、不重跑兩組portfolio replay：
-
-```bash
-python -m tools.filters.breakout_quality.strategy_compare --comparison-mode score-ranking --score-source selection_point_in_time --param-policy base-finalist-best --capture-audit-only
-```
-
-- `--capture-audit-only`只支援score-ranking，並要求既有`strategy_comparison.json`、兩組transaction CSV及兩組selected-target diagnostics完整存在；缺工件時fail-fast，不會悄悄重跑或改用其他Score來源。
+- Score-ranking capture attribution已從正式strategy compare runtime拆離。`filters/breakout_quality/strategy_compare_engine.py`只產生canonical策略比較工件，不import `tools/audit/`、不在replay流程內自動產生Audit，也不提供`--capture-audit-only`。
+- 通用capture實作位於`tools/audit/portfolio/score_ranking_capture.py`，只能從**已完成的pair工件**物化read-only報表；需要此歷史研究診斷的`strategy_filter_gate.py`／`strategy_adapt.py`會在正式比較完成或重用既有pair後顯式呼叫它，不因此重跑portfolio。Future Target仍只可在replay後join，不進候選排序、資金配置、成交或optimizer。
+- 原策略比較主要工件維持`strategy_comparison.md`、`strategy_comparison.json`及canonical equity／trades／daily-capacity／selected diagnostics；capture audit如被研究工具要求，另輸出`score_ranking_capture_audit.md`、`score_ranking_capture_audit.json`與lifecycle／年度／scenario CSV。兩份報表彼此獨立，strategy comparison JSON不再內嵌Audit payload。
+- Capture audit可分解平均實際投入、預留／投入比例、stop distance、保留買單成交率、持有期、首次半倉時間、尾倉slot-days、entry-date／月份集中度、可用時的產業集中度、exit reason、Realized R、Target R、Target capture ratio、realization gap與年度差異；若交易列沒有canonical產業欄位則顯示N/A，不自行推測類股。
 - 一般Optimizer search space固定ranking=`False`，不得把ranking開關設成trial維度。策略適應使用專用固定context，而不是搜尋ranking開關。
 - PIT build與model audit完成後，Selection ranking參數適應仍屬明確research CLI，不加入模型或正式策略比較選單：
 
@@ -668,7 +671,7 @@ python apps/ml_optimizer.py --dataset full --model trade --trials 10
 目前 random-seed ensemble 已啟用，因此 `run_best_params.json` 可能是 static active-param ensemble，而不是單一參數 JSON；策略對照工具支援此格式，但僅可明確標記為非 OOS 敏感度診斷：
 
 ```bash
-python -m tools.filters.breakout_quality.strategy_compare --dataset full --params models/run_best_params.json --allow-static-diagnostic --max-positions 10 --rotation off
+python -m filters.breakout_quality.strategy_compare_engine --dataset full --params models/run_best_params.json --allow-static-diagnostic --max-positions 10 --rotation off
 ```
 
 不指定 `--params` 時，也只有加上 `--allow-static-diagnostic` 才會使用正式 primary param source。此結果不可作為 2021～2025 無前視 OOS 部署證據。

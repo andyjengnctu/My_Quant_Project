@@ -15,12 +15,12 @@ from filters.breakout_quality.continuous_target import (
     resolve_continuous_target_dir,
 )
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID, DEFAULT_LABEL_POLICY
-from tools.filters.breakout_quality.audit_continuous_target import main as build_base_target
-from tools.filters.breakout_quality.audit_no_time_continuous_target import (
+from tools.audit.breakout_quality.continuous_target import main as build_base_target
+from tools.audit.breakout_quality.no_time_continuous_target import (
     main as build_no_time_target,
 )
-from tools.filters.breakout_quality.common import PROJECT_ROOT, load_validated_dataset_bundle
-from filters.breakout_quality.console_report import (
+from filters.breakout_quality.workflow_io import PROJECT_ROOT, load_validated_dataset_bundle
+from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
     paint,

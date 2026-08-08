@@ -16,12 +16,12 @@ import pandas as pd
 
 from config.breakout_quality import BREAKOUT_QUALITY_DEFAULT_FILTER_ID
 from filters.breakout_quality.continuous_target import STRATEGY_ALIGNED_NO_TIME_TARGET_ID
-from tools.filters.breakout_quality.audit_selection_strategy_realization import (
+from tools.audit.breakout_quality.selection_strategy_realization import (
     AUDIT_JSON_FILENAME as SOURCE_AUDIT_JSON_FILENAME,
     _output_dir as selection_strategy_output_dir,
 )
-from filters.breakout_quality.console_report import print_artifact_paths
-from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
+from core.console_report import print_artifact_paths
+from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.train_continuous_ranker import _spearman
 
 AUDIT_SCHEMA_VERSION = 1

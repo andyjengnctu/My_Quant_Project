@@ -23,7 +23,7 @@ from core.portfolio_entries import build_candidate_plan_seed, clone_shadow_posit
 from core.trade_plans import execute_pre_market_entry_plan
 from filters.breakout_quality.continuous_target import STRATEGY_ALIGNED_NO_TIME_TARGET_ID
 from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
-from tools.filters.breakout_quality.audit_selection_strategy_realization import (
+from tools.audit.breakout_quality.selection_strategy_realization import (
     AUDIT_JSON_FILENAME as SOURCE_AUDIT_JSON_FILENAME,
     AUDIT_DIRNAME as SOURCE_AUDIT_DIRNAME,
     DEFAULT_NESTED_OOS_END_DATE,
@@ -37,9 +37,9 @@ from tools.filters.breakout_quality.audit_selection_strategy_realization import 
     _unique_signals,
     _validate_param_coverage,
 )
-from filters.breakout_quality.console_report import print_artifact_paths
-from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
-from tools.filters.breakout_quality.strategy_compare import (
+from core.console_report import print_artifact_paths
+from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
+from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
     _flatten_candidate_replay_rows,
     _run_scenario,

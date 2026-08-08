@@ -13,7 +13,7 @@ import pandas as pd
 
 from config.audit import AUDIT_OUTPUT_ROOT, AuditDefinition
 from core.runtime_utils import get_taipei_now
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -21,7 +21,7 @@ from filters.breakout_quality.console_report import (
     render_table,
     render_title,
 )
-from tools.filters.breakout_quality.audit_pass_quality import (
+from tools.audit.breakout_quality.pass_quality import (
     audit_quantile_labels,
     audit_spearman,
     collect_pass_quality_status,

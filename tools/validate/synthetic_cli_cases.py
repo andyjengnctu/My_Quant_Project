@@ -1109,7 +1109,7 @@ def validate_dataset_cli_contract_case(_base_params):
     )
 
     console_report_module = importlib.import_module(
-        "filters.breakout_quality.console_report"
+        "core.console_report"
     )
     compact_artifact_output = StringIO()
     with (
@@ -1681,10 +1681,10 @@ def validate_dataset_cli_contract_case(_base_params):
     command_modules = {
         "build-dataset": "tools.filters.breakout_quality.build_dataset",
         "train": "tools.filters.breakout_quality.train",
-        "export-scores": "tools.filters.breakout_quality.export_scores",
+        "export-scores": "filters.breakout_quality.export_scores",
         "report": "tools.filters.breakout_quality.report",
         "evaluate": "tools.filters.breakout_quality.evaluate",
-        "regime-audit": "tools.filters.breakout_quality.regime_audit",
+        "regime-audit": "tools.audit.breakout_quality.regime",
     }
     for command, expected_module in command_modules.items():
         received_argv = []

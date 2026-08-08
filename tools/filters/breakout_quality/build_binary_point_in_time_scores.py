@@ -68,7 +68,7 @@ from filters.breakout_quality.torch_runtime import (
     SUPPORTED_TORCH_DEVICES,
     resolve_torch_execution_plan,
 )
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -83,7 +83,7 @@ from tools.filters.breakout_quality.build_point_in_time_scores import (
     _minimum_count_failures,
     _resolve_score_start,
 )
-from tools.filters.breakout_quality.common import (
+from filters.breakout_quality.workflow_io import (
     PROJECT_ROOT,
     load_validated_dataset_bundle,
 )

@@ -30,7 +30,7 @@ from core.walk_forward_policy import (
     load_walk_forward_policy,
 )
 from filters.breakout_quality.artifacts import compute_file_sha256
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
     print_artifact_paths,
@@ -49,12 +49,13 @@ from strategies.breakout.search_space import (
     BREAKOUT_OPTIMIZER_SEARCH_SPACE,
     get_breakout_optimizer_required_min_rows,
 )
-from tools.filters.breakout_quality.audit_score_ranking_capture import (
+from tools.audit.portfolio.score_ranking_capture import (
     build_score_ranking_capture_audit,
+    materialize_score_ranking_capture_from_pair,
     render_capture_audit_console,
     write_score_ranking_capture_audit_outputs,
 )
-from tools.filters.breakout_quality.strategy_report_style import (
+from filters.breakout_quality.strategy_report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_NEUTRAL,
     SIGNAL_POSITIVE,
@@ -63,7 +64,7 @@ from tools.filters.breakout_quality.strategy_report_style import (
     signal_marker,
     terminal_signal,
 )
-from tools.filters.breakout_quality.strategy_compare import (
+from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_SCORE_RANKING,
     PARAM_POLICY_BASE_FINALIST_BEST,
     _assert_shared_benchmark,
@@ -387,10 +388,14 @@ def _load_current_pair_if_compatible(
             f"score SHA256: artifact={recorded_score_sha}, expected={actual_score_sha}"
         )
 
+    capture_keys = {
+        "capture_json", "capture_markdown", "baseline_capture_lifecycle",
+        "sort_only_capture_lifecycle", "capture_yearly", "capture_scenarios",
+    }
     missing = [
         project_relative_display_path(path, project_root=root)
-        for path in expected_paths.values()
-        if not path.is_file()
+        for key, path in expected_paths.items()
+        if key not in capture_keys and not path.is_file()
     ]
     if missing:
         issues.append("缺少必要比較工件：" + ", ".join(missing))
@@ -486,6 +491,9 @@ def _load_or_run_current_pair(
                 "純化Baseline／Sort Only重建後identity仍不一致："
                 + "；".join(issues[:8])
             )
+    capture_payload = materialize_score_ranking_capture_from_pair(output_dir)
+    payload["score_ranking_capture_audit"] = capture_payload
+
     # adaptation_pair_manifest是[2]的衍生索引；[1]重跑或舊版identity格式變更後
     # 應依已驗證的正式比較工件重新產生，不得反過來阻擋有效工件。
     _write_current_pair_manifest(

@@ -11,7 +11,7 @@ from typing import Any
 
 
 from config.breakout_quality import get_breakout_quality_workflow_settings
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -30,15 +30,15 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_LABEL_ID,
     TRADE_PATH_RESEARCH_FILTER_ID,
 )
-from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
-from tools.filters.breakout_quality.export_scores import main as export_scores_main
-from tools.filters.breakout_quality.strategy_compare import (
+from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
+from filters.breakout_quality.export_scores import main as export_scores_main
+from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_HARD_FILTER,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     PARAM_POLICY_BASE_FINALIST_BEST,
     run_comparison,
 )
-from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
+from filters.breakout_quality.strategy_param_training import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
 

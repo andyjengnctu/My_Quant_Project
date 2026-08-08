@@ -1,4 +1,4 @@
-"""Shared console-report formatting for breakout-quality commands."""
+"""Shared project-wide console-report formatting."""
 
 from __future__ import annotations
 

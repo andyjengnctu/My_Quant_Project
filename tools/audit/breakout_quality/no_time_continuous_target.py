@@ -47,7 +47,7 @@ from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
     resolve_breakout_quality_outer_policy,
 )
-from tools.filters.breakout_quality.audit_continuous_target import (
+from tools.audit.breakout_quality.continuous_target import (
     _collapse_group_frame,
     _daily_rankability,
     _distribution_metrics,
@@ -57,24 +57,24 @@ from tools.filters.breakout_quality.audit_continuous_target import (
     _source_data_end,
     _spearman,
 )
-from tools.filters.breakout_quality.audit_target_component_attribution import (
+from tools.audit.breakout_quality.target_component_attribution import (
     _ranker_dir,
     _read_json,
     _sha256_file,
 )
-from tools.filters.breakout_quality.audit_target_time_penalty_ablation import (
+from tools.audit.breakout_quality.target_time_penalty_ablation import (
     ACTUAL_ABLATION_FILENAME,
     AUDIT_DIRNAME as ABLATION_AUDIT_DIRNAME,
     AUDIT_JSON_FILENAME as ABLATION_AUDIT_JSON_FILENAME,
     QUALIFIED_ABLATION_FILENAME,
 )
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
     paint,
     print_artifact_paths,
 )
-from tools.filters.breakout_quality.common import (
+from filters.breakout_quality.workflow_io import (
     PROJECT_ROOT,
     load_validated_dataset_bundle,
     write_json,

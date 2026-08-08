@@ -19,7 +19,7 @@ from config.breakout_quality import (
 )
 from filters.breakout_quality.continuous_target import STRATEGY_ALIGNED_TARGET_ID
 from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
-from tools.filters.breakout_quality.audit_target_component_attribution import (
+from tools.audit.breakout_quality.target_component_attribution import (
     ACTUAL_ATTRIBUTION_FILENAME,
     AUDIT_DIRNAME as ATTRIBUTION_AUDIT_DIRNAME,
     AUDIT_JSON_FILENAME as ATTRIBUTION_AUDIT_JSON_FILENAME,
@@ -28,8 +28,8 @@ from tools.filters.breakout_quality.audit_target_component_attribution import (
     _read_json,
     _sha256_file,
 )
-from filters.breakout_quality.console_report import print_artifact_paths
-from tools.filters.breakout_quality.common import PROJECT_ROOT, write_json
+from core.console_report import print_artifact_paths
+from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from tools.filters.breakout_quality.train_continuous_ranker import _spearman
 
 AUDIT_SCHEMA_VERSION = 1

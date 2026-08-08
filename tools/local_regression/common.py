@@ -231,9 +231,7 @@ def _atomic_replace_text(path: Path, text: str, *, encoding: str, newline: Optio
         _atomic_replace_file(temp_path, path)
     except Exception as exc:
         try:
-            temp_path.unlink()
-        except FileNotFoundError:
-            pass
+            temp_path.unlink(missing_ok=True)
         except OSError as cleanup_exc:
             add_note = getattr(exc, "add_note", None)
             cleanup_detail = f"atomic temp cleanup failed: {type(cleanup_exc).__name__}: {cleanup_exc}"
@@ -596,6 +594,6 @@ def publish_root_bundle_copy(bundle_path: Path, *, prefix: str = "to_chatgpt_bun
         try:
             old_path.unlink()
         except FileNotFoundError:
-            pass
+            continue
     shutil.copy2(bundle_path, latest_path)
     return latest_path

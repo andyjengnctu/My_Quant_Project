@@ -1,7 +1,9 @@
-"""正式 Audit／診斷設定。
+"""Project-wide Audit policy.
 
-所有 Audit 對象、來源、分層與輸出政策集中於此；Audit 只讀既有正式工件，
-不得自行修改策略、Label、模型或 runtime。
+Audit implementation inventory lives in ``tools/audit/catalog.py``.  This file only
+selects which read-only audits are active and provides user-adjustable source,
+dimension, outcome, and output policy.  Audit code must never mutate strategy,
+labels, models, parameters, or runtime state.
 """
 
 from __future__ import annotations
@@ -10,15 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 1
+AUDIT_SCHEMA_VERSION = 2
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 
-# 每個模組可獨立管理自己的 Audit；正式 App 只執行其模組下 enabled=True 的項目。
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
     "breakout_quality": {
         "enabled": True,
         "audits": {
-            "a9_pass_quality": {
+            "a9-pass-quality": {
                 "enabled": False,
                 "audit_type": "pass_quality",
                 "description": "A9 PASS 內部品質：Score、candidate age、candidate type 與 Label／Realized R",
@@ -38,7 +39,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 },
                 "output_subdir": "breakout_quality/a9_pass_quality",
             },
-            "a9_pass_persistence": {
+            "a9-pass-persistence": {
                 "enabled": False,
                 "audit_type": "pass_persistence",
                 "description": "A9 PASS persistence：unique event、candidate-day與selected false-positive放大",
@@ -56,8 +57,8 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 },
                 "output_subdir": "breakout_quality/a9_pass_persistence",
             },
-            "a9_selection_confidence": {
-                "enabled": True,
+            "a9-selection-confidence": {
+                "enabled": False,
                 "audit_type": "selection_confidence",
                 "description": "A9 confidence在DL Selection Mode多PASS競爭時對Event Label／Realized R的排序力",
                 "source": {
@@ -74,6 +75,30 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "realized_r": True,
                 },
                 "output_subdir": "breakout_quality/a9_selection_confidence",
+            },
+            "c15-strategy-attribution": {
+                "enabled": True,
+                "audit_type": "strategy_attribution",
+                "description": "C15相對C3／C12的wealth-path、selection、capital geometry、slot occupancy與trade contribution歸因",
+                "source": {
+                    "kind": "strategy_compare",
+                    "run": "latest",
+                    "candidate_arm_id": "C15",
+                    "comparator_arm_ids": ["C3", "C12"],
+                },
+                "dimensions": {
+                    "focus_year": 2024,
+                    "top_month_count": 5,
+                    "top_trade_count": 20,
+                },
+                "outcomes": {
+                    "log_wealth_path": True,
+                    "selection_changes": True,
+                    "capital_geometry": True,
+                    "slot_occupancy": True,
+                    "trade_contribution": True,
+                },
+                "output_subdir": "breakout_quality/c15_strategy_attribution",
             },
         },
     },
@@ -115,59 +140,31 @@ def _validate_relative_path(value: str, *, field_name: str) -> None:
 def _validate_definition(definition: AuditDefinition) -> None:
     if not definition.module_id or not definition.audit_id:
         raise ValueError("audit module_id／audit_id不可空白")
-    if definition.audit_type not in {"pass_quality", "pass_persistence", "selection_confidence"}:
-        raise ValueError(f"不支援的audit_type: {definition.audit_type}")
-    source = dict(definition.source)
-    if str(source.get("kind") or "") != "strategy_compare":
-        raise ValueError(f"{definition.audit_id}.source.kind目前只支援strategy_compare")
-    run = str(source.get("run") or "").strip()
-    if not run:
-        raise ValueError(f"{definition.audit_id}.source.run不可空白")
-    if run != "latest":
-        _validate_relative_path(run, field_name=f"{definition.audit_id}.source.run")
-    if not str(source.get("arm_id") or "").strip():
-        raise ValueError(f"{definition.audit_id}.source.arm_id不可空白")
-
-    dimensions = dict(definition.dimensions)
-    if definition.audit_type == "pass_quality":
-        for key in ("score_quantile_groups", "candidate_age_quantile_groups"):
-            try:
-                groups = int(dimensions.get(key))
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"{definition.audit_id}.{key}必須是整數") from exc
-            if groups < 2:
-                raise ValueError(f"{definition.audit_id}.{key}必須>=2")
-        if not isinstance(dimensions.get("candidate_type"), bool):
-            raise ValueError(f"{definition.audit_id}.candidate_type必須是bool")
-    elif definition.audit_type == "pass_persistence":
-        if not isinstance(dimensions.get("selected_amplification"), bool):
-            raise ValueError(f"{definition.audit_id}.selected_amplification必須是bool")
-    else:
-        try:
-            minimum_competing = int(dimensions.get("minimum_competing_pass_candidates"))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{definition.audit_id}.minimum_competing_pass_candidates必須是整數") from exc
-        if minimum_competing < 2:
-            raise ValueError(f"{definition.audit_id}.minimum_competing_pass_candidates必須>=2")
-        try:
-            score_groups = int(dimensions.get("score_quantile_groups"))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{definition.audit_id}.score_quantile_groups必須是整數") from exc
-        if score_groups < 2:
-            raise ValueError(f"{definition.audit_id}.score_quantile_groups必須>=2")
-
-    outcomes = dict(definition.outcomes)
-    for key in ("label_quality", "realized_r"):
-        if not isinstance(outcomes.get(key), bool):
-            raise ValueError(f"{definition.audit_id}.{key}必須是bool")
-    if definition.audit_type == "pass_persistence" and not bool(outcomes.get("label_quality")):
-        raise ValueError(f"{definition.audit_id}.pass_persistence要求label_quality=True")
+    if not definition.audit_type:
+        raise ValueError(f"{definition.audit_id}.audit_type不可空白")
+    if not isinstance(definition.source, Mapping):
+        raise ValueError(f"{definition.audit_id}.source必須是mapping")
+    if not isinstance(definition.dimensions, Mapping):
+        raise ValueError(f"{definition.audit_id}.dimensions必須是mapping")
+    if not isinstance(definition.outcomes, Mapping):
+        raise ValueError(f"{definition.audit_id}.outcomes必須是mapping")
     if not str(definition.output_subdir).strip():
         raise ValueError(f"{definition.audit_id}.output_subdir不可空白")
     _validate_relative_path(
         definition.output_subdir,
         field_name=f"{definition.audit_id}.output_subdir",
     )
+
+
+def get_audit_module_ids(*, enabled_only: bool = True) -> tuple[str, ...]:
+    module_ids: list[str] = []
+    for module_id, raw in AUDIT_MODULES.items():
+        if not isinstance(raw, dict):
+            raise ValueError(f"AUDIT_MODULES[{module_id!r}]必須是mapping")
+        if enabled_only and not bool(raw.get("enabled", False)):
+            continue
+        module_ids.append(str(module_id))
+    return tuple(module_ids)
 
 
 def get_audit_definitions(module_id: str) -> tuple[AuditDefinition, ...]:
@@ -224,6 +221,7 @@ __all__ = [
     "AUDIT_SCHEMA_VERSION",
     "AuditDefinition",
     "get_audit_definitions",
+    "get_audit_module_ids",
     "get_enabled_audit_definitions",
     "validate_audit_config",
 ]

@@ -19,7 +19,7 @@ from filters.breakout_quality.artifacts import (
     load_model_artifact_contract,
     load_runtime_artifact_contract,
 )
-from filters.breakout_quality.console_report import project_relative_display_path
+from core.console_report import project_relative_display_path
 from filters.breakout_quality.export_scores import export_forward_oos_scores
 from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_model_output_dir
 from filters.breakout_quality.ranking_score_store import (

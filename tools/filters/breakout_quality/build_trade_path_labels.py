@@ -22,7 +22,7 @@ from core.dataset_profiles import get_dataset_dir
 from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
 from filters.breakout_quality.artifacts import build_file_manifest, compute_file_sha256
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -62,7 +62,7 @@ from filters.breakout_quality.trade_path_label import (
     simulate_realized_trade_path_label,
 )
 from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows
-from tools.filters.breakout_quality.common import (
+from filters.breakout_quality.workflow_io import (
     PROJECT_ROOT,
     dataset_output_dir,
     discover_dataset_csv_inputs,
@@ -74,12 +74,12 @@ from tools.filters.breakout_quality.common import (
     write_json,
 )
 from tools.filters.breakout_quality.strategy_adapt import _build_base_policy
-from tools.filters.breakout_quality.strategy_compare import (
+from filters.breakout_quality.strategy_compare_engine import (
     PARAM_POLICY_BASE_FINALIST_BEST,
     _load_param_source,
     _validate_requested_param_policy,
 )
-from tools.filters.breakout_quality.strategy_dl_filter_param_adapt_gate import (
+from filters.breakout_quality.strategy_param_training import (
     RISK_SEARCH_FIELDS,
     _validate_risk_only_params,
     build_risk_only_fold_overrides,

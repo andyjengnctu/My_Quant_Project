@@ -39,7 +39,7 @@ from filters.breakout_quality.paths import (
     resolve_existing_filter_research_score_path,
 )
 from filters.breakout_quality.splits import KEY_COLUMNS, normalize_split_assignment_keys
-from tools.filters.breakout_quality.common import (
+from filters.breakout_quality.workflow_io import (
     event_group_summary,
     group_size_weights,
     read_breakout_quality_csv,

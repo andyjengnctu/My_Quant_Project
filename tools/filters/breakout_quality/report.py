@@ -22,7 +22,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_report_json_path,
     resolve_filter_report_markdown_path,
 )
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     console_color_enabled,
     print_artifact_paths,
     render_title,

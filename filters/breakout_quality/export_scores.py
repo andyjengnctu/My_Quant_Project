@@ -74,7 +74,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_research_score_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
-from filters.breakout_quality.console_report import print_artifact_paths
+from core.console_report import print_artifact_paths
 from filters.breakout_quality.workflow_io import (
     discover_dataset_csv_inputs,
     load_dataset_frame,

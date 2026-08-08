@@ -23,7 +23,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     print_artifact_paths,
     project_relative_display_path,
     render_key_values,
@@ -33,7 +33,8 @@ from filters.breakout_quality.console_report import (
 )
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
 from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
-from tools.filters.breakout_quality.strategy_compare import (
+from tools.audit.portfolio.score_ranking_capture import materialize_score_ranking_capture_from_pair
+from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_SCORE_RANKING,
     OPTIONAL_ENTRY_FILTER_FIELDS,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
@@ -250,6 +251,9 @@ def _run_pair(
                 comparison_start_date=args.start_date,
                 comparison_end_date=args.end_date,
                 quiet=args.quiet,
+            )
+            payload["score_ranking_capture_audit"] = materialize_score_ranking_capture_from_pair(
+                output_dir
             )
     except Exception as exc:
         captured = buffer.getvalue().strip()

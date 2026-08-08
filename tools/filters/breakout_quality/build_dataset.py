@@ -45,14 +45,14 @@ from filters.breakout_quality.market_set import (
 )
 from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.source_inventory import build_source_data_inventory
-from filters.breakout_quality.console_report import (
+from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
     paint,
     print_artifact_paths,
 )
 from core.display_common import InlineProgress, render_elapsed
-from tools.filters.breakout_quality.common import (
+from filters.breakout_quality.workflow_io import (
     PROJECT_ROOT,
     add_policy_args,
     build_policy_from_args,
