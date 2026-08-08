@@ -5714,3 +5714,28 @@ Infrastructure completed；不占用新的`MR-*`／`SR-C*`／`AUD-*` identity。
 - config-driven Strategy Compare direct contract新增pair payload同時產生Markdown＋console簡報、cache required-files包含Markdown、C17/C18 REUSE重新materialize本次Markdown並在互動執行顯示相同pair簡報；相關contract直接執行39項全部PASS。
 - 新增`validate_breakout_quality_strategy_readable_report_contract_case`，集中盤點Strategy Compare pair／multi-arm、Binary參數適應、Selection策略適應、optional-filter gate、Binary DL rule gate與trade-path label gate共七個正式策略結果入口，要求persistent Markdown與`core.console_report`-based console renderer。
 - GPT未執行`apps/test_suite.py`；正式double check仍由使用者本機單一正式入口執行。
+
+
+## 2026-08-08 — `apps/breakout_quality.py`正式輸出簡易報表
+
+### 狀態
+
+Infrastructure completed；不占用新的`MR-*`／`SR-C*`／`AUD-*` identity。MR-12B、DL-CONT12B、C17/C18/C19/C20研究語意與策略結果均不變。
+
+### 程式基準
+
+- 使用者指定ZIP：`test-branch-1_20260808_172555_4bbab0b.zip`
+- SHA256：`ef689ab698a18f61e0c1a0b3eb5a4b0bedddf39b1441fe04b1f19a72a0434aad`
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 使用者要求與唯一變更
+
+使用者澄清前一輪所稱`strategy_quality`實際指`apps/breakout_quality.py`，要求該App本身的正式輸出都具備簡易報表。本輪在App command dispatcher增加統一summary：成功subcommand保留原本詳細console／JSON／CSV／Markdown，最後再輸出`Breakout Quality 簡易報表`並保存`outputs/filters/breakout_quality/<filter_id>/simple_reports/<command>.md`。摘要固定顯示command、status、filter、architecture、profile、objective與elapsed；Dataset、Binary report、Continuous ranker、PIT audit與Continuous Target只讀既有canonical工件補核心數字，不建立第二套模型統計。完整workflow另輸出最終summary；Audit互動執行後直接顯示最近Audit摘要。
+
+### 固定研究／runtime條件
+
+不修改Dataset／Label、MR-12B pairwise loss與whole-date batching、模型權重、PIT score語意、C17/C18 selector、C19/C20、Strategy Compare cache／fingerprint、策略sizing／accounting／execution。
+
+### GPT獨立驗證
+
+`validate_breakout_quality_app_simple_report_contract_case`直接6/6 PASS，驗證console、persistent Markdown、專案相對路徑、active identity與subcommand／workflow掛載；既有`validate_dataset_cli_contract_case` 174項PASS。GPT未執行`apps/test_suite.py`。

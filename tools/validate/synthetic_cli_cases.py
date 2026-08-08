@@ -76,6 +76,21 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         "用法: python apps/breakout_quality.py [menu|workflow|<command>] [options]" in help_text,
     )
+    with TemporaryDirectory() as tmp_dir:
+        simple_root = Path(tmp_dir)
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", simple_root):
+            simple_rc, simple_stdout = _capture_stdout(
+                app_breakout_quality._emit_breakout_quality_simple_report,
+                "evaluate",
+                ["--filter-id", "synthetic_quality"],
+                returncode=0,
+                elapsed_sec=1.25,
+            )
+        simple_text = simple_rc.read_text(encoding="utf-8")
+        add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_console", True, "Breakout Quality 簡易報表" in simple_stdout)
+        add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_markdown", True, simple_rc.is_file() and "# Breakout Quality 簡易報表" in simple_text)
+        add_check(results, "cli_contract", case_id, "breakout_quality_app_simple_report_uses_relative_path", True, "outputs/filters/breakout_quality/synthetic_quality/simple_reports/evaluate.md" in simple_stdout and str(simple_root) not in simple_stdout)
+
     for command in (
         "menu", "workflow", "build-dataset", "build-pretrain-dataset", "pretrain",
         "train", "export-scores", "report", "evaluate", "regime-audit",
@@ -2072,6 +2087,62 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_test_suite_after_zip", True, stdout_text.index(f"[package_zip] output={new_zip_path}") < stdout_text.index("[package_zip] test_suite=pass"))
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_headline_reported", True, "[package_zip] commit=[feature/workflow fedcba9] feat: package workflow" in stdout_text)
         add_check(results, "cli_contract", case_id, "package_zip_orchestration_bundle_preserved", True, (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
+def validate_breakout_quality_app_simple_report_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_APP_SIMPLE_REPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    app_breakout_quality = importlib.import_module("apps.breakout_quality")
+
+    with TemporaryDirectory() as tmp_dir:
+        simple_root = Path(tmp_dir)
+        with patch.object(app_breakout_quality, "PROJECT_ROOT", simple_root):
+            report_path, console_text = _capture_stdout(
+                app_breakout_quality._emit_breakout_quality_simple_report,
+                "evaluate",
+                ["--filter-id", "synthetic_quality"],
+                returncode=0,
+                elapsed_sec=1.25,
+            )
+        markdown = report_path.read_text(encoding="utf-8")
+        add_check(
+            results, "output_contract", case_id,
+            "breakout_quality_app_console_simple_report", True,
+            "Breakout Quality 簡易報表" in console_text and "狀態" in console_text,
+        )
+        add_check(
+            results, "output_contract", case_id,
+            "breakout_quality_app_persistent_markdown_simple_report", True,
+            report_path.is_file() and "# Breakout Quality 簡易報表" in markdown,
+        )
+        add_check(
+            results, "output_contract", case_id,
+            "breakout_quality_app_simple_report_paths_are_project_relative", True,
+            "outputs/filters/breakout_quality/synthetic_quality/simple_reports/evaluate.md" in console_text
+            and str(simple_root) not in console_text,
+        )
+        add_check(
+            results, "output_contract", case_id,
+            "breakout_quality_app_simple_report_contains_active_identity", True,
+            "synthetic_quality" in markdown and "Objective" in markdown,
+        )
+
+    source = Path(app_breakout_quality.__file__).read_text(encoding="utf-8")
+    add_check(
+        results, "output_contract", case_id,
+        "breakout_quality_app_successful_subcommands_emit_simple_report", True,
+        "_emit_breakout_quality_simple_report(" in source
+        and "if returncode == 0:" in source,
+    )
+    add_check(
+        results, "output_contract", case_id,
+        "breakout_quality_app_workflow_emits_final_simple_report", True,
+        '"workflow",' in source and "workflow_report_args" in source,
+    )
 
     summary["checks"] = len(results)
     return results, summary

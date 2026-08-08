@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -187,15 +188,228 @@ def _command_program_name(program_name: str, command: str) -> str:
     return f"{normalized_program_name} {command}"
 
 
+def _cli_option_value(args: list[str], flag: str, default=None):
+    try:
+        index = args.index(flag)
+    except ValueError:
+        return default
+    if index + 1 >= len(args):
+        return default
+    return args[index + 1]
+
+
+def _safe_json_object(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _simple_report_context(command: str, args: list[str]) -> tuple[str, str, str]:
+    settings = get_breakout_quality_workflow_settings()
+    filter_id = normalize_filter_id(
+        _cli_option_value(args, "--filter-id", settings.filter_id)
+    )
+    architecture = str(
+        _cli_option_value(args, "--model-architecture", settings.model_architecture)
+    )
+    profile = str(
+        _cli_option_value(args, "--experiment-profile", settings.experiment_profile)
+    )
+    return filter_id, architecture, profile
+
+
+def _fmt_simple_metric(value, *, digits: int = 4, percent: bool = False) -> str:
+    if value is None:
+        return "-"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if percent:
+        return f"{number * 100.0:.2f}%"
+    return f"{number:.{digits}f}"
+
+
+def _simple_report_details(
+    command: str,
+    args: list[str],
+    *,
+    filter_id: str,
+    architecture: str,
+    profile: str,
+) -> tuple[list[tuple[str, object]], Path | None]:
+    rows: list[tuple[str, object]] = []
+    detail_report: Path | None = None
+
+    if command == "build-dataset":
+        summary = _read_dataset_summary(filter_id) or {}
+        counts = dict(summary.get("label_counts") or {})
+        group_summary = dict(summary.get("event_group_summary") or {})
+        rows.extend(
+            [
+                ("Events", summary.get("event_count")),
+                ("Groups", group_summary.get("group_count")),
+                ("PASS／REJECT", f"{counts.get('pass', '-')} / {counts.get('reject', '-') }"),
+                ("日期範圍", summary.get("selected_date_range") or summary.get("date_range") or "-"),
+            ]
+        )
+    elif command == "train-continuous-ranker":
+        output_dir = resolve_filter_model_output_dir(
+            PROJECT_ROOT, filter_id, architecture, profile
+        )
+        report_json = output_dir / CONTINUOUS_RANKER_REPORT_FILENAME
+        payload = _safe_json_object(report_json)
+        training = dict(payload.get("training") or {})
+        metrics = dict(payload.get("split_metrics") or {})
+        rows.extend(
+            [
+                ("Selected epoch", training.get("selected_epoch")),
+                ("Validation daily rho", _fmt_simple_metric((metrics.get("validation") or {}).get("mean_daily_spearman"))),
+                ("Selection daily rho", _fmt_simple_metric((metrics.get("selection") or {}).get("mean_daily_spearman"))),
+                ("OOS daily rho", _fmt_simple_metric((metrics.get("oos") or {}).get("mean_daily_spearman"))),
+            ]
+        )
+        candidate = output_dir / "continuous_ranker_report.md"
+        detail_report = candidate if candidate.is_file() else None
+    elif command in {"build-point-in-time-scores", "audit-point-in-time-scores"}:
+        audit_json = resolve_selection_point_in_time_audit_json_path(
+            PROJECT_ROOT, filter_id, architecture, profile
+        )
+        payload = _safe_json_object(audit_json)
+        coverage = dict(payload.get("score_coverage") or {})
+        primary = dict(payload.get("primary_metrics") or payload.get("pass_only_metrics") or {})
+        if not primary:
+            target_quality = dict(payload.get("target_quality") or {})
+            primary = dict(target_quality.get("primary") or {})
+        rows.extend(
+            [
+                ("Score coverage", _fmt_simple_metric(coverage.get("coverage_rate"), percent=True)),
+                ("Scored groups", coverage.get("scored_group_count")),
+                ("Daily rho", _fmt_simple_metric(primary.get("mean_daily_spearman"))),
+                ("Global rho", _fmt_simple_metric(primary.get("global_spearman"))),
+            ]
+        )
+        candidate = resolve_selection_point_in_time_audit_markdown_path(
+            PROJECT_ROOT, filter_id, architecture, profile
+        )
+        detail_report = candidate if candidate.is_file() else None
+    elif command in {"report", "workflow"}:
+        report_json = resolve_filter_report_json_path(
+            PROJECT_ROOT, filter_id, architecture, profile
+        )
+        payload = _safe_json_object(report_json)
+        oos = dict((payload.get("split_summaries") or {}).get("oos") or {})
+        conclusion = dict(payload.get("conclusion") or {})
+        rows.extend(
+            [
+                ("OOS 原始 PASS", _fmt_simple_metric(oos.get("base_pass_rate"), percent=True)),
+                ("OOS PASS Precision", _fmt_simple_metric(oos.get("pass_precision"), percent=True)),
+                ("OOS PASS Recall", _fmt_simple_metric(oos.get("pass_recall"), percent=True)),
+                ("OOS Accuracy", _fmt_simple_metric(oos.get("accuracy"), percent=True)),
+                ("結論", conclusion.get("title") or conclusion.get("status") or "-"),
+            ]
+        )
+        candidate = resolve_filter_report_markdown_path(
+            PROJECT_ROOT, filter_id, architecture, profile
+        )
+        detail_report = candidate if candidate.is_file() else None
+    elif command == "prepare-continuous-target":
+        target_id = str(
+            _cli_option_value(
+                args,
+                "--target-id",
+                get_breakout_quality_experiment_profile(profile).continuous_target_id or "",
+            )
+        )
+        if target_id:
+            target_dir = resolve_continuous_target_dir(
+                PROJECT_ROOT, filter_id, target_id=target_id
+            )
+            manifest = _safe_json_object(target_dir / TARGET_MANIFEST_FILENAME)
+            coverage = dict(manifest.get("coverage") or {})
+            rows.extend(
+                [
+                    ("Target ID", target_id),
+                    ("Valid groups", coverage.get("valid_group_count") or manifest.get("valid_group_count")),
+                ]
+            )
+            candidate = target_dir / TARGET_AUDIT_MARKDOWN_FILENAME
+            detail_report = candidate if candidate.is_file() else None
+
+    return rows, detail_report
+
+
+def _emit_breakout_quality_simple_report(
+    command: str,
+    args: list[str],
+    *,
+    returncode: int,
+    elapsed_sec: float,
+) -> Path:
+    filter_id, architecture, profile = _simple_report_context(command, args)
+    experiment = get_breakout_quality_experiment_profile(profile)
+    detail_rows, detail_report = _simple_report_details(
+        command,
+        list(args),
+        filter_id=filter_id,
+        architecture=architecture,
+        profile=profile,
+    )
+    status = "PASS" if int(returncode) == 0 else f"FAIL ({int(returncode)})"
+    rows: list[tuple[str, object]] = [
+        ("動作", command),
+        ("狀態", status),
+        ("Filter ID", filter_id),
+        ("Architecture", architecture),
+        ("Profile", profile),
+        ("Objective", experiment.training_objective),
+        ("耗時", render_elapsed(float(elapsed_sec))),
+        *detail_rows,
+    ]
+    if detail_report is not None:
+        rows.append(("詳細報表", project_relative_display_path(detail_report, project_root=PROJECT_ROOT)))
+
+    print("\n" + render_title("Breakout Quality 簡易報表"))
+    print(render_key_values(rows))
+
+    report_dir = resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id) / "simple_reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    safe_command = command.replace("/", "_").replace("\\", "_")
+    report_path = report_dir / f"{safe_command}.md"
+    markdown_lines = [
+        "# Breakout Quality 簡易報表",
+        "",
+        f"- Generated at UTC：`{datetime.now(timezone.utc).isoformat()}`",
+    ]
+    for label, value in rows:
+        markdown_lines.append(f"- **{label}**：{value}")
+    report_path.write_text("\n".join(markdown_lines) + "\n", encoding="utf-8")
+    print(render_status_paths((("簡易報表", report_path, True),), project_root=PROJECT_ROOT))
+    return report_path
+
+
 def _run_command(command: str, args: list[str], *, program_name: str) -> int:
     command_module = _load_command_module(command)
     original_program_name = sys.argv[0]
     sys.argv[0] = _command_program_name(program_name, command)
+    started = time.perf_counter()
     try:
         result = command_module.main(list(args))
     finally:
         sys.argv[0] = original_program_name
-    return int(result or 0)
+    returncode = int(result or 0)
+    if returncode == 0:
+        _emit_breakout_quality_simple_report(
+            command,
+            list(args),
+            returncode=returncode,
+            elapsed_sec=time.perf_counter() - started,
+        )
+    return returncode
 
 
 @contextmanager
@@ -1028,6 +1242,17 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     print(
         "\n=== Workflow 完成 | "
         f"總耗時 {render_elapsed(workflow_elapsed, color=color_time)} ==="
+    )
+    workflow_report_args = [
+        "--filter-id", filter_id,
+        "--model-architecture", str(BREAKOUT_QUALITY_MODEL_ARCHITECTURE),
+        "--experiment-profile", str(args.experiment_profile),
+    ]
+    _emit_breakout_quality_simple_report(
+        "workflow",
+        workflow_report_args,
+        returncode=0,
+        elapsed_sec=workflow_elapsed,
     )
     return 0
 
@@ -2203,6 +2428,7 @@ def _interactive_audit_menu() -> int:
                 print("輸入無效，本次不執行。")
                 continue
             run_enabled_audits("breakout_quality")
+            print("\n" + render_latest_audit_summary("breakout_quality"))
         elif choice == "2":
             print("\n" + render_audit_status("breakout_quality"))
         elif choice == "3":
