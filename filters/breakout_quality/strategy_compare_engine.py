@@ -2885,7 +2885,14 @@ def run_comparison(
         "filter_id": filter_id,
         "model_architecture": manifest_architecture,
         "experiment_profile": manifest_profile,
-        "threshold": (None if score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS else configured_threshold),
+        "threshold": (
+            None
+            if score_source in {
+                SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+                SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+            }
+            else configured_threshold
+        ),
         "threshold_used_as_gate": bool(comparison_mode == COMPARISON_MODE_HARD_FILTER),
         "score_ranking_order": (
             (

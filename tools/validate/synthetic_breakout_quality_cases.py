@@ -16790,6 +16790,56 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and not legacy_param_path.exists()
         and '"export-scores": "filters.breakout_quality.export_scores"' in model_app_source,
     )
+    pit_sources = [
+        source for source in settings.dl_sources.values()
+        if source.score_source == "selection_point_in_time"
+    ]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_pit_strategy_sources_are_read_only_and_preparation_validates_pit_contract",
+        True,
+        bool(pit_sources)
+        and all(source.threshold is None for source in pit_sources)
+        and all(source.forward_scores_builder is None for source in pit_sources)
+        and "load_selection_point_in_time_ranking_contract" in preparation_source
+        and "SCORE_SOURCE_SELECTION_POINT_IN_TIME" in preparation_source
+        and any(
+            source.artifact_contract is not None
+            for source in settings.parameter_sources.values()
+        ),
+    )
+
+    from filters.breakout_quality.strategy_compare_preparation import (
+        _validate_expected_artifact_contract,
+    )
+    contract_example = {
+        "breakout_quality_param_adaptation": {
+            "mode": "risk_only_training",
+            "parameter_set": "P2_HISTORY",
+            "fixed_rule_contract": "all_rule_filters_off",
+            "training_dl_enabled": False,
+        },
+        "unrelated": 123,
+    }
+    expected_contract = {
+        "breakout_quality_param_adaptation": {
+            "parameter_set": "P2_HISTORY",
+            "training_dl_enabled": False,
+        }
+    }
+    bad_contract = {
+        "breakout_quality_param_adaptation": {
+            "parameter_set": "P3",
+            "training_dl_enabled": False,
+        }
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "parameter_artifact_subset_contract_accepts_expected_identity_and_rejects_mismatch",
+        True,
+        _validate_expected_artifact_contract(contract_example, expected_contract) is None
+        and _validate_expected_artifact_contract(bad_contract, expected_contract) is not None,
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "preparation_plan_has_ready_preparable_blocked_and_single_confirmation_contract",
@@ -17796,7 +17846,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and all(
             call.kwargs.get("comparison_start_date") == "2021-01-01"
             and call.kwargs.get("comparison_end_date") == "2021-12-31"
-            for call in mocked_run.call_args_list
+            and call.kwargs.get("score_source")
+            == settings.dl_sources[pair_contract[3].dl_id].score_source
+            for pair_contract, call in zip(execution_pairs, mocked_run.call_args_list)
         )
         and set(replay_payload["scenarios"])
         == {arm.arm_id for arm in settings.enabled_arms}
@@ -17973,7 +18025,19 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and cache_miss_after_score_change,
         )
 
-        if all(arm_id in settings.arms for arm_id in ("C17", "C18", "C19", "C20", "C21", "C22")):
+        historical_ids = {"C3", "C17", "C18", "C19", "C20", "C21", "C22"}
+        if historical_ids.issubset(set(settings.arms)):
+            historical_settings = replace(
+                settings,
+                arms={
+                    arm_id: replace(arm, enabled=arm_id in historical_ids)
+                    for arm_id, arm in settings.arms.items()
+                },
+                contrasts={
+                    contrast_id: replace(contrast, enabled=False)
+                    for contrast_id, contrast in settings.contrasts.items()
+                },
+            )
             with tempfile.TemporaryDirectory() as reuse_tmp:
                 reuse_root = Path(reuse_tmp)
                 reusable_pair_dir = reuse_root / "historical_pair"
@@ -17983,6 +18047,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                     encoding="utf-8",
                 )
                 reuse_status = dict(ready_status)
+                reuse_status["resolved_parameter_paths"] = {
+                    "min_roos": "models/min_roos.json"
+                }
                 reuse_status["replay_cache"] = {
                     "pairs": {
                         "C17": {
@@ -18015,7 +18082,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 with patch.object(
                     strategy_comparison_module,
                     "get_strategy_comparison_settings",
-                    return_value=settings,
+                    return_value=historical_settings,
                 ), patch.object(
                     strategy_comparison_module,
                     "run_comparison",

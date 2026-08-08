@@ -21,11 +21,19 @@ from filters.breakout_quality.artifacts import (
 )
 from core.console_report import project_relative_display_path
 from filters.breakout_quality.export_scores import export_forward_oos_scores
-from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_model_output_dir
+from filters.breakout_quality.paths import (
+    resolve_filter_artifact_paths,
+    resolve_filter_model_output_dir,
+    resolve_selection_point_in_time_audit_json_path,
+    resolve_selection_point_in_time_manifest_path,
+    resolve_selection_point_in_time_score_path,
+)
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     load_continuous_ranker_oos_contract,
+    load_selection_point_in_time_ranking_contract,
 )
 from filters.breakout_quality.strategy_compare_engine import (
     PARAM_POLICY_SPECS,
@@ -80,12 +88,38 @@ def resolve_param_source_path(
     return _resolve_relative_path(root, rendered)
 
 
+def _validate_expected_artifact_contract(
+    actual: Any,
+    expected: Any,
+    *,
+    field_path: str = "root",
+) -> str | None:
+    """Return the first subset-contract mismatch, or ``None`` when matched."""
+
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return f"{field_path}: expected object, actual={type(actual).__name__}"
+        for key, expected_value in expected.items():
+            if key not in actual:
+                return f"{field_path}.{key}: missing"
+            mismatch = _validate_expected_artifact_contract(
+                actual[key], expected_value, field_path=f"{field_path}.{key}"
+            )
+            if mismatch is not None:
+                return mismatch
+        return None
+    if actual != expected:
+        return f"{field_path}: expected={expected!r}, actual={actual!r}"
+    return None
+
+
 def _validate_param_artifact(
     path: Path,
     *,
     param_policy: str,
     comparison_start: str | None = None,
     comparison_end: str | None = None,
+    artifact_contract: dict[str, Any] | None = None,
 ) -> tuple[bool, str, dict[str, Any] | None]:
     if not path.is_file():
         return False, "MISSING", None
@@ -116,6 +150,13 @@ def _validate_param_artifact(
                 f"comparison={required_start.date()}~{required_end.date()}",
                 policy,
             )
+    if artifact_contract:
+        raw_payload = _read_json(path)
+        if raw_payload is None:
+            return False, "PARAM_CONTRACT_INVALID_JSON", policy
+        mismatch = _validate_expected_artifact_contract(raw_payload, artifact_contract)
+        if mismatch is not None:
+            return False, f"PARAM_CONTRACT_MISMATCH: {mismatch}", policy
     return True, "READY", policy
 
 
@@ -300,6 +341,91 @@ def collect_artifact_status(
             source.model_architecture,
             source.experiment_profile,
         )
+
+        if source.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            pit_contract = None
+            pit_ready = False
+            pit_status = "MISSING"
+            try:
+                pit_contract = load_selection_point_in_time_ranking_contract(
+                    str(root),
+                    source.filter_id,
+                    source.model_architecture,
+                    source.experiment_profile,
+                )
+                if str(pit_contract.model_validation_gate.get("status") or "") != "PASS":
+                    raise ValueError("Selection PIT model validation Gate非PASS")
+                pit_ready = True
+                pit_status = "READY"
+                runtime_periods[dl_id] = (
+                    str(pit_contract.available_from),
+                    str(pit_contract.available_through),
+                )
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                pit_status = f"SELECTION_PIT_INVALID ({type(exc).__name__})"
+            dl_model_ready[dl_id] = pit_ready
+            if pit_contract is not None:
+                files = {
+                    "manifest": pit_contract.manifest_path,
+                    "audit": pit_contract.audit_path,
+                    "forward_scores": pit_contract.score_path,
+                }
+            else:
+                files = {
+                    "manifest": resolve_selection_point_in_time_manifest_path(
+                        root, source.filter_id, source.model_architecture, source.experiment_profile
+                    ),
+                    "audit": resolve_selection_point_in_time_audit_json_path(
+                        root, source.filter_id, source.model_architecture, source.experiment_profile
+                    ),
+                    "forward_scores": resolve_selection_point_in_time_score_path(
+                        root, source.filter_id, source.model_architecture, source.experiment_profile
+                    ),
+                }
+            file_rows: dict[str, Any] = {}
+            for key, path in files.items():
+                sha256 = compute_file_sha256(path) if path.is_file() else None
+                artifact_identities[f"dl:{dl_id}:{key}"] = {
+                    "path": project_relative_display_path(path, project_root=root),
+                    "sha256": sha256,
+                }
+                action = (
+                    "REUSE"
+                    if pit_ready and settings.preparation.reuse_ready_artifacts
+                    else "BLOCKED"
+                )
+                description = (
+                    "重用既有Selection PIT score／audit工件"
+                    if pit_ready
+                    else (
+                        "缺少或無效；請先由模型研究入口執行Selection PIT Scores與模型驗證，"
+                        "策略比較不得自動重訓"
+                    )
+                )
+                file_rows[key] = {
+                    "ready": pit_ready,
+                    "status": pit_status,
+                    "action": action,
+                    "path": project_relative_display_path(path, project_root=root),
+                    "sha256": sha256,
+                }
+                actions.append(
+                    _preparation_action(
+                        action_id=f"dl:{dl_id}:{key}",
+                        artifact_key=f"dl:{dl_id}:{key}",
+                        action=action,
+                        builder_type=None,
+                        description=description,
+                        path=file_rows[key]["path"],
+                    )
+                )
+            dl_rows[dl_id] = {
+                "ready": pit_ready,
+                "status": pit_status,
+                "identity": source.as_dict(),
+                "files": file_rows,
+            }
+            continue
 
         if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
             model_ready = False
@@ -530,6 +656,9 @@ def collect_artifact_status(
             param_policy=settings.param_policy,
             comparison_start=comparison_start,
             comparison_end=comparison_end,
+            artifact_contract=(
+                None if source.artifact_contract is None else dict(source.artifact_contract)
+            ),
         )
         identity_ready, identity_status, identity_path = _validate_param_training_identity(
             root=root,

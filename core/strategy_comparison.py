@@ -76,6 +76,7 @@ class StrategyParameterSource:
     description: str
     identity_manifest_path: str | None = None
     trained_with_dl_id: str | None = None
+    artifact_contract: Mapping[str, Any] | None = None
     builder: StrategyArtifactBuilder | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -85,6 +86,9 @@ class StrategyParameterSource:
             "description": self.description,
             "identity_manifest_path": self.identity_manifest_path,
             "trained_with_dl_id": self.trained_with_dl_id,
+            "artifact_contract": (
+                None if self.artifact_contract is None else dict(self.artifact_contract)
+            ),
             "builder": None if self.builder is None else self.builder.as_dict(),
         }
 
@@ -370,6 +374,13 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 raise ValueError(f"continuous DL source不得設定binary threshold: {key}")
             if source.forward_scores_builder is not None:
                 raise ValueError(f"continuous DL source不得由策略比較自動訓練／重建score: {key}")
+        elif source.score_source == "selection_point_in_time":
+            if source.threshold is not None:
+                raise ValueError(f"Selection PIT continuous DL source不得設定binary threshold: {key}")
+            if source.forward_scores_builder is not None:
+                raise ValueError(
+                    f"Selection PIT score不得由策略比較自動訓練／重建: {key}"
+                )
         else:
             raise ValueError(f"DL source score_source不支援: {key}/{source.score_source}")
         _validate_builder(

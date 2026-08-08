@@ -17,15 +17,15 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 10
+STRATEGY_COMPARE_SCHEMA_VERSION = 11
 
 # =============================================================================
 # 1. 共用執行設定
 # =============================================================================
 
 STRATEGY_COMPARE_DATASET = "full"
-STRATEGY_COMPARE_START_DATE: str | None = None
-STRATEGY_COMPARE_END_DATE: str | None = None
+STRATEGY_COMPARE_START_DATE: str | None = "2014-01-01"
+STRATEGY_COMPARE_END_DATE: str | None = "2020-12-31"
 STRATEGY_COMPARE_PARAM_POLICY = "base-finalist-best"
 STRATEGY_COMPARE_MAX_POSITIONS = 10
 STRATEGY_COMPARE_ROTATION = "off"
@@ -142,6 +142,27 @@ STRATEGY_PARAM_SOURCES = {
             },
         },
     },
+    "selection_min_roos": {
+        "path_template": (
+            "models/research/breakout_quality/trade_path_label/a2_teacher_params/"
+            "p2_dl_off_trained/active_params/{param_filename}"
+        ),
+        "description": (
+            "Selection 2014～2020 historical P2 Min ROOS；rules全關、DL-off訓練，"
+            "只重用既有lookahead-safe active params"
+        ),
+        "identity_manifest_path": None,
+        "trained_with_dl_id": None,
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "mode": "risk_only_training",
+                "parameter_set": "P2_HISTORY",
+                "fixed_rule_contract": "all_rule_filters_off",
+                "training_dl_enabled": False,
+            }
+        },
+        "builder": None,
+    },
 }
 
 # =============================================================================
@@ -231,6 +252,18 @@ STRATEGY_DL_SOURCES = {
         "description": "MR-12C all-event no-time ListNet top-one listwise ranker frozen OOS score；只允許受控strategy research replay",
         "forward_scores_builder": None,
     },
+    "CONT12B_PIT": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "strategy_aligned_no_time_all_event_pairwise",
+        "threshold": None,
+        "score_source": "selection_point_in_time",
+        "description": (
+            "MR-12B Selection point-in-time continuous score；"
+            "只供2014～2020無前視策略經濟驗證"
+        ),
+        "forward_scores_builder": None,
+    },
 }
 
 # =============================================================================
@@ -261,7 +294,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "hard-filter",
     },
     "C3": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS",
         "description": "rules全關、DL-off環境訓練的Min基準",
         "param_source": "min_roos",
@@ -394,7 +427,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-capital-preserving",
     },
     "C17": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: All-event Continuous max-DL constrained basket",
         "description": (
             "Min ROOS只固定每日預留單數K與exact reserved-capital floor；"
@@ -408,7 +441,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl",
     },
     "C18": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: All-event Continuous max-DL feasible-ascent",
         "description": (
             "與C17使用完全相同K/R0、MR-12A與basket內Min ROOS執行順序；"
@@ -422,7 +455,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
     "C19": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: MR-12B pairwise max-DL constrained basket",
         "description": (
             "與C17使用完全相同K/R0、minimum-repair與basket內Min ROOS執行順序；"
@@ -435,7 +468,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl",
     },
     "C20": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: MR-12B pairwise max-DL feasible-ascent",
         "description": (
             "與C18使用完全相同K/R0、feasible-ascent與basket內Min ROOS執行順序；"
@@ -448,7 +481,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
     "C21": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: MR-12C listwise max-DL constrained basket",
         "description": (
             "與C19使用完全相同C17 K/R0、minimum-repair與basket內Min ROOS執行順序；"
@@ -461,7 +494,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl",
     },
     "C22": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: MR-12C listwise max-DL feasible-ascent",
         "description": (
             "與C20使用完全相同C18 K/R0、feasible-ascent與basket內Min ROOS執行順序；"
@@ -471,6 +504,45 @@ STRATEGY_COMPARE_ARMS = {
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT12C",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
+    "C23": {
+        "enabled": True,
+        "name": "Selection Min ROOS PIT baseline",
+        "description": (
+            "2014～2020 historical P2 Min ROOS active params；rules全關；DL關閉；"
+            "作Selection PIT策略經濟驗證共同baseline"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+    },
+    "C24": {
+        "enabled": True,
+        "name": "Selection PIT: MR-12B minimum-repair",
+        "description": (
+            "與C23使用完全相同historical P2 Min ROOS params；"
+            "使用MR-12B Selection PIT score並完全沿用C17 minimum-repair selector"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12B_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl",
+    },
+    "C25": {
+        "enabled": True,
+        "name": "Selection PIT: MR-12B feasible-ascent",
+        "description": (
+            "與C23使用完全相同historical P2 Min ROOS params；"
+            "使用MR-12B Selection PIT score並完全沿用C18 feasible-ascent selector"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12B_PIT",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
 }
@@ -493,16 +565,19 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C17-C3": {"enabled": False, "left": "C17", "right": "C3", "description": "Max-DL constrained basket在固定Min ROOS資源底線下相對正式研究基準"},
     "C18-C17": {"enabled": False, "left": "C18", "right": "C17", "description": "相同MR-12A與K/R0資源契約下，feasible-ascent相對C17 minimum-repair的純selector搜尋效果"},
     "C18-C3": {"enabled": False, "left": "C18", "right": "C3", "description": "Max-DL feasible-ascent在固定Min ROOS資源底線下相對正式研究基準"},
-    "C21-C19": {"enabled": True, "left": "C21", "right": "C19", "description": "固定C17 selector下MR-12C listwise相對MR-12B pairwise的純DL模型效果"},
-    "C22-C20": {"enabled": True, "left": "C22", "right": "C20", "description": "固定C18 selector下MR-12C listwise相對MR-12B pairwise的純DL模型效果"},
-    "C22-C21": {"enabled": True, "left": "C22", "right": "C21", "description": "同一MR-12C source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
-    "C21-C3": {"enabled": True, "left": "C21", "right": "C3", "description": "MR-12C在C17 selector下相對Min ROOS研究基準"},
-    "C22-C3": {"enabled": True, "left": "C22", "right": "C3", "description": "MR-12C在C18 selector下相對Min ROOS研究基準"},
-    "C19-C17": {"enabled": True, "left": "C19", "right": "C17", "description": "固定C17 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
-    "C20-C18": {"enabled": True, "left": "C20", "right": "C18", "description": "固定C18 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
-    "C20-C19": {"enabled": True, "left": "C20", "right": "C19", "description": "同一MR-12B source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
-    "C19-C3": {"enabled": True, "left": "C19", "right": "C3", "description": "MR-12B在C17 selector下相對Min ROOS研究基準"},
-    "C20-C3": {"enabled": True, "left": "C20", "right": "C3", "description": "MR-12B在C18 selector下相對Min ROOS研究基準"},
+    "C21-C19": {"enabled": False, "left": "C21", "right": "C19", "description": "固定C17 selector下MR-12C listwise相對MR-12B pairwise的純DL模型效果"},
+    "C22-C20": {"enabled": False, "left": "C22", "right": "C20", "description": "固定C18 selector下MR-12C listwise相對MR-12B pairwise的純DL模型效果"},
+    "C22-C21": {"enabled": False, "left": "C22", "right": "C21", "description": "同一MR-12C source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
+    "C21-C3": {"enabled": False, "left": "C21", "right": "C3", "description": "MR-12C在C17 selector下相對Min ROOS研究基準"},
+    "C22-C3": {"enabled": False, "left": "C22", "right": "C3", "description": "MR-12C在C18 selector下相對Min ROOS研究基準"},
+    "C19-C17": {"enabled": False, "left": "C19", "right": "C17", "description": "固定C17 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
+    "C20-C18": {"enabled": False, "left": "C20", "right": "C18", "description": "固定C18 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
+    "C20-C19": {"enabled": False, "left": "C20", "right": "C19", "description": "同一MR-12B source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
+    "C19-C3": {"enabled": False, "left": "C19", "right": "C3", "description": "MR-12B在C17 selector下相對Min ROOS研究基準"},
+    "C20-C3": {"enabled": False, "left": "C20", "right": "C3", "description": "MR-12B在C18 selector下相對Min ROOS研究基準"},
+    "C24-C23": {"enabled": True, "left": "C24", "right": "C23", "description": "Selection PIT下固定historical Min ROOS與C17 selector，MR-12B PIT ranking相對DL-off baseline的經濟效果"},
+    "C25-C23": {"enabled": True, "left": "C25", "right": "C23", "description": "Selection PIT下固定historical Min ROOS與C18 selector，MR-12B PIT ranking相對DL-off baseline的經濟效果"},
+    "C25-C24": {"enabled": True, "left": "C25", "right": "C24", "description": "Selection PIT MR-12B固定score source下，C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
     "C12-C11": {"enabled": False, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
     "C11-C8": {"enabled": False, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
     "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},
@@ -559,6 +634,11 @@ def get_strategy_comparison_settings() -> StrategyComparisonSettings:
             description=str(raw.get("description") or "").strip(),
             identity_manifest_path=raw.get("identity_manifest_path"),
             trained_with_dl_id=raw.get("trained_with_dl_id"),
+            artifact_contract=(
+                None
+                if raw.get("artifact_contract") in (None, {})
+                else dict(raw.get("artifact_contract") or {})
+            ),
             builder=_builder(raw.get("builder")),
         )
         for source_id, raw in STRATEGY_PARAM_SOURCES.items()

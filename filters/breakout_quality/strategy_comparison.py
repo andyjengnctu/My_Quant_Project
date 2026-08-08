@@ -161,9 +161,13 @@ def _pair_cache_fingerprint_from_payload(
             for name in ("model", "manifest", "forward_scores")
         )
     if dl_id:
+        dl_artifact_names = (
+            ("manifest", "audit", "forward_scores")
+            if str(dl_payload.get("score_source") or "") == "selection_point_in_time"
+            else ("model", "manifest", "forward_scores")
+        )
         artifact_keys.extend(
-            f"dl:{dl_id}:{name}"
-            for name in ("model", "manifest", "forward_scores")
+            f"dl:{dl_id}:{name}" for name in dl_artifact_names
         )
     selected_artifacts = {
         key: artifact_identities.get(key)

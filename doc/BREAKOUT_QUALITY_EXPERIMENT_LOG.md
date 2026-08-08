@@ -6385,3 +6385,41 @@ MR-12B的Selection PIT模型層證據通過：10個年度的PASS-only rho全部�
 1. 進入正式Selection PIT策略績效驗證，讓歷史每個交易日只使用當時合法PIT score，並建立orderable score coverage；比較時維持既有策略參數／selector contract，禁止依PIT結果回頭修改loss、epoch或score normalization。
 2. 策略層優先看Return、MDD、RoMD、EV、Exposure／資金利用率與年度穩定，確認PIT模型排序能力是否能轉成無前視portfolio economics。
 3. 若策略結果因fold邊界或跨foldscore level出現異常，再做read-only cross-fold/action attribution；`drift=True`本身不足以建立新model experiment。
+
+## 2026-08-09 — Selection PIT 3-arm策略經濟驗證入口實作（SR-C23／C24／C25）
+
+### 狀態
+
+`IMPLEMENTED / STRATEGY_RESULT_NOT_AVAILABLE`。本輪只建立正式config-driven Strategy Compare入口與工件契約，不執行strategy replay、不重訓MR-12B、不重新最佳化策略參數。
+
+### 本輪基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_050516_cc11b79.zip`。
+- SHA256：`7adc1e247972afa409c391b1e46f830c016d7ff692845b0ef1055acaf5fcb8b0`。
+- GPT fresh extract：`/mnt/data/stock_review_20260809_050516`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 固定研究設計
+
+- 比較期間固定`2014-01-01～2020-12-31`。
+- 共用策略參數來源：歷史A2 teacher P2 Min ROOS active params：`models/research/breakout_quality/trade_path_label/a2_teacher_params/p2_dl_off_trained/active_params/roos_base_best.json`。此工件由Selection nested baseline衍生，rules固定all-off、training DL off、只搜尋既定risk fields；Strategy Compare僅重用，不自動執行rolling optimizer。
+- 參數工件額外驗證`breakout_quality_param_adaptation.mode=risk_only_training`、`parameter_set=P2_HISTORY`、`fixed_rule_contract=all_rule_filters_off`、`training_dl_enabled=false`，避免誤接forward 2021～2026 P2或其他參數來源。
+- 新runtime source：`DL-CONT12B-PIT`（config alias=`CONT12B_PIT`），identity固定MR-12B／InceptionTime／`strategy_aligned_no_time_all_event_pairwise`；score source=`selection_point_in_time`。前置檢查要求Selection PIT score／manifest／audit完整且model Gate=`PASS`；Strategy Compare不得build/rebuild PIT model或score。
+- `SR-C23`：historical P2 Min ROOS、rules all-off、DL off baseline。
+- `SR-C24`：與C23相同params，使用MR-12B PIT score，完全沿用C17 `resource-aware-continuous-max-dl` minimum-repair selector。
+- `SR-C25`：與C23相同params，使用MR-12B PIT score，完全沿用C18 `resource-aware-continuous-max-dl-feasible-ascent` selector。
+- 正式 contrasts：`C24-C23`、`C25-C23`、`C25-C24`。
+- 不改max positions=10、rotation=off、param policy=`base-finalist-best`、accounting、execution、candidate lifecycle或selector語意。
+
+### 實作邊界
+
+1. `core.strategy_comparison`正式允許read-only `selection_point_in_time` DL source，且禁止binary threshold與forward-score builder。
+2. `strategy_compare_preparation`直接使用`load_selection_point_in_time_ranking_contract`驗證PIT工件與Gate，並把score／manifest／audit SHA綁入artifact identity；缺工件時BLOCK，不自動訓練。
+3. Strategy pair cache對`selection_point_in_time` source額外納入PIT audit identity；既有canonical／continuous-OOS sources的fingerprint欄位與schema維持不變，避免無關地失效歷史cache，同時防止PIT audit變更後誤重用舊結果。
+4. Engine既有Selection PIT lookup／post-replay target diagnostics沿用；PIT continuous source在metadata中threshold固定為None。
+5. Config切換為C23／C24／C25三arm；舊C17～C22保留Registry／config歷史重現但本輪disabled。
+
+### 下一步
+
+使用正式選單`apps/research.py → [3] 策略組合比較 → [2] 查看設定、工件與預計動作`。先確認期間2014～2020、arms=C23/C24/C25、PIT工件與historical P2 params皆READY；若READY，再`[1/Enter] 執行目前比較設定`。結果優先比較Return、MDD、RoMD、EV、Exposure／資金利用率、orderable PIT-score coverage及年度穩定性；不得依此結果回頭調MR-12B loss／epoch／score normalization。
+
