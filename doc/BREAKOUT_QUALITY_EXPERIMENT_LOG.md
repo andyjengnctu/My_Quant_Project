@@ -5048,51 +5048,59 @@ metadata固定標示：`read_only=true`、`portfolio_replay_executed=false`、`t
 - 全專案282個Python檔AST parse與`compileall`通過；bare except=0、pass-only exception handler=0、internal import cycle=0、`core/filters → tools.audit`=0、legacy wrapper=0。
 - `apps/test_suite.py`僅做靜態可信度檢查，未由GPT執行；formal結果仍須由使用者本機重新執行確認。
 
-## 2026-08-08 — Audit migration physical-path formal-regression閉環
+## 2026-08-08 — Project-wide Audit migration consistency／coverage synthetic閉環修正
 
 ### 狀態
 
-`INFRASTRUCTURE_FIX / FORMAL_RETEST_PENDING / AUD-c15-strategy-attribution RESULT_PENDING`
+`INFRASTRUCTURE_FIX / AUD-c15-strategy-attribution RESULT_PENDING`。
 
-### 程式與formal bundle基準
+### 程式基準
 
-- 使用者ZIP：`test-branch-1_20260808_121033_c482ac9.zip`
-- ZIP SHA256：`30e99cd6f59386b96b13fa8168620ac4886656c4b08503191cc0b52dfb0b8cf4`
-- Formal bundle：`to_chatgpt_bundle_20260808_121126_4140bb87.zip`
-- Bundle SHA256：`fb327c5bbf606bd8cc7d72ab08c391f44529a9a2aad37956decd85dc0609b2dc`
+- 使用者ZIP：`test-branch-1_20260808_121538_c482ac9.zip`
+- SHA256：`fc72fc2655a2d29ddd58e85ccbe17848273bb81901b0c8ab4169e8bdde3b0490`
+- Formal bundle：`to_chatgpt_bundle_20260808_121631_e2812b00.zip`
 - 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
 
-### Formal結果與根因
+### 使用者本機formal結果
 
-使用者本機結果：quick gate PASS、chain checks PASS、ml smoke PASS；consistency只有1個failure，meta quality有4個failure。Bundle顯示四個meta failure並非四個獨立產品問題：
+- quick gate：PASS。
+- consistency：FAIL 1；唯一失敗為`SYNTHETIC_SUITE`，`FileNotFoundError`仍讀取已搬移的`tools/filters/breakout_quality/audit_pass_realization_gap.py`。
+- chain checks：PASS。
+- ml smoke：PASS。
+- meta quality：FAIL 4，皆為coverage synthetic相關。
 
-1. consistency在`validate_breakout_quality_pass_realization_gap_attribution_contract_case`讀取已刪除的`tools/filters/breakout_quality/audit_pass_realization_gap.py`時`FileNotFoundError`，synthetic suite中止；
-2. meta quality的`coverage_synthetic_suite_runs_successfully`由同一例外失敗；
-3. line／branch coverage與key-target coverage因此只量到提前中止前的22%左右，屬連帶失敗，不是runtime coverage本身突然退化。
+`coverage_artifacts/coverage_run_info.json`確認coverage subprocess `returncode=1`，stderr為同一個`audit_pass_realization_gap.py` FileNotFoundError，且`synthetic_case_count=0`。因此當輪line coverage=`22.71%`、branch coverage=`22.98%`只是synthetic suite在執行任何case前中止造成的連鎖結果，不代表正式coverage能力退化；不得調低coverage threshold來消除FAIL。
 
-進一步獨立掃描沒有停在formal首先撞到的11H路徑，又找到9個同類latent stale physical-path references：11C、11D、11E、11F、11I、11J、11K各1處，PIT builder另對11A／11F各1處。合計10個舊實體路徑讀取、影響T270～T273與T275～T279九個synthetic tests；若只修formal第一個FileNotFound，下一次suite會繼續在後續案例逐一失敗。
+### 根因
+
+Audit migration後，production imports已改到`tools/audit/`，但`tools/validate/synthetic_breakout_quality_cases.py`仍殘留三類舊契約：
+
+1. 多個contract test直接以舊實體路徑`read_text()` Audit原始碼；第一個撞到的是11H pass-realization-gap，但後面另有11C／11D／11E／11F／11I／11J／11K與PIT相關舊路徑。
+2. PIT builder synthetic仍從`tools.filters.breakout_quality.continuous_ranker_pipeline` import已移至`filters.breakout_quality.continuous_ranker_data`的`_validate_group_consistency`。
+3. Audit CLI已改為`tools/audit/catalog.py`動態merge至`apps/breakout_quality.py::COMMAND_MODULES`，但多個synthetic仍只AST讀取靜態`COMMAND_MODULES = {...}` literal，因此會把合法Audit command誤判成未註冊。
+
+另發現score-ranking capture compact console正式標題已為`Score Sort 資金配置與 Target Capture 診斷`，舊synthetic仍要求非compact長標題；此為stale output assertion，不應反向修改正式報表。
 
 ### 修正
 
-`tools/validate/synthetic_breakout_quality_cases.py`新增`_read_audit_source(audit_type)`，所有上述10個Audit source inspection均不再保存physical path，而是：
+只修改validator與本Experiment Log，不改production strategy／model／config：
 
-`audit_type → tools/audit/catalog.py → canonical module → module source`
+- 所有已搬移Audit的source-reading contract改讀`tools/audit/breakout_quality/`正式位置；不恢復任何legacy檔。
+- qualified-candidate audit source亦改讀project-wide Audit位置。
+- PIT group consistency helper改從canonical `filters.breakout_quality.continuous_ranker_data` import。
+- 新增catalog-aware Audit CLI module lookup；11A／11C～11K等Audit command registration檢查直接以`tools.audit.catalog.get_domain_cli_commands("breakout_quality")`為SSOT，不再把動態Audit誤當靜態dict內容。
+- score-ranking capture compact console assertion同步目前正式compact title；非compact正式title與report內容均未修改。
 
-因此Audit catalog繼續作project-wide inventory SSOT；未來Audit實體位置再調整時，validator不需要同步第二份路徑mapping。沒有恢復任何legacy wrapper或舊檔。
+### 獨立驗證
 
-### 語意邊界
+未執行`apps/test_suite.py`，亦未直接重跑formal consistency／meta-quality step。
 
-- 不修改Dataset、Label、MR-12A、DL-CONT12A、SR-C15、selector、strategy replay或任何正式研究結果。
-- `AUD-c15-strategy-attribution`仍為`IMPLEMENTED / RESULT_PENDING`；本輪沒有產生正式C15 Audit結果。
-- meta quality coverage門檻／target清單沒有為了通過測試而下修；本輪只修復synthetic suite提前中止的來源解析。
+逐一直接驗證本次migration受影響的contract case：continuous target、qualified candidate set、target component attribution、time-penalty ablation、no-time target、pass realization gap、selection strategy realization、candidate counterfactual、portfolio selection pressure、PIT score builder、score-ranking capture與project-wide Audit framework，全部`failed=0`。
 
-### GPT獨立驗證
+全專案獨立靜態檢查另確認：282個Python檔AST可解析、`compileall`通過、bare except=0、pass-only except=0、missing internal import=0、internal import cycle=0、layer violation=0；所有16個Audit catalog modules可import，`core/filters → tools.audit`仍為0，已刪除Audit舊檔名／舊module import在current Python source中為0。`apps/test_suite.py`只做靜態可信度檢查，仍含quick gate／consistency／chain checks／ml smoke／meta quality五段且不讀`PROJECT_SETTINGS.md`；Checklist markdown欄位、T排序、G日期／ID排序亦通過獨立檢查。
 
-未執行`apps/test_suite.py`或其formal step。獨立驗證確認：
+交易正式層未修改；另獨立確認盤前reserve在intraday fill判斷前扣除、限價成交使用`min(open, limit)`且low未到limit則miss、entry-day stop／TP只建立next-open pending action、sell cash扣除fee與tax、extended正式限價仍取`orig_limit`。
 
-- 9個受影響Audit type皆可由catalog解析到存在的canonical source；
-- 原各synthetic所檢查的11H／11I／11J／11K／11A／11F關鍵source token在canonical module中仍存在；
-- validator source中已無`tools/filters/breakout_quality/audit_*.py`硬編讀取；
-- 全專案283個Python檔AST parse與`compileall`通過；bare except=0、pass-only exception handler=0、internal import cycle=0；
-- `apps/test_suite.py`與Checklist僅做靜態可信度／覆蓋治理核對，正式double-check仍由使用者本機重跑確認。
+### 研究狀態
 
+`MR-12A`、`DL-CONT12A`、`SR-C15`與`AUD-c15-strategy-attribution`的identity／策略結果／研究判定均不變；`AUD-c15-strategy-attribution`仍為`IMPLEMENTED / RESULT_PENDING`。本輪只修formal validation migration regression，不新增C16、不訓練模型、不修改Target或runtime selector。
