@@ -6349,3 +6349,39 @@ P2 Dynamic-K / score-date comparability目前使用的方向真值仍是每個�
 2. P2到此不再因C17 K=1原始event-target反轉設計新loss；MR-12D暫不建立。
 3. 若仍要解釋C17/C19、C18/C20的portfolio action差異，下一個診斷必須以**orderable trade date的canonical counterfactual／realized strategy outcome**為真值，並直接對planned basket／repair／feasible-ascent action做歸因；不得再用原始score-event-date Target冒充當下剩餘機會。
 
+
+
+## 2026-08-09 — MR-12B Selection PIT模型驗證：10/10年度rho為正，Gate PASS
+
+### 狀態
+
+`MR-12B / DL-CONT12B`更新為`PIT_MODEL_VALIDATION_PASS / MODEL_ECONOMIC_IMPROVEMENT_SUPPORTED`。本輪只取得既有MR-12B的Selection point-in-time模型驗證結果，不建立新`MR-*`、`DL-*`、`SR-C*`或`AUD-*` identity。
+
+### 本輪基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_045404_66521e1.zip`。
+- SHA256：`710539a6fc783608572c753a050e2a83237d6500919fbebfddd1e63690abff5a`。
+- GPT fresh extract：`/mnt/data/stock_review_20260809_045404_710539a6`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 使用者本機PIT結果
+
+- Profile：`strategy_aligned_no_time_all_event_pairwise`；objective=`daily_pairwise_ranking`；scope=`all_labels`；seed=42。
+- PIT period：`2011-01-01～2020-12-31`；12-month score folds／24-month inner validation；folds=`10`。
+- PIT scores：`23,932 / 23,932` groups，coverage=`100.00%`；本輪10 folds全部重用既有合法工件，未重訓。
+- PASS-only target ordering：global rho=`0.2336`；mean daily rho=`0.1859`；top-bottom spread=`1.1386R`。
+- 年度穩定：rho>0=`10/10`；spread>0=`9/10`。
+- 分類重疊：AUC=`0.5670`；Top decile PASS=`63.07%`；Overall PASS=`55.46%`。
+- Gate=`PASS`。Gate固定只使用PASS-only global/daily Spearman與多數年度rho/spread方向，不使用策略績效。
+- `drift=True`：audit定義為至少一組相鄰fold的score平均值位移`>=1.0 pooled score SD`。此旗標描述score level／calibration drift，不代表年度ranking方向失敗，也不是目前predeclared Gate veto。
+- Orderable coverage尚未提供，依正式語意於後續Selection strategy replay建立。
+
+### 判定
+
+MR-12B的Selection PIT模型層證據通過：10個年度的PASS-only rho全部為正、9/10年度top-bottom spread為正，且全期global／daily rho均為正。這補上Forward-OOS與C19/C20 controlled replay之外的歷史時間穩定性證據。`drift=True`需在策略層留意跨fold score level，但目前沒有證據支持因該warning修改Pairwise loss或拒絕MR-12B。 此audit只評估MR-12B自身是否具有正向且跨年穩定的PIT排序能力，**沒有與MR-12A做same-fold paired comparison**，因此不可把Gate PASS寫成「MR-12B在歷史每個fold都優於MR-12A」。若要補齊learning-objective歷史比較，應以相同PIT日期／候選做MR-12B−MR-12A paired PIT read-only comparison。
+
+### 下一步
+
+1. 進入正式Selection PIT策略績效驗證，讓歷史每個交易日只使用當時合法PIT score，並建立orderable score coverage；比較時維持既有策略參數／selector contract，禁止依PIT結果回頭修改loss、epoch或score normalization。
+2. 策略層優先看Return、MDD、RoMD、EV、Exposure／資金利用率與年度穩定，確認PIT模型排序能力是否能轉成無前視portfolio economics。
+3. 若策略結果因fold邊界或跨foldscore level出現異常，再做read-only cross-fold/action attribution；`drift=True`本身不足以建立新model experiment。
