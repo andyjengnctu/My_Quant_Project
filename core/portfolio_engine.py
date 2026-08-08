@@ -1108,6 +1108,11 @@ def run_portfolio_timeline(
             'max_dl_repair_steps': 0,
             'max_dl_repair_evaluations': 0,
             'max_dl_fallback_to_baseline': False,
+            'max_dl_seed_fallback': False,
+            'max_dl_feasible_ascent_steps': 0,
+            'max_dl_feasible_ascent_evaluations': 0,
+            'max_dl_feasible_ascent_local_optimum': False,
+            'selector_elapsed_ns': 0,
         }
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
@@ -1516,6 +1521,11 @@ def run_portfolio_timeline(
                 'Resource_Aware_Max_DL_Repair_Steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
                 'Resource_Aware_Max_DL_Repair_Evaluations': int(resource_selection_diag.get('max_dl_repair_evaluations', 0) or 0),
                 'Resource_Aware_Max_DL_Fallback': bool(resource_selection_diag.get('max_dl_fallback_to_baseline', False)),
+                'Resource_Aware_Max_DL_Seed_Fallback': bool(resource_selection_diag.get('max_dl_seed_fallback', False)),
+                'Resource_Aware_Max_DL_Feasible_Ascent_Steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
+                'Resource_Aware_Max_DL_Feasible_Ascent_Evaluations': int(resource_selection_diag.get('max_dl_feasible_ascent_evaluations', 0) or 0),
+                'Resource_Aware_Max_DL_Feasible_Ascent_Local_Optimum': bool(resource_selection_diag.get('max_dl_feasible_ascent_local_optimum', False)),
+                'Resource_Aware_Selector_Elapsed_Ns': int(resource_selection_diag.get('selector_elapsed_ns', 0) or 0),
             })
 
         current_equity = today_equity

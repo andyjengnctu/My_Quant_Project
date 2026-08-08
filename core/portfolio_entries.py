@@ -1,4 +1,5 @@
 import math
+import time
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
@@ -6,6 +7,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
     RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES,
     resolve_breakout_quality_ranking_policy,
 )
@@ -281,6 +283,11 @@ def _resource_aware_default_diag(rows, free_slots, *, selector):
         'max_dl_repair_steps': 0,
         'max_dl_repair_evaluations': 0,
         'max_dl_fallback_to_baseline': False,
+        'max_dl_seed_fallback': False,
+        'max_dl_feasible_ascent_steps': 0,
+        'max_dl_feasible_ascent_evaluations': 0,
+        'max_dl_feasible_ascent_local_optimum': False,
+        'selector_elapsed_ns': 0,
     }
 
 
@@ -1200,6 +1207,158 @@ def _reorder_resource_aware_continuous_max_dl(
     )
 
 
+def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """Strengthen C17 with feasible best-improvement swaps, without exact combinatorial search.
+
+    C17 first supplies a guaranteed-feasible K-basket.  If its Top-K repair had to
+    fall back to Min ROOS, that baseline is still a valid seed rather than a terminal
+    failure.  From the seed, every single membership swap is evaluated with canonical
+    exact reservation; the highest-DL-quality feasible improvement is accepted and the
+    process repeats until no improving single swap remains.  Capital never contributes
+    to the objective: it is only the K/R0 feasibility contract.
+    """
+
+    target_count = int(baseline['selected_count'])
+    reserve_floor_milli = int(baseline['reserved_cost_milli'])
+    base_rank = {id(row): idx for idx, row in enumerate(rows)}
+    seed_order, seed_diag = _reorder_resource_aware_continuous_max_dl(
+        rows,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+        baseline=baseline,
+        default_diag=default_diag,
+    )
+    if not bool(seed_diag.get('max_dl_eligible', False)):
+        out = dict(seed_diag)
+        out.update({
+            'selector': 'continuous-score-max-dl-feasible-ascent',
+            'max_dl_seed_fallback': bool(seed_diag.get('max_dl_fallback_to_baseline', False)),
+            'max_dl_fallback_to_baseline': False,
+            'max_dl_feasible_ascent_local_optimum': True,
+        })
+        return seed_order, out
+
+    def evaluate_basket(basket):
+        ordered = _max_dl_execution_order(basket, base_rank=base_rank)
+        result = _simulate_reserved_candidate_order(
+            ordered,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=target_count,
+            params=params,
+        )
+        return ordered, result
+
+    current_basket = list(seed_order[:target_count])
+    current_order, current_result = evaluate_basket(current_basket)
+    if not _max_dl_basket_is_feasible(
+        current_result,
+        target_count=target_count,
+        reserve_floor_milli=reserve_floor_milli,
+    ):
+        raise RuntimeError('max-DL feasible-ascent seed不符合Min ROOS資源契約')
+    current_key = _max_dl_basket_quality_key(current_order, base_rank=base_rank)
+    evaluations = 0
+    ascent_steps = 0
+    local_optimum = False
+
+    while True:
+        current_ids = {id(row) for row in current_basket}
+        in_rows = [row for row in rows if id(row) not in current_ids]
+        best = None
+        best_key = current_key
+        best_tie = None
+        for out_row in list(current_basket):
+            for in_row in in_rows:
+                trial_basket = [
+                    row for row in current_basket if id(row) != id(out_row)
+                ] + [in_row]
+                trial_order, trial_result = evaluate_basket(trial_basket)
+                evaluations += 1
+                if not _max_dl_basket_is_feasible(
+                    trial_result,
+                    target_count=target_count,
+                    reserve_floor_milli=reserve_floor_milli,
+                ):
+                    continue
+                quality_key = _max_dl_basket_quality_key(
+                    trial_order, base_rank=base_rank
+                )
+                if quality_key <= current_key:
+                    continue
+                tie_key = (
+                    -base_rank[id(out_row)],
+                    -base_rank[id(in_row)],
+                )
+                if (
+                    best is None
+                    or quality_key > best_key
+                    or (quality_key == best_key and tie_key > best_tie)
+                ):
+                    best = (trial_basket, trial_order, trial_result)
+                    best_key = quality_key
+                    best_tie = tie_key
+        if best is None:
+            local_optimum = True
+            break
+        current_basket, current_order, current_result = best
+        current_key = best_key
+        ascent_steps += 1
+
+    baseline_selected_ids = {id(row) for row in baseline['selected_rows']}
+    selected_ids = {id(row) for row in current_result['selected_rows']}
+    final_ids = {id(row) for row in current_order}
+    final_order = list(current_order) + [
+        row for row in rows if id(row) not in final_ids
+    ]
+    promoted_count = sum(
+        1 for row in current_result['selected_rows']
+        if id(row) not in baseline_selected_ids
+    )
+    out = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        current_result,
+        changed=bool(selected_ids != baseline_selected_ids),
+        promoted_pass_count=0,
+        selector='continuous-score-max-dl-feasible-ascent',
+    )
+    out.update({
+        'mode': 'dl-selection',
+        'promoted_score_orders': int(promoted_count),
+        'direct_score_order_feasible': bool(seed_diag.get('direct_score_order_feasible', False)),
+        'basket_search_states': int(seed_diag.get('basket_search_states', 0) or 0) + int(evaluations),
+        'basket_search_pruned': 0,
+        'basket_feasible_count': int(seed_diag.get('basket_feasible_count', 0) or 0),
+        'resource_preservation_required': True,
+        'pre_market_order_limit': int(target_count),
+        'max_dl_eligible': True,
+        'max_dl_repair_steps': int(seed_diag.get('max_dl_repair_steps', 0) or 0),
+        'max_dl_repair_evaluations': int(seed_diag.get('max_dl_repair_evaluations', 0) or 0),
+        'max_dl_seed_fallback': bool(seed_diag.get('max_dl_fallback_to_baseline', False)),
+        'max_dl_fallback_to_baseline': False,
+        'max_dl_feasible_ascent_steps': int(ascent_steps),
+        'max_dl_feasible_ascent_evaluations': int(evaluations),
+        'max_dl_feasible_ascent_local_optimum': bool(local_optimum),
+    })
+    if int(current_result['selected_count']) != target_count:
+        raise RuntimeError('max-DL feasible-ascent輸出未維持Min ROOS預留單數')
+    if int(current_result['reserved_cost_milli']) < reserve_floor_milli:
+        raise RuntimeError('max-DL feasible-ascent輸出低於Min ROOS reserved-capital floor')
+    return final_order, out
+
+
 def select_resource_aware_action_candidates(orderable_candidates_today, resource_selection_diag):
     """Return the candidates that may create pre-market orders, preserving full diagnostics input."""
 
@@ -1234,12 +1393,15 @@ def reorder_candidates_for_resource_aware_quality(
     resource constraints.  No selector introduces a numeric utilization threshold.
     """
 
+    started_ns = time.perf_counter_ns()
     rows = list(orderable_candidates_today or [])
     free_slots = max(0, int(max_positions) - int(pre_market_occupied))
     policy = _resource_aware_quality_policy(rows)
     selector = (
         'best-improvement-basket'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+        else 'continuous-score-max-dl-feasible-ascent'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
         else 'continuous-score-max-dl'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
         else 'continuous-score-capital-preserving'
@@ -1249,8 +1411,14 @@ def reorder_candidates_for_resource_aware_quality(
         else 'greedy-first-improvement'
     )
     default_diag = _resource_aware_default_diag(rows, free_slots, selector=selector)
+
+    def finish(order, diag):
+        out = dict(diag or {})
+        out['selector_elapsed_ns'] = int(max(0, time.perf_counter_ns() - started_ns))
+        return order, out
+
     if free_slots <= 0 or not rows or policy is None:
-        return rows, default_diag
+        return finish(rows, default_diag)
 
     baseline = _simulate_reserved_candidate_order(
         rows,
@@ -1259,8 +1427,19 @@ def reorder_candidates_for_resource_aware_quality(
         free_slots=free_slots,
         params=params,
     )
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT:
+        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+        )
+        return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL:
-        return _reorder_resource_aware_continuous_max_dl(
+        order, diag = _reorder_resource_aware_continuous_max_dl(
             rows,
             available_cash=available_cash,
             sizing_equity=sizing_equity,
@@ -1269,8 +1448,9 @@ def reorder_candidates_for_resource_aware_quality(
             baseline=baseline,
             default_diag=default_diag,
         )
+        return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING:
-        return _reorder_resource_aware_continuous_capital_preserving(
+        order, diag = _reorder_resource_aware_continuous_capital_preserving(
             rows,
             available_cash=available_cash,
             sizing_equity=sizing_equity,
@@ -1279,8 +1459,9 @@ def reorder_candidates_for_resource_aware_quality(
             baseline=baseline,
             default_diag=default_diag,
         )
+        return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS:
-        return _reorder_resource_aware_continuous(
+        order, diag = _reorder_resource_aware_continuous(
             rows,
             available_cash=available_cash,
             sizing_equity=sizing_equity,
@@ -1289,8 +1470,9 @@ def reorder_candidates_for_resource_aware_quality(
             baseline=baseline,
             default_diag=default_diag,
         )
+        return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET:
-        return _reorder_resource_aware_binary_basket(
+        order, diag = _reorder_resource_aware_binary_basket(
             rows,
             available_cash=available_cash,
             sizing_equity=sizing_equity,
@@ -1299,7 +1481,8 @@ def reorder_candidates_for_resource_aware_quality(
             baseline=baseline,
             default_diag=default_diag,
         )
-    return _reorder_resource_aware_binary_greedy(
+        return finish(order, diag)
+    order, diag = _reorder_resource_aware_binary_greedy(
         rows,
         available_cash=available_cash,
         sizing_equity=sizing_equity,
@@ -1308,6 +1491,7 @@ def reorder_candidates_for_resource_aware_quality(
         baseline=baseline,
         default_diag=default_diag,
     )
+    return finish(order, diag)
 
 
 

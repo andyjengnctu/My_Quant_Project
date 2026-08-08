@@ -16075,7 +16075,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17"}.issubset(set(settings.arms))
+        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17", "C18"}.issubset(set(settings.arms))
         and all(arm.enabled for arm in settings.enabled_arms)
         and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
         and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
@@ -16119,6 +16119,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C15": "Min ROOS: All-event Continuous resource-aware",
         "C16": "Min ROOS: All-event Continuous capital-preserving",
         "C17": "Min ROOS: All-event Continuous max-DL constrained basket",
+        "C18": "Min ROOS: All-event Continuous max-DL feasible-ascent",
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -16609,6 +16610,211 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and len(max_dl_direct_order) == 3
         and len(max_dl_direct_action) == 2
         and {row["ticker"] for row in max_dl_direct_action} == {"D1", "D2"},
+    )
+
+
+    ascent_gap_seed = (
+        ("X0", 300.0, 119, 0.027),
+        ("X1", 200.0, 304, 0.206),
+        ("X2", 100.0, 287, 0.827),
+        ("X3", 1000.0, 93, 0.817),
+        ("X4", 500.0, 233, 0.056),
+        ("X5", 500.0, 283, 0.379),
+        ("X6", 300.0, 114, 0.892),
+    )
+    ascent_gap_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-max-dl-feasible-ascent",
+        )
+        for ticker, price, qty, score in ascent_gap_seed
+    ]
+    ascent_gap_order, ascent_gap_diag = reorder_candidates_for_resource_aware_quality(
+        ascent_gap_rows,
+        available_cash=300_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=7,
+        max_positions=10,
+        params=resource_params,
+    )
+    ascent_gap_action = select_resource_aware_action_candidates(
+        ascent_gap_order, ascent_gap_diag
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_feasible_ascent_improves_c17_local_repair_without_changing_k_or_resource_floor",
+        True,
+        [row["ticker"] for row in ascent_gap_action] == ["X1", "X3", "X5"]
+        and ascent_gap_diag["max_dl_feasible_ascent_steps"] > 0
+        and ascent_gap_diag["max_dl_feasible_ascent_evaluations"] > 0
+        and ascent_gap_diag["max_dl_feasible_ascent_local_optimum"]
+        and not ascent_gap_diag["max_dl_fallback_to_baseline"]
+        and ascent_gap_diag["selector_elapsed_ns"] > 0
+        and ascent_gap_diag["selected_count"] == ascent_gap_diag["baseline_selected_count"]
+        and ascent_gap_diag["reserved_cost_milli"] >= ascent_gap_diag["baseline_reserved_cost_milli"],
+    )
+
+    fallback_ascent_seed = (
+        ("F0", 200.0, 153, 0.899),
+        ("F1", 500.0, 249, 0.312),
+        ("F2", 1000.0, 233, 0.346),
+        ("F3", 1000.0, 162, 0.685),
+        ("F4", 100.0, 334, 0.012),
+        ("F5", 100.0, 326, 0.929),
+        ("F6", 1000.0, 51, 0.706),
+        ("F7", 300.0, 283, 0.585),
+    )
+    fallback_c17_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score, "resource-aware-continuous-max-dl"
+        )
+        for ticker, price, qty, score in fallback_ascent_seed
+    ]
+    fallback_c18_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-max-dl-feasible-ascent",
+        )
+        for ticker, price, qty, score in fallback_ascent_seed
+    ]
+    fallback_c17_order, fallback_c17_diag = reorder_candidates_for_resource_aware_quality(
+        fallback_c17_rows,
+        available_cash=400_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=6,
+        max_positions=10,
+        params=resource_params,
+    )
+    fallback_c18_order, fallback_c18_diag = reorder_candidates_for_resource_aware_quality(
+        fallback_c18_rows,
+        available_cash=400_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=6,
+        max_positions=10,
+        params=resource_params,
+    )
+    fallback_c17_action = select_resource_aware_action_candidates(
+        fallback_c17_order, fallback_c17_diag
+    )
+    fallback_c18_action = select_resource_aware_action_candidates(
+        fallback_c18_order, fallback_c18_diag
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_feasible_ascent_continues_dl_optimization_after_c17_seed_fallback",
+        True,
+        fallback_c17_diag["max_dl_fallback_to_baseline"]
+        and fallback_c18_diag["max_dl_seed_fallback"]
+        and not fallback_c18_diag["max_dl_fallback_to_baseline"]
+        and fallback_c18_diag["max_dl_feasible_ascent_steps"] > 0
+        and fallback_c18_diag["selected_score_sum"] > fallback_c17_diag["selected_score_sum"]
+        and [row["ticker"] for row in fallback_c17_action] == ["F1", "F2"]
+        and [row["ticker"] for row in fallback_c18_action] == ["F2", "F3"]
+        and fallback_c18_diag["selected_count"] == fallback_c18_diag["baseline_selected_count"]
+        and fallback_c18_diag["reserved_cost_milli"] >= fallback_c18_diag["baseline_reserved_cost_milli"],
+    )
+
+
+    ascent_gap_seed = (
+        ("X0", 300.0, 119, 0.027),
+        ("X1", 200.0, 304, 0.206),
+        ("X2", 100.0, 287, 0.827),
+        ("X3", 1000.0, 93, 0.817),
+        ("X4", 500.0, 233, 0.056),
+        ("X5", 500.0, 283, 0.379),
+        ("X6", 300.0, 114, 0.892),
+    )
+    ascent_gap_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-max-dl-feasible-ascent",
+        )
+        for ticker, price, qty, score in ascent_gap_seed
+    ]
+    ascent_gap_order, ascent_gap_diag = reorder_candidates_for_resource_aware_quality(
+        ascent_gap_rows,
+        available_cash=300_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=7,
+        max_positions=10,
+        params=resource_params,
+    )
+    ascent_gap_action = select_resource_aware_action_candidates(
+        ascent_gap_order, ascent_gap_diag
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_feasible_ascent_improves_c17_local_repair_without_changing_k_or_resource_floor",
+        True,
+        [row["ticker"] for row in max_dl_action_rows] == ["T0", "T2", "T6"]
+        and [row["ticker"] for row in ascent_gap_action] == ["X1", "X3", "X5"]
+        and ascent_gap_diag["max_dl_feasible_ascent_steps"] > 0
+        and ascent_gap_diag["max_dl_feasible_ascent_evaluations"] > 0
+        and ascent_gap_diag["max_dl_feasible_ascent_local_optimum"]
+        and not ascent_gap_diag["max_dl_fallback_to_baseline"]
+        and ascent_gap_diag["selector_elapsed_ns"] > 0
+        and ascent_gap_diag["selected_count"] == ascent_gap_diag["baseline_selected_count"]
+        and ascent_gap_diag["reserved_cost_milli"] >= ascent_gap_diag["baseline_reserved_cost_milli"],
+    )
+
+    fallback_ascent_seed = (
+        ("F0", 200.0, 153, 0.899),
+        ("F1", 500.0, 249, 0.312),
+        ("F2", 1000.0, 233, 0.346),
+        ("F3", 1000.0, 162, 0.685),
+        ("F4", 100.0, 334, 0.012),
+        ("F5", 100.0, 326, 0.929),
+        ("F6", 1000.0, 51, 0.706),
+        ("F7", 300.0, 283, 0.585),
+    )
+    fallback_c17_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score, "resource-aware-continuous-max-dl"
+        )
+        for ticker, price, qty, score in fallback_ascent_seed
+    ]
+    fallback_c18_rows = [
+        _resource_candidate_fixed(
+            ticker, price, qty, score,
+            "resource-aware-continuous-max-dl-feasible-ascent",
+        )
+        for ticker, price, qty, score in fallback_ascent_seed
+    ]
+    fallback_c17_order, fallback_c17_diag = reorder_candidates_for_resource_aware_quality(
+        fallback_c17_rows,
+        available_cash=400_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=6,
+        max_positions=10,
+        params=resource_params,
+    )
+    fallback_c18_order, fallback_c18_diag = reorder_candidates_for_resource_aware_quality(
+        fallback_c18_rows,
+        available_cash=400_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=6,
+        max_positions=10,
+        params=resource_params,
+    )
+    fallback_c17_action = select_resource_aware_action_candidates(
+        fallback_c17_order, fallback_c17_diag
+    )
+    fallback_c18_action = select_resource_aware_action_candidates(
+        fallback_c18_order, fallback_c18_diag
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_feasible_ascent_continues_dl_optimization_after_c17_seed_fallback",
+        True,
+        fallback_c17_diag["max_dl_fallback_to_baseline"]
+        and fallback_c18_diag["max_dl_seed_fallback"]
+        and not fallback_c18_diag["max_dl_fallback_to_baseline"]
+        and fallback_c18_diag["max_dl_feasible_ascent_steps"] > 0
+        and fallback_c18_diag["selected_score_sum"] > fallback_c17_diag["selected_score_sum"]
+        and [row["ticker"] for row in fallback_c17_action] == ["F1", "F2"]
+        and [row["ticker"] for row in fallback_c18_action] == ["F2", "F3"]
+        and fallback_c18_diag["selected_count"] == fallback_c18_diag["baseline_selected_count"]
+        and fallback_c18_diag["reserved_cost_milli"] >= fallback_c18_diag["baseline_reserved_cost_milli"],
     )
 
     mocked_pair_payload = {

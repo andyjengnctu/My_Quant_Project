@@ -19,6 +19,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
@@ -46,6 +47,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
@@ -58,7 +60,7 @@ from filters.breakout_quality.strategy_compare_preparation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESULT_SCHEMA_VERSION = 5
+RESULT_SCHEMA_VERSION = 6
 
 
 def _json_native(value: Any) -> Any:
@@ -277,11 +279,14 @@ def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
     }:
         return {
             "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
             "ranking_policy": (
-                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL
                 else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
@@ -636,6 +641,7 @@ def _resource_aware_table(
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
         }:
             continue
         payload = scenarios[arm.arm_id]
@@ -656,6 +662,9 @@ def _resource_aware_table(
             _fmt(payload.get("resource_aware_max_dl_eligible_days"), digits=0),
             _fmt(payload.get("resource_aware_max_dl_repair_days"), digits=0),
             _fmt(payload.get("resource_aware_max_dl_fallback_days"), digits=0),
+            _fmt(payload.get("resource_aware_max_dl_seed_fallback_days"), digits=0),
+            _fmt(payload.get("resource_aware_max_dl_feasible_ascent_days"), digits=0),
+            _fmt(payload.get("resource_aware_max_dl_feasible_ascent_local_optimum_days"), digits=0),
             _fmt(payload.get("resource_aware_max_dl_order_count_violation_days"), digits=0),
         ))
     if not rows:
@@ -678,7 +687,50 @@ def _resource_aware_table(
             "Max-DL可介入日",
             "Max-DL修復日",
             "Max-DL回退日",
+            "Seed原為回退日",
+            "Feasible-ascent改善日",
+            "1-swap local optimum日",
             "Max-DL K違規日",
+        ),
+        rows,
+    )
+
+
+def _selector_timing_table(
+    scenarios: dict[str, dict[str, Any]],
+    *,
+    settings: StrategyComparisonSettings,
+) -> str:
+    rows = []
+    for arm in settings.enabled_arms:
+        if arm.dl_runtime_mode not in {
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+        }:
+            continue
+        payload = scenarios[arm.arm_id]
+        rows.append((
+            arm.arm_id,
+            arm.name,
+            _fmt(payload.get("resource_aware_selector_timing_total_ms"), unit=" ms", digits=2),
+            _fmt(payload.get("resource_aware_selector_timing_median_ms"), unit=" ms", digits=3),
+            _fmt(payload.get("resource_aware_selector_timing_p95_ms"), unit=" ms", digits=3),
+            _fmt(payload.get("resource_aware_selector_timing_max_ms"), unit=" ms", digits=3),
+            _fmt(payload.get("resource_aware_max_dl_repair_evaluations"), digits=0),
+            _fmt(payload.get("resource_aware_max_dl_feasible_ascent_evaluations"), digits=0),
+        ))
+    if not rows:
+        return "本次沒有啟用Max-DL selector arm。"
+    return render_table(
+        (
+            "編號",
+            "比較對象",
+            "Selector總時間",
+            "Median/日",
+            "P95/日",
+            "Max/日",
+            "C17 repair eval",
+            "Feasible-ascent eval",
         ),
         rows,
     )
@@ -767,7 +819,9 @@ def _render_report(
             _yearly_table(pair_payloads, settings=settings),
             render_section("4. Resource-aware盤前診斷"),
             _resource_aware_table(scenarios, settings=settings),
-            render_section("5. 判讀原則"),
+            render_section("5. Max-DL Selector計算時間"),
+            _selector_timing_table(scenarios, settings=settings),
+            render_section("6. 判讀原則"),
             (
                 "以config中啟用的contrast逐項判讀；不得用單一年份改善取代"
                 "全期RoMD、EV、同參數DL選擇R與年度穩定性。同參數DL選擇R只可在"
@@ -776,6 +830,7 @@ def _render_report(
                 "共用服務補建既有模型的forward-OOS scores與比較所需策略參數工件。"
                 "Resource-aware Binary與舊Continuous沿用各自資源Gate；Max-DL Continuous則以Min ROOS"
                 "預留單數與reserved-capital floor作硬限制，合法範圍內只最大化frozen DL score；"
+                "Feasible-ascent只在相同K/R0合法集合內做best-improvement single-swap，不引入capital objective；"
                 "不得新增資金利用Threshold。Binary arm看PASS資源配置，Continuous arm看selected score改善；各者都必須同時檢查"
                 "總曝險、預留資金與策略績效，不能只看模型分數。"
             ),

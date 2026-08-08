@@ -5395,3 +5395,100 @@ SR-C17每日先以Min ROOS exact reservation建立：
 GPT獨立小型oracle驗證（非正式策略績效）：995個可行random small-N cases中resource violations=0，快速selector與exhaustive global best basket一致990例（99.50%）；12例回退Min ROOS。此數據只驗證approximation行為與硬契約，不作SR-C17績效採用證據。正式策略結果仍為`RESULT_PENDING`。
 
 正式比較設定收斂為`C3 / C16 / C17`，只開`C17-C16`與`C17-C3`。取得forward-OOS結果後可判斷max-DL selector是否值得凍結；不得依該結果新增repair tolerance、blend、score cutoff或capital/DL比例。
+
+## 2026-08-08 — SR-C17正式結果、Exact Max-DL計算時間評估與SR-C18 feasible-ascent
+
+### 狀態
+
+`SR-C17 RESULT_AVAILABLE / SELECTOR_NOT_FROZEN`
+
+`SR-C18 IMPLEMENTED / RESULT_PENDING`
+
+### 程式基準
+
+- 使用者指定ZIP：`test-branch-1_20260808_144639_67acaf9(1).zip`
+- SHA256：`45a8c140e8e15fa9164452b4505bc011788b2633888ac36f26882e1ce8847190`
+- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+- Dataset、Label、`MR-12A / DL-CONT12A`模型權重、forward OOS scores、`PARAM-P2 / Min ROOS`、sizing、accounting、execution、max positions=10、rotation=off皆固定；本輪不重訓模型、不修改Target、不使用forward-OOS績效調score／threshold／blend／resource tolerance。
+
+### SR-C17正式forward結果
+
+使用者本地正式`apps/strategy_compare.py`工件：config fingerprint=`7a0888323f3b`，期間`2021-01-01 ～ 2025-12-22`。
+
+C17：Return=164.13%、MDD=14.38%、RoMD=11.42、Annual Return=21.60%、Log R²=0.8865、月勝率=68.33%、EV=0.72R、Exposure=92.04%、trades=328、same-param DL selection R=+20.31R。
+
+相對C3：Return +7.79pp、MDD -1.03pp、RoMD +1.27、Annual Return +0.73pp、EV +0.06R、Exposure +0.05pp、trades -1、same-param DL selection R +20.31R。
+
+相對C16：Return -11.02pp、MDD -1.48pp、RoMD +0.37、Annual Return -1.00pp、EV +0.23R、Exposure +0.21pp、trades -80、same-param DL selection R +37.85R。
+
+年度報酬：2021=19.18%、2022=-2.80%、2023=76.00%、2024=32.68%、2025=-2.36%。本輪不依年度／headline return回頭調selector；C17後續變更理由只來自搜尋完整性與計算時間。
+
+Resource diagnostics：Max-DL eligible=223日、repair=209日、final fallback=26日、K violation=0、resource-preservation violation=0、planned selected-count delta=0、reserved-capital delta=+906,375。Min ROOS baseline本身必為合法K／R0 basket，因此26個fallback表示C17 local minimum-repair沒有找到某些已知存在的合法／更佳路徑；這是selector search completeness問題，而不是模型或resource contract問題。
+
+### Exact global Max-DL搜尋評估：不採用production
+
+本輪先實作工程用exact global search原型，目標與C17完全相同：固定K、R0與basket內Min ROOS execution order，只求hard-feasible basket中`sum(DL score)`全域最大。先測naive DFS Branch-and-Bound，再測以C17合法解作incumbent的best-first K-combination enumeration；兩者都沒有node cap／timeout近似作為正式語意，工程壓力測試只用來判斷可否實際部署。
+
+代表性single-case selector CPU benchmark（K=10）：
+
+- N=12：C17約3.5ms；exact約8.4ms。
+- N=14：C17約4.8ms；exact約72ms。
+- N=20：C17約16ms；exact約1.33s。
+- N=22：C17約17ms；exact約0.67s。
+- N=30：C17約22ms；exact超過10s仍未完成。
+- N=80：C17約107ms；exact超過10s仍未完成。
+
+真實strategy candidate-day平均候選規模約80，因此global exact的worst／difficult-case成本會直接妨礙後續MR-12B／MR-12C反覆strategy replay。結論：**global exact search只保留工程oracle用途，不建立正式runtime mode、不分配獨立SR ID、不進production。**
+
+### SR-C18：Max-DL feasible-ascent
+
+為消除C17「repair失敗即停止／fallback」而不引入global exact爆炸成本，分配`SR-C18`。C18與C17使用完全相同：
+
+- `PARAM-P2 / Min ROOS`
+- `DL-CONT12A / MR-12A`
+- `K = Min ROOS baseline selected_count`
+- `R0 = Min ROOS baseline reserved capital`
+- basket內正式執行順序固定Min ROOS rank
+- full orderable universe與K筆action prefix分離
+
+唯一差異是搜尋完整度：先執行C17取得合法seed；即使C17原本fallback Min ROOS，該baseline也只視為合法seed，不是終點。其後每輪枚舉目前K-basket內每個selected與外部每個unselected的single swap；每個trial以canonical exact reservation重算，只接受`selected_count == K`、`reserved_cost >= R0`且DL quality嚴格提高的方案，並選當輪DL quality最高的feasible improvement。重複直到不存在任何improving feasible single swap，因此輸出保證為deterministic **1-swap local optimum**，但不宣稱global optimum。Capital全程只作hard feasibility，不是objective。
+
+新增runtime policy／mode：`resource-aware-continuous-max-dl-feasible-ascent`。正式比較設定改為`C3 / C17 / C18`，只開`C18-C17`與`C18-C3`。
+
+### 計算時間與工程驗證
+
+300組random exact-reservation selector benchmark（N=8～30）：
+
+- eligible cases=300
+- C17 seed fallback=51
+- C18相對C17 DL score improvement cases=61
+- resource violations=0
+- DL score regressions=0
+- 最終非1-swap local optimum=0
+- C17 median=2.484ms；C18 median=3.720ms，median slowdown=1.497×
+- C17 total=1,263.35ms；C18 total=1,864.79ms，total slowdown=1.476×
+
+代表性N=80、K=10、50組random cases：
+
+- C17 median=77.35ms、p95=172.63ms、max=215.14ms、total=4,361.50ms
+- C18 median=108.26ms、p95=295.70ms、max=336.11ms、total=6,828.64ms
+- slowdown：median=1.40×、p95 ratio=1.71×、total=1.57×
+- C17 final fallback=17/50；C18 seed fallback=17/50但**final fallback=0**
+- C18 ascent days=39/50、ascent steps=105、ascent exact evaluations=76,694
+
+最終封裝前另以獨立seed重跑N=80、K=10、50-case verification：C17 median=38.76ms／p95=79.49ms／total=1,990.35ms；C18 median=56.73ms／p95=155.47ms／total=3,524.29ms；median slowdown=1.46×、total slowdown=1.77×，C17 fallback=14而C18 final fallback=0、resource violation=0。兩批N=80 benchmark的絕對毫秒受候選成本分布與CPU狀態影響，但一致顯示C18約1.4～1.5× median、約1.6～1.8× total selector成本，仍遠低於global exact difficult-case的10秒級。
+
+N=20與N=40代表性50-case benchmark的total slowdown分別約1.26×與1.42×。相較global exact在N=30／80超過10秒，C18維持百毫秒級selector成本，適合後續頻繁DL模型策略驗證。
+
+Strategy Compare summary新增selector CPU timing：calls、total ms、median ms、p95 ms、max ms；並新增C18 seed-fallback、feasible-ascent days／steps／evaluations、1-swap local-optimum days。正式本機replay後以同一run內C17／C18 timing作最終真實成本比較。
+
+### Direct synthetic / 判定
+
+`validate_strategy_compare_config_driven_app_contract_case`新增C18固定案例：
+
+1. C17 minimum-repair得到次佳合法basket時，C18會在相同K／R0下找到更高DL quality的1-swap feasible improvement。
+2. C17 seed原本fallback Min ROOS時，C18仍從該合法seed繼續DL ascent，不把fallback當終點。
+
+目前direct synthetic共32項全部PASS。GPT未執行`apps/test_suite.py`。
+
+C18狀態固定`IMPLEMENTED / RESULT_PENDING`。取得正式forward結果前不得把engineering timing、random benchmark或C17 headline績效當成C18採用證據；也不得依forward結果調single-swap規則、score cutoff、resource floor或任何numeric selector參數。
