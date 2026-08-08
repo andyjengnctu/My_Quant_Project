@@ -6080,3 +6080,56 @@ P2 `_dynamic_orderable_frame()`卻只讀`ticker / trade_date / signal_date`，�
 ### 下一步
 
 先用同一正式選單重新執行`apps/research.py → 模型訓練 → 比較設定中的 Continuous Rankers`。在修正後Dynamic-K coverage與結果取得前，不新增MR-12D、不改Pairwise loss、不改C17/C18 selector。若修正後coverage顯著提高且MR-12B在Dynamic-K仍弱於MR-12A，再做K-stratified（尤其K=1/2/3）與C18 feasible-swap attribution，判斷是否為top-prefix極前段排序問題；只有歸因成立後才設計新的model experiment。
+
+
+## 2026-08-09 — P2 Dynamic-K重跑：score-date假設排除；complete-case raw-score限制確認
+
+狀態：`P2_FIXED_K_RESULT_AVAILABLE / DYNAMIC_K_LIMITED_DIAGNOSTIC`。不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity；`MR-12B / DL-CONT12B`仍維持current model research anchor，`MR-12C`仍維持REJECTED。
+
+### 本輪基準與唯一診斷變化
+
+- 最新程式ZIP：`test-branch-1_20260809_031311_2ee25ae.zip`；SHA256：`a140e71c420f05b14d61118c764c543012c763096ae0b39403ff8b0a6ec87c1b`。
+- GPT fresh extract：`/mnt/data/stock_review_20260809_031311`；開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+- 使用者本機以score-event-date修正版重新執行`apps/research.py → 模型訓練 → 比較設定中的 Continuous Rankers`。
+- Fixed K=10 Selection／OOS數字與前輪完全相同，表示score-event-date修正只影響Dynamic-K join路徑。
+- Dynamic-K仍為C17 max-DL eligible `223`日，其中三模型score+target全候選共同完整日`94`、非共同完整日`129`、day coverage `42.15%`；K=`1～8`、mean=`1.34`。
+- `沿用runtime score date列=17,744`，但`score date != signal date列=0`。因此上一輪「continuation/re-entry score-event-date錯接造成42.15% coverage」假設被實跑否定；不得再把該假設當作Dynamic-K弱勢解釋。
+
+### 仍成立的Fixed-K OOS證據
+
+MR-12B相對MR-12A在603個共同OOS competition days：NDCG `+0.0290`、Top-K Lift `+0.1601R`、Oracle overlap `+2.60pp`、Boundary `+3.02pp`、Boundary gap `+0.2610R`。此結果與C19-C17及C20-C18 controlled strategy replay的模型經濟改善方向一致。
+
+### Dynamic-K common-complete raw-score結果
+
+在94個C17-reference common-complete competition days：
+
+- MR-12A：NDCG `0.5819`、Top-K Lift `0.5308R`、Boundary `56.47%`、Boundary gap `+0.1133R`。
+- MR-12B：NDCG `0.5162`、Top-K Lift `0.1752R`、Boundary `43.94%`、Boundary gap `-0.1365R`。
+- MR-12B − MR-12A：NDCG `-0.0657`、Top-K Lift `-0.3556R`、Boundary `-12.53pp`、Boundary gap `-0.2498R`。
+- MR-12C同樣弱於MR-12A；相對MR-12B的Boundary僅`+2.51pp`，不足以推翻正式C21/C22已淘汰ListNet的經濟證據。
+
+### 新確認的診斷語意限制
+
+程式核對確認，P2 Dynamic-K目前不是「實際C17 selector basket品質」：
+
+1. P2只有當日**全部orderable candidates × 全部比較模型的score與target都完整**時才保留整天；正式`continuous-score-max-dl`只要求當天至少一個candidate有continuous score即可進DL selection，缺score candidate會排在已評分候選之後，因此`42.15%`是P2 complete-case day coverage，不是runtime DL可用率。
+2. P2對保留日直接依各模型raw score做Top-K／boundary；正式C17還會以Min ROOS固定`K/R0`後做exact-reservation minimum-repair，C18再做feasible-ascent single swaps。因此P2沒有量到resource-feasible最終basket。
+3. Dynamic-K的候選集合、K與portfolio state固定取C17 reference replay；C19/C20正式策略各自重播後會因先前選股、持倉、現金與continuation path不同而形成不同後續state。P2是同一reference path上的controlled static diagnostic，不等同各模型native strategy path。
+
+所以目前能下的結論是：**MR-12B在Fixed-K broad OOS ranking較MR-12A好，但在C17-reference、低K、common-complete raw-score子集上較弱；尚不能判定弱點是K=1/2極前段排序、partial-score日、resource repair，或path-dependent selector interaction。**
+
+### 本輪P2診斷補強
+
+不修改模型／score／selector／strategy replay，只補read-only P2：
+
+- Dynamic-K標題改為`reference path / common-complete raw-score diagnostic`，禁止再標示成「實際selector決策邊界」。
+- coverage新增common-complete candidate row rate、reference runtime scored-candidate rate、各模型candidate score coverage與runtime unavailable reason counts。
+- 新增依Dynamic K分層的paired表，直接輸出K=1/2/3/...的NDCG、Boundary與Top-K Lift，先判斷MR-12B弱勢是否集中於極低K。
+- App簡易摘要同步標示`Dynamic raw-score Boundary`，避免和C17/C18正式selector action品質混淆。
+
+### 下一步
+
+1. 先原樣重跑P2取得新增candidate-level coverage與K-stratified表，不重訓、不重跑Strategy Compare。
+2. 若MR-12B弱勢主要集中K=1/2，進一步做top-prefix decision attribution；若各K都弱，再查complete-case selection bias與score-unavailable候選。
+3. 無論K-stratified結果如何，下一個真正對應經濟結果的診斷應以C17/C18各arm的**盤前planned basket / repair / feasible-swap action**為單位，而不是再用generic raw-score Top-K代替selector。若現有持久工件不足以重建planned basket，應先補保存selector action membership/rank的canonical diagnostic欄位，再由既有replay產物或下一次正式replay產生，不得用selected fills冒充盤前planned orders。
+4. 在上述歸因完成前，不建立MR-12D、不依94日Dynamic-K子集改Pairwise loss。

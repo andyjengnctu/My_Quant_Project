@@ -464,10 +464,10 @@ def _simple_report_details(
                 ("Fixed OOS競爭日", fixed_oos.get("competition_date_count")),
                 (f"{summary_left} OOS NDCG", _fmt_simple_metric(fixed_summary.get("ndcg_at_k"))),
                 (f"{summary_left} OOS Boundary", _fmt_simple_metric(fixed_summary.get("boundary_concordance"), percent=True)),
-                ("Dynamic-K完整score日", coverage.get("full_score_coverage_date_count")),
-                (f"{summary_left} Dynamic Boundary", _fmt_simple_metric(dynamic_summary.get("boundary_concordance"), percent=True)),
+                ("Dynamic-K common-complete日", coverage.get("full_score_coverage_date_count")),
+                (f"{summary_left} Dynamic raw-score Boundary", _fmt_simple_metric(dynamic_summary.get("boundary_concordance"), percent=True)),
                 (
-                    f"{summary_left}−{summary_right} Dynamic Boundary Δ",
+                    f"{summary_left}−{summary_right} Dynamic raw-score Boundary Δ",
                     "-"
                     if dynamic_boundary_delta.get("mean_delta") is None
                     else f"{float(dynamic_boundary_delta.get('mean_delta')) * 100.0:+.2f}pp",

@@ -11852,6 +11852,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     )
     from tools.filters.breakout_quality.compare_continuous_rankers import (
         _dynamic_orderable_frame,
+        _evaluate_dynamic_k_strata,
         _evaluate_paired_frame,
     )
 
@@ -12119,6 +12120,8 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
                     "trade_date": trade_date,
                     "signal_date": signal_date,
                     "breakout_quality_score_date": "2024-03-01",
+                    "breakout_quality_score": 0.75,
+                    "breakout_quality_score_unavailable_reason": "",
                 }
                 for trade_date, signal_date in (
                     ("2024-03-04", "2024-03-01"),
@@ -12151,12 +12154,17 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             model_frames=dynamic_models,
             model_ids=("MR-12A", "MR-12B", "MR-12C"),
         )
+    dynamic_strata = _evaluate_dynamic_k_strata(
+        dynamic_frame,
+        model_ids=("MR-12A", "MR-12B", "MR-12C"),
+        boundary_width=2,
+    )
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
         "continuous_ranker_dynamic_k_uses_runtime_score_event_date_for_later_occurrences",
-        (8, (2,), 2, 1.0, 8, 4),
+        (8, (2,), 2, 1.0, 8, 4, 1.0, 1.0, ("2",), 2),
         (
             int(len(dynamic_frame)),
             tuple(sorted(set(int(value) for value in dynamic_frame["dynamic_k"]))),
@@ -12164,6 +12172,10 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             float(dynamic_coverage["full_score_coverage_rate"]),
             int(dynamic_coverage["runtime_score_event_date_row_count"]),
             int(dynamic_coverage["score_event_date_differs_from_signal_date_row_count"]),
+            float(dynamic_coverage["common_complete_candidate_row_rate"]),
+            float(dynamic_coverage["reference_runtime_scored_candidate_row_rate"]),
+            tuple(sorted(dynamic_strata)),
+            int(dynamic_strata["2"]["competition_date_count"]),
         ),
     )
 

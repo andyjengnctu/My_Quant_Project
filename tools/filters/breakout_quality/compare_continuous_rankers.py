@@ -382,7 +382,11 @@ def _dynamic_orderable_frame(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     capacity = pd.read_csv(pair_dir / "score_ranking_daily_capacity.csv", encoding="utf-8-sig")
     required_orderable = {"ticker", "trade_date", "signal_date"}
-    optional_orderable = {"breakout_quality_score_date"}
+    optional_orderable = {
+        "breakout_quality_score_date",
+        "breakout_quality_score",
+        "breakout_quality_score_unavailable_reason",
+    }
     orderable = read_breakout_quality_csv(
         pair_dir / "score_ranking_orderable_candidates.csv",
         encoding="utf-8-sig",
@@ -469,6 +473,42 @@ def _dynamic_orderable_frame(
     score_event_date_differs_from_signal_date_row_count = int(
         (orderable["score_event_date"] != orderable["signal_date"]).sum()
     )
+    if "breakout_quality_score" in orderable.columns:
+        reference_runtime_score = pd.to_numeric(
+            orderable["breakout_quality_score"], errors="coerce"
+        )
+        reference_runtime_score_available = reference_runtime_score.notna()
+        reference_runtime_scored_candidate_row_count = int(
+            reference_runtime_score_available.sum()
+        )
+        reference_runtime_scored_candidate_row_rate = (
+            float(reference_runtime_score_available.mean()) if len(orderable) else None
+        )
+        reference_runtime_any_score_date_count = int(
+            orderable.assign(_score_available=reference_runtime_score_available)
+            .groupby("date", sort=True)["_score_available"]
+            .any()
+            .sum()
+        )
+    else:
+        reference_runtime_scored_candidate_row_count = None
+        reference_runtime_scored_candidate_row_rate = None
+        reference_runtime_any_score_date_count = None
+    unavailable_reason_counts: dict[str, int] = {}
+    if "breakout_quality_score_unavailable_reason" in orderable.columns:
+        unavailable_reasons = (
+            orderable["breakout_quality_score_unavailable_reason"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+        unavailable_reason_counts = {
+            str(key): int(value)
+            for key, value in unavailable_reasons[unavailable_reasons.ne("")]
+            .value_counts()
+            .head(8)
+            .items()
+        }
 
     result = orderable[["date", "ticker", "signal_date", "score_event_date"]].copy()
     result["dynamic_k"] = result["date"].map(k_by_date).astype(int)
@@ -508,8 +548,21 @@ def _dynamic_orderable_frame(
     target_columns = [f"target_raw_r__{model_id}" for model_id in model_ids]
     pct_columns = [f"target_daily_percentile__{model_id}" for model_id in model_ids]
     complete = result[score_columns + target_columns + pct_columns].notna().all(axis=1)
+    # Compatibility field name retained, but this is a score+target complete-case mask.
     result["all_model_score_available"] = complete
     per_day = result.groupby("date", sort=True)["all_model_score_available"].agg(["all", "size"])
+    common_complete_candidate_row_count = int(complete.sum())
+    common_complete_candidate_row_rate = float(complete.mean()) if len(result) else None
+    per_model_score_coverage: dict[str, dict[str, Any]] = {}
+    for model_id in model_ids:
+        available = result[f"score__{model_id}"].notna()
+        by_day = result.assign(_score_available=available).groupby("date", sort=True)["_score_available"]
+        per_model_score_coverage[model_id] = {
+            "candidate_row_count": int(available.sum()),
+            "candidate_row_rate": float(available.mean()) if len(result) else None,
+            "any_score_date_count": int(by_day.any().sum()),
+            "full_score_date_count": int(by_day.all().sum()),
+        }
     observed_dates = set(per_day.index.astype(str))
     full_coverage_dates = set(per_day.index[per_day["all"]].astype(str))
     partial_dates = set(per_day.index[~per_day["all"]].astype(str))
@@ -539,6 +592,20 @@ def _dynamic_orderable_frame(
     day_k = paired.groupby("date", sort=True)["dynamic_k"].nunique()
     if bool((day_k != 1).any()):
         raise ValueError("Dynamic-K同一交易日K不唯一")
+    dynamic_k_date_counts = {
+        str(k): int(sum(1 for value in k_by_date.values() if int(value) == int(k)))
+        for k in sorted(set(k_by_date.values()))
+    }
+    full_score_dynamic_k_date_counts = {
+        str(k): int(
+            sum(
+                1
+                for date in full_coverage_dates
+                if int(k_by_date.get(str(date), -1)) == int(k)
+            )
+        )
+        for k in sorted(set(k_by_date.values()))
+    }
     return paired, {
         "eligible_strategy_date_count": int(len(k_by_date)),
         "orderable_strategy_date_count": int(len(observed_dates)),
@@ -547,6 +614,13 @@ def _dynamic_orderable_frame(
         "runtime_score_event_date_row_count": runtime_score_event_date_row_count,
         "score_event_date_fallback_signal_date_row_count": score_event_date_fallback_signal_date_row_count,
         "score_event_date_differs_from_signal_date_row_count": score_event_date_differs_from_signal_date_row_count,
+        "reference_runtime_scored_candidate_row_count": reference_runtime_scored_candidate_row_count,
+        "reference_runtime_scored_candidate_row_rate": reference_runtime_scored_candidate_row_rate,
+        "reference_runtime_any_score_date_count": reference_runtime_any_score_date_count,
+        "reference_runtime_score_unavailable_reason_counts": unavailable_reason_counts,
+        "common_complete_candidate_row_count": common_complete_candidate_row_count,
+        "common_complete_candidate_row_rate": common_complete_candidate_row_rate,
+        "per_model_score_coverage": per_model_score_coverage,
         "full_score_coverage_date_count": int(len(full_coverage_dates)),
         "partial_score_coverage_date_count": int(len(partial_dates)),
         "full_score_coverage_rate": (
@@ -555,7 +629,82 @@ def _dynamic_orderable_frame(
         "dynamic_k_min": int(min(k_by_date.values())) if k_by_date else None,
         "dynamic_k_max": int(max(k_by_date.values())) if k_by_date else None,
         "dynamic_k_mean": float(np.mean(list(k_by_date.values()))) if k_by_date else None,
+        "dynamic_k_date_counts": dynamic_k_date_counts,
+        "full_score_dynamic_k_date_counts": full_score_dynamic_k_date_counts,
     }
+
+
+def _evaluate_dynamic_k_strata(
+    frame: pd.DataFrame,
+    *,
+    model_ids: tuple[str, ...],
+    boundary_width: int,
+) -> dict[str, Any]:
+    """Describe common-complete Dynamic-K days by the actual reference-path K."""
+
+    output: dict[str, Any] = {}
+    if frame.empty:
+        return output
+    for raw_k, subset in frame.groupby("dynamic_k", sort=True):
+        k = int(raw_k)
+        k_by_date = {str(date): k for date in subset["date"].unique()}
+        output[str(k)] = _evaluate_paired_frame(
+            subset,
+            model_ids=model_ids,
+            k_by_date=k_by_date,
+            boundary_width=boundary_width,
+        )
+    return output
+
+
+def _render_dynamic_k_strata_table(
+    strata: dict[str, Any],
+    *,
+    summary_pair: tuple[str, str],
+) -> str:
+    left_id, right_id = summary_pair
+    rows = []
+    for key in sorted(strata, key=lambda value: int(value)):
+        section = dict(strata.get(key) or {})
+        left = dict((section.get("models") or {}).get(left_id) or {})
+        right = dict((section.get("models") or {}).get(right_id) or {})
+        contrast = dict(
+            (section.get("paired_contrasts") or {}).get(f"{left_id}_minus_{right_id}") or {}
+        )
+        metrics = dict(contrast.get("metrics") or {})
+        rows.append(
+            (
+                key,
+                int(section.get("competition_date_count", 0) or 0),
+                _fmt(left.get("ndcg_at_k")),
+                _fmt(right.get("ndcg_at_k")),
+                _fmt((metrics.get("ndcg_at_k") or {}).get("mean_delta")),
+                _fmt_pct(left.get("boundary_concordance")),
+                _fmt_pct(right.get("boundary_concordance")),
+                _fmt_delta_pct(
+                    (metrics.get("boundary_concordance") or {}).get("mean_delta"),
+                    0.0,
+                ),
+                _fmt(left.get("top_k_raw_target_lift")),
+                _fmt(right.get("top_k_raw_target_lift")),
+            )
+        )
+    return render_table(
+        (
+            "K",
+            "Days",
+            f"{left_id} NDCG",
+            f"{right_id} NDCG",
+            "NDCG Δ",
+            f"{left_id} Boundary",
+            f"{right_id} Boundary",
+            "Boundary Δ",
+            f"{left_id} Lift",
+            f"{right_id} Lift",
+        ),
+        rows,
+        aligns=("right", "right", "right", "right", "right", "right", "right", "right", "right", "right"),
+    )
 
 
 def _render_metric_table(section: dict[str, Any], *, model_ids: tuple[str, ...]) -> str:
@@ -664,6 +813,15 @@ def _fmt_delta_pct(value: Any, baseline: Any) -> str:
     return f"{(float(value) - float(baseline)) * 100.0:+.2f}pp"
 
 
+def _fmt_k_counts(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return "-"
+    return ", ".join(
+        f"K={key}:{int(count)}"
+        for key, count in sorted(value.items(), key=lambda item: int(item[0]))
+    )
+
+
 def render_console(payload: dict[str, Any]) -> str:
     model_ids = tuple(str(item["model_id"]) for item in payload.get("models") or [])
     fixed = dict(payload.get("fixed_k") or {})
@@ -700,24 +858,36 @@ def render_console(payload: dict[str, Any]) -> str:
     coverage = dict(dynamic.get("coverage") or {})
     lines.extend(
         (
-            render_section(f"Dynamic-K｜實際 {dynamic.get('reference_arm')} selector 決策邊界"),
+            render_section(f"Dynamic-K｜{dynamic.get('reference_arm')} reference path・common-complete raw-score診斷"),
             render_key_values(
                 (
                     (f"{dynamic.get('reference_arm')} max-DL eligible days", coverage.get("eligible_strategy_date_count")),
                     ("有orderable candidates日", coverage.get("orderable_strategy_date_count")),
-                    (f"{len(model_ids)}模型完整score日", coverage.get("full_score_coverage_date_count")),
-                    ("部分score日", coverage.get("partial_score_coverage_date_count")),
+                    (f"{len(model_ids)}模型common-complete日", coverage.get("full_score_coverage_date_count")),
+                    ("非common-complete日", coverage.get("partial_score_coverage_date_count")),
                     ("缺orderable日", coverage.get("missing_orderable_date_count")),
-                    ("完整score coverage", _fmt_pct(coverage.get("full_score_coverage_rate"))),
+                    ("common-complete day coverage", _fmt_pct(coverage.get("full_score_coverage_rate"))),
+                    ("common-complete candidate coverage", _fmt_pct(coverage.get("common_complete_candidate_row_rate"))),
+                    (f"{dynamic.get('reference_arm')} runtime scored candidates", _fmt_pct(coverage.get("reference_runtime_scored_candidate_row_rate"))),
                     ("沿用runtime score date列", coverage.get("runtime_score_event_date_row_count")),
                     ("score date≠signal date列", coverage.get("score_event_date_differs_from_signal_date_row_count")),
                     ("Dynamic K", f"{coverage.get('dynamic_k_min')}～{coverage.get('dynamic_k_max')}；mean={_fmt(coverage.get('dynamic_k_mean'), 2)}"),
+                    ("eligible K分布", _fmt_k_counts(coverage.get("dynamic_k_date_counts"))),
+                    ("common-complete K分布", _fmt_k_counts(coverage.get("full_score_dynamic_k_date_counts"))),
                     ("實際競爭日", dyn_section.get("competition_date_count")),
                 )
             ),
             _render_metric_table(dyn_section, model_ids=model_ids),
             "同日 paired 改善：",
             _render_paired_table(dyn_section),
+            "依 Dynamic-K 分層（只含common-complete days）：",
+            _render_dynamic_k_strata_table(
+                dict(dynamic.get("stratified_by_k") or {}),
+                summary_pair=tuple(
+                    str(value)
+                    for value in (payload.get("comparison_settings") or {}).get("summary_pair") or model_ids[:2]
+                ),
+            ),
         )
     )
     return "\n".join(str(line) for line in lines if line)
@@ -736,7 +906,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         "- Random baseline使用每個交易日候選數與target分布的精確期望值，不使用Monte Carlo。",
         f"- Fixed-K只讀{len(model_ids)}個config設定模型的既有frozen score；候選row identity與Target必須完全一致才允許paired比較。",
         f"- Dynamic-K reference：`{dynamic.get('reference_arm')}`；來源：`{dynamic.get('pair_dir')}`。",
-        f"- Dynamic-K只讀既有Strategy Compare orderable candidates與{reference_arm} max-DL pre-market order limit；不重跑策略。",
+        f"- Dynamic-K只讀既有Strategy Compare orderable candidates與{reference_arm} max-DL pre-market order limit；不重跑策略。它是reference-path raw-score complete-case診斷，不等同C17/C18資源約束後的實際selector basket。",
         "",
     ]
     for split in ("selection", "oos"):
@@ -781,12 +951,14 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     dyn = dict(dynamic.get("evaluation") or {})
     cov = dict(dynamic.get("coverage") or {})
     lines += [
-        f"## Dynamic-K — 實際 {reference_arm} selector boundary",
+        f"## Dynamic-K — {reference_arm} reference path / common-complete raw-score diagnostic",
         "",
         f"- {reference_arm} max-DL eligible days：`{cov.get('eligible_strategy_date_count')}`；有orderable candidates日：`{cov.get('orderable_strategy_date_count')}`。",
-        f"- {len(model_ids)}模型完整score日：`{cov.get('full_score_coverage_date_count')}`；部分score日：`{cov.get('partial_score_coverage_date_count')}`；缺orderable日：`{cov.get('missing_orderable_date_count')}`；coverage：`{_fmt_pct(cov.get('full_score_coverage_rate'))}`。",
+        f"- {len(model_ids)}模型common-complete日：`{cov.get('full_score_coverage_date_count')}`；非common-complete日：`{cov.get('partial_score_coverage_date_count')}`；缺orderable日：`{cov.get('missing_orderable_date_count')}`；day coverage：`{_fmt_pct(cov.get('full_score_coverage_rate'))}`。",
+        f"- common-complete candidate coverage：`{_fmt_pct(cov.get('common_complete_candidate_row_rate'))}`；{reference_arm} runtime scored candidate coverage：`{_fmt_pct(cov.get('reference_runtime_scored_candidate_row_rate'))}`。",
         f"- runtime score-event date列：`{cov.get('runtime_score_event_date_row_count')}`；fallback signal-date列：`{cov.get('score_event_date_fallback_signal_date_row_count')}`；score-event date與signal date不同列：`{cov.get('score_event_date_differs_from_signal_date_row_count')}`。",
         f"- Dynamic K：`{cov.get('dynamic_k_min')}～{cov.get('dynamic_k_max')}`；mean `{_fmt(cov.get('dynamic_k_mean'), 2)}`。",
+        f"- eligible K distribution：`{_fmt_k_counts(cov.get('dynamic_k_date_counts'))}`；common-complete K distribution：`{_fmt_k_counts(cov.get('full_score_dynamic_k_date_counts'))}`。",
         f"- paired competition days：`{dyn.get('competition_date_count')}`。",
         "",
         "| Model | NDCG | NDCG-Random | Top-K Lift | Oracle overlap | Overlap-Random | Boundary | Boundary-50% | Boundary gap |",
@@ -821,10 +993,44 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             )
     lines += [
         "",
+        "### Dynamic-K 分層",
+        "",
+        "以下只分解已進入common-complete paired診斷的日期；用來判斷差異是否集中於K=1/2/3，不代表正式selector action attribution。",
+        "",
+    ]
+    summary_pair = tuple(
+        str(value)
+        for value in (payload.get("comparison_settings") or {}).get("summary_pair") or model_ids[:2]
+    )
+    left_id, right_id = summary_pair
+    lines += [
+        f"| K | Days | {left_id} NDCG | {right_id} NDCG | NDCG Δ | {left_id} Boundary | {right_id} Boundary | Boundary Δ | {left_id} Lift | {right_id} Lift |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for key in sorted((dynamic.get("stratified_by_k") or {}), key=lambda value: int(value)):
+        section = dict((dynamic.get("stratified_by_k") or {}).get(key) or {})
+        left = dict((section.get("models") or {}).get(left_id) or {})
+        right = dict((section.get("models") or {}).get(right_id) or {})
+        contrast = dict(
+            (section.get("paired_contrasts") or {}).get(f"{left_id}_minus_{right_id}") or {}
+        )
+        metrics = dict(contrast.get("metrics") or {})
+        ndcg_delta = (metrics.get("ndcg_at_k") or {}).get("mean_delta")
+        boundary_delta = (metrics.get("boundary_concordance") or {}).get("mean_delta")
+        lines.append(
+            f"| {key} | {int(section.get('competition_date_count', 0) or 0)} "
+            f"| {_fmt(left.get('ndcg_at_k'))} | {_fmt(right.get('ndcg_at_k'))} | {_fmt(ndcg_delta)} "
+            f"| {_fmt_pct(left.get('boundary_concordance'))} | {_fmt_pct(right.get('boundary_concordance'))} "
+            f"| {_fmt_delta_pct(boundary_delta, 0.0)} "
+            f"| {_fmt(left.get('top_k_raw_target_lift'))} | {_fmt(right.get('top_k_raw_target_lift'))} |"
+        )
+    lines += [
+        "",
         "## 契約",
         "",
         "- 所有比較均為checkpoint後描述性評估；OOS不進loss、gradient、epoch selection或任何模型擬合。",
         f"- Dynamic-K的K與orderable candidate universe來自既有{reference_arm} replay；Future Target只在replay後離線join作模型品質診斷。",
+        "- Dynamic-K目前只對所有比較模型score與target皆完整的候選日計算raw-score Top-K；正式max-DL selector允許partial-score、還會套K/R0 exact-reservation repair／feasible-ascent，因此本段不得標示或解讀成實際selector basket品質。",
         f"- 本報表不修改config設定的比較模型、{reference_arm} reference selector、策略參數或既有策略結果。",
         "",
     ]
@@ -919,8 +1125,14 @@ def run_comparison(
             "candidate_universe": "reference_arm_score_ranking_orderable_candidates",
             "k_source": "Resource_Aware_Pre_Market_Order_Limit_on_Max_DL_Eligible_days",
             "score_join": "ticker + score_event_date (runtime breakout_quality_score_date, fallback signal_date)",
+            "diagnostic_scope": "reference_path_common_complete_raw_score_not_runtime_selector_basket",
             "coverage": coverage,
             "evaluation": dynamic_evaluation,
+            "stratified_by_k": _evaluate_dynamic_k_strata(
+                dynamic_frame,
+                model_ids=model_ids,
+                boundary_width=boundary_width,
+            ),
         },
         "random_baseline": {
             "method": "exact_uniform_random_order_expectation",
