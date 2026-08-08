@@ -16074,7 +16074,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15"}.issubset(set(settings.arms))
+        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16"}.issubset(set(settings.arms))
         and all(arm.enabled for arm in settings.enabled_arms)
         and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
         and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
@@ -16116,6 +16116,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C12": "Min ROOS: A9 resource-aware basket",
         "C14": "Min ROOS: Continuous resource-aware",
         "C15": "Min ROOS: All-event Continuous resource-aware",
+        "C16": "Min ROOS: All-event Continuous capital-preserving",
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -16399,6 +16400,84 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and continuous_slot_diag["mode"] == "capital-utilization"
         and not continuous_slot_diag["changed"]
         and [row["ticker"] for row in continuous_slot_order] == ["R1", "R2", "Q1"],
+    )
+
+    capital_preserving_slot_rows = [
+        _resource_candidate_fixed(
+            "R1", 1000.0, 70, 0.10,
+            "resource-aware-continuous-capital-preserving",
+        ),
+        _resource_candidate_fixed(
+            "Q1", 1000.0, 80, 0.95,
+            "resource-aware-continuous-capital-preserving",
+        ),
+    ]
+    capital_preserving_slot_order, capital_preserving_slot_diag = (
+        reorder_candidates_for_resource_aware_quality(
+            capital_preserving_slot_rows,
+            available_cash=180_000.0,
+            sizing_equity=2_000_000.0,
+            pre_market_occupied=9,
+            max_positions=10,
+            params=resource_params,
+        )
+    )
+    capital_preserving_slot_selected = _simulate_reserved_candidate_order(
+        capital_preserving_slot_order,
+        available_cash=180_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=1,
+        params=resource_params,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "capital_preserving_continuous_can_improve_slot_binding_day_without_reducing_count_or_reserved_capital",
+        True,
+        capital_preserving_slot_diag["mode"] == "dl-selection"
+        and capital_preserving_slot_diag["changed"]
+        and capital_preserving_slot_diag["resource_preservation_required"]
+        and capital_preserving_slot_diag["selected_count_preserved"]
+        and capital_preserving_slot_diag["reserved_capital_preserved"]
+        and capital_preserving_slot_diag["selected_count"]
+        >= capital_preserving_slot_diag["baseline_selected_count"]
+        and capital_preserving_slot_diag["reserved_cost_milli"]
+        >= capital_preserving_slot_diag["baseline_reserved_cost_milli"]
+        and capital_preserving_slot_selected["selected_rows"][0]["ticker"] == "Q1",
+    )
+
+    capital_preserving_reject_rows = [
+        _resource_candidate_fixed(
+            "R1", 1000.0, 110, 0.10,
+            "resource-aware-continuous-capital-preserving",
+        ),
+        _resource_candidate_fixed(
+            "Q1", 1000.0, 80, 0.95,
+            "resource-aware-continuous-capital-preserving",
+        ),
+    ]
+    capital_preserving_reject_order, capital_preserving_reject_diag = (
+        reorder_candidates_for_resource_aware_quality(
+            capital_preserving_reject_rows,
+            available_cash=180_000.0,
+            sizing_equity=2_000_000.0,
+            pre_market_occupied=9,
+            max_positions=10,
+            params=resource_params,
+        )
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "capital_preserving_continuous_rejects_higher_score_basket_when_reserved_capital_would_fall",
+        True,
+        capital_preserving_reject_diag["mode"] == "dl-selection"
+        and not capital_preserving_reject_diag["changed"]
+        and capital_preserving_reject_diag["resource_preservation_required"]
+        and capital_preserving_reject_diag["selected_count_preserved"]
+        and capital_preserving_reject_diag["reserved_capital_preserved"]
+        and capital_preserving_reject_diag["reserved_cost_milli"]
+        == capital_preserving_reject_diag["baseline_reserved_cost_milli"]
+        and [row["ticker"] for row in capital_preserving_reject_order]
+        == ["R1", "Q1"],
     )
 
     mocked_pair_payload = {

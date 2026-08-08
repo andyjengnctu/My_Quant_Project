@@ -1497,6 +1497,9 @@ def run_portfolio_timeline(
                 'Resource_Aware_Score_Mean': resource_selection_diag.get('selected_score_mean'),
                 'Resource_Aware_Promoted_Score_Orders': int(resource_selection_diag.get('promoted_score_orders', 0) or 0),
                 'Resource_Aware_Direct_Score_Order_Feasible': bool(resource_selection_diag.get('direct_score_order_feasible', False)),
+                'Resource_Aware_Preservation_Required': bool(resource_selection_diag.get('resource_preservation_required', False)),
+                'Resource_Aware_Selected_Count_Preserved': bool(resource_selection_diag.get('selected_count_preserved', True)),
+                'Resource_Aware_Reserved_Capital_Preserved': bool(resource_selection_diag.get('reserved_capital_preserved', True)),
             })
 
         current_equity = today_equity

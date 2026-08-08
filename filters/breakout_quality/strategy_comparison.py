@@ -17,6 +17,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
@@ -42,6 +43,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
@@ -271,11 +273,14 @@ def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     }:
         return {
             "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
             "ranking_policy": (
-                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS
                 else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET
@@ -624,6 +629,7 @@ def _resource_aware_table(
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
         }:
             continue
         payload = scenarios[arm.arm_id]
@@ -638,7 +644,9 @@ def _resource_aware_table(
             _fmt(payload.get("resource_aware_promoted_score_orders"), digits=0),
             _fmt(payload.get("resource_aware_selected_score_sum_gain"), digits=3),
             _fmt(payload.get("resource_aware_direct_score_order_days"), digits=0),
+            _fmt(payload.get("resource_aware_selected_count_delta"), digits=0),
             _fmt_money_milli(payload.get("resource_aware_reserved_delta_milli")),
+            _fmt(payload.get("resource_aware_preservation_violation_days"), digits=0),
         ))
     if not rows:
         return "本次沒有啟用Resource-aware arm。"
@@ -654,7 +662,9 @@ def _resource_aware_table(
             "Continuous新選入單",
             "Selected Score總和增量",
             "直接Score排序可行日",
+            "預計選入差",
             "總預留資金增量",
+            "資源保護違規日",
         ),
         rows,
     )

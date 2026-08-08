@@ -5249,81 +5249,118 @@ Capital geometry：平均投入`160,998 → 172,080`、平均預留`168,163 → 
 
 套用後直接由`apps/audit.py`正式選單執行目前Audit設定即可；若本機保留上述兩個strategy-compare正式runs，應直接READY並產生C15 vs C14結果，不需要重新執行`apps/strategy_compare.py`。取得結果後再判斷是否建立新的capital-preserving selector研究；本輪不預先分配`SR-C16`。
 
-## 2026-08-08 — AUD-c15-source-attribution正式結果：MR-12A all-label source獲支持，SR-C15仍不promotion
+## 2026-08-08 — AUD-c15-source-attribution正式結果：MR-12A all-label source成立，SR-C15仍不promotion
 
 ### 狀態
 
 `AUD-c15-source-attribution RESULT_AVAILABLE / MR-12A SOURCE_SUPPORTED / DL-CONT12A SOURCE_SUPPORTED / SR-C15 PROMISING_NOT_PROMOTED`
 
-### 程式基準
+### 正式來源
 
-- 使用者ZIP：`test-branch-1_20260808_131423_1149509.zip`
-- SHA256：`368572aa5f8b85179ebc1379dbfd1ccb5d3827257d3a4b963e15c17c7bf558ae`
-- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
-
-### 正式Audit來源
-
+- Candidate run：`outputs/strategy_compare/runs/20260808_011957_C3-C12-C15_4da3217c83bd`
+- Comparator run：`outputs/strategy_compare/runs/20260808_001744_C3-C12-C14_902c90b40dc2`
+- 比較期間：`2021-01-01～2025-12-22`
 - Candidate：`SR-C15 / DL-CONT12A / MR-12A all_labels`
 - Comparator：`SR-C14 / DL-CONT11G / MR-11G pass_only`
-- 期間：`2021-01-01 ～ 2025-12-22`
-- C15正式run：`outputs/strategy_compare/runs/20260808_011957_C3-C12-C15_4da3217c83bd`
-- C14正式run：`outputs/strategy_compare/runs/20260808_001744_C3-C12-C14_902c90b40dc2`
-- Audit run：`outputs/audit/breakout_quality/c15_source_attribution/runs/20260808_131431_906592`
-- Cross-run guard已確認兩者comparison period、dataset、param policy、max positions、rotation、param source、rule policy、runtime mode與`PARAM-P2 / Min ROOS`正式參數SHA一致；Audit只讀既有replay，不重跑portfolio、不修改score／selector／training。
+- 共用契約：`PARAM-P2 / Min ROOS`、all-off rules、max positions=10、rotation=off、`resource-aware-continuous`，跨run已驗證Min ROOS參數SHA一致。
+- Audit只讀既有replay；不重跑、不改score／selector／training。
 
-### C15 vs C14正式結果
+### 正式結果
 
-| 指標 | C14 | C15 | 差異 |
+| 指標 | C14 | C15 | C15 - C14 |
 |---|---:|---:|---:|
-| Total Return | 157.07% | 168.69% | **+11.61pp** |
-| MDD | 17.17% | 14.81% | **-2.36pp** |
-| RoMD | 9.15 | 11.39 | **+2.24** |
-| EV | 0.58R | 0.64R | **+0.06R** |
+| Total Return | 157.07% | 168.69% | +11.61pp |
+| MDD | 17.17% | 14.81% | -2.36pp |
+| RoMD | 9.15 | 11.39 | +2.24 |
+| EV | 0.58R | 0.64R | +0.06R |
 | Average Exposure | 91.74% | 91.71% | -0.03pp |
-| Final relative wealth advantage | - | - | **+4.52%** |
-| 2024 relative wealth effect | - | - | **+3.44%** |
-| 非2024 relative wealth effect | - | - | **+1.04%** |
-| 2024 share of net Δlog wealth | - | - | 76.58% |
+| Final relative wealth | - | - | +4.52% |
 
-Top正貢獻月份為`2024-04 / 2022-03 / 2023-08 / 2023-10 / 2021-12`；Top 5正貢獻月份占全部正貢獻`43.52%`。與C15相對C3/C12不同，source attribution的非2024期間仍為正，且主要正貢獻月份跨2021～2024，故MR-12A相對MR-11G的改善不是只靠2024把其他年份整體落後補回。
+Wealth concentration：2024單獨relative wealth effect約`+3.44%`，非2024期間仍為`+1.04%`；2024占全期淨Δlog wealth `76.58%`，但不像C15 vs C3/C12需要由2024補回其他年份整體負貢獻。Top正貢獻月份跨2021、2022、2023、2024。
 
-### Selection／trade與資源歸因
+Selection／trade：選股不同日`300`；C15-only/C14-only=`239/255`；exclusive selection `ΔR=+12.16R`、`ΔPnL=+196,527.93`；common trades `ΔPnL=-80,379.56`，all-trade `ΔPnL=+116,148.37`。
 
-- 選股不同日：`300`
-- C15-only / C14-only選入單：`239 / 255`
-- Exclusive selection：`ΔR=+12.16R`、`ΔPnL=+196,527.93`
-- Common trades `ΔPnL=-80,379.56`；All trade `ΔPnL=+116,148.37`
-- 平均Capital Return：`2.63% → 3.16%`（`+0.53pp`）
-- 平均Realized R：`0.58R → 0.64R`（`+0.06R`）
-- Underfilled end days：`633 → 590`
-- Position gap slot-days：`955 → 872`
-- selection-changed days平均持股差僅`+0.01`，成交買單差`-16`、missed-buy差`+2`；因此C15相對C14並不是單純靠多成交或更高macro exposure取得優勢。
+Capital geometry：平均實際投入`153,068 → 172,080`、平均預留`159,732 → 179,205`、平均停損距離`6.36% → 5.68%`、平均Capital Return`2.63% → 3.16%`、平均Realized R`0.58R → 0.64R`。Underfilled end days`633 → 590`，position-gap slot-days`955 → 872`。
 
-Selector自身盤前診斷：
-
-| 指標 | C14 | C15 |
-|---|---:|---:|
-| DL-selection days | 126 | 114 |
-| Capital-utilization days | 489 | 461 |
-| Selector changed days | 116 | 94 |
-| 相對各自Min ROOS預計選入單數差 | +27 | +24 |
-| 相對各自Min ROOS累計預留資金差 | -1,861,230 | -1,063,551 |
-| Promoted score orders | 147 | 119 |
-| Direct score-order feasible days | 35 | 32 |
-
-C15在**較少selector changed days**、且對Min ROOS的planned reserved-capital偏離較小的情況下仍優於C14，因此不能把source improvement解釋成「MR-12A只是更激進地改basket」。這是支持`all_labels` training semantics的主要portfolio-level證據。
+Selector自身盤前診斷：C14/C15 DL-selection days=`126/114`、selector changed days=`116/94`、相對各自Min ROOS planned selected-count delta=`+27/+24`、reserved capital delta=`-1,861,230/-1,063,551`、promoted score orders=`147/119`、direct score-order feasible days=`35/32`。
 
 ### 判定
 
-1. **`MR-12A`獲得source-level支持。** 在同一`resource-aware-continuous` runtime、同一Min ROOS參數與近乎相同macro exposure下，C15相對C14的Return、MDD、RoMD、EV、Capital Return、exclusive R／PnL方向一致改善，且非2024 relative wealth仍為正。`MR-12A`保留為目前continuous model research source。
-2. **`DL-CONT12A`保留為目前continuous controlled research DL source。** 這個判定只代表source比歷史`DL-CONT11G`更適合all-event deployment，不代表策略arm已promotion。
-3. **`SR-C15`仍不promotion。** 原`AUD-c15-strategy-attribution`已確認C15相對C3/C12的全期優勢分別高度依賴2024，非2024為負；source-level改善與strategy-level robustness必須分開判定。
-4. **下一個問題已從「模型source是否成立」轉成「selector能否在不惡化盤前資金幾何下擴大DL決策權」。** C15自身雖相對Min ROOS多`+24`預計選入單，但累計reserved cash仍少約`1.064M`，證明只維持cash-binding或selected count不足以定義capital-preserving。
+1. 相同Min ROOS、相同runtime與幾乎相同macro exposure下，MR-12A all-label source在Return／MDD／RoMD／EV／exclusive R／exclusive dollar PnL／Capital Return均同向優於MR-11G PASS-only source，且非2024仍為正，因此`MR-12A / DL-CONT12A`升為`SOURCE_SUPPORTED`。
+2. Source支持不等於策略promotion。SR-C15相對C3/C12仍高度依賴2024，故維持`PROMISING_NOT_PROMOTED`。
+3. C15相對Min ROOS出現planned selected-count `+24`但reserved capital `-1.064M`，正式證明「仍為cash-binding」不能保證basket-level資金幾何不退化；後續不再調模型，優先研究selector resource floor。
+
+## 2026-08-08 — SR-C16實作：All-event Continuous basket-level capital-preserving selector
+
+### 狀態
+
+`SR-C16 IMPLEMENTED / RESULT_PENDING`
+
+### 程式基準
+
+- 使用者指定ZIP：`test-branch-1_20260808_131423_1149509(1).zip`
+- SHA256：`368572aa5f8b85179ebc1379dbfd1ccb5d3827257d3a4b963e15c17c7bf558ae`
+- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 唯一研究變更
+
+`SR-C16`固定沿用：
+
+- `PARAM-P2 / Min ROOS`
+- rules=`all_off`
+- `DL-CONT12A / MR-12A`
+- frozen OOS continuous score
+- max positions=10
+- rotation=off
+- 原策略sizing／exact accounting／成交語意
+
+唯一新變數為selector feasibility contract；不修改模型權重、Target、training scope、score cutoff、blend weight、年份／regime gate或strategy params。
+
+新runtime mode：`resource-aware-continuous-capital-preserving`。
+
+每日盤前先用原Min ROOS順序與正式cash-capped exact reservation建立baseline。任何DL重排只有同時滿足下列兩個invariant才可接受：
+
+`selected_count >= baseline_selected_count`
+
+`reserved_cost_milli >= baseline_reserved_cost_milli`
+
+因此C16不再把「cash仍為binding resource」當作可行條件；cash-binding與slot-binding日皆可讓MR-12A score參與，但不得以減少預計選入數或降低盤前reserved capital交換品質分數。所有條件只使用盤前可知資料，未使用隔日成交或Future Target。
+
+### Selector演算法
+
+1. 候選建立與pre-sort完全維持Min ROOS原排序。
+2. 先計算Min ROOS exact reservation baseline。
+3. 若沒有可競爭的未選候選或沒有有效continuous score，完整回退Min ROOS。
+4. 先嘗試純score-descending order；只有雙resource floor成立且selected quality嚴格改善才接受。
+5. 若純score order不可行，從Min ROOS開始做deterministic best-improvement score promotions；每輪評估所有尚未promotion的scored candidate，exact replay後只保留雙resource floor成立且quality嚴格改善的trial，再採當輪最佳trial。
+6. 不新增任何resource tolerance／threshold；exact milli accounting直接比較，不用近似比例。
+
+### 正式比較矩陣
+
+`config/strategy_compare.py`目前只啟用：
+
+- `C3 = SR-C3 / Min ROOS`
+- `C15 = SR-C15 / MR-12A cash-binding resource-aware continuous`
+- `C16 = SR-C16 / MR-12A capital-preserving continuous`
+
+只啟用兩個核心contrast：
+
+- `C16-C15`：同一MR-12A source下，只隔離selector resource contract。
+- `C16-C3`：檢查新selector相對Min ROOS基準的完整經濟效果。
+
+不再把C12/C14塞入本輪主矩陣。
+
+### 診斷與驗證
+
+Daily capacity新增：`Resource_Aware_Preservation_Required`、`Resource_Aware_Selected_Count_Preserved`、`Resource_Aware_Reserved_Capital_Preserved`。Strategy summary新增planned selected-count delta與resource-preservation violation days；C16正式結果的violation days必須為0，否則視為runtime contract failure，不得解讀績效。
+
+獨立direct synthetic已新增兩個固定案例：
+
+- slot-binding baseline下，高score候選若selected count不降且reserved capital提高，C16允許換股；舊C15仍不介入該類日。
+- 高score候選若使reserved capital低於Min ROOS baseline，即使score較高也必須拒絕並保留原順序。
+
+`validate_strategy_compare_config_driven_app_contract_case`直接執行`48/48 PASS`。GPT未執行`apps/test_suite.py`。
 
 ### 下一步
 
-不重訓MR-12A、不新增score cutoff／blend／年份或regime gate。下一個strategy runtime研究應採basket-level盤前資源constraint：以同日Min ROOS exact reservation結果作baseline，DL只能在事前可知條件下尋找更高quality basket，且不得降低正式定義的reserved-capital利用；若要擴大到slot-binding day，也必須維持baseline selected-count與reserved-capital契約。正式實作前再依Registry取得下一個可用`SR-C*`，不得先用OOS結果調numeric utilization threshold。
-
-### 同輪程式精簡
-
-獨立全專案source scan發現`core/portfolio_entries.py`仍保留已無production caller的`reorder_candidates_for_resource_aware_binary` backward-compatible function alias，只有synthetic validator使用舊名。依使用者先前要求不保留legacy相容層，本輪移除該alias並把validator直接改用canonical `reorder_candidates_for_resource_aware_quality`；不改任何selector邏輯或結果語意。
+使用正式`apps/strategy_compare.py`選單執行目前設定。結果取得前`SR-C16`只能標記`IMPLEMENTED / RESULT_PENDING`；不得依2021+ OOS結果回頭調resource tolerance、score threshold或其他numeric gate。正式報表先驗證resource-preservation violation days=`0`，再比較C16-C15與C16-C3的Return／MDD／RoMD／EV、exposure、selected-count delta、reserved-capital delta與DL selection coverage。

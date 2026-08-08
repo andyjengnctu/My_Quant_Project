@@ -4,6 +4,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES,
     resolve_breakout_quality_ranking_policy,
 )
@@ -271,6 +272,9 @@ def _resource_aware_default_diag(rows, free_slots, *, selector):
         'selected_score_mean': None,
         'promoted_score_orders': 0,
         'direct_score_order_feasible': False,
+        'resource_preservation_required': False,
+        'selected_count_preserved': True,
+        'reserved_capital_preserved': True,
     }
 
 
@@ -297,6 +301,12 @@ def _resource_aware_diag_from_result(default_diag, baseline, selected, *, change
         'selected_score_sum': float(selected_score['score_sum']),
         'baseline_selected_score_mean': baseline_score['score_mean'],
         'selected_score_mean': selected_score['score_mean'],
+        'selected_count_preserved': bool(
+            int(selected['selected_count']) >= int(baseline['selected_count'])
+        ),
+        'reserved_capital_preserved': bool(
+            int(selected['reserved_cost_milli']) >= int(baseline['reserved_cost_milli'])
+        ),
     }
 
 
@@ -623,6 +633,223 @@ def _reorder_resource_aware_continuous(
     return current_order, diag
 
 
+
+def _capital_preserving_continuous_quality_key(result, *, free_slots):
+    """Rank a selected basket by frozen continuous quality without rewarding empty slots."""
+
+    scores = sorted(
+        [
+            float(score)
+            for row in result.get('selected_rows', [])
+            if (score := _candidate_continuous_score(row)) is not None
+        ],
+        reverse=True,
+    )
+    padded = scores + [-math.inf] * max(0, int(free_slots) - len(scores))
+    return tuple(padded[: int(free_slots)])
+
+
+def _preserves_min_roos_resource_geometry(baseline, trial):
+    """Require no loss of planned position count or exact pre-market reserved capital."""
+
+    return bool(
+        int(trial['selected_count']) >= int(baseline['selected_count'])
+        and int(trial['reserved_cost_milli']) >= int(baseline['reserved_cost_milli'])
+    )
+
+
+def _reorder_resource_aware_continuous_capital_preserving(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """Improve frozen continuous quality without degrading Min ROOS resource geometry.
+
+    Unlike C15, this selector is not limited to days where cash is the baseline
+    bottleneck.  It may also intervene on slot-binding days, but every accepted
+    basket must preserve both Min ROOS planned selected-count and exact reserved
+    capital.  The direct score order is tried first.  If it violates either
+    invariant, deterministic best-improvement score promotions are searched; no
+    future fill information, score threshold, utilization tolerance, or blend
+    weight is introduced.
+    """
+
+    diag = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        baseline,
+        changed=False,
+        promoted_pass_count=0,
+        selector='continuous-score-capital-preserving',
+    )
+    diag['resource_preservation_required'] = True
+
+    score_rows = [row for row in rows if _candidate_continuous_score(row) is not None]
+    if not score_rows or not bool(baseline['has_unselected_candidates']):
+        diag['mode'] = 'capital-utilization'
+        return list(rows), diag
+
+    diag['mode'] = 'dl-selection'
+    base_rank = {id(row): idx for idx, row in enumerate(rows)}
+    baseline_key = _capital_preserving_continuous_quality_key(
+        baseline, free_slots=free_slots
+    )
+
+    score_rows.sort(
+        key=lambda row: (
+            -float(_candidate_continuous_score(row)),
+            base_rank[id(row)],
+        )
+    )
+    scored_ids = {id(row) for row in score_rows}
+    direct_order = score_rows + [row for row in rows if id(row) not in scored_ids]
+    direct = _simulate_reserved_candidate_order(
+        direct_order,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=free_slots,
+        params=params,
+    )
+    direct_feasible = _preserves_min_roos_resource_geometry(baseline, direct)
+    direct_key = _capital_preserving_continuous_quality_key(
+        direct, free_slots=free_slots
+    )
+    if direct_feasible and direct_key > baseline_key:
+        baseline_selected_ids = {id(row) for row in baseline['selected_rows']}
+        promoted_count = sum(
+            1 for row in direct['selected_rows'] if id(row) not in baseline_selected_ids
+        )
+        diag.update(
+            _resource_aware_diag_from_result(
+                default_diag,
+                baseline,
+                direct,
+                changed=bool(
+                    [id(row) for row in direct_order] != [id(row) for row in rows]
+                ),
+                promoted_pass_count=0,
+                selector='continuous-score-capital-preserving-direct',
+            )
+        )
+        diag.update({
+            'mode': 'dl-selection',
+            'promoted_score_orders': int(promoted_count),
+            'direct_score_order_feasible': True,
+            'basket_search_states': 1,
+            'basket_feasible_count': 1,
+            'resource_preservation_required': True,
+        })
+        if not diag['selected_count_preserved'] or not diag['reserved_capital_preserved']:
+            raise RuntimeError('capital-preserving Continuous直接排序違反Min ROOS資源契約')
+        return direct_order, diag
+
+    promoted_ids = set()
+    current_order = list(rows)
+    current = baseline
+    current_key = baseline_key
+    evaluated = 1
+    feasible = 0
+
+    while True:
+        best_trial = None
+        best_trial_key = None
+        best_tie_key = None
+        for candidate in score_rows:
+            candidate_id = id(candidate)
+            if candidate_id in promoted_ids:
+                continue
+            trial_promoted = set(promoted_ids)
+            trial_promoted.add(candidate_id)
+            trial_order = sorted(
+                rows,
+                key=lambda row: (
+                    0 if id(row) in trial_promoted else 1,
+                    -(
+                        float(_candidate_continuous_score(row))
+                        if id(row) in trial_promoted
+                        and _candidate_continuous_score(row) is not None
+                        else 0.0
+                    ),
+                    base_rank[id(row)],
+                ),
+            )
+            if [id(row) for row in trial_order] == [id(row) for row in current_order]:
+                continue
+            evaluated += 1
+            trial = _simulate_reserved_candidate_order(
+                trial_order,
+                available_cash=available_cash,
+                sizing_equity=sizing_equity,
+                free_slots=free_slots,
+                params=params,
+            )
+            if not _preserves_min_roos_resource_geometry(baseline, trial):
+                continue
+            if candidate_id not in {id(row) for row in trial['selected_rows']}:
+                continue
+            feasible += 1
+            trial_key = _capital_preserving_continuous_quality_key(
+                trial, free_slots=free_slots
+            )
+            if trial_key <= current_key:
+                continue
+            selected_base_ranks = tuple(
+                -base_rank[id(row)] for row in trial['selected_rows']
+            )
+            tie_key = (
+                -len(trial_promoted),
+                selected_base_ranks,
+            )
+            if (
+                best_trial_key is None
+                or trial_key > best_trial_key
+                or (trial_key == best_trial_key and tie_key > best_tie_key)
+            ):
+                best_trial_key = trial_key
+                best_tie_key = tie_key
+                best_trial = (trial_promoted, trial_order, trial)
+
+        if best_trial is None:
+            break
+        promoted_ids, current_order, current = best_trial
+        current_key = best_trial_key
+
+    if not _preserves_min_roos_resource_geometry(baseline, current):
+        raise RuntimeError('capital-preserving Continuous違反Min ROOS資源契約')
+
+    baseline_selected_ids = {id(row) for row in baseline['selected_rows']}
+    promoted_count = sum(
+        1 for row in current['selected_rows'] if id(row) not in baseline_selected_ids
+    )
+    diag.update(
+        _resource_aware_diag_from_result(
+            default_diag,
+            baseline,
+            current,
+            changed=bool(
+                [id(row) for row in current_order] != [id(row) for row in rows]
+            ),
+            promoted_pass_count=0,
+            selector='continuous-score-capital-preserving',
+        )
+    )
+    diag.update({
+        'mode': 'dl-selection',
+        'promoted_score_orders': int(promoted_count),
+        'direct_score_order_feasible': bool(direct_feasible),
+        'basket_search_states': int(evaluated),
+        'basket_feasible_count': int(feasible),
+        'resource_preservation_required': True,
+    })
+    if not diag['selected_count_preserved'] or not diag['reserved_capital_preserved']:
+        raise RuntimeError('capital-preserving Continuous輸出違反Min ROOS資源契約')
+    return current_order, diag
+
 def reorder_candidates_for_resource_aware_quality(
     orderable_candidates_today,
     *,
@@ -635,10 +862,11 @@ def reorder_candidates_for_resource_aware_quality(
     """Apply the configured resource-aware quality selector before reservation.
 
     Min ROOS always owns the exact cash-capped resource-bottleneck decision.
-    Binary variants optimize PASS use only on cash-binding days.  The continuous
-    variant instead uses frozen event-level quality scores only on those same
-    DL-selection days.  No selector may turn a cash-binding baseline into a
-    slot-binding order plan or introduce a numeric utilization threshold.
+    Binary variants optimize PASS use only on cash-binding days.  The original
+    continuous variant uses frozen event-level quality scores on those same days.
+    The capital-preserving continuous variant may also act on slot-binding days,
+    but it must preserve Min ROOS selected-count and exact reserved capital.
+    No selector introduces a numeric utilization threshold.
     """
 
     rows = list(orderable_candidates_today or [])
@@ -647,6 +875,8 @@ def reorder_candidates_for_resource_aware_quality(
     selector = (
         'best-improvement-basket'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+        else 'continuous-score-capital-preserving'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
         else 'continuous-score-constrained'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
         else 'greedy-first-improvement'
@@ -662,6 +892,16 @@ def reorder_candidates_for_resource_aware_quality(
         free_slots=free_slots,
         params=params,
     )
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING:
+        return _reorder_resource_aware_continuous_capital_preserving(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+        )
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS:
         return _reorder_resource_aware_continuous(
             rows,
@@ -691,6 +931,8 @@ def reorder_candidates_for_resource_aware_quality(
         baseline=baseline,
         default_diag=default_diag,
     )
+
+
 
 def execute_reserved_entries_for_day(
     portfolio,

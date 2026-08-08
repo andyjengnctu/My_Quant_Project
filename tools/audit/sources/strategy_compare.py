@@ -147,6 +147,7 @@ def _runtime_prefix(arm: dict[str, Any]) -> str:
         "resource-aware-binary",
         "resource-aware-binary-basket",
         "resource-aware-continuous",
+        "resource-aware-continuous-capital-preserving",
     }:
         return "score_ranking"
     raise ValueError(f"不支援的strategy compare runtime: {runtime!r}")

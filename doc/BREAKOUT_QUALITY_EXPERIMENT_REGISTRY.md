@@ -55,12 +55,12 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | Strategy params baseline | `PARAM-P2 / Min ROOS` | DL-off-trained rolling active params | ACTIVE strategy parameter baseline |
 | Resource-aware 最佳已知經濟結果 | `SR-C15` | All-event continuous capital-utilization-first | RESULT_AVAILABLE／PROMISING_NOT_PROMOTED；全期Return/MDD/RoMD最佳，但AUD-c15確認優勢高度集中2024，尚不升格正式基準 |
 | 最大化 PASS 研究基準 | `SR-C12` | A9 resource-aware best-improvement basket | ACTIVE；研究方向固定為「最大化 PASS 使用，再提高 PASS 品質」 |
-| 最新已完成Audit結果 | `AUD-c15-source-attribution` | `SR-C15 / MR-12A` vs `SR-C14 / MR-11G` read-only source attribution | RESULT_AVAILABLE；全期相對wealth +4.52%，2024約+3.44%、非2024約+1.04%；在同runtime／同Min ROOS下MR-12A all-label source的Return、MDD、RoMD、EV、Capital Return與exclusive selection經濟效果方向一致優於MR-11G pass-only deployment |
+| 最新已完成Audit結果 | `AUD-c15-source-attribution` | `SR-C15 / MR-12A` vs `SR-C14 / MR-11G` read-only source attribution | RESULT_AVAILABLE；C15相對C14 final relative wealth +4.52%，2024 +3.44%、非2024仍+1.04%；EV +0.06R、exclusive selection +12.16R／+196,527.93 PnL，支持all-label source |
 | Continuous research DL source | `DL-CONT11G` | `MR-11G / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse` frozen OOS continuous score | HISTORICAL controlled-replay source；SR-C14未採用 |
-| Current model research | `MR-12A` | No-time all-event continuous breakout-event ranker；同一Target／architecture，只把training scope由PASS-only改為all-events | ARTIFACT_AVAILABLE／SOURCE_SUPPORTED；AUD-c15-source-attribution確認在同runtime／同Min ROOS下all-event deployment相對MR-11G為正，保留為目前continuous research model source；standalone model OOS metrics待正式回填 |
-| Current continuous DL source | `DL-CONT12A` | `MR-12A / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_mse` frozen OOS continuous score | ARTIFACT_AVAILABLE／SOURCE_SUPPORTED；目前continuous controlled research source；不等同SR-C15已promotion |
-| Current strategy arm | `SR-C15` | Capital-utilization first + `DL-CONT12A` all-event continuous score | RESULT_AVAILABLE／PROMISING_NOT_PROMOTED；AUD-c15已完成，確認C15相對C3/C12的全期優勢由2024 over-compensate非2024劣勢，且主要機制為capital geometry／slot occupancy／compounding而非平均R提升 |
-| 最新策略結果 | `SR-C15` | Capital-utilization first + `DL-CONT12A` all-event continuous score | RESULT_AVAILABLE／PROMISING_NOT_PROMOTED；C15 vs C14 source attribution支持MR-12A，但C15相對C3/C12的全期優勢仍高度依賴2024，因此模型source與策略promotion分開判定 |
+| Current model research | `MR-12A` | No-time all-event continuous breakout-event ranker；同一Target／architecture，只把training scope由PASS-only改為all-events | SOURCE_SUPPORTED；AUD-c15-source-attribution確認相同runtime／Min ROOS下all-event deployment優於MR-11G，standalone model OOS metrics待正式回填 |
+| Current continuous DL source | `DL-CONT12A` | `MR-12A / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_mse` frozen OOS continuous score | SOURCE_SUPPORTED；固定作後續controlled strategy research source，不因SR-C15未promotion而回退模型source |
+| Current strategy research arm | `SR-C16` | Min ROOS exact basket resource floor + `DL-CONT12A` frozen continuous score | IMPLEMENTED／RESULT_PENDING；唯一新變數為selector feasibility：selected count與reserved capital均不得低於同日Min ROOS baseline；可在cash／slot-binding日介入 |
+| 最新策略結果 | `SR-C15` | Capital-utilization first + `DL-CONT12A` all-event continuous score | RESULT_AVAILABLE；2021-01-01～2025-12-22 Return=168.69%、MDD=14.81%、RoMD=11.39；AUD-c15-source-attribution支持MR-12A source，但SR-C15仍PROMISING_NOT_PROMOTED |
 
 ### `MR-9A` 與 `DL-A9` 必須分開
 
@@ -110,7 +110,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 
 | ID | 名稱 | 狀態 |
 |---|---|---|
-| `MR-12A` | No-time All-event Continuous Ranker / `strategy_aligned_no_time_all_event_mse` | ARTIFACT_AVAILABLE／SOURCE_SUPPORTED；同一`strategy_aligned_opportunity_no_time_r_v1`與`ARCH-inception_time_v1`，唯一模型變數為training scope `pass_only → all_labels`；AUD-c15-source-attribution確認同runtime下非2024仍為正，保留為目前continuous research model source |
+| `MR-12A` | No-time All-event Continuous Ranker / `strategy_aligned_no_time_all_event_mse` | SOURCE_SUPPORTED；同一`strategy_aligned_opportunity_no_time_r_v1`與`ARCH-inception_time_v1`，唯一模型變數為training scope `pass_only → all_labels`；AUD-c15-source-attribution確認相同runtime下C15相對C14 final relative wealth +4.52%，且非2024仍+1.04% |
 
 `MR-12A` 已正式占用。後續不得重用此 ID；若模型權重／target／training-data semantics 再變更，須重新查 Registry 取得新的 `MR-*`。
 
@@ -123,7 +123,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `DL-A9` | `A9` | `MR-9A / ARCH-inception_time_v1 / PROFILE-unique_group_sampling` | Binary breakout-quality score，threshold 0.5 | ACTIVE research source |
 | `DL-TP1` | `TP1` | `LABEL-a2_realized_trade_path_v1` training line | Realized trade-path binary score，threshold 0.5 | Hard-filter use rejected；歷史保留 |
 | `DL-CONT11G` | `CONT11G` | `MR-11G / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse` | Frozen OOS continuous breakout-event score；只供capital-utilization-first controlled strategy research。歷史training scope為PASS-only，SR-C14在全部orderable breakout events上的使用屬受控deployment hypothesis | HISTORICAL research-only score source；SR-C14未採用 |
-| `DL-CONT12A` | `CONT12A` | `MR-12A / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_mse` | Frozen OOS all-event continuous breakout-event score；training scope=`all_labels`，Target仍為`strategy_aligned_opportunity_no_time_r_v1`；只供capital-utilization-first controlled strategy research | ARTIFACT_AVAILABLE／SOURCE_SUPPORTED |
+| `DL-CONT12A` | `CONT12A` | `MR-12A / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_mse` | Frozen OOS all-event continuous breakout-event score；training scope=`all_labels`，Target仍為`strategy_aligned_opportunity_no_time_r_v1`；作為後續controlled selector研究的固定score source | SOURCE_SUPPORTED |
 
 **改變 DL-A9 的策略使用方式不會自動產生 `DL-A10`，也不會自動成為新 `MR-*`。**只有模型權重、training target、architecture 或 training-data semantics 真正改變，才需要另立 model research identity。
 
@@ -148,6 +148,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `SR-C13` | Min ROOS: A9 resource-aware basket + candidate-day re-score | 同一DL-A9權重／threshold與C12 allocation，把A9 quality改為每個策略VALID candidate day重新計算 | **CANCELLED_BEFORE_IMPLEMENTATION**；A9是breakout-event classifier，extended candidate-day通常不是breakout形態，直接re-score語意／distribution不成立；ID永久保留不得重用 |
 | `SR-C14` | Min ROOS: Continuous resource-aware | Min ROOS exact cash-cap先判resource mode；capital-utilization mode完全維持Min ROOS，只有cash-binding的DL Selection Mode才使用`DL-CONT11G` frozen OOS continuous score，且排序不得破壞cash-binding資源契約 | RESULT_AVAILABLE／NOT_ADOPTED；曝險接近C3，但RoMD／EV／同參數DL選擇R明顯低於C12；MR-11G PASS-only score的all-event deployment不成立 |
 | `SR-C15` | Min ROOS: All-event Continuous resource-aware | 完全沿用SR-C14 capital-utilization-first與cash-binding契約；唯一差異為score source改成`DL-CONT12A / MR-12A`真正all-event訓練的continuous ranker | RESULT_AVAILABLE／PROMISING_NOT_PROMOTED；同期間相對C3 +12.35pp Return、-0.60pp MDD、+1.24 RoMD；相對C12 +6.10pp Return、-1.66pp MDD、+1.51 RoMD，但EV與同參數DL選擇R較弱且年度結果集中 |
+| `SR-C16` | Min ROOS: All-event Continuous capital-preserving | 固定`PARAM-P2 / DL-CONT12A / MR-12A`；Min ROOS先建立exact reservation baseline，continuous score可跨cash／slot-binding重排，但接受basket必須同時滿足`selected_count >= baseline`與`reserved_cost >= baseline`；不新增threshold／blend／future資料 | IMPLEMENTED／RESULT_PENDING；正式比較只開C16-C15與C16-C3，結果取得前不得宣稱改善 |
 
 ### `SR-C13` identity boundary
 
@@ -165,7 +166,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `AUD-a9-pass-persistence` | `a9-pass-persistence` | `SR-C12 / DL-A9` | RESULT_AVAILABLE | False PASS persistence=1.60×；candidate-day FP amplification=1.33×；selector 不是主要放大來源 |
 | `AUD-a9-selection-confidence` | `a9-selection-confidence` | `SR-C12 / DL-A9` | RESULT_AVAILABLE／NOT_USED_FOR_PRIMARY_RANK | Candidate-day rho=0.071、unique-event rho=0.102、selected R rho=0.082；每日平均Label concordance=49.18%，不支持A9 confidence作主排序 |
 | `AUD-c15-strategy-attribution` | `c15-strategy-attribution` | `SR-C15` vs `SR-C3 / SR-C12` | RESULT_AVAILABLE | 2024單獨relative wealth effect約+18.10%/+11.46%，非2024約-11.25%/-8.19%；C15全期優勢主要由portfolio geometry／slot occupancy／compounding解釋，非平均R提升 |
-| `AUD-c15-source-attribution` | `c15-source-attribution` | `SR-C15 / MR-12A` vs `SR-C14 / MR-11G` | RESULT_AVAILABLE | 全期relative wealth `+4.52%`；2024 effect約`+3.44%`、非2024約`+1.04%`；Return `+11.61pp`、MDD `-2.36pp`、RoMD `+2.24`、EV `+0.06R`、exclusive selection `+12.16R / +196,527.93 PnL`；支持MR-12A all-label source，不promotion SR-C15 |
+| `AUD-c15-source-attribution` | `c15-source-attribution` | `SR-C15 / MR-12A` vs `SR-C14 / MR-11G` | RESULT_AVAILABLE | C15相對C14 Return +11.61pp、MDD -2.36pp、RoMD +2.24、EV +0.06R、relative wealth +4.52%；2024 +3.44%、非2024 +1.04%，exclusive selection +12.16R／+196,527.93 PnL；MR-12A all-label source支持保留 |
 
 Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Audit 自己不占用這兩種 ID。
 
@@ -201,7 +202,9 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 12. `SR-C14`正式結果期間為2021-01-01～2025-12-22（受DL-CONT11G frozen OOS coverage限制）：相對SR-C3報酬+0.73pp、MDD+1.76pp、RoMD-1.00、EV-0.07R、曝險-0.25pp、同參數DL選擇R+14.62R；相對SR-C12報酬-5.52pp、RoMD-0.73、EV-0.24R、同參數DL選擇R-79.99R。判定capital-utilization-first已大幅消除舊raw continuous sort的macro曝險問題，但現有MR-11G score在此deployment仍未形成足夠經濟排序力。
 13. `MR-12A`已完成工件並由`DL-CONT12A / SR-C15`進行正式controlled replay；相同capital-first runtime下，all-event training明顯優於MR-11G PASS-only deployment：C15相對C14報酬+11.62pp、MDD-2.36pp、RoMD+2.24、EV+0.06R，曝險只差-0.03pp，支持`all_labels` training semantics。
 14. `SR-C15`正式結果為Return=168.69%、MDD=14.81%、RoMD=11.39；同期間相對C3為+12.35pp Return／-0.60pp MDD／+1.24 RoMD，相對C12為+6.10pp Return／-1.66pp MDD／+1.51 RoMD。惟EV=0.64R、same-param DL selection R=+26.78R均弱於C12，且`AUD-c15-strategy-attribution`已確認相對C3/C12的全期優勢高度依賴2024，因此目前標記`PROMISING_NOT_PROMOTED`。
-15. `AUD-c15-source-attribution`已完成：C15相對C14全期relative wealth `+4.52%`，2024約`+3.44%`、非2024約`+1.04%`；C15 selector changed days較少（`94 vs 116`），相對Min ROOS累計reserved-cash破壞也較小（約`-1.064M vs -1.861M`），仍取得更佳Return／MDD／RoMD／EV與exclusive selection經濟效果。判定`MR-12A / DL-CONT12A`保留為目前continuous research source，但`SR-C15`仍因相對C3/C12年度集中而不promotion。下一個策略研究應隔離**basket-level盤前資金幾何約束**：提高DL決策覆蓋時，不能只維持cash-binding或selected count，需明確約束相對同日Min ROOS的reserved capital；新`SR-C*`須等正式實作時再依Registry分配。
+15. `AUD-c15-source-attribution`已完成：C15相對C14 Return +11.61pp、MDD -2.36pp、RoMD +2.24、EV +0.06R、final relative wealth +4.52%；2024約+3.44%，非2024仍+1.04%，因此`MR-12A / DL-CONT12A`升為`SOURCE_SUPPORTED`，但不等同`SR-C15` promotion。
+16. C15自身盤前診斷仍顯示相對Min ROOS預計選入單數`+24`但reserved capital累計`-1,063,551`，正式證明cash-binding不等於basket-level capital preservation。`SR-C16`因此只改selector feasibility：任何DL basket不得降低Min ROOS同日selected count或exact reserved capital；模型／Target／score source／參數全部固定。
+17. `SR-C16`正式比較矩陣只保留`C3 / C15 / C16`，核心contrast為`C16-C15`（隔離resource-preserving selector本身）與`C16-C3`（相對Min ROOS基準）；結果取得前狀態固定`IMPLEMENTED / RESULT_PENDING`。
 
 ---
 

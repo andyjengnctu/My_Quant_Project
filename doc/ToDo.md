@@ -10,6 +10,14 @@ restructure
 - 移出非必要放在config/下的設定
 - 優化選單，常用以選單為主(避免去背指令)，不常用以CLI為主(避免選單太雜)
 
+- system
+- trading
+    - strategy
+    - selectors
+    - filters
+    - rangers 
+- tools
+
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議
     - 加入大盤過濾 +  加入低點買入 
