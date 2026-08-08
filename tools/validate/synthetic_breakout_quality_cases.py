@@ -16979,7 +16979,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     mocked_pair_payload = {
         "metadata": {
-            "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"}
+            "comparison_mode": "score-ranking",
+            "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},
+            "params_path": "models/min_roos.json",
+            "param_source_kind": "rolling_active_param_ensemble",
+            "param_selector": "base_finalist_best",
+            "runtime_member_count_min": 1,
+            "runtime_member_count_max": 1,
+            "runtime_min_agree": 1,
+            "comparison_design": "synthetic_score_ranking",
+            "lookahead_safe_active_param_schedule": True,
+            "dataset": "full",
+            "score_source": "continuous_ranker_oos",
+            "score_ranking_policy": "resource-aware-continuous-max-dl",
+            "optional_entry_filter_policy": "all-off",
+            "benchmark_ticker": "0050",
+            "filter_id": "breakout_quality_v1",
+            "model_architecture": "inception_time_v1",
+            "experiment_profile": "strategy_aligned_no_time_all_event_mse",
+            "score_ranking_order": ["continuous_score_top_k"],
+            "ranking_scope": "all_candidates_after_single_member_qualification",
         },
         "no_filter": {
             "total_return_pct": 10.0,
@@ -17017,14 +17036,51 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "resource_aware_pass_reserved_gain_milli": 1000000,
             "resource_aware_reserved_delta_milli": -500000,
         },
+        "score_ranking_minus_no_filter": {
+            "total_return_pct": 2.0,
+            "max_drawdown_pct": 0.0,
+            "return_over_max_drawdown": 0.4,
+            "annual_return_pct": 2.0,
+            "expected_value_r": 0.03,
+            "payoff_ratio": 0.10,
+            "avg_exposure_pct": 0.0,
+            "trade_count": 0,
+        },
         "yearly": [
             {
                 "year": 2021,
                 "no_filter_return_pct": 10.0,
                 "quality_filter_return_pct": 11.0,
+                "score_ranking_return_pct": 12.0,
+                "delta_pct": 2.0,
+                "is_full_year": True,
             }
         ],
     }
+    from filters.breakout_quality.strategy_compare_engine import (
+        materialize_strategy_pair_readable_report,
+        render_strategy_pair_simple_report,
+    )
+    rendered_pair_summary = render_strategy_pair_simple_report(
+        mocked_pair_payload,
+        color=False,
+    )
+    with tempfile.TemporaryDirectory() as report_tmp:
+        readable_report_path = materialize_strategy_pair_readable_report(
+            mocked_pair_payload,
+            output_dir=Path(report_tmp),
+        )
+        readable_report_text = readable_report_path.read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_pair_outputs_always_materialize_markdown_and_console_simple_report",
+        True,
+        "Breakout Quality Score 排序策略經濟效果對照" in rendered_pair_summary
+        and "主要結果" in rendered_pair_summary
+        and readable_report_path.name == "strategy_comparison.md"
+        and "# Breakout Quality Score 排序策略經濟效果對照" in readable_report_text,
+    )
+
     ready_plan = StrategyPreparationPlan(overall_status="READY", actions=tuple())
     ready_status = {
         "overall_status": "READY",
@@ -17103,6 +17159,21 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     cache_off = settings.arms.get("C3")
     cache_on = settings.arms.get("C17")
     if cache_off is not None and cache_on is not None and cache_on.dl_id:
+        with tempfile.TemporaryDirectory() as required_tmp:
+            required_names = {
+                path.name
+                for path in strategy_comparison_module._pair_cache_required_files(
+                    Path(required_tmp),
+                    on_arm=cache_on,
+                )
+            }
+        add_check(
+            results, "synthetic_breakout_quality", case_id,
+            "completed_pair_cache_requires_human_readable_strategy_report",
+            True,
+            "strategy_comparison.md" in required_names
+            and "strategy_comparison.json" in required_names,
+        )
         cache_period = {"start": "2021-01-01", "end": "2025-12-22"}
         cache_artifacts = {
             "param:min_roos": {"path": "models/min.json", "sha256": "param-sha"},
@@ -17141,6 +17212,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 encoding="utf-8",
             )
             for filename in (
+                "strategy_comparison.md",
                 "yearly_returns_comparison.csv",
                 "no_filter_equity.csv",
                 "score_ranking_equity.csv",
@@ -17257,6 +17329,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                         }
                     },
                 }
+                reuse_console = io.StringIO()
                 with patch.object(
                     strategy_comparison_module,
                     "get_strategy_comparison_settings",
@@ -17269,11 +17342,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                     strategy_comparison_module,
                     "_load_direct_selection_r",
                     return_value=0.25,
-                ), redirect_stdout(io.StringIO()):
+                ), redirect_stdout(reuse_console):
                     cached_execution_payload = (
                         strategy_comparison_module.run_strategy_comparison(
                             project_root=reuse_root,
-                            quiet=True,
+                            quiet=False,
                             status=reuse_status,
                             auto_prepare=False,
                         )
@@ -17293,6 +17366,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                     and all(
                         call.kwargs.get("baseline_reuse_dir") is not None
                         for call in cache_run.call_args_list
+                    )
+                    and reuse_console.getvalue().count(
+                        "Breakout Quality Score 排序策略經濟效果對照"
+                    ) >= 2
+                    and all(
+                        (
+                            reuse_root
+                            / str(cached_execution_payload["pair_execution"][arm_id]["current_pair_dir"])
+                            / "strategy_comparison.md"
+                        ).is_file()
+                        for arm_id in ("C17", "C18")
                     )
                 )
             add_check(
@@ -18418,3 +18502,116 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
 
     summary["enabled_audit_ids"] = [item.audit_id for item in enabled_definitions]
     return results, summary
+
+def validate_breakout_quality_strategy_readable_report_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_STRATEGY_READABLE_REPORT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+    project_root = Path(__file__).resolve().parents[2]
+
+    contracts = (
+        (
+            "strategy_compare_pair",
+            project_root / "filters/breakout_quality/strategy_compare_engine.py",
+            "strategy_comparison.md",
+            "render_strategy_pair_simple_report",
+        ),
+        (
+            "strategy_compare_multi_arm",
+            project_root / "filters/breakout_quality/strategy_comparison.py",
+            "strategy_comparison.md",
+            'render_title("策略績效比較")',
+        ),
+        (
+            "strategy_parameter_adaptation",
+            project_root / "filters/breakout_quality/strategy_param_training.py",
+            "strategy_dl_filter_param_adapt_gate.md",
+            "_render_report",
+        ),
+        (
+            "selection_strategy_adaptation",
+            project_root / "tools/filters/breakout_quality/strategy_adapt.py",
+            "strategy_adaptation_comparison.md",
+            "_render_four_way_console",
+        ),
+        (
+            "optional_filter_gate",
+            project_root / "tools/filters/breakout_quality/strategy_filter_gate.py",
+            "strategy_filter_gate.md",
+            "_render_console",
+        ),
+        (
+            "binary_dl_rule_gate",
+            project_root / "tools/filters/breakout_quality/strategy_dl_filter_gate.py",
+            "strategy_dl_filter_rule_ablation_gate.md",
+            "_render_console",
+        ),
+        (
+            "trade_path_label_gate",
+            project_root / "tools/filters/breakout_quality/strategy_trade_path_label_gate.py",
+            "strategy_trade_path_label_gate.md",
+            "_render_report",
+        ),
+    )
+    contract_rows = []
+    for name, source_path, markdown_filename, renderer_token in contracts:
+        source = source_path.read_text(encoding="utf-8")
+        contract_rows.append(
+            (
+                name,
+                markdown_filename in source,
+                renderer_token in source,
+                "core.console_report" in source,
+            )
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "all_formal_strategy_results_have_persistent_markdown_simple_report",
+        True,
+        all(row[1] for row in contract_rows),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "all_formal_strategy_results_have_console_readable_renderer",
+        True,
+        all(row[2] and row[3] for row in contract_rows),
+    )
+
+    comparison_source = (
+        project_root / "filters/breakout_quality/strategy_comparison.py"
+    ).read_text(encoding="utf-8")
+    engine_source = (
+        project_root / "filters/breakout_quality/strategy_compare_engine.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "strategy_compare_run_and_reuse_share_canonical_pair_readable_report_renderer",
+        True,
+        "materialize_strategy_pair_readable_report" in comparison_source
+        and "render_strategy_pair_simple_report" in comparison_source
+        and "materialize_strategy_pair_readable_report" in engine_source
+        and 'pair_dir / "strategy_comparison.md"' in comparison_source,
+    )
+
+    settings_text = (project_root / "doc/PROJECT_SETTINGS.md").read_text(
+        encoding="utf-8"
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "project_policy_requires_strategy_result_simple_report_without_per_artifact_duplication",
+        True,
+        "策略層正式結果" in settings_text
+        and "簡易報表" in settings_text
+        and "JSON／CSV／manifest" in settings_text,
+    )
+    summary["strategy_output_contracts"] = [row[0] for row in contract_rows]
+    return results, summary
+

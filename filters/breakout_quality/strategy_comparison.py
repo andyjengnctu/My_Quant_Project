@@ -41,6 +41,8 @@ from filters.breakout_quality.strategy_compare_engine import (
     COMPARISON_MODE_SCORE_RANKING,
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    materialize_strategy_pair_readable_report,
+    render_strategy_pair_simple_report,
     run_comparison,
 )
 from core.buy_sort import (
@@ -229,6 +231,7 @@ def _pair_cache_required_files(
     runtime_spec = _arm_runtime_spec(on_arm)
     required = [
         pair_dir / "strategy_comparison.json",
+        pair_dir / "strategy_comparison.md",
         pair_dir / "yearly_returns_comparison.csv",
         pair_dir / "no_filter_equity.csv",
         pair_dir / "no_filter_trades.csv",
@@ -1269,6 +1272,10 @@ def run_strategy_comparison(
             })
             pair_payload["metadata"] = pair_metadata
             _write_json(pair_dir / "strategy_comparison.json", pair_payload)
+            materialize_strategy_pair_readable_report(
+                pair_payload,
+                output_dir=pair_dir,
+            )
             pair_payloads[group_id] = {
                 "arm_contract": (param_source, rule_policy, off_arm, on_arm),
                 "payload": pair_payload,
@@ -1297,6 +1304,11 @@ def run_strategy_comparison(
                         source_pair_dir,
                         project_root=root,
                     )
+                )
+                print("\n" + render_strategy_pair_simple_report(pair_payload))
+                print_artifact_paths(
+                    (("策略比較簡易報表", pair_dir / "strategy_comparison.md"),),
+                    project_root=root,
                 )
             continue
 

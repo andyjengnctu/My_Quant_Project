@@ -53,7 +53,7 @@ python apps/workbench.py
 
 # Breakout quality filter
 
-- 所有簡易報表共用統一console格式；使用者可見的工件路徑一律從專案根目錄顯示相對路徑並使用`/`分隔。易讀內容直接顯示於console，持久工件依命令保留Markdown／JSON／CSV，不產生HTML。
+- 所有簡易報表共用統一console格式；使用者可見的工件路徑一律從專案根目錄顯示相對路徑並使用`/`分隔。易讀內容直接顯示於console，持久工件依命令保留Markdown／JSON／CSV，不產生HTML。Breakout Quality策略層正式結果一律保證console摘要＋Markdown簡易報表；JSON／CSV／manifest只作詳細工件。Strategy Compare即使命中REUSE/cache，也會由canonical pair JSON重新產生本次run的Markdown並顯示相同簡報，不會因重用而只列工件路徑。
 
 ## 研究資料、訓練與評估
 

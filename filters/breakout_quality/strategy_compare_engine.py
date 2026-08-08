@@ -1711,6 +1711,84 @@ def _render_strategy_console_report(
     return "\n".join(lines)
 
 
+def _strategy_pair_report_components(
+    payload: dict[str, Any],
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    pd.DataFrame,
+    dict[str, Any] | None,
+]:
+    """Resolve canonical readable-report inputs from one completed pair payload."""
+
+    metadata = dict(payload.get("metadata") or {})
+    comparison_mode = str(metadata.get("comparison_mode") or "")
+    labels = _comparison_labels(comparison_mode)
+    active_name = labels["active_name"]
+    baseline = dict(payload.get("no_filter") or {})
+    quality = dict(payload.get(active_name) or {})
+    delta = dict(payload.get(f"{active_name}_minus_no_filter") or {})
+    if not metadata or not baseline or not quality or not delta:
+        raise ValueError("strategy pair payload缺少可讀報表必要欄位")
+    yearly = pd.DataFrame(list(payload.get("yearly") or []))
+    diagnostics_raw = payload.get("selection_diagnostics")
+    diagnostics = dict(diagnostics_raw) if isinstance(diagnostics_raw, dict) else None
+    return metadata, baseline, quality, delta, yearly, diagnostics
+
+
+def render_strategy_pair_simple_report(
+    payload: dict[str, Any],
+    *,
+    color: bool | None = None,
+) -> str:
+    """Render the canonical human-readable strategy pair report from JSON payload."""
+
+    metadata, baseline, quality, delta, yearly, diagnostics = (
+        _strategy_pair_report_components(payload)
+    )
+    return _render_strategy_console_report(
+        metadata,
+        baseline,
+        quality,
+        delta,
+        yearly,
+        diagnostics,
+        color=color,
+    )
+
+
+def render_strategy_pair_markdown(payload: dict[str, Any]) -> str:
+    """Render the canonical persistent Markdown strategy pair report from JSON payload."""
+
+    metadata, baseline, quality, delta, yearly, diagnostics = (
+        _strategy_pair_report_components(payload)
+    )
+    return _markdown_report(
+        metadata,
+        baseline,
+        quality,
+        delta,
+        yearly,
+        diagnostics,
+    )
+
+
+def materialize_strategy_pair_readable_report(
+    payload: dict[str, Any],
+    *,
+    output_dir: str | Path,
+) -> Path:
+    """Persist the required human-readable report for a completed strategy pair."""
+
+    target_dir = Path(output_dir).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    report_path = target_dir / "strategy_comparison.md"
+    report_path.write_text(render_strategy_pair_markdown(payload), encoding="utf-8")
+    return report_path
+
+
 def _remove_legacy_html_outputs(output_dir: Path) -> None:
     for filename in ("strategy_comparison.html",):
         path = output_dir / filename
@@ -2129,9 +2207,9 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
         json.dumps(refreshed, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    (output_dir / "strategy_comparison.md").write_text(
-        _markdown_report(metadata, baseline, quality, deltas, yearly),
-        encoding="utf-8",
+    materialize_strategy_pair_readable_report(
+        refreshed,
+        output_dir=output_dir,
     )
     yearly.to_csv(output_dir / "yearly_returns_comparison.csv", index=False, encoding="utf-8-sig")
     attribution = write_trade_attribution_outputs(
@@ -2961,9 +3039,9 @@ def run_comparison(
         json.dumps(json_payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    (output_dir / "strategy_comparison.md").write_text(
-        _markdown_report(metadata, baseline, quality, deltas, yearly, strategy_diagnostics),
-        encoding="utf-8",
+    materialize_strategy_pair_readable_report(
+        json_payload,
+        output_dir=output_dir,
     )
     _remove_legacy_html_outputs(output_dir)
     baseline_payload["equity_curve"].to_csv(
@@ -3008,14 +3086,7 @@ def run_comparison(
             no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
             quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
         )
-    print("\n" + _render_strategy_console_report(
-        metadata,
-        baseline,
-        quality,
-        deltas,
-        yearly,
-        strategy_diagnostics,
-    ))
+    print("\n" + render_strategy_pair_simple_report(json_payload))
     artifacts = [
         ("策略比較 Markdown", output_dir / "strategy_comparison.md"),
         ("策略比較 JSON", output_dir / "strategy_comparison.json"),
@@ -3061,6 +3132,9 @@ def main(argv=None):
 
 
 __all__ = [
+    "render_strategy_pair_simple_report",
+    "render_strategy_pair_markdown",
+    "materialize_strategy_pair_readable_report",
     "main", "run_comparison", "run_existing_attribution",
     "run_no_filter_candidate_replay_from_metadata",
     "canonical_strategy_compare_output_dir_names", "_first_existing_comparison_dir",

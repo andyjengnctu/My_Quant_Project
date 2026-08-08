@@ -5686,3 +5686,31 @@ C19與C20都重用同一C3 baseline；因此本輪只需執行兩條新的MR-12B
 
 `validate_breakout_quality_binary_dl_param_adaptation_contract_case`直接執行9/9 PASS。另掃描`tools/validate/`內其餘`unique_group_sampling`引用，保留明確隔離的歷史／固定profile案例，不把合法固定fixture誤改為動態config。GPT未執行`apps/test_suite.py`或formal consistency/meta-quality step；正式閉環待使用者套patch後以單一正式入口重跑。
 
+
+## 2026-08-08 — Breakout Quality策略層正式輸出簡易報表契約
+
+### 狀態
+
+Infrastructure completed；不占用新的`MR-*`／`SR-C*`／`AUD-*` identity。`MR-12B / DL-CONT12B / SR-C19 / SR-C20`狀態與研究語意不變。
+
+### 程式基準
+
+- 使用者指定ZIP：`test-branch-1_20260808_171335_08a20ea.zip`
+- SHA256：`560d1ac9c1907c027f86048a22b2df3fc75f7c4ff17e7042677e98a486d3cc36`
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 使用者要求與唯一變更
+
+使用者要求Breakout Quality策略層輸出一律具有簡易報表。本輪將此要求提升為全域正式輸出契約：Strategy Compare、策略參數適應與strategy gate等頂層正式策略結果只要產生持久工件，就必須同時有console易讀摘要與Markdown；JSON／CSV／manifest只作同一結果的詳細工件，不要求每個支援檔重複一份報表。
+
+現有非cache策略流程本來已各自具有console renderer與Markdown；真正缺口出現在新增completed-pair cache後的Strategy Compare REUSE：舊pair目錄雖被整體複製，但orchestrator只顯示`REUSE`路徑，不重新顯示該pair簡報，且複製的Markdown仍是舊run metadata。修正後canonical engine可直接由`strategy_comparison.json` payload解析metadata／baseline／active arm／delta／yearly／selection diagnostics，RUN與REUSE共同使用同一套Markdown與console renderer；REUSE更新本次run metadata後會重新materialize`strategy_comparison.md`並顯示簡報。Pair cache required-files新增Markdown，缺簡易報表的歷史pair不視為完整cache。
+
+### 固定研究／runtime條件
+
+本輪不修改MR-12B pairwise loss、whole-date batching、CONT12B artifact semantics、C17/C18 selector、C19/C20矩陣、策略sizing／accounting／execution、pair fingerprint或shared-baseline cache identity。報表只重用canonical pair JSON既有數值，不另算第二套策略指標。
+
+### GPT獨立驗證
+
+- config-driven Strategy Compare direct contract新增pair payload同時產生Markdown＋console簡報、cache required-files包含Markdown、C17/C18 REUSE重新materialize本次Markdown並在互動執行顯示相同pair簡報；相關contract直接執行39項全部PASS。
+- 新增`validate_breakout_quality_strategy_readable_report_contract_case`，集中盤點Strategy Compare pair／multi-arm、Binary參數適應、Selection策略適應、optional-filter gate、Binary DL rule gate與trade-path label gate共七個正式策略結果入口，要求persistent Markdown與`core.console_report`-based console renderer。
+- GPT未執行`apps/test_suite.py`；正式double check仍由使用者本機單一正式入口執行。
