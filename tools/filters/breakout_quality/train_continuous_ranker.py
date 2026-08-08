@@ -18,9 +18,12 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+    CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     get_breakout_quality_experiment_profile,
     resolve_breakout_quality_random_seed,
 )
@@ -107,10 +110,28 @@ RANKER_REPORT_MARKDOWN_FILENAME = "continuous_ranker_report.md"
 RANKER_TARGET_FILENAME = "group_target_daily_percentile.npy"
 
 
+PAIRWISE_TRAINING_CONTRACT = {
+    "pair_scope": "same_date_non_tied_target_pairs",
+    "pair_weighting": "equal_pair_weight",
+    "model_margin": "pass_logit_minus_reject_logit",
+    "batching": "whole_date_pack_no_date_split",
+    "runtime_score": "softmax_pass_probability",
+}
+
+
+def _training_semantics(profile) -> dict[str, Any]:
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+        return {
+            "batching": PAIRWISE_TRAINING_CONTRACT["batching"],
+            "pairwise_contract": dict(PAIRWISE_TRAINING_CONTRACT),
+        }
+    return {"batching": "shuffled_unique_group_batches", "pairwise_contract": None}
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
-            "Research-only同日percentile regression；保留9A InceptionTime與兩logit head，"
+            "Research-only continuous ranking training；保留9A InceptionTime與兩logit head，"
             "由experiment profile決定continuous target與label scope"
         )
     )
@@ -127,6 +148,7 @@ def parse_args(argv=None):
             STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
             STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
         ),
     )
     parser.add_argument("--epochs", type=int, default=BREAKOUT_QUALITY_DEFAULT_EPOCHS)
@@ -215,8 +237,8 @@ def _validate_args(args) -> None:
         or bool(model_spec.derived_context_features)
     ):
         raise ValueError("continuous ranker只允許sequence-only architecture")
-    if profile.training_objective != TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
-        raise ValueError("continuous ranker命令只接受daily percentile regression profile")
+    if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+        raise ValueError("continuous ranker命令只接受continuous ranking profile")
     expected_targets = {
         STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE: (
             STRATEGY_ALIGNED_TARGET_ID,
@@ -227,6 +249,10 @@ def _validate_args(args) -> None:
             TRAINING_LABEL_SCOPE_PASS_ONLY,
         ),
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE: (
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_ALL,
+        ),
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE: (
             STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_ALL,
         ),
@@ -301,6 +327,14 @@ def _profile_contract(profile) -> dict[str, str]:
             "phase": "12A",
             "target_description": "same_date_all_event_rank_percentile_of_strategy_aligned_opportunity_no_time_r_v1",
             "objective_description": "同日all-event No-time target percentile的MSE",
+            "metric_scope": "all_labels",
+        }
+    if profile.name == STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE:
+        return {
+            "experiment": "MR-12B All-event No-time Pairwise Ranker",
+            "phase": "12B",
+            "target_description": "same_date_all_event_order_of_strategy_aligned_opportunity_no_time_r_v1",
+            "objective_description": "同日all-event No-time target ordering的RankNet pairwise logistic loss",
             "metric_scope": "all_labels",
         }
     raise ValueError(f"不支援的continuous ranker profile: {profile.name}")
@@ -488,6 +522,79 @@ def _new_model_and_optimizer(torch, *, feature_count: int, context_count: int, a
     return model, optimizer
 
 
+def _date_coherent_batches(
+    group_ids: np.ndarray,
+    group_dates: pd.Series | np.ndarray,
+    *,
+    batch_size: int,
+    seed: int,
+) -> list[np.ndarray]:
+    """Pack whole trading dates into deterministic mini-batches for pairwise ranking."""
+
+    ids = np.asarray(group_ids, dtype=np.int64)
+    if ids.ndim != 1:
+        raise ValueError("pairwise ranker group_ids必須是一維")
+    dates = pd.to_datetime(pd.Series(group_dates), errors="raise").dt.normalize()
+    if len(dates) <= int(ids.max(initial=-1)):
+        raise ValueError("pairwise ranker group_dates長度不足")
+    by_date: dict[pd.Timestamp, list[int]] = {}
+    for group_id in ids:
+        by_date.setdefault(pd.Timestamp(dates.iloc[int(group_id)]), []).append(int(group_id))
+    date_keys = np.asarray(sorted(by_date), dtype=object)
+    rng = np.random.default_rng(int(seed))
+    rng.shuffle(date_keys)
+    batches: list[np.ndarray] = []
+    current: list[int] = []
+    for date_key in date_keys:
+        day_ids = by_date[pd.Timestamp(date_key)]
+        if current and len(current) + len(day_ids) > int(batch_size):
+            batches.append(np.asarray(current, dtype=np.int64))
+            current = []
+        # Never split a date: cross-sectional pairwise loss must see the full same-date set.
+        if len(day_ids) > int(batch_size):
+            if current:
+                batches.append(np.asarray(current, dtype=np.int64))
+                current = []
+            batches.append(np.asarray(day_ids, dtype=np.int64))
+        else:
+            current.extend(day_ids)
+    if current:
+        batches.append(np.asarray(current, dtype=np.int64))
+    return batches
+
+
+def _pairwise_logistic_loss(torch, margins, targets, dates) -> tuple[Any | None, int]:
+    """Return equal-weight RankNet logistic loss over comparable within-day pairs only."""
+
+    import torch.nn.functional as F
+
+    date_values = pd.to_datetime(pd.Series(dates), errors="raise").dt.normalize().to_numpy()
+    losses = []
+    pair_count = 0
+    for date_value in pd.unique(date_values):
+        positions = np.flatnonzero(date_values == date_value)
+        if len(positions) < 2:
+            continue
+        pos = torch.as_tensor(positions, dtype=torch.long, device=margins.device)
+        day_margin = margins.index_select(0, pos)
+        day_target = targets.index_select(0, pos)
+        margin_diff = day_margin[:, None] - day_margin[None, :]
+        target_diff = day_target[:, None] - day_target[None, :]
+        upper = torch.triu(
+            torch.ones_like(target_diff, dtype=torch.bool), diagonal=1
+        )
+        comparable = upper & (target_diff != 0)
+        count = int(comparable.sum().item())
+        if count == 0:
+            continue
+        signs = torch.sign(target_diff[comparable])
+        losses.append(F.softplus(-signs * margin_diff[comparable]))
+        pair_count += count
+    if not losses:
+        return None, 0
+    return torch.cat(losses).mean(), int(pair_count)
+
+
 def _train_epoch(
     torch,
     model,
@@ -496,7 +603,9 @@ def _train_epoch(
     group_context: np.ndarray,
     group_ids: np.ndarray,
     percentile_target: np.ndarray,
+    group_dates: pd.Series | np.ndarray,
     *,
+    training_objective: str,
     batch_size: int,
     seed: int,
     gradient_clip_norm: float,
@@ -504,22 +613,54 @@ def _train_epoch(
     grad_scaler,
 ) -> float:
     model.train()
+    ids_all = np.asarray(group_ids, dtype=np.int64)
     rng = np.random.default_rng(int(seed))
-    order = np.asarray(group_ids, dtype=np.int64).copy()
-    rng.shuffle(order)
+    if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+        order = ids_all.copy()
+        rng.shuffle(order)
+        batches = [
+            order[start:start + int(batch_size)]
+            for start in range(0, len(order), int(batch_size))
+        ]
+    elif training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+        batches = _date_coherent_batches(
+            ids_all,
+            group_dates,
+            batch_size=int(batch_size),
+            seed=int(seed),
+        )
+    else:
+        raise ValueError(f"不支援的continuous ranker training objective: {training_objective!r}")
+
     losses: list[float] = []
+    weighted_loss_sum = 0.0
+    weighted_loss_count = 0
     import torch.nn.functional as F
 
-    for start in range(0, len(order), int(batch_size)):
-        ids = order[start:start + int(batch_size)]
+    for ids in batches:
+        if len(ids) == 0:
+            continue
         xb = torch.from_numpy(np.asarray(feature_bank[ids], dtype=np.float32)).to(plan.device)
         cb = torch.from_numpy(np.asarray(group_context[ids], dtype=np.float32)).to(plan.device)
         target = torch.from_numpy(np.asarray(percentile_target[ids], dtype=np.float32)).to(plan.device)
         optimizer.zero_grad(set_to_none=True)
         with autocast_context(torch, plan):
             logits = model(xb, cb)
-            score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
-            loss = F.mse_loss(score, target, reduction="mean")
+            if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+                score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
+                loss = F.mse_loss(score, target, reduction="mean")
+                loss_weight = int(len(ids))
+            else:
+                margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
+                loss, pair_count = _pairwise_logistic_loss(
+                    torch,
+                    margins,
+                    target,
+                    pd.Series(group_dates).iloc[ids].to_numpy(),
+                )
+                if loss is None:
+                    continue
+                loss_weight = int(pair_count)
         if not bool(torch.isfinite(loss).item()):
             raise FloatingPointError("continuous ranker training loss非有限值")
         if grad_scaler is None:
@@ -534,11 +675,16 @@ def _train_epoch(
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(gradient_clip_norm))
             grad_scaler.step(optimizer)
             grad_scaler.update()
-        losses.append(float(loss.detach().cpu().item()))
-    if not losses:
-        raise ValueError("continuous ranker training沒有任何batch")
-    return float(np.mean(losses))
-
+        value = float(loss.detach().cpu().item())
+        losses.append(value)
+        weighted_loss_sum += value * float(loss_weight)
+        weighted_loss_count += int(loss_weight)
+    if not losses or weighted_loss_count < 1:
+        raise ValueError("continuous ranker training沒有任何有效batch／pair")
+    if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+        # Preserve MR-12A historical reporting semantics exactly.
+        return float(np.mean(losses))
+    return float(weighted_loss_sum / float(weighted_loss_count))
 
 def _predict_scores(torch, model, feature_bank: np.ndarray, group_context: np.ndarray, group_ids: np.ndarray, *, batch_size: int, plan) -> np.ndarray:
     ids = np.asarray(group_ids, dtype=np.int64)
@@ -596,6 +742,8 @@ def _select_epoch(
             group_context,
             train_ids,
             percentile_target,
+            group_table["date"],
+            training_objective=get_breakout_quality_experiment_profile(args.experiment_profile).training_objective,
             batch_size=int(args.batch_size),
             seed=int(args.seed) + epoch,
             gradient_clip_norm=float(args.gradient_clip_norm),
@@ -646,7 +794,7 @@ def _select_epoch(
         if not compact_console:
             marker = " ★新最佳" if improved else ""
             print(
-                f"  Epoch {epoch:>3}/{int(args.epochs)} | Train MSE {train_metrics['mse_vs_daily_percentile']:.6f} "
+                f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} | Train MSE {train_metrics['mse_vs_daily_percentile']:.6f} "
                 f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(metric):.4f} "
                 f"| {elapsed:.1f}s{marker}"
             )
@@ -668,6 +816,7 @@ def _fit_final(
     feature_bank: np.ndarray,
     group_context: np.ndarray,
     percentile_target: np.ndarray,
+    group_table: pd.DataFrame,
     final_ids: np.ndarray,
     *,
     epochs: int,
@@ -697,6 +846,8 @@ def _fit_final(
             group_context,
             final_ids,
             percentile_target,
+            group_table["date"],
+            training_objective=get_breakout_quality_experiment_profile(args.experiment_profile).training_objective,
             batch_size=int(args.batch_size),
             seed=int(args.seed) + epoch,
             gradient_clip_norm=float(args.gradient_clip_norm),
@@ -706,7 +857,7 @@ def _fit_final(
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})
         if not compact_console:
-            print(f"  Epoch {epoch:>3}/{int(epochs)} | Batch MSE {loss:.6f} | {elapsed:.1f}s")
+            print(f"  Epoch {epoch:>3}/{int(epochs)} | Batch Loss {loss:.6f} | {elapsed:.1f}s")
     return model.eval(), history
 
 
@@ -1006,6 +1157,7 @@ def main(argv=None) -> int:
         feature_bank,
         group_context,
         percentile_target,
+        group_table,
         scoped_split_ids["selection"],
         epochs=selected_epoch,
         args=args,
@@ -1033,6 +1185,7 @@ def main(argv=None) -> int:
             "training_objective": profile.training_objective,
             "training_label_scope": profile.training_label_scope,
             "continuous_target_contract": target_manifest.get("target_contract"),
+            "training_semantics": _training_semantics(profile),
             "torch_execution": plan.as_manifest_payload(),
             "trainable_parameter_count": int(trainable_parameter_count),
             "total_parameter_count": int(total_parameter_count),
@@ -1153,6 +1306,8 @@ def main(argv=None) -> int:
             "objective_description": contract["objective_description"],
             "loss": profile.loss_name,
             "model_score": "softmax_pass_probability",
+            "batching": _training_semantics(profile)["batching"],
+            "pairwise_contract": _training_semantics(profile)["pairwise_contract"],
             "target": contract["target_description"],
             "training_label_scope": profile.training_label_scope,
             "training_group_counts": training_group_counts,
@@ -1202,6 +1357,7 @@ def main(argv=None) -> int:
         "model_spec": model_spec.as_manifest_payload(),
         "training_objective": profile.training_objective,
         "training_label_scope": profile.training_label_scope,
+        "training_semantics": _training_semantics(profile),
         "continuous_target_id": profile.continuous_target_id,
         "sequence_length": int(feature_bank.shape[1]),
         "feature_columns": list(FEATURE_COLUMNS),

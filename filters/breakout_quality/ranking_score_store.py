@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 
 from config.breakout_quality import (
-    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     get_breakout_quality_experiment_profile,
 )
 
@@ -415,8 +416,8 @@ def load_continuous_ranker_oos_contract(
                 f"expected={expected}, actual={report.get(field)!r}"
             )
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
-    if profile.training_objective != TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
-        raise ValueError("Continuous ranker OOS source只接受daily_percentile_regression profile")
+    if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+        raise ValueError("Continuous ranker OOS source只接受continuous ranking profile")
     manifest_objective = str(manifest.get("training_objective") or "")
     if manifest_objective != profile.training_objective:
         raise ValueError(
@@ -429,6 +430,38 @@ def load_continuous_ranker_oos_contract(
             "Continuous ranker manifest training_label_scope與profile不一致: "
             f"expected={profile.training_label_scope}, actual={manifest_scope!r}"
         )
+    report_training = dict(report.get("training") or {})
+    report_objective = str(report_training.get("objective") or "")
+    if report_objective != profile.training_objective:
+        raise ValueError(
+            "Continuous ranker report training objective與profile不一致: "
+            f"expected={profile.training_objective}, actual={report_objective!r}"
+        )
+    report_loss = str(report_training.get("loss") or "")
+    if report_loss != profile.loss_name:
+        raise ValueError(
+            "Continuous ranker report loss與profile不一致: "
+            f"expected={profile.loss_name}, actual={report_loss!r}"
+        )
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+        expected_pairwise = {
+            "pair_scope": "same_date_non_tied_target_pairs",
+            "pair_weighting": "equal_pair_weight",
+            "model_margin": "pass_logit_minus_reject_logit",
+            "batching": "whole_date_pack_no_date_split",
+            "runtime_score": "softmax_pass_probability",
+        }
+        manifest_semantics = dict(manifest.get("training_semantics") or {})
+        report_pairwise = dict(report_training.get("pairwise_contract") or {})
+        if str(manifest_semantics.get("batching") or "") != expected_pairwise["batching"]:
+            raise ValueError("Continuous pairwise ranker manifest batching contract不一致")
+        if dict(manifest_semantics.get("pairwise_contract") or {}) != expected_pairwise:
+            raise ValueError("Continuous pairwise ranker manifest pairwise contract不一致")
+        if str(report_training.get("batching") or "") != expected_pairwise["batching"]:
+            raise ValueError("Continuous pairwise ranker report batching contract不一致")
+        if report_pairwise != expected_pairwise:
+            raise ValueError("Continuous pairwise ranker report pairwise contract不一致")
+
     target_id = str(manifest.get("continuous_target_id") or "")
     if not target_id:
         raise ValueError("Continuous ranker manifest缺少continuous_target_id")

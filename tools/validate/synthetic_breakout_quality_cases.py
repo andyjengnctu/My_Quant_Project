@@ -45,8 +45,10 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_LABEL_SCOPE_ALL,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
@@ -11715,6 +11717,7 @@ __all__ = [
     "validate_breakout_quality_continuous_ranker_contract_case",
     "validate_breakout_quality_pass_conditional_ranker_contract_case",
     "validate_breakout_quality_all_event_no_time_ranker_contract_case",
+    "validate_breakout_quality_pairwise_ranker_contract_case",
     "validate_breakout_quality_pass_realization_gap_attribution_contract_case",
     "validate_breakout_quality_qualified_candidate_set_audit_contract_case",
     "validate_breakout_quality_target_component_attribution_contract_case",
@@ -11818,6 +11821,160 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
     summary["profile"] = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
     summary["training_label_scope"] = TRAINING_LABEL_SCOPE_ALL
     return results, summary
+
+
+def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_PAIRWISE_RANKER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from filters.breakout_quality.models.factory import require_torch
+    from config.strategy_compare import get_strategy_comparison_settings
+    from tools.filters.breakout_quality.train_continuous_ranker import (
+        PAIRWISE_TRAINING_CONTRACT,
+        _date_coherent_batches,
+        _pairwise_logistic_loss,
+        _profile_contract,
+        _training_semantics,
+        parse_args as parse_continuous_ranker_args,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12b_profile_changes_only_learning_objective_with_same_target_scope_architecture_family",
+        (
+            TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_ALL,
+            "pairwise_logistic",
+            "mean_daily_spearman",
+            False,
+        ),
+        (
+            profile.training_objective,
+            profile.continuous_target_id,
+            profile.training_label_scope,
+            profile.loss_name,
+            profile.epoch_selection_metric,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+        ),
+    )
+
+    semantics = _training_semantics(profile)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12b_pairwise_artifact_semantics_are_explicit_and_runtime_score_is_unchanged",
+        (
+            "same_date_non_tied_target_pairs",
+            "equal_pair_weight",
+            "pass_logit_minus_reject_logit",
+            "whole_date_pack_no_date_split",
+            "softmax_pass_probability",
+        ),
+        tuple(
+            semantics["pairwise_contract"][key]
+            for key in ("pair_scope", "pair_weighting", "model_margin", "batching", "runtime_score")
+        ),
+    )
+    assert semantics["pairwise_contract"] == PAIRWISE_TRAINING_CONTRACT
+
+    args = parse_continuous_ranker_args(
+        ["--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE]
+    )
+    contract = _profile_contract(profile)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12b_cli_and_registry_identity_are_explicit",
+        (STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE, "12B", "all_labels"),
+        (args.experiment_profile, contract["phase"], contract["metric_scope"]),
+    )
+
+    dates = pd.Series(["2024-01-02"] * 3 + ["2024-01-03"] * 2 + ["2024-01-04"] * 3)
+    batches = _date_coherent_batches(
+        np.arange(8, dtype=np.int64), dates, batch_size=4, seed=42
+    )
+    batch_by_group = {
+        int(group_id): int(batch_index)
+        for batch_index, batch in enumerate(batches)
+        for group_id in batch
+    }
+    date_batch_counts = []
+    for _date, day in pd.DataFrame({"date": dates, "group_id": np.arange(8)}).groupby("date"):
+        date_batch_counts.append(len({batch_by_group[int(group_id)] for group_id in day["group_id"]}))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pairwise_training_batches_never_split_same_date_competition_set",
+        (1, 1, 1),
+        tuple(date_batch_counts),
+    )
+
+    torch, _nn = require_torch()
+    targets = torch.tensor([0.0, 0.5, 1.0, 0.0, 1.0], dtype=torch.float32)
+    loss_dates = np.asarray(["2024-01-02"] * 3 + ["2024-01-03"] * 2)
+    good_margin = torch.tensor([-2.0, 0.0, 2.0, -1.0, 1.0], dtype=torch.float32, requires_grad=True)
+    bad_margin = torch.tensor([2.0, 0.0, -2.0, 1.0, -1.0], dtype=torch.float32, requires_grad=True)
+    good_loss, good_pairs = _pairwise_logistic_loss(torch, good_margin, targets, loss_dates)
+    bad_loss, bad_pairs = _pairwise_logistic_loss(torch, bad_margin, targets, loss_dates)
+    good_loss.backward()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pairwise_logistic_prefers_correct_within_day_order_and_has_finite_gradient",
+        (True, 4, 4, True),
+        (
+            bool(float(good_loss.detach().cpu().item()) < float(bad_loss.detach().cpu().item())),
+            int(good_pairs),
+            int(bad_pairs),
+            bool(torch.isfinite(good_margin.grad).all().item()),
+        ),
+    )
+
+    strategy = get_strategy_comparison_settings()
+    enabled = {arm.arm_id: arm for arm in strategy.enabled_arms}
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12a_and_mr12b_are_compared_under_both_c17_c18_selector_semantics",
+        (
+            ("C17", "CONT12A", "resource-aware-continuous-max-dl"),
+            ("C18", "CONT12A", "resource-aware-continuous-max-dl-feasible-ascent"),
+            ("C19", "CONT12B", "resource-aware-continuous-max-dl"),
+            ("C20", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
+        ),
+        tuple(
+            (arm_id, enabled[arm_id].dl_id, enabled[arm_id].dl_runtime_mode)
+            for arm_id in ("C17", "C18", "C19", "C20")
+        ),
+    )
+    enabled_contrasts = {item.contrast_id for item in strategy.enabled_contrasts}
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12b_strategy_matrix_isolates_model_gain_and_selector_conversion",
+        {"C19-C17", "C20-C18", "C20-C19"},
+        enabled_contrasts & {"C19-C17", "C20-C18", "C20-C19"},
+    )
+
+    summary["profile"] = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+    summary["training_objective"] = TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING
+    summary["training_performed"] = False
+    return results, summary
+
 
 def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_BUILDER"

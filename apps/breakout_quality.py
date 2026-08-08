@@ -75,6 +75,8 @@ from filters.breakout_quality.paths import (
     resolve_existing_filter_artifact_paths,
     resolve_existing_filter_research_manifest_path,
     resolve_existing_filter_research_score_path,
+    resolve_filter_artifact_paths,
+    resolve_filter_model_output_dir,
     resolve_filter_output_dir,
     resolve_filter_report_json_path,
     resolve_filter_report_markdown_path,
@@ -85,6 +87,10 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.ranking_score_store import (
+    CONTINUOUS_RANKER_REPORT_FILENAME,
+    CONTINUOUS_RANKER_SCORE_FILENAME,
+)
 from tools.audit.catalog import get_domain_cli_commands
 
 from core.console_report import (
@@ -141,7 +147,7 @@ COMMAND_DESCRIPTIONS = {
     "report": "產生表格化終端報表、Markdown 報表與完整 metrics JSON",
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
-    "train-continuous-ranker": "執行continuous ranker模型研究（含MR-12A）；research-only、CLI-only",
+    "train-continuous-ranker": "執行continuous ranker模型研究（MR-12系列）；正式選單亦可使用",
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
     "build-binary-point-in-time-scores": (
         "建立Binary DL filter歷史 point-in-time scores；research-only、CLI-only"
@@ -1665,8 +1671,18 @@ def _print_workflow_status() -> None:
         ),
     ))
     print(render_key_values(base_rows))
+    model_artifacts = resolve_filter_artifact_paths(
+        PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+    )
+    model_output_dir = resolve_filter_model_output_dir(
+        PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
+    )
     status_paths = {
         "Dataset summary": _dataset_paths(settings.filter_id)["summary"],
+        "Full model": model_artifacts.model_path,
+        "Full model manifest": model_artifacts.manifest_path,
+        "Full model report": model_output_dir / CONTINUOUS_RANKER_REPORT_FILENAME,
+        "Forward OOS scores": model_output_dir / CONTINUOUS_RANKER_SCORE_FILENAME,
         "Target manifest": resolve_continuous_target_dir(
             PROJECT_ROOT,
             settings.filter_id,
@@ -1698,6 +1714,15 @@ def _print_workflow_status() -> None:
         (
             "Continuous Target",
             (status_paths["Target manifest"], status_paths["Target audit Markdown"]),
+        ),
+        (
+            "Full Model / Forward OOS",
+            (
+                status_paths["Full model"],
+                status_paths["Full model manifest"],
+                status_paths["Full model report"],
+                status_paths["Forward OOS scores"],
+            ),
         ),
         (
             "PIT Scores",
@@ -2002,38 +2027,8 @@ def _interactive_binary_model_research(
         print("無效選項，請重新輸入。")
 
 
-def _interactive_model_research(program_name: str) -> int:
-    settings = get_breakout_quality_workflow_settings()
+def _prepare_continuous_research_inputs(program_name: str, settings) -> int:
     color_enabled = console_color_enabled()
-    if settings.is_binary_classification:
-        return _interactive_binary_model_research(
-            program_name,
-            workflow_settings=settings,
-        )
-    if not settings.is_continuous_ranker:
-        raise ValueError(
-            f"不支援的 workflow training objective: {settings.training_objective!r}"
-        )
-
-    _print_workflow_status()
-    if not _prompt_bool(
-        "必要時先建立Dataset與Continuous Target，再建立／更新PIT Scores並執行模型驗證",
-        True,
-    ):
-        return 0
-    build_args = [
-        "--filter-id", settings.filter_id,
-        "--model-architecture", settings.model_architecture,
-        "--experiment-profile", settings.experiment_profile,
-        "--score-start-date", settings.point_in_time_score_start_date,
-        "--fold-months", str(settings.point_in_time_fold_months),
-        "--inner-validation-months", str(settings.point_in_time_inner_validation_months),
-        "--seed", str(settings.seed),
-    ]
-    if settings.point_in_time_score_end_date:
-        build_args.extend(["--score-end-date", settings.point_in_time_score_end_date])
-    build_args.append("--resume" if settings.point_in_time_resume else "--no-resume")
-
     refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(
         settings.filter_id,
         INTERACTIVE_DATASET_PROFILE,
@@ -2049,37 +2044,129 @@ def _interactive_model_research(program_name: str) -> int:
         with _compact_console_scope():
             code = _run_command(command, command_args, program_name=program_name)
         if code != 0:
-            return code
-
+            return int(code)
     with _compact_console_scope():
-        code = _run_command(
-            "prepare-continuous-target",
-            [
-                "--filter-id",
-                settings.filter_id,
-                "--target-id",
-                str(settings.continuous_target_id),
-            ],
+        return int(
+            _run_command(
+                "prepare-continuous-target",
+                [
+                    "--filter-id", settings.filter_id,
+                    "--target-id", str(settings.continuous_target_id),
+                ],
+                program_name=program_name,
+            )
+        )
+
+
+def _interactive_continuous_full_train(program_name: str, settings) -> int:
+    _print_workflow_status()
+    profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
+    print(
+        "\n即將執行：確認Dataset／Continuous Target → 以Selection內Inner Validation選epoch "
+        "→ 完整Selection重訓 → checkpoint後才評估forward OOS。"
+    )
+    print(
+        f"Profile={profile.name}｜Objective={profile.training_objective}｜"
+        f"Loss={profile.loss_name}｜Epoch metric={profile.epoch_selection_metric}"
+    )
+    print("本流程不執行策略比較；模型完成後請另開 apps/strategy_compare.py。")
+    if not _prompt_bool("確認開始", True):
+        print("已取消。")
+        return 0
+    code = _prepare_continuous_research_inputs(program_name, settings)
+    if code != 0:
+        return int(code)
+    argv = [
+        "--filter-id", settings.filter_id,
+        "--model-architecture", settings.model_architecture,
+        "--experiment-profile", settings.experiment_profile,
+        "--seed", str(settings.seed),
+    ]
+    return int(
+        _run_command(
+            "train-continuous-ranker",
+            argv,
             program_name=program_name,
         )
-        if code != 0:
-            return code
+    )
 
+
+def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
+    _print_workflow_status()
+    if not _prompt_bool(
+        "必要時先建立Dataset與Continuous Target，再建立／更新PIT Scores並執行模型驗證",
+        True,
+    ):
+        return 0
+    code = _prepare_continuous_research_inputs(program_name, settings)
+    if code != 0:
+        return int(code)
+    build_args = [
+        "--filter-id", settings.filter_id,
+        "--model-architecture", settings.model_architecture,
+        "--experiment-profile", settings.experiment_profile,
+        "--score-start-date", settings.point_in_time_score_start_date,
+        "--fold-months", str(settings.point_in_time_fold_months),
+        "--inner-validation-months", str(settings.point_in_time_inner_validation_months),
+        "--seed", str(settings.seed),
+    ]
+    if settings.point_in_time_score_end_date:
+        build_args.extend(["--score-end-date", settings.point_in_time_score_end_date])
+    build_args.append("--resume" if settings.point_in_time_resume else "--no-resume")
+    with _compact_console_scope():
         code = _run_command(
             "build-point-in-time-scores", build_args, program_name=program_name
         )
         if code != 0:
-            return code
-        return _run_command(
-            "audit-point-in-time-scores",
-            [
-                "--filter-id", settings.filter_id,
-                "--model-architecture", settings.model_architecture,
-                "--experiment-profile", settings.experiment_profile,
-            ],
-            program_name=program_name,
+            return int(code)
+        return int(
+            _run_command(
+                "audit-point-in-time-scores",
+                [
+                    "--filter-id", settings.filter_id,
+                    "--model-architecture", settings.model_architecture,
+                    "--experiment-profile", settings.experiment_profile,
+                ],
+                program_name=program_name,
+            )
         )
 
+
+def _interactive_model_research(program_name: str) -> int:
+    settings = get_breakout_quality_workflow_settings()
+    if settings.is_binary_classification:
+        return _interactive_binary_model_research(
+            program_name,
+            workflow_settings=settings,
+        )
+    if not settings.is_continuous_ranker:
+        raise ValueError(
+            f"不支援的 workflow training objective: {settings.training_objective!r}"
+        )
+
+    while True:
+        print("\n=== Continuous DL 模型研究與驗證 ===")
+        print(f"Active Profile：{settings.experiment_profile}")
+        print("[1/Enter] 訓練目前模型 → forward-OOS模型報表")
+        print("[2] 建立／更新 Selection PIT Scores → PIT模型驗證")
+        print("[3] 查看目前Workflow與工件狀態")
+        print("[0] 返回")
+        try:
+            raw_choice = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            print("\n輸入已結束。")
+            return 0
+        choice = "1" if raw_choice == "" else raw_choice
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        if choice == "1":
+            return _interactive_continuous_full_train(program_name, settings)
+        if choice == "2":
+            return _interactive_continuous_pit_validation(program_name, settings)
+        if choice == "3":
+            _print_workflow_status()
+            continue
+        print("無效選項，請重新輸入。")
 
 def _interactive_audit_menu() -> int:
     from tools.audit.runner import (

@@ -106,6 +106,7 @@ def fit_final(
         bundle.feature_bank,
         bundle.group_context,
         percentile_target,
+        bundle.group_table,
         np.asarray(final_ids, dtype=np.int64),
         epochs=int(epochs),
         args=args,

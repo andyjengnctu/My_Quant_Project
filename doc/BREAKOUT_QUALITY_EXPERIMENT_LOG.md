@@ -5550,3 +5550,43 @@ C18 Max-DL eligible=242日、repair=232日、seed原為fallback=34日、final fa
 C18績效顯著低於C17，同時C18把DL objective推得更完整（selected score gain=+14.441 vs C17 +11.826，final fallback=0），卻使same-param DL selection R由C17 +20.31R降至C18 -26.25R。此證據定位為**現有MR-12A ranking品質不足以支撐更強DL主導**，而不是再調selector的理由。後續所有新continuous DL source固定使用SR-C18作策略驗證harness，讓模型差異直接暴露在相同K/R0、execution order、sizing與accounting下。
 
 另核對目前程式：`MR-12A / PROFILE-strategy_aligned_no_time_all_event_mse`本身已使用`daily_percentile_regression`，Target為同日all-event `strategy_aligned_opportunity_no_time_r_v1` percentile，loss=MSE、epoch selection=`mean_daily_spearman`。因此下一個模型研究不得把「daily percentile regression」當新變數；較乾淨的下一步是固定同一Target／all-label scope／ARCH-inception_time_v1，改研究pairwise或listwise ranking loss。
+
+## 2026-08-08 — MR-12B：All-event within-day Pairwise Ranker + C17/C18雙selector驗證
+
+### 狀態
+
+`MR-12B / DL-CONT12B / SR-C19 / SR-C20 IMPLEMENTED / RESULT_PENDING`
+
+### 基準與研究動機
+
+- 唯一程式基準：`test-branch-1_20260808_160555_0f9f831.zip`，SHA256=`2f17172fed82222cb7df72ec265c13905a8fc1bc1d49ee7d34cbe67706bba79a`。
+- C18已完成selector freeze，但MR-12A在較完整Max-DL objective下績效與same-param DL selection R惡化，研究瓶頸定位為DL ranking品質。
+- 使用者要求C17與C18都保留作固定validation harness，用來驗證新DL改善是否在較Max-DL selector上轉化最好；本輪不再修改K、R0、repair/ascent、execution order或任何capital/DL比例。
+- MR-12A本身已是all-event daily-percentile regression，因此MR-12B不重做percentile target，而直接改learning objective/loss。
+
+### MR-12B固定項與唯一scientific change
+
+固定：`strategy_aligned_opportunity_no_time_r_v1`、all-label scope、`ARCH-inception_time_v1`、兩logit head、Adam、LR/weight decay/grad clip、Selection/Validation/OOS切分、OOS隔離、epoch selection=`mean_daily_spearman`、runtime score=`softmax_pass_probability`。
+
+唯一scientific change：`daily_percentile_regression + MSE` → `daily_pairwise_ranking + RankNet-style pairwise logistic`。同一天Target不相等的pair才參與，tie忽略、pair等權；margin固定`PASS logit - REJECT logit`，loss為`softplus(-sign(target_i-target_j) * (margin_i-margin_j))`。為讓同日pair完整可見，training改為whole-date coherent packing：同一date不得拆到不同mini-batches；group每epoch仍只曝光一次，但optimizer step數可因date packing改變，這是pairwise objective的必要batch semantics，不是額外調參。
+
+Manifest/report明確保存pair scope、pair weighting、margin、whole-date batching與runtime score contract；`ranking_score_store`依profile嚴格驗證objective/loss/target/scope與pairwise artifact semantics。Strategy Compare不得自動訓練MR-12B。
+
+### 固定策略驗證矩陣
+
+- `C17 = MR-12A + max-DL minimum-repair`（anchor）
+- `C18 = MR-12A + max-DL feasible-ascent`（anchor）
+- `C19 = MR-12B + 完全相同C17 selector`
+- `C20 = MR-12B + 完全相同C18 selector`
+
+核心contrast：`C19-C17`（C17下純model gain）、`C20-C18`（C18下純model gain）、`C20-C19`（同MR-12B在較Max selector上的轉化）；另保留C19/C20相對C3作最終策略經濟參考。不得用這些forward/OOS結果回頭調pair sampling、loss、K/R0或selector。
+
+### GPT獨立直接驗證
+
+- MR-12B profile/CLI identity、all-label/no-time target、pairwise loss與mean-daily-Spearman epoch metric。
+- Whole-date batch不切分同日competition set。
+- 正序margin的pairwise loss低於反序且gradient有限。
+- C17/C18×MR-12A/MR-12B雙selector矩陣與model-only/selector-conversion contrasts。
+- MR-12A、PIT builder與config-driven strategy compare相關direct regression持續通過。
+- GPT未執行`apps/test_suite.py`，亦未執行正式模型訓練；正式結果待使用者本機執行。
+

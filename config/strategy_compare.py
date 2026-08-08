@@ -209,6 +209,15 @@ STRATEGY_DL_SOURCES = {
         "description": "MR-12A all-event no-time frozen OOS continuous ranker；只允許受控strategy research replay",
         "forward_scores_builder": None,
     },
+    "CONT12B": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "strategy_aligned_no_time_all_event_pairwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": "MR-12B all-event no-time pairwise ranker frozen OOS score；只允許受控strategy research replay",
+        "forward_scores_builder": None,
+    },
 }
 
 # =============================================================================
@@ -399,6 +408,32 @@ STRATEGY_COMPARE_ARMS = {
         "dl_id": "CONT12A",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
+    "C19": {
+        "enabled": True,
+        "name": "Min ROOS: MR-12B pairwise max-DL constrained basket",
+        "description": (
+            "與C17使用完全相同K/R0、minimum-repair與basket內Min ROOS執行順序；"
+            "唯一模型差異為DL source改成MR-12B pairwise ranker"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12B",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl",
+    },
+    "C20": {
+        "enabled": True,
+        "name": "Min ROOS: MR-12B pairwise max-DL feasible-ascent",
+        "description": (
+            "與C18使用完全相同K/R0、feasible-ascent與basket內Min ROOS執行順序；"
+            "唯一模型差異為DL source改成MR-12B pairwise ranker"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12B",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
 }
 
 # =============================================================================
@@ -417,8 +452,13 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C16-C3": {"enabled": False, "left": "C16", "right": "C3", "description": "Capital-preserving MR-12A selector相對Min ROOS正式研究基準"},
     "C17-C16": {"enabled": False, "left": "C17", "right": "C16", "description": "同一MR-12A source下max-DL constrained basket相對C16 capital-preserving heuristic的純selector效果"},
     "C17-C3": {"enabled": False, "left": "C17", "right": "C3", "description": "Max-DL constrained basket在固定Min ROOS資源底線下相對正式研究基準"},
-    "C18-C17": {"enabled": True, "left": "C18", "right": "C17", "description": "相同MR-12A與K/R0資源契約下，feasible-ascent相對C17 minimum-repair的純selector搜尋效果"},
-    "C18-C3": {"enabled": True, "left": "C18", "right": "C3", "description": "Max-DL feasible-ascent在固定Min ROOS資源底線下相對正式研究基準"},
+    "C18-C17": {"enabled": False, "left": "C18", "right": "C17", "description": "相同MR-12A與K/R0資源契約下，feasible-ascent相對C17 minimum-repair的純selector搜尋效果"},
+    "C18-C3": {"enabled": False, "left": "C18", "right": "C3", "description": "Max-DL feasible-ascent在固定Min ROOS資源底線下相對正式研究基準"},
+    "C19-C17": {"enabled": True, "left": "C19", "right": "C17", "description": "固定C17 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
+    "C20-C18": {"enabled": True, "left": "C20", "right": "C18", "description": "固定C18 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
+    "C20-C19": {"enabled": True, "left": "C20", "right": "C19", "description": "同一MR-12B source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
+    "C19-C3": {"enabled": True, "left": "C19", "right": "C3", "description": "MR-12B在C17 selector下相對Min ROOS研究基準"},
+    "C20-C3": {"enabled": True, "left": "C20", "right": "C3", "description": "MR-12B在C18 selector下相對Min ROOS研究基準"},
     "C12-C11": {"enabled": False, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
     "C11-C8": {"enabled": False, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
     "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},

@@ -31,8 +31,9 @@ from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 # This is the only setting normally changed to switch the main menu model workflow.
 # - 9A binary filter: "unique_group_sampling"
 # - continuous PIT ranker (PASS-only): "strategy_aligned_no_time_pass_magnitude_mse"
-# - MR-12A all-event continuous: "strategy_aligned_no_time_all_event_mse"
-BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
+# - MR-12A all-event continuous MSE: "strategy_aligned_no_time_all_event_mse"
+# - MR-12B all-event pairwise ranker: "strategy_aligned_no_time_all_event_pairwise"
+BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -215,6 +216,7 @@ UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE = "unique_group_date_balanced"
 STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE = "strategy_aligned_daily_percentile_mse"
 STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE = "strategy_aligned_no_time_pass_magnitude_mse"
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE = "strategy_aligned_no_time_all_event_mse"
+STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
@@ -245,9 +247,14 @@ SUPPORTED_BREAKOUT_QUALITY_TRAINING_LABEL_SCOPES = (
 
 TRAINING_OBJECTIVE_BINARY_CLASSIFICATION = "binary_classification"
 TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
+TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
+CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
+    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+)
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
-    TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+    *CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
 )
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_WEIGHT_REDUCTIONS = (
     TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM,
@@ -327,19 +334,27 @@ class BreakoutQualityExperimentProfile:
                 raise ValueError("binary classification profile 必須使用 cross_entropy / validation_loss")
             if self.training_label_scope != TRAINING_LABEL_SCOPE_ALL:
                 raise ValueError("binary classification profile 必須使用all_labels scope")
-        elif self.training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+        elif self.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
             if not str(self.continuous_target_id or "").strip():
-                raise ValueError("daily percentile regression profile 必須指定 continuous_target_id")
-            if self.loss_name != "mse":
-                raise ValueError("daily percentile regression profile 必須使用 mse")
+                raise ValueError("continuous ranker profile 必須指定 continuous_target_id")
+            expected_loss = (
+                "mse"
+                if self.training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION
+                else "pairwise_logistic"
+            )
+            if self.loss_name != expected_loss:
+                raise ValueError(
+                    "continuous ranker loss與training objective不一致: "
+                    f"objective={self.training_objective}, expected={expected_loss}, actual={self.loss_name}"
+                )
             if self.epoch_selection_metric != "mean_daily_spearman":
-                raise ValueError("daily percentile regression profile 必須以 mean_daily_spearman 選 epoch")
+                raise ValueError("continuous ranker profile 必須以 mean_daily_spearman 選 epoch")
             if self.training_sampling_mode != TRAINING_SAMPLING_UNIQUE_TICKER_DATE:
-                raise ValueError("daily percentile regression 只允許 unique ticker/date sampling")
+                raise ValueError("continuous ranker只允許 unique ticker/date sampling")
             if self.time_weight_mode not in {None, TIME_WEIGHT_MODE_NONE}:
-                raise ValueError("daily percentile regression 第一版不允許 time weighting")
+                raise ValueError("continuous ranker不允許 time weighting")
             if self.training_weight_reduction != TRAINING_WEIGHT_REDUCTION_BATCH_WEIGHT_SUM:
-                raise ValueError("daily percentile regression 第一版只允許 batch_weight_sum")
+                raise ValueError("continuous ranker只允許 batch_weight_sum")
         if (
             self.training_weight_reduction == TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE
             and self.time_weight_mode != TIME_WEIGHT_MODE_DATE_BALANCED
@@ -646,6 +661,16 @@ _EXPERIMENT_PROFILES = {
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
     ),
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="strategy_aligned_opportunity_no_time_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -839,7 +864,7 @@ class BreakoutQualityWorkflowSettings:
 
     @property
     def is_continuous_ranker(self) -> bool:
-        return self.training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION
+        return self.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
 
     def as_manifest_payload(self) -> dict[str, Any]:
         return {
@@ -895,7 +920,7 @@ def _resolve_strategy_defaults(training_objective: str) -> tuple[str, str, str]:
             WORKFLOW_SCORE_SOURCE_CANONICAL_RUNTIME,
             WORKFLOW_BUY_SORT_ORIGINAL,
         )
-    if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
+    if training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         return (
             WORKFLOW_STRATEGY_MODE_SCORE_RANKING,
             WORKFLOW_SCORE_SOURCE_SELECTION_POINT_IN_TIME,
@@ -916,7 +941,7 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
     )
     if profile.training_objective not in {
         TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
-        TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
+        *CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     }:
         raise ValueError(
             "workflow experiment profile必須是binary classification或continuous ranker"
@@ -1152,6 +1177,7 @@ __all__ = [
     'STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE',
     'STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE',
     'STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE',
+    'STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE',
     'TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE',
     'BreakoutQualityExperimentProfile',
     'BreakoutQualityPretrainingProfile',
@@ -1165,11 +1191,13 @@ __all__ = [
     'SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES',
     'SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLING_MODES',
     'SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES',
+    'CONTINUOUS_RANKER_TRAINING_OBJECTIVES',
     'SUPPORTED_BREAKOUT_QUALITY_TRAINING_LABEL_SCOPES',
     'TRAINING_LABEL_SCOPE_ALL',
     'TRAINING_LABEL_SCOPE_PASS_ONLY',
     'TRAINING_OBJECTIVE_BINARY_CLASSIFICATION',
     'TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION',
+    'TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING',
     'TRAINING_SAMPLING_ALL_EVENT_ROWS',
     'TRAINING_SAMPLING_UNIQUE_TICKER_DATE',
     'TIME_WEIGHT_MODE_DATE_BALANCED',
