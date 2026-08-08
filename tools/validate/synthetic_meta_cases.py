@@ -1779,16 +1779,27 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
             True,
             row["b_id"] in mapped_b_ids,
         )
-        entry_candidates = re.findall(r"(?:apps|core|tools)/[A-Za-z0-9_./-]+\.py", row["entry"])
+        entry_candidates = list(dict.fromkeys(
+            re.findall(r"(?:apps|config|core|filters|tools)/[A-Za-z0-9_./-]+\.py", row["entry"])
+        ))
         if entry_candidates:
-            entry_path = entry_candidates[0]
+            missing_entry_paths = [
+                entry_path
+                for entry_path in entry_candidates
+                if not (PROJECT_ROOT / entry_path).exists()
+            ]
             add_check(
                 results,
                 "meta_registry",
                 case_id,
                 f"{row['b_id']}_declared_entry_file_exists",
                 True,
-                (PROJECT_ROOT / entry_path).exists(),
+                not missing_entry_paths,
+                note=(
+                    "missing=" + ",".join(missing_entry_paths)
+                    if missing_entry_paths
+                    else ""
+                ),
             )
 
     summary["done_test_count"] = len(done_test_rows)

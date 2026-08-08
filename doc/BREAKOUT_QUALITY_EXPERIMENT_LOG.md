@@ -5848,3 +5848,41 @@ Infrastructure completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` id
 - 受入口遷移影響的CLI、local-regression、architecture與Breakout Quality／Strategy Compare／Audit synthetic contracts合計480項直接檢查全部PASS；其中Dataset／CLI 162項、17組Breakout Quality source/runtime contract 252項均為0 failure。
 - 全專案281個Python檔`py_compile` PASS；裸`except:`=0，`core/`／`filters/`反向import `apps`或`tools.audit`=0，current code／operational docs舊Research entry引用=0。
 - GPT未執行`apps/test_suite.py`或formal pipeline；正式double check仍由使用者本機單一正式入口執行。
+
+## 2026-08-08 — Research單一入口 formal consistency 閉環修正
+
+### 狀態
+
+Infrastructure fix completed；不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，Registry scientific identity與目前model／selector判定不變。
+
+### 程式與formal bundle基準
+
+- 使用者正式suite後ZIP：`test-branch-1_20260808_191745_a497f1c.zip`
+- ZIP SHA256：`1bc4f037f27f31aae40fb7121fc956c5ea1777165a97c4454d7f5dbb4d6050d5`
+- Formal bundle：`to_chatgpt_bundle_20260808_191933_7a62f740.zip`
+- Bundle SHA256：`ba4f4cbd39891e43aa33e2c7d37b0b3d102940f8b2961e187a3223012cc86257`
+
+### Formal結果與根因
+
+使用者本機formal double check：quick gate PASS、chain checks PASS、ml smoke PASS；consistency只有7個FAIL，全部來自`META_REGISTRY_CHECKLIST_ENTRY`的`B170/B182/B184/B188/B189/B190/B194_declared_entry_file_exists`。原因是Research單一入口遷移後，`doc/TEST_SUITE_CHECKLIST.md`現行B2主表仍把已刪除的`apps/breakout_quality.py`／`apps/strategy_compare.py`／`apps/audit.py`列為建議落點。Runtime、策略計算與模型流程沒有失敗。
+
+另發現meta checker原本每個DONE B-row只驗證第一個`apps/core/tools`路徑，因此B171等列後段殘留的舊Research wrapper未被本次7個FAIL揭露。
+
+### 修正
+
+- 現行B2主表所有Research舊wrapper引用改為`apps/research.py`，並同步更新B182/B184/B186/B188/B189/B190/B194的單一入口工作類型語意；歷史G紀錄與Experiment Log舊指令保留作歷史證據，不改寫。
+- `validate_registry_checklist_entry_consistency_case`改為逐列驗證建議落點中所有`apps/config/core/filters/tools/*.py`宣告，不再只取第一個path；失敗時note直接列出missing paths。
+- B23 checklist／registry／正式入口一致性契約同步補上「DONE主表列所有宣告Python路徑必須存在」。
+
+### 固定研究／runtime條件
+
+不修改Dataset／Label、MR-12B／MR-12C訓練目標、模型權重、PIT scores、Strategy Compare arms／fingerprint／cache、C17/C18 selector、策略參數、replay、sizing、accounting、execution或Audit算法。
+
+### 獨立驗證
+
+- `validate_registry_checklist_entry_consistency_case`：1217／1217 PASS；強化後同時檢出並修正原本被第一路徑遮蔽的B50／B172／B177現行stale declaration。
+- 受影響直接契約：Dataset／CLI 162／162 PASS、Strategy Compare config-driven app 39／39 PASS、Audit framework 8／8 PASS、Breakout Quality簡易報表6／6 PASS；合計1432項direct checks、0 failure。
+- `apps/research.py`、`model`、`optimizer`、`compare`、`audit` help route全部可正常解析；`optimizer`仍原樣轉交既有optimizer service。
+- 全專案282個Python檔AST parse／compile PASS；裸`except:`=0、pass-only exception handler=0、local import cycle=0、`core/`／`filters/`反向import `apps`或`tools.audit`=0；現行DONE checklist宣告Python path缺件=0，`PROJECT_SETTINGS.md`／`ARCHITECTURE.md`／`CMD.md`舊Research wrapper引用=0。
+- `G`表1461筆狀態鏈、日期／ID排序、重複`NEW`、no-op transition均為0異常，B23最新狀態為DONE；既有歷史列未改寫，只新增本輪B23兩筆收斂紀錄。
+- GPT未執行`apps/test_suite.py`或formal pipeline；formal suite結果須由使用者套用patch後於本機正式入口重跑確認。
