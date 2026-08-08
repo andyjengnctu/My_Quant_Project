@@ -6423,3 +6423,54 @@ MR-12B的Selection PIT模型層證據通過：10個年度的PASS-only rho全部�
 
 使用正式選單`apps/research.py → [3] 策略組合比較 → [2] 查看設定、工件與預計動作`。先確認期間2014～2020、arms=C23/C24/C25、PIT工件與historical P2 params皆READY；若READY，再`[1/Enter] 執行目前比較設定`。結果優先比較Return、MDD、RoMD、EV、Exposure／資金利用率、orderable PIT-score coverage及年度穩定性；不得依此結果回頭調MR-12B loss／epoch／score normalization。
 
+
+
+## 2026-08-09 — MR-12B Selection PIT C23/C24/C25策略經濟驗證結果
+
+### 狀態
+
+`RESULT_AVAILABLE / PIT_MODEL_GATE_PASS / PIT_STRATEGY_NOT_PROMOTED / REALIZATION_ATTRIBUTION_NEXT`
+
+### 程式基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_055527_b0e14c8.zip`。
+- SHA256：`0b3702630954ad39a254de2805f30b5cb6239c7df43f500630824e93bdda88ba`。
+- GPT fresh extract：`/mnt/data/stock_review_055527`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 固定條件
+
+2014-01-01～2020-12-31；historical P2 Min ROOS active params；`base_finalist_best`；max positions=10；rotation=off；optional entry filters=all-off；hard filter off；Selection PIT source=`DL-CONT12B-PIT`；Dataset、Continuous Target、PIT folds／scores／audit、entry／stop／exit、accounting與portfolio規則固定。C23為DL-off baseline；C24只加入MR-12B PIT + C17 minimum-repair；C25只加入同一PIT source + C18 feasible-ascent。Future Target只於replay完成後join，不進runtime。
+
+### 主要結果
+
+| Arm | Return | MDD | RoMD | Annual | EV | Exposure | Trades | same-param DL selection R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| C23 | 127.45% | 25.45% | 5.01 | 12.46% | 0.62R | 87.68% | 379 | 0.00R |
+| C24 | 108.05% | 24.51% | 4.41 | 11.04% | 0.53R | 87.40% | 374 | -35.78R |
+| C25 | 115.42% | 26.36% | 4.38 | 11.59% | 0.59R | 87.65% | 366 | -19.52R |
+
+Controlled deltas：
+
+- C24-C23：Return `-19.40pp`、MDD `-0.94pp`、RoMD `-0.60`、Annual `-1.42pp`、EV `-0.09R`、Exposure `-0.29pp`、selection R `-35.78R`。
+- C25-C23：Return `-12.03pp`、MDD `+0.91pp`、RoMD `-0.63`、Annual `-0.87pp`、EV `-0.03R`、Exposure `-0.03pp`、selection R `-19.52R`。
+- C25-C24：Return `+7.37pp`、MDD `+1.85pp`、RoMD `-0.03`、Annual `+0.55pp`、EV `+0.06R`、Exposure `+0.25pp`、selection R `+16.26R`。Feasible-ascent改善minimum-repair的經濟轉化，但仍不足以超越C23。
+
+### Selection／resource診斷
+
+- C24相對C23：selected Target percentile `+0.0164`、Target mean `+0.0476R`、opportunity gap改善`0.1373R`，但selection R `-35.78R`、期末未滿倉日`+318`、持股缺口`+297格日`。
+- C25相對C23：selected Target percentile `+0.0178`、Target mean `+0.0306R`、opportunity gap改善`0.0607R`，但selection R `-19.52R`、期末未滿倉日`+259`、持股缺口`+274格日`。
+- Candidate supply幾乎不變：平均每日可掛單候選C23/C24/C25=`65.33/63.25/65.10`，供給不足日=`101/103/102`；因此策略惡化不能主要歸因於候選供給不足。
+- C24/C25平均曝險仍接近C23，代表「更多未滿倉日」不等於總資金曝險同比例下降；需要拆解position sizing、fill、holding/partial-tail slot occupancy與capital deployment。
+- C24的Future Target mean／opportunity gap優於C25，但C25的Return與selection R反而較好；這是直接證據顯示`strategy_aligned_opportunity_no_time_r_v1`的原始event Target改善不等於portfolio可實現R改善。
+
+### 判定
+
+1. MR-12B的Selection PIT模型Gate仍維持`PASS`；本次不否定Pairwise模型研究結論。
+2. `DL-CONT12B-PIT`直接套用historical P2 Min ROOS的C24/C25皆`NOT_ADOPTED`；不得升格正式策略source。
+3. C25相對C24的改善證明selector搜尋完整度有影響，但不是根因；較Max selector仍無法使PIT source超越baseline。
+4. 本次最強訊號為Target→realized economics realization gap：post-replay Future Target改善與same-param selection R／總報酬方向相反。不得直接依Selection結果修改MR-12B loss、architecture或OOS selector。
+
+### 下一步
+
+下一個最高資訊量工作是read-only **PIT strategy realization/capture attribution**，直接重用C23/C24/C25既有replay工件，不重跑portfolio、不重訓模型、不跑optimizer。至少拆解：exclusive trade realized R／PnL、planned/reserved→fill、position sizing與stop distance、holding與partial-tail slot-days、capital deployment、Target capture ratio／realization gap、以及年度貢獻；優先比較C24-C23與C25-C23，再用C25-C24隔離selector轉化。只有歸因確認有明確可由既有策略參數空間修正的機械瓶頸，才考慮Selection內參數適應；否則維持C23 baseline並把PIT ranking的直接策略部署淘汰。
