@@ -5662,3 +5662,27 @@ C19與C20都重用同一C3 baseline；因此本輪只需執行兩條新的MR-12B
 
 `validate_strategy_compare_config_driven_app_contract_case`新增completed-pair cache、score SHA invalidation、report-only config independence、same-run shared-baseline及baseline contract rehydration／mismatch rejection案例；direct contract共37項全部PASS。另以完整orchestration mock確認C17/C18命中cache而C19/C20未命中時，canonical engine實際只呼叫2次，兩次皆收到`baseline_reuse_dir`。GPT未執行`apps/test_suite.py`。
 
+## 2026-08-08 — MR-12B formal consistency：4×2 validator config-sensitive profile closure
+
+### 狀態
+
+`MR-12B / DL-CONT12B / SR-C19 / SR-C20 IMPLEMENTED / RESULT_PENDING`不變；本輪只修formal synthetic expected，不修改pairwise loss、whole-date batching、artifact semantics、Strategy Compare cache、C17/C18 selector或C19/C20策略矩陣。
+
+### 使用者正式bundle
+
+- 程式基準：`test-branch-1_20260808_170549_2bd495e.zip`，SHA256=`9ec5af4554fd986fcefd9591c2687665d393c6f0c82edafaf767cf52468f233b`。
+- Debug bundle：`to_chatgpt_bundle_20260808_170738_8d95d831.zip`，SHA256=`3fd1670b7cf405ad481c4974cd36b518433a6cdae700af195ec087c888b2e1ef`。
+- formal摘要：quick gate PASS、chain checks PASS、ml smoke PASS；consistency FAIL僅1項；meta quality只剩`coverage_synthetic_suite_runs_successfully` FAIL。
+
+### 根因
+
+`consistency_failures_20260808_170733.csv`唯一失敗為`BREAKOUT_QUALITY_BINARY_DL_PARAM_ADAPTATION / binary_dl_four_by_two_risk_only_fold_contract`：validator expected tuple最後一欄固定為歷史`unique_group_sampling`，但`strategy_param_training._parse_args([])`依法讀取目前workflow設定，MR-12B active profile為`strategy_aligned_no_time_all_event_pairwise`。Runtime／parser行為正確，錯誤在synthetic把`config/`目前值硬編為唯一合法答案，違反`PROJECT_SETTINGS C8`。meta-quality coverage failure只是同一synthetic suite returncode=1的下游結果。
+
+### 修正
+
+4×2 risk-only synthetic先獨立讀取`get_breakout_quality_workflow_settings()`，expected profile改用`workflow_settings.experiment_profile`，再與`parse_dl_param_adapt_args([]).experiment_profile`比較；因此仍可攔截parser default未忠實跟隨config，但不限制使用者目前必須使用特定profile。`RISK_SEARCH_FIELDS`、P2/P3 DL off/on、optional filters all-off、all-rule filters all-off與fold runtime override等其餘contract維持exact比較。
+
+### GPT獨立驗證
+
+`validate_breakout_quality_binary_dl_param_adaptation_contract_case`直接執行9/9 PASS。另掃描`tools/validate/`內其餘`unique_group_sampling`引用，保留明確隔離的歷史／固定profile案例，不把合法固定fixture誤改為動態config。GPT未執行`apps/test_suite.py`或formal consistency/meta-quality step；正式閉環待使用者套patch後以單一正式入口重跑。
+

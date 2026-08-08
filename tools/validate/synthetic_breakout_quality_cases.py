@@ -13354,6 +13354,9 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         resolve_optimizer_session_spec_for_fold,
     )
 
+    from config.breakout_quality import get_breakout_quality_workflow_settings
+
+    workflow_settings = get_breakout_quality_workflow_settings()
     param_adapt_args = parse_dl_param_adapt_args([])
     baseline_member_params = params_to_json_dict(base)
     baseline_member_params.update(
@@ -13408,7 +13411,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             True,
             True,
             True,
-            "unique_group_sampling",
+            workflow_settings.experiment_profile,
         ),
         (
             tuple(RISK_SEARCH_FIELDS),
