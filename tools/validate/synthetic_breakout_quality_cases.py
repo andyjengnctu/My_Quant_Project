@@ -18279,89 +18279,133 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and mismatched_baseline_rejected,
     )
 
-    min_off = settings.arms["C3"]
-    min_a9_hard = settings.arms["C8"]
-    min_a9_resource = settings.arms["C11"]
-    mismatched_pairs = {
-        "min__a9_hard": {
-            "arm_contract": ("min_roos", "all_off", min_off, min_a9_hard),
-            "payload": dict(mocked_pair_payload),
-        },
-        "min__a9_resource": {
-            "arm_contract": ("min_roos", "all_off", min_off, min_a9_resource),
-            "payload": {
-                **dict(mocked_pair_payload),
-                "no_filter": {
-                    **dict(mocked_pair_payload["no_filter"]),
-                    "total_return_pct": 9.0,
+    # Exercise shared-baseline aggregation with an isolated synthetic enabled
+    # matrix. Historical arms may legitimately be disabled by the user's current
+    # config, so this contract must not depend on the active comparison matrix.
+    registered_groups: dict[tuple[str, str], dict[str, object]] = {}
+    registered_group_order: list[tuple[str, str]] = []
+    for arm in settings.arms.values():
+        key = (arm.param_source, arm.rule_policy)
+        if key not in registered_groups:
+            registered_groups[key] = {"off": None, "on": []}
+            registered_group_order.append(key)
+        group = registered_groups[key]
+        if arm.dl_enabled:
+            group["on"].append(arm)
+        elif group["off"] is None:
+            group["off"] = arm
+
+    shared_group = next(
+        (
+            registered_groups[key]
+            for key in registered_group_order
+            if registered_groups[key]["off"] is not None
+            and len(registered_groups[key]["on"]) >= 2
+        ),
+        None,
+    )
+    if shared_group is None:
+        shared_baseline_fixture_available = False
+        repeated_baseline_mismatch_rejected = False
+        volatile_timing_ignored = False
+    else:
+        shared_baseline_fixture_available = True
+        selected_off = shared_group["off"]
+        selected_on = list(shared_group["on"][:2])
+        enabled_ids = {selected_off.arm_id, *(arm.arm_id for arm in selected_on)}
+        synthetic_arms = {
+            arm_id: replace(arm, enabled=arm_id in enabled_ids)
+            for arm_id, arm in settings.arms.items()
+        }
+        synthetic_settings = replace(settings, arms=synthetic_arms)
+        synthetic_execution_pairs = strategy_comparison_module._execution_pairs(
+            synthetic_settings
+        )
+        pair_a = synthetic_execution_pairs[0]
+        pair_b = synthetic_execution_pairs[1]
+        mismatched_pairs = {
+            "shared_a": {
+                "arm_contract": pair_a,
+                "payload": dict(mocked_pair_payload),
+            },
+            "shared_b": {
+                "arm_contract": pair_b,
+                "payload": {
+                    **dict(mocked_pair_payload),
+                    "no_filter": {
+                        **dict(mocked_pair_payload["no_filter"]),
+                        "total_return_pct": 9.0,
+                    },
                 },
             },
-        },
-    }
-    try:
-        strategy_comparison_module._scenario_payloads(
-            mismatched_pairs,
-            {"min__a9_hard": 0.1, "min__a9_resource": 0.2},
-            settings=settings,
-        )
-    except ValueError as exc:
-        repeated_baseline_mismatch_rejected = "共用基準不一致" in str(exc)
-    else:
-        repeated_baseline_mismatch_rejected = False
+        }
+        try:
+            strategy_comparison_module._scenario_payloads(
+                mismatched_pairs,
+                {"shared_a": 0.1, "shared_b": 0.2},
+                settings=synthetic_settings,
+            )
+        except ValueError as exc:
+            repeated_baseline_mismatch_rejected = "共用基準不一致" in str(exc)
+        else:
+            repeated_baseline_mismatch_rejected = False
+
+        timing_only_pairs = {
+            "shared_a": {
+                "arm_contract": pair_a,
+                "payload": {
+                    **dict(mocked_pair_payload),
+                    "no_filter": {
+                        **dict(mocked_pair_payload["no_filter"]),
+                        "resource_aware_selector_timing_calls": 1,
+                        "resource_aware_selector_timing_total_ms": 0.050,
+                        "resource_aware_selector_timing_median_ms": 0.050,
+                        "resource_aware_selector_timing_p95_ms": 0.050,
+                        "resource_aware_selector_timing_max_ms": 0.050,
+                    },
+                },
+            },
+            "shared_b": {
+                "arm_contract": pair_b,
+                "payload": {
+                    **dict(mocked_pair_payload),
+                    "no_filter": {
+                        **dict(mocked_pair_payload["no_filter"]),
+                        "resource_aware_selector_timing_calls": 1,
+                        "resource_aware_selector_timing_total_ms": 0.091,
+                        "resource_aware_selector_timing_median_ms": 0.091,
+                        "resource_aware_selector_timing_p95_ms": 0.091,
+                        "resource_aware_selector_timing_max_ms": 0.091,
+                    },
+                },
+            },
+        }
+        try:
+            timing_scenarios = strategy_comparison_module._scenario_payloads(
+                timing_only_pairs,
+                {"shared_a": 0.1, "shared_b": 0.2},
+                settings=synthetic_settings,
+            )
+        except ValueError:
+            volatile_timing_ignored = False
+        else:
+            volatile_timing_ignored = (
+                timing_scenarios.get(selected_off.arm_id, {}).get("total_return_pct")
+                == 10.0
+            )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multiple_dl_sources_require_identical_replayed_shared_baseline",
         True,
-        repeated_baseline_mismatch_rejected,
+        shared_baseline_fixture_available and repeated_baseline_mismatch_rejected,
     )
-
-    timing_only_pairs = {
-        "min__a9_hard": {
-            "arm_contract": ("min_roos", "all_off", min_off, min_a9_hard),
-            "payload": {
-                **dict(mocked_pair_payload),
-                "no_filter": {
-                    **dict(mocked_pair_payload["no_filter"]),
-                    "resource_aware_selector_timing_calls": 1,
-                    "resource_aware_selector_timing_total_ms": 0.050,
-                    "resource_aware_selector_timing_median_ms": 0.050,
-                    "resource_aware_selector_timing_p95_ms": 0.050,
-                    "resource_aware_selector_timing_max_ms": 0.050,
-                },
-            },
-        },
-        "min__a9_resource": {
-            "arm_contract": ("min_roos", "all_off", min_off, min_a9_resource),
-            "payload": {
-                **dict(mocked_pair_payload),
-                "no_filter": {
-                    **dict(mocked_pair_payload["no_filter"]),
-                    "resource_aware_selector_timing_calls": 1,
-                    "resource_aware_selector_timing_total_ms": 0.091,
-                    "resource_aware_selector_timing_median_ms": 0.091,
-                    "resource_aware_selector_timing_p95_ms": 0.091,
-                    "resource_aware_selector_timing_max_ms": 0.091,
-                },
-            },
-        },
-    }
-    try:
-        timing_scenarios = strategy_comparison_module._scenario_payloads(
-            timing_only_pairs,
-            {"min__a9_hard": 0.1, "min__a9_resource": 0.2},
-            settings=settings,
-        )
-    except ValueError:
-        volatile_timing_ignored = False
-    else:
-        volatile_timing_ignored = timing_scenarios.get("C3", {}).get("total_return_pct") == 10.0
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "shared_baseline_consistency_ignores_only_volatile_selector_cpu_timing",
         True,
-        volatile_timing_ignored,
+        shared_baseline_fixture_available and volatile_timing_ignored,
     )
-
 
     min_roos_source = settings.parameter_sources["min_roos"]
     add_check(
