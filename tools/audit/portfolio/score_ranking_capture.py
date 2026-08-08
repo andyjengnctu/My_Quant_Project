@@ -451,24 +451,36 @@ def _decision(
         and finite_number(score_sort.get("avg_invested_total")) is not None
         and float(score_sort["avg_invested_total"]) < float(baseline["avg_invested_total"]) * 0.90
     )
-    bottlenecks = []
+    mechanical_bottlenecks = []
     if deployment_gap:
-        bottlenecks.append("平均曝險明顯下降")
+        mechanical_bottlenecks.append("平均曝險明顯下降")
     if sizing_gap:
-        bottlenecks.append("每筆實際投入金額下降")
-    if capture_gap:
-        bottlenecks.append("Target轉成Realized R的capture惡化")
+        mechanical_bottlenecks.append("每筆實際投入金額下降")
     if turnover_gap:
-        bottlenecks.append("持有／半倉殘留時間拉長")
+        mechanical_bottlenecks.append("持有／半倉殘留時間拉長")
     if fill_gap:
-        bottlenecks.append("保留買單成交率下降")
-    if not bottlenecks:
-        bottlenecks.append("未由目前可觀測欄位確認單一機械瓶頸")
-    adaptation_candidate = bool(target_improved and economic_failed and any((deployment_gap, sizing_gap, capture_gap, turnover_gap, fill_gap)))
+        mechanical_bottlenecks.append("保留買單成交率下降")
+
+    findings = list(mechanical_bottlenecks)
+    if capture_gap:
+        findings.append("Target轉成Realized R的capture惡化（結果訊號，非參數機械瓶頸）")
+    if not findings:
+        findings.append("未由目前可觀測欄位確認單一機械瓶頸")
+
+    mechanical_bottleneck_detected = bool(mechanical_bottlenecks)
+    adaptation_candidate = bool(
+        target_improved
+        and economic_failed
+        and mechanical_bottleneck_detected
+    )
     if adaptation_candidate:
         status = "ADAPTATION_DIAGNOSTIC_SUPPORTED"
         signal = SIGNAL_WARNING
-        conclusion = "模型確實改善Target選擇，但舊參數下經濟效果失敗，且已找到可由策略參數適應檢驗的資本／capture瓶頸。"
+        conclusion = "模型確實改善Target選擇，但舊參數下經濟效果失敗，且已找到可由既有策略參數空間檢驗的機械瓶頸。"
+    elif target_improved and economic_failed and capture_gap:
+        status = "SORT_ONLY_REJECTED_REALIZATION_GAP_NO_MECHANICAL_BOTTLENECK"
+        signal = SIGNAL_NEGATIVE
+        conclusion = "模型改善Target選擇但經濟效果失敗；capture惡化只證明realization gap，尚未找到可由既有策略參數適應直接檢驗的機械瓶頸。"
     elif target_improved and economic_failed:
         status = "SORT_ONLY_REJECTED_NO_MECHANICAL_BOTTLENECK"
         signal = SIGNAL_NEGATIVE
@@ -487,7 +499,10 @@ def _decision(
         "target_selection_improved": target_improved,
         "economic_effect_failed": economic_failed,
         "parameter_adaptation_candidate": adaptation_candidate,
-        "bottlenecks": bottlenecks,
+        "realization_gap_detected": capture_gap,
+        "mechanical_bottleneck_detected": mechanical_bottleneck_detected,
+        "mechanical_bottlenecks": mechanical_bottlenecks,
+        "bottlenecks": findings,
         "conclusion": conclusion,
         "future_target_used_for_runtime": False,
     }

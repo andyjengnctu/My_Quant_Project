@@ -13766,6 +13766,7 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     )
     from tools.audit.portfolio.score_ranking_capture import (
         _aggregate_capture_ratio,
+        _decision,
         build_score_ranking_capture_audit,
         render_capture_audit_console,
         write_score_ranking_capture_audit_outputs,
@@ -13900,13 +13901,62 @@ def validate_breakout_quality_score_ranking_capture_audit_contract_case(_base_pa
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "capture_audit_supports_parameter_adaptation_only_after_target_improves_and_sort_only_fails",
-        ("ADAPTATION_DIAGNOSTIC_SUPPORTED", True, True, True, False),
+        ("ADAPTATION_DIAGNOSTIC_SUPPORTED", True, True, True, True, True, False),
         (
             result["decision"]["status"],
             result["decision"]["target_selection_improved"],
             result["decision"]["economic_effect_failed"],
             result["decision"]["parameter_adaptation_candidate"],
+            result["decision"]["mechanical_bottleneck_detected"],
+            result["decision"]["realization_gap_detected"],
             result["decision"]["future_target_used_for_runtime"],
+        ),
+    )
+
+    capture_only_decision = _decision(
+        baseline={
+            "avg_invested_total": 100000.0,
+        },
+        score_sort={
+            "avg_invested_total": 98000.0,
+        },
+        delta={
+            "total_return_pct": -10.0,
+            "return_over_max_drawdown": -0.5,
+            "avg_exposure_pct": -0.2,
+            "aggregate_target_capture_ratio": -0.30,
+            "median_target_capture_ratio": -0.20,
+            "target_ge_0_5_capture_ratio": -0.25,
+            "avg_target_realization_gap_r": 0.15,
+            "avg_holding_calendar_days": 0.5,
+            "avg_partial_to_exit_calendar_days": 0.0,
+            "reserved_buy_fill_rate_pct": -1.0,
+        },
+        selection_diagnostics={
+            "score_ranking_minus_no_filter": {
+                "selected_target_mean_r": 0.05,
+                "target_top_k_retention_mean": 0.01,
+            }
+        },
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "capture_gap_alone_is_not_parameter_adaptation_mechanical_evidence",
+        (
+            "SORT_ONLY_REJECTED_REALIZATION_GAP_NO_MECHANICAL_BOTTLENECK",
+            True,
+            True,
+            False,
+            False,
+            True,
+        ),
+        (
+            capture_only_decision["status"],
+            capture_only_decision["target_selection_improved"],
+            capture_only_decision["economic_effect_failed"],
+            capture_only_decision["parameter_adaptation_candidate"],
+            capture_only_decision["mechanical_bottleneck_detected"],
+            capture_only_decision["realization_gap_detected"],
         ),
     )
 
@@ -19438,6 +19488,20 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and c25_pair["interpretation"]["target_to_realized_divergence"] is True
             and c24_pair["structural"]["trade_contribution"]["exclusive_selection_delta_r"] < 0
             and c25_pair["structural"]["trade_contribution"]["exclusive_selection_delta_r"] < 0
+            and math.isclose(
+                float(c24_pair["exclusive_trade_breakdown"]["implied_selection_delta_r"]),
+                float(c24_pair["structural"]["trade_contribution"]["exclusive_selection_delta_r"]),
+                rel_tol=0.0,
+                abs_tol=1e-8,
+            )
+            and math.isclose(
+                float(c25_pair["exclusive_trade_breakdown"]["implied_selection_delta_r"]),
+                float(c25_pair["structural"]["trade_contribution"]["exclusive_selection_delta_r"]),
+                rel_tol=0.0,
+                abs_tol=1e-8,
+            )
+            and c24_pair["exclusive_trade_breakdown"]["primary_realized_driver"] in {"winner_capture", "loser_avoidance", "balanced", "mixed"}
+            and c25_pair["exclusive_trade_breakdown"]["primary_realized_driver"] in {"winner_capture", "loser_avoidance", "balanced", "mixed"}
             and c24_pair["capture"]["score_sort"]["avg_target_r"] > c24_pair["capture"]["baseline"]["avg_target_r"]
             and c24_pair["capture"]["score_sort"]["avg_realized_r"] < c24_pair["capture"]["baseline"]["avg_realized_r"]
             and c24_pair["structural"]["slot_occupancy"]["candidate_end_position_gap_slot_days"] > c24_pair["structural"]["slot_occupancy"]["comparator_end_position_gap_slot_days"]
@@ -19445,6 +19509,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and pit_payload["metadata"]["training_performed"] is False
             and "Target → Realized R / 資金捕捉" in pit_report
             and "Exclusive trades" in pit_report
+            and "Exclusive R分解" in pit_report
             and (pit_latest / "audit.json").is_file()
             and (pit_latest / "C24_vs_C23_capture_candidate_lifecycle.csv").is_file()
             and (pit_latest / "C25_vs_C23_trade_contributions.csv").is_file(),

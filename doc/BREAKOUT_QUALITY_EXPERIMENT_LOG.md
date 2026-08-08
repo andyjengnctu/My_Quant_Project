@@ -6511,3 +6511,55 @@ Controlled deltas：
 
 使用正式選單`apps/research.py → [4] Audit／診斷`先查看設定／工件狀態；READY後執行目前Audit。結果先比較C24-C23與C25-C23的exclusive winner/loser R、fill、平均投入、holding／partial-tail、underfilled slot-days及aggregate Target capture，再用兩者差異判斷是否存在可由既有Selection策略參數空間檢驗的mechanical bottleneck。Audit結果取得前不得進參數適應或建立新MR。
 
+
+
+## 2026-08-09 — AUD-c23-c25-pit-realization結果：winner capture不足；修正capture-gap不等於參數機械瓶頸
+
+### 狀態
+
+`RESULT_AVAILABLE / REALIZATION_GAP_CONFIRMED / PARAM_ADAPTATION_NOT_SUPPORTED`。本輪取得使用者本機只讀Audit結果，並修正既有capture decision將「capture惡化」本身誤當成可由策略參數適應檢驗之機械瓶頸的過度判定。未重跑portfolio、未重訓模型、未跑optimizer、未建立新`MR-*`／`SR-C*`。
+
+### 本輪基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_065116_e3092c2.zip`。
+- SHA256：`c714add288f842d6b7383f5a577bf38220785beffc55e841af69bebf3c269729`。
+- GPT fresh extract：`/mnt/data/stock_review_065116`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 使用者本機Audit結果
+
+#### C24 vs C23
+
+- Return `127.45% → 108.05%`（`-19.40pp`）；RoMD `5.01 → 4.41`；EV `0.62R → 0.53R`；exclusive selection R=`-35.78R`。
+- 平均Target R `0.46R → 0.50R`（`+0.04R`），但平均Realized R `0.62R → 0.53R`（`-0.09R`）；aggregate capture `1.44 → 1.03`（`-0.41`）。
+- Fill `-0.80pp`、平均投入`-3,832`（約`-2.46%`）、投入／預留比`-0.58pp`、平均持有`-0.28日`、平均曝險`-0.29pp`。這些均未跨既定mechanical-gap門檻（fill `-2pp`、sizing `-10%`、holding `+3日`、exposure `-5pp`）。
+- Exclusive trades：C23-only winners `69 / +203.30R`、losers `88 / -73.68R`；C24-only winners `57 / +173.78R`、losers `95 / -79.94R`。
+- R分解：winner contribution約`-29.52R`；loser contribution約`-6.26R`；合計`-35.78R`。主要driver=`winner_capture`。Exclusive decisive win rate約`43.95% → 37.50%`（`-6.45pp`）。
+
+#### C25 vs C23
+
+- Return `127.45% → 115.42%`（`-12.03pp`）；RoMD `5.01 → 4.38`；EV `0.62R → 0.59R`；exclusive selection R=`-19.52R`。
+- 平均Target R `0.46R → 0.52R`（`+0.06R`），但平均Realized R `0.62R → 0.59R`（`-0.03R`）；aggregate capture `1.44 → 1.18`（`-0.26`）。
+- Fill `-1.61pp`、平均投入`+8,288`、投入／預留比`-0.57pp`、平均持有`+1.17日`、平均曝險`-0.03pp`；同樣未跨既定mechanical-gap門檻。
+- Exclusive trades：C23-only winners `73 / +162.85R`、losers `99 / -86.87R`；C25-only winners `61 / +140.82R`、losers `98 / -84.36R`。
+- R分解：winner contribution約`-22.03R`；loser contribution約`+2.51R`（candidate反而少承擔loser R）；合計`-19.52R`。主要driver=`winner_capture`。Exclusive decisive win rate約`42.44% → 38.36%`（`-4.08pp`）。
+
+### 判定修正
+
+舊`score_ranking_capture._decision`把`capture_gap`與fill／sizing／deployment／holding並列，只要Target改善且經濟失敗，capture gap單獨成立就會輸出`ADAPTATION_DIAGNOSTIC_SUPPORTED`。這會把**結果層的Target→Realized mismatch**誤稱為**可由既有策略參數空間修正的機械瓶頸**。本輪改為：
+
+1. `capture_gap`仍保存為`realization_gap_detected`，但不單獨觸發parameter adaptation。
+2. 只有預先定義的fill／sizing／deployment／holding mechanical gap至少一項成立，才可輸出`ADAPTATION_DIAGNOSTIC_SUPPORTED`。
+3. 若Target改善、經濟失敗、capture gap成立，但沒有mechanical gap，狀態改為`SORT_ONLY_REJECTED_REALIZATION_GAP_NO_MECHANICAL_BOTTLENECK`，`parameter_adaptation_candidate=false`。
+4. `AUD-c23-c25-pit-realization`新增exclusive winner/loser R contribution、exclusive win rate與implied selection R閉環；報表明確區分winner capture與loser avoidance。
+
+### 科學判定
+
+- C24/C25的直接PIT部署仍`NOT_ADOPTED`。
+- 本Audit不否定MR-12B PIT模型Gate；它證明的是**高Target selection沒有被既有策略路徑轉成較高realized R**。
+- 目前損失主要來自「少捕捉winner」，不是loser severity、fill、sizing、holding或平均exposure已被證實惡化到足以構成參數適應mechanical hypothesis。
+- 因此**現在不進Selection參數適應**，也不從本Audit直接修改MR-12B loss／threshold／selector。
+
+### 下一步
+
+下一個最高資訊量read-only診斷優先檢查**PIT-specific fold score drift / mixed-fold runtime conditioning**：PIT audit已有`drift=True`，而Strategy replay的orderable候選可跨年度fold保留frozen score。應直接量測trade date是否混用不同PIT fold model scores、fold boundary附近的exclusive winner capture／selection R是否異常，以及負向selection R是否集中mixed-fold日期。這是PIT-specific問題，先於新Target／新MR。若fold conditioning不能解釋loss，再回到Target與realized trade-path語意研究；不得先跑optimizer。

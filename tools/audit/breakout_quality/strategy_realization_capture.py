@@ -224,22 +224,79 @@ def _exclusive_breakdown(trade_contributions: pd.DataFrame) -> dict[str, Any]:
             "candidate_only_winner_r": 0.0,
             "candidate_only_loser_count": 0,
             "candidate_only_loser_r_abs": 0.0,
+            "baseline_only_net_r": 0.0,
+            "candidate_only_net_r": 0.0,
+            "baseline_only_win_rate_pct": None,
+            "candidate_only_win_rate_pct": None,
+            "exclusive_win_rate_delta_pp": None,
+            "winner_r_contribution_delta": 0.0,
+            "loser_r_contribution_delta": 0.0,
+            "implied_selection_delta_r": 0.0,
+            "primary_realized_driver": "none",
         }
     baseline_only = frame[frame["category"] == "comparator_only"].copy()
     candidate_only = frame[frame["category"] == "candidate_only"].copy()
     baseline_r = pd.to_numeric(baseline_only.get("comparator_r"), errors="coerce").fillna(0.0)
     candidate_r = pd.to_numeric(candidate_only.get("candidate_r"), errors="coerce").fillna(0.0)
+
+    baseline_winner_count = int((baseline_r > 0).sum())
+    baseline_loser_count = int((baseline_r < 0).sum())
+    candidate_winner_count = int((candidate_r > 0).sum())
+    candidate_loser_count = int((candidate_r < 0).sum())
+    baseline_winner_r = float(baseline_r[baseline_r > 0].sum())
+    baseline_loser_r_abs = float(abs(baseline_r[baseline_r < 0].sum()))
+    candidate_winner_r = float(candidate_r[candidate_r > 0].sum())
+    candidate_loser_r_abs = float(abs(candidate_r[candidate_r < 0].sum()))
+
+    baseline_decisive_count = baseline_winner_count + baseline_loser_count
+    candidate_decisive_count = candidate_winner_count + candidate_loser_count
+    baseline_win_rate = (
+        100.0 * baseline_winner_count / baseline_decisive_count
+        if baseline_decisive_count
+        else None
+    )
+    candidate_win_rate = (
+        100.0 * candidate_winner_count / candidate_decisive_count
+        if candidate_decisive_count
+        else None
+    )
+    winner_contribution = candidate_winner_r - baseline_winner_r
+    # Positive means candidate avoids more loser R; negative means candidate adds loser R.
+    loser_contribution = baseline_loser_r_abs - candidate_loser_r_abs
+    implied_delta = winner_contribution + loser_contribution
+    if abs(winner_contribution) > abs(loser_contribution):
+        primary_driver = "winner_capture"
+    elif abs(loser_contribution) > abs(winner_contribution):
+        primary_driver = "loser_avoidance"
+    elif abs(implied_delta) <= 1e-12:
+        primary_driver = "balanced"
+    else:
+        primary_driver = "mixed"
+
     return {
         "baseline_only_count": int(len(baseline_only)),
         "candidate_only_count": int(len(candidate_only)),
-        "baseline_only_winner_count": int((baseline_r > 0).sum()),
-        "baseline_only_winner_r": float(baseline_r[baseline_r > 0].sum()),
-        "baseline_only_loser_count": int((baseline_r < 0).sum()),
-        "baseline_only_loser_r_abs": float(abs(baseline_r[baseline_r < 0].sum())),
-        "candidate_only_winner_count": int((candidate_r > 0).sum()),
-        "candidate_only_winner_r": float(candidate_r[candidate_r > 0].sum()),
-        "candidate_only_loser_count": int((candidate_r < 0).sum()),
-        "candidate_only_loser_r_abs": float(abs(candidate_r[candidate_r < 0].sum())),
+        "baseline_only_winner_count": baseline_winner_count,
+        "baseline_only_winner_r": baseline_winner_r,
+        "baseline_only_loser_count": baseline_loser_count,
+        "baseline_only_loser_r_abs": baseline_loser_r_abs,
+        "candidate_only_winner_count": candidate_winner_count,
+        "candidate_only_winner_r": candidate_winner_r,
+        "candidate_only_loser_count": candidate_loser_count,
+        "candidate_only_loser_r_abs": candidate_loser_r_abs,
+        "baseline_only_net_r": baseline_winner_r - baseline_loser_r_abs,
+        "candidate_only_net_r": candidate_winner_r - candidate_loser_r_abs,
+        "baseline_only_win_rate_pct": baseline_win_rate,
+        "candidate_only_win_rate_pct": candidate_win_rate,
+        "exclusive_win_rate_delta_pp": (
+            candidate_win_rate - baseline_win_rate
+            if candidate_win_rate is not None and baseline_win_rate is not None
+            else None
+        ),
+        "winner_r_contribution_delta": winner_contribution,
+        "loser_r_contribution_delta": loser_contribution,
+        "implied_selection_delta_r": implied_delta,
+        "primary_realized_driver": primary_driver,
     }
 
 
@@ -295,6 +352,24 @@ def _pair_result(
         "capture_yearly": pd.DataFrame(capture.pop("yearly")),
     }
     exclusive = _exclusive_breakdown(structural_frames["trade_contributions"])
+    reported_selection_delta = _finite(
+        dict(structural.get("trade_contribution") or {}).get("exclusive_selection_delta_r")
+    )
+    implied_selection_delta = _finite(exclusive.get("implied_selection_delta_r"))
+    if (
+        reported_selection_delta is not None
+        and implied_selection_delta is not None
+        and not math.isclose(
+            reported_selection_delta,
+            implied_selection_delta,
+            rel_tol=1e-9,
+            abs_tol=1e-8,
+        )
+    ):
+        raise ValueError(
+            "exclusive trade decomposition與canonical exclusive_selection_delta_r不一致: "
+            f"{implied_selection_delta:.8f} != {reported_selection_delta:.8f}"
+        )
     pair = {
         "baseline_arm_id": baseline.arm_id,
         "candidate_arm_id": candidate.arm_id,
@@ -402,6 +477,31 @@ def _render_report(payload: dict[str, Any]) -> str:
                     (f"{candidate_id} only losers", exclusive["candidate_only_loser_count"], _fmt(exclusive["candidate_only_loser_r_abs"], unit=" R")),
                 ),
             ),
+            render_table(
+                ("Exclusive R分解", "差異", "含義"),
+                (
+                    (
+                        "Exclusive win rate",
+                        _fmt(exclusive.get("exclusive_win_rate_delta_pp"), unit="pp", signed=True),
+                        f"{_fmt(exclusive.get('baseline_only_win_rate_pct'), unit='%')} → {_fmt(exclusive.get('candidate_only_win_rate_pct'), unit='%')}",
+                    ),
+                    (
+                        "Winner R contribution",
+                        _fmt(exclusive.get("winner_r_contribution_delta"), unit=" R", signed=True),
+                        "負值＝換入／保留的winner總R較少",
+                    ),
+                    (
+                        "Loser R contribution",
+                        _fmt(exclusive.get("loser_r_contribution_delta"), unit=" R", signed=True),
+                        "正值＝少承擔loser R；負值＝多承擔loser R",
+                    ),
+                    (
+                        "Implied selection R",
+                        _fmt(exclusive.get("implied_selection_delta_r"), unit=" R", signed=True),
+                        f"主要driver={exclusive.get('primary_realized_driver', '-')}",
+                    ),
+                ),
+            ),
             "判讀：" + (
                 "Target較高但Realized R未改善，存在明確Target→realized轉化落差。"
                 if interpretation.get("target_to_realized_divergence")
@@ -414,7 +514,7 @@ def _render_report(payload: dict[str, Any]) -> str:
         render_section(f"{len(payload.get('comparisons') or []) + 1}. 使用限制"),
         "Future Target只在既有replay完成後離線join；本Audit不能證明未成交候選的counterfactual realized R。",
         "Exclusive trade R、fill、sizing、holding與slot occupancy是已實現路徑歸因；不得回流OOS模型loss、threshold、selector或參數調整。",
-        "若Target改善但capture／realized R惡化，下一個研究只能針對可觀測的realization機械瓶頸建立Selection內受控假說；不得用本Audit直接擬合OOS。",
+        "Capture惡化本身是realization gap的結果訊號，不等同可由既有策略參數修正的機械瓶頸；只有fill／sizing／deployment／holding等預先定義機械門檻成立時，才支持進入Selection參數適應。",
     ))
     return "\n\n".join(lines).rstrip() + "\n"
 
