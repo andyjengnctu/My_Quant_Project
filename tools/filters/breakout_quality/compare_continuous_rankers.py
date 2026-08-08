@@ -38,7 +38,7 @@ from filters.breakout_quality.paths import resolve_filter_output_dir
 from filters.breakout_quality.ranking_score_store import load_continuous_ranker_oos_contract
 from filters.breakout_quality.workflow_io import PROJECT_ROOT
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REPORT_JSON_FILENAME = "continuous_ranker_comparison.json"
 REPORT_MARKDOWN_FILENAME = "continuous_ranker_comparison.md"
 OUTPUT_DIRNAME = "continuous_ranker_comparison"
@@ -634,6 +634,32 @@ def _dynamic_orderable_frame(
     }
 
 
+def _evaluate_fixed_k_sweep(
+    frame: pd.DataFrame,
+    *,
+    model_ids: tuple[str, ...],
+    k_values: tuple[int, ...],
+    boundary_width: int,
+) -> dict[str, Any]:
+    """Evaluate fixed Top-K prefixes on the same paired candidate universe."""
+
+    output: dict[str, Any] = {}
+    if frame.empty:
+        return output
+    dates = tuple(str(value) for value in frame["date"].unique())
+    for raw_k in k_values:
+        k = int(raw_k)
+        if k < 1:
+            raise ValueError("Fixed-K prefix sweep的K必須>=1")
+        output[str(k)] = _evaluate_paired_frame(
+            frame,
+            model_ids=model_ids,
+            k_by_date={date: k for date in dates},
+            boundary_width=boundary_width,
+        )
+    return output
+
+
 def _evaluate_dynamic_k_strata(
     frame: pd.DataFrame,
     *,
@@ -825,6 +851,7 @@ def _fmt_k_counts(value: Any) -> str:
 def render_console(payload: dict[str, Any]) -> str:
     model_ids = tuple(str(item["model_id"]) for item in payload.get("models") or [])
     fixed = dict(payload.get("fixed_k") or {})
+    fixed_prefix = dict(payload.get("fixed_k_prefix_sweep") or {})
     dynamic = dict(payload.get("dynamic_k") or {})
     lines = [
         render_title(f"{' / '.join(model_ids)} Paired 排序品質比較"),
@@ -854,6 +881,21 @@ def render_console(payload: dict[str, Any]) -> str:
                 _render_paired_table(section),
             )
         )
+    prefix_summary_pair = tuple(
+        str(value)
+        for value in (payload.get("comparison_settings") or {}).get("summary_pair") or model_ids[:2]
+    )
+    lines.extend(
+        (
+            render_section("Forward-OOS Fixed-K prefix sweep｜完整共同候選"),
+            "同一份完整OOS候選宇宙只改K，用來區分一般Top-1/Top-2能力與reference-path子集效應。",
+            _render_dynamic_k_strata_table(
+                dict(fixed_prefix.get("by_k") or {}),
+                summary_pair=prefix_summary_pair,
+            ),
+        )
+    )
+
     dyn_section = dict(dynamic.get("evaluation") or {})
     coverage = dict(dynamic.get("coverage") or {})
     lines.extend(
@@ -896,6 +938,7 @@ def render_console(payload: dict[str, Any]) -> str:
 def _render_markdown(payload: dict[str, Any]) -> str:
     model_ids = tuple(str(item["model_id"]) for item in payload.get("models") or [])
     fixed = dict(payload.get("fixed_k") or {})
+    fixed_prefix = dict(payload.get("fixed_k_prefix_sweep") or {})
     dynamic = dict(payload.get("dynamic_k") or {})
     model_label = " / ".join(model_ids)
     reference_arm = str(dynamic.get("reference_arm") or "-")
@@ -947,6 +990,38 @@ def _render_markdown(payload: dict[str, Any]) -> str:
                     f"| {_fmt_pct(row.get('left_win_rate'))} | {int(row.get('paired_date_count', 0) or 0):,} |"
                 )
         lines.append("")
+
+    prefix_summary_pair = tuple(
+        str(value)
+        for value in (payload.get("comparison_settings") or {}).get("summary_pair") or model_ids[:2]
+    )
+    prefix_left, prefix_right = prefix_summary_pair
+    lines += [
+        "## Forward-OOS Fixed-K prefix sweep",
+        "",
+        "同一份完整paired OOS候選宇宙只改K；此表用來判斷Top-1/Top-2弱勢是否為一般forward-OOS現象，而不是C17 reference path或complete-day子集造成。",
+        "",
+        f"| K | Days | {prefix_left} NDCG | {prefix_right} NDCG | NDCG Δ | {prefix_left} Boundary | {prefix_right} Boundary | Boundary Δ | {prefix_left} Lift | {prefix_right} Lift |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for key in sorted((fixed_prefix.get("by_k") or {}), key=lambda value: int(value)):
+        section = dict((fixed_prefix.get("by_k") or {}).get(key) or {})
+        left = dict((section.get("models") or {}).get(prefix_left) or {})
+        right = dict((section.get("models") or {}).get(prefix_right) or {})
+        contrast = dict(
+            (section.get("paired_contrasts") or {}).get(f"{prefix_left}_minus_{prefix_right}") or {}
+        )
+        metrics = dict(contrast.get("metrics") or {})
+        ndcg_delta = (metrics.get("ndcg_at_k") or {}).get("mean_delta")
+        boundary_delta = (metrics.get("boundary_concordance") or {}).get("mean_delta")
+        lines.append(
+            f"| {key} | {int(section.get('competition_date_count', 0) or 0)} "
+            f"| {_fmt(left.get('ndcg_at_k'))} | {_fmt(right.get('ndcg_at_k'))} | {_fmt(ndcg_delta)} "
+            f"| {_fmt_pct(left.get('boundary_concordance'))} | {_fmt_pct(right.get('boundary_concordance'))} "
+            f"| {_fmt_delta_pct(boundary_delta, 0.0)} "
+            f"| {_fmt(left.get('top_k_raw_target_lift'))} | {_fmt(right.get('top_k_raw_target_lift'))} |"
+        )
+    lines.append("")
 
     dyn = dict(dynamic.get("evaluation") or {})
     cov = dict(dynamic.get("coverage") or {})
@@ -1066,8 +1141,10 @@ def run_comparison(
     top_k = int(BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K)
     boundary_width = int(BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH)
     fixed_splits: dict[str, Any] = {}
+    paired_splits: dict[str, pd.DataFrame] = {}
     for split in ("selection", "oos"):
         paired = _paired_score_frame(model_frames, split=split)
+        paired_splits[split] = paired
         k_by_date = {str(date): top_k for date in paired["date"].unique()}
         fixed_splits[split] = _evaluate_paired_frame(
             paired,
@@ -1077,6 +1154,12 @@ def run_comparison(
         )
 
     comparison_settings = get_breakout_quality_continuous_ranker_comparison_settings()
+    fixed_k_prefix_sweep = _evaluate_fixed_k_sweep(
+        paired_splits["oos"],
+        model_ids=model_ids,
+        k_values=comparison_settings.fixed_k_values,
+        boundary_width=boundary_width,
+    )
     reference_arm = comparison_settings.reference_arm
     pair_dir, run_dir, _run_payload = _resolve_reference_pair_dir(
         root=root,
@@ -1110,6 +1193,7 @@ def run_comparison(
             "model_ids": list(model_ids),
             "reference_arm": reference_arm,
             "summary_pair": list(comparison_settings.summary_pair),
+            "fixed_k_values": list(comparison_settings.fixed_k_values),
         },
         "fixed_k": {
             "top_k": top_k,
@@ -1117,6 +1201,13 @@ def run_comparison(
             "candidate_universe": "canonical_continuous_ranker_same_day_event_groups",
             "paired_identity_required": True,
             "splits": fixed_splits,
+        },
+        "fixed_k_prefix_sweep": {
+            "split": "oos",
+            "k_values": list(comparison_settings.fixed_k_values),
+            "candidate_universe": "canonical_continuous_ranker_same_day_event_groups",
+            "paired_identity_required": True,
+            "by_k": fixed_k_prefix_sweep,
         },
         "dynamic_k": {
             "reference_arm": reference_arm,

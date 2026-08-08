@@ -448,6 +448,16 @@ def _simple_report_details(
             )
         fixed_oos = dict(((payload.get("fixed_k") or {}).get("splits") or {}).get("oos") or {})
         fixed_summary = dict((fixed_oos.get("models") or {}).get(summary_left) or {})
+        fixed_prefix = dict(payload.get("fixed_k_prefix_sweep") or {})
+        prefix_by_k = dict(fixed_prefix.get("by_k") or {})
+        first_prefix_k = min((int(value) for value in prefix_by_k), default=None)
+        first_prefix = dict(prefix_by_k.get(str(first_prefix_k)) or {}) if first_prefix_k is not None else {}
+        first_prefix_contrast = dict(
+            (first_prefix.get("paired_contrasts") or {}).get(f"{summary_left}_minus_{summary_right}") or {}
+        )
+        first_prefix_metrics = dict(first_prefix_contrast.get("metrics") or {})
+        first_prefix_ndcg_delta = dict(first_prefix_metrics.get("ndcg_at_k") or {})
+        first_prefix_boundary_delta = dict(first_prefix_metrics.get("boundary_concordance") or {})
         dynamic = dict(payload.get("dynamic_k") or {})
         coverage = dict(dynamic.get("coverage") or {})
         dynamic_eval = dict(dynamic.get("evaluation") or {})
@@ -464,6 +474,20 @@ def _simple_report_details(
                 ("Fixed OOS競爭日", fixed_oos.get("competition_date_count")),
                 (f"{summary_left} OOS NDCG", _fmt_simple_metric(fixed_summary.get("ndcg_at_k"))),
                 (f"{summary_left} OOS Boundary", _fmt_simple_metric(fixed_summary.get("boundary_concordance"), percent=True)),
+                *(
+                    [
+                        (
+                            f"Fixed OOS K={first_prefix_k} NDCG Δ ({summary_left}−{summary_right})",
+                            "-" if first_prefix_ndcg_delta.get("mean_delta") is None else f"{float(first_prefix_ndcg_delta.get('mean_delta')):+.4f}",
+                        ),
+                        (
+                            f"Fixed OOS K={first_prefix_k} Boundary Δ ({summary_left}−{summary_right})",
+                            "-" if first_prefix_boundary_delta.get("mean_delta") is None else f"{float(first_prefix_boundary_delta.get('mean_delta')) * 100.0:+.2f}pp",
+                        ),
+                    ]
+                    if first_prefix_k is not None
+                    else []
+                ),
                 ("Dynamic-K common-complete日", coverage.get("full_score_coverage_date_count")),
                 (f"{summary_left} Dynamic raw-score Boundary", _fmt_simple_metric(dynamic_summary.get("boundary_concordance"), percent=True)),
                 (

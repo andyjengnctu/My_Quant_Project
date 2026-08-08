@@ -11853,6 +11853,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
     from tools.filters.breakout_quality.compare_continuous_rankers import (
         _dynamic_orderable_frame,
         _evaluate_dynamic_k_strata,
+        _evaluate_fixed_k_sweep,
         _evaluate_paired_frame,
         _render_dynamic_k_strata_table,
     )
@@ -12035,6 +12036,11 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL",
             "Config comparison",
         ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES",
+            (1, 4, 9),
+        ),
     ):
         configured_comparison = (
             get_breakout_quality_continuous_ranker_comparison_settings()
@@ -12049,12 +12055,14 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             "CFG-REFERENCE",
             ("CFG-B", "CFG-A"),
             "Config comparison",
+            (1, 4, 9),
         ),
         (
             configured_comparison.model_ids,
             configured_comparison.reference_arm,
             configured_comparison.summary_pair,
             configured_comparison.menu_label,
+            configured_comparison.fixed_k_values,
         ),
     )
 
@@ -12090,6 +12098,34 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             bool(float(ba["ndcg_at_k"]["mean_delta"]) > 0.0),
             bool(float(cb["ndcg_at_k"]["mean_delta"]) < 0.0),
             float(paired_eval["models"]["MR-12B"]["boundary_concordance"]),
+        ),
+    )
+
+    fixed_prefix = _evaluate_fixed_k_sweep(
+        paired_frame,
+        model_ids=("MR-12A", "MR-12B", "MR-12C"),
+        k_values=(1, 2, 3),
+        boundary_width=2,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_p2_fixed_k_prefix_sweep_reuses_same_oos_candidate_universe",
+        (("1", "2", "3"), 1, True, True),
+        (
+            tuple(sorted(fixed_prefix, key=int)),
+            int(fixed_prefix["1"]["competition_date_count"]),
+            bool(
+                float(
+                    fixed_prefix["1"]["paired_contrasts"]["MR-12B_minus_MR-12A"]["metrics"]["ndcg_at_k"]["mean_delta"]
+                ) >= 0.0
+            ),
+            bool(
+                float(
+                    fixed_prefix["3"]["paired_contrasts"]["MR-12C_minus_MR-12B"]["metrics"]["ndcg_at_k"]["mean_delta"]
+                ) < 0.0
+            ),
         ),
     )
 

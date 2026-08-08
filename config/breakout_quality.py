@@ -213,6 +213,8 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES = (
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM = "C17"
 # Short console summary compares left minus right.  The pair must be adjacent in the model order above.
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR = ("MR-12B", "MR-12A")
+# Forward-OOS top-prefix diagnostic. Values are descriptive only and never enter training.
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
 
 # "auto" resolves from the selected experiment profile:
 # - binary classification -> hard-filter / canonical_runtime / original
@@ -841,6 +843,7 @@ class BreakoutQualityContinuousRankerComparisonSettings:
     model_profiles: tuple[tuple[str, str], ...]
     reference_arm: str
     summary_pair: tuple[str, str]
+    fixed_k_values: tuple[int, ...]
 
     @property
     def model_ids(self) -> tuple[str, ...]:
@@ -892,12 +895,24 @@ def get_breakout_quality_continuous_ranker_comparison_settings(
             "continuous ranker comparison summary pair必須符合model profiles的相鄰比較順序"
         )
 
+    fixed_k_values = tuple(
+        int(value)
+        for value in BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES
+    )
+    if not fixed_k_values or any(value < 1 for value in fixed_k_values):
+        raise ValueError("continuous ranker comparison fixed K sweep只能包含正整數")
+    if len(set(fixed_k_values)) != len(fixed_k_values):
+        raise ValueError("continuous ranker comparison fixed K sweep不可重複")
+    if tuple(sorted(fixed_k_values)) != fixed_k_values:
+        raise ValueError("continuous ranker comparison fixed K sweep必須遞增排序")
+
     return BreakoutQualityContinuousRankerComparisonSettings(
         enabled=bool(BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_ENABLED),
         menu_label=menu_label,
         model_profiles=model_profiles,
         reference_arm=reference_arm,
         summary_pair=(raw_summary_pair[0], raw_summary_pair[1]),
+        fixed_k_values=fixed_k_values,
     )
 
 
@@ -1221,6 +1236,7 @@ __all__ = [
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM',
     'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES',
     'BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK',
     'BREAKOUT_QUALITY_PRETRAINING_PROFILE',
     'BREAKOUT_QUALITY_PRETRAINING_FAMILY',

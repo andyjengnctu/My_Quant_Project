@@ -6153,3 +6153,44 @@ MR-12B相對MR-12A在603個共同OOS competition days：NDCG `+0.0290`、Top-K L
 ### 下一步
 
 原樣重跑正式選單P2即可；不需重訓模型、不需重跑Strategy Compare。取得K=1/2/3/...分層與candidate coverage後，再依前節既定順序判斷top-prefix弱點或complete-case selection bias；在歸因完成前仍不建立MR-12D。
+
+
+## 2026-08-09 — P2 Dynamic-K K分層結果：弱勢集中K=1；新增完整OOS prefix sweep
+
+### 狀態
+
+`P2_K_STRATIFIED_RESULT_AVAILABLE / FIXED_OOS_PREFIX_SWEEP_IMPLEMENTED`。此為read-only模型品質診斷，不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity；`MR-12B / DL-CONT12B`維持current model research anchor，`MR-12C`維持REJECTED。歸因完成前不修改Pairwise loss、不建立新MR。
+
+### 程式基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_035134_5989e50.zip`。
+- SHA256：`54beca984605fee7618a80098e2a0b0b2a5ee1f0773bfe4d8062609616d0260d`。
+- GPT fresh extract：`/mnt/data/stock_review_20260809_035134`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 使用者本機P2結果
+
+Fixed K=10 OOS維持603個competition days；MR-12B相對MR-12A：NDCG `+0.0290`、Top-K Lift `+0.1601R`、Oracle overlap `+2.60pp`、Boundary `+3.02pp`、Boundary gap `+0.2610R`，broad Top-10 forward-OOS優勢仍成立。
+
+Dynamic-K reference仍為C17：eligible `223`日、common-complete `94`日、day coverage `42.15%`；但common-complete candidate coverage與C17 runtime scored-candidate coverage均為`97.52%`。因此day coverage低不是大量候選缺分，而是少量缺分散落在多個日期造成strict all-candidate complete-day淘汰。
+
+K分布顯示C17 reference path大多數決策是極低K：eligible `K=1:179, K=2:30, K=3:8, K=4:3, K=7:1, K=8:2`，即K=1佔`179/223 = 80.27%`；common-complete中K=1亦佔`71/94 = 75.53%`。
+
+K=1的MR-12B弱勢明確：NDCG `0.4997 vs 0.5883`（B-A `-0.0886`）、Boundary `38.03% vs 57.75%`（`-19.72pp`）、Top-1 raw-target lift `0.0425R vs 0.4903R`（`-0.4478R`）。因K=1時boundary width自動縮成1，Boundary即比較score rank #1與#2的raw target，故`38.03%`代表MR-12B排第一的候選其target高於第二名的比例低於50%。
+
+K=2與K=3的NDCG／Boundary反而偏向MR-12B：K=2 NDCG Δ `+0.0588`、Boundary Δ `+15.38pp`；K=3 NDCG Δ `+0.0089`、Boundary Δ `+4.44pp`。但樣本僅13日與5日，不能作採用結論。K>=4樣本更少，不具判定力。故目前Dynamic-K aggregate B<A主要由K=1主導，不是已證明所有Dynamic-K皆較差。
+
+### 下一個可執行診斷
+
+為區分「MR-12B一般性的Top-1弱點」與「只在C17 reference path／其日期子集出現」，P2新增config-driven Forward-OOS Fixed-K prefix sweep。預設K=`1,2,3,5,10`，全部使用完整paired OOS event-group候選宇宙，只改K；不重訓模型、不strategy replay、不使用selector state。若完整OOS K=1仍B<A，才支持top-prefix objective mismatch假說；若完整OOS K=1為B>=A，則弱點較可能來自C17 path／regime／candidate subset，下一步應做native selector/action attribution而不是改loss。
+
+### 實作
+
+1. `config/breakout_quality.py`新增`BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES`，並由comparison settings驗證正整數、唯一、遞增；值屬使用者config，不由validator硬編唯一合法答案。
+2. `compare_continuous_rankers.py`新增`_evaluate_fixed_k_sweep()`，在同一完整OOS paired frame上逐K呼叫canonical `_evaluate_paired_frame()`；JSON schema升為2，新增`fixed_k_prefix_sweep`，console／Markdown新增Forward-OOS prefix表。
+3. `application.py`短版簡易報表新增最小configured K的OOS NDCG Δ與Boundary Δ，直接讀canonical P2 JSON，不重算第二套指標。
+4. 既有Pairwise synthetic contract加入isolated config override與fixed-K sweep直接行為檢查。
+
+### 科學約束
+
+此prefix sweep只作已查看OOS上的迭代研究歸因，符合`PROJECT_SETTINGS E7`；不得進loss、gradient、epoch selection、normalization、sample weighting或hyperparameter optimization。只有先確認弱點的範圍與selector interaction後，才允許提出新的model experiment。
