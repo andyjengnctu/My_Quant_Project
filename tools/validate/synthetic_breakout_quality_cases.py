@@ -276,9 +276,9 @@ from core.portfolio_exits import _iter_reentry_watch_targets
 from core.strategy_params import V16StrategyParams
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
-from tools.filters.breakout_quality import common as breakout_quality_common
+from filters.breakout_quality import workflow_io as breakout_quality_common
 from tools.filters.breakout_quality import evaluate as breakout_quality_evaluate
-from tools.filters.breakout_quality import export_scores as breakout_quality_export_scores
+from filters.breakout_quality import export_scores as breakout_quality_export_scores
 from tools.filters.breakout_quality import train as breakout_quality_train
 from tools.audit.breakout_quality.continuous_target import (
     _load_round_trip_source,
@@ -8885,9 +8885,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     # Regression: hard-filter comparison has no score-ranking capture audit.
     # The shared console renderer must receive None rather than an unbound local.
     from datetime import date as _date
-    from tools.filters.breakout_quality import (
-        strategy_compare as strategy_compare_module,
-    )
+    from filters.breakout_quality import strategy_compare_engine as strategy_compare_module
 
     with tempfile.TemporaryDirectory() as hard_filter_tmp_dir:
         hard_filter_root = Path(hard_filter_tmp_dir)

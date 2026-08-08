@@ -5018,3 +5018,32 @@ metadata固定標示：`read_only=true`、`portfolio_replay_executed=false`、`t
 全專案獨立靜態檢查另確認282個Python檔AST可解析、`compileall`通過、無bare except、無pass-only except handler、無internal import cycle，且`core/`／`filters/`沒有`tools.audit`反向依賴。新`apps/audit.py`已直接執行`--help`與status smoke；本ZIP未包含`outputs/strategy_compare/latest/manifest.json`，因此正式C15 Audit status正確顯示`BLOCKED`。上述synthetic只證明實作契約，**不是SR-C15正式Audit結果**。
 
 因此`AUD-c15-strategy-attribution`目前仍為`IMPLEMENTED / RESULT_PENDING`。下一步由使用者在含正式`outputs/strategy_compare`工件的專案以`python apps/audit.py`進入正式選單執行Audit，再據此決定是否需要capital-preserving basket selector研究；不得在結果前先建立新的C16或回頭修改MR-12A。
+
+## 2026-08-08 — Project-wide Audit migration formal-regression修正
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / AUD-c15-strategy-attribution RESULT_PENDING`。
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260808_115630_c38367d.zip`
+- SHA256：`360e9acfb464b7f8b14ba86a2fe8983605887bd15a04c3de69c885207781d1f7`
+- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 本機formal結果與根因
+
+使用者回報quick gate只有`dataset_cli::cli.py::--dataset bad`失敗，consistency與meta quality則因`missing_summary_file`失敗。獨立重現確認`tools/validate/cli.py --dataset bad`尚未進入dataset profile validation，就在lazy載入consistency synthetic時碰到Audit migration後未同步的legacy import：`tools.filters.breakout_quality.common`。同一synthetic檔另殘留已刪除的`export_scores`與`strategy_compare`舊入口，因此合法consistency執行也會在建立summary前中止；meta quality後續載入同一synthetic registry亦受影響。
+
+### 修正
+
+1. `tools/validate/synthetic_breakout_quality_cases.py`三個legacy引用改為canonical正式來源：`filters.breakout_quality.workflow_io`、`filters.breakout_quality.export_scores`、`filters.breakout_quality.strategy_compare_engine`；不恢復任何compatibility wrapper。
+2. `tools/validate/cli.py`把`--dataset`值的合法性驗證移至lazy import consistency implementation之前；非法dataset、缺值與空值皆在CLI boundary fail-fast，不再受synthetic/import狀態干擾。
+3. `AUD-c15-strategy-attribution`identity、runtime、模型、策略結果與`IMPLEMENTED / RESULT_PENDING`狀態均未改變；本輪沒有產生新的研究結果。
+
+### 獨立驗證
+
+- `--dataset bad`回傳1並輸出`不支援的資料集模式`；`--dataset`缺值與`--dataset=`空值亦分別以預期訊息fail-fast。
+- `tools.validate.synthetic_cases`完整import成功；所有本輪已刪除Breakout Quality legacy module的AST import引用=0。
+- 全專案282個Python檔AST parse與`compileall`通過；bare except=0、pass-only exception handler=0、internal import cycle=0、`core/filters → tools.audit`=0、legacy wrapper=0。
+- `apps/test_suite.py`僅做靜態可信度檢查，未由GPT執行；formal結果仍須由使用者本機重新執行確認。
