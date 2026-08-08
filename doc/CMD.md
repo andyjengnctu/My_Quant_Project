@@ -236,7 +236,7 @@ python apps/strategy_compare.py
 
 先選`[2] 查看設定、工件與預計動作`，再選`[1/Enter] 執行目前比較設定`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
 
-目前策略研究比較聚焦`C3 Min ROOS`、`C15 Min ROOS: All-event Continuous resource-aware`與`C16 Min ROOS: All-event Continuous capital-preserving`。C15保留既有cash-binding-only selector作同source runtime comparator；C16固定同一`DL-CONT12A / MR-12A` frozen OOS score與Min ROOS參數，只改盤前allocation feasibility：先以Min ROOS原順序和正式cash-capped sizing建立baseline，cash或slot-binding日都可評估continuous score，但任何接受basket的預計選入數與exact reserved capital都不得低於Min ROOS baseline。C16不設score threshold、不加Min ROOS／DL混合權重、不使用Future Target；若完整score order違反resource floor，才改用符合相同雙floor的best-improvement promotions。若MR-12A model／manifest／report／OOS score缺失或identity/hash不一致，正式策略比較顯示`BLOCKED`而不得自動訓練模型。正式比較設定只重跑C3／C15／C16，核心contrast為C16-C15與C16-C3；C12/C14保留歷史對照但目前disabled。
+目前策略研究比較聚焦`C3 Min ROOS`、`C16 Min ROOS: All-event Continuous capital-preserving`與`C17 Min ROOS: All-event Continuous max-DL constrained basket`。C16保留既有capital-preserving heuristic作同source selector comparator；C17固定相同`DL-CONT12A / MR-12A` frozen OOS score與Min ROOS參數，Min ROOS只提供每日K筆預留單數與exact reserved-capital floor，stock membership先由DL score Top-K決定，不合法時才作deterministic minimum-repair；basket內執行順序仍沿用Min ROOS rank，且正式action只允許K筆盤前預留單。C17不設score threshold、不加Min ROOS／DL混合權重、不使用Future Target。若MR-12A model／manifest／report／OOS score缺失或identity/hash不一致，正式策略比較顯示`BLOCKED`而不得自動訓練模型。正式比較設定只重跑C3／C16／C17，核心contrast為C17-C16與C17-C3；C12/C14/C15保留歷史對照但目前disabled。
 
 低階研究如需直接檢查canonical engine，可執行`python -m filters.breakout_quality.strategy_compare_engine --help`；正式比較仍一律使用`apps/strategy_compare.py`。
 

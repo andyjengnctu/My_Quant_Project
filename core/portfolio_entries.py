@@ -5,6 +5,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES,
     resolve_breakout_quality_ranking_policy,
 )
@@ -275,6 +276,11 @@ def _resource_aware_default_diag(rows, free_slots, *, selector):
         'resource_preservation_required': False,
         'selected_count_preserved': True,
         'reserved_capital_preserved': True,
+        'pre_market_order_limit': None,
+        'max_dl_eligible': False,
+        'max_dl_repair_steps': 0,
+        'max_dl_repair_evaluations': 0,
+        'max_dl_fallback_to_baseline': False,
     }
 
 
@@ -850,6 +856,363 @@ def _reorder_resource_aware_continuous_capital_preserving(
         raise RuntimeError('capital-preserving Continuous輸出違反Min ROOS資源契約')
     return current_order, diag
 
+
+def _max_dl_score_order(rows, *, base_rank):
+    """Rank candidate membership only by frozen DL score, then original deterministic rank."""
+
+    return sorted(
+        list(rows or []),
+        key=lambda row: (
+            0 if _candidate_continuous_score(row) is not None else 1,
+            -(
+                float(_candidate_continuous_score(row))
+                if _candidate_continuous_score(row) is not None
+                else 0.0
+            ),
+            base_rank[id(row)],
+        ),
+    )
+
+
+def _max_dl_execution_order(rows, *, base_rank):
+    """Keep canonical Min ROOS priority inside an already chosen DL basket."""
+
+    return sorted(list(rows or []), key=lambda row: base_rank[id(row)])
+
+
+def _max_dl_basket_quality_key(rows, *, base_rank):
+    """Higher is better; score coverage comes before score sum, with deterministic ties."""
+
+    basket = list(rows or [])
+    scores = [
+        float(score)
+        for row in basket
+        if (score := _candidate_continuous_score(row)) is not None
+    ]
+    sorted_scores = tuple(sorted(scores, reverse=True))
+    stable_base_ranks = tuple(
+        -base_rank[id(row)]
+        for row in sorted(basket, key=lambda item: base_rank[id(item)])
+    )
+    return (
+        int(len(scores)),
+        float(sum(scores)),
+        sorted_scores,
+        stable_base_ranks,
+    )
+
+
+def _max_dl_resource_deficit(result, *, target_count, reserve_floor_milli):
+    """Lexicographic hard-constraint deficit: planned order count first, then reserve floor."""
+
+    return (
+        max(0, int(target_count) - int(result['selected_count'])),
+        max(0, int(reserve_floor_milli) - int(result['reserved_cost_milli'])),
+    )
+
+
+def _max_dl_basket_is_feasible(result, *, target_count, reserve_floor_milli):
+    return bool(
+        int(result['selected_count']) == int(target_count)
+        and int(result['reserved_cost_milli']) >= int(reserve_floor_milli)
+    )
+
+
+def _reorder_resource_aware_continuous_max_dl(
+    rows,
+    *,
+    available_cash,
+    sizing_equity,
+    free_slots,
+    params,
+    baseline,
+    default_diag,
+):
+    """Let frozen DL own stock choice; Min ROOS supplies only exact pre-market resource floors.
+
+    The baseline fixes K (planned order count) and R0 (exact reserved capital).  The
+    unconstrained DL Top-K basket is tried first.  Basket membership is owned by DL,
+    while the execution order inside a chosen basket stays on the canonical Min ROOS
+    rank so stock selection is not mixed with a second allocation-priority change.
+    If Top-K violates K/R0, deterministic minimum-repair replaces original Top-K
+    members one at a time.  Every trial uses the canonical cash-capped reservation
+    simulator.  No score threshold, blend
+    weight, utilization ratio, future fill data, or OOS-tuned numeric tolerance is
+    introduced.
+    """
+
+    target_count = int(baseline['selected_count'])
+    reserve_floor_milli = int(baseline['reserved_cost_milli'])
+    diag = _resource_aware_diag_from_result(
+        default_diag,
+        baseline,
+        baseline,
+        changed=False,
+        promoted_pass_count=0,
+        selector='continuous-score-max-dl',
+    )
+    diag.update({
+        'resource_preservation_required': True,
+        'pre_market_order_limit': int(target_count),
+        'max_dl_eligible': False,
+        'max_dl_repair_steps': 0,
+        'max_dl_repair_evaluations': 0,
+        'max_dl_fallback_to_baseline': False,
+    })
+
+    if target_count <= 0 or len(rows) <= target_count:
+        diag['mode'] = 'capital-utilization'
+        return list(rows), diag
+
+    score_available = any(_candidate_continuous_score(row) is not None for row in rows)
+    if not score_available:
+        diag['mode'] = 'capital-utilization'
+        return list(rows), diag
+
+    diag['mode'] = 'dl-selection'
+    diag['max_dl_eligible'] = True
+    base_rank = {id(row): idx for idx, row in enumerate(rows)}
+    dl_order = _max_dl_score_order(rows, base_rank=base_rank)
+    pure_basket = list(dl_order[:target_count])
+    pure_ids = {id(row) for row in pure_basket}
+
+    def evaluate_basket(basket):
+        ordered_basket = _max_dl_execution_order(basket, base_rank=base_rank)
+        result = _simulate_reserved_candidate_order(
+            ordered_basket,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=target_count,
+            params=params,
+        )
+        return ordered_basket, result
+
+    pure_ordered, pure_result = evaluate_basket(pure_basket)
+    evaluated = 1
+    feasible_count = int(
+        _max_dl_basket_is_feasible(
+            pure_result,
+            target_count=target_count,
+            reserve_floor_milli=reserve_floor_milli,
+        )
+    )
+    direct_feasible = bool(feasible_count)
+    baseline_selected_ids = {id(row) for row in baseline['selected_rows']}
+
+    def final_order_for_basket(basket):
+        basket_order = _max_dl_execution_order(basket, base_rank=base_rank)
+        basket_ids = {id(row) for row in basket_order}
+        return basket_order + [row for row in rows if id(row) not in basket_ids]
+
+    def finalize(
+        basket,
+        result,
+        *,
+        selector,
+        repair_steps,
+        fallback,
+        preserve_basket_order=False,
+    ):
+        if preserve_basket_order:
+            basket_order = list(basket)
+            basket_ids = {id(row) for row in basket_order}
+            final_order = basket_order + [
+                row for row in rows if id(row) not in basket_ids
+            ]
+        else:
+            final_order = final_order_for_basket(basket)
+        promoted_count = sum(
+            1 for row in result['selected_rows'] if id(row) not in baseline_selected_ids
+        )
+        selected_ids = {id(row) for row in result['selected_rows']}
+        out = _resource_aware_diag_from_result(
+            default_diag,
+            baseline,
+            result,
+            changed=bool(selected_ids != baseline_selected_ids),
+            promoted_pass_count=0,
+            selector=selector,
+        )
+        out.update({
+            'mode': 'dl-selection',
+            'promoted_score_orders': int(promoted_count),
+            'direct_score_order_feasible': bool(direct_feasible),
+            'basket_search_states': int(evaluated),
+            'basket_feasible_count': int(feasible_count),
+            'resource_preservation_required': True,
+            'pre_market_order_limit': int(target_count),
+            'max_dl_eligible': True,
+            'max_dl_repair_steps': int(repair_steps),
+            'max_dl_repair_evaluations': int(max(0, evaluated - 1)),
+            'max_dl_fallback_to_baseline': bool(fallback),
+        })
+        if int(result['selected_count']) != target_count:
+            raise RuntimeError('max-DL Continuous輸出未維持Min ROOS預留單數')
+        if int(result['reserved_cost_milli']) < reserve_floor_milli:
+            raise RuntimeError('max-DL Continuous輸出低於Min ROOS reserved-capital floor')
+        return final_order, out
+
+    if direct_feasible:
+        return finalize(
+            pure_ordered,
+            pure_result,
+            selector='continuous-score-max-dl-direct',
+            repair_steps=0,
+            fallback=False,
+        )
+
+    current_basket = list(pure_basket)
+    current_result = pure_result
+    current_deficit = _max_dl_resource_deficit(
+        current_result,
+        target_count=target_count,
+        reserve_floor_milli=reserve_floor_milli,
+    )
+    repaired_out_ids = set()
+    repaired_in_ids = set()
+
+    for repair_step in range(1, target_count + 1):
+        current_ids = {id(row) for row in current_basket}
+        out_rows = [
+            row
+            for row in pure_basket
+            if id(row) in current_ids and id(row) not in repaired_out_ids
+        ]
+        in_rows = [
+            row
+            for row in dl_order[target_count:]
+            if id(row) not in current_ids and id(row) not in repaired_in_ids
+        ]
+        if not out_rows or not in_rows:
+            break
+
+        best_progress = None
+        best_progress_quality = None
+        best_progress_tie = None
+        best_feasible = None
+        best_feasible_quality = None
+        best_feasible_tie = None
+
+        for out_row in out_rows:
+            for in_row in in_rows:
+                trial_basket = [
+                    row for row in current_basket if id(row) != id(out_row)
+                ] + [in_row]
+                trial_ordered, trial_result = evaluate_basket(trial_basket)
+                evaluated += 1
+                trial_deficit = _max_dl_resource_deficit(
+                    trial_result,
+                    target_count=target_count,
+                    reserve_floor_milli=reserve_floor_milli,
+                )
+                if trial_deficit >= current_deficit:
+                    continue
+
+                quality_key = _max_dl_basket_quality_key(
+                    trial_ordered, base_rank=base_rank
+                )
+                tie_key = (
+                    -base_rank[id(out_row)],
+                    -base_rank[id(in_row)],
+                )
+                if _max_dl_basket_is_feasible(
+                    trial_result,
+                    target_count=target_count,
+                    reserve_floor_milli=reserve_floor_milli,
+                ):
+                    feasible_count += 1
+                    if (
+                        best_feasible_quality is None
+                        or quality_key > best_feasible_quality
+                        or (
+                            quality_key == best_feasible_quality
+                            and tie_key > best_feasible_tie
+                        )
+                    ):
+                        best_feasible_quality = quality_key
+                        best_feasible_tie = tie_key
+                        best_feasible = (
+                            out_row,
+                            in_row,
+                            trial_ordered,
+                            trial_result,
+                        )
+
+                if (
+                    best_progress_quality is None
+                    or quality_key > best_progress_quality
+                    or (
+                        quality_key == best_progress_quality
+                        and tie_key > best_progress_tie
+                    )
+                ):
+                    best_progress_quality = quality_key
+                    best_progress_tie = tie_key
+                    best_progress = (
+                        out_row,
+                        in_row,
+                        trial_ordered,
+                        trial_result,
+                        trial_deficit,
+                    )
+
+        if best_feasible is not None:
+            out_row, in_row, trial_ordered, trial_result = best_feasible
+            repaired_out_ids.add(id(out_row))
+            repaired_in_ids.add(id(in_row))
+            return finalize(
+                trial_ordered,
+                trial_result,
+                selector='continuous-score-max-dl-minimum-repair',
+                repair_steps=repair_step,
+                fallback=False,
+            )
+
+        if best_progress is None:
+            break
+
+        out_row, in_row, current_basket, current_result, current_deficit = best_progress
+        repaired_out_ids.add(id(out_row))
+        repaired_in_ids.add(id(in_row))
+
+    baseline_basket = list(baseline['selected_rows'])
+    baseline_ordered = list(baseline_basket)
+    baseline_result = _simulate_reserved_candidate_order(
+        baseline_ordered,
+        available_cash=available_cash,
+        sizing_equity=sizing_equity,
+        free_slots=target_count,
+        params=params,
+    )
+    if not _max_dl_basket_is_feasible(
+        baseline_result,
+        target_count=target_count,
+        reserve_floor_milli=reserve_floor_milli,
+    ):
+        raise RuntimeError('max-DL Continuous無法重建Min ROOS baseline resource floor')
+    return finalize(
+        baseline_ordered,
+        baseline_result,
+        selector='continuous-score-max-dl-baseline-fallback',
+        repair_steps=len(repaired_out_ids),
+        fallback=True,
+        preserve_basket_order=True,
+    )
+
+
+def select_resource_aware_action_candidates(orderable_candidates_today, resource_selection_diag):
+    """Return the candidates that may create pre-market orders, preserving full diagnostics input."""
+
+    rows = list(orderable_candidates_today or [])
+    raw_limit = (resource_selection_diag or {}).get('pre_market_order_limit')
+    if raw_limit is None:
+        return rows
+    limit = int(raw_limit)
+    if limit < 0:
+        raise ValueError('pre_market_order_limit不得小於0')
+    return rows[:limit]
+
+
 def reorder_candidates_for_resource_aware_quality(
     orderable_candidates_today,
     *,
@@ -866,7 +1229,9 @@ def reorder_candidates_for_resource_aware_quality(
     continuous variant uses frozen event-level quality scores on those same days.
     The capital-preserving continuous variant may also act on slot-binding days,
     but it must preserve Min ROOS selected-count and exact reserved capital.
-    No selector introduces a numeric utilization threshold.
+    The max-DL variant fixes the Min ROOS planned-order count and reserved-capital
+    floor, then lets frozen DL score own stock choice subject only to those hard
+    resource constraints.  No selector introduces a numeric utilization threshold.
     """
 
     rows = list(orderable_candidates_today or [])
@@ -875,6 +1240,8 @@ def reorder_candidates_for_resource_aware_quality(
     selector = (
         'best-improvement-basket'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+        else 'continuous-score-max-dl'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
         else 'continuous-score-capital-preserving'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
         else 'continuous-score-constrained'
@@ -892,6 +1259,16 @@ def reorder_candidates_for_resource_aware_quality(
         free_slots=free_slots,
         params=params,
     )
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL:
+        return _reorder_resource_aware_continuous_max_dl(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+        )
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING:
         return _reorder_resource_aware_continuous_capital_preserving(
             rows,

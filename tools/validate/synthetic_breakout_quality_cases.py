@@ -4,6 +4,7 @@ from contextlib import redirect_stdout
 from dataclasses import replace
 import ast
 import io
+import itertools
 import json
 import math
 import os
@@ -16074,7 +16075,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16"}.issubset(set(settings.arms))
+        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17"}.issubset(set(settings.arms))
         and all(arm.enabled for arm in settings.enabled_arms)
         and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
         and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
@@ -16117,6 +16118,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "C14": "Min ROOS: Continuous resource-aware",
         "C15": "Min ROOS: All-event Continuous resource-aware",
         "C16": "Min ROOS: All-event Continuous capital-preserving",
+        "C17": "Min ROOS: All-event Continuous max-DL constrained basket",
     }
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -16129,6 +16131,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     from core.portfolio_entries import (
         _simulate_reserved_candidate_order,
         reorder_candidates_for_resource_aware_quality,
+        select_resource_aware_action_candidates,
     )
     from core.strategy_params import V16StrategyParams
     from core.trade_plans import build_normal_candidate_plan
@@ -16478,6 +16481,134 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == capital_preserving_reject_diag["baseline_reserved_cost_milli"]
         and [row["ticker"] for row in capital_preserving_reject_order]
         == ["R1", "Q1"],
+    )
+
+    max_dl_seed = (
+        ("T0", 300.0, 259, 0.791),
+        ("T1", 100.0, 121, 0.522),
+        ("T2", 1000.0, 303, 0.557),
+        ("T3", 300.0, 296, 0.105),
+        ("T4", 300.0, 155, 0.893),
+        ("T5", 300.0, 87, 0.272),
+        ("T6", 1000.0, 164, 0.203),
+    )
+    max_dl_rows = [
+        _resource_candidate_fixed(
+            ticker,
+            price,
+            qty,
+            score,
+            "resource-aware-continuous-max-dl",
+        )
+        for ticker, price, qty, score in max_dl_seed
+    ]
+    max_dl_baseline = _simulate_reserved_candidate_order(
+        max_dl_rows,
+        available_cash=500_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=3,
+        params=resource_params,
+    )
+    max_dl_order, max_dl_diag = reorder_candidates_for_resource_aware_quality(
+        max_dl_rows,
+        available_cash=500_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=7,
+        max_positions=10,
+        params=resource_params,
+    )
+    max_dl_action_rows = select_resource_aware_action_candidates(
+        max_dl_order,
+        max_dl_diag,
+    )
+    max_dl_selected = _simulate_reserved_candidate_order(
+        max_dl_action_rows,
+        available_cash=500_000.0,
+        sizing_equity=2_000_000.0,
+        free_slots=3,
+        params=resource_params,
+    )
+    max_dl_base_rank = {id(row): idx for idx, row in enumerate(max_dl_rows)}
+    max_dl_oracle = None
+    for combo in itertools.combinations(max_dl_rows, 3):
+        execution_order = sorted(combo, key=lambda row: max_dl_base_rank[id(row)])
+        trial = _simulate_reserved_candidate_order(
+            execution_order,
+            available_cash=500_000.0,
+            sizing_equity=2_000_000.0,
+            free_slots=3,
+            params=resource_params,
+        )
+        if (
+            trial["selected_count"] != max_dl_baseline["selected_count"]
+            or trial["reserved_cost_milli"] < max_dl_baseline["reserved_cost_milli"]
+        ):
+            continue
+        score_sum = sum(float(row["breakout_quality_score"]) for row in combo)
+        oracle_key = (
+            score_sum,
+            tuple(-max_dl_base_rank[id(row)] for row in execution_order),
+        )
+        if max_dl_oracle is None or oracle_key > max_dl_oracle[0]:
+            max_dl_oracle = (
+                oracle_key,
+                [row["ticker"] for row in execution_order],
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_constrained_basket_uses_fixed_min_roos_k_and_exact_reserve_floor_with_oracle_matched_minimum_repair",
+        True,
+        max_dl_oracle is not None
+        and max_dl_diag["mode"] == "dl-selection"
+        and max_dl_diag["max_dl_eligible"]
+        and max_dl_diag["max_dl_repair_steps"] == 1
+        and not max_dl_diag["max_dl_fallback_to_baseline"]
+        and max_dl_diag["pre_market_order_limit"]
+        == max_dl_baseline["selected_count"]
+        and len(max_dl_order) == len(max_dl_rows)
+        and len(max_dl_action_rows) == max_dl_baseline["selected_count"]
+        and max_dl_selected["selected_count"] == max_dl_baseline["selected_count"]
+        and max_dl_selected["reserved_cost_milli"]
+        >= max_dl_baseline["reserved_cost_milli"]
+        and [row["ticker"] for row in max_dl_action_rows] == max_dl_oracle[1]
+        and [row["ticker"] for row in max_dl_action_rows] == ["T0", "T2", "T6"],
+    )
+
+    max_dl_direct_rows = [
+        _resource_candidate_fixed(
+            "D0", 1000.0, 120, 0.20,
+            "resource-aware-continuous-max-dl",
+        ),
+        _resource_candidate_fixed(
+            "D1", 1000.0, 120, 0.95,
+            "resource-aware-continuous-max-dl",
+        ),
+        _resource_candidate_fixed(
+            "D2", 1000.0, 120, 0.90,
+            "resource-aware-continuous-max-dl",
+        ),
+    ]
+    max_dl_direct_order, max_dl_direct_diag = reorder_candidates_for_resource_aware_quality(
+        max_dl_direct_rows,
+        available_cash=250_000.0,
+        sizing_equity=2_000_000.0,
+        pre_market_occupied=8,
+        max_positions=10,
+        params=resource_params,
+    )
+    max_dl_direct_action = select_resource_aware_action_candidates(
+        max_dl_direct_order,
+        max_dl_direct_diag,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_constrained_basket_keeps_full_orderable_universe_but_only_action_prefix_can_create_orders",
+        True,
+        max_dl_direct_diag["direct_score_order_feasible"]
+        and max_dl_direct_diag["pre_market_order_limit"] == 2
+        and len(max_dl_direct_order) == 3
+        and len(max_dl_direct_action) == 2
+        and {row["ticker"] for row in max_dl_direct_action} == {"D1", "D2"},
     )
 
     mocked_pair_payload = {

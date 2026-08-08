@@ -5364,3 +5364,34 @@ Daily capacity新增：`Resource_Aware_Preservation_Required`、`Resource_Aware_
 ### 下一步
 
 使用正式`apps/strategy_compare.py`選單執行目前設定。結果取得前`SR-C16`只能標記`IMPLEMENTED / RESULT_PENDING`；不得依2021+ OOS結果回頭調resource tolerance、score threshold或其他numeric gate。正式報表先驗證resource-preservation violation days=`0`，再比較C16-C15與C16-C3的Return／MDD／RoMD／EV、exposure、selected-count delta、reserved-capital delta與DL selection coverage。
+
+
+## 2026-08-08 — SR-C16正式結果＋SR-C17 Max-DL constrained basket實作
+
+### SR-C16 RESULT_AVAILABLE
+
+程式／回放工件由使用者本地正式`apps/strategy_compare.py`產生；期間`2021-01-01 ～ 2025-12-22`，固定`PARAM-P2 / Min ROOS`、`DL-CONT12A / MR-12A`、all-off rules、max positions=10、rotation=off。
+
+主要結果：C16 Return=175.15%、MDD=15.86%、RoMD=11.05、Annual Return=22.60%、Log R²=0.8773、月勝率=63.33%、EV=0.48R、Exposure=91.83%。相對C15：Return +6.46pp、MDD +1.04pp、RoMD -0.34、Annual Return +0.59pp、EV -0.15R、Exposure +0.11pp；相對C3：Return +18.81pp、MDD +0.45pp、RoMD +0.90、EV -0.17R。
+
+資源契約：DL-selection days=270、selector changed days=179、相對Min ROOS預計選入單數差=+70、reserved-capital delta=+1,361,933、resource-preservation violation days=0。結論為`RESOURCE_CONTRACT_PASSED / NOT_PROMOTED`：C16證明可大幅提高DL介入率且不降低盤前selected-count／reserved-capital floor，但風險品質與EV相對C15退步，不把最高Return直接視為selector最終解。
+
+### SR-C17 IMPLEMENTED
+
+程式基準：`test-branch-1_20260808_134906_908f3b4(1).zip`，SHA256 `703650d1947d8b619d4e4739ebf35049a852bed1872a7eb7f93fa10cb920c5e0`。
+
+唯一變更為selector；Dataset、Label、MR-12A模型權重、continuous OOS scores、策略參數、sizing、accounting、execution、max positions與rotation均不變，不重建Dataset／Label、不重新訓練模型。
+
+SR-C17每日先以Min ROOS exact reservation建立：
+- `K = baseline selected_count`
+- `R0 = baseline reserved_cost`
+
+之後basket membership的唯一objective為frozen MR-12A continuous score。先取純DL Top-K；若以正式cash-capped reservation檢查後不滿足`selected_count == K`或`reserved_cost >= R0`，才從原Top-K做deterministic minimum-repair：每一步只替換一個尚未替換的Top-K成員，所有可能single-swap均以正式exact reservation重算；只接受hard-resource deficit嚴格改善的trial，並在可改善trial中保留DL quality最高者，最多K步。若仍無法取得合法basket，回退同日Min ROOS baseline basket。
+
+為避免「DL選誰」與「DL決定誰先吃資金」混為同一研究變數，basket membership由DL score決定，但已選basket內的盤前執行順序固定沿用原Min ROOS rank。Runtime保留完整orderable-candidate universe供候選統計／diagnostics，只有action prefix限制為K筆，避免第K+1候選在正式reservation繼續建立掛單。
+
+時間複雜度：純Top-K排序`O(N log N)`；repair最多K輪，每輪評估至多`K(N-K)`個single swaps，每個trial exact simulation最多K筆，故worst-case約`O(N log N + K^3 N)`；本專案`K<=10`時屬小常數乘線性候選規模。此快速selector不宣稱組合數學全域最優；小N exhaustive oracle只作工程驗證，不回流策略參數。
+
+GPT獨立小型oracle驗證（非正式策略績效）：995個可行random small-N cases中resource violations=0，快速selector與exhaustive global best basket一致990例（99.50%）；12例回退Min ROOS。此數據只驗證approximation行為與硬契約，不作SR-C17績效採用證據。正式策略結果仍為`RESULT_PENDING`。
+
+正式比較設定收斂為`C3 / C16 / C17`，只開`C17-C16`與`C17-C3`。取得forward-OOS結果後可判斷max-DL selector是否值得凍結；不得依該結果新增repair tolerance、blend、score cutoff或capital/DL比例。

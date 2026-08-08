@@ -349,7 +349,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous",
     },
     "C15": {
-        "enabled": True,
+        "enabled": False,
         "name": "Min ROOS: All-event Continuous resource-aware",
         "description": "Min ROOS先維持資本利用；只有cash-binding的DL Selection Mode才使用MR-12A all-event frozen OOS continuous score排序",
         "param_source": "min_roos",
@@ -371,6 +371,20 @@ STRATEGY_COMPARE_ARMS = {
         "dl_id": "CONT12A",
         "dl_runtime_mode": "resource-aware-continuous-capital-preserving",
     },
+    "C17": {
+        "enabled": True,
+        "name": "Min ROOS: All-event Continuous max-DL constrained basket",
+        "description": (
+            "Min ROOS只固定每日預留單數K與exact reserved-capital floor；"
+            "MR-12A frozen score先取純DL Top-K，不合法時只做deterministic minimum-repair，"
+            "最後只允許K筆盤前預留單"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12A",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl",
+    },
 }
 
 # =============================================================================
@@ -385,8 +399,10 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C14-C12": {"enabled": False, "left": "C14", "right": "C12", "description": "MR-11G Continuous resource-aware相對A9 max-PASS resource-aware效果"},
     "C15-C3": {"enabled": False, "left": "C15", "right": "C3", "description": "Capital-utilization first下MR-12A all-event continuous排序效果"},
     "C15-C12": {"enabled": False, "left": "C15", "right": "C12", "description": "All-event continuous resource-aware相對A9 max-PASS resource-aware效果"},
-    "C16-C15": {"enabled": True, "left": "C16", "right": "C15", "description": "同一MR-12A source下capital-preserving selector相對C15 cash-binding selector的純runtime效果"},
-    "C16-C3": {"enabled": True, "left": "C16", "right": "C3", "description": "Capital-preserving MR-12A selector相對Min ROOS正式研究基準"},
+    "C16-C15": {"enabled": False, "left": "C16", "right": "C15", "description": "同一MR-12A source下capital-preserving selector相對C15 cash-binding selector的純runtime效果"},
+    "C16-C3": {"enabled": False, "left": "C16", "right": "C3", "description": "Capital-preserving MR-12A selector相對Min ROOS正式研究基準"},
+    "C17-C16": {"enabled": True, "left": "C17", "right": "C16", "description": "同一MR-12A source下max-DL constrained basket相對C16 capital-preserving heuristic的純selector效果"},
+    "C17-C3": {"enabled": True, "left": "C17", "right": "C3", "description": "Max-DL constrained basket在固定Min ROOS資源底線下相對正式研究基準"},
     "C12-C11": {"enabled": False, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
     "C11-C8": {"enabled": False, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
     "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},

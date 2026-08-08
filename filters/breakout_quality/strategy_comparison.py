@@ -18,6 +18,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
@@ -44,6 +45,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
@@ -274,11 +276,14 @@ def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     }:
         return {
             "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
             "ranking_policy": (
-                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
                 else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS
@@ -630,6 +635,7 @@ def _resource_aware_table(
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
         }:
             continue
         payload = scenarios[arm.arm_id]
@@ -647,6 +653,10 @@ def _resource_aware_table(
             _fmt(payload.get("resource_aware_selected_count_delta"), digits=0),
             _fmt_money_milli(payload.get("resource_aware_reserved_delta_milli")),
             _fmt(payload.get("resource_aware_preservation_violation_days"), digits=0),
+            _fmt(payload.get("resource_aware_max_dl_eligible_days"), digits=0),
+            _fmt(payload.get("resource_aware_max_dl_repair_days"), digits=0),
+            _fmt(payload.get("resource_aware_max_dl_fallback_days"), digits=0),
+            _fmt(payload.get("resource_aware_max_dl_order_count_violation_days"), digits=0),
         ))
     if not rows:
         return "本次沒有啟用Resource-aware arm。"
@@ -665,6 +675,10 @@ def _resource_aware_table(
             "預計選入差",
             "總預留資金增量",
             "資源保護違規日",
+            "Max-DL可介入日",
+            "Max-DL修復日",
+            "Max-DL回退日",
+            "Max-DL K違規日",
         ),
         rows,
     )
@@ -760,8 +774,9 @@ def _render_report(
                 "param_source與rule_policy皆相同的arms之間比較；跨參數contrast固定顯示-。"
                 "比較流程不建立Label、不選模型也不訓練模型權重；可依config透過正式"
                 "共用服務補建既有模型的forward-OOS scores與比較所需策略參數工件。"
-                "Resource-aware只在盤前cash先成瓶頸時介入，且不得新增資金利用Threshold；"
-                "Binary arm看PASS資源配置，Continuous arm看selected score改善；兩者都必須同時檢查"
+                "Resource-aware Binary與舊Continuous沿用各自資源Gate；Max-DL Continuous則以Min ROOS"
+                "預留單數與reserved-capital floor作硬限制，合法範圍內只最大化frozen DL score；"
+                "不得新增資金利用Threshold。Binary arm看PASS資源配置，Continuous arm看selected score改善；各者都必須同時檢查"
                 "總曝險、預留資金與策略績效，不能只看模型分數。"
             ),
         )

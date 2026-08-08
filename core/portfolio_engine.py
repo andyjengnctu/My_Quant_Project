@@ -48,6 +48,7 @@ from core.portfolio_ops import (
     closeout_open_positions,
     execute_reserved_entries_for_day,
     reorder_candidates_for_resource_aware_quality,
+    select_resource_aware_action_candidates,
     settle_portfolio_positions,
     try_rotate_weakest_position,
 )
@@ -1080,6 +1081,7 @@ def run_portfolio_timeline(
         daily_missed_buy_count_before = int(total_missed_buys)
         candidate_sources_today = False
         orderable_candidates_today = []
+        resource_action_candidates_today = []
         resource_selection_diag = {
             'enabled': False,
             'mode': 'inactive',
@@ -1101,6 +1103,11 @@ def run_portfolio_timeline(
             'selected_score_mean': None,
             'promoted_score_orders': 0,
             'direct_score_order_feasible': False,
+            'pre_market_order_limit': None,
+            'max_dl_eligible': False,
+            'max_dl_repair_steps': 0,
+            'max_dl_repair_evaluations': 0,
+            'max_dl_fallback_to_baseline': False,
         }
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         if use_param_ensemble:
@@ -1272,6 +1279,10 @@ def run_portfolio_timeline(
                     max_positions=max_positions,
                     params=day_params,
                 )
+                resource_action_candidates_today = select_resource_aware_action_candidates(
+                    orderable_candidates_today,
+                    resource_selection_diag,
+                )
 
                 qualified_candidate_snapshots_today = []
                 orderable_candidate_snapshots_today = []
@@ -1331,14 +1342,14 @@ def run_portfolio_timeline(
                             )
                         )
 
-                if orderable_candidates_today:
+                if resource_action_candidates_today:
                     t0 = time.perf_counter() if profile_timing_enabled else None
                     cash, normal_trade_count, extended_trade_count = _run_portfolio_replay_phase(
                         today,
                         "rotate_weakest_position",
                         try_rotate_weakest_position,
                         portfolio=portfolio,
-                        orderable_candidates_today=orderable_candidates_today,
+                        orderable_candidates_today=resource_action_candidates_today,
                         max_positions=max_positions,
                         enable_rotation=enable_rotation,
                         sold_today=sold_today,
@@ -1385,7 +1396,7 @@ def run_portfolio_timeline(
 
             can_try_entries_today = (
                 (not no_entry_capacity_today)
-                and bool(orderable_candidates_today)
+                and bool(resource_action_candidates_today)
                 and (len(portfolio) + len(sold_today)) < int(max_positions)
             )
             if can_try_entries_today:
@@ -1396,7 +1407,7 @@ def run_portfolio_timeline(
                     execute_reserved_entries_for_day,
                     portfolio=portfolio,
                     active_extended_signals=active_extended_signals,
-                    orderable_candidates_today=orderable_candidates_today,
+                    orderable_candidates_today=resource_action_candidates_today,
                     sold_today=sold_today,
                     all_dfs_fast=day_all_dfs_fast,
                     today=today,
@@ -1500,6 +1511,11 @@ def run_portfolio_timeline(
                 'Resource_Aware_Preservation_Required': bool(resource_selection_diag.get('resource_preservation_required', False)),
                 'Resource_Aware_Selected_Count_Preserved': bool(resource_selection_diag.get('selected_count_preserved', True)),
                 'Resource_Aware_Reserved_Capital_Preserved': bool(resource_selection_diag.get('reserved_capital_preserved', True)),
+                'Resource_Aware_Pre_Market_Order_Limit': resource_selection_diag.get('pre_market_order_limit'),
+                'Resource_Aware_Max_DL_Eligible': bool(resource_selection_diag.get('max_dl_eligible', False)),
+                'Resource_Aware_Max_DL_Repair_Steps': int(resource_selection_diag.get('max_dl_repair_steps', 0) or 0),
+                'Resource_Aware_Max_DL_Repair_Evaluations': int(resource_selection_diag.get('max_dl_repair_evaluations', 0) or 0),
+                'Resource_Aware_Max_DL_Fallback': bool(resource_selection_diag.get('max_dl_fallback_to_baseline', False)),
             })
 
         current_equity = today_equity
