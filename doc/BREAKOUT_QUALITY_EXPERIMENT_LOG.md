@@ -5104,3 +5104,35 @@ Audit migration後，production imports已改到`tools/audit/`，但`tools/valid
 ### 研究狀態
 
 `MR-12A`、`DL-CONT12A`、`SR-C15`與`AUD-c15-strategy-attribution`的identity／策略結果／研究判定均不變；`AUD-c15-strategy-attribution`仍為`IMPLEMENTED / RESULT_PENDING`。本輪只修formal validation migration regression，不新增C16、不訓練模型、不修改Target或runtime selector。
+
+## 2026-08-08 — Formal synthetic metadata／Workbench documentation同步修正
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / AUD-c15-strategy-attribution RESULT_PENDING`。
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260808_122638_d04e5a1.zip`
+- SHA256：`7cdc074ea0f577d5ec8f71450a87cb9f45675fe55816775056bf3bc0db0d4507`
+- Formal bundle：`to_chatgpt_bundle_20260808_122824_661b56ee.zip`
+- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 使用者本機formal結果
+
+- quick gate：PASS。
+- consistency：FAIL 2；真實股票FAIL=0，兩個FAIL皆為synthetic/meta contract。
+- chain checks：PASS。
+- ml smoke：PASS。
+- meta quality：只剩`coverage_synthetic_suite_runs_successfully` FAIL；line=`79.32%`、branch=`61.44%`與key targets皆已通過。
+
+`coverage_run_info.json`顯示coverage synthetic已完整執行247個case，但`synthetic_fail_count=2`，與consistency兩個meta FAIL完全一致。因此本輪不修改coverage threshold或production runtime。
+
+### 根因與修正
+
+1. `META_GUI_WORKBENCH_DOCUMENTATION_SYNC`：Workbench實作與`doc/CMD.md`均已明確使用`交易明細`、`Console`兩個獨立tab；`doc/ARCHITECTURE.md`的`tools/workbench_ui`段亦已有相同描述，但`正式入口`的`apps/workbench.py`列未同步，造成跨文件契約FAIL。修正為在正式入口列明確補上`K 線檢視中的交易明細與 Console 改以獨立分頁承接`；不放寬validator。
+2. `META_SYNTHETIC_REGISTRY_METADATA`：`validate_breakout_quality_binary_dl_param_adaptation_contract_case`的`impacted_modules`將canonical `filters/breakout_quality/strategy_param_training.py`重複登記兩次。只移除重複metadata entry，不改validator與production code。
+
+### 研究狀態
+
+`MR-12A`、`DL-CONT12A`、`SR-C15`與`AUD-c15-strategy-attribution`的identity、策略結果與研究判定均不變；`AUD-c15-strategy-attribution`仍為`IMPLEMENTED / RESULT_PENDING`。本輪只修formal synthetic metadata與文件同步問題。

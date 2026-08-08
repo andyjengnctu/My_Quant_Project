@@ -213,7 +213,7 @@ python apps/breakout_quality.py audit-target-time-ablation --filter-id breakout_
 - `apps/portfolio_sim.py`：投組模擬正式入口。
 - `apps/smart_downloader.py`：下載器正式入口。
 - `apps/vip_scanner.py`：scanner 正式入口。
-- `apps/workbench.py`：GUI / workbench 正式入口；也是單股 trade-analysis 的單一使用者入口。
+- `apps/workbench.py`：GUI / workbench 正式入口；也是單股 trade-analysis 的單一使用者入口；K 線檢視中的交易明細與 Console 改以獨立分頁承接。
 
 ## 正式單一真理來源 / 開發輔助
 
