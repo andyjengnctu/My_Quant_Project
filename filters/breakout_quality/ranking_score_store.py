@@ -20,6 +20,7 @@ import pandas as pd
 from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     get_breakout_quality_experiment_profile,
 )
 
@@ -461,6 +462,27 @@ def load_continuous_ranker_oos_contract(
             raise ValueError("Continuous pairwise ranker report batching contract不一致")
         if report_pairwise != expected_pairwise:
             raise ValueError("Continuous pairwise ranker report pairwise contract不一致")
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
+        expected_listwise = {
+            "list_scope": "same_date_full_candidate_list",
+            "target_distribution": "softmax_daily_percentile",
+            "prediction_distribution": "softmax_pass_minus_reject_margin",
+            "tie_handling": "equal_target_equal_distribution_weight",
+            "date_weighting": "equal_rankable_date_weight",
+            "model_margin": "pass_logit_minus_reject_logit",
+            "batching": "whole_date_pack_no_date_split",
+            "runtime_score": "softmax_pass_probability",
+        }
+        manifest_semantics = dict(manifest.get("training_semantics") or {})
+        report_listwise = dict(report_training.get("listwise_contract") or {})
+        if str(manifest_semantics.get("batching") or "") != expected_listwise["batching"]:
+            raise ValueError("Continuous listwise ranker manifest batching contract不一致")
+        if dict(manifest_semantics.get("listwise_contract") or {}) != expected_listwise:
+            raise ValueError("Continuous listwise ranker manifest listwise contract不一致")
+        if str(report_training.get("batching") or "") != expected_listwise["batching"]:
+            raise ValueError("Continuous listwise ranker report batching contract不一致")
+        if report_listwise != expected_listwise:
+            raise ValueError("Continuous listwise ranker report listwise contract不一致")
 
     target_id = str(manifest.get("continuous_target_id") or "")
     if not target_id:

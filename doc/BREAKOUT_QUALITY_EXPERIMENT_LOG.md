@@ -5739,3 +5739,80 @@ Infrastructure completed；不占用新的`MR-*`／`SR-C*`／`AUD-*` identity。
 ### GPT獨立驗證
 
 `validate_breakout_quality_app_simple_report_contract_case`直接6/6 PASS，驗證console、persistent Markdown、專案相對路徑、active identity與subcommand／workflow掛載；既有`validate_dataset_cli_contract_case` 174項PASS。GPT未執行`apps/test_suite.py`。
+
+## 2026-08-08 — MR-12B正式策略驗證：Pairwise改善成立，較Max-DL harness放大模型品質差異
+
+### 狀態
+
+`MR-12B / DL-CONT12B = RESULT_AVAILABLE / MODEL_ECONOMIC_IMPROVEMENT_SUPPORTED`；`SR-C19 / SR-C20 = RESULT_AVAILABLE / MODEL_VALIDATION_ARM`。C17/C18 selector語意維持凍結，不依本次forward/OOS結果調整。
+
+### 正式controlled replay
+
+- Strategy Compare fingerprint：`a530e2b6f5f4`
+- 期間：2021-01-01～2025-12-22
+- Dataset：full
+- Params：`PARAM-P2 / Min ROOS`
+- C17/C19共用minimum-repair selector；C18/C20共用feasible-ascent selector。
+- C19唯一模型差異：`DL-CONT12A / MR-12A MSE → DL-CONT12B / MR-12B pairwise`。
+- C20唯一模型差異同上。
+
+### 主要結果
+
+- C19：Return 181.75%、MDD 16.19%、RoMD 11.23、Annual 23.19%、EV 0.70R、Exposure 92.14%、same-param DL selection R +25.05R。
+- C20：Return 179.54%、MDD 14.48%、RoMD 12.40、Annual 23.00%、EV 0.84R、Exposure 92.21%、same-param DL selection R +55.31R。
+- C19-C17：Return +17.62pp、MDD +1.81pp、RoMD -0.19、EV -0.02R、selection R +4.74R。
+- C20-C18：Return +38.98pp、MDD -0.25pp、RoMD +2.86、EV +0.27R、selection R +81.57R。
+- C20-C19：Return -2.22pp，但MDD -1.70pp、RoMD +1.17、EV +0.14R、selection R +30.27R。
+
+### 判定
+
+MR-12B pairwise objective相對MR-12A MSE的模型經濟改善成立。更重要的是，C18-style較Max-DL selector在MR-12A弱ranking時放大錯誤，但在MR-12B改善後同時把MDD、RoMD、EV與selection R顯著拉高，證明C17/C18雙harness具有辨識模型品質與selector轉化差異的價值。後續新模型必須同時跑兩者；不得因C19 raw Return略高或C20風險調整較佳而刪除任一harness。
+
+
+## 2026-08-08 — MR-12C實作：All-event ListNet Top-one Listwise Ranker
+
+### 狀態
+
+`MR-12C / DL-CONT12C / SR-C21 / SR-C22 = IMPLEMENTED / RESULT_PENDING`。本輪未執行正式模型訓練、forward-OOS推論或策略replay。
+
+### 程式基準
+
+- 使用者指定ZIP：`test-branch-1_20260808_174356_04c0505(2).zip`
+- SHA256：`6144ba09731c6e75da5d49334d746c3aced6b1d35e85d06a9f4ade7895730104`
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 唯一scientific change
+
+固定MR-12B的：
+
+- `strategy_aligned_opportunity_no_time_r_v1`
+- `all_labels`
+- `ARCH-inception_time_v1`
+- optimizer／LR／weight decay／gradient clip
+- Selection／Validation／OOS split
+- epoch selection=`mean_daily_spearman`
+- runtime score=`softmax PASS probability`
+- C17/C18 K/R0／minimum-repair／feasible-ascent／execution-order語意
+
+只將training objective由`daily_pairwise_ranking / pairwise_logistic`改為`daily_listwise_ranking / listnet_top_one_cross_entropy`。
+
+### Listwise契約
+
+每一交易日完整candidate list不得跨mini-batch切分。模型排序score使用`PASS logit - REJECT logit`；真實daily-percentile target由高到低形成tie groups。每個rankable date把daily-percentile target經softmax轉成target top-one distribution，模型`PASS logit - REJECT logit`經softmax轉成prediction distribution，再計算整日cross-entropy；相同target自然得到相同target mass，不建立任意tie順序。各rankable date等權；不新增temperature、Top-K weight、cutoff或其他可依OOS調整的超參數。
+
+### 策略驗證矩陣
+
+- `C21 = MR-12C + 完全相同C17 minimum-repair selector`
+- `C22 = MR-12C + 完全相同C18 feasible-ascent selector`
+- 核心contrast：`C21-C19`（固定C17-style下Listwise vs Pairwise）、`C22-C20`（固定C18-style下Listwise vs Pairwise）、`C22-C21`（同MR-12C在較Max selector上的轉化）。
+- C17/C18/C19/C20持續保留，completed-pair cache可重用；Strategy Compare不得自動訓練CONT12C。
+
+### GPT獨立直接驗證
+
+- listwise profile／CLI identity、Target／scope／architecture family與runtime score契約。
+- whole-date batching不切分同日candidate list。
+- ListNet top-one cross-entropy對正確完整排序給出較低loss、gradient有限，且交換同target tie成員不改loss。
+- 真optimizer step可完成且model parameters確實更新。
+- C19/C20與C21/C22雙selector矩陣及三個核心contrast。
+- MR-12B pairwise direct contract持續通過。
+- GPT未執行`apps/test_suite.py`；正式結果待使用者本機執行。

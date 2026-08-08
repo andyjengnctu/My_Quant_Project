@@ -222,6 +222,15 @@ STRATEGY_DL_SOURCES = {
         "description": "MR-12B all-event no-time pairwise ranker frozen OOS score；只允許受控strategy research replay",
         "forward_scores_builder": None,
     },
+    "CONT12C": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "strategy_aligned_no_time_all_event_listwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": "MR-12C all-event no-time ListNet top-one listwise ranker frozen OOS score；只允許受控strategy research replay",
+        "forward_scores_builder": None,
+    },
 }
 
 # =============================================================================
@@ -438,6 +447,32 @@ STRATEGY_COMPARE_ARMS = {
         "dl_id": "CONT12B",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
+    "C21": {
+        "enabled": True,
+        "name": "Min ROOS: MR-12C listwise max-DL constrained basket",
+        "description": (
+            "與C19使用完全相同C17 K/R0、minimum-repair與basket內Min ROOS執行順序；"
+            "唯一模型差異為DL source改成MR-12C ListNet top-one listwise ranker"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12C",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl",
+    },
+    "C22": {
+        "enabled": True,
+        "name": "Min ROOS: MR-12C listwise max-DL feasible-ascent",
+        "description": (
+            "與C20使用完全相同C18 K/R0、feasible-ascent與basket內Min ROOS執行順序；"
+            "唯一模型差異為DL source改成MR-12C ListNet top-one listwise ranker"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12C",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
 }
 
 # =============================================================================
@@ -458,6 +493,11 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C17-C3": {"enabled": False, "left": "C17", "right": "C3", "description": "Max-DL constrained basket在固定Min ROOS資源底線下相對正式研究基準"},
     "C18-C17": {"enabled": False, "left": "C18", "right": "C17", "description": "相同MR-12A與K/R0資源契約下，feasible-ascent相對C17 minimum-repair的純selector搜尋效果"},
     "C18-C3": {"enabled": False, "left": "C18", "right": "C3", "description": "Max-DL feasible-ascent在固定Min ROOS資源底線下相對正式研究基準"},
+    "C21-C19": {"enabled": True, "left": "C21", "right": "C19", "description": "固定C17 selector下MR-12C listwise相對MR-12B pairwise的純DL模型效果"},
+    "C22-C20": {"enabled": True, "left": "C22", "right": "C20", "description": "固定C18 selector下MR-12C listwise相對MR-12B pairwise的純DL模型效果"},
+    "C22-C21": {"enabled": True, "left": "C22", "right": "C21", "description": "同一MR-12C source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
+    "C21-C3": {"enabled": True, "left": "C21", "right": "C3", "description": "MR-12C在C17 selector下相對Min ROOS研究基準"},
+    "C22-C3": {"enabled": True, "left": "C22", "right": "C3", "description": "MR-12C在C18 selector下相對Min ROOS研究基準"},
     "C19-C17": {"enabled": True, "left": "C19", "right": "C17", "description": "固定C17 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
     "C20-C18": {"enabled": True, "left": "C20", "right": "C18", "description": "固定C18 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
     "C20-C19": {"enabled": True, "left": "C20", "right": "C19", "description": "同一MR-12B source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},

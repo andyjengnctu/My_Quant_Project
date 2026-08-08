@@ -33,7 +33,8 @@ from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 # - continuous PIT ranker (PASS-only): "strategy_aligned_no_time_pass_magnitude_mse"
 # - MR-12A all-event continuous MSE: "strategy_aligned_no_time_all_event_mse"
 # - MR-12B all-event pairwise ranker: "strategy_aligned_no_time_all_event_pairwise"
-BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
+# - MR-12C all-event ListNet top-one listwise ranker: "strategy_aligned_no_time_all_event_listwise"
+BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_listwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -217,6 +218,7 @@ STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE = "strategy_aligned_daily_percenti
 STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE = "strategy_aligned_no_time_pass_magnitude_mse"
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE = "strategy_aligned_no_time_all_event_mse"
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
+STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE = "strategy_aligned_no_time_all_event_listwise"
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
@@ -248,9 +250,11 @@ SUPPORTED_BREAKOUT_QUALITY_TRAINING_LABEL_SCOPES = (
 TRAINING_OBJECTIVE_BINARY_CLASSIFICATION = "binary_classification"
 TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
 TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 CONTINUOUS_RANKER_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
 )
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_OBJECTIVES = (
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
@@ -337,11 +341,11 @@ class BreakoutQualityExperimentProfile:
         elif self.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
             if not str(self.continuous_target_id or "").strip():
                 raise ValueError("continuous ranker profile 必須指定 continuous_target_id")
-            expected_loss = (
-                "mse"
-                if self.training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION
-                else "pairwise_logistic"
-            )
+            expected_loss = {
+                TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION: "mse",
+                TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING: "pairwise_logistic",
+                TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: "listnet_top_one_cross_entropy",
+            }[self.training_objective]
             if self.loss_name != expected_loss:
                 raise ValueError(
                     "continuous ranker loss與training objective不一致: "
@@ -668,6 +672,16 @@ _EXPERIMENT_PROFILES = {
         training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
         continuous_target_id="strategy_aligned_opportunity_no_time_r_v1",
         loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+    ),
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+        continuous_target_id="strategy_aligned_opportunity_no_time_r_v1",
+        loss_name="listnet_top_one_cross_entropy",
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
     ),
@@ -1178,6 +1192,7 @@ __all__ = [
     'STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE',
     'STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE',
     'STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE',
+    'STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE',
     'TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE',
     'BreakoutQualityExperimentProfile',
     'BreakoutQualityPretrainingProfile',
@@ -1198,6 +1213,7 @@ __all__ = [
     'TRAINING_OBJECTIVE_BINARY_CLASSIFICATION',
     'TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION',
     'TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING',
+    'TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING',
     'TRAINING_SAMPLING_ALL_EVENT_ROWS',
     'TRAINING_SAMPLING_UNIQUE_TICKER_DATE',
     'TIME_WEIGHT_MODE_DATE_BALANCED',

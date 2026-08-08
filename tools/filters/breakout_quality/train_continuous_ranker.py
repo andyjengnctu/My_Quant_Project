@@ -19,11 +19,13 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     get_breakout_quality_experiment_profile,
     resolve_breakout_quality_random_seed,
 )
@@ -118,14 +120,36 @@ PAIRWISE_TRAINING_CONTRACT = {
     "runtime_score": "softmax_pass_probability",
 }
 
+LISTWISE_TRAINING_CONTRACT = {
+    "list_scope": "same_date_full_candidate_list",
+    "target_distribution": "softmax_daily_percentile",
+    "prediction_distribution": "softmax_pass_minus_reject_margin",
+    "tie_handling": "equal_target_equal_distribution_weight",
+    "date_weighting": "equal_rankable_date_weight",
+    "model_margin": "pass_logit_minus_reject_logit",
+    "batching": "whole_date_pack_no_date_split",
+    "runtime_score": "softmax_pass_probability",
+}
+
 
 def _training_semantics(profile) -> dict[str, Any]:
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
         return {
             "batching": PAIRWISE_TRAINING_CONTRACT["batching"],
             "pairwise_contract": dict(PAIRWISE_TRAINING_CONTRACT),
+            "listwise_contract": None,
         }
-    return {"batching": "shuffled_unique_group_batches", "pairwise_contract": None}
+    if profile.training_objective == TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING:
+        return {
+            "batching": LISTWISE_TRAINING_CONTRACT["batching"],
+            "pairwise_contract": None,
+            "listwise_contract": dict(LISTWISE_TRAINING_CONTRACT),
+        }
+    return {
+        "batching": "shuffled_unique_group_batches",
+        "pairwise_contract": None,
+        "listwise_contract": None,
+    }
 
 
 def parse_args(argv=None):
@@ -149,6 +173,7 @@ def parse_args(argv=None):
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
             STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
             STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
         ),
     )
     parser.add_argument("--epochs", type=int, default=BREAKOUT_QUALITY_DEFAULT_EPOCHS)
@@ -256,6 +281,10 @@ def _validate_args(args) -> None:
             STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_ALL,
         ),
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE: (
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_ALL,
+        ),
     }
     expected = expected_targets.get(args.experiment_profile)
     if expected is None or (profile.continuous_target_id, profile.training_label_scope) != expected:
@@ -335,6 +364,14 @@ def _profile_contract(profile) -> dict[str, str]:
             "phase": "12B",
             "target_description": "same_date_all_event_order_of_strategy_aligned_opportunity_no_time_r_v1",
             "objective_description": "同日all-event No-time target ordering的RankNet pairwise logistic loss",
+            "metric_scope": "all_labels",
+        }
+    if profile.name == STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE:
+        return {
+            "experiment": "MR-12C All-event No-time ListNet Top-one Ranker",
+            "phase": "12C",
+            "target_description": "same_date_all_event_listnet_distribution_of_strategy_aligned_opportunity_no_time_r_v1",
+            "objective_description": "同日all-event No-time完整候選榜單的ListNet top-one cross-entropy",
             "metric_scope": "all_labels",
         }
     raise ValueError(f"不支援的continuous ranker profile: {profile.name}")
@@ -529,14 +566,14 @@ def _date_coherent_batches(
     batch_size: int,
     seed: int,
 ) -> list[np.ndarray]:
-    """Pack whole trading dates into deterministic mini-batches for pairwise ranking."""
+    """Pack whole trading dates into deterministic mini-batches for cross-sectional ranking."""
 
     ids = np.asarray(group_ids, dtype=np.int64)
     if ids.ndim != 1:
-        raise ValueError("pairwise ranker group_ids必須是一維")
+        raise ValueError("date-coherent ranker group_ids必須是一維")
     dates = pd.to_datetime(pd.Series(group_dates), errors="raise").dt.normalize()
     if len(dates) <= int(ids.max(initial=-1)):
-        raise ValueError("pairwise ranker group_dates長度不足")
+        raise ValueError("date-coherent ranker group_dates長度不足")
     by_date: dict[pd.Timestamp, list[int]] = {}
     for group_id in ids:
         by_date.setdefault(pd.Timestamp(dates.iloc[int(group_id)]), []).append(int(group_id))
@@ -550,7 +587,7 @@ def _date_coherent_batches(
         if current and len(current) + len(day_ids) > int(batch_size):
             batches.append(np.asarray(current, dtype=np.int64))
             current = []
-        # Never split a date: cross-sectional pairwise loss must see the full same-date set.
+        # Never split a date: cross-sectional ranking loss must see the full same-date set.
         if len(day_ids) > int(batch_size):
             if current:
                 batches.append(np.asarray(current, dtype=np.int64))
@@ -595,6 +632,39 @@ def _pairwise_logistic_loss(torch, margins, targets, dates) -> tuple[Any | None,
     return torch.cat(losses).mean(), int(pair_count)
 
 
+def _listnet_top_one_loss(torch, margins, targets, dates) -> tuple[Any | None, int]:
+    """ListNet top-one cross-entropy over complete same-date candidate lists.
+
+    Daily percentile targets are converted into a target top-one distribution with
+    softmax; model margins form the predicted distribution.  Equal targets therefore
+    receive equal target mass without any arbitrary tie ordering.  Only dates with at
+    least two distinct target levels contribute ranking supervision, and each rankable
+    date has equal weight.
+    """
+
+    import torch.nn.functional as F
+
+    date_values = pd.to_datetime(pd.Series(dates), errors="raise").dt.normalize().to_numpy()
+    day_losses = []
+    ranked_date_count = 0
+    for date_value in pd.unique(date_values):
+        positions = np.flatnonzero(date_values == date_value)
+        if len(positions) < 2:
+            continue
+        pos = torch.as_tensor(positions, dtype=torch.long, device=margins.device)
+        day_margin = margins.index_select(0, pos)
+        day_target = targets.index_select(0, pos)
+        if int(torch.unique(day_target.detach()).numel()) < 2:
+            continue
+        target_distribution = torch.softmax(day_target.detach(), dim=0)
+        prediction_log_distribution = F.log_softmax(day_margin, dim=0)
+        day_losses.append(-(target_distribution * prediction_log_distribution).sum())
+        ranked_date_count += 1
+    if not day_losses:
+        return None, 0
+    return torch.stack(day_losses).mean(), int(ranked_date_count)
+
+
 def _train_epoch(
     torch,
     model,
@@ -622,7 +692,10 @@ def _train_epoch(
             order[start:start + int(batch_size)]
             for start in range(0, len(order), int(batch_size))
         ]
-    elif training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
+    elif training_objective in {
+        TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    }:
         batches = _date_coherent_batches(
             ids_all,
             group_dates,
@@ -650,7 +723,7 @@ def _train_epoch(
                 score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
                 loss = F.mse_loss(score, target, reduction="mean")
                 loss_weight = int(len(ids))
-            else:
+            elif training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
                 margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
                 loss, pair_count = _pairwise_logistic_loss(
                     torch,
@@ -661,6 +734,17 @@ def _train_epoch(
                 if loss is None:
                     continue
                 loss_weight = int(pair_count)
+            else:
+                margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
+                loss, ranked_date_count = _listnet_top_one_loss(
+                    torch,
+                    margins,
+                    target,
+                    pd.Series(group_dates).iloc[ids].to_numpy(),
+                )
+                if loss is None:
+                    continue
+                loss_weight = int(ranked_date_count)
         if not bool(torch.isfinite(loss).item()):
             raise FloatingPointError("continuous ranker training loss非有限值")
         if grad_scaler is None:
@@ -680,7 +764,7 @@ def _train_epoch(
         weighted_loss_sum += value * float(loss_weight)
         weighted_loss_count += int(loss_weight)
     if not losses or weighted_loss_count < 1:
-        raise ValueError("continuous ranker training沒有任何有效batch／pair")
+        raise ValueError("continuous ranker training沒有任何有效batch／ranking supervision")
     if training_objective == TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION:
         # Preserve MR-12A historical reporting semantics exactly.
         return float(np.mean(losses))
@@ -1308,6 +1392,7 @@ def main(argv=None) -> int:
             "model_score": "softmax_pass_probability",
             "batching": _training_semantics(profile)["batching"],
             "pairwise_contract": _training_semantics(profile)["pairwise_contract"],
+            "listwise_contract": _training_semantics(profile)["listwise_contract"],
             "target": contract["target_description"],
             "training_label_scope": profile.training_label_scope,
             "training_group_counts": training_group_counts,

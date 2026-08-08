@@ -46,9 +46,11 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_LABEL_SCOPE_ALL,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
@@ -11718,6 +11720,7 @@ __all__ = [
     "validate_breakout_quality_pass_conditional_ranker_contract_case",
     "validate_breakout_quality_all_event_no_time_ranker_contract_case",
     "validate_breakout_quality_pairwise_ranker_contract_case",
+    "validate_breakout_quality_listwise_ranker_contract_case",
     "validate_breakout_quality_pass_realization_gap_attribution_contract_case",
     "validate_breakout_quality_qualified_candidate_set_audit_contract_case",
     "validate_breakout_quality_target_component_attribution_contract_case",
@@ -11972,6 +11975,289 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
 
     summary["profile"] = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
     summary["training_objective"] = TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING
+    summary["training_performed"] = False
+    return results, summary
+
+
+def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_LISTWISE_RANKER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from filters.breakout_quality.models.factory import require_torch
+    from config.strategy_compare import get_strategy_comparison_settings
+    from tools.filters.breakout_quality.train_continuous_ranker import (
+        LISTWISE_TRAINING_CONTRACT,
+        _date_coherent_batches,
+        _profile_contract,
+        _listnet_top_one_loss,
+        _training_semantics,
+        parse_args as parse_continuous_ranker_args,
+    )
+
+    profile = get_breakout_quality_experiment_profile(
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12c_profile_changes_pairwise_to_listwise_with_same_target_scope_architecture_family",
+        (
+            TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+            STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_ALL,
+            "listnet_top_one_cross_entropy",
+            "mean_daily_spearman",
+            False,
+        ),
+        (
+            profile.training_objective,
+            profile.continuous_target_id,
+            profile.training_label_scope,
+            profile.loss_name,
+            profile.epoch_selection_metric,
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE
+            in SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
+        ),
+    )
+
+    semantics = _training_semantics(profile)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12c_listwise_artifact_semantics_are_explicit_and_runtime_score_is_unchanged",
+        (
+            "same_date_full_candidate_list",
+            "softmax_daily_percentile",
+            "softmax_pass_minus_reject_margin",
+            "equal_target_equal_distribution_weight",
+            "equal_rankable_date_weight",
+            "pass_logit_minus_reject_logit",
+            "whole_date_pack_no_date_split",
+            "softmax_pass_probability",
+        ),
+        tuple(
+            semantics["listwise_contract"][key]
+            for key in (
+                "list_scope",
+                "target_distribution",
+                "prediction_distribution",
+                "tie_handling",
+                "date_weighting",
+                "model_margin",
+                "batching",
+                "runtime_score",
+            )
+        ),
+    )
+    assert semantics["listwise_contract"] == LISTWISE_TRAINING_CONTRACT
+    assert semantics["pairwise_contract"] is None
+
+    from filters.breakout_quality.artifacts import build_file_manifest
+    from filters.breakout_quality.paths import (
+        resolve_filter_artifact_paths,
+        resolve_filter_model_output_dir,
+    )
+    from filters.breakout_quality.ranking_score_store import (
+        load_continuous_ranker_oos_contract,
+        load_continuous_ranker_oos_score_table,
+    )
+    listwise_loader_accepts = False
+    listwise_loader_rejects_corruption = False
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        filter_id = "breakout_quality_v1"
+        architecture = "inception_time_v1"
+        profile_name = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE
+        artifact_paths = resolve_filter_artifact_paths(
+            root, filter_id, architecture, profile_name
+        )
+        output_dir = resolve_filter_model_output_dir(
+            root, filter_id, architecture, profile_name
+        )
+        artifact_paths.model_path.parent.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        artifact_paths.model_path.write_bytes(b"synthetic-model")
+        score_path = output_dir / "continuous_ranker_scores.csv"
+        pd.DataFrame([
+            {
+                "ticker": "2330",
+                "date": "2021-01-04",
+                "group_index": 1,
+                "split": "oos",
+                "model_score": 0.70,
+            }
+        ]).to_csv(score_path, index=False)
+        report = {
+            "status": "RESULT_AVAILABLE",
+            "filter_id": filter_id,
+            "model_architecture": architecture,
+            "experiment_profile": profile_name,
+            "training": {
+                "objective": profile.training_objective,
+                "loss": profile.loss_name,
+                "batching": LISTWISE_TRAINING_CONTRACT["batching"],
+                "pairwise_contract": None,
+                "listwise_contract": dict(LISTWISE_TRAINING_CONTRACT),
+                "training_label_scope": TRAINING_LABEL_SCOPE_ALL,
+                "seed": 42,
+            },
+            "experiment_settings": {
+                "continuous_target_id": STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            },
+            "artifacts": {"scores": build_file_manifest(score_path)},
+        }
+        (output_dir / "continuous_ranker_report.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+        manifest = {
+            "filter_id": filter_id,
+            "model_architecture": architecture,
+            "experiment_profile": profile_name,
+            "training_objective": profile.training_objective,
+            "training_label_scope": TRAINING_LABEL_SCOPE_ALL,
+            "continuous_target_id": STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
+            "training_semantics": {
+                "batching": LISTWISE_TRAINING_CONTRACT["batching"],
+                "pairwise_contract": None,
+                "listwise_contract": dict(LISTWISE_TRAINING_CONTRACT),
+            },
+            "model": build_file_manifest(artifact_paths.model_path),
+            "research_outputs": {"scores": build_file_manifest(score_path)},
+            "outer_oos_policy": {
+                "oos_start_date": "2021-01-01",
+                "configured_oos_end_date": "2021-12-31",
+            },
+            "model_information_cutoff": "2020-12-31",
+        }
+        artifact_paths.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        load_continuous_ranker_oos_contract.cache_clear()
+        load_continuous_ranker_oos_score_table.cache_clear()
+        contract = load_continuous_ranker_oos_contract(
+            str(root), filter_id, architecture, profile_name
+        )
+        listwise_loader_accepts = contract.experiment_profile == profile_name
+        manifest["training_semantics"]["listwise_contract"] = dict(
+            LISTWISE_TRAINING_CONTRACT, tie_handling="invalid"
+        )
+        artifact_paths.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        load_continuous_ranker_oos_contract.cache_clear()
+        try:
+            load_continuous_ranker_oos_contract(
+                str(root), filter_id, architecture, profile_name
+            )
+        except ValueError as exc:
+            listwise_loader_rejects_corruption = (
+                "listwise contract不一致" in str(exc)
+            )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "dl_cont12c_loader_accepts_exact_listwise_contract_and_rejects_semantic_drift",
+        (True, True),
+        (listwise_loader_accepts, listwise_loader_rejects_corruption),
+    )
+
+    args = parse_continuous_ranker_args(
+        ["--experiment-profile", STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE]
+    )
+    contract = _profile_contract(profile)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12c_cli_and_registry_identity_are_explicit",
+        (STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE, "12C", "all_labels"),
+        (args.experiment_profile, contract["phase"], contract["metric_scope"]),
+    )
+
+    dates = pd.Series(["2024-01-02"] * 4 + ["2024-01-03"] * 3 + ["2024-01-04"] * 2)
+    batches = _date_coherent_batches(
+        np.arange(9, dtype=np.int64), dates, batch_size=5, seed=42
+    )
+    batch_by_group = {
+        int(group_id): int(batch_index)
+        for batch_index, batch in enumerate(batches)
+        for group_id in batch
+    }
+    date_batch_counts = []
+    for _date, day in pd.DataFrame({"date": dates, "group_id": np.arange(9)}).groupby("date"):
+        date_batch_counts.append(len({batch_by_group[int(group_id)] for group_id in day["group_id"]}))
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "listwise_training_batches_never_split_same_date_candidate_list",
+        (1, 1, 1),
+        tuple(date_batch_counts),
+    )
+
+    torch, _nn = require_torch()
+    targets = torch.tensor([1.0, 1.0, 0.5, 0.0], dtype=torch.float32)
+    loss_dates = np.asarray(["2024-01-02"] * 4)
+    good_margin = torch.tensor([2.0, 1.5, 0.0, -2.0], dtype=torch.float32, requires_grad=True)
+    bad_margin = torch.tensor([-2.0, -1.5, 0.0, 2.0], dtype=torch.float32, requires_grad=True)
+    tie_swapped = torch.tensor([1.5, 2.0, 0.0, -2.0], dtype=torch.float32)
+    good_loss, good_dates = _listnet_top_one_loss(
+        torch, good_margin, targets, loss_dates
+    )
+    bad_loss, bad_dates = _listnet_top_one_loss(
+        torch, bad_margin, targets, loss_dates
+    )
+    tie_loss, tie_dates = _listnet_top_one_loss(
+        torch, tie_swapped, targets, loss_dates
+    )
+    good_loss.backward()
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "listnet_prefers_correct_full_list_distribution_and_is_invariant_within_target_ties",
+        (True, 1, 1, 1, True, True),
+        (
+            bool(float(good_loss.detach().cpu().item()) < float(bad_loss.detach().cpu().item())),
+            int(good_dates),
+            int(bad_dates),
+            int(tie_dates),
+            bool(torch.isfinite(good_margin.grad).all().item()),
+            bool(torch.isclose(good_loss.detach(), tie_loss.detach(), atol=1e-7).item()),
+        ),
+    )
+
+    strategy = get_strategy_comparison_settings()
+    enabled = {arm.arm_id: arm for arm in strategy.enabled_arms}
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12b_and_mr12c_are_compared_under_both_fixed_selector_semantics",
+        (
+            ("C19", "CONT12B", "resource-aware-continuous-max-dl"),
+            ("C20", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
+            ("C21", "CONT12C", "resource-aware-continuous-max-dl"),
+            ("C22", "CONT12C", "resource-aware-continuous-max-dl-feasible-ascent"),
+        ),
+        tuple(
+            (arm_id, enabled[arm_id].dl_id, enabled[arm_id].dl_runtime_mode)
+            for arm_id in ("C19", "C20", "C21", "C22")
+        ),
+    )
+    enabled_contrasts = {item.contrast_id for item in strategy.enabled_contrasts}
+    required = {"C21-C19", "C22-C20", "C22-C21"}
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "mr12c_strategy_matrix_isolates_pairwise_vs_listwise_and_selector_conversion",
+        required,
+        enabled_contrasts & required,
+    )
+
+    summary["profile"] = STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE
+    summary["training_objective"] = TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING
     summary["training_performed"] = False
     return results, summary
 
@@ -17299,7 +17585,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             and cache_miss_after_score_change,
         )
 
-        if all(arm_id in settings.arms for arm_id in ("C17", "C18", "C19", "C20")):
+        if all(arm_id in settings.arms for arm_id in ("C17", "C18", "C19", "C20", "C21", "C22")):
             with tempfile.TemporaryDirectory() as reuse_tmp:
                 reuse_root = Path(reuse_tmp)
                 reusable_pair_dir = reuse_root / "historical_pair"
@@ -17319,8 +17605,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                             "source_pair_dir": reusable_pair_dir,
                             "fingerprint": "c18-cache",
                         },
-                        "C19": None,
-                        "C20": None,
+                        "C19": {
+                            "source_pair_dir": reusable_pair_dir,
+                            "fingerprint": "c19-cache",
+                        },
+                        "C20": {
+                            "source_pair_dir": reusable_pair_dir,
+                            "fingerprint": "c20-cache",
+                        },
+                        "C21": None,
+                        "C22": None,
                     },
                     "baseline_groups": {
                         "min_roos::all_off": {
@@ -17361,8 +17655,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                     cache_run.call_count == 2
                     and cache_actions.get("C17") == "REUSE"
                     and cache_actions.get("C18") == "REUSE"
-                    and cache_actions.get("C19") == "RUN"
-                    and cache_actions.get("C20") == "RUN"
+                    and cache_actions.get("C19") == "REUSE"
+                    and cache_actions.get("C20") == "REUSE"
+                    and cache_actions.get("C21") == "RUN"
+                    and cache_actions.get("C22") == "RUN"
                     and all(
                         call.kwargs.get("baseline_reuse_dir") is not None
                         for call in cache_run.call_args_list
@@ -17376,12 +17672,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                             / str(cached_execution_payload["pair_execution"][arm_id]["current_pair_dir"])
                             / "strategy_comparison.md"
                         ).is_file()
-                        for arm_id in ("C17", "C18")
+                        for arm_id in ("C17", "C18", "C19", "C20")
                     )
                 )
             add_check(
                 results, "synthetic_breakout_quality", case_id,
-                "mr12b_matrix_reuses_c17_c18_and_runs_only_c19_c20_with_shared_baseline",
+                "multi_model_matrix_reuses_c17_c20_and_runs_only_c21_c22_with_shared_baseline",
                 True,
                 only_new_model_pairs_run,
             )
