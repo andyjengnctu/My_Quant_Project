@@ -5136,3 +5136,74 @@ Audit migration後，production imports已改到`tools/audit/`，但`tools/valid
 ### 研究狀態
 
 `MR-12A`、`DL-CONT12A`、`SR-C15`與`AUD-c15-strategy-attribution`的identity、策略結果與研究判定均不變；`AUD-c15-strategy-attribution`仍為`IMPLEMENTED / RESULT_PENDING`。本輪只修formal synthetic metadata與文件同步問題。
+
+## 2026-08-08 — AUD-c15-strategy-attribution正式結果：C15全期優勢由2024 over-compensate非2024劣勢，機制以portfolio geometry為主
+
+### 狀態
+
+`AUD-c15-strategy-attribution RESULT_AVAILABLE / SR-C15 PROMISING_NOT_PROMOTED`
+
+### 程式基準與正式來源
+
+- 使用者ZIP：`test-branch-1_20260808_123516_f128346.zip`
+- SHA256：`13904dc779a52ccd259df1614a716d1198f0725dcf67c00d99f8a6134de31d03`
+- Audit正式讀取：`outputs/strategy_compare/runs/20260808_011957_C3-C12-C15_4da3217c83bd`
+- 比較期間：`2021-01-01～2025-12-22`
+- Audit契約：只讀既有strategy replay；未重跑portfolio、未修改score／selector／training，Future Target未進runtime。
+
+### C15 vs C3
+
+| 指標 | 結果 |
+|---|---:|
+| Total Return | `156.34% → 168.69%`（`+12.35pp`） |
+| MDD | `15.41% → 14.81%`（`-0.60pp`） |
+| RoMD | `10.15 → 11.39`（`+1.24`） |
+| EV | `0.65R → 0.64R`（`-0.02R`） |
+| Average Exposure | `91.99% → 91.71%`（`-0.28pp`） |
+| Final relative wealth advantage | `+4.82%` |
+| 2024 share of net Δlog wealth | `353.54%` |
+| 2024 relative wealth effect | 約`+18.10%` |
+| 非2024 relative wealth effect | 約`-11.25%` |
+
+Selection／trade：選股不同日`273`；C15-only/C3-only選入單=`249/199`；exclusive selection `ΔR=+26.78R`。交易層common trades `ΔPnL=-206,198.31`，all-trade `ΔPnL=+123,465.99`，因此exclusive selection交易層`ΔPnL=+329,664.30`。Trade PnL只作mechanism diagnosis，不等同portfolio wealth差。
+
+Capital geometry：平均投入`194,645 → 172,080`、平均預留`201,348 → 179,205`、平均停損距離`4.44% → 5.68%`、平均Capital Return`2.22% → 3.16%`、平均Realized R`0.65R → 0.64R`。Underfilled end days `890 → 590`、position-gap slot-days `2499 → 872`；selection-changed days平均持股`+1.48`，成交買單總差`+50`且missed-buy差`0`。
+
+### C15 vs C12
+
+| 指標 | 結果 |
+|---|---:|
+| Total Return | `162.59% → 168.69%`（`+6.10pp`） |
+| MDD | `16.47% → 14.81%`（`-1.66pp`） |
+| RoMD | `9.87 → 11.39`（`+1.51`） |
+| EV | `0.82R → 0.64R`（`-0.19R`） |
+| Average Exposure | `92.38% → 91.71%`（`-0.67pp`） |
+| Final relative wealth advantage | `+2.32%` |
+| 2024 share of net Δlog wealth | `472.28%` |
+| 2024 relative wealth effect | 約`+11.46%` |
+| 非2024 relative wealth effect | 約`-8.19%` |
+
+Selection／trade：選股不同日`293`；C15-only/C12-only選入單=`260/256`；exclusive selection `ΔR=-67.83R`。common trades `ΔPnL=-73,701.70`，all-trade `ΔPnL=+60,984.48`，因此exclusive selection交易層`ΔPnL=+134,686.18`。C15雖exclusive summed R大幅較弱，exclusive dollar PnL仍較高，證明R總和不能代表cash-capped portfolio的經濟貢獻。
+
+Capital geometry：平均投入`160,998 → 172,080`、平均預留`168,163 → 179,205`、平均停損距離`5.49% → 5.68%`、平均Capital Return`1.98% → 3.16%`、平均Realized R`0.82R → 0.64R`。Underfilled end days `744 → 590`、position-gap slot-days `1249 → 872`；selection-changed days平均持股`+0.26`、成交買單總差`+4`、missed-buy差`-1`。
+
+### 歸因判定
+
+1. **SR-C15不升格正式基準。** 2024對C3/C12的Δlog wealth分別占全期淨差異`353.54% / 472.28%`；換成更直觀的exact log-wealth分解，2024單獨約帶來`+18.10% / +11.46%`相對wealth effect，而其餘年份合計約為`-11.25% / -8.19%`。因此不是「2024只是主要貢獻」，而是**2024超額績效必須抵銷其他年份整體落後後，C15才留下全期優勢**。
+2. **相對C3，主要改善不是平均R。** C15平均R略低，但單筆占用資金較少、停損距離較寬、slot occupancy明顯提高，且changed days多成交50筆；全期優勢更符合「風險sizing／資金占用／可同時持有數／fill path／compounding」共同作用。
+3. **相對C12，交易數差異已很小，仍不能用平均R或selection R解釋。** C15只多4筆成交，exclusive `ΔR=-67.83R`，但exclusive dollar PnL約`+134.7k`且capital return更高；主要差別進一步落在實際risk-dollar、position sizing、交易時點與持有重疊。
+4. 既有`SR-C15 vs SR-C14`仍是判斷`MR-12A all_labels`相對`MR-11G pass_only`最乾淨的受控比較，因兩者runtime與macro exposure幾乎相同。現有AUD-c15只比較C3/C12，不能用來取代C14/C15的model-source attribution。
+
+### Audit輸出補強
+
+同一`AUD-c15-strategy-attribution`升級結果schema至v2，不改任何策略或研究變數：
+
+- 集中度表直接新增focus-year與non-focus的relative wealth effect，避免`>100%` share難以直觀解讀。
+- `Selection／trade`直接顯示`Exclusive selection ΔPnL`，並把原誤導性的`All matched trade ΔPnL`更名為`All trade ΔPnL`。
+- 新增`SR-C15 selector自身盤前診斷`：直接從既有daily-capacity工件顯示DL-selection／capital-utilization days、selector changed days、相對同日Min ROOS的planned selected-count差、reserved-cash差、score gain與direct-score-order feasibility；仍只讀既有工件、不重跑portfolio。
+- Formal synthetic B190/T287同步覆蓋schema v2、non-focus wealth分解與新增selector diagnostics。
+
+### 下一步
+
+不先建立新的SR-C16，也不回頭調MR-12A模型。下一個最高資訊量工作是**同一capital-utilization-first runtime下的SR-C15 vs SR-C14 read-only attribution**，用來把`all_labels` score source的改善與portfolio geometry分離。完成後若確認MR-12A在相同geometry下仍有穩定經濟貢獻，再把「增加DL實際決策日、同時不惡化盤前資源利用」設計為新的selector研究；selector variant應先在pre-2021 Selection/PIT strategy replay中決定，再回到既有2021+迭代研究OOS評估。
+

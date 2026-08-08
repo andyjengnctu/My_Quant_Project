@@ -34,7 +34,7 @@ from tools.audit.sources.strategy_compare import (
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-AUDIT_RESULT_SCHEMA_VERSION = 1
+AUDIT_RESULT_SCHEMA_VERSION = 2
 
 
 def _finite(value: Any) -> float | None:
@@ -237,6 +237,7 @@ def _concentration_summary(
     top_positive = positive.nlargest(top_month_count) if not positive.empty else positive
     focus_rows = yearly[yearly["year"] == int(focus_year)]
     focus = float(focus_rows["delta_log_wealth"].sum()) if not focus_rows.empty else 0.0
+    non_focus = float(net - focus)
     return {
         "net_delta_log_wealth": net,
         "positive_month_delta_log_wealth": positive_sum,
@@ -252,6 +253,8 @@ def _concentration_summary(
             float(focus / net * 100.0) if not math.isclose(net, 0.0, abs_tol=1e-15) else None
         ),
         "focus_year_relative_wealth_effect_pct": float((math.exp(focus) - 1.0) * 100.0),
+        "non_focus_delta_log_wealth": non_focus,
+        "non_focus_relative_wealth_effect_pct": float((math.exp(non_focus) - 1.0) * 100.0),
     }
 
 
@@ -480,10 +483,14 @@ def _capacity_attribution(
         "Resource_Aware_DL_Enabled",
         "Resource_Aware_Mode",
         "Resource_Aware_Changed",
+        "Resource_Aware_Baseline_Selected",
+        "Resource_Aware_Selected",
         "Resource_Aware_Baseline_Reserved_Milli",
         "Resource_Aware_Reserved_Milli",
         "Resource_Aware_Baseline_Score_Sum",
         "Resource_Aware_Score_Sum",
+        "Resource_Aware_Promoted_Score_Orders",
+        "Resource_Aware_Direct_Score_Order_Feasible",
     ):
         candidate_column = f"candidate_{column}"
         if candidate_column in merged.columns:
@@ -493,6 +500,12 @@ def _capacity_attribution(
                 summary["candidate_resource_aware_capital_utilization_days"] = int((mode == "capital-utilization").sum())
             elif column == "Resource_Aware_Changed":
                 summary["candidate_resource_aware_changed_days"] = int(merged[candidate_column].fillna(False).astype(bool).sum())
+            elif column == "Resource_Aware_Selected":
+                baseline_col = "candidate_Resource_Aware_Baseline_Selected"
+                if baseline_col in merged.columns:
+                    selected = pd.to_numeric(merged[candidate_column], errors="coerce").fillna(0)
+                    baseline = pd.to_numeric(merged[baseline_col], errors="coerce").fillna(0)
+                    summary["candidate_resource_aware_selected_order_delta"] = int((selected - baseline).sum())
             elif column == "Resource_Aware_Reserved_Milli":
                 baseline_col = "candidate_Resource_Aware_Baseline_Reserved_Milli"
                 if baseline_col in merged.columns:
@@ -511,6 +524,14 @@ def _capacity_attribution(
                             - pd.to_numeric(merged[baseline_col], errors="coerce").fillna(0.0)
                         ).sum()
                     )
+            elif column == "Resource_Aware_Promoted_Score_Orders":
+                summary["candidate_resource_aware_promoted_score_orders"] = int(
+                    pd.to_numeric(merged[candidate_column], errors="coerce").fillna(0).sum()
+                )
+            elif column == "Resource_Aware_Direct_Score_Order_Feasible":
+                summary["candidate_resource_aware_direct_score_order_days"] = int(
+                    merged[candidate_column].fillna(False).astype(bool).sum()
+                )
     return merged, summary
 
 
@@ -635,6 +656,13 @@ def _fmt(value: Any, digits: int = 2, unit: str = "", signed: bool = False) -> s
     return f"{number:{sign}.{digits}f}{unit}"
 
 
+def _fmt_milli_money(value: Any, *, signed: bool = False) -> str:
+    number = _finite(value)
+    if number is None:
+        return "N/A"
+    return _fmt(number / 1000.0, digits=0, signed=signed)
+
+
 def _render_report(payload: dict[str, Any]) -> str:
     metadata = payload["metadata"]
     lines = [
@@ -649,6 +677,26 @@ def _render_report(payload: dict[str, Any]) -> str:
             ("契約", "只讀既有replay；不重跑、不改score／selector／training"),
         )),
     ]
+    if payload["comparisons"]:
+        selector = payload["comparisons"][0]["slot_occupancy"]
+        if "candidate_resource_aware_dl_selection_days" in selector:
+            lines.extend((
+                render_section("SR-C15 selector自身盤前診斷"),
+                render_table(
+                    ("指標", "結果"),
+                    (
+                        ("DL-selection days", str(selector.get("candidate_resource_aware_dl_selection_days", 0))),
+                        ("Capital-utilization days", str(selector.get("candidate_resource_aware_capital_utilization_days", 0))),
+                        ("Selector changed days", str(selector.get("candidate_resource_aware_changed_days", 0))),
+                        ("相對Min ROOS預計選入單數差", _fmt(selector.get("candidate_resource_aware_selected_order_delta"), digits=0, signed=True)),
+                        ("相對Min ROOS預留資金差", _fmt_milli_money(selector.get("candidate_resource_aware_reserved_delta_milli"), signed=True)),
+                        ("Selected score sum gain", _fmt(selector.get("candidate_resource_aware_score_sum_gain"), digits=4, signed=True)),
+                        ("Promoted score orders", str(selector.get("candidate_resource_aware_promoted_score_orders", 0))),
+                        ("Direct score-order feasible days", str(selector.get("candidate_resource_aware_direct_score_order_days", 0))),
+                    ),
+                ),
+                "此表只比較C15 selector與同日Min ROOS盤前baseline；不使用隔日成交或未來資訊。",
+            ))
     for index, pair in enumerate(payload["comparisons"], start=1):
         cand = pair["candidate_arm_id"]
         comp = pair["comparator_arm_id"]
@@ -675,6 +723,8 @@ def _render_report(payload: dict[str, Any]) -> str:
                 (
                     ("最終相對wealth優勢", _fmt(pair["wealth_path"].get("final_relative_wealth_advantage_pct"), unit="%", signed=True)),
                     (f"{metadata['focus_year']} Δlog wealth占全期淨差異", _fmt(conc.get("focus_year_share_of_net_pct"), unit="%")),
+                    (f"{metadata['focus_year']} 單獨相對wealth effect", _fmt(conc.get("focus_year_relative_wealth_effect_pct"), unit="%", signed=True)),
+                    (f"非{metadata['focus_year']}期間相對wealth effect", _fmt(conc.get("non_focus_relative_wealth_effect_pct"), unit="%", signed=True)),
                     ("最大正貢獻月份占全部正貢獻", _fmt(conc.get("top_positive_month_share_pct"), unit="%")),
                     (f"Top {metadata['top_month_count']}正貢獻月份占全部正貢獻", _fmt(conc.get(f"top_{metadata['top_month_count']}_positive_month_share_pct"), unit="%")),
                 ),
@@ -686,8 +736,9 @@ def _render_report(payload: dict[str, Any]) -> str:
                     ("C15-only選入單", str(pair["selection"]["candidate_only_selected_orders"])),
                     (f"{comp}-only選入單", str(pair["selection"]["comparator_only_selected_orders"])),
                     ("Exclusive selection ΔR", _fmt(trade.get("exclusive_selection_delta_r"), unit=" R", signed=True)),
+                    ("Exclusive selection ΔPnL", _fmt(trade.get("exclusive_selection_delta_pnl"), signed=True)),
                     ("Common trades ΔPnL", _fmt(trade.get("common_trade_pnl_delta"), signed=True)),
-                    ("All matched trade ΔPnL", _fmt(trade.get("all_trade_pnl_delta"), signed=True)),
+                    ("All trade ΔPnL", _fmt(trade.get("all_trade_pnl_delta"), signed=True)),
                 ),
             ),
             render_table(
@@ -734,6 +785,7 @@ def _render_report(payload: dict[str, Any]) -> str:
         render_section(f"{len(payload['comparisons']) + 1}. 使用限制"),
         "本Audit只使用已完成strategy compare工件。Δlog wealth是portfolio path的精確相對wealth歸因；trade PnL／R分解是交易層診斷，因position sizing與compounding不同，不要求其算術加總等於最終報酬差。",
         "選股不同日只依盤前selected-buy集合比較；後續持倉延續造成的wealth差異會落在之後日期，因此不可把同日equity變化直接當作該日selection的因果效果。",
+        "Selector自身盤前診斷比較C15重排結果與同日Min ROOS baseline；其selected／reserved差異是事前資源幾何，不代表事後一定成交或獲利。",
         "本結果不得回流score cutoff、blend weight、年份/regime gate、Target係數或模型訓練。",
     ))
     return "\n\n".join(lines).rstrip() + "\n"

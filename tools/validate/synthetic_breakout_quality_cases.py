@@ -17222,10 +17222,14 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 data.update({
                     "Resource_Aware_Mode": ["dl-selection", "inactive", "inactive"],
                     "Resource_Aware_Changed": [True, False, False],
+                    "Resource_Aware_Baseline_Selected": [1, 0, 0],
+                    "Resource_Aware_Selected": [2, 0, 0],
                     "Resource_Aware_Baseline_Reserved_Milli": [100000, 0, 0],
-                    "Resource_Aware_Reserved_Milli": [100000, 0, 0],
+                    "Resource_Aware_Reserved_Milli": [110000, 0, 0],
                     "Resource_Aware_Baseline_Score_Sum": [0.5, 0.0, 0.0],
                     "Resource_Aware_Score_Sum": [0.8, 0.0, 0.0],
+                    "Resource_Aware_Promoted_Score_Orders": [1, 0, 0],
+                    "Resource_Aware_Direct_Score_Order_Feasible": [True, False, False],
                 })
             return pd.DataFrame(data)
 
@@ -17276,6 +17280,15 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                     abs_tol=1e-12,
                 )
             )
+        c15_vs_c3 = next(
+            item for item in c15_payload["comparisons"]
+            if item["comparator_arm_id"] == "C3"
+        )
+        c15_vs_c12 = next(
+            item for item in c15_payload["comparisons"]
+            if item["comparator_arm_id"] == "C12"
+        )
+        c15_report_text = (c15_latest / "audit.md").read_text(encoding="utf-8")
         add_check(
             results,
             "synthetic_breakout_quality",
@@ -17283,12 +17296,28 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             "c15_attribution_is_read_only_exact_wealth_path_and_cross_arm_capital_geometry_audit",
             True,
             c15_status["status"] == "READY"
+            and c15_payload["schema_version"] == 2
             and [item["comparator_arm_id"] for item in c15_payload["comparisons"]] == ["C3", "C12"]
             and all(exact_paths)
             and all(item["selection"]["changed_days"] == 1 for item in c15_payload["comparisons"])
-            and next(item for item in c15_payload["comparisons"] if item["comparator_arm_id"] == "C12")["trade_contribution"]["common_trade_count"] == 0
-            and next(item for item in c15_payload["comparisons"] if item["comparator_arm_id"] == "C12")["trade_contribution"]["candidate_only_trade_count"] == 1
-            and next(item for item in c15_payload["comparisons"] if item["comparator_arm_id"] == "C12")["trade_contribution"]["comparator_only_trade_count"] == 1
+            and c15_vs_c12["trade_contribution"]["common_trade_count"] == 0
+            and c15_vs_c12["trade_contribution"]["candidate_only_trade_count"] == 1
+            and c15_vs_c12["trade_contribution"]["comparator_only_trade_count"] == 1
+            and math.isclose(
+                c15_vs_c3["concentration"]["non_focus_delta_log_wealth"],
+                c15_vs_c3["concentration"]["net_delta_log_wealth"]
+                - c15_vs_c3["concentration"]["focus_year_delta_log_wealth"],
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            and c15_vs_c3["slot_occupancy"]["candidate_resource_aware_selected_order_delta"] == 1
+            and c15_vs_c3["slot_occupancy"]["candidate_resource_aware_reserved_delta_milli"] == 10000
+            and c15_vs_c3["slot_occupancy"]["candidate_resource_aware_promoted_score_orders"] == 1
+            and c15_vs_c3["slot_occupancy"]["candidate_resource_aware_direct_score_order_days"] == 1
+            and "Exclusive selection ΔPnL" in c15_report_text
+            and "All trade ΔPnL" in c15_report_text
+            and "非2024期間相對wealth effect" in c15_report_text
+            and "SR-C15 selector自身盤前診斷" in c15_report_text
             and c15_payload["metadata"]["read_only"] is True
             and c15_payload["metadata"]["portfolio_replay_executed"] is False
             and (c15_latest / "audit.md").is_file()

@@ -53,15 +53,14 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | Runtime DL source | `DL-A9` | `DATA-breakout_quality_v1 / ARCH-inception_time_v1 / PROFILE-unique_group_sampling / threshold 0.5` | ACTIVE research DL source |
 | Alternative DL source | `DL-TP1` | `LABEL-a2_realized_trade_path_v1` realized trade-path binary source | HARD-FILTER REJECTED；保留歷史重現 |
 | Strategy params baseline | `PARAM-P2 / Min ROOS` | DL-off-trained rolling active params | ACTIVE strategy parameter baseline |
-| Resource-aware 最佳已知經濟結果 | `SR-C11` | A9 resource-aware first-improvement | 目前 resource-aware variants 中已知經濟績效最佳 |
+| Resource-aware 最佳已知經濟結果 | `SR-C15` | All-event continuous capital-utilization-first | RESULT_AVAILABLE／PROMISING_NOT_PROMOTED；全期Return/MDD/RoMD最佳，但AUD-c15確認優勢高度集中2024，尚不升格正式基準 |
 | 最大化 PASS 研究基準 | `SR-C12` | A9 resource-aware best-improvement basket | ACTIVE；研究方向固定為「最大化 PASS 使用，再提高 PASS 品質」 |
-| 最新已完成Audit結果 | `AUD-a9-selection-confidence` | `SR-C12` DL Selection Mode內A9 confidence排序力 | RESULT_AVAILABLE；整體排序力弱，不採用confidence-priority |
-| Current Audit work | `AUD-c15-strategy-attribution` | `SR-C15` vs `SR-C3 / SR-C12` read-only portfolio attribution | IMPLEMENTED／RESULT_PENDING；只讀既有strategy-compare工件，不新增OOS runtime調參 |
+| 最新已完成Audit結果 | `AUD-c15-strategy-attribution` | `SR-C15` vs `SR-C3 / SR-C12` read-only portfolio attribution | RESULT_AVAILABLE；2024單獨相對wealth effect約+18.10%/+11.46%，非2024則約-11.25%/-8.19%；portfolio優勢主要由capital geometry、slot occupancy與compounding解釋，非平均R改善 |
 | Continuous research DL source | `DL-CONT11G` | `MR-11G / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse` frozen OOS continuous score | HISTORICAL controlled-replay source；SR-C14未採用 |
 | Current model research | `MR-12A` | No-time all-event continuous breakout-event ranker；同一Target／architecture，只把training scope由PASS-only改為all-events | ARTIFACT_AVAILABLE／STRATEGY_RESULT_AVAILABLE；all-event deployment明顯優於MR-11G，standalone model OOS metrics待正式回填 |
 | Current continuous DL source | `DL-CONT12A` | `MR-12A / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_mse` frozen OOS continuous score | ARTIFACT_AVAILABLE／STRATEGY_RESULT_AVAILABLE；只供controlled strategy research |
-| Current strategy arm | `SR-C15` | Capital-utilization first + `DL-CONT12A` all-event continuous score | RESULT_AVAILABLE／PROMISING_NOT_PROMOTED；同期間C3/C12中Return/MDD/RoMD最佳，但年度集中與EV/selection-R差異需歸因 |
-| 最新策略結果 | `SR-C15` | Capital-utilization first + `DL-CONT12A` all-event continuous score | RESULT_AVAILABLE；2021-01-01～2025-12-22 Return=168.69%、MDD=14.81%、RoMD=11.39；優於同期間C3/C12主要portfolio指標，但尚未正式promote |
+| Current strategy arm | `SR-C15` | Capital-utilization first + `DL-CONT12A` all-event continuous score | RESULT_AVAILABLE／PROMISING_NOT_PROMOTED；AUD-c15已完成，確認C15相對C3/C12的全期優勢由2024 over-compensate非2024劣勢，且主要機制為capital geometry／slot occupancy／compounding而非平均R提升 |
+| 最新策略結果 | `SR-C15` | Capital-utilization first + `DL-CONT12A` all-event continuous score | RESULT_AVAILABLE；2021-01-01～2025-12-22 Return=168.69%、MDD=14.81%、RoMD=11.39；仍不promote，下一個最乾淨診斷應優先比較相同runtime的SR-C15 vs SR-C14 |
 
 ### `MR-9A` 與 `DL-A9` 必須分開
 
