@@ -49,29 +49,92 @@ def read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def resolve_strategy_compare_run(root: Path, definition: AuditDefinition) -> tuple[Path, dict[str, Any]]:
-    if str(definition.source.get("kind") or "") != "strategy_compare":
-        raise ValueError(f"{definition.audit_id}.source.kind必須是strategy_compare")
-    run_setting = str(definition.source.get("run") or "").strip()
-    if not run_setting:
-        raise ValueError(f"{definition.audit_id}.source.run不可空白")
+def _validated_completed_run(root: Path, run_dir: Path) -> tuple[Path, dict[str, Any]]:
+    resolved = Path(run_dir).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Audit strategy_compare run必須位於專案root內") from exc
+    result = read_json(resolved / "strategy_comparison.json")
+    if str(result.get("status") or "") != "COMPLETED":
+        raise ValueError("strategy_compare結果尚未完成")
+    return resolved, result
+
+
+def resolve_strategy_compare_run_selector(
+    root: Path,
+    selector: dict[str, Any],
+    *,
+    audit_id: str,
+    required_arm_id: str | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    root = Path(root).resolve()
+    run_setting = str(selector.get("run") or "").strip()
+    fingerprint = str(selector.get("config_fingerprint") or "").strip()
+    if bool(run_setting) == bool(fingerprint):
+        raise ValueError(
+            f"{audit_id}.strategy_compare run selector必須二選一設定run或config_fingerprint"
+        )
+    if fingerprint:
+        runs_root = root / "outputs" / "strategy_compare" / "runs"
+        if not runs_root.is_dir():
+            raise FileNotFoundError("缺少strategy_compare runs目錄")
+        matches: list[tuple[Path, dict[str, Any]]] = []
+        for candidate_dir in sorted(
+            (path for path in runs_root.iterdir() if path.is_dir()),
+            key=lambda path: path.name,
+            reverse=True,
+        ):
+            result_path = candidate_dir / "strategy_comparison.json"
+            if not result_path.is_file():
+                continue
+            try:
+                result = read_json(result_path)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                continue
+            if str(result.get("status") or "") != "COMPLETED":
+                continue
+            if str(result.get("config_fingerprint") or "").strip() != fingerprint:
+                continue
+            if required_arm_id:
+                scenarios = dict(result.get("scenarios") or {})
+                arms = dict(dict(result.get("settings") or {}).get("arms") or {})
+                if required_arm_id not in scenarios or required_arm_id not in arms:
+                    continue
+            matches.append((candidate_dir.resolve(), result))
+        if not matches:
+            suffix = "" if not required_arm_id else f" 且包含arm={required_arm_id}"
+            raise FileNotFoundError(
+                f"找不到config_fingerprint={fingerprint}的已完成strategy_compare run{suffix}"
+            )
+        return _validated_completed_run(root, matches[0][0])
+
     if run_setting == "latest":
         manifest_path = root / "outputs" / "strategy_compare" / "latest" / "manifest.json"
         manifest = read_json(manifest_path)
         run_value = str(manifest.get("run_dir") or "").strip()
         if not run_value:
             raise ValueError("strategy_compare latest manifest缺少run_dir")
-        run_dir = (root / Path(run_value)).resolve()
+        run_dir = root / Path(run_value)
     else:
-        run_dir = (root / Path(run_setting)).resolve()
-    try:
-        run_dir.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("Audit strategy_compare run必須位於專案root內") from exc
-    result = read_json(run_dir / "strategy_comparison.json")
-    if str(result.get("status") or "") != "COMPLETED":
-        raise ValueError("strategy_compare結果尚未完成")
+        run_dir = root / Path(run_setting)
+    run_dir, result = _validated_completed_run(root, run_dir)
+    if required_arm_id:
+        scenarios = dict(result.get("scenarios") or {})
+        arms = dict(dict(result.get("settings") or {}).get("arms") or {})
+        if required_arm_id not in scenarios or required_arm_id not in arms:
+            raise ValueError(f"strategy_compare run不存在arm: {required_arm_id}")
     return run_dir, result
+
+
+def resolve_strategy_compare_run(root: Path, definition: AuditDefinition) -> tuple[Path, dict[str, Any]]:
+    if str(definition.source.get("kind") or "") != "strategy_compare":
+        raise ValueError(f"{definition.audit_id}.source.kind必須是strategy_compare")
+    return resolve_strategy_compare_run_selector(
+        root,
+        dict(definition.source),
+        audit_id=definition.audit_id,
+    )
 
 
 def _runtime_prefix(arm: dict[str, Any]) -> str:
@@ -161,4 +224,5 @@ __all__ = [
     "read_json",
     "resolve_arm_artifacts",
     "resolve_strategy_compare_run",
+    "resolve_strategy_compare_run_selector",
 ]

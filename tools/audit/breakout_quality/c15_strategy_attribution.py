@@ -29,12 +29,12 @@ from tools.audit.portfolio.score_ranking_capture import build_trade_lifecycle_ro
 from tools.audit.sources.strategy_compare import (
     StrategyCompareArmArtifacts,
     resolve_arm_artifacts,
-    resolve_strategy_compare_run,
+    resolve_strategy_compare_run_selector,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-AUDIT_RESULT_SCHEMA_VERSION = 2
+AUDIT_RESULT_SCHEMA_VERSION = 3
 
 
 def _finite(value: Any) -> float | None:
@@ -110,6 +110,124 @@ def _required_paths(artifacts: StrategyCompareArmArtifacts) -> dict[str, Path]:
     }
 
 
+def _arm_run_selector(definition: AuditDefinition, arm_id: str) -> dict[str, Any]:
+    source = dict(definition.source)
+    arm_runs = source.get("arm_runs")
+    if arm_runs in (None, {}):
+        return source
+    if not isinstance(arm_runs, dict):
+        raise ValueError(f"{definition.audit_id}.source.arm_runs必須是mapping")
+    selector = arm_runs.get(str(arm_id))
+    if not isinstance(selector, dict):
+        raise ValueError(f"{definition.audit_id}.source.arm_runs缺少arm: {arm_id}")
+    return dict(selector)
+
+
+def _resolve_attribution_run(
+    root: Path,
+    definition: AuditDefinition,
+    arm_id: str,
+) -> tuple[Path, dict[str, Any]]:
+    return resolve_strategy_compare_run_selector(
+        root,
+        _arm_run_selector(definition, arm_id),
+        audit_id=definition.audit_id,
+        required_arm_id=arm_id,
+    )
+
+
+def _strategy_settings_signature(result: dict[str, Any]) -> dict[str, Any]:
+    settings = dict(result.get("settings") or {})
+    return {
+        "dataset": settings.get("dataset"),
+        "param_policy": settings.get("param_policy"),
+        "max_positions": settings.get("max_positions"),
+        "rotation": settings.get("rotation"),
+    }
+
+
+def _result_arm(result: dict[str, Any], arm_id: str) -> dict[str, Any]:
+    arms = dict(dict(result.get("settings") or {}).get("arms") or {})
+    arm = arms.get(str(arm_id))
+    if not isinstance(arm, dict):
+        raise ValueError(f"strategy_compare結果不存在arm: {arm_id}")
+    return dict(arm)
+
+
+def _validate_cross_run_pair(
+    candidate_result: dict[str, Any],
+    comparator_result: dict[str, Any],
+    *,
+    candidate_arm_id: str,
+    comparator_arm_id: str,
+) -> None:
+    candidate_period = dict(candidate_result.get("comparison_period") or {})
+    comparator_period = dict(comparator_result.get("comparison_period") or {})
+    if candidate_period != comparator_period:
+        raise ValueError(
+            f"跨run attribution期間不一致: {candidate_arm_id}={candidate_period}, "
+            f"{comparator_arm_id}={comparator_period}"
+        )
+    candidate_signature = _strategy_settings_signature(candidate_result)
+    comparator_signature = _strategy_settings_signature(comparator_result)
+    if candidate_signature != comparator_signature:
+        raise ValueError(
+            f"跨run attribution共用執行設定不一致: "
+            f"{candidate_arm_id}={candidate_signature}, {comparator_arm_id}={comparator_signature}"
+        )
+    candidate_arm = _result_arm(candidate_result, candidate_arm_id)
+    comparator_arm = _result_arm(comparator_result, comparator_arm_id)
+    for field in ("param_source", "rule_policy", "dl_runtime_mode"):
+        if candidate_arm.get(field) != comparator_arm.get(field):
+            raise ValueError(
+                f"跨run attribution arm契約不一致: field={field}, "
+                f"{candidate_arm_id}={candidate_arm.get(field)!r}, "
+                f"{comparator_arm_id}={comparator_arm.get(field)!r}"
+            )
+    param_source = str(candidate_arm.get("param_source") or "").strip()
+    if not param_source:
+        raise ValueError("跨run attribution缺少param_source")
+    candidate_identity = dict(candidate_result.get("artifact_identities") or {}).get(
+        f"param:{param_source}"
+    )
+    comparator_identity = dict(comparator_result.get("artifact_identities") or {}).get(
+        f"param:{param_source}"
+    )
+    if not isinstance(candidate_identity, dict) or not isinstance(comparator_identity, dict):
+        raise ValueError("跨run attribution缺少正式策略參數identity")
+    candidate_sha = str(candidate_identity.get("sha256") or "").strip()
+    comparator_sha = str(comparator_identity.get("sha256") or "").strip()
+    if not candidate_sha or not comparator_sha or candidate_sha != comparator_sha:
+        raise ValueError(
+            f"跨run attribution策略參數工件不一致: "
+            f"{candidate_arm_id}={candidate_sha or '-'}, {comparator_arm_id}={comparator_sha or '-'}"
+        )
+
+
+def _resolve_attribution_sources(
+    root: Path,
+    definition: AuditDefinition,
+    candidate: str,
+    comparators: tuple[str, ...],
+) -> tuple[dict[str, Path], dict[str, dict[str, Any]]]:
+    run_dirs: dict[str, Path] = {}
+    results: dict[str, dict[str, Any]] = {}
+    for arm_id in (candidate, *comparators):
+        run_dir, result = _resolve_attribution_run(root, definition, arm_id)
+        run_dirs[arm_id] = run_dir
+        results[arm_id] = result
+    candidate_run = run_dirs[candidate]
+    for comparator in comparators:
+        if run_dirs[comparator] != candidate_run:
+            _validate_cross_run_pair(
+                results[candidate],
+                results[comparator],
+                candidate_arm_id=candidate,
+                comparator_arm_id=comparator,
+            )
+    return run_dirs, results
+
+
 def collect_strategy_attribution_status(
     definition: AuditDefinition,
     *,
@@ -118,19 +236,15 @@ def collect_strategy_attribution_status(
     root = Path(project_root).resolve()
     try:
         candidate, comparators, _focus_year, _top_months, _top_trades = _validate_definition(definition)
-        run_dir, result = resolve_strategy_compare_run(root, definition)
-        candidate_artifacts = resolve_arm_artifacts(
-            run_dir=run_dir,
-            result=result,
-            arm_id=candidate,
-            preferred_pair_arm_id=candidate,
+        run_dirs, results = _resolve_attribution_sources(
+            root, definition, candidate, comparators
         )
-        all_artifacts = {candidate: candidate_artifacts}
-        for comparator in comparators:
-            all_artifacts[comparator] = resolve_arm_artifacts(
-                run_dir=run_dir,
-                result=result,
-                arm_id=comparator,
+        all_artifacts: dict[str, StrategyCompareArmArtifacts] = {}
+        for arm_id in (candidate, *comparators):
+            all_artifacts[arm_id] = resolve_arm_artifacts(
+                run_dir=run_dirs[arm_id],
+                result=results[arm_id],
+                arm_id=arm_id,
                 preferred_pair_arm_id=candidate,
             )
         missing: list[str] = []
@@ -140,6 +254,10 @@ def collect_strategy_attribution_status(
                     missing.append(f"{arm_id}:{label}")
         status = "READY" if not missing else "BLOCKED"
         reason = "" if not missing else "缺少正式只讀工件: " + ", ".join(missing)
+        display_runs = {
+            arm_id: project_relative_display_path(path, project_root=root)
+            for arm_id, path in run_dirs.items()
+        }
         return {
             "audit_id": definition.audit_id,
             "status": status,
@@ -148,7 +266,8 @@ def collect_strategy_attribution_status(
                 "candidate_arm_id": candidate,
                 "comparator_arm_ids": list(comparators),
                 "display": f"{candidate} vs {','.join(comparators)}",
-                "strategy_compare_run": project_relative_display_path(run_dir, project_root=root),
+                "strategy_compare_runs": display_runs,
+                "cross_run": len(set(display_runs.values())) > 1,
             },
         }
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
@@ -479,59 +598,62 @@ def _capacity_attribution(
         "changed_days_filled_buy_delta": float(pd.to_numeric(changed.get("delta_Filled_Buys_Today"), errors="coerce").fillna(0).sum()) if not changed.empty else 0.0,
         "changed_days_missed_buy_delta": float(pd.to_numeric(changed.get("delta_Missed_Buys_Today"), errors="coerce").fillna(0).sum()) if not changed.empty else 0.0,
     }
-    for column in (
-        "Resource_Aware_DL_Enabled",
-        "Resource_Aware_Mode",
-        "Resource_Aware_Changed",
-        "Resource_Aware_Baseline_Selected",
-        "Resource_Aware_Selected",
-        "Resource_Aware_Baseline_Reserved_Milli",
-        "Resource_Aware_Reserved_Milli",
-        "Resource_Aware_Baseline_Score_Sum",
-        "Resource_Aware_Score_Sum",
-        "Resource_Aware_Promoted_Score_Orders",
-        "Resource_Aware_Direct_Score_Order_Feasible",
-    ):
-        candidate_column = f"candidate_{column}"
-        if candidate_column in merged.columns:
-            if column == "Resource_Aware_Mode":
-                mode = merged[candidate_column].fillna("inactive").astype(str)
-                summary["candidate_resource_aware_dl_selection_days"] = int((mode == "dl-selection").sum())
-                summary["candidate_resource_aware_capital_utilization_days"] = int((mode == "capital-utilization").sum())
-            elif column == "Resource_Aware_Changed":
-                summary["candidate_resource_aware_changed_days"] = int(merged[candidate_column].fillna(False).astype(bool).sum())
-            elif column == "Resource_Aware_Selected":
-                baseline_col = "candidate_Resource_Aware_Baseline_Selected"
-                if baseline_col in merged.columns:
-                    selected = pd.to_numeric(merged[candidate_column], errors="coerce").fillna(0)
-                    baseline = pd.to_numeric(merged[baseline_col], errors="coerce").fillna(0)
-                    summary["candidate_resource_aware_selected_order_delta"] = int((selected - baseline).sum())
-            elif column == "Resource_Aware_Reserved_Milli":
-                baseline_col = "candidate_Resource_Aware_Baseline_Reserved_Milli"
-                if baseline_col in merged.columns:
-                    summary["candidate_resource_aware_reserved_delta_milli"] = int(
-                        (
-                            pd.to_numeric(merged[candidate_column], errors="coerce").fillna(0)
-                            - pd.to_numeric(merged[baseline_col], errors="coerce").fillna(0)
-                        ).sum()
-                    )
-            elif column == "Resource_Aware_Score_Sum":
-                baseline_col = "candidate_Resource_Aware_Baseline_Score_Sum"
-                if baseline_col in merged.columns:
-                    summary["candidate_resource_aware_score_sum_gain"] = float(
-                        (
-                            pd.to_numeric(merged[candidate_column], errors="coerce").fillna(0.0)
-                            - pd.to_numeric(merged[baseline_col], errors="coerce").fillna(0.0)
-                        ).sum()
-                    )
-            elif column == "Resource_Aware_Promoted_Score_Orders":
-                summary["candidate_resource_aware_promoted_score_orders"] = int(
-                    pd.to_numeric(merged[candidate_column], errors="coerce").fillna(0).sum()
-                )
-            elif column == "Resource_Aware_Direct_Score_Order_Feasible":
-                summary["candidate_resource_aware_direct_score_order_days"] = int(
-                    merged[candidate_column].fillna(False).astype(bool).sum()
-                )
+    def append_resource_summary(side: str) -> None:
+        prefix = f"{side}_"
+        mode_col = prefix + "Resource_Aware_Mode"
+        if mode_col not in merged.columns:
+            return
+        mode = merged[mode_col].fillna("inactive").astype(str)
+        summary[f"{side}_resource_aware_dl_selection_days"] = int((mode == "dl-selection").sum())
+        summary[f"{side}_resource_aware_capital_utilization_days"] = int((mode == "capital-utilization").sum())
+
+        changed_col = prefix + "Resource_Aware_Changed"
+        if changed_col in merged.columns:
+            summary[f"{side}_resource_aware_changed_days"] = int(
+                merged[changed_col].fillna(False).astype(bool).sum()
+            )
+
+        selected_col = prefix + "Resource_Aware_Selected"
+        baseline_selected_col = prefix + "Resource_Aware_Baseline_Selected"
+        if selected_col in merged.columns and baseline_selected_col in merged.columns:
+            selected = pd.to_numeric(merged[selected_col], errors="coerce").fillna(0)
+            baseline = pd.to_numeric(merged[baseline_selected_col], errors="coerce").fillna(0)
+            summary[f"{side}_resource_aware_selected_order_delta"] = int((selected - baseline).sum())
+
+        reserved_col = prefix + "Resource_Aware_Reserved_Milli"
+        baseline_reserved_col = prefix + "Resource_Aware_Baseline_Reserved_Milli"
+        if reserved_col in merged.columns and baseline_reserved_col in merged.columns:
+            summary[f"{side}_resource_aware_reserved_delta_milli"] = int(
+                (
+                    pd.to_numeric(merged[reserved_col], errors="coerce").fillna(0)
+                    - pd.to_numeric(merged[baseline_reserved_col], errors="coerce").fillna(0)
+                ).sum()
+            )
+
+        score_col = prefix + "Resource_Aware_Score_Sum"
+        baseline_score_col = prefix + "Resource_Aware_Baseline_Score_Sum"
+        if score_col in merged.columns and baseline_score_col in merged.columns:
+            summary[f"{side}_resource_aware_score_sum_gain"] = float(
+                (
+                    pd.to_numeric(merged[score_col], errors="coerce").fillna(0.0)
+                    - pd.to_numeric(merged[baseline_score_col], errors="coerce").fillna(0.0)
+                ).sum()
+            )
+
+        promoted_col = prefix + "Resource_Aware_Promoted_Score_Orders"
+        if promoted_col in merged.columns:
+            summary[f"{side}_resource_aware_promoted_score_orders"] = int(
+                pd.to_numeric(merged[promoted_col], errors="coerce").fillna(0).sum()
+            )
+
+        feasible_col = prefix + "Resource_Aware_Direct_Score_Order_Feasible"
+        if feasible_col in merged.columns:
+            summary[f"{side}_resource_aware_direct_score_order_days"] = int(
+                merged[feasible_col].fillna(False).astype(bool).sum()
+            )
+
+    append_resource_summary("candidate")
+    append_resource_summary("comparator")
     return merged, summary
 
 
@@ -665,17 +787,23 @@ def _fmt_milli_money(value: Any, *, signed: bool = False) -> str:
 
 def _render_report(payload: dict[str, Any]) -> str:
     metadata = payload["metadata"]
+    source_rows = [
+        ("Audit", f"AUD-{payload['audit_id']}"),
+        ("策略比較期間", f"{metadata['comparison_period'].get('start', '')} ～ {metadata['comparison_period'].get('end', '')}"),
+        ("Candidate", metadata["candidate_arm_id"]),
+        ("Comparators", ", ".join(metadata["comparator_arm_ids"])),
+        ("Focus year", metadata["focus_year"]),
+    ]
+    run_map = dict(metadata.get("strategy_compare_runs") or {})
+    if bool(metadata.get("cross_run")):
+        for arm_id in (metadata["candidate_arm_id"], *metadata["comparator_arm_ids"]):
+            source_rows.append((f"Strategy compare {arm_id}", run_map.get(arm_id, "-")))
+    else:
+        source_rows.append(("Strategy compare", run_map.get(metadata["candidate_arm_id"], metadata.get("strategy_compare_run", "-"))))
+    source_rows.append(("契約", "只讀既有replay；不重跑、不改score／selector／training"))
     lines = [
         render_title("C15 Read-only Strategy Attribution"),
-        render_key_values((
-            ("Audit", f"AUD-{payload['audit_id']}"),
-            ("策略比較期間", f"{metadata['comparison_period'].get('start', '')} ～ {metadata['comparison_period'].get('end', '')}"),
-            ("Strategy compare", metadata["strategy_compare_run"]),
-            ("Candidate", metadata["candidate_arm_id"]),
-            ("Comparators", ", ".join(metadata["comparator_arm_ids"])),
-            ("Focus year", metadata["focus_year"]),
-            ("契約", "只讀既有replay；不重跑、不改score／selector／training"),
-        )),
+        render_key_values(tuple(source_rows)),
     ]
     if payload["comparisons"]:
         selector = payload["comparisons"][0]["slot_occupancy"]
@@ -771,6 +899,24 @@ def _render_report(payload: dict[str, Any]) -> str:
                 ),
             ),
         ))
+        if "comparator_resource_aware_dl_selection_days" in gap:
+            lines.append(
+                render_table(
+                    ("Selector盤前資源診斷", comp, cand),
+                    (
+                        ("DL-selection days", str(gap.get("comparator_resource_aware_dl_selection_days", 0)), str(gap.get("candidate_resource_aware_dl_selection_days", 0))),
+                        ("Capital-utilization days", str(gap.get("comparator_resource_aware_capital_utilization_days", 0)), str(gap.get("candidate_resource_aware_capital_utilization_days", 0))),
+                        ("Selector changed days", str(gap.get("comparator_resource_aware_changed_days", 0)), str(gap.get("candidate_resource_aware_changed_days", 0))),
+                        ("相對各自Min ROOS預計選入單數差", _fmt(gap.get("comparator_resource_aware_selected_order_delta"), digits=0, signed=True), _fmt(gap.get("candidate_resource_aware_selected_order_delta"), digits=0, signed=True)),
+                        ("相對各自Min ROOS預留資金差", _fmt_milli_money(gap.get("comparator_resource_aware_reserved_delta_milli"), signed=True), _fmt_milli_money(gap.get("candidate_resource_aware_reserved_delta_milli"), signed=True)),
+                        ("Promoted score orders", str(gap.get("comparator_resource_aware_promoted_score_orders", 0)), str(gap.get("candidate_resource_aware_promoted_score_orders", 0))),
+                        ("Direct score-order feasible days", str(gap.get("comparator_resource_aware_direct_score_order_days", 0)), str(gap.get("candidate_resource_aware_direct_score_order_days", 0))),
+                    ),
+                )
+            )
+            lines.append(
+                "兩模型的score數值尺度不直接互相比較；此表只比較各自相對同日Min ROOS造成的盤前資源與selector行為。"
+            )
         top_month_rows = [
             (row["month"], _fmt(row["delta_log_wealth"], digits=5, signed=True), _fmt(row["relative_wealth_effect_pct"], unit="%", signed=True))
             for row in pair["top_positive_months"]
@@ -799,19 +945,21 @@ def run_strategy_attribution_audit(
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     candidate, comparators, focus_year, top_month_count, top_trade_count = _validate_definition(definition)
-    run_dir, result = resolve_strategy_compare_run(root, definition)
-    period = dict(result.get("comparison_period") or {})
+    run_dirs, results = _resolve_attribution_sources(
+        root, definition, candidate, comparators
+    )
+    period = dict(results[candidate].get("comparison_period") or {})
     candidate_artifacts = resolve_arm_artifacts(
-        run_dir=run_dir,
-        result=result,
+        run_dir=run_dirs[candidate],
+        result=results[candidate],
         arm_id=candidate,
         preferred_pair_arm_id=candidate,
     )
     comparisons: list[dict[str, Any]] = []
     for comparator in comparators:
         comparator_artifacts = resolve_arm_artifacts(
-            run_dir=run_dir,
-            result=result,
+            run_dir=run_dirs[comparator],
+            result=results[comparator],
             arm_id=comparator,
             preferred_pair_arm_id=candidate,
         )
@@ -823,6 +971,14 @@ def run_strategy_attribution_audit(
             top_trade_count=top_trade_count,
         ))
 
+    display_runs = {
+        arm_id: project_relative_display_path(path, project_root=root)
+        for arm_id, path in run_dirs.items()
+    }
+    fingerprints = {
+        arm_id: results[arm_id].get("config_fingerprint")
+        for arm_id in run_dirs
+    }
     payload = {
         "schema_version": AUDIT_RESULT_SCHEMA_VERSION,
         "created_at": get_taipei_now().isoformat(),
@@ -830,8 +986,11 @@ def run_strategy_attribution_audit(
         "audit_type": definition.audit_type,
         "config": definition.as_dict(),
         "metadata": {
-            "strategy_compare_run": project_relative_display_path(run_dir, project_root=root),
-            "strategy_compare_config_fingerprint": result.get("config_fingerprint"),
+            "strategy_compare_run": display_runs[candidate],
+            "strategy_compare_runs": display_runs,
+            "strategy_compare_config_fingerprint": fingerprints[candidate],
+            "strategy_compare_config_fingerprints": fingerprints,
+            "cross_run": len(set(display_runs.values())) > 1,
             "comparison_period": period,
             "candidate_arm_id": candidate,
             "comparator_arm_ids": list(comparators),

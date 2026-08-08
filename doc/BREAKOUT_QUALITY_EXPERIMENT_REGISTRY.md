@@ -164,7 +164,8 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `AUD-a9-pass-quality` | `a9-pass-quality` | `SR-C12 / DL-A9` | RESULT_AVAILABLE | Raw A9 PASS score 整體單調性弱；不支持直接 score sorting 或 age cutoff |
 | `AUD-a9-pass-persistence` | `a9-pass-persistence` | `SR-C12 / DL-A9` | RESULT_AVAILABLE | False PASS persistence=1.60×；candidate-day FP amplification=1.33×；selector 不是主要放大來源 |
 | `AUD-a9-selection-confidence` | `a9-selection-confidence` | `SR-C12 / DL-A9` | RESULT_AVAILABLE／NOT_USED_FOR_PRIMARY_RANK | Candidate-day rho=0.071、unique-event rho=0.102、selected R rho=0.082；每日平均Label concordance=49.18%，不支持A9 confidence作主排序 |
-| `AUD-c15-strategy-attribution` | `c15-strategy-attribution` | `SR-C15` vs `SR-C3 / SR-C12` | IMPLEMENTED／RESULT_PENDING | exact daily `Δ log wealth`＋changed selection days＋common/exclusive trades＋capital geometry＋slot occupancy＋2024 concentration；只讀既有replay，不回流runtime／training |
+| `AUD-c15-strategy-attribution` | `c15-strategy-attribution` | `SR-C15` vs `SR-C3 / SR-C12` | RESULT_AVAILABLE | 2024單獨relative wealth effect約+18.10%/+11.46%，非2024約-11.25%/-8.19%；C15全期優勢主要由portfolio geometry／slot occupancy／compounding解釋，非平均R提升 |
+| `AUD-c15-source-attribution` | `c15-source-attribution` | `SR-C15 / MR-12A` vs `SR-C14 / MR-11G` | IMPLEMENTED／RESULT_PENDING | 直接按既有strategy-compare config fingerprint跨run重用正式C15/C14工件；只允許同期間、同Min ROOS參數SHA、同rule/runtime契約，隔離all-label vs PASS-only score source的經濟與資源差異 |
 
 Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Audit 自己不占用這兩種 ID。
 
@@ -199,7 +200,8 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 11. `SR-C14`不使用A9 PASS／REJECT、不重訓`MR-11G`、不新增score threshold或Min ROOS／DL混合權重；若本機缺MR-11G既有research OOS工件，策略比較必須BLOCKED而不是自動重訓。
 12. `SR-C14`正式結果期間為2021-01-01～2025-12-22（受DL-CONT11G frozen OOS coverage限制）：相對SR-C3報酬+0.73pp、MDD+1.76pp、RoMD-1.00、EV-0.07R、曝險-0.25pp、同參數DL選擇R+14.62R；相對SR-C12報酬-5.52pp、RoMD-0.73、EV-0.24R、同參數DL選擇R-79.99R。判定capital-utilization-first已大幅消除舊raw continuous sort的macro曝險問題，但現有MR-11G score在此deployment仍未形成足夠經濟排序力。
 13. `MR-12A`已完成工件並由`DL-CONT12A / SR-C15`進行正式controlled replay；相同capital-first runtime下，all-event training明顯優於MR-11G PASS-only deployment：C15相對C14報酬+11.62pp、MDD-2.36pp、RoMD+2.24、EV+0.06R，曝險只差-0.03pp，支持`all_labels` training semantics。
-14. `SR-C15`正式結果為Return=168.69%、MDD=14.81%、RoMD=11.39；同期間相對C3為+12.35pp Return／-0.60pp MDD／+1.24 RoMD，相對C12為+6.10pp Return／-1.66pp MDD／+1.51 RoMD。惟EV=0.64R、same-param DL selection R=+26.78R均弱於C12，且相對C3/C12的全期優勢高度依賴2024，因此目前標記`PROMISING_NOT_PROMOTED`；`AUD-c15-strategy-attribution`已實作、待使用者正式工件執行結果，不新增OOS調參。
+14. `SR-C15`正式結果為Return=168.69%、MDD=14.81%、RoMD=11.39；同期間相對C3為+12.35pp Return／-0.60pp MDD／+1.24 RoMD，相對C12為+6.10pp Return／-1.66pp MDD／+1.51 RoMD。惟EV=0.64R、same-param DL selection R=+26.78R均弱於C12，且`AUD-c15-strategy-attribution`已確認相對C3/C12的全期優勢高度依賴2024，因此目前標記`PROMISING_NOT_PROMOTED`。
+15. 下一個最高資訊量診斷為`AUD-c15-source-attribution`：直接重用config fingerprint=`4da3217c83bd`的C15正式run與`902c90b40dc2`的C14正式run；只有期間、共用執行設定、`PARAM-P2 / Min ROOS`參數SHA及`resource-aware-continuous` runtime契約全部一致才允許跨run attribution，不重跑portfolio。
 
 ---
 

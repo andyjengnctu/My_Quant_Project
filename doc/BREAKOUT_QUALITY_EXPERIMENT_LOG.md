@@ -5207,3 +5207,44 @@ Capital geometry：平均投入`160,998 → 172,080`、平均預留`168,163 → 
 
 不先建立新的SR-C16，也不回頭調MR-12A模型。下一個最高資訊量工作是**同一capital-utilization-first runtime下的SR-C15 vs SR-C14 read-only attribution**，用來把`all_labels` score source的改善與portfolio geometry分離。完成後若確認MR-12A在相同geometry下仍有穩定經濟貢獻，再把「增加DL實際決策日、同時不惡化盤前資源利用」設計為新的selector研究；selector variant應先在pre-2021 Selection/PIT strategy replay中決定，再回到既有2021+迭代研究OOS評估。
 
+
+## 2026-08-08 — AUD-c15-source-attribution實作：跨run重用C14/C15正式工件隔離all-label vs PASS-only score source
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING`
+
+### 程式基準
+
+- 使用者ZIP：`test-branch-1_20260808_125606_32f0bea.zip`
+- SHA256：`b1581a8d30e9c8ed215e077985c678abb0b05f80fc8914ee7d2cf6ec9a9c0f9c`
+- 本輪開始前已依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`。
+
+### 既有正式證據
+
+`AUD-c15-strategy-attribution`已確認：C15相對C3/C12的全期優勢高度依賴2024，且平均Realized R沒有同步提高；C15自身盤前resource-aware診斷為DL-selection days=114、selector changed days=94、相對Min ROOS預計選入單數差=+24、累計預留資金差約-1.064M、direct score-order feasible days=32。這正式證明目前cash-binding契約可守住macro exposure，但不等同逐日／逐basket資金幾何完全不變。
+
+同時既有C14正式結果已保存於config fingerprint=`902c90b40dc2`，C15正式結果保存於`4da3217c83bd`；兩者期間皆為`2021-01-01～2025-12-22`，均使用`PARAM-P2 / Min ROOS`、`base-finalist-best`、max positions=10、rotation=off與`resource-aware-continuous` runtime。為避免為read-only歸因重跑portfolio，本輪新增跨run正式工件解析。
+
+### 唯一變更
+
+新增`AUD-c15-source-attribution`，仍重用既有`strategy_attribution` handler，不建立新策略arm或模型：
+
+- Candidate：`SR-C15 / DL-CONT12A / MR-12A all_labels`，依正式config fingerprint=`4da3217c83bd`解析已完成run。
+- Comparator：`SR-C14 / DL-CONT11G / MR-11G pass_only`，依正式config fingerprint=`902c90b40dc2`解析已完成run。
+- 跨run只在comparison period、dataset、param policy、max positions、rotation、param source、rule policy、runtime mode與`param:min_roos`正式SHA全部一致時允許；任一不一致即BLOCKED。
+- Audit結果schema升至v3，metadata明確保存每個arm的source run／fingerprint與`cross_run`狀態。
+- Selector資源診斷由只顯示C15，擴充成pair-level顯示C14與C15各自相對同日Min ROOS的DL-selection days、selector changed days、planned selected-count delta、reserved-cash delta、promoted score orders與direct score-order feasible days；不同模型score數值本身不直接互比。
+
+### 研究邊界
+
+本輪只新增read-only Audit source與診斷；不重跑C14/C15、不重訓MR-11G/MR-12A、不改Target、score、resource gate、selector或strategy parameters。正式結果取得前`AUD-c15-source-attribution`只能標記`IMPLEMENTED / RESULT_PENDING`。
+
+### 獨立驗證
+
+- direct synthetic已覆蓋同run既有C15/C3/C12 attribution與跨run C15/C14 fingerprint resolver；跨run案例確認`portfolio_replay_executed=false`、exact `sum(Δlog wealth)=target relative wealth`、param SHA相同才READY，且pair-level comparator resource diagnostics存在。
+- GPT未執行`apps/test_suite.py`；正式double check仍由使用者本機執行。
+
+### 下一步
+
+套用後直接由`apps/audit.py`正式選單執行目前Audit設定即可；若本機保留上述兩個strategy-compare正式runs，應直接READY並產生C15 vs C14結果，不需要重新執行`apps/strategy_compare.py`。取得結果後再判斷是否建立新的capital-preserving selector研究；本輪不預先分配`SR-C16`。

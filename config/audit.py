@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-AUDIT_SCHEMA_VERSION = 2
+AUDIT_SCHEMA_VERSION = 3
 AUDIT_OUTPUT_ROOT = "outputs/audit"
 
 AUDIT_MODULES: dict[str, dict[str, Any]] = {
@@ -77,7 +77,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/a9_selection_confidence",
             },
             "c15-strategy-attribution": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "strategy_attribution",
                 "description": "C15相對C3／C12的wealth-path、selection、capital geometry、slot occupancy與trade contribution歸因",
                 "source": {
@@ -99,6 +99,33 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "trade_contribution": True,
                 },
                 "output_subdir": "breakout_quality/c15_strategy_attribution",
+            },
+            "c15-source-attribution": {
+                "enabled": True,
+                "audit_type": "strategy_attribution",
+                "description": "C15相對C14的跨run同runtime source attribution；隔離MR-12A all-label與MR-11G pass-only score source差異",
+                "source": {
+                    "kind": "strategy_compare",
+                    "candidate_arm_id": "C15",
+                    "comparator_arm_ids": ["C14"],
+                    "arm_runs": {
+                        "C15": {"config_fingerprint": "4da3217c83bd"},
+                        "C14": {"config_fingerprint": "902c90b40dc2"},
+                    },
+                },
+                "dimensions": {
+                    "focus_year": 2024,
+                    "top_month_count": 5,
+                    "top_trade_count": 20,
+                },
+                "outcomes": {
+                    "log_wealth_path": True,
+                    "selection_changes": True,
+                    "capital_geometry": True,
+                    "slot_occupancy": True,
+                    "trade_contribution": True,
+                },
+                "output_subdir": "breakout_quality/c15_source_attribution",
             },
         },
     },

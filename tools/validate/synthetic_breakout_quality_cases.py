@@ -16768,7 +16768,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         (item for item in all_definitions if item.audit_type == "selection_confidence"), None
     )
     strategy_attribution_definition = next(
-        (item for item in all_definitions if item.audit_type == "strategy_attribution"), None
+        (item for item in all_definitions if item.audit_id == "c15-strategy-attribution"), None
+    )
+    source_attribution_definition = next(
+        (item for item in all_definitions if item.audit_id == "c15-source-attribution"), None
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
@@ -16797,6 +16800,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and persistence_definition is not None
         and confidence_definition is not None
         and strategy_attribution_definition is not None
+        and source_attribution_definition is not None
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),
@@ -17185,12 +17189,17 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             "config_fingerprint": "synthetic-c15",
             "comparison_period": {"start": "2024-01-01", "end": "2024-01-05"},
             "settings": {
+                "dataset": "full",
+                "param_policy": "base-finalist-best",
+                "max_positions": 10,
+                "rotation": "off",
                 "arms": {
                     "C3": {"arm_id": "C3", "enabled": True, "param_source": "min_roos", "rule_policy": "all_off", "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None},
                     "C12": {"arm_id": "C12", "enabled": True, "param_source": "min_roos", "rule_policy": "all_off", "dl_enabled": True, "dl_id": "A9", "dl_runtime_mode": "resource-aware-binary-basket"},
                     "C15": {"arm_id": "C15", "enabled": True, "param_source": "min_roos", "rule_policy": "all_off", "dl_enabled": True, "dl_id": "CONT12A", "dl_runtime_mode": "resource-aware-continuous"},
                 }
             },
+            "artifact_identities": {"param:min_roos": {"sha256": "synthetic-param"}},
             "scenarios": {
                 "C3": {"total_return_pct": 10.0, "max_drawdown_pct": 8.0, "return_over_max_drawdown": 1.25, "expected_value_r": 1.0, "avg_exposure_pct": 90.0},
                 "C12": {"total_return_pct": 12.0, "max_drawdown_pct": 9.0, "return_over_max_drawdown": 1.33, "expected_value_r": 1.2, "avg_exposure_pct": 91.0},
@@ -17296,7 +17305,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             "c15_attribution_is_read_only_exact_wealth_path_and_cross_arm_capital_geometry_audit",
             True,
             c15_status["status"] == "READY"
-            and c15_payload["schema_version"] == 2
+            and c15_payload["schema_version"] == 3
             and [item["comparator_arm_id"] for item in c15_payload["comparisons"]] == ["C3", "C12"]
             and all(exact_paths)
             and all(item["selection"]["changed_days"] == 1 for item in c15_payload["comparisons"])
@@ -17322,6 +17331,103 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and c15_payload["metadata"]["portfolio_replay_executed"] is False
             and (c15_latest / "audit.md").is_file()
             and (c15_latest / "audit.json").is_file(),
+        )
+
+        if source_attribution_definition is None:
+            raise AssertionError("缺少c15-source-attribution正式設定")
+        c14_run_dir = root / "outputs" / "strategy_compare" / "runs" / "c14_synthetic"
+        c14_pair = c14_run_dir / "pairs" / "min_roos__all_off__CONT11G__resource_aware_continuous"
+        c14_pair.mkdir(parents=True, exist_ok=True)
+        c14_result = {
+            "status": "COMPLETED",
+            "config_fingerprint": "synthetic-c14",
+            "comparison_period": {"start": "2024-01-01", "end": "2024-01-05"},
+            "settings": {
+                "dataset": "full",
+                "param_policy": "base-finalist-best",
+                "max_positions": 10,
+                "rotation": "off",
+                "arms": {
+                    "C14": {"arm_id": "C14", "enabled": True, "param_source": "min_roos", "rule_policy": "all_off", "dl_enabled": True, "dl_id": "CONT11G", "dl_runtime_mode": "resource-aware-continuous"},
+                },
+            },
+            "artifact_identities": {"param:min_roos": {"sha256": "synthetic-param"}},
+            "scenarios": {
+                "C14": {"total_return_pct": 13.0, "max_drawdown_pct": 8.0, "return_over_max_drawdown": 1.625, "expected_value_r": 0.7, "avg_exposure_pct": 90.4},
+            },
+        }
+        (c14_run_dir / "strategy_comparison.json").write_text(
+            json.dumps(c14_result), encoding="utf-8"
+        )
+        _audit_trade_rows("CCC", 0.7, 9000.0, 85000.0, 98000.0, 87.0).to_csv(
+            c14_pair / "score_ranking_trades.csv", index=False, encoding="utf-8-sig"
+        )
+        _audit_equity([100.0, 107.0, 113.0]).to_csv(
+            c14_pair / "score_ranking_equity.csv", index=False, encoding="utf-8-sig"
+        )
+        _audit_capacity([1, 0, 0], [9, 10, 10], resource=True).to_csv(
+            c14_pair / "score_ranking_daily_capacity.csv", index=False, encoding="utf-8-sig"
+        )
+        _audit_selected("CCC").to_csv(
+            c14_pair / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig"
+        )
+        source_definition = type(source_attribution_definition)(
+            module_id=source_attribution_definition.module_id,
+            audit_id=source_attribution_definition.audit_id,
+            enabled=True,
+            audit_type=source_attribution_definition.audit_type,
+            description=source_attribution_definition.description,
+            source={
+                "kind": "strategy_compare",
+                "candidate_arm_id": "C15",
+                "comparator_arm_ids": ["C14"],
+                "arm_runs": {
+                    "C15": {"config_fingerprint": "synthetic-c15"},
+                    "C14": {"config_fingerprint": "synthetic-c14"},
+                },
+            },
+            dimensions={"focus_year": 2024, "top_month_count": 2, "top_trade_count": 5},
+            outcomes=dict(source_attribution_definition.outcomes),
+            output_subdir="breakout_quality/c15_source_attribution_synthetic",
+        )
+        source_status = collect_strategy_attribution_status(source_definition, project_root=root)
+        source_payload = run_strategy_attribution_audit(source_definition, project_root=root, quiet=True)
+        bad_c14_result = json.loads(json.dumps(c14_result))
+        bad_c14_result["artifact_identities"]["param:min_roos"]["sha256"] = "different-param"
+        (c14_run_dir / "strategy_comparison.json").write_text(
+            json.dumps(bad_c14_result), encoding="utf-8"
+        )
+        bad_source_status = collect_strategy_attribution_status(source_definition, project_root=root)
+        (c14_run_dir / "strategy_comparison.json").write_text(
+            json.dumps(c14_result), encoding="utf-8"
+        )
+        source_pair = source_payload["comparisons"][0]
+        source_latest = root / Path(AUDIT_OUTPUT_ROOT) / source_definition.output_subdir / "latest"
+        source_daily = pd.read_csv(
+            source_latest / "C15_vs_C14_daily_log_wealth.csv", encoding="utf-8-sig"
+        )
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "c15_source_attribution_reuses_compatible_completed_runs_by_fingerprint_without_replay",
+            True,
+            source_status["status"] == "READY"
+            and source_status["source"]["cross_run"] is True
+            and bad_source_status["status"] == "BLOCKED"
+            and "策略參數工件不一致" in bad_source_status["reason"]
+            and source_payload["schema_version"] == 3
+            and source_payload["metadata"]["cross_run"] is True
+            and source_payload["metadata"]["strategy_compare_config_fingerprints"] == {"C15": "synthetic-c15", "C14": "synthetic-c14"}
+            and source_pair["comparator_arm_id"] == "C14"
+            and "comparator_resource_aware_changed_days" in source_pair["slot_occupancy"]
+            and math.isclose(
+                float(source_daily["delta_log_wealth"].sum()),
+                float(source_pair["wealth_path"]["target_delta_log_wealth"]),
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            and source_payload["metadata"]["portfolio_replay_executed"] is False,
         )
 
     app_source = (Path(__file__).resolve().parents[2] / "apps" / "breakout_quality.py").read_text(encoding="utf-8")
