@@ -6474,3 +6474,40 @@ Controlled deltas：
 ### 下一步
 
 下一個最高資訊量工作是read-only **PIT strategy realization/capture attribution**，直接重用C23/C24/C25既有replay工件，不重跑portfolio、不重訓模型、不跑optimizer。至少拆解：exclusive trade realized R／PnL、planned/reserved→fill、position sizing與stop distance、holding與partial-tail slot-days、capital deployment、Target capture ratio／realization gap、以及年度貢獻；優先比較C24-C23與C25-C23，再用C25-C24隔離selector轉化。只有歸因確認有明確可由既有策略參數空間修正的機械瓶頸，才考慮Selection內參數適應；否則維持C23 baseline並把PIT ranking的直接策略部署淘汰。
+
+## 2026-08-09 — AUD-c23-c25-pit-realization 實作：Selection PIT策略實現／Capture只讀歸因
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / READ_ONLY_EXISTING_REPLAY_ONLY`
+
+### 程式基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_063143_d77bb26.zip`。
+- SHA256：`bd5fef06ca9e26a984187820b0d7f91ca78d9a9f0bb5afad46a5824ea78f56d5`。
+- GPT fresh extract：`/mnt/data/stock_review_063143`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### Audit identity／固定來源
+
+- 新增`AUD-c23-c25-pit-realization`（config id=`c23-c25-pit-realization`），不建立新`MR-*`、`DL-*`、`SR-C*`或參數stage。
+- 正式來源由`config/audit.py`驅動：baseline=`SR-C23`；candidate arms=`SR-C24 / SR-C25`；預設讀取最新已完成Strategy Compare run。handler不硬編arm ID。
+- Audit只接受既有completed score-ranking pair工件；需要`trades/equity/daily_capacity/selected_buys/selected_target_diagnostics/strategy_comparison.json`完整存在。缺工件即BLOCKED，不自動replay或重建。
+
+### 實作與單一真理
+
+1. `tools/audit/breakout_quality/strategy_realization_capture.py`只做orchestration與報表；不重寫交易／Target公式。
+2. Wealth path、selection difference、trade contribution、capital geometry與slot occupancy共用既有`c15_strategy_attribution` pair primitive；該primitive正式公開為`build_strategy_attribution_pair_payload`。
+3. Fill、reserved→invested、stop distance、holding、partial-tail slot-days與Target→Realized capture共用`tools/audit/portfolio/score_ranking_capture.py`既有`build_score_ranking_capture_audit`。Future Target仍只在replay後離線join。
+4. 新Audit另外把exclusive trades拆成baseline-only winner／loser與candidate-only winner／loser，並保存每pair詳細CSV；此拆解只來自canonical completed round trips，不估未成交候選R。
+5. `tools/audit/sources/strategy_compare.py`補齊已正式存在的`resource-aware-continuous-max-dl`與`resource-aware-continuous-max-dl-feasible-ascent` artifact prefix resolver；不改runtime selector。
+6. Formal Audit runner仍由`apps/research.py → Audit／診斷`共用config/catalog backend；本輪把舊`c15-source-attribution`切為OFF、新Audit切為ON。
+
+### 獨立synthetic結果
+
+以隔離completed strategy-pair fixture直接驗證兩個candidate arms：Target mean刻意高於baseline、Realized R刻意較低、exclusive selection R為負且slot gap增加。新Audit status=`READY`，兩pair均辨識`target_to_realized_divergence=True`，並產生`audit.md/.json`與trade/capture lifecycle CSV；metadata固定`portfolio_replay_executed=false`、`training_performed=false`。同一獨立Audit framework synthetic共9項、0失敗。
+
+### 下一步
+
+使用正式選單`apps/research.py → [4] Audit／診斷`先查看設定／工件狀態；READY後執行目前Audit。結果先比較C24-C23與C25-C23的exclusive winner/loser R、fill、平均投入、holding／partial-tail、underfilled slot-days及aggregate Target capture，再用兩者差異判斷是否存在可由既有Selection策略參數空間檢驗的mechanical bottleneck。Audit結果取得前不得進參數適應或建立新MR。
+

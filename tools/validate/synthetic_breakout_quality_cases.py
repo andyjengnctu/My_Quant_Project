@@ -18622,6 +18622,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         collect_strategy_attribution_status,
         run_strategy_attribution_audit,
     )
+    from tools.audit.breakout_quality.strategy_realization_capture import (
+        collect_strategy_realization_capture_status,
+        run_strategy_realization_capture_audit,
+    )
     from tools.audit.catalog import validate_audit_catalog
 
     case_id = "AUDIT_FRAMEWORK"
@@ -18645,6 +18649,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     source_attribution_definition = next(
         (item for item in all_definitions if item.audit_id == "c15-source-attribution"), None
+    )
+    pit_realization_definition = next(
+        (item for item in all_definitions if item.audit_id == "c23-c25-pit-realization"), None
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
@@ -18675,6 +18682,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and confidence_definition is not None
         and strategy_attribution_definition is not None
         and source_attribution_definition is not None
+        and pit_realization_definition is not None
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),
@@ -19302,6 +19310,144 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 abs_tol=1e-12,
             )
             and source_payload["metadata"]["portfolio_replay_executed"] is False,
+        )
+
+        if pit_realization_definition is None:
+            raise AssertionError("缺少c23-c25-pit-realization正式設定")
+        pit_run = root / "outputs" / "strategy_compare" / "runs" / "pit_realization_synthetic"
+        pit_pair_24 = pit_run / "pairs" / "selection_min_roos__all_off__CONT12B_PIT__resource_aware_continuous_max_dl"
+        pit_pair_25 = pit_run / "pairs" / "selection_min_roos__all_off__CONT12B_PIT__resource_aware_continuous_max_dl_feasible_ascent"
+        pit_pair_24.mkdir(parents=True, exist_ok=True)
+        pit_pair_25.mkdir(parents=True, exist_ok=True)
+        pit_result = {
+            "status": "COMPLETED",
+            "config_fingerprint": "synthetic-pit-realization",
+            "comparison_period": {"start": "2024-01-01", "end": "2024-01-05"},
+            "settings": {
+                "dataset": "full",
+                "param_policy": "base-finalist-best",
+                "max_positions": 10,
+                "rotation": "off",
+                "arms": {
+                    "C23": {"arm_id": "C23", "enabled": True, "param_source": "selection_min_roos", "rule_policy": "all_off", "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None},
+                    "C24": {"arm_id": "C24", "enabled": True, "param_source": "selection_min_roos", "rule_policy": "all_off", "dl_enabled": True, "dl_id": "CONT12B_PIT", "dl_runtime_mode": "resource-aware-continuous-max-dl"},
+                    "C25": {"arm_id": "C25", "enabled": True, "param_source": "selection_min_roos", "rule_policy": "all_off", "dl_enabled": True, "dl_id": "CONT12B_PIT", "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent"},
+                },
+            },
+            "scenarios": {
+                "C23": {"total_return_pct": 12.0, "max_drawdown_pct": 8.0, "return_over_max_drawdown": 1.5, "expected_value_r": 1.0, "avg_exposure_pct": 90.0},
+                "C24": {"total_return_pct": 8.0, "max_drawdown_pct": 8.0, "return_over_max_drawdown": 1.0, "expected_value_r": 0.4, "avg_exposure_pct": 82.0},
+                "C25": {"total_return_pct": 10.0, "max_drawdown_pct": 8.5, "return_over_max_drawdown": 1.1765, "expected_value_r": 0.7, "avg_exposure_pct": 86.0},
+            },
+        }
+        (pit_run / "strategy_comparison.json").write_text(json.dumps(pit_result), encoding="utf-8")
+
+        def _write_pit_pair(pair_dir, *, ticker, realized_r, pnl, invested, reserved, stop, target_r, return_pct, romd, ev, gap):
+            _audit_trade_rows("AAA", 1.0, 10000.0, 100000.0, 110000.0, 90.0).to_csv(
+                pair_dir / "no_filter_trades.csv", index=False, encoding="utf-8-sig"
+            )
+            _audit_trade_rows(ticker, realized_r, pnl, invested, reserved, stop).to_csv(
+                pair_dir / "score_ranking_trades.csv", index=False, encoding="utf-8-sig"
+            )
+            _audit_equity([100.0, 105.0, 112.0]).to_csv(
+                pair_dir / "no_filter_equity.csv", index=False, encoding="utf-8-sig"
+            )
+            _audit_equity([100.0, 103.0, 108.0 if ticker == "BBB" else 110.0]).to_csv(
+                pair_dir / "score_ranking_equity.csv", index=False, encoding="utf-8-sig"
+            )
+            _audit_capacity([1, 1, 0], [9, 9, 10]).to_csv(
+                pair_dir / "no_filter_daily_capacity.csv", index=False, encoding="utf-8-sig"
+            )
+            _audit_capacity([gap, gap, 0], [10-gap, 10-gap, 10], resource=True).to_csv(
+                pair_dir / "score_ranking_daily_capacity.csv", index=False, encoding="utf-8-sig"
+            )
+            _audit_selected("AAA").to_csv(
+                pair_dir / "no_filter_selected_buys.csv", index=False, encoding="utf-8-sig"
+            )
+            _audit_selected(ticker).to_csv(
+                pair_dir / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig"
+            )
+            pd.DataFrame([{
+                "ticker": "AAA", "trade_date": "2024-01-02", "signal_date": "2024-01-01",
+                "score_event_date": "2024-01-01", "target_raw_r": 0.8,
+            }]).to_csv(pair_dir / "no_filter_selected_target_diagnostics.csv", index=False, encoding="utf-8-sig")
+            pd.DataFrame([{
+                "ticker": ticker, "trade_date": "2024-01-02", "signal_date": "2024-01-01",
+                "score_event_date": "2024-01-01", "target_raw_r": target_r,
+            }]).to_csv(pair_dir / "score_ranking_selected_target_diagnostics.csv", index=False, encoding="utf-8-sig")
+            pair_payload = {
+                "metadata": {
+                    "comparison_mode": "score-ranking",
+                    "comparison_period": {"start": "2024-01-01", "end": "2024-01-05"},
+                    "score_source": "selection_point_in_time",
+                },
+                "no_filter": pit_result["scenarios"]["C23"],
+                "score_ranking": {
+                    "total_return_pct": return_pct, "max_drawdown_pct": 8.0,
+                    "return_over_max_drawdown": romd, "expected_value_r": ev,
+                    "avg_exposure_pct": 82.0 if ticker == "BBB" else 86.0,
+                },
+                "selection_diagnostics": {
+                    "score_ranking_minus_no_filter": {
+                        "selected_target_mean_r": target_r - 0.8,
+                        "target_top_k_retention_mean": 0.01,
+                    }
+                },
+            }
+            (pair_dir / "strategy_comparison.json").write_text(json.dumps(pair_payload), encoding="utf-8")
+
+        _write_pit_pair(
+            pit_pair_24, ticker="BBB", realized_r=0.4, pnl=4000.0, invested=70000.0,
+            reserved=100000.0, stop=85.0, target_r=1.4, return_pct=8.0, romd=1.0, ev=0.4, gap=2,
+        )
+        _write_pit_pair(
+            pit_pair_25, ticker="CCC", realized_r=0.7, pnl=7000.0, invested=85000.0,
+            reserved=105000.0, stop=88.0, target_r=1.2, return_pct=10.0, romd=1.1765, ev=0.7, gap=1,
+        )
+        pit_definition = type(pit_realization_definition)(
+            module_id=pit_realization_definition.module_id,
+            audit_id=pit_realization_definition.audit_id,
+            enabled=True,
+            audit_type=pit_realization_definition.audit_type,
+            description=pit_realization_definition.description,
+            source={
+                "kind": "strategy_compare",
+                "run": "outputs/strategy_compare/runs/pit_realization_synthetic",
+                "baseline_arm_id": "C23",
+                "candidate_arm_ids": ["C24", "C25"],
+            },
+            dimensions={"focus_year": 2024, "top_month_count": 2, "top_trade_count": 5},
+            outcomes=dict(pit_realization_definition.outcomes),
+            output_subdir="breakout_quality/c23_c25_pit_realization_synthetic",
+        )
+        pit_status = collect_strategy_realization_capture_status(pit_definition, project_root=root)
+        pit_payload = run_strategy_realization_capture_audit(pit_definition, project_root=root, quiet=True)
+        pit_latest = root / Path(AUDIT_OUTPUT_ROOT) / pit_definition.output_subdir / "latest"
+        pit_report = (pit_latest / "audit.md").read_text(encoding="utf-8")
+        c24_pair = next(item for item in pit_payload["comparisons"] if item["candidate_arm_id"] == "C24")
+        c25_pair = next(item for item in pit_payload["comparisons"] if item["candidate_arm_id"] == "C25")
+        add_check(
+            results,
+            "synthetic_breakout_quality",
+            case_id,
+            "selection_pit_realization_capture_audit_is_read_only_config_driven_and_exposes_target_to_realized_gap",
+            True,
+            pit_status["status"] == "READY"
+            and [item["candidate_arm_id"] for item in pit_payload["comparisons"]] == ["C24", "C25"]
+            and c24_pair["interpretation"]["target_to_realized_divergence"] is True
+            and c25_pair["interpretation"]["target_to_realized_divergence"] is True
+            and c24_pair["structural"]["trade_contribution"]["exclusive_selection_delta_r"] < 0
+            and c25_pair["structural"]["trade_contribution"]["exclusive_selection_delta_r"] < 0
+            and c24_pair["capture"]["score_sort"]["avg_target_r"] > c24_pair["capture"]["baseline"]["avg_target_r"]
+            and c24_pair["capture"]["score_sort"]["avg_realized_r"] < c24_pair["capture"]["baseline"]["avg_realized_r"]
+            and c24_pair["structural"]["slot_occupancy"]["candidate_end_position_gap_slot_days"] > c24_pair["structural"]["slot_occupancy"]["comparator_end_position_gap_slot_days"]
+            and pit_payload["metadata"]["portfolio_replay_executed"] is False
+            and pit_payload["metadata"]["training_performed"] is False
+            and "Target → Realized R / 資金捕捉" in pit_report
+            and "Exclusive trades" in pit_report
+            and (pit_latest / "audit.json").is_file()
+            and (pit_latest / "C24_vs_C23_capture_candidate_lifecycle.csv").is_file()
+            and (pit_latest / "C25_vs_C23_trade_contributions.csv").is_file(),
         )
 
     app_source = (Path(__file__).resolve().parents[2] / "tools" / "filters" / "breakout_quality" / "application.py").read_text(encoding="utf-8")

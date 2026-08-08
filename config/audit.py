@@ -102,7 +102,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/c15_strategy_attribution",
             },
             "c15-source-attribution": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "strategy_attribution",
                 "description": "C15相對C14的跨run同runtime source attribution；隔離MR-12A all-label與MR-11G pass-only score source差異",
                 "source": {
@@ -127,6 +127,30 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "trade_contribution": True,
                 },
                 "output_subdir": "breakout_quality/c15_source_attribution",
+            },
+            "c23-c25-pit-realization": {
+                "enabled": True,
+                "audit_type": "strategy_realization_capture",
+                "description": "Selection PIT直接部署失敗歸因：比較baseline與設定中的PIT ranking arms之exclusive trades、fill、sizing、holding、slot occupancy與Target→Realized capture",
+                "source": {
+                    "kind": "strategy_compare",
+                    "run": "latest",
+                    "baseline_arm_id": "C23",
+                    "candidate_arm_ids": ["C24", "C25"],
+                },
+                "dimensions": {
+                    "focus_year": 2020,
+                    "top_month_count": 5,
+                    "top_trade_count": 20,
+                },
+                "outcomes": {
+                    "selection_changes": True,
+                    "exclusive_trade_realization": True,
+                    "capital_geometry": True,
+                    "slot_occupancy": True,
+                    "target_capture": True,
+                },
+                "output_subdir": "breakout_quality/c23_c25_pit_realization_capture",
             },
         },
     },

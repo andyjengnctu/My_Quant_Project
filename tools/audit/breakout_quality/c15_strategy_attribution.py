@@ -657,7 +657,7 @@ def _capacity_attribution(
     return merged, summary
 
 
-def _pair_payload(
+def build_strategy_attribution_pair_payload(
     *,
     candidate_artifacts: StrategyCompareArmArtifacts,
     comparator_artifacts: StrategyCompareArmArtifacts,
@@ -963,7 +963,7 @@ def run_strategy_attribution_audit(
             arm_id=comparator,
             preferred_pair_arm_id=candidate,
         )
-        comparisons.append(_pair_payload(
+        comparisons.append(build_strategy_attribution_pair_payload(
             candidate_artifacts=candidate_artifacts,
             comparator_artifacts=comparator_artifacts,
             focus_year=focus_year,
@@ -1054,4 +1054,5 @@ __all__ = [
     "AUDIT_RESULT_SCHEMA_VERSION",
     "collect_strategy_attribution_status",
     "run_strategy_attribution_audit",
+    "build_strategy_attribution_pair_payload",
 ]

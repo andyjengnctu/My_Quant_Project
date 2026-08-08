@@ -40,12 +40,19 @@ class StrategyCompareArmArtifacts:
         return self.pair_dir / f"{self.prefix}_orderable_candidates.csv"
 
 
-def read_json(path: Path) -> dict[str, Any]:
+def read_json(path: Path, *, display_root: Path | None = None) -> dict[str, Any]:
+    display_path = Path(path)
+    if display_root is not None:
+        try:
+            display_path = Path(path).resolve().relative_to(Path(display_root).resolve())
+        except ValueError:
+            display_path = Path(path)
+    display_text = display_path.as_posix()
     if not path.is_file():
-        raise FileNotFoundError(f"缺少JSON工件: {path}")
+        raise FileNotFoundError(f"缺少JSON工件: {display_text}")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError(f"JSON root必須是object: {path}")
+        raise ValueError(f"JSON root必須是object: {display_text}")
     return payload
 
 
@@ -55,7 +62,7 @@ def _validated_completed_run(root: Path, run_dir: Path) -> tuple[Path, dict[str,
         resolved.relative_to(root)
     except ValueError as exc:
         raise ValueError("Audit strategy_compare run必須位於專案root內") from exc
-    result = read_json(resolved / "strategy_comparison.json")
+    result = read_json(resolved / "strategy_comparison.json", display_root=root)
     if str(result.get("status") or "") != "COMPLETED":
         raise ValueError("strategy_compare結果尚未完成")
     return resolved, result
@@ -89,7 +96,7 @@ def resolve_strategy_compare_run_selector(
             if not result_path.is_file():
                 continue
             try:
-                result = read_json(result_path)
+                result = read_json(result_path, display_root=root)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
                 continue
             if str(result.get("status") or "") != "COMPLETED":
@@ -111,7 +118,7 @@ def resolve_strategy_compare_run_selector(
 
     if run_setting == "latest":
         manifest_path = root / "outputs" / "strategy_compare" / "latest" / "manifest.json"
-        manifest = read_json(manifest_path)
+        manifest = read_json(manifest_path, display_root=root)
         run_value = str(manifest.get("run_dir") or "").strip()
         if not run_value:
             raise ValueError("strategy_compare latest manifest缺少run_dir")
@@ -148,6 +155,8 @@ def _runtime_prefix(arm: dict[str, Any]) -> str:
         "resource-aware-binary-basket",
         "resource-aware-continuous",
         "resource-aware-continuous-capital-preserving",
+        "resource-aware-continuous-max-dl",
+        "resource-aware-continuous-max-dl-feasible-ascent",
     }:
         return "score_ranking"
     raise ValueError(f"不支援的strategy compare runtime: {runtime!r}")

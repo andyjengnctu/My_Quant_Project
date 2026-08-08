@@ -87,6 +87,16 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_strategy_attribution_status",
         run_function="run_strategy_attribution_audit",
     ),
+    "strategy_realization_capture": AuditCatalogEntry(
+        audit_type="strategy_realization_capture",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.strategy_realization_capture",
+        mode="formal",
+        description="既有score-ranking replay的exclusive trade、資金幾何、slot occupancy與Target→Realized capture整合歸因",
+        read_only=True,
+        status_function="collect_strategy_realization_capture_status",
+        run_function="run_strategy_realization_capture_audit",
+    ),
     # Research / historical Audit commands. They share this inventory but are not
     # eligible for the formal config runner unless promoted to mode=formal later.
     "regime": AuditCatalogEntry(
