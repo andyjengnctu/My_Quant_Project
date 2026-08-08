@@ -57,12 +57,12 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | 最大化 PASS 研究基準 | `SR-C12` | A9 resource-aware best-improvement basket | ACTIVE；研究方向固定為「最大化 PASS 使用，再提高 PASS 品質」 |
 | 最新已完成Audit結果 | `AUD-c15-source-attribution` | `SR-C15 / MR-12A` vs `SR-C14 / MR-11G` read-only source attribution | RESULT_AVAILABLE；C15相對C14 final relative wealth +4.52%，2024 +3.44%、非2024仍+1.04%；EV +0.06R、exclusive selection +12.16R／+196,527.93 PnL，支持all-label source |
 | Continuous research DL source | `DL-CONT11G` | `MR-11G / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse` frozen OOS continuous score | HISTORICAL controlled-replay source；SR-C14未採用 |
-| Current model research | `MR-12C` | No-time all-event ListNet top-one listwise ranker；固定MR-12B Target／all-label／InceptionTime／optimizer／split／epoch metric，只將within-day Pairwise RankNet改為整日ListNet Top-one Ranker | IMPLEMENTED／RESULT_PENDING；需先完成模型／forward-OOS score工件，再以C17/C18雙selector驗證 |
+| Current model research | `MR-12B` | No-time all-event within-day Pairwise RankNet ranker；固定all-event Target／InceptionTime，以同日pairwise logistic直接學cross-sectional ordering | RESULT_AVAILABLE／MODEL_ECONOMIC_IMPROVEMENT_SUPPORTED；C19/C20 controlled replay均支持，維持目前model research anchor |
 | Previous continuous DL anchor | `DL-CONT12A` | `MR-12A / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_mse` frozen OOS continuous score | SOURCE_SUPPORTED historical anchor；保留作MSE基準 |
 | Current continuous DL anchor | `DL-CONT12B` | `MR-12B / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_pairwise` frozen OOS continuous score | SOURCE_SUPPORTED_FOR_MODEL_RESEARCH；C19/C20正式controlled replay支持pairwise learning objective |
-| Candidate continuous DL source | `DL-CONT12C` | `MR-12C / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_listwise` frozen OOS continuous score | IMPLEMENTED／MODEL_ARTIFACT_PENDING；不得由strategy compare自動訓練 |
+| Rejected continuous DL source | `DL-CONT12C` | `MR-12C / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_listwise` frozen OOS continuous score | RESULT_AVAILABLE／REJECTED_FOR_MODEL_RESEARCH；C21略弱於C19，C22相對C20大幅退步；保留歷史重現，不作current anchor |
 | Current strategy validation harness | `SR-C17 / SR-C18` | 同一K/R0與Min ROOS execution order的兩個固定selector：C17 minimum-repair、C18 feasible-ascent | FROZEN_FOR_MODEL_COMPARISON；MR-12A用C17/C18、MR-12B用C19/C20、MR-12C用C21/C22套完全相同兩個selector，同時驗證model-only gain與較Max selector的轉化；不得依新模型OOS修改C17/C18 |
-| 最新model-validation策略結果 | `SR-C19 / SR-C20` | `DL-CONT12B / MR-12B`分別套C17／C18固定selector | RESULT_AVAILABLE；C19 Return=181.75%、MDD=16.19%、RoMD=11.23、EV=0.70R；C20 Return=179.54%、MDD=14.48%、RoMD=12.40、EV=0.84R。相對各自MR-12A anchor，C19-C17 Return +17.62pp但RoMD -0.19，C20-C18 Return +38.98pp且MDD -0.25pp、RoMD +2.86、EV +0.27R；支持MR-12B並支持持續保留較Max-DL C18 harness |
+| 最新model-validation策略結果 | `SR-C21 / SR-C22` | `DL-CONT12C / MR-12C`分別套C17／C18固定selector | RESULT_AVAILABLE／MODEL_REJECTED；C21 Return=178.68%、MDD=16.22%、RoMD=11.02、EV=0.67R、selection R=+14.09R；C22 Return=116.51%、MDD=16.49%、RoMD=7.07、EV=0.45R、selection R=-59.48R。相對MR-12B anchors，C21-C19 Return -3.08pp／selection R -10.95R，C22-C20 Return -63.03pp／RoMD -5.33／EV -0.39R／selection R -114.79R；ListNet未改善Pairwise，且較Max-DL C18強烈放大其ranking弱點 |
 
 ### `MR-9A` 與 `DL-A9` 必須分開
 
@@ -114,7 +114,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 |---|---|---|
 | `MR-12A` | No-time All-event Continuous Ranker / `strategy_aligned_no_time_all_event_mse` | SOURCE_SUPPORTED；同一`strategy_aligned_opportunity_no_time_r_v1`與`ARCH-inception_time_v1`，唯一模型變數為training scope `pass_only → all_labels`；AUD-c15-source-attribution確認相同runtime下C15相對C14 final relative wealth +4.52%，且非2024仍+1.04% |
 | `MR-12B` | No-time All-event Pairwise Ranker / `strategy_aligned_no_time_all_event_pairwise` | RESULT_AVAILABLE／MODEL_ECONOMIC_IMPROVEMENT_SUPPORTED；固定MR-12A Target／all-label／InceptionTime，MSE→within-day RankNet pairwise logistic。正式C19-C17：Return +17.62pp、MDD +1.81pp、RoMD -0.19、EV -0.02R、same-param DL selection R +4.74R；C20-C18：Return +38.98pp、MDD -0.25pp、RoMD +2.86、EV +0.27R、selection R +81.57R，支持pairwise objective，尤其較Max-DL的C18 harness對模型品質改善轉化更強 |
-| `MR-12C` | No-time All-event ListNet Top-one Listwise Ranker / `strategy_aligned_no_time_all_event_listwise` | IMPLEMENTED／RESULT_PENDING；固定MR-12B的Target、all-label、`ARCH-inception_time_v1`、optimizer/LR、split與`mean_daily_spearman` epoch selection，唯一scientific change為within-day pairwise logistic→same-date full-list ListNet top-one cross-entropy。完整date不得拆batch；daily-percentile target經softmax形成target top-one distribution、model margin經softmax形成prediction distribution並做整日cross-entropy；相同target自然取得相同target mass；各rankable date等權，runtime仍使用softmax PASS probability；OOS不參與training/epoch selection |
+| `MR-12C` | No-time All-event ListNet Top-one Listwise Ranker / `strategy_aligned_no_time_all_event_listwise` | RESULT_AVAILABLE／REJECTED；固定MR-12B其餘條件、唯一scientific change為within-day pairwise logistic→same-date full-list ListNet top-one cross-entropy。C21-C19 Return -3.08pp、RoMD -0.21、EV -0.02R、selection R -10.95R；C22-C20 Return -63.03pp、MDD +2.00pp、RoMD -5.33、EV -0.39R、selection R -114.79R。較Max-DL C18下惡化顯著放大，故不取代MR-12B；工件保留歷史重現 |
 
 `MR-12A`、`MR-12B`、`MR-12C` 已正式占用。後續不得重用；若模型權重／target／loss／training-data semantics再變更，須重新查 Registry 取得新的 `MR-*`。
 
@@ -129,7 +129,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `DL-CONT11G` | `CONT11G` | `MR-11G / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_pass_magnitude_mse` | Frozen OOS continuous breakout-event score；只供capital-utilization-first controlled strategy research。歷史training scope為PASS-only，SR-C14在全部orderable breakout events上的使用屬受控deployment hypothesis | HISTORICAL research-only score source；SR-C14未採用 |
 | `DL-CONT12A` | `CONT12A` | `MR-12A / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_mse` | Frozen OOS all-event continuous breakout-event score；training scope=`all_labels`，Target仍為`strategy_aligned_opportunity_no_time_r_v1`；作為後續controlled selector研究的固定score source | SOURCE_SUPPORTED |
 | `DL-CONT12B` | `CONT12B` | `MR-12B / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_pairwise` | Frozen OOS all-event continuous score；runtime仍使用softmax PASS probability，training為同日pairwise ranking；固定C17/C18 selector controlled replay已支持其模型經濟改善 | SOURCE_SUPPORTED_FOR_MODEL_RESEARCH |
-| `DL-CONT12C` | `CONT12C` | `MR-12C / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_listwise` | Frozen OOS all-event continuous score；runtime仍使用softmax PASS probability，training為same-date full-list ListNet top-one cross-entropy；只供固定C17/C18 selector的controlled Pairwise-vs-Listwise comparison | IMPLEMENTED／MODEL_ARTIFACT_PENDING |
+| `DL-CONT12C` | `CONT12C` | `MR-12C / ARCH-inception_time_v1 / PROFILE-strategy_aligned_no_time_all_event_listwise` | Frozen OOS all-event continuous score；runtime仍使用softmax PASS probability，training為same-date full-list ListNet top-one cross-entropy；只供固定C17/C18 selector的controlled Pairwise-vs-Listwise歷史重現 | RESULT_AVAILABLE／REJECTED_FOR_MODEL_RESEARCH |
 
 **改變 DL-A9 的策略使用方式不會自動產生 `DL-A10`，也不會自動成為新 `MR-*`。**只有模型權重、training target、architecture 或 training-data semantics 真正改變，才需要另立 model research identity。
 
@@ -159,8 +159,8 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 | `SR-C18` | Min ROOS: All-event Continuous max-DL feasible-ascent | 固定`PARAM-P2 / DL-CONT12A / MR-12A`與C17完全相同K／R0 hard constraints；先取得C17合法seed（含原fallback Min ROOS seed），再對所有selected↔unselected single swaps逐一用canonical exact reservation驗證，只接受可行且DL quality更高者，每輪取最佳改善直到無任何1-swap改善；capital只作feasibility，不參與objective | RESULT_AVAILABLE／SELECTOR_FROZEN_FOR_MODEL_RESEARCH／NOT_PROMOTED_AS_STRATEGY；Return=140.56%、MDD=14.73%、RoMD=9.54、EV=0.57R、same-param DL selection R=-26.25R；242/242 eligible days達1-swap local optimum、final fallback=0、K/resource violation=0。Selector total=1668.23ms、median=0.829ms、p95=4.065ms，相對C17 total slowdown=1.277×；成本可接受，後續固定此selector檢驗新DL source，不再新增capital/DL比例或搜尋規則 |
 | `SR-C19` | Min ROOS: MR-12B max-DL constrained basket | 完全沿用SR-C17 K/R0、minimum-repair、action-prefix與execution-order語意；唯一差異為score source `DL-CONT12A → DL-CONT12B` | RESULT_AVAILABLE／MODEL_VALIDATION_ARM；Return=181.75%、MDD=16.19%、RoMD=11.23、EV=0.70R、same-param DL selection R=+25.05R；相對C17 Return +17.62pp但MDD/RoMD/EV略退步 |
 | `SR-C20` | Min ROOS: MR-12B max-DL feasible-ascent | 完全沿用SR-C18 K/R0、feasible-ascent與execution-order語意；唯一差異為score source `DL-CONT12A → DL-CONT12B` | RESULT_AVAILABLE／MODEL_VALIDATION_ARM；Return=179.54%、MDD=14.48%、RoMD=12.40、EV=0.84R、same-param DL selection R=+55.31R；相對C18 Return +38.98pp、MDD -0.25pp、RoMD +2.86、EV +0.27R，顯示較Max selector能強烈放大DL品質差異 |
-| `SR-C21` | Min ROOS: MR-12C max-DL constrained basket | 完全沿用SR-C19／SR-C17 K/R0、minimum-repair、action-prefix與execution-order語意；唯一差異為score source `DL-CONT12B → DL-CONT12C` | IMPLEMENTED／RESULT_PENDING；純模型contrast=`C21-C19` |
-| `SR-C22` | Min ROOS: MR-12C max-DL feasible-ascent | 完全沿用SR-C20／SR-C18 K/R0、feasible-ascent與execution-order語意；唯一差異為score source `DL-CONT12B → DL-CONT12C` | IMPLEMENTED／RESULT_PENDING；純模型contrast=`C22-C20`，另以`C22-C21`驗證同一MR-12C在較Max selector上的轉化 |
+| `SR-C21` | Min ROOS: MR-12C max-DL constrained basket | 完全沿用SR-C19／SR-C17 K/R0、minimum-repair、action-prefix與execution-order語意；唯一差異為score source `DL-CONT12B → DL-CONT12C` | RESULT_AVAILABLE／MODEL_VALIDATION_ARM／NOT_ADOPTED；Return=178.68%、MDD=16.22%、RoMD=11.02、EV=0.67R、selection R=+14.09R；相對C19全面小幅退步 |
+| `SR-C22` | Min ROOS: MR-12C max-DL feasible-ascent | 完全沿用SR-C20／SR-C18 K/R0、feasible-ascent與execution-order語意；唯一差異為score source `DL-CONT12B → DL-CONT12C` | RESULT_AVAILABLE／MODEL_VALIDATION_ARM／NOT_ADOPTED；Return=116.51%、MDD=16.49%、RoMD=7.07、EV=0.45R、selection R=-59.48R；相對C20 Return -63.03pp、RoMD -5.33、EV -0.39R、selection R -114.79R，顯示較Max selector強烈放大MR-12C ranking弱點 |
 
 ### `SR-C13` identity boundary
 
@@ -200,7 +200,7 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 
 截至 2026-08-08：
 
-1. 目前continuous模型研究以`DL-CONT12B / MR-12B`作current anchor、`DL-CONT12C / MR-12C`作IMPLEMENTED／MODEL_ARTIFACT_PENDING candidate；`DL-CONT12A / MR-12A`保留為previous MSE anchor。
+1. 目前continuous模型研究以`DL-CONT12B / MR-12B`作current anchor；`DL-CONT12C / MR-12C`已完成controlled replay並REJECTED，保留歷史重現；`DL-CONT12A / MR-12A`保留為previous MSE anchor。
 2. A9 hard-filter 使用方式 `SR-C7 / SR-C8 / SR-C10` 已淘汰。
 3. Resource-aware 使用方式已解掉主要曝險問題；`SR-C11`仍是A9 resource-aware variants中的歷史較佳經濟結果，`SR-C15`則是不同continuous source的最新promising arm，兩者期間／source不同不得直接混成單一排名。
 4. 使用者目前研究原則不是最佳化「Min ROOS sorting 與 DL sorting 的比例」，而是**固定在資源契約下最大化 PASS 使用，再改善 PASS 品質**。
@@ -221,7 +221,7 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 19. `SR-C18`只處理C17搜尋完整性與計算時間：K、R0、MR-12A、execution order皆不變；exact global search因N=30／80壓力案例超過10秒而拒絕進production，正式實作改採C17合法seed後的best-feasible single-swap ascent直到1-swap local optimum，並直接量測selector total／median／p95／max CPU time。
 20. 使用者要求後續同時保留`SR-C17`與`SR-C18`作固定validation harness：每個新DL source都分別跑兩個selector，先看同selector下model-only gain，再看同一新模型是否在較Max-DL的C18上轉化更好；C17/C18不得依新模型OOS修改。
 21. `MR-12B / DL-CONT12B / SR-C19 / SR-C20`正式結果已取得：C19相對C17 Return +17.62pp但MDD +1.81pp、RoMD -0.19、EV -0.02R；C20相對C18 Return +38.98pp、MDD -0.25pp、RoMD +2.86、EV +0.27R、same-param DL selection R +81.57R。Pairwise objective判定`MODEL_ECONOMIC_IMPROVEMENT_SUPPORTED`，且C18較Max-DL harness對模型品質差異的轉化更強；C17/C18因此持續雙保留。
-22. `MR-12C / DL-CONT12C / SR-C21 / SR-C22`已分配並實作；唯一scientific change為MR-12B within-day RankNet pairwise logistic→same-date full-list ListNet top-one cross-entropy，Target、all-label scope、InceptionTime、optimizer/LR、split、epoch selection與C17/C18 selector均固定。結果待本地模型訓練與forward-OOS controlled replay。
+22. `MR-12C / DL-CONT12C / SR-C21 / SR-C22`正式結果已取得並REJECTED：C21-C19 Return -3.08pp、RoMD -0.21、EV -0.02R、selection R -10.95R；C22-C20 Return -63.03pp、MDD +2.00pp、RoMD -5.33、EV -0.39R、selection R -114.79R。C22 Selected Score總和增量仍達+15.028且251/251 eligible日為1-swap local optimum、K/resource violation=0，說明C18確實更完整最大化MR-12C score，但該score與實現選股品質失配；故淘汰ListNet objective、恢復MR-12B為active model anchor，C17/C18雙harness維持凍結。
 
 ---
 

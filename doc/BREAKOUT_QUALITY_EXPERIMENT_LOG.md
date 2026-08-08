@@ -5816,3 +5816,43 @@ MR-12B pairwise objective相對MR-12A MSE的模型經濟改善成立。更重要
 - C19/C20與C21/C22雙selector矩陣及三個核心contrast。
 - MR-12B pairwise direct contract持續通過。
 - GPT未執行`apps/test_suite.py`；正式結果待使用者本機執行。
+
+## 2026-08-08 — MR-12C正式策略驗證：ListNet不如Pairwise，較Max-DL harness放大失配
+
+### 狀態
+
+`MR-12C / DL-CONT12C = RESULT_AVAILABLE / REJECTED_FOR_MODEL_RESEARCH`；`SR-C21 / SR-C22 = RESULT_AVAILABLE / MODEL_VALIDATION_ARM / NOT_ADOPTED`。`MR-12B / DL-CONT12B`恢復為current model research anchor。C17/C18 selector維持凍結，不依本次OOS結果調整。
+
+### 程式與結果基準
+
+- 使用者結果ZIP：`test-branch-1_20260808_182645_c736a49.zip`
+- SHA256：`9ed8580d4ad2697cc36417086f08d595e72b327cdc4fec3c82696cb3f9f9c8b2`
+- Strategy Compare fingerprint：`35230a3d71e0`
+- 期間：2021-01-01～2025-12-22
+- Dataset：full
+- Params：`PARAM-P2 / Min ROOS`
+- `C21`與`C19`共用C17-style minimum-repair selector；`C22`與`C20`共用C18-style feasible-ascent selector。
+- 唯一模型差異：`DL-CONT12B / MR-12B Pairwise RankNet → DL-CONT12C / MR-12C ListNet top-one`。
+
+### 主要結果
+
+- C21：Return 178.68%、MDD 16.22%、RoMD 11.02、Annual 22.92%、EV 0.67R、Exposure 92.18%、same-param DL selection R +14.09R。
+- C22：Return 116.51%、MDD 16.49%、RoMD 7.07、Annual 16.83%、EV 0.45R、Exposure 91.91%、same-param DL selection R -59.48R。
+- C21-C19：Return -3.08pp、MDD +0.03pp、RoMD -0.21、Annual -0.27pp、EV -0.02R、selection R -10.95R。
+- C22-C20：Return -63.03pp、MDD +2.00pp、RoMD -5.33、Annual -6.17pp、EV -0.39R、selection R -114.79R。
+- C22-C21：Return -62.16pp、MDD +0.27pp、RoMD -3.95、Annual -6.09pp、EV -0.22R、selection R -73.57R。
+
+### Selector／score診斷
+
+- C21：Max-DL eligible 236日、repair 225日、fallback 33日、K/resource violation 0；Selected Score總和增量 +5.870。
+- C22：Max-DL eligible 251日、repair 238日、final fallback 0、251/251日達1-swap local optimum、K/resource violation 0；Selected Score總和增量 +15.028。
+- C22相對C20雖更完整提高其自身模型score，但realized same-param DL selection R由+55.31R降至-59.48R。故失敗不能歸因於C18沒有最大化score；相反地，C18成功放大了MR-12C score與實現策略品質的失配。
+
+### 判定
+
+MR-12C ListNet top-one objective不取代MR-12B Pairwise RankNet。C17-style較保守harness下12C只是小幅落後，但C18-style較Max-DL harness下全面且大幅退步，支持「較Max-DL selector可作模型ranking品質放大器」的既有研究假說。C17/C18兩個固定harness都保留：C17提供較保守轉化參考，C18用來檢查模型score被更積極使用時是否仍具經濟品質。
+
+### 結構性解釋與後續邊界
+
+12C固定設計把daily percentile（範圍0～1）直接送入`softmax`形成ListNet top-one target distribution，因此單日最高／最低target的未正規化權重比最多只有`e^1:e^0 ≈ 2.718:1`；對數十個候選的完整list而言，target mass相對平坦，loss會把大量權重分配到整張榜單，而非直接強化portfolio真正關心的Top-K boundary。這是12C objective本身的數學性質，可作下一個模型假設來源，但不得依本次OOS去調temperature、Top-K weight或其他12C數值超參數。若續做新模型實驗，應另立新`MR-*`並固定C17/C18雙harness。
+
