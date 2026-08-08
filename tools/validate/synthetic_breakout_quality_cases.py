@@ -11856,8 +11856,10 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         _evaluate_fixed_k_sweep,
         _evaluate_paired_frame,
         _evaluate_reference_subset_attribution,
+        _evaluate_score_event_date_comparability,
         _render_dynamic_k_strata_table,
         _render_reference_subset_attribution_table,
+        _render_score_event_date_comparability_table,
     )
 
     profile = get_breakout_quality_experiment_profile(
@@ -12259,6 +12261,56 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             int(reference_orderable_k2.get("competition_date_count", 0)),
             bool(reference_subset_table.strip()),
             "Orderable NDCG Δ" in reference_subset_table,
+        ),
+    )
+
+    score_date_frame = pd.DataFrame(
+        {
+            "date": ["2024-03-10"] * 4,
+            "ticker": ["A", "B", "C", "D"],
+            "score_event_date": ["2024-03-10", "2024-03-10", "2024-03-01", "2024-03-01"],
+            "dynamic_k": [1, 1, 1, 1],
+            "target_raw_r": [4.0, 3.0, 2.0, 1.0],
+            "score__MR-12A": [0.9, 0.8, 0.7, 0.6],
+            "score__MR-12B": [0.2, 0.1, 0.9, 0.8],
+            "score__MR-12C": [0.9, 0.8, 0.7, 0.6],
+        }
+    )
+    score_date_diag = _evaluate_score_event_date_comparability(
+        score_date_frame,
+        model_ids=("MR-12A", "MR-12B", "MR-12C"),
+    )
+    score_date_table = _render_score_event_date_comparability_table(
+        score_date_diag,
+        summary_pair=("MR-12B", "MR-12A"),
+    )
+    same_scope = dict(
+        (score_date_diag.get("pair_scopes") or {}).get("same_score_event_date_pairs") or {}
+    )
+    cross_scope = dict(
+        (score_date_diag.get("pair_scopes") or {}).get("cross_score_event_date_pairs") or {}
+    )
+    same_delta = dict(
+        (same_scope.get("contrasts") or {}).get("MR-12B_minus_MR-12A") or {}
+    ).get("pairwise_concordance_delta")
+    cross_delta = dict(
+        (cross_scope.get("contrasts") or {}).get("MR-12B_minus_MR-12A") or {}
+    ).get("pairwise_concordance_delta")
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_orderable_score_date_comparability_separates_within_date_from_cross_date_pairs",
+        (0.5, 1, 1.0, 1.0, 0.0, -1.0, True, True),
+        (
+            round(float(score_date_diag.get("carried_candidate_row_rate")), 6),
+            int(score_date_diag.get("mixed_score_event_date_count", 0)),
+            float(score_date_diag.get("mixed_score_event_date_rate")),
+            float(score_date_diag.get("k1_mixed_score_event_date_rate")),
+            round(float(same_delta), 6),
+            round(float(cross_delta), 6),
+            "Cross score-date" in score_date_table,
+            "K=1 cross score-date" in score_date_table,
         ),
     )
 

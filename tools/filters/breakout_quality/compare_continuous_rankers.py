@@ -38,7 +38,7 @@ from filters.breakout_quality.paths import resolve_filter_output_dir
 from filters.breakout_quality.ranking_score_store import load_continuous_ranker_oos_contract
 from filters.breakout_quality.workflow_io import PROJECT_ROOT
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 REPORT_JSON_FILENAME = "continuous_ranker_comparison.json"
 REPORT_MARKDOWN_FILENAME = "continuous_ranker_comparison.md"
 OUTPUT_DIRNAME = "continuous_ranker_comparison"
@@ -728,6 +728,148 @@ def _evaluate_reference_subset_attribution(
     return output
 
 
+def _evaluate_score_event_date_comparability(
+    dynamic_frame: pd.DataFrame,
+    *,
+    model_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    """Measure whether frozen scores remain comparable across score-event-date cohorts.
+
+    MR-12B is trained only on within-date pairs.  A strategy trade-date orderable
+    pool can contain frozen scores originating from different signal/score dates,
+    so this diagnostic separates same-origin-date pairs from cross-origin-date
+    pairs without replaying the strategy or changing model scores.
+    """
+
+    frame = pd.DataFrame(dynamic_frame).copy()
+    if frame.empty:
+        return {}
+    required = {"date", "score_event_date", "target_raw_r", "dynamic_k"}
+    required.update(f"score__{model_id}" for model_id in model_ids)
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"score-event-date comparability缺少欄位: {missing}")
+
+    trade_date = pd.to_datetime(frame["date"], errors="raise").dt.normalize()
+    score_date = pd.to_datetime(frame["score_event_date"], errors="raise").dt.normalize()
+    age_days = (trade_date - score_date).dt.days.astype(int)
+    if bool((age_days < 0).any()):
+        sample = frame.loc[age_days < 0, ["date", "ticker", "score_event_date"]].head(8).to_dict("records")
+        raise ValueError(f"score_event_date不得晚於trade_date: sample={sample}")
+    frame["_score_age_days"] = age_days
+    frame["_score_event_date_norm"] = score_date.dt.strftime("%Y-%m-%d")
+
+    day_origin_count = frame.groupby("date", sort=True)["_score_event_date_norm"].nunique()
+    mixed_dates = set(day_origin_count[day_origin_count > 1].index.astype(str))
+    k1_dates = set(
+        frame.loc[pd.to_numeric(frame["dynamic_k"], errors="raise").astype(int) == 1, "date"]
+        .astype(str)
+        .unique()
+    )
+
+    scopes = {
+        "all_pairs": None,
+        "same_score_event_date_pairs": "same",
+        "cross_score_event_date_pairs": "cross",
+        "k1_same_score_event_date_pairs": "k1_same",
+        "k1_cross_score_event_date_pairs": "k1_cross",
+    }
+    scope_rows: dict[str, Any] = {}
+
+    for scope_name, scope in scopes.items():
+        per_model_concordant = {model_id: 0.0 for model_id in model_ids}
+        per_model_daily: dict[str, list[float]] = {model_id: [] for model_id in model_ids}
+        pair_count = 0
+        rankable_dates = 0
+        for date, day in frame.groupby("date", sort=True):
+            if scope in {"k1_same", "k1_cross"} and int(day["dynamic_k"].iloc[0]) != 1:
+                continue
+            targets = day["target_raw_r"].to_numpy(dtype=np.float64)
+            origins = day["_score_event_date_norm"].astype(str).to_numpy()
+            if len(day) < 2:
+                continue
+            target_diff = targets[:, None] - targets[None, :]
+            upper = np.triu(np.ones(target_diff.shape, dtype=bool), k=1)
+            comparable = upper & (target_diff != 0.0)
+            same_origin = origins[:, None] == origins[None, :]
+            if scope in {"same", "k1_same"}:
+                comparable &= same_origin
+            elif scope in {"cross", "k1_cross"}:
+                comparable &= ~same_origin
+            count = int(comparable.sum())
+            if count == 0:
+                continue
+            rankable_dates += 1
+            pair_count += count
+            for model_id in model_ids:
+                scores = day[f"score__{model_id}"].to_numpy(dtype=np.float64)
+                score_diff = scores[:, None] - scores[None, :]
+                products = score_diff[comparable] * target_diff[comparable]
+                concordant = float((products > 0.0).sum()) + 0.5 * float((products == 0.0).sum())
+                per_model_concordant[model_id] += concordant
+                per_model_daily[model_id].append(float(concordant / count))
+
+        models = {
+            model_id: {
+                "pairwise_concordance": (
+                    float(per_model_concordant[model_id] / pair_count) if pair_count else None
+                ),
+                "mean_daily_concordance": (
+                    float(np.mean(per_model_daily[model_id])) if per_model_daily[model_id] else None
+                ),
+            }
+            for model_id in model_ids
+        }
+        contrasts: dict[str, Any] = {}
+        for left_id, right_id in zip(model_ids[1:], model_ids[:-1]):
+            left = models[left_id]
+            right = models[right_id]
+            pair_delta = (
+                None
+                if left["pairwise_concordance"] is None or right["pairwise_concordance"] is None
+                else float(left["pairwise_concordance"] - right["pairwise_concordance"])
+            )
+            daily_delta = (
+                None
+                if left["mean_daily_concordance"] is None or right["mean_daily_concordance"] is None
+                else float(left["mean_daily_concordance"] - right["mean_daily_concordance"])
+            )
+            contrasts[f"{left_id}_minus_{right_id}"] = {
+                "pairwise_concordance_delta": pair_delta,
+                "mean_daily_concordance_delta": daily_delta,
+            }
+        scope_rows[scope_name] = {
+            "date_count": int(rankable_dates),
+            "pair_count": int(pair_count),
+            "models": models,
+            "contrasts": contrasts,
+        }
+
+    age_counts = {
+        "age_0": int((age_days == 0).sum()),
+        "age_1_to_2": int(((age_days >= 1) & (age_days <= 2)).sum()),
+        "age_3_to_5": int(((age_days >= 3) & (age_days <= 5)).sum()),
+        "age_6_plus": int((age_days >= 6).sum()),
+    }
+    return {
+        "candidate_row_count": int(len(frame)),
+        "score_age_days_mean": float(age_days.mean()) if len(age_days) else None,
+        "score_age_days_median": float(age_days.median()) if len(age_days) else None,
+        "score_age_days_max": int(age_days.max()) if len(age_days) else None,
+        "carried_candidate_row_count": int((age_days > 0).sum()),
+        "carried_candidate_row_rate": float((age_days > 0).mean()) if len(age_days) else None,
+        "age_bucket_counts": age_counts,
+        "mixed_score_event_date_count": int(len(mixed_dates)),
+        "mixed_score_event_date_rate": float(len(mixed_dates) / frame["date"].nunique()) if frame["date"].nunique() else None,
+        "k1_date_count": int(len(k1_dates)),
+        "k1_mixed_score_event_date_count": int(len(k1_dates & mixed_dates)),
+        "k1_mixed_score_event_date_rate": (
+            float(len(k1_dates & mixed_dates) / len(k1_dates)) if k1_dates else None
+        ),
+        "pair_scopes": scope_rows,
+    }
+
+
 def _paired_metric_delta(
     section: dict[str, Any],
     *,
@@ -822,6 +964,69 @@ def _render_reference_subset_attribution_table(
         alignments=(
             "right",
             "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+        ),
+    )
+
+
+def _render_score_event_date_comparability_table(
+    diagnostic: dict[str, Any],
+    *,
+    summary_pair: tuple[str, str],
+) -> str:
+    left_id, right_id = summary_pair
+    scopes = dict(diagnostic.get("pair_scopes") or {})
+    labels = (
+        ("all_pairs", "All"),
+        ("same_score_event_date_pairs", "Same score-date"),
+        ("cross_score_event_date_pairs", "Cross score-date"),
+        ("k1_same_score_event_date_pairs", "K=1 same score-date"),
+        ("k1_cross_score_event_date_pairs", "K=1 cross score-date"),
+    )
+    rows = []
+    for key, label in labels:
+        item = dict(scopes.get(key) or {})
+        models = dict(item.get("models") or {})
+        left = dict(models.get(left_id) or {})
+        right = dict(models.get(right_id) or {})
+        contrast = dict(
+            (item.get("contrasts") or {}).get(f"{left_id}_minus_{right_id}") or {}
+        )
+        rows.append(
+            (
+                label,
+                int(item.get("date_count", 0) or 0),
+                int(item.get("pair_count", 0) or 0),
+                _fmt_pct(left.get("pairwise_concordance")),
+                _fmt_pct(right.get("pairwise_concordance")),
+                _fmt_delta_pct(contrast.get("pairwise_concordance_delta"), 0.0),
+                _fmt_pct(left.get("mean_daily_concordance")),
+                _fmt_pct(right.get("mean_daily_concordance")),
+                _fmt_delta_pct(contrast.get("mean_daily_concordance_delta"), 0.0),
+            )
+        )
+    return render_table(
+        (
+            "Pair scope",
+            "Days",
+            "Pairs",
+            f"{left_id} Pair",
+            f"{right_id} Pair",
+            "Pair Δ",
+            f"{left_id} Daily",
+            f"{right_id} Daily",
+            "Daily Δ",
+        ),
+        rows,
+        alignments=(
+            "left",
             "right",
             "right",
             "right",
@@ -1050,6 +1255,7 @@ def render_console(payload: dict[str, Any]) -> str:
     dyn_section = dict(dynamic.get("evaluation") or {})
     coverage = dict(dynamic.get("coverage") or {})
     reference_attribution = dict(dynamic.get("reference_subset_attribution") or {})
+    score_date_diag = dict(dynamic.get("score_event_date_comparability") or {})
     lines.extend(
         (
             render_section(f"Dynamic-K｜{dynamic.get('reference_arm')} reference path・common-complete raw-score診斷"),
@@ -1086,6 +1292,23 @@ def render_console(payload: dict[str, Any]) -> str:
             "同一批common-complete reference dates固定實際K：Event欄使用完整OOS event-group候選；Orderable欄使用reference arm盤前orderable候選。若Event Δ仍正而Orderable Δ轉負，弱勢來自candidate/path conditioning，而不是一般Top-K能力。",
             _render_reference_subset_attribution_table(
                 reference_attribution,
+                summary_pair=prefix_summary_pair,
+            ),
+            render_section("Orderable score-date comparability｜同score-date vs 跨score-date pairs"),
+            render_key_values(
+                (
+                    ("score-age>0候選", score_date_diag.get("carried_candidate_row_count")),
+                    ("score-age>0比例", _fmt_pct(score_date_diag.get("carried_candidate_row_rate"))),
+                    ("mixed score-date日", score_date_diag.get("mixed_score_event_date_count")),
+                    ("mixed score-date比例", _fmt_pct(score_date_diag.get("mixed_score_event_date_rate"))),
+                    ("K=1 mixed score-date日", score_date_diag.get("k1_mixed_score_event_date_count")),
+                    ("K=1 mixed score-date比例", _fmt_pct(score_date_diag.get("k1_mixed_score_event_date_rate"))),
+                    ("score age days", f"mean={_fmt(score_date_diag.get('score_age_days_mean'), 2)}, median={_fmt(score_date_diag.get('score_age_days_median'), 2)}, max={score_date_diag.get('score_age_days_max')}"),
+                )
+            ),
+            "Same score-date pairs接近MR-12B訓練pair scope；Cross score-date pairs只在runtime混合不同歷史score cohort時出現。",
+            _render_score_event_date_comparability_table(
+                score_date_diag,
                 summary_pair=prefix_summary_pair,
             ),
         )
@@ -1281,6 +1504,41 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             f"| {_fmt(_paired_metric_delta(event, left_id=left_id, right_id=right_id, metric='top_k_raw_target_lift'))} "
             f"| {_fmt(_paired_metric_delta(orderable, left_id=left_id, right_id=right_id, metric='top_k_raw_target_lift'))} |"
         )
+    score_date_diag = dict(dynamic.get("score_event_date_comparability") or {})
+    score_scopes = dict(score_date_diag.get("pair_scopes") or {})
+    lines += [
+        "",
+        "## Orderable score-date comparability",
+        "",
+        "MR-12B的pairwise loss只在同一score-event-date內建立pair；但策略orderable pool可同時含不同歷史score cohort。以下用trade-date內target raw R比較same-score-date與cross-score-date pair concordance，僅作部署語意歸因。",
+        "",
+        f"- score-age>0候選：`{score_date_diag.get('carried_candidate_row_count')}` / `{score_date_diag.get('candidate_row_count')}`（`{_fmt_pct(score_date_diag.get('carried_candidate_row_rate'))}`）。",
+        f"- mixed score-date days：`{score_date_diag.get('mixed_score_event_date_count')}`（`{_fmt_pct(score_date_diag.get('mixed_score_event_date_rate'))}`）；K=1 mixed score-date days：`{score_date_diag.get('k1_mixed_score_event_date_count')}` / `{score_date_diag.get('k1_date_count')}`（`{_fmt_pct(score_date_diag.get('k1_mixed_score_event_date_rate'))}`）。",
+        f"- score age days：mean `{_fmt(score_date_diag.get('score_age_days_mean'), 2)}`；median `{_fmt(score_date_diag.get('score_age_days_median'), 2)}`；max `{score_date_diag.get('score_age_days_max')}`。",
+        "",
+        f"| Pair scope | Days | Pairs | {left_id} Pair | {right_id} Pair | Pair Δ | {left_id} Daily | {right_id} Daily | Daily Δ |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for scope_key, scope_label in (
+        ("all_pairs", "All"),
+        ("same_score_event_date_pairs", "Same score-date"),
+        ("cross_score_event_date_pairs", "Cross score-date"),
+        ("k1_same_score_event_date_pairs", "K=1 same score-date"),
+        ("k1_cross_score_event_date_pairs", "K=1 cross score-date"),
+    ):
+        item = dict(score_scopes.get(scope_key) or {})
+        models = dict(item.get("models") or {})
+        left = dict(models.get(left_id) or {})
+        right = dict(models.get(right_id) or {})
+        contrast = dict((item.get("contrasts") or {}).get(f"{left_id}_minus_{right_id}") or {})
+        lines.append(
+            f"| {scope_label} | {int(item.get('date_count', 0) or 0)} | {int(item.get('pair_count', 0) or 0)} "
+            f"| {_fmt_pct(left.get('pairwise_concordance'))} | {_fmt_pct(right.get('pairwise_concordance'))} "
+            f"| {_fmt_delta_pct(contrast.get('pairwise_concordance_delta'), 0.0)} "
+            f"| {_fmt_pct(left.get('mean_daily_concordance'))} | {_fmt_pct(right.get('mean_daily_concordance'))} "
+            f"| {_fmt_delta_pct(contrast.get('mean_daily_concordance_delta'), 0.0)} |"
+        )
+
     lines += [
         "",
         "## 契約",
@@ -1368,6 +1626,10 @@ def run_comparison(
         model_ids=model_ids,
         boundary_width=boundary_width,
     )
+    score_event_date_comparability = _evaluate_score_event_date_comparability(
+        dynamic_frame,
+        model_ids=model_ids,
+    )
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -1413,6 +1675,7 @@ def run_comparison(
                 boundary_width=boundary_width,
             ),
             "reference_subset_attribution": reference_subset_attribution,
+            "score_event_date_comparability": score_event_date_comparability,
         },
         "random_baseline": {
             "method": "exact_uniform_random_order_expectation",

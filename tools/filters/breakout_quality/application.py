@@ -470,6 +470,10 @@ def _simple_report_details(
             (dynamic_contrast.get("metrics") or {}).get("boundary_concordance") or {}
         )
         reference_attribution = dict(dynamic.get("reference_subset_attribution") or {})
+        score_date_diag = dict(dynamic.get("score_event_date_comparability") or {})
+        score_date_scopes = dict(score_date_diag.get("pair_scopes") or {})
+        cross_scope = dict(score_date_scopes.get("cross_score_event_date_pairs") or {})
+        k1_cross_scope = dict(score_date_scopes.get("k1_cross_score_event_date_pairs") or {})
         first_reference_k = min((int(value) for value in reference_attribution), default=None)
         first_reference = (
             dict(reference_attribution.get(str(first_reference_k)) or {})
@@ -484,6 +488,10 @@ def _simple_report_details(
                 (section.get("paired_contrasts") or {}).get(contrast_id) or {}
             )
             return dict((contrast.get("metrics") or {}).get(metric) or {}).get("mean_delta")
+
+        def _score_date_delta(section: dict, metric: str):
+            contrast = dict((section.get("contrasts") or {}).get(contrast_id) or {})
+            return contrast.get(metric)
 
         rows.extend(
             [
@@ -529,6 +537,18 @@ def _simple_report_details(
                     ]
                     if first_reference_k is not None
                     else []
+                ),
+                (
+                    f"Cross score-date Pair Δ ({summary_left}−{summary_right})",
+                    "-"
+                    if _score_date_delta(cross_scope, "pairwise_concordance_delta") is None
+                    else f"{float(_score_date_delta(cross_scope, 'pairwise_concordance_delta')) * 100.0:+.2f}pp",
+                ),
+                (
+                    f"K=1 Cross score-date Pair Δ ({summary_left}−{summary_right})",
+                    "-"
+                    if _score_date_delta(k1_cross_scope, "pairwise_concordance_delta") is None
+                    else f"{float(_score_date_delta(k1_cross_scope, 'pairwise_concordance_delta')) * 100.0:+.2f}pp",
                 ),
             ]
         )

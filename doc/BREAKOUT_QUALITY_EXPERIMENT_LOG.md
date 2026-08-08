@@ -6246,3 +6246,57 @@ console／Markdown直接列出MR-12B−MR-12A的NDCG、Boundary與Top-K Lift差�
 3. 若K=1 Event Δ已為負，先做reference dates的year/regime／candidate-set特徵歸因，再決定是否需要PIT fold stability；不得直接修改loss。
 4. 在上述歸因完成前，不建立MR-12D。
 
+## 2026-08-09 — P2 Reference-subset attribution結果：反轉由Orderable universe引入；score-date comparability診斷實作
+
+### 狀態
+
+`P2_REFERENCE_SUBSET_RESULT_AVAILABLE / SCORE_DATE_COMPARABILITY_IMPLEMENTED`。read-only模型品質歸因，不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity；`MR-12B / DL-CONT12B`維持current model research anchor，`MR-12C`維持REJECTED。
+
+### 本輪基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_041427_90499bb.zip`。
+- SHA256：`ddf8d4d2666b16871ad2c00c794861b7b4511230683c58570104ba9248cd6304`。
+- GPT fresh extract：`/mnt/data/stock_review_20260809_041427`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 使用者本機Reference-subset attribution結果
+
+對C17 common-complete K=1的同一71個reference dates固定K=1：
+
+- 完整Forward-OOS `event_universe`：有效competition days=`64`；MR-12B−MR-12A NDCG Δ=`+0.0532`、Boundary Δ=`+4.69pp`、Top-1 Lift Δ=`-0.0052R`。
+- C17 `orderable_universe`：competition days=`71`；NDCG Δ=`-0.0886`、Boundary Δ=`-19.72pp`、Top-1 Lift Δ=`-0.4478R`。
+
+因此「reference-date / regime conditioning本身使MR-12B Top-1變差」不成立：同一批日期回到canonical same-day event universe後，MR-12B的NDCG與Boundary仍優於MR-12A；負向反轉是在正式C17 orderable candidate universe形成後才出現。K=2 Event與Orderable NDCG Δ皆為正（`+0.0797/+0.0588`），其餘K樣本過少不作採用判定。
+
+### 新的最小機制假說
+
+MR-12B training objective為**within-day RankNet**：pair只在相同event date內建立，loss只約束同日margin ordering。正式C17 orderable pool則可在同一trade date同時包含新訊號與延續中的歷史訊號；這些候選沿用各自原始`breakout_quality_score_date`的frozen score，因此runtime會比較不同`score_event_date` cohort的score。
+
+這形成可直接驗證的objective/runtime mismatch假說：
+
+- `same score-event-date pairs`接近MR-12B實際training pair scope；
+- `cross score-event-date pairs`從未被MR-12B pairwise loss直接約束其absolute score scale；
+- MR-12A的daily-percentile MSE雖也是same-day target，但逐row MSE對[0,1] percentile提供absolute score anchor，理論上較容易保留跨date cohort可比性。
+
+此機制目前僅為待驗證假說；不得在取得pair-scope診斷前建立MR-12D或修改loss。
+
+### 本輪新增read-only診斷
+
+`compare-continuous-rankers`新增`score_event_date_comparability`：
+
+1. 對common-complete C17 orderable rows計算`trade_date - score_event_date`，輸出score-age>0候選比例、age bucket、mixed-score-date trade days，以及K=1 mixed-score-date比例。
+2. 在每個trade date內以`target_raw_r`作方向真值，分別計算：
+   - all pairs；
+   - same-score-event-date pairs；
+   - cross-score-event-date pairs；
+   - K=1 same-score-event-date pairs；
+   - K=1 cross-score-event-date pairs。
+3. 每個scope同時輸出pair-weighted concordance與mean-daily concordance，並直接比較config summary pair（目前MR-12B−MR-12A）。
+4. 此診斷只讀既有frozen score與C17 orderable artifacts；不重訓、不strategy replay、不修改selector，不把OOS資料送回loss／gradient／epoch selection。
+
+### 判讀規則與下一步
+
+- 若MR-12B在same-score-date pairs仍優於／不弱於MR-12A，但cross-score-date pairs明顯轉負，則支持「跨score-date cohort可比性」是主要runtime落差；下一個model research才可考慮以Selection-only資料做`within-day pairwise + absolute percentile anchor`之單一objective變更。
+- 若same-score-date與cross-score-date皆轉負，則orderable universe還有其他candidate-lifecycle／portfolio-state conditioning，下一步拆score age、candidate type、fresh/continuation與C17/C19 native planned basket action。
+- 在上述診斷完成前，不建立MR-12D、不修改C17/C18。
+
