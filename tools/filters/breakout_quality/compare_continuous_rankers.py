@@ -703,7 +703,7 @@ def _render_dynamic_k_strata_table(
             f"{right_id} Lift",
         ),
         rows,
-        aligns=("right", "right", "right", "right", "right", "right", "right", "right", "right", "right"),
+        alignments=("right", "right", "right", "right", "right", "right", "right", "right", "right", "right"),
     )
 
 

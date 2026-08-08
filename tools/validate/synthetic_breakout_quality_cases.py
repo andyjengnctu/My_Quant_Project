@@ -11854,6 +11854,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         _dynamic_orderable_frame,
         _evaluate_dynamic_k_strata,
         _evaluate_paired_frame,
+        _render_dynamic_k_strata_table,
     )
 
     profile = get_breakout_quality_experiment_profile(
@@ -12176,6 +12177,22 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             float(dynamic_coverage["reference_runtime_scored_candidate_row_rate"]),
             tuple(sorted(dynamic_strata)),
             int(dynamic_strata["2"]["competition_date_count"]),
+        ),
+    )
+    dynamic_strata_table = _render_dynamic_k_strata_table(
+        dynamic_strata,
+        summary_pair=("MR-12B", "MR-12A"),
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_dynamic_k_strata_console_renderer_uses_shared_table_contract",
+        (True, True, True),
+        (
+            bool(dynamic_strata_table.strip()),
+            "MR-12B NDCG" in dynamic_strata_table,
+            "Boundary Δ" in dynamic_strata_table,
         ),
     )
 

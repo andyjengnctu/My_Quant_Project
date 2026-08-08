@@ -6133,3 +6133,23 @@ MR-12B相對MR-12A在603個共同OOS competition days：NDCG `+0.0290`、Top-K L
 2. 若MR-12B弱勢主要集中K=1/2，進一步做top-prefix decision attribution；若各K都弱，再查complete-case selection bias與score-unavailable候選。
 3. 無論K-stratified結果如何，下一個真正對應經濟結果的診斷應以C17/C18各arm的**盤前planned basket / repair / feasible-swap action**為單位，而不是再用generic raw-score Top-K代替selector。若現有持久工件不足以重建planned basket，應先補保存selector action membership/rank的canonical diagnostic欄位，再由既有replay產物或下一次正式replay產生，不得用selected fills冒充盤前planned orders。
 4. 在上述歸因完成前，不建立MR-12D、不依94日Dynamic-K子集改Pairwise loss。
+
+
+## 2026-08-09 — P2 Dynamic-K K分層console renderer API閉環
+
+狀態：`IMPLEMENTED / LOCAL_RERUN_REQUIRED`。此為P2 read-only診斷輸出bug fix，不占用新的`MR-*`／`DL-*`／`SR-C*`／`AUD-*` identity，不修改Dataset、Label、模型權重、score、selector或strategy replay。
+
+### 程式基準與本機失敗
+
+- 輸入ZIP：`test-branch-1_20260809_034619_538614e.zip`；SHA256：`805cf0b8c7bf55a81c13145413ff51d2b84b8132221232700f75b385285f8a0d`。
+- 使用者由`apps/research.py → 模型訓練 → 比較設定中的 Continuous Rankers`執行P2時，計算已完成至console rendering，但新增`_render_dynamic_k_strata_table()`呼叫共用`core.console_report.render_table()`時誤用私有舊renderer的keyword `aligns=`，造成`TypeError: render_table() got an unexpected keyword argument 'aligns'`，因此本輪沒有產生可採用的新K-stratified結果。
+
+### 根因與修正
+
+- `core.console_report.render_table()`正式keyword為`alignments=`；`aligns=`只屬`tools/filters/breakout_quality/report.py`內部`_render_ascii_table()`，兩者API不同。
+- 將P2 K分層renderer改為`alignments=`，不改任何metric計算、candidate coverage、Dynamic-K sample或既有工件語意。
+- 在既有continuous-ranker synthetic contract中直接呼叫`_render_dynamic_k_strata_table()`並驗證標題欄位，避免未來只測metric payload而漏掉console renderer的API mismatch。
+
+### 下一步
+
+原樣重跑正式選單P2即可；不需重訓模型、不需重跑Strategy Compare。取得K=1/2/3/...分層與candidate coverage後，再依前節既定順序判斷top-prefix弱點或complete-case selection bias；在歸因完成前仍不建立MR-12D。
