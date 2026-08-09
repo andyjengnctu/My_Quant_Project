@@ -16412,10 +16412,12 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         build_trade_path_excluded_event_update,
         simulate_realized_trade_path_label,
     )
+    from filters.breakout_quality.strategy_param_training import (
+        validate_selection_historical_baseline_period,
+    )
     from tools.filters.breakout_quality.build_trade_path_labels import (
         _load_valid_ticker_shard,
         _ticker_shard_path,
-        _validate_historical_teacher_baseline_period,
         _write_ticker_shard,
     )
 
@@ -16436,7 +16438,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         "first_oos_date": "2014-01-01",
         "last_oos_date": "2020-12-01",
     }
-    accepted_dates = _validate_historical_teacher_baseline_period(
+    accepted_dates = validate_selection_historical_baseline_period(
         payload=valid_teacher_payload,
         meta=valid_teacher_meta,
     )
@@ -16450,7 +16452,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         }
     }
     try:
-        _validate_historical_teacher_baseline_period(
+        validate_selection_historical_baseline_period(
             payload=incomplete_teacher_payload,
             meta=valid_teacher_meta,
         )

@@ -189,6 +189,46 @@ def _load_baseline_contract(*, root: Path, args) -> dict[str, Any]:
     }
 
 
+def validate_selection_historical_baseline_period(
+    *, payload: dict[str, Any], meta: dict[str, Any]
+) -> tuple[str, ...]:
+    """Validate the canonical Selection historical effective-date coverage.
+
+    The historical P2 teacher must cover every annual effective date from
+    2014 through 2020.  ``last_oos_date`` may be any date in 2020 (for example
+    the rolling contract's December boundary); the effective-date schedule is
+    the authoritative annual coverage contract.
+    """
+
+    first_oos = pd.Timestamp(str(meta.get("first_oos_date"))).normalize()
+    last_oos = pd.Timestamp(str(meta.get("last_oos_date"))).normalize()
+    expected_effective_dates = tuple(
+        pd.Timestamp(year=year, month=1, day=1) for year in range(2014, 2021)
+    )
+    raw_schedule = dict(payload.get("params_ensemble_by_effective_date") or {})
+    try:
+        observed_effective_dates = tuple(
+            sorted(pd.Timestamp(str(value)).normalize() for value in raw_schedule)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Selection historical P2上游基準生效日不合法") from exc
+    if (
+        first_oos != pd.Timestamp("2014-01-01")
+        or last_oos.year != 2020
+        or last_oos < pd.Timestamp("2020-01-01")
+        or observed_effective_dates != expected_effective_dates
+    ):
+        observed_text = ",".join(
+            value.strftime("%Y-%m-%d") for value in observed_effective_dates
+        ) or "-"
+        raise ValueError(
+            "Selection historical P2上游基準必須完整涵蓋2014～2020: "
+            f"meta={first_oos.date()}~{last_oos.date()}, "
+            f"effective_dates={observed_text}"
+        )
+    return tuple(value.strftime("%Y-%m-%d") for value in observed_effective_dates)
+
+
 def _load_selection_historical_baseline_contract(
     *, root: Path, param_policy: str
 ) -> dict[str, Any]:
@@ -216,32 +256,7 @@ def _load_selection_historical_baseline_contract(
     missing = [key for key in required if meta.get(key) in (None, "")]
     if missing:
         raise ValueError("Selection historical P2上游基準缺少meta: " + ", ".join(missing))
-    first_oos = pd.Timestamp(str(meta["first_oos_date"])).normalize()
-    last_oos = pd.Timestamp(str(meta["last_oos_date"])).normalize()
-    expected_effective_dates = tuple(
-        pd.Timestamp(year=year, month=1, day=1) for year in range(2014, 2021)
-    )
-    raw_schedule = dict(payload.get("params_ensemble_by_effective_date") or {})
-    try:
-        observed_effective_dates = tuple(
-            sorted(pd.Timestamp(str(value)).normalize() for value in raw_schedule)
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Selection historical P2上游基準生效日不合法") from exc
-    if (
-        first_oos != pd.Timestamp("2014-01-01")
-        or last_oos.year != 2020
-        or last_oos < pd.Timestamp("2020-01-01")
-        or observed_effective_dates != expected_effective_dates
-    ):
-        observed_text = ",".join(
-            value.strftime("%Y-%m-%d") for value in observed_effective_dates
-        ) or "-"
-        raise ValueError(
-            "Selection historical P2上游基準必須完整涵蓋2014～2020: "
-            f"meta={first_oos.date()}~{last_oos.date()}, "
-            f"effective_dates={observed_text}"
-        )
+    validate_selection_historical_baseline_period(payload=payload, meta=meta)
     return {
         "path": path,
         "payload": payload,
