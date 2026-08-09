@@ -7215,3 +7215,32 @@ Stage 3實作前曾預期future-independent score universe會使row數高於`778
 - `SR-C27 / SR-C28`：`READY_FOR_SELECTION_COMPARE / RESULT_PENDING`。
 - 下一步直接執行Selection Strategy Compare的C23/C24/C25/C27/C28固定比較；優先看C27-C24與C28-C25的source-only差異。
 - 在C27/C28 Selection結果取得前，MR-13A仍不得取代MR-12B，也不得進ROOS。
+
+
+## 2026-08-09 — Stage 3 Strategy Compare前置依賴自動化修正
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / SELECTION_COMPARE_STILL_PENDING`。
+
+### 使用者觀察
+
+在C23/C24/C25/C27/C28 Strategy Compare狀態頁，`CONT13A_PIT`已READY，但`CONT12B_PIT`三個top-level工件與`selection_min_roos`缺少時整體直接BLOCKED。使用者指出既有Strategy Compare原已實作「正式入口先規劃依賴，能由既有真理工件確定完成的前置自動建立／接續」契約。
+
+### 根因
+
+1. Selection歷史P2來源`selection_min_roos`在C23～C28研究設計時刻意設定`builder=None`，因此即使它屬策略參數工件、且已有正式rolling optimizer service，planner仍只能標BLOCKED。這與`PROJECT_SETTINGS`目前「策略比較可建立比較所需策略參數」的全專案契約不一致。
+2. Selection PIT source一律禁止builder，將「不得由Strategy Compare訓練PIT模型」錯誤擴張為「連既有fold score/checkpoint的純推論工件重建也禁止」。實際上專案契約允許策略比較匯出既有模型推論工件。
+3. PIT CLI argparse原先在解析`--experiment-profile`前就以目前model-research Active Profile填入fold／validation／seed等預設值；不同PIT source設定若未來分叉，checkpoint identity可能錯用另一profile的預設。
+
+### 修正
+
+- `selection_min_roos`新增config-driven `selection_historical_p2` builder；重用既有Selection baseline truth，只建立／接續2014～2020 P2_HISTORY risk-only active params，不建立Label、不啟用DL。
+- `CONT12B_PIT`與`CONT13A_PIT`新增`selection_pit_from_existing_folds` builder。Strategy Compare若PIT top-level工件缺少／無效，可自動重組既有fold scores，或從training identity完全一致的既有checkpoint重新推論，再執行PIT Audit。
+- PIT builder新增`--checkpoint-only`硬契約：任何fold無法由既有score/checkpoint合法重用時，在進入`_train_fold`前立即失敗，Strategy Compare不得因此訓練模型。
+- PIT parser先解析`--experiment-profile`，再由該profile取得PIT defaults，消除Active Profile隱性耦合。
+- 前置計畫對一個PIT source只建立一個bundle BUILD action，避免manifest／audit／scores三個檔各自重複執行builder；狀態頁仍逐檔顯示預計動作。
+
+### Scientific identity／判定
+
+MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28的target、model weights、selector、策略參數語意與比較期間均未修改；本輪只修正前置工件 orchestration，不新增MR/SR ID。若既有PIT fold/checkpoint也不存在或identity不相容，仍必須BLOCK並由模型研究入口重建，不能為了自動化跨越「策略比較不得訓練模型」邊界。

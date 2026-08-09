@@ -10,16 +10,13 @@ import os
 from pathlib import Path
 import shutil
 import time
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from config.breakout_quality import get_breakout_quality_workflow_settings
-from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
 from core.dataset_profiles import get_dataset_dir
-from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
 from filters.breakout_quality.artifacts import build_file_manifest, compute_file_sha256
 from core.console_report import (
@@ -47,7 +44,6 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_BASE_FILTER_ID,
     TRADE_PATH_FORWARD_TEACHER_PARAMS_RELATIVE_PATH,
     TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH,
-    TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR,
     TRADE_PATH_LABEL_CONTRACT_VERSION,
     TRADE_PATH_LABEL_ID,
     TRADE_PATH_REASON_INACTIVE_HIGH_LEN,
@@ -61,7 +57,6 @@ from filters.breakout_quality.trade_path_label import (
     merge_active_param_schedules,
     simulate_realized_trade_path_label,
 )
-from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows
 from filters.breakout_quality.workflow_io import (
     PROJECT_ROOT,
     dataset_output_dir,
@@ -73,27 +68,11 @@ from filters.breakout_quality.workflow_io import (
     read_json,
     write_json,
 )
-from tools.filters.breakout_quality.strategy_adapt import _build_base_policy
 from filters.breakout_quality.strategy_compare_engine import (
     PARAM_POLICY_BASE_FINALIST_BEST,
-    _load_param_source,
-    _validate_requested_param_policy,
 )
 from filters.breakout_quality.strategy_param_training import (
-    RISK_SEARCH_FIELDS,
-    _validate_risk_only_params,
-    build_risk_only_fold_overrides,
-)
-from tools.optimizer.outer_rolling_oos import (
-    FOLD_FIXED_STRATEGY_OVERRIDES_KEY,
-    run_outer_rolling_oos,
-)
-from tools.optimizer.prep import load_all_raw_data
-from tools.optimizer.runtime import create_optimizer_study
-from tools.optimizer.session_factory import (
-    build_optimizer_session,
-    configure_optuna_logging,
-    ensure_study_effective_policy_compatible,
+    prepare_selection_historical_p2_params,
 )
 
 SCHEMA_VERSION = 2
@@ -180,220 +159,21 @@ def _write_ticker_shard(path: Path, rows: list[dict[str, Any]]) -> pd.DataFrame:
     return frame
 
 
-def _validate_historical_teacher_baseline_period(
-    *,
-    payload: dict[str, Any],
-    meta: dict[str, Any],
-) -> tuple[str, ...]:
-    first_oos = pd.Timestamp(str(meta["first_oos_date"])).normalize()
-    last_oos = pd.Timestamp(str(meta["last_oos_date"])).normalize()
-    expected_effective_dates = tuple(
-        pd.Timestamp(year=year, month=1, day=1)
-        for year in range(2014, 2021)
-    )
-    raw_schedule = dict(payload.get("params_ensemble_by_effective_date") or {})
-    try:
-        observed_effective_dates = tuple(
-            sorted(pd.Timestamp(str(value)).normalize() for value in raw_schedule)
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValueError("歷史teacher基準active-param生效日不合法") from exc
-    period_boundary_valid = (
-        first_oos == pd.Timestamp("2014-01-01")
-        and last_oos.year == 2020
-        and last_oos >= pd.Timestamp("2020-01-01")
-    )
-    if not period_boundary_valid or observed_effective_dates != expected_effective_dates:
-        observed_text = ",".join(
-            value.strftime("%Y-%m-%d") for value in observed_effective_dates
-        ) or "-"
-        raise ValueError(
-            "歷史teacher基準必須完整涵蓋2014～2020年度active params: "
-            f"meta={first_oos.date()}~{last_oos.date()}, "
-            f"effective_dates={observed_text}"
-        )
-    return tuple(value.strftime("%Y-%m-%d") for value in observed_effective_dates)
-
-
-def _load_selection_baseline_contract(root: Path) -> dict[str, Any]:
-    path = root / TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH
-    if not path.is_file():
-        raise FileNotFoundError(
-            "缺少2014～2020歷史teacher基準參數："
-            f"{project_relative_display_path(path, project_root=root)}；"
-            "請先保留既有Selection strategy realization工件。"
-        )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    source = _load_param_source(path)
-    policy = _validate_requested_param_policy(source, PARAM_POLICY_BASE_FINALIST_BEST)
-    if str(source.get("kind") or "") != "rolling_active_param_ensemble":
-        raise ValueError("歷史teacher基準必須是rolling active-param ensemble")
-    meta = dict(payload.get("meta") or {})
-    required = (
-        "window_mode",
-        "first_oos_date",
-        "last_oos_date",
-        "train_window_months",
-        "oos_horizon_months",
-    )
-    missing = [name for name in required if meta.get(name) in (None, "")]
-    if missing:
-        raise ValueError(f"歷史teacher基準缺少meta: {missing}")
-    _validate_historical_teacher_baseline_period(payload=payload, meta=meta)
-    return {
-        "path": path,
-        "payload": payload,
-        "source": source,
-        "policy": policy,
-        "meta": meta,
-        "summary": dict(payload.get("summary") or {}),
-        "sha256": compute_file_sha256(path),
-    }
-
-
-def _historical_teacher_args(args) -> SimpleNamespace:
-    settings = get_breakout_quality_workflow_settings()
-    return SimpleNamespace(
+def _ensure_historical_teacher_params(root: Path, args) -> Path:
+    result = prepare_selection_historical_p2_params(
+        project_root=root,
         dataset=str(args.dataset),
-        filter_id=TRADE_PATH_BASE_FILTER_ID,
-        model_architecture=str(settings.model_architecture),
-        experiment_profile=str(settings.experiment_profile),
         param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
         trials_per_fold=int(args.historical_teacher_trials_per_fold),
         max_positions=int(args.max_positions),
         rotation=str(args.rotation),
         fixed_risk=float(args.fixed_risk),
         max_position_cap_pct=float(args.max_position_cap_pct),
+        optimizer_seed=int(get_breakout_quality_workflow_settings().seed),
+        resume_parameter_training=bool(args.resume),
         quiet=bool(args.quiet),
     )
-
-
-def _ensure_historical_teacher_params(root: Path, args) -> Path:
-    target_path = root / TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH
-    output_dir = root / TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR
-    active_param_dir = target_path.parent
-    optimizer_output_dir = output_dir / "p2_dl_off_trained" / "optimizer_runtime"
-    baseline_contract = _load_selection_baseline_contract(root)
-    teacher_args = _historical_teacher_args(args)
-    fold_overrides = build_risk_only_fold_overrides(
-        baseline_contract=baseline_contract,
-        args=teacher_args,
-        training_dl_enabled=False,
-    )
-    identity_payload = {
-        "schema_version": SCHEMA_VERSION,
-        "mode": "a2_trade_path_historical_teacher_params",
-        "dataset": str(args.dataset),
-        "dataset_identity": build_source_data_inventory(root, args.dataset),
-        "baseline_path": project_relative_display_path(
-            baseline_contract["path"], project_root=root
-        ),
-        "baseline_sha256": baseline_contract["sha256"],
-        "rolling_policy": {
-            key: baseline_contract["meta"][key]
-            for key in (
-                "window_mode",
-                "first_oos_date",
-                "last_oos_date",
-                "train_window_months",
-                "oos_horizon_months",
-            )
-        },
-        "trials_per_fold": int(teacher_args.trials_per_fold),
-        "risk_search_fields": list(RISK_SEARCH_FIELDS),
-        "fixed_overrides_by_effective_date": fold_overrides,
-        "max_positions": int(teacher_args.max_positions),
-        "rotation": str(teacher_args.rotation),
-        "fixed_risk": float(teacher_args.fixed_risk),
-        "max_position_cap_pct": float(teacher_args.max_position_cap_pct),
-    }
-    identity_payload["runtime_identity_sha256"] = _canonical_hash(identity_payload)
-    preflight_path = output_dir / "p2_dl_off_trained" / "rolling_preflight.json"
-    prior = None
-    if preflight_path.is_file():
-        try:
-            prior = json.loads(preflight_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            prior = None
-    reusable = (
-        isinstance(prior, dict)
-        and prior.get("runtime_identity_sha256")
-        == identity_payload["runtime_identity_sha256"]
-        and target_path.is_file()
-    )
-    preflight_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(
-        preflight_path,
-        {
-            **identity_payload,
-            "status": "HISTORICAL_TEACHER_PREFLIGHT_PASS",
-            "created_at": get_taipei_now().isoformat(),
-        },
-    )
-    if not reusable:
-        base_policy = _build_base_policy(root=root, baseline_contract=baseline_contract)
-        base_policy.update(
-            {
-                "adaptation_scope": "a2_trade_path_historical_teacher_risk_only",
-                "evaluation_scope": "rolling_selection_diagnostic",
-            }
-        )
-        session_spec = {
-            "output_dir": str((optimizer_output_dir / "sessions").resolve()),
-            FOLD_FIXED_STRATEGY_OVERRIDES_KEY: fold_overrides,
-            "runtime_cache_identity": identity_payload["runtime_identity_sha256"],
-            "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
-            "train_max_positions": int(teacher_args.max_positions),
-            "train_enable_rotation": str(teacher_args.rotation) == "on",
-        }
-        outer_environ = dict(os.environ)
-        outer_environ["V16_MODELS_DIR"] = resolve_models_dir(str(root))
-        outer_environ["OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"
-        outer_environ["OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = "1"
-        meta = baseline_contract["meta"]
-        argv = [
-            "--outer-first-oos-date",
-            str(meta["first_oos_date"]),
-            "--outer-last-oos-date",
-            str(meta["last_oos_date"]),
-            "--outer-train-window-months",
-            str(int(meta["train_window_months"])),
-            "--outer-oos-months",
-            str(int(meta["oos_horizon_months"])),
-            "--trials",
-            str(int(teacher_args.trials_per_fold)),
-        ]
-        code = run_outer_rolling_oos(
-            argv=argv,
-            environ=outer_environ,
-            project_root=str(root),
-            output_dir=str(optimizer_output_dir),
-            base_policy=base_policy,
-            selected_data_dir=get_dataset_dir(str(root), args.dataset),
-            dataset_label=str(args.dataset),
-            load_all_raw_data=load_all_raw_data,
-            optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
-            build_optimizer_session=build_optimizer_session,
-            create_optimizer_study=create_optimizer_study,
-            ensure_study_effective_policy_compatible=ensure_study_effective_policy_compatible,
-            configure_optuna_logging=configure_optuna_logging,
-            optimizer_seed=int(get_breakout_quality_workflow_settings().seed),
-            optimizer_session_spec=session_spec,
-            default_trials=int(teacher_args.trials_per_fold),
-            timing_mode=False,
-            paramset_models_dir=str(active_param_dir.resolve()),
-        )
-        if int(code) != 0:
-            raise RuntimeError(f"歷史A2 teacher rolling optimizer失敗: {code}")
-    _validate_risk_only_params(
-        path=target_path,
-        baseline_contract=baseline_contract,
-        fold_overrides=fold_overrides,
-        args=teacher_args,
-        training_dl_enabled=False,
-        arm_id="P2_HISTORY",
-    )
-    return target_path
+    return Path(result["params_path"])
 
 
 def _hardlink_or_copy(source: Path, destination: Path) -> None:

@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 13
+STRATEGY_COMPARE_SCHEMA_VERSION = 14
 
 # =============================================================================
 # 1. 共用執行設定
@@ -162,7 +162,19 @@ STRATEGY_PARAM_SOURCES = {
                 "training_dl_enabled": False,
             }
         },
-        "builder": None,
+        "builder": {
+            "enabled": True,
+            "builder_type": "selection_historical_p2",
+            "options": {
+                "parameter_set": "p2_history",
+                "trials_per_fold": 200,
+                "resume": True,
+                "fixed_risk": 0.01,
+                "max_position_cap_pct": 0.30,
+                "optimizer_seed": 42,
+                "quiet": False,
+            },
+        },
     },
 }
 
@@ -263,7 +275,14 @@ STRATEGY_DL_SOURCES = {
             "MR-12B Selection point-in-time continuous score；"
             "只供2014～2020無前視策略經濟驗證"
         ),
-        "forward_scores_builder": None,
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {
+                "resume": True,
+                "allow_stale_source": False,
+            },
+        },
     },
     "CONT13A_PIT": {
         "filter_id": "breakout_quality_v1",
@@ -275,7 +294,14 @@ STRATEGY_DL_SOURCES = {
             "MR-13A Daily Universal Selection point-in-time score；"
             "每個盤前決策只使用最新已完成交易日資訊，供2014～2020無前視策略經濟驗證"
         ),
-        "forward_scores_builder": None,
+        "forward_scores_builder": {
+            "enabled": True,
+            "builder_type": "selection_pit_from_existing_folds",
+            "options": {
+                "resume": True,
+                "allow_stale_source": False,
+            },
+        },
     },
 }
 

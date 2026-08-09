@@ -89,7 +89,15 @@ REQUIRED_SCORE_COLUMNS = (
 
 
 def parse_args(argv=None) -> argparse.Namespace:
-    settings = get_breakout_quality_workflow_settings()
+    active_settings = get_breakout_quality_workflow_settings()
+    profile_parser = argparse.ArgumentParser(add_help=False)
+    profile_parser.add_argument(
+        "--experiment-profile", default=active_settings.experiment_profile
+    )
+    profile_args, _ = profile_parser.parse_known_args(argv)
+    settings = get_breakout_quality_workflow_settings(
+        experiment_profile=str(profile_args.experiment_profile)
+    )
     parser = argparse.ArgumentParser(
         description=(
             "以expanding-window folds建立Selection point-in-time continuous-ranker scores；"
@@ -178,6 +186,14 @@ def parse_args(argv=None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=settings.point_in_time_resume,
         help="重用fingerprint與hash均符合的既有fold工件",
+    )
+    parser.add_argument(
+        "--checkpoint-only",
+        action="store_true",
+        help=(
+            "只允許重用既有fold score／checkpoint重建PIT工件；"
+            "任何fold若需要模型訓練就立即停止"
+        ),
     )
     parser.add_argument(
         "--plan-only",
@@ -683,7 +699,7 @@ def _fold_training_contract_is_compatible(
     return True
 
 
-def _rescore_daily_fold_from_compatible_checkpoint(
+def _rescore_fold_from_compatible_checkpoint(
     *,
     fold_dir: Path,
     bundle,
@@ -694,13 +710,8 @@ def _rescore_daily_fold_from_compatible_checkpoint(
     torch_module,
     plan,
 ) -> tuple[pd.DataFrame, dict[str, Any]] | None:
-    """Reuse an unchanged daily fitted model and regenerate only the expanded scores."""
+    """Reuse an unchanged fitted fold model and regenerate its score rows only."""
 
-    if (
-        str(bundle.profile.training_sample_scope)
-        != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-    ):
-        return None
     manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
     model_path = fold_dir / DEFAULT_MODEL_FILENAME
     if not (manifest_path.is_file() and model_path.is_file()):
@@ -794,9 +805,19 @@ def _rescore_daily_fold_from_compatible_checkpoint(
             "coverage_rate": 1.0 if len(ids["score_ids"]) else None,
         },
         "migration": {
-            "kind": "expanded_daily_score_universe_checkpoint_reuse",
+            "kind": (
+                "expanded_daily_score_universe_checkpoint_reuse"
+                if str(bundle.profile.training_sample_scope)
+                == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+                else "checkpoint_score_regeneration"
+            ),
             "training_contract_unchanged": True,
-            "future_target_required_for_score": False,
+            **(
+                {"future_target_required_for_score": False}
+                if str(bundle.profile.training_sample_scope)
+                == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+                else {}
+            ),
         },
         "artifacts": {
             "checkpoint": build_file_manifest(model_path),
@@ -805,6 +826,10 @@ def _rescore_daily_fold_from_compatible_checkpoint(
     }
     write_json(manifest_path, rescored_manifest)
     return frame, rescored_manifest
+
+
+# Backward-compatible helper name retained for existing focused contract tests.
+_rescore_daily_fold_from_compatible_checkpoint = _rescore_fold_from_compatible_checkpoint
 
 
 def _migrate_compatible_legacy_fold(
@@ -1272,7 +1297,7 @@ def main(argv=None) -> int:
         migrated = False
         rescored_checkpoint = False
         if reused is None and bool(args.resume):
-            reused = _rescore_daily_fold_from_compatible_checkpoint(
+            reused = _rescore_fold_from_compatible_checkpoint(
                 fold_dir=fold_dir,
                 bundle=bundle,
                 ids=ids,
@@ -1319,6 +1344,12 @@ def main(argv=None) -> int:
                     )
                 )
         else:
+            if bool(args.checkpoint_only):
+                raise RuntimeError(
+                    "checkpoint-only PIT重建無法完成；fold缺少可重用score/checkpoint或identity不相容: "
+                    f"{fold['fold_id']}。Strategy Compare不得因此訓練模型，"
+                    "請由模型研究入口重建Selection PIT。"
+                )
             built_fold_count += 1
             fold_started = time.perf_counter()
             if compact_console:

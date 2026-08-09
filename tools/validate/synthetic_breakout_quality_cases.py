@@ -17268,17 +17268,36 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     ]
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "selection_pit_strategy_sources_are_read_only_and_preparation_validates_pit_contract",
+        "selection_pit_strategy_sources_allow_checkpoint_only_rebuild_but_never_model_training",
         True,
         bool(pit_sources)
         and all(source.threshold is None for source in pit_sources)
-        and all(source.forward_scores_builder is None for source in pit_sources)
+        and all(
+            source.forward_scores_builder is not None
+            and source.forward_scores_builder.builder_type
+            == "selection_pit_from_existing_folds"
+            for source in pit_sources
+        )
         and "load_selection_point_in_time_ranking_contract" in preparation_source
-        and "SCORE_SOURCE_SELECTION_POINT_IN_TIME" in preparation_source
+        and "--checkpoint-only" in preparation_source
+        and "Strategy Compare不得因此訓練模型" in (
+            project_root / "tools" / "filters" / "breakout_quality" / "build_point_in_time_scores.py"
+        ).read_text(encoding="utf-8")
         and any(
             source.artifact_contract is not None
             for source in settings.parameter_sources.values()
         ),
+    )
+    selection_min_roos_source = settings.parameter_sources.get("selection_min_roos")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_historical_p2_parameter_source_has_formal_auto_builder",
+        True,
+        selection_min_roos_source is not None
+        and selection_min_roos_source.builder is not None
+        and selection_min_roos_source.builder.builder_type == "selection_historical_p2"
+        and str(selection_min_roos_source.builder.options.get("parameter_set")) == "p2_history"
+        and "prepare_selection_historical_p2_params" in preparation_source,
     )
 
     from filters.breakout_quality.strategy_compare_preparation import (

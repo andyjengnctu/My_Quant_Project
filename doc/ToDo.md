@@ -8,6 +8,7 @@
     - audit 同源
     - 移出非必要放在config/下的設定
     - 優化選單，常用以選單為主(避免去背指令)，不常用以CLI為主(避免選單太雜)
+    - 具備自動檢查與完成缺少的前置工作能力
 
 - stablity test
     - multi seeds test

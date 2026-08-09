@@ -42,6 +42,7 @@ from filters.breakout_quality.strategy_compare_engine import (
     _validate_requested_param_policy,
 )
 from filters.breakout_quality.strategy_param_training import (
+    prepare_selection_historical_p2_params,
     prepare_strategy_parameter_source,
 )
 
@@ -382,6 +383,14 @@ def collect_artifact_status(
                         root, source.filter_id, source.model_architecture, source.experiment_profile
                     ),
                 }
+            builder = source.forward_scores_builder
+            checkpoint_rebuild_allowed = bool(
+                not pit_ready
+                and settings.preparation.auto_prepare
+                and builder is not None
+                and builder.enabled
+                and builder.builder_type == "selection_pit_from_existing_folds"
+            )
             file_rows: dict[str, Any] = {}
             for key, path in files.items():
                 sha256 = compute_file_sha256(path) if path.is_file() else None
@@ -389,19 +398,21 @@ def collect_artifact_status(
                     "path": project_relative_display_path(path, project_root=root),
                     "sha256": sha256,
                 }
-                action = (
-                    "REUSE"
-                    if pit_ready and settings.preparation.reuse_ready_artifacts
-                    else "BLOCKED"
-                )
-                description = (
-                    "重用既有Selection PIT score／audit工件"
-                    if pit_ready
-                    else (
-                        "缺少或無效；請先由模型研究入口執行Selection PIT Scores與模型驗證，"
-                        "策略比較不得自動重訓"
+                if pit_ready and settings.preparation.reuse_ready_artifacts:
+                    action = "REUSE"
+                    description = "重用既有Selection PIT score／audit工件"
+                elif checkpoint_rebuild_allowed:
+                    action = "BUILD"
+                    description = (
+                        "以既有PIT fold score／checkpoint重建Selection PIT推論工件與Audit；"
+                        "若任何fold需要模型訓練則立即停止"
                     )
-                )
+                else:
+                    action = "BLOCKED"
+                    description = (
+                        "缺少或無效；既有fold/checkpoint無可用的checkpoint-only builder，"
+                        "請先由模型研究入口執行Selection PIT Scores與模型驗證"
+                    )
                 file_rows[key] = {
                     "ready": pit_ready,
                     "status": pit_status,
@@ -409,14 +420,28 @@ def collect_artifact_status(
                     "path": project_relative_display_path(path, project_root=root),
                     "sha256": sha256,
                 }
+                if pit_ready or not checkpoint_rebuild_allowed:
+                    actions.append(
+                        _preparation_action(
+                            action_id=f"dl:{dl_id}:{key}",
+                            artifact_key=f"dl:{dl_id}:{key}",
+                            action=action,
+                            builder_type=None,
+                            description=description,
+                            path=file_rows[key]["path"],
+                        )
+                    )
+            if checkpoint_rebuild_allowed:
                 actions.append(
                     _preparation_action(
-                        action_id=f"dl:{dl_id}:{key}",
-                        artifact_key=f"dl:{dl_id}:{key}",
-                        action=action,
-                        builder_type=None,
-                        description=description,
-                        path=file_rows[key]["path"],
+                        action_id=f"dl:{dl_id}:selection_pit_bundle",
+                        artifact_key=f"dl:{dl_id}:selection_pit_bundle",
+                        action="BUILD",
+                        builder_type="selection_pit_from_existing_folds",
+                        description=(
+                            "重建Selection PIT scores／manifest／audit（僅允許既有fold/checkpoint，禁止訓練）"
+                        ),
+                        path=file_rows["forward_scores"]["path"],
                     )
                 )
             dl_rows[dl_id] = {
@@ -805,6 +830,66 @@ def _execute_preparation_action(
             preload_feature_bank=bool(options.get("preload_feature_bank", True)),
         )
         return
+    if action.builder_type == "selection_historical_p2":
+        _kind, source_id = action.artifact_key.split(":", 1)
+        source = settings.parameter_sources[source_id]
+        builder = source.builder
+        if builder is None:
+            raise RuntimeError(f"參數來源builder設定不完整: {source_id}")
+        options = dict(builder.options)
+        prepare_selection_historical_p2_params(
+            project_root=root,
+            dataset=settings.dataset,
+            param_policy=settings.param_policy,
+            trials_per_fold=int(options["trials_per_fold"]),
+            max_positions=int(settings.max_positions),
+            rotation=str(settings.rotation),
+            fixed_risk=float(options["fixed_risk"]),
+            max_position_cap_pct=float(options["max_position_cap_pct"]),
+            optimizer_seed=int(options["optimizer_seed"]),
+            resume_parameter_training=bool(
+                options.get("resume", settings.preparation.resume_parameter_training)
+            ),
+            quiet=bool(options.get("quiet", False)),
+        )
+        return
+    if action.builder_type == "selection_pit_from_existing_folds":
+        _kind, dl_id, _bundle = action.artifact_key.split(":", 2)
+        source = settings.dl_sources[dl_id]
+        builder = source.forward_scores_builder
+        if builder is None:
+            raise RuntimeError(f"Selection PIT builder設定不完整: {dl_id}")
+        options = dict(builder.options)
+        from tools.filters.breakout_quality.build_point_in_time_scores import (
+            main as build_point_in_time_scores_main,
+        )
+        from tools.audit.breakout_quality.point_in_time_scores import (
+            main as audit_point_in_time_scores_main,
+        )
+
+        build_argv = [
+            "--filter-id", str(source.filter_id),
+            "--model-architecture", str(source.model_architecture),
+            "--experiment-profile", str(source.experiment_profile),
+            "--checkpoint-only",
+            "--resume" if bool(options.get("resume", True)) else "--no-resume",
+        ]
+        if bool(options.get("allow_stale_source", False)):
+            build_argv.append("--allow-stale-source")
+        code = build_point_in_time_scores_main(build_argv)
+        if int(code) != 0:
+            raise RuntimeError(f"Selection PIT checkpoint-only重建失敗: {dl_id}/{code}")
+        audit_argv = [
+            "--filter-id", str(source.filter_id),
+            "--model-architecture", str(source.model_architecture),
+            "--experiment-profile", str(source.experiment_profile),
+        ]
+        if bool(options.get("allow_stale_source", False)):
+            audit_argv.append("--allow-stale-source")
+        code = audit_point_in_time_scores_main(audit_argv)
+        if int(code) != 0:
+            raise RuntimeError(f"Selection PIT Audit失敗: {dl_id}/{code}")
+        return
     if action.builder_type == "binary_dl_risk_only_rolling":
         _kind, source_id = action.artifact_key.split(":", 1)
         source = settings.parameter_sources[source_id]
@@ -826,7 +911,7 @@ def _execute_preparation_action(
             experiment_profile=dl.experiment_profile,
             param_policy=settings.param_policy,
             parameter_set=str(options.get("parameter_set", "p3")),
-            trials_per_fold=int(options.get("trials_per_fold", 200)),
+            trials_per_fold=int(options["trials_per_fold"]),
             max_positions=int(settings.max_positions),
             rotation=str(settings.rotation),
             fixed_risk=float(options.get("fixed_risk", 0.01)),

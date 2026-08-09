@@ -310,6 +310,27 @@ def _validate_builder(
         for option_name in ("resume", "build_binary_pit", "binary_pit_resume", "quiet"):
             if option_name in builder.options and not isinstance(builder.options[option_name], bool):
                 raise ValueError(f"{field_name}.{option_name}必須是bool")
+    if builder.builder_type == "selection_historical_p2":
+        if str(builder.options.get("parameter_set") or "").lower() != "p2_history":
+            raise ValueError(f"{field_name}.parameter_set必須是p2_history")
+        if int(builder.options.get("trials_per_fold") or 0) < 1:
+            raise ValueError(f"{field_name}.trials_per_fold必須>=1")
+        if float(builder.options.get("fixed_risk") or 0.0) <= 0.0:
+            raise ValueError(f"{field_name}.fixed_risk必須>0")
+        cap = float(builder.options.get("max_position_cap_pct") or 0.0)
+        if not 0.0 < cap <= 1.0:
+            raise ValueError(f"{field_name}.max_position_cap_pct必須介於0與1")
+        if "optimizer_seed" not in builder.options:
+            raise ValueError(f"{field_name}.optimizer_seed不可省略")
+        if int(builder.options["optimizer_seed"]) < 0:
+            raise ValueError(f"{field_name}.optimizer_seed必須>=0")
+        for option_name in ("resume", "quiet"):
+            if option_name in builder.options and not isinstance(builder.options[option_name], bool):
+                raise ValueError(f"{field_name}.{option_name}必須是bool")
+    if builder.builder_type == "selection_pit_from_existing_folds":
+        for option_name in ("resume", "allow_stale_source"):
+            if option_name in builder.options and not isinstance(builder.options[option_name], bool):
+                raise ValueError(f"{field_name}.{option_name}必須是bool")
 
 
 def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) -> None:
@@ -348,7 +369,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         _validate_builder(
             source.builder,
             field_name=f"parameter_sources[{key}].builder",
-            allowed_types={"binary_dl_risk_only_rolling"},
+            allowed_types={"binary_dl_risk_only_rolling", "selection_historical_p2"},
         )
         if source.builder is not None and source.builder.enabled:
             options = dict(source.builder.options)
@@ -366,6 +387,8 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     )
             elif parameter_set == "p2" and source.trained_with_dl_id is not None:
                 raise ValueError(f"parameter source {key}的P2 builder不得設定trained_with_dl_id")
+            if source.builder.builder_type == "selection_historical_p2" and source.trained_with_dl_id is not None:
+                raise ValueError(f"parameter source {key}的Selection historical P2 builder不得設定trained_with_dl_id")
 
     for key, source in settings.dl_sources.items():
         if key != source.dl_id or not key.strip():
@@ -377,6 +400,11 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         if source.score_source == "canonical_runtime":
             if source.threshold is None or not 0.0 <= float(source.threshold) <= 1.0:
                 raise ValueError(f"canonical DL source threshold必須介於0與1: {key}")
+            if (
+                source.forward_scores_builder is not None
+                and source.forward_scores_builder.builder_type != "forward_oos_scores"
+            ):
+                raise ValueError(f"canonical DL source只允許forward_oos_scores builder: {key}")
         elif source.score_source == "continuous_ranker_oos":
             if source.threshold is not None:
                 raise ValueError(f"continuous DL source不得設定binary threshold: {key}")
@@ -385,16 +413,20 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         elif source.score_source == "selection_point_in_time":
             if source.threshold is not None:
                 raise ValueError(f"Selection PIT continuous DL source不得設定binary threshold: {key}")
-            if source.forward_scores_builder is not None:
+            if (
+                source.forward_scores_builder is not None
+                and source.forward_scores_builder.builder_type
+                != "selection_pit_from_existing_folds"
+            ):
                 raise ValueError(
-                    f"Selection PIT score不得由策略比較自動訓練／重建: {key}"
+                    f"Selection PIT只允許以既有fold/checkpoint重建推論工件，不得訓練模型: {key}"
                 )
         else:
             raise ValueError(f"DL source score_source不支援: {key}/{source.score_source}")
         _validate_builder(
             source.forward_scores_builder,
             field_name=f"dl_sources[{key}].forward_scores_builder",
-            allowed_types={"forward_oos_scores"},
+            allowed_types={"forward_oos_scores", "selection_pit_from_existing_folds"},
         )
 
     if len(settings.enabled_arms) < 2:

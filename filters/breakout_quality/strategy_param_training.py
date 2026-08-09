@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -45,6 +46,12 @@ from core.console_report import (
     render_title,
 )
 from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.trade_path_label import (
+    TRADE_PATH_BASE_FILTER_ID,
+    TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH,
+    TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR,
+    TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH,
+)
 from filters.breakout_quality.strategy_rule_policies import (
     ALL_OFF_INACTIVE_VALUE_OVERRIDES,
     ALL_RULE_FILTERS_OFF_OVERRIDES,
@@ -179,6 +186,70 @@ def _load_baseline_contract(*, root: Path, args) -> dict[str, Any]:
         "meta": meta,
         "summary": dict(payload.get("summary") or {}),
         "sha256": compute_file_sha256(params_path),
+    }
+
+
+def _load_selection_historical_baseline_contract(
+    *, root: Path, param_policy: str
+) -> dict[str, Any]:
+    path = root / TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH
+    if not path.is_file():
+        raise FileNotFoundError(
+            "缺少2014～2020 Selection historical P2上游基準參數: "
+            f"{project_relative_display_path(path, project_root=root)}"
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    source = _load_param_source(path)
+    policy = _validate_requested_param_policy(source, param_policy)
+    if str(source.get("kind") or "") != "rolling_active_param_ensemble":
+        raise ValueError("Selection historical P2上游基準必須是rolling active-param ensemble")
+    if int(policy.get("member_count_min") or 0) != 1 or int(policy.get("member_count_max") or 0) != 1:
+        raise ValueError("Selection historical P2要求每個effective date恰有1個member")
+    meta = dict(payload.get("meta") or {})
+    required = (
+        "window_mode",
+        "first_oos_date",
+        "last_oos_date",
+        "train_window_months",
+        "oos_horizon_months",
+    )
+    missing = [key for key in required if meta.get(key) in (None, "")]
+    if missing:
+        raise ValueError("Selection historical P2上游基準缺少meta: " + ", ".join(missing))
+    first_oos = pd.Timestamp(str(meta["first_oos_date"])).normalize()
+    last_oos = pd.Timestamp(str(meta["last_oos_date"])).normalize()
+    expected_effective_dates = tuple(
+        pd.Timestamp(year=year, month=1, day=1) for year in range(2014, 2021)
+    )
+    raw_schedule = dict(payload.get("params_ensemble_by_effective_date") or {})
+    try:
+        observed_effective_dates = tuple(
+            sorted(pd.Timestamp(str(value)).normalize() for value in raw_schedule)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Selection historical P2上游基準生效日不合法") from exc
+    if (
+        first_oos != pd.Timestamp("2014-01-01")
+        or last_oos.year != 2020
+        or last_oos < pd.Timestamp("2020-01-01")
+        or observed_effective_dates != expected_effective_dates
+    ):
+        observed_text = ",".join(
+            value.strftime("%Y-%m-%d") for value in observed_effective_dates
+        ) or "-"
+        raise ValueError(
+            "Selection historical P2上游基準必須完整涵蓋2014～2020: "
+            f"meta={first_oos.date()}~{last_oos.date()}, "
+            f"effective_dates={observed_text}"
+        )
+    return {
+        "path": path,
+        "payload": payload,
+        "source": source,
+        "policy": policy,
+        "meta": meta,
+        "summary": dict(payload.get("summary") or {}),
+        "sha256": compute_file_sha256(path),
     }
 
 
@@ -667,6 +738,139 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
     }
     _write_json(arm_dir / "rolling_optimizer_summary.json", summary)
     return {"params_path": params_path, "summary": summary, "contract": contract}
+
+
+def prepare_selection_historical_p2_params(
+    *,
+    project_root=PROJECT_ROOT,
+    dataset: str,
+    param_policy: str,
+    trials_per_fold: int,
+    max_positions: int,
+    rotation: str,
+    fixed_risk: float,
+    max_position_cap_pct: float,
+    optimizer_seed: int,
+    resume_parameter_training: bool = True,
+    quiet: bool = False,
+):
+    """Build/reuse the canonical 2014-2020 Selection historical P2 params only.
+
+    This service never builds labels and never enables a DL model.  It is safe for
+    Strategy Compare preparation because it only materializes the configured
+    strategy-parameter artifact from the existing Selection baseline truth.
+    """
+
+    root = Path(project_root).resolve()
+    baseline_contract = _load_selection_historical_baseline_contract(
+        root=root, param_policy=str(param_policy)
+    )
+    args = SimpleNamespace(
+        dataset=str(dataset),
+        filter_id=TRADE_PATH_BASE_FILTER_ID,
+        model_architecture="inception_time_v1",
+        experiment_profile="selection_historical_p2",
+        param_policy=str(param_policy),
+        trials_per_fold=int(trials_per_fold),
+        max_positions=int(max_positions),
+        rotation=str(rotation),
+        fixed_risk=float(fixed_risk),
+        max_position_cap_pct=float(max_position_cap_pct),
+        p3_variant=None,
+        resume_parameter_training=bool(resume_parameter_training),
+        quiet=bool(quiet),
+    )
+    settings = SimpleNamespace(seed=int(optimizer_seed))
+    target_path = root / TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH
+    output_dir = root / TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR
+    fold_overrides = build_risk_only_fold_overrides(
+        baseline_contract=baseline_contract,
+        args=args,
+        training_dl_enabled=False,
+    )
+
+    # The historical A2 teacher builder existed before this service was shared with
+    # Strategy Compare.  Preserve that completed work only when its full legacy
+    # preflight identity matches the current config; otherwise let the canonical
+    # optimizer service rebuild/resume instead of silently reusing stale params.
+    if target_path.is_file():
+        try:
+            _validate_risk_only_params(
+                path=target_path,
+                baseline_contract=baseline_contract,
+                fold_overrides=fold_overrides,
+                args=args,
+                training_dl_enabled=False,
+                arm_id="P2_HISTORY",
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            target_path.unlink(missing_ok=True)
+        else:
+            preflight_path = output_dir / "p2_dl_off_trained" / "rolling_preflight.json"
+            prior = _load_json(preflight_path)
+            legacy_identity = {
+                "schema_version": 2,
+                "mode": "a2_trade_path_historical_teacher_params",
+                "dataset": str(args.dataset),
+                "dataset_identity": build_source_data_inventory(root, args.dataset),
+                "baseline_path": project_relative_display_path(
+                    baseline_contract["path"], project_root=root
+                ),
+                "baseline_sha256": baseline_contract["sha256"],
+                "rolling_policy": {
+                    key: baseline_contract["meta"][key]
+                    for key in (
+                        "window_mode",
+                        "first_oos_date",
+                        "last_oos_date",
+                        "train_window_months",
+                        "oos_horizon_months",
+                    )
+                },
+                "trials_per_fold": int(args.trials_per_fold),
+                "risk_search_fields": list(RISK_SEARCH_FIELDS),
+                "fixed_overrides_by_effective_date": fold_overrides,
+                "max_positions": int(args.max_positions),
+                "rotation": str(args.rotation),
+                "fixed_risk": float(args.fixed_risk),
+                "max_position_cap_pct": float(args.max_position_cap_pct),
+            }
+            legacy_identity_sha256 = _canonical_hash(legacy_identity)
+            if (
+                isinstance(prior, dict)
+                and str(prior.get("runtime_identity_sha256") or "")
+                == legacy_identity_sha256
+            ):
+                migrated_contract = _runtime_contract(
+                    root=root,
+                    args=args,
+                    baseline_contract=baseline_contract,
+                    fold_overrides=fold_overrides,
+                    model_artifact=None,
+                    arm_id="P2_HISTORY",
+                    training_dl_enabled=False,
+                    binary_pit=None,
+                )
+                _write_json(
+                    preflight_path,
+                    {
+                        **migrated_contract,
+                        "status": "P2_HISTORY_PREFLIGHT_PASS",
+                        "legacy_historical_teacher_preflight_migrated": True,
+                        "created_at": get_taipei_now().isoformat(),
+                    },
+                )
+    return _run_optimizer_arm(
+        root=root,
+        args=args,
+        settings=settings,
+        baseline_contract=baseline_contract,
+        model_artifact=None,
+        output_dir=output_dir,
+        arm_id="P2_HISTORY",
+        training_dl_enabled=False,
+        binary_pit=None,
+    )
 
 
 def _run_pair(
