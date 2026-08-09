@@ -6663,3 +6663,48 @@ Controlled deltas：
 ### 下一步
 
 使用正式選單`apps/research.py → [4] Audit／診斷 → [2] 查看Audit設定、工件與預計動作`；READY後`[1/Enter]`執行。先比較C24/C25各age quantile的Selection ΔR、Target與Realized方向，再決定後續是研究candidate aging／refresh語意，或回到Target label semantics。
+
+## 2026-08-09 — AUD-c23-c25-pit-target-realization結果：C25負Selection R集中old-signal tail
+
+### 狀態
+
+`RESULT_AVAILABLE / C25_OLD_SIGNAL_TAIL_SUPPORTED / C24_NON_MONOTONIC / NO_MODEL_OR_TARGET_CHANGE`。
+
+### 程式基準
+
+- ZIP：`test-branch-1_20260809_123909_0537dbe.zip`
+- SHA256：`d62779ff43005ba1d6eb75f6bb9ab7cddf79bab6156c605c1a0439c79226455c`
+- Audit：`AUD-c23-c25-pit-target-realization`
+- 期間：2014-01-01～2020-12-31；只讀既有`SR-C23/C24/C25` completed replay、validated Selection PIT score與原始Continuous Target。
+- 不重跑portfolio、不建立未成交counterfactual、不重訓／校正模型、不改selector／params／Target。
+
+### 結果
+
+#### C24 vs C23
+
+- Exclusive selection R=`-35.78R`；Target/score coverage=`93.85%`。
+- C24-only相對C23-only：平均Target `+0.10R`，平均Realized `-0.38R`，win rate `-9.32pp`。
+- Target↔Realized rho：C23-only=`0.34`、C24-only=`0.23`；Score↔Realized rho：`-0.04/-0.15`。
+- Age buckets Selection ΔR：Q1=`+31.73R`、Q2=`-50.95R`、Q3=`-9.41R`、Q4=`-21.61R`。
+- 負R不是單調隨age增加；因此C24不支持簡單全域age cutoff。
+
+#### C25 vs C23
+
+- Exclusive selection R=`-19.52R`；Target/score coverage=`93.66%`。
+- C25-only相對C23-only：平均Target `+0.14R`，平均Realized `-0.11R`，win rate `-4.62pp`。
+- Target↔Realized rho：C23-only=`0.36`、C25-only=`0.35`；Score↔Realized rho：`-0.02/-0.06`。
+- Age buckets Selection ΔR：Q1=`+5.67R`、Q2=`+13.31R`、Q3=`+2.76R`、Q4=`-40.18R`。
+- Covered trades的Q1～Q3合計=`+21.74R`；Q4(age `23～288` calendar days，median=`38.5`)單獨反轉為`-40.18R`。C25-only Q4平均Realized=`0.42R`，C23-only=`1.50R`；Q4 Target則`0.23R vs 0.25R`，已不存在前3個bucket的Target優勢。
+- Age↔Realized與Age↔(Target−R) Spearman接近0，表示不是平滑單調age效應，而是尾端／threshold-like現象。
+
+### 判定
+
+1. `MR-12B`與原始Continuous Target目前均**不因本Audit被淘汰或修改**；C25的Target↔Realized仍約`0.35`，不支持「Target全面失效」。
+2. `SR-C25` feasible-ascent是下一個runtime研究基礎；C24因age pattern非單調，不作age-guard基礎。
+3. 下一個Selection-only受控假說應是**stale-score membership guard**：過舊PIT score不得驅動DL造成basket membership change，但candidate本身不得被拒絕／過期，需完整保留Min ROOS fallback與K/R0資源契約。
+4. 若實作固定score-age cutoff，該值只能由本Selection evidence預先固定並在OOS前凍結；OOS結果不得再用來調cutoff。未成交／未選候選仍不得建立counterfactual R。
+5. 在這個runtime guard完成Selection驗證前，不建立新`MR-*`、不重做Target label、不進參數適應。
+
+### 下一步
+
+先以`SR-C25`為控制基準實作單一runtime變更：stale-score只禁止DL membership change，不刪候選、不改score、不改feasible-ascent的K/R0 hard feasibility。Selection內與`SR-C23`及`SR-C25`比較Return、RoMD、EV、same-param DL selection R、underfilled slot-days與guard觸發日；若Selection改善再凍結同一規則進Forward-OOS驗證。
