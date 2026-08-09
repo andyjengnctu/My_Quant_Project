@@ -18679,6 +18679,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from tools.audit.breakout_quality.pit_fold_runtime_attribution import (
         build_pit_fold_runtime_attribution,
     )
+    from tools.audit.breakout_quality.pit_target_realization_attribution import (
+        build_pit_target_realization_attribution,
+    )
     from tools.audit.catalog import validate_audit_catalog
 
     case_id = "AUDIT_FRAMEWORK"
@@ -18708,6 +18711,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     pit_fold_runtime_definition = next(
         (item for item in all_definitions if item.audit_id == "c23-c25-pit-fold-runtime"), None
+    )
+    pit_target_realization_definition = next(
+        (item for item in all_definitions if item.audit_id == "c23-c25-pit-target-realization"), None
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
@@ -18740,6 +18746,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and source_attribution_definition is not None
         and pit_realization_definition is not None
         and pit_fold_runtime_definition is not None
+        and pit_target_realization_definition is not None
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),
@@ -18789,6 +18796,39 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and math.isclose(float(by_boundary["True"]["selection_delta_r"]), -3.0, abs_tol=1e-12)
         and math.isclose(float(by_boundary["False"]["selection_delta_r"]), 2.0, abs_tol=1e-12)
         and not fold_frames["exclusive_trade_fold_attribution"].empty,
+    )
+
+    target_payload, target_frames = build_pit_target_realization_attribution(
+        score_table=pd.DataFrame([
+            {"ticker": "A", "date": "2024-01-01", "group_index": 0, "breakout_quality_score": 0.40},
+            {"ticker": "B", "date": "2024-01-02", "group_index": 1, "breakout_quality_score": 0.90},
+            {"ticker": "C", "date": "2024-01-03", "group_index": 2, "breakout_quality_score": 0.50},
+            {"ticker": "D", "date": "2024-01-04", "group_index": 3, "breakout_quality_score": 0.95},
+        ]),
+        target_raw_r=np.asarray([0.5, 2.0, 0.6, 2.2], dtype=np.float32),
+        target_valid_mask=np.asarray([True, True, True, True], dtype=bool),
+        trade_contributions=pd.DataFrame([
+            {"category": "comparator_only", "ticker": "A", "entry_date": "2024-01-03", "signal_date": "2024-01-01", "candidate_r": 0.0, "comparator_r": 2.0, "r_delta": -2.0},
+            {"category": "candidate_only", "ticker": "B", "entry_date": "2024-01-04", "signal_date": "2024-01-02", "candidate_r": 1.0, "comparator_r": 0.0, "r_delta": 1.0},
+            {"category": "comparator_only", "ticker": "C", "entry_date": "2024-03-20", "signal_date": "2024-01-03", "candidate_r": 0.0, "comparator_r": 2.0, "r_delta": -2.0},
+            {"category": "candidate_only", "ticker": "D", "entry_date": "2024-03-22", "signal_date": "2024-01-04", "candidate_r": -1.0, "comparator_r": 0.0, "r_delta": -1.0},
+        ]),
+        score_age_quantile_groups=2,
+    )
+    age_rows = target_payload["age_buckets"]
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pit_target_realization_attribution_detects_high_target_but_worse_realized_r_and_age_concentration_without_counterfactual",
+        True,
+        target_payload["covered_trade_count"] == 4
+        and float(target_payload["candidate_only"]["avg_target_r"]) > float(target_payload["baseline_only"]["avg_target_r"])
+        and float(target_payload["candidate_only"]["avg_realized_r"]) < float(target_payload["baseline_only"]["avg_realized_r"])
+        and len(age_rows) == 2
+        and float(age_rows[-1]["selection_delta_r"]) < float(age_rows[0]["selection_delta_r"])
+        and target_payload["semantic_boundary"]["unselected_counterfactual_r_available"] is False
+        and not target_frames["exclusive_trade_target_realization"].empty,
     )
 
     with tempfile.TemporaryDirectory() as tmp:

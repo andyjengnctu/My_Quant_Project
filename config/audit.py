@@ -153,7 +153,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/c23_c25_pit_realization_capture",
             },
             "c23-c25-pit-fold-runtime": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "pit_fold_runtime_attribution",
                 "description": "Selection PIT fold drift／mixed-fold runtime歸因：檢查orderable pool跨fold score混合與winner capture損失是否集中於fold transition",
                 "source": {
@@ -174,6 +174,29 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "fold_boundary_attribution": True,
                 },
                 "output_subdir": "breakout_quality/c23_c25_pit_fold_runtime",
+            },
+            "c23-c25-pit-target-realization": {
+                "enabled": True,
+                "audit_type": "pit_target_realization_attribution",
+                "description": "Selection PIT Target→realized R／score-age歸因：檢查exclusive winner capture損失是否集中於較舊signal→entry age，區分event Target老化與Target公式本身失配",
+                "source": {
+                    "kind": "strategy_compare",
+                    "run": "latest",
+                    "baseline_arm_id": "C23",
+                    "candidate_arm_ids": ["C24", "C25"],
+                },
+                "dimensions": {
+                    "score_age_quantile_groups": 4,
+                    "focus_year": 2020,
+                    "top_month_count": 5,
+                    "top_trade_count": 20,
+                },
+                "outcomes": {
+                    "actual_exclusive_trade_alignment": True,
+                    "target_realization_gap": True,
+                    "score_age_attribution": True,
+                },
+                "output_subdir": "breakout_quality/c23_c25_pit_target_realization",
             },
         },
     },

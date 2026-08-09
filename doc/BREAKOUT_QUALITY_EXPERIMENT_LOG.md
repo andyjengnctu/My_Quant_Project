@@ -6601,3 +6601,65 @@ Controlled deltas：
 
 使用正式選單`apps/research.py → [4] Audit／診斷 → [2] 查看Audit設定、工件與預計動作`；READY後`[1/Enter]`執行。先看C24/C25的mixed-fold day比例、cross-fold pair share、mixed vs single exclusive selection R，以及fold-boundary vs outside winner contribution。只有損失明顯集中才考慮Selection-only score-normalization／runtime假說。
 
+
+## 2026-08-09 — AUD-c23-c25-pit-fold-runtime結果：fold drift／mixed-fold不是PIT直接部署失敗主因
+
+### 狀態
+
+`RESULT_AVAILABLE / FOLD_DRIFT_NOT_PRIMARY_CAUSE / CROSS_FOLD_NORMALIZATION_NOT_SUPPORTED`。本輪取得使用者本機只讀Audit結果；未重跑portfolio、未重訓／校正PIT模型、未跑optimizer。
+
+### 程式基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_082042_f0e60a4.zip`。
+- SHA256：`33eedd1798f6a4ecfacc85c65405a64dafb9eda8c7c8da7763fbcded281931fb`。
+- GPT fresh extract：`/mnt/data/stock_review_082042`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### 使用者本機Audit結果
+
+#### C24 vs C23
+
+- PIT drift=`True`，max adjacent mean shift=`1.03 pooled SD`，flagged fold=`fold_20170101_20171231`。
+- Mixed-fold days=`353/1633 (21.62%)`，cross-fold pair share=`5.12%`，score age mean/median=`26.16/17.00日`。
+- Exclusive selection R=`-35.78R`，但mixed-fold=`+13.91R`；single-fold=`-46.05R`；no-orderable=`-3.64R`。
+- Fold boundary ±30日內=`+2.17R`；outside=`-37.95R`。
+- 因此負R不集中mixed-fold或fold transition，反而主要在正常single-fold／boundary outside。
+
+#### C25 vs C23
+
+- Mixed-fold days=`357/1635 (21.83%)`，cross-fold pair share=`5.55%`，score age mean/median=`26.22/17.00日`。
+- Exclusive selection R=`-19.52R`；mixed-fold=`-4.25R`、single-fold=`-10.65R`、no-orderable=`-4.62R`。
+- Fold boundary ±30日內=`+4.93R`；outside=`-24.45R`。
+- mixed-fold有部分winner capture損失，但無法解釋主要總損失；fold boundary更不是負R集中區。
+
+### 判定
+
+1. PIT audit的`drift=True`保留為score-level warning，但本次實際策略損失不支持其為C24/C25 winner-capture失敗主因。
+2. 不建立Selection-only cross-fold normalization／calibration runtime；不得因本Audit修改MR-12B loss、epoch、threshold或selector。
+3. 下一步回到Target／realized outcome語意：直接使用已成交exclusive trades，檢查PIT score與原始event Target對realized R的對齊，並按signal→entry age拆分，以區分event Target老化與Target公式本身失配。
+4. 既有11J per-candidate counterfactual已正式STOPPED，不能為此重啟；未成交／未選候選realized R仍保持未知。
+
+## 2026-08-09 — AUD-c23-c25-pit-target-realization實作：exclusive trade Target／Score→Realized R與Score-age只讀歸因
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / READ_ONLY_ACTUAL_TRADES_ONLY`。本輪只新增正式Audit與獨立synthetic contract；不執行portfolio replay、不建立counterfactual、不重訓／校正PIT模型、不跑optimizer。
+
+### Audit identity／固定來源
+
+- 新增`AUD-c23-c25-pit-target-realization`（config id=`c23-c25-pit-target-realization`）；不新增`MR-*`、`DL-*`、`SR-C*`或`PARAM-*`。
+- source由`config/audit.py`驅動：baseline／candidate arms均不硬編於handler；目前設定讀C23 baseline與C24/C25 candidates的latest completed Strategy Compare。
+- `score_age_quantile_groups=4`為config可調Audit維度，只影響診斷分層，不進runtime。
+
+### 實作內容
+
+1. 共用`build_strategy_attribution_pair_payload`的canonical exclusive trade結果；每筆trade保留`ticker + signal_date + entry_date`與actual `r_multiple`，不重算另一套PnL／R。
+2. candidate arm解析validated Selection PIT score／manifest／audit identity；以`ticker + signal_date`對齊PIT `model_score`與`group_index`，再透過validated Continuous Target arrays取得原始`target_raw_r`。
+3. Baseline-only與candidate-only actual exclusive trades分別輸出平均Target、平均Realized R、win rate、Score↔Target、Target↔Realized、Score↔Realized、Age↔Realized與Age↔(Target−R) Spearman。
+4. 以所有covered exclusive trades的signal→entry calendar age共同做config-driven quantile切分；每bucket同時輸出baseline/candidate Target、Realized、win rate與Selection ΔR。
+5. 判讀只允許兩個受控方向：若負Selection R主要集中高age bucket，形成event Target老化／延續候選語意失真假說；若各age bucket皆負，優先視為Target公式與正式trade-path R失配。結果不直接授權新MR、參數適應或OOS修改。
+6. 未成交／未選候選沒有counterfactual realized R；Audit metadata固定`counterfactual_performed=false`，不得填0或推論其績效。
+
+### 下一步
+
+使用正式選單`apps/research.py → [4] Audit／診斷 → [2] 查看Audit設定、工件與預計動作`；READY後`[1/Enter]`執行。先比較C24/C25各age quantile的Selection ΔR、Target與Realized方向，再決定後續是研究candidate aging／refresh語意，或回到Target label semantics。

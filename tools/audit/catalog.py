@@ -107,6 +107,16 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_pit_fold_runtime_attribution_status",
         run_function="run_pit_fold_runtime_attribution_audit",
     ),
+    "pit_target_realization_attribution": AuditCatalogEntry(
+        audit_type="pit_target_realization_attribution",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.pit_target_realization_attribution",
+        mode="formal",
+        description="Selection PIT exclusive trades的Target／Score對realized R與signal→entry age歸因",
+        read_only=True,
+        status_function="collect_pit_target_realization_attribution_status",
+        run_function="run_pit_target_realization_attribution_audit",
+    ),
     # Research / historical Audit commands. They share this inventory but are not
     # eligible for the formal config runner unless promoted to mode=formal later.
     "regime": AuditCatalogEntry(
