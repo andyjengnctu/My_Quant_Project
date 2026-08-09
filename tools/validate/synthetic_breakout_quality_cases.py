@@ -17212,6 +17212,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     model_app_source = model_app_path.read_text(encoding="utf-8")
     orchestration_source = orchestration_path.read_text(encoding="utf-8")
     preparation_source = preparation_path.read_text(encoding="utf-8")
+    param_service_source = param_service_path.read_text(encoding="utf-8")
 
     from config import strategy_compare as strategy_config
     from core.strategy_comparison import strategy_comparison_fingerprint
@@ -17299,7 +17300,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and selection_min_roos_source.builder is not None
         and selection_min_roos_source.builder.builder_type == "selection_historical_p2"
         and str(selection_min_roos_source.builder.options.get("parameter_set")) == "p2_history"
-        and "prepare_selection_historical_p2_params" in preparation_source,
+        and int(selection_min_roos_source.builder.options.get("baseline_trials_per_fold") or 0) >= 1
+        and int(selection_min_roos_source.builder.options.get("baseline_train_window_months") or 0) >= 1
+        and int(selection_min_roos_source.builder.options.get("baseline_oos_months") or 0) >= 1
+        and "prepare_selection_historical_p2_params" in preparation_source
+        and all(token in param_service_source for token in (
+            "restore_selection_historical_p2_from_completed_strategy_compare",
+            "completed_strategy_pair_exact_sha",
+            "prepare_selection_historical_baseline_params",
+            'outer_environ["V16_MODELS_DIR"]',
+            "run_outer_rolling_oos",
+        )),
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,

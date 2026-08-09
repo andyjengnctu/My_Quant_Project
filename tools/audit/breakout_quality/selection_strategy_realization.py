@@ -39,6 +39,12 @@ from filters.breakout_quality.strategy_compare_engine import (
     _scenario_summary,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
+from filters.breakout_quality.trade_path_label import (
+    TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+    TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+    TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
+    TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
+)
 from tools.filters.breakout_quality.train_continuous_ranker import _spearman
 
 AUDIT_SCHEMA_VERSION = 1
@@ -51,11 +57,11 @@ ORDERABLE_FILENAME = "selection_orderable_candidates.csv"
 ROUND_TRIPS_FILENAME = "selection_round_trips.csv"
 TRADE_MATCHES_FILENAME = "selection_strategy_realization_matches.csv"
 PREPARE_SCRIPT_FILENAME = "prepare_selection_nested_roos.ps1"
-DEFAULT_START_DATE = "2014-01-01"
+DEFAULT_START_DATE = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE
 DEFAULT_REPLAY_END_DATE = "2020-11-05"
-DEFAULT_NESTED_OOS_END_DATE = "2020-12-31"
-DEFAULT_TRAIN_WINDOW_MONTHS = 120
-DEFAULT_OOS_MONTHS = 12
+DEFAULT_NESTED_OOS_END_DATE = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE
+DEFAULT_TRAIN_WINDOW_MONTHS = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS
+DEFAULT_OOS_MONTHS = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS
 
 
 def default_research_models_dir() -> Path:

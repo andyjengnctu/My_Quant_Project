@@ -7280,3 +7280,31 @@ MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28的target、mode
 
 MR-12B、MR-13A、C23～C28的模型權重、Target、selector、historical P2語意、comparison period與策略會計均未修改；本輪只修正dependency orchestration與completed-result cache provenance，不新增MR／SR ID。C27/C28 Selection結果仍待正式執行。
 
+
+## 2026-08-09 — Stage 3 Strategy Compare historical P2 prerequisite閉環
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / AUTO_PREPARATION_CHAIN_COMPLETED / SELECTION_COMPARE_STILL_PENDING`。
+
+### 程式基準與使用者錯誤
+
+- 本輪來源ZIP：`test-branch-1_20260809_212916_6c122dc.zip`；SHA256=`7324bc96a9f6150b3aa30af03dc5f474f3dd306da767f182c0b4cd0c5b048ed5`。
+- Strategy Compare前置已正確把`param:selection_min_roos`排在舊`CONT12B_PIT`之前，但正式執行時因缺少`models/research/breakout_quality/selection_strategy_realization/roos_base_best.json`而停止。
+- 該檔不是外部不可重建資料；11I歷史契約本來就是以2014-01-01～2020-12-31、120個月fixed train window、12個月OOS，將canonical outer-rolling optimizer隔離輸出到`models/research/breakout_quality/selection_strategy_realization/`。
+
+### 根因
+
+Stage 3新增的`selection_historical_p2` builder只共用了P2 risk-only訓練服務，仍把11I historical rolling baseline當成「必須預先存在」的上游真理工件。這與`PROJECT_SETTINGS`的正式App依賴規則不一致：策略參數工件若可由正式optimizer service確定建立，Strategy Compare應在同一次auto-preparation內自動建立／接續，不應要求使用者先執行零散optimizer CLI。
+
+### 修正
+
+1. `selection_historical_p2` builder先搜尋既有completed Strategy Compare runs；若run的dataset、period、param policy、max positions、rotation均一致，且pair保存完整`no_filter_params`與原`params_file_sha256`，則以canonical P2 JSON writer重新序列化candidate。只有candidate SHA與舊run記錄**完全一致**且P2_HISTORY／rolling single-member／2014～2020 coverage contract全部通過時，才原樣恢復`selection_min_roos`。這條路徑不重新最佳化，也不從報表文字推測參數。
+2. 若沒有任何可驗證completed pair可恢復，builder自動呼叫canonical`run_outer_rolling_oos`建立／接續historical baseline；輸出固定隔離到`models/research/breakout_quality/selection_strategy_realization/`，不得污染正式`models/roos_*.json`。
+3. baseline optimizer的first/last OOS date由目前Strategy Compare期間傳入；train window、OOS horizon與baseline trials由`config/strategy_compare.py` builder options驅動，其中baseline trials直接引用`config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`，不新增trial magic number。
+4. historical baseline的2014～2020、120m／12m canonical defaults抽到`filters/breakout_quality/trade_path_label.py`，11I audit與historical P2 service共用；Strategy Compare仍可由config顯式覆蓋，避免UI或validator硬編目前設定。
+5. completed-pair recovery失敗時才進baseline＋P2 optimizer fallback；任何hash、period、policy或member contract不符均不得採用近似恢復。
+
+### Scientific identity
+
+MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28的模型、Target、selector、historical P2定義、risk search fields、comparison period與策略會計均未改變；本輪只完成原有Strategy Compare auto-preparation dependency chain，不新增MR／SR ID。C27/C28 Selection結果仍待正式執行。

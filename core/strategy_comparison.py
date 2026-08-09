@@ -315,6 +315,12 @@ def _validate_builder(
             raise ValueError(f"{field_name}.parameter_set必須是p2_history")
         if int(builder.options.get("trials_per_fold") or 0) < 1:
             raise ValueError(f"{field_name}.trials_per_fold必須>=1")
+        if int(builder.options.get("baseline_trials_per_fold") or 0) < 1:
+            raise ValueError(f"{field_name}.baseline_trials_per_fold必須>=1")
+        if int(builder.options.get("baseline_train_window_months") or 0) < 1:
+            raise ValueError(f"{field_name}.baseline_train_window_months必須>=1")
+        if int(builder.options.get("baseline_oos_months") or 0) < 1:
+            raise ValueError(f"{field_name}.baseline_oos_months必須>=1")
         if float(builder.options.get("fixed_risk") or 0.0) <= 0.0:
             raise ValueError(f"{field_name}.fixed_risk必須>0")
         cap = float(builder.options.get("max_position_cap_pct") or 0.0)

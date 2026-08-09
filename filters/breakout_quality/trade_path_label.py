@@ -12,6 +12,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config.training_policy import (
+    OUTER_ROLLING_OOS_HORIZON_MONTHS,
+    OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+)
+
 from core.backtest_finalize import finalize_open_position_at_end
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_entry_plan, execute_pre_market_entry_plan
@@ -41,6 +46,10 @@ TRADE_PATH_LABEL_ID = "a2_realized_trade_path_v1"
 TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH = Path(
     "models/research/breakout_quality/selection_strategy_realization/roos_base_best.json"
 )
+TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE = "2014-01-01"
+TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE = "2020-12-31"
+TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS = OUTER_ROLLING_TRAIN_WINDOW_MONTHS
+TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS = OUTER_ROLLING_OOS_HORIZON_MONTHS
 TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR = Path(
     "models/research/breakout_quality/trade_path_label/a2_teacher_params"
 )
@@ -674,6 +683,10 @@ __all__ = [
     "TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR",
     "TRADE_PATH_LABEL_ID",
     "TRADE_PATH_RESEARCH_FILTER_ID",
+    "TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE",
+    "TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE",
+    "TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS",
+    "TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS",
     "TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH",
     "TRADE_PATH_LABEL_CONTRACT_VERSION",
     "TRADE_PATH_LABEL_REASON_STATUS",

@@ -6,6 +6,11 @@
 
 from __future__ import annotations
 
+from config.training_policy import (
+    OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    OUTER_ROLLING_OOS_HORIZON_MONTHS,
+    OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+)
 from core.strategy_comparison import (
     StrategyArtifactBuilder,
     StrategyComparisonArm,
@@ -168,6 +173,11 @@ STRATEGY_PARAM_SOURCES = {
             "options": {
                 "parameter_set": "p2_history",
                 "trials_per_fold": 200,
+                # historical baseline本身沿用正式rolling optimizer預設trial數；
+                # Strategy Compare缺件時可在隔離research models路徑自動建立／接續。
+                "baseline_trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+                "baseline_train_window_months": OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+                "baseline_oos_months": OUTER_ROLLING_OOS_HORIZON_MONTHS,
                 "resume": True,
                 "fixed_risk": 0.01,
                 "max_position_cap_pct": 0.30,

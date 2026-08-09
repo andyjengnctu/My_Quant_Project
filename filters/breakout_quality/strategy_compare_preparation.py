@@ -728,7 +728,11 @@ def collect_artifact_status(
             if action == "REBUILD" and not settings.preparation.rebuild_stale_artifacts:
                 action = "BLOCKED"
             description = (
-                "執行或接續config指定的策略參數訓練"
+                (
+                    "建立／接續Selection historical baseline與P2策略參數"
+                    if builder is not None and builder.builder_type == "selection_historical_p2"
+                    else "執行或接續config指定的策略參數訓練"
+                )
                 if action in {"BUILD", "REBUILD"}
                 else "參數工件過期且config禁止自動重建"
             )
@@ -841,7 +845,13 @@ def _execute_preparation_action(
             project_root=root,
             dataset=settings.dataset,
             param_policy=settings.param_policy,
+            comparison_output_root=str(settings.output_root),
             trials_per_fold=int(options["trials_per_fold"]),
+            baseline_trials_per_fold=int(options["baseline_trials_per_fold"]),
+            baseline_first_oos_date=str(settings.start_date),
+            baseline_last_oos_date=str(settings.end_date),
+            baseline_train_window_months=int(options["baseline_train_window_months"]),
+            baseline_oos_months=int(options["baseline_oos_months"]),
             max_positions=int(settings.max_positions),
             rotation=str(settings.rotation),
             fixed_risk=float(options["fixed_risk"]),

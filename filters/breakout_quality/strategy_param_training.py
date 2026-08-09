@@ -25,10 +25,14 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     get_breakout_quality_workflow_settings,
 )
-from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
+from config.training_policy import (
+    OPTIMIZER_FIXED_TP_PERCENT,
+    OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+)
 from core.dataset_profiles import get_dataset_dir
 from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
+from core.walk_forward_policy import load_walk_forward_policy
 from filters.breakout_quality.artifacts import compute_file_sha256, load_model_artifact_contract
 from filters.breakout_quality.binary_pit_score_store import (
     BINARY_PIT_IN_COVERAGE_MISSING_POLICY,
@@ -50,7 +54,11 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_BASE_FILTER_ID,
     TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH,
     TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR,
+    TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+    TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+    TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
     TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH,
+    TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
 )
 from filters.breakout_quality.strategy_rule_policies import (
     ALL_OFF_INACTIVE_VALUE_OVERRIDES,
@@ -755,6 +763,229 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
     return {"params_path": params_path, "summary": summary, "contract": contract}
 
 
+def restore_selection_historical_p2_from_completed_strategy_compare(
+    *,
+    project_root=PROJECT_ROOT,
+    output_root: str,
+    dataset: str,
+    param_policy: str,
+    start_date: str,
+    end_date: str,
+    max_positions: int,
+    rotation: str,
+    quiet: bool = False,
+) -> dict[str, Any] | None:
+    """Restore byte-identical historical P2 params from a completed formal pair.
+
+    A completed Strategy Compare pair stores the full no-filter rolling parameter
+    payload together with the SHA256 of the source parameter file.  Recovery is
+    accepted only when current immutable comparison settings match and serializing
+    that payload with the canonical P2 writer reproduces the recorded SHA exactly.
+    No historical model or optimizer artifact is inferred from report text.
+    """
+
+    root = Path(project_root).resolve()
+    output_base = Path(str(output_root))
+    if output_base.is_absolute() or ".." in output_base.parts:
+        raise ValueError("Strategy Compare output_root必須是專案root相對路徑")
+    runs_root = root / output_base / "runs"
+    target_path = root / TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH
+    if target_path.is_file() or not runs_root.is_dir():
+        return None
+
+    expected_period = {"start": str(start_date), "end": str(end_date)}
+    expected_contract = {
+        "mode": "risk_only_training",
+        "parameter_set": "P2_HISTORY",
+        "fixed_rule_contract": "all_rule_filters_off",
+        "training_dl_enabled": False,
+    }
+    for run_dir in sorted(
+        (path for path in runs_root.iterdir() if path.is_dir()),
+        key=lambda path: path.name,
+        reverse=True,
+    ):
+        run_payload = _load_json(run_dir / "strategy_comparison.json")
+        if not isinstance(run_payload, dict) or str(run_payload.get("status") or "") != "COMPLETED":
+            continue
+        settings_payload = dict(run_payload.get("settings") or {})
+        if (
+            str(settings_payload.get("dataset") or "") != str(dataset)
+            or str(settings_payload.get("param_policy") or "") != str(param_policy)
+            or int(settings_payload.get("max_positions") or 0) != int(max_positions)
+            or str(settings_payload.get("rotation") or "") != str(rotation)
+            or dict(run_payload.get("comparison_period") or {}) != expected_period
+        ):
+            continue
+        stored_param_sources = dict(settings_payload.get("parameter_sources") or {})
+        stored_selection = dict(stored_param_sources.get("selection_min_roos") or {})
+        if not stored_selection:
+            continue
+        pairs = dict(run_payload.get("pairs") or {})
+        for pair_payload in pairs.values():
+            if not isinstance(pair_payload, dict):
+                continue
+            metadata = dict(pair_payload.get("metadata") or {})
+            source_sha = str(metadata.get("params_file_sha256") or "").strip().lower()
+            candidate = metadata.get("no_filter_params")
+            if not source_sha or not isinstance(candidate, dict):
+                continue
+            adaptation = dict(candidate.get("breakout_quality_param_adaptation") or {})
+            if any(adaptation.get(key) != value for key, value in expected_contract.items()):
+                continue
+            candidate_text = (
+                json.dumps(
+                    candidate,
+                    ensure_ascii=False,
+                    indent=2,
+                    allow_nan=False,
+                    default=str,
+                )
+                + "\n"
+            )
+            candidate_sha = hashlib.sha256(candidate_text.encode("utf-8")).hexdigest()
+            if candidate_sha != source_sha:
+                continue
+            try:
+                validate_selection_historical_baseline_period(
+                    payload=candidate, meta=dict(candidate.get("meta") or {})
+                )
+                policy = _validate_requested_param_policy(
+                    {"kind": "rolling_active_param_ensemble", "payload": candidate},
+                    str(param_policy),
+                )
+            except (ValueError, KeyError, TypeError):
+                continue
+            if int(policy.get("member_count_min") or 0) != 1 or int(policy.get("member_count_max") or 0) != 1:
+                continue
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(candidate_text, encoding="utf-8")
+            if compute_file_sha256(target_path) != source_sha:
+                target_path.unlink(missing_ok=True)
+                continue
+            if not quiet:
+                print(
+                    "Selection historical P2已由completed Strategy Compare pair原樣恢復 "
+                    f"| source={project_relative_display_path(run_dir, project_root=root)} "
+                    f"| sha256={source_sha[:12]}"
+                )
+            return {
+                "params_path": target_path,
+                "params_sha256": source_sha,
+                "source_run_dir": run_dir,
+                "recovery_mode": "completed_strategy_pair_exact_sha",
+            }
+    return None
+
+
+def prepare_selection_historical_baseline_params(
+    *,
+    project_root=PROJECT_ROOT,
+    dataset: str,
+    param_policy: str,
+    first_oos_date: str,
+    last_oos_date: str,
+    train_window_months: int,
+    oos_months: int,
+    trials_per_fold: int,
+    optimizer_seed: int,
+    resume_parameter_training: bool = True,
+    quiet: bool = False,
+) -> dict[str, Any]:
+    """Build/reuse the isolated 2014-2020 Selection rolling baseline.
+
+    This is the programmatic equivalent of the historical 11I prepare flow that
+    ran the canonical outer-rolling optimizer with ``V16_MODELS_DIR`` pointed at
+    ``models/research/breakout_quality/selection_strategy_realization``.  It
+    trains strategy parameters only; no breakout-quality label or model weight
+    is created here.
+    """
+
+    root = Path(project_root).resolve()
+    target_path = root / TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH
+    if target_path.is_file():
+        return _load_selection_historical_baseline_contract(
+            root=root, param_policy=str(param_policy)
+        )
+
+    first = pd.Timestamp(str(first_oos_date)).normalize()
+    last = pd.Timestamp(str(last_oos_date)).normalize()
+    if last < first:
+        raise ValueError("Selection historical baseline期間不合法")
+    if int(train_window_months) < 1 or int(oos_months) < 1:
+        raise ValueError("Selection historical baseline rolling months必須>=1")
+    if int(trials_per_fold) < 1:
+        raise ValueError("Selection historical baseline trials_per_fold必須>=1")
+
+    models_dir = target_path.parent
+    optimizer_output_dir = models_dir / "optimizer_runtime"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    optimizer_output_dir.mkdir(parents=True, exist_ok=True)
+
+    outer_argv = [
+        "--outer-first-oos-date",
+        first.strftime("%Y-%m-%d"),
+        "--outer-last-oos-date",
+        last.strftime("%Y-%m-%d"),
+        "--outer-train-window-months",
+        str(int(train_window_months)),
+        "--outer-oos-months",
+        str(int(oos_months)),
+        "--trials",
+        str(int(trials_per_fold)),
+    ]
+    outer_environ = dict(os.environ)
+    outer_environ["V16_MODELS_DIR"] = str(models_dir.resolve())
+    outer_environ["OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"
+    outer_environ["OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = (
+        "1" if bool(resume_parameter_training) else "0"
+    )
+    base_policy = load_walk_forward_policy(str(root))
+
+    if not quiet:
+        print(
+            "Selection historical baseline缺少；自動建立／接續隔離rolling params "
+            f"| period={first.date()}~{last.date()} "
+            f"| train={int(train_window_months)}m "
+            f"| oos={int(oos_months)}m "
+            f"| trials={int(trials_per_fold)}/fold"
+        )
+
+    with _temporary_environment({"V16_MODELS_DIR": str(models_dir.resolve())}):
+        exit_code = run_outer_rolling_oos(
+            argv=outer_argv,
+            environ=outer_environ,
+            project_root=str(root),
+            output_dir=str(optimizer_output_dir),
+            base_policy=base_policy,
+            selected_data_dir=get_dataset_dir(str(root), str(dataset)),
+            dataset_label=str(dataset),
+            load_all_raw_data=load_all_raw_data,
+            optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
+            build_optimizer_session=build_optimizer_session,
+            create_optimizer_study=create_optimizer_study,
+            ensure_study_effective_policy_compatible=ensure_study_effective_policy_compatible,
+            configure_optuna_logging=configure_optuna_logging,
+            optimizer_seed=int(optimizer_seed),
+            optimizer_session_spec=None,
+            default_trials=int(trials_per_fold),
+            timing_mode=False,
+            paramset_models_dir=str(models_dir.resolve()),
+        )
+    if int(exit_code) != 0:
+        raise RuntimeError(
+            f"Selection historical baseline rolling optimizer失敗: {exit_code}"
+        )
+    if not target_path.is_file():
+        raise FileNotFoundError(
+            "Selection historical baseline optimizer完成但未產生指定param policy工件: "
+            f"{project_relative_display_path(target_path, project_root=root)}"
+        )
+    return _load_selection_historical_baseline_contract(
+        root=root, param_policy=str(param_policy)
+    )
+
+
 def prepare_selection_historical_p2_params(
     *,
     project_root=PROJECT_ROOT,
@@ -768,17 +999,62 @@ def prepare_selection_historical_p2_params(
     optimizer_seed: int,
     resume_parameter_training: bool = True,
     quiet: bool = False,
+    comparison_output_root: str = "outputs/strategy_compare",
+    baseline_trials_per_fold: int = OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    baseline_first_oos_date: str = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+    baseline_last_oos_date: str = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+    baseline_train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
+    baseline_oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
 ):
     """Build/reuse the canonical 2014-2020 Selection historical P2 params only.
 
     This service never builds labels and never enables a DL model.  It is safe for
-    Strategy Compare preparation because it only materializes the configured
-    strategy-parameter artifact from the existing Selection baseline truth.
+    Strategy Compare preparation because it only materializes strategy-parameter
+    artifacts: first by exact completed-pair recovery when possible, otherwise by
+    rebuilding/resuming the isolated Selection baseline before P2 risk-only training.
     """
 
     root = Path(project_root).resolve()
-    baseline_contract = _load_selection_historical_baseline_contract(
-        root=root, param_policy=str(param_policy)
+    recovered = restore_selection_historical_p2_from_completed_strategy_compare(
+        project_root=root,
+        output_root=str(comparison_output_root),
+        dataset=str(dataset),
+        param_policy=str(param_policy),
+        start_date=str(baseline_first_oos_date),
+        end_date=str(baseline_last_oos_date),
+        max_positions=int(max_positions),
+        rotation=str(rotation),
+        quiet=bool(quiet),
+    )
+    if recovered is not None:
+        return {
+            "params_path": Path(recovered["params_path"]),
+            "summary": {
+                "parameter_set": "P2_HISTORY",
+                "status": "RECOVERED_FROM_COMPLETED_STRATEGY_PAIR",
+                "recovery_mode": recovered["recovery_mode"],
+                "params_sha256": recovered["params_sha256"],
+            },
+            "contract": {
+                "status": "RECOVERED_FROM_COMPLETED_STRATEGY_PAIR",
+                "source_run_dir": project_relative_display_path(
+                    Path(recovered["source_run_dir"]), project_root=root
+                ),
+            },
+        }
+
+    baseline_contract = prepare_selection_historical_baseline_params(
+        project_root=root,
+        dataset=str(dataset),
+        param_policy=str(param_policy),
+        first_oos_date=str(baseline_first_oos_date),
+        last_oos_date=str(baseline_last_oos_date),
+        train_window_months=int(baseline_train_window_months),
+        oos_months=int(baseline_oos_months),
+        trials_per_fold=int(baseline_trials_per_fold),
+        optimizer_seed=int(optimizer_seed),
+        resume_parameter_training=bool(resume_parameter_training),
+        quiet=bool(quiet),
     )
     args = SimpleNamespace(
         dataset=str(dataset),
