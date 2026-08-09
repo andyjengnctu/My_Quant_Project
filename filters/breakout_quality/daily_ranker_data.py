@@ -310,12 +310,22 @@ def load_daily_universal_ranker_data(
     spec = StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY)
     tickers: list[str] = []
     frames: list[pd.DataFrame] = []
-    ticker_id_chunks: list[np.ndarray] = []
-    source_pos_chunks: list[np.ndarray] = []
-    benchmark_pos_chunks: list[np.ndarray] = []
-    date_chunks: list[np.ndarray] = []
-    label_end_chunks: list[np.ndarray] = []
-    target_chunks: list[np.ndarray] = []
+
+    # Keep target-valid rows first in the exact historical ticker/date order.  This preserves
+    # the scientific training universe while allowing additional inference-only rows to be
+    # appended without making score availability depend on future target completion.
+    valid_ticker_id_chunks: list[np.ndarray] = []
+    valid_source_pos_chunks: list[np.ndarray] = []
+    valid_benchmark_pos_chunks: list[np.ndarray] = []
+    valid_date_chunks: list[np.ndarray] = []
+    valid_label_end_chunks: list[np.ndarray] = []
+    valid_target_chunks: list[np.ndarray] = []
+
+    inference_ticker_id_chunks: list[np.ndarray] = []
+    inference_source_pos_chunks: list[np.ndarray] = []
+    inference_benchmark_pos_chunks: list[np.ndarray] = []
+    inference_date_chunks: list[np.ndarray] = []
+    pending_inference_only_tickers: list[tuple[str, pd.DataFrame, np.ndarray, np.ndarray, pd.DatetimeIndex]] = []
     skipped_tickers = 0
 
     for ticker, path in csv_inputs:
@@ -327,58 +337,151 @@ def load_daily_universal_ranker_data(
         except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
             skipped_tickers += 1
             continue
-        ticker_id = len(tickers)
+
         first_pos = int(DEFAULT_LABEL_POLICY.feature_window_bars) - 1
-        last_pos = len(frame) - int(spec.horizon_bars) - 1
-        if last_pos < first_pos:
+        if len(frame) <= first_pos:
             skipped_tickers += 1
             continue
-        candidate_positions = np.arange(first_pos, last_pos + 1, dtype=np.int64)
+        candidate_positions = np.arange(first_pos, len(frame), dtype=np.int64)
         frame_dates = pd.DatetimeIndex(frame.index).normalize()
         candidate_dates = frame_dates.take(candidate_positions)
         in_period = (candidate_dates >= sample_start) & (candidate_dates <= sample_end)
         benchmark_pos = benchmark_index.get_indexer(candidate_dates)
-        eligible = np.asarray(in_period, dtype=bool) & (benchmark_pos >= first_pos)
-        local_positions = candidate_positions[eligible]
-        local_benchmark_positions = benchmark_pos[eligible]
+        feature_eligible = np.asarray(in_period, dtype=bool) & (benchmark_pos >= first_pos)
+        local_positions = candidate_positions[feature_eligible]
+        local_benchmark_positions = benchmark_pos[feature_eligible]
         if len(local_positions) == 0:
             skipped_tickers += 1
             continue
-        local_targets, target_valid = _daily_targets_for_positions(
-            frame, local_positions, spec=spec
-        )
-        local_positions = local_positions[target_valid]
-        local_benchmark_positions = local_benchmark_positions[target_valid]
-        local_targets = local_targets[target_valid]
-        if len(local_positions) == 0:
-            skipped_tickers += 1
+
+        # Future target completion is a training/evaluation property, not an inference
+        # eligibility rule.  Rows without a complete 40-bar future path still receive PIT
+        # scores, but they never enter loss, epoch selection, refit, or audit target metrics.
+        local_targets = np.full(len(local_positions), np.nan, dtype=np.float32)
+        local_target_valid = np.zeros(len(local_positions), dtype=bool)
+        target_complete = local_positions + int(spec.horizon_bars) < len(frame)
+        if bool(target_complete.any()):
+            completed_targets, completed_valid = _daily_targets_for_positions(
+                frame, local_positions[target_complete], spec=spec
+            )
+            completed_indexes = np.flatnonzero(target_complete)
+            local_targets[completed_indexes] = completed_targets
+            local_target_valid[completed_indexes] = completed_valid
+
+        valid_positions = local_positions[local_target_valid]
+        valid_benchmark_positions = local_benchmark_positions[local_target_valid]
+        valid_targets = local_targets[local_target_valid]
+        invalid_positions = local_positions[~local_target_valid]
+        invalid_benchmark_positions = local_benchmark_positions[~local_target_valid]
+
+        if len(valid_positions):
+            ticker_id = len(tickers)
+            tickers.append(ticker)
+            frames.append(frame)
+            count = len(valid_positions)
+            valid_ticker_id_chunks.append(np.full(count, ticker_id, dtype=np.int32))
+            valid_source_pos_chunks.append(np.asarray(valid_positions, dtype=np.int32))
+            valid_benchmark_pos_chunks.append(
+                np.asarray(valid_benchmark_positions, dtype=np.int32)
+            )
+            valid_date_chunks.append(
+                frame_dates.take(valid_positions).to_numpy(dtype="datetime64[D]")
+            )
+            valid_label_end_chunks.append(
+                frame_dates.take(valid_positions + int(spec.horizon_bars)).to_numpy(
+                    dtype="datetime64[D]"
+                )
+            )
+            valid_target_chunks.append(np.asarray(valid_targets, dtype=np.float32))
+            if len(invalid_positions):
+                inference_ticker_id_chunks.append(
+                    np.full(len(invalid_positions), ticker_id, dtype=np.int32)
+                )
+                inference_source_pos_chunks.append(
+                    np.asarray(invalid_positions, dtype=np.int32)
+                )
+                inference_benchmark_pos_chunks.append(
+                    np.asarray(invalid_benchmark_positions, dtype=np.int32)
+                )
+                inference_date_chunks.append(
+                    frame_dates.take(invalid_positions).to_numpy(dtype="datetime64[D]")
+                )
+        else:
+            # A ticker with no target-valid row can still be score-eligible.  Append these
+            # tickers after the historical training tickers so existing target-valid ticker
+            # identities and group ordering remain stable.
+            pending_inference_only_tickers.append(
+                (
+                    ticker,
+                    frame,
+                    np.asarray(invalid_positions, dtype=np.int32),
+                    np.asarray(invalid_benchmark_positions, dtype=np.int32),
+                    frame_dates,
+                )
+            )
+
+    if not valid_target_chunks:
+        raise ValueError("daily universal ranker沒有任何有效target stock-day sample")
+
+    for ticker, frame, positions, benchmark_positions_local, frame_dates in pending_inference_only_tickers:
+        if len(positions) == 0:
             continue
-        local_dates_index = frame_dates.take(local_positions)
-        local_label_end_index = frame_dates.take(
-            local_positions + int(spec.horizon_bars)
-        )
+        ticker_id = len(tickers)
         tickers.append(ticker)
         frames.append(frame)
-        count = len(local_positions)
-        ticker_id_chunks.append(np.full(count, ticker_id, dtype=np.int32))
-        source_pos_chunks.append(np.asarray(local_positions, dtype=np.int32))
-        benchmark_pos_chunks.append(
-            np.asarray(local_benchmark_positions, dtype=np.int32)
+        inference_ticker_id_chunks.append(
+            np.full(len(positions), ticker_id, dtype=np.int32)
         )
-        date_chunks.append(local_dates_index.to_numpy(dtype="datetime64[D]"))
-        label_end_chunks.append(local_label_end_index.to_numpy(dtype="datetime64[D]"))
-        target_chunks.append(np.asarray(local_targets, dtype=np.float32))
+        inference_source_pos_chunks.append(np.asarray(positions, dtype=np.int32))
+        inference_benchmark_pos_chunks.append(
+            np.asarray(benchmark_positions_local, dtype=np.int32)
+        )
+        inference_date_chunks.append(
+            frame_dates.take(positions).to_numpy(dtype="datetime64[D]")
+        )
 
-    if not target_chunks:
-        raise ValueError("daily universal ranker沒有任何有效stock-day sample")
+    valid_ticker_ids = np.concatenate(valid_ticker_id_chunks)
+    valid_source_positions = np.concatenate(valid_source_pos_chunks)
+    valid_benchmark_positions = np.concatenate(valid_benchmark_pos_chunks)
+    valid_dates = np.concatenate(valid_date_chunks)
+    valid_label_end_dates = np.concatenate(valid_label_end_chunks)
+    valid_targets = np.concatenate(valid_target_chunks)
 
-    ticker_ids = np.concatenate(ticker_id_chunks)
-    source_positions = np.concatenate(source_pos_chunks)
-    benchmark_positions = np.concatenate(benchmark_pos_chunks)
-    dates = np.concatenate(date_chunks)
-    label_end_dates = np.concatenate(label_end_chunks)
-    raw_target = np.concatenate(target_chunks)
+    if inference_source_pos_chunks:
+        inference_ticker_ids = np.concatenate(inference_ticker_id_chunks)
+        inference_source_positions = np.concatenate(inference_source_pos_chunks)
+        inference_benchmark_positions = np.concatenate(inference_benchmark_pos_chunks)
+        inference_dates = np.concatenate(inference_date_chunks)
+    else:
+        inference_ticker_ids = np.empty(0, dtype=np.int32)
+        inference_source_positions = np.empty(0, dtype=np.int32)
+        inference_benchmark_positions = np.empty(0, dtype=np.int32)
+        inference_dates = np.empty(0, dtype="datetime64[D]")
+
+    ticker_ids = np.concatenate([valid_ticker_ids, inference_ticker_ids])
+    source_positions = np.concatenate([valid_source_positions, inference_source_positions])
+    benchmark_positions = np.concatenate(
+        [valid_benchmark_positions, inference_benchmark_positions]
+    )
+    dates = np.concatenate([valid_dates, inference_dates])
+    raw_target = np.concatenate(
+        [valid_targets, np.full(len(inference_dates), np.nan, dtype=np.float32)]
+    )
+    target_valid = np.concatenate(
+        [
+            np.ones(len(valid_targets), dtype=bool),
+            np.zeros(len(inference_dates), dtype=bool),
+        ]
+    )
+    label_end_dates = np.concatenate(
+        [
+            valid_label_end_dates.astype("datetime64[ns]"),
+            np.full(len(inference_dates), np.datetime64("NaT"), dtype="datetime64[ns]"),
+        ]
+    )
     group_count = int(len(raw_target))
+    target_valid_count = int(target_valid.sum())
+    inference_only_count = int(group_count - target_valid_count)
     group_index = np.arange(group_count, dtype=np.int64)
     ticker_categorical = pd.Categorical.from_codes(ticker_ids, categories=tickers)
     group_table = pd.DataFrame(
@@ -406,7 +509,10 @@ def load_daily_universal_ranker_data(
         "target_id": DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
         "target_contract": target_contract,
         "sample_scope": "daily_eligible_stock_days",
-        "sample_count": group_count,
+        "sample_count": target_valid_count,
+        "target_valid_sample_count": target_valid_count,
+        "score_eligible_sample_count": group_count,
+        "inference_only_sample_count": inference_only_count,
         "ticker_count": int(len(tickers)),
         "date_range": {
             "start": str(pd.Timestamp(group_table["date"].min()).date()),
@@ -423,6 +529,9 @@ def load_daily_universal_ranker_data(
         "policy": summary.get("policy"),
         "sample_scope": "daily_eligible_stock_days",
         "sample_count": group_count,
+        "score_eligible_sample_count": group_count,
+        "target_valid_sample_count": target_valid_count,
+        "inference_only_sample_count": inference_only_count,
         "ticker_count": int(len(tickers)),
         "skipped_ticker_count": int(skipped_tickers),
         "feature_storage": "lazy",
@@ -438,7 +547,7 @@ def load_daily_universal_ranker_data(
         group_table=group_table,
         group_context=np.empty((group_count, 0), dtype=np.float32),
         raw_target=raw_target,
-        target_valid=np.ones(group_count, dtype=bool),
+        target_valid=target_valid,
         target_manifest=target_manifest,
         outer_policy=outer_policy,
         profile=profile,

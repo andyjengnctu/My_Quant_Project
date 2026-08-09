@@ -12,6 +12,10 @@ from typing import Any, Iterator, Mapping
 import numpy as np
 import pandas as pd
 
+from config.breakout_quality import (
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
+)
 from filters.breakout_quality.contract import DEFAULT_FILTER_ID
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
@@ -163,6 +167,25 @@ def get_breakout_quality_ranking_source_context() -> BreakoutQualityRankingSourc
     return _RANKING_SOURCE_CONTEXT.get()
 
 
+def breakout_quality_ranking_uses_daily_information_date() -> bool:
+    """Return whether the active research ranker must refresh on each completed bar."""
+
+    context = get_breakout_quality_ranking_source_context()
+    if context.score_source not in {
+        SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    }:
+        return False
+    profile_name = str(context.experiment_profile or "").strip()
+    if not profile_name:
+        return False
+    profile = get_breakout_quality_experiment_profile(profile_name)
+    return (
+        profile.training_sample_scope
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    )
+
+
 @contextmanager
 def breakout_quality_ranking_source_context(
     *,
@@ -231,6 +254,7 @@ def resolve_breakout_quality_candidate_rank(
     *,
     ticker: str,
     signal_date,
+    information_date=None,
     high_len: int,
     filter_id: str = DEFAULT_FILTER_ID,
     project_root: str | None = None,
@@ -248,20 +272,30 @@ def resolve_breakout_quality_candidate_rank(
         payload = dict(payload)
         payload.setdefault("score_source", SCORE_SOURCE_CANONICAL_RUNTIME)
         return payload
-    if context.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-        return lookup_selection_point_in_time_candidate_score(
-            project_root=root,
-            ticker=str(ticker),
-            signal_date=signal_date,
-            filter_id=str(filter_id),
-            model_architecture=str(context.model_architecture),
-            experiment_profile=str(context.experiment_profile),
-        )
-    if context.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+    if context.score_source in {
+        SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    }:
+        lookup_date = signal_date
+        if breakout_quality_ranking_uses_daily_information_date():
+            if information_date is None:
+                raise ValueError(
+                    "daily-universal ranking source必須提供最新已完成交易日 information_date"
+                )
+            lookup_date = information_date
+        if context.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            return lookup_selection_point_in_time_candidate_score(
+                project_root=root,
+                ticker=str(ticker),
+                signal_date=lookup_date,
+                filter_id=str(filter_id),
+                model_architecture=str(context.model_architecture),
+                experiment_profile=str(context.experiment_profile),
+            )
         return lookup_continuous_ranker_oos_candidate_score(
             project_root=root,
             ticker=str(ticker),
-            signal_date=signal_date,
+            signal_date=lookup_date,
             filter_id=str(filter_id),
             model_architecture=str(context.model_architecture),
             experiment_profile=str(context.experiment_profile),
@@ -277,6 +311,7 @@ __all__ = [
     "build_breakout_quality_filter_pass_condition",
     "get_breakout_quality_filter_source_context",
     "get_breakout_quality_ranking_source_context",
+    "breakout_quality_ranking_uses_daily_information_date",
     "resolve_breakout_quality_candidate_rank",
     "resolve_project_root_from_runtime",
 ]

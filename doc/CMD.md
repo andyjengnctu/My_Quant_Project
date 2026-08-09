@@ -138,7 +138,7 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_eve
 BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-MR-13A Stage 1 forward-OOS模型Gate通過後，模型研究選單允許建立／更新其Selection PIT Scores並執行模型audit；**這只授權歷史PIT模型驗證，不代表MR-13A已成為策略runtime來源**。策略workflow仍維持MR-12B，直到後續有明確的PIT Gate與策略層授權。Binary、continuous、pretraining與Selection PIT流程共用`BREAKOUT_QUALITY_RANDOM_SEED`；只有單次重現特殊實驗時才用CLI `--seed`覆寫。
+MR-13A Stage 1 forward-OOS與Stage 2 Selection PIT模型Gate均已通過。Stage 3前置契約要求daily PIT的**score存在只依feature history，不得依future target完整性**，且策略盤前每次decision必須使用最新已完成交易日score；舊Stage 2 target-complete-only PIT table只保留model-audit evidence，Strategy Compare會拒絕使用，需由模型研究選單重新建立PIT Scores＋Audit。重建後才允許以config-driven `C27/C28`做Selection同參數策略轉化；策略workflow active仍維持MR-12B，未取得Selection經濟結果前不得自動切換。Binary、continuous、pretraining與Selection PIT流程共用`BREAKOUT_QUALITY_RANDOM_SEED`；只有單次重現特殊實驗時才用CLI `--seed`覆寫。
 
 
 ### A2 Realized Trade-path Label研究
@@ -192,7 +192,7 @@ python apps/research.py model build-point-in-time-scores --score-start-date auto
 python apps/research.py model build-point-in-time-scores --score-start-date auto --resume
 ```
 
-`auto`會依實際group、Target valid、label completion、inner validation與最小group門檻逐月解析最早合法日期。Fold目錄採`fold_YYYYMMDD_YYYYMMDD`穩定日期ID；向前延伸時，既有相同日期與完整契約的舊`fold_000`類checkpoint／scores會先驗證hash，再自動遷移重用，不因前面新增fold而全部重訓。
+`auto`會依實際group、Target valid、label completion、inner validation與最小group門檻逐月解析最早合法日期。Fold目錄採`fold_YYYYMMDD_YYYYMMDD`穩定日期ID；向前延伸時，既有相同日期與完整契約的舊`fold_000`類checkpoint／scores會先驗證hash，再自動遷移重用，不因前面新增fold而全部重訓。 MR-13A由Stage 2 target-valid score universe升級為Stage 3 feature-eligible score universe時，若同fold的inner-train／validation／final-refit identity、model spec、training settings、source contract、selected epoch與checkpoint hash完全一致，會保留既有模型權重並只重評擴充後的score rows；任何training-side差異都會自動退回完整fold重訓。
 
 模型層 audit：
 

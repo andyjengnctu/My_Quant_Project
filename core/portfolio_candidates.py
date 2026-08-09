@@ -6,6 +6,7 @@ from core.buy_sort import (
 from core.config import get_buy_sort_method
 from core.exact_accounting import build_buy_ledger_from_price, milli_to_money
 from filters.breakout_quality.runtime import (
+    breakout_quality_ranking_uses_daily_information_date,
     get_breakout_quality_ranking_source_context,
     resolve_breakout_quality_candidate_rank,
 )
@@ -33,12 +34,20 @@ from core.portfolio_fast_data import (
 )
 
 
-def _resolve_candidate_quality_ranking(*, params, ticker, signal_date, signal_state=None):
+def _resolve_candidate_quality_ranking(
+    *,
+    params,
+    ticker,
+    signal_date,
+    information_date=None,
+    signal_state=None,
+):
     enabled = bool(getattr(params, "use_breakout_quality_ranking", False))
     if not enabled:
         return None
 
     filter_id = str(getattr(params, "breakout_quality_filter_id"))
+    daily_refresh = breakout_quality_ranking_uses_daily_information_date()
     inherited_rank = resolve_breakout_quality_rank(signal_state)
     if inherited_rank is not None:
         inherited_filter_id = str(inherited_rank.get("filter_id") or "").strip()
@@ -54,15 +63,21 @@ def _resolve_candidate_quality_ranking(*, params, ticker, signal_date, signal_st
                 "continuation／re-entry breakout quality score source 與當前 replay 不一致: "
                 f"ticker={ticker}, inherited={inherited_source}, current={active_source}"
             )
-        inherited_rank["filter_id"] = filter_id
-        inherited_rank["score_source"] = active_source
-        return inherited_rank
+        if not daily_refresh:
+            inherited_rank["filter_id"] = filter_id
+            inherited_rank["score_source"] = active_source
+            return inherited_rank
 
     if signal_date is None:
         raise ValueError(f"breakout quality ranking 候選缺少原始 signal_date: ticker={ticker}")
+    if daily_refresh and information_date is None:
+        raise ValueError(
+            f"daily breakout quality ranking 候選缺少最新已完成交易日: ticker={ticker}"
+        )
     return resolve_breakout_quality_candidate_rank(
         ticker=str(ticker),
         signal_date=signal_date,
+        information_date=information_date,
         high_len=int(getattr(params, "high_len")),
         filter_id=filter_id,
     )
@@ -266,7 +281,10 @@ def _collect_normal_candidates(
             continue
 
         quality_rank = _resolve_candidate_quality_ranking(
-            params=params, ticker=ticker, signal_date=signal_date
+            params=params,
+            ticker=ticker,
+            signal_date=signal_date,
+            information_date=signal_date,
         )
         signal_state = create_signal_tracking_state(
             y_buy_limit,
@@ -354,7 +372,10 @@ def track_normal_setup_signals_for_day(
             continue
 
         quality_rank = _resolve_candidate_quality_ranking(
-            params=params, ticker=ticker, signal_date=signal_date
+            params=params,
+            ticker=ticker,
+            signal_date=signal_date,
+            information_date=signal_date,
         )
         signal_state = create_signal_tracking_state(
             y_buy_limit,
@@ -422,10 +443,12 @@ def _collect_extended_candidates(
         if candidate_plan is None:
             continue
 
+        information_date = get_fast_dates(fast_df)[y_pos]
         quality_rank = _resolve_candidate_quality_ranking(
             params=candidate_params,
             ticker=ticker,
             signal_date=candidate_plan.get("signal_date"),
+            information_date=information_date,
             signal_state=signal_state,
         )
         today_orderable = is_extended_signal_orderable_for_day(

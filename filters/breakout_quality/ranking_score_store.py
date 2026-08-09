@@ -21,10 +21,13 @@ from config.breakout_quality import (
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
 )
 
 from filters.breakout_quality.artifacts import compute_file_sha256
+from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
     resolve_continuous_target_dir,
@@ -126,6 +129,45 @@ def _validate_audit_source_artifact(
         raise ValueError(f"Selection PIT audit {label} size不一致")
 
 
+def _validate_embedded_target_source_artifact(
+    record: Any,
+    *,
+    manifest: dict[str, Any],
+    target_id: str,
+) -> None:
+    if not isinstance(record, dict):
+        raise ValueError(
+            "Selection PIT audit缺少daily Continuous Target內嵌來源，請重新執行模型audit"
+        )
+    if str(record.get("source") or "") != "embedded_in_point_in_time_manifest":
+        raise ValueError("Selection PIT audit daily Continuous Target source語意不一致")
+    if str(record.get("target_id") or "") != str(target_id):
+        raise ValueError("Selection PIT audit daily Continuous Target identity不一致")
+    manifest_target = dict(manifest.get("source_continuous_target") or {})
+    expected_contract = manifest_target.get("target_contract")
+    if expected_contract in (None, {}):
+        raise ValueError("Selection PIT manifest缺少daily Continuous Target contract")
+    if record.get("target_contract") != expected_contract:
+        raise ValueError("Selection PIT audit daily Continuous Target contract與manifest不一致")
+
+
+def _validate_score_eligibility_contract(
+    manifest: dict[str, Any], *, profile
+) -> None:
+    if (
+        str(profile.training_sample_scope)
+        != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        return
+    expected = build_score_eligibility_contract(profile)
+    actual = manifest.get("score_eligibility_contract")
+    if actual != expected:
+        raise ValueError(
+            "Selection PIT daily score eligibility contract過舊或不一致；"
+            "策略使用前請重新建立PIT Scores並重新執行PIT audit"
+        )
+
+
 def derive_point_in_time_model_validation_gate(audit: dict[str, Any]) -> dict[str, Any]:
     """Apply the predeclared model-layer gate without using strategy outcomes."""
 
@@ -217,6 +259,26 @@ def load_selection_point_in_time_ranking_contract(
                 f"Selection PIT audit identity不一致: field={field}, "
                 f"expected={expected}, actual={audit.get(field)!r}"
             )
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    manifest_sample_scope = str(
+        manifest.get("training_sample_scope")
+        or TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+    )
+    if manifest_sample_scope != str(profile.training_sample_scope):
+        raise ValueError(
+            "Selection PIT manifest sample scope與profile不一致: "
+            f"manifest={manifest_sample_scope}, profile={profile.training_sample_scope}"
+        )
+    audit_workflow = dict(audit.get("workflow") or {})
+    audit_sample_scope = str(
+        audit_workflow.get("training_sample_scope")
+        or TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+    )
+    if audit_sample_scope != manifest_sample_scope:
+        raise ValueError(
+            "Selection PIT audit sample scope與manifest不一致: "
+            f"audit={audit_sample_scope}, manifest={manifest_sample_scope}"
+        )
     if str(manifest.get("status") or "") != "BUILT":
         raise ValueError(f"Selection PIT manifest尚未完成: status={manifest.get('status')!r}")
     if int(audit.get("schema_version", 0) or 0) < 3:
@@ -249,12 +311,6 @@ def load_selection_point_in_time_ranking_contract(
         raise ValueError("Selection PIT score period不合法")
 
     manifest_target = str(manifest.get("continuous_target_id") or "")
-    target_manifest_path = (
-        resolve_continuous_target_dir(root, filter_id, target_id=manifest_target)
-        / TARGET_MANIFEST_FILENAME
-    ).resolve()
-    if not target_manifest_path.is_file():
-        raise FileNotFoundError(f"找不到Continuous Target manifest: {target_manifest_path}")
     audit_sources = dict(audit.get("source_artifacts") or {})
     for key, path, label in (
         ("point_in_time_manifest", manifest_path, "PIT manifest"),
@@ -266,12 +322,33 @@ def load_selection_point_in_time_ranking_contract(
             ).resolve(),
             "PIT coverage",
         ),
-        ("continuous_target_manifest", target_manifest_path, "Continuous Target manifest"),
     ):
         if not path.is_file():
             raise FileNotFoundError(f"找不到{label}: {path}")
         _validate_audit_source_artifact(
             audit_sources.get(key), expected_path=path, label=label
+        )
+
+    if manifest_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        _validate_score_eligibility_contract(manifest, profile=profile)
+        _validate_embedded_target_source_artifact(
+            audit_sources.get("continuous_target_manifest"),
+            manifest=manifest,
+            target_id=manifest_target,
+        )
+    else:
+        target_manifest_path = (
+            resolve_continuous_target_dir(root, filter_id, target_id=manifest_target)
+            / TARGET_MANIFEST_FILENAME
+        ).resolve()
+        if not target_manifest_path.is_file():
+            raise FileNotFoundError(
+                f"找不到Continuous Target manifest: {target_manifest_path}"
+            )
+        _validate_audit_source_artifact(
+            audit_sources.get("continuous_target_manifest"),
+            expected_path=target_manifest_path,
+            label="Continuous Target manifest",
         )
     if str(audit.get("continuous_target_id") or "") != manifest_target:
         raise ValueError("Selection PIT audit continuous target與manifest不一致")

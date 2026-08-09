@@ -12702,13 +12702,16 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         _stable_fold_id,
         _combined_validation,
         _fold_group_ids,
+        _fold_training_contract_is_compatible,
         _migrate_compatible_legacy_fold,
+        _rescore_daily_fold_from_compatible_checkpoint,
         _resolve_score_start,
         _validate_score_frame,
         parse_args as parse_point_in_time_args,
     )
-    from filters.breakout_quality.continuous_ranker_data import (
-        _validate_group_consistency,
+    from filters.breakout_quality.continuous_ranker_data import _validate_group_consistency
+    from filters.breakout_quality.ranker_sample_contract import (
+        build_score_eligibility_contract,
     )
     from filters.breakout_quality.artifacts import build_file_manifest
     from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME, LABEL_PASS
@@ -13177,6 +13180,223 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         ),
     )
 
+    inference_target_valid = np.ones(len(daily_group_table), dtype=bool)
+    inference_target_valid[[3, 6]] = False
+    inference_daily_bundle = SimpleNamespace(
+        group_table=daily_group_table,
+        profile=SimpleNamespace(
+            training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        ),
+        target_valid=inference_target_valid,
+        event_group_index=np.arange(len(daily_group_table), dtype=np.int64),
+    )
+    inference_daily_ids = _fold_group_ids(
+        inference_daily_bundle, fold, validation_months=24
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_pit_future_target_validity_controls_training_but_not_score_presence",
+        ([0], [2], [0, 1, 2], [5, 6]),
+        (
+            inference_daily_ids["train_ids"].tolist(),
+            inference_daily_ids["validation_ids"].tolist(),
+            inference_daily_ids["final_ids"].tolist(),
+            inference_daily_ids["score_ids"].tolist(),
+        ),
+    )
+
+    daily_score_contract = build_score_eligibility_contract(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    event_score_contract = build_score_eligibility_contract(
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pit_score_eligibility_contract_is_profile_driven_and_future_target_independent",
+        (
+            "feature_history_only",
+            False,
+            True,
+            "canonical_breakout_event_membership",
+            False,
+        ),
+        (
+            daily_score_contract["eligibility_basis"],
+            daily_score_contract["future_target_required_for_score"],
+            daily_score_contract["target_valid_required_for_training"],
+            event_score_contract["eligibility_basis"],
+            event_score_contract["future_target_required_for_score"],
+        ),
+    )
+
+    training_contract = {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        "continuous_target_id": "daily_opportunity_no_time_r_v1",
+        "training_label_scope": TRAINING_LABEL_SCOPE_ALL,
+        "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        "seed": 42,
+        "planned_periods": {
+            "validation_start": "2012-01-01",
+            "validation_end": "2013-12-31",
+            "score_start": "2014-01-01",
+            "score_end": "2014-12-31",
+        },
+        "observed_periods": {
+            "inner_train": {"start": "2010-01-01", "end": "2011-12-31"},
+            "validation": {"start": "2012-01-01", "end": "2013-11-01"},
+            "final_refit": {"start": "2010-01-01", "end": "2013-11-01"},
+            "score": {"start": "2014-01-01", "end": "2014-12-31"},
+        },
+        "model_information_cutoff": "2013-12-20",
+        "group_counts": {
+            "inner_train": 10,
+            "validation": 20,
+            "final_refit": 30,
+            "score": 40,
+        },
+        "event_row_counts": {
+            "inner_train": 10,
+            "validation": 20,
+            "final_refit": 30,
+            "score": 40,
+        },
+        "model_spec": {"architecture": "inception_time_v1"},
+        "experiment_settings": {"training_sample_scope": "daily_eligible_stock_days"},
+        "training_settings": {"epochs_max": 200},
+        "source_contract": {"target_contract": {"target_id": "daily_opportunity_no_time_r_v1"}},
+        "lookahead_contract": {"score_period_used_for_training_or_epoch_selection": False},
+    }
+    expanded_score_contract = json.loads(json.dumps(training_contract))
+    expanded_score_contract["group_counts"]["score"] = 55
+    expanded_score_contract["event_row_counts"]["score"] = 55
+    changed_training_contract = json.loads(json.dumps(expanded_score_contract))
+    changed_training_contract["group_counts"]["final_refit"] = 31
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_pit_checkpoint_reuse_allows_score_only_expansion_but_rejects_training_change",
+        (True, False),
+        (
+            _fold_training_contract_is_compatible(
+                training_contract, expected_contract=expanded_score_contract
+            ),
+            _fold_training_contract_is_compatible(
+                training_contract, expected_contract=changed_training_contract
+            ),
+        ),
+    )
+
+    class _SyntheticRankerModel:
+        def load_state_dict(self, _state, strict=True):
+            return self
+
+        def to(self, _device):
+            return self
+
+        def eval(self):
+            return self
+
+    old_checkpoint_contract = json.loads(json.dumps(training_contract))
+    old_checkpoint_contract.update({"schema_version": 2, "fold_id": "fold_20140101_20141231"})
+    old_checkpoint_contract["group_counts"]["score"] = 1
+    old_checkpoint_contract["event_row_counts"]["score"] = 1
+    expected_checkpoint_contract = json.loads(json.dumps(old_checkpoint_contract))
+    expected_checkpoint_contract["group_counts"]["score"] = 2
+    expected_checkpoint_contract["event_row_counts"]["score"] = 2
+    expected_checkpoint_contract["score_eligibility_contract"] = daily_score_contract
+    synthetic_bundle = SimpleNamespace(
+        profile=SimpleNamespace(
+            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        ),
+        feature_bank=SimpleNamespace(shape=(2, 300, 10)),
+        group_context=np.zeros((2, 0), dtype=np.float32),
+        group_table=pd.DataFrame(
+            [
+                {"ticker": "2330", "date": "2014-01-02", "group_index": 0},
+                {"ticker": "2317", "date": "2014-01-03", "group_index": 1},
+            ]
+        ),
+    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        rescore_fold_dir = Path(tmp_dir) / "fold_20140101_20141231"
+        rescore_fold_dir.mkdir(parents=True, exist_ok=True)
+        rescore_model_path = rescore_fold_dir / DEFAULT_MODEL_FILENAME
+        torch.save(
+            {
+                "model_state_dict": {"synthetic_weight": torch.tensor([1.0])},
+                "feature_count": 10,
+                "context_count": 0,
+                "sequence_length": 300,
+                "model_spec": old_checkpoint_contract["model_spec"],
+                "selected_epoch": 1,
+                "fold_contract": old_checkpoint_contract,
+            },
+            rescore_model_path,
+        )
+        old_rescore_manifest = {
+            **old_checkpoint_contract,
+            "selected_epoch": 1,
+            "epoch_selection": {"best_epoch": 1},
+            "final_refit_history": [{"epoch": 1}],
+            "artifacts": {
+                "checkpoint": build_file_manifest(rescore_model_path),
+                "scores": None,
+            },
+        }
+        (rescore_fold_dir / "manifest.json").write_text(
+            json.dumps(old_rescore_manifest), encoding="utf-8"
+        )
+        with patch(
+            "tools.filters.breakout_quality.build_point_in_time_scores.build_model",
+            return_value=_SyntheticRankerModel(),
+        ), patch(
+            "tools.filters.breakout_quality.build_point_in_time_scores.predict_scores",
+            return_value=np.asarray([0.25, 0.75], dtype=np.float32),
+        ):
+            rescored = _rescore_daily_fold_from_compatible_checkpoint(
+                fold_dir=rescore_fold_dir,
+                bundle=synthetic_bundle,
+                ids={"score_ids": np.asarray([0, 1], dtype=np.int64)},
+                fold_contract=expected_checkpoint_contract,
+                expected_fingerprint="expanded-score-fingerprint",
+                args=SimpleNamespace(evaluation_batch_size=32),
+                torch_module=torch,
+                plan=SimpleNamespace(device="cpu"),
+            )
+        rescored_frame, rescored_manifest = rescored or (pd.DataFrame(), {})
+        rewritten_checkpoint = (
+            torch.load(rescore_model_path, map_location="cpu", weights_only=True)
+            if rescored is not None
+            else {}
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_pit_checkpoint_reuse_round_trip_rescores_expanded_universe_without_refit",
+        (True, 2, "expanded_daily_score_universe_checkpoint_reuse", 2, 30),
+        (
+            rescored is not None,
+            len(rescored_frame),
+            dict(rescored_manifest.get("migration") or {}).get("kind"),
+            dict(rewritten_checkpoint.get("fold_contract") or {})
+            .get("group_counts", {})
+            .get("score"),
+            dict(rewritten_checkpoint.get("fold_contract") or {})
+            .get("group_counts", {})
+            .get("final_refit"),
+        ),
+    )
+
     fold_contract = {
         "fold_id": "fold_000",
         "model_information_cutoff": "2013-12-20",
@@ -13572,11 +13792,16 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     from core.portfolio_candidates import _make_candidate_row
     from filters.breakout_quality.ranking_score_store import (
         _validate_audit_source_artifact,
+        _validate_score_eligibility_contract,
         derive_point_in_time_model_validation_gate,
+    )
+    from filters.breakout_quality.ranker_sample_contract import (
+        build_score_eligibility_contract,
     )
     from filters.breakout_quality.runtime import (
         breakout_quality_ranking_source_context,
         get_breakout_quality_ranking_source_context,
+        resolve_breakout_quality_candidate_rank,
     )
     from filters.breakout_quality.strategy_compare_engine import (
         _strategy_selection_diagnostics,
@@ -13697,6 +13922,118 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         "point_in_time_ranking_source_context_is_scoped_and_restored",
         ("canonical_runtime", "selection_point_in_time", "canonical_runtime"),
         (default_source, inside_source, restored_source),
+    )
+
+    lookup_dates = []
+
+    def _synthetic_pit_lookup(**kwargs):
+        lookup_dates.append(pd.Timestamp(kwargs["signal_date"]).strftime("%Y-%m-%d"))
+        return {
+            "score": 0.7,
+            "available": True,
+            "score_date": pd.Timestamp(kwargs["signal_date"]).strftime("%Y-%m-%d"),
+            "score_source": "selection_point_in_time",
+        }
+
+    with patch(
+        "filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
+        side_effect=_synthetic_pit_lookup,
+    ):
+        with breakout_quality_ranking_source_context(
+            score_source="selection_point_in_time",
+            model_architecture="inception_time_v1",
+            experiment_profile=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        ):
+            resolve_breakout_quality_candidate_rank(
+                ticker="2330",
+                signal_date=pd.Timestamp("2020-01-02"),
+                information_date=pd.Timestamp("2020-01-09"),
+                high_len=275,
+            )
+        with breakout_quality_ranking_source_context(
+            score_source="selection_point_in_time",
+            model_architecture="inception_time_v1",
+            experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        ):
+            resolve_breakout_quality_candidate_rank(
+                ticker="2330",
+                signal_date=pd.Timestamp("2020-01-02"),
+                information_date=pd.Timestamp("2020-01-09"),
+                high_len=275,
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "pit_runtime_score_date_is_event_anchor_for_mr12b_and_latest_information_date_for_mr13a",
+        ["2020-01-02", "2020-01-09"],
+        lookup_dates,
+    )
+
+    inherited_daily_state = {}
+    attach_breakout_quality_rank(
+        inherited_daily_state,
+        {
+            "score": 0.4,
+            "available": True,
+            "score_date": "2020-01-02",
+            "score_source": "selection_point_in_time",
+            "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+            "model_architecture": "inception_time_v1",
+            "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        },
+    )
+    with breakout_quality_ranking_source_context(
+        score_source="selection_point_in_time",
+        model_architecture="inception_time_v1",
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+    ):
+        with patch(
+            "core.portfolio_candidates.resolve_breakout_quality_candidate_rank",
+            return_value={
+                "score": 0.9,
+                "available": True,
+                "score_date": "2020-01-09",
+                "score_source": "selection_point_in_time",
+                "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                "model_architecture": "inception_time_v1",
+                "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+            },
+        ) as refreshed_lookup:
+            refreshed_rank = _resolve_candidate_quality_ranking(
+                params=ranking_params,
+                ticker="2330",
+                signal_date=pd.Timestamp("2020-01-02"),
+                information_date=pd.Timestamp("2020-01-09"),
+                signal_state=inherited_daily_state,
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "daily_pit_continuation_refreshes_score_instead_of_reusing_breakout_day_rank",
+        (1, 0.9, "2020-01-09"),
+        (refreshed_lookup.call_count, refreshed_rank["score"], refreshed_rank["score_date"]),
+    )
+
+    daily_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    current_daily_contract = build_score_eligibility_contract(daily_profile)
+    current_daily_accepted = True
+    try:
+        _validate_score_eligibility_contract(
+            {"score_eligibility_contract": current_daily_contract},
+            profile=daily_profile,
+        )
+    except ValueError:
+        current_daily_accepted = False
+    legacy_daily_rejected = False
+    try:
+        _validate_score_eligibility_contract({}, profile=daily_profile)
+    except ValueError as exc:
+        legacy_daily_rejected = "重新建立PIT Scores" in str(exc)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_loader_requires_future_independent_daily_pit_score_eligibility_contract",
+        (True, True),
+        (current_daily_accepted, legacy_daily_rejected),
     )
 
     with tempfile.TemporaryDirectory() as artifact_dir:
@@ -18892,6 +19229,235 @@ def validate_breakout_quality_stale_score_membership_guard_contract_case(_base_p
         "stale_action": [row["ticker"] for row in stale_action],
         "stale_candidates_retained": "F3" in [row["ticker"] for row in stale_order],
     })
+    return results, summary
+
+
+def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_DAILY_PIT_STRATEGY_RUNTIME"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config import strategy_compare as strategy_config
+    from core.extended_signals import attach_breakout_quality_rank
+    from filters.breakout_quality.ranker_sample_contract import (
+        build_score_eligibility_contract,
+    )
+    from filters.breakout_quality.ranking_score_store import (
+        _validate_score_eligibility_contract,
+    )
+    from filters.breakout_quality.runtime import (
+        breakout_quality_ranking_source_context,
+        resolve_breakout_quality_candidate_rank,
+    )
+    from tools.filters.breakout_quality.build_point_in_time_scores import (
+        _fold_group_ids,
+    )
+
+    daily_profile = get_breakout_quality_experiment_profile(
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    event_profile = get_breakout_quality_experiment_profile(
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+    )
+    daily_contract = build_score_eligibility_contract(daily_profile)
+    event_contract = build_score_eligibility_contract(event_profile)
+    current_daily_accepted = True
+    try:
+        _validate_score_eligibility_contract(
+            {"score_eligibility_contract": daily_contract}, profile=daily_profile
+        )
+    except ValueError:
+        current_daily_accepted = False
+    legacy_daily_rejected = False
+    try:
+        _validate_score_eligibility_contract({}, profile=daily_profile)
+    except ValueError as exc:
+        legacy_daily_rejected = "重新建立PIT Scores" in str(exc)
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "daily_pit_score_presence_depends_only_on_past_feature_history_contract",
+        (
+            "feature_history_only", False, True,
+            "canonical_breakout_event_membership", False,
+            True, True,
+        ),
+        (
+            daily_contract["eligibility_basis"],
+            daily_contract["future_target_required_for_score"],
+            daily_contract["target_valid_required_for_training"],
+            event_contract["eligibility_basis"],
+            event_contract["future_target_required_for_score"],
+            current_daily_accepted,
+            legacy_daily_rejected,
+        ),
+    )
+
+    group_table = pd.DataFrame([
+        {"ticker": "A", "date": "2010-01-01", "group_index": 0, "label": -1, "label_eval_end_date": "2010-02-01"},
+        {"ticker": "B", "date": "2012-01-02", "group_index": 1, "label": -1, "label_eval_end_date": "2012-02-15"},
+        {"ticker": "C", "date": "2013-12-01", "group_index": 2, "label": -1, "label_eval_end_date": "2013-12-20"},
+        {"ticker": "D", "date": "2014-01-02", "group_index": 3, "label": -1, "label_eval_end_date": pd.NaT},
+        {"ticker": "E", "date": "2014-06-01", "group_index": 4, "label": -1, "label_eval_end_date": pd.NaT},
+    ])
+    bundle = SimpleNamespace(
+        group_table=group_table,
+        profile=SimpleNamespace(
+            training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        ),
+        target_valid=np.array([True, True, False, False, False], dtype=bool),
+        event_group_index=np.arange(len(group_table), dtype=np.int64),
+    )
+    ids = _fold_group_ids(
+        bundle,
+        {
+            "fold_id": "fold_20140101_20141231",
+            "score_start": pd.Timestamp("2014-01-01"),
+            "score_end": pd.Timestamp("2014-12-31"),
+        },
+        validation_months=24,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "daily_pit_target_invalid_rows_are_excluded_from_training_but_still_scored",
+        ([0], [1], [0, 1], [3, 4]),
+        (
+            ids["train_ids"].tolist(), ids["validation_ids"].tolist(),
+            ids["final_ids"].tolist(), ids["score_ids"].tolist(),
+        ),
+    )
+
+    lookup_dates = []
+
+    def _fake_lookup(**kwargs):
+        date = pd.Timestamp(kwargs["signal_date"]).strftime("%Y-%m-%d")
+        lookup_dates.append(date)
+        return {
+            "score": 0.8,
+            "available": True,
+            "score_date": date,
+            "score_source": "selection_point_in_time",
+        }
+
+    with patch(
+        "filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
+        side_effect=_fake_lookup,
+    ):
+        with breakout_quality_ranking_source_context(
+            score_source="selection_point_in_time",
+            model_architecture="inception_time_v1",
+            experiment_profile=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        ):
+            resolve_breakout_quality_candidate_rank(
+                ticker="2330", signal_date=pd.Timestamp("2020-01-02"),
+                information_date=pd.Timestamp("2020-01-09"), high_len=275,
+            )
+        with breakout_quality_ranking_source_context(
+            score_source="selection_point_in_time",
+            model_architecture="inception_time_v1",
+            experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        ):
+            resolve_breakout_quality_candidate_rank(
+                ticker="2330", signal_date=pd.Timestamp("2020-01-02"),
+                information_date=pd.Timestamp("2020-01-09"), high_len=275,
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr12b_keeps_event_score_date_while_mr13a_refreshes_latest_completed_information_date",
+        ["2020-01-02", "2020-01-09"], lookup_dates,
+    )
+
+    daily_params = replace(
+        _base_params,
+        use_breakout_quality_ranking=True,
+        breakout_quality_filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+    )
+    daily_state = {}
+    attach_breakout_quality_rank(daily_state, {
+        "score": 0.3,
+        "available": True,
+        "score_date": "2020-01-02",
+        "score_source": "selection_point_in_time",
+        "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+    })
+    with breakout_quality_ranking_source_context(
+        score_source="selection_point_in_time",
+        model_architecture="inception_time_v1",
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+    ):
+        with patch(
+            "core.portfolio_candidates.resolve_breakout_quality_candidate_rank",
+            return_value={
+                "score": 0.9, "available": True, "score_date": "2020-01-09",
+                "score_source": "selection_point_in_time",
+                "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+                "model_architecture": "inception_time_v1",
+                "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+            },
+        ) as lookup:
+            refreshed = _resolve_candidate_quality_ranking(
+                params=daily_params,
+                ticker="2330",
+                signal_date=pd.Timestamp("2020-01-02"),
+                information_date=pd.Timestamp("2020-01-09"),
+                signal_state=daily_state,
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "daily_continuation_recomputes_rank_each_day_instead_of_inheriting_event_score",
+        (1, 0.9, "2020-01-09"),
+        (lookup.call_count, refreshed["score"], refreshed["score_date"]),
+    )
+
+    settings = strategy_config.get_strategy_comparison_settings()
+    c24, c25, c27, c28 = (
+        settings.arms["C24"], settings.arms["C25"],
+        settings.arms["C27"], settings.arms["C28"],
+    )
+    source = settings.dl_sources["CONT13A_PIT"]
+    active_contrasts = {
+        key for key, value in settings.contrasts.items() if value.enabled
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "stage3_c27_c28_change_only_daily_pit_source_under_frozen_c24_c25_selectors",
+        (
+            True, True, "CONT13A_PIT", "CONT13A_PIT",
+            c24.param_source, c24.rule_policy, c24.dl_runtime_mode,
+            c25.param_source, c25.rule_policy, c25.dl_runtime_mode,
+            "selection_point_in_time", DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+            {"C27-C24", "C28-C25", "C27-C23", "C28-C23", "C28-C27"},
+        ),
+        (
+            c27.enabled, c28.enabled, c27.dl_id, c28.dl_id,
+            c27.param_source, c27.rule_policy, c27.dl_runtime_mode,
+            c28.param_source, c28.rule_policy, c28.dl_runtime_mode,
+            source.score_source, source.experiment_profile,
+            active_contrasts,
+        ),
+    )
+
+    project_root = Path(__file__).resolve().parents[2]
+    strategy_engine_source = (
+        project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
+    ).read_text(encoding="utf-8")
+    pipeline_source = (
+        project_root / "tools" / "filters" / "breakout_quality" /
+        "continuous_ranker_pipeline.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "training_and_strategy_diagnostics_share_domain_layer_profile_sample_provider",
+        True,
+        "load_profile_continuous_ranker_data" in strategy_engine_source
+        and "load_profile_continuous_ranker_data" in pipeline_source,
+    )
+
+    summary["profile"] = DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    summary["stage"] = "selection_strategy_translation"
+    summary["future_target_used_for_score_presence"] = False
     return results, summary
 
 def validate_breakout_quality_audit_framework_contract_case(_base_params):

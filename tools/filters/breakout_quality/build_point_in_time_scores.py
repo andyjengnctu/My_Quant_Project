@@ -33,9 +33,14 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
-from config.breakout_quality import get_breakout_quality_workflow_settings
+from config.breakout_quality import (
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_workflow_settings,
+)
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
+from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
+from filters.breakout_quality.models.factory import build_model
 from filters.breakout_quality.paths import (
     resolve_filter_point_in_time_dir,
     resolve_filter_point_in_time_fold_dir,
@@ -458,7 +463,7 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
         values = group_dates.iloc[group_ids]
         return {"start": str(values.min().date()), "end": str(values.max().date())}
 
-    return {
+    payload = {
         "schema_version": POINT_IN_TIME_SCHEMA_VERSION,
         "fold_id": str(fold["fold_id"]),
         "filter_id": str(args.filter_id),
@@ -529,6 +534,13 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             "oos_used_for_training_or_epoch_selection": False,
         },
     }
+
+    if (
+        str(bundle.profile.training_sample_scope)
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        payload["score_eligibility_contract"] = build_score_eligibility_contract(bundle.profile)
+    return payload
 
 
 def _validate_minimum_counts(settings, fold_id: str, ids: dict[str, Any]) -> None:
@@ -628,7 +640,171 @@ def _fold_contract_is_compatible(
         "source_contract",
         "lookahead_contract",
     )
-    return all(manifest.get(field) == expected_contract.get(field) for field in comparable_fields)
+    if not all(manifest.get(field) == expected_contract.get(field) for field in comparable_fields):
+        return False
+    if "score_eligibility_contract" in expected_contract:
+        return manifest.get("score_eligibility_contract") == expected_contract.get(
+            "score_eligibility_contract"
+        )
+    return True
+
+
+def _fold_training_contract_is_compatible(
+    candidate: dict[str, Any], *, expected_contract: dict[str, Any]
+) -> bool:
+    """Check that model-fitting semantics are unchanged while ignoring score-only expansion."""
+
+    exact_fields = (
+        "filter_id",
+        "model_architecture",
+        "experiment_profile",
+        "continuous_target_id",
+        "training_label_scope",
+        "training_sample_scope",
+        "seed",
+        "planned_periods",
+        "model_information_cutoff",
+        "model_spec",
+        "experiment_settings",
+        "training_settings",
+        "source_contract",
+        "lookahead_contract",
+    )
+    if not all(candidate.get(field) == expected_contract.get(field) for field in exact_fields):
+        return False
+    for field in ("observed_periods", "group_counts", "event_row_counts"):
+        candidate_values = candidate.get(field)
+        expected_values = expected_contract.get(field)
+        if not isinstance(candidate_values, dict) or not isinstance(expected_values, dict):
+            return False
+        for phase in ("inner_train", "validation", "final_refit"):
+            if candidate_values.get(phase) != expected_values.get(phase):
+                return False
+    return True
+
+
+def _rescore_daily_fold_from_compatible_checkpoint(
+    *,
+    fold_dir: Path,
+    bundle,
+    ids: dict[str, Any],
+    fold_contract: dict[str, Any],
+    expected_fingerprint: str,
+    args,
+    torch_module,
+    plan,
+) -> tuple[pd.DataFrame, dict[str, Any]] | None:
+    """Reuse an unchanged daily fitted model and regenerate only the expanded scores."""
+
+    if (
+        str(bundle.profile.training_sample_scope)
+        != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        return None
+    manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
+    model_path = fold_dir / DEFAULT_MODEL_FILENAME
+    if not (manifest_path.is_file() and model_path.is_file()):
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            return None
+        artifacts = dict(manifest.get("artifacts") or {})
+        if build_file_manifest(model_path) != artifacts.get("checkpoint"):
+            return None
+        if not _fold_training_contract_is_compatible(
+            manifest, expected_contract=fold_contract
+        ):
+            return None
+
+        checkpoint = torch_module.load(model_path, map_location="cpu", weights_only=True)
+        if not isinstance(checkpoint, dict):
+            return None
+        checkpoint_contract = checkpoint.get("fold_contract")
+        if not isinstance(checkpoint_contract, dict) or not _fold_training_contract_is_compatible(
+            checkpoint_contract, expected_contract=fold_contract
+        ):
+            return None
+        selected_epoch = int(checkpoint.get("selected_epoch") or 0)
+        if selected_epoch < 1 or selected_epoch != int(manifest.get("selected_epoch") or 0):
+            return None
+        if checkpoint.get("model_spec") != fold_contract.get("model_spec"):
+            return None
+        expected_shape = (
+            int(bundle.feature_bank.shape[1]),
+            int(bundle.feature_bank.shape[2]),
+            int(bundle.group_context.shape[1]),
+        )
+        checkpoint_shape = tuple(
+            int(checkpoint.get(field)) if checkpoint.get(field) is not None else -1
+            for field in ("sequence_length", "feature_count", "context_count")
+        )
+        if checkpoint_shape != expected_shape:
+            return None
+
+        model = build_model(
+            expected_shape[1],
+            expected_shape[2],
+            model_spec=checkpoint["model_spec"],
+        )
+        model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+        model.to(plan.device)
+        model.eval()
+        scores = predict_scores(
+            torch_module,
+            model,
+            bundle,
+            ids["score_ids"],
+            batch_size=int(args.evaluation_batch_size),
+            plan=plan,
+        )
+        if len(scores) != len(ids["score_ids"]):
+            return None
+        frame = bundle.group_table.iloc[ids["score_ids"]][
+            ["ticker", "date", "group_index"]
+        ].copy()
+        frame["breakout_quality_score"] = scores
+        frame["fold_id"] = str(fold_contract["fold_id"])
+        frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
+        frame = _validate_score_frame(frame, fold_contract=fold_contract)
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        RuntimeError,
+    ):
+        return None
+
+    migrated_checkpoint = {**checkpoint, "fold_contract": dict(fold_contract)}
+    score_path = fold_dir / FOLD_SCORE_FILENAME
+    torch_module.save(migrated_checkpoint, model_path)
+    frame.to_csv(score_path, index=False, encoding="utf-8-sig")
+    rescored_manifest = {
+        **manifest,
+        **fold_contract,
+        "schema_version": POINT_IN_TIME_SCHEMA_VERSION,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "contract_fingerprint": expected_fingerprint,
+        "score_coverage": {
+            "expected_groups": int(len(ids["score_ids"])),
+            "scored_groups": int(len(frame)),
+            "coverage_rate": 1.0 if len(ids["score_ids"]) else None,
+        },
+        "migration": {
+            "kind": "expanded_daily_score_universe_checkpoint_reuse",
+            "training_contract_unchanged": True,
+            "future_target_required_for_score": False,
+        },
+        "artifacts": {
+            "checkpoint": build_file_manifest(model_path),
+            "scores": build_file_manifest(score_path),
+        },
+    }
+    write_json(manifest_path, rescored_manifest)
+    return frame, rescored_manifest
 
 
 def _migrate_compatible_legacy_fold(
@@ -1071,6 +1247,7 @@ def main(argv=None) -> int:
     coverage_rows: list[dict[str, Any]] = []
     reused_fold_count = 0
     migrated_fold_count = 0
+    rescored_checkpoint_fold_count = 0
     built_fold_count = 0
     fold_progress = InlineProgress()
     for fold_index, (fold, ids) in enumerate(zip(folds, fold_details), start=1):
@@ -1093,6 +1270,19 @@ def main(argv=None) -> int:
             else None
         )
         migrated = False
+        rescored_checkpoint = False
+        if reused is None and bool(args.resume):
+            reused = _rescore_daily_fold_from_compatible_checkpoint(
+                fold_dir=fold_dir,
+                bundle=bundle,
+                ids=ids,
+                fold_contract=fold_contract,
+                expected_fingerprint=fingerprint,
+                args=args,
+                torch_module=torch,
+                plan=plan,
+            )
+            rescored_checkpoint = reused is not None
         if reused is None and bool(args.resume):
             reused = _migrate_compatible_legacy_fold(
                 point_in_time_dir=point_in_time_dir,
@@ -1104,17 +1294,25 @@ def main(argv=None) -> int:
             migrated = reused is not None
         if reused is not None:
             frame, manifest = reused
-            if migrated:
+            if rescored_checkpoint:
+                rescored_checkpoint_fold_count += 1
+            elif migrated:
                 migrated_fold_count += 1
             else:
                 reused_fold_count += 1
             if not compact_console:
+                if rescored_checkpoint:
+                    reuse_label = "重用既有checkpoint並重評score universe"
+                elif migrated:
+                    reuse_label = "遷移舊fold並重用"
+                else:
+                    reuse_label = "重用既有 fold 工件"
                 print(
                     "\n"
                     + paint(str(fold["fold_id"]), "cyan", enabled=color_enabled, bold=True)
                     + "："
                     + paint(
-                        "遷移舊fold並重用" if migrated else "重用既有 fold 工件",
+                        reuse_label,
                         "green",
                         enabled=color_enabled,
                         bold=True,
@@ -1252,6 +1450,11 @@ def main(argv=None) -> int:
         "torch_execution": plan.as_manifest_payload(),
         "elapsed_sec": round(time.perf_counter() - started, 3),
     }
+    if (
+        str(bundle.profile.training_sample_scope)
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        manifest["score_eligibility_contract"] = build_score_eligibility_contract(bundle.profile)
     write_json(manifest_path, manifest)
     if compact_console:
         print(
@@ -1259,6 +1462,7 @@ def main(argv=None) -> int:
             + f" | folds={len(folds)}"
             + f" | 重用={reused_fold_count}"
             + f" | 遷移重用={migrated_fold_count}"
+            + f" | checkpoint重評={rescored_checkpoint_fold_count}"
             + f" | 新建={built_fold_count}"
             + f" | groups={validation['scored_group_count']:,}"
             + f" | coverage={validation['coverage_rate']:.2%}"
@@ -1281,6 +1485,7 @@ def main(argv=None) -> int:
                     ("Folds", len(folds)),
                     ("Reused folds", reused_fold_count),
                     ("Migrated legacy folds", migrated_fold_count),
+                    ("Checkpoint-only rescored folds", rescored_checkpoint_fold_count),
                     ("Built folds", built_fold_count),
                     ("Scored groups", f"{validation['scored_group_count']:,}"),
                     (

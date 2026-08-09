@@ -70,7 +70,7 @@ from filters.breakout_quality.runtime import (
     breakout_quality_ranking_source_context,
 )
 from filters.breakout_quality.paths import resolve_filter_model_output_dir
-from filters.breakout_quality.continuous_ranker_data import load_continuous_ranker_data
+from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from filters.breakout_quality.strategy_report_style import (
     SIGNAL_NEGATIVE,
     SIGNAL_NEUTRAL,
@@ -1943,7 +1943,7 @@ def _selection_target_lookup(*, root: Path, filter_id: str, architecture: str, p
     scores = load_selection_point_in_time_score_table(
         str(root), filter_id, architecture, profile
     ).reset_index()
-    bundle = load_continuous_ranker_data(
+    bundle = load_profile_continuous_ranker_data(
         filter_id=filter_id,
         model_architecture=architecture,
         experiment_profile=profile,
@@ -1987,8 +1987,8 @@ def _strategy_selection_diagnostics(
                     frame[column], errors="coerce"
                 ).dt.strftime("%Y-%m-%d").fillna("")
 
-    # Continuation／re-entry 的交易 signal_date 可以晚於原始 breakout event；
-    # runtime Score 與 Future Target 都必須以保存下來的原始 score_date 對回 PIT 工件。
+    # Continuation／re-entry 的交易 signal_date 可以晚於目前模型資訊日；
+    # runtime Score 與 Future Target 都必須以replay保存的 score_date 對回 PIT 工件。
     raw_score_dates = orderable_work.get(
         "breakout_quality_score_date",
         pd.Series("", index=orderable_work.index, dtype="object"),

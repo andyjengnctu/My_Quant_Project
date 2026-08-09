@@ -7085,3 +7085,105 @@ Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權
 ### 下一步
 
 由正式`apps/research.py → 模型訓練 → 建立／更新 Selection PIT Scores → PIT模型驗證`執行MR-13A Stage 2。先審查all-stock歷史PIT、年度穩定性與breakout-candidate diagnostic；未取得結果前不得把MR-13A寫成strategy DL source，也不得跑ROOS promotion。
+
+## 2026-08-09 — MR-13A Stage 2結果：Selection PIT模型Gate通過
+
+### 狀態
+
+`RESULT_AVAILABLE / SELECTION_PIT_MODEL_GATE_PASS / STAGE3_STRATEGY_TRANSLATION_AUTHORIZED / NOT_PROMOTED_OVER_MR12B`。
+
+### 程式基準與固定條件
+
+- 使用者提供結果後的最新程式ZIP：`test-branch-1_20260809_193058_e59550d.zip`；SHA256=`ef437ca2f128321243af230743794e73d5204ca41fb186ec6929868c60fe44b8`。
+- Filter=`breakout_quality_v1`；Architecture=`inception_time_v1`；Profile=`daily_universal_no_time_pairwise`；Seed=42。
+- Objective=`daily_pairwise_ranking / pairwise_logistic`；Target=`daily_opportunity_no_time_r_v1`；PIT fold/validation=`12/24 months`。
+- PIT score period=`2013-04-01～2020-12-31`；8 folds；本次model-audit target-valid groups=`778,532`，coverage=`100.00%`。
+- 各fold selected epoch依序=`3,1,1,1,1,1,1,1`；validation daily rho依序=`0.0580,0.1125,0.1138,0.1311,0.1065,0.1167,0.1366,0.0567`。
+
+### PIT模型結果
+
+- All eligible target-valid stock-days：global rho=`0.0783`、mean daily rho=`0.1111`、pair concordance=`53.84%`、Top-bottom spread=`+0.3319R`。
+- 年度方向穩定：rho>0=`8/8`、spread>0=`8/8`；score-level drift=`True`只作warning，不否決方向Gate。
+- Breakout-candidate slice：global rho=`0.0580`、daily rho=`0.0784`、pair=`53.98%`、Top-K Lift=`+0.1102R`、Boundary=`51.49%`。
+- Daily sample沒有PASS/REJECT label，因此binary classification overlap不適用；orderable coverage留到strategy replay建立。
+
+### 判定
+
+1. Stage 2 PIT模型Gate PASS：全期與每年度排序方向一致為正，且breakout candidate slice亦維持正向訊號，因此同一`MR-13A`授權進Stage 3 Selection strategy translation。
+2. PIT訊號強度明顯低於Stage 1 Forward-OOS，尤其breakout slice daily rho由`0.1490`降至`0.0784`、pair由`56.91%`降至`53.98%`；因此Stage 3必須視為經濟轉化驗證，不得預設daily model已優於MR-12B。
+3. `DL-CONT12B / MR-12B`仍為current validated continuous anchor；MR-13A在取得同參數Selection strategy結果前不得promotion或進ROOS。
+
+### Stage 3 preflight發現
+
+在將這份PIT score接入strategy runtime前，另行檢查出兩個不影響上述model-audit數值、但會使strategy replay不合格的契約問題：
+
+1. Stage 2 daily index把「future 40-bar target完整」同時當成score row存在條件。這對train/audit合法，但若策略把score absence當資訊，就會讓是否有score間接受未來資料完整性／停止交易影響。
+2. 既有Selection PIT runtime lookup固定使用breakout `signal_date`。對MR-12B event score正確，但對MR-13A daily model會退化為「事件日算一次後沿用」，沒有真正測每日refresh語意。
+
+因此本次`778,532`-row PIT table保留為**model-audit evidence**，但不得直接作Stage 3 strategy runtime source。Stage 3必須先完成future-independent score universe與daily information-date lookup後重建PIT Scores＋Audit。
+
+
+## 2026-08-09 — MR-13A Stage 3：future-independent daily PIT runtime與C27/C28實作
+
+### 狀態
+
+`IMPLEMENTED / SAME_MR13A_ID / PIT_REBUILD_REQUIRED / SELECTION_STRATEGY_RESULT_PENDING / NOT_PROMOTED`。
+
+### 程式基準
+
+- 本輪來源ZIP：`test-branch-1_20260809_193058_e59550d.zip`。
+- SHA256：`ef437ca2f128321243af230743794e73d5204ca41fb186ec6929868c60fe44b8`。
+- 不修改MR-13A target、architecture、loss、optimizer、epoch Gate或selector scientific rules；因此不建立新的`MR-*`。
+
+### Daily score eligibility修正
+
+1. Daily universe拆成兩個獨立資格：
+   - `feature-eligible`：截至該information date已有完整300-bar stock/benchmark歷史，可安全做inference；**必須有PIT score**。
+   - `target-valid`：未來40 bars完整，可計算`daily_opportunity_no_time_r_v1`；只允許進train、validation、final refit與model-quality audit。
+2. `target_valid=False`的feature-eligible row會保留ticker/date/group identity並輸出score，但target=`NaN`、`label_eval_end_date=NaT`，不得進loss、percentile target、epoch selection或audit target metrics。
+3. 為維持Stage 2 scientific training universe，原target-valid rows保持原ticker/date/group順序與group index；inference-only rows只追加在其後，不重寫既有target-valid identity。
+4. 不建立expanded `stock-day × 300 × 10` feature artifact；仍由canonical sanitized OHLCV lazy materialization。
+
+### PIT artifact／fail-fast contract
+
+- Daily PIT fold與top manifest新增`score_eligibility_contract`：`eligibility_basis=feature_history_only`、`future_target_required_for_score=False`、`target_valid_required_for_training=True`。
+- 此欄位只加入daily profile；legacy MR-12 event PIT的schema version、fold payload與相容migration欄位維持原狀，避免無關歷史fold失效。
+- Strategy loader對MR-13A daily source強制驗證該contract；舊Stage 2 manifest缺欄位時直接要求「重新建立PIT Scores並重新執行PIT audit」，不得silent fallback。
+
+### Daily runtime information-date contract
+
+1. MR-12B event PIT維持以原breakout `signal_date`查score，歷史語意不變。
+2. MR-13A daily PIT不使用原signal date；每個盤前decision/candidate refresh查**最新已完成交易日**的score。
+3. Extended/continuation candidate若source為daily profile不得沿用先前繼承score；每個decision day重新依目前information date查PIT score。
+4. 不使用當日尚未完成OHLCV，不以fill date、future target或成交後狀態決定score date。
+
+### Stage 3 Strategy arms
+
+- 新source：`DL-CONT13A-PIT / CONT13A_PIT`，backing identity=`MR-13A / daily_universal_no_time_pairwise`。
+- C26結案時的「不新增SR-C27」限定於**不再延伸C26 runtime微調鏈**；本輪是在使用者另行啟動MR-13A模型研究後，使用下一個未占用strategy ID建立新的model-translation branch，不回收或延續C26假說。
+- `SR-C27`：完全沿用`SR-C24` historical P2 params、K/R0、minimum-repair selector與execution order；唯一DL差異=`DL-CONT12B-PIT → DL-CONT13A-PIT`。
+- `SR-C28`：完全沿用`SR-C25` historical P2 params、K/R0、feasible-ascent selector與execution order；唯一DL差異=`DL-CONT12B-PIT → DL-CONT13A-PIT`。
+- **不繼承SR-C26的22-calendar-day stale-score guard**：該guard是MR-12B event-score aging假說；MR-13A本身每天refresh，帶入22日門檻會混入無關runtime變因。
+- Active controlled contrasts固定為：`C27-C24`、`C28-C25`、`C27-C23`、`C28-C23`、`C28-C27`。
+  - `C27-C24`、`C28-C25`：隔離純model/source差異。
+  - `C27/C28-C23`：檢查daily PIT是否真正轉成portfolio economics。
+  - `C28-C27`：檢查相同MR-13A source下feasible-ascent是否比minimum-repair有更好的轉化。
+
+### PIT重建效能契約
+
+- Stage 3改變的是daily PIT **score universe**，不是fold的模型訓練條件。為避免8個既有fold無意義重訓，builder新增daily-only checkpoint rescore路徑。
+- 只有舊manifest與checkpoint hash合法，且`inner_train / validation / final_refit`的observed period、group/event-row counts、model information cutoff、model spec、experiment/training settings、source/lookahead contract、seed與selected epoch全部一致時，才允許重用既有權重。
+- `score`側group/event-row counts與`score_eligibility_contract`可因feature-eligible universe擴充而改變；重用後會重新推論完整新score period、重寫score artifact／fold manifest與checkpoint內fold contract。
+- 任一training-side identity不同時不做近似或部分重用，直接回到既有完整fold training。此路徑只省計算時間，不改MR-13A scientific condition。
+
+### Validation contract
+
+- 新synthetic contract覆蓋：target-invalid row不進train但仍進score period；event profile查signal date、daily profile查information date；daily continuation每日refresh；舊daily PIT score-eligibility manifest被拒；C27/C28只能換source、不准變selector/params；training pipeline與strategy diagnostic共用domain-layer profile sample provider。
+- `doc/TEST_SUITE_CHECKLIST.md`新增B197／T294，列為P0正式contract coverage。
+- 本輪仍依專案規則不由ChatGPT執行`apps/test_suite.py`；正式double check由使用者本機執行。
+
+### 下一步
+
+1. 先重新建立MR-13A Selection PIT Scores並重跑PIT Audit。預期score row數會高於Stage 2的`778,532`，因新增future-target-invalid但feature-eligible inference rows；**不得用row數增加本身判斷模型改善**。
+2. Audit model metrics仍只計target-valid rows，因此若scientific condition與資料未變，應與Stage 2結果在合理數值誤差內一致；若顯著改變，先停止strategy replay並查dataset identity／split。
+3. 新PIT manifest通過score-eligibility contract後，才執行Strategy Compare `C23/C24/C25/C27/C28`。取得Selection結果前不得進ROOS、不得切換strategy workflow active profile、不得宣告MR-13A取代MR-12B。

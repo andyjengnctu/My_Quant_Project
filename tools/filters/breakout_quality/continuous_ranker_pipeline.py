@@ -16,9 +16,7 @@ import pandas as pd
 from config.breakout_quality import (
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
-    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-    get_breakout_quality_experiment_profile,
 )
 from filters.breakout_quality.models.factory import (
     count_trainable_parameters,
@@ -26,10 +24,8 @@ from filters.breakout_quality.models.factory import (
 )
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
-from filters.breakout_quality.continuous_ranker_data import (
-    ContinuousRankerDataBundle,
-    load_continuous_ranker_data as load_event_continuous_ranker_data,
-)
+from filters.breakout_quality.continuous_ranker_data import ContinuousRankerDataBundle
+from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
 from tools.filters.breakout_quality import train_continuous_ranker as ranker_impl
 
 
@@ -44,9 +40,8 @@ def load_continuous_ranker_data(
     allow_stale_source: bool,
     project_root: Path | None = None,
 ) -> ContinuousRankerDataBundle:
-    """Load the canonical sample provider selected by the experiment profile."""
+    """Compatibility facade for the domain-layer canonical sample provider."""
 
-    profile = get_breakout_quality_experiment_profile(experiment_profile)
     kwargs = {
         "filter_id": filter_id,
         "model_architecture": model_architecture,
@@ -56,18 +51,7 @@ def load_continuous_ranker_data(
     }
     if project_root is not None:
         kwargs["project_root"] = Path(project_root)
-    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
-        return load_event_continuous_ranker_data(**kwargs)
-    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        from filters.breakout_quality.daily_ranker_data import (
-            load_daily_universal_ranker_data,
-        )
-
-        return load_daily_universal_ranker_data(**kwargs)
-    raise ValueError(
-        "不支援的continuous ranker sample scope: "
-        f"{profile.training_sample_scope!r}"
-    )
+    return load_profile_continuous_ranker_data(**kwargs)
 
 
 def build_training_scope_mask(bundle: ContinuousRankerDataBundle) -> np.ndarray:
