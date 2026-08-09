@@ -219,6 +219,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "capital_geometry": True,
                     "slot_occupancy": True,
                     "trade_contribution": True,
+                    "risk_dollar_translation": True,
                 },
                 "output_subdir": "breakout_quality/c23_c26_pit_portfolio_translation",
             },

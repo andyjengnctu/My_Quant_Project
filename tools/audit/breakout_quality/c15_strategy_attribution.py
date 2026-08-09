@@ -433,6 +433,145 @@ def _with_match_key(lifecycle: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _implied_initial_risk(pnl: Any, r_multiple: Any) -> float | None:
+    """Recover canonical initial-risk dollars from realized PnL / R when identifiable."""
+
+    pnl_value = _finite(pnl)
+    r_value = _finite(r_multiple)
+    if pnl_value is None or r_value is None or math.isclose(r_value, 0.0, abs_tol=1e-12):
+        return None
+    risk = pnl_value / r_value
+    if not math.isfinite(risk) or risk <= 0.0:
+        return None
+    return float(risk)
+
+
+def _risk_bucket_summary(frame: pd.DataFrame, *, pnl_col: str, r_col: str, risk_col: str) -> dict[str, Any]:
+    rows = pd.DataFrame(frame).copy()
+    if rows.empty:
+        return {
+            "trade_count": 0,
+            "total_r": 0.0,
+            "total_pnl": 0.0,
+            "risk_covered_trade_count": 0,
+            "risk_coverage_pct": None,
+            "total_implied_initial_risk": 0.0,
+            "avg_implied_initial_risk": None,
+            "risk_weighted_r": None,
+            "winner_count": 0,
+            "winner_total_r": 0.0,
+            "winner_total_pnl": 0.0,
+            "winner_avg_implied_initial_risk": None,
+            "loser_count": 0,
+            "loser_total_r": 0.0,
+            "loser_total_pnl": 0.0,
+            "loser_avg_implied_initial_risk": None,
+        }
+    pnl = pd.to_numeric(rows[pnl_col], errors="coerce")
+    r_values = pd.to_numeric(rows[r_col], errors="coerce")
+    risk = pd.to_numeric(rows[risk_col], errors="coerce")
+    finite_risk = risk[np.isfinite(risk) & (risk > 0.0)]
+    covered = rows.loc[finite_risk.index]
+    covered_pnl = pd.to_numeric(covered[pnl_col], errors="coerce").fillna(0.0)
+    total_risk = float(finite_risk.sum()) if len(finite_risk) else 0.0
+
+    winners = rows[r_values > 0.0]
+    losers = rows[r_values < 0.0]
+
+    def avg_risk(subset: pd.DataFrame) -> float | None:
+        if subset.empty:
+            return None
+        values = pd.to_numeric(subset[risk_col], errors="coerce")
+        values = values[np.isfinite(values) & (values > 0.0)]
+        return float(values.mean()) if len(values) else None
+
+    return {
+        "trade_count": int(len(rows)),
+        "total_r": float(r_values.fillna(0.0).sum()),
+        "total_pnl": float(pnl.fillna(0.0).sum()),
+        "risk_covered_trade_count": int(len(finite_risk)),
+        "risk_coverage_pct": float(len(finite_risk) / len(rows) * 100.0) if len(rows) else None,
+        "total_implied_initial_risk": total_risk,
+        "avg_implied_initial_risk": float(finite_risk.mean()) if len(finite_risk) else None,
+        "risk_weighted_r": float(covered_pnl.sum() / total_risk) if total_risk > 0.0 else None,
+        "winner_count": int(len(winners)),
+        "winner_total_r": float(pd.to_numeric(winners[r_col], errors="coerce").fillna(0.0).sum()),
+        "winner_total_pnl": float(pd.to_numeric(winners[pnl_col], errors="coerce").fillna(0.0).sum()),
+        "winner_avg_implied_initial_risk": avg_risk(winners),
+        "loser_count": int(len(losers)),
+        "loser_total_r": float(pd.to_numeric(losers[r_col], errors="coerce").fillna(0.0).sum()),
+        "loser_total_pnl": float(pd.to_numeric(losers[pnl_col], errors="coerce").fillna(0.0).sum()),
+        "loser_avg_implied_initial_risk": avg_risk(losers),
+    }
+
+
+def _risk_dollar_translation(frame: pd.DataFrame) -> dict[str, Any]:
+    rows = pd.DataFrame(frame).copy()
+    if rows.empty:
+        empty = _risk_bucket_summary(rows, pnl_col="candidate_pnl", r_col="candidate_r", risk_col="candidate_initial_risk")
+        return {"candidate_only": empty, "comparator_only": dict(empty), "common": {}}
+
+    candidate_only = rows[rows["category"] == "candidate_only"]
+    comparator_only = rows[rows["category"] == "comparator_only"]
+    common = rows[rows["category"] == "common"].copy()
+    common_summary: dict[str, Any] = {
+        "trade_count": int(len(common)),
+        "risk_covered_trade_count": 0,
+        "risk_coverage_pct": None,
+        "candidate_total_r": float(pd.to_numeric(common.get("candidate_r"), errors="coerce").fillna(0.0).sum()) if not common.empty else 0.0,
+        "comparator_total_r": float(pd.to_numeric(common.get("comparator_r"), errors="coerce").fillna(0.0).sum()) if not common.empty else 0.0,
+        "r_delta": float(pd.to_numeric(common.get("r_delta"), errors="coerce").fillna(0.0).sum()) if not common.empty else 0.0,
+        "pnl_delta": float(pd.to_numeric(common.get("pnl_delta"), errors="coerce").fillna(0.0).sum()) if not common.empty else 0.0,
+        "candidate_avg_implied_initial_risk": None,
+        "comparator_avg_implied_initial_risk": None,
+        "risk_size_effect_pnl": 0.0,
+        "r_difference_effect_pnl": 0.0,
+        "covered_pnl_delta": 0.0,
+        "uncovered_pnl_delta": 0.0,
+        "decomposition_residual_pnl": 0.0,
+    }
+    if not common.empty:
+        c_risk = pd.to_numeric(common["candidate_initial_risk"], errors="coerce")
+        b_risk = pd.to_numeric(common["comparator_initial_risk"], errors="coerce")
+        valid = np.isfinite(c_risk) & (c_risk > 0.0) & np.isfinite(b_risk) & (b_risk > 0.0)
+        covered = common.loc[valid].copy()
+        common_summary["risk_covered_trade_count"] = int(valid.sum())
+        common_summary["risk_coverage_pct"] = float(valid.mean() * 100.0)
+        if not covered.empty:
+            c_r = pd.to_numeric(covered["candidate_r"], errors="coerce").fillna(0.0)
+            b_r = pd.to_numeric(covered["comparator_r"], errors="coerce").fillna(0.0)
+            c_q = pd.to_numeric(covered["candidate_initial_risk"], errors="coerce")
+            b_q = pd.to_numeric(covered["comparator_initial_risk"], errors="coerce")
+            r_effect = (c_r - b_r) * ((c_q + b_q) / 2.0)
+            risk_effect = (c_q - b_q) * ((c_r + b_r) / 2.0)
+            covered_delta = pd.to_numeric(covered["pnl_delta"], errors="coerce").fillna(0.0)
+            common_summary.update({
+                "candidate_avg_implied_initial_risk": float(c_q.mean()),
+                "comparator_avg_implied_initial_risk": float(b_q.mean()),
+                "risk_size_effect_pnl": float(risk_effect.sum()),
+                "r_difference_effect_pnl": float(r_effect.sum()),
+                "covered_pnl_delta": float(covered_delta.sum()),
+                "uncovered_pnl_delta": float(common_summary["pnl_delta"] - covered_delta.sum()),
+                "decomposition_residual_pnl": float(covered_delta.sum() - risk_effect.sum() - r_effect.sum()),
+            })
+
+    return {
+        "candidate_only": _risk_bucket_summary(
+            candidate_only,
+            pnl_col="candidate_pnl",
+            r_col="candidate_r",
+            risk_col="candidate_initial_risk",
+        ),
+        "comparator_only": _risk_bucket_summary(
+            comparator_only,
+            pnl_col="comparator_pnl",
+            r_col="comparator_r",
+            risk_col="comparator_initial_risk",
+        ),
+        "common": common_summary,
+    }
+
+
 def _trade_contributions(
     candidate_trades: pd.DataFrame,
     comparator_trades: pd.DataFrame,
@@ -488,6 +627,8 @@ def _trade_contributions(
             "candidate_r": candidate_r,
             "comparator_r": comparator_r,
             "r_delta": candidate_r - comparator_r,
+            "candidate_initial_risk": _implied_initial_risk(candidate_pnl, candidate_r) if c is not None else None,
+            "comparator_initial_risk": _implied_initial_risk(comparator_pnl, comparator_r) if b is not None else None,
             "candidate_invested_total": _finite(cl.get("invested_total")) if cl is not None else None,
             "comparator_invested_total": _finite(bl.get("invested_total")) if bl is not None else None,
             "candidate_stop_distance_pct": _finite(cl.get("stop_distance_pct")) if cl is not None else None,
@@ -701,6 +842,7 @@ def build_strategy_attribution_pair_payload(
         candidate_capacity=candidate_capacity,
         comparator_capacity=comparator_capacity,
     )
+    risk_dollar_translation = _risk_dollar_translation(trade_rows)
     capacity_rows, capacity_summary = _capacity_attribution(
         candidate_capacity,
         comparator_capacity,
@@ -758,6 +900,7 @@ def build_strategy_attribution_pair_payload(
             "comparator_only_selected_orders": int(selection_days["comparator_only_count"].sum()) if not selection_days.empty else 0,
         },
         "trade_contribution": trade_summary,
+        "risk_dollar_translation": risk_dollar_translation,
         "capital_geometry": geometry,
         "slot_occupancy": capacity_summary,
         "interpretation": interpretation,
@@ -829,7 +972,7 @@ def _render_report(payload: dict[str, Any]) -> str:
                         ("Direct score-order feasible days", str(selector.get("candidate_resource_aware_direct_score_order_days", 0))),
                     ),
                 ),
-                "此表只比較C15 selector與同日Min ROOS盤前baseline；不使用隔日成交或未來資訊。",
+                f"此表只比較{metadata['candidate_arm_id']} selector與同日Min ROOS盤前baseline；不使用隔日成交或未來資訊。",
             ))
     for index, pair in enumerate(payload["comparisons"], start=1):
         cand = pair["candidate_arm_id"]
@@ -875,6 +1018,46 @@ def _render_report(payload: dict[str, Any]) -> str:
                     ("All trade ΔPnL", _fmt(trade.get("all_trade_pnl_delta"), signed=True)),
                 ),
             ),
+        ))
+        if metadata.get("risk_dollar_translation_enabled"):
+            risk = pair.get("risk_dollar_translation") or {}
+            candidate_risk = dict(risk.get("candidate_only") or {})
+            comparator_risk = dict(risk.get("comparator_only") or {})
+            common_risk = dict(risk.get("common") or {})
+            lines.extend((
+                render_table(
+                    ("Exclusive risk-dollar translation", comp + "-only", cand + "-only"),
+                    (
+                        ("Trades", str(comparator_risk.get("trade_count", 0)), str(candidate_risk.get("trade_count", 0))),
+                        ("Σ Realized R", _fmt(comparator_risk.get("total_r"), unit=" R", signed=True), _fmt(candidate_risk.get("total_r"), unit=" R", signed=True)),
+                        ("Σ PnL", _fmt(comparator_risk.get("total_pnl"), signed=True), _fmt(candidate_risk.get("total_pnl"), signed=True)),
+                        ("Risk coverage", _fmt(comparator_risk.get("risk_coverage_pct"), unit="%"), _fmt(candidate_risk.get("risk_coverage_pct"), unit="%")),
+                        ("Σ implied initial risk", _fmt(comparator_risk.get("total_implied_initial_risk"), digits=0), _fmt(candidate_risk.get("total_implied_initial_risk"), digits=0)),
+                        ("平均 implied initial risk", _fmt(comparator_risk.get("avg_implied_initial_risk"), digits=0), _fmt(candidate_risk.get("avg_implied_initial_risk"), digits=0)),
+                        ("Risk-weighted R", _fmt(comparator_risk.get("risk_weighted_r"), unit=" R"), _fmt(candidate_risk.get("risk_weighted_r"), unit=" R")),
+                        ("Winner / avg risk", f"{comparator_risk.get('winner_count', 0)} / {_fmt(comparator_risk.get('winner_avg_implied_initial_risk'), digits=0)}", f"{candidate_risk.get('winner_count', 0)} / {_fmt(candidate_risk.get('winner_avg_implied_initial_risk'), digits=0)}"),
+                        ("Loser / avg risk", f"{comparator_risk.get('loser_count', 0)} / {_fmt(comparator_risk.get('loser_avg_implied_initial_risk'), digits=0)}", f"{candidate_risk.get('loser_count', 0)} / {_fmt(candidate_risk.get('loser_avg_implied_initial_risk'), digits=0)}"),
+                    ),
+                ),
+                "Implied initial risk只以既有canonical trade的PnL ÷ R反推；R=0交易無法識別且不納入risk統計。此值只做事後risk-dollar歸因，不回流交易決策。",
+                render_table(
+                    ("Common trades PnL decomposition", "結果"),
+                    (
+                        ("Common trades", str(common_risk.get("trade_count", 0))),
+                        ("Risk-covered trades", f"{common_risk.get('risk_covered_trade_count', 0)} / {_fmt(common_risk.get('risk_coverage_pct'), unit='%')}"),
+                        ("Common ΔR", _fmt(common_risk.get("r_delta"), unit=" R", signed=True)),
+                        ("Common ΔPnL", _fmt(common_risk.get("pnl_delta"), signed=True)),
+                        (f"{comp} avg implied risk", _fmt(common_risk.get("comparator_avg_implied_initial_risk"), digits=0)),
+                        (f"{cand} avg implied risk", _fmt(common_risk.get("candidate_avg_implied_initial_risk"), digits=0)),
+                        ("Risk-size/path effect", _fmt(common_risk.get("risk_size_effect_pnl"), signed=True)),
+                        ("R-difference effect", _fmt(common_risk.get("r_difference_effect_pnl"), signed=True)),
+                        ("Uncovered ΔPnL", _fmt(common_risk.get("uncovered_pnl_delta"), signed=True)),
+                        ("Decomposition residual", _fmt(common_risk.get("decomposition_residual_pnl"), signed=True)),
+                    ),
+                ),
+                "Common trade對已識別initial risk使用對稱分解：Δ(R×Risk)=ΔR×平均Risk + ΔRisk×平均R；Risk-size/path effect可量出既有wealth／sizing路徑對共同交易PnL的下游放大。",
+            ))
+        lines.extend((
             render_table(
                 ("Capital geometry", comp, cand, "差異"),
                 tuple(
@@ -1008,6 +1191,7 @@ def run_strategy_attribution_audit(
             "focus_year": focus_year,
             "top_month_count": top_month_count,
             "top_trade_count": top_trade_count,
+            "risk_dollar_translation_enabled": bool(definition.outcomes.get("risk_dollar_translation", False)),
             "read_only": True,
             "portfolio_replay_executed": False,
             "training_performed": False,

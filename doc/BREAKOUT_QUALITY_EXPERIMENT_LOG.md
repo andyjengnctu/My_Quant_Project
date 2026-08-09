@@ -6831,3 +6831,57 @@ Controlled deltas：
 
 Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權新age gate、不授權參數適應或模型／Target修改。若負wealth主要可由既有capital/path機械項清楚解釋，才形成下一個單一Selection受控假說；若無明確可泛化機械原因，`SR-C26`維持NOT_PROMOTED並停止這條runtime微調鏈。
 
+## 2026-08-09 — AUD-c23-c26-pit-portfolio-translation結果：正Selection R未轉成dollar PnL／wealth
+
+### 狀態
+
+`RESULT_AVAILABLE / R_TO_DOLLAR_TRANSLATION_GAP_CONFIRMED / C26_NOT_PROMOTED`。
+
+### 程式基準與來源
+
+- 使用者本機執行基準：`test-branch-1_20260809_152631_768fd77.zip`。
+- SHA256：`28c35d36c73ca4a6278bbd2f026d9a1b43c793ecac82e841fb65658198f28156`。
+- Audit：`AUD-c23-c26-pit-portfolio-translation`；source=`outputs/strategy_compare/runs/20260809_150908_C23-C25-C26_6018e78bd663`。
+- 期間2014-01-01～2020-12-31；只讀既有replay，不重跑portfolio、不改score／selector／training。
+
+### C26 vs C23
+
+- Return=`119.74% vs 127.45%`（`-7.71pp`）；MDD=`+1.66pp`、RoMD=`-0.59`、EV=`+0.05R`。
+- Exclusive selection ΔR=`+7.99R`，但Exclusive selection ΔPnL=`-35,524.03`。
+- Common trades ΔPnL=`-41,604.23`；All trade ΔPnL=`-77,128.26`。
+- Final relative wealth advantage=`-3.39%`；2020只占全期淨差異`12.61%`，非2020 relative wealth effect=`-2.97%`，故不是單一年份集中。
+- 平均實際投入`+2,053`、平均預留`+2,607`、平均停損距離`+0.58pp`、平均Capital Return約持平、平均Realized R=`+0.05R`、平均持有日`+2.05`。
+- Underfilled end days=`+219`、position-gap slot-days=`+128`；changed days成交買單差=`-15`、missed buy差=`+2`。
+
+### C26 vs C25
+
+- Return=`+4.32pp`、RoMD=`+0.04`、EV=`+0.08R`。
+- Exclusive selection ΔR=`+27.51R`、Exclusive selection ΔPnL=`+57,383.45`、Common trades ΔPnL=`-14,203.16`、All trade ΔPnL=`+43,180.29`。
+- Final relative wealth advantage=`+2.00%`；underfilled end days=`-40`、position-gap slot-days=`-146`。
+- 這證明22日stale-score guard不只改善未加權R，也改善actual dollar trade PnL；不得回退C25或重新調22日門檻。
+
+### 判定
+
+1. C26相對C23的portfolio失敗由兩層共同構成：exclusive trades雖ΣR較高但dollar PnL較低；common trades亦因後續portfolio path出現負PnL差。
+2. `Common trades ΔPnL`可能是前段wealth差異造成後續position sizing縮放的下游放大，不能與exclusive selection loss直接視為兩個獨立根因。
+3. 現有平均invested／stop distance／capital return不足以解釋`+7.99R → -35.5k`；下一步只能在同一read-only Audit內拆每筆initial-risk dollars與共同交易R×Risk分解，不得新增cutoff、age gate、參數適應或Forward-OOS。
+
+## 2026-08-09 — AUD-c23-c26-pit-portfolio-translation擴充：risk-dollar／common sizing分解
+
+### 狀態
+
+`IMPLEMENTED / SAME_AUDIT_ID / READ_ONLY / EXTENDED_DIAGNOSTIC_PENDING_RERUN`。
+
+### 實作
+
+1. 不新增`AUD-*`；維持`AUD-c23-c26-pit-portfolio-translation`，因問題仍是同一個R→PnL→wealth translation。
+2. 每筆已結算trade在`R != 0`時只以canonical `PnL / R_Multiple`反推`implied initial risk`；`R=0`無法識別，明確列為未覆蓋，不由stop distance或未成交counterfactual補值。
+3. Exclusive candidate-only／comparator-only新增：ΣR、ΣPnL、risk coverage、Σ／平均implied initial risk、risk-weighted R，以及winner／loser各自平均risk dollars。
+4. Common matched trades新增精確對稱分解：`Δ(R×Risk) = ΔR × average(Risk) + ΔRisk × average(R)`；另列risk-size/path effect、R-difference effect、uncovered ΔPnL與decomposition residual。
+5. 此分解只讀既有trade CSV；不改accounting、replay、selector、22日guard、模型或Target。
+6. 同時修正generic strategy-attribution報表仍殘留「只比較C15 selector」的硬編文字，改由candidate arm identity動態顯示；不改計算。
+
+### 下一步
+
+重跑同一Audit即可。若C26-C23 exclusive端顯示winner risk dollars較小／loser risk dollars較大，則未加權R的正值主要被risk allocation/timing抵消；若common `Risk-size/path effect`幾乎解釋`-41.6k`且`R-difference effect`接近0，則common loss只是前段wealth差造成的下游position-size放大，不應另建selector假說。只有出現清楚、可泛化且Selection內可事前觀測的mechanism，才允許建立下一個SR runtime；否則C26維持NOT_PROMOTED並停止微調鏈。
+

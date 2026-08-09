@@ -18890,6 +18890,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     pit_target_realization_definition = next(
         (item for item in all_definitions if item.audit_id == "c23-c25-pit-target-realization"), None
     )
+    portfolio_translation_definition = next(
+        (item for item in all_definitions if item.audit_id == "c23-c26-pit-portfolio-translation"), None
+    )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
     audit_app_source = (project_root / "apps" / "research.py").read_text(encoding="utf-8")
@@ -18922,6 +18925,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and pit_realization_definition is not None
         and pit_fold_runtime_definition is not None
         and pit_target_realization_definition is not None
+        and portfolio_translation_definition is not None
+        and portfolio_translation_definition.outcomes.get("risk_dollar_translation") is True
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),
@@ -19449,17 +19454,33 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             return pd.DataFrame({"Date": dates, "Equity": values})
 
         _audit_trade_rows("AAA", 1.0, 10000.0, 100000.0, 110000.0, 90.0).to_csv(c15_pair / "no_filter_trades.csv", index=False, encoding="utf-8-sig")
-        _audit_trade_rows("BBB", 0.8, 12000.0, 80000.0, 100000.0, 88.0).to_csv(c15_pair / "score_ranking_trades.csv", index=False, encoding="utf-8-sig")
+        pd.concat([
+            _audit_trade_rows("BBB", 0.8, 12000.0, 80000.0, 100000.0, 88.0),
+            _audit_trade_rows("CCC", 1.0, 8000.0, 90000.0, 100000.0, 89.0, signal_date="2023-12-28"),
+            _audit_trade_rows("DDD", 0.0, 0.0, 90000.0, 100000.0, 89.0, signal_date="2023-12-27"),
+        ], ignore_index=True).to_csv(c15_pair / "score_ranking_trades.csv", index=False, encoding="utf-8-sig")
         _audit_equity([100.0, 105.0, 110.0]).to_csv(c15_pair / "no_filter_equity.csv", index=False, encoding="utf-8-sig")
         _audit_equity([100.0, 108.0, 115.0]).to_csv(c15_pair / "score_ranking_equity.csv", index=False, encoding="utf-8-sig")
         _audit_capacity([1, 1, 0], [9, 9, 10]).to_csv(c15_pair / "no_filter_daily_capacity.csv", index=False, encoding="utf-8-sig")
         _audit_capacity([0, 0, 0], [10, 10, 10], resource=True).to_csv(c15_pair / "score_ranking_daily_capacity.csv", index=False, encoding="utf-8-sig")
         _audit_selected("AAA").to_csv(c15_pair / "no_filter_selected_buys.csv", index=False, encoding="utf-8-sig")
-        _audit_selected("BBB").to_csv(c15_pair / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
-        _audit_trade_rows("BBB", 1.2, 11000.0, 95000.0, 105000.0, 89.0, signal_date="2023-12-29").to_csv(c12_pair / "score_ranking_trades.csv", index=False, encoding="utf-8-sig")
+        pd.concat([
+            _audit_selected("BBB"),
+            _audit_selected("CCC", signal_date="2023-12-28"),
+            _audit_selected("DDD", signal_date="2023-12-27"),
+        ], ignore_index=True).to_csv(c15_pair / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
+        pd.concat([
+            _audit_trade_rows("BBB", 1.2, 11000.0, 95000.0, 105000.0, 89.0, signal_date="2023-12-29"),
+            _audit_trade_rows("CCC", 1.0, 10000.0, 95000.0, 105000.0, 89.0, signal_date="2023-12-28"),
+            _audit_trade_rows("DDD", 0.0, 0.0, 95000.0, 105000.0, 89.0, signal_date="2023-12-27"),
+        ], ignore_index=True).to_csv(c12_pair / "score_ranking_trades.csv", index=False, encoding="utf-8-sig")
         _audit_equity([100.0, 106.0, 112.0]).to_csv(c12_pair / "score_ranking_equity.csv", index=False, encoding="utf-8-sig")
         _audit_capacity([1, 0, 0], [9, 10, 10], resource=True).to_csv(c12_pair / "score_ranking_daily_capacity.csv", index=False, encoding="utf-8-sig")
-        _audit_selected("BBB", signal_date="2023-12-29").to_csv(c12_pair / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
+        pd.concat([
+            _audit_selected("BBB", signal_date="2023-12-29"),
+            _audit_selected("CCC", signal_date="2023-12-28"),
+            _audit_selected("DDD", signal_date="2023-12-27"),
+        ], ignore_index=True).to_csv(c12_pair / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
 
         c15_definition = type(strategy_attribution_definition)(
             module_id=strategy_attribution_definition.module_id,
@@ -19469,7 +19490,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             description=strategy_attribution_definition.description,
             source={"kind": "strategy_compare", "run": "latest", "candidate_arm_id": "C15", "comparator_arm_ids": ["C3", "C12"]},
             dimensions={"focus_year": 2024, "top_month_count": 2, "top_trade_count": 5},
-            outcomes=dict(strategy_attribution_definition.outcomes),
+            outcomes={**dict(strategy_attribution_definition.outcomes), "risk_dollar_translation": True},
             output_subdir="breakout_quality/c15_strategy_attribution_synthetic",
         )
         c15_status = collect_strategy_attribution_status(c15_definition, project_root=root)
@@ -19509,9 +19530,14 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and [item["comparator_arm_id"] for item in c15_payload["comparisons"]] == ["C3", "C12"]
             and all(exact_paths)
             and all(item["selection"]["changed_days"] == 1 for item in c15_payload["comparisons"])
-            and c15_vs_c12["trade_contribution"]["common_trade_count"] == 0
+            and c15_vs_c12["trade_contribution"]["common_trade_count"] == 2
             and c15_vs_c12["trade_contribution"]["candidate_only_trade_count"] == 1
             and c15_vs_c12["trade_contribution"]["comparator_only_trade_count"] == 1
+            and c15_vs_c12["risk_dollar_translation"]["common"]["risk_covered_trade_count"] == 1
+            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["risk_coverage_pct"], 50.0, rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["risk_size_effect_pnl"], -2000.0, rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["r_difference_effect_pnl"], 0.0, rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(c15_vs_c12["risk_dollar_translation"]["common"]["decomposition_residual_pnl"], 0.0, rel_tol=0.0, abs_tol=1e-9)
             and math.isclose(
                 c15_vs_c3["concentration"]["non_focus_delta_log_wealth"],
                 c15_vs_c3["concentration"]["net_delta_log_wealth"]
@@ -19525,6 +19551,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and c15_vs_c3["slot_occupancy"]["candidate_resource_aware_direct_score_order_days"] == 1
             and "Exclusive selection ΔPnL" in c15_report_text
             and "All trade ΔPnL" in c15_report_text
+            and "Exclusive risk-dollar translation" in c15_report_text
+            and "Risk-size/path effect" in c15_report_text
+            and "此表只比較C15 selector" in c15_report_text
             and "非2024期間相對wealth effect" in c15_report_text
             and "C15 selector自身盤前診斷" in c15_report_text
             and c15_payload["metadata"]["read_only"] is True
