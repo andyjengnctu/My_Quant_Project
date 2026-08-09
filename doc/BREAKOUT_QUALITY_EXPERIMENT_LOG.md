@@ -7127,7 +7127,7 @@ Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權
 
 ### 狀態
 
-`IMPLEMENTED / SAME_MR13A_ID / PIT_REBUILD_REQUIRED / SELECTION_STRATEGY_RESULT_PENDING / NOT_PROMOTED`。
+`IMPLEMENTED / SAME_MR13A_ID / PIT_RUNTIME_READY / SELECTION_STRATEGY_RESULT_PENDING / NOT_PROMOTED`。
 
 ### 程式基準
 
@@ -7184,6 +7184,34 @@ Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權
 
 ### 下一步
 
-1. 先重新建立MR-13A Selection PIT Scores並重跑PIT Audit。預期score row數會高於Stage 2的`778,532`，因新增future-target-invalid但feature-eligible inference rows；**不得用row數增加本身判斷模型改善**。
+1. 先重新建立MR-13A Selection PIT Scores並重跑PIT Audit。score row數**可能高於、也可能等於**Stage 2的`778,532`；是否增加取決於Selection期間是否實際存在feature-eligible但target-invalid rows。正式Gate只驗`feature_history_only` score-eligibility contract與daily information-date lookup，**不得把row數增加當成正確性或模型改善條件**。
 2. Audit model metrics仍只計target-valid rows，因此若scientific condition與資料未變，應與Stage 2結果在合理數值誤差內一致；若顯著改變，先停止strategy replay並查dataset identity／split。
 3. 新PIT manifest通過score-eligibility contract後，才執行Strategy Compare `C23/C24/C25/C27/C28`。取得Selection結果前不得進ROOS、不得切換strategy workflow active profile、不得宣告MR-13A取代MR-12B。
+
+
+## 2026-08-09 — MR-13A Stage 3 PIT runtime rebuild結果：contract生效，允許Selection strategy compare
+
+### 執行結果
+
+- Profile=`daily_universal_no_time_pairwise`；PIT period=`2013-04-01～2020-12-31`；8 folds。
+- Builder：`checkpoint重評=8`、`新建=0`、完整fold retraining=0；總耗時=`01:14.3`。
+- PIT score groups=`778,532`、coverage=`100.00%`。
+- Audit all-stock：global rho=`0.0783`、daily rho=`0.1111`、pair=`53.84%`、spread=`+0.3319R`。
+- Breakout slice：global rho=`0.0580`、daily rho=`0.0784`、pair=`53.98%`、Top-K Lift=`+0.1102R`、Boundary=`51.49%`。
+- Audit Gate=`PASS`；target-valid模型品質與Stage 2結果一致。
+
+### 重要更正：score groups不必增加
+
+Stage 3實作前曾預期future-independent score universe會使row數高於`778,532`。實際重建後row數相同。重新核對canonical builder與PIT split後確認：
+
+1. daily provider已把score eligibility與future target validity分離；`score_ids`只依score日期範圍，不套`target_valid`。
+2. train／validation／final-refit仍必須`target_valid=True`且遵守label-end embargo。
+3. 因此row數是否增加只取決於2013-04-01～2020-12-31期間是否真的存在feature-eligible但target-invalid stock-days；本次正式資料中該差集沒有造成額外Selection PIT rows。
+4. **row count不是Stage 3 contract Gate**。真正Gate是新PIT manifest必須宣告`score_eligibility_contract.eligibility_basis=feature_history_only`，且策略runtime對MR-13A使用最新已完成交易日score，而不是breakout signal-date score。
+
+### 判定
+
+- `DL-CONT13A-PIT`：`STRATEGY_RUNTIME_READY`。
+- `SR-C27 / SR-C28`：`READY_FOR_SELECTION_COMPARE / RESULT_PENDING`。
+- 下一步直接執行Selection Strategy Compare的C23/C24/C25/C27/C28固定比較；優先看C27-C24與C28-C25的source-only差異。
+- 在C27/C28 Selection結果取得前，MR-13A仍不得取代MR-12B，也不得進ROOS。
