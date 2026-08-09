@@ -578,7 +578,7 @@ def main(argv=None) -> int:
     )
     if bool(args.plan_only):
         print(render_section("Plan"))
-        print("先建立2014～2020 no-DL risk-only teacher params，再合併既有2021～2026 P2 params，最後沿用feature bank建立新Label Dataset。")
+        print("先以canonical Min ROOS單階段rolling建立2014～2020 no-DL teacher params（high_len＋4 ATR），再合併既有2021～2026 P2 params，最後沿用feature bank建立新Label Dataset。")
         return 0
     historical_path = _ensure_historical_teacher_params(root, args)
     if not forward_path.is_file():

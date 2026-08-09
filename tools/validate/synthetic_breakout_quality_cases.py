@@ -14550,17 +14550,20 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         build_breakout_quality_filter_pass_condition,
         get_breakout_quality_filter_source_context,
     )
-    from strategies.breakout.search_space import build_trial_params
+    from strategies.breakout.search_space import (
+        BREAKOUT_OPTIMIZER_SEARCH_SPACE,
+        build_trial_params,
+    )
     from filters.breakout_quality.strategy_compare_engine import (
         _run_scenario as run_strategy_comparison_scenario,
         run_comparison as run_strategy_comparison,
     )
     from filters.breakout_quality.strategy_param_training import (
         ALL_RULE_FILTERS_OFF_OVERRIDES,
-        RISK_SEARCH_FIELDS,
+        MIN_ROOS_SEARCH_FIELDS,
         _parse_args as parse_dl_param_adapt_args,
         _validate_binary_pit_optimizer_coverage,
-        build_risk_only_fold_overrides,
+        build_min_roos_fold_overrides,
         run_param_adaptation_gate,
     )
     from tools.optimizer.outer_rolling_oos import (
@@ -14587,6 +14590,12 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         }
     )
     synthetic_baseline_contract = {
+        "meta": {
+            "first_oos_date": "2021-01-01",
+            "last_oos_date": "2021-12-31",
+            "train_window_months": 120,
+            "oos_horizon_months": 12,
+        },
         "payload": {
             "params_ensemble_by_effective_date": {
                 "2021-01-01": [
@@ -14595,12 +14604,12 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             }
         }
     }
-    p2_overrides = build_risk_only_fold_overrides(
+    p2_overrides = build_min_roos_fold_overrides(
         baseline_contract=synthetic_baseline_contract,
         args=param_adapt_args,
         training_dl_enabled=False,
     )
-    p3_overrides = build_risk_only_fold_overrides(
+    p3_overrides = build_min_roos_fold_overrides(
         baseline_contract=synthetic_baseline_contract,
         args=param_adapt_args,
         training_dl_enabled=True,
@@ -14618,9 +14627,9 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_dl_four_by_two_risk_only_fold_contract",
+        "binary_dl_four_by_two_min_roos_fold_contract",
         (
-            tuple(RISK_SEARCH_FIELDS),
+            tuple(MIN_ROOS_SEARCH_FIELDS),
             False,
             True,
             True,
@@ -14629,7 +14638,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             workflow_settings.experiment_profile,
         ),
         (
-            tuple(RISK_SEARCH_FIELDS),
+            tuple(MIN_ROOS_SEARCH_FIELDS),
             p2_fixed["use_breakout_quality_filter"],
             p3_fixed["use_breakout_quality_filter"],
             all(not p2_fixed[field] for field in OPTIONAL_ENTRY_FILTER_FIELDS),
@@ -14680,8 +14689,14 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         results,
         "synthetic_breakout_quality",
         case_id,
-        "binary_dl_four_by_two_searches_only_risk_fields",
-        (set(RISK_SEARCH_FIELDS), 220, False, False, False),
+        "binary_dl_four_by_two_searches_only_min_roos_fields",
+        (
+            set(MIN_ROOS_SEARCH_FIELDS),
+            int(BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["low"]),
+            False,
+            False,
+            False,
+        ),
         (
             set(risk_trial.calls),
             risk_params.high_len,
@@ -17284,9 +17299,30 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     param_service_source = param_service_path.read_text(encoding="utf-8")
 
     from config import strategy_compare as strategy_config
+    from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
     from core.strategy_comparison import strategy_comparison_fingerprint
 
     settings = strategy_config.get_strategy_comparison_settings()
+    configured_roos_builders = [
+        source.builder
+        for source in settings.parameter_sources.values()
+        if source.builder is not None
+        and source.builder.builder_type
+        in {"binary_dl_min_roos_rolling", "selection_historical_p2"}
+    ]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "all_roos_builders_use_training_policy_trials_single_source",
+        True,
+        bool(configured_roos_builders)
+        and all(
+            int(builder.options.get("trials_per_fold") or 0)
+            == int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+            for builder in configured_roos_builders
+        )
+        and '"trials_per_fold": 200' not in config_source
+        and '"baseline_trials_per_fold"' not in config_source,
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "comparison_config_lists_individual_arms_contrasts_and_preparation_without_active_id",
@@ -17369,16 +17405,16 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and selection_min_roos_source.builder is not None
         and selection_min_roos_source.builder.builder_type == "selection_historical_p2"
         and str(selection_min_roos_source.builder.options.get("parameter_set")) == "p2_history"
-        and int(selection_min_roos_source.builder.options.get("baseline_trials_per_fold") or 0) >= 1
-        and int(selection_min_roos_source.builder.options.get("baseline_train_window_months") or 0) >= 1
-        and int(selection_min_roos_source.builder.options.get("baseline_oos_months") or 0) >= 1
+        and int(selection_min_roos_source.builder.options.get("trials_per_fold") or 0) >= 1
+        and int(selection_min_roos_source.builder.options.get("train_window_months") or 0) >= 1
+        and int(selection_min_roos_source.builder.options.get("oos_months") or 0) >= 1
         and "prepare_selection_historical_p2_params" in preparation_source
         and all(token in param_service_source for token in (
             "restore_selection_historical_p2_from_completed_strategy_compare",
             "completed_strategy_pair_exact_sha",
-            "prepare_selection_historical_baseline_params",
-            'outer_environ["V16_MODELS_DIR"]',
-            "run_outer_rolling_oos",
+            "_build_min_roos_schedule_contract",
+            "MIN_ROOS_SEARCH_FIELDS",
+            "Selection Min ROOS缺少；自動建立／接續單階段rolling params",
         )),
     )
     add_check(
@@ -17411,8 +17447,15 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
     contract_example = {
         "breakout_quality_param_adaptation": {
-            "mode": "risk_only_training",
+            "mode": "min_roos_training",
             "parameter_set": "P2_HISTORY",
+            "search_fields": [
+                "high_len",
+                "atr_len",
+                "atr_buy_tol",
+                "atr_times_init",
+                "atr_times_trail",
+            ],
             "fixed_rule_contract": "all_rule_filters_off",
             "training_dl_enabled": False,
         },
@@ -19023,7 +19066,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         action_id="param:min_roos",
         artifact_key="param:min_roos",
         action="BUILD",
-        builder_type="binary_dl_risk_only_rolling",
+        builder_type="binary_dl_min_roos_rolling",
         description="build p2",
         path="models/p2.json",
     )
@@ -19075,12 +19118,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "parameter_preflight_identity_tracks_config_and_baseline",
+        "parameter_preflight_identity_tracks_current_min_roos_contract_not_removed_full_baseline",
         True,
         all(token in preparation_source for token in (
-            "TRAINING_CONFIG_MISMATCH", "BASELINE_PARAMS_IDENTITY_MISMATCH",
-            "BINARY_PIT_IDENTITY_MISSING", "trials_per_fold", "max_position_cap_pct",
-        )),
+            "TRAINING_CONFIG_MISMATCH", "BINARY_PIT_IDENTITY_MISSING",
+            "MIN_ROOS_SEARCH_FIELDS_MISMATCH", "trials_per_fold",
+            "max_position_cap_pct",
+        ))
+        and "BASELINE_PARAMS_IDENTITY_MISMATCH" not in preparation_source,
     )
 
     enabled_dl_arm_ids = [

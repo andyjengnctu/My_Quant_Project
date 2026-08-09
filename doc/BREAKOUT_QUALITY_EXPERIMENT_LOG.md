@@ -7336,3 +7336,33 @@ MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28的模型、Targ
 ### Scientific identity
 
 MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28均不變；C27/C28 Selection Strategy Compare仍待正式執行。
+
+
+## 2026-08-09 — Min ROOS五欄單階段Rolling與trial單一真理修正
+
+### 狀態
+
+`PARAMETER_SEMANTICS_CORRECTION / OLD_FOUR_ATR_P2_SUPERSEDED / SELECTION_COMPARE_REQUIRES_RERUN`。
+
+### 使用者確認的canonical Min ROOS定義
+
+- Min ROOS每fold只最佳化`high_len`、`atr_len`、`atr_buy_tol`、`atr_times_init`、`atr_times_trail`五個欄位。
+- Rule-based entry filters固定全關，DL-off的P2／Selection baseline不使用DL作訓練決策；其餘optimizer維度由canonical config/schema固定，不再從另一輪完整ROOS結果繼承。
+- Outer Rolling未顯式CLI override時，trials/fold唯一來源為`config.training_policy.OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`；`config/strategy_compare.py`不得另設200等第二套預設。
+
+### 根因
+
+舊P2實作沿用早期risk-only研究契約：先建立historical full baseline，再把`high_len`與所有非ATR欄位凍結，只重新搜尋4個ATR欄位；Strategy Compare又另外硬編`trials_per_fold=200`，因此Selection auto-preparation實際出現一次300-trial完整Outer Rolling，再出現一次200-trial risk-only Outer Rolling。這同時違反目前Min ROOS定義與training-policy單一真理。
+
+### 修正
+
+1. `MIN_ROOS_SEARCH_FIELDS`固定為`high_len`＋4個ATR欄位；fold fixed overrides只固定其餘canonical optimizer維度。
+2. Selection Min ROOS移除完整historical baseline前置依賴；2014～2020直接執行一次120m train／12m OOS的Outer Rolling建立active schedule。
+3. `min_roos`、`min_dl_tp1_roos`、`min_dl_a9_roos`與`selection_min_roos`全部直接引用`OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT`；移除Strategy Compare的200 magic number與`baseline_trials_per_fold`雙重policy。
+4. artifact mode改為`min_roos_training`並保存五欄`search_fields`；parameter-training schema與Strategy Compare schema同步升版。舊4-ATR／`high_len`凍結工件及其completed-pair cache不得恢復成current Min ROOS。
+5. B187／B189 synthetic contract同步驗證五欄search、single-stage Selection preparation、training-policy trial SSOT及舊artifact rejection。
+
+### Scientific consequence
+
+既有使用舊4-ATR P2的C23／C24／C25 Selection策略結果保留為歷史read-only，但不再是current五欄Min ROOS universe的合法comparator；C27／C28與MR-12B comparator必須在新Min ROOS schedule下同批重跑後才能形成新的Selection策略結論。模型權重、MR-12B／MR-13A Target、PIT score與selector本身未因本輪修改而改變。
+

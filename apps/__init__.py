@@ -1,12 +1,6 @@
 from __future__ import annotations
 
 
-def ml_optimizer_main(*args, **kwargs):
-    from .ml_optimizer import main as _main
-
-    return _main(*args, **kwargs)
-
-
 def portfolio_sim_main(*args, **kwargs):
     from .portfolio_sim import main as _main
 
@@ -48,7 +42,6 @@ def __getattr__(name):
 
 
 __all__ = [
-    "ml_optimizer_main",
     "portfolio_sim_main",
     "print_yearly_return_report",
     "run_portfolio_simulation",

@@ -42,6 +42,7 @@ from filters.breakout_quality.strategy_compare_engine import (
     _validate_requested_param_policy,
 )
 from filters.breakout_quality.strategy_param_training import (
+    MIN_ROOS_SEARCH_FIELDS,
     prepare_selection_historical_p2_params,
     prepare_strategy_parameter_source,
 )
@@ -279,17 +280,8 @@ def _validate_param_training_identity(
         if expected_training_dl_enabled and not isinstance(payload.get("binary_pit"), dict):
             return False, "BINARY_PIT_IDENTITY_MISSING", manifest_path
 
-        baseline_path = _resolve_params_path(
-            root=root,
-            params_path=None,
-            param_policy=settings.param_policy,
-            allow_static_diagnostic=False,
-        ).resolve()
-        if not baseline_path.is_file():
-            return False, "BASELINE_PARAMS_MISSING", manifest_path
-        expected_baseline_sha = compute_file_sha256(baseline_path)
-        if str(payload.get("baseline_params_sha256") or "") != expected_baseline_sha:
-            return False, "BASELINE_PARAMS_IDENTITY_MISMATCH", manifest_path
+        if list(payload.get("search_fields") or []) != list(MIN_ROOS_SEARCH_FIELDS):
+            return False, "MIN_ROOS_SEARCH_FIELDS_MISMATCH", manifest_path
     return True, "READY", manifest_path
 
 def _preparation_action(
@@ -729,7 +721,7 @@ def collect_artifact_status(
                 action = "BLOCKED"
             description = (
                 (
-                    "建立／接續Selection historical baseline與P2策略參數"
+                    "建立／接續Selection historical Min ROOS單階段rolling參數"
                     if builder is not None and builder.builder_type == "selection_historical_p2"
                     else "執行或接續config指定的策略參數訓練"
                 )
@@ -847,11 +839,10 @@ def _execute_preparation_action(
             param_policy=settings.param_policy,
             comparison_output_root=str(settings.output_root),
             trials_per_fold=int(options["trials_per_fold"]),
-            baseline_trials_per_fold=int(options["baseline_trials_per_fold"]),
-            baseline_first_oos_date=str(settings.start_date),
-            baseline_last_oos_date=str(settings.end_date),
-            baseline_train_window_months=int(options["baseline_train_window_months"]),
-            baseline_oos_months=int(options["baseline_oos_months"]),
+            first_oos_date=str(settings.start_date),
+            last_oos_date=str(settings.end_date),
+            train_window_months=int(options["train_window_months"]),
+            oos_months=int(options["oos_months"]),
             max_positions=int(settings.max_positions),
             rotation=str(settings.rotation),
             fixed_risk=float(options["fixed_risk"]),
@@ -900,7 +891,7 @@ def _execute_preparation_action(
         if int(code) != 0:
             raise RuntimeError(f"Selection PIT Audit失敗: {dl_id}/{code}")
         return
-    if action.builder_type == "binary_dl_risk_only_rolling":
+    if action.builder_type == "binary_dl_min_roos_rolling":
         _kind, source_id = action.artifact_key.split(":", 1)
         source = settings.parameter_sources[source_id]
         builder = source.builder

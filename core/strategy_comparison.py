@@ -291,7 +291,7 @@ def _validate_builder(
             raise ValueError(f"{field_name}.inference_batch_size必須>=1")
         if int(builder.options.get("inference_workers") or 0) < 1:
             raise ValueError(f"{field_name}.inference_workers必須>=1")
-    if builder.builder_type == "binary_dl_risk_only_rolling":
+    if builder.builder_type == "binary_dl_min_roos_rolling":
         parameter_set = str(builder.options.get("parameter_set") or "").lower()
         if parameter_set not in {"p2", "p3"}:
             raise ValueError(f"{field_name}.parameter_set必須是p2或p3")
@@ -315,12 +315,10 @@ def _validate_builder(
             raise ValueError(f"{field_name}.parameter_set必須是p2_history")
         if int(builder.options.get("trials_per_fold") or 0) < 1:
             raise ValueError(f"{field_name}.trials_per_fold必須>=1")
-        if int(builder.options.get("baseline_trials_per_fold") or 0) < 1:
-            raise ValueError(f"{field_name}.baseline_trials_per_fold必須>=1")
-        if int(builder.options.get("baseline_train_window_months") or 0) < 1:
-            raise ValueError(f"{field_name}.baseline_train_window_months必須>=1")
-        if int(builder.options.get("baseline_oos_months") or 0) < 1:
-            raise ValueError(f"{field_name}.baseline_oos_months必須>=1")
+        if int(builder.options.get("train_window_months") or 0) < 1:
+            raise ValueError(f"{field_name}.train_window_months必須>=1")
+        if int(builder.options.get("oos_months") or 0) < 1:
+            raise ValueError(f"{field_name}.oos_months必須>=1")
         if float(builder.options.get("fixed_risk") or 0.0) <= 0.0:
             raise ValueError(f"{field_name}.fixed_risk必須>0")
         cap = float(builder.options.get("max_position_cap_pct") or 0.0)
@@ -375,7 +373,7 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         _validate_builder(
             source.builder,
             field_name=f"parameter_sources[{key}].builder",
-            allowed_types={"binary_dl_risk_only_rolling", "selection_historical_p2"},
+            allowed_types={"binary_dl_min_roos_rolling", "selection_historical_p2"},
         )
         if source.builder is not None and source.builder.enabled:
             options = dict(source.builder.options)

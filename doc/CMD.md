@@ -614,7 +614,7 @@ python -m tools.filters.breakout_quality.strategy_dl_filter_gate --dataset full 
 
 Gate只關閉`use_breakout_ema_filter`、`use_bb`、`use_vol`、`use_breakout_return_filter`與`use_breakout_false_filter`；保留`high_len`突破事件、ATR buy／initial stop／trail、`use_kc` exit、reclaim re-entry、fixed risk、position cap及原buy-sort。`B−A`檢查DL疊加現有filters，`F−C`檢查DL作唯一品質Gate，`F−A`才是DL-only replacement對目前正式策略的採用比較，interaction=`(F−C)−(B−A)`只作機制判讀。兩個hard-filter pair都固定threshold 0.5、canonical runtime score與相同active params；不重訓模型、不調threshold、不執行optimizer、不使用Future Target。輸出隔離於`strategy_dl_filter_gate_<param_policy>_canonical_runtime/`，包含A/B與C/F pair的完整策略比較、交易歸因及合併`strategy_dl_filter_gate.md/json`。
 
-Binary DL risk-only parameter adaptation同樣為CLI-only暫時研究，不加入互動選單。正式比較固定為4種參數 × Binary DL關／開，共8個操作點：P0原ROOS＋原正式規則、P1原ROOS＋Rule-based filters全關、P2在rules全關／DL關環境只重訓四個風險參數、P3在rules全關／DL開環境以Binary PIT Scores只重訓同四個風險參數。每套參數各回放DL關／開，命名為A0／B0至A3／B3：
+Binary DL risk-only parameter adaptation同樣為CLI-only暫時研究，不加入互動選單。正式比較固定為4種參數 × Binary DL關／開，共8個操作點：P0原ROOS＋原正式規則、P1原ROOS＋Rule-based filters全關、P2在rules全關／DL關環境只訓練Min ROOS五個欄位、P3在rules全關／DL開環境以Binary PIT Scores只訓練同五個欄位。每套參數各回放DL關／開，命名為A0／B0至A3／B3：
 
 ```powershell
 python -m filters.breakout_quality.strategy_param_training `
@@ -624,7 +624,7 @@ python -m filters.breakout_quality.strategy_param_training `
   --rotation off
 ```
 
-風險搜尋欄位固定為`atr_len`、`atr_buy_tol`、`atr_times_init`與`atr_times_trail`；`high_len`、TP、fixed risk、position cap、max positions、rotation、費稅、原position-aware buy-sort及其餘非風險值依各rolling effective date凍結。未指定`--trials-per-fold`時採目前正式training policy；原ROOS歷史trial數只作診斷，不要求與本次相等。
+Min ROOS搜尋欄位固定為`high_len`、`atr_len`、`atr_buy_tol`、`atr_times_init`與`atr_times_trail`；TP、rule switches、fixed risk、position cap、max positions、rotation、費稅、原position-aware buy-sort及其餘非Min欄位由canonical config/schema固定，不再依另一輪完整ROOS結果凍結。未指定`--trials-per-fold`時直接採`config/training_policy.py`的正式outer-rolling trial policy；不得另設200/300等第二套預設。
 
 P3訓練必須使用`build-binary-point-in-time-scores`建立的expanding-window Binary PIT Scores。每個score period的模型只可使用該期開始日前已完成Label的歷史資料；optimizer runtime與平行fold workers都必須驗證同一PIT manifest／scores identity。禁止使用最終9A forward-OOS、`research_scores.csv`或Selection in-sample score回灌歷史訓練。Binary PIT最早合法日期不必倒推覆蓋完整120個月Selection：PIT開始日前固定pass-through，等同DL-off；PIT期間內缺少候選分數採保守REJECT；PIT尾端早於optimizer最新Selection則fail-fast。P3 preflight會輸出逐fold bootstrap／partial／full coverage與`binary_pit_optimizer_coverage.csv`，並將coverage policy納入runtime identity。預設Gate在PIT缺失時自動建立；可用`--no-build-binary-pit`只做前置檢查。PIT獨立CLI為：
 

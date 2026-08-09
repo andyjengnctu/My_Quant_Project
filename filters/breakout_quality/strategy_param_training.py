@@ -1,9 +1,9 @@
-"""Breakout-quality strategy parameter training service and legacy 4×2 gate.
+"""Breakout-quality Min ROOS parameter training service and legacy 4×2 gate.
 
 The matrix is:
 P0 original ROOS with formal rules, P1 original ROOS with all rule-based
-filters disabled, P2 risk parameters trained with DL disabled, and P3 risk
-parameters trained with DL enabled using binary point-in-time scores.  Every
+filters disabled, P2 Min ROOS parameters trained with DL disabled, and P3 Min
+ROOS parameters trained with DL enabled using binary point-in-time scores. Every
 parameter set is replayed once with the binary filter off (A) and once on (B).
 """
 
@@ -15,7 +15,6 @@ import json
 import math
 import os
 from pathlib import Path
-import shutil
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,11 +27,11 @@ from config.breakout_quality import (
 from config.training_policy import (
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    SELECTION_POLICY_PARAM_SPECS,
 )
 from core.dataset_profiles import get_dataset_dir
 from core.model_paths import resolve_models_dir
 from core.runtime_utils import get_taipei_now
-from core.walk_forward_policy import load_walk_forward_policy
 from filters.breakout_quality.artifacts import compute_file_sha256, load_model_artifact_contract
 from filters.breakout_quality.binary_pit_score_store import (
     BINARY_PIT_IN_COVERAGE_MISSING_POLICY,
@@ -57,13 +56,13 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
     TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
     TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
-    TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH,
     TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
 )
 from filters.breakout_quality.strategy_rule_policies import (
     ALL_OFF_INACTIVE_VALUE_OVERRIDES,
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
+from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows
 from tools.filters.breakout_quality.build_binary_point_in_time_scores import (
     build_binary_point_in_time_scores,
@@ -94,9 +93,25 @@ from tools.optimizer.session_factory import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 EXPERIMENT_STATUS = "FOUR_BY_TWO_COMPLETE"
-RISK_SEARCH_FIELDS = ("atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail")
+MIN_ROOS_SEARCH_FIELDS = (
+    "high_len",
+    "atr_len",
+    "atr_buy_tol",
+    "atr_times_init",
+    "atr_times_trail",
+)
+
+
+def _min_roos_adaptation_contract(*, arm_id: str, training_dl_enabled: bool) -> dict[str, Any]:
+    return {
+        "mode": "min_roos_training",
+        "parameter_set": str(arm_id),
+        "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
+        "fixed_rule_contract": "all_rule_filters_off",
+        "training_dl_enabled": bool(training_dl_enabled),
+    }
 EXPERIMENT_RELATIVE_DIR = Path(
     "models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling"
 )
@@ -108,7 +123,7 @@ BINARY_PIT_RELATIVE_DIR = Path(
 def _parse_args(argv=None):
     settings = get_breakout_quality_workflow_settings()
     parser = argparse.ArgumentParser(
-        description="執行4種參數 × Binary DL關／開的8操作點風險參數適應Gate"
+        description="執行4種參數 × Binary DL關／開的8操作點Min ROOS參數適應Gate"
     )
     parser.add_argument("--dataset", choices=("reduced", "full"), default=settings.strategy_dataset)
     parser.add_argument("--filter-id", default=settings.filter_id)
@@ -180,7 +195,7 @@ def _load_baseline_contract(*, root: Path, args) -> dict[str, Any]:
     if str(source.get("kind") or "") != "rolling_active_param_ensemble":
         raise ValueError("4×2 Gate只接受rolling active-param ensemble Baseline")
     if int(policy.get("member_count_min") or 0) != 1 or int(policy.get("member_count_max") or 0) != 1:
-        raise ValueError("risk-only fold freeze目前要求每個effective date恰有1個member")
+        raise ValueError("Min ROOS rolling baseline schedule目前要求每個effective date恰有1個member")
     meta = dict(payload.get("meta") or {})
     required = ("window_mode", "first_oos_date", "last_oos_date", "train_window_months", "oos_horizon_months")
     missing = [key for key in required if meta.get(key) in (None, "")]
@@ -202,83 +217,74 @@ def validate_selection_historical_baseline_period(
 ) -> tuple[str, ...]:
     """Validate the canonical Selection historical effective-date coverage.
 
-    The historical P2 teacher must cover every annual effective date from
-    2014 through 2020.  ``last_oos_date`` may be any date in 2020 (for example
-    the rolling contract's December boundary); the effective-date schedule is
-    the authoritative annual coverage contract.
+    The historical Min ROOS teacher must match the canonical Selection rolling
+    period declared in ``trade_path_label.py``.  The effective-date schedule is
+    derived from those config constants rather than hard-coded in the validator.
     """
 
     first_oos = pd.Timestamp(str(meta.get("first_oos_date"))).normalize()
     last_oos = pd.Timestamp(str(meta.get("last_oos_date"))).normalize()
-    expected_effective_dates = tuple(
-        pd.Timestamp(year=year, month=1, day=1) for year in range(2014, 2021)
-    )
+    canonical_first = pd.Timestamp(
+        TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE
+    ).normalize()
+    canonical_last = pd.Timestamp(
+        TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE
+    ).normalize()
+    expected_effective_dates = []
+    cursor = canonical_first
+    while cursor <= canonical_last:
+        expected_effective_dates.append(cursor)
+        cursor = (
+            cursor + pd.DateOffset(months=TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS)
+        ).normalize()
+    expected_effective_dates = tuple(expected_effective_dates)
     raw_schedule = dict(payload.get("params_ensemble_by_effective_date") or {})
     try:
         observed_effective_dates = tuple(
             sorted(pd.Timestamp(str(value)).normalize() for value in raw_schedule)
         )
     except (TypeError, ValueError) as exc:
-        raise ValueError("Selection historical P2上游基準生效日不合法") from exc
+        raise ValueError("Selection historical Min ROOS生效日不合法") from exc
     if (
-        first_oos != pd.Timestamp("2014-01-01")
-        or last_oos.year != 2020
-        or last_oos < pd.Timestamp("2020-01-01")
+        first_oos != canonical_first
+        or last_oos != canonical_last
         or observed_effective_dates != expected_effective_dates
     ):
         observed_text = ",".join(
             value.strftime("%Y-%m-%d") for value in observed_effective_dates
         ) or "-"
         raise ValueError(
-            "Selection historical P2上游基準必須完整涵蓋2014～2020: "
+            "Selection historical Min ROOS必須符合canonical rolling period: "
             f"meta={first_oos.date()}~{last_oos.date()}, "
             f"effective_dates={observed_text}"
         )
     return tuple(value.strftime("%Y-%m-%d") for value in observed_effective_dates)
 
 
-def _load_selection_historical_baseline_contract(
-    *, root: Path, param_policy: str
-) -> dict[str, Any]:
-    path = root / TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH
-    if not path.is_file():
-        raise FileNotFoundError(
-            "缺少2014～2020 Selection historical P2上游基準參數: "
-            f"{project_relative_display_path(path, project_root=root)}"
-        )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    source = _load_param_source(path)
-    policy = _validate_requested_param_policy(source, param_policy)
-    if str(source.get("kind") or "") != "rolling_active_param_ensemble":
-        raise ValueError("Selection historical P2上游基準必須是rolling active-param ensemble")
-    if int(policy.get("member_count_min") or 0) != 1 or int(policy.get("member_count_max") or 0) != 1:
-        raise ValueError("Selection historical P2要求每個effective date恰有1個member")
-    meta = dict(payload.get("meta") or {})
-    required = (
-        "window_mode",
-        "first_oos_date",
-        "last_oos_date",
-        "train_window_months",
-        "oos_horizon_months",
-    )
-    missing = [key for key in required if meta.get(key) in (None, "")]
-    if missing:
-        raise ValueError("Selection historical P2上游基準缺少meta: " + ", ".join(missing))
-    validate_selection_historical_baseline_period(payload=payload, meta=meta)
-    return {
-        "path": path,
-        "payload": payload,
-        "source": source,
-        "policy": policy,
-        "meta": meta,
-        "summary": dict(payload.get("summary") or {}),
-        "sha256": compute_file_sha256(path),
-    }
+def _rolling_effective_dates(contract: dict[str, Any]) -> tuple[str, ...]:
+    meta = dict(contract.get("meta") or {})
+    first = pd.Timestamp(str(meta.get("first_oos_date"))).normalize()
+    last = pd.Timestamp(str(meta.get("last_oos_date"))).normalize()
+    horizon_months = int(meta.get("oos_horizon_months") or 0)
+    if pd.isna(first) or pd.isna(last) or first > last or horizon_months < 1:
+        raise ValueError("Min ROOS rolling schedule不合法")
+    dates = []
+    cursor = first
+    while cursor <= last:
+        dates.append(cursor.strftime("%Y-%m-%d"))
+        cursor = (cursor + pd.DateOffset(months=horizon_months)).normalize()
+    if not dates:
+        raise ValueError("Min ROOS rolling schedule沒有effective date")
+    return tuple(dates)
 
 
-def _single_member_params_by_effective_date(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    mapping = dict(contract["payload"].get("params_ensemble_by_effective_date") or {})
-    output = {}
+def _single_member_params_by_effective_date(
+    contract: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Read a real rolling param artifact for comparison/reporting only."""
+
+    mapping = dict(contract.get("payload", {}).get("params_ensemble_by_effective_date") or {})
+    output: dict[str, dict[str, Any]] = {}
     for effective_date, raw_members in mapping.items():
         members = list(raw_members or [])
         if len(members) != 1:
@@ -288,31 +294,59 @@ def _single_member_params_by_effective_date(contract: dict[str, Any]) -> dict[st
             raise ValueError(f"active param member缺少params: {effective_date}")
         output[pd.Timestamp(effective_date).strftime("%Y-%m-%d")] = params
     if not output:
-        raise ValueError("Baseline沒有params_ensemble_by_effective_date")
+        raise ValueError("rolling param artifact沒有params_ensemble_by_effective_date")
     return output
 
 
-def build_risk_only_fold_overrides(*, baseline_contract, args, training_dl_enabled: bool):
-    output = {}
-    for effective_date, params in _single_member_params_by_effective_date(baseline_contract).items():
-        fixed = dict(params)
-        for field_name in RISK_SEARCH_FIELDS:
-            fixed.pop(field_name, None)
-        fixed.update({field_name: False for field_name in OPTIONAL_ENTRY_FILTER_FIELDS})
-        fixed.update(ALL_RULE_FILTERS_OFF_OVERRIDES)
-        fixed.update(ALL_OFF_INACTIVE_VALUE_OVERRIDES)
-        fixed.update(
-            {
-                "use_breakout_quality_filter": bool(training_dl_enabled),
-                "use_breakout_quality_ranking": False,
-                "breakout_quality_filter_id": str(args.filter_id),
-                "breakout_quality_score_threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
-                "fixed_risk": float(args.fixed_risk),
-                "max_position_cap_pct": float(args.max_position_cap_pct),
-            }
-        )
-        output[effective_date] = fixed
-    return output
+def _build_min_roos_fixed_overrides(*, args, training_dl_enabled: bool) -> dict[str, Any]:
+    """Freeze every optimizer dimension except the canonical five Min ROOS fields."""
+
+    fixed: dict[str, Any] = {
+        field_name: spec["default"]
+        for field_name, spec in BREAKOUT_PARAM_SPECS.items()
+        if field_name not in MIN_ROOS_SEARCH_FIELDS
+    }
+    fixed.update(
+        {
+            field_name: spec["default"]
+            for field_name, spec in SELECTION_POLICY_PARAM_SPECS.items()
+            if field_name not in MIN_ROOS_SEARCH_FIELDS
+        }
+    )
+    fixed.update({field_name: False for field_name in OPTIONAL_ENTRY_FILTER_FIELDS})
+    fixed.update(ALL_RULE_FILTERS_OFF_OVERRIDES)
+    fixed.update(ALL_OFF_INACTIVE_VALUE_OVERRIDES)
+    fixed.update(
+        {
+            "use_breakout_quality_filter": bool(training_dl_enabled),
+            "use_breakout_quality_ranking": False,
+            "breakout_quality_filter_id": str(args.filter_id),
+            "breakout_quality_score_threshold": float(
+                BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
+            ),
+            "tp_percent": float(
+                BREAKOUT_PARAM_SPECS["tp_percent"]["default"]
+                if OPTIMIZER_FIXED_TP_PERCENT is None
+                else OPTIMIZER_FIXED_TP_PERCENT
+            ),
+            "fixed_risk": float(args.fixed_risk),
+            "max_position_cap_pct": float(args.max_position_cap_pct),
+        }
+    )
+    for field_name in MIN_ROOS_SEARCH_FIELDS:
+        fixed.pop(field_name, None)
+    return fixed
+
+
+def build_min_roos_fold_overrides(*, baseline_contract, args, training_dl_enabled: bool):
+    fixed = _build_min_roos_fixed_overrides(
+        args=args,
+        training_dl_enabled=training_dl_enabled,
+    )
+    return {
+        effective_date: dict(fixed)
+        for effective_date in _rolling_effective_dates(baseline_contract)
+    }
 
 
 def _binary_pit_paths(root: Path, args) -> tuple[Path, Path]:
@@ -507,18 +541,29 @@ def _validate_binary_pit_optimizer_coverage(
 
 
 def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_artifact, arm_id, training_dl_enabled, binary_pit):
+    reference_path = baseline_contract.get("path")
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "mode": "binary_dl_filter_risk_only_param_adaptation",
+        "mode": "binary_dl_filter_min_roos_param_adaptation",
         "arm_id": str(arm_id),
         "training_dl_enabled": bool(training_dl_enabled),
         "dataset": str(args.dataset),
         "dataset_identity": build_source_data_inventory(root, args.dataset),
-        "baseline_params_path": project_relative_display_path(baseline_contract["path"], project_root=root),
-        "baseline_params_sha256": baseline_contract["sha256"],
+        "parameter_reference": {
+            "type": str(
+                baseline_contract.get("reference_type")
+                or "rolling_baseline_schedule"
+            ),
+            "path": (
+                None
+                if reference_path is None
+                else project_relative_display_path(reference_path, project_root=root)
+            ),
+            "sha256": str(baseline_contract["sha256"]),
+        },
         "rolling_policy": {key: baseline_contract["meta"][key] for key in ("window_mode", "first_oos_date", "last_oos_date", "train_window_months", "oos_horizon_months")},
         "trials_per_fold": int(args.trials_per_fold),
-        "risk_search_fields": list(RISK_SEARCH_FIELDS),
+        "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
         "fixed_overrides_by_effective_date": fold_overrides,
         "binary_runtime": (
             None
@@ -549,7 +594,7 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
     return payload
 
 
-def _validate_risk_only_params(*, path, baseline_contract, fold_overrides, args, training_dl_enabled, arm_id):
+def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, training_dl_enabled, arm_id):
     payload = _load_json(path)
     if payload is None:
         raise FileNotFoundError(f"{arm_id} optimizer未產生參數工件: {path}")
@@ -577,29 +622,24 @@ def _validate_risk_only_params(*, path, baseline_contract, fold_overrides, args,
                     raise ValueError(
                         f"{arm_id}固定契約未落入active params: date={effective_date}, field={field_name}, actual={actual!r}, expected={expected!r}"
                     )
-            for field_name in RISK_SEARCH_FIELDS:
+            for field_name in MIN_ROOS_SEARCH_FIELDS:
                 if field_name not in params:
-                    raise ValueError(f"{arm_id}缺少risk field: {effective_date}/{field_name}")
-    payload["breakout_quality_param_adaptation"] = {
-        "mode": "risk_only_training",
-        "parameter_set": str(arm_id),
-        "risk_search_fields": list(RISK_SEARCH_FIELDS),
-        "fixed_rule_contract": "all_rule_filters_off",
-        "training_dl_enabled": bool(training_dl_enabled),
-    }
+                    raise ValueError(f"{arm_id}缺少Min ROOS搜尋欄位: {effective_date}/{field_name}")
+    existing_adaptation = dict(
+        payload.get("breakout_quality_param_adaptation") or {}
+    )
+    expected_adaptation = _min_roos_adaptation_contract(
+        arm_id=str(arm_id),
+        training_dl_enabled=bool(training_dl_enabled),
+    )
+    if existing_adaptation and existing_adaptation != expected_adaptation:
+        raise ValueError(
+            f"{arm_id}參數工件仍是舊Min ROOS語意，不得重用: "
+            f"adaptation={existing_adaptation!r}"
+        )
+    payload["breakout_quality_param_adaptation"] = expected_adaptation
     _write_json(path, payload)
     return payload
-
-
-def _copy_legacy_p2_if_available(*, output_dir: Path, target_dir: Path) -> bool:
-    legacy = output_dir / "a5_dl_off_trained"
-    legacy_params = legacy / "active_params" / "roos_base_best.json"
-    target_params = target_dir / "active_params" / "roos_base_best.json"
-    if target_params.is_file() or not legacy_params.is_file():
-        return False
-    target_params.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(legacy_params, target_params)
-    return True
 
 
 def _temporary_environment(values: dict[str, str]):
@@ -625,10 +665,7 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
     active_param_dir = arm_dir / "active_params"
     optimizer_output_dir = arm_dir / "optimizer_runtime"
     active_param_dir.mkdir(parents=True, exist_ok=True)
-    migrated = False
-    if not training_dl_enabled:
-        migrated = _copy_legacy_p2_if_available(output_dir=output_dir, target_dir=arm_dir)
-    fold_overrides = build_risk_only_fold_overrides(
+    fold_overrides = build_min_roos_fold_overrides(
         baseline_contract=baseline_contract, args=args, training_dl_enabled=training_dl_enabled
     )
     contract = _runtime_contract(
@@ -644,13 +681,18 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
     preflight_path = arm_dir / "rolling_preflight.json"
     params_path = active_param_dir / "roos_base_best.json"
     prior = _load_json(preflight_path)
+    prior_params = _load_json(params_path) if params_path.is_file() else None
+    expected_adaptation = _min_roos_adaptation_contract(
+        arm_id=str(arm_id),
+        training_dl_enabled=bool(training_dl_enabled),
+    )
     reusable = (
         prior is not None
         and str(prior.get("runtime_identity_sha256") or "") == contract["runtime_identity_sha256"]
-        and params_path.is_file()
+        and isinstance(prior_params, dict)
+        and dict(prior_params.get("breakout_quality_param_adaptation") or {})
+        == expected_adaptation
     )
-    if migrated:
-        reusable = True
     coverage_path = arm_dir / "binary_pit_optimizer_coverage.csv"
     if training_dl_enabled:
         coverage_rows = []
@@ -670,7 +712,6 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
         {
             **contract,
             "status": f"{arm_id}_PREFLIGHT_PASS",
-            "legacy_p2_migrated": migrated,
             "binary_pit_optimizer_coverage_path": (
                 project_relative_display_path(coverage_path, project_root=root)
                 if training_dl_enabled
@@ -681,7 +722,7 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
     )
     if not reusable:
         base_policy = build_rolling_base_policy(root=root, baseline_contract=baseline_contract)
-        base_policy.update({"adaptation_scope": f"binary_dl_filter_risk_only_{arm_id.lower()}", "evaluation_scope": "rolling_selection_diagnostic"})
+        base_policy.update({"adaptation_scope": f"binary_dl_filter_min_roos_{arm_id.lower()}", "evaluation_scope": "rolling_selection_diagnostic"})
         session_spec = {
             "output_dir": str((optimizer_output_dir / "sessions").resolve()),
             FOLD_FIXED_STRATEGY_OVERRIDES_KEY: fold_overrides,
@@ -735,8 +776,8 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
                 paramset_models_dir=str(active_param_dir.resolve()),
             )
         if int(exit_code) != 0:
-            raise RuntimeError(f"{arm_id} risk-only rolling optimizer失敗: {exit_code}")
-    params_payload = _validate_risk_only_params(
+            raise RuntimeError(f"{arm_id} Min ROOS rolling optimizer失敗: {exit_code}")
+    params_payload = _validate_min_roos_params(
         path=params_path,
         baseline_contract=baseline_contract,
         fold_overrides=fold_overrides,
@@ -748,7 +789,7 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
         "parameter_set": arm_id,
         "training_dl_enabled": bool(training_dl_enabled),
         "status": "COMPLETED",
-        "risk_search_fields": list(RISK_SEARCH_FIELDS),
+        "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
         "folds": int(dict(params_payload.get("summary") or {}).get("folds", 0) or 0),
         "trials_per_fold": int(args.trials_per_fold),
         "optimizer_search_reused": bool(reusable),
@@ -795,8 +836,9 @@ def restore_selection_historical_p2_from_completed_strategy_compare(
 
     expected_period = {"start": str(start_date), "end": str(end_date)}
     expected_contract = {
-        "mode": "risk_only_training",
+        "mode": "min_roos_training",
         "parameter_set": "P2_HISTORY",
+        "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
         "fixed_rule_contract": "all_rule_filters_off",
         "training_dl_enabled": False,
     }
@@ -878,112 +920,55 @@ def restore_selection_historical_p2_from_completed_strategy_compare(
     return None
 
 
-def prepare_selection_historical_baseline_params(
+def _build_min_roos_schedule_contract(
     *,
-    project_root=PROJECT_ROOT,
-    dataset: str,
-    param_policy: str,
     first_oos_date: str,
     last_oos_date: str,
     train_window_months: int,
     oos_months: int,
-    trials_per_fold: int,
-    optimizer_seed: int,
-    resume_parameter_training: bool = True,
-    quiet: bool = False,
 ) -> dict[str, Any]:
-    """Build/reuse the isolated 2014-2020 Selection rolling baseline.
+    """Build an in-memory rolling schedule reference for canonical Min ROOS.
 
-    This is the programmatic equivalent of the historical 11I prepare flow that
-    ran the canonical outer-rolling optimizer with ``V16_MODELS_DIR`` pointed at
-    ``models/research/breakout_quality/selection_strategy_realization``.  It
-    trains strategy parameters only; no breakout-quality label or model weight
-    is created here.
+    Min ROOS does not need a separately optimized full-strategy baseline.  The
+    only trainable dimensions are ``MIN_ROOS_SEARCH_FIELDS``; every other
+    optimizer dimension is frozen from canonical config/schema defaults by
+    ``build_min_roos_fold_overrides``.
     """
-
-    root = Path(project_root).resolve()
-    target_path = root / TRADE_PATH_SELECTION_BASELINE_PARAMS_RELATIVE_PATH
-    if target_path.is_file():
-        return _load_selection_historical_baseline_contract(
-            root=root, param_policy=str(param_policy)
-        )
 
     first = pd.Timestamp(str(first_oos_date)).normalize()
     last = pd.Timestamp(str(last_oos_date)).normalize()
-    if last < first:
-        raise ValueError("Selection historical baseline期間不合法")
+    if pd.isna(first) or pd.isna(last) or last < first:
+        raise ValueError("Selection Min ROOS期間不合法")
     if int(train_window_months) < 1 or int(oos_months) < 1:
-        raise ValueError("Selection historical baseline rolling months必須>=1")
-    if int(trials_per_fold) < 1:
-        raise ValueError("Selection historical baseline trials_per_fold必須>=1")
-
-    models_dir = target_path.parent
-    optimizer_output_dir = models_dir / "optimizer_runtime"
-    models_dir.mkdir(parents=True, exist_ok=True)
-    optimizer_output_dir.mkdir(parents=True, exist_ok=True)
-
-    outer_argv = [
-        "--outer-first-oos-date",
-        first.strftime("%Y-%m-%d"),
-        "--outer-last-oos-date",
-        last.strftime("%Y-%m-%d"),
-        "--outer-train-window-months",
-        str(int(train_window_months)),
-        "--outer-oos-months",
-        str(int(oos_months)),
-        "--trials",
-        str(int(trials_per_fold)),
-    ]
-    outer_environ = dict(os.environ)
-    outer_environ["V16_MODELS_DIR"] = str(models_dir.resolve())
-    outer_environ["OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"
-    outer_environ["OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = (
-        "1" if bool(resume_parameter_training) else "0"
-    )
-    base_policy = load_walk_forward_policy(str(root))
-
-    if not quiet:
-        print(
-            "Selection historical baseline缺少；自動建立／接續隔離rolling params "
-            f"| period={first.date()}~{last.date()} "
-            f"| train={int(train_window_months)}m "
-            f"| oos={int(oos_months)}m "
-            f"| trials={int(trials_per_fold)}/fold"
-        )
-
-    with _temporary_environment({"V16_MODELS_DIR": str(models_dir.resolve())}):
-        exit_code = run_outer_rolling_oos(
-            argv=outer_argv,
-            environ=outer_environ,
-            project_root=str(root),
-            output_dir=str(optimizer_output_dir),
-            base_policy=base_policy,
-            selected_data_dir=get_dataset_dir(str(root), str(dataset)),
-            dataset_label=str(dataset),
-            load_all_raw_data=load_all_raw_data,
-            optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
-            build_optimizer_session=build_optimizer_session,
-            create_optimizer_study=create_optimizer_study,
-            ensure_study_effective_policy_compatible=ensure_study_effective_policy_compatible,
-            configure_optuna_logging=configure_optuna_logging,
-            optimizer_seed=int(optimizer_seed),
-            optimizer_session_spec=None,
-            default_trials=int(trials_per_fold),
-            timing_mode=False,
-            paramset_models_dir=str(models_dir.resolve()),
-        )
-    if int(exit_code) != 0:
-        raise RuntimeError(
-            f"Selection historical baseline rolling optimizer失敗: {exit_code}"
-        )
-    if not target_path.is_file():
-        raise FileNotFoundError(
-            "Selection historical baseline optimizer完成但未產生指定param policy工件: "
-            f"{project_relative_display_path(target_path, project_root=root)}"
-        )
-    return _load_selection_historical_baseline_contract(
-        root=root, param_policy=str(param_policy)
-    )
+        raise ValueError("Selection Min ROOS rolling months必須>=1")
+    meta = {
+        "window_mode": "fixed",
+        "first_oos_date": first.strftime("%Y-%m-%d"),
+        "last_oos_date": last.strftime("%Y-%m-%d"),
+        "train_window_months": int(train_window_months),
+        "oos_horizon_months": int(oos_months),
+    }
+    reference_payload = {
+        "reference_type": "canonical_min_roos_fixed_defaults",
+        "rolling_policy": meta,
+        "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
+        "breakout_defaults": {
+            key: spec["default"] for key, spec in BREAKOUT_PARAM_SPECS.items()
+        },
+        "selection_defaults": {
+            key: spec["default"]
+            for key, spec in SELECTION_POLICY_PARAM_SPECS.items()
+        },
+        "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
+    }
+    return {
+        "path": None,
+        "payload": {},
+        "meta": meta,
+        "sha256": _canonical_hash(reference_payload),
+        "reference_type": "canonical_min_roos_fixed_defaults",
+        "reference_payload": reference_payload,
+    }
 
 
 def prepare_selection_historical_p2_params(
@@ -1000,18 +985,16 @@ def prepare_selection_historical_p2_params(
     resume_parameter_training: bool = True,
     quiet: bool = False,
     comparison_output_root: str = "outputs/strategy_compare",
-    baseline_trials_per_fold: int = OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
-    baseline_first_oos_date: str = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
-    baseline_last_oos_date: str = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
-    baseline_train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
-    baseline_oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
+    first_oos_date: str = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+    last_oos_date: str = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+    train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
+    oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
 ):
-    """Build/reuse the canonical 2014-2020 Selection historical P2 params only.
+    """Build/reuse Selection Min ROOS with one canonical rolling optimization.
 
-    This service never builds labels and never enables a DL model.  It is safe for
-    Strategy Compare preparation because it only materializes strategy-parameter
-    artifacts: first by exact completed-pair recovery when possible, otherwise by
-    rebuilding/resuming the isolated Selection baseline before P2 risk-only training.
+    No full-strategy historical baseline is trained first.  The rolling search
+    directly optimizes ``high_len`` plus the four ATR fields while every other
+    optimizer dimension is frozen from canonical config/schema defaults.
     """
 
     root = Path(project_root).resolve()
@@ -1020,8 +1003,8 @@ def prepare_selection_historical_p2_params(
         output_root=str(comparison_output_root),
         dataset=str(dataset),
         param_policy=str(param_policy),
-        start_date=str(baseline_first_oos_date),
-        end_date=str(baseline_last_oos_date),
+        start_date=str(first_oos_date),
+        end_date=str(last_oos_date),
         max_positions=int(max_positions),
         rotation=str(rotation),
         quiet=bool(quiet),
@@ -1043,18 +1026,11 @@ def prepare_selection_historical_p2_params(
             },
         }
 
-    baseline_contract = prepare_selection_historical_baseline_params(
-        project_root=root,
-        dataset=str(dataset),
-        param_policy=str(param_policy),
-        first_oos_date=str(baseline_first_oos_date),
-        last_oos_date=str(baseline_last_oos_date),
-        train_window_months=int(baseline_train_window_months),
-        oos_months=int(baseline_oos_months),
-        trials_per_fold=int(baseline_trials_per_fold),
-        optimizer_seed=int(optimizer_seed),
-        resume_parameter_training=bool(resume_parameter_training),
-        quiet=bool(quiet),
+    schedule_contract = _build_min_roos_schedule_contract(
+        first_oos_date=str(first_oos_date),
+        last_oos_date=str(last_oos_date),
+        train_window_months=int(train_window_months),
+        oos_months=int(oos_months),
     )
     args = SimpleNamespace(
         dataset=str(dataset),
@@ -1072,97 +1048,27 @@ def prepare_selection_historical_p2_params(
         quiet=bool(quiet),
     )
     settings = SimpleNamespace(seed=int(optimizer_seed))
-    target_path = root / TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH
-    output_dir = root / TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR
-    fold_overrides = build_risk_only_fold_overrides(
-        baseline_contract=baseline_contract,
-        args=args,
-        training_dl_enabled=False,
-    )
-
-    # The historical A2 teacher builder existed before this service was shared with
-    # Strategy Compare.  Preserve that completed work only when its full legacy
-    # preflight identity matches the current config; otherwise let the canonical
-    # optimizer service rebuild/resume instead of silently reusing stale params.
-    if target_path.is_file():
-        try:
-            _validate_risk_only_params(
-                path=target_path,
-                baseline_contract=baseline_contract,
-                fold_overrides=fold_overrides,
-                args=args,
-                training_dl_enabled=False,
-                arm_id="P2_HISTORY",
-            )
-        except (OSError, ValueError, KeyError, TypeError):
-            target_path.unlink(missing_ok=True)
-        else:
-            preflight_path = output_dir / "p2_dl_off_trained" / "rolling_preflight.json"
-            prior = _load_json(preflight_path)
-            legacy_identity = {
-                "schema_version": 2,
-                "mode": "a2_trade_path_historical_teacher_params",
-                "dataset": str(args.dataset),
-                "dataset_identity": build_source_data_inventory(root, args.dataset),
-                "baseline_path": project_relative_display_path(
-                    baseline_contract["path"], project_root=root
-                ),
-                "baseline_sha256": baseline_contract["sha256"],
-                "rolling_policy": {
-                    key: baseline_contract["meta"][key]
-                    for key in (
-                        "window_mode",
-                        "first_oos_date",
-                        "last_oos_date",
-                        "train_window_months",
-                        "oos_horizon_months",
-                    )
-                },
-                "trials_per_fold": int(args.trials_per_fold),
-                "risk_search_fields": list(RISK_SEARCH_FIELDS),
-                "fixed_overrides_by_effective_date": fold_overrides,
-                "max_positions": int(args.max_positions),
-                "rotation": str(args.rotation),
-                "fixed_risk": float(args.fixed_risk),
-                "max_position_cap_pct": float(args.max_position_cap_pct),
-            }
-            legacy_identity_sha256 = _canonical_hash(legacy_identity)
-            if (
-                isinstance(prior, dict)
-                and str(prior.get("runtime_identity_sha256") or "")
-                == legacy_identity_sha256
-            ):
-                migrated_contract = _runtime_contract(
-                    root=root,
-                    args=args,
-                    baseline_contract=baseline_contract,
-                    fold_overrides=fold_overrides,
-                    model_artifact=None,
-                    arm_id="P2_HISTORY",
-                    training_dl_enabled=False,
-                    binary_pit=None,
-                )
-                _write_json(
-                    preflight_path,
-                    {
-                        **migrated_contract,
-                        "status": "P2_HISTORY_PREFLIGHT_PASS",
-                        "legacy_historical_teacher_preflight_migrated": True,
-                        "created_at": get_taipei_now().isoformat(),
-                    },
-                )
+    if not quiet:
+        print(
+            "Selection Min ROOS缺少；自動建立／接續單階段rolling params "
+            f"| period={schedule_contract['meta']['first_oos_date']}~"
+            f"{schedule_contract['meta']['last_oos_date']} "
+            f"| train={int(train_window_months)}m "
+            f"| oos={int(oos_months)}m "
+            f"| trials={int(trials_per_fold)}/fold "
+            f"| search={','.join(MIN_ROOS_SEARCH_FIELDS)}"
+        )
     return _run_optimizer_arm(
         root=root,
         args=args,
         settings=settings,
-        baseline_contract=baseline_contract,
+        baseline_contract=schedule_contract,
         model_artifact=None,
-        output_dir=output_dir,
+        output_dir=root / TRADE_PATH_HISTORICAL_TEACHER_RELATIVE_DIR,
         arm_id="P2_HISTORY",
         training_dl_enabled=False,
         binary_pit=None,
     )
-
 
 def _run_pair(
     *, root, args, params_path, policy_name, output_dir,
@@ -1280,7 +1186,7 @@ def _adaptation_rows(matrix):
     return rows
 
 
-def _risk_param_rows(*, baseline_contract, p2_path, p3_path):
+def _min_roos_param_rows(*, baseline_contract, p2_path, p3_path):
     baseline = _single_member_params_by_effective_date(baseline_contract)
     def _load(path):
         payload = _load_json(path) or {}
@@ -1294,7 +1200,7 @@ def _risk_param_rows(*, baseline_contract, p2_path, p3_path):
     p3 = _load(p3_path)
     rows = []
     dates = sorted(baseline)
-    for field in RISK_SEARCH_FIELDS:
+    for field in MIN_ROOS_SEARCH_FIELDS:
         rows.append((field, ", ".join(str(baseline[d].get(field)) for d in dates), ", ".join(str(p2.get(d, {}).get(field)) for d in dates), ", ".join(str(p3.get(d, {}).get(field)) for d in dates)))
     return rows
 
@@ -1368,7 +1274,7 @@ def _render_report(*, args, matrix, p2_arm, p3_arm, binary_pit, baseline_contrac
         render_key_values(
             (
                 ("參數基準", args.param_policy),
-                ("搜尋參數", " / ".join(RISK_SEARCH_FIELDS)),
+                ("搜尋參數", " / ".join(MIN_ROOS_SEARCH_FIELDS)),
                 ("P2訓練", "rules全關／DL關"),
                 ("P3訓練", "rules全關／DL開／Binary PIT"),
                 ("Binary PIT", binary_pit["status"]),
@@ -1402,8 +1308,8 @@ def _render_report(*, args, matrix, p2_arm, p3_arm, binary_pit, baseline_contrac
     if p2_arm is not None and p3_arm is not None:
         lines.extend(
             (
-                render_section("4. 風險參數"),
-                render_table(("參數", "P0/P1 原ROOS", "P2 DL-off-trained", "P3 DL-on-trained"), _risk_param_rows(baseline_contract=baseline_contract, p2_path=p2_arm["params_path"], p3_path=p3_arm["params_path"])),
+                render_section("4. Min ROOS搜尋參數"),
+                render_table(("參數", "P0/P1 原ROOS", "P2 DL-off-trained", "P3 DL-on-trained"), _min_roos_param_rows(baseline_contract=baseline_contract, p2_path=p2_arm["params_path"], p3_path=p3_arm["params_path"])),
             )
         )
     lines.extend(
@@ -1590,7 +1496,7 @@ def prepare_strategy_parameter_source(
     resume_parameter_training: bool = True,
     quiet: bool = False,
 ):
-    """Build one configured risk-only rolling parameter source without replay."""
+    """Build one configured Min ROOS rolling parameter source without replay."""
 
     argv = [
         "--dataset", str(dataset),

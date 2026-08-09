@@ -22,7 +22,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 14
+STRATEGY_COMPARE_SCHEMA_VERSION = 15
 
 # =============================================================================
 # 1. 共用執行設定
@@ -78,11 +78,11 @@ STRATEGY_PARAM_SOURCES = {
         "trained_with_dl_id": None,
         "builder": {
             "enabled": True,
-            "builder_type": "binary_dl_risk_only_rolling",
+            "builder_type": "binary_dl_min_roos_rolling",
             "options": {
                 "parameter_set": "p2",
                 "model_source_id": "TP1",
-                "trials_per_fold": 200,
+                "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
                 "resume": True,
                 "fixed_risk": 0.01,
                 "max_position_cap_pct": 0.30,
@@ -105,12 +105,12 @@ STRATEGY_PARAM_SOURCES = {
         "trained_with_dl_id": "TP1",
         "builder": {
             "enabled": True,
-            "builder_type": "binary_dl_risk_only_rolling",
+            "builder_type": "binary_dl_min_roos_rolling",
             "options": {
                 "parameter_set": "p3",
                 "model_source_id": "TP1",
                 "p3_variant": None,
-                "trials_per_fold": 200,
+                "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
                 "resume": True,
                 "fixed_risk": 0.01,
                 "max_position_cap_pct": 0.30,
@@ -133,12 +133,12 @@ STRATEGY_PARAM_SOURCES = {
         "trained_with_dl_id": "A9",
         "builder": {
             "enabled": True,
-            "builder_type": "binary_dl_risk_only_rolling",
+            "builder_type": "binary_dl_min_roos_rolling",
             "options": {
                 "parameter_set": "p3",
                 "model_source_id": "A9",
                 "p3_variant": "A9",
-                "trials_per_fold": 200,
+                "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
                 "resume": True,
                 "fixed_risk": 0.01,
                 "max_position_cap_pct": 0.30,
@@ -154,15 +154,22 @@ STRATEGY_PARAM_SOURCES = {
             "p2_dl_off_trained/active_params/{param_filename}"
         ),
         "description": (
-            "Selection 2014～2020 historical P2 Min ROOS；rules全關、DL-off訓練，"
-            "只重用既有lookahead-safe active params"
+            "Selection 2014～2020 historical Min ROOS；rules全關、DL-off，"
+            "單階段rolling直接搜尋high_len＋4個ATR欄位"
         ),
         "identity_manifest_path": None,
         "trained_with_dl_id": None,
         "artifact_contract": {
             "breakout_quality_param_adaptation": {
-                "mode": "risk_only_training",
+                "mode": "min_roos_training",
                 "parameter_set": "P2_HISTORY",
+                "search_fields": [
+                    "high_len",
+                    "atr_len",
+                    "atr_buy_tol",
+                    "atr_times_init",
+                    "atr_times_trail",
+                ],
                 "fixed_rule_contract": "all_rule_filters_off",
                 "training_dl_enabled": False,
             }
@@ -172,12 +179,9 @@ STRATEGY_PARAM_SOURCES = {
             "builder_type": "selection_historical_p2",
             "options": {
                 "parameter_set": "p2_history",
-                "trials_per_fold": 200,
-                # historical baseline本身沿用正式rolling optimizer預設trial數；
-                # Strategy Compare缺件時可在隔離research models路徑自動建立／接續。
-                "baseline_trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
-                "baseline_train_window_months": OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
-                "baseline_oos_months": OUTER_ROLLING_OOS_HORIZON_MONTHS,
+                "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+                "train_window_months": OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+                "oos_months": OUTER_ROLLING_OOS_HORIZON_MONTHS,
                 "resume": True,
                 "fixed_risk": 0.01,
                 "max_position_cap_pct": 0.30,
