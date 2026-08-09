@@ -31,7 +31,6 @@ from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, load_validated_dataset_bundle, write_json
 from core.console_report import print_artifact_paths
-from tools.filters.breakout_quality import train_continuous_ranker as ranker_impl
 
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
 
@@ -163,7 +162,7 @@ def _render_markdown(payload: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run(args) -> int:
+def run(args, *, ranker_impl) -> int:
     started = time.perf_counter()
     bundle = load_daily_universal_ranker_data(
         filter_id=str(args.filter_id),

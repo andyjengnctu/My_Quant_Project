@@ -1235,7 +1235,7 @@ def main(argv=None) -> int:
     if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
         from tools.filters.breakout_quality.train_daily_ranker import run as run_daily_ranker
 
-        return int(run_daily_ranker(args))
+        return int(run_daily_ranker(args, ranker_impl=sys.modules[__name__]))
     contract = _profile_contract(profile)
     model_spec = get_model_spec(str(args.model_architecture))
     summary, indexed_features, context, labels, events = load_validated_dataset_bundle(

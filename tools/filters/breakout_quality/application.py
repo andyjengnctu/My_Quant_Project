@@ -2252,7 +2252,7 @@ def _print_workflow_status(settings=None) -> None:
             ),
         ))
     else:
-        base_rows.append(("PIT", "MR-13A stage 1：未啟用，先完成forward-OOS模型Gate"))
+        base_rows.append(("PIT", "目前Active Profile未啟用；先完成forward-OOS模型Gate"))
     print(render_key_values(base_rows))
     model_artifacts = resolve_filter_artifact_paths(
         PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
@@ -2701,7 +2701,7 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
 
 def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
     if not settings.supports_point_in_time_scores:
-        print("目前Active Profile尚未啟用PIT；MR-13A stage 1先完成forward-OOS模型Gate。")
+        print("目前Active Profile尚未啟用PIT；先完成forward-OOS模型Gate。")
         return 0
     _print_workflow_status(settings)
     if not _prompt_bool(

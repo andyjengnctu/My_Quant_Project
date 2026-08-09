@@ -76,8 +76,23 @@ class LazyDailyFeatureBank:
 
     def __getitem__(self, item):
         scalar = isinstance(item, (int, np.integer))
-        ids = np.asarray([int(item)], dtype=np.int64) if scalar else np.arange(len(self))[item]
+        if scalar:
+            ids = np.asarray([int(item)], dtype=np.int64)
+        elif isinstance(item, slice):
+            start, stop, step = item.indices(len(self))
+            ids = np.arange(start, stop, step, dtype=np.int64)
+        else:
+            ids = np.asarray(item)
+            if ids.dtype == bool:
+                if ids.ndim != 1 or len(ids) != len(self):
+                    raise IndexError("daily feature boolean index長度不一致")
+                ids = np.flatnonzero(ids)
+            else:
+                ids = np.asarray(ids, dtype=np.int64)
         ids = np.asarray(ids, dtype=np.int64).reshape(-1)
+        if bool(np.any(ids < -len(self))) or bool(np.any(ids >= len(self))):
+            raise IndexError("daily feature group index超出範圍")
+        ids = np.where(ids < 0, ids + len(self), ids)
         output = np.empty(
             (len(ids), int(self._policy.feature_window_bars), len(FEATURE_COLUMNS)),
             dtype=np.float32,

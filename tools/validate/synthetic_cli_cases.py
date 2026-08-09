@@ -22,6 +22,7 @@ from config.breakout_quality import (
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
 )
 from .checks import add_check
 
@@ -254,6 +255,11 @@ def validate_dataset_cli_contract_case(_base_params):
         patch.object(
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
         ),
         patch.object(
@@ -277,7 +283,7 @@ def validate_dataset_cli_contract_case(_base_params):
             "auto",
         ),
     ):
-        workflow_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
+        model_research_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
         with (
             patch("builtins.input", side_effect=["2", ""]),
             patch("tools.filters.breakout_quality.application._print_workflow_status"),
@@ -314,27 +320,27 @@ def validate_dataset_cli_contract_case(_base_params):
             and interactive_commands[0]["args"]
             == [
                 "--filter-id",
-                workflow_settings.filter_id,
+                model_research_settings.filter_id,
                 "--target-id",
-                workflow_settings.continuous_target_id,
+                model_research_settings.continuous_target_id,
             ]
             and interactive_commands[1]["args"][:6]
             == [
                 "--filter-id",
-                workflow_settings.filter_id,
+                model_research_settings.filter_id,
                 "--model-architecture",
-                workflow_settings.model_architecture,
+                model_research_settings.model_architecture,
                 "--experiment-profile",
-                workflow_settings.experiment_profile,
+                model_research_settings.experiment_profile,
             ]
             and interactive_commands[2]["args"]
             == [
                 "--filter-id",
-                workflow_settings.filter_id,
+                model_research_settings.filter_id,
                 "--model-architecture",
-                workflow_settings.model_architecture,
+                model_research_settings.model_architecture,
                 "--experiment-profile",
-                workflow_settings.experiment_profile,
+                model_research_settings.experiment_profile,
             ]
             and all(
                 item["compact_console"] == "1"
@@ -366,6 +372,11 @@ def validate_dataset_cli_contract_case(_base_params):
         patch.object(
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
         ),
         patch.object(
@@ -374,7 +385,7 @@ def validate_dataset_cli_contract_case(_base_params):
             configured_comparison_menu_label,
         ),
     ):
-        comparison_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
+        comparison_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
         with (
             patch("builtins.input", side_effect=["4"]),
             patch(
@@ -442,6 +453,31 @@ def validate_dataset_cli_contract_case(_base_params):
         (continuous_default_rc, continuous_train_route.call_count),
     )
 
+    with (
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
+            DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        ),
+        patch("builtins.input", side_effect=["0"]),
+    ):
+        no_pit_rc, no_pit_text = _capture_stdout(
+            app_breakout_quality._interactive_model_research,
+            "apps/research.py model",
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_model_menu_hides_pit_when_active_profile_disables_it",
+        (0, False, True),
+        (
+            no_pit_rc,
+            "[2] 建立／更新 Selection PIT Scores → PIT模型驗證" in no_pit_text,
+            "[1/Enter] 訓練目前模型 → forward-OOS模型報表" in no_pit_text,
+        ),
+    )
+
     research_app = importlib.import_module("apps.research")
     with (
         patch("builtins.input", side_effect=["4", "0", "0"]),
@@ -472,11 +508,11 @@ def validate_dataset_cli_contract_case(_base_params):
     )
 
     status_output = StringIO()
+    current_model_settings = app_breakout_quality.get_breakout_quality_model_research_settings()
     with redirect_stdout(status_output):
-        app_breakout_quality._print_workflow_status()
+        app_breakout_quality._print_workflow_status(current_model_settings)
     rendered_status = status_output.getvalue()
-    current_workflow_settings = app_breakout_quality.get_breakout_quality_workflow_settings()
-    if current_workflow_settings.is_binary_classification:
+    if current_model_settings.is_binary_classification:
         workflow_status_contract_ok = (
             "Breakout Quality 工件狀態" in rendered_status
             and "runtime_scores" in rendered_status
@@ -484,13 +520,17 @@ def validate_dataset_cli_contract_case(_base_params):
             and "models/filters/breakout_quality/" in rendered_status
         )
     else:
+        pit_status_ok = (
+            ("PIT Scores" in rendered_status and "PIT 模型驗證" in rendered_status)
+            if current_model_settings.supports_point_in_time_scores
+            else ("PIT Scores" not in rendered_status and "PIT 模型驗證" not in rendered_status)
+        )
         workflow_status_contract_ok = (
-            current_workflow_settings.is_continuous_ranker
+            current_model_settings.is_continuous_ranker
             and "Workflow 狀態" in rendered_status
             and "Continuous Target" in rendered_status
             and "Full Model / Forward OOS" in rendered_status
-            and "PIT Scores" in rendered_status
-            and "PIT 模型驗證" in rendered_status
+            and pit_status_ok
         )
     add_check(
         results,
@@ -500,9 +540,10 @@ def validate_dataset_cli_contract_case(_base_params):
         True,
         (
             "Current Breakout Quality Workflow" in rendered_status
-            and str(current_workflow_settings.experiment_profile) in rendered_status
-            and str(current_workflow_settings.training_objective) in rendered_status
-            and str(current_workflow_settings.training_label_scope) in rendered_status
+            and str(current_model_settings.experiment_profile) in rendered_status
+            and str(current_model_settings.training_objective) in rendered_status
+            and str(current_model_settings.training_label_scope) in rendered_status
+            and str(current_model_settings.training_sample_scope) in rendered_status
             and workflow_status_contract_ok
             and "C:\\Users\\" not in rendered_status
             and "/mnt/data/" not in rendered_status
@@ -526,13 +567,18 @@ def validate_dataset_cli_contract_case(_base_params):
 
     dataset_step = (
         "build-dataset",
-        ["--dataset", "full", "--filter-id", workflow_settings.filter_id],
+        ["--dataset", "full", "--filter-id", model_research_settings.filter_id],
         "完整建立 indexed feature bank dataset",
     )
     with (
         patch.object(
             breakout_quality_config,
             "BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE",
+            STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+        ),
+        patch.object(
+            breakout_quality_config,
+            "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE",
             STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
         ),
         patch.object(
@@ -623,9 +669,9 @@ def validate_dataset_cli_contract_case(_base_params):
         prepare_target_rc = prepare_target_module.main(
             [
                 "--filter-id",
-                workflow_settings.filter_id,
+                model_research_settings.filter_id,
                 "--target-id",
-                workflow_settings.continuous_target_id,
+                model_research_settings.continuous_target_id,
             ]
         )
     add_check(
@@ -633,7 +679,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_prepare_continuous_target_rebuilds_then_revalidates",
-        (0, 1, workflow_settings.continuous_target_id),
+        (0, 1, model_research_settings.continuous_target_id),
         (
             prepare_target_rc,
             build_target.call_count,
@@ -662,9 +708,9 @@ def validate_dataset_cli_contract_case(_base_params):
         compact_current_rc = prepare_target_module.main(
             [
                 "--filter-id",
-                workflow_settings.filter_id,
+                model_research_settings.filter_id,
                 "--target-id",
-                workflow_settings.continuous_target_id,
+                model_research_settings.continuous_target_id,
             ]
         )
     add_check(
@@ -676,8 +722,8 @@ def validate_dataset_cli_contract_case(_base_params):
         (compact_current_rc, compact_current_output.getvalue()),
     )
 
-    binary_workflow_settings = replace(
-        workflow_settings,
+    binary_model_research_settings = replace(
+        model_research_settings,
         experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
         training_objective=TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
         continuous_target_id=None,
@@ -688,8 +734,8 @@ def validate_dataset_cli_contract_case(_base_params):
     )
     with (
         patch(
-            "tools.filters.breakout_quality.application.get_breakout_quality_workflow_settings",
-            return_value=binary_workflow_settings,
+            "tools.filters.breakout_quality.application.get_breakout_quality_model_research_settings",
+            return_value=binary_model_research_settings,
         ),
         patch(
             "tools.filters.breakout_quality.application._interactive_binary_model_research",
@@ -704,7 +750,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "breakout_quality_binary_profile_routes_to_binary_model_submenu",
-        (41, 1, binary_workflow_settings),
+        (41, 1, binary_model_research_settings),
         (
             binary_rc,
             binary_route.call_count,
