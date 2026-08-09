@@ -25,6 +25,7 @@ from core.strategy_comparison import (
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
+    StrategyPreparationAction,
     StrategyPreparationPlan,
     strategy_comparison_fingerprint,
 )
@@ -55,6 +56,9 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+)
+from filters.breakout_quality.ranking_score_store import (
+    SCORE_SOURCE_SELECTION_POINT_IN_TIME,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
 from filters.breakout_quality.strategy_rule_policies import (
@@ -262,6 +266,199 @@ def _pair_cache_required_files(
     return tuple(required)
 
 
+
+def _artifact_identity_sha(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("sha256") or "").strip().lower()
+
+
+def _settings_core_matches_archived_pair(
+    *,
+    settings: StrategyComparisonSettings,
+    stored_settings: dict[str, Any],
+    on_arm: StrategyComparisonArm,
+) -> bool:
+    """Validate immutable replay semantics before using an archived comparator pair."""
+
+    for field in ("dataset", "param_policy", "max_positions", "rotation"):
+        if stored_settings.get(field) != settings.as_dict().get(field):
+            return False
+
+    stored_params = dict(stored_settings.get("parameter_sources") or {})
+    stored_dl_sources = dict(stored_settings.get("dl_sources") or {})
+    current_param = settings.parameter_sources[on_arm.param_source].as_dict()
+    stored_param = dict(stored_params.get(on_arm.param_source) or {})
+    if not stored_param:
+        return False
+    for field in ("path_template", "identity_manifest_path", "trained_with_dl_id"):
+        if stored_param.get(field) != current_param.get(field):
+            return False
+
+    dl_id = str(on_arm.dl_id or "")
+    if not dl_id or dl_id not in settings.dl_sources:
+        return False
+    current_dl = settings.dl_sources[dl_id].as_dict()
+    stored_dl = dict(stored_dl_sources.get(dl_id) or {})
+    if not stored_dl:
+        return False
+    for field in (
+        "filter_id",
+        "model_architecture",
+        "experiment_profile",
+        "threshold",
+        "score_source",
+    ):
+        if stored_dl.get(field) != current_dl.get(field):
+            return False
+    return True
+
+
+def _archived_pair_source_is_self_contained(
+    *,
+    run_artifact_identities: dict[str, Any],
+    dl_id: str,
+) -> bool:
+    """Require proof that the completed pair was built from fully materialized PIT artifacts."""
+
+    return all(
+        bool(_artifact_identity_sha(run_artifact_identities.get(f"dl:{dl_id}:{name}")))
+        for name in ("manifest", "audit", "forward_scores")
+    )
+
+
+def _find_reusable_pair_with_archived_source(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    off_arm: StrategyComparisonArm,
+    on_arm: StrategyComparisonArm,
+) -> dict[str, Any] | None:
+    """Reuse a completed pair when its old PIT source no longer exists locally.
+
+    This path is intentionally narrower than normal cache reuse.  It is allowed only when
+    the current parameter artifact is present and byte-identical to the completed run, the
+    replay/config contracts still match, the historical run recorded complete PIT source
+    identities, and every required pair output is still present.  No missing model/audit
+    artifact is reconstructed or treated as READY.
+    """
+
+    if not settings.preparation.reuse_completed_results:
+        return None
+    dl_id = str(on_arm.dl_id or "")
+    if not dl_id or dl_id not in settings.dl_sources:
+        return None
+    if settings.dl_sources[dl_id].score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        return None
+    dl_status = dict((status.get("dl_sources") or {}).get(dl_id) or {})
+    if bool(dl_status.get("ready")):
+        return None
+    param_identity = dict(
+        (status.get("artifact_identities") or {}).get(
+            f"param:{on_arm.param_source}"
+        )
+        or {}
+    )
+    current_param_sha = _artifact_identity_sha(param_identity)
+    if not current_param_sha:
+        return None
+
+    comparison_period = dict(status.get("comparison_period") or {})
+    if not comparison_period:
+        return None
+    output_root = _resolve_relative_path(root, settings.output_root)
+    runs_root = output_root / "runs"
+    if not runs_root.is_dir():
+        return None
+    current_group_id = _pair_group_id(
+        param_source=on_arm.param_source,
+        rule_policy=on_arm.rule_policy,
+        dl_id=dl_id,
+        dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
+    )
+    expected_off = _replay_arm_contract(off_arm.as_dict())
+    expected_on = _replay_arm_contract(on_arm.as_dict())
+
+    for run_dir in sorted(
+        (path for path in runs_root.iterdir() if path.is_dir()),
+        key=lambda path: path.name,
+        reverse=True,
+    ):
+        run_payload = _read_json(run_dir / "strategy_comparison.json")
+        if not isinstance(run_payload, dict) or str(run_payload.get("status") or "") != "COMPLETED":
+            continue
+        stored_settings = dict(run_payload.get("settings") or {})
+        if not _settings_core_matches_archived_pair(
+            settings=settings,
+            stored_settings=stored_settings,
+            on_arm=on_arm,
+        ):
+            continue
+        if dict(run_payload.get("comparison_period") or {}) != comparison_period:
+            continue
+        stored_arms = dict(stored_settings.get("arms") or {})
+        stored_off = dict(stored_arms.get(off_arm.arm_id) or {})
+        stored_on = dict(stored_arms.get(on_arm.arm_id) or {})
+        if not stored_off or not stored_on:
+            continue
+        if _replay_arm_contract(stored_off) != expected_off or _replay_arm_contract(stored_on) != expected_on:
+            continue
+
+        run_artifacts = dict(run_payload.get("artifact_identities") or {})
+        stored_param_sha = _artifact_identity_sha(
+            run_artifacts.get(f"param:{on_arm.param_source}")
+        )
+        if stored_param_sha != current_param_sha:
+            continue
+        if not _archived_pair_source_is_self_contained(
+            run_artifact_identities=run_artifacts,
+            dl_id=dl_id,
+        ):
+            continue
+
+        stored_group_id = _pair_group_id(
+            param_source=str(stored_on.get("param_source") or ""),
+            rule_policy=str(stored_on.get("rule_policy") or ""),
+            dl_id=str(stored_on.get("dl_id") or ""),
+            dl_runtime_mode=str(stored_on.get("dl_runtime_mode") or ""),
+        )
+        pairs = dict(run_payload.get("pairs") or {})
+        pair_payload = pairs.get(stored_group_id)
+        if not isinstance(pair_payload, dict):
+            continue
+        metadata = dict(pair_payload.get("metadata") or {})
+        if int(metadata.get("schema_version") or 0) != int(STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION):
+            continue
+        pair_dir = run_dir / "pairs" / stored_group_id
+        if not all(
+            path.is_file()
+            for path in _pair_cache_required_files(pair_dir, on_arm=on_arm)
+        ):
+            continue
+        try:
+            stored_fingerprint = _pair_cache_fingerprint_from_payload(
+                settings_payload=stored_settings,
+                artifact_identities=run_artifacts,
+                comparison_period=comparison_period,
+                off_arm_payload=stored_off,
+                on_arm_payload=stored_on,
+                engine_schema_version=STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
+            )
+        except (TypeError, ValueError):
+            continue
+        return {
+            "fingerprint": stored_fingerprint,
+            "source_run_dir": run_dir,
+            "source_pair_dir": pair_dir,
+            "source_group_id": stored_group_id,
+            "current_group_id": current_group_id,
+            "source_artifact_mode": "archived_completed_pair",
+            "archived_dl_id": dl_id,
+        }
+    return None
+
+
 def _find_reusable_pair(
     *,
     root: Path,
@@ -344,7 +541,13 @@ def _find_reusable_pair(
             "source_group_id": stored_group_id,
             "current_group_id": current_group_id,
         }
-    return None
+    return _find_reusable_pair_with_archived_source(
+        root=root,
+        settings=settings,
+        status=status,
+        off_arm=off_arm,
+        on_arm=on_arm,
+    )
 
 
 def _collect_replay_cache_status(
@@ -379,6 +582,91 @@ def _collect_replay_cache_status(
     }
 
 
+
+def _apply_archived_pair_dependency_waivers(
+    *,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    replay_cache: dict[str, Any],
+) -> dict[str, Any]:
+    """Do not require vanished model artifacts for arms that will only reuse completed pairs."""
+
+    pairs = dict(replay_cache.get("pairs") or {})
+    waived_dl_ids: set[str] = set()
+    for dl_id, source_row in dict(status.get("dl_sources") or {}).items():
+        if bool(source_row.get("ready")):
+            continue
+        dependent_arms = tuple(
+            arm
+            for arm in settings.enabled_arms
+            if arm.dl_enabled and str(arm.dl_id or "") == str(dl_id)
+        )
+        if not dependent_arms:
+            continue
+        if all(
+            isinstance(pairs.get(arm.arm_id), dict)
+            and pairs[arm.arm_id].get("source_artifact_mode") == "archived_completed_pair"
+            for arm in dependent_arms
+        ):
+            waived_dl_ids.add(str(dl_id))
+    if not waived_dl_ids:
+        status["replay_cache"] = replay_cache
+        return status
+
+    plan: StrategyPreparationPlan = status["preparation_plan"]
+    rewritten_actions: list[StrategyPreparationAction] = []
+    for item in plan.actions:
+        parts = item.artifact_key.split(":")
+        dl_id = parts[1] if len(parts) >= 2 and parts[0] == "dl" else None
+        if dl_id in waived_dl_ids:
+            rewritten_actions.append(
+                StrategyPreparationAction(
+                    action_id=item.action_id,
+                    artifact_key=item.artifact_key,
+                    action="REUSE",
+                    builder_type=None,
+                    description=(
+                        "本次使用此DL的arms全部重用identity一致的completed pair；"
+                        "不重建已缺少的歷史模型／PIT工件"
+                    ),
+                    path=item.path,
+                )
+            )
+        else:
+            rewritten_actions.append(item)
+
+    action_names = {item.action for item in rewritten_actions}
+    overall_status = (
+        "BLOCKED"
+        if "BLOCKED" in action_names
+        else "PREPARABLE"
+        if action_names & {"BUILD", "REBUILD"}
+        else "READY"
+    )
+    status = dict(status)
+    status["preparation_plan"] = StrategyPreparationPlan(
+        overall_status=overall_status,
+        actions=tuple(rewritten_actions),
+    )
+    status["overall_status"] = overall_status
+    status["comparison_ready"] = overall_status == "READY"
+    status["replay_cache"] = replay_cache
+    status["archived_pair_dependency_waivers"] = sorted(waived_dl_ids)
+    for dl_id in waived_dl_ids:
+        row = dict(status["dl_sources"][dl_id])
+        row["status"] = "ARCHIVED_PAIR_REUSE"
+        row["required_for_current_execution"] = False
+        files = {}
+        for key, file_row in dict(row.get("files") or {}).items():
+            updated = dict(file_row)
+            updated["action"] = "REUSE"
+            updated["required_for_current_execution"] = False
+            files[key] = updated
+        row["files"] = files
+        status["dl_sources"][dl_id] = row
+    return status
+
+
 def collect_artifact_status(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -393,12 +681,16 @@ def collect_artifact_status(
         current,
         artifact_identities=status["artifact_identities"],
     )
-    status["replay_cache"] = _collect_replay_cache_status(
+    replay_cache = _collect_replay_cache_status(
         root=Path(project_root).resolve(),
         settings=current,
         status=status,
     )
-    return status
+    return _apply_archived_pair_dependency_waivers(
+        settings=current,
+        status=status,
+        replay_cache=replay_cache,
+    )
 
 
 def render_status(
@@ -498,9 +790,16 @@ def render_execution_plan(
     status: dict[str, Any],
 ) -> str:
     plan: StrategyPreparationPlan = status["preparation_plan"]
+    ordered_actions = sorted(
+        plan.actions,
+        key=lambda item: (
+            0 if item.artifact_key.startswith("param:") else 1,
+            item.artifact_key,
+        ),
+    )
     rows = [
         (item.action, item.artifact_key, item.description)
-        for item in plan.actions
+        for item in ordered_actions
     ]
     replay_cache = dict(status.get("replay_cache") or {})
     cached_pairs = dict(replay_cache.get("pairs") or {})
@@ -1220,6 +1519,9 @@ def run_strategy_comparison(
             project_root=root,
             settings=settings,
             status=status,
+            status_refresher=lambda: collect_artifact_status(
+                project_root=root, settings=settings
+            ),
         )
         status = _collect_ready_status_after_preparation(
             root=root,
@@ -1321,6 +1623,9 @@ def run_strategy_comparison(
                     pair_dir, project_root=root
                 ),
                 "shared_baseline_reused": True,
+                "source_artifact_mode": cache_entry.get(
+                    "source_artifact_mode", "current_artifacts"
+                ),
             }
             if not quiet:
                 print(

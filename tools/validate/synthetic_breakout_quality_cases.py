@@ -17301,6 +17301,30 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and str(selection_min_roos_source.builder.options.get("parameter_set")) == "p2_history"
         and "prepare_selection_historical_p2_params" in preparation_source,
     )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "completed_pair_cache_can_replace_vanished_historical_pit_only_for_reuse",
+        True,
+        all(token in orchestration_source for token in (
+            "archived_completed_pair",
+            "_find_reusable_pair_with_archived_source",
+            "stored_param_sha != current_param_sha",
+            "_archived_pair_source_is_self_contained",
+            "settings.dl_sources[dl_id].score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME",
+            "dependent_arms = tuple(",
+            "本次使用此DL的arms全部重用identity一致的completed pair",
+        )),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "preparation_builds_parameter_identity_first_and_replans_before_historical_pit_rebuild",
+        True,
+        all(token in preparation_source for token in (
+            "status_refresher",
+            'item.artifact_key.startswith("param:")',
+            "current = refresh_status()",
+        )),
+    )
 
     from filters.breakout_quality.strategy_compare_preparation import (
         _validate_expected_artifact_contract,

@@ -7244,3 +7244,39 @@ Stage 3實作前曾預期future-independent score universe會使row數高於`778
 ### Scientific identity／判定
 
 MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28的target、model weights、selector、策略參數語意與比較期間均未修改；本輪只修正前置工件 orchestration，不新增MR/SR ID。若既有PIT fold/checkpoint也不存在或identity不相容，仍必須BLOCK並由模型研究入口重建，不能為了自動化跨越「策略比較不得訓練模型」邊界。
+
+## 2026-08-09 — Stage 3 Strategy Compare archived comparator自動重用閉環
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / C24_C25_ARCHIVED_PAIR_REUSE_SUPPORTED / SELECTION_COMPARE_STILL_PENDING`。
+
+### 程式基準與使用者錯誤
+
+- 本輪來源ZIP：`test-branch-1_20260809_211141_5a2c093.zip`；SHA256=`08172f5433fc76cd2f0fa404cf1e03c71a8ebde1408f0b300ed9f538687175af`。
+- Strategy Compare已進入`PREPARABLE`並嘗試checkpoint-only重建`DL-CONT12B-PIT`，但在真正fold reuse前被缺少`outputs/filters/breakout_quality/breakout_quality_v1/continuous_targets/strategy_aligned_opportunity_no_time_r_v1/manifest.json`阻擋。
+- 該Continuous Target屬MR-12B模型研究上游；依專案契約，Strategy Compare不得為了補歷史comparator自行建立Target／Label。
+
+### 根因
+
+先前將「Selection PIT top-level工件缺失可由既有fold/checkpoint重建」泛化過度。MR-12B event provider在載入fold plan時仍需要Continuous Target以重建train／validation／refit identity，而PIT Audit也必須用Target重新計算Spearman／spread並驗證Target manifest hash。因此當Target artifact本身已被刪除時，不能合法地只靠checkpoint-only重建完整model-audit source。
+
+然而本輪C24/C25並不是待重跑的新arm：它們已有2014～2020正式completed Strategy Compare pair，且本次用途只是作C27/C28的固定歷史comparator。要求恢復已刪MR-12B Target只為重新產生不會被replay的C24/C25，是不必要的反向依賴。
+
+### 修正
+
+1. Strategy Compare新增狹義`archived_completed_pair` cache路徑，只允許Selection PIT類歷史source缺失時使用；它不把缺少的PIT source標為READY，也不重建Target／Audit。
+2. archived pair必須同時滿足：
+   - current historical P2 params已存在，且SHA256與completed run記錄完全一致；
+   - dataset、param policy、max positions、rotation、comparison period、param source identity、DL filter／architecture／profile／score source與off/on arm runtime contract全部一致；
+   - completed run當時記錄的PIT manifest／audit／forward-score identities皆有非空SHA；
+   - completed pair的正式JSON／Markdown／yearly／equity／trades／capacity／orderable／selected-buys等必要工件仍完整；
+   - pair engine schema仍與目前一致。
+3. 任一條件不符即不得使用archived reuse；若current param SHA不同，必須拒絕而不是把歷史結果搬到不同參數宇宙。
+4. 前置executor改為每次只完成一個BUILD／REBUILD後立即重新規劃，並優先建立`param:*`。因此本案例會先建立／接續`selection_min_roos`；若其SHA證明C24/C25 completed pairs可重用，下一波直接取消`CONT12B_PIT`重建依賴。若無可用completed pair，原checkpoint-only／BLOCKED安全邊界仍保留。
+5. 新run的pair execution manifest會標記`source_artifact_mode=archived_completed_pair`，保留「結果來自已完成歷史pair、不是目前source重新READY」的可稽核差異。
+
+### Scientific identity
+
+MR-12B、MR-13A、C23～C28的模型權重、Target、selector、historical P2語意、comparison period與策略會計均未修改；本輪只修正dependency orchestration與completed-result cache provenance，不新增MR／SR ID。C27/C28 Selection結果仍待正式執行。
+

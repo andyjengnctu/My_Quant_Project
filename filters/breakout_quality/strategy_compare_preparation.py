@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -940,6 +940,7 @@ def prepare_strategy_comparison_artifacts(
     project_root: Path = PROJECT_ROOT,
     settings: StrategyComparisonSettings,
     status: dict[str, Any],
+    status_refresher: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     requested_plan: StrategyPreparationPlan = status["preparation_plan"]
@@ -951,6 +952,11 @@ def prepare_strategy_comparison_artifacts(
         raise RuntimeError("目前config已關閉auto_prepare")
 
     current = status
+    refresh_status = (
+        status_refresher
+        if status_refresher is not None
+        else lambda: collect_artifact_status(project_root=root, settings=settings)
+    )
     executed_signatures: set[tuple[str, str, str | None, str]] = set()
     max_waves = max(2, len(requested_plan.actions) + 2)
     for _wave in range(max_waves):
@@ -974,6 +980,15 @@ def prepare_strategy_comparison_artifacts(
         ]
         if not wave_actions:
             raise RuntimeError("策略比較前置狀態非READY，但沒有可執行BUILD／REBUILD動作")
+        # Build deterministic strategy parameters first, then immediately re-plan.  A newly
+        # materialized parameter hash may prove that an older completed comparator pair is
+        # reusable, in which case vanished historical model artifacts are no longer needed.
+        wave_actions.sort(
+            key=lambda item: (
+                0 if item.artifact_key.startswith("param:") else 1,
+                item.artifact_key,
+            )
+        )
         executed_this_wave = 0
         for action in wave_actions:
             signature = (
@@ -993,9 +1008,10 @@ def prepare_strategy_comparison_artifacts(
                     f"path={action.path} | {type(exc).__name__}: {exc}"
                 ) from exc
             executed_signatures.add(signature)
-            executed_this_wave += 1
+            executed_this_wave = 1
+            break
 
-        current = collect_artifact_status(project_root=root, settings=settings)
+        current = refresh_status()
         current["requested_preparation_plan"] = requested_plan
         if current["comparison_ready"]:
             return current
