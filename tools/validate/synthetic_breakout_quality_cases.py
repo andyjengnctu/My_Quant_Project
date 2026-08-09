@@ -18676,6 +18676,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         collect_strategy_realization_capture_status,
         run_strategy_realization_capture_audit,
     )
+    from tools.audit.breakout_quality.pit_fold_runtime_attribution import (
+        build_pit_fold_runtime_attribution,
+    )
     from tools.audit.catalog import validate_audit_catalog
 
     case_id = "AUDIT_FRAMEWORK"
@@ -18702,6 +18705,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     pit_realization_definition = next(
         (item for item in all_definitions if item.audit_id == "c23-c25-pit-realization"), None
+    )
+    pit_fold_runtime_definition = next(
+        (item for item in all_definitions if item.audit_id == "c23-c25-pit-fold-runtime"), None
     )
     validate_audit_catalog(all_definitions)
     project_root = Path(__file__).resolve().parents[2]
@@ -18733,9 +18739,56 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and strategy_attribution_definition is not None
         and source_attribution_definition is not None
         and pit_realization_definition is not None
+        and pit_fold_runtime_definition is not None
         and "breakout_quality" in get_audit_module_ids(enabled_only=True)
         and bool(enabled_definitions)
         and all(bool(str(item.source.get("kind") or "").strip()) for item in all_definitions),
+    )
+
+    synthetic_scores = pd.DataFrame([
+        {"ticker": "A", "date": "2023-12-20", "fold_id": "F1", "breakout_quality_score": 0.70},
+        {"ticker": "B", "date": "2023-12-21", "fold_id": "F1", "breakout_quality_score": 0.60},
+        {"ticker": "C", "date": "2024-01-02", "fold_id": "F2", "breakout_quality_score": 0.80},
+        {"ticker": "D", "date": "2024-01-03", "fold_id": "F2", "breakout_quality_score": 0.50},
+    ])
+    synthetic_orderable = pd.DataFrame([
+        {"ticker": "A", "trade_date": "2024-01-04", "signal_date": "2023-12-20", "breakout_quality_score_date": "2023-12-20"},
+        {"ticker": "C", "trade_date": "2024-01-04", "signal_date": "2024-01-02", "breakout_quality_score_date": "2024-01-02"},
+        {"ticker": "C", "trade_date": "2024-03-15", "signal_date": "2024-01-02", "breakout_quality_score_date": "2024-01-02"},
+        {"ticker": "D", "trade_date": "2024-03-15", "signal_date": "2024-01-03", "breakout_quality_score_date": "2024-01-03"},
+    ])
+    synthetic_trade_contributions = pd.DataFrame([
+        {"category": "comparator_only", "ticker": "A", "entry_date": "2024-01-04", "signal_date": "2023-12-20", "candidate_r": 0.0, "comparator_r": 2.0, "r_delta": -2.0},
+        {"category": "candidate_only", "ticker": "C", "entry_date": "2024-01-04", "signal_date": "2024-01-02", "candidate_r": -1.0, "comparator_r": 0.0, "r_delta": -1.0},
+        {"category": "comparator_only", "ticker": "D", "entry_date": "2024-03-15", "signal_date": "2024-01-03", "candidate_r": 0.0, "comparator_r": -1.0, "r_delta": 1.0},
+        {"category": "candidate_only", "ticker": "C", "entry_date": "2024-03-15", "signal_date": "2024-01-02", "candidate_r": 1.0, "comparator_r": 0.0, "r_delta": 1.0},
+    ])
+    fold_payload, fold_frames = build_pit_fold_runtime_attribution(
+        score_table=synthetic_scores,
+        pit_audit={
+            "fold_drift": {"drift_flag": True, "flagged_folds": ["F2"], "max_adjacent_mean_shift_in_pooled_std": 1.2},
+            "fold_metrics": [],
+        },
+        orderable_candidates=synthetic_orderable,
+        trade_contributions=synthetic_trade_contributions,
+        fold_boundary_window_days=30,
+    )
+    by_scope = {row["scope"]: row for row in fold_payload["exclusive_selection"]["by_day_scope"]}
+    by_boundary = {str(row["scope"]): row for row in fold_payload["exclusive_selection"]["by_fold_boundary_window"]}
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "pit_fold_runtime_attribution_separates_mixed_fold_and_boundary_winner_capture_without_replay",
+        True,
+        fold_payload["runtime_mixing"]["mixed_fold_day_count"] == 1
+        and math.isclose(float(fold_payload["runtime_mixing"]["cross_fold_pair_share"]), 0.5, abs_tol=1e-12)
+        and math.isclose(float(by_scope["mixed_fold"]["selection_delta_r"]), -3.0, abs_tol=1e-12)
+        and math.isclose(float(by_scope["single_fold"]["selection_delta_r"]), 2.0, abs_tol=1e-12)
+        and math.isclose(float(by_scope["mixed_fold"]["winner_r_contribution_delta"]), -2.0, abs_tol=1e-12)
+        and math.isclose(float(by_boundary["True"]["selection_delta_r"]), -3.0, abs_tol=1e-12)
+        and math.isclose(float(by_boundary["False"]["selection_delta_r"]), 2.0, abs_tol=1e-12)
+        and not fold_frames["exclusive_trade_fold_attribution"].empty,
     )
 
     with tempfile.TemporaryDirectory() as tmp:

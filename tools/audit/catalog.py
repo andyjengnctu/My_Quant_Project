@@ -97,6 +97,16 @@ AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
         status_function="collect_strategy_realization_capture_status",
         run_function="run_strategy_realization_capture_audit",
     ),
+    "pit_fold_runtime_attribution": AuditCatalogEntry(
+        audit_type="pit_fold_runtime_attribution",
+        domain="breakout_quality",
+        module="tools.audit.breakout_quality.pit_fold_runtime_attribution",
+        mode="formal",
+        description="Selection PIT orderable pool的cross-fold score mixing、fold transition與exclusive winner capture歸因",
+        read_only=True,
+        status_function="collect_pit_fold_runtime_attribution_status",
+        run_function="run_pit_fold_runtime_attribution_audit",
+    ),
     # Research / historical Audit commands. They share this inventory but are not
     # eligible for the formal config runner unless promoted to mode=formal later.
     "regime": AuditCatalogEntry(

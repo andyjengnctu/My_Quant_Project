@@ -468,6 +468,7 @@ def _trade_contributions(
         cl = candidate_life.loc[key] if not candidate_lifecycle.empty and key in candidate_life.index else None
         bl = comparator_life.loc[key] if not comparator_lifecycle.empty and key in comparator_life.index else None
         entry_date = str((c if c is not None else b).get("entry_date") or "")
+        signal_date = str((c if c is not None else b).get("signal_date") or "")
         category = "common" if has_candidate and has_comparator else "candidate_only" if has_candidate else "comparator_only"
         candidate_pnl = float(c.get("pnl", 0.0)) if c is not None else 0.0
         comparator_pnl = float(b.get("pnl", 0.0)) if b is not None else 0.0
@@ -478,6 +479,7 @@ def _trade_contributions(
             "category": category,
             "ticker": str((c if c is not None else b).get("ticker") or ""),
             "entry_date": entry_date,
+            "signal_date": signal_date,
             "entry_month": entry_date[:7],
             "entry_year": int(entry_date[:4]) if len(entry_date) >= 4 else None,
             "candidate_pnl": candidate_pnl,

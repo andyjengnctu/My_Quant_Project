@@ -6563,3 +6563,41 @@ Controlled deltas：
 ### 下一步
 
 下一個最高資訊量read-only診斷優先檢查**PIT-specific fold score drift / mixed-fold runtime conditioning**：PIT audit已有`drift=True`，而Strategy replay的orderable候選可跨年度fold保留frozen score。應直接量測trade date是否混用不同PIT fold model scores、fold boundary附近的exclusive winner capture／selection R是否異常，以及負向selection R是否集中mixed-fold日期。這是PIT-specific問題，先於新Target／新MR。若fold conditioning不能解釋loss，再回到Target與realized trade-path語意研究；不得先跑optimizer。
+
+## 2026-08-09 — AUD-c23-c25-pit-fold-runtime 實作：PIT fold drift／mixed-fold winner capture只讀歸因
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / READ_ONLY_EXISTING_REPLAY_AND_PIT_ONLY`。本輪只新增正式Audit與獨立synthetic contract，不執行portfolio replay、不重訓／校正PIT模型、不跑optimizer。
+
+### 程式基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_073059_dca5f98.zip`。
+- SHA256：`7eed43b7ae194e0e42f68a87c2a96754f4fe6d5cbb4603823a1e28d3f0a999f3`。
+- GPT fresh extract：`/mnt/data/stock_review_073059`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
+
+### Audit identity／固定來源
+
+- 新增`AUD-c23-c25-pit-fold-runtime`（config id=`c23-c25-pit-fold-runtime`）；不新增`MR-*`、`DL-*`、`SR-C*`或`PARAM-*`。
+- source由`config/audit.py`驅動：baseline與candidate arms均不硬編於handler；目前設定為C23 baseline、C24/C25 candidates，讀最新已完成Strategy Compare。
+- candidate arm必須綁定`score_source=selection_point_in_time`；Audit再由Strategy Compare保存的DL identity解析合法PIT score／manifest／audit，沿用正式hash/Gate驗證。
+- fold boundary window預設`30` calendar days，為config可調研究顯示參數，不進runtime。
+
+### 實作內容
+
+1. 每個orderable candidate以`breakout_quality_score_date`優先、否則`signal_date`對回PIT score table的`fold_id`；保存score age與PIT score coverage。
+2. 每個trade date計算fold count、mixed-fold flag、scored pairs與cross-fold pair share，直接量化runtime是否把不同fold模型分數混在同一候選池。
+3. 共用`build_strategy_attribution_pair_payload`的canonical round-trip／exclusive trade結果；該primitive新增只讀`signal_date`欄位，以`entry_date+ticker+signal_date`對回candidate occurrence，不改既有R／PnL口徑。
+4. Exclusive selection R另拆成single-fold vs mixed-fold days，以及距PIT fold transition是否落於±config window；同時拆winner R contribution與loser R contribution。
+5. 報表同步顯示既有PIT audit的`fold_drift`與fold score分布，但不重算另一套Gate，也不把共現解讀成因果。
+6. 若mixed-fold／fold-boundary不能解釋C24/C25 winner capture loss，下一步回到Target／realized outcome語意；不得因本Audit直接校正score或修改MR-12B loss／OOS selector。
+
+### 獨立synthetic
+
+隔離fixture建立F1/F2兩fold、1個mixed-fold trade day與1個single-fold trade day；mixed day固定exclusive selection R=`-3R`（winner contribution=`-2R`），single-fold day=`+2R`，fold boundary ±30天亦固定`-3R`。`validate_breakout_quality_audit_framework_contract_case`直接驗證mixed-fold day count、cross-fold pair share、兩scope R分解與read-only attribution primitive，結果0失敗。
+
+### 下一步
+
+使用正式選單`apps/research.py → [4] Audit／診斷 → [2] 查看Audit設定、工件與預計動作`；READY後`[1/Enter]`執行。先看C24/C25的mixed-fold day比例、cross-fold pair share、mixed vs single exclusive selection R，以及fold-boundary vs outside winner contribution。只有損失明顯集中才考慮Selection-only score-normalization／runtime假說。
+

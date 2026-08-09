@@ -129,7 +129,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/c15_source_attribution",
             },
             "c23-c25-pit-realization": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "strategy_realization_capture",
                 "description": "Selection PIT直接部署失敗歸因：比較baseline與設定中的PIT ranking arms之exclusive trades、fill、sizing、holding、slot occupancy與Target→Realized capture",
                 "source": {
@@ -151,6 +151,29 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "target_capture": True,
                 },
                 "output_subdir": "breakout_quality/c23_c25_pit_realization_capture",
+            },
+            "c23-c25-pit-fold-runtime": {
+                "enabled": True,
+                "audit_type": "pit_fold_runtime_attribution",
+                "description": "Selection PIT fold drift／mixed-fold runtime歸因：檢查orderable pool跨fold score混合與winner capture損失是否集中於fold transition",
+                "source": {
+                    "kind": "strategy_compare",
+                    "run": "latest",
+                    "baseline_arm_id": "C23",
+                    "candidate_arm_ids": ["C24", "C25"],
+                },
+                "dimensions": {
+                    "fold_boundary_window_days": 30,
+                    "focus_year": 2020,
+                    "top_month_count": 5,
+                    "top_trade_count": 20,
+                },
+                "outcomes": {
+                    "runtime_fold_mixing": True,
+                    "exclusive_winner_capture": True,
+                    "fold_boundary_attribution": True,
+                },
+                "output_subdir": "breakout_quality/c23_c25_pit_fold_runtime",
             },
         },
     },
