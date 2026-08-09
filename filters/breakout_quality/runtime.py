@@ -7,7 +7,7 @@ from contextvars import ContextVar
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator, Mapping
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,7 @@ class BreakoutQualityRankingSourceContext:
     model_architecture: str | None = None
     experiment_profile: str | None = None
     ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE
+    ranking_options: Mapping[str, Any] | None = None
 
 
 
@@ -169,6 +170,7 @@ def breakout_quality_ranking_source_context(
     model_architecture: str | None = None,
     experiment_profile: str | None = None,
     ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    ranking_options: Mapping[str, Any] | None = None,
 ) -> Iterator[BreakoutQualityRankingSourceContext]:
     source = str(score_source).strip()
     if source not in SUPPORTED_RANKING_SCORE_SOURCES:
@@ -184,6 +186,7 @@ def breakout_quality_ranking_source_context(
         model_architecture=None if model_architecture is None else str(model_architecture),
         experiment_profile=None if experiment_profile is None else str(experiment_profile),
         ranking_policy=resolved_policy,
+        ranking_options=(None if ranking_options in (None, {}) else dict(ranking_options)),
     )
     token = _RANKING_SOURCE_CONTEXT.set(context)
     try:

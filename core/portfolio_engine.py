@@ -411,6 +411,17 @@ def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
                 f"同一 ticker 的 ensemble members ranking policy不一致: ticker={ticker}"
             )
         representative["breakout_quality_ranking_policy"] = next(iter(ranking_policies), "score")
+        ranking_options = {
+            repr(sorted(dict(row.get("breakout_quality_ranking_options") or {}).items()))
+            for row in group_rows
+        }
+        if len(ranking_options) > 1:
+            raise ValueError(
+                f"同一 ticker 的 ensemble members ranking options不一致: ticker={ticker}"
+            )
+        representative["breakout_quality_ranking_options"] = dict(
+            group_rows[0].get("breakout_quality_ranking_options") or {}
+        )
         for metric_name in (
             "projected_capital_fraction",
             "projected_capital_deployment_rate",
@@ -656,6 +667,9 @@ def _candidate_replay_snapshot(candidate, *, fallback_trade_date, is_orderable):
         "breakout_quality_score_source": str(row.get("breakout_quality_score_source") or ""),
         "breakout_quality_ranking_policy": str(
             row.get("breakout_quality_ranking_policy") or "score"
+        ),
+        "breakout_quality_ranking_options": dict(
+            row.get("breakout_quality_ranking_options") or {}
         ),
         "projected_capital_fraction": _optional_float(
             row.get("projected_capital_fraction")
@@ -1112,6 +1126,12 @@ def run_portfolio_timeline(
             'max_dl_feasible_ascent_steps': 0,
             'max_dl_feasible_ascent_evaluations': 0,
             'max_dl_feasible_ascent_local_optimum': False,
+            'stale_score_membership_guard_enabled': False,
+            'stale_score_membership_guard_max_age_days': None,
+            'stale_score_candidate_count': 0,
+            'stale_score_guard_triggered': False,
+            'stale_score_guard_seed_blocked': False,
+            'stale_score_guard_blocked_swaps': 0,
             'selector_elapsed_ns': 0,
         }
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
@@ -1525,6 +1545,12 @@ def run_portfolio_timeline(
                 'Resource_Aware_Max_DL_Feasible_Ascent_Steps': int(resource_selection_diag.get('max_dl_feasible_ascent_steps', 0) or 0),
                 'Resource_Aware_Max_DL_Feasible_Ascent_Evaluations': int(resource_selection_diag.get('max_dl_feasible_ascent_evaluations', 0) or 0),
                 'Resource_Aware_Max_DL_Feasible_Ascent_Local_Optimum': bool(resource_selection_diag.get('max_dl_feasible_ascent_local_optimum', False)),
+                'Resource_Aware_Stale_Score_Guard_Enabled': bool(resource_selection_diag.get('stale_score_membership_guard_enabled', False)),
+                'Resource_Aware_Stale_Score_Guard_Max_Age_Days': resource_selection_diag.get('stale_score_membership_guard_max_age_days'),
+                'Resource_Aware_Stale_Score_Candidate_Count': int(resource_selection_diag.get('stale_score_candidate_count', 0) or 0),
+                'Resource_Aware_Stale_Score_Guard_Triggered': bool(resource_selection_diag.get('stale_score_guard_triggered', False)),
+                'Resource_Aware_Stale_Score_Guard_Seed_Blocked': bool(resource_selection_diag.get('stale_score_guard_seed_blocked', False)),
+                'Resource_Aware_Stale_Score_Guard_Blocked_Swaps': int(resource_selection_diag.get('stale_score_guard_blocked_swaps', 0) or 0),
                 'Resource_Aware_Selector_Elapsed_Ns': int(resource_selection_diag.get('selector_elapsed_ns', 0) or 0),
             })
 

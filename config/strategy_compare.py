@@ -17,7 +17,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 11
+STRATEGY_COMPARE_SCHEMA_VERSION = 12
 
 # =============================================================================
 # 1. 共用執行設定
@@ -30,6 +30,7 @@ STRATEGY_COMPARE_PARAM_POLICY = "base-finalist-best"
 STRATEGY_COMPARE_MAX_POSITIONS = 10
 STRATEGY_COMPARE_ROTATION = "off"
 STRATEGY_COMPARE_OUTPUT_ROOT = "outputs/strategy_compare"
+STRATEGY_COMPARE_STALE_SCORE_MEMBERSHIP_GUARD_MAX_AGE_DAYS = 22
 
 # =============================================================================
 # 2. 前置工件政策
@@ -520,7 +521,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": None,
     },
     "C24": {
-        "enabled": True,
+        "enabled": False,
         "name": "Selection PIT: MR-12B minimum-repair",
         "description": (
             "與C23使用完全相同historical P2 Min ROOS params；"
@@ -544,6 +545,23 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": True,
         "dl_id": "CONT12B_PIT",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
+    "C26": {
+        "enabled": True,
+        "name": "Selection PIT: MR-12B feasible-ascent stale-score guard",
+        "description": (
+            "與C25完全相同MR-12B Selection PIT與feasible-ascent；"
+            f"唯一變更為score age超過Selection預先凍結{STRATEGY_COMPARE_STALE_SCORE_MEMBERSHIP_GUARD_MAX_AGE_DAYS}日門檻時，"
+            "該舊score不得驅動DL membership swap，候選本身仍保留並沿用Min ROOS資源契約"
+        ),
+        "param_source": "selection_min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT12B_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard",
+        "dl_runtime_options": {
+            "stale_score_membership_guard_max_age_days": STRATEGY_COMPARE_STALE_SCORE_MEMBERSHIP_GUARD_MAX_AGE_DAYS,
+        },
     },
 }
 
@@ -575,9 +593,11 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C20-C19": {"enabled": False, "left": "C20", "right": "C19", "description": "同一MR-12B source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
     "C19-C3": {"enabled": False, "left": "C19", "right": "C3", "description": "MR-12B在C17 selector下相對Min ROOS研究基準"},
     "C20-C3": {"enabled": False, "left": "C20", "right": "C3", "description": "MR-12B在C18 selector下相對Min ROOS研究基準"},
-    "C24-C23": {"enabled": True, "left": "C24", "right": "C23", "description": "Selection PIT下固定historical Min ROOS與C17 selector，MR-12B PIT ranking相對DL-off baseline的經濟效果"},
+    "C24-C23": {"enabled": False, "left": "C24", "right": "C23", "description": "Selection PIT下固定historical Min ROOS與C17 selector，MR-12B PIT ranking相對DL-off baseline的經濟效果"},
     "C25-C23": {"enabled": True, "left": "C25", "right": "C23", "description": "Selection PIT下固定historical Min ROOS與C18 selector，MR-12B PIT ranking相對DL-off baseline的經濟效果"},
-    "C25-C24": {"enabled": True, "left": "C25", "right": "C24", "description": "Selection PIT MR-12B固定score source下，C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
+    "C26-C25": {"enabled": True, "left": "C26", "right": "C25", "description": "Selection PIT MR-12B feasible-ascent固定其餘條件下，stale-score membership guard的純runtime效果"},
+    "C26-C23": {"enabled": True, "left": "C26", "right": "C23", "description": "Selection PIT下固定historical Min ROOS，MR-12B feasible-ascent加stale-score membership guard相對DL-off baseline的經濟效果"},
+    "C25-C24": {"enabled": False, "left": "C25", "right": "C24", "description": "Selection PIT MR-12B固定score source下，C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
     "C12-C11": {"enabled": False, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
     "C11-C8": {"enabled": False, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
     "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},
@@ -670,6 +690,11 @@ def get_strategy_comparison_settings() -> StrategyComparisonSettings:
                 None
                 if raw.get("dl_runtime_mode") in (None, "")
                 else str(raw.get("dl_runtime_mode")).strip()
+            ),
+            dl_runtime_options=(
+                None
+                if raw.get("dl_runtime_options") in (None, {})
+                else dict(raw.get("dl_runtime_options") or {})
             ),
         )
         for arm_id, raw in STRATEGY_COMPARE_ARMS.items()

@@ -6708,3 +6708,59 @@ Controlled deltas：
 ### 下一步
 
 先以`SR-C25`為控制基準實作單一runtime變更：stale-score只禁止DL membership change，不刪候選、不改score、不改feasible-ascent的K/R0 hard feasibility。Selection內與`SR-C23`及`SR-C25`比較Return、RoMD、EV、same-param DL selection R、underfilled slot-days與guard觸發日；若Selection改善再凍結同一規則進Forward-OOS驗證。
+
+
+## 2026-08-09 — SR-C26實作：Selection PIT feasible-ascent stale-score membership guard
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / SELECTION_ONLY / CUTOFF_FROZEN_22D / NO_MODEL_OR_TARGET_CHANGE`。
+
+### 程式基準
+
+- 使用者最新版ZIP：`test-branch-1_20260809_144248_97c69f4.zip`。
+- SHA256：`86e8d0293fff2b126cf4b934a3488e5d7d814909e156370c7d448f6f99319d43`。
+- GPT fresh extract：`/mnt/data/stock_review_144248`。
+- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；Registry確認`SR-C26`尚未占用。
+- 本輪不執行`apps/test_suite.py`，只做獨立synthetic／AST／compile／CLI／依賴檢查。
+
+### Selection evidence與固定假說
+
+`AUD-c23-c25-pit-target-realization`顯示SR-C25 actual exclusive trades：Q1～Q3(age 1～22 calendar days) Selection ΔR合計`+21.74R`，Q4(age 23～288日、median 38.5日)單獨`-40.18R`。因此在任何Forward-OOS驗證前預先固定`22 calendar days`為唯一age門檻；此值之後不得依OOS結果改成20／25／30日或做sweep。
+
+### SR-C26唯一scientific change
+
+1. Baseline固定SR-C25：historical P2 Min ROOS active params、rules all-off、`DL-CONT12B-PIT / MR-12B`、C18 feasible-ascent、K/R0、entry／exit／accounting、max positions=10、rotation off全部不變。
+2. 新runtime mode：`resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard`。
+3. `config/strategy_compare.py`唯一新增runtime option：`stale_score_membership_guard_max_age_days=22`。
+4. Score age固定以`trade_date - breakout_quality_score_date` calendar days計算；缺score date才fallback原`signal_date`。有有效score但日期不可稽核時採保守guard；未評分candidate不因本規則被視為stale。
+5. Candidate本身**不得刪除、過期或hard reject**。若C25/C17 seed相對Min ROOS的membership變更牽涉stale scored candidate，C26先回到Min ROOS合法seed；之後feasible-ascent只接受不牽涉stale scored candidate、且canonical exact reservation滿足K/R0 hard floor的score-improving single swap。
+6. Fresh候選全部存在時，C26必須與C25 membership一致；stale候選仍完整保留於orderable universe與fallback排序。
+
+### Strategy Compare active matrix
+
+- `SR-C23`：Selection Min ROOS PIT baseline（DL off）。
+- `SR-C25`：MR-12B PIT feasible-ascent control。
+- `SR-C26`：MR-12B PIT feasible-ascent + 22-day stale-score membership guard。
+- Enabled contrasts：`C25-C23`、`C26-C25`、`C26-C23`。
+- `SR-C24`與歷史C17～C22 identity保留但disabled，不得因本輪改寫歷史結果。
+
+### 診斷與cache契約
+
+- 新增daily diagnostics：guard enabled／max age、stale candidate count、guard triggered、seed blocked與blocked feasible score-improving swaps。
+- Strategy summary直接聚合guard觸發日、stale候選數與blocked swaps，並在Resource-aware盤前診斷顯示22日門檻。
+- C26 runtime options進入pair replay fingerprint；改門檻必須使C26 cache失效。C25 arm contract沒有runtime options且engine schema保持既有版本，因此既有C25 completed pair仍可正常REUSE，不因新增C26或報表欄位無關失效。
+
+### 獨立synthetic結果
+
+固定同一個C25 feasible-ascent盤前fixture：
+
+- 全部score新鮮：C25 action=`F2,F3`，C26 action同為`F2,F3`。
+- 只將`F3` score date改為超過22日：C26 action回到`F1,F2`；`F3`仍存在orderable output，guard triggered且blocked feasible score-improving swap>0；K與reserved-capital floor均維持。
+- 核心selector不含`C26` scientific arm ID，只讀generic runtime policy與ranking options。
+- Focused synthetic：既有config-driven Strategy Compare contract `41/41 PASS`；新增stale-score guard contract `4/4 PASS`。
+- 以原始ZIP與修改後程式對同一dummy artifact identity實算SR-C25 pair fingerprint，兩邊皆為`079ff59ca62a3bf3`，確認C25既有cache identity不因C26新增而改變。
+
+### 下一步
+
+套用程式後先執行`apps/research.py → [3] 策略組合比較 → [2] 查看設定、工件與預計動作`。若Selection PIT與historical P2 artifacts READY，正式執行C23/C25/C26；預期既有C23/C25可依fingerprint重用，C26為新RUN。先看`C26-C25`是否改善same-param DL selection R／Return／RoMD／EV且不惡化underfilled slot-days，再看`C26-C23`是否真正超越baseline。只有Selection結果支持C26，才可把**完全相同22日規則**凍結搬到Forward-OOS；OOS不得再調門檻。

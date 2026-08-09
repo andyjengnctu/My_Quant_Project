@@ -18657,6 +18657,181 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
 
 
+
+def validate_breakout_quality_stale_score_membership_guard_contract_case(_base_params):
+    case_id = "BREAKOUT_QUALITY_STALE_SCORE_MEMBERSHIP_GUARD"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from config.strategy_compare import get_strategy_comparison_settings
+    from core.exact_accounting import build_buy_ledger_from_price
+    from core.portfolio_entries import (
+        reorder_candidates_for_resource_aware_quality,
+        select_resource_aware_action_candidates,
+    )
+    from core.strategy_params import V16StrategyParams
+
+    settings = get_strategy_comparison_settings()
+    c25 = settings.arms.get("C25")
+    c26 = settings.arms.get("C26")
+    contrast_c26_c25 = settings.contrasts.get("C26-C25")
+    contrast_c26_c23 = settings.contrasts.get("C26-C23")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "c26_registry_identity_is_c25_plus_selection_frozen_22d_stale_score_guard",
+        True,
+        c25 is not None
+        and c26 is not None
+        and c25.param_source == c26.param_source == "selection_min_roos"
+        and c25.rule_policy == c26.rule_policy == "all_off"
+        and c25.dl_id == c26.dl_id == "CONT12B_PIT"
+        and c25.dl_runtime_mode == "resource-aware-continuous-max-dl-feasible-ascent"
+        and c26.dl_runtime_mode == "resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard"
+        and dict(c26.dl_runtime_options or {}) == {
+            "stale_score_membership_guard_max_age_days": 22,
+        }
+        and contrast_c26_c25 is not None
+        and contrast_c26_c25.left == "C26"
+        and contrast_c26_c25.right == "C25"
+        and contrast_c26_c23 is not None
+        and contrast_c26_c23.left == "C26"
+        and contrast_c26_c23.right == "C23",
+    )
+
+    resource_params = V16StrategyParams()
+    resource_params.use_breakout_quality_ranking = True
+    resource_params.breakout_quality_score_threshold = 0.5
+    seed = (
+        ("F0", 200.0, 153, 0.899),
+        ("F1", 500.0, 249, 0.312),
+        ("F2", 1000.0, 233, 0.346),
+        ("F3", 1000.0, 162, 0.685),
+        ("F4", 100.0, 334, 0.012),
+        ("F5", 100.0, 326, 0.929),
+        ("F6", 1000.0, 51, 0.706),
+        ("F7", 300.0, 283, 0.585),
+    )
+
+    def candidate(raw, *, policy, score_date):
+        ticker, price, qty, score = raw
+        cost_milli = build_buy_ledger_from_price(
+            price, qty, resource_params
+        )["net_buy_total_milli"]
+        return {
+            "ticker": ticker,
+            "type": "normal",
+            "limit_px": price,
+            "init_sl": price * 0.95,
+            "init_trail": price * 0.95,
+            "target_price": price * 1.10,
+            "entry_atr": price * 0.05,
+            "qty": qty,
+            "max_qty": qty,
+            "proj_cost_milli": cost_milli,
+            "proj_cost": cost_milli / 1000.0,
+            "is_orderable": True,
+            "params_obj": resource_params,
+            "sizing_capital": 2_000_000.0,
+            "use_breakout_quality_ranking": True,
+            "breakout_quality_ranking_policy": policy,
+            "breakout_quality_score": score,
+            "breakout_quality_rank": {"available": True, "score": score},
+            "trade_date": "2024-01-10",
+            "candidate_date": "2024-01-10",
+            "signal_date": score_date,
+            "breakout_quality_score_date": score_date,
+            "breakout_quality_ranking_options": {
+                "stale_score_membership_guard_max_age_days": 22,
+            },
+        }
+
+    c25_rows = [
+        candidate(
+            raw,
+            policy="resource-aware-continuous-max-dl-feasible-ascent",
+            score_date="2024-01-09",
+        )
+        for raw in seed
+    ]
+    c26_fresh_rows = [
+        candidate(
+            raw,
+            policy="resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard",
+            score_date="2024-01-09",
+        )
+        for raw in seed
+    ]
+    c26_stale_rows = [
+        candidate(
+            raw,
+            policy="resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard",
+            score_date=("2023-12-01" if raw[0] == "F3" else "2024-01-09"),
+        )
+        for raw in seed
+    ]
+
+    def run(rows):
+        order, diag = reorder_candidates_for_resource_aware_quality(
+            rows,
+            available_cash=400_000.0,
+            sizing_equity=2_000_000.0,
+            pre_market_occupied=6,
+            max_positions=10,
+            params=resource_params,
+        )
+        action = select_resource_aware_action_candidates(order, diag)
+        return order, action, diag
+
+    c25_order, c25_action, c25_diag = run(c25_rows)
+    fresh_order, fresh_action, fresh_diag = run(c26_fresh_rows)
+    stale_order, stale_action, stale_diag = run(c26_stale_rows)
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "fresh_scores_preserve_c25_feasible_ascent_membership_exactly",
+        True,
+        [row["ticker"] for row in c25_action] == ["F2", "F3"]
+        and [row["ticker"] for row in fresh_action]
+        == [row["ticker"] for row in c25_action]
+        and not fresh_diag["stale_score_guard_triggered"]
+        and fresh_diag["stale_score_candidate_count"] == 0
+        and fresh_diag["selected_count"] == c25_diag["selected_count"]
+        and fresh_diag["reserved_cost_milli"] >= fresh_diag["baseline_reserved_cost_milli"],
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "stale_score_blocks_dl_membership_change_without_expiring_candidate_or_breaking_k_r0",
+        True,
+        [row["ticker"] for row in stale_action] == ["F1", "F2"]
+        and "F3" in [row["ticker"] for row in stale_order]
+        and stale_diag["stale_score_membership_guard_enabled"]
+        and stale_diag["stale_score_membership_guard_max_age_days"] == 22
+        and stale_diag["stale_score_candidate_count"] == 1
+        and stale_diag["stale_score_guard_triggered"]
+        and stale_diag["stale_score_guard_blocked_swaps"] > 0
+        and stale_diag["selected_count"] == stale_diag["baseline_selected_count"]
+        and stale_diag["reserved_cost_milli"] >= stale_diag["baseline_reserved_cost_milli"],
+    )
+
+    core_source = (
+        Path(__file__).resolve().parents[2] / "core" / "portfolio_entries.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "stale_guard_core_is_runtime_option_driven_without_scientific_arm_id",
+        True,
+        "C26" not in core_source
+        and "stale_score_membership_guard_max_age_days" in core_source,
+    )
+
+    summary.update({
+        "cutoff_calendar_days": 22,
+        "fresh_action": [row["ticker"] for row in fresh_action],
+        "stale_action": [row["ticker"] for row in stale_action],
+        "stale_candidates_retained": "F3" in [row["ticker"] for row in stale_order],
+    })
+    return results, summary
+
 def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from config.audit import (
         AUDIT_OUTPUT_ROOT,

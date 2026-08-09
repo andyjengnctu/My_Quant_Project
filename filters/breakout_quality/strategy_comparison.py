@@ -21,6 +21,7 @@ from core.strategy_comparison import (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
     StrategyComparisonArm,
     StrategyComparisonSettings,
     StrategyDLSource,
@@ -52,6 +53,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
 )
 from filters.breakout_quality.trade_attribution import reconstruct_round_trips
@@ -128,13 +130,19 @@ def _pair_group_id(
 
 
 def _replay_arm_contract(raw: dict[str, Any]) -> dict[str, Any]:
-    return {
+    contract = {
         "param_source": str(raw.get("param_source") or ""),
         "rule_policy": str(raw.get("rule_policy") or ""),
         "dl_enabled": bool(raw.get("dl_enabled")),
         "dl_id": raw.get("dl_id"),
         "dl_runtime_mode": raw.get("dl_runtime_mode"),
     }
+    runtime_options = dict(raw.get("dl_runtime_options") or {})
+    if runtime_options:
+        # 歷史arm沒有runtime options時維持既有pair fingerprint；
+        # 只有真正新增的runtime option才進入cache identity。
+        contract["dl_runtime_options"] = runtime_options
+    return contract
 
 
 def _pair_cache_fingerprint_from_payload(
@@ -567,11 +575,14 @@ def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
     }:
         return {
             "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
             "ranking_policy": (
-                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+                if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+                else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
                 else BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
                 if mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL
@@ -933,6 +944,7 @@ def _resource_aware_table(
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
         }:
             continue
         payload = scenarios[arm.arm_id]
@@ -956,6 +968,10 @@ def _resource_aware_table(
             _fmt(payload.get("resource_aware_max_dl_seed_fallback_days"), digits=0),
             _fmt(payload.get("resource_aware_max_dl_feasible_ascent_days"), digits=0),
             _fmt(payload.get("resource_aware_max_dl_feasible_ascent_local_optimum_days"), digits=0),
+            _fmt(payload.get("resource_aware_stale_score_guard_max_age_days"), unit="日", digits=0),
+            _fmt(payload.get("resource_aware_stale_score_guard_triggered_days"), digits=0),
+            _fmt(payload.get("resource_aware_stale_score_candidate_count"), digits=0),
+            _fmt(payload.get("resource_aware_stale_score_guard_blocked_swaps"), digits=0),
             _fmt(payload.get("resource_aware_max_dl_order_count_violation_days"), digits=0),
         ))
     if not rows:
@@ -981,6 +997,10 @@ def _resource_aware_table(
             "Seed原為回退日",
             "Feasible-ascent改善日",
             "1-swap local optimum日",
+            "Stale門檻",
+            "Stale guard日",
+            "Stale候選數",
+            "Blocked swaps",
             "Max-DL K違規日",
         ),
         rows,
@@ -997,6 +1017,7 @@ def _selector_timing_table(
         if arm.dl_runtime_mode not in {
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
             STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
         }:
             continue
         payload = scenarios[arm.arm_id]
@@ -1334,6 +1355,7 @@ def run_strategy_comparison(
             max_position_cap_pct=None,
             comparison_mode=runtime_spec["comparison_mode"],
             ranking_policy=runtime_spec["ranking_policy"],
+            ranking_options=dict(on_arm.dl_runtime_options or {}),
             optional_entry_filter_policy=(
                 OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
                 if all_off

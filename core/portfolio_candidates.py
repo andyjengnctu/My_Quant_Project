@@ -182,6 +182,7 @@ def _make_candidate_row(
         'entry_source': (signal_state or {}).get('source') if signal_state is not None else candidate_type,
         'use_breakout_quality_ranking': bool(normalized_quality_rank is not None),
         'breakout_quality_ranking_policy': str(ranking_context.ranking_policy),
+        'breakout_quality_ranking_options': dict(ranking_context.ranking_options or {}),
         'breakout_quality_score': (
             None
             if normalized_quality_rank is None

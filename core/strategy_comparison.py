@@ -22,6 +22,9 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL = (
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT = (
     'resource-aware-continuous-max-dl-feasible-ascent'
 )
+STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD = (
+    'resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard'
+)
 SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY,
@@ -30,6 +33,7 @@ SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
 )
 
 
@@ -132,6 +136,7 @@ class StrategyComparisonArm:
     dl_enabled: bool
     dl_id: str | None
     dl_runtime_mode: str | None
+    dl_runtime_options: Mapping[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -144,6 +149,9 @@ class StrategyComparisonArm:
             "dl_enabled": bool(self.dl_enabled),
             "dl_id": self.dl_id,
             "dl_runtime_mode": self.dl_runtime_mode,
+            "dl_runtime_options": (
+                None if self.dl_runtime_options is None else dict(self.dl_runtime_options)
+            ),
         }
 
 
@@ -407,6 +415,13 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                     f"arm {key}的dl_runtime_mode不支援: {arm.dl_runtime_mode}; "
                     f"allowed={SUPPORTED_STRATEGY_DL_RUNTIME_MODES}"
                 )
+            options = dict(arm.dl_runtime_options or {})
+            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
+                raw_max_age = options.get('stale_score_membership_guard_max_age_days')
+                if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, int) or raw_max_age < 0:
+                    raise ValueError(
+                        f"arm {key} stale-score guard必須指定非負整數 stale_score_membership_guard_max_age_days"
+                    )
             trained_with = parameter_source.trained_with_dl_id
             if trained_with is not None and arm.dl_id != trained_with:
                 raise ValueError(
@@ -418,6 +433,8 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
                 raise ValueError(f"arm {key}關閉DL時dl_id必須為None")
             if arm.dl_runtime_mode is not None:
                 raise ValueError(f"arm {key}關閉DL時dl_runtime_mode必須為None")
+            if arm.dl_runtime_options not in (None, {}):
+                raise ValueError(f"arm {key}關閉DL時dl_runtime_options必須為空")
 
     enabled_ids = {arm.arm_id for arm in settings.enabled_arms}
     for key, contrast in settings.contrasts.items():

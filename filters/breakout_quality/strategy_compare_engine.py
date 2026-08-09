@@ -37,6 +37,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
@@ -187,8 +188,15 @@ def _parse_args(argv=None):
             "resource-aware-continuous-max-dl=固定Min ROOS預留單數與reserved-capital floor，"
             "由continuous score主導Top-K並只在不合法時作deterministic minimum-repair；"
             "resource-aware-continuous-max-dl-feasible-ascent=相同K/R0與DL objective，"
-            "在C17合法seed上持續做best-feasible single-swap DL改善直到1-swap local optimum。"
+            "在C17合法seed上持續做best-feasible single-swap DL改善直到1-swap local optimum；"
+            "resource-aware-continuous-max-dl-feasible-ascent-stale-score-guard=同一selector再禁止過舊score驅動membership change。"
         ),
+    )
+    parser.add_argument(
+        "--stale-score-membership-guard-max-age-days",
+        type=int,
+        default=None,
+        help="僅stale-score-guard policy使用；正式Strategy Compare由config arm runtime options提供。",
     )
     parser.add_argument(
         "--optional-entry-filters",
@@ -947,6 +955,27 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
         max_dl_ascent_local_optimum = frame.get(
             "Resource_Aware_Max_DL_Feasible_Ascent_Local_Optimum", pd.Series(False, index=frame.index)
         ).fillna(False).astype(bool)
+        stale_guard_enabled = frame.get(
+            "Resource_Aware_Stale_Score_Guard_Enabled", pd.Series(False, index=frame.index)
+        ).fillna(False).astype(bool)
+        stale_guard_triggered = frame.get(
+            "Resource_Aware_Stale_Score_Guard_Triggered", pd.Series(False, index=frame.index)
+        ).fillna(False).astype(bool)
+        stale_guard_seed_blocked = frame.get(
+            "Resource_Aware_Stale_Score_Guard_Seed_Blocked", pd.Series(False, index=frame.index)
+        ).fillna(False).astype(bool)
+        stale_candidate_count = pd.to_numeric(
+            frame.get("Resource_Aware_Stale_Score_Candidate_Count", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        stale_guard_blocked_swaps = pd.to_numeric(
+            frame.get("Resource_Aware_Stale_Score_Guard_Blocked_Swaps", pd.Series(0, index=frame.index)),
+            errors="coerce",
+        ).fillna(0)
+        stale_guard_max_age = pd.to_numeric(
+            frame.get("Resource_Aware_Stale_Score_Guard_Max_Age_Days", pd.Series(float("nan"), index=frame.index)),
+            errors="coerce",
+        )
         selector_elapsed_ns = pd.to_numeric(
             frame.get("Resource_Aware_Selector_Elapsed_Ns", pd.Series(0, index=frame.index)),
             errors="coerce",
@@ -987,6 +1016,15 @@ def _capacity_summary(profile: dict[str, Any]) -> dict[str, Any]:
             "resource_aware_max_dl_feasible_ascent_steps": int(max_dl_ascent_steps.sum()),
             "resource_aware_max_dl_feasible_ascent_evaluations": int(max_dl_ascent_evaluations.sum()),
             "resource_aware_max_dl_feasible_ascent_local_optimum_days": int((max_dl_eligible & max_dl_ascent_local_optimum).sum()),
+            "resource_aware_stale_score_guard_enabled_days": int(stale_guard_enabled.sum()),
+            "resource_aware_stale_score_guard_triggered_days": int(stale_guard_triggered.sum()),
+            "resource_aware_stale_score_guard_seed_blocked_days": int(stale_guard_seed_blocked.sum()),
+            "resource_aware_stale_score_candidate_count": int(stale_candidate_count.sum()),
+            "resource_aware_stale_score_guard_blocked_swaps": int(stale_guard_blocked_swaps.sum()),
+            "resource_aware_stale_score_guard_max_age_days": (
+                None if not bool(stale_guard_max_age.notna().any())
+                else int(stale_guard_max_age.dropna().iloc[0])
+            ),
             "resource_aware_selector_timing_calls": int((selector_elapsed_ns > 0).sum()),
             "resource_aware_selector_timing_total_ms": float(selector_elapsed_ns.sum() / 1_000_000.0),
             "resource_aware_selector_timing_median_ms": float(selector_elapsed_ns[selector_elapsed_ns > 0].median() / 1_000_000.0) if bool((selector_elapsed_ns > 0).any()) else 0.0,
@@ -2349,6 +2387,7 @@ def run_comparison(
     fixed_risk=None, max_position_cap_pct=None, allow_static_diagnostic=False,
     comparison_mode=COMPARISON_MODE_HARD_FILTER,
     ranking_policy=BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    ranking_options=None,
     optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
     filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
@@ -2366,6 +2405,7 @@ def run_comparison(
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
     ranking_policy = str(ranking_policy).strip()
+    ranking_options = dict(ranking_options or {})
     optional_entry_filter_policy = str(optional_entry_filter_policy).strip()
     score_source = str(score_source)
     filter_id = str(filter_id)
@@ -2383,6 +2423,12 @@ def run_comparison(
         raise ValueError(f"不支援的 score source: {score_source!r}")
     if ranking_policy not in SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES:
         raise ValueError(f"不支援的 ranking policy: {ranking_policy!r}")
+    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
+        raw_max_age = ranking_options.get("stale_score_membership_guard_max_age_days")
+        if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, int) or raw_max_age < 0:
+            raise ValueError(
+                "stale-score membership guard必須由config提供非負整數 stale_score_membership_guard_max_age_days"
+            )
     if optional_entry_filter_policy not in SUPPORTED_OPTIONAL_ENTRY_FILTER_POLICIES:
         raise ValueError(
             f"不支援的 optional entry filter policy: {optional_entry_filter_policy!r}"
@@ -2460,6 +2506,7 @@ def run_comparison(
             BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
             BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
             BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+            BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
         }:
             raise ValueError(
                 "Continuous ranker OOS source只允許resource-aware-continuous系列policy"
@@ -2476,6 +2523,7 @@ def run_comparison(
             "model_architecture": manifest_architecture,
             "experiment_profile": manifest_profile,
             "ranking_policy": ranking_policy,
+            "ranking_options": ranking_options,
         }
     elif score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
         if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
@@ -2503,6 +2551,7 @@ def run_comparison(
             "model_architecture": manifest_architecture,
             "experiment_profile": manifest_profile,
             "ranking_policy": ranking_policy,
+            "ranking_options": ranking_options,
         }
     else:
         try:
@@ -2535,6 +2584,7 @@ def run_comparison(
                 "model_architecture": None,
                 "experiment_profile": None,
                 "ranking_policy": ranking_policy,
+                "ranking_options": ranking_options,
             }
 
     if (comparison_start_date is None) != (comparison_end_date is None):
@@ -2839,6 +2889,7 @@ def run_comparison(
         "schema_version": SCHEMA_VERSION,
         "comparison_mode": comparison_mode,
         "score_ranking_policy": ranking_policy if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None,
+        "score_ranking_options": ranking_options if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None,
         "optional_entry_filter_policy": optional_entry_filter_policy,
         "optional_entry_filter_fields": list(OPTIONAL_ENTRY_FILTER_FIELDS),
         "optional_entry_filter_forced_values": (
@@ -2914,6 +2965,16 @@ def run_comparison(
                     "fixed_baseline_order_count",
                     "continuous_score_top_k",
                     "deterministic_minimum_repair_seed",
+                    "stale_score_membership_guard",
+                    "fresh_only_best_feasible_single_swap_ascent",
+                    "one_swap_local_optimum",
+                ]
+                if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+                else [
+                    "min_roos_exact_resource_baseline",
+                    "fixed_baseline_order_count",
+                    "continuous_score_top_k",
+                    "deterministic_minimum_repair_seed",
                     "best_feasible_single_swap_ascent",
                     "one_swap_local_optimum",
                 ]
@@ -2939,7 +3000,7 @@ def run_comparison(
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
                 else ["capital_deployment_bucket_desc", "breakout_quality_score_desc"]
             )
-            + (["ticker_deterministic"] if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT} else ["existing_buy_sort", "ticker_deterministic"])
+            + (["ticker_deterministic"] if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD} else ["existing_buy_sort", "ticker_deterministic"])
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING else None
         ),
         "capital_aware_ranking_contract": (
@@ -2947,14 +3008,14 @@ def run_comparison(
                 "resource_gate": "canonical_min_roos_exact_cash_cap_baseline",
                 "dl_intervention": (
                     "all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count"
-                    if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT}
+                    if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD}
                     else "cash_or_slot_binding_with_exact_baseline_resource_preservation"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
                     else "only_when_baseline_stops_before_free_slots_with_unselected_candidates"
                 ),
                 "quality_objective": (
                     "maximize_fixed_k_continuous_score_subject_to_min_roos_reserved_capital_floor"
-                    if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT}
+                    if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD}
                     else "maximize_selected_continuous_score_subject_to_min_roos_resource_floor"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
                     else "maximize_selected_continuous_score_without_breaking_cash_binding"
@@ -2963,13 +3024,15 @@ def run_comparison(
                 ),
                 "resource_feasibility": (
                     "selected_count==baseline_selected_count and reserved_cost>=baseline_reserved_cost"
-                    if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT}
+                    if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD}
                     else "selected_count>=baseline_selected_count and reserved_cost>=baseline_reserved_cost"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
                     else "cash remains the binding pre-market resource after the selected basket"
                 ),
                 "selection_objective": (
-                    "dl_top_k_repair_seed_then_best_feasible_single_swap_ascent"
+                    "dl_top_k_repair_seed_then_stale_membership_guard_then_fresh_only_best_feasible_single_swap_ascent"
+                    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+                    else "dl_top_k_repair_seed_then_best_feasible_single_swap_ascent"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
                     else "dl_top_k_then_deterministic_minimum_repair"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
@@ -2982,12 +3045,23 @@ def run_comparison(
                     else "first_improving_pass_reserved_promotion"
                 ),
                 "fallback": (
-                    "c17_seed_may_use_canonical_min_roos_then_feasible_ascent_continues"
+                    "stale_score_membership_change_blocked_to_min_roos_or_fresh_only_ascent"
+                    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+                    else "c17_seed_may_use_canonical_min_roos_then_feasible_ascent_continues"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
                     else "canonical_min_roos_order"
                 ),
                 "future_target_used": False,
-                "additional_numeric_thresholds": [],
+                "additional_numeric_thresholds": (
+                    [{
+                        "name": "stale_score_membership_guard_max_age_days",
+                        "value": ranking_options.get("stale_score_membership_guard_max_age_days"),
+                        "unit": "calendar_days",
+                        "source": "config/strategy_compare.py",
+                    }]
+                    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
+                    else []
+                ),
             }
             if comparison_mode == COMPARISON_MODE_SCORE_RANKING
             and ranking_policy in {
@@ -2997,6 +3071,7 @@ def run_comparison(
                 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
                 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
                 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+                BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
             }
             else {
                 "projected_capital_fraction_source": "canonical_pretrade_proj_cost_div_sizing_capital",
@@ -3126,6 +3201,15 @@ def main(argv=None):
         allow_static_diagnostic=args.allow_static_diagnostic,
         comparison_mode=args.comparison_mode,
         ranking_policy=args.ranking_policy,
+        ranking_options=(
+            {}
+            if args.stale_score_membership_guard_max_age_days is None
+            else {
+                "stale_score_membership_guard_max_age_days": int(
+                    args.stale_score_membership_guard_max_age_days
+                )
+            }
+        ),
         optional_entry_filter_policy=args.optional_entry_filters,
         filter_id=args.filter_id,
         score_source=args.score_source,

@@ -1,5 +1,6 @@
 import math
 import time
+from datetime import date, datetime
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
@@ -8,6 +9,7 @@ from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
+    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
     RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES,
     resolve_breakout_quality_ranking_policy,
 )
@@ -287,6 +289,12 @@ def _resource_aware_default_diag(rows, free_slots, *, selector):
         'max_dl_feasible_ascent_steps': 0,
         'max_dl_feasible_ascent_evaluations': 0,
         'max_dl_feasible_ascent_local_optimum': False,
+        'stale_score_membership_guard_enabled': False,
+        'stale_score_membership_guard_max_age_days': None,
+        'stale_score_candidate_count': 0,
+        'stale_score_guard_triggered': False,
+        'stale_score_guard_seed_blocked': False,
+        'stale_score_guard_blocked_swaps': 0,
         'selector_elapsed_ns': 0,
     }
 
@@ -1207,6 +1215,65 @@ def _reorder_resource_aware_continuous_max_dl(
     )
 
 
+def _candidate_date_value(value):
+    if value is None:
+        return None
+    try:
+        is_missing = bool(value != value)
+    except (TypeError, ValueError):
+        is_missing = False
+    if is_missing:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if hasattr(value, "date"):
+        try:
+            resolved = value.date()
+        except (TypeError, ValueError, AttributeError):
+            resolved = None
+        if isinstance(resolved, date):
+            return resolved
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _stale_score_guard_max_age_days(rows):
+    values = set()
+    for row in list(rows or []):
+        options = row.get('breakout_quality_ranking_options') or {}
+        raw = options.get('stale_score_membership_guard_max_age_days')
+        if raw is None:
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            raise ValueError('stale-score membership guard max age必須是非負整數')
+        values.add(int(raw))
+    if not values:
+        raise ValueError('stale-score membership guard缺少max age設定')
+    if len(values) != 1:
+        raise ValueError('同一候選集合的stale-score membership guard max age不一致')
+    return next(iter(values))
+
+
+def _candidate_has_stale_scored_signal(row, *, max_age_days):
+    if _candidate_continuous_score(row) is None:
+        return False
+    trade_date = _candidate_date_value(row.get('trade_date') or row.get('candidate_date'))
+    score_date = _candidate_date_value(
+        row.get('breakout_quality_score_date') or row.get('signal_date')
+    )
+    if trade_date is None or score_date is None:
+        # 有有效score卻沒有可稽核日期時採保守解讀：不得讓它改變membership。
+        return True
+    return int((trade_date - score_date).days) > int(max_age_days)
+
+
 def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     rows,
     *,
@@ -1216,6 +1283,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     params,
     baseline,
     default_diag,
+    stale_score_membership_guard_max_age_days=None,
 ):
     """Strengthen C17 with feasible best-improvement swaps, without exact combinatorial search.
 
@@ -1230,6 +1298,18 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     target_count = int(baseline['selected_count'])
     reserve_floor_milli = int(baseline['reserved_cost_milli'])
     base_rank = {id(row): idx for idx, row in enumerate(rows)}
+    guard_enabled = stale_score_membership_guard_max_age_days is not None
+    guard_max_age = (
+        None if not guard_enabled else int(stale_score_membership_guard_max_age_days)
+    )
+    stale_ids = (
+        set()
+        if not guard_enabled
+        else {
+            id(row) for row in rows
+            if _candidate_has_stale_scored_signal(row, max_age_days=guard_max_age)
+        }
+    )
     seed_order, seed_diag = _reorder_resource_aware_continuous_max_dl(
         rows,
         available_cash=available_cash,
@@ -1242,7 +1322,16 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     if not bool(seed_diag.get('max_dl_eligible', False)):
         out = dict(seed_diag)
         out.update({
-            'selector': 'continuous-score-max-dl-feasible-ascent',
+            'selector': (
+                'continuous-score-max-dl-feasible-ascent-stale-score-guard'
+                if guard_enabled else 'continuous-score-max-dl-feasible-ascent'
+            ),
+            'stale_score_membership_guard_enabled': bool(guard_enabled),
+            'stale_score_membership_guard_max_age_days': guard_max_age,
+            'stale_score_candidate_count': int(len(stale_ids)),
+            'stale_score_guard_triggered': False,
+            'stale_score_guard_seed_blocked': False,
+            'stale_score_guard_blocked_swaps': 0,
             'max_dl_seed_fallback': bool(seed_diag.get('max_dl_fallback_to_baseline', False)),
             'max_dl_fallback_to_baseline': False,
             'max_dl_feasible_ascent_local_optimum': True,
@@ -1260,7 +1349,16 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         )
         return ordered, result
 
-    current_basket = list(seed_order[:target_count])
+    baseline_ids = {id(row) for row in baseline['selected_rows']}
+    seed_basket = list(seed_order[:target_count])
+    seed_ids = {id(row) for row in seed_basket}
+    seed_guard_blocked = bool(
+        guard_enabled
+        and any(row_id in stale_ids for row_id in (baseline_ids ^ seed_ids))
+    )
+    current_basket = (
+        list(baseline['selected_rows']) if seed_guard_blocked else seed_basket
+    )
     current_order, current_result = evaluate_basket(current_basket)
     if not _max_dl_basket_is_feasible(
         current_result,
@@ -1270,6 +1368,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         raise RuntimeError('max-DL feasible-ascent seed不符合Min ROOS資源契約')
     current_key = _max_dl_basket_quality_key(current_order, base_rank=base_rank)
     evaluations = 0
+    blocked_swaps = 0
     ascent_steps = 0
     local_optimum = False
 
@@ -1296,6 +1395,11 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
                     trial_order, base_rank=base_rank
                 )
                 if quality_key <= current_key:
+                    continue
+                if guard_enabled and (id(out_row) in stale_ids or id(in_row) in stale_ids):
+                    # 只計數C25本來會接受的hard-feasible score改善；
+                    # 單純存在stale候選不應被誤報成guard真正阻擋。
+                    blocked_swaps += 1
                     continue
                 tie_key = (
                     -base_rank[id(out_row)],
@@ -1332,7 +1436,10 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         current_result,
         changed=bool(selected_ids != baseline_selected_ids),
         promoted_pass_count=0,
-        selector='continuous-score-max-dl-feasible-ascent',
+        selector=(
+            'continuous-score-max-dl-feasible-ascent-stale-score-guard'
+            if guard_enabled else 'continuous-score-max-dl-feasible-ascent'
+        ),
     )
     out.update({
         'mode': 'dl-selection',
@@ -1351,6 +1458,12 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         'max_dl_feasible_ascent_steps': int(ascent_steps),
         'max_dl_feasible_ascent_evaluations': int(evaluations),
         'max_dl_feasible_ascent_local_optimum': bool(local_optimum),
+        'stale_score_membership_guard_enabled': bool(guard_enabled),
+        'stale_score_membership_guard_max_age_days': guard_max_age,
+        'stale_score_candidate_count': int(len(stale_ids)),
+        'stale_score_guard_triggered': bool(seed_guard_blocked or blocked_swaps > 0),
+        'stale_score_guard_seed_blocked': bool(seed_guard_blocked),
+        'stale_score_guard_blocked_swaps': int(blocked_swaps),
     })
     if int(current_result['selected_count']) != target_count:
         raise RuntimeError('max-DL feasible-ascent輸出未維持Min ROOS預留單數')
@@ -1400,6 +1513,8 @@ def reorder_candidates_for_resource_aware_quality(
     selector = (
         'best-improvement-basket'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
+        else 'continuous-score-max-dl-feasible-ascent-stale-score-guard'
+        if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
         else 'continuous-score-max-dl-feasible-ascent'
         if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
         else 'continuous-score-max-dl'
@@ -1431,6 +1546,19 @@ def reorder_candidates_for_resource_aware_quality(
         free_slots=free_slots,
         params=params,
     )
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
+        max_age_days = _stale_score_guard_max_age_days(rows)
+        order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
+            rows,
+            available_cash=available_cash,
+            sizing_equity=sizing_equity,
+            free_slots=free_slots,
+            params=params,
+            baseline=baseline,
+            default_diag=default_diag,
+            stale_score_membership_guard_max_age_days=max_age_days,
+        )
+        return finish(order, diag)
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT:
         order, diag = _reorder_resource_aware_continuous_max_dl_feasible_ascent(
             rows,
