@@ -10975,7 +10975,18 @@ def validate_breakout_quality_pass_realization_gap_attribution_contract_case(_ba
 
 def validate_breakout_quality_selection_strategy_realization_contract_case(_base_params):
     from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
-    from tools.audit.breakout_quality.selection_strategy_realization import parse_args as parse_selection_strategy_realization_args
+    from filters.breakout_quality.trade_path_label import (
+        TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+        TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+        TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
+    )
+    from tools.audit.breakout_quality.selection_strategy_realization import (
+        DEFAULT_NESTED_OOS_END_DATE,
+        DEFAULT_REPLAY_END_DATE,
+        DEFAULT_START_DATE,
+        DEFAULT_TRAIN_WINDOW_MONTHS,
+        parse_args as parse_selection_strategy_realization_args,
+    )
 
     case_id = "BREAKOUT_QUALITY_SELECTION_STRATEGY_REALIZATION"
     results = []
@@ -11137,10 +11148,16 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
         "selection_nested_roos_prepare_contract_is_lookahead_safe_and_isolated",
         (True, True, True, True, True, True),
         (
-            "DEFAULT_START_DATE = \"2014-01-01\"" in audit_source,
-            "DEFAULT_REPLAY_END_DATE = \"2020-11-05\"" in audit_source,
-            "DEFAULT_NESTED_OOS_END_DATE = \"2020-12-31\"" in audit_source,
-            "--outer-train-window-months" in audit_source and "DEFAULT_TRAIN_WINDOW_MONTHS = 120" in audit_source,
+            DEFAULT_START_DATE == TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+            pd.Timestamp(DEFAULT_START_DATE)
+            <= pd.Timestamp(DEFAULT_REPLAY_END_DATE)
+            < pd.Timestamp(DEFAULT_NESTED_OOS_END_DATE),
+            DEFAULT_NESTED_OOS_END_DATE == TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+            (
+                "--outer-train-window-months" in audit_source
+                and DEFAULT_TRAIN_WINDOW_MONTHS
+                == TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS
+            ),
             "V16_MODELS_DIR" in audit_source,
             "resolve_models_dir(project_root, environ=environ)" in optimizer_source,
         ),
@@ -11174,7 +11191,7 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
             (
                 "--dataset reduced" in prepare_source,
                 "--trials 17" in prepare_source,
-                "--outer-last-oos-date 2020-12-31" in prepare_source,
+                f"--outer-last-oos-date {DEFAULT_NESTED_OOS_END_DATE}" in prepare_source,
                 "Remove-Item Env:V16_MODELS_DIR" in prepare_source,
             ),
         )
