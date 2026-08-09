@@ -6885,3 +6885,49 @@ Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權
 
 重跑同一Audit即可。若C26-C23 exclusive端顯示winner risk dollars較小／loser risk dollars較大，則未加權R的正值主要被risk allocation/timing抵消；若common `Risk-size/path effect`幾乎解釋`-41.6k`且`R-difference effect`接近0，則common loss只是前段wealth差造成的下游position-size放大，不應另建selector假說。只有出現清楚、可泛化且Selection內可事前觀測的mechanism，才允許建立下一個SR runtime；否則C26維持NOT_PROMOTED並停止微調鏈。
 
+## 2026-08-09 — AUD-c23-c26-pit-portfolio-translation risk-dollar重跑結果：C26 runtime微調鏈結案
+
+### 狀態
+
+`RESULT_AVAILABLE / RISK_DOLLAR_PATH_DECOMPOSITION_CONFIRMED / C26_NOT_PROMOTED / RUNTIME_MICROTUNING_STOPPED`。
+
+### 程式基準與來源
+
+- 使用者本機執行基準：`test-branch-1_20260809_153811_a2377c1.zip`。
+- SHA256：`775a804fc47b4ab5684a602ebab4e8e2a9f966b533873f9f3e20c2313669ff35`。
+- Audit：`AUD-c23-c26-pit-portfolio-translation`；source=`outputs/strategy_compare/runs/20260809_150908_C23-C25-C26_6018e78bd663`。
+- 期間2014-01-01～2020-12-31；只讀既有replay，不重跑portfolio、不改score／selector／training。
+
+### C26 vs C23：exclusive risk-dollar translation
+
+- Exclusive selection ΔR=`+7.99R`，但exclusive ΔPnL=`-35,524.03`。
+- C23-only：173 trades，ΣR=`+76.19R`、ΣPnL=`+231,681.38`、Σ implied initial risk=`854,162`、平均risk=`4,937`、risk-weighted R=`0.27R`。
+- C26-only：158 trades，ΣR=`+84.18R`、ΣPnL=`+196,157.35`、Σ implied initial risk=`924,372`、平均risk=`5,850`、risk-weighted R=`0.21R`。
+- Winner／loser平均risk：C23=`4,718 / 5,094`；C26=`5,674 / 5,967`。C26並非簡單整體de-risk；真正差異是實際risk dollars對不同R magnitude／交易時點的權重分布，使equal-weighted ΣR優勢反轉為較低的risk-weighted R與dollar PnL。
+
+### C26 vs C23：common matched trades
+
+- Common trades=`206`，risk coverage=`100%`。
+- Common ΔR約=`0.00R`，Common ΔPnL=`-41,604.23`。
+- C23/C26平均implied initial risk=`9,049 / 9,117`；C26平均risk並未較低。
+- 對稱分解：risk-size/path effect=`-41,612.25`；R-difference effect=`+8.02`；uncovered=`0`；residual約`0`。
+- 因共同交易R幾乎完全相同，這`-41.6k`不是「同一交易被C26做壞」，而是前面portfolio path、當時equity／cash／position state與canonical sizing共同形成的trade-specific risk-dollar差。它是既有selection path的下游放大，不應另建selector或依事後R修改fixed-risk sizing。
+
+### C26 vs C25
+
+- Exclusive ΔR=`+27.51R`、Exclusive ΔPnL=`+57,383.45`、All trade ΔPnL=`+43,180.29`，再次確認22日stale-score guard本身在equal-weighted R與actual dollar PnL兩層均有效。
+- C25-only/C26-only risk-weighted R=`0.06R/0.13R`；guard後實際risk-dollar品質亦改善。
+- Common ΔPnL=`-14,203.16`幾乎完全由risk-size/path effect=`-14,217.77`解釋；R-difference effect僅`+14.61`。
+
+### 最終判定
+
+1. `SR-C26`保留為`STALE_GUARD_SUPPORTED / NOT_PROMOTED`歷史研究結果；22-calendar-day guard不得再依Selection／OOS結果調整，也不回退SR-C25。
+2. C26相對C23的`+7.99R`只代表equal-weighted exclusive R改善，不能取代portfolio Return／MDD／RoMD gate；actual exclusive risk-weighted R反而`0.21R < 0.27R`，且dollar PnL為負。
+3. Common trade loss已被risk-size/path effect完整解釋；因平均risk並未下降，不能簡化為「C26整體position size較小」，而是portfolio path造成的trade-specific sizing分布。這是下游結果，不構成新的可事前觀測selector假說。
+4. 目前沒有清楚、可泛化、Selection盤前可觀測且不依賴未來realized outcome的mechanism支持再改fixed risk、stop distance、selector、22日guard或資金配置。為避免Selection過度微調，**C26 runtime微調鏈在此停止；不進Forward-OOS、不進參數適應、不新增SR-C27。**
+5. `same-param DL selection R`後續只保留為診斷，不得單獨作promotion gate；portfolio gate仍以Return／MDD／RoMD／EV與正式wealth path為主。
+
+### 下一步
+
+離開C26 runtime微調，回到尚未補齊的模型層證據：先做`MR-12B vs MR-12A` **same-fold paired Selection PIT read-only comparison**，固定相同PIT日期／共同候選／Continuous Target，直接比較每fold daily rho、pair concordance、Top-K／boundary與年度穩定性；只讀既有PIT工件，若MR-12A工件不存在才由正式模型入口依既有profile建立，不用C23/C26策略結果調模型。這一步先判定Pairwise objective在歷史PIT是否真的穩定優於MSE，再決定下一個模型研究方向；不得重啟11J counterfactual。
+
