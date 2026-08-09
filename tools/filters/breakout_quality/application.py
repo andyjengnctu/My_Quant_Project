@@ -300,6 +300,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
     if sample:
         top_k = int(sample.get("top_k", 0) or 0)
         boundary_width = int(sample.get("boundary_width", 0) or 0)
+        competition_scope = "只看同日樣本數>K" if daily_universal else "只看候選數>K"
 
         def top_k_row(name: str) -> tuple[str, ...]:
             quality = dict((metrics.get(name) or {}).get("top_k_quality") or {})
@@ -315,7 +316,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             )
 
         lines.extend([
-            render_section(f"Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；只看同日樣本數>K）"),
+            render_section(f"Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；{competition_scope}）"),
             render_table(
                 ("Split", "NDCG@K", "Top-K Target", "Lift", "Oracle overlap", "Boundary", "Boundary gap", "競爭日"),
                 [top_k_row(name) for name in split_names],
@@ -375,9 +376,10 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     if sample:
         top_k = int(sample.get("top_k", 0) or 0)
         boundary_width = int(sample.get("boundary_width", 0) or 0)
+        competition_scope = "只看同日樣本數>K" if daily_universal else "只看候選數>K"
         lines.extend([
             "",
-            f"## Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；只看同日樣本數>K）",
+            f"## Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；{competition_scope}）",
             "",
             "| Split | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | 競爭日 |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
