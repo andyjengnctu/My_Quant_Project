@@ -7366,3 +7366,27 @@ MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28均不變；C27/
 
 既有使用舊4-ATR P2的C23／C24／C25 Selection策略結果保留為歷史read-only，但不再是current五欄Min ROOS universe的合法comparator；C27／C28與MR-12B comparator必須在新Min ROOS schedule下同批重跑後才能形成新的Selection策略結論。模型權重、MR-12B／MR-13A Target、PIT score與selector本身未因本輪修改而改變。
 
+
+## 2026-08-10 — Selection Min ROOS post-run OOS month-boundary與completed-artifact resume修正
+
+### 現象
+
+使用者以current五欄、單階段`PARAM-P2 / Min ROOS`完成Selection 2014-01-01～2020-12-31七個Outer Rolling folds後，正式輸出已寫入`models/research/breakout_quality/trade_path_label/a2_teacher_params/p2_dl_off_trained/active_params/roos_base_best.json`，但前置在post-run validation拋出`P2_HISTORY參數fold schedule不一致: last_oos_date`。訓練效能摘要顯示7/7 completed、total 01:27:32，故不得把問題誤判為optimizer失敗或要求重訓。
+
+### Root cause
+
+- Strategy Compare／Min ROOS request使用完整期間結束日`2020-12-31`；Outer Rolling本身是month-bucket engine，`_parse_oos_boundary()`會將同一月份canonicalize為`2020-12-01`並寫入active-param meta。
+- `_validate_min_roos_params()`近期五欄單階段重構後以字串完全相等比較request meta與optimizer output，將同一2020-12月份誤判為不同fold schedule。
+- `build_rolling_base_policy()`又直接把requested月底做`+ MonthEnd(1)`，會把2020-12-31錯推到2021-01-31；雖CLI last-OOS仍限制實際fold，但base policy日期語意已分叉。
+- post-run validator在寫入`breakout_quality_param_adaptation=min_roos_training`前失敗，原resume判斷要求該stamp已存在，因此即使preflight identity與7-fold params都已完成，下次仍會再次啟動昂貴optimizer。
+
+### 修正
+
+1. Min ROOS與historical teacher的first／last OOS boundary統一按calendar month比較；train-window與OOS-horizon months仍精確比較，年度effective-date schedule另行完整驗證。
+2. `build_rolling_base_policy()`先把first／last OOS正規化為month-start，再由last month取得同月MonthEnd，2014-01-01～2020-12-31 request正確維持2020-12-31，不再延伸至2021-01-31。
+3. 新增completed-artifact resume：只有既有`rolling_preflight.json`的`runtime_identity_sha256`等於current contract時，才嘗試對既有`roos_base_best.json`執行完整schedule／trials／fixed overrides／五個search fields／舊adaptation排除驗證；全部通過即補寫current`min_roos_training` stamp並直接REUSE，不重新跑Outer Rolling。任何舊4-ATR／risk-only或其他不相容artifact仍會落回正式重訓。
+4. T284新增post-run failure resume固定案例；T285重新以canonical end date動態轉month-start作actual fixture，避免expected／actual共用同一月底表示而漏測。
+
+### 判定
+
+這是`PARAM-P2 / Min ROOS`工程契約修正，不新增MR／DL／SR ID，不改五欄search space、training-policy trials、模型、PIT source、selector、交易會計或Strategy Compare scientific matrix。Registry status維持ACTIVE；已完成的七fold current artifact在套用修正後應直接重新驗證接續，而非再執行1:27:32的rolling optimization。

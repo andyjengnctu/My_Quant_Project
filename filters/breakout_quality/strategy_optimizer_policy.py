@@ -22,8 +22,13 @@ def build_rolling_base_policy(
 
     policy = load_walk_forward_policy(str(root))
     meta = dict(baseline_contract["meta"])
-    first_oos = pd.Timestamp(meta["first_oos_date"])
-    last_oos = pd.Timestamp(meta["last_oos_date"])
+    # Outer Rolling is month-bucket based.  Callers may express the requested
+    # comparison boundary as a calendar month end (for example 2020-12-31),
+    # while the optimizer canonicalizes the same boundary to that month's first
+    # day (2020-12-01).  Normalize here before deriving policy dates so a
+    # month-end request cannot accidentally extend the base policy by one month.
+    first_oos = pd.Timestamp(meta["first_oos_date"]).to_period("M").start_time
+    last_oos = pd.Timestamp(meta["last_oos_date"]).to_period("M").start_time
     train_months = int(meta["train_window_months"])
     training_start = first_oos - pd.DateOffset(months=train_months)
     policy.update(
@@ -44,8 +49,8 @@ def build_rolling_base_policy(
             "oos_start_year": int(first_oos.year),
             "oos_end_year": int(last_oos.year),
             "oos_start_date": first_oos.strftime("%Y-%m-%d"),
-            "oos_end_date": (last_oos + pd.offsets.MonthEnd(1)).strftime("%Y-%m-%d"),
-            "latest_data_date": (last_oos + pd.offsets.MonthEnd(1)).strftime(
+            "oos_end_date": (last_oos + pd.offsets.MonthEnd(0)).strftime("%Y-%m-%d"),
+            "latest_data_date": (last_oos + pd.offsets.MonthEnd(0)).strftime(
                 "%Y-%m-%d"
             ),
             "min_train_years": max(1, int(math.ceil(train_months / 12.0))),

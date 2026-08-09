@@ -230,9 +230,14 @@ def validate_selection_historical_baseline_period(
     canonical_last = pd.Timestamp(
         TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE
     ).normalize()
+    first_oos_month = first_oos.to_period("M")
+    last_oos_month = last_oos.to_period("M")
+    canonical_first_month = canonical_first.to_period("M")
+    canonical_last_month = canonical_last.to_period("M")
     expected_effective_dates = []
-    cursor = canonical_first
-    while cursor <= canonical_last:
+    cursor = canonical_first_month.start_time
+    canonical_last_month_start = canonical_last_month.start_time
+    while cursor <= canonical_last_month_start:
         expected_effective_dates.append(cursor)
         cursor = (
             cursor + pd.DateOffset(months=TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS)
@@ -246,8 +251,8 @@ def validate_selection_historical_baseline_period(
     except (TypeError, ValueError) as exc:
         raise ValueError("Selection historical Min ROOS生效日不合法") from exc
     if (
-        first_oos != canonical_first
-        or last_oos != canonical_last
+        first_oos_month != canonical_first_month
+        or last_oos_month != canonical_last_month
         or observed_effective_dates != expected_effective_dates
     ):
         observed_text = ",".join(
@@ -263,8 +268,8 @@ def validate_selection_historical_baseline_period(
 
 def _rolling_effective_dates(contract: dict[str, Any]) -> tuple[str, ...]:
     meta = dict(contract.get("meta") or {})
-    first = pd.Timestamp(str(meta.get("first_oos_date"))).normalize()
-    last = pd.Timestamp(str(meta.get("last_oos_date"))).normalize()
+    first = pd.Timestamp(str(meta.get("first_oos_date"))).to_period("M").start_time
+    last = pd.Timestamp(str(meta.get("last_oos_date"))).to_period("M").start_time
     horizon_months = int(meta.get("oos_horizon_months") or 0)
     if pd.isna(first) or pd.isna(last) or first > last or horizon_months < 1:
         raise ValueError("Min ROOS rolling schedule不合法")
@@ -599,8 +604,20 @@ def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, 
     if payload is None:
         raise FileNotFoundError(f"{arm_id} optimizer未產生參數工件: {path}")
     meta = dict(payload.get("meta") or {})
-    for key in ("first_oos_date", "last_oos_date", "train_window_months", "oos_horizon_months"):
-        if str(meta.get(key)) != str(baseline_contract["meta"].get(key)):
+    for key in ("first_oos_date", "last_oos_date"):
+        try:
+            actual_month = pd.Timestamp(str(meta.get(key))).to_period("M")
+            expected_month = pd.Timestamp(
+                str(baseline_contract["meta"].get(key))
+            ).to_period("M")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{arm_id}參數fold schedule不合法: {key}") from exc
+        if actual_month != expected_month:
+            raise ValueError(f"{arm_id}參數fold schedule不一致: {key}")
+    for key in ("train_window_months", "oos_horizon_months"):
+        if int(meta.get(key, 0) or 0) != int(
+            baseline_contract["meta"].get(key, 0) or 0
+        ):
             raise ValueError(f"{arm_id}參數fold schedule不一致: {key}")
     if int(meta.get("trials_per_fold", 0) or 0) != int(args.trials_per_fold):
         raise ValueError(f"{arm_id}參數trials／fold與目前要求不一致")
@@ -642,6 +659,48 @@ def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, 
     return payload
 
 
+def _reuse_existing_min_roos_params_if_compatible(
+    *,
+    prior_preflight,
+    contract,
+    params_path,
+    baseline_contract,
+    fold_overrides,
+    args,
+    training_dl_enabled,
+    arm_id,
+):
+    """Reuse a completed Min ROOS artifact after post-run validation failure.
+
+    The preflight identity proves the optimizer was launched under the current
+    five-field Min ROOS contract.  The parameter payload is then fully validated
+    against current fixed overrides, trials and month-bucket rolling schedule.
+    This allows recovery from failures that occurred only while stamping or
+    validating the completed artifact, without repeating the expensive rolling
+    optimization.
+    """
+
+    if not isinstance(prior_preflight, dict):
+        return None
+    if str(prior_preflight.get("runtime_identity_sha256") or "") != str(
+        contract.get("runtime_identity_sha256") or ""
+    ):
+        return None
+    if not Path(params_path).is_file():
+        return None
+    try:
+        return _validate_min_roos_params(
+            path=params_path,
+            baseline_contract=baseline_contract,
+            fold_overrides=fold_overrides,
+            args=args,
+            training_dl_enabled=training_dl_enabled,
+            arm_id=arm_id,
+        )
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 def _temporary_environment(values: dict[str, str]):
     class _Env:
         def __enter__(self):
@@ -681,18 +740,17 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
     preflight_path = arm_dir / "rolling_preflight.json"
     params_path = active_param_dir / "roos_base_best.json"
     prior = _load_json(preflight_path)
-    prior_params = _load_json(params_path) if params_path.is_file() else None
-    expected_adaptation = _min_roos_adaptation_contract(
-        arm_id=str(arm_id),
-        training_dl_enabled=bool(training_dl_enabled),
+    reused_params_payload = _reuse_existing_min_roos_params_if_compatible(
+        prior_preflight=prior,
+        contract=contract,
+        params_path=params_path,
+        baseline_contract=baseline_contract,
+        fold_overrides=fold_overrides,
+        args=args,
+        training_dl_enabled=training_dl_enabled,
+        arm_id=arm_id,
     )
-    reusable = (
-        prior is not None
-        and str(prior.get("runtime_identity_sha256") or "") == contract["runtime_identity_sha256"]
-        and isinstance(prior_params, dict)
-        and dict(prior_params.get("breakout_quality_param_adaptation") or {})
-        == expected_adaptation
-    )
+    reusable = reused_params_payload is not None
     coverage_path = arm_dir / "binary_pit_optimizer_coverage.csv"
     if training_dl_enabled:
         coverage_rows = []
@@ -777,13 +835,17 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
             )
         if int(exit_code) != 0:
             raise RuntimeError(f"{arm_id} Min ROOS rolling optimizer失敗: {exit_code}")
-    params_payload = _validate_min_roos_params(
-        path=params_path,
-        baseline_contract=baseline_contract,
-        fold_overrides=fold_overrides,
-        args=args,
-        training_dl_enabled=training_dl_enabled,
-        arm_id=arm_id,
+    params_payload = (
+        reused_params_payload
+        if reused_params_payload is not None
+        else _validate_min_roos_params(
+            path=params_path,
+            baseline_contract=baseline_contract,
+            fold_overrides=fold_overrides,
+            args=args,
+            training_dl_enabled=training_dl_enabled,
+            arm_id=arm_id,
+        )
     )
     summary = {
         "parameter_set": arm_id,

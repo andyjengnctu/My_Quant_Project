@@ -14562,6 +14562,7 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
         ALL_RULE_FILTERS_OFF_OVERRIDES,
         MIN_ROOS_SEARCH_FIELDS,
         _parse_args as parse_dl_param_adapt_args,
+        _reuse_existing_min_roos_params_if_compatible,
         _validate_binary_pit_optimizer_coverage,
         build_min_roos_fold_overrides,
         run_param_adaptation_gate,
@@ -14649,6 +14650,64 @@ def validate_breakout_quality_binary_dl_param_adaptation_contract_case(_base_par
             resolved_fold_spec["fixed_strategy_param_overrides"]
             ["use_breakout_quality_filter"],
             param_adapt_args.experiment_profile,
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        completed_params_path = Path(tmp) / "roos_base_best.json"
+        completed_member_params = dict(p2_fixed)
+        for field_name in MIN_ROOS_SEARCH_FIELDS:
+            completed_member_params[field_name] = baseline_member_params[field_name]
+        completed_params_path.write_text(
+            json.dumps(
+                {
+                    "meta": {
+                        "first_oos_date": "2021-01-01",
+                        "last_oos_date": "2021-12-01",
+                        "train_window_months": 120,
+                        "oos_horizon_months": 12,
+                        "trials_per_fold": int(param_adapt_args.trials_per_fold),
+                    },
+                    "params_ensemble_by_effective_date": {
+                        "2021-01-01": [
+                            {"member_index": 1, "params": completed_member_params}
+                        ]
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        reused_completed_payload = _reuse_existing_min_roos_params_if_compatible(
+            prior_preflight={"runtime_identity_sha256": "synthetic-current"},
+            contract={"runtime_identity_sha256": "synthetic-current"},
+            params_path=completed_params_path,
+            baseline_contract=synthetic_baseline_contract,
+            fold_overrides=p2_overrides,
+            args=param_adapt_args,
+            training_dl_enabled=False,
+            arm_id="P2_HISTORY",
+        )
+        stamped_completed_payload = json.loads(
+            completed_params_path.read_text(encoding="utf-8")
+        )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "completed_min_roos_month_bucket_artifact_is_reused_after_postrun_validation_failure",
+        (True, "min_roos_training", "2021-12-01"),
+        (
+            reused_completed_payload is not None,
+            dict(
+                stamped_completed_payload.get("breakout_quality_param_adaptation")
+                or {}
+            ).get("mode"),
+            dict(reused_completed_payload.get("meta") or {}).get("last_oos_date")
+            if isinstance(reused_completed_payload, dict)
+            else None,
         ),
     )
 
@@ -16536,7 +16595,9 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     }
     valid_teacher_meta = {
         "first_oos_date": TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
-        "last_oos_date": TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+        "last_oos_date": pd.Timestamp(
+            TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE
+        ).to_period("M").start_time.strftime("%Y-%m-%d"),
     }
     accepted_dates = validate_selection_historical_baseline_period(
         payload=valid_teacher_payload,
