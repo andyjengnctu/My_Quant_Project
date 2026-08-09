@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.breakout_quality import (
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     SUPPORTED_BREAKOUT_QUALITY_TIME_WEIGHT_MODES,
     build_breakout_quality_pretraining_profile_payload,
@@ -32,7 +33,10 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
 )
-from config.breakout_quality import get_breakout_quality_workflow_settings
+from config.breakout_quality import (
+    get_breakout_quality_model_research_settings,
+    get_breakout_quality_workflow_settings,
+)
 from core.display_common import render_elapsed
 from core.runtime_utils import (
     is_interactive_console,
@@ -92,6 +96,7 @@ from filters.breakout_quality.source_inventory import build_source_data_inventor
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     CONTINUOUS_RANKER_SCORE_FILENAME,
+    DAILY_RANKER_OOS_SCORE_FILENAME,
 )
 from tools.audit.catalog import get_domain_cli_commands
 
@@ -150,7 +155,7 @@ COMMAND_DESCRIPTIONS = {
     "report": "產生表格化終端報表、Markdown 報表與完整 metrics JSON",
     "evaluate": "輸出 train、validation、selection 或 OOS 的詳細 JSON",
     "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
-    "train-continuous-ranker": "執行continuous ranker模型研究（MR-12系列）；正式選單亦可使用",
+    "train-continuous-ranker": "執行continuous ranker模型研究（MR-12／MR-13系列）；正式選單亦可使用",
     "compare-continuous-rankers": (
         "只讀config設定的continuous-ranker frozen scores，做paired／random baseline／Dynamic-K品質比較"
     ),
@@ -214,7 +219,11 @@ def _safe_json_object(path: Path) -> dict:
 
 
 def _simple_report_context(command: str, args: list[str]) -> tuple[str, str, str]:
-    settings = get_breakout_quality_workflow_settings()
+    settings = (
+        get_breakout_quality_model_research_settings()
+        if command == "train-continuous-ranker"
+        else get_breakout_quality_workflow_settings()
+    )
     filter_id = normalize_filter_id(
         _cli_option_value(args, "--filter-id", settings.filter_id)
     )
@@ -268,9 +277,18 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             _fmt_simple_metric(row.get("bottom_score_decile_raw_target_mean")),
         )
 
-    split_names = ("validation", "selection", "oos")
+    daily_universal = bool(metrics.get("breakout_candidate_oos"))
+    split_names = (
+        ["validation", "oos", "breakout_candidate_oos"]
+        if daily_universal
+        else ["validation", "selection", "oos"]
+    )
     lines = [
-        render_section("完整 Selection 重訓後排序品質"),
+        render_section(
+            "Daily Universal Forward-OOS 排序品質"
+            if daily_universal
+            else "完整 Selection 重訓後排序品質"
+        ),
         render_table(
             ("Split", "Groups", "Daily rho", "Global rho", "Pair", "Top 10% Target", "Bottom 10% Target"),
             [split_row(name) for name in split_names],
@@ -297,7 +315,7 @@ def _render_continuous_ranker_simple_console(payload: dict) -> str:
             )
 
         lines.extend([
-            render_section(f"Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；只看候選數>K）"),
+            render_section(f"Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；只看同日樣本數>K）"),
             render_table(
                 ("Split", "NDCG@K", "Top-K Target", "Lift", "Oracle overlap", "Boundary", "Boundary gap", "競爭日"),
                 [top_k_row(name) for name in split_names],
@@ -326,14 +344,24 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
     metrics = dict(payload.get("split_metrics") or {})
     if not metrics:
         return []
+    daily_universal = bool(metrics.get("breakout_candidate_oos"))
     lines = [
         "",
-        "## 完整 Selection 重訓後排序品質",
+        (
+            "## Daily Universal Forward-OOS 排序品質"
+            if daily_universal
+            else "## 完整 Selection 重訓後排序品質"
+        ),
         "",
         "| Split | Groups | Daily rho | Global rho | Pair | Top 10% Target | Bottom 10% Target |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
-    for name in ("validation", "selection", "oos"):
+    split_names = (
+        ["validation", "oos", "breakout_candidate_oos"]
+        if daily_universal
+        else ["validation", "selection", "oos"]
+    )
+    for name in split_names:
         row = dict(metrics.get(name) or {})
         lines.append(
             f"| {name} | {int(row.get('group_count', 0) or 0):,} "
@@ -349,12 +377,12 @@ def _render_continuous_ranker_simple_markdown(payload: dict) -> list[str]:
         boundary_width = int(sample.get("boundary_width", 0) or 0)
         lines.extend([
             "",
-            f"## Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；只看候選數>K）",
+            f"## Top-K / K-boundary（K={top_k}，邊界寬度={boundary_width}；只看同日樣本數>K）",
             "",
             "| Split | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | 競爭日 |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
         ])
-        for name in ("validation", "selection", "oos"):
+        for name in split_names:
             quality = dict((metrics.get(name) or {}).get("top_k_quality") or {})
             lines.append(
                 f"| {name} | {_fmt_simple_metric(quality.get('ndcg_at_k'))} "
@@ -421,8 +449,24 @@ def _simple_report_details(
                 ("Selected epoch", training.get("selected_epoch")),
                 ("選模 Validation rho", _fmt_simple_metric(epoch_selection.get("best_validation_mean_daily_spearman"))),
                 ("重訓後原 Validation rho", _fmt_simple_metric((metrics.get("validation") or {}).get("mean_daily_spearman"))),
-                ("重訓後 Selection rho", _fmt_simple_metric((metrics.get("selection") or {}).get("mean_daily_spearman"))),
                 ("Forward OOS rho", _fmt_simple_metric((metrics.get("oos") or {}).get("mean_daily_spearman"))),
+                *(
+                    [
+                        (
+                            "Breakout slice OOS rho",
+                            _fmt_simple_metric(
+                                (metrics.get("breakout_candidate_oos") or {}).get("mean_daily_spearman")
+                            ),
+                        )
+                    ]
+                    if metrics.get("breakout_candidate_oos")
+                    else [
+                        (
+                            "重訓後 Selection rho",
+                            _fmt_simple_metric((metrics.get("selection") or {}).get("mean_daily_spearman")),
+                        )
+                    ]
+                ),
             ]
         )
         candidate = output_dir / "continuous_ranker_report.md"
@@ -2145,8 +2189,10 @@ def _interactive_regime_audit(program_name: str) -> int:
 
 
 
-def _print_workflow_status() -> None:
-    settings = get_breakout_quality_workflow_settings()
+def _print_workflow_status(settings=None) -> None:
+    if settings is None:
+        settings = get_breakout_quality_model_research_settings()
+    profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
     color_enabled = console_color_enabled()
     print(
         "\n"
@@ -2165,6 +2211,7 @@ def _print_workflow_status() -> None:
         ("Experiment Profile", settings.experiment_profile),
         ("Training Objective", settings.training_objective),
         ("Training Scope", settings.training_label_scope),
+        ("Sample Scope", settings.training_sample_scope),
         ("Seed", settings.seed),
     ]
 
@@ -2186,23 +2233,26 @@ def _print_workflow_status() -> None:
         raise ValueError(
             f"不支援的 workflow training objective: {settings.training_objective!r}"
         )
-    base_rows.extend((
-        ("Continuous Target", settings.continuous_target_id),
-        (
-            "PIT Score Period",
-            f"{'auto（最早合法）' if str(settings.point_in_time_score_start_date).lower() == 'auto' else settings.point_in_time_score_start_date} ～ "
-            f"{settings.point_in_time_score_end_date or 'Selection end'}",
-        ),
-        (
-            "PIT Fold／Validation",
-            f"{settings.point_in_time_fold_months}／"
-            f"{settings.point_in_time_inner_validation_months} months",
-        ),
-        (
-            "PIT Coverage Reference",
-            settings.point_in_time_coverage_reference_start_date,
-        ),
-    ))
+    base_rows.append(("Continuous Target", settings.continuous_target_id))
+    if settings.supports_point_in_time_scores:
+        base_rows.extend((
+            (
+                "PIT Score Period",
+                f"{'auto（最早合法）' if str(settings.point_in_time_score_start_date).lower() == 'auto' else settings.point_in_time_score_start_date} ～ "
+                f"{settings.point_in_time_score_end_date or 'Selection end'}",
+            ),
+            (
+                "PIT Fold／Validation",
+                f"{settings.point_in_time_fold_months}／"
+                f"{settings.point_in_time_inner_validation_months} months",
+            ),
+            (
+                "PIT Coverage Reference",
+                settings.point_in_time_coverage_reference_start_date,
+            ),
+        ))
+    else:
+        base_rows.append(("PIT", "MR-13A stage 1：未啟用，先完成forward-OOS模型Gate"))
     print(render_key_values(base_rows))
     model_artifacts = resolve_filter_artifact_paths(
         PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
@@ -2215,7 +2265,11 @@ def _print_workflow_status() -> None:
         "Full model": model_artifacts.model_path,
         "Full model manifest": model_artifacts.manifest_path,
         "Full model report": model_output_dir / CONTINUOUS_RANKER_REPORT_FILENAME,
-        "Forward OOS scores": model_output_dir / CONTINUOUS_RANKER_SCORE_FILENAME,
+        "Forward OOS scores": model_output_dir / (
+            DAILY_RANKER_OOS_SCORE_FILENAME
+            if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+            else CONTINUOUS_RANKER_SCORE_FILENAME
+        ),
         "Target manifest": resolve_continuous_target_dir(
             PROJECT_ROOT,
             settings.filter_id,
@@ -2242,12 +2296,17 @@ def _print_workflow_status() -> None:
             PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
         ),
     }
-    grouped_status = (
+    grouped_status = [
         ("Dataset", (status_paths["Dataset summary"],)),
-        (
-            "Continuous Target",
-            (status_paths["Target manifest"], status_paths["Target audit Markdown"]),
-        ),
+    ]
+    if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        grouped_status.append(
+            (
+                "Continuous Target",
+                (status_paths["Target manifest"], status_paths["Target audit Markdown"]),
+            )
+        )
+    grouped_status.append(
         (
             "Full Model / Forward OOS",
             (
@@ -2256,16 +2315,19 @@ def _print_workflow_status() -> None:
                 status_paths["Full model report"],
                 status_paths["Forward OOS scores"],
             ),
-        ),
-        (
-            "PIT Scores",
-            (status_paths["PIT scores"], status_paths["PIT manifest"], status_paths["PIT coverage"]),
-        ),
-        (
-            "PIT 模型驗證",
-            (status_paths["PIT audit JSON"], status_paths["PIT audit Markdown"]),
-        ),
+        )
     )
+    if settings.supports_point_in_time_scores:
+        grouped_status.extend((
+            (
+                "PIT Scores",
+                (status_paths["PIT scores"], status_paths["PIT manifest"], status_paths["PIT coverage"]),
+            ),
+            (
+                "PIT 模型驗證",
+                (status_paths["PIT audit JSON"], status_paths["PIT audit Markdown"]),
+            ),
+        ))
     status_rows = []
     for label, paths in grouped_status:
         existing = sum(path.is_file() for path in paths)
@@ -2578,6 +2640,11 @@ def _prepare_continuous_research_inputs(program_name: str, settings) -> int:
             code = _run_command(command, command_args, program_name=program_name)
         if code != 0:
             return int(code)
+    profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
+    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        # MR-13A target is derived directly from canonical future OHLCV for each
+        # eligible stock-day.  Do not create an event-group Continuous Target artifact.
+        return 0
     with _compact_console_scope():
         return int(
             _run_command(
@@ -2592,12 +2659,20 @@ def _prepare_continuous_research_inputs(program_name: str, settings) -> int:
 
 
 def _interactive_continuous_full_train(program_name: str, settings) -> int:
-    _print_workflow_status()
+    _print_workflow_status(settings)
     profile = get_breakout_quality_experiment_profile(settings.experiment_profile)
-    print(
-        "\n即將執行：確認Dataset／Continuous Target → 以Selection內Inner Validation選epoch "
-        "→ 完整Selection重訓 → checkpoint後才評估forward OOS。"
-    )
+    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        print(
+            "\n即將執行：確認canonical Dataset來源 → 建立daily stock-day index／target "
+            "→ 以Selection內Inner Validation選epoch → 完整Selection重訓 "
+            "→ checkpoint後評估全市場與breakout-candidate forward OOS。"
+        )
+        print("Daily feature採lazy materialization；不建立expanded 300×10 daily feature artifact。")
+    else:
+        print(
+            "\n即將執行：確認Dataset／Continuous Target → 以Selection內Inner Validation選epoch "
+            "→ 完整Selection重訓 → checkpoint後才評估forward OOS。"
+        )
     print(
         f"Profile={profile.name}｜Objective={profile.training_objective}｜"
         f"Loss={profile.loss_name}｜Epoch metric={profile.epoch_selection_metric}"
@@ -2625,7 +2700,10 @@ def _interactive_continuous_full_train(program_name: str, settings) -> int:
 
 
 def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
-    _print_workflow_status()
+    if not settings.supports_point_in_time_scores:
+        print("目前Active Profile尚未啟用PIT；MR-13A stage 1先完成forward-OOS模型Gate。")
+        return 0
+    _print_workflow_status(settings)
     if not _prompt_bool(
         "必要時先建立Dataset與Continuous Target，再建立／更新PIT Scores並執行模型驗證",
         True,
@@ -2666,7 +2744,7 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
 
 
 def _interactive_model_research(program_name: str) -> int:
-    settings = get_breakout_quality_workflow_settings()
+    settings = get_breakout_quality_model_research_settings()
     if settings.is_binary_classification:
         return _interactive_binary_model_research(
             program_name,
@@ -2682,7 +2760,8 @@ def _interactive_model_research(program_name: str) -> int:
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
         print("[1/Enter] 訓練目前模型 → forward-OOS模型報表")
-        print("[2] 建立／更新 Selection PIT Scores → PIT模型驗證")
+        if settings.supports_point_in_time_scores:
+            print("[2] 建立／更新 Selection PIT Scores → PIT模型驗證")
         print("[3] 查看目前Workflow與工件狀態")
         if comparison_settings.enabled:
             print(f"[4] {comparison_settings.menu_label}")
@@ -2697,10 +2776,10 @@ def _interactive_model_research(program_name: str) -> int:
             return 0
         if choice == "1":
             return _interactive_continuous_full_train(program_name, settings)
-        if choice == "2":
+        if choice == "2" and settings.supports_point_in_time_scores:
             return _interactive_continuous_pit_validation(program_name, settings)
         if choice == "3":
-            _print_workflow_status()
+            _print_workflow_status(settings)
             continue
         if choice == "4" and comparison_settings.enabled:
             return int(
@@ -2725,8 +2804,8 @@ def run_model_training_menu(program_name: str = "apps/research.py model") -> int
 
 
 def show_model_status() -> None:
-    """Render current Breakout Quality workflow and artifact status."""
-    _print_workflow_status()
+    """Render current Breakout Quality model-research and artifact status."""
+    _print_workflow_status(get_breakout_quality_model_research_settings())
 
 
 def main(argv=None) -> int:

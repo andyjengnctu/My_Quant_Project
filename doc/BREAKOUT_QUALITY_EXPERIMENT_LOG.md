@@ -6931,3 +6931,46 @@ Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權
 
 離開C26 runtime微調，回到尚未補齊的模型層證據：先做`MR-12B vs MR-12A` **same-fold paired Selection PIT read-only comparison**，固定相同PIT日期／共同候選／Continuous Target，直接比較每fold daily rho、pair concordance、Top-K／boundary與年度穩定性；只讀既有PIT工件，若MR-12A工件不存在才由正式模型入口依既有profile建立，不用C23/C26策略結果調模型。這一步先判定Pairwise objective在歷史PIT是否真的穩定優於MSE，再決定下一個模型研究方向；不得重啟11J counterfactual。
 
+
+## 2026-08-09 — MR-13A Daily Universal No-time Pairwise Ranker：stage 1實作
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / FORWARD_OOS_MODEL_GATE_ONLY / PIT_NOT_IMPLEMENTED / STRATEGY_NOT_CONNECTED`。
+
+### 使用者決策與程式基準
+
+- 使用者明確選擇離開C26 runtime微調鏈，並將下一個模型方向改為「每天對所有合法股票直接預測quality score」，不再先以breakout event決定模型sample。
+- 因此上一版Log排隊的`MR-12B vs MR-12A same-fold paired Selection PIT read-only comparison`暫不執行；這是使用者新的研究優先順序，不代表舊比較假說被結果淘汰。
+- 本輪來源ZIP：`test-branch-1_20260809_162849_0734449(1).zip`。
+- SHA256：`e7b71905c7c469b0f66758e207c4f80f0515ca101a79d20674b4b90c7c0dac5f`。
+- 新Model Research ID：`MR-13A`；profile=`daily_universal_no_time_pairwise`；target=`daily_opportunity_no_time_r_v1`。
+- Active identity分離：模型研究入口由`BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE`指向MR-13A；既有strategy workflow的`BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE`維持MR-12B。MR-13A stage 1不得因切換模型研究profile而改變Selection PIT／strategy compare的預設模型身份。
+
+### Scientific contract
+
+1. Sample universe由`breakout_event_groups`改為`daily_eligible_stock_days`：每支有足夠300-bar歷史、benchmark同日可用、且40-bar future target完整的股票／交易日最多一筆sample。
+2. Candidate membership、`high_len`、breakout level與任何strategy order／fill state都不參與training sample selection或模型input；breakout candidates只在checkpoint寫入後作OOS diagnostic slice。
+3. Input architecture不變：沿用既有`300×10` stock+0050 normalized OHLCV sequence與`ARCH-inception_time_v1`；不新增手工MA／breakout context。
+4. Target沿用MR-12 no-time target的既有40-day adverse-first future-path核心：在首次10% risk barrier touch前取最早最大safe high，adverse excursion量到該peak；公式仍為`favorable/risk_budget - adverse/risk_budget`。新identity只表示它可在任意合法stock-day計算，不依賴breakout-event語意。
+5. Objective／loss／epoch Gate不變：`daily_pairwise_ranking / pairwise_logistic / mean_daily_spearman`；whole-date coherent batch不得拆日，也不新增pair sampling或固定pair數magic number。
+6. OOS在checkpoint寫入後才推論；不得參與loss、gradient、epoch selection或target normalization。
+
+### Storage／performance contract
+
+- 不建立`stock-day × 300 × 10` expanded feature bank；daily sample只持久化compact identity／target／score類工件。
+- 訓練時以canonical sanitized ticker OHLCV + benchmark作lazy sequence materialization，重用既有`build_breakout_quality_sequence_feature`，避免第二套feature公式。
+- Daily 40-bar target改為每ticker向量化計算；以109個synthetic stock-days逐筆對照canonical scalar target，最大絕對誤差=`3.0131e-08`，語意一致。
+- Daily universe的epoch selection略過每epoch完整inner-train inference metrics，因該數值不參與選模；完整Validation仍每epoch評估，選模規則不變。舊MR-12 path預設行為不變。
+
+### Stage 1驗證輸出
+
+正式訓練完成後，報表必須同時提供：
+
+- `All eligible stock-days` forward OOS：Mean Daily Spearman、Global Spearman、Pair Concordance、Top/Bottom 10% Target、NDCG@K、Top-K Lift、Oracle overlap、Boundary concordance／gap。
+- `Breakout candidate slice` forward OOS：以同一MR-13A checkpoint／scores切出官方breakout ticker/date後計算同組排序品質；candidate membership只作post-checkpoint診斷。
+- Stage 1不建立Selection PIT scores、不建立strategy ranking source、不跑C17/C18／ROOS，也不根據strategy結果調模型。
+
+### 下一步Gate
+
+先由使用者在正式`apps/research.py → 模型訓練`執行MR-13A full forward-OOS。只有全市場與breakout-candidate slice模型結果支持daily-universal方向，才進MR-13A stage 2建立Selection PIT daily scores；若forward-OOS本身不支持，直接停在模型層，不消耗PIT／strategy replay成本。

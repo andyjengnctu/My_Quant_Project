@@ -34,7 +34,12 @@ from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 # - MR-12A all-event continuous MSE: "strategy_aligned_no_time_all_event_mse"
 # - MR-12B all-event pairwise ranker: "strategy_aligned_no_time_all_event_pairwise"
 # - MR-12C all-event ListNet top-one listwise ranker: "strategy_aligned_no_time_all_event_listwise"
+# - MR-13A daily-universal pairwise ranker: "daily_universal_no_time_pairwise"
+# Strategy workflow remains on the latest validated deployable/PIT-capable anchor.
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
+# Model-research menu may move ahead of strategy deployment.  MR-13A stage 1 is
+# forward-OOS-only and must not silently change strategy defaults or PIT identity.
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
 BREAKOUT_QUALITY_RANDOM_SEED = 42
@@ -239,6 +244,7 @@ STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE = "strategy_aligned_no_time_
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE = "strategy_aligned_no_time_all_event_mse"
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
 STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE = "strategy_aligned_no_time_all_event_listwise"
+DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE = "daily_universal_no_time_pairwise"
 
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 
@@ -266,6 +272,13 @@ TRAINING_LABEL_SCOPE_PASS_ONLY = "pass_only"
 SUPPORTED_BREAKOUT_QUALITY_TRAINING_LABEL_SCOPES = (
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
+)
+
+TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS = "breakout_event_groups"
+TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS = "daily_eligible_stock_days"
+SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES = (
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
 )
 
 TRAINING_OBJECTIVE_BINARY_CLASSIFICATION = "binary_classification"
@@ -322,6 +335,7 @@ class BreakoutQualityExperimentProfile:
     loss_name: str = "cross_entropy"
     epoch_selection_metric: str = "validation_loss"
     training_label_scope: str = TRAINING_LABEL_SCOPE_ALL
+    training_sample_scope: str = TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
 
     def __post_init__(self) -> None:
         normalized_name = str(self.name).strip().lower()
@@ -352,6 +366,8 @@ class BreakoutQualityExperimentProfile:
             raise ValueError(f"不支援的 training objective: {self.training_objective!r}")
         if self.training_label_scope not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_LABEL_SCOPES:
             raise ValueError(f"不支援的 training label scope: {self.training_label_scope!r}")
+        if self.training_sample_scope not in SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES:
+            raise ValueError(f"不支援的 training sample scope: {self.training_sample_scope!r}")
         if self.training_objective == TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
             if self.continuous_target_id is not None:
                 raise ValueError("binary classification profile 不得指定 continuous_target_id")
@@ -359,6 +375,8 @@ class BreakoutQualityExperimentProfile:
                 raise ValueError("binary classification profile 必須使用 cross_entropy / validation_loss")
             if self.training_label_scope != TRAINING_LABEL_SCOPE_ALL:
                 raise ValueError("binary classification profile 必須使用all_labels scope")
+            if self.training_sample_scope != TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
+                raise ValueError("binary classification profile 必須使用breakout_event_groups sample scope")
         elif self.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
             if not str(self.continuous_target_id or "").strip():
                 raise ValueError("continuous ranker profile 必須指定 continuous_target_id")
@@ -465,6 +483,11 @@ class BreakoutQualityExperimentProfile:
                 "loss_name": self.loss_name,
                 "epoch_selection_metric": self.epoch_selection_metric,
             })
+            # The event-group scope is the historical continuous-ranker default.
+            # Omit it so existing MR-12 artifact identities remain byte-for-byte
+            # compatible; only new non-default sample scopes are explicit.
+            if self.training_sample_scope != TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
+                payload["training_sample_scope"] = self.training_sample_scope
             if self.training_label_scope != TRAINING_LABEL_SCOPE_ALL:
                 payload["training_label_scope"] = self.training_label_scope
         return payload
@@ -706,6 +729,17 @@ _EXPERIMENT_PROFILES = {
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
     ),
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_opportunity_no_time_r_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    ),
 }
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -747,7 +781,7 @@ def resolve_breakout_quality_random_seed() -> int:
 # =============================================================================
 
 # Workflow filter and architecture intentionally follow the active canonical identity.
-# Users switch the main-menu model type with BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE.
+# Strategy tools use the validated workflow identity; the model-research menu has its own active profile above.
 BREAKOUT_QUALITY_WORKFLOW_FILTER_ID = BREAKOUT_QUALITY_DEFAULT_FILTER_ID
 BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE = BREAKOUT_QUALITY_MODEL_ARCHITECTURE
 
@@ -952,6 +986,7 @@ class BreakoutQualityWorkflowSettings:
     training_objective: str
     continuous_target_id: str | None
     training_label_scope: str
+    training_sample_scope: str
     seed: int
     point_in_time_score_start_date: str
     point_in_time_coverage_reference_start_date: str
@@ -981,8 +1016,18 @@ class BreakoutQualityWorkflowSettings:
     def is_continuous_ranker(self) -> bool:
         return self.training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
 
+    @property
+    def supports_point_in_time_scores(self) -> bool:
+        # MR-13A stage 1 deliberately stops at forward-OOS model validation.
+        # Daily PIT generation will become a separate follow-up implementation.
+        return bool(
+            self.is_continuous_ranker
+            and self.training_sample_scope
+            == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+        )
+
     def as_manifest_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "filter_id": self.filter_id,
             "model_architecture": self.model_architecture,
             "experiment_profile": self.experiment_profile,
@@ -991,7 +1036,7 @@ class BreakoutQualityWorkflowSettings:
             "training_label_scope": self.training_label_scope,
             "seed": int(self.seed),
             "point_in_time": {
-                "enabled": bool(self.is_continuous_ranker),
+                "enabled": bool(self.supports_point_in_time_scores),
                 "score_start_date": self.point_in_time_score_start_date,
                 "coverage_reference_start_date": (
                     self.point_in_time_coverage_reference_start_date
@@ -1026,6 +1071,10 @@ class BreakoutQualityWorkflowSettings:
                 "buy_sort": self.strategy_buy_sort,
             },
         }
+        if self.training_sample_scope != TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
+            payload["training_sample_scope"] = self.training_sample_scope
+        return payload
+
 
 
 def _resolve_strategy_defaults(training_objective: str) -> tuple[str, str, str]:
@@ -1049,11 +1098,16 @@ def _resolve_auto(value: str, *, auto_value: str, resolved_default: str) -> str:
     return resolved_default if normalized == auto_value else normalized
 
 
-def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
+def get_breakout_quality_workflow_settings(
+    *, experiment_profile: str | None = None
+) -> BreakoutQualityWorkflowSettings:
     random_seed = resolve_breakout_quality_random_seed()
-    profile = get_breakout_quality_experiment_profile(
+    resolved_experiment_profile = str(
         BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE
-    )
+        if experiment_profile is None
+        else experiment_profile
+    ).strip()
+    profile = get_breakout_quality_experiment_profile(resolved_experiment_profile)
     if profile.training_objective not in {
         TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
         *CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
@@ -1158,7 +1212,7 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
     return BreakoutQualityWorkflowSettings(
         filter_id=str(BREAKOUT_QUALITY_WORKFLOW_FILTER_ID),
         model_architecture=str(BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE),
-        experiment_profile=str(BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE),
+        experiment_profile=resolved_experiment_profile,
         training_objective=str(profile.training_objective),
         continuous_target_id=(
             None
@@ -1166,6 +1220,7 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
             else str(profile.continuous_target_id)
         ),
         training_label_scope=str(profile.training_label_scope),
+        training_sample_scope=str(profile.training_sample_scope),
         seed=random_seed,
         point_in_time_score_start_date=str(
             BREAKOUT_QUALITY_POINT_IN_TIME_SCORE_START_DATE
@@ -1208,6 +1263,15 @@ def get_breakout_quality_workflow_settings() -> BreakoutQualityWorkflowSettings:
         strategy_buy_sort=strategy_buy_sort,
     )
 
+
+def get_breakout_quality_model_research_settings() -> BreakoutQualityWorkflowSettings:
+    """Return the active model-research identity without changing strategy defaults."""
+
+    return get_breakout_quality_workflow_settings(
+        experiment_profile=BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE
+    )
+
+
 __all__ = [
     'BREAKOUT_QUALITY_BENCHMARK_TICKER',
     'BREAKOUT_QUALITY_TORCH_DEVICE',
@@ -1218,6 +1282,7 @@ __all__ = [
     'BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE',
     'BREAKOUT_QUALITY_DEFAULT_EPOCHS',
     'BREAKOUT_QUALITY_DEFAULT_FILTER_ID',
+    'BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE',
     'BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE',
     'BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM',
     'BREAKOUT_QUALITY_RANDOM_SEED',
@@ -1325,6 +1390,10 @@ __all__ = [
     'TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING',
     'TRAINING_SAMPLING_ALL_EVENT_ROWS',
     'TRAINING_SAMPLING_UNIQUE_TICKER_DATE',
+    'TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS',
+    'TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS',
+    'SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES',
+    'DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE',
     'TIME_WEIGHT_MODE_DATE_BALANCED',
     'TIME_WEIGHT_MODE_NONE',
     'TIME_WEIGHT_MODE_YEAR_BALANCED_SQRT',
@@ -1360,4 +1429,5 @@ __all__ = [
     'WORKFLOW_STRATEGY_MODE_SCORE_RANKING',
     'get_breakout_quality_continuous_ranker_comparison_settings',
     'get_breakout_quality_workflow_settings',
+    'get_breakout_quality_model_research_settings',
 ]

@@ -15,6 +15,7 @@ from filters.breakout_quality.contract import BreakoutQualityLabelPolicy
 CONTINUOUS_TARGET_SCHEMA_VERSION = 1
 STRATEGY_ALIGNED_TARGET_ID = "strategy_aligned_opportunity_r_v1"
 STRATEGY_ALIGNED_NO_TIME_TARGET_ID = "strategy_aligned_opportunity_no_time_r_v1"
+DAILY_OPPORTUNITY_NO_TIME_TARGET_ID = "daily_opportunity_no_time_r_v1"
 
 TARGET_RAW_FILENAME = "group_target_raw_r.npy"
 TARGET_FAVORABLE_RETURN_FILENAME = "group_favorable_return.npy"
@@ -197,6 +198,84 @@ def strategy_aligned_target_from_cached_path(
         opportunity_bar=int(opportunity_bar),
         first_risk_breach_bar=int(first_risk_breach_bar),
     )
+
+
+def daily_opportunity_no_time_target_from_cached_path(
+    high_prices: np.ndarray,
+    low_prices: np.ndarray,
+    *,
+    anchor_price: float,
+    available_bars: int,
+    spec: StrategyAlignedContinuousTargetSpec,
+) -> StrategyAlignedContinuousTargetResult:
+    """Build the strategy-independent daily opportunity target.
+
+    The future-path mechanics are intentionally identical to the validated no-time
+    target used by MR-12A/B/C.  The only semantic change is the sample universe:
+    this function may be evaluated for any eligible ticker/date and does not require
+    a breakout event, high_len, breakout level, candidate membership, or strategy
+    execution decision.
+    """
+
+    source = strategy_aligned_target_from_cached_path(
+        high_prices,
+        low_prices,
+        anchor_price=anchor_price,
+        available_bars=available_bars,
+        spec=spec,
+    )
+    if not source.valid:
+        return source
+    risk_budget = float(spec.risk_budget_return)
+    target_raw_r = (
+        float(source.favorable_return) / risk_budget
+        - float(source.adverse_return_to_peak) / risk_budget
+    )
+    if not math.isfinite(target_raw_r):
+        return _invalid_result("non_finite_target")
+    return StrategyAlignedContinuousTargetResult(
+        valid=True,
+        reason="ok",
+        target_raw_r=float(target_raw_r),
+        favorable_return=float(source.favorable_return),
+        adverse_return_to_peak=float(source.adverse_return_to_peak),
+        opportunity_bar=int(source.opportunity_bar),
+        first_risk_breach_bar=int(source.first_risk_breach_bar),
+    )
+
+
+def build_daily_opportunity_no_time_contract(
+    policy: BreakoutQualityLabelPolicy,
+) -> dict[str, object]:
+    """Return the fixed MR-13A target contract without breakout-event semantics."""
+
+    spec = StrategyAlignedContinuousTargetSpec.from_label_policy(policy)
+    return {
+        "schema_version": CONTINUOUS_TARGET_SCHEMA_VERSION,
+        "target_id": DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+        "objective_family": "daily_cross_sectional_opportunity_no_time",
+        "information_source": "fixed_future_high_low_path",
+        "sample_scope": "daily_eligible_stock_days",
+        "horizon_bars": int(spec.horizon_bars),
+        "risk_budget_return": float(spec.risk_budget_return),
+        "formula": (
+            "favorable_return_before_first_risk_breach / risk_budget_return "
+            "- adverse_return_required_to_reach_that_peak / risk_budget_return"
+        ),
+        "peak_rule": "earliest maximum high before first risk-barrier touch",
+        "risk_rule": "same-bar adverse-first; barrier-day high is excluded",
+        "adverse_scope": "worst low from horizon start through selected peak bar",
+        "no_safe_bar_rule": "target=-1R when the risk barrier is touched on the first bar",
+        "requires_breakout_event": False,
+        "requires_high_len": False,
+        "requires_breakout_level": False,
+        "requires_strategy_candidate_membership": False,
+        "time_penalty_included": False,
+        "normalization": "none",
+        "clipping": "none",
+        "split_derived_parameters": False,
+        "oos_fitted_parameters": False,
+    }
 
 
 def build_strategy_aligned_group_targets(
@@ -613,6 +692,7 @@ def load_validated_continuous_target_component_arrays(
 
 __all__ = [
     "CONTINUOUS_TARGET_SCHEMA_VERSION",
+    "DAILY_OPPORTUNITY_NO_TIME_TARGET_ID",
     "STRATEGY_ALIGNED_TARGET_ID",
     "STRATEGY_ALIGNED_NO_TIME_TARGET_ID",
     "TARGET_ADVERSE_RETURN_FILENAME",
@@ -628,11 +708,13 @@ __all__ = [
     "TARGET_VALID_MASK_FILENAME",
     "StrategyAlignedContinuousTargetResult",
     "StrategyAlignedContinuousTargetSpec",
+    "build_daily_opportunity_no_time_contract",
     "build_strategy_aligned_group_targets",
     "build_strategy_aligned_no_time_contract",
     "build_strategy_aligned_no_time_group_targets",
     "load_validated_continuous_target_arrays",
     "load_validated_continuous_target_component_arrays",
     "resolve_continuous_target_dir",
+    "daily_opportunity_no_time_target_from_cached_path",
     "strategy_aligned_target_from_cached_path",
 ]

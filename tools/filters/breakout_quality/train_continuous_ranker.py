@@ -20,12 +20,14 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
     resolve_breakout_quality_random_seed,
 )
@@ -54,6 +56,7 @@ from config.breakout_quality import (
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_ranker_quality import daily_top_k_metrics
 from filters.breakout_quality.continuous_target import (
+    DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_TARGET_ID,
     TARGET_TRADE_MATCHES_CSV_FILENAME,
@@ -178,6 +181,7 @@ def parse_args(argv=None):
             STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
             STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
             STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
+            DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
         ),
     )
     parser.add_argument("--epochs", type=int, default=BREAKOUT_QUALITY_DEFAULT_EPOCHS)
@@ -289,6 +293,10 @@ def _validate_args(args) -> None:
             STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_ALL,
         ),
+        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE: (
+            DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
+            TRAINING_LABEL_SCOPE_ALL,
+        ),
     }
     expected = expected_targets.get(args.experiment_profile)
     if expected is None or (profile.continuous_target_id, profile.training_label_scope) != expected:
@@ -377,6 +385,14 @@ def _profile_contract(profile) -> dict[str, str]:
             "target_description": "same_date_all_event_listnet_distribution_of_strategy_aligned_opportunity_no_time_r_v1",
             "objective_description": "同日all-event No-time完整候選榜單的ListNet top-one cross-entropy",
             "metric_scope": "all_labels",
+        }
+    if profile.name == DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE:
+        return {
+            "experiment": "MR-13A Daily Universal No-time Pairwise Ranker",
+            "phase": "13A",
+            "target_description": "same_date_all_stock_order_of_daily_opportunity_no_time_r_v1",
+            "objective_description": "同日全部合法stock-day No-time target ordering的RankNet pairwise logistic loss",
+            "metric_scope": "all_stock_days",
         }
     raise ValueError(f"不支援的continuous ranker profile: {profile.name}")
 
@@ -748,6 +764,7 @@ def _train_epoch(
     weighted_loss_sum = 0.0
     weighted_loss_count = 0
     import torch.nn.functional as F
+    group_dates_series = pd.Series(group_dates)
 
     for ids in batches:
         if len(ids) == 0:
@@ -768,7 +785,7 @@ def _train_epoch(
                     torch,
                     margins,
                     target,
-                    pd.Series(group_dates).iloc[ids].to_numpy(),
+                    group_dates_series.iloc[ids].to_numpy(),
                 )
                 if loss is None:
                     continue
@@ -779,7 +796,7 @@ def _train_epoch(
                     torch,
                     margins,
                     target,
-                    pd.Series(group_dates).iloc[ids].to_numpy(),
+                    group_dates_series.iloc[ids].to_numpy(),
                 )
                 if loss is None:
                     continue
@@ -838,6 +855,7 @@ def _select_epoch(
     *,
     args,
     plan,
+    evaluate_train_metrics: bool = True,
 ) -> dict[str, Any]:
     model, optimizer = _new_model_and_optimizer(
         torch,
@@ -873,17 +891,26 @@ def _select_epoch(
             plan=plan,
             grad_scaler=grad_scaler,
         )
-        train_scores = _predict_scores(
-            torch, model, feature_bank, group_context, train_ids,
-            batch_size=int(args.evaluation_batch_size), plan=plan,
-        )
         validation_scores = _predict_scores(
             torch, model, feature_bank, group_context, validation_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
         )
-        train_metrics = _split_metrics(
-            train_ids, group_table, raw_target, percentile_target, train_scores,
-        )
+        if bool(evaluate_train_metrics):
+            train_scores = _predict_scores(
+                torch, model, feature_bank, group_context, train_ids,
+                batch_size=int(args.evaluation_batch_size), plan=plan,
+            )
+            train_metrics = _split_metrics(
+                train_ids, group_table, raw_target, percentile_target, train_scores,
+            )
+        else:
+            train_metrics = {
+                "group_count": int(len(train_ids)),
+                "not_evaluated_reason": (
+                    "daily-universal sample universe略過每epoch完整train inference；"
+                    "epoch selection仍只依完整validation mean daily Spearman"
+                ),
+            }
         validation_metrics = _split_metrics(
             validation_ids, group_table, raw_target, percentile_target, validation_scores,
         )
@@ -916,11 +943,18 @@ def _select_epoch(
         })
         if not compact_console:
             marker = " ★新最佳" if improved else ""
-            print(
-                f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} | Train MSE {train_metrics['mse_vs_daily_percentile']:.6f} "
-                f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(metric):.4f} "
-                f"| {elapsed:.1f}s{marker}"
-            )
+            if bool(evaluate_train_metrics):
+                print(
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} | Train MSE {train_metrics['mse_vs_daily_percentile']:.6f} "
+                    f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(metric):.4f} "
+                    f"| {elapsed:.1f}s{marker}"
+                )
+            else:
+                print(
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
+                    f"| Val MSE {validation_mse:.6f} | Val Daily Spearman {float(metric):.4f} "
+                    f"| {elapsed:.1f}s{marker}"
+                )
         if int(args.early_stopping_patience) > 0 and epochs_without_improvement >= int(args.early_stopping_patience):
             break
     if best_epoch < 1:
@@ -1198,6 +1232,10 @@ def main(argv=None) -> int:
     _validate_args(args)
     started = time.perf_counter()
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
+    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        from tools.filters.breakout_quality.train_daily_ranker import run as run_daily_ranker
+
+        return int(run_daily_ranker(args))
     contract = _profile_contract(profile)
     model_spec = get_model_spec(str(args.model_architecture))
     summary, indexed_features, context, labels, events = load_validated_dataset_bundle(

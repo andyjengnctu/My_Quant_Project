@@ -50,6 +50,7 @@ SUPPORTED_RANKING_SCORE_SOURCES = (
 
 CONTINUOUS_RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
 CONTINUOUS_RANKER_REPORT_FILENAME = "continuous_ranker_report.json"
+DAILY_RANKER_OOS_SCORE_FILENAME = "daily_ranker_oos_scores.csv.gz"
 
 PIT_REQUIRED_SCORE_COLUMNS = (
     "ticker",
