@@ -7,6 +7,8 @@ import json
 import math
 import sys
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
     BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH,
     BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
@@ -191,6 +194,12 @@ def parse_args(argv=None):
         type=int,
         default=BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     )
+    parser.add_argument(
+        "--train-prefetch-batches",
+        type=int,
+        default=BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
+        help="預先物化後續continuous-ranker training batches；0 表示關閉",
+    )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument("--weight-decay", type=float, default=BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY)
     parser.add_argument(
@@ -305,6 +314,8 @@ def _validate_args(args) -> None:
         raise ValueError("continuous ranker必須使用inner validation選epoch")
     if int(args.epochs) < 1 or int(args.batch_size) < 2 or int(args.evaluation_batch_size) < 1:
         raise ValueError("epochs>=1、batch-size>=2、evaluation-batch-size>=1")
+    if int(args.train_prefetch_batches) < 0:
+        raise ValueError("train-prefetch-batches必須 >=0")
     if float(args.lr) <= 0.0 or float(args.weight_decay) < 0.0:
         raise ValueError("learning rate必須>0，weight decay必須>=0")
     if float(args.gradient_clip_norm) < 0.0:
@@ -687,6 +698,60 @@ def _pairwise_logistic_loss(torch, margins, targets, dates) -> tuple[Any | None,
     return torch.cat(losses).mean(), int(pair_count)
 
 
+def _materialize_feature_batch(feature_bank, ids: np.ndarray) -> np.ndarray:
+    return np.asarray(feature_bank[np.asarray(ids, dtype=np.int64)], dtype=np.float32)
+
+
+def _iter_materialized_feature_batches(
+    feature_bank,
+    batches: list[np.ndarray],
+    *,
+    prefetch_batches: int,
+):
+    """Materialize batches in-order while one CPU worker runs ahead of the GPU.
+
+    The worker only reads the feature bank.  Batch identity/order and optimizer
+    updates remain identical to the non-prefetch path.
+    """
+
+    depth = int(prefetch_batches)
+    if depth <= 0 or len(batches) <= 1:
+        for ids in batches:
+            yield ids, _materialize_feature_batch(feature_bank, ids)
+        return
+
+    queue_depth = min(depth, len(batches))
+    with ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="continuous-ranker-prefetch",
+    ) as executor:
+        pending = deque(
+            (
+                batches[index],
+                executor.submit(_materialize_feature_batch, feature_bank, batches[index]),
+            )
+            for index in range(queue_depth)
+        )
+        next_index = queue_depth
+        while pending:
+            ids, future = pending.popleft()
+            features = future.result()
+            if next_index < len(batches):
+                next_ids = batches[next_index]
+                pending.append(
+                    (
+                        next_ids,
+                        executor.submit(
+                            _materialize_feature_batch,
+                            feature_bank,
+                            next_ids,
+                        ),
+                    )
+                )
+                next_index += 1
+            yield ids, features
+
+
 def _listnet_top_one_loss(torch, margins, targets, dates) -> tuple[Any | None, int]:
     """ListNet top-one cross-entropy over complete same-date candidate lists.
 
@@ -736,6 +801,7 @@ def _train_epoch(
     gradient_clip_norm: float,
     plan,
     grad_scaler,
+    prefetch_batches: int = 0,
 ) -> float:
     model.train()
     ids_all = np.asarray(group_ids, dtype=np.int64)
@@ -766,10 +832,14 @@ def _train_epoch(
     import torch.nn.functional as F
     group_dates_series = pd.Series(group_dates)
 
-    for ids in batches:
+    for ids, batch_features in _iter_materialized_feature_batches(
+        feature_bank,
+        batches,
+        prefetch_batches=int(prefetch_batches),
+    ):
         if len(ids) == 0:
             continue
-        xb = torch.from_numpy(np.asarray(feature_bank[ids], dtype=np.float32)).to(plan.device)
+        xb = torch.from_numpy(batch_features).to(plan.device)
         cb = torch.from_numpy(np.asarray(group_context[ids], dtype=np.float32)).to(plan.device)
         target = torch.from_numpy(np.asarray(percentile_target[ids], dtype=np.float32)).to(plan.device)
         optimizer.zero_grad(set_to_none=True)
@@ -890,6 +960,7 @@ def _select_epoch(
             gradient_clip_norm=float(args.gradient_clip_norm),
             plan=plan,
             grad_scaler=grad_scaler,
+            prefetch_batches=int(args.train_prefetch_batches),
         )
         validation_scores = _predict_scores(
             torch, model, feature_bank, group_context, validation_ids,
@@ -1010,6 +1081,7 @@ def _fit_final(
             gradient_clip_norm=float(args.gradient_clip_norm),
             plan=plan,
             grad_scaler=grad_scaler,
+            prefetch_batches=int(args.train_prefetch_batches),
         )
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})

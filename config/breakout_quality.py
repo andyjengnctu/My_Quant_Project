@@ -150,6 +150,7 @@ BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS = True  # 固定 PyTorch deterministic
 BREAKOUT_QUALITY_ALLOW_TF32 = False  # 保持跨裝置數值契約；不使用 TF32。
 BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES = 0  # 訓練時預先準備後續 batches 的數量；RAM preload 開啟時預設 0，慢速磁碟可自行調高；不改 batch 順序或 optimizer 更新。
 BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK = True  # 訓練與分數匯出前將去重 feature bank 與小型事件陣列載入 RAM；資料值與列順序不變。
+BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES = 2  # Continuous/daily ranker CPU feature feeding pipeline；只預先物化後續batch，不改batch order、loss或optimizer step。
 
 
 # =============================================================================
@@ -1316,6 +1317,7 @@ __all__ = [
     'BREAKOUT_QUALITY_PRETRAINING_CONTRASTIVE_ALPHA',
     'BREAKOUT_QUALITY_PRETRAINING_TEMPORAL_UNIT',
     'BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES',
+    'BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES',
     'BREAKOUT_QUALITY_EXTRA_HIGH_LENS',
     'BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA',
     'BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE',

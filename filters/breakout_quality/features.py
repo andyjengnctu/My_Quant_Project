@@ -98,13 +98,30 @@ def _normalize_volume_window(volume: np.ndarray) -> np.ndarray:
 
 
 def _normalize_ohlcv_window(window: pd.DataFrame, anchor_close: float) -> np.ndarray:
+    values = window[["Open", "High", "Low", "Close", "Volume"]].to_numpy(
+        dtype=np.float64,
+        copy=False,
+    )
+    return normalize_ohlcv_array_window(values, anchor_close)
+
+
+def normalize_ohlcv_array_window(values: np.ndarray, anchor_close: float) -> np.ndarray:
+    """Normalize one canonical OHLCV window without requiring a DataFrame.
+
+    This is the single numerical implementation shared by the historical
+    DataFrame feature builder and the MR-13A lazy stock-day materializer.
+    """
+
     if not math.isfinite(anchor_close) or anchor_close <= 0.0:
         raise ValueError("anchor_close 必須是有限正數")
-    open_norm = window["Open"].to_numpy(dtype=np.float64, copy=False) / anchor_close - 1.0
-    high_norm = window["High"].to_numpy(dtype=np.float64, copy=False) / anchor_close - 1.0
-    low_norm = window["Low"].to_numpy(dtype=np.float64, copy=False) / anchor_close - 1.0
-    close_norm = window["Close"].to_numpy(dtype=np.float64, copy=False) / anchor_close - 1.0
-    volume_norm = _normalize_volume_window(window["Volume"].to_numpy(dtype=np.float64, copy=False))
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 2 or array.shape[1] != 5:
+        raise ValueError("OHLCV array window必須是 [bars, 5]")
+    open_norm = array[:, 0] / anchor_close - 1.0
+    high_norm = array[:, 1] / anchor_close - 1.0
+    low_norm = array[:, 2] / anchor_close - 1.0
+    close_norm = array[:, 3] / anchor_close - 1.0
+    volume_norm = _normalize_volume_window(array[:, 4])
     return np.column_stack([open_norm, high_norm, low_norm, close_norm, volume_norm]).astype(np.float32)
 
 

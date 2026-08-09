@@ -22,7 +22,7 @@ from filters.breakout_quality.continuous_target import (
     build_daily_opportunity_no_time_contract,
 )
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
-from filters.breakout_quality.features import build_breakout_quality_sequence_feature
+from filters.breakout_quality.features import normalize_ohlcv_array_window
 from filters.breakout_quality.models.spec import get_model_spec, validate_model_sequence_length
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.workflow_io import (
@@ -43,21 +43,69 @@ class LazyDailyFeatureBank:
         benchmark: pd.DataFrame,
         ticker_ids: np.ndarray,
         source_positions: np.ndarray,
+        benchmark_positions: np.ndarray,
         policy,
     ) -> None:
-        self._frames = tuple(frames)
-        self._benchmark = benchmark
+        self._frame_arrays = tuple(
+            frame[["Open", "High", "Low", "Close", "Volume"]].to_numpy(
+                dtype=np.float64,
+                copy=True,
+            )
+            for frame in frames
+        )
+        self._benchmark_array = benchmark[
+            ["Open", "High", "Low", "Close", "Volume"]
+        ].to_numpy(dtype=np.float64, copy=True)
         self._ticker_ids = np.asarray(ticker_ids, dtype=np.int32)
         self._source_positions = np.asarray(source_positions, dtype=np.int32)
+        self._benchmark_positions = np.asarray(benchmark_positions, dtype=np.int32)
         self._policy = policy
-        if self._ticker_ids.ndim != 1 or self._source_positions.ndim != 1:
+        self._benchmark_feature_cache: dict[int, np.ndarray] = {}
+        if (
+            self._ticker_ids.ndim != 1
+            or self._source_positions.ndim != 1
+            or self._benchmark_positions.ndim != 1
+        ):
             raise ValueError("daily feature index必須是一維")
-        if self._ticker_ids.shape != self._source_positions.shape:
-            raise ValueError("daily feature ticker/source index長度不一致")
+        if not (
+            self._ticker_ids.shape
+            == self._source_positions.shape
+            == self._benchmark_positions.shape
+        ):
+            raise ValueError("daily feature ticker/source/benchmark index長度不一致")
         if len(self._ticker_ids) and (
-            int(self._ticker_ids.min()) < 0 or int(self._ticker_ids.max()) >= len(self._frames)
+            int(self._ticker_ids.min()) < 0
+            or int(self._ticker_ids.max()) >= len(self._frame_arrays)
         ):
             raise ValueError("daily feature ticker index超出frame範圍")
+        if len(self._benchmark_positions) and (
+            int(self._benchmark_positions.min()) < 0
+            or int(self._benchmark_positions.max()) >= len(self._benchmark_array)
+        ):
+            raise ValueError("daily feature benchmark index超出範圍")
+
+    def _normalized_window(self, values: np.ndarray, source_pos: int) -> np.ndarray:
+        feature_window = int(self._policy.feature_window_bars)
+        start_pos = int(source_pos) - feature_window + 1
+        if start_pos < 0 or int(source_pos) >= len(values):
+            raise RuntimeError("daily feature source position沒有足夠history")
+        window = values[start_pos : int(source_pos) + 1]
+        if len(window) != feature_window:
+            raise RuntimeError("daily feature window長度與policy不一致")
+        anchor_close = float(values[int(source_pos), 3])
+        normalized = normalize_ohlcv_array_window(window, anchor_close)
+        if not np.isfinite(normalized).all():
+            raise RuntimeError("daily feature window產生non-finite value")
+        return normalized
+
+    def _benchmark_feature(self, benchmark_pos: int) -> np.ndarray:
+        position = int(benchmark_pos)
+        cached = self._benchmark_feature_cache.get(position)
+        if cached is not None:
+            return cached
+        feature = self._normalized_window(self._benchmark_array, position)
+        self._benchmark_feature_cache[position] = feature
+        return feature
 
     @property
     def shape(self) -> tuple[int, int, int]:
@@ -100,18 +148,12 @@ class LazyDailyFeatureBank:
         for out_index, group_id in enumerate(ids.tolist()):
             ticker_id = int(self._ticker_ids[group_id])
             source_pos = int(self._source_positions[group_id])
-            sequence = build_breakout_quality_sequence_feature(
-                self._frames[ticker_id],
-                self._benchmark,
-                event_pos=source_pos,
-                policy=self._policy,
+            benchmark_pos = int(self._benchmark_positions[group_id])
+            output[out_index, :, :5] = self._normalized_window(
+                self._frame_arrays[ticker_id],
+                source_pos,
             )
-            if sequence is None:
-                raise RuntimeError(
-                    "daily feature index與canonical feature builder不一致: "
-                    f"group_index={group_id}, ticker_id={ticker_id}, source_pos={source_pos}"
-                )
-            output[out_index] = sequence
+            output[out_index, :, 5:] = self._benchmark_feature(benchmark_pos)
         return output[0] if scalar else output
 
 
@@ -270,6 +312,7 @@ def load_daily_universal_ranker_data(
     frames: list[pd.DataFrame] = []
     ticker_id_chunks: list[np.ndarray] = []
     source_pos_chunks: list[np.ndarray] = []
+    benchmark_pos_chunks: list[np.ndarray] = []
     date_chunks: list[np.ndarray] = []
     label_end_chunks: list[np.ndarray] = []
     target_chunks: list[np.ndarray] = []
@@ -297,6 +340,7 @@ def load_daily_universal_ranker_data(
         benchmark_pos = benchmark_index.get_indexer(candidate_dates)
         eligible = np.asarray(in_period, dtype=bool) & (benchmark_pos >= first_pos)
         local_positions = candidate_positions[eligible]
+        local_benchmark_positions = benchmark_pos[eligible]
         if len(local_positions) == 0:
             skipped_tickers += 1
             continue
@@ -304,6 +348,7 @@ def load_daily_universal_ranker_data(
             frame, local_positions, spec=spec
         )
         local_positions = local_positions[target_valid]
+        local_benchmark_positions = local_benchmark_positions[target_valid]
         local_targets = local_targets[target_valid]
         if len(local_positions) == 0:
             skipped_tickers += 1
@@ -317,6 +362,9 @@ def load_daily_universal_ranker_data(
         count = len(local_positions)
         ticker_id_chunks.append(np.full(count, ticker_id, dtype=np.int32))
         source_pos_chunks.append(np.asarray(local_positions, dtype=np.int32))
+        benchmark_pos_chunks.append(
+            np.asarray(local_benchmark_positions, dtype=np.int32)
+        )
         date_chunks.append(local_dates_index.to_numpy(dtype="datetime64[D]"))
         label_end_chunks.append(local_label_end_index.to_numpy(dtype="datetime64[D]"))
         target_chunks.append(np.asarray(local_targets, dtype=np.float32))
@@ -326,6 +374,7 @@ def load_daily_universal_ranker_data(
 
     ticker_ids = np.concatenate(ticker_id_chunks)
     source_positions = np.concatenate(source_pos_chunks)
+    benchmark_positions = np.concatenate(benchmark_pos_chunks)
     dates = np.concatenate(date_chunks)
     label_end_dates = np.concatenate(label_end_chunks)
     raw_target = np.concatenate(target_chunks)
@@ -348,6 +397,7 @@ def load_daily_universal_ranker_data(
         benchmark=benchmark,
         ticker_ids=ticker_ids,
         source_positions=source_positions,
+        benchmark_positions=benchmark_positions,
         policy=DEFAULT_LABEL_POLICY,
     )
     validate_model_sequence_length(model_spec, int(feature_bank.shape[1]))

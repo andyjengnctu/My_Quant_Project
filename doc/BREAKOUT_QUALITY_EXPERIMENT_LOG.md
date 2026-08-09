@@ -6974,3 +6974,37 @@ Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權
 ### 下一步Gate
 
 先由使用者在正式`apps/research.py → 模型訓練`執行MR-13A full forward-OOS。只有全市場與breakout-candidate slice模型結果支持daily-universal方向，才進MR-13A stage 2建立Selection PIT daily scores；若forward-OOS本身不支持，直接停在模型層，不消耗PIT／strategy replay成本。
+
+## 2026-08-09 — MR-13A Stage 1：daily lazy feature feeding效能修正
+
+### 狀態
+
+`IMPLEMENTED / PERFORMANCE_ONLY / SCIENTIFIC_CONTRACT_UNCHANGED / RESULT_PENDING`。
+
+### 程式基準與問題定位
+
+- 使用者本輪來源ZIP：`test-branch-1_20260809_182833_19839e6.zip`。
+- SHA256：`30c30900ddce00674ce8c853ef1bda76e50ffec56af84795c3eaca1d281fcad9`。
+- 使用者觀察：MR-13A full training耗時長，GPU utilization約20%。
+- 原MR-13A為避免建立巨大的`stock-day × 300 × 10` expanded feature artifact，採`LazyDailyFeatureBank`；但每個training／evaluation batch會在單一Python執行緒逐stock-day呼叫DataFrame版canonical feature builder。每筆均重做stock／0050 300-bar slicing、benchmark date lookup與OHLCV normalization；同一交易日的0050 window亦會被每支股票重算。GPU因此大量時間等待CPU feature materialization。
+- `ARCH-inception_time_v1`僅約473k trainable parameters；在RTX 5080等高階GPU上，此feeding bottleneck會比模型算力更早成為限制。
+
+### Performance-only實作
+
+1. `filters/breakout_quality/features.py`新增canonical `normalize_ohlcv_array_window()`，DataFrame builder與MR-13A NumPy lazy path共用同一數值實作，避免feature公式分叉。
+2. `LazyDailyFeatureBank`建立時只把canonical sanitized OHLCV轉為RAM中的NumPy arrays；不建立每個stock-day的expanded sequence bank。
+3. 每個stock-day只以NumPy slice materialize其300-bar stock window，不再逐sample執行Pandas `iloc`與benchmark index lookup。
+4. dataset建索引時同步保存每個sample的benchmark position；同一benchmark position的normalized 300×5 window在RAM cache只計算一次並跨batch／epoch重用。cache規模只隨benchmark交易日數成長，不隨ticker×date sample數成長。
+5. Continuous ranker新增config-driven `BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES=2`；單一背景CPU worker只依既定batch順序預先materialize後續features，GPU仍按原順序做完全相同optimizer steps。設為0可關閉。
+6. 不修改MR-13A sample universe、40-day target、daily percentile、whole-date batch ordering、pairwise loss、optimizer、LR、mixed precision、epoch selection、checkpoint、OOS Gate或持久工件內容。
+
+### 獨立等價／效能檢查
+
+- Synthetic 40 tickers × 3 dates，共120個300×10 sequence：新NumPy lazy path與原canonical `build_breakout_quality_sequence_feature()`逐值`array_equal=True`，最大絕對誤差=`0`。
+- Synthetic單日550 stocks materialization：原版約`0.22～0.32s/batch`（約`1.7k～2.5k stock-days/s`）；修正後約`0.05～0.06s/batch`（約`9.3k～10.8k stock-days/s`），此環境約4～5倍feeding加速。此benchmark只量feature materialization，不宣稱等比例縮短整體training wall time。
+- Prefetch pipeline synthetic 10-batch檢查（每批CPU materialization與GPU stand-in各30ms）：prefetch=0約`0.604s`、prefetch=2約`0.335s`，batch order完全一致；此測試只驗證pipeline overlap與順序契約，不代表正式GPU wall-time倍率。
+
+### 判定
+
+此修正不占用新的`MR-*` identity，因沒有改變模型權重語意、target、loss、architecture或training-data semantics；MR-13A仍為`RESULT_PENDING`。正式full forward-OOS需以修正版重新執行後，才能記錄實際epoch時間、GPU utilization與模型Gate結果。
+
