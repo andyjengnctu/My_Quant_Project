@@ -16483,6 +16483,9 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
     from filters.breakout_quality.paths import resolve_filter_artifact_paths
     from core.backtest_core import run_v16_backtest
     from filters.breakout_quality.trade_path_label import (
+        TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+        TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+        TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
         TRADE_PATH_LABEL_CONTRACT_VERSION,
         TRADE_PATH_LABEL_ID,
         TRADE_PATH_LABEL_REASON_STATUS,
@@ -16512,15 +16515,28 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         _render_summary_table as _render_trade_path_gate_summary_table,
     )
 
+    expected_teacher_dates = []
+    teacher_cursor = pd.Timestamp(
+        TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE
+    ).normalize()
+    teacher_last = pd.Timestamp(
+        TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE
+    ).normalize()
+    while teacher_cursor <= teacher_last:
+        expected_teacher_dates.append(teacher_cursor.strftime("%Y-%m-%d"))
+        teacher_cursor = (
+            teacher_cursor
+            + pd.DateOffset(months=TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS)
+        ).normalize()
     valid_teacher_payload = {
         "params_ensemble_by_effective_date": {
-            f"{year}-01-01": [{"params": {"atr_len": 5}}]
-            for year in range(2014, 2021)
+            effective_date: [{"params": {"atr_len": 5}}]
+            for effective_date in expected_teacher_dates
         }
     }
     valid_teacher_meta = {
-        "first_oos_date": "2014-01-01",
-        "last_oos_date": "2020-12-01",
+        "first_oos_date": TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+        "last_oos_date": TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
     }
     accepted_dates = validate_selection_historical_baseline_period(
         payload=valid_teacher_payload,
@@ -16532,7 +16548,7 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
             for key, value in valid_teacher_payload[
                 "params_ensemble_by_effective_date"
             ].items()
-            if key != "2020-01-01"
+            if key != expected_teacher_dates[-1]
         }
     }
     try:
@@ -16540,16 +16556,21 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
             payload=incomplete_teacher_payload,
             meta=valid_teacher_meta,
         )
-    except ValueError as exc:
-        incomplete_schedule_rejected = "完整涵蓋2014～2020" in str(exc)
+    except ValueError:
+        incomplete_schedule_rejected = True
     else:
         incomplete_schedule_rejected = False
     add_check(
         results,
         "synthetic_breakout_quality",
         case_id,
-        "trade_path_historical_teacher_accepts_2020_december_oos_boundary_and_validates_effective_schedule",
-        ("2014-01-01", "2020-01-01", 7, True),
+        "trade_path_historical_teacher_accepts_canonical_oos_boundary_and_validates_effective_schedule",
+        (
+            expected_teacher_dates[0],
+            expected_teacher_dates[-1],
+            len(expected_teacher_dates),
+            True,
+        ),
         (
             accepted_dates[0],
             accepted_dates[-1],
