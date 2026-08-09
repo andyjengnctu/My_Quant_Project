@@ -17,19 +17,19 @@ from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_target import DAILY_OPPORTUNITY_NO_TIME_TARGET_ID
 from filters.breakout_quality.contract import (
     ARTIFACT_CONTRACT_VERSION,
-    DEFAULT_LABEL_POLICY,
     FEATURE_COLUMNS,
     FILTER_FAMILY,
 )
 from filters.breakout_quality.daily_ranker_data import (
     build_daily_ranker_split,
     load_daily_universal_ranker_data,
+    select_breakout_candidate_group_ids,
 )
 from filters.breakout_quality.models.factory import count_trainable_parameters, require_torch
 from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_model_output_dir
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
-from filters.breakout_quality.workflow_io import PROJECT_ROOT, load_validated_dataset_bundle, write_json
+from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
 
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
@@ -98,29 +98,6 @@ def _date_split_frame(bundle, split) -> pd.DataFrame:
             outer_split, role = "selection", "embargo"
         rows.append({"date": str(pd.Timestamp(date_value).date()), "outer_split": outer_split, "selection_role": role})
     return pd.DataFrame(rows)
-
-
-def _candidate_oos_ids(
-    bundle, oos_ids: np.ndarray, *, allow_stale_source: bool
-) -> np.ndarray:
-    _summary, _features, _context, _labels, events = load_validated_dataset_bundle(
-        str(bundle.summary["filter_id"]),
-        expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
-        require_current_source=not bool(allow_stale_source),
-    )
-    # Candidate membership is diagnostic only.  Do not reintroduce the old
-    # binary-label validity gate into the new daily-universal sample semantics.
-    event_frame = events.loc[:, ["ticker", "date"]].copy()
-    event_frame["ticker"] = event_frame["ticker"].astype(str)
-    event_frame["date"] = pd.to_datetime(event_frame["date"], errors="raise").dt.normalize()
-    event_keys = set(zip(event_frame["ticker"].tolist(), event_frame["date"].tolist()))
-    oos = bundle.group_table.iloc[np.asarray(oos_ids, dtype=np.int64)]
-    mask = np.fromiter(
-        ((str(ticker), pd.Timestamp(date).normalize()) in event_keys for ticker, date in zip(oos["ticker"], oos["date"])),
-        dtype=bool,
-        count=len(oos),
-    )
-    return np.asarray(oos_ids, dtype=np.int64)[mask]
 
 
 def _render_markdown(payload: dict) -> str:
@@ -273,7 +250,7 @@ def run(args, *, ranker_impl) -> int:
     )
     score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
     score_by_group[split.oos_ids] = oos_scores
-    candidate_ids = _candidate_oos_ids(
+    candidate_ids = select_breakout_candidate_group_ids(
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
     )
     candidate_metrics = (

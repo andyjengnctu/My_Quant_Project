@@ -7008,3 +7008,80 @@ Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權
 
 此修正不占用新的`MR-*` identity，因沒有改變模型權重語意、target、loss、architecture或training-data semantics；MR-13A仍為`RESULT_PENDING`。正式full forward-OOS需以修正版重新執行後，才能記錄實際epoch時間、GPU utilization與模型Gate結果。
 
+
+## 2026-08-09 — MR-13A Stage 1結果：Forward-OOS Gate通過，授權Stage 2 Selection PIT
+
+### 狀態
+
+`RESULT_AVAILABLE / FORWARD_OOS_MODEL_GATE_PASS / NOT_PROMOTED_OVER_MR12B / STAGE2_AUTHORIZED`。
+
+### 程式基準與固定條件
+
+- 使用者本機結果來源：`test-branch-1_20260809_184850_7662026(1).zip`；SHA256=`c66977555f0f404c36f29f46bbb38a81f4bc17de0cf8607efde3768e973f7e26`。
+- Filter=`breakout_quality_v1`；Architecture=`inception_time_v1`；Profile=`daily_universal_no_time_pairwise`；Seed=42。
+- Sample scope=`daily_eligible_stock_days`；Target=`daily_opportunity_no_time_r_v1`；Objective=`daily_pairwise_ranking / pairwise_logistic`；epoch metric=`mean_daily_spearman`。
+- Daily universe=`1,578,349` samples／`558` tickers；feature storage仍為lazy canonical 300×10 sequence，不建立expanded daily feature artifact。
+- Epoch 1為Selection內Inner Validation選模最佳：選模Validation daily rho=`0.0999`；Epoch 2=`0.0436`，故selected epoch=`1`。完整Selection refit固定1 epoch。
+- 重訓後原Validation daily rho=`0.2631`只作描述；因final refit已包含原Validation rows，**不得**當作獨立選模／泛化證據。
+
+### Forward-OOS結果
+
+- All eligible stock-days OOS：`608,204` groups；daily rho=`0.1755`、global rho=`0.1761`、pair concordance=`56.12%`；Top 10% Target=`1.8261R`、Bottom 10%=`0.4846R`，spread=`+1.3415R`。
+- All-stock K=10：NDCG=`0.6045`、Top-K Target=`2.0375R`、Lift=`+1.0357R`、Oracle overlap=`9.07%`、Boundary=`50.99%`、Boundary gap=`+0.1035R`，competition days=`1,203`。
+- Breakout-candidate OOS：`17,346` groups；daily rho=`0.1490`、global rho=`0.1894`、pair=`56.91%`；Top 10% Target=`2.3302R`、Bottom 10%=`0.5250R`。
+- Breakout K=10：NDCG=`0.7201`、Top-K Target=`1.6198R`、Lift=`+0.4056R`、Oracle overlap=`61.04%`、Boundary=`54.02%`、Boundary gap=`+0.2158R`，competition days=`603`。
+
+### 與MR-12B anchor的同口徑判讀
+
+- 既有MR-12B breakout Forward-OOS anchor：daily rho=`0.1568`、pair=`56.40%`、K=10 Top-K Target=`1.6231R`、Lift=`+0.4089R`、Oracle overlap=`59.80%`、Boundary=`52.98%`、Boundary gap=`+0.2121R`，competition days同為`603`。
+- MR-13A相對MR-12B：daily rho=`-0.0078`；pair=`+0.51pp`；Top-K Target=`-0.0033R`；Lift=`-0.0033R`；Oracle overlap=`+1.24pp`；Boundary=`+1.04pp`；Boundary gap=`+0.0037R`。
+- 因此MR-13A不是全面優於MR-12B；較合理結論是breakout實用raw Top-K品質近乎持平、pair／boundary略升，同時成功取得全市場每日排序能力。
+- **NDCG比較限制**：MR-13A Stage 1先在full daily universe建立same-day percentile relevance再切breakout candidate；MR-12B在event universe建立percentile relevance。因此`0.7201 vs 0.6905`只作描述，不納入嚴格head-to-head promotion證據。Raw Target／Lift／Pair／Boundary gap／Oracle overlap不依賴此percentile normalization差異，可直接判讀。
+
+### 判定與下一步
+
+1. Stage 1達成預先設定的模型層方向Gate：全市場OOS與breakout slice都呈正向排序能力，因此授權同一`MR-13A`進Stage 2 Selection PIT。
+2. 不建立新MR identity；Stage 2不改target、loss、architecture或training-data semantics，只把既有PIT infrastructure泛化到daily sample provider。
+3. `DL-CONT12B / MR-12B`仍為current validated continuous anchor；MR-13A尚未建立strategy runtime source，也不得因Stage 1結果切換strategy workflow。
+4. Stage 2先看historical PIT all-stock primary ordering與breakout-candidate diagnostic；只有PIT Gate通過後才討論Stage 3 strategy runtime／same-parameter comparison。
+
+## 2026-08-09 — MR-13A Stage 2：Daily Selection PIT與模型Audit實作
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / SAME_MR13A_ID / PIT_MODEL_GATE_ONLY / STRATEGY_NOT_CONNECTED`。
+
+### 程式基準與唯一變更
+
+- 本輪來源ZIP仍為`test-branch-1_20260809_184850_7662026(1).zip`；SHA256=`c66977555f0f404c36f29f46bbb38a81f4bc17de0cf8607efde3768e973f7e26`。
+- 不改MR-13A scientific condition；唯一功能性擴充是讓既有Selection PIT pipeline依`training_sample_scope`選擇canonical event或daily provider，並讓PIT audit primary scope由profile語意決定。
+- `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE`仍維持MR-12B；`BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE`維持MR-13A。Stage 2不得暗中改策略預設。
+
+### PIT／no-lookahead contract
+
+1. Event ranker繼續使用原`load_continuous_ranker_data`；daily ranker由同一public pipeline路由到`load_daily_universal_ranker_data`，不複製第二套PIT trainer。
+2. Daily training eligibility不再依賴PASS／REJECT label（daily rows的label固定為-1）；只依daily target validity。Legacy event profile的PASS-only／all-label mask完全保留。
+3. 每fold仍固定：inner train與final refit都必須`label_eval_end_date <`對應validation／score cutoff；score rows不進該fold training、epoch selection或target percentile建立。
+4. Daily fold沿用Selection內Validation選epoch與完整歷史refit；為避免大量無用推論，daily epoch selection不計算不參與選模的inner-train完整metrics，Validation Gate不變。
+5. PIT builder補齊config-driven `train_prefetch_batches`參數；這也修正performance prefetch加入後legacy PIT重建可能缺少arg的infrastructure regression。
+6. PIT builder與audit改由實際`--experiment-profile`解析settings，不再錯讀strategy-workflow active profile；因此MR-13A model research與MR-12B strategy workflow真正隔離。
+7. PIT audit新增`training_sample_scope`工件身份fail-fast；新工件必須與目前profile完全一致，legacy manifest缺欄位時只按歷史契約解讀為`breakout_event_groups`，不得把event PIT誤接daily provider。
+
+### Audit contract
+
+- Legacy event PIT primary evidence維持`PASS-only target`，舊audit若沒有新欄位仍預設此語意，歷史Gate相容。
+- MR-13A daily PIT primary evidence=`all_valid_target / All eligible stock-days`；年度方向Gate仍要求global rho>0、mean daily rho>0、過半年度rho>0且過半年度Top-bottom spread>0。
+- Daily audit另以官方breakout dataset ticker/date切出`breakout_candidate_target` diagnostic；candidate membership只在score生成後作audit，不進daily training sample selection。
+- Pair concordance與K=10 Top-K／boundary使用現有continuous-ranker canonical quality計算；audit不另寫第二套排名公式。Candidate audit的percentile relevance在candidate scope內重新建立，因此其NDCG口徑對event candidate universe更直接。
+- Daily target沒有獨立event-style target manifest；audit source record改以PIT manifest內嵌target contract作可追溯來源，不假造不存在的persisted target artifact。
+- PIT builder的`runtime_eligibility.eligible`仍為False；Stage 2 audit結果即使PASS也不等於forward-OOS runtime資格，strategy source／ROOS仍未接入。
+
+### Dataset／Label需求
+
+- 不重建既有`DATA-breakout_quality_v1` feature bank identity，不新增binary Label。
+- Daily stock-day index／40-day target依canonical sanitized OHLCV在PIT執行時確定性重建；feature仍lazy materialization，不產生expanded 300×10 daily feature artifact。
+- 持久PIT score只保存ticker/date/group index/score/fold/information cutoff等compact欄位；檔案會隨stock-day數成長，但不是feature tensor級膨脹。
+
+### 下一步
+
+由正式`apps/research.py → 模型訓練 → 建立／更新 Selection PIT Scores → PIT模型驗證`執行MR-13A Stage 2。先審查all-stock歷史PIT、年度穩定性與breakout-candidate diagnostic；未取得結果前不得把MR-13A寫成strategy DL source，也不得跑ROOS promotion。

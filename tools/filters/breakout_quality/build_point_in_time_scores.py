@@ -18,6 +18,7 @@ from core.display_common import InlineProgress, format_elapsed
 
 from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
     BREAKOUT_QUALITY_DEFAULT_EPOCHS,
     BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
@@ -32,17 +33,9 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
-from config.breakout_quality import (
-    TRAINING_LABEL_SCOPE_ALL,
-    TRAINING_LABEL_SCOPE_PASS_ONLY,
-)
 from config.breakout_quality import get_breakout_quality_workflow_settings
 from filters.breakout_quality.artifacts import build_file_manifest
-from filters.breakout_quality.contract import (
-    DEFAULT_MODEL_FILENAME,
-    LABEL_PASS,
-    LABEL_REJECT,
-)
+from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.paths import (
     resolve_filter_point_in_time_dir,
     resolve_filter_point_in_time_fold_dir,
@@ -67,6 +60,7 @@ from core.console_report import (
 from tools.filters.breakout_quality.continuous_ranker_pipeline import (
     build_checkpoint_payload,
     build_percentile_target,
+    build_training_scope_mask,
     fit_final,
     load_continuous_ranker_data,
     predict_scores,
@@ -121,6 +115,12 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--evaluation-batch-size",
         type=int,
         default=BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
+    )
+    parser.add_argument(
+        "--train-prefetch-batches",
+        type=int,
+        default=BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
+        help="預先materialize後續訓練batches；0表示關閉，不改batch順序",
     )
     parser.add_argument("--lr", type=float, default=BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE)
     parser.add_argument(
@@ -194,6 +194,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("fold-months與inner-validation-months必須>=1")
     if int(args.epochs) < 1 or int(args.batch_size) < 2 or int(args.evaluation_batch_size) < 1:
         raise ValueError("epochs>=1、batch-size>=2、evaluation-batch-size>=1")
+    if int(args.train_prefetch_batches) < 0:
+        raise ValueError("train-prefetch-batches必須>=0")
     if float(args.lr) <= 0.0 or float(args.weight_decay) < 0.0:
         raise ValueError("learning rate必須>0，weight decay必須>=0")
     if float(args.gradient_clip_norm) < 0.0:
@@ -339,16 +341,7 @@ def _resolve_score_start(
     label_end_dates = pd.to_datetime(
         bundle.group_table["label_eval_end_date"], errors="raise"
     ).dt.normalize()
-    labels = bundle.group_table["label"].to_numpy(dtype=np.int64)
-    target_valid = np.asarray(bundle.target_valid, dtype=bool)
-    if bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_PASS_ONLY:
-        scoped_target = target_valid & (labels == LABEL_PASS)
-    elif bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_ALL:
-        scoped_target = target_valid & np.isin(labels, [LABEL_REJECT, LABEL_PASS])
-    else:
-        raise ValueError(
-            f"不支援的continuous ranker training scope: {bundle.profile.training_label_scope}"
-        )
+    scoped_target = build_training_scope_mask(bundle)
 
     rejected: list[dict[str, Any]] = []
     for candidate in _candidate_month_starts(selection_start, score_end):
@@ -402,20 +395,11 @@ def _fold_group_ids(bundle, fold: dict[str, Any], *, validation_months: int) -> 
     label_end_dates = pd.to_datetime(
         bundle.group_table["label_eval_end_date"], errors="raise"
     ).dt.normalize()
-    labels = bundle.group_table["label"].to_numpy(dtype=np.int64)
-    target_valid = np.asarray(bundle.target_valid, dtype=bool)
     score_start = pd.Timestamp(fold["score_start"])
     score_end = pd.Timestamp(fold["score_end"])
     validation_start = (score_start - pd.DateOffset(months=int(validation_months))).normalize()
 
-    if bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_PASS_ONLY:
-        scoped_target = target_valid & (labels == LABEL_PASS)
-    elif bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_ALL:
-        scoped_target = target_valid & np.isin(labels, [LABEL_REJECT, LABEL_PASS])
-    else:
-        raise ValueError(
-            f"不支援的continuous ranker training scope: {bundle.profile.training_label_scope}"
-        )
+    scoped_target = build_training_scope_mask(bundle)
     train_mask = (
         scoped_target
         & (group_dates < validation_start).to_numpy(dtype=bool)
@@ -482,6 +466,7 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
         "experiment_profile": str(args.experiment_profile),
         "continuous_target_id": str(bundle.profile.continuous_target_id),
         "training_label_scope": str(bundle.profile.training_label_scope),
+        "training_sample_scope": str(bundle.profile.training_sample_scope),
         "seed": int(args.seed),
         "planned_periods": {
             "validation_start": str(pd.Timestamp(ids["validation_start"]).date()),
@@ -514,6 +499,7 @@ def _fold_contract_payload(args, bundle, fold, ids: dict[str, Any]) -> dict[str,
             "epochs_max": int(args.epochs),
             "batch_size": int(args.batch_size),
             "evaluation_batch_size": int(args.evaluation_batch_size),
+            "train_prefetch_batches": int(args.train_prefetch_batches),
             "learning_rate": float(args.lr),
             "weight_decay": float(args.weight_decay),
             "gradient_clip_norm": float(args.gradient_clip_norm),
@@ -960,7 +946,13 @@ def _combined_fold_record(args, item: dict[str, Any]) -> dict[str, Any]:
 def main(argv=None) -> int:
     args = parse_args(argv)
     _validate_args(args)
-    settings = get_breakout_quality_workflow_settings()
+    settings = get_breakout_quality_workflow_settings(
+        experiment_profile=str(args.experiment_profile)
+    )
+    if not settings.supports_point_in_time_scores:
+        raise ValueError(
+            f"目前profile未啟用PIT scores: {args.experiment_profile}"
+        )
     started = time.perf_counter()
     color_enabled = console_color_enabled()
     bundle = load_continuous_ranker_data(
@@ -1216,6 +1208,7 @@ def main(argv=None) -> int:
         "experiment_profile": str(args.experiment_profile),
         "continuous_target_id": str(bundle.profile.continuous_target_id),
         "training_label_scope": str(bundle.profile.training_label_scope),
+        "training_sample_scope": str(bundle.profile.training_sample_scope),
         "score_column": "breakout_quality_score",
         "score_period": {
             "start": str(score_start.date()),

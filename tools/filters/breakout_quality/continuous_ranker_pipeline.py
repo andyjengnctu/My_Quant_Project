@@ -13,18 +13,131 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import get_breakout_quality_experiment_profile
+from config.breakout_quality import (
+    TRAINING_LABEL_SCOPE_ALL,
+    TRAINING_LABEL_SCOPE_PASS_ONLY,
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
+)
 from filters.breakout_quality.models.factory import (
     count_trainable_parameters,
     require_torch,
 )
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
+from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
 from filters.breakout_quality.continuous_ranker_data import (
     ContinuousRankerDataBundle,
-    load_continuous_ranker_data,
+    load_continuous_ranker_data as load_event_continuous_ranker_data,
 )
-from filters.breakout_quality.workflow_io import PROJECT_ROOT
 from tools.filters.breakout_quality import train_continuous_ranker as ranker_impl
+
+
+
+
+def load_continuous_ranker_data(
+    *,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    preload_feature_bank: bool,
+    allow_stale_source: bool,
+    project_root: Path | None = None,
+) -> ContinuousRankerDataBundle:
+    """Load the canonical sample provider selected by the experiment profile."""
+
+    profile = get_breakout_quality_experiment_profile(experiment_profile)
+    kwargs = {
+        "filter_id": filter_id,
+        "model_architecture": model_architecture,
+        "experiment_profile": experiment_profile,
+        "preload_feature_bank": bool(preload_feature_bank),
+        "allow_stale_source": bool(allow_stale_source),
+    }
+    if project_root is not None:
+        kwargs["project_root"] = Path(project_root)
+    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
+        return load_event_continuous_ranker_data(**kwargs)
+    if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        from filters.breakout_quality.daily_ranker_data import (
+            load_daily_universal_ranker_data,
+        )
+
+        return load_daily_universal_ranker_data(**kwargs)
+    raise ValueError(
+        "不支援的continuous ranker sample scope: "
+        f"{profile.training_sample_scope!r}"
+    )
+
+
+def build_training_scope_mask(bundle: ContinuousRankerDataBundle) -> np.ndarray:
+    """Return the canonical target-eligible mask for this sample universe."""
+
+    target_valid = np.asarray(bundle.target_valid, dtype=bool)
+    if bundle.profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        return target_valid.copy()
+    labels = bundle.group_table["label"].to_numpy(dtype=np.int64)
+    if bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_PASS_ONLY:
+        return target_valid & (labels == LABEL_PASS)
+    if bundle.profile.training_label_scope == TRAINING_LABEL_SCOPE_ALL:
+        return target_valid & np.isin(labels, [LABEL_REJECT, LABEL_PASS])
+    raise ValueError(
+        "不支援的continuous ranker training scope: "
+        f"{bundle.profile.training_label_scope}"
+    )
+
+
+def primary_audit_metric_scope(bundle: ContinuousRankerDataBundle) -> str:
+    if bundle.profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        return "all_valid_target"
+    return "pass_only_target"
+
+
+
+
+def calculate_descriptive_rank_quality(
+    dates: np.ndarray,
+    scores: np.ndarray,
+    raw_targets: np.ndarray,
+    *,
+    top_k: int,
+    boundary_width: int,
+) -> dict[str, Any]:
+    """Return canonical same-day rank and Top-K diagnostics for one score scope."""
+
+    date_values = pd.to_datetime(pd.Series(dates), errors="raise").dt.normalize()
+    score_values = np.asarray(scores, dtype=np.float64)
+    target_values = np.asarray(raw_targets, dtype=np.float64)
+    if not (len(date_values) == len(score_values) == len(target_values)):
+        raise ValueError("rank quality input長度不一致")
+    valid = np.isfinite(score_values) & np.isfinite(target_values)
+    date_values = date_values[valid].reset_index(drop=True)
+    score_values = score_values[valid]
+    target_values = target_values[valid]
+    if len(score_values) == 0:
+        daily = ranker_impl._daily_rank_metrics(
+            np.empty(0, dtype="datetime64[ns]"),
+            np.empty(0, dtype=np.float64),
+            np.empty(0, dtype=np.float64),
+        )
+        return {**daily, "top_k_quality": None}
+    percentile = ranker_impl.build_daily_percentile_targets(
+        target_values,
+        np.ones(len(target_values), dtype=bool),
+        date_values,
+    )
+    daily = ranker_impl._daily_rank_metrics(
+        date_values.to_numpy(), score_values, target_values
+    )
+    top_k_quality = ranker_impl._daily_top_k_metrics(
+        date_values.to_numpy(),
+        score_values,
+        target_values,
+        percentile,
+        top_k=int(top_k),
+        boundary_width=int(boundary_width),
+    )
+    return {**daily, "top_k_quality": top_k_quality}
 
 
 def calculate_spearman(x: np.ndarray, y: np.ndarray) -> float | None:
@@ -77,6 +190,10 @@ def select_epoch(
     args,
     plan,
 ) -> dict[str, Any]:
+    evaluate_train_metrics = (
+        bundle.profile.training_sample_scope
+        != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    )
     return ranker_impl._select_epoch(
         torch,
         bundle.feature_bank,
@@ -88,6 +205,7 @@ def select_epoch(
         np.asarray(validation_ids, dtype=np.int64),
         args=args,
         plan=plan,
+        evaluate_train_metrics=evaluate_train_metrics,
     )
 
 
@@ -168,13 +286,16 @@ def build_checkpoint_payload(
 
 
 __all__ = [
+    "calculate_descriptive_rank_quality",
     "calculate_spearman",
     "ContinuousRankerDataBundle",
     "build_checkpoint_payload",
     "build_percentile_target",
+    "build_training_scope_mask",
     "fit_final",
     "load_continuous_ranker_data",
     "predict_scores",
+    "primary_audit_metric_scope",
     "resolve_ranker_execution_plan",
     "select_epoch",
 ]

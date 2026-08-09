@@ -129,13 +129,18 @@ def _validate_audit_source_artifact(
 def derive_point_in_time_model_validation_gate(audit: dict[str, Any]) -> dict[str, Any]:
     """Apply the predeclared model-layer gate without using strategy outcomes."""
 
-    metrics = dict((audit.get("metrics") or {}).get("pass_only_target") or {})
+    decision = dict(audit.get("decision_contract") or {})
+    primary_scope = str(decision.get("primary_metric_scope") or "pass_only_target")
+    primary_label = str(decision.get("primary_metric_label") or "PASS-only")
+    metrics = dict((audit.get("metrics") or {}).get(primary_scope) or {})
     direction = dict(audit.get("direction_summary") or {})
     global_spearman = _finite_number(
-        metrics.get("global_spearman"), field="PIT audit PASS-only global_spearman"
+        metrics.get("global_spearman"),
+        field=f"PIT audit {primary_label} global_spearman",
     )
     daily_spearman = _finite_number(
-        metrics.get("mean_daily_spearman"), field="PIT audit PASS-only mean_daily_spearman"
+        metrics.get("mean_daily_spearman"),
+        field=f"PIT audit {primary_label} mean_daily_spearman",
     )
     valid_years = int(direction.get("valid_year_count", 0) or 0)
     positive_spearman_years = int(direction.get("positive_spearman_year_count", 0) or 0)
@@ -143,23 +148,30 @@ def derive_point_in_time_model_validation_gate(audit: dict[str, Any]) -> dict[st
     if valid_years < 1:
         raise ValueError("PIT audit沒有可用年度穩定性資料")
 
+    prefix = "pass_only" if primary_scope == "pass_only_target" else "primary"
     checks = {
-        "pass_only_global_spearman_positive": bool(global_spearman > 0.0),
-        "pass_only_mean_daily_spearman_positive": bool(daily_spearman > 0.0),
+        f"{prefix}_global_spearman_positive": bool(global_spearman > 0.0),
+        f"{prefix}_mean_daily_spearman_positive": bool(daily_spearman > 0.0),
         "majority_years_positive_spearman": bool(positive_spearman_years * 2 > valid_years),
         "majority_years_positive_top_bottom_spread": bool(positive_spread_years * 2 > valid_years),
     }
-    return {
+    result = {
         "status": "PASS" if all(checks.values()) else "FAIL",
         "checks": checks,
-        "pass_only_global_spearman": global_spearman,
-        "pass_only_mean_daily_spearman": daily_spearman,
+        "primary_metric_scope": primary_scope,
+        "primary_metric_label": primary_label,
+        "primary_global_spearman": global_spearman,
+        "primary_mean_daily_spearman": daily_spearman,
         "valid_year_count": valid_years,
         "positive_spearman_year_count": positive_spearman_years,
         "positive_spread_year_count": positive_spread_years,
         "strategy_metrics_used": False,
         "future_target_used_for_runtime_sort": False,
     }
+    if primary_scope == "pass_only_target":
+        result["pass_only_global_spearman"] = global_spearman
+        result["pass_only_mean_daily_spearman"] = daily_spearman
+    return result
 
 
 @lru_cache(maxsize=16)

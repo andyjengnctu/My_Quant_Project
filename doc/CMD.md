@@ -128,17 +128,17 @@ Active Research Label：a2_realized_trade_path_v1
 
 Breakout-quality 模型／Label／training／workflow設定只編輯 `config/breakout_quality.py`；正式Audit對象與診斷設定集中於 `config/audit.py`。檔案上半部是可調設定；下半部集中命名profile、驗證、衍生值與helper。舊`breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`已刪除；任何新舊程式都必須直接import `config.breakout_quality`。
 
-模型研究 workflow 由 `config/breakout_quality.py` 的 `BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE` 決定，主選單不綁定9A或11G名稱。程式讀取該profile的 `training_objective` 自動派送：目前binary classification主選單固定執行A2 realized trade-path Label的Dataset／train／research score／Selection與OOS模型報表／forward-OOS score，策略比較不在選單自動執行；daily percentile regression先以同一套Dataset refresh contract檢查Full dataset與全部股票，缺少、過期或policy不一致時自動完整重建，只有Label policy改變時快速relabel。接著執行泛用`prepare-continuous-target`：依profile的`continuous_target_id`檢查manifest、group count、Dataset policy與來源artifact SHA256，缺少或stale時自動建立目前Target，再執行Selection point-in-time Score builder與模型audit。策略設定預設為`auto`：binary自動解析為`hard-filter / canonical_runtime / original buy-sort`，continuous自動解析為`score-ranking / selection_point_in_time / breakout_quality_score_desc`。Binary新Label模型流程在Prediction報表與forward-OOS模型score工件完成後停止；策略經濟比較僅由獨立`apps/research.py`的「策略組合比較」執行。continuous策略選項會讀取Selection PIT manifest／audit並要求模型層gate通過，使用歷史nested active params比較Baseline與Score Sort；不會回退誤用canonical runtime scores。
+模型研究與策略 workflow 使用**分離的config-driven identity**。`BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE`只決定 `apps/research.py → 模型訓練` 的Active Profile；`BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE`則保留目前已驗證的策略／PIT runtime anchor，模型研究往前推進時不得自動改變策略基準。主選單不硬編MR／model名稱，會依模型研究profile的 `training_objective` 與 `training_sample_scope` 自動派送。event-based continuous profile會先依canonical Dataset refresh contract確認Dataset，再由`prepare-continuous-target`建立／驗證event-style Target artifact；daily-universal profile的Target直接由canonical OHLCV按ticker/date建立，feature採lazy materialization，因此**不建立expanded 300×10 daily feature artifact，也不建立event-style Continuous Target artifact**。兩者均可沿用同一Selection PIT builder／audit；PIT split固定要求training label完成日早於validation／score cutoff，score table不得含Future Target。模型流程到模型報表／PIT audit為止，策略經濟比較只由獨立「策略組合比較」入口執行。
 
-
-目前正式 workflow 已切回9A binary classification。設定位置仍只有 `config/breakout_quality.py`：
+目前模型研究與策略anchor設定為：
 
 ```python
-BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "unique_group_sampling"
-BREAKOUT_QUALITY_RANDOM_SEED = 42  # 所有breakout-quality正式模型流程共用
+BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_pairwise"
+BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
+BREAKOUT_QUALITY_RANDOM_SEED = 42
 ```
 
-若策略三項維持 `auto`，選單會自動顯示並執行hard-filter對照。切回continuous ranker時，只將profile改回 `strategy_aligned_no_time_pass_magnitude_mse`。Binary、continuous、pretraining與Selection PIT workflow全部共用`BREAKOUT_QUALITY_RANDOM_SEED`；目前值為42。只有單次重現特殊實驗時才用CLI `--seed`覆寫。PIT日期／fold設定只在continuous objective下生效。
+MR-13A Stage 1 forward-OOS模型Gate通過後，模型研究選單允許建立／更新其Selection PIT Scores並執行模型audit；**這只授權歷史PIT模型驗證，不代表MR-13A已成為策略runtime來源**。策略workflow仍維持MR-12B，直到後續有明確的PIT Gate與策略層授權。Binary、continuous、pretraining與Selection PIT流程共用`BREAKOUT_QUALITY_RANDOM_SEED`；只有單次重現特殊實驗時才用CLI `--seed`覆寫。
 
 
 ### A2 Realized Trade-path Label研究

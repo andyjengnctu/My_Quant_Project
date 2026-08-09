@@ -469,8 +469,8 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "breakout_quality_model_menu_hides_pit_when_active_profile_disables_it",
-        (0, False, True),
+        "breakout_quality_model_menu_shows_pit_when_active_profile_supports_it",
+        (0, True, True),
         (
             no_pit_rc,
             "[2] 建立／更新 Selection PIT Scores → PIT模型驗證" in no_pit_text,

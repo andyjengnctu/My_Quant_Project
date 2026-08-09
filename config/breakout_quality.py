@@ -37,8 +37,8 @@ from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
 # - MR-13A daily-universal pairwise ranker: "daily_universal_no_time_pairwise"
 # Strategy workflow remains on the latest validated deployable/PIT-capable anchor.
 BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "strategy_aligned_no_time_all_event_pairwise"
-# Model-research menu may move ahead of strategy deployment.  MR-13A stage 1 is
-# forward-OOS-only and must not silently change strategy defaults or PIT identity.
+# Model-research menu may move ahead of strategy deployment. MR-13A model research
+# must not silently change strategy defaults or the deployed strategy PIT identity.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = "daily_universal_no_time_pairwise"
 
 # (AI註: Breakout-quality全部正式模型流程共用此Seed；CLI --seed只作單次覆寫。)
@@ -1019,12 +1019,10 @@ class BreakoutQualityWorkflowSettings:
 
     @property
     def supports_point_in_time_scores(self) -> bool:
-        # MR-13A stage 1 deliberately stops at forward-OOS model validation.
-        # Daily PIT generation will become a separate follow-up implementation.
         return bool(
             self.is_continuous_ranker
             and self.training_sample_scope
-            == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+            in SUPPORTED_BREAKOUT_QUALITY_TRAINING_SAMPLE_SCOPES
         )
 
     def as_manifest_payload(self) -> dict[str, Any]:

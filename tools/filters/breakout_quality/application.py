@@ -607,7 +607,11 @@ def _simple_report_details(
         )
         payload = _safe_json_object(audit_json)
         coverage = dict(payload.get("score_coverage") or {})
-        primary = dict(payload.get("primary_metrics") or payload.get("pass_only_metrics") or {})
+        decision = dict(payload.get("decision_contract") or {})
+        primary_scope = str(decision.get("primary_metric_scope") or "pass_only_target")
+        primary = dict((payload.get("metrics") or {}).get(primary_scope) or {})
+        if not primary:
+            primary = dict(payload.get("primary_metrics") or payload.get("pass_only_metrics") or {})
         if not primary:
             target_quality = dict(payload.get("target_quality") or {})
             primary = dict(target_quality.get("primary") or {})
@@ -2707,7 +2711,7 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
         return 0
     _print_workflow_status(settings)
     if not _prompt_bool(
-        "必要時先建立Dataset與Continuous Target，再建立／更新PIT Scores並執行模型驗證",
+        "確認前置Dataset／Target來源後，建立／更新PIT Scores並執行模型驗證",
         True,
     ):
         return 0

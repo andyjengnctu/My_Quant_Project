@@ -12,7 +12,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config.breakout_quality import get_breakout_quality_workflow_settings
+from config.breakout_quality import (
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH,
+    BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
+    get_breakout_quality_workflow_settings,
+)
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.continuous_target import (
     TARGET_MANIFEST_FILENAME,
@@ -41,8 +45,17 @@ from tools.filters.breakout_quality.build_point_in_time_scores import (
     FOLD_SCORE_FILENAME,
     POINT_IN_TIME_SCHEMA_VERSION,
 )
-from filters.breakout_quality.continuous_ranker_data import load_continuous_ranker_data
-from tools.filters.breakout_quality.continuous_ranker_pipeline import calculate_spearman
+from config.breakout_quality import (
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+)
+from filters.breakout_quality.daily_ranker_data import select_breakout_candidate_group_ids
+from tools.filters.breakout_quality.continuous_ranker_pipeline import (
+    calculate_descriptive_rank_quality,
+    calculate_spearman,
+    load_continuous_ranker_data,
+    primary_audit_metric_scope,
+)
 from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
@@ -269,6 +282,27 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
     return frame, manifest
 
 
+def _primary_scope_key(payload: dict[str, Any]) -> str:
+    return str(
+        (payload.get("decision_contract") or {}).get(
+            "primary_metric_scope", "pass_only_target"
+        )
+    )
+
+
+def _primary_scope_label(payload: dict[str, Any]) -> str:
+    return str(
+        (payload.get("decision_contract") or {}).get(
+            "primary_metric_label", "PASS-only"
+        )
+    )
+
+
+def _primary_metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    key = _primary_scope_key(payload)
+    return dict((payload.get("metrics") or {}).get(key) or {})
+
+
 def _rank_auc(labels: np.ndarray, scores: np.ndarray) -> float | None:
     y = np.asarray(labels, dtype=np.int64)
     s = np.asarray(scores, dtype=np.float64)
@@ -285,27 +319,6 @@ def _rank_auc(labels: np.ndarray, scores: np.ndarray) -> float | None:
         (rank_sum_positive - positive * (positive + 1) / 2.0)
         / float(positive * negative)
     )
-
-
-def _daily_spearman(frame: pd.DataFrame) -> dict[str, Any]:
-    values: list[float] = []
-    eligible_days = 0
-    for _date, day in frame.groupby("date", sort=True):
-        if len(day) < 2:
-            continue
-        eligible_days += 1
-        value = calculate_spearman(
-            day["breakout_quality_score"].to_numpy(dtype=np.float64),
-            day["target_raw_r"].to_numpy(dtype=np.float64),
-        )
-        if value is not None and math.isfinite(float(value)):
-            values.append(float(value))
-    return {
-        "eligible_day_count": int(eligible_days),
-        "valid_spearman_day_count": int(len(values)),
-        "mean_daily_spearman": float(np.mean(values)) if values else None,
-        "median_daily_spearman": float(np.median(values)) if values else None,
-    }
 
 
 def _decile_metrics(frame: pd.DataFrame) -> dict[str, Any]:
@@ -338,16 +351,29 @@ def _scope_metrics(frame: pd.DataFrame) -> dict[str, Any]:
         return {
             "group_count": 0,
             "global_spearman": None,
-            **_daily_spearman(frame),
+            "eligible_day_count": 0,
+            "valid_spearman_day_count": 0,
+            "mean_daily_spearman": None,
+            "median_daily_spearman": None,
+            "pairwise_concordance": None,
+            "comparable_pair_count": 0,
+            "top_k_quality": None,
             **_decile_metrics(frame),
         }
+    rank_quality = calculate_descriptive_rank_quality(
+        frame["date"].to_numpy(),
+        frame["breakout_quality_score"].to_numpy(dtype=np.float64),
+        frame["target_raw_r"].to_numpy(dtype=np.float64),
+        top_k=BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_TOP_K,
+        boundary_width=BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH,
+    )
     return {
         "group_count": int(len(frame)),
         "global_spearman": calculate_spearman(
             frame["breakout_quality_score"].to_numpy(dtype=np.float64),
             frame["target_raw_r"].to_numpy(dtype=np.float64),
         ),
-        **_daily_spearman(frame),
+        **rank_quality,
         **_decile_metrics(frame),
     }
 
@@ -362,7 +388,9 @@ def _yearly_metrics(frame: pd.DataFrame) -> list[dict[str, Any]]:
     return rows
 
 
-def _fold_metrics(frame: pd.DataFrame) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _fold_metrics(
+    frame: pd.DataFrame, *, primary_metric_scope: str
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     pooled_std = float(frame["breakout_quality_score"].std(ddof=0)) if len(frame) else math.nan
     previous_mean: float | None = None
@@ -377,9 +405,12 @@ def _fold_metrics(frame: pd.DataFrame) -> tuple[list[dict[str, Any]], dict[str, 
             max_shift = max(max_shift, shift)
             if shift >= DRIFT_MEAN_SHIFT_STD_THRESHOLD:
                 drift_folds.append(str(fold_id))
-        target_frame = fold_frame[
-            fold_frame["target_available"] & (fold_frame["label"] == LABEL_PASS)
-        ].copy()
+        if primary_metric_scope == "all_valid_target":
+            target_frame = fold_frame[fold_frame["target_available"]].copy()
+        else:
+            target_frame = fold_frame[
+                fold_frame["target_available"] & (fold_frame["label"] == LABEL_PASS)
+            ].copy()
         rows.append(
             {
                 "fold_id": str(fold_id),
@@ -390,12 +421,20 @@ def _fold_metrics(frame: pd.DataFrame) -> tuple[list[dict[str, Any]], dict[str, 
                 "score_p50": float(np.quantile(score, 0.50)),
                 "score_p90": float(np.quantile(score, 0.90)),
                 "adjacent_mean_shift_in_pooled_std": shift,
-                "pass_target_spearman": calculate_spearman(
+                "primary_target_spearman": calculate_spearman(
                     target_frame["breakout_quality_score"].to_numpy(dtype=np.float64),
                     target_frame["target_raw_r"].to_numpy(dtype=np.float64),
                 )
                 if len(target_frame) >= 2
                 else None,
+                "pass_target_spearman": (
+                    calculate_spearman(
+                        target_frame["breakout_quality_score"].to_numpy(dtype=np.float64),
+                        target_frame["target_raw_r"].to_numpy(dtype=np.float64),
+                    )
+                    if primary_metric_scope == "pass_only_target" and len(target_frame) >= 2
+                    else None
+                ),
             }
         )
         previous_mean = mean
@@ -595,8 +634,15 @@ def _direction_summary(yearly_rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> str:
-    primary = payload["metrics"]["pass_only_target"]
+    primary = _primary_metrics(payload)
     all_target = payload["metrics"]["all_valid_target"]
+    candidate_target = dict((payload.get("metrics") or {}).get("breakout_candidate_target") or {})
+    secondary_label = (
+        "Breakout candidates"
+        if _primary_scope_key(payload) == "all_valid_target"
+        else "All valid"
+    )
+    secondary = candidate_target if secondary_label == "Breakout candidates" else all_target
     classification = payload["classification_overlap"]
     drift = payload["fold_drift"]
     direction = payload["direction_summary"]
@@ -644,7 +690,7 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
             (
                 "Primary Evidence",
                 paint(
-                    "PASS-only No-time Target ordering",
+                    f"{_primary_scope_label(payload)} No-time Target ordering",
                     "cyan",
                     enabled=color,
                     bold=True,
@@ -667,7 +713,7 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
             ["Scope", "Groups", "Spearman", "Daily rho", "Top", "Bottom", "Spread"],
             [
                 [
-                    paint("PASS-only", "cyan", enabled=color, bold=True),
+                    paint(_primary_scope_label(payload), "cyan", enabled=color, bold=True),
                     f"{int(primary['group_count']):,}",
                     paint(
                         _fmt_metric(primary.get("global_spearman")),
@@ -691,23 +737,23 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
                     ),
                 ],
                 [
-                    "All valid",
-                    f"{int(all_target['group_count']):,}",
+                    secondary_label,
+                    f"{int(secondary.get('group_count', 0) or 0):,}",
                     paint(
-                        _fmt_metric(all_target.get("global_spearman")),
-                        _signed_tone(all_target.get("global_spearman")),
+                        _fmt_metric(secondary.get("global_spearman")),
+                        _signed_tone(secondary.get("global_spearman")),
                         enabled=color,
                     ),
                     paint(
-                        _fmt_metric(all_target.get("mean_daily_spearman")),
-                        _signed_tone(all_target.get("mean_daily_spearman")),
+                        _fmt_metric(secondary.get("mean_daily_spearman")),
+                        _signed_tone(secondary.get("mean_daily_spearman")),
                         enabled=color,
                     ),
-                    _fmt_metric(all_target.get("top_decile_target_mean")),
-                    _fmt_metric(all_target.get("bottom_decile_target_mean")),
+                    _fmt_metric(secondary.get("top_decile_target_mean")),
+                    _fmt_metric(secondary.get("bottom_decile_target_mean")),
                     paint(
-                        _fmt_metric(all_target.get("top_bottom_target_spread")),
-                        _signed_tone(all_target.get("top_bottom_target_spread")),
+                        _fmt_metric(secondary.get("top_bottom_target_spread")),
+                        _signed_tone(secondary.get("top_bottom_target_spread")),
                         enabled=color,
                     ),
                 ],
@@ -717,7 +763,7 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
     lines.extend(
         [
             "",
-            _colored_section("年度穩定性（PASS-only）", number=2, color=color),
+            _colored_section(f"年度穩定性（{_primary_scope_label(payload)}）", number=2, color=color),
             (
                 "正向 Spearman 年度："
                 + paint(
@@ -767,7 +813,7 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
                 bold=True,
             ),
         ]
-        for row in payload["yearly_pass_only"]
+        for row in payload.get("yearly_primary", payload.get("yearly_pass_only", []))
     ]
     lines.extend(
         _render_console_table(
@@ -787,8 +833,8 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
             _fmt_metric(row.get("score_p50")),
             _fmt_metric(row.get("score_p90")),
             paint(
-                _fmt_metric(row.get("pass_target_spearman")),
-                _signed_tone(row.get("pass_target_spearman")),
+                _fmt_metric(row.get("primary_target_spearman", row.get("pass_target_spearman"))),
+                _signed_tone(row.get("primary_target_spearman", row.get("pass_target_spearman"))),
                 enabled=color,
                 bold=True,
             ),
@@ -797,7 +843,7 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
     ]
     lines.extend(
         _render_console_table(
-            ["Fold", "Groups", "Mean", "Std", "P10", "P50", "P90", "PASS rho"],
+            ["Fold", "Groups", "Mean", "Std", "P10", "P50", "P90", "Primary rho"],
             fold_rows,
         )
     )
@@ -849,7 +895,7 @@ def render_console_summary(payload: dict[str, Any], *, color: bool = False) -> s
                 enabled=color,
                 bold=True,
             ),
-            "PASS-only Target Spearman  : "
+            f"{_primary_scope_label(payload)} Target Spearman  : "
             + paint(
                 _fmt_metric(primary.get("global_spearman")),
                 _signed_tone(primary.get("global_spearman")),
@@ -930,7 +976,7 @@ def render_compact_console_summary(
 ) -> str:
     """Render the interactive workflow summary without repeating full audit detail."""
 
-    primary = payload["metrics"]["pass_only_target"]
+    primary = _primary_metrics(payload)
     classification = payload["classification_overlap"]
     direction = payload["direction_summary"]
     drift = payload["fold_drift"]
@@ -939,6 +985,7 @@ def render_compact_console_summary(
     workflow = payload.get("workflow") or {}
     orderable = payload["orderable_candidate_coverage"]
     gate = derive_point_in_time_model_validation_gate(payload)
+    candidate = dict((payload.get("metrics") or {}).get("breakout_candidate_target") or {})
 
     gate_passed = gate["status"] == "PASS"
     orderable_text = (
@@ -960,8 +1007,9 @@ def render_compact_console_summary(
         (
             "核心排序",
             paint(
-                f"PASS-only rho={_fmt_metric(primary.get('global_spearman'))}"
+                f"{_primary_scope_label(payload)} rho={_fmt_metric(primary.get('global_spearman'))}"
                 f" | daily rho={_fmt_metric(primary.get('mean_daily_spearman'))}"
+                f" | pair={_fmt_percent(primary.get('pairwise_concordance'))}"
                 f" | spread={_fmt_metric(primary.get('top_bottom_target_spread'))}R",
                 "green" if gate_passed else "red",
                 enabled=color,
@@ -981,11 +1029,27 @@ def render_compact_console_summary(
                 bold=True,
             ),
         ),
+        *(
+            ((
+                "Breakout slice",
+                f"rho={_fmt_metric(candidate.get('global_spearman'))}"
+                f" | daily rho={_fmt_metric(candidate.get('mean_daily_spearman'))}"
+                f" | pair={_fmt_percent(candidate.get('pairwise_concordance'))}"
+                f" | top-K lift={_fmt_metric((candidate.get('top_k_quality') or {}).get('top_k_raw_target_lift'))}R"
+                f" | boundary={_fmt_percent((candidate.get('top_k_quality') or {}).get('boundary_concordance'))}",
+            ),)
+            if int(candidate.get("group_count", 0) or 0) > 0
+            else ()
+        ),
         (
             "分類重疊",
-            f"AUC={_fmt_metric(classification.get('score_vs_pass_reject_auc'))}"
-            f" | Top decile PASS={_fmt_percent(classification.get('top_score_decile_pass_share'))}"
-            f" | Overall={_fmt_percent(classification.get('overall_pass_share'))}",
+            (
+                f"AUC={_fmt_metric(classification.get('score_vs_pass_reject_auc'))}"
+                f" | Top decile PASS={_fmt_percent(classification.get('top_score_decile_pass_share'))}"
+                f" | Overall={_fmt_percent(classification.get('overall_pass_share'))}"
+                if int(classification.get("valid_label_group_count", 0) or 0) > 0
+                else "不適用（daily sample無PASS／REJECT label）"
+            ),
         ),
         ("Orderable coverage", orderable_text),
         (
@@ -1020,7 +1084,7 @@ def render_compact_console_summary(
 
 
 def _render_markdown(payload: dict[str, Any]) -> str:
-    primary = payload["metrics"]["pass_only_target"]
+    primary = _primary_metrics(payload)
     all_target = payload["metrics"]["all_valid_target"]
     classification = payload["classification_overlap"]
     direction = payload["direction_summary"]
@@ -1043,6 +1107,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         f"| Experiment profile | `{payload['experiment_profile']}` |",
         f"| Continuous Target | `{payload['continuous_target_id']}` |",
         f"| Training scope | `{workflow.get('training_label_scope', '-')}` |",
+        f"| Sample scope | `{workflow.get('training_sample_scope', '-')}` |",
         f"| Seed | `{workflow.get('seed', '-')}` |",
         f"| Score period | `{payload['score_period']['start']} ~ {payload['score_period']['end']}` |",
         f"| PIT folds | `{workflow.get('fold_count', '-')}` |",
@@ -1051,12 +1116,39 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         "",
         "## 2. 核心排序能力",
         "",
-        "| Scope | Groups | Global Spearman | Mean daily Spearman | Top decile Target | Bottom decile Target | Top-bottom spread |",
-        "|---|---:|---:|---:|---:|---:|---:|",
-        f"| **PASS-only（主要判讀）** | {primary['group_count']:,} | {_fmt_metric(primary['global_spearman'])} | {_fmt_metric(primary['mean_daily_spearman'])} | {_fmt_metric(primary['top_decile_target_mean'])} | {_fmt_metric(primary['bottom_decile_target_mean'])} | {_fmt_metric(primary['top_bottom_target_spread'])} |",
-        f"| All valid labels | {all_target['group_count']:,} | {_fmt_metric(all_target['global_spearman'])} | {_fmt_metric(all_target['mean_daily_spearman'])} | {_fmt_metric(all_target['top_decile_target_mean'])} | {_fmt_metric(all_target['bottom_decile_target_mean'])} | {_fmt_metric(all_target['top_bottom_target_spread'])} |",
+        "| Scope | Groups | Global Spearman | Mean daily Spearman | Pair | Top decile Target | Bottom decile Target | Top-bottom spread |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        f"| **{_primary_scope_label(payload)}（主要判讀）** | {primary['group_count']:,} | {_fmt_metric(primary['global_spearman'])} | {_fmt_metric(primary['mean_daily_spearman'])} | {_fmt_percent(primary.get('pairwise_concordance'))} | {_fmt_metric(primary['top_decile_target_mean'])} | {_fmt_metric(primary['bottom_decile_target_mean'])} | {_fmt_metric(primary['top_bottom_target_spread'])} |",
+        (
+            f"| All valid labels | {all_target['group_count']:,} | {_fmt_metric(all_target['global_spearman'])} | {_fmt_metric(all_target['mean_daily_spearman'])} | {_fmt_percent(all_target.get('pairwise_concordance'))} | {_fmt_metric(all_target['top_decile_target_mean'])} | {_fmt_metric(all_target['bottom_decile_target_mean'])} | {_fmt_metric(all_target['top_bottom_target_spread'])} |"
+            if _primary_scope_key(payload) != "all_valid_target"
+            else f"| Breakout candidate diagnostic | {int((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('group_count', 0)):,} | {_fmt_metric((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('global_spearman'))} | {_fmt_metric((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('mean_daily_spearman'))} | {_fmt_percent((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('pairwise_concordance'))} | {_fmt_metric((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_decile_target_mean'))} | {_fmt_metric((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('bottom_decile_target_mean'))} | {_fmt_metric((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_bottom_target_spread'))} |"
+        ),
         "",
-        "## 3. 年度穩定性（PASS-only）",
+        "### Top-K / K-boundary",
+        "",
+        "| Scope | NDCG@K | Top-K Target | Lift | Oracle overlap | Boundary | Boundary gap | 競爭日 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        (
+            f"| {_primary_scope_label(payload)} | {_fmt_metric((primary.get('top_k_quality') or {}).get('ndcg_at_k'))} | "
+            f"{_fmt_metric((primary.get('top_k_quality') or {}).get('top_k_raw_target_mean'))} | "
+            f"{_fmt_metric((primary.get('top_k_quality') or {}).get('top_k_raw_target_lift'))} | "
+            f"{_fmt_percent((primary.get('top_k_quality') or {}).get('oracle_top_k_overlap'))} | "
+            f"{_fmt_percent((primary.get('top_k_quality') or {}).get('boundary_concordance'))} | "
+            f"{_fmt_metric((primary.get('top_k_quality') or {}).get('boundary_raw_target_gap'))} | "
+            f"{int((primary.get('top_k_quality') or {}).get('competition_date_count', 0) or 0):,} |"
+        ),
+        (
+            f"| Breakout candidate diagnostic | {_fmt_metric(((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_k_quality') or {}).get('ndcg_at_k'))} | "
+            f"{_fmt_metric(((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_k_quality') or {}).get('top_k_raw_target_mean'))} | "
+            f"{_fmt_metric(((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_k_quality') or {}).get('top_k_raw_target_lift'))} | "
+            f"{_fmt_percent(((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_k_quality') or {}).get('oracle_top_k_overlap'))} | "
+            f"{_fmt_percent(((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_k_quality') or {}).get('boundary_concordance'))} | "
+            f"{_fmt_metric(((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_k_quality') or {}).get('boundary_raw_target_gap'))} | "
+            f"{int(((payload.get('metrics') or {}).get('breakout_candidate_target', {}).get('top_k_quality') or {}).get('competition_date_count', 0) or 0):,} |"
+        ),
+        "",
+        f"## 3. 年度穩定性（{_primary_scope_label(payload)}）",
         "",
         f"- 有效年度：**{direction['valid_year_count']}**",
         f"- Spearman 為正：**{direction['positive_spearman_year_count']}/{direction['valid_year_count']}**（{_fmt_percent(direction['positive_spearman_year_rate'])}）",
@@ -1065,7 +1157,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         "| Year | Groups | Spearman | Mean daily Spearman | Top-bottom spread |",
         "|---:|---:|---:|---:|---:|",
     ]
-    for row in payload["yearly_pass_only"]:
+    for row in payload.get("yearly_primary", payload.get("yearly_pass_only", [])):
         lines.append(
             f"| {row['year']} | {row['group_count']:,} | {_fmt_metric(row['global_spearman'])} | "
             f"{_fmt_metric(row['mean_daily_spearman'])} | {_fmt_metric(row['top_bottom_target_spread'])} |"
@@ -1076,7 +1168,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "",
             "## 4. Fold 分布與漂移",
             "",
-            "| Fold | Groups | Mean | Std | P10 | P50 | P90 | PASS Target Spearman | Adjacent mean shift（pooled SD） |",
+            "| Fold | Groups | Mean | Std | P10 | P50 | P90 | Primary Target Spearman | Adjacent mean shift（pooled SD） |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -1085,7 +1177,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             f"| `{row['fold_id']}` | {row['group_count']:,} | {_fmt_metric(row['score_mean'])} | "
             f"{_fmt_metric(row['score_std'])} | {_fmt_metric(row['score_p10'])} | "
             f"{_fmt_metric(row['score_p50'])} | {_fmt_metric(row['score_p90'])} | "
-            f"{_fmt_metric(row['pass_target_spearman'])} | "
+            f"{_fmt_metric(row.get('primary_target_spearman', row.get('pass_target_spearman')))} | "
             f"{_fmt_metric(row['adjacent_mean_shift_in_pooled_std'])} |"
         )
     lines.extend(
@@ -1103,7 +1195,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             f"| Score vs PASS／REJECT AUC | {_fmt_metric(classification['score_vs_pass_reject_auc'])} |",
             f"| Overall PASS share | {_fmt_percent(classification['overall_pass_share'])} |",
             f"| Top score decile PASS share | {_fmt_percent(classification['top_score_decile_pass_share'])} |",
-            f"| PASS-only Target Spearman | {_fmt_metric(primary['global_spearman'])} |",
+            f"| {_primary_scope_label(payload)} Target Spearman | {_fmt_metric(primary['global_spearman'])} |",
             "",
             classification["interpretation_contract"],
             "",
@@ -1130,7 +1222,12 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     def source_path(name: str) -> str:
         record = sources.get(name, "-")
         if isinstance(record, dict):
-            return str(record.get("path") or record.get("filename") or "-")
+            return str(
+                record.get("path")
+                or record.get("filename")
+                or record.get("source")
+                or "-"
+            )
         return str(record)
 
     lines.extend(
@@ -1138,7 +1235,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "",
             "## 7. 研究邊界與下一步",
             "",
-            "- 主要證據：PASS-only No-time Target ordering。",
+            f"- 主要證據：{_primary_scope_label(payload)} No-time Target ordering。",
             "- Actual selected R 不作本階段主要否決依據。",
             "- 策略 optimizer：**未執行**。",
             "- Future Target runtime sort：**未使用**。",
@@ -1150,7 +1247,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             f"- PIT manifest：`{source_path('point_in_time_manifest')}`",
             f"- PIT Scores：`{source_path('point_in_time_scores')}`",
             f"- PIT coverage：`{source_path('point_in_time_coverage')}`",
-            f"- Continuous Target manifest：`{source_path('continuous_target_manifest')}`",
+            f"- Continuous Target source：`{source_path('continuous_target_manifest')}`",
             f"- Markdown 易讀報表：`{outputs.get('markdown', '-')}`",
             f"- 完整指標 JSON：`{outputs.get('json', '-')}`",
         ]
@@ -1160,6 +1257,13 @@ def _render_markdown(payload: dict[str, Any]) -> str:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    settings = get_breakout_quality_workflow_settings(
+        experiment_profile=str(args.experiment_profile)
+    )
+    if not settings.supports_point_in_time_scores:
+        raise ValueError(
+            f"目前profile未啟用PIT scores: {args.experiment_profile}"
+        )
     score_frame, manifest = _validate_score_artifacts(args)
     bundle = load_continuous_ranker_data(
         filter_id=args.filter_id,
@@ -1171,6 +1275,16 @@ def main(argv=None) -> int:
     )
     if str(bundle.profile.continuous_target_id) != str(manifest.get("continuous_target_id")):
         raise ValueError("PIT score manifest target與目前profile不一致")
+    manifest_sample_scope = str(
+        manifest.get("training_sample_scope")
+        or TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+    )
+    if manifest_sample_scope != str(bundle.profile.training_sample_scope):
+        raise ValueError(
+            "PIT score manifest sample scope與目前profile不一致: "
+            f"manifest={manifest_sample_scope}, "
+            f"profile={bundle.profile.training_sample_scope}"
+        )
     groups = bundle.group_table[["group_index", "ticker", "date", "label"]].copy()
     groups["ticker"] = groups["ticker"].astype(str)
     groups["date"] = pd.to_datetime(groups["date"], errors="raise").dt.normalize()
@@ -1201,6 +1315,27 @@ def main(argv=None) -> int:
     all_metrics = _scope_metrics(valid_target)
     pass_metrics = _scope_metrics(pass_target)
     reject_metrics = _scope_metrics(reject_target)
+    primary_metric_scope = primary_audit_metric_scope(bundle)
+    primary_frame = valid_target if primary_metric_scope == "all_valid_target" else pass_target
+    primary_metric_label = (
+        "All eligible stock-days"
+        if primary_metric_scope == "all_valid_target"
+        else "PASS-only"
+    )
+
+    candidate_metrics = _scope_metrics(pd.DataFrame(columns=valid_target.columns))
+    if (
+        bundle.profile.training_sample_scope
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        candidate_ids = select_breakout_candidate_group_ids(
+            bundle,
+            merged["group_index"].to_numpy(dtype=np.int64),
+            allow_stale_source=bool(args.allow_stale_source),
+        )
+        candidate_metrics = _scope_metrics(
+            valid_target[valid_target["group_index"].isin(candidate_ids)].copy()
+        )
 
     label_valid = merged[merged["label"].isin([LABEL_REJECT, LABEL_PASS])].copy()
     ordered = label_valid.sort_values("breakout_quality_score", kind="mergesort")
@@ -1222,10 +1357,15 @@ def main(argv=None) -> int:
         "interpretation_contract": (
             "AUC/decile PASS share衡量Score是否主要重複binary分類；"
             "PASS-only target Spearman衡量分類內部magnitude排序能力。"
+            if len(label_valid)
+            else "Daily-universal sample沒有PASS／REJECT binary label；此診斷不適用。"
         ),
     }
+    yearly_primary = _yearly_metrics(primary_frame)
     yearly_pass_only = _yearly_metrics(pass_target)
-    fold_rows, fold_drift = _fold_metrics(merged)
+    fold_rows, fold_drift = _fold_metrics(
+        merged, primary_metric_scope=primary_metric_scope
+    )
     orderable = _orderable_coverage(
         score_frame,
         requested_path=args.orderable_candidates,
@@ -1265,6 +1405,25 @@ def main(argv=None) -> int:
         )
         / TARGET_MANIFEST_FILENAME
     )
+    if (
+        bundle.profile.training_sample_scope
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    ):
+        target_source_artifact = {
+            "path": None,
+            "source": "embedded_in_point_in_time_manifest",
+            "target_id": str(bundle.profile.continuous_target_id),
+            "target_contract": bundle.target_manifest.get("target_contract"),
+        }
+    else:
+        if not target_manifest_path.is_file():
+            raise FileNotFoundError(
+                f"缺少Continuous Target manifest: {target_manifest_path}"
+            )
+        target_source_artifact = {
+            "path": str(target_manifest_path),
+            **build_file_manifest(target_manifest_path),
+        }
     payload = {
         "schema_version": AUDIT_SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1278,6 +1437,7 @@ def main(argv=None) -> int:
         "score_coverage": manifest.get("coverage"),
         "workflow": {
             "training_label_scope": manifest.get("training_label_scope"),
+            "training_sample_scope": manifest.get("training_sample_scope"),
             "seed": manifest.get("seed"),
             "fold_count": manifest.get("fold_count"),
             "fold_months": manifest.get("fold_months"),
@@ -1290,15 +1450,19 @@ def main(argv=None) -> int:
             "pass_only_target": pass_metrics,
             "reject_only_target": reject_metrics,
             "all_valid_target": all_metrics,
+            "breakout_candidate_target": candidate_metrics,
         },
+        "yearly_primary": yearly_primary,
         "yearly_pass_only": yearly_pass_only,
-        "direction_summary": _direction_summary(yearly_pass_only),
+        "direction_summary": _direction_summary(yearly_primary),
         "fold_metrics": fold_rows,
         "fold_drift": fold_drift,
         "classification_overlap": classification_overlap,
         "orderable_candidate_coverage": orderable,
         "decision_contract": {
-            "primary_evidence": "PASS-only no-time target ordering",
+            "primary_metric_scope": primary_metric_scope,
+            "primary_metric_label": primary_metric_label,
+            "primary_evidence": f"{primary_metric_label} no-time target ordering",
             "actual_selected_r_is_primary_veto": False,
             "strategy_optimizer_executed": False,
             "future_target_used_for_runtime_sort": False,
@@ -1316,10 +1480,7 @@ def main(argv=None) -> int:
                 "path": str(coverage_path),
                 **build_file_manifest(coverage_path),
             },
-            "continuous_target_manifest": {
-                "path": str(target_manifest_path),
-                **build_file_manifest(target_manifest_path),
-            },
+            "continuous_target_manifest": target_source_artifact,
         },
         "report_artifacts": {
             "markdown": str(output_markdown),

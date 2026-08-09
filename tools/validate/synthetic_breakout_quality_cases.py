@@ -47,12 +47,15 @@ from config.breakout_quality import (
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES,
     TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_LABEL_SCOPE_ALL,
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     LR_SCHEDULE_LINEAR_WARMUP_COSINE,
     TIME_WEIGHT_MODE_DATE_BALANCED,
     TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
@@ -11760,6 +11763,8 @@ def validate_breakout_quality_all_event_no_time_ranker_contract_case(_base_param
             TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION,
             STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_ALL,
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
             "mse",
             "mean_daily_spearman",
             False,
@@ -11874,6 +11879,8 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
             STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_ALL,
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
             "pairwise_logistic",
             "mean_daily_spearman",
             False,
@@ -12407,6 +12414,8 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
             TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
             STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             TRAINING_LABEL_SCOPE_ALL,
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
             "listnet_top_one_cross_entropy",
             "mean_daily_spearman",
             False,
@@ -12809,6 +12818,27 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             continuous_settings.strategy_buy_sort,
         ),
     )
+    daily_settings = workflow_config.get_breakout_quality_workflow_settings(
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_universal_profile_enables_model_layer_pit_without_changing_strategy_identity",
+        (
+            "daily_pairwise_ranking",
+            "daily_eligible_stock_days",
+            True,
+            settings.experiment_profile,
+        ),
+        (
+            daily_settings.training_objective,
+            daily_settings.training_sample_scope,
+            daily_settings.supports_point_in_time_scores,
+            workflow_config.BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE,
+        ),
+    )
     parsed = parse_point_in_time_args([])
     add_check(
         results,
@@ -12883,7 +12913,10 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             "label": np.full(len(auto_group_dates), LABEL_PASS, dtype=np.int64),
         }),
         target_valid=np.ones(len(auto_group_dates), dtype=bool),
-        profile=SimpleNamespace(training_label_scope=TRAINING_LABEL_SCOPE_PASS_ONLY),
+        profile=SimpleNamespace(
+            training_label_scope=TRAINING_LABEL_SCOPE_PASS_ONLY,
+            training_sample_scope=TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+        ),
     )
     auto_settings = SimpleNamespace(
         point_in_time_min_train_groups=2,
@@ -13091,7 +13124,10 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     )
     bundle = SimpleNamespace(
         group_table=group_table,
-        profile=SimpleNamespace(training_label_scope="pass_only"),
+        profile=SimpleNamespace(
+            training_label_scope="pass_only",
+            training_sample_scope=TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+        ),
         target_valid=np.ones(len(group_table), dtype=bool),
         event_group_index=np.arange(len(group_table), dtype=np.int64),
     )
@@ -13112,6 +13148,32 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             ids["validation_ids"].tolist(),
             ids["final_ids"].tolist(),
             ids["score_ids"].tolist(),
+        ),
+    )
+
+    daily_group_table = group_table.copy()
+    daily_group_table["label"] = -1
+    daily_bundle = SimpleNamespace(
+        group_table=daily_group_table,
+        profile=SimpleNamespace(
+            training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+            training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        ),
+        target_valid=np.ones(len(daily_group_table), dtype=bool),
+        event_group_index=np.arange(len(daily_group_table), dtype=np.int64),
+    )
+    daily_ids = _fold_group_ids(daily_bundle, fold, validation_months=24)
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "daily_point_in_time_split_uses_all_target_valid_stock_days_and_same_label_end_embargo",
+        ([0], [2, 3], [0, 1, 2, 3], [5, 6]),
+        (
+            daily_ids["train_ids"].tolist(),
+            daily_ids["validation_ids"].tolist(),
+            daily_ids["final_ids"].tolist(),
+            daily_ids["score_ids"].tolist(),
         ),
     )
 

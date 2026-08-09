@@ -446,6 +446,38 @@ def load_daily_universal_ranker_data(
     )
 
 
+def select_breakout_candidate_group_ids(
+    bundle: ContinuousRankerDataBundle,
+    group_ids: np.ndarray,
+    *,
+    allow_stale_source: bool,
+) -> np.ndarray:
+    """Select official breakout ticker/date membership for post-model diagnostics."""
+
+    _summary, _features, _context, _labels, events = load_validated_dataset_bundle(
+        str(bundle.summary["filter_id"]),
+        expected_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+        require_current_source=not bool(allow_stale_source),
+    )
+    event_frame = events.loc[:, ["ticker", "date"]].copy()
+    event_frame["ticker"] = event_frame["ticker"].astype(str)
+    event_frame["date"] = pd.to_datetime(
+        event_frame["date"], errors="raise"
+    ).dt.normalize()
+    event_keys = set(zip(event_frame["ticker"].tolist(), event_frame["date"].tolist()))
+    ids = np.asarray(group_ids, dtype=np.int64)
+    groups = bundle.group_table.iloc[ids]
+    mask = np.fromiter(
+        (
+            (str(ticker), pd.Timestamp(date).normalize()) in event_keys
+            for ticker, date in zip(groups["ticker"], groups["date"])
+        ),
+        dtype=bool,
+        count=len(groups),
+    )
+    return ids[mask]
+
+
 def build_daily_ranker_split(bundle: ContinuousRankerDataBundle, *, inner_validation_months: int) -> DailyRankerSplit:
     """Mirror the canonical no-lookahead split directly at stock/day group level."""
 
@@ -515,4 +547,5 @@ __all__ = [
     "LazyDailyFeatureBank",
     "build_daily_ranker_split",
     "load_daily_universal_ranker_data",
+    "select_breakout_candidate_group_ids",
 ]
