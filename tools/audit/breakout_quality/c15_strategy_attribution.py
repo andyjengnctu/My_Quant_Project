@@ -310,7 +310,7 @@ def _log_wealth_path(
     left = _normalize_equity(candidate_equity, arm_id="candidate")
     right = _normalize_equity(comparator_equity, arm_id="comparator")
     if left["Date"].tolist() != right["Date"].tolist():
-        raise ValueError("C15 attribution要求兩arm equity交易日期完全一致")
+        raise ValueError("strategy attribution要求兩arm equity交易日期完全一致")
     result = pd.DataFrame({
         "date": left["Date"],
         "candidate_equity": left["Equity"].to_numpy(dtype=float),
@@ -577,7 +577,7 @@ def _capacity_attribution(
         validate="one_to_one",
     )
     if len(merged) != len(left) or len(merged) != len(right):
-        raise ValueError("C15 attribution要求兩arm daily capacity日期完全一致")
+        raise ValueError("strategy attribution要求兩arm daily capacity日期完全一致")
     merged.insert(0, "date", merged["candidate_Date"])
     changed_lookup = dict(zip(selection_days.get("trade_date", []), selection_days.get("changed", [])))
     merged["selection_changed"] = merged["date"].map(lambda value: bool(changed_lookup.get(value, False)))
@@ -738,6 +738,10 @@ def build_strategy_attribution_pair_payload(
                 > (_finite(geometry["comparator"].get("avg_realized_r")) or 0.0)
             )
         ),
+        "positive_selection_r_but_lower_total_return": (
+            float(trade_summary.get("exclusive_selection_delta_r") or 0.0) > 0.0
+            and candidate_return < comparator_return
+        ),
     }
     return {
         "candidate_arm_id": candidate_artifacts.arm_id,
@@ -804,14 +808,14 @@ def _render_report(payload: dict[str, Any]) -> str:
         source_rows.append(("Strategy compare", run_map.get(metadata["candidate_arm_id"], metadata.get("strategy_compare_run", "-"))))
     source_rows.append(("契約", "只讀既有replay；不重跑、不改score／selector／training"))
     lines = [
-        render_title("C15 Read-only Strategy Attribution"),
+        render_title("Strategy Read-only Attribution"),
         render_key_values(tuple(source_rows)),
     ]
     if payload["comparisons"]:
         selector = payload["comparisons"][0]["slot_occupancy"]
         if "candidate_resource_aware_dl_selection_days" in selector:
             lines.extend((
-                render_section("SR-C15 selector自身盤前診斷"),
+                render_section(f"{metadata['candidate_arm_id']} selector自身盤前診斷"),
                 render_table(
                     ("指標", "結果"),
                     (
@@ -863,7 +867,7 @@ def _render_report(payload: dict[str, Any]) -> str:
                 ("Selection／trade", "結果"),
                 (
                     ("選股不同日", str(pair["selection"]["changed_days"])),
-                    ("C15-only選入單", str(pair["selection"]["candidate_only_selected_orders"])),
+                    (f"{cand}-only選入單", str(pair["selection"]["candidate_only_selected_orders"])),
                     (f"{comp}-only選入單", str(pair["selection"]["comparator_only_selected_orders"])),
                     ("Exclusive selection ΔR", _fmt(trade.get("exclusive_selection_delta_r"), unit=" R", signed=True)),
                     ("Exclusive selection ΔPnL", _fmt(trade.get("exclusive_selection_delta_pnl"), signed=True)),
@@ -925,15 +929,20 @@ def _render_report(payload: dict[str, Any]) -> str:
         ]
         lines.append(render_table(("Top月份", "Δlog wealth", "相對wealth effect"), top_month_rows))
         interp = pair["interpretation"]
-        if interp.get("portfolio_advantage_not_explained_by_avg_r_alone"):
+        if interp.get("positive_selection_r_but_lower_total_return"):
+            lines.append(
+                "判讀：Exclusive selection ΔR為正但總報酬較低；selection R改善尚未轉成portfolio wealth。"
+                "優先檢查Exclusive selection ΔPnL、Common trades ΔPnL、capital geometry、slot occupancy與compounding path。"
+            )
+        elif interp.get("portfolio_advantage_not_explained_by_avg_r_alone"):
             lines.append("判讀：Candidate總報酬較高，但平均Realized R沒有同步提高；portfolio優勢不能只用per-trade R解釋，需同時看capital return、slot occupancy、position sizing與compounding path。")
         else:
-            lines.append("判讀：本比較的portfolio結果與per-trade R方向沒有出現『總報酬較高但平均R較低』的矛盾。")
+            lines.append("判讀：本比較的portfolio結果與per-trade R方向沒有出現需要額外拆解的方向性矛盾。")
     lines.extend((
         render_section(f"{len(payload['comparisons']) + 1}. 使用限制"),
         "本Audit只使用已完成strategy compare工件。Δlog wealth是portfolio path的精確相對wealth歸因；trade PnL／R分解是交易層診斷，因position sizing與compounding不同，不要求其算術加總等於最終報酬差。",
         "選股不同日只依盤前selected-buy集合比較；後續持倉延續造成的wealth差異會落在之後日期，因此不可把同日equity變化直接當作該日selection的因果效果。",
-        "Selector自身盤前診斷比較C15重排結果與同日Min ROOS baseline；其selected／reserved差異是事前資源幾何，不代表事後一定成交或獲利。",
+        f"Selector自身盤前診斷比較{metadata['candidate_arm_id']}重排結果與同日Min ROOS baseline；其selected／reserved差異是事前資源幾何，不代表事後一定成交或獲利。",
         "本結果不得回流score cutoff、blend weight、年份/regime gate、Target係數或模型訓練。",
     ))
     return "\n\n".join(lines).rstrip() + "\n"

@@ -6764,3 +6764,70 @@ Controlled deltas：
 ### 下一步
 
 套用程式後先執行`apps/research.py → [3] 策略組合比較 → [2] 查看設定、工件與預計動作`。若Selection PIT與historical P2 artifacts READY，正式執行C23/C25/C26；預期既有C23/C25可依fingerprint重用，C26為新RUN。先看`C26-C25`是否改善same-param DL selection R／Return／RoMD／EV且不惡化underfilled slot-days，再看`C26-C23`是否真正超越baseline。只有Selection結果支持C26，才可把**完全相同22日規則**凍結搬到Forward-OOS；OOS不得再調門檻。
+
+## 2026-08-09 — SR-C26 Selection結果：stale guard修復selection R，但portfolio gate仍未通過
+
+### 狀態
+
+`RESULT_AVAILABLE / STALE_GUARD_SUPPORTED / NOT_PROMOTED / FORWARD_OOS_NOT_AUTHORIZED`。
+
+### 程式基準與正式結果
+
+- 使用者本機執行基準：`test-branch-1_20260809_150343_3b98cc3.zip`。
+- SHA256：`fe7d7aed0ec5ccbc126ff0f45b9c542cca82b1f1dc1923ebdda060b21bde9a48`。
+- Strategy Compare run：`outputs/strategy_compare/runs/20260809_150908_C23-C25-C26_6018e78bd663`。
+- 期間：2014-01-01～2020-12-31；historical P2 Min ROOS active params；MR-12B Selection PIT；C26唯一scientific change仍為預先凍結的22-calendar-day stale-score membership guard。
+
+### C26相對C25：guard純runtime效果
+
+- Return `115.42% → 119.74%`（`+4.32pp`）。
+- MDD `26.36% → 27.11%`（`+0.75pp`）；RoMD `4.38 → 4.42`（`+0.04`）。
+- EV `0.59R → 0.67R`（`+0.08R`）。
+- same-param DL selection R `-19.52R → +7.99R`（`+27.51R`）。
+- underfilled end days `963 → 923`（`-40`）；position-gap slot-days `1927 → 1781`（`-146`）。
+- 實際改單日 `94 → 75`；Continuous新選入單 `97 → 79`；guard觸發日=`43`、blocked feasible score-improving swaps=`378`。
+- 判定：22日stale-score guard確實修復C25 old-signal tail造成的selection loss；Selection evidence支持guard機制本身。
+
+### C26相對C23：Selection portfolio gate
+
+- Return `127.45% → 119.74%`（`-7.71pp`）。
+- MDD `25.45% → 27.11%`（`+1.66pp`）；RoMD `5.01 → 4.42`（`-0.59`）；年化 `-0.55pp`。
+- EV `0.62R → 0.67R`（`+0.05R`），same-param DL selection R=`+7.99R`。
+- 平均曝險只`-0.20pp`，但underfilled end days仍`+219`、position-gap slot-days仍`+128`。
+- 選中候選Target percentile `+0.0237`、Target mean `+0.0680R`；Target方向仍改善。
+- 年度Return僅2014、2015、2019優於C23；2016、2017、2018、2020較弱。
+
+### 科學判定
+
+1. C26把C25的負selection R修成相對C23 `+7.99R`，故stale-score guard假說不是無效；不得把本結果解讀成回到C25。
+2. 但主要策略Gate仍以Return／MDD／RoMD等portfolio結果為準；C26尚未超越C23，因此**不得進Forward-OOS**。
+3. `+7.99R selection R`與`-7.71pp Return`形成新的R→portfolio translation gap。不能據此再調22日cutoff、增加第二個age threshold或修改MR-12B／Target。
+4. 下一步只允許read-only attribution：拆exclusive selection ΔPnL、common-trade ΔPnL、position sizing／capital return、slot occupancy與wealth/compounding path，判斷positive R為何沒有轉成positive portfolio wealth。
+
+## 2026-08-09 — AUD-c23-c26-pit-portfolio-translation實作：C26正Selection R到負Portfolio Return的只讀歸因
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / READ_ONLY_EXISTING_REPLAY_ONLY`。
+
+### Audit identity／固定來源
+
+- 新增`AUD-c23-c26-pit-portfolio-translation`（config id=`c23-c26-pit-portfolio-translation`）；不新增`MR-*`、`DL-*`、`SR-C*`或`PARAM-*`。
+- 目前candidate=`SR-C26`，comparators=`SR-C23 / SR-C25`，source=`latest` completed Strategy Compare。
+- 共用既有`strategy_attribution` primitive；不建立第二套R／PnL／wealth公式，不重跑portfolio。
+
+### 唯一目的
+
+直接拆解：
+- Exclusive selection ΔR 與 Exclusive selection ΔPnL；
+- Common trades ΔPnL 與 All trade ΔPnL；
+- position sizing／reserved／invested、capital return、holding；
+- underfilled days／position-gap slot-days；
+- exact log-wealth path與年度／月份compounding concentration。
+
+若C26相對C23出現`Exclusive selection ΔR > 0`但總Return < 0，報表必須明確標示R→portfolio wealth translation gap，不能把positive R直接當作策略promotion證據。
+
+### 使用限制／下一步
+
+Audit只用既有Selection replay做解釋，不授權調22日cutoff、不授權新age gate、不授權參數適應或模型／Target修改。若負wealth主要可由既有capital/path機械項清楚解釋，才形成下一個單一Selection受控假說；若無明確可泛化機械原因，`SR-C26`維持NOT_PROMOTED並停止這條runtime微調鏈。
+

@@ -19526,7 +19526,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and "Exclusive selection ΔPnL" in c15_report_text
             and "All trade ΔPnL" in c15_report_text
             and "非2024期間相對wealth effect" in c15_report_text
-            and "SR-C15 selector自身盤前診斷" in c15_report_text
+            and "C15 selector自身盤前診斷" in c15_report_text
             and c15_payload["metadata"]["read_only"] is True
             and c15_payload["metadata"]["portfolio_replay_executed"] is False
             and (c15_latest / "audit.md").is_file()

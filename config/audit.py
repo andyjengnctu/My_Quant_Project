@@ -176,7 +176,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                 "output_subdir": "breakout_quality/c23_c25_pit_fold_runtime",
             },
             "c23-c25-pit-target-realization": {
-                "enabled": True,
+                "enabled": False,
                 "audit_type": "pit_target_realization_attribution",
                 "description": "Selection PIT Target→realized R／score-age歸因：檢查exclusive winner capture損失是否集中於較舊signal→entry age，區分event Target老化與Target公式本身失配",
                 "source": {
@@ -197,6 +197,30 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
                     "score_age_attribution": True,
                 },
                 "output_subdir": "breakout_quality/c23_c25_pit_target_realization",
+            },
+            "c23-c26-pit-portfolio-translation": {
+                "enabled": True,
+                "audit_type": "strategy_attribution",
+                "description": "SR-C26在Selection內已修復same-param selection R但仍落後baseline的portfolio translation歸因：拆exclusive/common trade PnL、capital geometry、slot occupancy與wealth path",
+                "source": {
+                    "kind": "strategy_compare",
+                    "run": "latest",
+                    "candidate_arm_id": "C26",
+                    "comparator_arm_ids": ["C23", "C25"],
+                },
+                "dimensions": {
+                    "focus_year": 2020,
+                    "top_month_count": 5,
+                    "top_trade_count": 20,
+                },
+                "outcomes": {
+                    "log_wealth_path": True,
+                    "selection_changes": True,
+                    "capital_geometry": True,
+                    "slot_occupancy": True,
+                    "trade_contribution": True,
+                },
+                "output_subdir": "breakout_quality/c23_c26_pit_portfolio_translation",
             },
         },
     },
