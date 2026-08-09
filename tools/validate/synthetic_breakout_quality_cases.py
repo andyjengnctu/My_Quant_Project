@@ -11162,6 +11162,58 @@ def validate_breakout_quality_selection_strategy_realization_contract_case(_base
             "resolve_models_dir(project_root, environ=environ)" in optimizer_source,
         ),
     )
+    from tools.optimizer.outer_rolling_oos import _resolve_config as _resolve_outer_rolling_config
+
+    option_only_argv = [
+        "--outer-first-oos-date",
+        str(DEFAULT_START_DATE),
+        "--outer-last-oos-date",
+        str(DEFAULT_NESTED_OOS_END_DATE),
+        "--outer-train-window-months",
+        str(int(DEFAULT_TRAIN_WINDOW_MONTHS)),
+        "--outer-oos-months",
+        "12",
+        "--trials",
+        "17",
+    ]
+    parser_policy = {
+        # AI註: 故意與Selection期間不同，第一個argv token若再被漏讀就必須失敗。
+        "oos_start_year": 2021,
+        "oos_end_date": "2026-03-02",
+    }
+    option_only_config = _resolve_outer_rolling_config(
+        option_only_argv,
+        {},
+        base_policy=parser_policy,
+        latest_year=2026,
+        latest_date=pd.Timestamp("2026-03-02"),
+        default_trials=300,
+        timing_mode=False,
+    )
+    sys_argv_config = _resolve_outer_rolling_config(
+        ["tools/optimizer/main.py", *option_only_argv],
+        {},
+        base_policy=parser_policy,
+        latest_year=2026,
+        latest_date=pd.Timestamp("2026-03-02"),
+        default_trials=300,
+        timing_mode=False,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "outer_rolling_parser_accepts_cli_and_programmatic_argv_without_dropping_first_option",
+        (2014, 2020, 120, 12, 17, True),
+        (
+            int(option_only_config.first_oos_year),
+            int(option_only_config.last_oos_year),
+            int(option_only_config.train_window_months),
+            int(option_only_config.oos_horizon_months),
+            int(option_only_config.trials_per_fold),
+            option_only_config == sys_argv_config,
+        ),
+    )
     add_check(
         results,
         "synthetic_breakout_quality",

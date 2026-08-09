@@ -7308,3 +7308,31 @@ Stage 3新增的`selection_historical_p2` builder只共用了P2 risk-only訓練�
 ### Scientific identity
 
 MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28的模型、Target、selector、historical P2定義、risk search fields、comparison period與策略會計均未改變；本輪只完成原有Strategy Compare auto-preparation dependency chain，不新增MR／SR ID。C27/C28 Selection結果仍待正式執行。
+
+
+## 2026-08-09 — Stage 3 Strategy Compare Selection baseline programmatic argv 修正
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / NO_SCIENTIFIC_CONDITION_CHANGE / FORMAL_SUITE_PRE_FIX_PASS / SELECTION_COMPARE_STILL_PENDING`。
+
+### 程式基準與使用者錯誤
+
+- 本輪來源ZIP：`test-branch-1_20260809_215948_7b98b09.zip`；SHA256=`b8b121d4e79d832375293e4ef8cba5a81ce6420cb595210aa1c581989b28eb97`。
+- 使用者在 Strategy Compare 自動 BUILD `param:selection_min_roos` 時，console 已正確顯示 `2014-01-01~2020-12-31 / train=120m / oos=12m / trials=300/fold`，但 canonical outer-rolling service 隨即拋出 `ValueError: first OOS date 不可晚於 last OOS date`。
+- 同一來源基準的正式 local regression bundle `to_chatgpt_bundle_20260809_220143_9cdf2b12.zip` 已全部 PASS（quick gate / consistency / chain checks / ml smoke / meta quality），表示此錯誤位於未被既有 formal case 覆蓋的 programmatic outer-rolling argv 邊界。
+
+### 根因
+
+`run_outer_rolling_oos()` 同時支援真實CLI `sys.argv` 與內部service呼叫。既有 `_extract_cli_value()` / `_has_cli_flag()` 固定從 `argv[1]` 掃描，假設 `argv[0]` 一定是program path；但 `strategy_param_training.py`、`strategy_optimizer_policy.py` 與既有 strategy adaptation service 都以 option-only list 呼叫，第一個token即 `--outer-first-oos-date`。因此 Selection baseline 的 first-OOS option 被忽略，first date回退到較晚的 base policy，而 last date仍讀到2020，形成反向區間。
+
+### 修正
+
+1. outer-rolling argv parser依第一個token是否為option判定掃描起點：option-only programmatic argv從index 0掃描，真實CLI argv仍從index 1掃描。
+2. `_extract_cli_value()` 與 `_has_cli_flag()` 共用相同起點語意，避免value option與flag option再度分叉。
+3. B179 synthetic contract新增雙路徑回歸：同一2014～2020 schedule分別以option-only argv與含program path的CLI argv解析，兩者必須得到相同 first/last OOS、120m train、12m OOS與trial數；fallback policy故意設為2021，確保第一個option若再被漏讀會立即失敗。
+4. 未修改MR-13A模型、PIT、C27/C28 selector、historical P2定義、optimizer objective、trial數、strategy accounting或comparison period。
+
+### Scientific identity
+
+MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28均不變；C27/C28 Selection Strategy Compare仍待正式執行。

@@ -1499,7 +1499,10 @@ def _prompt_str(label: str, default: str, *, allowed: tuple[str, ...] | None = N
 
 def _extract_cli_value(argv, option_name: str) -> str:
     args = list(argv or [])
-    for idx in range(1, len(args)):
+    # AI註: ``run_outer_rolling_oos`` 同時接受真實CLI argv與內部option-only argv；
+    # 內部service的第一個token本身就是option，不可固定從index 1開始掃描。
+    first_option_index = 0 if args and str(args[0]).strip().startswith("-") else 1
+    for idx in range(first_option_index, len(args)):
         raw = str(args[idx]).strip()
         if raw == option_name and idx + 1 < len(args):
             return str(args[idx + 1]).strip()
@@ -1509,7 +1512,11 @@ def _extract_cli_value(argv, option_name: str) -> str:
 
 
 def _has_cli_flag(argv, option_name: str) -> bool:
-    return any(str(arg).strip() == option_name for arg in list(argv or [])[1:])
+    args = list(argv or [])
+    first_option_index = 0 if args and str(args[0]).strip().startswith("-") else 1
+    return any(
+        str(arg).strip() == option_name for arg in args[first_option_index:]
+    )
 
 
 def _month_start(value) -> pd.Timestamp:
