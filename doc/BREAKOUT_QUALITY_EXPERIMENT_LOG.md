@@ -7693,3 +7693,37 @@ Forward active contrasts固定為`C1-C3 / C20-C3 / C29-C3 / C29-C20`。
 - 報表：表一同列Full／Min fixed baselines與stochastic arms各項final-strategy metric Mean（Return、MDD、RoMD、Annual、EV、Payoff、Exposure、Trades、Win Rate、Monthly Win Rate、Log R²、同參數DL選擇R）；表二只列RoMD完整分布（Mean、Median、Std、CV、Min、P25、P75、Max、勝Min／Full counts及cross-seed distribution comparison）。
 - Retention：永久輸出固定為`outputs/strategy_compare/robustness/<fingerprint>/`下`manifest.json`、`seed_results.csv`、`robustness_summary.json`、`robustness_report.md`；checkpoint／full scores／replay details預設清除，可由config retention flags顯式保留。fingerprint包含實際共同OOS期間、dataset inventory、策略參數artifact identities、experiment profile semantics、有效training defaults、seed policy與runtime selector contract。
 
+
+## 2026-08-10 — Selection PIT / Forward-OOS完整語意稽核：Forward score universe future-target依賴修正
+
+### 工作基準
+
+- 使用者指定最新版：`test-branch-1_20260810_212258_a5289fd.zip`
+- SHA256：`72c474dbb2d7477c9303490970c0d025b4bbb669609fbe92423e2fdcbf15eda4`
+- 本輪以fresh-unzip為唯一修改基準，保留其後新增的Selection／Forward雙profile、current四arm矩陣、daily Forward artifact schema與Multiple-seed robustness isolation；不得用較舊patch整檔覆蓋。
+
+### 稽核結論
+
+Selection PIT本身維持正確：PIT score eligibility只由當時可得feature/benchmark history決定，future Target完整性只控制train／validation／final-refit與事後audit；event profile仍查breakout signal date，daily profile仍於每個盤前decision查最新已完成交易日information-date score。
+
+Forward-OOS模型訓練／model Gate亦沒有把OOS帶入gradient、epoch selection或final refit；但MR-12B event與MR-13A daily trainer在輸出Forward runtime score時仍直接使用target-valid OOS IDs，導致「某日是否有score」取決於future 40-bar Target是否已完整。舊Forward共同期間因此在2025-12-22附近被Target horizon截尾；這是runtime score coverage的no-lookahead違規，不是frozen checkpoint本身失效。
+
+### 修正
+
+1. `ranker_sample_contract.py`新增共用Forward SSOT：prediction-time inference universe只依OOS日期與當時feature history；target-evaluable universe為其`target_valid` subset。
+2. event／daily trainer的OOS model metrics仍只使用target-evaluable subset；runtime score artifact改涵蓋完整inference universe。Target未完成rows仍輸出`model_score`，但`target_raw_r`／`target_daily_percentile`固定為NaN。
+3. Manifest／report新增`score_eligibility_contract`與`forward_score_coverage`，明確保存inference groups、target-evaluable groups與`future_target_required_for_score=False`。Forward loader要求完整契約；舊target-complete-only score artifact不得直接作current strategy source。
+4. 新增`rebuild_forward_oos_scores.py` frozen-checkpoint score-only服務：驗證model/profile/objective/spec/input shape/selected epoch/Dataset/Target identity後，不做fit，只重建Forward scores與report/manifest。模型工作類型先走此路徑，只有checkpoint identity不安全才退回canonical full training；Strategy Compare本身仍禁止train。
+5. `compare_continuous_rankers.py`改為允許runtime score table尾端Target=NaN，模型品質比較只在target-evaluable subset計算，避免為了診斷再次截短runtime universe。
+6. 保留最新版Multiple-seed robustness的`--model-output-dir`／`--research-output-dir` isolated training與`score_path_override`；本輪沒有改seed生成、final-strategy統計或profile matrix。
+
+### 研究狀態影響
+
+- `DL-CONT12B-PIT`／`DL-CONT13A-PIT`與Selection C23/C25/C28結果維持current，不需因本修正重跑Selection PIT。
+- `DL-CONT12B`／`DL-CONT13A` frozen model checkpoints與既有Forward model Gate仍有效，不因score coverage修正重訓權重。
+- 舊C20/C29以及舊2021-01-01～2025-12-22 Forward contrasts降級為`PRE_FIX_RESULT_ARCHIVED`，不得再用來宣告MR-13A Forward fail或MR-12B current strategy anchor。
+- 下一個正式動作是由模型工作類型以frozen checkpoint重建future-independent Forward scores，再以同一五欄Min ROOS＋frozen feasible-ascent重跑C20/C29 controlled replay；新結果出來前MR-13A維持`PROMOTION_PENDING_RECHECK`。
+
+### Scientific identity
+
+本輪不新增MR／DL／SR ID，不改Target、loss、architecture、selected epoch、Min/Full參數、selector、K/R0、feasible-ascent、交易會計、Strategy Compare雙profile或Multiple-seed robustness scientific design；只修正Forward score availability的時間因果契約與score-only artifact repair path。

@@ -7,6 +7,7 @@ import json
 import math
 import sys
 import time
+from types import SimpleNamespace
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -92,6 +93,10 @@ from filters.breakout_quality.paths import (
     build_filter_artifact_paths_from_dir,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
+)
+from filters.breakout_quality.ranker_sample_contract import (
+    build_score_eligibility_contract,
+    resolve_forward_oos_score_group_ids,
 )
 from filters.breakout_quality.splits import (
     build_selection_oos_split_assignments,
@@ -1392,6 +1397,9 @@ def main(argv=None) -> int:
         "selection": _group_ids_from_event_rows(event_group_index, selection_rows, target_valid),
         "oos": _group_ids_from_event_rows(event_group_index, oos_rows, target_valid),
     }
+    forward_score_ids = resolve_forward_oos_score_group_ids(
+        SimpleNamespace(group_table=group_table, outer_policy=outer_policy)
+    )
     scoped_split_ids = {
         name: _scope_group_ids(
             ids,
@@ -1540,19 +1548,44 @@ def main(argv=None) -> int:
             include_top_k_quality=True,
         )
 
+    # Forward runtime score availability must depend only on prediction-time
+    # information.  OOS metrics above intentionally remain restricted to rows
+    # whose future target is complete; inference-only tail rows are scored here
+    # after the frozen Selection-fit checkpoint exists.
+    missing_forward_ids = forward_score_ids[~np.isfinite(score_by_group[forward_score_ids])]
+    if len(missing_forward_ids):
+        score_by_group[missing_forward_ids] = _predict_scores(
+            torch,
+            model,
+            feature_bank,
+            group_context,
+            missing_forward_ids,
+            batch_size=int(args.evaluation_batch_size),
+            plan=plan,
+        )
+
     role_by_group = np.full((group_count,), "selection_other", dtype=object)
     role_by_group[all_split_ids["inner_train"]] = "inner_train"
     role_by_group[all_split_ids["validation"]] = "validation"
-    role_by_group[all_split_ids["oos"]] = "oos"
+    role_by_group[forward_score_ids] = "oos"
     score_frames: list[pd.DataFrame] = []
     for name in ("selection", "oos"):
-        ids = all_split_ids[name]
+        ids = all_split_ids[name] if name == "selection" else forward_score_ids
         frame = group_table.iloc[ids][["ticker", "date", "group_index", "label"]].copy()
         frame["split"] = name
         frame["selection_role"] = role_by_group[ids]
         frame["in_training_label_scope"] = np.isin(ids, scoped_split_ids[name])
-        frame["target_raw_r"] = raw_target[ids]
-        frame["target_daily_percentile"] = percentile_target[ids]
+        if name == "oos":
+            evaluable_mask = np.isin(ids, all_split_ids["oos"])
+            frame["target_raw_r"] = np.nan
+            frame["target_daily_percentile"] = np.nan
+            frame.loc[evaluable_mask, "target_raw_r"] = raw_target[ids[evaluable_mask]]
+            frame.loc[evaluable_mask, "target_daily_percentile"] = percentile_target[
+                ids[evaluable_mask]
+            ]
+        else:
+            frame["target_raw_r"] = raw_target[ids]
+            frame["target_daily_percentile"] = percentile_target[ids]
         frame["model_score"] = score_by_group[ids]
         score_frames.append(frame)
     score_frame = pd.concat(score_frames, ignore_index=True)
@@ -1627,6 +1660,12 @@ def main(argv=None) -> int:
         "model_information_cutoff": information_cutoff,
         "oos_used_for_training_or_epoch_selection": False,
         "oos_evaluated_after_checkpoint_write": True,
+        "score_eligibility_contract": build_score_eligibility_contract(profile),
+        "forward_score_coverage": {
+            "inference_eligible_groups": int(len(forward_score_ids)),
+            "target_evaluable_groups": int(len(all_split_ids["oos"])),
+            "future_target_required_for_score": False,
+        },
         "runtime_eligibility": {
             "eligible": False,
             "scope": "research_only",
@@ -1682,6 +1721,8 @@ def main(argv=None) -> int:
         "torch_execution": plan.as_manifest_payload(),
         "oos_predictions_used_during_training": False,
         "runtime_eligibility": payload["runtime_eligibility"],
+        "score_eligibility_contract": payload["score_eligibility_contract"],
+        "forward_score_coverage": payload["forward_score_coverage"],
         "research_outputs": {
             "scores": build_file_manifest(score_path),
             "daily_percentile_target": build_file_manifest(percentile_path),

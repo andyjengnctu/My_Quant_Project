@@ -2857,7 +2857,7 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 print(
-                    "  Forward-OOS policy：模型工作類型補齊缺少／不相容的完整模型工件"
+                    "  Forward-OOS policy：模型工作類型修復缺少／不相容的Forward工件"
                     f" | reason={type(exc).__name__}"
                 )
                 code = _prepare_continuous_research_inputs(
@@ -2868,21 +2868,50 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
                 )
                 if code != 0:
                     return int(code)
-                code = _run_command(
-                    "train-continuous-ranker",
-                    [
-                        "--filter-id", str(source.filter_id),
-                        "--model-architecture", str(source.model_architecture),
-                        "--experiment-profile", str(source.experiment_profile),
-                        "--seed", str(workflow.seed),
-                    ],
-                    program_name=program_name,
-                )
-                if code != 0:
-                    return int(code)
+                score_only_error = None
+                try:
+                    from tools.filters.breakout_quality.rebuild_forward_oos_scores import (
+                        rebuild_forward_oos_scores_from_frozen_checkpoint,
+                    )
+
+                    print(
+                        "  Forward-OOS repair：先重用frozen checkpoint，只重建future-independent score universe"
+                    )
+                    rebuild_forward_oos_scores_from_frozen_checkpoint(
+                        project_root=PROJECT_ROOT,
+                        filter_id=str(source.filter_id),
+                        model_architecture=str(source.model_architecture),
+                        experiment_profile=str(source.experiment_profile),
+                        seed=int(workflow.seed),
+                    )
+                    load_continuous_ranker_oos_contract(
+                        PROJECT_ROOT,
+                        str(source.filter_id),
+                        str(source.model_architecture),
+                        str(source.experiment_profile),
+                    )
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError) as rebuild_exc:
+                    score_only_error = rebuild_exc
+                if score_only_error is not None:
+                    print(
+                        "  Forward-OOS repair：frozen checkpoint不可安全重用，才重建完整模型工件"
+                        f" | reason={type(score_only_error).__name__}"
+                    )
+                    code = _run_command(
+                        "train-continuous-ranker",
+                        [
+                            "--filter-id", str(source.filter_id),
+                            "--model-architecture", str(source.model_architecture),
+                            "--experiment-profile", str(source.experiment_profile),
+                            "--seed", str(workflow.seed),
+                        ],
+                        program_name=program_name,
+                    )
+                    if code != 0:
+                        return int(code)
                 # The training command is the canonical producer for the frozen
-                # Forward-OOS model, report, and score table.  Revalidate instead
-                # of accepting a successful return code alone.
+                # Forward-OOS model when score-only checkpoint reuse is unsafe.
+                # Revalidate instead of accepting either repair path alone.
                 load_continuous_ranker_oos_contract(
                     PROJECT_ROOT,
                     str(source.filter_id),

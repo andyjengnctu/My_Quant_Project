@@ -26,6 +26,10 @@ from filters.breakout_quality.daily_ranker_data import (
     select_breakout_candidate_group_ids,
 )
 from filters.breakout_quality.models.factory import count_trainable_parameters, require_torch
+from filters.breakout_quality.ranker_sample_contract import (
+    build_score_eligibility_contract,
+    resolve_forward_oos_score_group_ids,
+)
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
@@ -79,12 +83,22 @@ def _empty_split_metrics(group_count: int, reason: str) -> dict:
     }
 
 
-def _date_split_frame(bundle, split) -> pd.DataFrame:
+def _date_split_frame(
+    bundle,
+    split,
+    *,
+    forward_score_ids: np.ndarray | None = None,
+) -> pd.DataFrame:
     dates = pd.to_datetime(bundle.group_table["date"], errors="raise").dt.normalize()
     selection_dates = set(dates.iloc[split.selection_ids].tolist())
     train_dates = set(dates.iloc[split.inner_train_ids].tolist())
     validation_dates = set(dates.iloc[split.validation_ids].tolist())
-    oos_dates = set(dates.iloc[split.oos_ids].tolist())
+    oos_group_ids = (
+        split.oos_ids
+        if forward_score_ids is None
+        else np.asarray(forward_score_ids, dtype=np.int64)
+    )
+    oos_dates = set(dates.iloc[oos_group_ids].tolist())
     rows = []
     for date_value in sorted(selection_dates | oos_dates):
         if date_value in oos_dates:
@@ -150,6 +164,7 @@ def run(args, *, ranker_impl) -> int:
     if str(bundle.profile.continuous_target_id) != DAILY_OPPORTUNITY_NO_TIME_TARGET_ID:
         raise ValueError("MR-13A target identity不一致")
     split = build_daily_ranker_split(bundle, inner_validation_months=int(args.inner_validation_months))
+    forward_score_ids = resolve_forward_oos_score_group_ids(bundle)
 
     percentile_target = np.full(bundle.raw_target.shape, np.nan, dtype=np.float32)
     selection_mask = np.zeros(bundle.raw_target.shape, dtype=bool)
@@ -233,10 +248,13 @@ def run(args, *, ranker_impl) -> int:
         torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
         batch_size=int(args.evaluation_batch_size), plan=plan,
     )
-    oos_scores = ranker_impl._predict_scores(
-        torch, model, bundle.feature_bank, bundle.group_context, split.oos_ids,
+    forward_scores = ranker_impl._predict_scores(
+        torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
         batch_size=int(args.evaluation_batch_size), plan=plan,
     )
+    score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
+    score_by_group[forward_score_ids] = forward_scores
+    oos_scores = score_by_group[split.oos_ids]
     validation_metrics = ranker_impl._split_metrics(
         split.validation_ids, bundle.group_table, bundle.raw_target, percentile_target,
         validation_scores, include_top_k_quality=True,
@@ -245,8 +263,6 @@ def run(args, *, ranker_impl) -> int:
         split.oos_ids, bundle.group_table, bundle.raw_target, percentile_target,
         oos_scores, include_top_k_quality=True,
     )
-    score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
-    score_by_group[split.oos_ids] = oos_scores
     candidate_ids = select_breakout_candidate_group_ids(
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
     )
@@ -271,12 +287,21 @@ def run(args, *, ranker_impl) -> int:
     report_markdown_path = output_dir / ranker_impl.RANKER_REPORT_MARKDOWN_FILENAME
     split_path = output_dir / DAILY_SPLIT_FILENAME
 
-    oos_frame = bundle.group_table.iloc[split.oos_ids][["ticker", "date", "group_index"]].copy()
-    oos_frame["target_raw_r"] = bundle.raw_target[split.oos_ids]
-    oos_frame["target_daily_percentile"] = percentile_target[split.oos_ids]
-    oos_frame["model_score"] = oos_scores
+    oos_frame = bundle.group_table.iloc[forward_score_ids][["ticker", "date", "group_index"]].copy()
+    evaluable_forward_mask = np.isin(forward_score_ids, split.oos_ids)
+    oos_frame["target_raw_r"] = np.nan
+    oos_frame["target_daily_percentile"] = np.nan
+    oos_frame.loc[evaluable_forward_mask, "target_raw_r"] = bundle.raw_target[
+        forward_score_ids[evaluable_forward_mask]
+    ]
+    oos_frame.loc[evaluable_forward_mask, "target_daily_percentile"] = percentile_target[
+        forward_score_ids[evaluable_forward_mask]
+    ]
+    oos_frame["model_score"] = forward_scores
     oos_frame.to_csv(score_path, index=False, encoding="utf-8-sig", compression="gzip")
-    _date_split_frame(bundle, split).to_csv(split_path, index=False, encoding="utf-8-sig")
+    _date_split_frame(bundle, split, forward_score_ids=forward_score_ids).to_csv(
+        split_path, index=False, encoding="utf-8-sig"
+    )
 
     information_cutoff = str(pd.Timestamp(bundle.group_table.iloc[split.selection_ids]["label_eval_end_date"].max()).date())
     split_metrics = {
@@ -320,6 +345,12 @@ def run(args, *, ranker_impl) -> int:
         "model_information_cutoff": information_cutoff,
         "oos_used_for_training_or_epoch_selection": False,
         "oos_evaluated_after_checkpoint_write": True,
+        "score_eligibility_contract": build_score_eligibility_contract(bundle.profile),
+        "forward_score_coverage": {
+            "inference_eligible_groups": int(len(forward_score_ids)),
+            "target_evaluable_groups": int(len(split.oos_ids)),
+            "future_target_required_for_score": False,
+        },
         "runtime_eligibility": {
             "eligible": False,
             "scope": "research_only",
@@ -365,6 +396,8 @@ def run(args, *, ranker_impl) -> int:
         "source_dataset": bundle.summary,
         "source_continuous_target": bundle.target_manifest,
         "runtime_eligibility": payload["runtime_eligibility"],
+        "score_eligibility_contract": payload["score_eligibility_contract"],
+        "forward_score_coverage": payload["forward_score_coverage"],
         "research_outputs": {
             "oos_scores_gzip": build_file_manifest(score_path),
             "report_json": build_file_manifest(report_json_path),

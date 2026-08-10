@@ -11925,6 +11925,7 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
         exact_random_top_k_baseline,
     )
     from tools.filters.breakout_quality.compare_continuous_rankers import (
+        _load_model_frame,
         _dynamic_orderable_frame,
         _evaluate_dynamic_k_strata,
         _evaluate_fixed_k_sweep,
@@ -12091,6 +12092,58 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
             float(random_baseline["boundary_raw_target_gap"]),
         ),
     )
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        score_path = root / "continuous_ranker_scores.csv"
+        pd.DataFrame([
+            {
+                "ticker": "A", "date": "2021-01-04", "group_index": 0,
+                "split": "oos", "target_raw_r": 0.2,
+                "target_daily_percentile": 1.0, "model_score": 0.8,
+            },
+            {
+                "ticker": "B", "date": "2021-01-04", "group_index": 1,
+                "split": "oos", "target_raw_r": 0.1,
+                "target_daily_percentile": 0.5, "model_score": 0.6,
+            },
+            {
+                "ticker": "C", "date": "2021-12-31", "group_index": 2,
+                "split": "oos", "target_raw_r": np.nan,
+                "target_daily_percentile": np.nan, "model_score": 0.7,
+            },
+        ]).to_csv(score_path, index=False, encoding="utf-8-sig")
+        fake_contract = SimpleNamespace(
+            score_path=score_path,
+            continuous_target_id=profile.continuous_target_id,
+            report_path=root / "report.json",
+            model_information_cutoff="2020-12-31",
+            available_from="2021-01-04",
+            available_through="2021-12-31",
+        )
+        with patch(
+            "tools.filters.breakout_quality.compare_continuous_rankers.load_continuous_ranker_oos_contract",
+            return_value=fake_contract,
+        ):
+            comparable_frame, _comparable_meta = _load_model_frame(
+                root=root,
+                filter_id="synthetic",
+                architecture="synthetic",
+                model_id="synthetic",
+                profile=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
+            )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "continuous_ranker_quality_comparison_uses_target_evaluable_subset_not_runtime_score_universe",
+        (["A", "B"], True),
+        (
+            comparable_frame["ticker"].tolist(),
+            bool(np.isfinite(comparable_frame["target_raw_r"].to_numpy(dtype=np.float64)).all()),
+        ),
+    )
+
     with (
         patch.object(
             breakout_quality_config,
@@ -12460,6 +12513,7 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     from filters.breakout_quality.models.factory import require_torch
+    from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
     from config.strategy_compare import get_strategy_comparison_settings
     from tools.filters.breakout_quality.train_continuous_ranker import (
         LISTWISE_TRAINING_CONTRACT,
@@ -12474,6 +12528,7 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
     profile = get_breakout_quality_experiment_profile(
         STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_LISTWISE_PROFILE
     )
+    score_eligibility_contract = build_score_eligibility_contract(profile)
     add_check(
         results,
         "synthetic_breakout_quality",
@@ -12585,6 +12640,12 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
             "experiment_settings": {
                 "continuous_target_id": STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
             },
+            "score_eligibility_contract": score_eligibility_contract,
+            "forward_score_coverage": {
+                "inference_eligible_groups": 1,
+                "target_evaluable_groups": 1,
+                "future_target_required_for_score": False,
+            },
             "artifacts": {"scores": build_file_manifest(score_path)},
         }
         (output_dir / "continuous_ranker_report.json").write_text(
@@ -12603,6 +12664,12 @@ def validate_breakout_quality_listwise_ranker_contract_case(_base_params):
                 "listwise_contract": dict(LISTWISE_TRAINING_CONTRACT),
             },
             "model": build_file_manifest(artifact_paths.model_path),
+            "score_eligibility_contract": score_eligibility_contract,
+            "forward_score_coverage": {
+                "inference_eligible_groups": 1,
+                "target_evaluable_groups": 1,
+                "future_target_required_for_score": False,
+            },
             "research_outputs": {"scores": build_file_manifest(score_path)},
             "outer_oos_policy": {
                 "oos_start_date": "2021-01-01",
@@ -12781,6 +12848,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from filters.breakout_quality.continuous_ranker_data import _validate_group_consistency
     from filters.breakout_quality.ranker_sample_contract import (
         build_score_eligibility_contract,
+        resolve_forward_oos_score_group_ids,
+        resolve_forward_oos_target_evaluable_group_ids,
     )
     from filters.breakout_quality.artifacts import build_file_manifest
     from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME, LABEL_PASS
@@ -12819,6 +12888,35 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "point_in_time_group_consistency_accepts_all_missing_terminal_label_end",
         True,
         all_missing_label_end_accepted,
+    )
+
+    event_profile = get_breakout_quality_experiment_profile(
+        STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE
+    )
+    forward_bundle = SimpleNamespace(
+        group_table=pd.DataFrame([
+            {"ticker": "A", "date": "2021-01-04", "group_index": 0, "label": 1},
+            {"ticker": "B", "date": "2021-01-04", "group_index": 1, "label": 0},
+            {"ticker": "C", "date": "2021-01-05", "group_index": 2, "label": -1},
+            {"ticker": "D", "date": "2020-12-31", "group_index": 3, "label": 1},
+        ]),
+        target_valid=np.array([True, False, True, True], dtype=bool),
+        outer_policy={
+            "oos_start_date": "2021-01-01",
+            "effective_oos_end_date": "2021-12-31",
+        },
+        profile=event_profile,
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "forward_oos_runtime_score_universe_does_not_require_future_target_completion",
+        ([0, 1, 2], [0]),
+        (
+            resolve_forward_oos_score_group_ids(forward_bundle).tolist(),
+            resolve_forward_oos_target_evaluable_group_ids(forward_bundle).tolist(),
+        ),
     )
 
     mixed_label_end_rejected = False
@@ -17507,9 +17605,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "_strategy_compare_required_model_sources" in model_app_source
         and "SCORE_SOURCE_CONTINUOUS_RANKER_OOS" in model_prepare_source
         and "load_continuous_ranker_oos_contract" in model_prepare_source
+        and "rebuild_forward_oos_scores_from_frozen_checkpoint" in model_prepare_source
         and '"train-continuous-ranker"' in model_prepare_source
         and "Forward-OOS policy：REUSE" in model_prepare_source
-        and "Forward-OOS policy：模型工作類型補齊" in model_prepare_source
+        and "Forward-OOS policy：模型工作類型修復" in model_prepare_source
+        and "先重用frozen checkpoint" in model_prepare_source
+        and "才重建完整模型工件" in model_prepare_source
         and "train-continuous-ranker" not in preparation_source
         and "模型訓練工作類型執行「準備策略比較所需模型工件」" in preparation_source,
     )
@@ -20232,6 +20333,11 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
                 "target_raw_r": 0.20, "target_daily_percentile": 1.0,
                 "model_score": 0.75,
             },
+            {
+                "ticker": "2317", "date": "2021-01-05", "group_index": 3,
+                "target_raw_r": np.nan, "target_daily_percentile": np.nan,
+                "model_score": 0.65,
+            },
         ]).to_csv(
             score_path, index=False, encoding="utf-8-sig", compression="gzip"
         )
@@ -20256,6 +20362,12 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
                 "pairwise_contract": pairwise_contract,
                 "seed": 42,
             },
+            "score_eligibility_contract": daily_contract,
+            "forward_score_coverage": {
+                "inference_eligible_groups": 3,
+                "target_evaluable_groups": 2,
+                "future_target_required_for_score": False,
+            },
             "artifacts": {
                 "model": build_file_manifest(artifact_paths.model_path),
                 "oos_scores_gzip": build_file_manifest(score_path),
@@ -20273,6 +20385,12 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
             "training_sample_scope": daily_profile.training_sample_scope,
             "continuous_target_id": daily_profile.continuous_target_id,
             "model": build_file_manifest(artifact_paths.model_path),
+            "score_eligibility_contract": daily_contract,
+            "forward_score_coverage": {
+                "inference_eligible_groups": 3,
+                "target_evaluable_groups": 2,
+                "future_target_required_for_score": False,
+            },
             "research_outputs": {
                 "oos_scores_gzip": build_file_manifest(score_path),
             },
@@ -20299,9 +20417,11 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
             == daily_profile.continuous_target_id
         )
         daily_forward_table_uses_all_oos_rows_without_split_column = (
-            len(forward_table) == 2
+            len(forward_table) == 3
             and "split" not in forward_table.columns
             and ("2330", "2021-01-04") in forward_table.index
+            and ("2317", "2021-01-05") in forward_table.index
+            and pd.isna(forward_table.loc[("2317", "2021-01-05"), "target_raw_r"])
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,

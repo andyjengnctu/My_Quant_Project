@@ -134,10 +134,23 @@ def _load_model_frame(
     frame["group_index"] = pd.to_numeric(frame["group_index"], errors="raise").astype(int)
     for column in ("target_raw_r", "target_daily_percentile", "model_score"):
         frame[column] = pd.to_numeric(frame[column], errors="raise").astype(float)
-        if not np.isfinite(frame[column].to_numpy(dtype=np.float64)).all():
-            raise ValueError(f"{model_id} {column}含非有限值")
+    scores = frame["model_score"].to_numpy(dtype=np.float64, copy=False)
+    if not np.isfinite(scores).all():
+        raise ValueError(f"{model_id} model_score含非有限值")
     if frame.duplicated(["ticker", "date", "group_index", "split"]).any():
         raise ValueError(f"{model_id} continuous ranker score row identity重複")
+    # Canonical Forward runtime scores cover every prediction-time eligible row.
+    # Model-quality comparison still requires completed future targets, so the
+    # inference-only tail is excluded here rather than from the runtime artifact.
+    target_evaluable = (
+        np.isfinite(frame["target_raw_r"].to_numpy(dtype=np.float64, copy=False))
+        & np.isfinite(
+            frame["target_daily_percentile"].to_numpy(dtype=np.float64, copy=False)
+        )
+    )
+    frame = frame.loc[target_evaluable].copy()
+    if frame.empty:
+        raise ValueError(f"{model_id} continuous ranker沒有target-evaluable rows可供品質比較")
     return frame, {
         "model_id": model_id,
         "profile": profile,

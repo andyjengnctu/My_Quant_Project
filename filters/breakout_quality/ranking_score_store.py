@@ -106,13 +106,30 @@ class SelectionPointInTimeRankingContract:
     model_validation_gate: dict[str, Any]
 
 
-def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
+def _display_path(path: Path, *, project_root: Path) -> str:
+    resolved = Path(path).resolve()
+    root = Path(project_root).resolve()
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        return resolved.name
+
+
+def _read_json_object(
+    path: Path,
+    *,
+    label: str,
+    project_root: Path,
+) -> dict[str, Any]:
+    display_path = _display_path(path, project_root=project_root)
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"無法讀取{label}: {path}; {type(exc).__name__}: {exc}") from exc
+        raise ValueError(
+            f"無法讀取{label}: {display_path}; {type(exc).__name__}: {exc}"
+        ) from exc
     if not isinstance(payload, dict):
-        raise ValueError(f"{label}根節點必須是object: {path}")
+        raise ValueError(f"{label}根節點必須是object: {display_path}")
     return payload
 
 
@@ -131,6 +148,7 @@ def _validate_audit_source_artifact(
     *,
     expected_path: Path,
     label: str,
+    project_root: Path,
 ) -> None:
     if not isinstance(record, dict):
         raise ValueError(f"Selection PIT audit缺少{label}雜湊綁定，請重新執行模型audit")
@@ -138,7 +156,8 @@ def _validate_audit_source_artifact(
     if recorded_path != expected_path.resolve():
         raise ValueError(
             f"Selection PIT audit {label}路徑不一致: "
-            f"expected={expected_path.resolve()}, actual={recorded_path}"
+            f"expected={_display_path(expected_path, project_root=project_root)}, "
+            f"actual={_display_path(recorded_path, project_root=project_root)}"
         )
     if str(record.get("filename") or "") != expected_path.name:
         raise ValueError(f"Selection PIT audit {label} filename不一致")
@@ -263,10 +282,20 @@ def load_selection_point_in_time_ranking_contract(
         ("Selection PIT audit", audit_path),
     ):
         if not path.is_file():
-            raise FileNotFoundError(f"找不到{label}: {path}")
+            raise FileNotFoundError(
+                f"找不到{label}: {_display_path(path, project_root=root)}"
+            )
 
-    manifest = _read_json_object(manifest_path, label="Selection PIT manifest")
-    audit = _read_json_object(audit_path, label="Selection PIT audit")
+    manifest = _read_json_object(
+        manifest_path,
+        label="Selection PIT manifest",
+        project_root=root,
+    )
+    audit = _read_json_object(
+        audit_path,
+        label="Selection PIT audit",
+        project_root=root,
+    )
     expected_identity = {
         "filter_id": str(filter_id),
         "model_architecture": str(model_architecture),
@@ -350,7 +379,10 @@ def load_selection_point_in_time_ranking_contract(
         if not path.is_file():
             raise FileNotFoundError(f"找不到{label}: {path}")
         _validate_audit_source_artifact(
-            audit_sources.get(key), expected_path=path, label=label
+            audit_sources.get(key),
+            expected_path=path,
+            label=label,
+            project_root=root,
         )
 
     if manifest_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
@@ -367,12 +399,14 @@ def load_selection_point_in_time_ranking_contract(
         ).resolve()
         if not target_manifest_path.is_file():
             raise FileNotFoundError(
-                f"找不到Continuous Target manifest: {target_manifest_path}"
+                "找不到Continuous Target manifest: "
+                f"{_display_path(target_manifest_path, project_root=root)}"
             )
         _validate_audit_source_artifact(
             audit_sources.get("continuous_target_manifest"),
             expected_path=target_manifest_path,
             label="Continuous Target manifest",
+            project_root=root,
         )
     if str(audit.get("continuous_target_id") or "") != manifest_target:
         raise ValueError("Selection PIT audit continuous target與manifest不一致")
@@ -513,10 +547,20 @@ def load_continuous_ranker_oos_contract(
         ("Continuous ranker OOS scores", score_path),
     ):
         if not path.is_file():
-            raise FileNotFoundError(f"找不到{label}: {path}")
+            raise FileNotFoundError(
+                f"找不到{label}: {_display_path(path, project_root=root)}"
+            )
 
-    manifest = _read_json_object(manifest_path, label="Continuous ranker manifest")
-    report = _read_json_object(report_path, label="Continuous ranker report")
+    manifest = _read_json_object(
+        manifest_path,
+        label="Continuous ranker manifest",
+        project_root=root,
+    )
+    report = _read_json_object(
+        report_path,
+        label="Continuous ranker report",
+        project_root=root,
+    )
     expected_identity = {
         "filter_id": str(filter_id),
         "model_architecture": str(model_architecture),
@@ -653,6 +697,28 @@ def load_continuous_ranker_oos_contract(
         expected_label_scope = manifest_label_scope or str(profile.training_label_scope)
         if report_label_scope != expected_label_scope:
             raise ValueError("Continuous ranker report／manifest training_label_scope不一致")
+    expected_score_eligibility = build_score_eligibility_contract(profile)
+    if manifest.get("score_eligibility_contract") != expected_score_eligibility:
+        raise ValueError(
+            "Continuous ranker Forward-OOS score eligibility contract過舊或不一致；"
+            "請由模型工作類型以既有frozen checkpoint重建Forward scores"
+        )
+    if report.get("score_eligibility_contract") != expected_score_eligibility:
+        raise ValueError(
+            "Continuous ranker Forward-OOS report score eligibility contract過舊或不一致"
+        )
+    manifest_coverage = dict(manifest.get("forward_score_coverage") or {})
+    report_coverage = dict(report.get("forward_score_coverage") or {})
+    if not manifest_coverage or manifest_coverage != report_coverage:
+        raise ValueError("Continuous ranker Forward-OOS score coverage contract缺少或不一致")
+    if manifest_coverage.get("future_target_required_for_score") is not False:
+        raise ValueError("Continuous ranker Forward-OOS score不得要求future target")
+    inference_groups = int(manifest_coverage.get("inference_eligible_groups", 0) or 0)
+    target_evaluable_groups = int(manifest_coverage.get("target_evaluable_groups", 0) or 0)
+    if inference_groups < 1 or target_evaluable_groups < 1:
+        raise ValueError("Continuous ranker Forward-OOS score coverage count必須為正")
+    if target_evaluable_groups > inference_groups:
+        raise ValueError("Continuous ranker target-evaluable groups不可多於inference-eligible groups")
     if str(report.get("status") or "") not in {
         "RESULT_AVAILABLE_PENDING_REVIEW",
         "RESULT_AVAILABLE",
@@ -703,8 +769,15 @@ def load_continuous_ranker_oos_contract(
     available_from = str(table.index.get_level_values("date").min())
     available_through = str(table.index.get_level_values("date").max())
     if available_from < execution_start:
-        if pd.Timestamp(available_from) < pd.Timestamp(information_cutoff):
-            raise ValueError("Continuous ranker OOS scores包含model information cutoff之前事件")
+        raise ValueError(
+            "Continuous ranker OOS scores包含execution_start之前事件: "
+            f"available_from={available_from}, execution_start={execution_start}"
+        )
+    if len(table) != inference_groups:
+        raise ValueError(
+            "Continuous ranker Forward-OOS score row count與inference eligibility contract不一致: "
+            f"table={len(table)}, expected={inference_groups}"
+        )
     if configured_end and pd.Timestamp(available_through) > pd.Timestamp(configured_end):
         raise ValueError("Continuous ranker OOS scores超出outer OOS configured end")
     return ContinuousRankerOOSContract(
@@ -733,7 +806,7 @@ def load_continuous_ranker_oos_score_table_from_path(
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
     path = Path(score_path).resolve()
     if not path.is_file():
-        raise FileNotFoundError(f"找不到Continuous ranker scores: {path}")
+        raise FileNotFoundError(f"找不到Continuous ranker scores: {path.name}")
     frame = read_breakout_quality_csv(path).copy()
     required = {"ticker", "date", "group_index", "model_score"}
     if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:

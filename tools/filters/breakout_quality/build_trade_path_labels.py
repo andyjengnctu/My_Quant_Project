@@ -578,14 +578,14 @@ def main(argv=None) -> int:
     )
     if bool(args.plan_only):
         print(render_section("Plan"))
-        print("先以canonical Min ROOS單階段rolling建立2014～2020 no-DL teacher params（high_len＋4 ATR），再合併既有2021～2026 P2 params，最後沿用feature bank建立新Label Dataset。")
+        print("先建立Selection historical canonical Min ROOS no-DL teacher params，再合併既有forward teacher params，最後沿用feature bank建立新Label Dataset。")
         return 0
     historical_path = _ensure_historical_teacher_params(root, args)
     if not forward_path.is_file():
         raise FileNotFoundError(
-            "缺少2021～2026 P2 teacher params："
+            "缺少forward teacher params："
             f"{project_relative_display_path(forward_path, project_root=root)}；"
-            "請先完成strategy-dl-filter-param-adapt-gate的P2工件。"
+            "請先由正式策略參數適應流程建立目前config指定的forward teacher工件。"
         )
     summary = _build_dataset(root, args, historical_path, forward_path)
     summary["elapsed_sec"] = round(time.perf_counter() - started, 3)
