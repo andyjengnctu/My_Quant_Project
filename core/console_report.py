@@ -100,7 +100,7 @@ def render_menu_item(index: int, label: object, *, default: bool = False) -> str
         raise ValueError("menu index不得小於0")
     text = str(label)
     if default:
-        return f"[{number} ] {text}  (Enter)"
+        return f"[{number}]  {text}  (Enter)"
     return f"[{number}]  {text}"
 
 

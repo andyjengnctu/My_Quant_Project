@@ -8004,3 +8004,18 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 本輪只改UI／validator／文件，不改Dataset、Label、MR-12B／MR-13A、Target、architecture、loss、seed、Selection／Forward period、strategy accounting、scientific fingerprint或既有robustness結果；不新增／修改任何MR／DL／SR identity。
 - 依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`；formal double check由使用者本機正式入口完成。
 
+## 2026-08-11 — Formal bundle 閉環：menu renderer 後的 Audit／Trade-path source-string fixture 修正
+
+- 本地 formal summary：quick gate PASS、chain checks PASS、ml smoke PASS；consistency `5378` checks中只剩2個synthetic FAIL，分別為`project_audit_entry_and_breakout_quality_facade_share_one_config_driven_backend`與`trade_path_menu_completes_model_artifacts_and_strategy_comparison_stays_separate`。Meta quality只剩`coverage_synthetic_suite_runs_successfully`，屬這兩個consistency FAIL的次生結果；coverage line／branch與performance summary本身仍通過。
+- Root cause均為上一輪正式選單改用project-wide `render_menu_item()`後的stale source-string fixture：Audit case仍搜尋舊`[4]       Audit／診斷`固定spacing；Trade-path case仍在`application.py` source內搜尋渲染後的`[1 ] ... (Enter)`／`[2]`／`[3]`字串。Production正式入口、工作類型、config-driven backend與模型／策略分離語意沒有回歸。
+- 修正新增共用AST source helper，直接驗證`render_menu_item(index, label, default)`呼叫語意；Trade-path仍要求三個模型研究工作類型、builder command、模型流程不得執行策略績效比較且legacy strategy gate不得進正式模型選單；Audit仍要求Research主選單保留Audit入口、模型research facade不混入Audit、active module與enabled audit backend共用同一config-driven服務。Renderer實際spacing／Enter字樣只由`core/console_report.py`與其專屬CLI contract驗證，不再由不相干synthetic重複硬編。
+- 本輪只修validator與必要文件，不修改Dataset、Label、MR-12B／MR-13A、Target、architecture、loss、seed、Selection／Forward期間、Strategy Compare、Audit backend、trade-path runtime、scientific fingerprint或既有robustness結果；不新增／修改任何MR／DL／SR identity。
+
+## 2026-08-11 — Enter預設列格式最終統一為 `[1]  ...  (Enter)`
+
+- 使用者進一步修正上一輪的預設列格式：所有「Enter 等價於數字1」的正式互動選單，最終統一顯示為`[1]  項目  (Enter)`；不再使用`[1 ] 項目  (Enter)`。
+- 實作只修改project-wide `core.console_report.render_menu_item()`的default renderer，因此Research、Strategy Compare、Audit、Binary／Continuous模型研究與已接共用renderer的optimizer提示會同源同步；非default列仍維持`[2]  項目`。
+- `doc/CMD.md`、trade-path前置提示與direct renderer synthetic expectation同步更新；Enter本來不等於數字1的Optimizer Mode／Study Mode仍不改語意。
+- 本輪不修改Dataset、Label、MR-12B／MR-13A、Target、architecture、loss、seed、Selection／Forward期間、strategy accounting、scientific fingerprint或既有robustness結果；不新增／修改MR／DL／SR identity。
+- 依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`；formal double check由使用者本機正式入口完成。
+

@@ -59,7 +59,7 @@ python apps/workbench.py
 
 研究工作統一由`apps/research.py`進入；主選單只選工作類型。模型標的由`config/research.py`指定，Audit module由`config/audit.py`指定，策略比較arms／contrasts由`config/strategy_compare.py`指定。`tools/filters/breakout_quality/`的直接CLI只保留開發與歷史研究用途，不保留Audit或strategy-compare legacy相容入口。
 
-互動式 PowerShell／Terminal 直接執行下列指令會開啟 Research 單一正式入口；主選單只選工作類型。選擇 `[1 ] 模型訓練  (Enter)` 後，才進入 `config/research.py` 指定 active model 的既有模型選單。Dataset、單獨 train、export及歷史版本化research audit仍可透過 `python apps/research.py model <command>` 執行。目前 Binary 模型研究固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由「策略組合比較」工作類型依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
+互動式 PowerShell／Terminal 直接執行下列指令會開啟 Research 單一正式入口；主選單只選工作類型。選擇 `[1]  模型訓練  (Enter)` 後，才進入 `config/research.py` 指定 active model 的既有模型選單。Dataset、單獨 train、export及歷史版本化research audit仍可透過 `python apps/research.py model <command>` 執行。目前 Binary 模型研究固定研究 `a2_realized_trade_path_v1`：只建立新Label、訓練並顯示模型預測報表；策略經濟效果由「策略組合比較」工作類型依`config/strategy_compare.py`執行；舊Label／A2 no-DL專用Gate只保留研究CLI。continuous workflow仍維持模型與策略分開。
 
 ```bash
 python apps/research.py
@@ -69,7 +69,7 @@ python apps/research.py
 ====================================================================================================
  Research
 ====================================================================================================
-[1 ] 模型訓練  (Enter)
+[1]  模型訓練  (Enter)
 [2]  策略參數最佳化
 [3]  策略組合比較
 [4]  Audit／診斷
@@ -91,7 +91,7 @@ python apps/research.py compare robustness latest
 
 ```text
 === Audit／診斷 ===
-[1 ] 執行目前 Audit 設定  (Enter)
+[1]  執行目前 Audit 設定  (Enter)
 [2]  查看 Audit 設定、工件與預計動作
 [3]  查看最近 Audit 結果
 [0]  返回
@@ -123,7 +123,7 @@ python apps/research.py compare forward_oos status
 
 ```text
 === 策略組合比較 ===
-[1 ] Selection PIT 策略比較  (Enter)
+[1]  Selection PIT 策略比較  (Enter)
 [2]  Forward-OOS 策略比較
 [3]  Selection PIT Multi-seed robustness
 [4]  Forward-OOS Multi-seed robustness
@@ -134,7 +134,7 @@ python apps/research.py compare forward_oos status
 進入任一階段後，第二層選單固定為：
 
 ```text
-[1 ] 執行目前比較設定  (Enter)
+[1]  執行目前比較設定  (Enter)
 [2]  查看設定、工件與預計動作
 [0]  返回
 ```
@@ -143,12 +143,12 @@ python apps/research.py compare forward_oos status
 
 目前比較profiles、比較對象、參數來源、DL來源、差異比較與前置建立政策全部條列於`config/strategy_compare.py`；每個profile用`arm_ids`／`contrast_ids`決定當階段啟用集合，arm／contrast定義本身仍可保留歷史項目，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。同一param source／rule policy使用一個共用DL-off基準，可同時掛多個DL-on模型；各DL-on arm可獨立開關，執行引擎會逐一與同一基準形成controlled pair，並驗證重複基準結果一致。選擇執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；對可由既有正式工件確定產生的缺件，依config自動重用、重建或接續，包括既有模型的forward-OOS scores與比較所需的策略參數。App不建立Label、不選模型、不訓練模型權重；Selection PIT若只缺top-level scores／manifest／audit但既有fold score/checkpoint identity仍合法，可自動以checkpoint-only方式重建推論工件並執行Audit，任何fold若需要訓練則立即停止；缺少模型/checkpoint等上游真理工件時才導向模型正式入口。執行前會由全部啟用DL runtime工件解析共同比較期間，先驗證Full／Min／Min-DL rolling active params是否完整覆蓋；Min ROOS固定使用forward P2 DL-off-trained工件，不得使用只涵蓋Selection的歷史Label teacher params。若forward scores建立後才得知正式期間，App會重新規劃下一波前置並自動建立／接續缺少或過期的P2／P3，全部READY後才開始第一組replay。DL-aware參數必須與訓練時相同的DL版本配對：TP1-trained只允許TP1-on，A9-trained只允許A9-on；跨版本runtime組合在config驗證階段直接拒絕。A9 P3使用獨立`p3_dl_on_trained/A9/`工件，不覆蓋TP1 P3。console／報表採簡稱`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`。報表的`同參數DL選擇R`只在相同`param_source`與`rule_policy`的arms間具共同attribution基準；跨參數contrast的`Δ同參數DL選擇R`固定顯示`-`。預設`reuse_completed_results=True`與`reuse_shared_baseline=True`：選單的執行計畫會把replay identity與目前工件SHA完全一致的既有arm顯示為`REUSE`，只有新／失效arm顯示`RUN`；同一param/rules群組的DL-off baseline最多執行一次。例如新增MR-12B的C19/C20時，若C3/C17/C18已有compatible正式結果，計畫應直接重用C3/C17/C18，只執行C19/C20，再組合全部contrasts。修改contrast或報表說明不會使cache失效；param、model、manifest、forward score、期間或runtime contract任何一項改變都必須重新replay。
 
-當目前 workflow 是 Binary classification 時，選擇 `[1 ] 模型研究與驗證  (Enter)` 後會顯示：
+當目前 workflow 是 Binary classification 時，選擇 `[1]  模型研究與驗證  (Enter)` 後會顯示：
 
 ```text
 === Binary DL Filter 模型研究與驗證 ===
 Active Research Label：a2_realized_trade_path_v1
-[1 ] 建立新Label → 重新訓練 → 模型預測報表  (Enter)
+[1]  建立新Label → 重新訓練 → 模型預測報表  (Enter)
 [2]  使用既有模型 → 更新Scores → 模型預測報表
 [3]  查看Label與事件生命週期摘要
 [0]  返回
@@ -175,7 +175,7 @@ MR-13A Stage 1 forward-OOS與Stage 2 Selection PIT模型Gate均已通過。Stage
 
 新Label以一個原始breakout event的完整生命週期為單位。初次`Low > orig_limit`只把事件留在pending／continuation，不下REJECT；後續回到原始limit成交後，直接重用正式initial stop、trailing、indicator exit與費稅帳務，只有終局`realized_net_r > 0`標PASS，其餘已成交完整交易標REJECT。新setup覆蓋舊延續訊號、shadow completion／invalidation、資料結尾仍未成交或成交後尚未結算者標INVALID並排除Binary訓練。同一ticker/date group只讓當日A2 active `high_len`事件取得有效Label，其餘high_len rows保持INVALID。Feature snapshot固定原始signal date，不因延續等待日重建。
 
-選單`[1 ] ...  (Enter)`會自動執行等價於：
+選單`[1]  ...  (Enter)`會自動執行等價於：
 
 ```powershell
 python apps/research.py model build-trade-path-labels `
@@ -268,7 +268,7 @@ outputs/filters/breakout_quality/<filter_id>/<architecture>/<profile>/point_in_t
 python apps/research.py compare
 ```
 
-先選`[2] 查看設定、工件與預計動作`，再選`[1 ] 執行目前比較設定  (Enter)`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
+先選`[2] 查看設定、工件與預計動作`，再選`[1]  執行目前比較設定  (Enter)`並按Enter確認一次。`status`／`run`子命令只供自動化與非互動環境相容，不作一般使用者主要操作流程。
 
 目前策略研究比較聚焦`C3 Min ROOS`、`C16 Min ROOS: All-event Continuous capital-preserving`與`C17 Min ROOS: All-event Continuous max-DL constrained basket`。C16保留既有capital-preserving heuristic作同source selector comparator；C17固定相同`DL-CONT12A / MR-12A` frozen OOS score與Min ROOS參數，Min ROOS只提供每日K筆預留單數與exact reserved-capital floor，stock membership先由DL score Top-K決定，不合法時才作deterministic minimum-repair；basket內執行順序仍沿用Min ROOS rank，且正式action只允許K筆盤前預留單。C17不設score threshold、不加Min ROOS／DL混合權重、不使用Future Target。若MR-12A model／manifest／report／OOS score缺失或identity/hash不一致，正式策略比較顯示`BLOCKED`而不得自動訓練模型。正式比較設定只重跑C3／C16／C17，核心contrast為C17-C16與C17-C3；C12/C14/C15保留歷史對照但目前disabled。
 

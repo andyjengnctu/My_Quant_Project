@@ -20,6 +20,49 @@ import pandas as pd
 
 from tools.audit.catalog import get_domain_cli_commands
 
+
+def _source_has_render_menu_item_call(
+    source: str,
+    *,
+    index: int,
+    label: str,
+    default: bool = False,
+) -> bool:
+    """Return whether source calls the shared menu renderer with this semantic row."""
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id != "render_menu_item":
+            continue
+        if len(node.args) < 2:
+            continue
+        try:
+            actual_index = ast.literal_eval(node.args[0])
+            actual_label = ast.literal_eval(node.args[1])
+        except (ValueError, TypeError):
+            continue
+        if actual_index != int(index) or actual_label != str(label):
+            continue
+        actual_default = False
+        for keyword in node.keywords:
+            if keyword.arg != "default":
+                continue
+            try:
+                actual_default = bool(ast.literal_eval(keyword.value))
+            except (ValueError, TypeError):
+                actual_default = False
+            break
+        if actual_default == bool(default):
+            return True
+    return False
+
+
 def _registered_breakout_quality_audit_module(command: str) -> str | None:
     entry = get_domain_cli_commands("breakout_quality").get(str(command))
     return None if entry is None else str(entry.module)
@@ -17270,12 +17313,25 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         case_id,
         "trade_path_menu_completes_model_artifacts_and_strategy_comparison_stays_separate",
         True,
-        all(
+        _source_has_render_menu_item_call(
+            app_source,
+            index=1,
+            label="建立新Label → 重新訓練 → 模型預測報表",
+            default=True,
+        )
+        and _source_has_render_menu_item_call(
+            app_source,
+            index=2,
+            label="使用既有模型 → 更新Scores → 模型預測報表",
+        )
+        and _source_has_render_menu_item_call(
+            app_source,
+            index=3,
+            label="查看Label與事件生命週期摘要",
+        )
+        and all(
             token in app_source
             for token in (
-                "[1 ] 建立新Label → 重新訓練 → 模型預測報表  (Enter)",
-                "[2]  使用既有模型 → 更新Scores → 模型預測報表",
-                "[3]  查看Label與事件生命週期摘要",
                 '"build-trade-path-labels"',
                 "本流程不執行策略績效比較",
                 "apps/research.py compare",
@@ -21900,7 +21956,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         True,
         "get_domain_cli_commands" in app_source
         and "Audit／診斷" not in app_source[app_source.find("def _interactive_model_research"):app_source.find("def run_model_training_menu")]
-        and "[4]       Audit／診斷" in project_audit_source
+        and _source_has_render_menu_item_call(
+            project_audit_source,
+            index=4,
+            label="Audit／診斷",
+        )
         and "get_active_audit_module_id" in project_audit_source
         and "get_audit_module_ids" not in project_audit_source
         and "run_enabled_audits" in project_audit_source,

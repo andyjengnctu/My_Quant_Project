@@ -351,7 +351,7 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
-            and "[1 ] 訓練目前模型 → forward-OOS模型報表  (Enter)" in interactive_text
+            and "[1]  訓練目前模型 → forward-OOS模型報表  (Enter)" in interactive_text
             and "[2]  建立／更新 Selection PIT Scores → PIT模型驗證" in interactive_text
             and "[3]  查看目前Workflow與工件狀態" in interactive_text
             and f"[4]  {configured_ranker_menu_label}" in interactive_text
@@ -498,7 +498,7 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             no_pit_rc,
             "[2]  建立／更新 Selection PIT Scores → PIT模型驗證" in no_pit_text,
-            "[1 ] 訓練目前模型 → forward-OOS模型報表  (Enter)" in no_pit_text,
+            "[1]  訓練目前模型 → forward-OOS模型報表  (Enter)" in no_pit_text,
         ),
     )
 
@@ -863,7 +863,7 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "default_first_menu_item_uses_shared_enter_suffix_format",
-        "[1 ] synthetic  (Enter)",
+        "[1]  synthetic  (Enter)",
         menu_renderer(1, "synthetic", default=True),
     )
     add_check(
