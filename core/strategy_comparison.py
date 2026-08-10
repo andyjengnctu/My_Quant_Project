@@ -169,6 +169,7 @@ class StrategyMultiSeedRobustnessSettings:
     keep_checkpoints: bool
     keep_scores: bool
     keep_replay_details: bool
+    romd_reference_baselines: Mapping[str, Mapping[str, str]]
     output_root: str
     model_work_root: str
 
@@ -184,6 +185,10 @@ class StrategyMultiSeedRobustnessSettings:
             "keep_checkpoints": bool(self.keep_checkpoints),
             "keep_scores": bool(self.keep_scores),
             "keep_replay_details": bool(self.keep_replay_details),
+            "romd_reference_baselines": {
+                str(key): dict(value)
+                for key, value in self.romd_reference_baselines.items()
+            },
             "output_root": self.output_root,
             "model_work_root": self.model_work_root,
         }
@@ -202,6 +207,20 @@ def validate_strategy_multi_seed_robustness_settings(
         raise ValueError("目前multi-seed robustness單GPU training worker固定為1")
     if int(settings.cpu_replay_workers) < 1:
         raise ValueError("multi-seed robustness cpu_replay_workers必須>=1")
+    required_reference_keys = {"min", "full"}
+    configured_reference_keys = {
+        str(key).strip() for key in settings.romd_reference_baselines
+    }
+    if configured_reference_keys != required_reference_keys:
+        raise ValueError(
+            "multi-seed robustness romd_reference_baselines必須定義min/full兩個語意基準"
+        )
+    for key, raw in settings.romd_reference_baselines.items():
+        spec = dict(raw or {})
+        if not str(spec.get("param_source") or "").strip():
+            raise ValueError(f"multi-seed robustness {key} reference缺少param_source")
+        if not str(spec.get("rule_policy") or "").strip():
+            raise ValueError(f"multi-seed robustness {key} reference缺少rule_policy")
     _validate_relative_path(settings.output_root, field_name="multi_seed.output_root")
     _validate_relative_path(settings.model_work_root, field_name="multi_seed.model_work_root")
 

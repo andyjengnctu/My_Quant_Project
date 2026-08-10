@@ -17655,48 +17655,44 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "selection_full_roos_training" in param_service_source
         and {item["profile_id"] for item in strategy_config.get_strategy_comparison_profiles()}
         == set(strategy_config.STRATEGY_COMPARE_PROFILES)
-        and {
-            arm.arm_id
-            for arm in strategy_config.get_strategy_comparison_settings("selection_pit").enabled_arms
-        } == set(strategy_config.STRATEGY_COMPARE_PROFILES["selection_pit"]["arm_ids"])
-        and {
-            arm.arm_id
-            for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
-        } == set(strategy_config.STRATEGY_COMPARE_PROFILES["forward_oos"]["arm_ids"])
-        and {
-            item.contrast_id
-            for item in strategy_config.get_strategy_comparison_settings("selection_pit").enabled_contrasts
-        } == set(strategy_config.STRATEGY_COMPARE_PROFILES["selection_pit"]["contrast_ids"])
-        and {
-            item.contrast_id
-            for item in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_contrasts
-        } == set(strategy_config.STRATEGY_COMPARE_PROFILES["forward_oos"]["contrast_ids"])
-        and strategy_config.get_strategy_comparison_settings("selection_pit").output_root
-        == "outputs/strategy_compare/selection_pit"
-        and strategy_config.get_strategy_comparison_settings("forward_oos").output_root
-        == "outputs/strategy_compare/forward_oos"
-        and strategy_config.get_strategy_comparison_settings("selection_pit").reuse_output_roots
-        == ("outputs/strategy_compare",)
-        and strategy_config.get_strategy_comparison_settings("forward_oos").reuse_output_roots
-        == ("outputs/strategy_compare",)
+        and all(
+            {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings(profile_id).enabled_arms}
+            == set(raw_profile["arm_ids"])
+            and {
+                item.contrast_id
+                for item in strategy_config.get_strategy_comparison_settings(profile_id).enabled_contrasts
+            } == set(raw_profile["contrast_ids"])
+            and strategy_config.get_strategy_comparison_settings(profile_id).output_root
+            == str(raw_profile["output_root"])
+            and strategy_config.get_strategy_comparison_settings(profile_id).reuse_output_roots
+            == tuple(raw_profile.get("reuse_output_roots", ()))
+            for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
+        )
         and "_comparison_runs_roots" in orchestration_source,
     )
 
-    selection_display_names = tuple(
-        arm.name
-        for arm in strategy_config.get_strategy_comparison_settings("selection_pit").enabled_arms
-    )
-    forward_display_names = tuple(
-        arm.name
-        for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
-    )
+    display_alignment_groups = {}
+    for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items():
+        group = str(raw_profile.get("display_alignment_group") or "").strip()
+        if not group:
+            continue
+        display_alignment_groups.setdefault(group, []).append(
+            tuple(
+                arm.name
+                for arm in strategy_config.get_strategy_comparison_settings(profile_id).enabled_arms
+            )
+        )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "selection_and_forward_core_arm_display_names_stay_aligned",
+        "configured_core_arm_display_alignment_groups_stay_aligned",
         True,
-        bool(selection_display_names)
-        and selection_display_names == forward_display_names
-        and len(set(selection_display_names)) == len(selection_display_names),
+        bool(display_alignment_groups)
+        and all(
+            bool(group_names)
+            and all(names == group_names[0] for names in group_names)
+            and len(set(group_names[0])) == len(group_names[0])
+            for group_names in display_alignment_groups.values()
+        ),
     )
 
     robustness_path = (
@@ -17715,34 +17711,53 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         arm for arm in robustness_profile.enabled_arms
         if arm.robustness_role == "stochastic"
     )
+    reference_specs = dict(robustness_settings.romd_reference_baselines)
+    reference_matches = {
+        key: tuple(
+            arm for arm in robustness_fixed
+            if arm.param_source == spec["param_source"]
+            and arm.rule_policy == spec["rule_policy"]
+        )
+        for key, spec in reference_specs.items()
+    }
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_robustness_is_strategy_compare_config_driven_without_second_arm_id_list",
         True,
         robustness_path.is_file()
-        and robustness_settings.profile_id == "forward_oos"
+        and robustness_settings.profile_id in strategy_config.STRATEGY_COMPARE_PROFILES
         and robustness_settings.seed_count >= 2
         and robustness_settings.gpu_train_workers == 1
         and robustness_settings.cpu_replay_workers >= 1
-        and {arm.name for arm in robustness_fixed} == {"Full ROOS", "Min ROOS"}
-        and {arm.name for arm in robustness_stochastic} == {"Min MR-12B", "Min MR-13A"}
+        and bool(robustness_fixed)
+        and bool(robustness_stochastic)
         and all(not arm.dl_enabled for arm in robustness_fixed)
-        and all(arm.dl_enabled for arm in robustness_stochastic)
+        and all(
+            arm.dl_enabled
+            and robustness_profile.dl_sources[str(arm.dl_id)].score_source
+            == "continuous_ranker_oos"
+            for arm in robustness_stochastic
+        )
+        and set(reference_matches) == {"min", "full"}
+        and all(len(matches) == 1 for matches in reference_matches.values())
+        and "romd_reference_baselines" in config_source
         and "robustness_role" in config_source
         and "MULTI_SEED_ROBUSTNESS_ARM_IDS" not in config_source
-        and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"")),
+        and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"", "\"Min ROOS\"", "\"Full ROOS\"")),
     )
 
     from filters.breakout_quality import strategy_multi_seed_robustness as robustness_module
 
+    configured_seed_count = int(robustness_settings.seed_count)
+    configured_generator_seed = int(robustness_settings.seed_generator_seed)
     seeds_a = robustness_module.resolve_multi_seed_values(
-        seed_count=8, generator_seed=20260810
+        seed_count=configured_seed_count, generator_seed=configured_generator_seed
     )
     seeds_b = robustness_module.resolve_multi_seed_values(
-        seed_count=8, generator_seed=20260810
+        seed_count=configured_seed_count, generator_seed=configured_generator_seed
     )
     seeds_c = robustness_module.resolve_multi_seed_values(
-        seed_count=8, generator_seed=20260811
+        seed_count=configured_seed_count, generator_seed=configured_generator_seed + 1
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -17750,7 +17765,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         seeds_a == seeds_b
         and seeds_a != seeds_c
-        and len(seeds_a) == len(set(seeds_a)) == 8
+        and len(seeds_a) == len(set(seeds_a)) == configured_seed_count
         and all(seed > 0 for seed in seeds_a)
         and "best_seed =" not in robustness_source.lower()
         and "selected_best_seed" not in robustness_source.lower(),
@@ -17772,20 +17787,25 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "direct_selection_r": 1.0,
         }
 
+    min_reference_arm = reference_matches["min"][0]
+    full_reference_arm = reference_matches["full"][0]
     fixed_results = {}
-    fixed_values = {"Full ROOS": (7.0, 120.0), "Min ROOS": (6.0, 90.0)}
-    for arm in robustness_fixed:
-        romd, total_return = fixed_values[arm.name]
+    for fixed_order, arm in enumerate(robustness_fixed, start=1):
+        if arm.arm_id == full_reference_arm.arm_id:
+            romd, total_return = 7.0, 120.0
+        elif arm.arm_id == min_reference_arm.arm_id:
+            romd, total_return = 6.0, 90.0
+        else:
+            romd, total_return = 5.0 + fixed_order / 10.0, 80.0 + fixed_order
         fixed_results[arm.arm_id] = {
             "metrics": _robustness_metrics(romd, total_return, 40.0)
         }
     synthetic_seed_rows = []
-    synthetic_values = {
-        "Min MR-12B": (5.0, 7.0),
-        "Min MR-13A": (8.0, 10.0),
-    }
+    stochastic_expected_mean = {}
     for arm_order, arm in enumerate(robustness_stochastic, start=1):
-        low, high = synthetic_values[arm.name]
+        low = 5.0 + 3.0 * (arm_order - 1)
+        high = low + 2.0
+        stochastic_expected_mean[arm.arm_id] = (low + high) / 2.0
         for seed_order, (seed, romd) in enumerate(((101, low), (202, high)), start=1):
             synthetic_seed_rows.append({
                 "arm_id": arm.arm_id,
@@ -17812,28 +17832,64 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         fixed_results=fixed_results,
         seed_frame=synthetic_frame,
     )
-    mean_by_name = {row["name"]: row for row in synthetic_summary["mean_strategy_metrics"]}
-    romd_by_name = {row["name"]: row for row in synthetic_summary["romd_statistics"]}
+    mean_by_arm = {row["arm_id"]: row for row in synthetic_summary["mean_strategy_metrics"]}
+    romd_by_arm = {row["arm_id"]: row for row in synthetic_summary["romd_statistics"]}
+    stochastic_distribution_ok = all(
+        math.isclose(
+            mean_by_arm[arm.arm_id]["return_over_max_drawdown"],
+            stochastic_expected_mean[arm.arm_id],
+        )
+        and math.isclose(mean_by_arm[arm.arm_id]["win_rate_pct"], 51.5)
+        and math.isclose(romd_by_arm[arm.arm_id]["median"], stochastic_expected_mean[arm.arm_id])
+        and math.isclose(
+            romd_by_arm[arm.arm_id]["min"],
+            stochastic_expected_mean[arm.arm_id] - 1.0,
+        )
+        and math.isclose(
+            romd_by_arm[arm.arm_id]["max"],
+            stochastic_expected_mean[arm.arm_id] + 1.0,
+        )
+        for arm in robustness_stochastic
+    )
+    distribution_compare = synthetic_summary["romd_distribution_comparison"]
+    distribution_compare_ok = (
+        distribution_compare is None
+        if len(robustness_stochastic) != 2
+        else isinstance(distribution_compare, dict)
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_fixed_baselines",
         True,
-        math.isclose(mean_by_name["Full ROOS"]["return_over_max_drawdown"], 7.0)
-        and math.isclose(mean_by_name["Min ROOS"]["return_over_max_drawdown"], 6.0)
-        and math.isclose(mean_by_name["Min MR-12B"]["return_over_max_drawdown"], 6.0)
-        and math.isclose(mean_by_name["Min MR-12B"]["win_rate_pct"], 51.5)
-        and math.isclose(mean_by_name["Min MR-13A"]["return_over_max_drawdown"], 9.0)
-        and romd_by_name["Full ROOS"]["std"] is None
-        and romd_by_name["Min ROOS"]["std"] is None
-        and math.isclose(romd_by_name["Min MR-12B"]["median"], 6.0)
-        and math.isclose(romd_by_name["Min MR-12B"]["min"], 5.0)
-        and math.isclose(romd_by_name["Min MR-12B"]["max"], 7.0)
-        and romd_by_name["Min MR-13A"]["beats_min_count"] == 2
-        and romd_by_name["Min MR-13A"]["beats_full_count"] == 2
-        and math.isclose(
-            synthetic_summary["romd_distribution_comparison"]["pairwise_left_gt_right_probability"],
-            0.0,
-        ),
+        math.isclose(mean_by_arm[full_reference_arm.arm_id]["return_over_max_drawdown"], 7.0)
+        and math.isclose(mean_by_arm[min_reference_arm.arm_id]["return_over_max_drawdown"], 6.0)
+        and romd_by_arm[full_reference_arm.arm_id]["std"] is None
+        and romd_by_arm[min_reference_arm.arm_id]["std"] is None
+        and stochastic_distribution_ok
+        and all(
+            romd_by_arm[arm.arm_id]["beats_min_count"]
+            == sum(
+                value > 6.0
+                for value in (
+                    stochastic_expected_mean[arm.arm_id] - 1.0,
+                    stochastic_expected_mean[arm.arm_id] + 1.0,
+                )
+            )
+            and romd_by_arm[arm.arm_id]["beats_full_count"]
+            == sum(
+                value > 7.0
+                for value in (
+                    stochastic_expected_mean[arm.arm_id] - 1.0,
+                    stochastic_expected_mean[arm.arm_id] + 1.0,
+                )
+            )
+            for arm in robustness_stochastic
+        )
+        and synthetic_summary["contract"]["romd_reference_baselines"]["min"]["arm_id"]
+        == min_reference_arm.arm_id
+        and synthetic_summary["contract"]["romd_reference_baselines"]["full"]["arm_id"]
+        == full_reference_arm.arm_id
+        and distribution_compare_ok,
     )
 
     add_check(

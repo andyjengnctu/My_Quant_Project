@@ -50,6 +50,7 @@ STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
         "description": "2014～2020 point-in-time策略轉化Gate；核心比較固定為Full／Min baseline與Min MR-12B／MR-13A。",
+        "display_alignment_group": "core_strategy_compare",
         "start_date": "2014-01-01",
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
@@ -63,6 +64,7 @@ STRATEGY_COMPARE_PROFILES = {
     "forward_oos": {
         "label": "Forward-OOS 策略比較",
         "description": "2021+ frozen Forward-OOS策略Gate；核心比較固定為Full／Min baseline與Min MR-12B／MR-13A。",
+        "display_alignment_group": "core_strategy_compare",
         "start_date": None,
         "end_date": None,
         "output_root": "outputs/strategy_compare/forward_oos",
@@ -91,6 +93,11 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS = {
     "keep_checkpoints": False,
     "keep_scores": False,
     "keep_replay_details": False,
+    # RoMD勝基準統計以策略語意解析，不依賴arm ID或顯示名稱。
+    "romd_reference_baselines": {
+        "min": {"param_source": "min_roos", "rule_policy": "all_off"},
+        "full": {"param_source": "full_roos", "rule_policy": "formal"},
+    },
     "output_root": "outputs/strategy_compare/robustness",
     "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
 }
@@ -926,6 +933,13 @@ def get_strategy_multi_seed_robustness_settings() -> StrategyMultiSeedRobustness
         keep_checkpoints=bool(raw.get("keep_checkpoints", False)),
         keep_scores=bool(raw.get("keep_scores", False)),
         keep_replay_details=bool(raw.get("keep_replay_details", False)),
+        romd_reference_baselines={
+            str(key).strip(): {
+                "param_source": str(dict(value or {}).get("param_source") or "").strip(),
+                "rule_policy": str(dict(value or {}).get("rule_policy") or "").strip(),
+            }
+            for key, value in dict(raw.get("romd_reference_baselines") or {}).items()
+        },
         output_root=str(raw.get("output_root") or "").strip(),
         model_work_root=str(raw.get("model_work_root") or "").strip(),
     )
@@ -945,6 +959,18 @@ def get_strategy_multi_seed_robustness_settings() -> StrategyMultiSeedRobustness
         if not arm.dl_id or profile_settings.dl_sources[arm.dl_id].score_source != "continuous_ranker_oos":
             raise ValueError(
                 f"multi-seed stochastic arm必須使用continuous_ranker_oos source: {arm.arm_id}"
+            )
+    for reference_key, spec in settings.romd_reference_baselines.items():
+        matches = [
+            arm for arm in fixed
+            if arm.param_source == spec["param_source"]
+            and arm.rule_policy == spec["rule_policy"]
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "multi-seed RoMD reference必須唯一對應一個fixed baseline: "
+                f"reference={reference_key}, param_source={spec['param_source']}, "
+                f"rule_policy={spec['rule_policy']}, matches={len(matches)}"
             )
     return settings
 

@@ -7769,3 +7769,48 @@ Forward-OOS模型訓練／model Gate亦沒有把OOS帶入gradient、epoch select
 - T294 daily Forward warm-cache效能契約維持：candidate lookup不重新掃描完整score index。
 - 本輪不改MR／DL／SR ID、不改Selection PIT／Forward score-universe scientific semantics、不產生新研究結果。
 
+
+## 2026-08-10 — Post-fix Forward-OOS controlled replay完成：MR-12B維持anchor、MR-13A未泛化
+
+### 工作基準與結果來源
+
+- 程式基準：`test-branch-1_20260810_221241_c0b9a19.zip`；SHA256 `d27645f9c3a9604d56aa32ff49734d55da2836859b243e99e1b03727ea89f4dc`。
+- Selection current run：`outputs/strategy_compare/selection_pit/runs/20260810_221455_C32-C23-C25-C28_2e37f985168a/`。
+- Forward current run：`outputs/strategy_compare/forward_oos/runs/20260810_221923_C1-C3-C20-C29_b0c6ee3b0b32/`。
+- Forward score已先依前一輪修正重建為`feature_history_only` inference universe；本次共同策略期間完整延伸至`2026-03-02`，不再由future 40-bar Target完整性控制score presence。因此本次C20/C29結果是post-fix current evidence，舊2021～2025-12-22結果只保留PRE_FIX歷史。
+
+### Selection PIT固定結果
+
+- C32 Full ROOS：Return `132.25%`、MDD `15.85%`、RoMD `8.34`、Annual `12.80%`、EV `0.71R`。
+- C23 Min ROOS：`107.98% / 20.57% / 5.25 / 11.03% / 0.42R`。
+- C25 Min MR-12B：`101.55% / 19.66% / 5.17 / 10.53% / 0.52R`，same-param selection R `+26.19R`。
+- C28 Min MR-13A：`151.88% / 18.86% / 8.05 / 14.11% / 0.71R`，same-param selection R `+109.91R`。
+- C28-C25純DL source：Return `+50.33pp`、MDD `-0.80pp`、RoMD `+2.89`、Annual `+3.58pp`、EV `+0.19R`、selection R `+83.72R`。Selection仍明確支持MR-13A daily source。
+
+### Forward-OOS post-fix結果
+
+共同期間`2021-01-01～2026-03-02`：
+
+- C1 Full ROOS：Return `129.08%`、MDD `17.41%`、RoMD `7.42`、Annual `17.43%`、EV `0.53R`。
+- C3 Min ROOS：`101.60% / 13.12% / 7.74 / 14.56% / 1.02R`。
+- C20 Min MR-12B：`190.26% / 18.75% / 10.15 / 22.95% / 1.17R`，same-param selection R `+35.93R`。
+- C29 Min MR-13A：`83.81% / 15.71% / 5.34 / 12.53% / 0.52R`，same-param selection R `-183.42R`。
+- C20-C3：Return `+88.66pp`、MDD `+5.62pp`、RoMD `+2.41`、Annual `+8.39pp`、EV `+0.15R`、selection R `+35.93R`。
+- C29-C3：Return `-17.79pp`、MDD `+2.58pp`、RoMD `-2.41`、Annual `-2.03pp`、EV `-0.51R`、selection R `-183.42R`。
+- C29-C20純DL source：Return `-106.45pp`、MDD `-3.04pp`、RoMD `-4.81`、Annual `-10.42pp`、EV `-0.65R`、selection R `-219.35R`。
+
+### 判讀
+
+1. MR-13A的Selection優勢在post-fix Forward策略層完全反轉；因score universe已修正並跑到2026-03-02，此反轉不得再歸因於舊future-target coverage bug。
+2. C20與C29使用相同current Min ROOS、all-off rules、K/R0與frozen feasible-ascent。C29 selector診斷仍達`230`個Max-DL介入日、`217`個repair日、`20`個feasible-ascent改善日、`230`個1-swap local optimum日且resource/K violation為0；因此目前主要失敗點是**MR-13A score對實際策略邊界選擇的Forward泛化**，不是selector hard-feasibility或資源契約。
+3. C29相對C3的勝率由`40.70%`升至`43.87%`，但Payoff由`3.17`降至`2.45`、EV由`1.02R`降至`0.52R`，且same-param selection R為`-183.42R`。這支持「daily score能提高部分命中率，但把basket membership推向較差的R/payoff tail」的診斷方向。
+4. MR-12B/C20在相同post-fix期間仍有正selection R與更高RoMD，因此維持current Forward strategy anchor；MR-13A標記`FORWARD_OOS_STRATEGY_FAIL / NOT_PROMOTED`，但daily-universal方向本身仍可作後續研究，不回退或覆寫MR-13A identity。
+5. 下一個立即可執行步驟先跑既有`Multiple-seed robustness`，判斷C20/C29差異是systematic model-semantic差異或seed variance；不得挑best seed或做ensemble。若MR-13A跨seed仍普遍負selection R／低RoMD，再做changed-order／swap-boundary attribution與Selection→Forward分布漂移診斷，才建立下一個新的`MR-*`假設。
+
+### 本輪完整檢查追加修正：Robustness摘要reference改為config-driven
+
+- 發現`strategy_multi_seed_robustness.py`計算RoMD「勝Min／勝Full」時以顯示名稱字串`Min ROOS`／`Full ROOS`尋找fixed baseline。這違反專案「摘要對象由config／registry／active settings驅動」契約；改名或切換profile時可能得到錯誤reference。
+- `config/strategy_compare.py`的`STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS`新增`romd_reference_baselines`，以`param_source + rule_policy`描述Min／Full語意reference，不另列active C-ID，也不依賴display name。
+- `StrategyMultiSeedRobustnessSettings`新增typed mapping與唯一匹配validator；robustness contract保存resolved reference arm identity，summary只依contract的arm_id取baseline。Robustness schema bump `1 → 2`，只影響尚未產生結果的robustness fingerprint，不影響Selection／Forward pair cache或策略回放語意。
+- synthetic contract同步改為讀取目前config的profile、seed count／generator seed、arm names與reference semantics，不再把`forward_oos`、8 seeds或目前四個顯示名稱當成唯一合法設定。
+- Scientific identity：不新增MR／DL／SR ID，不改model、Target、loss、score、selector、K/R0、交易會計或本次C20/C29結果。

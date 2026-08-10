@@ -80,7 +80,7 @@ SUMMARY_FILENAME = "robustness_summary.json"
 SEED_RESULTS_FILENAME = "seed_results.csv"
 MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
-ROBUSTNESS_SCHEMA_VERSION = 1
+ROBUSTNESS_SCHEMA_VERSION = 2
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
     ("報酬", "total_return_pct", "%"),
@@ -211,6 +211,25 @@ def build_multi_seed_robustness_contract(
             )
         }
     training_defaults = _continuous_training_defaults_snapshot()
+    reference_baselines: dict[str, dict[str, Any]] = {}
+    for reference_key, spec in robustness.romd_reference_baselines.items():
+        matches = [
+            arm for arm in fixed
+            if arm.param_source == spec["param_source"]
+            and arm.rule_policy == spec["rule_policy"]
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "multi-seed RoMD reference無法唯一解析fixed baseline: "
+                f"reference={reference_key}, matches={len(matches)}"
+            )
+        matched = matches[0]
+        reference_baselines[str(reference_key)] = {
+            "arm_id": matched.arm_id,
+            "name": matched.name,
+            "param_source": matched.param_source,
+            "rule_policy": matched.rule_policy,
+        }
     contract = {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
         "profile_id": settings.profile_id,
@@ -226,6 +245,7 @@ def build_multi_seed_robustness_contract(
         "seed_generator_seed": int(robustness.seed_generator_seed),
         "resolved_seeds": list(seeds),
         "training_defaults": training_defaults,
+        "romd_reference_baselines": reference_baselines,
         "fixed_arms": [
             {
                 "arm_id": arm.arm_id,
@@ -549,9 +569,16 @@ def _robustness_summary(
             }
         )
 
-    fixed_by_name = {row["name"]: row for row in mean_rows if row["type"] == "Fixed"}
-    min_baseline = fixed_by_name.get("Min ROOS")
-    full_baseline = fixed_by_name.get("Full ROOS")
+    fixed_by_arm_id = {
+        row["arm_id"]: row for row in mean_rows if row["type"] == "Fixed"
+    }
+    references = dict(contract.get("romd_reference_baselines") or {})
+    min_reference = dict(references.get("min") or {})
+    full_reference = dict(references.get("full") or {})
+    min_baseline = fixed_by_arm_id.get(str(min_reference.get("arm_id") or ""))
+    full_baseline = fixed_by_arm_id.get(str(full_reference.get("arm_id") or ""))
+    if min_baseline is None or full_baseline is None:
+        raise ValueError("multi-seed summary缺少config指定的Min/Full fixed baseline")
     romd_rows: list[dict[str, Any]] = []
     for row in mean_rows:
         if row["type"] == "Fixed":
@@ -687,12 +714,15 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
             f"- P({compare['left']} > {compare['right']}) = {float(compare['pairwise_left_gt_right_probability'])*100:.2f}% "
             f"（{compare['pair_count']}組cross-seed pairs）",
         ])
+    references = dict(summary["contract"].get("romd_reference_baselines") or {})
+    min_name = str(dict(references.get("min") or {}).get("name") or "Min baseline")
+    full_name = str(dict(references.get("full") or {}).get("name") or "Full baseline")
     lines.extend([
         "",
         "## 3. 限制",
         "",
         "- resolved seeds只用於重現；報表不指定seed 42或任何best seed。",
-        "- Full ROOS／Min ROOS沒有DL訓練seed，因此以固定正式baseline值放入同一平均績效表。",
+        f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一平均績效表。",
         "- Forward-OOS已屬iterative research OOS evidence；不得用本報表挑training hyperparameter或best seed。",
         "",
     ])
