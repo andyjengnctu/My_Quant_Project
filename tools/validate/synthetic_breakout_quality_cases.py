@@ -14210,7 +14210,10 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         exact_binding_accepted = True
         try:
             _validate_audit_source_artifact(
-                source_record, expected_path=source_path, label="synthetic PIT Scores"
+                source_record,
+                expected_path=source_path,
+                label="synthetic PIT Scores",
+                project_root=Path(artifact_dir),
             )
         except ValueError:
             exact_binding_accepted = False
@@ -14218,7 +14221,10 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         stale_binding_rejected = False
         try:
             _validate_audit_source_artifact(
-                source_record, expected_path=source_path, label="synthetic PIT Scores"
+                source_record,
+                expected_path=source_path,
+                label="synthetic PIT Scores",
+                project_root=Path(artifact_dir),
             )
         except ValueError as exc:
             stale_binding_rejected = "SHA256" in str(exc)

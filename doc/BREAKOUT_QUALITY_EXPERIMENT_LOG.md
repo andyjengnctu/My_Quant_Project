@@ -7750,3 +7750,22 @@ Forward-OOS模型訓練／model Gate亦沒有把OOS帶入gradient、epoch select
 
 本輪只修Forward runtime score lookup複雜度，不改MR-12B/MR-13A模型、Forward score values、daily refresh timing、Min/Full參數、feasible-ascent、K/R0、交易會計、Selection PIT、Forward score-universe contract或Multiple-seed robustness scientific design；不新增任何MR/DL/SR ID，也不使既有pair result因identity改變而失效。重新執行C29應得到相同策略結果，只縮短wall time。
 
+## 2026-08-10 — Formal consistency synthetic caller與Forward loader一次性I/O修正
+
+### Formal bundle現象
+
+- `quick gate`、`chain checks`、`ml smoke`皆PASS；`consistency`只有1個FAIL。
+- `SYNTHETIC_SUITE`在啟動coverage synthetic時拋出`TypeError: _validate_audit_source_artifact() missing 1 required keyword-only argument: project_root`，因此synthetic case count為0。
+- `meta quality`的coverage line／branch／key-target／critical-file六個FAIL均為同一次synthetic early-abort的連帶結果，不代表新增六個runtime regression。
+
+### Root cause與修正
+
+1. `ranking_score_store._validate_audit_source_artifact()`為符合使用者可見相對路徑契約已要求`project_root`；T280的Selection PIT audit source hash synthetic仍沿用舊signature。修正為使用該fixture自己的temporary artifact root，既驗證exact hash binding，也驗證修改後source必須被SHA mismatch拒絕；runtime validator參數與fail-fast語意不放寬。
+2. 同輪全專案檢查發現`load_continuous_ranker_oos_score_table_from_path()`首次載入同一Forward score CSV/GZIP時重複呼叫reader兩次；另`load_continuous_ranker_oos_contract()`在table已保存`available_from/available_through`後仍再次掃描MultiIndex date level。兩者移除後只降低一次性I/O/O(N)成本，不改score values、daily information-date refresh、selector、pair identity或策略結果。
+
+### 驗證
+
+- `validate_breakout_quality_selection_point_in_time_score_sort_contract_case`：10 checks／0 fail。
+- T294 daily Forward warm-cache效能契約維持：candidate lookup不重新掃描完整score index。
+- 本輪不改MR／DL／SR ID、不改Selection PIT／Forward score-universe scientific semantics、不產生新研究結果。
+

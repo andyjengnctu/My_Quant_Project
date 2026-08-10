@@ -766,8 +766,12 @@ def load_continuous_ranker_oos_contract(
     )
     if table.empty:
         raise ValueError("Continuous ranker OOS score table不可為空")
-    available_from = str(table.index.get_level_values("date").min())
-    available_through = str(table.index.get_level_values("date").max())
+    available_from = str(table.attrs.get("available_from") or "")
+    available_through = str(table.attrs.get("available_through") or "")
+    if not available_from or not available_through:
+        raise ValueError(
+            "Continuous ranker OOS score table缺少預先計算的日期範圍metadata"
+        )
     if available_from < execution_start:
         raise ValueError(
             "Continuous ranker OOS scores包含execution_start之前事件: "
