@@ -22,22 +22,51 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 16
+STRATEGY_COMPARE_SCHEMA_VERSION = 17
 
 # =============================================================================
 # 1. 共用執行設定
 # =============================================================================
 
 STRATEGY_COMPARE_DATASET = "full"
-# Forward-OOS比較期間由所有啟用DL source的共同runtime coverage自動決定；
-# 不把任一模型較長的score尾端單獨算入source-only contrast。
-STRATEGY_COMPARE_START_DATE: str | None = None
-STRATEGY_COMPARE_END_DATE: str | None = None
 STRATEGY_COMPARE_PARAM_POLICY = "base-finalist-best"
 STRATEGY_COMPARE_MAX_POSITIONS = 10
 STRATEGY_COMPARE_ROTATION = "off"
-STRATEGY_COMPARE_OUTPUT_ROOT = "outputs/strategy_compare"
 STRATEGY_COMPARE_STALE_SCORE_MEMBERSHIP_GUARD_MAX_AGE_DAYS = 22
+
+# Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
+# arms／contrasts／period／output namespace全部由本檔驅動。
+STRATEGY_COMPARE_DEFAULT_PROFILE = "forward_oos"
+STRATEGY_COMPARE_PROFILES = {
+    "selection_pit": {
+        "label": "Selection PIT 策略比較",
+        "description": "2014～2020 point-in-time策略轉化Gate；重用既有Selection PIT模型工件。",
+        "start_date": "2014-01-01",
+        "end_date": "2020-12-31",
+        "output_root": "outputs/strategy_compare/selection_pit",
+        "reuse_output_roots": ("outputs/strategy_compare",),
+        "arm_ids": ("C23", "C25", "C28", "C32", "C33", "C34"),
+        "contrast_ids": (
+            "C25-C23", "C28-C23", "C28-C25",
+            "C33-C32", "C34-C32", "C34-C33",
+            "C32-C23", "C34-C28",
+        ),
+    },
+    "forward_oos": {
+        "label": "Forward-OOS 策略比較",
+        "description": "2021+ frozen Forward-OOS策略Gate；共同期間由啟用DL source coverage交集決定。",
+        "start_date": None,
+        "end_date": None,
+        "output_root": "outputs/strategy_compare/forward_oos",
+        "reuse_output_roots": ("outputs/strategy_compare",),
+        "arm_ids": ("C1", "C3", "C20", "C29", "C30", "C31"),
+        "contrast_ids": (
+            "C20-C3", "C29-C3", "C29-C20",
+            "C30-C1", "C31-C1", "C31-C30",
+            "C1-C3", "C31-C29",
+        ),
+    },
+}
 
 # =============================================================================
 # 2. 前置工件政策
@@ -181,6 +210,43 @@ STRATEGY_PARAM_SOURCES = {
             "builder_type": "selection_historical_p2",
             "options": {
                 "parameter_set": "p2_history",
+                "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+                "train_window_months": OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
+                "oos_months": OUTER_ROLLING_OOS_HORIZON_MONTHS,
+                "resume": True,
+                "fixed_risk": 0.01,
+                "max_position_cap_pct": 0.30,
+                "optimizer_seed": 42,
+                "quiet": False,
+            },
+        },
+    },
+    "selection_full_roos": {
+        "path_template": (
+            "models/research/breakout_quality/strategy_compare/selection_full_roos/"
+            "active_params/{param_filename}"
+        ),
+        "description": (
+            "Selection 2014～2020 historical Full ROOS；使用canonical Full optimizer search space，"
+            "DL filter/ranking與TP維持optimizer正式固定契約"
+        ),
+        "identity_manifest_path": (
+            "models/research/breakout_quality/strategy_compare/selection_full_roos/"
+            "rolling_preflight.json"
+        ),
+        "trained_with_dl_id": None,
+        "artifact_contract": {
+            "breakout_quality_param_adaptation": {
+                "mode": "selection_full_roos_training",
+                "parameter_set": "P4_HISTORY",
+                "training_dl_enabled": False,
+            }
+        },
+        "builder": {
+            "enabled": True,
+            "builder_type": "selection_historical_full_roos",
+            "options": {
+                "parameter_set": "p4_history",
                 "trials_per_fold": OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
                 "train_window_months": OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
                 "oos_months": OUTER_ROLLING_OOS_HORIZON_MONTHS,
@@ -696,6 +762,42 @@ STRATEGY_COMPARE_ARMS = {
         "dl_id": "CONT13A",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
+    "C32": {
+        "enabled": False,
+        "name": "Selection Full ROOS PIT baseline",
+        "description": "2014～2020 historical Full ROOS active params；formal rules；DL-off共同baseline",
+        "param_source": "selection_full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": False,
+        "dl_id": None,
+        "dl_runtime_mode": None,
+    },
+    "C33": {
+        "enabled": False,
+        "name": "Selection Full ROOS: MR-12B feasible-ascent",
+        "description": (
+            "與C32使用相同historical Full ROOS與formal rules；K/R0由同參數DL-off baseline建立；"
+            "使用MR-12B Selection PIT與frozen feasible-ascent"
+        ),
+        "param_source": "selection_full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": True,
+        "dl_id": "CONT12B_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
+    "C34": {
+        "enabled": False,
+        "name": "Selection Full ROOS: MR-13A daily feasible-ascent",
+        "description": (
+            "與C33使用相同historical Full ROOS、formal rules與frozen feasible-ascent；"
+            "唯一DL source差異為MR-13A Daily Universal Selection PIT"
+        ),
+        "param_source": "selection_full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": True,
+        "dl_id": "CONT13A_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
 }
 
 # =============================================================================
@@ -757,6 +859,11 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C10-C8": {"enabled": False, "left": "C10", "right": "C8", "description": "A9-on下參數適應效果"},
     "C6-C1": {"enabled": False, "left": "C6", "right": "C1", "description": "Min-TP1完整方案相對正式基準"},
     "C10-C1": {"enabled": False, "left": "C10", "right": "C1", "description": "Min-A9完整方案相對正式基準"},
+    "C33-C32": {"enabled": False, "left": "C33", "right": "C32", "description": "Selection Full ROOS下MR-12B feasible-ascent相對DL-off baseline的策略效果"},
+    "C34-C32": {"enabled": False, "left": "C34", "right": "C32", "description": "Selection Full ROOS下MR-13A daily feasible-ascent相對DL-off baseline的策略效果"},
+    "C34-C33": {"enabled": False, "left": "C34", "right": "C33", "description": "固定Selection Full ROOS與feasible-ascent，MR-13A daily相對MR-12B event PIT的純DL source效果"},
+    "C32-C23": {"enabled": False, "left": "C32", "right": "C23", "description": "Selection Full ROOS相對Selection Min ROOS的完整策略體系差異；不是單一參數效果"},
+    "C34-C28": {"enabled": False, "left": "C34", "right": "C28", "description": "固定MR-13A daily PIT與feasible-ascent下，Selection Full相對Min的完整策略體系interaction"},
 }
 
 
@@ -770,7 +877,36 @@ def _builder(raw) -> StrategyArtifactBuilder | None:
     )
 
 
-def get_strategy_comparison_settings() -> StrategyComparisonSettings:
+def get_strategy_comparison_profiles() -> tuple[dict[str, str], ...]:
+    return tuple(
+        {
+            "profile_id": str(profile_id),
+            "label": str(raw["label"]),
+            "description": str(raw.get("description") or ""),
+        }
+        for profile_id, raw in STRATEGY_COMPARE_PROFILES.items()
+    )
+
+
+def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyComparisonSettings:
+    selected_profile_id = str(profile_id or STRATEGY_COMPARE_DEFAULT_PROFILE).strip()
+    if selected_profile_id not in STRATEGY_COMPARE_PROFILES:
+        raise ValueError(f"未知Strategy Compare profile: {selected_profile_id}")
+    profile = dict(STRATEGY_COMPARE_PROFILES[selected_profile_id])
+    profile_arm_ids = tuple(str(value) for value in profile.get("arm_ids", ()))
+    profile_contrast_ids = tuple(str(value) for value in profile.get("contrast_ids", ()))
+    missing_arms = [arm_id for arm_id in profile_arm_ids if arm_id not in STRATEGY_COMPARE_ARMS]
+    missing_contrasts = [
+        contrast_id
+        for contrast_id in profile_contrast_ids
+        if contrast_id not in STRATEGY_COMPARE_CONTRASTS
+    ]
+    if missing_arms or missing_contrasts:
+        raise ValueError(
+            "Strategy Compare profile引用不存在的設定: "
+            f"arms={missing_arms or '-'}, contrasts={missing_contrasts or '-'}"
+        )
+
     preparation = StrategyPreparationPolicy(
         auto_prepare=bool(STRATEGY_COMPARE_PREPARATION.get("auto_prepare")),
         reuse_ready_artifacts=bool(
@@ -824,7 +960,7 @@ def get_strategy_comparison_settings() -> StrategyComparisonSettings:
     arms = {
         arm_id: StrategyComparisonArm(
             arm_id=arm_id,
-            enabled=bool(raw.get("enabled")),
+            enabled=arm_id in profile_arm_ids,
             name=str(raw.get("name") or "").strip(),
             description=str(raw.get("description") or "").strip(),
             param_source=str(raw.get("param_source") or "").strip(),
@@ -847,7 +983,7 @@ def get_strategy_comparison_settings() -> StrategyComparisonSettings:
     contrasts = {
         contrast_id: StrategyComparisonContrast(
             contrast_id=contrast_id,
-            enabled=bool(raw.get("enabled")),
+            enabled=contrast_id in profile_contrast_ids,
             left=str(raw.get("left") or "").strip(),
             right=str(raw.get("right") or "").strip(),
             description=str(raw.get("description") or "").strip(),
@@ -856,13 +992,28 @@ def get_strategy_comparison_settings() -> StrategyComparisonSettings:
     }
     settings = StrategyComparisonSettings(
         schema_version=int(STRATEGY_COMPARE_SCHEMA_VERSION),
+        profile_id=selected_profile_id,
+        profile_label=str(profile["label"]),
         dataset=str(STRATEGY_COMPARE_DATASET).strip(),
-        start_date=(None if STRATEGY_COMPARE_START_DATE in (None, "") else str(STRATEGY_COMPARE_START_DATE).strip()),
-        end_date=(None if STRATEGY_COMPARE_END_DATE in (None, "") else str(STRATEGY_COMPARE_END_DATE).strip()),
+        start_date=(
+            None
+            if profile.get("start_date") in (None, "")
+            else str(profile.get("start_date")).strip()
+        ),
+        end_date=(
+            None
+            if profile.get("end_date") in (None, "")
+            else str(profile.get("end_date")).strip()
+        ),
         param_policy=str(STRATEGY_COMPARE_PARAM_POLICY).strip(),
         max_positions=int(STRATEGY_COMPARE_MAX_POSITIONS),
         rotation=str(STRATEGY_COMPARE_ROTATION).strip(),
-        output_root=str(STRATEGY_COMPARE_OUTPUT_ROOT).strip(),
+        output_root=str(profile["output_root"]).strip(),
+        reuse_output_roots=tuple(
+            str(value).strip()
+            for value in tuple(profile.get("reuse_output_roots") or ())
+            if str(value).strip()
+        ),
         preparation=preparation,
         parameter_sources=parameter_sources,
         dl_sources=dl_sources,
@@ -877,7 +1028,9 @@ __all__ = [
     "STRATEGY_COMPARE_ARMS",
     "STRATEGY_COMPARE_CONTRASTS",
     "STRATEGY_COMPARE_PREPARATION",
+    "STRATEGY_COMPARE_PROFILES",
     "STRATEGY_DL_SOURCES",
     "STRATEGY_PARAM_SOURCES",
+    "get_strategy_comparison_profiles",
     "get_strategy_comparison_settings",
 ]

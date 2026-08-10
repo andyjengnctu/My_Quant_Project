@@ -801,12 +801,12 @@ def validate_dataset_cli_contract_case(_base_params):
 
     strategy_calls = []
 
-    def _record_strategy_run(*, confirm):
-        strategy_calls.append(("run", bool(confirm)))
+    def _record_strategy_run(*, profile_id, confirm):
+        strategy_calls.append(("run", str(profile_id), bool(confirm)))
         return {}
 
-    def _record_strategy_status():
-        strategy_calls.append(("status", None))
+    def _record_strategy_status(*, settings):
+        strategy_calls.append(("status", str(settings.profile_id)))
         return {}
 
     with (
@@ -820,23 +820,43 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
         patch("apps.research.is_interactive_console", return_value=False),
     ):
-        strategy_run_rc = app_strategy_compare.main(
-            ["apps/research.py", "compare", "run"]
+        selection_run_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "selection_pit", "run"]
         )
-        strategy_status_rc = app_strategy_compare.main(
-            ["apps/research.py", "compare", "status"]
+        selection_status_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "selection_pit", "status"]
+        )
+        forward_run_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "forward_oos", "run"]
+        )
+        forward_status_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "forward_oos", "status"]
         )
     add_check(
         results,
         "cli_contract",
         case_id,
-        "strategy_compare_app_separates_run_and_status",
-        (0, 0, [("run", False), ("status", None)]),
-        (strategy_run_rc, strategy_status_rc, strategy_calls),
+        "strategy_compare_app_separates_profiles_run_and_status",
+        (
+            0, 0, 0, 0,
+            [
+                ("run", "selection_pit", False),
+                ("status", "selection_pit"),
+                ("run", "forward_oos", False),
+                ("status", "forward_oos"),
+            ],
+        ),
+        (
+            selection_run_rc,
+            selection_status_rc,
+            forward_run_rc,
+            forward_status_rc,
+            strategy_calls,
+        ),
     )
 
     with (
-        patch("builtins.input", side_effect=["2", "0"]),
+        patch("builtins.input", side_effect=["3", "0"]),
         patch("apps.research.show_strategy_comparison_status") as compare_status,
     ):
         strategy_menu_rc = app_strategy_compare._strategy_compare_menu()
@@ -844,8 +864,8 @@ def validate_dataset_cli_contract_case(_base_params):
         results,
         "cli_contract",
         case_id,
-        "strategy_compare_interactive_menu_is_generic",
-        (0, 1),
+        "strategy_compare_interactive_menu_is_profile_driven",
+        (0, 2),
         (strategy_menu_rc, compare_status.call_count),
     )
 

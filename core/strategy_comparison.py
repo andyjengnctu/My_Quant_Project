@@ -176,6 +176,8 @@ class StrategyComparisonContrast:
 @dataclass(frozen=True)
 class StrategyComparisonSettings:
     schema_version: int
+    profile_id: str
+    profile_label: str
     dataset: str
     start_date: str | None
     end_date: str | None
@@ -183,6 +185,7 @@ class StrategyComparisonSettings:
     max_positions: int
     rotation: str
     output_root: str
+    reuse_output_roots: tuple[str, ...]
     preparation: StrategyPreparationPolicy
     parameter_sources: Mapping[str, StrategyParameterSource]
     dl_sources: Mapping[str, StrategyDLSource]
@@ -200,6 +203,8 @@ class StrategyComparisonSettings:
     def as_dict(self) -> dict[str, Any]:
         return {
             "schema_version": int(self.schema_version),
+            "profile_id": self.profile_id,
+            "profile_label": self.profile_label,
             "dataset": self.dataset,
             "start_date": self.start_date,
             "end_date": self.end_date,
@@ -207,6 +212,7 @@ class StrategyComparisonSettings:
             "max_positions": int(self.max_positions),
             "rotation": self.rotation,
             "output_root": self.output_root,
+            "reuse_output_roots": list(self.reuse_output_roots),
             "preparation": self.preparation.as_dict(),
             "parameter_sources": {
                 key: value.as_dict() for key, value in self.parameter_sources.items()
@@ -331,6 +337,25 @@ def _validate_builder(
         for option_name in ("resume", "quiet"):
             if option_name in builder.options and not isinstance(builder.options[option_name], bool):
                 raise ValueError(f"{field_name}.{option_name}必須是bool")
+    if builder.builder_type == "selection_historical_full_roos":
+        if str(builder.options.get("parameter_set") or "").lower() != "p4_history":
+            raise ValueError(f"{field_name}.parameter_set必須是p4_history")
+        if int(builder.options.get("trials_per_fold") or 0) < 1:
+            raise ValueError(f"{field_name}.trials_per_fold必須>=1")
+        if int(builder.options.get("train_window_months") or 0) < 1:
+            raise ValueError(f"{field_name}.train_window_months必須>=1")
+        if int(builder.options.get("oos_months") or 0) < 1:
+            raise ValueError(f"{field_name}.oos_months必須>=1")
+        if float(builder.options.get("fixed_risk") or 0.0) <= 0.0:
+            raise ValueError(f"{field_name}.fixed_risk必須>0")
+        cap = float(builder.options.get("max_position_cap_pct") or 0.0)
+        if not 0.0 < cap <= 1.0:
+            raise ValueError(f"{field_name}.max_position_cap_pct必須介於0與1")
+        if "optimizer_seed" not in builder.options or int(builder.options["optimizer_seed"]) < 0:
+            raise ValueError(f"{field_name}.optimizer_seed必須>=0")
+        for option_name in ("resume", "quiet"):
+            if option_name in builder.options and not isinstance(builder.options[option_name], bool):
+                raise ValueError(f"{field_name}.{option_name}必須是bool")
     if builder.builder_type == "selection_pit_from_existing_folds":
         for option_name in ("resume", "allow_stale_source"):
             if option_name in builder.options and not isinstance(builder.options[option_name], bool):
@@ -340,6 +365,8 @@ def _validate_builder(
 def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) -> None:
     if settings.schema_version < 2:
         raise ValueError("strategy comparison schema_version必須>=2")
+    if not str(settings.profile_id).strip() or not str(settings.profile_label).strip():
+        raise ValueError("strategy comparison profile identity不可空白")
     if settings.dataset not in {"reduced", "full"}:
         raise ValueError("strategy comparison dataset必須是reduced或full")
     if settings.param_policy not in {"base-finalist-best", "base-finalists-agree"}:
@@ -351,6 +378,10 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
     if (settings.start_date is None) != (settings.end_date is None):
         raise ValueError("strategy comparison start_date與end_date必須同時設定或同時留空")
     _validate_relative_path(settings.output_root, field_name="output_root")
+    for index, path in enumerate(settings.reuse_output_roots):
+        _validate_relative_path(path, field_name=f"reuse_output_roots[{index}]")
+        if str(path) == str(settings.output_root):
+            raise ValueError("reuse_output_roots不得重複目前output_root")
 
     if not settings.parameter_sources:
         raise ValueError("至少需要一個parameter source")
@@ -373,7 +404,11 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         _validate_builder(
             source.builder,
             field_name=f"parameter_sources[{key}].builder",
-            allowed_types={"binary_dl_min_roos_rolling", "selection_historical_p2"},
+            allowed_types={
+                "binary_dl_min_roos_rolling",
+                "selection_historical_p2",
+                "selection_historical_full_roos",
+            },
         )
         if source.builder is not None and source.builder.enabled:
             options = dict(source.builder.options)

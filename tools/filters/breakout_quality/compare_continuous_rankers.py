@@ -370,7 +370,7 @@ def _resolve_reference_pair_dir(
             return pair_dir, run_dir, payload
     raise FileNotFoundError(
         f"找不到符合目前設定 reference arm={reference_arm_id} 語意的已完成 Strategy Compare pair；"
-        "請確認目前 config 指定的比較對象已有正式結果，且工件仍在 outputs/strategy_compare/runs/"
+        "請確認目前 config 指定的比較對象已有正式結果，且工件仍在 config 指定的 Strategy Compare profile runs／legacy reuse roots"
     )
 
 

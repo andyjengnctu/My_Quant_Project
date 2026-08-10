@@ -63,7 +63,10 @@ from filters.breakout_quality.strategy_rule_policies import (
     ALL_RULE_FILTERS_OFF_OVERRIDES,
 )
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
-from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows
+from strategies.breakout.search_space import (
+    BREAKOUT_OPTIMIZER_SEARCH_SPACE,
+    get_breakout_optimizer_required_min_rows,
+)
 from tools.filters.breakout_quality.build_binary_point_in_time_scores import (
     build_binary_point_in_time_scores,
 )
@@ -77,6 +80,7 @@ from filters.breakout_quality.strategy_compare_engine import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
     PARAM_POLICIES,
+    PARAM_POLICY_SPECS,
     PARAM_POLICY_BASE_FINALIST_BEST,
     _load_param_source,
     _resolve_params_path,
@@ -101,6 +105,36 @@ MIN_ROOS_SEARCH_FIELDS = (
     "atr_buy_tol",
     "atr_times_init",
     "atr_times_trail",
+)
+def _full_roos_trainable_fields() -> tuple[str, ...]:
+    """Return optimizer fields that can actually vary under the current Full policy."""
+
+    fields: list[str] = []
+    for name, raw_spec in BREAKOUT_OPTIMIZER_SEARCH_SPACE.items():
+        spec = dict(raw_spec or {})
+        enabled_by = spec.get("enabled_by")
+        if enabled_by:
+            parent = dict(BREAKOUT_OPTIMIZER_SEARCH_SPACE.get(str(enabled_by)) or {})
+            parent_choices = list(parent.get("choices") or [])
+            if parent.get("kind") == "categorical" and True not in parent_choices:
+                continue
+        kind = str(spec.get("kind") or "")
+        if kind == "categorical":
+            if len(set(spec.get("choices") or [])) > 1:
+                fields.append(str(name))
+            continue
+        if kind in {"int", "float"}:
+            try:
+                if float(spec.get("high")) > float(spec.get("low")):
+                    fields.append(str(name))
+            except (TypeError, ValueError):
+                continue
+    return tuple(fields)
+
+
+FULL_ROOS_SEARCH_FIELDS = _full_roos_trainable_fields()
+SELECTION_FULL_ROOS_RELATIVE_DIR = Path(
+    "models/research/breakout_quality/strategy_compare/selection_full_roos"
 )
 
 
@@ -518,7 +552,7 @@ def _validate_binary_pit_optimizer_coverage(
     }
     coverage = {
         "contract_version": 2,
-        "full_history_required": False,
+        "p4_history_required": False,
         "optimizer_selection_period": {
             "start": str(required_start.date()),
             "end": str(required_end.date()),
@@ -870,6 +904,7 @@ def restore_selection_historical_p2_from_completed_strategy_compare(
     *,
     project_root=PROJECT_ROOT,
     output_root: str,
+    output_roots: tuple[str, ...] | None = None,
     dataset: str,
     param_policy: str,
     start_date: str,
@@ -888,12 +923,17 @@ def restore_selection_historical_p2_from_completed_strategy_compare(
     """
 
     root = Path(project_root).resolve()
-    output_base = Path(str(output_root))
-    if output_base.is_absolute() or ".." in output_base.parts:
-        raise ValueError("Strategy Compare output_root必須是專案root相對路徑")
-    runs_root = root / output_base / "runs"
+    raw_output_roots = tuple(output_roots or (str(output_root),))
+    runs_roots: list[Path] = []
+    for raw_output_root in raw_output_roots:
+        output_base = Path(str(raw_output_root))
+        if output_base.is_absolute() or ".." in output_base.parts:
+            raise ValueError("Strategy Compare output_root必須是專案root相對路徑")
+        runs_root = root / output_base / "runs"
+        if runs_root.is_dir() and runs_root not in runs_roots:
+            runs_roots.append(runs_root)
     target_path = root / TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH
-    if target_path.is_file() or not runs_root.is_dir():
+    if target_path.is_file() or not runs_roots:
         return None
 
     expected_period = {"start": str(start_date), "end": str(end_date)}
@@ -904,11 +944,17 @@ def restore_selection_historical_p2_from_completed_strategy_compare(
         "fixed_rule_contract": "all_rule_filters_off",
         "training_dl_enabled": False,
     }
-    for run_dir in sorted(
-        (path for path in runs_root.iterdir() if path.is_dir()),
+    run_dirs = sorted(
+        (
+            path
+            for runs_root in runs_roots
+            for path in runs_root.iterdir()
+            if path.is_dir()
+        ),
         key=lambda path: path.name,
         reverse=True,
-    ):
+    )
+    for run_dir in run_dirs:
         run_payload = _load_json(run_dir / "strategy_comparison.json")
         if not isinstance(run_payload, dict) or str(run_payload.get("status") or "") != "COMPLETED":
             continue
@@ -1047,6 +1093,7 @@ def prepare_selection_historical_p2_params(
     resume_parameter_training: bool = True,
     quiet: bool = False,
     comparison_output_root: str = "outputs/strategy_compare",
+    comparison_output_roots: tuple[str, ...] | None = None,
     first_oos_date: str = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
     last_oos_date: str = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
     train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
@@ -1063,6 +1110,7 @@ def prepare_selection_historical_p2_params(
     recovered = restore_selection_historical_p2_from_completed_strategy_compare(
         project_root=root,
         output_root=str(comparison_output_root),
+        output_roots=tuple(comparison_output_roots or (str(comparison_output_root),)),
         dataset=str(dataset),
         param_policy=str(param_policy),
         start_date=str(first_oos_date),
@@ -1131,6 +1179,266 @@ def prepare_selection_historical_p2_params(
         training_dl_enabled=False,
         binary_pit=None,
     )
+
+
+def _build_selection_full_roos_schedule_contract(
+    *,
+    first_oos_date: str,
+    last_oos_date: str,
+    train_window_months: int,
+    oos_months: int,
+) -> dict[str, Any]:
+    first = pd.Timestamp(str(first_oos_date)).normalize()
+    last = pd.Timestamp(str(last_oos_date)).normalize()
+    if pd.isna(first) or pd.isna(last) or last < first:
+        raise ValueError("Selection Full ROOS期間不合法")
+    if int(train_window_months) < 1 or int(oos_months) < 1:
+        raise ValueError("Selection Full ROOS rolling months必須>=1")
+    meta = {
+        "window_mode": "fixed",
+        "first_oos_date": first.strftime("%Y-%m-%d"),
+        "last_oos_date": last.strftime("%Y-%m-%d"),
+        "train_window_months": int(train_window_months),
+        "oos_horizon_months": int(oos_months),
+    }
+    reference_payload = {
+        "reference_type": "canonical_full_roos_optimizer_search_space",
+        "rolling_policy": meta,
+        "search_space": BREAKOUT_OPTIMIZER_SEARCH_SPACE,
+        "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
+    }
+    return {
+        "path": None,
+        "payload": {},
+        "meta": meta,
+        "sha256": _canonical_hash(reference_payload),
+        "reference_type": "canonical_full_roos_optimizer_search_space",
+        "reference_payload": reference_payload,
+    }
+
+
+def _selection_full_roos_runtime_contract(*, root: Path, args, schedule_contract) -> dict[str, Any]:
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "mode": "selection_full_roos_parameter_training",
+        "arm_id": "P4_HISTORY",
+        "training_dl_enabled": False,
+        "dataset": str(args.dataset),
+        "dataset_identity": build_source_data_inventory(root, args.dataset),
+        "parameter_reference": {
+            "type": str(schedule_contract["reference_type"]),
+            "path": None,
+            "sha256": str(schedule_contract["sha256"]),
+        },
+        "rolling_policy": dict(schedule_contract["meta"]),
+        "trials_per_fold": int(args.trials_per_fold),
+        "search_fields": list(FULL_ROOS_SEARCH_FIELDS),
+        "search_space_sha256": _canonical_hash(BREAKOUT_OPTIMIZER_SEARCH_SPACE),
+        "fixed_risk": float(args.fixed_risk),
+        "max_position_cap_pct": float(args.max_position_cap_pct),
+        "max_positions": int(args.max_positions),
+        "rotation": str(args.rotation),
+    }
+    payload["runtime_identity_sha256"] = _canonical_hash(payload)
+    return payload
+
+
+def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args) -> dict[str, Any]:
+    payload = _load_json(path)
+    if payload is None:
+        raise FileNotFoundError(f"Selection Full ROOS optimizer未產生參數工件: {path}")
+    meta = dict(payload.get("meta") or {})
+    for key in ("first_oos_date", "last_oos_date"):
+        try:
+            actual_month = pd.Timestamp(str(meta.get(key))).to_period("M")
+            expected_month = pd.Timestamp(str(schedule_contract["meta"].get(key))).to_period("M")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Selection Full ROOS參數fold schedule不合法: {key}") from exc
+        if actual_month != expected_month:
+            raise ValueError(f"Selection Full ROOS參數fold schedule不一致: {key}")
+    for key in ("train_window_months", "oos_horizon_months"):
+        if int(meta.get(key, 0) or 0) != int(schedule_contract["meta"].get(key, 0) or 0):
+            raise ValueError(f"Selection Full ROOS參數fold schedule不一致: {key}")
+    if int(meta.get("trials_per_fold", 0) or 0) != int(args.trials_per_fold):
+        raise ValueError("Selection Full ROOS參數trials／fold與目前要求不一致")
+    first_month = pd.Timestamp(str(schedule_contract["meta"]["first_oos_date"])).to_period("M")
+    last_month = pd.Timestamp(str(schedule_contract["meta"]["last_oos_date"])).to_period("M")
+    cursor = first_month.start_time
+    expected_dates: list[str] = []
+    while cursor <= last_month.start_time:
+        expected_dates.append(cursor.strftime("%Y-%m-%d"))
+        cursor = (cursor + pd.DateOffset(months=int(schedule_contract["meta"]["oos_horizon_months"]))).normalize()
+    members_by_date = dict(payload.get("params_ensemble_by_effective_date") or {})
+    if tuple(sorted(members_by_date)) != tuple(expected_dates):
+        raise ValueError(
+            "Selection Full ROOS effective-date schedule不一致: "
+            f"expected={expected_dates}, actual={sorted(members_by_date)}"
+        )
+    for effective_date, members in members_by_date.items():
+        for member in list(members or []):
+            params = dict((member or {}).get("params") or {})
+            if bool(params.get("use_breakout_quality_filter", False)):
+                raise ValueError(f"Selection Full ROOS不得在參數訓練啟用DL hard filter: {effective_date}")
+            if bool(params.get("use_breakout_quality_ranking", False)):
+                raise ValueError(f"Selection Full ROOS不得在參數訓練啟用DL ranking: {effective_date}")
+            if bool(params.get("use_history_threshold", False)):
+                raise ValueError(f"Selection Full ROOS目前History threshold必須維持optimizer固定OFF: {effective_date}")
+            tp = float(params.get("tp_percent", 0.0) or 0.0)
+            if not math.isclose(tp, float(OPTIMIZER_FIXED_TP_PERCENT), rel_tol=0.0, abs_tol=1e-12):
+                raise ValueError(f"Selection Full ROOS tp_percent未遵守training_policy固定值: {effective_date}")
+    payload["breakout_quality_param_adaptation"] = {
+        "mode": "selection_full_roos_training",
+        "parameter_set": "P4_HISTORY",
+        "training_dl_enabled": False,
+        "search_fields": list(FULL_ROOS_SEARCH_FIELDS),
+        "search_space_sha256": _canonical_hash(BREAKOUT_OPTIMIZER_SEARCH_SPACE),
+    }
+    _write_json(path, payload)
+    return payload
+
+
+def prepare_selection_historical_full_roos_params(
+    *,
+    project_root=PROJECT_ROOT,
+    dataset: str,
+    param_policy: str,
+    trials_per_fold: int,
+    max_positions: int,
+    rotation: str,
+    fixed_risk: float,
+    max_position_cap_pct: float,
+    optimizer_seed: int,
+    resume_parameter_training: bool = True,
+    quiet: bool = False,
+    first_oos_date: str = TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+    last_oos_date: str = TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+    train_window_months: int = TRADE_PATH_SELECTION_BASELINE_TRAIN_WINDOW_MONTHS,
+    oos_months: int = TRADE_PATH_SELECTION_BASELINE_OOS_MONTHS,
+):
+    """Build/reuse Selection historical Full ROOS using the canonical full search space."""
+
+    root = Path(project_root).resolve()
+    schedule_contract = _build_selection_full_roos_schedule_contract(
+        first_oos_date=str(first_oos_date),
+        last_oos_date=str(last_oos_date),
+        train_window_months=int(train_window_months),
+        oos_months=int(oos_months),
+    )
+    args = SimpleNamespace(
+        dataset=str(dataset),
+        param_policy=str(param_policy),
+        trials_per_fold=int(trials_per_fold),
+        max_positions=int(max_positions),
+        rotation=str(rotation),
+        fixed_risk=float(fixed_risk),
+        max_position_cap_pct=float(max_position_cap_pct),
+        resume_parameter_training=bool(resume_parameter_training),
+        quiet=bool(quiet),
+    )
+    output_dir = root / SELECTION_FULL_ROOS_RELATIVE_DIR
+    active_param_dir = output_dir / "active_params"
+    optimizer_output_dir = output_dir / "optimizer_runtime"
+    preflight_path = output_dir / "rolling_preflight.json"
+    params_path = active_param_dir / str(PARAM_POLICY_SPECS[str(param_policy)]["filename"])
+    active_param_dir.mkdir(parents=True, exist_ok=True)
+    contract = _selection_full_roos_runtime_contract(
+        root=root,
+        args=args,
+        schedule_contract=schedule_contract,
+    )
+    prior = _load_json(preflight_path)
+    reusable = bool(
+        isinstance(prior, dict)
+        and str(prior.get("runtime_identity_sha256") or "")
+        == str(contract["runtime_identity_sha256"])
+        and params_path.is_file()
+    )
+    if reusable:
+        try:
+            payload = _validate_selection_full_roos_params(
+                path=params_path,
+                schedule_contract=schedule_contract,
+                args=args,
+            )
+        except (FileNotFoundError, ValueError):
+            reusable = False
+            payload = None
+    else:
+        payload = None
+    _write_json(
+        preflight_path,
+        {
+            **contract,
+            "status": "P4_HISTORY_PREFLIGHT_PASS",
+            "created_at": get_taipei_now().isoformat(),
+        },
+    )
+    if not reusable:
+        if not quiet:
+            print(
+                "Selection Full ROOS缺少；自動建立／接續canonical Full rolling params "
+                f"| period={schedule_contract['meta']['first_oos_date']}~{schedule_contract['meta']['last_oos_date']} "
+                f"| train={int(train_window_months)}m | oos={int(oos_months)}m "
+                f"| trials={int(trials_per_fold)}/fold"
+            )
+        base_policy = build_rolling_base_policy(root=root, baseline_contract=schedule_contract)
+        base_policy.update(
+            {
+                "adaptation_scope": "selection_full_roos_historical_validation",
+                "evaluation_scope": "rolling_selection_diagnostic",
+            }
+        )
+        session_spec = {
+            "output_dir": str((optimizer_output_dir / "sessions").resolve()),
+            "runtime_cache_identity": contract["runtime_identity_sha256"],
+            "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
+            "train_max_positions": int(max_positions),
+            "train_enable_rotation": str(rotation) == "on",
+        }
+        outer_environ = dict(os.environ)
+        outer_environ["V16_MODELS_DIR"] = resolve_models_dir(str(root))
+        outer_environ["OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE"] = "sqlite"
+        outer_environ["OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES"] = (
+            "1" if bool(resume_parameter_training) else "0"
+        )
+        exit_code = run_outer_rolling_oos(
+            argv=build_outer_rolling_argv(args=args, baseline_contract=schedule_contract),
+            environ=outer_environ,
+            project_root=str(root),
+            output_dir=str(optimizer_output_dir),
+            base_policy=base_policy,
+            selected_data_dir=get_dataset_dir(str(root), str(dataset)),
+            dataset_label=str(dataset),
+            load_all_raw_data=load_all_raw_data,
+            optimizer_required_min_rows=get_breakout_optimizer_required_min_rows(),
+            build_optimizer_session=build_optimizer_session,
+            create_optimizer_study=create_optimizer_study,
+            ensure_study_effective_policy_compatible=ensure_study_effective_policy_compatible,
+            configure_optuna_logging=configure_optuna_logging,
+            optimizer_seed=int(optimizer_seed),
+            optimizer_session_spec=session_spec,
+            default_trials=int(trials_per_fold),
+            timing_mode=False,
+            paramset_models_dir=str(active_param_dir.resolve()),
+        )
+        if int(exit_code) != 0:
+            raise RuntimeError(f"Selection Full ROOS rolling optimizer失敗: {exit_code}")
+        payload = _validate_selection_full_roos_params(
+            path=params_path,
+            schedule_contract=schedule_contract,
+            args=args,
+        )
+    return {
+        "params_path": params_path,
+        "summary": {
+            "parameter_set": "P4_HISTORY",
+            "status": "COMPLETED",
+            "folds": int(dict(payload.get("summary") or {}).get("folds", 0) or 0),
+            "trials_per_fold": int(trials_per_fold),
+            "optimizer_search_reused": bool(reusable),
+        },
+        "contract": contract,
+    }
 
 def _run_pair(
     *, root, args, params_path, policy_name, output_dir,

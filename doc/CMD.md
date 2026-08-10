@@ -104,14 +104,32 @@ python apps/research.py audit
 python apps/research.py compare
 ```
 
-```text
-=== 策略組合比較 ===
-[1/Enter] 執行目前比較設定
-[2] 查看設定、工件與預計動作
-[0] 返回
+CLI亦可明確指定階段：
+
+```bash
+python apps/research.py compare selection_pit status
+python apps/research.py compare forward_oos status
 ```
 
-目前比較對象、參數來源、DL來源、差異比較與前置建立政策全部條列於`config/strategy_compare.py`；arms與contrasts以`enabled`開關，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。同一param source／rule policy使用一個共用DL-off基準，可同時掛多個DL-on模型；各DL-on arm可獨立開關，執行引擎會逐一與同一基準形成controlled pair，並驗證重複基準結果一致。選擇執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；對可由既有正式工件確定產生的缺件，依config自動重用、重建或接續，包括既有模型的forward-OOS scores與比較所需的策略參數。App不建立Label、不選模型、不訓練模型權重；Selection PIT若只缺top-level scores／manifest／audit但既有fold score/checkpoint identity仍合法，可自動以checkpoint-only方式重建推論工件並執行Audit，任何fold若需要訓練則立即停止；缺少模型/checkpoint等上游真理工件時才導向模型正式入口。執行前會由全部啟用DL runtime工件解析共同比較期間，先驗證Full／Min／Min-DL rolling active params是否完整覆蓋；Min ROOS固定使用forward P2 DL-off-trained工件，不得使用只涵蓋Selection的歷史Label teacher params。若forward scores建立後才得知正式期間，App會重新規劃下一波前置並自動建立／接續缺少或過期的P2／P3，全部READY後才開始第一組replay。DL-aware參數必須與訓練時相同的DL版本配對：TP1-trained只允許TP1-on，A9-trained只允許A9-on；跨版本runtime組合在config驗證階段直接拒絕。A9 P3使用獨立`p3_dl_on_trained/A9/`工件，不覆蓋TP1 P3。console／報表採簡稱`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`。報表的`同參數DL選擇R`只在相同`param_source`與`rule_policy`的arms間具共同attribution基準；跨參數contrast的`Δ同參數DL選擇R`固定顯示`-`。預設`reuse_completed_results=True`與`reuse_shared_baseline=True`：選單的執行計畫會把replay identity與目前工件SHA完全一致的既有arm顯示為`REUSE`，只有新／失效arm顯示`RUN`；同一param/rules群組的DL-off baseline最多執行一次。例如新增MR-12B的C19/C20時，若C3/C17/C18已有compatible正式結果，計畫應直接重用C3/C17/C18，只執行C19/C20，再組合全部contrasts。修改contrast或報表說明不會使cache失效；param、model、manifest、forward score、期間或runtime contract任何一項改變都必須重新replay。
+```text
+=== 策略組合比較 ===
+[1/Enter] Selection PIT 策略比較
+[2]       Forward-OOS 策略比較
+[3]       查看全部階段設定與工件狀態
+[0]       返回
+```
+
+進入任一階段後，第二層選單固定為：
+
+```text
+[1/Enter] 執行目前比較設定
+[2]       查看設定、工件與預計動作
+[0]       返回
+```
+
+兩階段由`config/strategy_compare.py`的profiles驅動並長期共存；Selection固定使用historical PIT／historical active params與`outputs/strategy_compare/selection_pit/`，Forward-OOS使用frozen forward score／forward active params與`outputs/strategy_compare/forward_oos/`。不得為了切換階段重寫同一組enabled arms或共用`latest/`。兩profile可依config唯讀掃描舊`outputs/strategy_compare/runs/`重用既有pair，但新輸出不寫回舊root。
+
+目前比較profiles、比較對象、參數來源、DL來源、差異比較與前置建立政策全部條列於`config/strategy_compare.py`；每個profile用`arm_ids`／`contrast_ids`決定當階段啟用集合，arm／contrast定義本身仍可保留歷史項目，不存在代表整套實驗的`ACTIVE_STRATEGY_COMPARISON_ID`。同一param source／rule policy使用一個共用DL-off基準，可同時掛多個DL-on模型；各DL-on arm可獨立開關，執行引擎會逐一與同一基準形成controlled pair，並驗證重複基準結果一致。選擇執行後，App先顯示`READY／PREPARABLE／BLOCKED`依賴計畫並只確認一次；對可由既有正式工件確定產生的缺件，依config自動重用、重建或接續，包括既有模型的forward-OOS scores與比較所需的策略參數。App不建立Label、不選模型、不訓練模型權重；Selection PIT若只缺top-level scores／manifest／audit但既有fold score/checkpoint identity仍合法，可自動以checkpoint-only方式重建推論工件並執行Audit，任何fold若需要訓練則立即停止；缺少模型/checkpoint等上游真理工件時才導向模型正式入口。執行前會由全部啟用DL runtime工件解析共同比較期間，先驗證Full／Min／Min-DL rolling active params是否完整覆蓋；Min ROOS固定使用forward P2 DL-off-trained工件，不得使用只涵蓋Selection的歷史Label teacher params。若forward scores建立後才得知正式期間，App會重新規劃下一波前置並自動建立／接續缺少或過期的P2／P3，全部READY後才開始第一組replay。DL-aware參數必須與訓練時相同的DL版本配對：TP1-trained只允許TP1-on，A9-trained只允許A9-on；跨版本runtime組合在config驗證階段直接拒絕。A9 P3使用獨立`p3_dl_on_trained/A9/`工件，不覆蓋TP1 P3。console／報表採簡稱`Min ROOS`、`Min ROOS: TP1-on`、`Min ROOS: A9-on`、`Min-TP1 ROOS`、`Min-TP1 ROOS: DL-on`、`Min-A9 ROOS`、`Min-A9 ROOS: DL-on`。報表的`同參數DL選擇R`只在相同`param_source`與`rule_policy`的arms間具共同attribution基準；跨參數contrast的`Δ同參數DL選擇R`固定顯示`-`。預設`reuse_completed_results=True`與`reuse_shared_baseline=True`：選單的執行計畫會把replay identity與目前工件SHA完全一致的既有arm顯示為`REUSE`，只有新／失效arm顯示`RUN`；同一param/rules群組的DL-off baseline最多執行一次。例如新增MR-12B的C19/C20時，若C3/C17/C18已有compatible正式結果，計畫應直接重用C3/C17/C18，只執行C19/C20，再組合全部contrasts。修改contrast或報表說明不會使cache失效；param、model、manifest、forward score、期間或runtime contract任何一項改變都必須重新replay。
 
 當目前 workflow 是 Binary classification 時，選擇 `[1/Enter] 模型研究與驗證` 後會顯示：
 

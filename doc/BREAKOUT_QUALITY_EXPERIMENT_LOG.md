@@ -7606,3 +7606,17 @@ MR-13A architecture、daily sample universe、target、RankNet loss、selected e
 - `validate_strategy_compare_config_driven_app_contract_case`：48 checks / 0 fail。
 - `validate_breakout_quality_listwise_ranker_contract_case`：8 checks / 0 fail，確認event continuous/listwise原有CSV＋split契約未被daily分支破壞。
 - 正式`apps/test_suite.py`未由GPT執行；仍由使用者本地formal double check。
+
+
+## 2026-08-10 — Selection Full row與Strategy Compare雙階段profile固化
+
+- 狀態：`IMPLEMENTED / SELECTION_FULL_ROW_RESULT_PENDING / FORWARD_PROFILE_PRESERVED`。
+- 工作基準：`test-branch-1_20260810_153408_87b3b7c.zip`；SHA256=`518c43fcc0be91ff079e0354a60116555b0c9e37aa8a7d7e39f6601d7c1d757d`。
+- 使用者要求在Full ROOS加入最終Forward-OOS矩陣後，先補對稱的Selection策略驗證；同時為避免日後再把Selection／Forward enabled arms互相覆寫，`apps/research.py → [3] 策略組合比較`改為兩個永久共存、config-driven profiles：`selection_pit`與`forward_oos`。兩者共用同一strategy comparison engine，但period、enabled arms/contrasts與output namespace隔離。
+- 新增`PARAM-P4`：2014-01-01～2020-12-31 historical Full ROOS rolling active params，120m train／12m OOS，trials直接讀`config/training_policy.py`；使用canonical Full optimizer search space。TP、DL hard filter/ranking及History threshold維持current optimizer policy固定OFF，不因Selection結果新增trial維度。參數工件位於`models/research/breakout_quality/strategy_compare/selection_full_roos/`，不得用2021+ `full_roos` forward params倒灌Selection。
+- 新增Selection Full row：`SR-C32`=Full DL-off baseline；`SR-C33`=`PARAM-P4 + DL-CONT12B-PIT + frozen feasible-ascent`；`SR-C34`=`PARAM-P4 + DL-CONT13A-PIT + frozen feasible-ascent`。C33/C34的K、R0與reserved-capital floor只取同參數／formal-rules的C32 baseline，不借用Min ROOS。Min row重用`C23/C25/C28`。
+- Selection profile contrasts固定包含Min row既有`C25-C23/C28-C23/C28-C25`與Full row`C33-C32/C34-C32/C34-C33`，另保留`C32-C23`與`C34-C28`作完整策略體系interaction；核心新Gate為`C34-C33`純DL source與`C34-C32`Full baseline economics。不得依Selection結果再調feasible-ascent、score cutoff、stale guard、capital objective或模型。
+- Forward profile完整保留既有2×3：`C1/C3/C20/C29/C30/C31`及其八個contrasts，不因補Selection Full row而重寫；Forward-OOS仍待Selection Full row結果後執行。
+- 模型前置resolver改為跨所有Strategy Compare profiles去重解析依賴，因此模型工作類型可一次準備Selection PIT與Forward-OOS所需sources；Strategy Compare本身仍不得訓練模型權重。
+- 為避免profile拆分後遺失既有C23/C25/C28與其他已完成pair cache，兩profile由config宣告唯讀`reuse_output_roots=("outputs/strategy_compare",)`；pair cache與historical P2 recovery可掃描legacy runs，但新run／latest只寫入各自profile root，因此舊工件可重用而未來Selection/Forward結果不再互相覆寫。
+- 直接isolated builder驗證：`PARAM-P4`第一次建立會執行一次7-fold Full outer rolling；相同identity第二次直接REUSE，effective dates=`2014-01-01 ... 2020-01-01`，artifact stamp=`selection_full_roos_training / P4_HISTORY`。

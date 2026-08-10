@@ -53,7 +53,9 @@ from filters.breakout_quality.strategy_compare_engine import (
     _validate_requested_param_policy,
 )
 from filters.breakout_quality.strategy_param_training import (
+    FULL_ROOS_SEARCH_FIELDS,
     MIN_ROOS_SEARCH_FIELDS,
+    prepare_selection_historical_full_roos_params,
     prepare_selection_historical_p2_params,
     prepare_strategy_parameter_source,
 )
@@ -349,8 +351,12 @@ def _validate_param_training_identity(
         if expected_training_dl_enabled and not isinstance(payload.get("binary_pit"), dict):
             return False, "BINARY_PIT_IDENTITY_MISSING", manifest_path
 
-        if list(payload.get("search_fields") or []) != list(MIN_ROOS_SEARCH_FIELDS):
-            return False, "MIN_ROOS_SEARCH_FIELDS_MISMATCH", manifest_path
+        if builder.builder_type in {"binary_dl_min_roos_rolling", "selection_historical_p2"}:
+            if list(payload.get("search_fields") or []) != list(MIN_ROOS_SEARCH_FIELDS):
+                return False, "MIN_ROOS_SEARCH_FIELDS_MISMATCH", manifest_path
+        elif builder.builder_type == "selection_historical_full_roos":
+            if list(payload.get("search_fields") or []) != list(FULL_ROOS_SEARCH_FIELDS):
+                return False, "FULL_ROOS_SEARCH_FIELDS_MISMATCH", manifest_path
     return True, "READY", manifest_path
 
 def _preparation_action(
@@ -818,8 +824,14 @@ def collect_artifact_status(
                 action = "BLOCKED"
             description = (
                 (
-                    "建立／接續Selection historical Min ROOS單階段rolling參數"
-                    if builder is not None and builder.builder_type == "selection_historical_p2"
+                    (
+                        "建立／接續Selection historical Min ROOS單階段rolling參數"
+                        if builder is not None and builder.builder_type == "selection_historical_p2"
+                        else "建立／接續Selection historical Full ROOS rolling參數"
+                    )
+                    if builder is not None and builder.builder_type in {
+                        "selection_historical_p2", "selection_historical_full_roos"
+                    }
                     else "執行或接續config指定的策略參數訓練"
                 )
                 if action in {"BUILD", "REBUILD"}
@@ -935,6 +947,37 @@ def _execute_preparation_action(
             dataset=settings.dataset,
             param_policy=settings.param_policy,
             comparison_output_root=str(settings.output_root),
+            comparison_output_roots=(
+                str(settings.output_root),
+                *tuple(str(value) for value in settings.reuse_output_roots),
+            ),
+            trials_per_fold=int(options["trials_per_fold"]),
+            first_oos_date=str(settings.start_date),
+            last_oos_date=str(settings.end_date),
+            train_window_months=int(options["train_window_months"]),
+            oos_months=int(options["oos_months"]),
+            max_positions=int(settings.max_positions),
+            rotation=str(settings.rotation),
+            fixed_risk=float(options["fixed_risk"]),
+            max_position_cap_pct=float(options["max_position_cap_pct"]),
+            optimizer_seed=int(options["optimizer_seed"]),
+            resume_parameter_training=bool(
+                options.get("resume", settings.preparation.resume_parameter_training)
+            ),
+            quiet=bool(options.get("quiet", False)),
+        )
+        return
+    if action.builder_type == "selection_historical_full_roos":
+        _kind, source_id = action.artifact_key.split(":", 1)
+        source = settings.parameter_sources[source_id]
+        builder = source.builder
+        if builder is None:
+            raise RuntimeError(f"參數來源builder設定不完整: {source_id}")
+        options = dict(builder.options)
+        prepare_selection_historical_full_roos_params(
+            project_root=root,
+            dataset=settings.dataset,
+            param_policy=settings.param_policy,
             trials_per_fold=int(options["trials_per_fold"]),
             first_oos_date=str(settings.start_date),
             last_oos_date=str(settings.end_date),

@@ -2765,26 +2765,41 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
 
 
 def _strategy_compare_required_model_sources():
-    """Resolve all configured Strategy Compare model sources without exposing model choice in UI."""
+    """Resolve model sources required by every configured Strategy Compare profile."""
 
-    from config.strategy_compare import get_strategy_comparison_settings
+    from config.strategy_compare import (
+        get_strategy_comparison_profiles,
+        get_strategy_comparison_settings,
+    )
 
-    comparison = get_strategy_comparison_settings()
-    required_ids = {
-        str(arm.dl_id)
-        for arm in comparison.enabled_arms
-        if arm.dl_enabled and arm.dl_id
-    }
     supported_score_sources = {
         SCORE_SOURCE_SELECTION_POINT_IN_TIME,
         SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     }
-    return comparison, tuple(
-        (dl_id, comparison.dl_sources[dl_id])
-        for dl_id in comparison.dl_sources
-        if dl_id in required_ids
-        and comparison.dl_sources[dl_id].score_source in supported_score_sources
-    )
+    comparisons = []
+    dedup: dict[tuple[str, str, str, str], tuple[str, object]] = {}
+    for profile in get_strategy_comparison_profiles():
+        comparison = get_strategy_comparison_settings(profile["profile_id"])
+        comparisons.append(comparison)
+        required_ids = {
+            str(arm.dl_id)
+            for arm in comparison.enabled_arms
+            if arm.dl_enabled and arm.dl_id
+        }
+        for dl_id in comparison.dl_sources:
+            if dl_id not in required_ids:
+                continue
+            source = comparison.dl_sources[dl_id]
+            if source.score_source not in supported_score_sources:
+                continue
+            key = (
+                str(source.filter_id),
+                str(source.model_architecture),
+                str(source.experiment_profile),
+                str(source.score_source),
+            )
+            dedup.setdefault(key, (dl_id, source))
+    return tuple(comparisons), tuple(dedup.values())
 
 
 def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
@@ -2797,15 +2812,19 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
     Strategy Compare itself remains unable to train model weights.
     """
 
-    comparison, sources = _strategy_compare_required_model_sources()
+    comparisons, sources = _strategy_compare_required_model_sources()
     if not sources:
         print("目前策略比較設定沒有需要準備的模型工件。")
         return 0
+    datasets = {comparison.dataset for comparison in comparisons}
+    if len(datasets) != 1:
+        raise ValueError(f"Strategy Compare profiles dataset不一致: {sorted(datasets)}")
+    comparison = comparisons[0]
 
     color_enabled = console_color_enabled()
     print(
         paint("策略比較模型工件準備", "cyan", enabled=color_enabled, bold=True)
-        + f" | sources={len(sources)} | dataset={comparison.dataset}"
+        + f" | profiles={len(comparisons)} | sources={len(sources)} | dataset={comparison.dataset}"
     )
     for source_index, (dl_id, source) in enumerate(sources, start=1):
         workflow = get_breakout_quality_workflow_settings(
@@ -2956,7 +2975,7 @@ def _interactive_model_research(program_name: str) -> int:
         print("[3] 查看目前Workflow與工件狀態")
         if comparison_settings.enabled:
             print(f"[4] {comparison_settings.menu_label}")
-        _comparison, strategy_model_sources = _strategy_compare_required_model_sources()
+        _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:
             print("[5] 準備策略比較所需模型工件")
         print("[0] 返回")

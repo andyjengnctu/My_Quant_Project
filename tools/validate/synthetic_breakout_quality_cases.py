@@ -17392,7 +17392,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         for source in settings.parameter_sources.values()
         if source.builder is not None
         and source.builder.builder_type
-        in {"binary_dl_min_roos_rolling", "selection_historical_p2"}
+        in {
+            "binary_dl_min_roos_rolling",
+            "selection_historical_p2",
+            "selection_historical_full_roos",
+        }
     ]
     add_check(
         results, "synthetic_breakout_quality", case_id,
@@ -17425,6 +17429,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         all(token in app_source for token in (
             "執行目前比較設定", "查看設定、工件與預計動作", "config/strategy_compare.py",
+            "get_strategy_comparison_profiles", "查看全部階段設定與工件狀態",
         ))
         and "C1" not in app_source and "TP1" not in app_source
         and '"strategy-compare"' not in model_app_source
@@ -17529,6 +17534,148 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             "Selection Min ROOS缺少；自動建立／接續單階段rolling params",
         )),
     )
+    selection_full_roos_source = settings.parameter_sources.get("selection_full_roos")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_historical_full_roos_has_independent_auto_builder_and_profile",
+        True,
+        selection_full_roos_source is not None
+        and selection_full_roos_source.builder is not None
+        and selection_full_roos_source.builder.builder_type == "selection_historical_full_roos"
+        and str(selection_full_roos_source.builder.options.get("parameter_set")) == "p4_history"
+        and "prepare_selection_historical_full_roos_params" in preparation_source
+        and "FULL_ROOS_SEARCH_FIELDS" in param_service_source
+        and "selection_full_roos_training" in param_service_source
+        and {item["profile_id"] for item in strategy_config.get_strategy_comparison_profiles()}
+        == {"selection_pit", "forward_oos"}
+        and {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("selection_pit").enabled_arms}
+        == {"C23", "C25", "C28", "C32", "C33", "C34"}
+        and {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms}
+        == {"C1", "C3", "C20", "C29", "C30", "C31"}
+        and strategy_config.get_strategy_comparison_settings("selection_pit").output_root
+        == "outputs/strategy_compare/selection_pit"
+        and strategy_config.get_strategy_comparison_settings("forward_oos").output_root
+        == "outputs/strategy_compare/forward_oos"
+        and strategy_config.get_strategy_comparison_settings("selection_pit").reuse_output_roots
+        == ("outputs/strategy_compare",)
+        and strategy_config.get_strategy_comparison_settings("forward_oos").reuse_output_roots
+        == ("outputs/strategy_compare",)
+        and "_comparison_runs_roots" in orchestration_source,
+    )
+
+    from filters.breakout_quality import strategy_param_training as strategy_param_training_module
+
+    with tempfile.TemporaryDirectory() as tmp:
+        selection_full_root = Path(tmp)
+        optimizer_calls = []
+
+        def _fake_selection_full_outer_rolling(**kwargs):
+            optimizer_calls.append(kwargs)
+            destination = Path(kwargs["paramset_models_dir"])
+            destination.mkdir(parents=True, exist_ok=True)
+            params = {
+                "high_len": 201,
+                "atr_len": 14,
+                "atr_buy_tol": 1.5,
+                "atr_times_init": 2.0,
+                "atr_times_trail": 3.0,
+                "use_breakout_quality_filter": False,
+                "use_breakout_quality_ranking": False,
+                "use_history_threshold": False,
+                "tp_percent": 0.0,
+            }
+            payload = {
+                "meta": {
+                    "first_oos_date": "2014-01-01",
+                    "last_oos_date": "2020-12-01",
+                    "train_window_months": 120,
+                    "oos_horizon_months": 12,
+                    "trials_per_fold": int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
+                },
+                "summary": {"folds": 7},
+                "params_ensemble_by_effective_date": {
+                    f"{year}-01-01": [{"params": dict(params)}]
+                    for year in range(2014, 2021)
+                },
+            }
+            (destination / "roos_base_best.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+            return 0
+
+        with patch.object(
+            strategy_param_training_module,
+            "build_source_data_inventory",
+            return_value={"dataset": "synthetic-full"},
+        ), patch.object(
+            strategy_param_training_module,
+            "build_rolling_base_policy",
+            return_value={"model_mode": "oos"},
+        ), patch.object(
+            strategy_param_training_module,
+            "get_dataset_dir",
+            return_value=str(selection_full_root / "data"),
+        ), patch.object(
+            strategy_param_training_module,
+            "run_outer_rolling_oos",
+            side_effect=_fake_selection_full_outer_rolling,
+        ):
+            selection_full_kwargs = {
+                "project_root": selection_full_root,
+                "dataset": "full",
+                "param_policy": "base-finalist-best",
+                "trials_per_fold": int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
+                "max_positions": 10,
+                "rotation": "off",
+                "fixed_risk": 0.01,
+                "max_position_cap_pct": 0.30,
+                "optimizer_seed": 42,
+                "quiet": True,
+                "first_oos_date": "2014-01-01",
+                "last_oos_date": "2020-12-31",
+                "train_window_months": 120,
+                "oos_months": 12,
+            }
+            selection_full_first = strategy_param_training_module.prepare_selection_historical_full_roos_params(
+                **selection_full_kwargs
+            )
+            selection_full_second = strategy_param_training_module.prepare_selection_historical_full_roos_params(
+                **selection_full_kwargs
+            )
+            selection_full_payload = json.loads(
+                Path(selection_full_second["params_path"]).read_text(encoding="utf-8")
+            )
+    full_search_fields = set(
+        selection_full_payload["breakout_quality_param_adaptation"]["search_fields"]
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_historical_full_roos_builder_runs_once_reuses_and_excludes_fixed_fields",
+        True,
+        len(optimizer_calls) == 1
+        and not bool(selection_full_first["summary"]["optimizer_search_reused"])
+        and bool(selection_full_second["summary"]["optimizer_search_reused"])
+        and int(selection_full_second["summary"]["folds"]) == 7
+        and selection_full_payload["breakout_quality_param_adaptation"]["mode"]
+        == "selection_full_roos_training"
+        and selection_full_payload["breakout_quality_param_adaptation"]["parameter_set"]
+        == "P4_HISTORY"
+        and {"high_len", "atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail"}
+        <= full_search_fields
+        and all(
+            field not in full_search_fields
+            for field in (
+                "use_breakout_buy",
+                "use_breakout_quality_filter",
+                "use_breakout_quality_ranking",
+                "use_history_threshold",
+                "min_history_trades",
+                "min_history_ev",
+                "min_history_win_rate",
+            )
+        ),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "completed_pair_cache_can_replace_vanished_historical_pit_only_for_reuse",
@@ -17756,7 +17903,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17", "C18"}.issubset(set(settings.arms))
+        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17", "C18"}.issubset(set(strategy_config.STRATEGY_COMPARE_ARMS))
         and all(arm.enabled for arm in settings.enabled_arms)
         and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
         and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
@@ -17769,8 +17916,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
 
     from dataclasses import replace as _replace_strategy_arm
     mismatched_arms = dict(settings.arms)
-    mismatched_arms["C10"] = _replace_strategy_arm(
-        mismatched_arms["C10"], param_source="min_dl_tp1_roos", dl_id="A9"
+    mismatched_arms["C20"] = _replace_strategy_arm(
+        mismatched_arms["C20"], param_source="min_dl_tp1_roos", dl_id="CONT12B"
     )
     try:
         from core.strategy_comparison import validate_strategy_comparison_settings
@@ -17806,7 +17953,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         results, "synthetic_breakout_quality", case_id,
         "min_roos_display_names_follow_training_identity_then_runtime_suffix_contract",
         True,
-        all(settings.arms[arm_id].name == name for arm_id, name in expected_display_names.items()),
+        all(
+            str(strategy_config.STRATEGY_COMPARE_ARMS[arm_id]["name"]) == name
+            for arm_id, name in expected_display_names.items()
+        ),
     )
 
     from core.exact_accounting import build_buy_ledger_from_price
@@ -18722,9 +18872,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         }
         with tempfile.TemporaryDirectory() as cache_tmp:
             cache_root = Path(cache_tmp)
+            cache_read_root = (
+                settings.reuse_output_roots[0]
+                if settings.reuse_output_roots
+                else settings.output_root
+            )
             cached_run = (
                 cache_root
-                / settings.output_root
+                / cache_read_root
                 / "runs"
                 / "20260808_000000_C3-C17_cache"
             )
@@ -19289,33 +19444,30 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         arm.arm_id for arm in settings.enabled_arms if arm.dl_enabled
     ]
     switch_target_arm_id = enabled_dl_arm_ids[0] if len(enabled_dl_arm_ids) >= 2 else None
-    original_switch_target = (
-        dict(strategy_config.STRATEGY_COMPARE_ARMS[switch_target_arm_id])
-        if switch_target_arm_id is not None
-        else None
-    )
-    original_contrasts = {
-        key: dict(value)
-        for key, value in strategy_config.STRATEGY_COMPARE_CONTRASTS.items()
-    }
+    profile_id = settings.profile_id
+    original_profile = dict(strategy_config.STRATEGY_COMPARE_PROFILES[profile_id])
     reduced_settings = settings
     if switch_target_arm_id is not None:
         try:
-            strategy_config.STRATEGY_COMPARE_ARMS[switch_target_arm_id]["enabled"] = False
-            for contrast in strategy_config.STRATEGY_COMPARE_CONTRASTS.values():
-                if (
-                    contrast.get("left") == switch_target_arm_id
-                    or contrast.get("right") == switch_target_arm_id
-                ):
-                    contrast["enabled"] = False
-            reduced_settings = strategy_config.get_strategy_comparison_settings()
-        finally:
-            strategy_config.STRATEGY_COMPARE_ARMS[switch_target_arm_id].clear()
-            strategy_config.STRATEGY_COMPARE_ARMS[switch_target_arm_id].update(
-                original_switch_target
+            reduced_arm_ids = tuple(
+                arm_id
+                for arm_id in original_profile["arm_ids"]
+                if arm_id != switch_target_arm_id
             )
-            strategy_config.STRATEGY_COMPARE_CONTRASTS.clear()
-            strategy_config.STRATEGY_COMPARE_CONTRASTS.update(original_contrasts)
+            reduced_contrast_ids = tuple(
+                contrast_id
+                for contrast_id in original_profile["contrast_ids"]
+                if strategy_config.STRATEGY_COMPARE_CONTRASTS[contrast_id].get("left")
+                != switch_target_arm_id
+                and strategy_config.STRATEGY_COMPARE_CONTRASTS[contrast_id].get("right")
+                != switch_target_arm_id
+            )
+            strategy_config.STRATEGY_COMPARE_PROFILES[profile_id]["arm_ids"] = reduced_arm_ids
+            strategy_config.STRATEGY_COMPARE_PROFILES[profile_id]["contrast_ids"] = reduced_contrast_ids
+            reduced_settings = strategy_config.get_strategy_comparison_settings(profile_id)
+        finally:
+            strategy_config.STRATEGY_COMPARE_PROFILES[profile_id].clear()
+            strategy_config.STRATEGY_COMPARE_PROFILES[profile_id].update(original_profile)
     expected_reduced_arm_ids = tuple(
         arm.arm_id
         for arm in settings.enabled_arms

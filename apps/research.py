@@ -17,7 +17,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config.audit import get_active_audit_module_id
 from config.research import get_active_model_research_provider
-from config.strategy_compare import get_strategy_comparison_settings
+from config.strategy_compare import (
+    get_strategy_comparison_profiles,
+    get_strategy_comparison_settings,
+)
 from core.runtime_utils import is_interactive_console, run_cli_entrypoint
 from filters.breakout_quality.strategy_comparison import (
     collect_artifact_status,
@@ -67,8 +70,8 @@ def _run_optimizer(args: list[str] | None = None) -> int:
     return int(optimizer_main(argv=routed_args) or 0)
 
 
-def _run_current_comparison(*, confirm: bool) -> dict:
-    settings = get_strategy_comparison_settings()
+def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
+    settings = get_strategy_comparison_settings(profile_id)
     status = collect_artifact_status(settings=settings)
     print("\n" + render_execution_plan(settings=settings, status=status))
     if status["overall_status"] == "BLOCKED":
@@ -85,12 +88,17 @@ def _run_current_comparison(*, confirm: bool) -> dict:
         if choice not in {"", "1"}:
             print("輸入無效，本次不執行。")
             return {}
-    return run_strategy_comparison(status=status, auto_prepare=True)
+    return run_strategy_comparison(
+        status=status,
+        auto_prepare=True,
+        settings=settings,
+    )
 
 
-def _strategy_compare_menu() -> int:
+def _strategy_compare_profile_menu(profile_id: str) -> int:
+    settings = get_strategy_comparison_settings(profile_id)
     while True:
-        print("\n=== 策略組合比較 ===")
+        print(f"\n=== {settings.profile_label} ===")
         print("[1/Enter] 執行目前比較設定")
         print("[2]       查看設定、工件與預計動作")
         print("[0]       返回")
@@ -103,15 +111,55 @@ def _strategy_compare_menu() -> int:
             return 0
         try:
             if choice == "1":
-                _run_current_comparison(confirm=True)
+                _run_current_comparison(profile_id=profile_id, confirm=True)
             elif choice == "2":
-                show_strategy_comparison_status()
+                show_strategy_comparison_status(settings=settings)
             else:
                 print("選項無效，請按 Enter 或輸入 0～2。")
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:
-            print("\n目前操作已中止，返回策略組合比較選單。")
+            print(f"\n目前操作已中止，返回{settings.profile_label}選單。")
+
+
+def _show_all_strategy_comparison_status() -> None:
+    for profile in get_strategy_comparison_profiles():
+        settings = get_strategy_comparison_settings(profile["profile_id"])
+        print(f"\n--- {settings.profile_label} ---")
+        try:
+            show_strategy_comparison_status(settings=settings)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"[狀態不可用] {type(exc).__name__}: {exc}")
+
+
+def _strategy_compare_menu() -> int:
+    profiles = get_strategy_comparison_profiles()
+    while True:
+        print("\n=== 策略組合比較 ===")
+        for index, profile in enumerate(profiles, start=1):
+            suffix = "/Enter" if index == 1 else ""
+            print(f"[{index}{suffix}] {profile['label']}")
+        status_choice = len(profiles) + 1
+        print(f"[{status_choice}]       查看全部階段設定與工件狀態")
+        print("[0]       返回")
+        try:
+            raw = input("👉 請選擇：").strip().lower()
+        except EOFError:
+            return 0
+        choice = "1" if raw == "" else raw
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        try:
+            numeric = int(choice)
+        except ValueError:
+            print("選項無效。")
+            continue
+        if 1 <= numeric <= len(profiles):
+            _strategy_compare_profile_menu(profiles[numeric - 1]["profile_id"])
+        elif numeric == status_choice:
+            _show_all_strategy_comparison_status()
+        else:
+            print(f"選項無效，請按 Enter 或輸入 0～{status_choice}。")
 
 
 def _audit_menu() -> int:
@@ -157,7 +205,7 @@ def _show_research_status() -> int:
     print("====================================================================================================")
     sections = (
         ("模型訓練", _show_model_status),
-        ("策略組合比較", show_strategy_comparison_status),
+        ("策略組合比較", _show_all_strategy_comparison_status),
         (
             "Audit／診斷",
             lambda: print(
@@ -225,7 +273,7 @@ def _print_help(program_name: str) -> None:
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  策略參數最佳化；後續參數原樣轉交既有 ml_optimizer service")
-    print("  compare    策略組合比較；可接 run 或 status")
+    print("  compare    策略組合比較；可接 [profile] run/status")
     print("  audit      目前 config 指定 Audit module；可接 run、status 或 latest")
     print("  status     查看目前設定與工件狀態")
 
@@ -252,18 +300,31 @@ def main(argv=None) -> int:
     if command in {"compare", "strategy-compare"}:
         if not rest:
             return _strategy_compare_menu() if is_interactive_console() else 0
-        action = str(rest[0]).strip().lower()
-        if action in {"-h", "--help", "help"}:
-            print(f"用法: python {program_name} compare [run|status]")
-            print("說明: 依config/strategy_compare.py執行或查看目前策略組合比較。")
+        if str(rest[0]).strip().lower() in {"-h", "--help", "help"}:
+            print(f"用法: python {program_name} compare [profile] [run|status]")
+            print("說明: profile由config/strategy_compare.py定義；省略profile時使用default profile。")
             return 0
-        if len(rest) > 1:
-            raise ValueError(f"compare不支援額外參數: {' '.join(rest[1:])}")
+        profile_ids = {item["profile_id"] for item in get_strategy_comparison_profiles()}
+        first = str(rest[0]).strip()
+        if first in profile_ids:
+            profile_id = first
+            action = str(rest[1]).strip().lower() if len(rest) >= 2 else "status"
+            if len(rest) > 2:
+                raise ValueError(f"compare不支援額外參數: {' '.join(rest[2:])}")
+        else:
+            profile_id = None
+            action = first.lower()
+            if len(rest) > 1:
+                raise ValueError(f"compare不支援額外參數: {' '.join(rest[1:])}")
+        settings = get_strategy_comparison_settings(profile_id)
         if action in {"run", "compare"}:
-            _run_current_comparison(confirm=is_interactive_console())
+            _run_current_comparison(
+                profile_id=settings.profile_id,
+                confirm=is_interactive_console(),
+            )
             return 0
         if action in {"status", "show"}:
-            show_strategy_comparison_status()
+            show_strategy_comparison_status(settings=settings)
             return 0
         raise ValueError(f"compare不支援的命令: {action}")
     if command == "audit":

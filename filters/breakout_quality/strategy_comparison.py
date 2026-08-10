@@ -327,6 +327,17 @@ def _archived_pair_source_is_self_contained(
     )
 
 
+def _comparison_runs_roots(*, root: Path, settings: StrategyComparisonSettings) -> tuple[Path, ...]:
+    """Return current write root plus config-declared read-only legacy cache roots."""
+
+    roots: list[Path] = []
+    for raw in (settings.output_root, *settings.reuse_output_roots):
+        candidate = _resolve_relative_path(root, str(raw)) / "runs"
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
 def _find_reusable_pair_with_archived_source(
     *,
     root: Path,
@@ -367,9 +378,11 @@ def _find_reusable_pair_with_archived_source(
     comparison_period = dict(status.get("comparison_period") or {})
     if not comparison_period:
         return None
-    output_root = _resolve_relative_path(root, settings.output_root)
-    runs_root = output_root / "runs"
-    if not runs_root.is_dir():
+    runs_roots = tuple(
+        path for path in _comparison_runs_roots(root=root, settings=settings)
+        if path.is_dir()
+    )
+    if not runs_roots:
         return None
     current_group_id = _pair_group_id(
         param_source=on_arm.param_source,
@@ -380,11 +393,17 @@ def _find_reusable_pair_with_archived_source(
     expected_off = _replay_arm_contract(off_arm.as_dict())
     expected_on = _replay_arm_contract(on_arm.as_dict())
 
-    for run_dir in sorted(
-        (path for path in runs_root.iterdir() if path.is_dir()),
+    run_dirs = sorted(
+        (
+            path
+            for runs_root in runs_roots
+            for path in runs_root.iterdir()
+            if path.is_dir()
+        ),
         key=lambda path: path.name,
         reverse=True,
-    ):
+    )
+    for run_dir in run_dirs:
         run_payload = _read_json(run_dir / "strategy_comparison.json")
         if not isinstance(run_payload, dict) or str(run_payload.get("status") or "") != "COMPLETED":
             continue
@@ -469,9 +488,11 @@ def _find_reusable_pair(
 ) -> dict[str, Any] | None:
     if not settings.preparation.reuse_completed_results:
         return None
-    output_root = _resolve_relative_path(root, settings.output_root)
-    runs_root = output_root / "runs"
-    if not runs_root.is_dir():
+    runs_roots = tuple(
+        path for path in _comparison_runs_roots(root=root, settings=settings)
+        if path.is_dir()
+    )
+    if not runs_roots:
         return None
     expected = _current_pair_cache_fingerprint(
         settings=settings,
@@ -485,11 +506,17 @@ def _find_reusable_pair(
         dl_id=str(on_arm.dl_id or ""),
         dl_runtime_mode=str(on_arm.dl_runtime_mode or ""),
     )
-    for run_dir in sorted(
-        (path for path in runs_root.iterdir() if path.is_dir()),
+    run_dirs = sorted(
+        (
+            path
+            for runs_root in runs_roots
+            for path in runs_root.iterdir()
+            if path.is_dir()
+        ),
         key=lambda path: path.name,
         reverse=True,
-    ):
+    )
+    for run_dir in run_dirs:
         run_payload = _read_json(run_dir / "strategy_comparison.json")
         if not isinstance(run_payload, dict):
             continue
@@ -715,7 +742,7 @@ def render_status(
             "DL-on" if arm.dl_enabled else "DL-off",
             arm.description,
         )
-        for arm in current.arms.values()
+        for arm in current.enabled_arms
     ]
     contrast_rows = [
         (
@@ -725,7 +752,7 @@ def render_status(
             item.right,
             item.description,
         )
-        for item in current.contrasts.values()
+        for item in current.enabled_contrasts
     ]
     artifact_rows = []
     for source_id, row in current_status["parameters"].items():
@@ -750,6 +777,7 @@ def render_status(
             render_key_values(
                 (
                     ("設定檔", "config/strategy_compare.py"),
+                    ("比較階段", f"{current.profile_label} ({current.profile_id})"),
                     ("Dataset", current.dataset),
                     (
                         "期間",
@@ -833,6 +861,7 @@ def render_execution_plan(
                 (
                     ("整體狀態", plan.overall_status),
                     ("設定檔", "config/strategy_compare.py"),
+                    ("比較階段", f"{settings.profile_label} ({settings.profile_id})"),
                     ("Config fingerprint", status["config_fingerprint"]),
                 )
             ),
@@ -1502,9 +1531,10 @@ def run_strategy_comparison(
     quiet: bool = False,
     status: dict[str, Any] | None = None,
     auto_prepare: bool = True,
+    settings: StrategyComparisonSettings | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    settings = get_strategy_comparison_settings()
+    settings = settings or get_strategy_comparison_settings()
     status = status or collect_artifact_status(project_root=root, settings=settings)
     requested_fingerprint = str(status["config_fingerprint"])
     requested_plan = status["preparation_plan"]
@@ -1810,9 +1840,10 @@ def run_strategy_comparison(
 def show_strategy_comparison_status(
     *,
     project_root: Path = PROJECT_ROOT,
+    settings: StrategyComparisonSettings | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    settings = get_strategy_comparison_settings()
+    settings = settings or get_strategy_comparison_settings()
     status = collect_artifact_status(project_root=root, settings=settings)
     print("\n" + render_status(project_root=root, settings=settings, status=status))
     return status
