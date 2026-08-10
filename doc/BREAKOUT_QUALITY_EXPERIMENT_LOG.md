@@ -7947,3 +7947,29 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 不建立legacy Market Set Bank，也不把已淘汰的`inception_time_market_set_*` architecture重新帶回正式MR-13A流程。
 - Multiple-seed robustness既有結果與schema v3判讀維持有效；本輪只是修正前置依賴分類，讓同一正式入口可直接進入既定isolated train + replay流程。
 - GPT未執行`apps/test_suite.py`；formal double check仍由使用者本機正式入口執行。
+
+## 2026-08-11 — Strategy Compare robustness workflow收斂：Selection PIT multi-seed、年度aggregate、console降噪與SSOT
+
+### 工作基準
+
+- 程式基準：`test-branch-1_20260811_003951_11855b1(1).zip`；SHA256 `17637b30a6372992c7dd4aedc91ea8a6603520d2506e2f5c6a254aac496f4b93`。
+- 本輪只修改research/robustness infrastructure與report contract；沒有產生新的模型／策略結果，不改既有MR-12B／MR-13A scientific interpretation。
+
+### 實作內容
+
+1. Strategy Compare正式選單由config動態新增兩個獨立robustness工作類型：`Forward-OOS Multi-seed robustness`與`Selection PIT Multi-seed robustness`；App不硬編MR/C/model名稱。
+2. Selection PIT robustness改用canonical PIT builder的isolated output override。每個seed只建策略比較期間`2014-01-01～2020-12-31`所需fold；現行12 months/fold因此是7 folds/model/seed，8 seeds×2 stochastic models預計112 fold trainings。Canonical MR-12B 10-fold與MR-13A 8-fold歷史工件不被覆寫，也不是本工作量。
+3. `run_comparison(..., quiet=True)`完成真正silent worker contract：market/signal cache、replay狀態與完整pair report都不再由inner worker印到console；robustness orchestrator統一管理進度。TTY使用bounded inline progress，redirected output只保留完成狀態；DONE/REUSE/FAILED與績效delta沿用共用console palette及`strategy_report_style`方向性。
+4. 新增`seed_yearly_returns.csv`永久raw aggregate；無論年度表顯示開或關都保存raw yearly。robustness summary/Markdown/console可加入年度Mean/Median/Std/Min/P25/P75/Max與兩個stochastic arms的same-seed年度差值／勝數；每個observation的年度資料在刪除暫存replay前抽取，後續只改report renderer或切換年度顯示可直接重建，不需重訓。
+5. `DL選擇R`仍沿用Strategy Compare既有`_load_direct_selection_r()` SSOT；RoMD same-seed matched-pair與cross-seed distribution維持分開。
+6. `config/strategy_compare.py`移除重複的Dataset／param policy／max positions／rotation magic values；Strategy Compare直接讀`get_breakout_quality_workflow_settings()`。檔案頂端只集中Strategy Compare自己擁有且可調的常用knobs（seed count/generator、CPU replay workers、console mode、年度報表、retention等）；單GPU training queue屬目前orchestrator能力契約，不偽裝成可調config knob。
+7. Robustness schema升至v4，contract拆成scientific identity與execution/report options。Scientific fingerprint不再包含worker數、console mode、progress interval、yearly renderer、report schema、retention、arm顯示名稱與DL description；Selection PIT scientific identity另明確保存fold months／inner validation／minimum group policy，因此只有真正training/runtime semantics改變才換fingerprint。
+8. 成功完成仍預設清除isolated checkpoints/Scores/replay details；失敗或中斷保留resumable工件。同fingerprint重跑可重用完成seed；同一v4 scientific fingerprint的run若缺年度raw，該observation會視為尚未完整並補跑一次，之後report-only變更不再需要重訓。Selection PIT即使checkpoint與score共置同一isolated root，`keep_checkpoints`／`keep_scores`仍分別生效。
+9. 年度aggregate明確區分結果side：Full/Min fixed baseline一律讀`no_filter_return_pct`，stochastic DL ranking一律讀`score_ranking_return_pct`；即使fixed baseline由既有controlled-pair cache重用，也不得把該pair的DL-on年度報酬誤當baseline。
+
+### Scientific identity與狀態
+
+- 不新增／重用任何`MR-*`、`DL-*`、`SR-C*` ID；不改Target、architecture、loss、selector、K/R0、交易會計或既有Selection/Forward period。
+- Selection PIT canonical fold數差異仍是sample-universe最早合法score start造成：MR-12B canonical為2011～2020共10 folds，MR-13A canonical為2013-04～2020共8 folds；本次Selection robustness因策略期間固定2014～2020而雙方一律只需7 folds/seed。
+- 狀態：`IMPLEMENTED / FORWARD_COMPATIBLE / SELECTION_ROBUSTNESS_RESULT_PENDING`。
+- 依PROJECT_SETTINGS，本輪不執行`apps/test_suite.py`；formal double check由使用者本機正式入口完成。

@@ -17700,6 +17700,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
     robustness_source = robustness_path.read_text(encoding="utf-8")
     robustness_settings = strategy_config.get_strategy_multi_seed_robustness_settings()
+    robustness_profiles = strategy_config.get_strategy_multi_seed_robustness_profiles()
+    selection_robustness = strategy_config.get_strategy_multi_seed_robustness_settings("selection_pit")
     robustness_profile = strategy_config.get_strategy_comparison_settings(
         robustness_settings.profile_id
     )
@@ -17725,6 +17727,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "multi_seed_robustness_is_strategy_compare_config_driven_without_second_arm_id_list",
         True,
         robustness_path.is_file()
+        and {item["robustness_id"] for item in robustness_profiles} >= {"forward_oos", "selection_pit"}
+        and selection_robustness.profile_id == "selection_pit"
         and robustness_settings.profile_id in strategy_config.STRATEGY_COMPARE_PROFILES
         and robustness_settings.seed_count >= 2
         and robustness_settings.gpu_train_workers == 1
@@ -17798,9 +17802,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         else:
             romd, total_return = 5.0 + fixed_order / 10.0, 80.0 + fixed_order
         fixed_results[arm.arm_id] = {
-            "metrics": _robustness_metrics(romd, total_return, 40.0)
+            "metrics": _robustness_metrics(romd, total_return, 40.0),
+            "yearly": [
+                {"arm_id": arm.arm_id, "name": arm.name, "seed": None, "seed_order": None, "arm_order": fixed_order, "year": 2021, "return_pct": total_return / 10.0, "is_complete_year": True},
+                {"arm_id": arm.arm_id, "name": arm.name, "seed": None, "seed_order": None, "arm_order": fixed_order, "year": 2022, "return_pct": total_return / 20.0, "is_complete_year": True},
+            ],
         }
     synthetic_seed_rows = []
+    synthetic_yearly_rows = []
     stochastic_expected_mean = {}
     for arm_order, arm in enumerate(robustness_stochastic, start=1):
         low = 5.0 + 3.0 * (arm_order - 1)
@@ -17815,7 +17824,14 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 "seed_order": seed_order,
                 **_robustness_metrics(romd, romd * 10.0, 50.0 + seed_order),
             })
+            for year, annual_return in ((2021, romd), (2022, romd + 1.0)):
+                synthetic_yearly_rows.append({
+                    "arm_id": arm.arm_id, "name": arm.name, "seed": seed,
+                    "arm_order": arm_order, "seed_order": seed_order,
+                    "year": year, "return_pct": annual_return, "is_complete_year": True,
+                })
     synthetic_frame = pd.DataFrame(synthetic_seed_rows)
+    synthetic_yearly_frame = pd.DataFrame(synthetic_yearly_rows)
     with patch.object(
         robustness_module, "build_source_data_inventory",
         return_value={"dataset": "synthetic-full"},
@@ -17831,6 +17847,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         contract=synthetic_contract,
         fixed_results=fixed_results,
         seed_frame=synthetic_frame,
+        seed_yearly_frame=synthetic_yearly_frame,
+    )
+    yearly_side_fixture = [{
+        "year": 2021,
+        "no_filter_return_pct": 1.25,
+        "score_ranking_return_pct": 9.75,
+        "is_full_year": True,
+    }]
+    fixed_yearly_side = robustness_module._normalize_yearly_rows(
+        yearly_side_fixture, arm_id="fixed", name="Fixed", seed=None, seed_order=None, arm_order=1,
+        result_side="no_filter",
+    )
+    stochastic_yearly_side = robustness_module._normalize_yearly_rows(
+        yearly_side_fixture, arm_id="stochastic", name="Stochastic", seed=101, seed_order=1, arm_order=1,
     )
     mean_by_arm = {row["arm_id"]: row for row in synthetic_summary["mean_strategy_metrics"]}
     romd_by_arm = {row["arm_id"]: row for row in synthetic_summary["romd_statistics"]}
@@ -17905,6 +17935,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == full_reference_arm.arm_id
         and distribution_compare_ok
         and same_seed_compare_ok
+        and len(synthetic_summary["yearly_statistics"]) >= len(robustness_fixed) * 2 + len(robustness_stochastic) * 2
+        and len(synthetic_summary["yearly_same_seed_comparison"]) == (2 if len(robustness_stochastic) == 2 else 0)
+        and math.isclose(fixed_yearly_side[0]["return_pct"], 1.25)
+        and math.isclose(stochastic_yearly_side[0]["return_pct"], 9.75)
+        and robustness_source.count('result_side="no_filter"') >= 2
         and "_load_direct_selection_r(" in robustness_source
         and "active_trades_filename=runtime_spec[\"active_trades_filename\"]" in robustness_source,
     )
@@ -17916,13 +17951,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         all(token in robustness_source for token in (
             "--model-output-dir", "--research-output-dir",
             "keep_checkpoints", "keep_scores", "keep_replay_details",
-            "seed_results.csv", "robustness_summary.json", "robustness_report.md",
+            "seed_results.csv", "seed_yearly_returns.csv", "robustness_summary.json", "robustness_report.md",
             "ThreadPoolExecutor", "CPU strategy replay",
         ))
         and not robustness_settings.keep_checkpoints
         and not robustness_settings.keep_scores
         and not robustness_settings.keep_replay_details
-        and "Multiple-seed robustness" in app_source
+        and "get_strategy_multi_seed_robustness_profiles" in app_source
         and "compare robustness" in app_source,
     )
 
@@ -18025,7 +18060,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and isolated_available_through == "2026-03-02"
         and late_execution_rejected
         and '"score_execution_start": artifacts["score_execution_start"]' in robustness_source
-        and 'continuous_score_execution_start_override=str(job["score_execution_start"])' in robustness_source
+        and 'continuous_score_execution_start_override=' in robustness_source
+        and 'str(job["score_execution_start"])' in robustness_source
         and "outer_oos_policy" in robustness_source,
     )
     engine_source = (
@@ -18037,6 +18073,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         '"required_start": continuous_score_override["execution_start"]' in engine_source
         and '"first_scored_event": continuous_score_override["available_from"]' in engine_source,
+    )
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_pit_multi_seed_uses_isolated_period_scoped_pit_scores_and_dynamic_menu_profile",
+        True,
+        '"selection_pit"' in config_source
+        and "--point-in-time-dir-override" in robustness_source
+        and "--score-start-date" in robustness_source
+        and "--score-end-date" in robustness_source
+        and "selection_pit_score_path_override" in engine_source
+        and "selection_pit_manifest_path_override" in engine_source
+        and "get_strategy_multi_seed_robustness_profiles" in app_source
+        and "_pit_fold_count_for_period" in robustness_source,
     )
 
     from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
@@ -18232,11 +18282,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
                 comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
                 artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
             )["fingerprint"]
+        display_only_settings = replace(
+            robustness_settings,
+            console_mode=("verbose" if robustness_settings.console_mode == "compact" else "compact"),
+            progress_interval_seconds=float(robustness_settings.progress_interval_seconds) + 7.0,
+            yearly_report=not bool(robustness_settings.yearly_report),
+            keep_replay_details=not bool(robustness_settings.keep_replay_details),
+        )
+        with patch.object(
+            robustness_module, "get_strategy_multi_seed_robustness_settings",
+            return_value=display_only_settings,
+        ):
+            fingerprint_display_only = robustness_module.build_multi_seed_robustness_contract(
+                comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
+                artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
+            )["fingerprint"]
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_fingerprint_changes_with_oos_period_param_identity_and_effective_training_defaults",
         True,
-        len({fingerprint_base, fingerprint_period, fingerprint_param, fingerprint_training}) == 4,
+        len({fingerprint_base, fingerprint_period, fingerprint_param, fingerprint_training}) == 4
+        and fingerprint_display_only == fingerprint_base,
     )
 
     from filters.breakout_quality import strategy_param_training as strategy_param_training_module

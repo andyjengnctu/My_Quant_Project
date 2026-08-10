@@ -48,25 +48,35 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
+    get_breakout_quality_workflow_settings,
 )
 from config.strategy_compare import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
 )
 from core.console_report import (
+    console_color_enabled,
+    paint,
     project_relative_display_path,
     render_table,
     render_title,
 )
+from core.display_common import InlineProgress
 from core.strategy_comparison import StrategyComparisonArm
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.dataset_store import resolve_dataset_paths
-from filters.breakout_quality.paths import resolve_filter_output_dir
+from filters.breakout_quality.paths import (
+    SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
+    SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+    resolve_filter_output_dir,
+)
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     DAILY_RANKER_OOS_SCORE_FILENAME,
     CONTINUOUS_RANKER_SCORE_FILENAME,
     load_continuous_ranker_oos_score_table_from_path,
+    load_selection_point_in_time_score_table_from_path,
 )
 from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.strategy_compare_engine import (
@@ -76,6 +86,10 @@ from filters.breakout_quality.strategy_compare_engine import (
     run_standalone_baseline,
 )
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
+from filters.breakout_quality.strategy_report_style import (
+    signal_for_delta,
+    terminal_signal,
+)
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.strategy_comparison import (
     _arm_runtime_spec,
@@ -92,9 +106,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_FILENAME = "robustness_report.md"
 SUMMARY_FILENAME = "robustness_summary.json"
 SEED_RESULTS_FILENAME = "seed_results.csv"
+SEED_YEARLY_RESULTS_FILENAME = "seed_yearly_returns.csv"
 MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
-ROBUSTNESS_SCHEMA_VERSION = 3
+ROBUSTNESS_SCHEMA_VERSION = 4
+ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION = 1
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
@@ -285,10 +301,19 @@ def _parameter_plan_rows(
     return rows, blockers
 
 
+def _pit_fold_count_for_period(start: str, end: str, fold_months: int) -> int:
+    current = pd.Timestamp(start).normalize()
+    end_ts = pd.Timestamp(end).normalize()
+    count = 0
+    while current <= end_ts:
+        count += 1
+        current = current + pd.DateOffset(months=int(fold_months))
+    return count
+
+
 def _render_robustness_execution_plan(
-    *, settings, status: dict[str, Any], fixed_arms, stochastic_arms
+    *, cfg, settings, status: dict[str, Any], fixed_arms, stochastic_arms
 ) -> tuple[str, dict[str, Any]]:
-    cfg = get_strategy_multi_seed_robustness_settings()
     required_sources = _required_parameter_sources(fixed_arms, stochastic_arms)
     param_rows, param_blockers = _parameter_plan_rows(
         settings=settings, status=status, required_sources=required_sources
@@ -320,16 +345,51 @@ def _render_robustness_execution_plan(
             arm.name,
             f"{cfg.seed_count}個deterministic generated seeds；isolated canonical trainer + same strategy replay",
         ))
+    pit_workload_lines: list[str] = []
+    if settings.profile_id == "selection_pit" and start is not None and end is not None:
+        first_dl = settings.dl_sources[str(stochastic_arms[0].dl_id)]
+        workflow = get_breakout_quality_workflow_settings(
+            experiment_profile=str(first_dl.experiment_profile)
+        )
+        fold_count = _pit_fold_count_for_period(start, end, int(workflow.point_in_time_fold_months))
+        pit_workload_lines = [
+            f"PIT folds          ：{fold_count} folds / model / seed（只建策略比較期間所需fold）",
+            f"預計fold trainings ：{fold_count * cfg.seed_count * len(stochastic_arms)}",
+        ]
+    color_enabled = console_color_enabled()
+    action_colors = {
+        "READY": "green",
+        "REUSE": "green",
+        "BUILD": "yellow",
+        "REBUILD": "yellow",
+        "PREPARABLE": "yellow",
+        "BLOCKED": "red",
+        "RUN/REUSE": "cyan",
+        "TRAIN+REPLAY": "cyan",
+    }
+    colored_rows = [
+        (
+            paint(action, action_colors.get(str(action), "gray"), enabled=color_enabled, bold=True),
+            item,
+            description,
+        )
+        for action, item, description in rows
+    ]
+    overall_color = {"READY": "green", "PREPARABLE": "yellow", "BLOCKED": "red"}.get(overall, "gray")
     lines = [
-        render_title("Multiple-seed robustness 本次執行計畫"),
-        f"整體狀態          ：{overall}",
+        render_title(f"{cfg.label} 本次執行計畫"),
+        f"整體狀態          ：{paint(overall, overall_color, enabled=color_enabled, bold=True)}",
         f"比較階段          ：{settings.profile_label} ({settings.profile_id})",
         f"共同策略期間      ：{period_text}",
         f"Seed數量          ：{cfg.seed_count}",
         f"Seed generator    ：deterministic / generator_seed={cfg.seed_generator_seed}",
         f"GPU training      ：workers={cfg.gpu_train_workers}",
         f"CPU strategy replay：workers={cfg.cpu_replay_workers}",
-        render_table(("動作", "項目", "說明"), rows),
+        f"Console mode        ：{cfg.console_mode}",
+        f"年度報表顯示        ：{'on' if cfg.yearly_report else 'off'}（raw yearly永遠保留）",
+        f"永久保留模型/Scores/Replay：{cfg.keep_checkpoints}/{cfg.keep_scores}/{cfg.keep_replay_details}",
+        *pit_workload_lines,
+        render_table(("動作", "項目", "說明"), colored_rows),
     ]
     return "\n".join(lines), {
         "overall_status": overall,
@@ -349,6 +409,18 @@ def _dataset_identity_snapshot(dataset: str) -> dict[str, Any]:
             "dataset": str(dataset),
             "detail": str(exc),
         }
+
+
+def _point_in_time_training_policy_snapshot(*, experiment_profile: str) -> dict[str, Any]:
+    workflow = get_breakout_quality_workflow_settings(experiment_profile=str(experiment_profile))
+    return {
+        "fold_months": int(workflow.point_in_time_fold_months),
+        "inner_validation_months": int(workflow.point_in_time_inner_validation_months),
+        "min_train_groups": int(workflow.point_in_time_min_train_groups),
+        "min_validation_groups": int(workflow.point_in_time_min_validation_groups),
+        "min_score_groups": int(workflow.point_in_time_min_score_groups),
+        "resume": bool(workflow.point_in_time_resume),
+    }
 
 
 def _continuous_training_defaults_snapshot() -> dict[str, Any]:
@@ -376,10 +448,11 @@ def _continuous_training_defaults_snapshot() -> dict[str, Any]:
 
 def build_multi_seed_robustness_contract(
     *,
+    robustness_id: str | None = None,
     comparison_period: dict[str, Any] | None = None,
     artifact_identities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    robustness = get_strategy_multi_seed_robustness_settings()
+    robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
     settings = get_strategy_comparison_settings(robustness.profile_id)
     fixed, stochastic = _robustness_arms(settings)
     seeds = resolve_multi_seed_values(
@@ -390,28 +463,20 @@ def build_multi_seed_robustness_contract(
     if not resolved_period:
         resolved_period = {"start": settings.start_date, "end": settings.end_date}
     identities = dict(artifact_identities or {})
-    required_param_sources = sorted(
-        {arm.param_source for arm in (*fixed, *stochastic)}
-    )
+    required_param_sources = sorted({arm.param_source for arm in (*fixed, *stochastic)})
     parameter_identities = {}
     for source_id in required_param_sources:
         raw_identity = identities.get(f"param:{source_id}")
-        if not isinstance(raw_identity, dict):
-            continue
-        parameter_identities[source_id] = {
-            key: raw_identity.get(key)
-            for key in (
-                "sha256", "identity_status", "coverage_start",
-                "coverage_end", "coverage_status",
-            )
-        }
-    training_defaults = _continuous_training_defaults_snapshot()
+        if isinstance(raw_identity, dict):
+            parameter_identities[source_id] = {
+                key: raw_identity.get(key)
+                for key in ("sha256", "coverage_start", "coverage_end")
+            }
     reference_baselines: dict[str, dict[str, Any]] = {}
     for reference_key, spec in robustness.romd_reference_baselines.items():
         matches = [
             arm for arm in fixed
-            if arm.param_source == spec["param_source"]
-            and arm.rule_policy == spec["rule_policy"]
+            if arm.param_source == spec["param_source"] and arm.rule_policy == spec["rule_policy"]
         ]
         if len(matches) != 1:
             raise ValueError(
@@ -420,15 +485,21 @@ def build_multi_seed_robustness_contract(
             )
         matched = matches[0]
         reference_baselines[str(reference_key)] = {
-            "arm_id": matched.arm_id,
-            "name": matched.name,
-            "param_source": matched.param_source,
-            "rule_policy": matched.rule_policy,
+            "arm_id": matched.arm_id, "name": matched.name,
+            "param_source": matched.param_source, "rule_policy": matched.rule_policy,
         }
-    contract = {
-        "schema_version": ROBUSTNESS_SCHEMA_VERSION,
+    scientific_reference_baselines = {
+        key: {
+            field: value
+            for field, value in spec.items()
+            if field != "name"
+        }
+        for key, spec in reference_baselines.items()
+    }
+    scientific = {
+        "scientific_contract_version": ROBUSTNESS_SCIENTIFIC_CONTRACT_VERSION,
+        "robustness_id": robustness.robustness_id,
         "profile_id": settings.profile_id,
-        "strategy_schema_version": int(settings.schema_version),
         "dataset": settings.dataset,
         "dataset_identity": _dataset_identity_snapshot(settings.dataset),
         "param_policy": settings.param_policy,
@@ -439,35 +510,50 @@ def build_multi_seed_robustness_contract(
         "seed_count": int(robustness.seed_count),
         "seed_generator_seed": int(robustness.seed_generator_seed),
         "resolved_seeds": list(seeds),
-        "training_defaults": training_defaults,
-        "romd_reference_baselines": reference_baselines,
+        "training_defaults": _continuous_training_defaults_snapshot(),
+        "romd_reference_baselines": scientific_reference_baselines,
         "fixed_arms": [
-            {
-                "arm_id": arm.arm_id,
-                "param_source": arm.param_source,
-                "rule_policy": arm.rule_policy,
-            }
+            {"arm_id": arm.arm_id, "param_source": arm.param_source, "rule_policy": arm.rule_policy}
             for arm in fixed
         ],
         "stochastic_arms": [
             {
-                "arm_id": arm.arm_id,
-                "param_source": arm.param_source,
-                "rule_policy": arm.rule_policy,
-                "dl_id": arm.dl_id,
-                "dl_runtime_mode": arm.dl_runtime_mode,
+                "arm_id": arm.arm_id, "param_source": arm.param_source, "rule_policy": arm.rule_policy,
+                "dl_id": arm.dl_id, "dl_runtime_mode": arm.dl_runtime_mode,
                 "dl_runtime_options": dict(arm.dl_runtime_options or {}),
-                "dl_source": settings.dl_sources[str(arm.dl_id)].as_dict(),
+                "dl_source": {
+                    "dl_id": settings.dl_sources[str(arm.dl_id)].dl_id,
+                    "filter_id": settings.dl_sources[str(arm.dl_id)].filter_id,
+                    "model_architecture": settings.dl_sources[str(arm.dl_id)].model_architecture,
+                    "experiment_profile": settings.dl_sources[str(arm.dl_id)].experiment_profile,
+                    "threshold": settings.dl_sources[str(arm.dl_id)].threshold,
+                    "score_source": settings.dl_sources[str(arm.dl_id)].score_source,
+                },
                 "experiment_profile": get_breakout_quality_experiment_profile(
                     settings.dl_sources[str(arm.dl_id)].experiment_profile
                 ).as_manifest_payload(),
+                "point_in_time_training_policy": (
+                    _point_in_time_training_policy_snapshot(
+                        experiment_profile=settings.dl_sources[str(arm.dl_id)].experiment_profile
+                    )
+                    if str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
+                    else None
+                ),
             }
             for arm in stochastic
         ],
-        "parallelism": {
+    }
+    contract = {
+        **scientific,
+        "romd_reference_baselines": reference_baselines,
+        "report_schema_version": ROBUSTNESS_SCHEMA_VERSION,
+        "label": robustness.label,
+        "execution_options": {
             "gpu_train_workers": int(robustness.gpu_train_workers),
             "cpu_replay_workers": int(robustness.cpu_replay_workers),
-            "design": "single_gpu_training_queue_overlapped_with_cpu_replay_queue",
+            "console_mode": robustness.console_mode,
+            "progress_interval_seconds": float(robustness.progress_interval_seconds),
+            "yearly_report": bool(robustness.yearly_report),
         },
         "retention": {
             "keep_checkpoints": bool(robustness.keep_checkpoints),
@@ -475,22 +561,18 @@ def build_multi_seed_robustness_contract(
             "keep_replay_details": bool(robustness.keep_replay_details),
         },
     }
-    fingerprint_payload = {
-        key: value
-        for key, value in contract.items()
-        if key not in {"parallelism", "retention"}
-    }
-    contract["fingerprint"] = _canonical_hash(fingerprint_payload, length=16)
+    # 只有scientific identity改變才換fingerprint；console/report/parallelism/retention不觸發重訓。
+    contract["fingerprint"] = _canonical_hash(scientific, length=16)
     return contract
 
 
 def _run_root(contract: dict[str, Any]) -> Path:
-    cfg = get_strategy_multi_seed_robustness_settings()
+    cfg = get_strategy_multi_seed_robustness_settings(str(contract["robustness_id"]))
     return (PROJECT_ROOT / cfg.output_root / str(contract["fingerprint"])).resolve()
 
 
 def _model_work_root(contract: dict[str, Any]) -> Path:
-    cfg = get_strategy_multi_seed_robustness_settings()
+    cfg = get_strategy_multi_seed_robustness_settings(str(contract["robustness_id"]))
     return (PROJECT_ROOT / cfg.model_work_root / str(contract["fingerprint"])).resolve()
 
 
@@ -564,9 +646,55 @@ def _resolved_period(settings, status: dict[str, Any]) -> tuple[str, str]:
 
 
 def _validate_training_artifacts(
-    *, arm: StrategyComparisonArm, seed: int, model_dir: Path, research_dir: Path, settings
+    *, arm: StrategyComparisonArm, seed: int, model_dir: Path, research_dir: Path, settings,
+    comparison_start: str, comparison_end: str,
 ) -> dict[str, Any]:
     dl = settings.dl_sources[str(arm.dl_id)]
+    if str(dl.score_source) == "selection_point_in_time":
+        score = model_dir / SELECTION_POINT_IN_TIME_SCORE_FILENAME
+        manifest_path = model_dir / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+        for label, path in (("PIT score", score), ("PIT manifest", manifest_path)):
+            if not path.is_file():
+                raise FileNotFoundError(f"multi-seed {label}工件不存在: {path}")
+        manifest = _read_json(manifest_path)
+        for field, expected in (
+            ("filter_id", dl.filter_id),
+            ("experiment_profile", dl.experiment_profile),
+            ("model_architecture", dl.model_architecture),
+        ):
+            if str(manifest.get(field) or "") != str(expected):
+                raise ValueError(f"multi-seed PIT manifest {field}不一致")
+        if int(manifest.get("seed", -1)) != int(seed):
+            raise ValueError("multi-seed PIT manifest seed不一致")
+        period = dict(manifest.get("score_period") or {})
+        actual_start = pd.Timestamp(period.get("start")).strftime("%Y-%m-%d")
+        actual_end = pd.Timestamp(period.get("end")).strftime("%Y-%m-%d")
+        if actual_start != pd.Timestamp(comparison_start).strftime("%Y-%m-%d") or actual_end != pd.Timestamp(comparison_end).strftime("%Y-%m-%d"):
+            raise ValueError(
+                "multi-seed PIT只允許策略比較期間所需fold: "
+                f"expected={comparison_start}~{comparison_end}, actual={actual_start}~{actual_end}"
+            )
+        table = load_selection_point_in_time_score_table_from_path(
+            str(score), manifest_path=str(manifest_path)
+        )
+        folds = list(manifest.get("folds") or [])
+        if not folds:
+            raise ValueError("multi-seed PIT manifest沒有folds")
+        epochs = [int(dict(item).get("selected_epoch", 0) or 0) for item in folds]
+        if any(epoch < 1 for epoch in epochs):
+            raise ValueError("multi-seed PIT fold selected_epoch不合法")
+        return {
+            "score": str(score.resolve()),
+            "manifest": str(manifest_path.resolve()),
+            "score_sha256": compute_file_sha256(score),
+            "selected_epoch": int(round(float(np.median(epochs)))),
+            "training_elapsed_sec": float(manifest.get("elapsed_sec", 0.0) or 0.0),
+            "score_execution_start": str(table.attrs.get("available_from") or actual_start),
+            "score_available_from": str(table.attrs.get("available_from") or actual_start),
+            "score_available_through": str(table.attrs.get("available_through") or actual_end),
+            "fold_count": int(manifest.get("fold_count", len(folds)) or len(folds)),
+        }
+
     profile = get_breakout_quality_experiment_profile(dl.experiment_profile)
     score_name = (
         DAILY_RANKER_OOS_SCORE_FILENAME
@@ -574,19 +702,14 @@ def _validate_training_artifacts(
         else CONTINUOUS_RANKER_SCORE_FILENAME
     )
     paths = {
-        "model": model_dir / "model.pt",
-        "manifest": model_dir / "manifest.json",
-        "report": research_dir / CONTINUOUS_RANKER_REPORT_FILENAME,
-        "score": research_dir / score_name,
+        "model": model_dir / "model.pt", "manifest": model_dir / "manifest.json",
+        "report": research_dir / CONTINUOUS_RANKER_REPORT_FILENAME, "score": research_dir / score_name,
     }
     for label, path in paths.items():
         if not path.is_file():
             raise FileNotFoundError(f"multi-seed {label}工件不存在: {path}")
-    manifest = _read_json(paths["manifest"])
-    report = _read_json(paths["report"])
+    manifest = _read_json(paths["manifest"]); report = _read_json(paths["report"])
     for payload, label in ((manifest, "manifest"), (report, "report")):
-        if payload is None:
-            raise ValueError(f"multi-seed {label}不是有效JSON object")
         if str(payload.get("filter_id") or "") != dl.filter_id:
             raise ValueError(f"multi-seed {label} filter_id不一致")
         if str(payload.get("experiment_profile") or "") != dl.experiment_profile:
@@ -595,26 +718,19 @@ def _validate_training_artifacts(
             raise ValueError(f"multi-seed {label} architecture不一致")
     training = dict(report.get("training") or {})
     if int(training.get("seed", -1)) != int(seed):
-        raise ValueError(
-            f"multi-seed report seed不一致: expected={seed}, actual={training.get('seed')}"
-        )
+        raise ValueError("multi-seed report seed不一致")
     outer_policy = dict(manifest.get("outer_oos_policy") or {})
     execution_start_raw = str(outer_policy.get("oos_start_date") or "").strip()
     if not execution_start_raw:
         raise ValueError("multi-seed manifest缺少outer_oos_policy.oos_start_date")
     execution_start = pd.Timestamp(execution_start_raw).strftime("%Y-%m-%d")
-    score_table = load_continuous_ranker_oos_score_table_from_path(
-        str(paths["score"]), dl.experiment_profile
-    )
+    score_table = load_continuous_ranker_oos_score_table_from_path(str(paths["score"]), dl.experiment_profile)
     score_available_from = str(score_table.attrs.get("available_from") or "")
     score_available_through = str(score_table.attrs.get("available_through") or "")
     if not score_available_from or not score_available_through:
         raise ValueError("multi-seed score table缺少日期範圍metadata")
     if execution_start > score_available_from:
-        raise ValueError(
-            "multi-seed isolated score第一列早於execution_start，時間契約不一致: "
-            f"execution_start={execution_start}, available_from={score_available_from}"
-        )
+        raise ValueError("multi-seed isolated score時間契約不一致")
     return {
         **{key: str(path.resolve()) for key, path in paths.items()},
         "model_sha256": compute_file_sha256(paths["model"]),
@@ -624,37 +740,101 @@ def _validate_training_artifacts(
         "score_execution_start": execution_start,
         "score_available_from": score_available_from,
         "score_available_through": score_available_through,
+        "fold_count": None,
     }
 
 
 def _training_command(
-    *, arm: StrategyComparisonArm, seed: int, model_dir: Path, research_dir: Path, settings
+    *, arm: StrategyComparisonArm, seed: int, model_dir: Path, research_dir: Path, settings,
+    comparison_start: str, comparison_end: str,
 ) -> list[str]:
     dl = settings.dl_sources[str(arm.dl_id)]
+    if str(dl.score_source) == "selection_point_in_time":
+        return [
+            sys.executable, "-m", "tools.filters.breakout_quality.build_point_in_time_scores",
+            "--filter-id", dl.filter_id,
+            "--model-architecture", dl.model_architecture,
+            "--experiment-profile", dl.experiment_profile,
+            "--seed", str(int(seed)),
+            "--score-start-date", str(comparison_start),
+            "--score-end-date", str(comparison_end),
+            "--point-in-time-dir-override", str(model_dir.resolve()),
+        ]
     return [
-        sys.executable,
-        "-m",
-        "tools.filters.breakout_quality.train_continuous_ranker",
-        "--filter-id",
-        dl.filter_id,
-        "--model-architecture",
-        dl.model_architecture,
-        "--experiment-profile",
-        dl.experiment_profile,
-        "--seed",
-        str(int(seed)),
-        "--model-output-dir",
-        str(model_dir.resolve()),
-        "--research-output-dir",
-        str(research_dir.resolve()),
+        sys.executable, "-m", "tools.filters.breakout_quality.train_continuous_ranker",
+        "--filter-id", dl.filter_id, "--model-architecture", dl.model_architecture,
+        "--experiment-profile", dl.experiment_profile, "--seed", str(int(seed)),
+        "--model-output-dir", str(model_dir.resolve()),
+        "--research-output-dir", str(research_dir.resolve()),
     ]
-
 
 def _format_elapsed(seconds: float) -> str:
     total = max(0, int(round(float(seconds))))
     hours, rem = divmod(total, 3600)
     minutes, sec = divmod(rem, 60)
     return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+
+
+def _normalize_yearly_rows(
+    yearly: Any, *, arm_id: str, name: str, seed: int | None, seed_order: int | None, arm_order: int,
+    result_side: str = "score_ranking",
+) -> list[dict[str, Any]]:
+    side = str(result_side).strip()
+    if side not in {"score_ranking", "no_filter"}:
+        raise ValueError(f"不支援的年度報酬side: {side!r}")
+    primary_column = "score_ranking_return_pct" if side == "score_ranking" else "no_filter_return_pct"
+    rows: list[dict[str, Any]] = []
+    for raw in list(yearly or []):
+        item = dict(raw or {})
+        value = item.get(primary_column)
+        if value is None:
+            raise ValueError(
+                f"年度報酬缺少{side} canonical欄位: year={item.get('year')!r}, column={primary_column}"
+            )
+        rows.append({
+            "arm_id": str(arm_id), "name": str(name),
+            "seed": None if seed is None else int(seed),
+            "seed_order": None if seed_order is None else int(seed_order),
+            "arm_order": int(arm_order),
+            "year": int(item.get("year")),
+            "return_pct": float(value),
+            "is_complete_year": bool(item.get("is_full_year", item.get("is_complete_year", item.get("complete_year", False)))),
+        })
+    return rows
+
+
+def _coerce_bool_series(series: pd.Series, *, field_name: str) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return series.astype(bool)
+    normalized = series.astype(str).str.strip().str.lower()
+    mapping = {"true": True, "1": True, "yes": True, "是": True, "false": False, "0": False, "no": False, "否": False}
+    invalid = sorted(set(normalized[~normalized.isin(mapping)].tolist()))
+    if invalid:
+        raise ValueError(f"{field_name}包含無法解析的布林值: {invalid[:5]}")
+    return normalized.map(mapping).astype(bool)
+
+
+def _load_seed_yearly_results(path: Path) -> pd.DataFrame:
+    if not path.is_file():
+        return pd.DataFrame()
+    frame = pd.read_csv(path, encoding="utf-8-sig")
+    if frame.empty:
+        return frame
+    frame["arm_id"] = frame["arm_id"].astype(str)
+    frame["seed"] = pd.to_numeric(frame["seed"], errors="raise").astype(int)
+    frame["year"] = pd.to_numeric(frame["year"], errors="raise").astype(int)
+    if "is_complete_year" in frame.columns:
+        frame["is_complete_year"] = _coerce_bool_series(
+            frame["is_complete_year"], field_name="seed_yearly_results.is_complete_year"
+        )
+    return frame
+
+
+def _write_seed_yearly_results(path: Path, frame: pd.DataFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.sort_values(["arm_order", "seed_order", "year"], kind="mergesort").to_csv(
+        path, index=False, encoding="utf-8-sig"
+    )
 
 
 def _baseline_work_dir(run_root: Path, arm: StrategyComparisonArm) -> Path:
@@ -677,12 +857,18 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
                 "arm_id": arm.arm_id,
                 "name": arm.name,
                 "metrics": dict(payload.get("no_filter") or {}),
+                "yearly": _normalize_yearly_rows(
+                    payload.get("yearly"), arm_id=arm.arm_id, name=arm.name,
+                    seed=None, seed_order=None, arm_order=list(fixed_arms).index(arm) + 1,
+                    result_side="no_filter",
+                ),
                 "baseline_dir": str(reusable_dir.resolve()),
                 "source": "REUSE",
             }
+            color_enabled = console_color_enabled()
             print(
-                f"[BASELINE REUSE] {arm.name} | "
-                f"{project_relative_display_path(reusable_dir, project_root=PROJECT_ROOT)}"
+                paint("[BASELINE REUSE]", "green", enabled=color_enabled, bold=True)
+                + f" {arm.name} | {project_relative_display_path(reusable_dir, project_root=PROJECT_ROOT)}"
             )
             continue
         output_dir = _baseline_work_dir(run_root, arm)
@@ -711,6 +897,11 @@ def _run_fixed_baselines(*, settings, status, run_root: Path, fixed_arms) -> dic
             "arm_id": arm.arm_id,
             "name": arm.name,
             "metrics": dict(payload.get("no_filter") or {}),
+            "yearly": _normalize_yearly_rows(
+                payload.get("yearly"), arm_id=arm.arm_id, name=arm.name,
+                seed=None, seed_order=None, arm_order=list(fixed_arms).index(arm) + 1,
+                result_side="no_filter",
+            ),
             "baseline_dir": str(output_dir.resolve()),
             "source": "RUN",
         }
@@ -721,70 +912,54 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     settings = get_strategy_comparison_settings(str(job["profile_id"]))
     arm = settings.arms[str(job["arm_id"])]
     dl = settings.dl_sources[str(arm.dl_id)]
-    start = str(job["comparison_start"])
-    end = str(job["comparison_end"])
+    start = str(job["comparison_start"]); end = str(job["comparison_end"])
     pair_dir = Path(str(job["pair_dir"])).resolve()
     baseline_dir = Path(str(job["baseline_dir"])).resolve()
-    if pair_dir.exists():
-        shutil.rmtree(pair_dir)
+    if pair_dir.exists(): shutil.rmtree(pair_dir)
     all_off = arm.rule_policy == "all_off"
-    started = time.perf_counter()
-    runtime_spec = _arm_runtime_spec(arm)
+    started = time.perf_counter(); runtime_spec = _arm_runtime_spec(arm)
+    is_selection = str(dl.score_source) == "selection_point_in_time"
     payload = run_comparison(
-        project_root=PROJECT_ROOT,
-        dataset=settings.dataset,
-        params_path=str(job["params_path"]),
-        param_policy=settings.param_policy,
-        max_positions=settings.max_positions,
-        enable_rotation=settings.rotation == "on",
-        comparison_mode=runtime_spec["comparison_mode"],
-        ranking_policy=runtime_spec["ranking_policy"],
-        ranking_options=dict(arm.dl_runtime_options or {}),
-        optional_entry_filter_policy=(
-            OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
-            if all_off
-            else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
-        ),
-        filter_id=dl.filter_id,
-        score_source=dl.score_source,
-        model_architecture=dl.model_architecture,
-        experiment_profile=dl.experiment_profile,
-        threshold=dl.threshold,
-        output_dir_override=pair_dir,
-        comparison_start_date=start,
-        comparison_end_date=end,
-        quiet=True,
+        project_root=PROJECT_ROOT, dataset=settings.dataset, params_path=str(job["params_path"]),
+        param_policy=settings.param_policy, max_positions=settings.max_positions,
+        enable_rotation=settings.rotation == "on", comparison_mode=runtime_spec["comparison_mode"],
+        ranking_policy=runtime_spec["ranking_policy"], ranking_options=dict(arm.dl_runtime_options or {}),
+        optional_entry_filter_policy=(OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT),
+        filter_id=dl.filter_id, score_source=dl.score_source, model_architecture=dl.model_architecture,
+        experiment_profile=dl.experiment_profile, threshold=dl.threshold, output_dir_override=pair_dir,
+        comparison_start_date=start, comparison_end_date=end, quiet=True,
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
         baseline_reuse_dir=baseline_dir,
-        continuous_score_path_override=str(job["score_path"]),
-        continuous_score_execution_start_override=str(job["score_execution_start"]),
+        continuous_score_path_override=(None if is_selection else str(job["score_path"])),
+        continuous_score_execution_start_override=(None if is_selection else str(job["score_execution_start"])),
+        selection_pit_score_path_override=(str(job["score_path"]) if is_selection else None),
+        selection_pit_manifest_path_override=(str(job["score_manifest_path"]) if is_selection else None),
+        selection_pit_expected_seed_override=(int(job["seed"]) if is_selection else None),
     )
     metrics = dict(payload.get("score_ranking") or {})
     metrics["direct_selection_r"] = _load_direct_selection_r(
-        pair_dir,
-        root=PROJECT_ROOT,
-        active_trades_filename=runtime_spec["active_trades_filename"],
+        pair_dir, root=PROJECT_ROOT, active_trades_filename=runtime_spec["active_trades_filename"]
     )
     result = {
-        "arm_id": arm.arm_id,
-        "name": arm.name,
-        "seed": int(job["seed"]),
-        "arm_order": int(job["arm_order"]),
-        "seed_order": int(job["seed_order"]),
+        "arm_id": arm.arm_id, "name": arm.name, "seed": int(job["seed"]),
+        "arm_order": int(job["arm_order"]), "seed_order": int(job["seed_order"]),
         "selected_epoch": int(job.get("selected_epoch", 0) or 0),
+        "fold_count": job.get("fold_count"),
         "training_elapsed_sec": float(job.get("training_elapsed_sec", 0.0) or 0.0),
         "replay_elapsed_sec": round(time.perf_counter() - started, 3),
         **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
+        "yearly": _normalize_yearly_rows(
+            payload.get("yearly"), arm_id=arm.arm_id, name=arm.name, seed=int(job["seed"]),
+            seed_order=int(job["seed_order"]), arm_order=int(job["arm_order"]),
+        ),
     }
-    result_path = Path(str(job["result_path"])).resolve()
-    _write_json(result_path, result)
-    if not bool(job.get("keep_replay_details")):
-        shutil.rmtree(pair_dir, ignore_errors=True)
+    result_path = Path(str(job["result_path"])).resolve(); _write_json(result_path, result)
+    if not bool(job.get("keep_replay_details")): shutil.rmtree(pair_dir, ignore_errors=True)
     return result
 
 
 def _result_row(result: dict[str, Any]) -> dict[str, Any]:
-    return dict(result)
+    return {key: value for key, value in result.items() if key != "yearly"}
 
 
 def _mean_or_none(series: pd.Series) -> float | None:
@@ -792,8 +967,25 @@ def _mean_or_none(series: pd.Series) -> float | None:
     return None if values.empty else float(values.mean())
 
 
+def _distribution_stats(values: np.ndarray) -> dict[str, Any]:
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if not len(values):
+        return {key: None for key in ("mean", "median", "std", "min", "p25", "p75", "max")}
+    return {
+        "mean": float(np.mean(values)),
+        "median": float(np.median(values)),
+        "std": (float(np.std(values, ddof=1)) if len(values) > 1 else 0.0),
+        "min": float(np.min(values)),
+        "p25": float(np.quantile(values, 0.25)),
+        "p75": float(np.quantile(values, 0.75)),
+        "max": float(np.max(values)),
+    }
+
+
 def _robustness_summary(
-    *, contract: dict[str, Any], fixed_results: dict[str, dict[str, Any]], seed_frame: pd.DataFrame
+    *, contract: dict[str, Any], fixed_results: dict[str, dict[str, Any]],
+    seed_frame: pd.DataFrame, seed_yearly_frame: pd.DataFrame,
 ) -> dict[str, Any]:
     settings = get_strategy_comparison_settings(str(contract["profile_id"]))
     fixed, stochastic = _robustness_arms(settings)
@@ -801,90 +993,59 @@ def _robustness_summary(
     for arm in fixed:
         metrics = dict(fixed_results[arm.arm_id]["metrics"])
         metrics.setdefault("direct_selection_r", 0.0)
-        mean_rows.append(
-            {
-                "arm_id": arm.arm_id,
-                "name": arm.name,
-                "type": "Fixed",
-                "n": 1,
-                **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
-            }
-        )
+        mean_rows.append({
+            "arm_id": arm.arm_id, "name": arm.name, "type": "Fixed", "n": 1,
+            **{key: metrics.get(key) for _label, key, _unit in MEAN_METRICS},
+        })
     for arm in stochastic:
         rows = seed_frame[seed_frame["arm_id"] == arm.arm_id].copy()
-        mean_rows.append(
-            {
-                "arm_id": arm.arm_id,
-                "name": arm.name,
-                "type": "Multi-seed",
-                "n": int(len(rows)),
-                **{key: _mean_or_none(rows[key]) for _label, key, _unit in MEAN_METRICS},
-            }
-        )
+        mean_rows.append({
+            "arm_id": arm.arm_id, "name": arm.name, "type": "Multi-seed", "n": int(len(rows)),
+            **{key: _mean_or_none(rows[key]) for _label, key, _unit in MEAN_METRICS},
+        })
 
-    fixed_by_arm_id = {
-        row["arm_id"]: row for row in mean_rows if row["type"] == "Fixed"
-    }
+    fixed_by_arm_id = {row["arm_id"]: row for row in mean_rows if row["type"] == "Fixed"}
     references = dict(contract.get("romd_reference_baselines") or {})
-    min_reference = dict(references.get("min") or {})
-    full_reference = dict(references.get("full") or {})
-    min_baseline = fixed_by_arm_id.get(str(min_reference.get("arm_id") or ""))
-    full_baseline = fixed_by_arm_id.get(str(full_reference.get("arm_id") or ""))
+    min_baseline = fixed_by_arm_id.get(str(dict(references.get("min") or {}).get("arm_id") or ""))
+    full_baseline = fixed_by_arm_id.get(str(dict(references.get("full") or {}).get("arm_id") or ""))
     if min_baseline is None or full_baseline is None:
         raise ValueError("multi-seed summary缺少config指定的Min/Full fixed baseline")
+
     romd_rows: list[dict[str, Any]] = []
     for row in mean_rows:
         if row["type"] == "Fixed":
             value = float(row["return_over_max_drawdown"])
-            romd_rows.append(
-                {
-                    "arm_id": row["arm_id"], "name": row["name"], "n": 1,
-                    "mean": value, "median": value, "std": None, "cv": None,
-                    "min": value, "p25": None, "p75": None, "max": value,
-                    "beats_min_count": None, "beats_full_count": None,
-                }
-            )
+            romd_rows.append({
+                "arm_id": row["arm_id"], "name": row["name"], "n": 1,
+                "mean": value, "median": value, "std": None, "cv": None,
+                "min": value, "p25": None, "p75": None, "max": value,
+                "beats_min_count": None, "beats_full_count": None,
+            })
             continue
         values = pd.to_numeric(
             seed_frame.loc[seed_frame["arm_id"] == row["arm_id"], "return_over_max_drawdown"],
             errors="coerce",
         ).dropna().to_numpy(dtype=float)
-        mean = float(np.mean(values))
-        std = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
-        romd_rows.append(
-            {
-                "arm_id": row["arm_id"], "name": row["name"], "n": int(len(values)),
-                "mean": mean,
-                "median": float(np.median(values)),
-                "std": std,
-                "cv": (None if math.isclose(mean, 0.0, abs_tol=1e-12) else float(std / abs(mean))),
-                "min": float(np.min(values)),
-                "p25": float(np.quantile(values, 0.25)),
-                "p75": float(np.quantile(values, 0.75)),
-                "max": float(np.max(values)),
-                "beats_min_count": (
-                    None if min_baseline is None else int(np.sum(values > float(min_baseline["return_over_max_drawdown"])))
-                ),
-                "beats_full_count": (
-                    None if full_baseline is None else int(np.sum(values > float(full_baseline["return_over_max_drawdown"])))
-                ),
-            }
-        )
+        stats = _distribution_stats(values)
+        mean = float(stats["mean"])
+        romd_rows.append({
+            "arm_id": row["arm_id"], "name": row["name"], "n": int(len(values)),
+            **stats,
+            "cv": (None if math.isclose(mean, 0.0, abs_tol=1e-12) else float(float(stats["std"]) / abs(mean))),
+            "beats_min_count": int(np.sum(values > float(min_baseline["return_over_max_drawdown"]))),
+            "beats_full_count": int(np.sum(values > float(full_baseline["return_over_max_drawdown"]))),
+        })
+
     stochastic_rows = [row for row in romd_rows if int(row["n"]) > 1]
     distribution_compare = None
     same_seed_compare = None
     if len(stochastic_rows) == 2:
         a, b = stochastic_rows
-        av = pd.to_numeric(
-            seed_frame.loc[seed_frame["arm_id"] == a["arm_id"], "return_over_max_drawdown"], errors="coerce"
-        ).dropna().to_numpy(dtype=float)
-        bv = pd.to_numeric(
-            seed_frame.loc[seed_frame["arm_id"] == b["arm_id"], "return_over_max_drawdown"], errors="coerce"
-        ).dropna().to_numpy(dtype=float)
+        av = pd.to_numeric(seed_frame.loc[seed_frame["arm_id"] == a["arm_id"], "return_over_max_drawdown"], errors="coerce").dropna().to_numpy(dtype=float)
+        bv = pd.to_numeric(seed_frame.loc[seed_frame["arm_id"] == b["arm_id"], "return_over_max_drawdown"], errors="coerce").dropna().to_numpy(dtype=float)
         if len(av) and len(bv):
             distribution_compare = {
-                "left": a["name"],
-                "right": b["name"],
+                "left": a["name"], "right": b["name"],
                 "pairwise_left_gt_right_probability": float(np.mean(av[:, None] > bv[None, :])),
                 "pair_count": int(len(av) * len(bv)),
             }
@@ -892,47 +1053,71 @@ def _robustness_summary(
             seed_frame["arm_id"].isin((a["arm_id"], b["arm_id"])),
             ["arm_id", "seed", "return_over_max_drawdown"],
         ].copy()
-        paired["return_over_max_drawdown"] = pd.to_numeric(
-            paired["return_over_max_drawdown"], errors="coerce"
-        )
-        paired = paired.dropna(subset=["return_over_max_drawdown"])
-        pivot = paired.pivot(index="seed", columns="arm_id", values="return_over_max_drawdown")
+        paired["return_over_max_drawdown"] = pd.to_numeric(paired["return_over_max_drawdown"], errors="coerce")
+        pivot = paired.dropna().pivot(index="seed", columns="arm_id", values="return_over_max_drawdown")
         if a["arm_id"] in pivot.columns and b["arm_id"] in pivot.columns:
             pivot = pivot[[a["arm_id"], b["arm_id"]]].dropna()
             if not pivot.empty:
-                delta = (
-                    pivot[b["arm_id"]].to_numpy(dtype=float)
-                    - pivot[a["arm_id"]].to_numpy(dtype=float)
-                )
-                delta_mean = float(np.mean(delta))
-                delta_std = float(np.std(delta, ddof=1)) if len(delta) > 1 else 0.0
-                tie_mask = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
+                delta = pivot[b["arm_id"]].to_numpy(dtype=float) - pivot[a["arm_id"]].to_numpy(dtype=float)
+                stats = _distribution_stats(delta)
+                tie = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
                 same_seed_compare = {
-                    "left": a["name"],
-                    "right": b["name"],
-                    "n": int(len(delta)),
-                    "left_gt_right_count": int(np.sum((delta < 0.0) & ~tie_mask)),
-                    "right_gt_left_count": int(np.sum((delta > 0.0) & ~tie_mask)),
-                    "tie_count": int(np.sum(tie_mask)),
-                    "right_minus_left_mean": delta_mean,
-                    "right_minus_left_median": float(np.median(delta)),
-                    "right_minus_left_std": delta_std,
-                    "right_minus_left_min": float(np.min(delta)),
-                    "right_minus_left_p25": float(np.quantile(delta, 0.25)),
-                    "right_minus_left_p75": float(np.quantile(delta, 0.75)),
-                    "right_minus_left_max": float(np.max(delta)),
+                    "left": a["name"], "right": b["name"], "n": int(len(delta)),
+                    "left_gt_right_count": int(np.sum((delta < 0.0) & ~tie)),
+                    "right_gt_left_count": int(np.sum((delta > 0.0) & ~tie)),
+                    "tie_count": int(np.sum(tie)),
+                    **{f"right_minus_left_{key}": value for key, value in stats.items()},
                 }
+
+    yearly_statistics: list[dict[str, Any]] = []
+    yearly_same_seed: list[dict[str, Any]] = []
+    if bool(dict(contract.get("execution_options") or {}).get("yearly_report", True)):
+        for arm_order, arm in enumerate(fixed, start=1):
+            for item in fixed_results[arm.arm_id].get("yearly", []):
+                yearly_statistics.append({
+                    "arm_id": arm.arm_id, "name": arm.name, "type": "Fixed", "n": 1,
+                    "year": int(item["year"]), "is_complete_year": bool(item["is_complete_year"]),
+                    "mean": float(item["return_pct"]), "median": float(item["return_pct"]),
+                    "std": None, "min": float(item["return_pct"]), "p25": None, "p75": None, "max": float(item["return_pct"]),
+                })
+        for arm in stochastic:
+            arm_yearly = seed_yearly_frame[seed_yearly_frame["arm_id"] == arm.arm_id].copy()
+            for year, group in arm_yearly.groupby("year", sort=True):
+                values = pd.to_numeric(group["return_pct"], errors="coerce").dropna().to_numpy(dtype=float)
+                stats = _distribution_stats(values)
+                yearly_statistics.append({
+                    "arm_id": arm.arm_id, "name": arm.name, "type": "Multi-seed", "n": int(len(values)),
+                    "year": int(year), "is_complete_year": bool(group["is_complete_year"].astype(bool).all()),
+                    **stats,
+                })
+        if len(stochastic) == 2 and not seed_yearly_frame.empty:
+            left, right = stochastic
+            p = seed_yearly_frame[seed_yearly_frame["arm_id"].isin((left.arm_id, right.arm_id))].copy()
+            for year, group in p.groupby("year", sort=True):
+                pivot = group.pivot(index="seed", columns="arm_id", values="return_pct")
+                if left.arm_id not in pivot.columns or right.arm_id not in pivot.columns:
+                    continue
+                pivot = pivot[[left.arm_id, right.arm_id]].dropna()
+                if pivot.empty:
+                    continue
+                delta = pivot[right.arm_id].to_numpy(dtype=float) - pivot[left.arm_id].to_numpy(dtype=float)
+                stats = _distribution_stats(delta); tie = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
+                yearly_same_seed.append({
+                    "year": int(year), "left": left.name, "right": right.name, "n": int(len(delta)),
+                    "left_gt_right_count": int(np.sum((delta < 0) & ~tie)),
+                    "right_gt_left_count": int(np.sum((delta > 0) & ~tie)),
+                    "tie_count": int(np.sum(tie)),
+                    **{f"right_minus_left_{key}": value for key, value in stats.items()},
+                })
+
     return {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
-        "status": "RESULT_AVAILABLE",
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "contract": contract,
-        "mean_strategy_metrics": mean_rows,
-        "romd_statistics": romd_rows,
-        "romd_distribution_comparison": distribution_compare,
+        "status": "RESULT_AVAILABLE", "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "contract": contract, "mean_strategy_metrics": mean_rows,
+        "romd_statistics": romd_rows, "romd_distribution_comparison": distribution_compare,
         "romd_same_seed_comparison": same_seed_compare,
+        "yearly_statistics": yearly_statistics, "yearly_same_seed_comparison": yearly_same_seed,
     }
-
 
 def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     def esc(value: Any) -> str:
@@ -960,14 +1145,11 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
     mean_rows = []
     for row in summary["mean_strategy_metrics"]:
         cells = [row["name"], row["type"], str(row["n"])]
-        for label, key, unit in MEAN_METRICS:
+        for _label, key, unit in MEAN_METRICS:
             digits = 1 if key == "trade_count" else 4 if key == "log_r_squared" else 2
             cells.append(_fmt(row.get(key), digits=digits, suffix=unit))
         mean_rows.append(cells)
-
-    romd_headers = [
-        "比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"
-    ]
+    romd_headers = ["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"]
     romd_rows = []
     for row in summary["romd_statistics"]:
         n = int(row["n"])
@@ -977,71 +1159,74 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
             "-" if row["beats_min_count"] is None else f"{row['beats_min_count']}/{n}",
             "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
         ])
-
+    contract = dict(summary["contract"])
     lines = [
-        "# Multiple-seed Robustness",
-        "",
-        f"- Profile：`{summary['contract']['profile_id']}`",
-        f"- Seeds：`{summary['contract']['seed_count']}`（deterministic generated；resolved values只存manifest，不作best-seed選擇）",
-        f"- Fingerprint：`{summary['contract']['fingerprint']}`",
-        "- 判讀原則：不挑最佳seed、不做seed ensemble；主表比較各策略指標的seed平均，第二表只看RoMD完整分布。",
-        "",
-        "## 1. 平均策略績效",
-        "",
-        _markdown_table(mean_headers, mean_rows),
-        "",
-        "## 2. RoMD完整統計",
-        "",
-        _markdown_table(romd_headers, romd_rows),
+        f"# {contract.get('label') or 'Multiple-seed Robustness'}", "",
+        f"- Profile：`{contract['profile_id']}`",
+        f"- Seeds：`{contract['seed_count']}`（deterministic generated；不作best-seed選擇）",
+        f"- Scientific fingerprint：`{contract['fingerprint']}`",
+        f"- Report schema：`{summary['schema_version']}`（不影響scientific fingerprint）", "",
+        "## 1. 平均策略績效", "", _markdown_table(mean_headers, mean_rows), "",
+        "## 2. RoMD完整統計", "", _markdown_table(romd_headers, romd_rows),
     ]
+    same = summary.get("romd_same_seed_comparison")
+    if isinstance(same, dict):
+        n = int(same["n"])
+        lines += ["", "### RoMD同seed配對比較", "",
+            f"- {same['right']} > {same['left']}：{same['right_gt_left_count']}/{n}；"
+            f"{same['left']} > {same['right']}：{same['left_gt_right_count']}/{n}；平手：{same['tie_count']}/{n}。",
+            f"- ΔRoMD（{same['right']} − {same['left']}）：Mean {_fmt(same['right_minus_left_mean'])}；"
+            f"Median {_fmt(same['right_minus_left_median'])}；Std {_fmt(same['right_minus_left_std'])}；"
+            f"Min {_fmt(same['right_minus_left_min'])}；P25 {_fmt(same['right_minus_left_p25'])}；"
+            f"P75 {_fmt(same['right_minus_left_p75'])}；Max {_fmt(same['right_minus_left_max'])}。"]
     compare = summary.get("romd_distribution_comparison")
     if isinstance(compare, dict):
-        lines.extend([
-            "",
-            "### RoMD任意seed分布交叉比較",
-            "",
+        lines += ["", "### RoMD任意seed分布交叉比較", "",
             f"- P({compare['left']} > {compare['right']}) = {float(compare['pairwise_left_gt_right_probability'])*100:.2f}% "
-            f"（{compare['pair_count']}組cross-seed pairs）",
-        ])
-    same_seed = summary.get("romd_same_seed_comparison")
-    if isinstance(same_seed, dict):
-        n = int(same_seed["n"])
-        lines.extend([
-            "",
-            "### RoMD同seed配對比較",
-            "",
-            f"- {same_seed['right']} > {same_seed['left']}：{same_seed['right_gt_left_count']}/{n}；"
-            f"{same_seed['left']} > {same_seed['right']}：{same_seed['left_gt_right_count']}/{n}；"
-            f"平手：{same_seed['tie_count']}/{n}。",
-            f"- ΔRoMD（{same_seed['right']} − {same_seed['left']}）："
-            f"Mean {_fmt(same_seed['right_minus_left_mean'])}；"
-            f"Median {_fmt(same_seed['right_minus_left_median'])}；"
-            f"Std {_fmt(same_seed['right_minus_left_std'])}；"
-            f"Min {_fmt(same_seed['right_minus_left_min'])}；"
-            f"P25 {_fmt(same_seed['right_minus_left_p25'])}；"
-            f"P75 {_fmt(same_seed['right_minus_left_p75'])}；"
-            f"Max {_fmt(same_seed['right_minus_left_max'])}。",
-        ])
-    references = dict(summary["contract"].get("romd_reference_baselines") or {})
+            f"（{compare['pair_count']}組cross-seed pairs；與同seed配對問題不同）。"]
+
+    yearly = list(summary.get("yearly_statistics") or [])
+    if yearly:
+        lines += ["", "## 3. 歷年報酬完整統計", ""]
+        rows = []
+        for row in sorted(yearly, key=lambda x: (int(x["year"]), str(x["type"]), str(x["name"]))):
+            rows.append([
+                str(row["year"]) + ("" if row.get("is_complete_year") else "*"), row["name"], row["type"], str(row["n"]),
+                _fmt(row["mean"], suffix="%"), _fmt(row["median"], suffix="%"), _fmt(row["std"], suffix="%"),
+                _fmt(row["min"], suffix="%"), _fmt(row["p25"], suffix="%"), _fmt(row["p75"], suffix="%"), _fmt(row["max"], suffix="%"),
+            ])
+        lines += [_markdown_table(["年度", "比較對象", "類型", "N", "Mean", "Median", "Std", "Min", "P25", "P75", "Max"], rows)]
+        annual_pair = list(summary.get("yearly_same_seed_comparison") or [])
+        if annual_pair:
+            lines += ["", "### 年度同seed配對比較", ""]
+            pair_rows = []
+            for row in annual_pair:
+                pair_rows.append([
+                    str(row["year"]), str(row["n"]), _fmt(row["right_minus_left_mean"], suffix="%"),
+                    _fmt(row["right_minus_left_median"], suffix="%"), _fmt(row["right_minus_left_std"], suffix="%"),
+                    f"{row['right_gt_left_count']}/{row['n']}", f"{row['left_gt_right_count']}/{row['n']}", f"{row['tie_count']}/{row['n']}",
+                ])
+            lines += [_markdown_table(["年度", "N", "Δ右-左 Mean", "Median", "Std", "右勝", "左勝", "Tie"], pair_rows)]
+        lines += ["", "* 非完整年度。"]
+
+    references = dict(contract.get("romd_reference_baselines") or {})
     min_name = str(dict(references.get("min") or {}).get("name") or "Min baseline")
     full_name = str(dict(references.get("full") or {}).get("name") or "Full baseline")
-    lines.extend([
-        "",
-        "## 3. 限制",
-        "",
-        "- resolved seeds只用於重現；報表不指定seed 42或任何best seed。",
-        f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一平均績效表。",
-        "- Forward-OOS已屬iterative research OOS evidence；不得用本報表挑training hyperparameter或best seed。",
-        "",
-    ])
+    section_no = 4 if yearly else 3
+    lines += ["", f"## {section_no}. 限制", "",
+        "- resolved seeds只用於重現；不得挑best seed或依本報表組seed ensemble。",
+        f"- {full_name}／{min_name}沒有DL訓練seed，因此以固定正式baseline值放入同一表。",
+        "- Selection PIT與Forward-OOS robustness均只評估既定scientific condition；不得依結果回頭調整training semantics。", ""]
     return "\n".join(lines)
 
 
+def _color_delta(text: str, value: Any, *, preference: str = "higher") -> str:
+    return terminal_signal(text, signal_for_delta(value, preference=preference))
+
+
 def _print_report_tables(summary: dict[str, Any]) -> None:
-    print("\n" + render_title("Multiple-seed Robustness"))
-    headers = ["比較對象", "類型", "N"] + [
-        f"{label} Mean" for label, _key, _unit in MEAN_METRICS
-    ]
+    print("\n" + render_title(str(summary["contract"].get("label") or "Multiple-seed Robustness")))
+    headers = ["比較對象", "類型", "N"] + [f"{label} Mean" for label, _key, _unit in MEAN_METRICS]
     rows = []
     for row in summary["mean_strategy_metrics"]:
         cells = [row["name"], row["type"], row["n"]]
@@ -1051,60 +1236,59 @@ def _print_report_tables(summary: dict[str, Any]) -> None:
         rows.append(cells)
     print(render_table(headers, rows))
     print("\nRoMD完整統計")
-    headers = ["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"]
     rows = []
     for row in summary["romd_statistics"]:
         n = int(row["n"])
-        rows.append([
-            row["name"], n, _fmt(row["mean"]), _fmt(row["median"]), _fmt(row["std"]), _fmt(row["cv"]),
+        rows.append([row["name"], n, _fmt(row["mean"]), _fmt(row["median"]), _fmt(row["std"]), _fmt(row["cv"]),
             _fmt(row["min"]), _fmt(row["p25"]), _fmt(row["p75"]), _fmt(row["max"]),
             "-" if row["beats_min_count"] is None else f"{row['beats_min_count']}/{n}",
-            "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
-        ])
-    print(render_table(headers, rows))
-    same_seed = summary.get("romd_same_seed_comparison")
-    if isinstance(same_seed, dict):
-        n = int(same_seed["n"])
+            "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}"])
+    print(render_table(["比較對象", "N", "Mean", "Median", "Std", "CV", "Min", "P25", "P75", "Max", "勝Min", "勝Full"], rows))
+    same = summary.get("romd_same_seed_comparison")
+    if isinstance(same, dict):
+        n = int(same["n"]); delta = same["right_minus_left_mean"]
         print("\nRoMD同seed配對比較")
-        print(
-            f"{same_seed['right']} > {same_seed['left']}：{same_seed['right_gt_left_count']}/{n} | "
-            f"{same_seed['left']} > {same_seed['right']}：{same_seed['left_gt_right_count']}/{n} | "
-            f"平手：{same_seed['tie_count']}/{n}"
-        )
-        print(
-            f"ΔRoMD（{same_seed['right']} − {same_seed['left']}）："
-            f"Mean {_fmt(same_seed['right_minus_left_mean'])} | "
-            f"Median {_fmt(same_seed['right_minus_left_median'])} | "
-            f"Std {_fmt(same_seed['right_minus_left_std'])} | "
-            f"Min {_fmt(same_seed['right_minus_left_min'])} | "
-            f"P25 {_fmt(same_seed['right_minus_left_p25'])} | "
-            f"P75 {_fmt(same_seed['right_minus_left_p75'])} | "
-            f"Max {_fmt(same_seed['right_minus_left_max'])}"
-        )
-    compare = summary.get("romd_distribution_comparison")
-    if isinstance(compare, dict):
-        print("\nRoMD任意seed分布交叉比較")
-        print(
-            f"P({compare['left']} > {compare['right']})="
-            f"{float(compare['pairwise_left_gt_right_probability'])*100:.2f}% "
-            f"({compare['pair_count']}組cross-seed pairs)"
-        )
+        print(f"{same['right']} > {same['left']}：{same['right_gt_left_count']}/{n} | {same['left']} > {same['right']}：{same['left_gt_right_count']}/{n} | 平手：{same['tie_count']}/{n}")
+        print("ΔRoMD Mean：" + _color_delta(_fmt(delta), delta) + f" | Median {_fmt(same['right_minus_left_median'])} | Std {_fmt(same['right_minus_left_std'])}")
+    yearly = list(summary.get("yearly_statistics") or [])
+    annual_pair = list(summary.get("yearly_same_seed_comparison") or [])
+    if yearly:
+        print("\n歷年報酬")
+        fixed = [row for row in summary["mean_strategy_metrics"] if row["type"] == "Fixed"]
+        stochastic = [row for row in summary["mean_strategy_metrics"] if row["type"] == "Multi-seed"]
+        names = [row["name"] for row in (*fixed, *stochastic)]
+        by_key = {(int(row["year"]), str(row["name"])): row for row in yearly}
+        annual_by_year = {int(row["year"]): row for row in annual_pair}
+        table_rows = []
+        for year in sorted({int(row["year"]) for row in yearly}):
+            sample = next(row for row in yearly if int(row["year"]) == year)
+            cells = [str(year) + ("" if sample.get("is_complete_year") else "*")]
+            for name in names:
+                record = by_key.get((year, name)); cells.append("-" if record is None else _fmt(record["mean"], suffix="%"))
+            pair = annual_by_year.get(year)
+            if pair:
+                delta = pair["right_minus_left_mean"]
+                cells += [_color_delta(_fmt(delta, suffix="%"), delta), f"{pair['right_gt_left_count']}/{pair['n']}"]
+            else:
+                cells += ["-", "-"]
+            table_rows.append(cells)
+        print(render_table(["年度", *names, "Δ右-左", "右勝左"], table_rows))
+        print("* 非完整年度")
 
-
-def show_multi_seed_robustness_status() -> None:
-    cfg = get_strategy_multi_seed_robustness_settings()
+def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> None:
+    cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     settings = get_strategy_comparison_settings(cfg.profile_id)
     status = collect_artifact_status(settings=settings)
     fixed, stochastic = _robustness_arms(settings)
     plan_text, plan = _render_robustness_execution_plan(
-        settings=settings, status=status, fixed_arms=fixed, stochastic_arms=stochastic
+        cfg=cfg, settings=settings, status=status, fixed_arms=fixed, stochastic_arms=stochastic
     )
     print("\n" + plan_text)
     if plan["comparison_period"] is None or plan["overall_status"] != "READY":
         print("Fingerprint       ：前置完成後依正式param identity與共同期間解析")
         return
     contract = build_multi_seed_robustness_contract(
-        comparison_period=dict(plan["comparison_period"]),
+        robustness_id=cfg.robustness_id, comparison_period=dict(plan["comparison_period"]),
         artifact_identities=dict(status.get("artifact_identities") or {}),
     )
     run_root = _run_root(contract)
@@ -1116,12 +1300,13 @@ def show_multi_seed_robustness_status() -> None:
     print("永久輸出：")
     print(f"- {project_relative_display_path(run_root / MANIFEST_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / SEED_RESULTS_FILENAME, project_root=PROJECT_ROOT)}")
+    print(f"- {project_relative_display_path(run_root / SEED_YEARLY_RESULTS_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT)}")
 
 
-def show_latest_multi_seed_robustness_report() -> None:
-    cfg = get_strategy_multi_seed_robustness_settings()
+def show_latest_multi_seed_robustness_report(*, robustness_id: str | None = None) -> None:
+    cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     latest = (PROJECT_ROOT / cfg.output_root / LATEST_FILENAME).resolve()
     if not latest.is_file():
         raise FileNotFoundError("尚無Multiple-seed robustness最新結果")
@@ -1132,8 +1317,32 @@ def show_latest_multi_seed_robustness_report() -> None:
     print(report.read_text(encoding="utf-8"))
 
 
-def _cleanup_unit_artifacts(*, model_dir: Path, research_dir: Path, keep_checkpoints: bool, keep_scores: bool) -> None:
+def _cleanup_unit_artifacts(
+    *, model_dir: Path, research_dir: Path, keep_checkpoints: bool, keep_scores: bool,
+    score_source: str,
+) -> None:
+    if str(score_source) != "selection_point_in_time":
+        if not keep_checkpoints:
+            shutil.rmtree(model_dir, ignore_errors=True)
+        if not keep_scores:
+            shutil.rmtree(research_dir, ignore_errors=True)
+        return
+
+    # Selection PIT把fold checkpoints與aggregate scores放在同一個isolated root。
+    # retention knobs仍維持獨立語意：scores可只留top-level aggregate；
+    # checkpoints可只留fold tree，不因目錄共置而互相綁定。
     if not keep_checkpoints:
+        shutil.rmtree(model_dir / "folds", ignore_errors=True)
+    if not keep_scores:
+        for filename in (
+            SELECTION_POINT_IN_TIME_SCORE_FILENAME,
+            SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
+        ):
+            try:
+                (model_dir / filename).unlink()
+            except FileNotFoundError:
+                pass
+    if not keep_checkpoints and not keep_scores:
         shutil.rmtree(model_dir, ignore_errors=True)
     if not keep_scores:
         shutil.rmtree(research_dir, ignore_errors=True)
@@ -1169,15 +1378,15 @@ def _manifest_progress_payload(
     return payload
 
 
-def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
-    cfg = get_strategy_multi_seed_robustness_settings()
+def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool = True) -> dict[str, Any]:
+    cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     if not cfg.enabled:
         raise RuntimeError("Multiple-seed robustness目前由config關閉")
     settings = get_strategy_comparison_settings(cfg.profile_id)
     fixed_arms, stochastic_arms = _robustness_arms(settings)
     status = collect_artifact_status(settings=settings)
     plan_text, plan = _render_robustness_execution_plan(
-        settings=settings, status=status, fixed_arms=fixed_arms, stochastic_arms=stochastic_arms
+        cfg=cfg, settings=settings, status=status, fixed_arms=fixed_arms, stochastic_arms=stochastic_arms
     )
     print("\n" + plan_text)
     if plan["overall_status"] == "BLOCKED":
@@ -1229,6 +1438,7 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
     status = dict(status)
     status["comparison_period"] = {"start": comparison_start, "end": comparison_end}
     contract = build_multi_seed_robustness_contract(
+        robustness_id=cfg.robustness_id,
         comparison_period={"start": comparison_start, "end": comparison_end},
         artifact_identities=dict(status.get("artifact_identities") or {}),
     )
@@ -1238,6 +1448,7 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
     model_root.mkdir(parents=True, exist_ok=True)
     manifest_path = run_root / MANIFEST_FILENAME
     seed_results_path = run_root / SEED_RESULTS_FILENAME
+    seed_yearly_results_path = run_root / SEED_YEARLY_RESULTS_FILENAME
     manifest = {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
         "status": "RUNNING",
@@ -1245,6 +1456,9 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
         "contract": contract,
         "comparison_period": {"start": comparison_start, "end": comparison_end},
         "seed_results_path": project_relative_display_path(seed_results_path, project_root=PROJECT_ROOT),
+        "seed_yearly_results_path": project_relative_display_path(
+            seed_yearly_results_path, project_root=PROJECT_ROOT
+        ),
     }
     _write_json(manifest_path, manifest)
 
@@ -1252,9 +1466,8 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
     seeds = tuple(int(value) for value in contract["resolved_seeds"])
     try:
         existing = _load_seed_results(seed_results_path)
-        _validate_seed_results_frame(
-            existing, stochastic_arms=stochastic_arms, seeds=seeds
-        )
+        _validate_seed_results_frame(existing, stochastic_arms=stochastic_arms, seeds=seeds)
+        existing_yearly = _load_seed_yearly_results(seed_yearly_results_path)
         fixed_results = _run_fixed_baselines(
             settings=settings, status=status, run_root=run_root, fixed_arms=fixed_arms
         )
@@ -1269,8 +1482,9 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
         })
         _write_json(manifest_path, manifest)
         print(
-            "[FAILED] Multiple-seed robustness前置回放階段已停止；可由同一入口接續。"
-            f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
+            paint("[FAILED]", "red", enabled=console_color_enabled(), bold=True)
+            + " Multiple-seed robustness前置回放階段已停止；可由同一入口接續。"
+            + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
         )
         raise
     baseline_by_group = {
@@ -1281,12 +1495,34 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
         (str(row.arm_id), int(row.seed))
         for row in existing.itertuples(index=False)
     } if not existing.empty and cfg.reuse_completed else set()
-    rows = existing.to_dict("records") if not existing.empty and cfg.reuse_completed else []
+    if completed:
+        yearly_units = set() if existing_yearly.empty else {
+            (str(row.arm_id), int(row.seed)) for row in existing_yearly.itertuples(index=False)
+        }
+        completed &= yearly_units
+    rows = (
+        [row for row in existing.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in completed]
+        if not existing.empty and cfg.reuse_completed else []
+    )
+    yearly_rows = (
+        [row for row in existing_yearly.to_dict("records") if (str(row.get("arm_id")), int(row.get("seed"))) in completed]
+        if cfg.reuse_completed and not existing_yearly.empty else []
+    )
     total_units = len(stochastic_arms) * len(seeds)
     done_units = len(completed)
     print("\n" + render_title("Multiple-seed robustness 執行"))
     print(f"Seeds={len(seeds)} | stochastic arms={len(stochastic_arms)} | work units={total_units}")
     print(f"GPU train workers={cfg.gpu_train_workers} | CPU replay workers={cfg.cpu_replay_workers}")
+    color_enabled = console_color_enabled()
+    progress = InlineProgress()
+    min_ref_arm = str(dict(dict(contract.get("romd_reference_baselines") or {}).get("min") or {}).get("arm_id") or "")
+    min_baseline_romd = float(fixed_results[min_ref_arm]["metrics"]["return_over_max_drawdown"])
+
+    def progress_update(text: str) -> None:
+        if cfg.console_mode == "verbose":
+            progress.print_line(text)
+            return
+        progress.update(text)
 
     current_training: dict[str, Any] | None = None
     manifest = _manifest_progress_payload(
@@ -1301,7 +1537,7 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
     futures: dict[Future, dict[str, Any]] = {}
 
     def harvest(*, wait_all: bool = False) -> None:
-        nonlocal done_units, rows, manifest
+        nonlocal done_units, rows, yearly_rows, manifest
         while True:
             finished = [future for future in futures if future.done()]
             if not finished and not wait_all:
@@ -1319,6 +1555,12 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                 rows.append(_result_row(result))
                 frame = pd.DataFrame(rows)
                 _write_seed_results(seed_results_path, frame)
+                yearly_rows = [
+                    row for row in yearly_rows
+                    if not (str(row.get("arm_id")) == str(result["arm_id"]) and int(row.get("seed")) == int(result["seed"]))
+                ]
+                yearly_rows.extend(list(result.get("yearly") or []))
+                _write_seed_yearly_results(seed_yearly_results_path, pd.DataFrame(yearly_rows))
                 completed.add((str(result["arm_id"]), int(result["seed"])))
                 done_units = len(completed)
                 manifest = _manifest_progress_payload(
@@ -1329,17 +1571,26 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                     futures=futures,
                 )
                 _write_json(manifest_path, manifest)
-                print(
-                    f"[DONE {done_units}/{total_units}] seed {meta['seed_order']}/{len(seeds)} | "
+                romd = float(result.get("return_over_max_drawdown"))
+                delta_min = romd - min_baseline_romd
+                done_tag = paint(f"[DONE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
+                delta_text = terminal_signal(
+                    f"ΔMin={delta_min:+.2f}", signal_for_delta(delta_min, preference="higher"), enabled=color_enabled
+                )
+                progress.print_line(
+                    f"{done_tag} seed {meta['seed_order']}/{len(seeds)} | "
                     f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['name']} | "
-                    f"RoMD={_fmt(result.get('return_over_max_drawdown'))} | "
+                    f"RoMD={romd:.2f} | {delta_text} | "
                     f"train={_format_elapsed(result.get('training_elapsed_sec', 0))} | "
                     f"replay={_format_elapsed(result.get('replay_elapsed_sec', 0))} | "
                     f"total={_format_elapsed(time.perf_counter()-started_total)}"
                 )
+                arm_cfg = next(arm for arm in stochastic_arms if arm.arm_id == str(result["arm_id"]))
+                score_source = str(settings.dl_sources[str(arm_cfg.dl_id)].score_source)
                 _cleanup_unit_artifacts(
                     model_dir=Path(meta["model_dir"]), research_dir=Path(meta["research_dir"]),
                     keep_checkpoints=cfg.keep_checkpoints, keep_scores=cfg.keep_scores,
+                    score_source=score_source,
                 )
             if not wait_all or not futures:
                 return
@@ -1348,9 +1599,9 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
         for seed_order, seed in enumerate(seeds, start=1):
             for arm_order, arm in enumerate(stochastic_arms, start=1):
                 if (arm.arm_id, seed) in completed:
-                    print(
-                        f"[REUSE {done_units}/{total_units}] seed {seed_order}/{len(seeds)} | "
-                        f"對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
+                    progress.print_line(
+                        paint(f"[REUSE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
+                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
                     )
                     continue
                 harvest()
@@ -1366,14 +1617,15 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                         artifacts = _validate_training_artifacts(
                             arm=arm, seed=seed, model_dir=model_dir,
                             research_dir=research_dir, settings=settings,
+                            comparison_start=comparison_start, comparison_end=comparison_end,
                         )
                     except (FileNotFoundError, ValueError):
                         artifacts = None
                 if artifacts is not None:
-                    print(
-                        f"[TRAIN REUSE] seed {seed_order}/{len(seeds)} | "
-                        f"對象 {arm_order}/{len(stochastic_arms)} {arm.name} | "
-                        f"epoch={artifacts['selected_epoch']}"
+                    progress_update(
+                        paint("[TRAIN REUSE]", "green", enabled=color_enabled, bold=True)
+                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
+                        + f"| epoch={artifacts['selected_epoch']}"
                     )
                 else:
                     shutil.rmtree(model_dir, ignore_errors=True)
@@ -1396,9 +1648,10 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                         futures=futures,
                     )
                     _write_json(manifest_path, manifest)
-                    print(
-                        f"[TRAIN] seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} "
-                        f"{arm.name} | completed={done_units}/{total_units} | total={_format_elapsed(time.perf_counter()-started_total)}"
+                    progress_update(
+                        paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
+                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
+                        + f"| completed={done_units}/{total_units} | total={_format_elapsed(time.perf_counter()-started_total)}"
                     )
                     env = dict(os.environ)
                     env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "1"
@@ -1406,7 +1659,8 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                     with train_log_path.open("w", encoding="utf-8") as train_log:
                         proc = subprocess.Popen(
                             _training_command(
-                                arm=arm, seed=seed, model_dir=model_dir, research_dir=research_dir, settings=settings
+                                arm=arm, seed=seed, model_dir=model_dir, research_dir=research_dir, settings=settings,
+                                comparison_start=comparison_start, comparison_end=comparison_end,
                             ),
                             cwd=str(PROJECT_ROOT),
                             env=env,
@@ -1414,19 +1668,20 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                             stderr=subprocess.STDOUT,
                             text=True,
                         )
-                        next_print = time.perf_counter() + 30.0
+                        next_print = time.perf_counter() + float(cfg.progress_interval_seconds)
                         try:
                             while proc.poll() is None:
                                 harvest()
                                 now = time.perf_counter()
                                 if now >= next_print:
                                     replaying = len(futures)
-                                    print(
-                                        f"  seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
-                                        f"training={_format_elapsed(now-train_started)} | CPU replay running={replaying} | "
-                                        f"total={_format_elapsed(now-started_total)}"
+                                    progress_update(
+                                        paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
+                                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
+                                        + f"| training={_format_elapsed(now-train_started)} | CPU replay running={replaying} "
+                                        + f"| total={_format_elapsed(now-started_total)}"
                                     )
-                                    next_print = now + 30.0
+                                    next_print = now + float(cfg.progress_interval_seconds)
                                 time.sleep(0.5)
                         except BaseException:
                             if proc.poll() is None:
@@ -1451,11 +1706,13 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                             f"returncode={proc.returncode}; log_tail={train_tail}"
                         )
                     artifacts = _validate_training_artifacts(
-                        arm=arm, seed=seed, model_dir=model_dir, research_dir=research_dir, settings=settings
+                        arm=arm, seed=seed, model_dir=model_dir, research_dir=research_dir, settings=settings,
+                        comparison_start=comparison_start, comparison_end=comparison_end,
                     )
-                    print(
-                        f"[TRAIN DONE] seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} | "
-                        f"epoch={artifacts['selected_epoch']} | elapsed={_format_elapsed(time.perf_counter()-train_started)}"
+                    progress_update(
+                        paint("[TRAIN DONE]", "green", enabled=color_enabled, bold=True)
+                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
+                        + f"| epoch={artifacts['selected_epoch']} | elapsed={_format_elapsed(time.perf_counter()-train_started)}"
                     )
                 current_training = None
                 baseline_dir = baseline_by_group.get((arm.param_source, arm.rule_policy))
@@ -1474,8 +1731,10 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                     "comparison_end": comparison_end,
                     "baseline_dir": baseline_dir,
                     "score_path": artifacts["score"],
+                    "score_manifest_path": artifacts.get("manifest"),
                     "score_execution_start": artifacts["score_execution_start"],
                     "selected_epoch": artifacts["selected_epoch"],
+                    "fold_count": artifacts.get("fold_count"),
                     "training_elapsed_sec": artifacts["training_elapsed_sec"],
                     "pair_dir": str(pair_dir),
                     "result_path": str(result_path),
@@ -1507,9 +1766,10 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                     futures=futures,
                 )
                 _write_json(manifest_path, manifest)
-                print(
-                    f"[REPLAY QUEUED] seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} "
-                    f"{arm.name} | CPU running={len(futures)}/{cfg.cpu_replay_workers}"
+                progress_update(
+                    paint("[REPLAY QUEUED]", "cyan", enabled=color_enabled, bold=True)
+                    + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
+                    + f"| CPU running={len(futures)}/{cfg.cpu_replay_workers}"
                 )
         harvest(wait_all=True)
     except BaseException as exc:
@@ -1529,9 +1789,10 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
             "resumable": True,
         })
         _write_json(manifest_path, manifest)
-        print(
-            "[FAILED] Multiple-seed robustness已停止；可修正後由同一入口接續。"
-            f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
+        progress.print_line(
+            paint("[FAILED]", "red", enabled=color_enabled, bold=True)
+            + " Multiple-seed robustness已停止；可修正後由同一入口接續。"
+            + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
         )
         raise
     finally:
@@ -1547,8 +1808,17 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
             raise RuntimeError(
                 f"multi-seed robustness結果不完整: expected={expected}, actual={len(seed_frame)}"
             )
+        seed_yearly_frame = _load_seed_yearly_results(seed_yearly_results_path)
+        expected_yearly_units = {(arm.arm_id, int(seed)) for arm in stochastic_arms for seed in seeds}
+        actual_yearly_units = set() if seed_yearly_frame.empty else {
+            (str(row.arm_id), int(row.seed)) for row in seed_yearly_frame.itertuples(index=False)
+        }
+        missing_yearly = expected_yearly_units - actual_yearly_units
+        if missing_yearly:
+            raise RuntimeError(f"multi-seed年度結果不完整: missing_observations={len(missing_yearly)}")
         summary = _robustness_summary(
-            contract=contract, fixed_results=fixed_results, seed_frame=seed_frame
+            contract=contract, fixed_results=fixed_results, seed_frame=seed_frame,
+            seed_yearly_frame=seed_yearly_frame,
         )
         summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
         _write_json(run_root / SUMMARY_FILENAME, summary)
@@ -1580,24 +1850,39 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
         })
         _write_json(manifest_path, manifest)
         print(
-            "[FAILED] Multiple-seed robustness彙總階段失敗；seed結果已保留，可由同一入口接續。"
-            f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
+            paint("[FAILED]", "red", enabled=console_color_enabled(), bold=True)
+            + " Multiple-seed robustness彙總階段失敗；seed結果已保留，可由同一入口接續。"
+            + f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
         )
         raise
+    selection_score_tree = any(
+        str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
+        for arm in stochastic_arms
+    )
     if not cfg.keep_replay_details:
         shutil.rmtree(run_root / "work" / "replay", ignore_errors=True)
     shutil.rmtree(run_root / "work" / "results", ignore_errors=True)
     shutil.rmtree(run_root / "work" / "baselines", ignore_errors=True)
-    if not cfg.keep_scores:
+    if selection_score_tree or not cfg.keep_scores:
         shutil.rmtree(run_root / "work" / "training", ignore_errors=True)
-    if not cfg.keep_checkpoints:
+    if not cfg.keep_checkpoints and (not selection_score_tree or not cfg.keep_scores):
         shutil.rmtree(model_root, ignore_errors=True)
-    if not cfg.keep_replay_details and not cfg.keep_scores:
+    if not cfg.keep_replay_details and (selection_score_tree or not cfg.keep_scores):
         shutil.rmtree(run_root / "work", ignore_errors=True)
+    if progress.inline:
+        progress.finish()
     _print_report_tables(summary)
     print(f"\n總耗時：{_format_elapsed(summary['elapsed_sec'])}")
+    cleanup_tag = paint("暫存清理", "green", enabled=color_enabled, bold=True)
+    print(
+        f"{cleanup_tag}：checkpoints={'保留' if cfg.keep_checkpoints else '已清除'}｜"
+        f"scores={'保留' if cfg.keep_scores else '已清除'}｜"
+        f"replay details={'保留' if cfg.keep_replay_details else '已清除'}"
+    )
     print("永久工件：")
-    for path in (manifest_path, seed_results_path, run_root / SUMMARY_FILENAME, run_root / REPORT_FILENAME):
+    permanent_paths = [manifest_path, seed_results_path, seed_yearly_results_path]
+    permanent_paths.extend([run_root / SUMMARY_FILENAME, run_root / REPORT_FILENAME])
+    for path in permanent_paths:
         print("- " + project_relative_display_path(path, project_root=PROJECT_ROOT))
     return summary
 

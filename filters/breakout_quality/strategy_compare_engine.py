@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 from dataclasses import replace
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ from core.rolling_oos_params import (
     is_rolling_oos_param_set_payload,
 )
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
-from filters.breakout_quality.artifacts import load_runtime_artifact_contract
+from filters.breakout_quality.artifacts import compute_file_sha256, load_runtime_artifact_contract
 from filters.breakout_quality.binary_pit_score_store import (
     BINARY_PIT_SCORE_SOURCE,
     load_binary_point_in_time_score_table,
@@ -65,6 +66,7 @@ from filters.breakout_quality.ranking_score_store import (
     load_continuous_ranker_oos_score_table_from_path,
     load_selection_point_in_time_ranking_contract,
     load_selection_point_in_time_score_table,
+    load_selection_point_in_time_score_table_from_path,
 )
 from filters.breakout_quality.runtime import (
     breakout_quality_filter_source_execution_context,
@@ -1839,7 +1841,8 @@ def _run_scenario(
     max_positions, enable_rotation, quiet, replay_counts=None,
     replay_execution_rows=None, ranking_source=None, filter_source=None,
 ):
-    print(f"\n[{name}] 建立市場與訊號快取")
+    if not quiet:
+        print(f"\n[{name}] 建立市場與訊號快取")
     with ExitStack() as stack:
         if ranking_source:
             stack.enter_context(breakout_quality_ranking_source_context(**ranking_source))
@@ -1859,7 +1862,8 @@ def _run_scenario_inside_source_context(
 ):
     if param_source_kind == "single_param":
         context = load_portfolio_market_context(str(data_dir), params, verbose=not quiet)
-        print(f"[{name}] 執行 {start_date} ～ {end_date}")
+        if not quiet:
+            print(f"[{name}] 執行 {start_date} ～ {end_date}")
         result = run_portfolio_simulation_prepared(
             context["all_dfs_fast"], context["all_trade_logs"], context["sorted_dates"], params,
             max_positions=max_positions, enable_rotation=enable_rotation,
@@ -1870,7 +1874,8 @@ def _run_scenario_inside_source_context(
             replay_execution_rows=replay_execution_rows,
         )
     elif param_source_kind in {"static_active_param_ensemble", "rolling_active_param_ensemble"}:
-        print(f"[{name}] 執行 active-param ensemble replay {start_date} ～ {end_date}")
+        if not quiet:
+            print(f"[{name}] 執行 active-param ensemble replay {start_date} ～ {end_date}")
         result = run_portfolio_simulation_with_param_ensemble(
             str(data_dir), params,
             max_positions=max_positions, enable_rotation=enable_rotation,
@@ -1880,7 +1885,8 @@ def _run_scenario_inside_source_context(
             replay_execution_rows=replay_execution_rows,
         )
     elif param_source_kind == "rolling_oos_param_schedule":
-        print(f"[{name}] 執行 rolling active-param replay {start_date} ～ {end_date}")
+        if not quiet:
+            print(f"[{name}] 執行 rolling active-param replay {start_date} ～ {end_date}")
         result = run_portfolio_simulation_with_param_schedule(
             str(data_dir), params,
             max_positions=max_positions, enable_rotation=enable_rotation,
@@ -1940,9 +1946,18 @@ def _flatten_selected_buy_rows(trade_history: pd.DataFrame) -> pd.DataFrame:
         ["trade_date", "ticker", "signal_date"], kind="mergesort"
     ).reset_index(drop=True)
 
-def _selection_target_lookup(*, root: Path, filter_id: str, architecture: str, profile: str) -> pd.DataFrame:
-    scores = load_selection_point_in_time_score_table(
-        str(root), filter_id, architecture, profile
+def _selection_target_lookup(
+    *, root: Path, filter_id: str, architecture: str, profile: str,
+    score_path_override: str | None = None, manifest_path_override: str | None = None,
+) -> pd.DataFrame:
+    scores = (
+        load_selection_point_in_time_score_table_from_path(
+            str(score_path_override), manifest_path=str(manifest_path_override)
+        )
+        if score_path_override not in (None, "")
+        else load_selection_point_in_time_score_table(
+            str(root), filter_id, architecture, profile
+        )
     ).reset_index()
     bundle = load_profile_continuous_ranker_data(
         filter_id=filter_id,
@@ -1969,6 +1984,85 @@ def _selection_target_lookup(*, root: Path, filter_id: str, architecture: str, p
         "ticker", "date", "group_index", "breakout_quality_score", "fold_id",
         "model_information_cutoff", "label", "target_raw_r", "target_available",
     ]].rename(columns={"date": "signal_date"})
+
+
+
+def _load_isolated_selection_pit_contract(
+    *, score_path: str, manifest_path: str, filter_id: str, model_architecture: str,
+    experiment_profile: str, expected_seed: int | None,
+):
+    score = Path(str(score_path)).resolve()
+    manifest_file = Path(str(manifest_path)).resolve()
+    for label, path in (("Selection PIT score", score), ("Selection PIT manifest", manifest_file)):
+        if not path.is_file():
+            raise FileNotFoundError(f"找不到isolated {label}: {path}")
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
+    if not isinstance(manifest, dict):
+        raise ValueError("isolated Selection PIT manifest根節點必須是object")
+    if str(manifest.get("status") or "") != "BUILT":
+        raise ValueError(f"isolated Selection PIT manifest尚未完成: {manifest.get('status')!r}")
+    expected_identity = {
+        "filter_id": str(filter_id),
+        "model_architecture": str(model_architecture),
+        "experiment_profile": str(experiment_profile),
+    }
+    for field, expected in expected_identity.items():
+        actual = str(manifest.get(field) or "")
+        if actual != expected:
+            raise ValueError(
+                f"isolated Selection PIT identity不一致: field={field}, expected={expected}, actual={actual}"
+            )
+    if expected_seed is not None and int(manifest.get("seed", -1)) != int(expected_seed):
+        raise ValueError(
+            "isolated Selection PIT seed不一致: "
+            f"expected={int(expected_seed)}, actual={manifest.get('seed')!r}"
+        )
+    lookahead = dict(manifest.get("lookahead_contract") or {})
+    required_true = (
+        "every_score_uses_model_not_trained_on_scored_event",
+        "training_requires_label_eval_end_before_score_start",
+    )
+    required_false = (
+        "oos_rows_or_target_statistics_used_for_training_or_epoch_selection",
+        "future_target_in_score_table",
+    )
+    if any(lookahead.get(key) is not True for key in required_true) or any(
+        lookahead.get(key) is not False for key in required_false
+    ):
+        raise ValueError("isolated Selection PIT lookahead contract不符合策略回放要求")
+    score_record = dict((manifest.get("artifacts") or {}).get("scores") or {})
+    if str(score_record.get("filename") or "") != score.name:
+        raise ValueError("isolated Selection PIT score filename與manifest不一致")
+    expected_hash = str(score_record.get("sha256") or "").lower()
+    actual_hash = compute_file_sha256(score).lower()
+    if not expected_hash or expected_hash != actual_hash:
+        raise ValueError("isolated Selection PIT score SHA256與manifest不一致")
+    expected_size = int(score_record.get("size_bytes", -1))
+    if expected_size != int(score.stat().st_size):
+        raise ValueError("isolated Selection PIT score size與manifest不一致")
+    table = load_selection_point_in_time_score_table_from_path(
+        str(score), manifest_path=str(manifest_file)
+    )
+    available_from = str(table.attrs.get("available_from") or "")
+    available_through = str(table.attrs.get("available_through") or "")
+    if not available_from or not available_through or available_through < available_from:
+        raise ValueError("isolated Selection PIT score period不合法")
+    return SimpleNamespace(
+        score_path=score,
+        manifest_path=manifest_file,
+        audit_path=None,
+        manifest=manifest,
+        model_architecture=str(model_architecture),
+        experiment_profile=str(experiment_profile),
+        seed=int(manifest.get("seed", 0) or 0),
+        available_from=available_from,
+        available_through=available_through,
+        model_validation_gate={
+            "status": "ISOLATED_MULTI_SEED_ROBUSTNESS",
+            "strategy_metrics_used": False,
+            "future_target_used_for_runtime_sort": False,
+        },
+    )
 
 def _strategy_selection_diagnostics(
     *, orderable: pd.DataFrame, selected: pd.DataFrame, lookup: pd.DataFrame,
@@ -2729,6 +2823,9 @@ def run_comparison(
     baseline_reuse_dir=None,
     continuous_score_path_override=None,
     continuous_score_execution_start_override=None,
+    selection_pit_score_path_override=None,
+    selection_pit_manifest_path_override=None,
+    selection_pit_expected_seed_override=None,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -2774,6 +2871,14 @@ def run_comparison(
         raise ValueError(
             "continuous_score_path_override與continuous_score_execution_start_override必須成對提供"
         )
+    has_selection_pit_score_override = selection_pit_score_path_override not in (None, "")
+    has_selection_pit_manifest_override = selection_pit_manifest_path_override not in (None, "")
+    if has_selection_pit_score_override != has_selection_pit_manifest_override:
+        raise ValueError(
+            "selection_pit_score_path_override與selection_pit_manifest_path_override必須成對提供"
+        )
+    if has_selection_pit_score_override and score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        raise ValueError("Selection PIT isolated override只支援selection_point_in_time score source")
 
     runtime_contract = None
     pit_contract = None
@@ -2888,20 +2993,33 @@ def run_comparison(
     elif score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
         if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
             raise ValueError("Selection PIT score source只支援score-ranking比較")
-        pit_contract = load_selection_point_in_time_ranking_contract(
-            str(root), filter_id, model_architecture, experiment_profile
-        )
-        workflow_settings = get_breakout_quality_workflow_settings()
-        if (
-            workflow_settings.filter_id == filter_id
-            and workflow_settings.model_architecture == model_architecture
-            and workflow_settings.experiment_profile == experiment_profile
-            and int(pit_contract.seed) != int(workflow_settings.seed)
-        ):
-            raise ValueError(
-                "Selection PIT工件seed與目前workflow不一致，必須重建："
-                f"artifact={pit_contract.seed}, workflow={workflow_settings.seed}"
+        if has_selection_pit_score_override:
+            pit_contract = _load_isolated_selection_pit_contract(
+                score_path=str(selection_pit_score_path_override),
+                manifest_path=str(selection_pit_manifest_path_override),
+                filter_id=filter_id,
+                model_architecture=model_architecture,
+                experiment_profile=experiment_profile,
+                expected_seed=(
+                    None if selection_pit_expected_seed_override is None
+                    else int(selection_pit_expected_seed_override)
+                ),
             )
+        else:
+            pit_contract = load_selection_point_in_time_ranking_contract(
+                str(root), filter_id, model_architecture, experiment_profile
+            )
+            workflow_settings = get_breakout_quality_workflow_settings()
+            if (
+                workflow_settings.filter_id == filter_id
+                and workflow_settings.model_architecture == model_architecture
+                and workflow_settings.experiment_profile == experiment_profile
+                and int(pit_contract.seed) != int(workflow_settings.seed)
+            ):
+                raise ValueError(
+                    "Selection PIT工件seed與目前workflow不一致，必須重建："
+                    f"artifact={pit_contract.seed}, workflow={workflow_settings.seed}"
+                )
         manifest_architecture = pit_contract.model_architecture
         manifest_profile = pit_contract.experiment_profile
         start_date = pit_contract.available_from
@@ -2912,6 +3030,12 @@ def run_comparison(
             "experiment_profile": manifest_profile,
             "ranking_policy": ranking_policy,
             "ranking_options": ranking_options,
+            "score_path_override": (
+                str(pit_contract.score_path) if has_selection_pit_score_override else None
+            ),
+            "score_manifest_path_override": (
+                str(pit_contract.manifest_path) if has_selection_pit_score_override else None
+            ),
         }
     else:
         try:
@@ -3150,6 +3274,12 @@ def run_comparison(
             lookup = _selection_target_lookup(
                 root=root, filter_id=filter_id, architecture=manifest_architecture,
                 profile=manifest_profile,
+                score_path_override=(
+                    str(pit_contract.score_path) if has_selection_pit_score_override else None
+                ),
+                manifest_path_override=(
+                    str(pit_contract.manifest_path) if has_selection_pit_score_override else None
+                ),
             )
             baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
                 _strategy_selection_diagnostics(
@@ -3213,7 +3343,7 @@ def run_comparison(
         score_artifact_metadata = {
             "score_manifest_path": str(pit_contract.manifest_path),
             "score_path": str(pit_contract.score_path),
-            "score_audit_path": str(pit_contract.audit_path),
+            "score_audit_path": (None if pit_contract.audit_path is None else str(pit_contract.audit_path)),
             "model_validation_gate": pit_contract.model_validation_gate,
             "runtime_eligibility": dict(pit_contract.manifest.get("runtime_eligibility") or {}),
             "score_table": dict(pit_contract.manifest.get("artifacts", {}).get("scores") or {}),
@@ -3539,15 +3669,16 @@ def run_comparison(
             no_filter_portfolio_total_r=baseline.get("portfolio_total_r"),
             quality_filter_portfolio_total_r=quality.get("portfolio_total_r"),
         )
-    print("\n" + render_strategy_pair_simple_report(json_payload))
-    artifacts = [
-        ("策略比較 Markdown", output_dir / "strategy_comparison.md"),
-        ("策略比較 JSON", output_dir / "strategy_comparison.json"),
-        ("年度比較 CSV", output_dir / "yearly_returns_comparison.csv"),
-    ]
-    if comparison_mode == COMPARISON_MODE_HARD_FILTER:
-        artifacts.append(("交易歸因 Markdown", output_dir / "trade_attribution.md"))
-    print_artifact_paths(artifacts, project_root=root)
+    if not quiet:
+        print("\n" + render_strategy_pair_simple_report(json_payload))
+        artifacts = [
+            ("策略比較 Markdown", output_dir / "strategy_comparison.md"),
+            ("策略比較 JSON", output_dir / "strategy_comparison.json"),
+            ("年度比較 CSV", output_dir / "yearly_returns_comparison.csv"),
+        ]
+        if comparison_mode == COMPARISON_MODE_HARD_FILTER:
+            artifacts.append(("交易歸因 Markdown", output_dir / "trade_attribution.md"))
+        print_artifact_paths(artifacts, project_root=root)
     return json_payload
 
 def main(argv=None):

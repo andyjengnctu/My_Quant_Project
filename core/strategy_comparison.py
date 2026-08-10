@@ -157,8 +157,13 @@ class StrategyComparisonArm:
         }
 
 
+MULTI_SEED_GPU_TRAIN_WORKERS = 1
+
+
 @dataclass(frozen=True)
 class StrategyMultiSeedRobustnessSettings:
+    robustness_id: str
+    label: str
     enabled: bool
     profile_id: str
     seed_count: int
@@ -166,6 +171,9 @@ class StrategyMultiSeedRobustnessSettings:
     gpu_train_workers: int
     cpu_replay_workers: int
     reuse_completed: bool
+    console_mode: str
+    progress_interval_seconds: float
+    yearly_report: bool
     keep_checkpoints: bool
     keep_scores: bool
     keep_replay_details: bool
@@ -175,6 +183,8 @@ class StrategyMultiSeedRobustnessSettings:
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "robustness_id": self.robustness_id,
+            "label": self.label,
             "enabled": bool(self.enabled),
             "profile_id": self.profile_id,
             "seed_count": int(self.seed_count),
@@ -182,6 +192,9 @@ class StrategyMultiSeedRobustnessSettings:
             "gpu_train_workers": int(self.gpu_train_workers),
             "cpu_replay_workers": int(self.cpu_replay_workers),
             "reuse_completed": bool(self.reuse_completed),
+            "console_mode": self.console_mode,
+            "progress_interval_seconds": float(self.progress_interval_seconds),
+            "yearly_report": bool(self.yearly_report),
             "keep_checkpoints": bool(self.keep_checkpoints),
             "keep_scores": bool(self.keep_scores),
             "keep_replay_details": bool(self.keep_replay_details),
@@ -197,16 +210,24 @@ class StrategyMultiSeedRobustnessSettings:
 def validate_strategy_multi_seed_robustness_settings(
     settings: StrategyMultiSeedRobustnessSettings,
 ) -> None:
+    if not str(settings.robustness_id).strip():
+        raise ValueError("multi-seed robustness robustness_id不可空白")
+    if not str(settings.label).strip():
+        raise ValueError("multi-seed robustness label不可空白")
     if not str(settings.profile_id).strip():
         raise ValueError("multi-seed robustness profile_id不可空白")
     if int(settings.seed_count) < 2:
         raise ValueError("multi-seed robustness seed_count必須>=2")
     if int(settings.seed_generator_seed) < 0:
         raise ValueError("multi-seed robustness seed_generator_seed必須>=0")
-    if int(settings.gpu_train_workers) != 1:
-        raise ValueError("目前multi-seed robustness單GPU training worker固定為1")
+    if int(settings.gpu_train_workers) != MULTI_SEED_GPU_TRAIN_WORKERS:
+        raise ValueError("目前multi-seed robustness採單一GPU training queue")
     if int(settings.cpu_replay_workers) < 1:
         raise ValueError("multi-seed robustness cpu_replay_workers必須>=1")
+    if str(settings.console_mode) not in {"compact", "verbose"}:
+        raise ValueError("multi-seed robustness console_mode只支援compact/verbose")
+    if float(settings.progress_interval_seconds) <= 0:
+        raise ValueError("multi-seed robustness progress_interval_seconds必須>0")
     required_reference_keys = {"min", "full"}
     configured_reference_keys = {
         str(key).strip() for key in settings.romd_reference_baselines
@@ -708,6 +729,7 @@ def strategy_comparison_fingerprint(
 
 
 __all__ = [
+    "MULTI_SEED_GPU_TRAIN_WORKERS",
     "StrategyArtifactBuilder",
     "StrategyComparisonArm",
     "StrategyComparisonContrast",

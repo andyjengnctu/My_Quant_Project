@@ -47,6 +47,7 @@ class BreakoutQualityRankingSourceContext:
     ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE
     ranking_options: Mapping[str, Any] | None = None
     score_path_override: str | None = None
+    score_manifest_path_override: str | None = None
 
 
 
@@ -196,6 +197,7 @@ def breakout_quality_ranking_source_context(
     ranking_policy: str = BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
     ranking_options: Mapping[str, Any] | None = None,
     score_path_override: str | None = None,
+    score_manifest_path_override: str | None = None,
 ) -> Iterator[BreakoutQualityRankingSourceContext]:
     source = str(score_source).strip()
     if source not in SUPPORTED_RANKING_SCORE_SOURCES:
@@ -213,6 +215,9 @@ def breakout_quality_ranking_source_context(
         ranking_policy=resolved_policy,
         ranking_options=(None if ranking_options in (None, {}) else dict(ranking_options)),
         score_path_override=(None if score_path_override in (None, "") else str(score_path_override)),
+        score_manifest_path_override=(
+            None if score_manifest_path_override in (None, "") else str(score_manifest_path_override)
+        ),
     )
     token = _RANKING_SOURCE_CONTEXT.set(context)
     try:
@@ -294,6 +299,8 @@ def resolve_breakout_quality_candidate_rank(
                 filter_id=str(filter_id),
                 model_architecture=str(context.model_architecture),
                 experiment_profile=str(context.experiment_profile),
+                score_path_override=context.score_path_override,
+                manifest_path_override=context.score_manifest_path_override,
             )
         return lookup_continuous_ranker_oos_candidate_score(
             project_root=root,

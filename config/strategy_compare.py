@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+from config.breakout_quality import get_breakout_quality_workflow_settings
 from config.training_policy import (
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
 from core.strategy_comparison import (
+    MULTI_SEED_GPU_TRAIN_WORKERS,
     StrategyArtifactBuilder,
     StrategyComparisonArm,
     StrategyComparisonContrast,
@@ -24,17 +26,29 @@ from core.strategy_comparison import (
     validate_strategy_multi_seed_robustness_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 19
+STRATEGY_COMPARE_SCHEMA_VERSION = 20
 
 # =============================================================================
-# 1. 共用執行設定
+# 1. 常用設定
+#    一般 Strategy Compare / robustness 實驗通常只需修改本區。
+#    Dataset / param policy / max positions / rotation 不在此複製；它們直接
+#    繼承 config/breakout_quality.py 的 BreakoutQualityWorkflowSettings SSOT。
 # =============================================================================
 
-STRATEGY_COMPARE_DATASET = "full"
-STRATEGY_COMPARE_PARAM_POLICY = "base-finalist-best"
-STRATEGY_COMPARE_MAX_POSITIONS = 10
-STRATEGY_COMPARE_ROTATION = "off"
+STRATEGY_COMPARE_DEFAULT_PROFILE = "forward_oos"
+STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE = "forward_oos"
 STRATEGY_COMPARE_STALE_SCORE_MEMBERSHIP_GUARD_MAX_AGE_DAYS = 22
+
+STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 8
+STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = 20260810
+STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS = 1
+STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED = True
+STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE = "compact"
+STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS = 60.0
+STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT = True
+STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS = False
+STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES = False
+STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS = False
 
 # Current Strategy Compare核心比較名稱的單一真理。
 # Selection PIT／Forward-OOS由profile頁首區分，不把研究階段或固定selector語意塞進arm顯示名稱。
@@ -45,7 +59,6 @@ STRATEGY_COMPARE_DISPLAY_MIN_MR13A = "Min MR-13A"
 
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
-STRATEGY_COMPARE_DEFAULT_PROFILE = "forward_oos"
 STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
@@ -77,30 +90,54 @@ STRATEGY_COMPARE_PROFILES = {
     },
 }
 
-# Multiple-seed robustness屬最終策略績效穩健性比較；比較對象不在這裡重列ID，
-# 而由所選profile的enabled arms + robustness_role解析。
-STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS = {
-    "enabled": True,
-    "profile_id": "forward_oos",
-    "seed_count": 8,
-    "seed_generator_seed": 20260810,
-    # 單一GPU training queue；CPU replay可和下一個seed訓練重疊。
-    "gpu_train_workers": 1,
-    # Strategy replay本身已使用CPU平行準備；預設只跑一條replay queue，與GPU training重疊，避免雙replay過度訂閱CPU。
-    "cpu_replay_workers": 1,
-    "reuse_completed": True,
-    # 正常完成後只保留aggregate report／CSV／manifest，避免每個seed永久堆模型與score。
-    "keep_checkpoints": False,
-    "keep_scores": False,
-    "keep_replay_details": False,
-    # RoMD勝基準統計以策略語意解析，不依賴arm ID或顯示名稱。
-    "romd_reference_baselines": {
-        "min": {"param_source": "min_roos", "rule_policy": "all_off"},
-        "full": {"param_source": "full_roos", "rule_policy": "formal"},
+# Multiple-seed robustness各研究階段以獨立config profile呈現於正式選單。
+# stochastic/fixed比較對象不在此重列arm ID，而由對應Strategy Compare profile的
+# enabled arms + robustness_role動態解析。
+STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
+    "forward_oos": {
+        "label": "Forward-OOS Multi-seed robustness",
+        "enabled": True,
+        "profile_id": "forward_oos",
+        "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
+        "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_roos", "rule_policy": "all_off"},
+            "full": {"param_source": "full_roos", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
     },
-    "output_root": "outputs/strategy_compare/robustness",
-    "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
+    "selection_pit": {
+        "label": "Selection PIT Multi-seed robustness",
+        "enabled": True,
+        "profile_id": "selection_pit",
+        "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
+        "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "romd_reference_baselines": {
+            "min": {"param_source": "selection_min_roos", "rule_policy": "all_off"},
+            "full": {"param_source": "selection_full_roos", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness/selection_pit",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/selection_pit",
+    },
 }
+
 
 
 # =============================================================================
@@ -920,16 +957,34 @@ def _builder(raw) -> StrategyArtifactBuilder | None:
     )
 
 
-def get_strategy_multi_seed_robustness_settings() -> StrategyMultiSeedRobustnessSettings:
-    raw = dict(STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS)
+def get_strategy_multi_seed_robustness_profiles() -> tuple[dict[str, str], ...]:
+    return tuple(
+        {"robustness_id": str(robustness_id), "label": str(raw.get("label") or robustness_id)}
+        for robustness_id, raw in STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES.items()
+        if bool(raw.get("enabled", True))
+    )
+
+
+def get_strategy_multi_seed_robustness_settings(
+    robustness_id: str | None = None,
+) -> StrategyMultiSeedRobustnessSettings:
+    selected_id = str(robustness_id or STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE).strip()
+    if selected_id not in STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES:
+        raise ValueError(f"不存在的multi-seed robustness profile: {selected_id}")
+    raw = dict(STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES[selected_id])
     settings = StrategyMultiSeedRobustnessSettings(
+        robustness_id=selected_id,
+        label=str(raw.get("label") or selected_id).strip(),
         enabled=bool(raw.get("enabled", True)),
         profile_id=str(raw.get("profile_id") or "").strip(),
         seed_count=int(raw.get("seed_count", 0) or 0),
         seed_generator_seed=int(raw.get("seed_generator_seed", 0) or 0),
-        gpu_train_workers=int(raw.get("gpu_train_workers", 0) or 0),
+        gpu_train_workers=int(MULTI_SEED_GPU_TRAIN_WORKERS),
         cpu_replay_workers=int(raw.get("cpu_replay_workers", 0) or 0),
         reuse_completed=bool(raw.get("reuse_completed", True)),
+        console_mode=str(raw.get("console_mode") or "compact").strip(),
+        progress_interval_seconds=float(raw.get("progress_interval_seconds", 60.0) or 60.0),
+        yearly_report=bool(raw.get("yearly_report", True)),
         keep_checkpoints=bool(raw.get("keep_checkpoints", False)),
         keep_scores=bool(raw.get("keep_scores", False)),
         keep_replay_details=bool(raw.get("keep_replay_details", False)),
@@ -955,11 +1010,19 @@ def get_strategy_multi_seed_robustness_settings() -> StrategyMultiSeedRobustness
         raise ValueError("multi-seed robustness至少需要一個fixed_baseline arm")
     if not stochastic:
         raise ValueError("multi-seed robustness至少需要一個stochastic arm")
-    for arm in stochastic:
-        if not arm.dl_id or profile_settings.dl_sources[arm.dl_id].score_source != "continuous_ranker_oos":
-            raise ValueError(
-                f"multi-seed stochastic arm必須使用continuous_ranker_oos source: {arm.arm_id}"
-            )
+    score_sources = {
+        profile_settings.dl_sources[str(arm.dl_id)].score_source
+        for arm in stochastic if arm.dl_id
+    }
+    expected_score_source = (
+        "selection_point_in_time" if settings.profile_id == "selection_pit"
+        else "continuous_ranker_oos"
+    )
+    if score_sources != {expected_score_source}:
+        raise ValueError(
+            "multi-seed stochastic arms的score source與robustness階段不一致: "
+            f"expected={expected_score_source}, actual={sorted(score_sources)}"
+        )
     for reference_key, spec in settings.romd_reference_baselines.items():
         matches = [
             arm for arm in fixed
@@ -1093,11 +1156,12 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
         for contrast_id in ordered_contrast_ids
         for raw in (STRATEGY_COMPARE_CONTRASTS[contrast_id],)
     }
+    workflow_settings = get_breakout_quality_workflow_settings()
     settings = StrategyComparisonSettings(
         schema_version=int(STRATEGY_COMPARE_SCHEMA_VERSION),
         profile_id=selected_profile_id,
         profile_label=str(profile["label"]),
-        dataset=str(STRATEGY_COMPARE_DATASET).strip(),
+        dataset=str(workflow_settings.strategy_dataset).strip(),
         start_date=(
             None
             if profile.get("start_date") in (None, "")
@@ -1108,9 +1172,9 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
             if profile.get("end_date") in (None, "")
             else str(profile.get("end_date")).strip()
         ),
-        param_policy=str(STRATEGY_COMPARE_PARAM_POLICY).strip(),
-        max_positions=int(STRATEGY_COMPARE_MAX_POSITIONS),
-        rotation=str(STRATEGY_COMPARE_ROTATION).strip(),
+        param_policy=str(workflow_settings.strategy_param_policy).strip(),
+        max_positions=int(workflow_settings.strategy_max_positions),
+        rotation=str(workflow_settings.strategy_rotation).strip(),
         output_root=str(profile["output_root"]).strip(),
         reuse_output_roots=tuple(
             str(value).strip()
@@ -1132,8 +1196,11 @@ __all__ = [
     "STRATEGY_COMPARE_CONTRASTS",
     "STRATEGY_COMPARE_PREPARATION",
     "STRATEGY_COMPARE_PROFILES",
+    "STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES",
     "STRATEGY_DL_SOURCES",
     "STRATEGY_PARAM_SOURCES",
     "get_strategy_comparison_profiles",
+    "get_strategy_multi_seed_robustness_profiles",
+    "get_strategy_multi_seed_robustness_settings",
     "get_strategy_comparison_settings",
 ]

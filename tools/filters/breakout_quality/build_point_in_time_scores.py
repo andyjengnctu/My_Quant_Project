@@ -42,11 +42,10 @@ from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.ranker_sample_contract import build_score_eligibility_contract
 from filters.breakout_quality.models.factory import build_model
 from filters.breakout_quality.paths import (
+    SELECTION_POINT_IN_TIME_COVERAGE_FILENAME,
+    SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
+    SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_point_in_time_dir,
-    resolve_filter_point_in_time_fold_dir,
-    resolve_selection_point_in_time_coverage_path,
-    resolve_selection_point_in_time_manifest_path,
-    resolve_selection_point_in_time_score_path,
 )
 from filters.breakout_quality.torch_runtime import (
     SUPPORTED_MIXED_PRECISION_DTYPES,
@@ -199,6 +198,14 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--plan-only",
         action="store_true",
         help="只建立並驗證fold計畫，不訓練或寫入正式score工件",
+    )
+    parser.add_argument(
+        "--point-in-time-dir-override",
+        default=None,
+        help=(
+            "隔離研究輸出用PIT根目錄；只改fold/checkpoint/score/manifest寫入位置，"
+            "Dataset／Target／feature來源仍讀canonical truth"
+        ),
     )
     parser.add_argument(
         "--allow-stale-source",
@@ -926,7 +933,40 @@ def _migrate_compatible_legacy_fold(
     return None
 
 
-def _train_fold(args, bundle, fold, ids, fold_contract, contract_fingerprint, *, torch, plan):
+def _point_in_time_dir_for_args(args) -> Path:
+    override = str(getattr(args, "point_in_time_dir_override", "") or "").strip()
+    if override:
+        return Path(override).resolve()
+    return resolve_filter_point_in_time_dir(
+        PROJECT_ROOT,
+        args.filter_id,
+        args.model_architecture,
+        args.experiment_profile,
+    )
+
+
+def _point_in_time_fold_dir_for_args(args, fold_id: str) -> Path:
+    normalized = str(fold_id).strip()
+    if not normalized or Path(normalized).name != normalized:
+        raise ValueError("point-in-time fold_id 必須是安全的單一資料夾名稱")
+    return _point_in_time_dir_for_args(args) / "folds" / normalized
+
+
+def _selection_point_in_time_score_path_for_args(args) -> Path:
+    return _point_in_time_dir_for_args(args) / SELECTION_POINT_IN_TIME_SCORE_FILENAME
+
+
+def _selection_point_in_time_coverage_path_for_args(args) -> Path:
+    return _point_in_time_dir_for_args(args) / SELECTION_POINT_IN_TIME_COVERAGE_FILENAME
+
+
+def _selection_point_in_time_manifest_path_for_args(args) -> Path:
+    return _point_in_time_dir_for_args(args) / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
+
+
+def _train_fold(
+    args, bundle, fold, ids, fold_contract, contract_fingerprint, *, torch, plan
+):
     fold_id = str(fold["fold_id"])
     percentile_target = build_percentile_target(bundle, ids["final_ids"])
     epoch_selection = select_epoch(
@@ -966,13 +1006,7 @@ def _train_fold(args, bundle, fold, ids, fold_contract, contract_fingerprint, *,
     frame["model_information_cutoff"] = fold_contract["model_information_cutoff"]
     frame = _validate_score_frame(frame, fold_contract=fold_contract)
 
-    fold_dir = resolve_filter_point_in_time_fold_dir(
-        PROJECT_ROOT,
-        args.filter_id,
-        fold_id,
-        args.model_architecture,
-        args.experiment_profile,
-    )
+    fold_dir = _point_in_time_fold_dir_for_args(args, fold_id)
     fold_dir.mkdir(parents=True, exist_ok=True)
     model_path = fold_dir / DEFAULT_MODEL_FILENAME
     score_path = fold_dir / FOLD_SCORE_FILENAME
@@ -1122,13 +1156,7 @@ def _print_plan(
 
 def _combined_fold_record(args, item: dict[str, Any]) -> dict[str, Any]:
     fold_id = str(item["fold_id"])
-    fold_dir = resolve_filter_point_in_time_fold_dir(
-        PROJECT_ROOT,
-        args.filter_id,
-        fold_id,
-        args.model_architecture,
-        args.experiment_profile,
-    )
+    fold_dir = _point_in_time_fold_dir_for_args(args, fold_id)
     manifest_path = fold_dir / FOLD_MANIFEST_FILENAME
     return {
         "fold_id": fold_id,
@@ -1259,12 +1287,7 @@ def main(argv=None) -> int:
                 )
             )
         )
-    point_in_time_dir = resolve_filter_point_in_time_dir(
-        PROJECT_ROOT,
-        args.filter_id,
-        args.model_architecture,
-        args.experiment_profile,
-    )
+    point_in_time_dir = _point_in_time_dir_for_args(args)
     point_in_time_dir.mkdir(parents=True, exist_ok=True)
 
     score_frames: list[pd.DataFrame] = []
@@ -1278,13 +1301,7 @@ def main(argv=None) -> int:
     for fold_index, (fold, ids) in enumerate(zip(folds, fold_details), start=1):
         fold_contract = _fold_contract_payload(args, bundle, fold, ids)
         fingerprint = _json_fingerprint(fold_contract)
-        fold_dir = resolve_filter_point_in_time_fold_dir(
-            PROJECT_ROOT,
-            args.filter_id,
-            str(fold["fold_id"]),
-            args.model_architecture,
-            args.experiment_profile,
-        )
+        fold_dir = _point_in_time_fold_dir_for_args(args, str(fold["fold_id"]))
         reused = (
             _load_reusable_fold(
                 fold_dir=fold_dir,
@@ -1416,15 +1433,9 @@ def main(argv=None) -> int:
         score_start=score_start,
         score_end=score_end,
     )
-    score_path = resolve_selection_point_in_time_score_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
-    coverage_path = resolve_selection_point_in_time_coverage_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
-    manifest_path = resolve_selection_point_in_time_manifest_path(
-        PROJECT_ROOT, args.filter_id, args.model_architecture, args.experiment_profile
-    )
+    score_path = _selection_point_in_time_score_path_for_args(args)
+    coverage_path = _selection_point_in_time_coverage_path_for_args(args)
+    manifest_path = _selection_point_in_time_manifest_path_for_args(args)
     combined.to_csv(score_path, index=False, encoding="utf-8-sig")
     pd.DataFrame(coverage_rows).to_csv(coverage_path, index=False, encoding="utf-8-sig")
 

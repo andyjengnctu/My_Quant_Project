@@ -197,6 +197,21 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用**
 
 若未來真的要學extended／candidate-state品質，必須另立新的`MR-*`模型研究；若只改既有`DL-A9`在portfolio中的排序／allocation，則使用下一個新的`SR-C*`，不得重用`SR-C13`。
 
+
+---
+
+### Multiple-seed robustness workflow contract（2026-08-11）
+
+- `Forward-OOS Multi-seed robustness`與`Selection PIT Multi-seed robustness`都是`config/strategy_compare.py`驅動的正式Strategy Compare子工作類型；App不得硬編MR/C/模型名稱。
+- Selection robustness固定沿用`selection_pit`策略比較期間；目前為`2014-01-01～2020-12-31`，PIT builder只建立此策略期間所需的12-month score folds，因此目前是7 folds/model/seed，而不是重跑各模型canonical PIT歷史的10/8 folds。
+- 每個seed的PIT模型／Scores必須寫入robustness isolated work root；不得覆寫canonical Selection PIT工件或workflow seed。Strategy replay可透過明確override讀取isolated PIT score+manifest，但仍沿用相同Target、architecture、training sample scope、selector與策略accounting。
+- Strategy runtime共用值`dataset / param_policy / max_positions / rotation`由`get_breakout_quality_workflow_settings()`單一來源供給；`config/strategy_compare.py`不得複製第二份magic value。
+- Robustness永久raw aggregate固定包含`seed_results.csv`與`seed_yearly_returns.csv`；`yearly_report`只控制年度表顯示，不控制raw年度資料保存，因此切換report/console設定不需因缺年度raw而重訓。成功完成預設清除per-seed checkpoints／scores／replay work，FAILED／INTERRUPTED保留resumable work。
+- 年度aggregate的side也是正式契約：fixed baseline只讀`no_filter_return_pct`，stochastic DL ranking只讀`score_ranking_return_pct`；controlled-pair cache同時存在兩欄時不得互換。
+- Scientific fingerprint只包含scientific identity；console mode、progress interval、worker數、report schema、yearly renderer、retention policy、選單/arm顯示名稱與description不得造成模型scientific fingerprint改變。
+- Console進度與Strategy Compare報表共用同一色彩語意：active info=cyan，DONE/REUSE=green，warning/resume=yellow，FAILED/BLOCKED=red；績效delta仍由`strategy_report_style.signal_for_delta()`依指標方向判讀，不能因工作完成就把負向績效染綠。
+- 狀態：`IMPLEMENTED / RESULT_PENDING_FOR_SELECTION_ROBUSTNESS`；不新增`MR-*`／`DL-*`／`SR-C*` identity，不改既有Forward multi-seed結果。
+
 ---
 
 ## 7. Audit Registry
@@ -230,7 +245,7 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 
 ### 8.1 Multiple-seed strategy robustness infrastructure
 
-`Multiple-seed robustness`是Strategy Compare的final-strategy穩健性診斷，不新增`MR-*`、`DL-*`或`SR-C*` identity，也不做seed ensemble／best-seed selection。比較對象由`config/strategy_compare.py`中目前profile的arm `robustness_role`解析：`fixed_baseline`只回放一次，`stochastic`依deterministic generated seeds逐一以canonical continuous-ranker trainer訓練、輸出隔離score並套用相同strategy replay。Per-seed isolated Forward score replay必須把calendar execution start與第一個實際score交易日分開：execution start取自isolated model manifest的`outer_oos_policy.oos_start_date`，score table `available_from`可因假日／非交易日晚於該日，兩者不得互相取代。若CPU replay在與下一個GPU training重疊時失敗，run manifest必須標記`FAILED`且`resumable=true`，並停止仍在執行的trainer process。永久只保留fingerprint-scoped `manifest.json`、`seed_results.csv`、`robustness_summary.json`與`robustness_report.md`；seed checkpoint／score／replay detail預設為暫存並於數值落盤後清除。報表第一表以各seed最終策略指標Mean比較並同列Full／Min fixed baseline；第二表專門列RoMD Mean／Median／Std／CV／Min／P25／P75／Max與勝baseline比例，並額外保存同seed matched-pair RoMD差異及任意seed distribution comparison。正式執行前只針對本次required parameter sources與model upstream顯示依賴計畫並確認一次；可建立的策略參數透過canonical parameter builder自動建立／接續，isolated seed workflow不得因normal Strategy Compare canonical DL source缺件而被阻擋。Forward共同期間由canonical Dataset與walk-forward policy推導，不綁定目前canonical score artifact尾端；resume seed results必須驗證arm/seed鍵集合，所有run-stage failure均留下`FAILED`／`resumable` manifest。2026-08-11首批8-seed結果：Full RoMD=7.42、Min=7.74；MR-12B RoMD Mean/Median/Std=`8.21/7.70/2.63`、勝Min/Full=`4/8`；MR-13A=`9.97/10.87/3.68`、勝Min/Full=`5/8`。MR-13A平均與median均高於MR-12B，但CV亦較高（0.37 vs 0.32），證明seed variance足以推翻「單一seed 42可代表模型語意優劣」的推論；在同seed paired delta完成前不升格MR-13A，也不維持「MR-13A普遍Forward失敗」的強結論。首批report另暴露`DL選擇R Mean`在score-ranking路徑未接canonical trade reconstruction而顯示`-`，schema v3改用Strategy Compare既有同參數直接選擇R SSOT並加入matched-seed RoMD比較。狀態：**RESULT_AVAILABLE／SINGLE-SEED_CONCLUSION_REOPENED／PAIRWISE_RECHECK_REQUIRED**。
+`Multiple-seed robustness`是Strategy Compare的final-strategy穩健性診斷，不新增`MR-*`、`DL-*`或`SR-C*` identity，也不做seed ensemble／best-seed selection。比較對象由`config/strategy_compare.py`中目前profile的arm `robustness_role`解析：`fixed_baseline`只回放一次，`stochastic`依deterministic generated seeds逐一使用該階段canonical trainer/PIT builder產生隔離score，再套用相同strategy replay；目前正式子工作類型為Forward-OOS與Selection PIT兩個config-driven profiles。Per-seed isolated Forward score replay必須把calendar execution start與第一個實際score交易日分開：execution start取自isolated model manifest的`outer_oos_policy.oos_start_date`，score table `available_from`可因假日／非交易日晚於該日，兩者不得互相取代。若CPU replay在與下一個GPU training重疊時失敗，run manifest必須標記`FAILED`且`resumable=true`，並停止仍在執行的trainer process。永久只保留fingerprint-scoped `manifest.json`、`seed_results.csv`、`seed_yearly_returns.csv`、`robustness_summary.json`與`robustness_report.md`；年度raw永遠保存，年度表顯示可關閉；seed checkpoint／score／replay detail預設為暫存並於數值落盤後清除。報表第一表以各seed最終策略指標Mean比較並同列Full／Min fixed baseline；第二表專門列RoMD Mean／Median／Std／CV／Min／P25／P75／Max與勝baseline比例，並額外保存同seed matched-pair RoMD差異及任意seed distribution comparison。正式執行前只針對本次required parameter sources與model upstream顯示依賴計畫並確認一次；可建立的策略參數透過canonical parameter builder自動建立／接續，isolated seed workflow不得因normal Strategy Compare canonical DL source缺件而被阻擋。Forward共同期間由canonical Dataset與walk-forward policy推導，不綁定目前canonical score artifact尾端；resume seed results必須驗證arm/seed鍵集合，所有run-stage failure均留下`FAILED`／`resumable` manifest。2026-08-11首批8-seed結果：Full RoMD=7.42、Min=7.74；MR-12B RoMD Mean/Median/Std=`8.21/7.70/2.63`、勝Min/Full=`4/8`；MR-13A=`9.97/10.87/3.68`、勝Min/Full=`5/8`。MR-13A平均與median均高於MR-12B，但CV亦較高（0.37 vs 0.32），證明seed variance足以推翻「單一seed 42可代表模型語意優劣」的推論；在同seed paired delta完成前不升格MR-13A，也不維持「MR-13A普遍Forward失敗」的強結論。首批report另暴露`DL選擇R Mean`在score-ranking路徑未接canonical trade reconstruction而顯示`-`，schema v3改用Strategy Compare既有同參數直接選擇R SSOT並加入matched-seed RoMD比較。狀態：**RESULT_AVAILABLE／SINGLE-SEED_CONCLUSION_REOPENED／PAIRWISE_RECHECK_REQUIRED**。
 
 ---
 

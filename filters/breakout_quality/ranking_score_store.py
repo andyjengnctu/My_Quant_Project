@@ -442,17 +442,30 @@ def load_selection_point_in_time_ranking_contract(
     )
 
 
-@lru_cache(maxsize=16)
-def load_selection_point_in_time_score_table(
-    project_root: str,
-    filter_id: str,
-    model_architecture: str,
-    experiment_profile: str,
+def load_selection_point_in_time_score_table_from_path(
+    score_path: str,
+    *,
+    manifest_path: str | None = None,
 ) -> pd.DataFrame:
-    contract = load_selection_point_in_time_ranking_contract(
-        project_root, filter_id, model_architecture, experiment_profile
-    )
-    table = read_breakout_quality_csv(contract.score_path).copy()
+    path = Path(score_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"找不到Selection PIT score: {path}")
+    manifest = None
+    available_from = ""
+    available_through = ""
+    expected_count = None
+    if manifest_path not in (None, ""):
+        manifest_file = Path(str(manifest_path)).resolve()
+        if not manifest_file.is_file():
+            raise FileNotFoundError(f"找不到Selection PIT manifest: {manifest_file}")
+        manifest = _read_json_object(
+            manifest_file, label="Selection PIT manifest", project_root=manifest_file.parent
+        )
+        period = dict(manifest.get("score_period") or {})
+        available_from = pd.Timestamp(period.get("start")).strftime("%Y-%m-%d")
+        available_through = pd.Timestamp(period.get("end")).strftime("%Y-%m-%d")
+        expected_count = int((manifest.get("coverage") or {}).get("scored_group_count", -1))
+    table = read_breakout_quality_csv(path).copy()
     missing = sorted(set(PIT_REQUIRED_SCORE_COLUMNS).difference(table.columns))
     if missing:
         raise ValueError(f"Selection PIT score table缺少欄位: {missing}")
@@ -476,14 +489,31 @@ def load_selection_point_in_time_score_table(
         raise ValueError("Selection PIT score table同一ticker/date出現重複Score")
     if table.duplicated(["group_index"]).any():
         raise ValueError("Selection PIT score table同一group_index出現重複Score")
-    if str(table["date"].min()) < contract.available_from or str(table["date"].max()) > contract.available_through:
+    if available_from and (str(table["date"].min()) < available_from or str(table["date"].max()) > available_through):
         raise ValueError("Selection PIT score實際日期超出manifest score period")
-    expected_count = int((contract.manifest.get("coverage") or {}).get("scored_group_count", -1))
-    if len(table) != expected_count:
+    if expected_count is not None and expected_count >= 0 and len(table) != expected_count:
         raise ValueError(
             f"Selection PIT score row count與manifest不一致: expected={expected_count}, actual={len(table)}"
         )
-    return table.set_index(["ticker", "date"]).sort_index()
+    indexed = table.set_index(["ticker", "date"]).sort_index()
+    indexed.attrs["available_from"] = available_from or str(table["date"].min())
+    indexed.attrs["available_through"] = available_through or str(table["date"].max())
+    return indexed
+
+
+@lru_cache(maxsize=16)
+def load_selection_point_in_time_score_table(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> pd.DataFrame:
+    contract = load_selection_point_in_time_ranking_contract(
+        project_root, filter_id, model_architecture, experiment_profile
+    )
+    return load_selection_point_in_time_score_table_from_path(
+        str(contract.score_path), manifest_path=str(contract.manifest_path)
+    )
 
 
 @dataclass(frozen=True)
@@ -942,10 +972,27 @@ def lookup_selection_point_in_time_candidate_score(
     filter_id: str,
     model_architecture: str,
     experiment_profile: str,
+    score_path_override: str | None = None,
+    manifest_path_override: str | None = None,
 ) -> dict[str, Any]:
-    contract = load_selection_point_in_time_ranking_contract(
-        project_root, filter_id, model_architecture, experiment_profile
+    contract = (
+        None
+        if score_path_override is not None
+        else load_selection_point_in_time_ranking_contract(
+            project_root, filter_id, model_architecture, experiment_profile
+        )
     )
+    table = (
+        load_selection_point_in_time_score_table_from_path(
+            str(score_path_override), manifest_path=manifest_path_override
+        )
+        if score_path_override is not None
+        else load_selection_point_in_time_score_table(
+            project_root, filter_id, model_architecture, experiment_profile
+        )
+    )
+    available_from = contract.available_from if contract is not None else str(table.attrs.get("available_from") or "")
+    available_through = contract.available_through if contract is not None else str(table.attrs.get("available_through") or "")
     ticker_text = str(ticker or "").strip()
     if not ticker_text:
         raise ValueError("Selection PIT ranking lookup必須提供ticker")
@@ -955,12 +1002,9 @@ def lookup_selection_point_in_time_candidate_score(
     fold_id = ""
     information_cutoff = ""
     group_index: int | None = None
-    if date_text < contract.available_from or date_text > contract.available_through:
+    if date_text < available_from or date_text > available_through:
         reason = "outside_score_period"
     else:
-        table = load_selection_point_in_time_score_table(
-            project_root, filter_id, model_architecture, experiment_profile
-        )
         key = (ticker_text, date_text)
         if key not in table.index:
             reason = "missing_ticker_date_score"
@@ -1002,5 +1046,6 @@ __all__ = [
     "derive_point_in_time_model_validation_gate",
     "load_selection_point_in_time_ranking_contract",
     "load_selection_point_in_time_score_table",
+    "load_selection_point_in_time_score_table_from_path",
     "lookup_selection_point_in_time_candidate_score",
 ]

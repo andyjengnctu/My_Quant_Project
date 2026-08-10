@@ -20,6 +20,8 @@ from config.research import get_active_model_research_provider
 from config.strategy_compare import (
     get_strategy_comparison_profiles,
     get_strategy_comparison_settings,
+    get_strategy_multi_seed_robustness_profiles,
+    get_strategy_multi_seed_robustness_settings,
 )
 from core.runtime_utils import is_interactive_console, run_cli_entrypoint
 from filters.breakout_quality.strategy_comparison import (
@@ -122,15 +124,16 @@ def _strategy_compare_profile_menu(profile_id: str) -> int:
             print(f"\n目前操作已中止，返回{settings.profile_label}選單。")
 
 
-def _strategy_multi_seed_robustness_menu() -> int:
+def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
     from filters.breakout_quality.strategy_multi_seed_robustness import (
         run_multi_seed_robustness,
         show_latest_multi_seed_robustness_report,
         show_multi_seed_robustness_status,
     )
 
+    robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
     while True:
-        print("\n=== Multiple-seed robustness ===")
+        print(f"\n=== {robustness.label} ===")
         print("[1/Enter] 執行")
         print("[2]       查看設定與預計動作")
         print("[3]       查看最新報表")
@@ -144,17 +147,17 @@ def _strategy_multi_seed_robustness_menu() -> int:
             return 0
         try:
             if choice == "1":
-                run_multi_seed_robustness(confirm=True)
+                run_multi_seed_robustness(robustness_id=robustness_id, confirm=True)
             elif choice == "2":
-                show_multi_seed_robustness_status()
+                show_multi_seed_robustness_status(robustness_id=robustness_id)
             elif choice == "3":
-                show_latest_multi_seed_robustness_report()
+                show_latest_multi_seed_robustness_report(robustness_id=robustness_id)
             else:
                 print("選項無效，請按 Enter 或輸入 0～3。")
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:
-            print("\n目前操作已中止，返回Multiple-seed robustness選單。")
+            print(f"\n目前操作已中止，返回{robustness.label}選單。")
 
 
 def _show_all_strategy_comparison_status() -> None:
@@ -163,6 +166,15 @@ def _show_all_strategy_comparison_status() -> None:
         print(f"\n--- {settings.profile_label} ---")
         try:
             show_strategy_comparison_status(settings=settings)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"[狀態不可用] {type(exc).__name__}: {exc}")
+    from filters.breakout_quality.strategy_multi_seed_robustness import (
+        show_multi_seed_robustness_status,
+    )
+    for robustness in get_strategy_multi_seed_robustness_profiles():
+        print(f"\n--- {robustness['label']} ---")
+        try:
+            show_multi_seed_robustness_status(robustness_id=robustness["robustness_id"])
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             print(f"[狀態不可用] {type(exc).__name__}: {exc}")
 
@@ -174,9 +186,11 @@ def _strategy_compare_menu() -> int:
         for index, profile in enumerate(profiles, start=1):
             suffix = "/Enter" if index == 1 else ""
             print(f"[{index}{suffix}] {profile['label']}")
-        robustness_choice = len(profiles) + 1
-        status_choice = robustness_choice + 1
-        print(f"[{robustness_choice}]       Multiple-seed robustness")
+        robustness_profiles = get_strategy_multi_seed_robustness_profiles()
+        robustness_start = len(profiles) + 1
+        for offset, robustness in enumerate(robustness_profiles):
+            print(f"[{robustness_start + offset}]       {robustness['label']}")
+        status_choice = robustness_start + len(robustness_profiles)
         print(f"[{status_choice}]       查看全部階段設定與工件狀態")
         print("[0]       返回")
         try:
@@ -193,8 +207,9 @@ def _strategy_compare_menu() -> int:
             continue
         if 1 <= numeric <= len(profiles):
             _strategy_compare_profile_menu(profiles[numeric - 1]["profile_id"])
-        elif numeric == robustness_choice:
-            _strategy_multi_seed_robustness_menu()
+        elif robustness_start <= numeric < status_choice:
+            robustness = robustness_profiles[numeric - robustness_start]
+            _strategy_multi_seed_robustness_menu(robustness["robustness_id"])
         elif numeric == status_choice:
             _show_all_strategy_comparison_status()
         else:
@@ -341,29 +356,42 @@ def main(argv=None) -> int:
             return _strategy_compare_menu() if is_interactive_console() else 0
         if str(rest[0]).strip().lower() in {"-h", "--help", "help"}:
             print(f"用法: python {program_name} compare [profile] [run|status]")
-            print(f"      python {program_name} compare robustness [run|status|latest]")
+            print(f"      python {program_name} compare robustness [robustness_id] [run|status|latest]")
             print("說明: profile與robustness設定皆由config/strategy_compare.py定義。")
             return 0
         first = str(rest[0]).strip()
         if first.lower() in {"robustness", "multi-seed", "multi_seed"}:
-            if len(rest) > 2:
-                raise ValueError(f"compare robustness不支援額外參數: {' '.join(rest[2:])}")
-            action = str(rest[1]).strip().lower() if len(rest) >= 2 else "status"
+            profiles = get_strategy_multi_seed_robustness_profiles()
+            profile_ids = {item["robustness_id"] for item in profiles}
+            robustness_id = get_strategy_multi_seed_robustness_settings().robustness_id
+            action_index = 1
+            if len(rest) >= 2 and rest[1] in profile_ids:
+                robustness_id = rest[1]
+                action_index = 2
+            action = rest[action_index].lower() if len(rest) > action_index else "status"
+            if len(rest) > action_index + 1:
+                raise ValueError(
+                    "compare robustness不支援額外參數: "
+                    + " ".join(rest[action_index + 1:])
+                )
             from filters.breakout_quality.strategy_multi_seed_robustness import (
                 run_multi_seed_robustness,
                 show_latest_multi_seed_robustness_report,
                 show_multi_seed_robustness_status,
             )
             if action == "run":
-                run_multi_seed_robustness(confirm=is_interactive_console())
+                run_multi_seed_robustness(
+                    robustness_id=robustness_id, confirm=is_interactive_console()
+                )
                 return 0
             if action in {"status", "show"}:
-                show_multi_seed_robustness_status()
+                show_multi_seed_robustness_status(robustness_id=robustness_id)
                 return 0
             if action == "latest":
-                show_latest_multi_seed_robustness_report()
+                show_latest_multi_seed_robustness_report(robustness_id=robustness_id)
                 return 0
             raise ValueError(f"compare robustness不支援的命令: {action}")
+
         profile_ids = {item["profile_id"] for item in get_strategy_comparison_profiles()}
         if first in profile_ids:
             profile_id = first
