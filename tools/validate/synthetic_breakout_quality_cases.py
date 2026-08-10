@@ -18011,6 +18011,175 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and 'continuous_score_execution_start_override=str(job["score_execution_start"])' in robustness_source
         and "outer_oos_policy" in robustness_source,
     )
+    engine_source = (
+        project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
+    ).read_text(encoding="utf-8")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_override_coverage_metadata_keeps_execution_start_distinct_from_first_score",
+        True,
+        '"required_start": continuous_score_override["execution_start"]' in engine_source
+        and '"first_scored_event": continuous_score_override["available_from"]' in engine_source,
+    )
+
+    from core.strategy_comparison import StrategyPreparationAction, StrategyPreparationPlan
+    from filters.breakout_quality import strategy_compare_preparation as preparation_module
+
+    dl_blocked = StrategyPreparationAction(
+        action_id="dl:synthetic:model", artifact_key="dl:synthetic:model",
+        action="BLOCKED", builder_type=None, description="canonical DL intentionally absent", path="models/dl.pt",
+    )
+    fake_settings = robustness_profile
+    configured_required_sources = sorted({
+        arm.param_source for arm in (*robustness_fixed, *robustness_stochastic)
+    })
+    parameter_only_prepare_ok = False
+    if len(configured_required_sources) >= 2:
+        build_source, reuse_source = configured_required_sources[:2]
+        first_plan = StrategyPreparationPlan(
+            overall_status="BLOCKED",
+            actions=(
+                StrategyPreparationAction(
+                    action_id=f"param:{build_source}", artifact_key=f"param:{build_source}",
+                    action="BUILD", builder_type="synthetic_builder", description="build", path="models/build.json",
+                ),
+                StrategyPreparationAction(
+                    action_id=f"param:{reuse_source}", artifact_key=f"param:{reuse_source}",
+                    action="REUSE", builder_type=None, description="reuse", path="models/reuse.json",
+                ),
+                dl_blocked,
+            ),
+        )
+        second_plan = StrategyPreparationPlan(
+            overall_status="BLOCKED",
+            actions=(
+                StrategyPreparationAction(
+                    action_id=f"param:{build_source}", artifact_key=f"param:{build_source}",
+                    action="REUSE", builder_type=None, description="reuse", path="models/build.json",
+                ),
+                StrategyPreparationAction(
+                    action_id=f"param:{reuse_source}", artifact_key=f"param:{reuse_source}",
+                    action="REUSE", builder_type=None, description="reuse", path="models/reuse.json",
+                ),
+                dl_blocked,
+            ),
+        )
+        prep_calls = []
+        with patch.object(
+            preparation_module, "_execute_preparation_action",
+            side_effect=lambda **kwargs: prep_calls.append(kwargs["action"].artifact_key),
+        ):
+            prepared = preparation_module.prepare_strategy_parameter_artifacts(
+                settings=fake_settings,
+                status={"preparation_plan": first_plan},
+                required_source_ids=(build_source, reuse_source),
+                status_refresher=lambda: {"preparation_plan": second_plan},
+            )
+        parameter_only_prepare_ok = (
+            prep_calls == [f"param:{build_source}"]
+            and prepared["preparation_plan"] is second_plan
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_parameter_preparation_ignores_normal_dl_blockers_and_reuses_canonical_param_builder",
+        True,
+        parameter_only_prepare_ok
+        and "prepare_strategy_parameter_artifacts" in robustness_source
+        and "請先由Strategy Compare正式前置建立" not in robustness_source,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        period_root = Path(tmp)
+        (period_root / "dataset_summary.json").write_text(
+            json.dumps({"dataset": robustness_profile.dataset, "source_data_date_range": {"end": "2026-03-02"}}),
+            encoding="utf-8",
+        )
+        stale_status = {
+            "comparison_period": {"start": "2021-01-01", "end": "2025-12-22"}
+        }
+        with patch.object(
+            robustness_module, "resolve_filter_output_dir", return_value=period_root
+        ), patch.object(
+            robustness_module, "resolve_breakout_quality_outer_policy",
+            return_value={"oos_start_date": "2021-01-01", "effective_oos_end_date": "2026-03-02"},
+        ):
+            derived_start, derived_end = robustness_module._comparison_period_from_upstream(
+                robustness_profile, robustness_stochastic, stale_status
+            )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_forward_period_is_derived_from_dataset_policy_not_current_canonical_score_tail",
+        True,
+        derived_start == "2021-01-01"
+        and derived_end == "2026-03-02",
+    )
+
+    dataset_profile_mismatch_rejected = False
+    with tempfile.TemporaryDirectory() as tmp:
+        period_root = Path(tmp)
+        (period_root / "dataset_summary.json").write_text(
+            json.dumps({"dataset": "wrong-profile", "source_data_date_range": {"end": "2026-03-02"}}),
+            encoding="utf-8",
+        )
+        with patch.object(
+            robustness_module, "resolve_filter_output_dir", return_value=period_root
+        ):
+            try:
+                robustness_module._comparison_period_from_upstream(
+                    robustness_profile, robustness_stochastic, {}
+                )
+            except RuntimeError:
+                dataset_profile_mismatch_rejected = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_forward_period_rejects_dataset_profile_mismatch",
+        True,
+        dataset_profile_mismatch_rejected,
+    )
+
+    valid_resume_rows = []
+    resume_seeds = (101, 202)
+    for arm_order, arm in enumerate(robustness_stochastic, start=1):
+        for seed_order, seed in enumerate(resume_seeds, start=1):
+            row = {
+                "arm_id": arm.arm_id, "seed": seed, "arm_order": arm_order,
+                "seed_order": seed_order,
+            }
+            row.update(_robustness_metrics(6.0 + arm_order, 100.0, 50.0))
+            valid_resume_rows.append(row)
+    valid_resume_frame = pd.DataFrame(valid_resume_rows)
+    robustness_module._validate_seed_results_frame(
+        valid_resume_frame, stochastic_arms=robustness_stochastic, seeds=resume_seeds
+    )
+    duplicate_rejected = False
+    try:
+        robustness_module._validate_seed_results_frame(
+            pd.concat([valid_resume_frame, valid_resume_frame.iloc[[0]]], ignore_index=True),
+            stochastic_arms=robustness_stochastic, seeds=resume_seeds,
+        )
+    except ValueError:
+        duplicate_rejected = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_resume_rejects_duplicate_or_foreign_seed_result_observations",
+        True,
+        duplicate_rejected
+        and '"failed_stage": "resume_preflight_or_fixed_baseline"' in robustness_source
+        and '"failed_stage": "summary_or_report_finalization"' in robustness_source,
+    )
+
+    confirm_index = robustness_source.find("按 Enter 執行全部前置、訓練與回放")
+    parameter_prepare_index = robustness_source.find("status = prepare_strategy_parameter_artifacts(")
+    run_dir_index = robustness_source.find("run_root.mkdir(parents=True, exist_ok=True)")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_shows_one_plan_confirmation_before_parameter_build_and_run_artifact_creation",
+        True,
+        confirm_index >= 0
+        and parameter_prepare_index > confirm_index
+        and run_dir_index > parameter_prepare_index
+        and robustness_source.count("按 Enter 執行全部前置、訓練與回放") == 1,
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_replay_failure_is_resumable_and_stops_overlapped_training_process",

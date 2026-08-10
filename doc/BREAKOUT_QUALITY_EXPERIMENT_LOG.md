@@ -7842,3 +7842,27 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 不升robustness schema、不改scientific fingerprint；`bb741ba0b0c3d680`保持有效。修正後由相同Research → Strategy Compare → Multiple-seed robustness入口重新執行，已完整且identity相符的per-seed isolated training artifact可直接`TRAIN REUSE`接續；未完整的training則依既有validator重訓。
 - 本輪沒有新的Multiple-seed策略結果，研究狀態仍是`IMPLEMENTED／RESULT_PENDING`。
 
+## 2026-08-10 — Multiple-seed robustness 完整檢查：正式前置、期間與resume完整性修正
+
+### 工作基準與範圍
+
+- 程式基準：`test-branch-1_20260810_225901_d85d909.zip`；SHA256 `b08243dff884aabbedfd887bc75dca75f2af390cc0f731343c322f5135d6cf2d`。
+- 本輪是程式／契約完整檢查，沒有新的Multiple-seed策略結果；研究狀態維持`IMPLEMENTED／RESULT_PENDING`，不新增MR／DL／SR identity。
+- 固定scientific variables不變：目前config的robustness profile、deterministic generated seeds、Target／architecture／loss／training defaults、Min／Full參數語意、selector、K/R0與feasible-ascent均未因結果調整。
+
+### 發現與修正
+
+1. Multiple-seed原本在required strategy parameter缺件時直接要求使用者先跑另一個Strategy Compare，且status頁沒有只屬於robustness的可稽核前置計畫。新增parameter-only canonical preparation service：normal Strategy Compare的DL-score BLOCKED action不會阻擋isolated-seed workflow；本次需要的param source若已有正式builder則在同一次確認後自動BUILD／REBUILD／REUSE，無builder或缺model upstream truth才事前BLOCKED。
+2. Forward robustness period原本可透過normal Strategy Compare status間接依賴目前canonical score coverage。改為在未設定explicit period時直接由canonical Dataset `source_data_date_range.end`與正式walk-forward policy推導共同OOS start/end，因此舊score tail例如`2025-12-22`不得把新isolated training的策略期間截短。
+3. isolated continuous override雖已分離calendar `execution_start`與score `available_from`，但輸出的`score_signal_coverage.required_start`仍誤寫成`available_from`。修正為required start=`execution_start`、first scored event=`available_from`，只修metadata，不改候選／score／交易結果。
+4. `seed_results.csv` resume新增exact contract integrity：arm/seed observation不得重複、不得出現目前stochastic arms／resolved seeds之外的row，arm_order／seed_order也須一致；partial expected rows仍可合法接續。
+5. fixed baseline／resume preflight與summary/report finalization原本可能在失敗後留下`RUNNING` manifest。現在與training/replay相同，均寫`FAILED`、`resumable=true`、`failed_stage`與錯誤內容；正式summary/report只在完整seed observation通過後產生。
+6. 執行順序改為：顯示robustness專屬依賴計畫 → 一次確認 → parameter-only自動前置 → 重新收集identity／解析共同期間 → 建立fingerprint-scoped run目錄 → fixed baseline → isolated train/replay → aggregate report。取消操作不再先建立`PLANNED` run artifact。
+
+### 驗證與scientific identity
+
+- GPT獨立custom target checks驗證parameter-only preparation可忽略normal DL blocker、duplicate seed result會被拒絕、`2021-01-01` execution start與`2021-01-04` first score day仍分離。
+- 全專案Python compile、AST bare-except、App menu hard-coded experiment ID、import SCC、formal output-root literal掃描均無新增問題；`apps/test_suite.py`未由GPT執行。
+- `validate_strategy_compare_config_driven_app_contract_case`已補direct synthetic coverage，但formal double check仍應由使用者本地`apps/test_suite.py`執行。
+- 不改既有Selection／Forward策略結果、不挑best seed、不做seed ensemble；尚未產生新的robustness數值。
+

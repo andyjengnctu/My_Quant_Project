@@ -52,15 +52,22 @@ from config.strategy_compare import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_settings,
 )
-from core.console_report import project_relative_display_path, render_table, render_title
+from core.console_report import (
+    project_relative_display_path,
+    render_table,
+    render_title,
+)
 from core.strategy_comparison import StrategyComparisonArm
 from filters.breakout_quality.artifacts import compute_file_sha256
+from filters.breakout_quality.dataset_store import resolve_dataset_paths
+from filters.breakout_quality.paths import resolve_filter_output_dir
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     DAILY_RANKER_OOS_SCORE_FILENAME,
     CONTINUOUS_RANKER_SCORE_FILENAME,
     load_continuous_ranker_oos_score_table_from_path,
 )
+from filters.breakout_quality.splits import resolve_breakout_quality_outer_policy
 from filters.breakout_quality.strategy_compare_engine import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
     OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
@@ -73,6 +80,10 @@ from filters.breakout_quality.strategy_comparison import (
     _arm_runtime_spec,
     _find_reusable_baseline_source,
     collect_artifact_status,
+)
+from filters.breakout_quality.strategy_compare_preparation import (
+    model_upstream_prerequisite_blockers,
+    prepare_strategy_parameter_artifacts,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -145,6 +156,175 @@ def _robustness_arms(settings) -> tuple[tuple[StrategyComparisonArm, ...], tuple
     if not fixed or not stochastic:
         raise ValueError("multi-seed robustness需要fixed baseline與stochastic arms")
     return fixed, stochastic
+
+
+def _required_parameter_sources(
+    fixed_arms: tuple[StrategyComparisonArm, ...],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+) -> tuple[str, ...]:
+    return tuple(sorted({arm.param_source for arm in (*fixed_arms, *stochastic_arms)}))
+
+
+def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str, str]], list[str]]:
+    rows: list[tuple[str, str, str]] = []
+    blockers: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for arm in stochastic_arms:
+        dl = settings.dl_sources[str(arm.dl_id)]
+        key = (str(dl.filter_id), str(dl.experiment_profile))
+        if key in seen:
+            continue
+        seen.add(key)
+        reasons = model_upstream_prerequisite_blockers(
+            PROJECT_ROOT,
+            filter_id=str(dl.filter_id),
+            experiment_profile=str(dl.experiment_profile),
+        )
+        if reasons:
+            blockers.extend(reasons)
+            rows.append((
+                "BLOCKED",
+                f"model-upstream:{dl.experiment_profile}",
+                "；".join(reasons),
+            ))
+        else:
+            rows.append((
+                "REUSE",
+                f"model-upstream:{dl.experiment_profile}",
+                "重用canonical Dataset／Target truth；isolated trainer不得建立Label／Target",
+            ))
+    return rows, blockers
+
+
+def _comparison_period_from_upstream(settings, stochastic_arms, status: dict[str, Any]) -> tuple[str, str]:
+    if settings.start_date is not None and settings.end_date is not None:
+        start = pd.Timestamp(str(settings.start_date)).normalize()
+        end = pd.Timestamp(str(settings.end_date)).normalize()
+        if end < start:
+            raise RuntimeError("Multiple-seed robustness設定期間不合法")
+        return str(start.date()), str(end.date())
+
+    runtime_periods: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    seen_filters: set[str] = set()
+    for arm in stochastic_arms:
+        dl = settings.dl_sources[str(arm.dl_id)]
+        filter_id = str(dl.filter_id)
+        if filter_id in seen_filters:
+            continue
+        seen_filters.add(filter_id)
+        dataset = resolve_dataset_paths(
+            resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
+        )
+        summary = _read_json(dataset.summary)
+        if summary is None:
+            raise RuntimeError(
+                "Multiple-seed robustness無法讀取canonical Dataset summary: "
+                + project_relative_display_path(dataset.summary, project_root=PROJECT_ROOT)
+            )
+        stored_dataset = str(summary.get("dataset") or "").strip().lower()
+        expected_dataset = str(settings.dataset).strip().lower()
+        if stored_dataset and stored_dataset != expected_dataset:
+            raise RuntimeError(
+                "Multiple-seed robustness Dataset profile不一致: "
+                f"expected={expected_dataset}, actual={stored_dataset}"
+            )
+        source_range = dict(summary.get("source_data_date_range") or {})
+        source_end = str(source_range.get("end") or "").strip()
+        if not source_end:
+            raise RuntimeError(
+                "Multiple-seed robustness無法由Dataset解析Forward OOS期間: "
+                + project_relative_display_path(dataset.summary, project_root=PROJECT_ROOT)
+            )
+        outer = resolve_breakout_quality_outer_policy(
+            PROJECT_ROOT, source_data_end_date=source_end
+        )
+        runtime_periods.append((
+            pd.Timestamp(str(outer["oos_start_date"])).normalize(),
+            pd.Timestamp(str(outer["effective_oos_end_date"])).normalize(),
+        ))
+    if not runtime_periods:
+        raise RuntimeError("Multiple-seed robustness沒有可解析Forward OOS期間的stochastic source")
+    start = max(item[0] for item in runtime_periods)
+    end = min(item[1] for item in runtime_periods)
+    if end < start:
+        raise RuntimeError("Multiple-seed robustness stochastic sources沒有共同Forward OOS期間")
+    return str(start.date()), str(end.date())
+
+
+def _parameter_plan_rows(
+    *, settings, status: dict[str, Any], required_sources: tuple[str, ...]
+) -> tuple[list[tuple[str, str, str]], list[str]]:
+    action_by_key = {
+        item.artifact_key: item for item in status["preparation_plan"].actions
+    }
+    rows: list[tuple[str, str, str]] = []
+    blockers: list[str] = []
+    for source_id in required_sources:
+        key = f"param:{source_id}"
+        item = action_by_key.get(key)
+        if item is None:
+            blockers.append(f"前置計畫缺少{key}")
+            rows.append(("BLOCKED", key, "正式前置計畫缺少此參數工件"))
+            continue
+        rows.append((item.action, item.artifact_key, item.description))
+        if item.action == "BLOCKED":
+            blockers.append(f"{item.artifact_key}: {item.description}")
+    return rows, blockers
+
+
+def _render_robustness_execution_plan(
+    *, settings, status: dict[str, Any], fixed_arms, stochastic_arms
+) -> tuple[str, dict[str, Any]]:
+    cfg = get_strategy_multi_seed_robustness_settings()
+    required_sources = _required_parameter_sources(fixed_arms, stochastic_arms)
+    param_rows, param_blockers = _parameter_plan_rows(
+        settings=settings, status=status, required_sources=required_sources
+    )
+    upstream_rows, upstream_blockers = _model_upstream_rows(settings, stochastic_arms)
+    blockers = [*param_blockers, *upstream_blockers]
+    try:
+        start, end = _comparison_period_from_upstream(settings, stochastic_arms, status)
+        period_text = f"{start} ～ {end}"
+        period_error = None
+    except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        start = end = None
+        period_text = f"BLOCKED: {type(exc).__name__}: {exc}"
+        period_error = str(exc)
+        blockers.append(str(exc))
+
+    pending_param = any(row[0] in {"BUILD", "REBUILD"} for row in param_rows)
+    overall = "BLOCKED" if blockers else "PREPARABLE" if pending_param else "READY"
+    rows = [*param_rows, *upstream_rows]
+    for arm in fixed_arms:
+        rows.append((
+            "RUN/REUSE",
+            arm.name,
+            "固定DL-off baseline；identity一致時重用，否則正式回放一次",
+        ))
+    for arm in stochastic_arms:
+        rows.append((
+            "TRAIN+REPLAY",
+            arm.name,
+            f"{cfg.seed_count}個deterministic generated seeds；isolated canonical trainer + same strategy replay",
+        ))
+    lines = [
+        render_title("Multiple-seed robustness 本次執行計畫"),
+        f"整體狀態          ：{overall}",
+        f"比較階段          ：{settings.profile_label} ({settings.profile_id})",
+        f"共同策略期間      ：{period_text}",
+        f"Seed數量          ：{cfg.seed_count}",
+        f"Seed generator    ：deterministic / generator_seed={cfg.seed_generator_seed}",
+        f"GPU training      ：workers={cfg.gpu_train_workers}",
+        f"CPU strategy replay：workers={cfg.cpu_replay_workers}",
+        render_table(("動作", "項目", "說明"), rows),
+    ]
+    return "\n".join(lines), {
+        "overall_status": overall,
+        "blockers": blockers,
+        "required_param_sources": required_sources,
+        "comparison_period": None if start is None else {"start": start, "end": end},
+        "period_error": period_error,
+    }
 
 
 def _dataset_identity_snapshot(dataset: str) -> dict[str, Any]:
@@ -316,6 +496,44 @@ def _load_seed_results(path: Path) -> pd.DataFrame:
     return frame
 
 
+def _validate_seed_results_frame(
+    frame: pd.DataFrame,
+    *,
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    seeds: tuple[int, ...],
+) -> None:
+    if frame.empty:
+        return
+    required_columns = {
+        "arm_id", "seed", "arm_order", "seed_order",
+        *(key for _label, key, _unit in MEAN_METRICS),
+    }
+    missing_columns = sorted(required_columns - set(frame.columns))
+    if missing_columns:
+        raise ValueError(
+            "multi-seed seed_results缺少欄位: " + ", ".join(missing_columns)
+        )
+    keys = [
+        (str(row.arm_id), int(row.seed)) for row in frame.itertuples(index=False)
+    ]
+    if len(keys) != len(set(keys)):
+        raise ValueError("multi-seed seed_results存在重複arm/seed observation")
+    expected = {
+        (arm.arm_id, int(seed)) for arm in stochastic_arms for seed in seeds
+    }
+    unexpected = sorted(set(keys) - expected)
+    if unexpected:
+        preview = ", ".join(_unit_key(arm_id, seed) for arm_id, seed in unexpected[:4])
+        raise ValueError(f"multi-seed seed_results含非本contract observation: {preview}")
+    arm_order = {arm.arm_id: index for index, arm in enumerate(stochastic_arms, start=1)}
+    seed_order = {int(seed): index for index, seed in enumerate(seeds, start=1)}
+    for row in frame.itertuples(index=False):
+        if int(row.arm_order) != arm_order[str(row.arm_id)]:
+            raise ValueError(f"multi-seed seed_results arm_order不一致: {row.arm_id}")
+        if int(row.seed_order) != seed_order[int(row.seed)]:
+            raise ValueError(f"multi-seed seed_results seed_order不一致: {row.seed}")
+
+
 def _write_seed_results(path: Path, frame: pd.DataFrame) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.sort_values(["arm_order", "seed_order"], kind="mergesort").to_csv(
@@ -354,6 +572,10 @@ def _validate_training_artifacts(
     manifest = _read_json(paths["manifest"])
     report = _read_json(paths["report"])
     for payload, label in ((manifest, "manifest"), (report, "report")):
+        if payload is None:
+            raise ValueError(f"multi-seed {label}不是有效JSON object")
+        if str(payload.get("filter_id") or "") != dl.filter_id:
+            raise ValueError(f"multi-seed {label} filter_id不一致")
         if str(payload.get("experiment_profile") or "") != dl.experiment_profile:
             raise ValueError(f"multi-seed {label} experiment profile不一致")
         if str(payload.get("model_architecture") or "") != dl.model_architecture:
@@ -783,27 +1005,24 @@ def show_multi_seed_robustness_status() -> None:
     cfg = get_strategy_multi_seed_robustness_settings()
     settings = get_strategy_comparison_settings(cfg.profile_id)
     status = collect_artifact_status(settings=settings)
-    period = dict(status.get("comparison_period") or {})
+    fixed, stochastic = _robustness_arms(settings)
+    plan_text, plan = _render_robustness_execution_plan(
+        settings=settings, status=status, fixed_arms=fixed, stochastic_arms=stochastic
+    )
+    print("\n" + plan_text)
+    if plan["comparison_period"] is None or plan["overall_status"] != "READY":
+        print("Fingerprint       ：前置完成後依正式param identity與共同期間解析")
+        return
     contract = build_multi_seed_robustness_contract(
-        comparison_period=period,
+        comparison_period=dict(plan["comparison_period"]),
         artifact_identities=dict(status.get("artifact_identities") or {}),
     )
-    fixed, stochastic = _robustness_arms(settings)
     run_root = _run_root(contract)
     existing = _load_seed_results(run_root / SEED_RESULTS_FILENAME)
-    print("\n" + render_title("Multiple-seed robustness 設定"))
-    print(f"比較階段          ：{settings.profile_label} ({settings.profile_id})")
-    print(f"Seed數量          ：{cfg.seed_count}")
-    print(f"Seed generator    ：deterministic / generator_seed={cfg.seed_generator_seed}")
-    print(f"GPU training      ：workers={cfg.gpu_train_workers}")
-    print(f"CPU strategy replay：workers={cfg.cpu_replay_workers}")
+    seeds = tuple(int(value) for value in contract["resolved_seeds"])
+    _validate_seed_results_frame(existing, stochastic_arms=stochastic, seeds=seeds)
     print(f"Fingerprint       ：{contract['fingerprint']}")
     print(f"已完成seed結果    ：{len(existing)}/{len(stochastic) * cfg.seed_count}")
-    print("比較對象：")
-    for arm in fixed:
-        print(f"- {arm.name:<16} fixed baseline")
-    for arm in stochastic:
-        print(f"- {arm.name:<16} {cfg.seed_count} random seeds")
     print("永久輸出：")
     print(f"- {project_relative_display_path(run_root / MANIFEST_FILENAME, project_root=PROJECT_ROOT)}")
     print(f"- {project_relative_display_path(run_root / SEED_RESULTS_FILENAME, project_root=PROJECT_ROOT)}")
@@ -867,15 +1086,58 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
     settings = get_strategy_comparison_settings(cfg.profile_id)
     fixed_arms, stochastic_arms = _robustness_arms(settings)
     status = collect_artifact_status(settings=settings)
+    plan_text, plan = _render_robustness_execution_plan(
+        settings=settings, status=status, fixed_arms=fixed_arms, stochastic_arms=stochastic_arms
+    )
+    print("\n" + plan_text)
+    if plan["overall_status"] == "BLOCKED":
+        raise RuntimeError(
+            "Multiple-seed robustness前置BLOCKED；請先由正式模型訓練入口準備上游真理工件，"
+            "或修復無builder的策略參數工件。"
+        )
+    if confirm:
+        try:
+            raw = input("👉 按 Enter 執行全部前置、訓練與回放；輸入 0 返回：").strip().lower()
+        except EOFError:
+            return {}
+        if raw in {"0", "q", "quit", "exit"}:
+            return {}
+        if raw not in {"", "1"}:
+            print("輸入無效，本次不執行。")
+            return {}
+
+    status = prepare_strategy_parameter_artifacts(
+        project_root=PROJECT_ROOT,
+        settings=settings,
+        status=status,
+        required_source_ids=tuple(plan["required_param_sources"]),
+        status_refresher=lambda: collect_artifact_status(settings=settings),
+    )
+    post_upstream_rows, post_upstream_blockers = _model_upstream_rows(
+        settings, stochastic_arms
+    )
+    del post_upstream_rows
+    if post_upstream_blockers:
+        raise RuntimeError(
+            "Multiple-seed robustness模型上游工件在前置後仍BLOCKED: "
+            + "；".join(post_upstream_blockers)
+        )
     resolved_params = dict(status.get("resolved_parameter_paths") or {})
-    required_param_sources = {arm.param_source for arm in (*fixed_arms, *stochastic_arms)}
-    missing_params = sorted(source for source in required_param_sources if not resolved_params.get(source))
+    required_param_sources = _required_parameter_sources(fixed_arms, stochastic_arms)
+    missing_params = sorted(
+        source for source in required_param_sources
+        if not resolved_params.get(source) or not Path(resolved_params[source]).is_file()
+    )
     if missing_params:
         raise RuntimeError(
-            "Multiple-seed robustness缺少策略參數工件，請先由Strategy Compare正式前置建立: "
+            "Multiple-seed robustness策略參數前置完成後仍缺工件: "
             + ", ".join(missing_params)
         )
-    comparison_start, comparison_end = _resolved_period(settings, status)
+    comparison_start, comparison_end = _comparison_period_from_upstream(
+        settings, stochastic_arms, status
+    )
+    status = dict(status)
+    status["comparison_period"] = {"start": comparison_start, "end": comparison_end}
     contract = build_multi_seed_robustness_contract(
         comparison_period={"start": comparison_start, "end": comparison_end},
         artifact_identities=dict(status.get("artifact_identities") or {}),
@@ -888,7 +1150,7 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
     seed_results_path = run_root / SEED_RESULTS_FILENAME
     manifest = {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
-        "status": "PLANNED",
+        "status": "RUNNING",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "contract": contract,
         "comparison_period": {"start": comparison_start, "end": comparison_end},
@@ -896,33 +1158,40 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
     }
     _write_json(manifest_path, manifest)
 
-    if confirm:
-        show_multi_seed_robustness_status()
-        try:
-            raw = input("👉 按 Enter 執行；輸入 0 返回：").strip().lower()
-        except EOFError:
-            return {}
-        if raw in {"0", "q", "quit", "exit"}:
-            return {}
-        if raw not in {"", "1"}:
-            print("輸入無效，本次不執行。")
-            return {}
-
     started_total = time.perf_counter()
-    fixed_results = _run_fixed_baselines(
-        settings=settings, status=status, run_root=run_root, fixed_arms=fixed_arms
-    )
+    seeds = tuple(int(value) for value in contract["resolved_seeds"])
+    try:
+        existing = _load_seed_results(seed_results_path)
+        _validate_seed_results_frame(
+            existing, stochastic_arms=stochastic_arms, seeds=seeds
+        )
+        fixed_results = _run_fixed_baselines(
+            settings=settings, status=status, run_root=run_root, fixed_arms=fixed_arms
+        )
+    except BaseException as exc:
+        manifest.update({
+            "status": "FAILED",
+            "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "failed_stage": "resume_preflight_or_fixed_baseline",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "resumable": True,
+        })
+        _write_json(manifest_path, manifest)
+        print(
+            "[FAILED] Multiple-seed robustness前置回放階段已停止；可由同一入口接續。"
+            f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
+        )
+        raise
     baseline_by_group = {
         (arm.param_source, arm.rule_policy): fixed_results[arm.arm_id]["baseline_dir"]
         for arm in fixed_arms
     }
-    existing = _load_seed_results(seed_results_path)
     completed = {
         (str(row.arm_id), int(row.seed))
         for row in existing.itertuples(index=False)
     } if not existing.empty and cfg.reuse_completed else set()
     rows = existing.to_dict("records") if not existing.empty and cfg.reuse_completed else []
-    seeds = tuple(int(value) for value in contract["resolved_seeds"])
     total_units = len(stochastic_arms) * len(seeds)
     done_units = len(completed)
     print("\n" + render_title("Multiple-seed robustness 執行"))
@@ -1164,6 +1433,7 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
         manifest.update({
             "status": "FAILED",
             "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "failed_stage": "isolated_training_or_strategy_replay",
             "error_type": type(exc).__name__,
             "error": str(exc),
             "resumable": True,
@@ -1177,34 +1447,53 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
     finally:
         executor.shutdown(wait=True, cancel_futures=False)
 
-    seed_frame = _load_seed_results(seed_results_path)
-    expected = len(stochastic_arms) * len(seeds)
-    if len(seed_frame) != expected:
-        raise RuntimeError(
-            f"multi-seed robustness結果不完整: expected={expected}, actual={len(seed_frame)}"
+    try:
+        seed_frame = _load_seed_results(seed_results_path)
+        _validate_seed_results_frame(
+            seed_frame, stochastic_arms=stochastic_arms, seeds=seeds
         )
-    summary = _robustness_summary(
-        contract=contract, fixed_results=fixed_results, seed_frame=seed_frame
-    )
-    summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
-    _write_json(run_root / SUMMARY_FILENAME, summary)
-    report_text = render_multi_seed_robustness_report(summary)
-    (run_root / REPORT_FILENAME).write_text(report_text, encoding="utf-8")
-    manifest.update({
-        "status": "COMPLETED",
-        "completed_at_utc": datetime.now(timezone.utc).isoformat(),
-        "elapsed_sec": summary["elapsed_sec"],
-        "completed_seed_strategy_observations": int(len(seed_frame)),
-        "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
-        "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
-    })
-    _write_json(manifest_path, manifest)
-    latest_path = (PROJECT_ROOT / cfg.output_root / LATEST_FILENAME).resolve()
-    _write_json(latest_path, {
-        "fingerprint": contract["fingerprint"],
-        "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
-        "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
-    })
+        expected = len(stochastic_arms) * len(seeds)
+        if len(seed_frame) != expected:
+            raise RuntimeError(
+                f"multi-seed robustness結果不完整: expected={expected}, actual={len(seed_frame)}"
+            )
+        summary = _robustness_summary(
+            contract=contract, fixed_results=fixed_results, seed_frame=seed_frame
+        )
+        summary["elapsed_sec"] = round(time.perf_counter() - started_total, 3)
+        _write_json(run_root / SUMMARY_FILENAME, summary)
+        report_text = render_multi_seed_robustness_report(summary)
+        (run_root / REPORT_FILENAME).write_text(report_text, encoding="utf-8")
+        manifest.update({
+            "status": "COMPLETED",
+            "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "elapsed_sec": summary["elapsed_sec"],
+            "completed_seed_strategy_observations": int(len(seed_frame)),
+            "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
+            "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
+        })
+        _write_json(manifest_path, manifest)
+        latest_path = (PROJECT_ROOT / cfg.output_root / LATEST_FILENAME).resolve()
+        _write_json(latest_path, {
+            "fingerprint": contract["fingerprint"],
+            "report_path": project_relative_display_path(run_root / REPORT_FILENAME, project_root=PROJECT_ROOT),
+            "summary_path": project_relative_display_path(run_root / SUMMARY_FILENAME, project_root=PROJECT_ROOT),
+        })
+    except BaseException as exc:
+        manifest.update({
+            "status": "FAILED",
+            "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "failed_stage": "summary_or_report_finalization",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "resumable": True,
+        })
+        _write_json(manifest_path, manifest)
+        print(
+            "[FAILED] Multiple-seed robustness彙總階段失敗；seed結果已保留，可由同一入口接續。"
+            f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
+        )
+        raise
     if not cfg.keep_replay_details:
         shutil.rmtree(run_root / "work" / "replay", ignore_errors=True)
     shutil.rmtree(run_root / "work" / "results", ignore_errors=True)

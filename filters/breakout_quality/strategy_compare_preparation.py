@@ -10,6 +10,7 @@ import pandas as pd
 
 from config.breakout_quality import (
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
 )
 from core.active_param_ensemble import get_active_param_ensemble_date_range
@@ -73,34 +74,32 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _selection_pit_checkpoint_rebuild_blockers(
+def model_upstream_prerequisite_blockers(
     root: Path,
     *,
     filter_id: str,
     experiment_profile: str,
 ) -> tuple[str, ...]:
-    """Return model-work prerequisites that Strategy Compare may not create itself.
+    """Return upstream truth artifacts that strategy work may not create itself.
 
-    Checkpoint-only PIT rebuilding is allowed only after the canonical supervised
-    Dataset exists.  Event-group rankers additionally require their Continuous
-    Target manifest because fold identity and the model-audit gate depend on it.
-    Dataset/Target preparation belongs to the model-training work type, not the
-    strategy-comparison work type.
+    Strategy Compare and Multiple-seed robustness may consume the canonical supervised
+    Dataset but must not create Dataset/Label/Target truth. Event-group rankers also
+    require their Continuous Target manifest. Daily-universal rankers require the
+    market-set arrays used by their canonical trainer.
     """
 
     blockers: list[str] = []
     dataset_root = resolve_filter_output_dir(root, filter_id=filter_id)
     dataset = resolve_dataset_paths(dataset_root)
-    if not dataset.summary.is_file():
+    summary = _read_json(dataset.summary)
+    if summary is None:
         blockers.append(
-            "缺少模型上游Dataset summary: "
+            "缺少或無效的模型上游Dataset summary: "
             + project_relative_display_path(dataset.summary, project_root=root)
         )
     else:
         missing_dataset_files = [
-            path
-            for path in dataset.artifact_paths().values()
-            if not path.is_file()
+            path for path in dataset.artifact_paths().values() if not path.is_file()
         ]
         if missing_dataset_files:
             preview = ", ".join(
@@ -111,10 +110,8 @@ def _selection_pit_checkpoint_rebuild_blockers(
             blockers.append(f"Dataset核心工件缺少: {preview}{suffix}")
 
     profile = get_breakout_quality_experiment_profile(experiment_profile)
-    if (
-        str(profile.training_sample_scope)
-        == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
-    ):
+    sample_scope = str(profile.training_sample_scope)
+    if sample_scope == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
         target_manifest = (
             resolve_continuous_target_dir(
                 root,
@@ -128,6 +125,17 @@ def _selection_pit_checkpoint_rebuild_blockers(
                 "缺少模型上游Continuous Target: "
                 + project_relative_display_path(target_manifest, project_root=root)
             )
+    elif sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        missing_market_files = [
+            path for path in dataset.market_set_artifact_paths().values() if not path.is_file()
+        ]
+        if missing_market_files:
+            preview = ", ".join(
+                project_relative_display_path(path, project_root=root)
+                for path in missing_market_files[:3]
+            )
+            suffix = "…" if len(missing_market_files) > 3 else ""
+            blockers.append(f"Dataset market-set工件缺少: {preview}{suffix}")
     return tuple(blockers)
 
 
@@ -452,7 +460,7 @@ def collect_artifact_status(
                 }
             builder = source.forward_scores_builder
             checkpoint_rebuild_blockers = (
-                _selection_pit_checkpoint_rebuild_blockers(
+                model_upstream_prerequisite_blockers(
                     root,
                     filter_id=source.filter_id,
                     experiment_profile=source.experiment_profile,
@@ -1076,6 +1084,98 @@ def _execute_preparation_action(
     raise RuntimeError(f"不支援的前置builder: {action.builder_type}")
 
 
+
+def prepare_strategy_parameter_artifacts(
+    *,
+    project_root: Path = PROJECT_ROOT,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    required_source_ids: tuple[str, ...] | list[str] | set[str],
+    status_refresher: Callable[[], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Prepare only requested strategy-parameter artifacts, ignoring DL-score actions.
+
+    This is the canonical parameter-only preparation path for workflows such as
+    Multiple-seed robustness, where model scores are intentionally produced in
+    isolated per-seed work directories rather than by the normal Strategy Compare
+    DL-source preparation plan.
+    """
+
+    root = Path(project_root).resolve()
+    requested = tuple(sorted({str(value) for value in required_source_ids}))
+    if not requested:
+        return status
+    unknown = sorted(set(requested) - set(settings.parameter_sources))
+    if unknown:
+        raise ValueError(
+            "策略參數前置包含未知source: " + ", ".join(unknown)
+        )
+    refresh_status = (
+        status_refresher
+        if status_refresher is not None
+        else lambda: collect_artifact_status(project_root=root, settings=settings)
+    )
+    current = status
+    executed_signatures: set[tuple[str, str, str | None, str]] = set()
+    max_waves = max(2, len(requested) + 2)
+    for _wave in range(max_waves):
+        action_by_key = {
+            item.artifact_key: item for item in current["preparation_plan"].actions
+        }
+        required_actions: list[StrategyPreparationAction] = []
+        for source_id in requested:
+            key = f"param:{source_id}"
+            action = action_by_key.get(key)
+            if action is None:
+                raise RuntimeError(f"策略參數前置計畫缺少工件: {key}")
+            required_actions.append(action)
+        blocked = [item for item in required_actions if item.action == "BLOCKED"]
+        if blocked:
+            raise RuntimeError(
+                "策略參數前置包含BLOCKED工件: "
+                + ", ".join(item.artifact_key for item in blocked)
+            )
+        pending = [
+            item for item in required_actions if item.action in {"BUILD", "REBUILD"}
+        ]
+        if not pending:
+            return current
+        if not settings.preparation.auto_prepare:
+            raise RuntimeError("目前config已關閉auto_prepare")
+        pending.sort(key=lambda item: item.artifact_key)
+        progressed = False
+        for action in pending:
+            signature = (
+                action.artifact_key,
+                action.action,
+                action.builder_type,
+                action.path,
+            )
+            if signature in executed_signatures:
+                continue
+            print(f"\n[前置] {action.description}")
+            try:
+                _execute_preparation_action(root=root, settings=settings, action=action)
+            except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+                raise RuntimeError(
+                    f"策略參數前置失敗: {action.artifact_key} | action={action.action} | "
+                    f"path={action.path} | {type(exc).__name__}: {exc}"
+                ) from exc
+            executed_signatures.add(signature)
+            progressed = True
+            break
+        current = refresh_status()
+        if not progressed:
+            remaining = [
+                f"{item.artifact_key}:{item.action}" for item in pending
+            ]
+            raise RuntimeError(
+                "策略參數前置重新規劃後沒有進展: " + ", ".join(remaining)
+            )
+    raise RuntimeError(
+        "策略參數前置超過最大依賴波次仍未完成: " + ", ".join(requested)
+    )
+
 def prepare_strategy_comparison_artifacts(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -1178,6 +1278,8 @@ def prepare_strategy_comparison_artifacts(
 
 __all__ = [
     "collect_artifact_status",
+    "model_upstream_prerequisite_blockers",
     "prepare_strategy_comparison_artifacts",
+    "prepare_strategy_parameter_artifacts",
     "resolve_param_source_path",
 ]

@@ -3220,7 +3220,7 @@ def run_comparison(
         }
     elif continuous_score_override is not None:
         score_signal_coverage = {
-            "required_start": continuous_score_override["available_from"],
+            "required_start": continuous_score_override["execution_start"],
             "first_scored_event": continuous_score_override["available_from"],
             "available_through": continuous_score_override["available_through"],
         }
