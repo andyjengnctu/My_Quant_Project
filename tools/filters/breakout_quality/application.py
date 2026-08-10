@@ -95,11 +95,10 @@ from filters.breakout_quality.paths import (
 from filters.breakout_quality.source_inventory import build_source_data_inventory
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
-    CONTINUOUS_RANKER_SCORE_FILENAME,
-    DAILY_RANKER_OOS_SCORE_FILENAME,
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     load_continuous_ranker_oos_contract,
+    resolve_continuous_ranker_oos_score_path,
 )
 from tools.audit.catalog import get_domain_cli_commands
 
@@ -2274,10 +2273,11 @@ def _print_workflow_status(settings=None) -> None:
         "Full model": model_artifacts.model_path,
         "Full model manifest": model_artifacts.manifest_path,
         "Full model report": model_output_dir / CONTINUOUS_RANKER_REPORT_FILENAME,
-        "Forward OOS scores": model_output_dir / (
-            DAILY_RANKER_OOS_SCORE_FILENAME
-            if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
-            else CONTINUOUS_RANKER_SCORE_FILENAME
+        "Forward OOS scores": resolve_continuous_ranker_oos_score_path(
+            PROJECT_ROOT,
+            settings.filter_id,
+            settings.model_architecture,
+            settings.experiment_profile,
         ),
         "Target manifest": resolve_continuous_target_dir(
             PROJECT_ROOT,

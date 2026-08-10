@@ -7572,3 +7572,37 @@ Min/Full × DL-off/MR-12B/MR-13A六arm Forward-OOS矩陣切換到`DL-CONT12B`與
 - 輸入基準：`test-branch-1_20260810_132241_b8c1f5e.zip`；SHA256=`b82535e73d58eddb8eba23c0696eb96ffd50dce2c9ba13d2a97d6981a5ceb242`。
 - 本輪為workflow／ownership修正，不新增`MR-*`、`DL-*`或`SR-C*` scientific ID。
 
+## 2026-08-10 — MR-13A Forward-OOS daily score artifact contract修正
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / PROFILE_AWARE_FORWARD_SCORE_CONTRACT / EXISTING_MR13A_MODEL_REUSABLE / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+### 現象與程式基準
+
+- 輸入基準：`test-branch-1_20260810_141107_cb605c7.zip`；SHA256=`8217707a996c542f248418a5d32ad37b1c55b5af6c2c741a707a6b59cce4751f`。
+- 使用者由`[模型訓練] → [5] 準備策略比較所需模型工件`成功補建`CONT12B`與`CONT13A`。MR-12B event ranker輸出`continuous_ranker_scores.csv`；MR-13A daily ranker訓練亦PASS並正式輸出`daily_ranker_oos_scores.csv.gz`。
+- MR-13A訓練完成後的再次Forward-OOS contract驗證仍固定尋找`continuous_ranker_scores.csv`，因此拋出`FileNotFoundError`。模型、report與daily OOS scores本身已完成，失敗發生於下游artifact resolver／validator。
+
+### Root cause
+
+`load_continuous_ranker_oos_contract()`與`load_continuous_ranker_oos_score_table()`仍把所有`continuous_ranker_oos` source視為event-ranker schema：固定檔名`continuous_ranker_scores.csv`、固定要求`split`欄再過濾`split=oos`，且只認manifest/report的`scores`記錄。MR-13A trainer從設計起即使用daily專屬canonical artifact：`daily_ranker_oos_scores.csv.gz`，整份檔案就是OOS daily stock-day universe，manifest/report key為`oos_scores_gzip`，沒有event-only `split`欄。
+
+### 修正
+
+1. 新增唯一`resolve_continuous_ranker_oos_score_path()`：依experiment profile的`training_sample_scope`解析Forward-OOS score真理路徑；event維持`continuous_ranker_scores.csv`，daily使用`daily_ranker_oos_scores.csv.gz`。模型狀態頁、Strategy Compare preflight與runtime loader共用此resolver。
+2. `load_continuous_ranker_oos_contract()`改為profile-aware驗證manifest/report：daily使用`oos_scores_gzip` file identity與現有daily report `sample_scope`／pairwise contract；event原有training semantics、label scope與`scores` identity驗證不放寬。
+3. `load_continuous_ranker_oos_score_table()`對event仍要求`split`且只取`oos`；daily不要求`split`，直接驗證整份gzip中的`ticker/date/group_index/model_score`、0～1有限分數與ticker/date唯一性。Runtime仍依daily profile使用最新已完成交易日`information_date`查分，不改無前視語意。
+4. 為未來新daily artifact補上`training_label_scope`與`training_semantics`共通metadata；loader仍接受本次已訓練、尚未包含這兩個新欄位的既有MR-13A artifact，因此**不需重新訓練CONT13A**。
+
+### Scientific identity
+
+MR-13A architecture、daily sample universe、target、RankNet loss、selected epoch、模型權重、Forward-OOS scores內容、Selection PIT、feasible-ascent、Min/Full 2×3矩陣、ROOS參數與策略accounting全部不變。本輪只修正trainer與consumer之間的Forward-OOS artifact schema／path契約，不新增`MR-*`、`DL-*`或`SR-C*`。
+
+### GPT focused驗證
+
+- synthetic MR-13A trainer-format artifact（gzip、無`split`、`oos_scores_gzip` identity）可被Forward-OOS contract直接載入，2 rows完整保留。
+- `validate_breakout_quality_daily_pit_strategy_runtime_contract_case`：9 checks / 0 fail，新增daily Forward-OOS gzip contract直接驗證。
+- `validate_strategy_compare_config_driven_app_contract_case`：48 checks / 0 fail。
+- `validate_breakout_quality_listwise_ranker_contract_case`：8 checks / 0 fail，確認event continuous/listwise原有CSV＋split契約未被daily分支破壞。
+- 正式`apps/test_suite.py`未由GPT執行；仍由使用者本地formal double check。

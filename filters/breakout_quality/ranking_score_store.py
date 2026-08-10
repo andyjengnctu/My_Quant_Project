@@ -55,6 +55,30 @@ CONTINUOUS_RANKER_SCORE_FILENAME = "continuous_ranker_scores.csv"
 CONTINUOUS_RANKER_REPORT_FILENAME = "continuous_ranker_report.json"
 DAILY_RANKER_OOS_SCORE_FILENAME = "daily_ranker_oos_scores.csv.gz"
 
+
+def resolve_continuous_ranker_oos_score_path(
+    project_root: str | Path,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> Path:
+    """Return the canonical Forward-OOS score artifact for the configured profile."""
+
+    root = Path(project_root).resolve()
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    filename = (
+        DAILY_RANKER_OOS_SCORE_FILENAME
+        if profile.training_sample_scope
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        else CONTINUOUS_RANKER_SCORE_FILENAME
+    )
+    return (
+        resolve_filter_model_output_dir(
+            root, filter_id, model_architecture, experiment_profile
+        )
+        / filename
+    ).resolve()
+
 PIT_REQUIRED_SCORE_COLUMNS = (
     "ticker",
     "date",
@@ -469,13 +493,16 @@ def load_continuous_ranker_oos_contract(
     experiment_profile: str,
 ) -> ContinuousRankerOOSContract:
     root = Path(project_root).resolve()
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
     artifacts = resolve_filter_artifact_paths(
         root, filter_id, model_architecture, experiment_profile
     )
     output_dir = resolve_filter_model_output_dir(
         root, filter_id, model_architecture, experiment_profile
     )
-    score_path = (output_dir / CONTINUOUS_RANKER_SCORE_FILENAME).resolve()
+    score_path = resolve_continuous_ranker_oos_score_path(
+        root, filter_id, model_architecture, experiment_profile
+    )
     report_path = (output_dir / CONTINUOUS_RANKER_REPORT_FILENAME).resolve()
     manifest_path = artifacts.manifest_path.resolve()
     model_path = artifacts.model_path.resolve()
@@ -506,21 +533,43 @@ def load_continuous_ranker_oos_contract(
                 f"Continuous ranker report identity不一致: field={field}, "
                 f"expected={expected}, actual={report.get(field)!r}"
             )
-    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
     if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
         raise ValueError("Continuous ranker OOS source只接受continuous ranking profile")
+
     manifest_objective = str(manifest.get("training_objective") or "")
     if manifest_objective != profile.training_objective:
         raise ValueError(
             "Continuous ranker manifest training_objective與profile不一致: "
             f"expected={profile.training_objective}, actual={manifest_objective!r}"
         )
-    manifest_scope = str(manifest.get("training_label_scope") or "")
-    if manifest_scope != profile.training_label_scope:
+    is_daily = (
+        profile.training_sample_scope
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+    )
+    manifest_sample_scope = str(
+        manifest.get("training_sample_scope")
+        or TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+    )
+    if manifest_sample_scope != str(profile.training_sample_scope):
+        raise ValueError(
+            "Continuous ranker manifest sample scope與profile不一致: "
+            f"expected={profile.training_sample_scope}, actual={manifest_sample_scope!r}"
+        )
+    manifest_label_scope = str(manifest.get("training_label_scope") or "")
+    if is_daily:
+        # MR-13A trainer predates the top-level training_label_scope field; its
+        # profile identity still fixes the scope and the report remains canonical.
+        if manifest_label_scope and manifest_label_scope != profile.training_label_scope:
+            raise ValueError(
+                "Continuous ranker manifest training_label_scope與profile不一致: "
+                f"expected={profile.training_label_scope}, actual={manifest_label_scope!r}"
+            )
+    elif manifest_label_scope != profile.training_label_scope:
         raise ValueError(
             "Continuous ranker manifest training_label_scope與profile不一致: "
-            f"expected={profile.training_label_scope}, actual={manifest_scope!r}"
+            f"expected={profile.training_label_scope}, actual={manifest_label_scope!r}"
         )
+
     report_training = dict(report.get("training") or {})
     report_objective = str(report_training.get("objective") or "")
     if report_objective != profile.training_objective:
@@ -534,6 +583,14 @@ def load_continuous_ranker_oos_contract(
             "Continuous ranker report loss與profile不一致: "
             f"expected={profile.loss_name}, actual={report_loss!r}"
         )
+    if is_daily:
+        report_sample_scope = str(report_training.get("sample_scope") or "")
+        if report_sample_scope != str(profile.training_sample_scope):
+            raise ValueError(
+                "Continuous ranker report sample scope與profile不一致: "
+                f"expected={profile.training_sample_scope}, actual={report_sample_scope!r}"
+            )
+
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
         expected_pairwise = {
             "pair_scope": "same_date_non_tied_target_pairs",
@@ -542,12 +599,13 @@ def load_continuous_ranker_oos_contract(
             "batching": "whole_date_pack_no_date_split",
             "runtime_score": "softmax_pass_probability",
         }
-        manifest_semantics = dict(manifest.get("training_semantics") or {})
         report_pairwise = dict(report_training.get("pairwise_contract") or {})
-        if str(manifest_semantics.get("batching") or "") != expected_pairwise["batching"]:
-            raise ValueError("Continuous pairwise ranker manifest batching contract不一致")
-        if dict(manifest_semantics.get("pairwise_contract") or {}) != expected_pairwise:
-            raise ValueError("Continuous pairwise ranker manifest pairwise contract不一致")
+        manifest_semantics = dict(manifest.get("training_semantics") or {})
+        if not is_daily or manifest_semantics:
+            if str(manifest_semantics.get("batching") or "") != expected_pairwise["batching"]:
+                raise ValueError("Continuous pairwise ranker manifest batching contract不一致")
+            if dict(manifest_semantics.get("pairwise_contract") or {}) != expected_pairwise:
+                raise ValueError("Continuous pairwise ranker manifest pairwise contract不一致")
         if str(report_training.get("batching") or "") != expected_pairwise["batching"]:
             raise ValueError("Continuous pairwise ranker report batching contract不一致")
         if report_pairwise != expected_pairwise:
@@ -586,36 +644,54 @@ def load_continuous_ranker_oos_contract(
     report_target = str(report_settings.get("continuous_target_id") or "")
     if report_target and report_target != target_id:
         raise ValueError("Continuous ranker report／manifest continuous_target_id不一致")
-    report_scope = str((report.get("training") or {}).get("training_label_scope") or "")
-    if report_scope and report_scope != manifest_scope:
-        raise ValueError("Continuous ranker report／manifest training_label_scope不一致")
+    if is_daily:
+        expected_settings = profile.as_manifest_payload()
+        if report_settings != expected_settings:
+            raise ValueError("Daily continuous ranker report experiment settings與profile不一致")
+    report_label_scope = str(report_training.get("training_label_scope") or "")
+    if report_label_scope:
+        expected_label_scope = manifest_label_scope or str(profile.training_label_scope)
+        if report_label_scope != expected_label_scope:
+            raise ValueError("Continuous ranker report／manifest training_label_scope不一致")
     if str(report.get("status") or "") not in {
         "RESULT_AVAILABLE_PENDING_REVIEW",
         "RESULT_AVAILABLE",
     }:
         raise ValueError(f"Continuous ranker report尚無可用結果: status={report.get('status')!r}")
 
-    _validate_file_record_simple(manifest.get("model"), path=model_path, label="Continuous ranker model")
-    research_outputs = dict(manifest.get("research_outputs") or {})
     _validate_file_record_simple(
-        research_outputs.get("scores"), path=score_path, label="Continuous ranker scores"
+        manifest.get("model"), path=model_path, label="Continuous ranker model"
     )
+    research_outputs = dict(manifest.get("research_outputs") or {})
     report_artifacts = dict(report.get("artifacts") or {})
+    score_record_key = "oos_scores_gzip" if is_daily else "scores"
     _validate_file_record_simple(
-        report_artifacts.get("scores"), path=score_path, label="Continuous ranker report scores"
+        research_outputs.get(score_record_key),
+        path=score_path,
+        label="Continuous ranker scores",
+    )
+    _validate_file_record_simple(
+        report_artifacts.get(score_record_key),
+        path=score_path,
+        label="Continuous ranker report scores",
     )
 
     outer = dict(manifest.get("outer_oos_policy") or {})
     execution_start = pd.Timestamp(str(outer.get("oos_start_date") or "")).strftime("%Y-%m-%d")
-    configured_end = str(outer.get("configured_oos_end_date") or outer.get("effective_oos_end_date") or "").strip()
-    information_cutoff = pd.Timestamp(str(manifest.get("model_information_cutoff") or "")).strftime("%Y-%m-%d")
+    configured_end = str(
+        outer.get("configured_oos_end_date")
+        or outer.get("effective_oos_end_date")
+        or ""
+    ).strip()
+    information_cutoff = pd.Timestamp(
+        str(manifest.get("model_information_cutoff") or "")
+    ).strftime("%Y-%m-%d")
     if information_cutoff >= execution_start:
         raise ValueError(
             "Continuous ranker model_information_cutoff必須早於OOS execution_start: "
             f"cutoff={information_cutoff}, start={execution_start}"
         )
-    training = dict(report.get("training") or {})
-    seed = int(training.get("seed", -1))
+    seed = int(report_training.get("seed", -1))
     if seed < 0:
         raise ValueError("Continuous ranker report缺少合法training seed")
 
@@ -627,7 +703,6 @@ def load_continuous_ranker_oos_contract(
     available_from = str(table.index.get_level_values("date").min())
     available_through = str(table.index.get_level_values("date").max())
     if available_from < execution_start:
-        # OOS score可包含execution_start前一個signal anchor時才合理；標準輸出通常不會。
         if pd.Timestamp(available_from) < pd.Timestamp(information_cutoff):
             raise ValueError("Continuous ranker OOS scores包含model information cutoff之前事件")
     if configured_end and pd.Timestamp(available_through) > pd.Timestamp(configured_end):
@@ -658,20 +733,25 @@ def load_continuous_ranker_oos_score_table(
     experiment_profile: str,
 ) -> pd.DataFrame:
     root = Path(project_root).resolve()
-    path = (
-        resolve_filter_model_output_dir(root, filter_id, model_architecture, experiment_profile)
-        / CONTINUOUS_RANKER_SCORE_FILENAME
-    ).resolve()
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    path = resolve_continuous_ranker_oos_score_path(
+        root, filter_id, model_architecture, experiment_profile
+    )
     if not path.is_file():
         raise FileNotFoundError(f"找不到Continuous ranker scores: {path}")
     frame = read_breakout_quality_csv(path).copy()
-    required = {"ticker", "date", "group_index", "split", "model_score"}
+    required = {"ticker", "date", "group_index", "model_score"}
+    if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        required.add("split")
     missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(f"Continuous ranker scores缺少欄位: {missing}")
-    frame = frame[frame["split"].astype(str) == "oos"].copy()
-    if frame.empty:
-        raise ValueError("Continuous ranker scores沒有OOS rows")
+    if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        frame = frame[frame["split"].astype(str) == "oos"].copy()
+        if frame.empty:
+            raise ValueError("Continuous ranker scores沒有OOS rows")
+    elif frame.empty:
+        raise ValueError("Daily continuous ranker OOS scores不可為空")
     frame["ticker"] = frame["ticker"].astype(str)
     frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.strftime("%Y-%m-%d")
     frame["group_index"] = pd.to_numeric(frame["group_index"], errors="raise").astype(int)
@@ -796,6 +876,7 @@ __all__ = [
     "SCORE_SOURCE_CONTINUOUS_RANKER_OOS",
     "SUPPORTED_RANKING_SCORE_SOURCES",
     "ContinuousRankerOOSContract",
+    "resolve_continuous_ranker_oos_score_path",
     "load_continuous_ranker_oos_contract",
     "load_continuous_ranker_oos_score_table",
     "lookup_continuous_ranker_oos_candidate_score",

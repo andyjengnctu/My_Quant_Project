@@ -44,6 +44,7 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     load_continuous_ranker_oos_contract,
     load_selection_point_in_time_ranking_contract,
+    resolve_continuous_ranker_oos_score_path,
 )
 from filters.breakout_quality.strategy_compare_engine import (
     PARAM_POLICY_SPECS,
@@ -563,7 +564,12 @@ def collect_artifact_status(
             score_path = (
                 continuous_contract.score_path
                 if continuous_contract is not None
-                else resolve_filter_model_output_dir(root, source.filter_id, source.model_architecture, source.experiment_profile) / "continuous_ranker_scores.csv"
+                else resolve_continuous_ranker_oos_score_path(
+                    root,
+                    source.filter_id,
+                    source.model_architecture,
+                    source.experiment_profile,
+                )
             )
             report_path = (
                 continuous_contract.report_path

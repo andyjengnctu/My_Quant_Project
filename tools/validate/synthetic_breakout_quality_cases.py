@@ -19571,6 +19571,9 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
     )
     from filters.breakout_quality.ranking_score_store import (
         _validate_score_eligibility_contract,
+        load_continuous_ranker_oos_contract,
+        load_continuous_ranker_oos_score_table,
+        resolve_continuous_ranker_oos_score_path,
     )
     from filters.breakout_quality.runtime import (
         breakout_quality_ranking_source_context,
@@ -19736,6 +19739,123 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         "daily_continuation_recomputes_rank_each_day_instead_of_inheriting_event_score",
         (1, 0.9, "2020-01-09"),
         (lookup.call_count, refreshed["score"], refreshed["score_date"]),
+    )
+
+    from filters.breakout_quality.artifacts import build_file_manifest
+    from filters.breakout_quality.paths import (
+        resolve_filter_artifact_paths,
+        resolve_filter_model_output_dir,
+    )
+
+    daily_forward_contract_accepts_canonical_gzip = False
+    daily_forward_table_uses_all_oos_rows_without_split_column = False
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        filter_id = BREAKOUT_QUALITY_DEFAULT_FILTER_ID
+        architecture = "inception_time_v1"
+        profile_name = DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+        artifact_paths = resolve_filter_artifact_paths(
+            root, filter_id, architecture, profile_name
+        )
+        output_dir = resolve_filter_model_output_dir(
+            root, filter_id, architecture, profile_name
+        )
+        artifact_paths.model_path.parent.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        artifact_paths.model_path.write_bytes(b"synthetic-daily-model")
+        score_path = resolve_continuous_ranker_oos_score_path(
+            root, filter_id, architecture, profile_name
+        )
+        pd.DataFrame([
+            {
+                "ticker": "0050", "date": "2021-01-04", "group_index": 1,
+                "target_raw_r": 0.10, "target_daily_percentile": 0.5,
+                "model_score": 0.55,
+            },
+            {
+                "ticker": "2330", "date": "2021-01-04", "group_index": 2,
+                "target_raw_r": 0.20, "target_daily_percentile": 1.0,
+                "model_score": 0.75,
+            },
+        ]).to_csv(
+            score_path, index=False, encoding="utf-8-sig", compression="gzip"
+        )
+        pairwise_contract = {
+            "pair_scope": "same_date_non_tied_target_pairs",
+            "pair_weighting": "equal_pair_weight",
+            "model_margin": "pass_logit_minus_reject_logit",
+            "batching": "whole_date_pack_no_date_split",
+            "runtime_score": "softmax_pass_probability",
+        }
+        report = {
+            "status": "RESULT_AVAILABLE_PENDING_REVIEW",
+            "filter_id": filter_id,
+            "model_architecture": architecture,
+            "experiment_profile": profile_name,
+            "experiment_settings": daily_profile.as_manifest_payload(),
+            "training": {
+                "objective": daily_profile.training_objective,
+                "loss": daily_profile.loss_name,
+                "sample_scope": daily_profile.training_sample_scope,
+                "batching": pairwise_contract["batching"],
+                "pairwise_contract": pairwise_contract,
+                "seed": 42,
+            },
+            "artifacts": {
+                "model": build_file_manifest(artifact_paths.model_path),
+                "oos_scores_gzip": build_file_manifest(score_path),
+            },
+        }
+        (output_dir / "continuous_ranker_report.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+        manifest = {
+            "filter_id": filter_id,
+            "model_architecture": architecture,
+            "experiment_profile": profile_name,
+            "experiment_settings": daily_profile.as_manifest_payload(),
+            "training_objective": daily_profile.training_objective,
+            "training_sample_scope": daily_profile.training_sample_scope,
+            "continuous_target_id": daily_profile.continuous_target_id,
+            "model": build_file_manifest(artifact_paths.model_path),
+            "research_outputs": {
+                "oos_scores_gzip": build_file_manifest(score_path),
+            },
+            "outer_oos_policy": {
+                "oos_start_date": "2021-01-01",
+                "effective_oos_end_date": "2021-12-31",
+            },
+            "model_information_cutoff": "2020-12-31",
+        }
+        artifact_paths.manifest_path.write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        load_continuous_ranker_oos_contract.cache_clear()
+        load_continuous_ranker_oos_score_table.cache_clear()
+        forward_contract = load_continuous_ranker_oos_contract(
+            str(root), filter_id, architecture, profile_name
+        )
+        forward_table = load_continuous_ranker_oos_score_table(
+            str(root), filter_id, architecture, profile_name
+        )
+        daily_forward_contract_accepts_canonical_gzip = (
+            forward_contract.score_path.name == "daily_ranker_oos_scores.csv.gz"
+            and forward_contract.continuous_target_id
+            == daily_profile.continuous_target_id
+        )
+        daily_forward_table_uses_all_oos_rows_without_split_column = (
+            len(forward_table) == 2
+            and "split" not in forward_table.columns
+            and ("2330", "2021-01-04") in forward_table.index
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "mr13a_forward_oos_contract_uses_daily_gzip_artifact_not_event_csv_schema",
+        (True, True),
+        (
+            daily_forward_contract_accepts_canonical_gzip,
+            daily_forward_table_uses_all_oos_rows_without_split_column,
+        ),
     )
 
     settings = strategy_config.get_strategy_comparison_settings()
