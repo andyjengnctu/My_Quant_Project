@@ -9041,7 +9041,7 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
                 model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
                 experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
                 output_dir_override=hard_filter_root / "comparison",
-                quiet=True,
+                quiet=False,
             )
     add_check(
         results,
@@ -17958,7 +17958,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and not robustness_settings.keep_scores
         and not robustness_settings.keep_replay_details
         and "get_strategy_multi_seed_robustness_profiles" in app_source
-        and "compare robustness" in app_source,
+        and "compare robustness" in app_source
+        and "quiet=True" in robustness_source,
     )
 
     replay_throttle_index = robustness_source.find(

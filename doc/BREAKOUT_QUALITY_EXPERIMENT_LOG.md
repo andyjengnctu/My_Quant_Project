@@ -7984,3 +7984,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 不修改Strategy Compare runtime、Selection PIT／Forward-OOS、多seed scientific identity、seed generator、Target、architecture、loss、training defaults、策略參數、selector、交易會計、報表統計或工件格式；不新增MR／DL／SR ID。
 - 本輪依`doc/PROJECT_SETTINGS.md`不執行`apps/test_suite.py`或其formal steps；交付前以獨立靜態／結構檢查閉環程式與checklist契約。
 
+## 2026-08-11 — Formal bundle 閉環：silent worker 與 shared console synthetic 契約分離
+
+- 程式基準：`test-branch-1_20260811_020957_219acdb.zip`；SHA256 `abe203462895bc3cfd4b66fb196d3ba845203c1ec72535e896b24b267c49277d`。
+- Formal bundle：`to_chatgpt_bundle_20260811_021151_ae41e284.zip`；SHA256 `97f5bcc1a4d30e173bc05bae3a257a9cce1948ca9ba564ff35ab226031950aa1`。
+- 本地 formal summary：quick gate PASS、chain checks PASS、ml smoke PASS；consistency已正常產生summary，253個synthetic cases中只剩1個FAIL：`hard_filter_strategy_compare_passes_none_capture_audit_to_shared_console`。meta quality亦只剩`coverage_synthetic_suite_runs_successfully`，是同一個synthetic FAIL的次生結果；coverage line約`71.13%`，沒有跌破既有門檻。
+- Root cause不是Strategy Compare runtime regression，而是前一輪完成silent worker後，`run_comparison(..., quiet=True)`依新契約不再呼叫console renderer；舊hard-filter direct synthetic卻仍在`quiet=True`下期待`_render_strategy_console_report()`被呼叫並收到`color=None`，把兩個互斥契約混在同一fixture。
+- 修正：hard-filter shared-console direct case改用`quiet=False`，但仍在fixture內`redirect_stdout()`，因此只驗證一般互動Strategy Compare的canonical shared renderer會收到`color=None`且不造成formal log洗版；Multiple-seed robustness direct check則明確驗證orchestrator source以`quiet=True`呼叫inner `run_comparison()`，保留silent worker契約。
+- 不修改Strategy Compare runtime、MR-12B／MR-13A、Target、architecture、loss、training defaults、seed generator、Selection／Forward期間、selector、策略參數、交易會計、scientific fingerprint或既有robustness結果；不新增／修改MR／DL／SR identity。
+- `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`無需變更，因本輪只修validator契約，沒有任何research identity或狀態改變。
+- 本輪依`doc/PROJECT_SETTINGS.md`不執行`apps/test_suite.py`或formal consistency step；交付前只做獨立靜態／結構／依賴與validator contract檢查。
