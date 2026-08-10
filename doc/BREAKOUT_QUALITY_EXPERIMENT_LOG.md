@@ -7887,3 +7887,40 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 不改`MR-*`／`DL-*`／`SR-C*` identity，不改Target、architecture、loss、seed policy、score、selector、K/R0、交易會計或Selection／Forward既有結果。
 - Multiple-seed robustness狀態仍為`IMPLEMENTED／RESULT_PENDING`；本輪沒有產生新策略結果。
 - Formal coverage的六個meta-quality FAIL應在synthetic suite可完整執行後重新計算；本輪不以GPT端執行formal suite替代使用者本機double check。
+
+## 2026-08-11 — Multiple-seed Forward robustness首批結果：單一seed結論重開、報表matched-pair契約補齊
+
+### 結果來源與固定條件
+
+- 程式基準：`test-branch-1_20260811_000339_d277205.zip`；SHA256 `e49854513aa4b2607a6f8c49a112d1aa1892953ba899ca8693a98bb5347916cc`。
+- 使用者提供首批Forward-OOS Multiple-seed console aggregate；目前config為8個deterministic generated seeds、profile=`forward_oos`、同一Min ROOS／all-off rules／frozen feasible-ascent、MR-12B與MR-13A各8個isolated training→strategy replay observations；Full／Min為固定baseline。
+- Canonical一般模型流程仍使用`BREAKOUT_QUALITY_RANDOM_SEED=42`；本次multi-seed generator產生的8個seed不包含42，因此本結果是獨立的seed robustness evidence，不是把seed 42重複納入平均。
+
+### 首批平均策略績效
+
+- Full ROOS：Return `129.08%`、MDD `17.41%`、RoMD `7.42`、Annual `17.43%`、EV `0.53R`。
+- Min ROOS：`101.60% / 13.12% / 7.74 / 14.56% / 1.02R`。
+- Min MR-12B（N=8）：Return Mean `129.01%`、MDD `15.87%`、RoMD `8.21`、Annual `17.15%`、EV `0.77R`、Payoff `3.12`、Exposure `92.76%`、Trades `318.6`、Win `42.61%`、Monthly Win `61.31%`、Log R² `0.8772`。
+- Min MR-13A（N=8）：Return Mean `148.18%`、MDD `15.47%`、RoMD `9.97`、Annual `19.02%`、EV `0.94R`、Payoff `3.19`、Exposure `92.83%`、Trades `316.0`、Win `43.66%`、Monthly Win `59.33%`、Log R² `0.8830`。
+- MR-13A − MR-12B的平均差：Return `+19.17pp`、MDD `-0.40pp`、RoMD `+1.76`、Annual `+1.87pp`、EV `+0.17R`、Payoff `+0.07`、Win `+1.05pp`；Monthly Win反而`-1.98pp`。
+
+### RoMD分布與研究判讀
+
+- MR-12B：Mean `8.21`、Median `7.70`、Std `2.63`、CV `0.32`、Min/P25/P75/Max=`3.94/6.76/10.77/11.51`、勝Min=`4/8`、勝Full=`4/8`。
+- MR-13A：Mean `9.97`、Median `10.87`、Std `3.68`、CV `0.37`、Min/P25/P75/Max=`4.38/6.84/12.92/14.49`、勝Min=`5/8`、勝Full=`5/8`。
+- MR-13A的Mean與Median都高於MR-12B，因此不是單一極佳seed單獨把平均拉高；但Std/CV亦更高，顯示daily-universal ranker對training seed更敏感，lower-tail仍明顯存在。
+- 這與canonical seed 42的post-fix Forward結果（MR-12B RoMD `10.15`、MR-13A `5.34`）方向相反。結論因此由「MR-13A Forward模型語意失敗」修正為：**seed 42失敗是有效單一run證據，但不足以代表跨seed模型優劣；seed variance本身已是主要研究變數之一。**
+- MR-13A仍不升格。下一個判讀必須優先看相同seed下的MR-13A−MR-12B matched-pair RoMD，而不是只比較兩個獨立分布平均或任意cross-seed pairs；不得挑best seed、做seed ensemble或用Forward結果調training hyperparameter。
+
+### 首批報表缺陷與修正
+
+1. `DL選擇R Mean`在兩個stochastic arms顯示`-`。Root cause是robustness worker只讀`trade_attribution.json`，但score-ranking策略不產生該hard-filter attribution檔；正常Strategy Compare其實已有從`no_filter_trades.csv`與active trades重建`exclusive_selection_delta_r`的canonical SSOT。
+2. robustness worker改為直接重用Strategy Compare既有`_load_direct_selection_r()`，因此score-ranking與hard-filter均使用同一直接選擇R定義，不新增第二套統計口徑。
+3. 首批報表只有RoMD勝Min／Full與Markdown內任意cross-seed distribution probability，沒有回答「同一training seed下MR-13A是否優於MR-12B」；schema `2 → 3`新增`romd_same_seed_comparison`，輸出matched N、雙方勝數、tie與ΔRoMD Mean/Median/Std/Min/P25/P75/Max，console與Markdown都顯示。
+4. schema bump只為完成robustness持久結果／報表契約；不改seed generator、Target、architecture、loss、training defaults、Forward period、selector、K/R0、策略accounting或任何scientific variable。因v2首批seed_results沒有可回復的直接選擇R、且暫存replay/training預設已清除，完整v3 `DL選擇R Mean`需要由同一正式入口重新跑8×2 isolated observations；不得由現有aggregate猜值。
+
+### 狀態
+
+- Multiple-seed robustness：`RESULT_AVAILABLE / REPORT_SCHEMA_V3_IMPLEMENTED / MATCHED_PAIR_RECHECK_REQUIRED`。
+- MR-12B：維持canonical seed42 runtime anchor，但`MULTI_SEED_SUPERIORITY_NOT_ESTABLISHED`。
+- MR-13A：`SINGLE_SEED_FORWARD_FAIL / MULTI_SEED_REOPENED / NOT_PROMOTED`。

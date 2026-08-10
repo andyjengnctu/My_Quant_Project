@@ -79,6 +79,7 @@ from filters.breakout_quality.source_inventory import build_source_data_inventor
 from filters.breakout_quality.strategy_comparison import (
     _arm_runtime_spec,
     _find_reusable_baseline_source,
+    _load_direct_selection_r,
     collect_artifact_status,
 )
 from filters.breakout_quality.strategy_compare_preparation import (
@@ -92,7 +93,7 @@ SUMMARY_FILENAME = "robustness_summary.json"
 SEED_RESULTS_FILENAME = "seed_results.csv"
 MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
-ROBUSTNESS_SCHEMA_VERSION = 2
+ROBUSTNESS_SCHEMA_VERSION = 3
 TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
@@ -747,16 +748,11 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         continuous_score_execution_start_override=str(job["score_execution_start"]),
     )
     metrics = dict(payload.get("score_ranking") or {})
-    attribution_path = pair_dir / "trade_attribution.json"
-    direct_selection_r = None
-    if attribution_path.is_file():
-        attribution = _read_json(attribution_path)
-        direct_selection_r = float(
-            dict(attribution.get("r_attribution") or {}).get(
-                "exclusive_selection_delta_r", 0.0
-            )
-        )
-    metrics["direct_selection_r"] = direct_selection_r
+    metrics["direct_selection_r"] = _load_direct_selection_r(
+        pair_dir,
+        root=PROJECT_ROOT,
+        active_trades_filename=runtime_spec["active_trades_filename"],
+    )
     result = {
         "arm_id": arm.arm_id,
         "name": arm.name,
@@ -864,6 +860,7 @@ def _robustness_summary(
         )
     stochastic_rows = [row for row in romd_rows if int(row["n"]) > 1]
     distribution_compare = None
+    same_seed_compare = None
     if len(stochastic_rows) == 2:
         a, b = stochastic_rows
         av = pd.to_numeric(
@@ -879,6 +876,40 @@ def _robustness_summary(
                 "pairwise_left_gt_right_probability": float(np.mean(av[:, None] > bv[None, :])),
                 "pair_count": int(len(av) * len(bv)),
             }
+        paired = seed_frame.loc[
+            seed_frame["arm_id"].isin((a["arm_id"], b["arm_id"])),
+            ["arm_id", "seed", "return_over_max_drawdown"],
+        ].copy()
+        paired["return_over_max_drawdown"] = pd.to_numeric(
+            paired["return_over_max_drawdown"], errors="coerce"
+        )
+        paired = paired.dropna(subset=["return_over_max_drawdown"])
+        pivot = paired.pivot(index="seed", columns="arm_id", values="return_over_max_drawdown")
+        if a["arm_id"] in pivot.columns and b["arm_id"] in pivot.columns:
+            pivot = pivot[[a["arm_id"], b["arm_id"]]].dropna()
+            if not pivot.empty:
+                delta = (
+                    pivot[b["arm_id"]].to_numpy(dtype=float)
+                    - pivot[a["arm_id"]].to_numpy(dtype=float)
+                )
+                delta_mean = float(np.mean(delta))
+                delta_std = float(np.std(delta, ddof=1)) if len(delta) > 1 else 0.0
+                tie_mask = np.isclose(delta, 0.0, rtol=0.0, atol=1e-12)
+                same_seed_compare = {
+                    "left": a["name"],
+                    "right": b["name"],
+                    "n": int(len(delta)),
+                    "left_gt_right_count": int(np.sum((delta < 0.0) & ~tie_mask)),
+                    "right_gt_left_count": int(np.sum((delta > 0.0) & ~tie_mask)),
+                    "tie_count": int(np.sum(tie_mask)),
+                    "right_minus_left_mean": delta_mean,
+                    "right_minus_left_median": float(np.median(delta)),
+                    "right_minus_left_std": delta_std,
+                    "right_minus_left_min": float(np.min(delta)),
+                    "right_minus_left_p25": float(np.quantile(delta, 0.25)),
+                    "right_minus_left_p75": float(np.quantile(delta, 0.75)),
+                    "right_minus_left_max": float(np.max(delta)),
+                }
     return {
         "schema_version": ROBUSTNESS_SCHEMA_VERSION,
         "status": "RESULT_AVAILABLE",
@@ -887,6 +918,7 @@ def _robustness_summary(
         "mean_strategy_metrics": mean_rows,
         "romd_statistics": romd_rows,
         "romd_distribution_comparison": distribution_compare,
+        "romd_same_seed_comparison": same_seed_compare,
     }
 
 
@@ -954,10 +986,29 @@ def render_multi_seed_robustness_report(summary: dict[str, Any]) -> str:
     if isinstance(compare, dict):
         lines.extend([
             "",
-            "### RoMD分布交叉比較",
+            "### RoMD任意seed分布交叉比較",
             "",
             f"- P({compare['left']} > {compare['right']}) = {float(compare['pairwise_left_gt_right_probability'])*100:.2f}% "
             f"（{compare['pair_count']}組cross-seed pairs）",
+        ])
+    same_seed = summary.get("romd_same_seed_comparison")
+    if isinstance(same_seed, dict):
+        n = int(same_seed["n"])
+        lines.extend([
+            "",
+            "### RoMD同seed配對比較",
+            "",
+            f"- {same_seed['right']} > {same_seed['left']}：{same_seed['right_gt_left_count']}/{n}；"
+            f"{same_seed['left']} > {same_seed['right']}：{same_seed['left_gt_right_count']}/{n}；"
+            f"平手：{same_seed['tie_count']}/{n}。",
+            f"- ΔRoMD（{same_seed['right']} − {same_seed['left']}）："
+            f"Mean {_fmt(same_seed['right_minus_left_mean'])}；"
+            f"Median {_fmt(same_seed['right_minus_left_median'])}；"
+            f"Std {_fmt(same_seed['right_minus_left_std'])}；"
+            f"Min {_fmt(same_seed['right_minus_left_min'])}；"
+            f"P25 {_fmt(same_seed['right_minus_left_p25'])}；"
+            f"P75 {_fmt(same_seed['right_minus_left_p75'])}；"
+            f"Max {_fmt(same_seed['right_minus_left_max'])}。",
         ])
     references = dict(summary["contract"].get("romd_reference_baselines") or {})
     min_name = str(dict(references.get("min") or {}).get("name") or "Min baseline")
@@ -999,6 +1050,33 @@ def _print_report_tables(summary: dict[str, Any]) -> None:
             "-" if row["beats_full_count"] is None else f"{row['beats_full_count']}/{n}",
         ])
     print(render_table(headers, rows))
+    same_seed = summary.get("romd_same_seed_comparison")
+    if isinstance(same_seed, dict):
+        n = int(same_seed["n"])
+        print("\nRoMD同seed配對比較")
+        print(
+            f"{same_seed['right']} > {same_seed['left']}：{same_seed['right_gt_left_count']}/{n} | "
+            f"{same_seed['left']} > {same_seed['right']}：{same_seed['left_gt_right_count']}/{n} | "
+            f"平手：{same_seed['tie_count']}/{n}"
+        )
+        print(
+            f"ΔRoMD（{same_seed['right']} − {same_seed['left']}）："
+            f"Mean {_fmt(same_seed['right_minus_left_mean'])} | "
+            f"Median {_fmt(same_seed['right_minus_left_median'])} | "
+            f"Std {_fmt(same_seed['right_minus_left_std'])} | "
+            f"Min {_fmt(same_seed['right_minus_left_min'])} | "
+            f"P25 {_fmt(same_seed['right_minus_left_p25'])} | "
+            f"P75 {_fmt(same_seed['right_minus_left_p75'])} | "
+            f"Max {_fmt(same_seed['right_minus_left_max'])}"
+        )
+    compare = summary.get("romd_distribution_comparison")
+    if isinstance(compare, dict):
+        print("\nRoMD任意seed分布交叉比較")
+        print(
+            f"P({compare['left']} > {compare['right']})="
+            f"{float(compare['pairwise_left_gt_right_probability'])*100:.2f}% "
+            f"({compare['pair_count']}組cross-seed pairs)"
+        )
 
 
 def show_multi_seed_robustness_status() -> None:

@@ -17857,6 +17857,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         if len(robustness_stochastic) != 2
         else isinstance(distribution_compare, dict)
     )
+    same_seed_compare = synthetic_summary["romd_same_seed_comparison"]
+    same_seed_compare_ok = (
+        same_seed_compare is None
+        if len(robustness_stochastic) != 2
+        else (
+            isinstance(same_seed_compare, dict)
+            and same_seed_compare["n"] == 2
+            and same_seed_compare["right_gt_left_count"] == 2
+            and same_seed_compare["left_gt_right_count"] == 0
+            and same_seed_compare["tie_count"] == 0
+            and math.isclose(same_seed_compare["right_minus_left_mean"], 3.0)
+            and math.isclose(same_seed_compare["right_minus_left_median"], 3.0)
+        )
+    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_fixed_baselines",
@@ -17889,7 +17903,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         == min_reference_arm.arm_id
         and synthetic_summary["contract"]["romd_reference_baselines"]["full"]["arm_id"]
         == full_reference_arm.arm_id
-        and distribution_compare_ok,
+        and distribution_compare_ok
+        and same_seed_compare_ok
+        and "_load_direct_selection_r(" in robustness_source
+        and "active_trades_filename=runtime_spec[\"active_trades_filename\"]" in robustness_source,
     )
 
     add_check(
