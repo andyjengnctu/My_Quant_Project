@@ -3,6 +3,7 @@ import os
 import sqlite3
 import sys
 
+from core.console_report import render_menu_item
 from core.log_utils import format_exception_summary
 
 from config.training_performance_policy import (
@@ -28,7 +29,11 @@ def prompt_existing_db_policy(db_file, colors):
     if not is_interactive_console():
         return
     choice = safe_prompt_choice(
-        "\n👉 Portfolio 記憶庫：[1] 接續訓練 (預設)  [2] 刪除重來 : ",
+        "\n👉 Portfolio 記憶庫："
+        + render_menu_item(1, "接續訓練", default=True)
+        + "  "
+        + render_menu_item(2, "刪除重來")
+        + " : ",
         "1",
         ("1", "2"),
         "記憶庫操作選項",

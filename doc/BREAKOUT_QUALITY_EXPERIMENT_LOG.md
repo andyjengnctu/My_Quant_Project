@@ -7994,3 +7994,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 不修改Strategy Compare runtime、MR-12B／MR-13A、Target、architecture、loss、training defaults、seed generator、Selection／Forward期間、selector、策略參數、交易會計、scientific fingerprint或既有robustness結果；不新增／修改MR／DL／SR identity。
 - `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`無需變更，因本輪只修validator契約，沒有任何research identity或狀態改變。
 - 本輪依`doc/PROJECT_SETTINGS.md`不執行`apps/test_suite.py`或formal consistency step；交付前只做獨立靜態／結構／依賴與validator contract檢查。
+
+## 2026-08-11 — 正式選單 Enter 顯示格式統一與 Strategy Compare robustness 排序
+
+- 程式基準：`test-branch-1_20260811_022602_d75dc04.zip`；SHA256 `efe4eae6e10d9f361c6bab59f4a526847b589774e659f3a1a37cfc3bf38f2cb1`。
+- 使用者要求所有「按 Enter 等價於數字 1」的正式互動選單，第一項統一顯示為`[1 ] 項目  (Enter)`；其餘項目統一顯示`[2]  項目`。本輪新增`core.console_report.render_menu_item()`作project-wide顯示SSOT，Research主選單、Strategy Compare階段／robustness子選單、Audit、Binary／Continuous模型研究與optimizer Portfolio記憶庫的numeric-1 default prompt均改用同一renderer。Enter本來不是數字1的Optimizer Mode／Study Mode選項不改語意。
+- Strategy Compare正式選單顯示順序改為Selection PIT strategy、Forward-OOS strategy、Selection PIT Multi-seed robustness、Forward-OOS Multi-seed robustness、全部狀態；robustness順序直接由`config/strategy_compare.py`profile insertion order驅動，CLI default robustness仍維持既有`STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE`，不因顯示排序改變。
+- Validator不硬編目前robustness ID或數量；只驗證共用menu renderer輸出與robustness profile順序跟Strategy profile順序一致。`doc/CMD.md`與Checklist同步更新目前正式UI。
+- 本輪只改UI／validator／文件，不改Dataset、Label、MR-12B／MR-13A、Target、architecture、loss、seed、Selection／Forward period、strategy accounting、scientific fingerprint或既有robustness結果；不新增／修改任何MR／DL／SR identity。
+- 依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`；formal double check由使用者本機正式入口完成。
+

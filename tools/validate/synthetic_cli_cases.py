@@ -351,10 +351,10 @@ def validate_dataset_cli_contract_case(_base_params):
             and "[rebuild]" not in interactive_text
             and "[relabel]" not in interactive_text
             and "=== Continuous DL 模型研究與驗證 ===" in interactive_text
-            and "[1/Enter] 訓練目前模型 → forward-OOS模型報表" in interactive_text
-            and "[2] 建立／更新 Selection PIT Scores → PIT模型驗證" in interactive_text
-            and "[3] 查看目前Workflow與工件狀態" in interactive_text
-            and f"[4] {configured_ranker_menu_label}" in interactive_text
+            and "[1 ] 訓練目前模型 → forward-OOS模型報表  (Enter)" in interactive_text
+            and "[2]  建立／更新 Selection PIT Scores → PIT模型驗證" in interactive_text
+            and "[3]  查看目前Workflow與工件狀態" in interactive_text
+            and f"[4]  {configured_ranker_menu_label}" in interactive_text
             and "MR-12A/B/C" not in interactive_text
             and "Audit／診斷" not in interactive_text
             and "策略組合比較" not in interactive_text
@@ -413,7 +413,7 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             comparison_rc,
             comparison_commands,
-            f"[4] {configured_comparison_menu_label}" in comparison_text
+            f"[4]  {configured_comparison_menu_label}" in comparison_text
             and "MR-12A/B/C" not in comparison_text,
         ),
     )
@@ -438,7 +438,7 @@ def validate_dataset_cli_contract_case(_base_params):
         (
             strategy_model_prepare_rc,
             strategy_model_prepare.call_count,
-            "[5] 準備策略比較所需模型工件" in strategy_model_prepare_text,
+            "[5]  準備策略比較所需模型工件" in strategy_model_prepare_text,
         ),
     )
 
@@ -497,8 +497,8 @@ def validate_dataset_cli_contract_case(_base_params):
         (0, True, True),
         (
             no_pit_rc,
-            "[2] 建立／更新 Selection PIT Scores → PIT模型驗證" in no_pit_text,
-            "[1/Enter] 訓練目前模型 → forward-OOS模型報表" in no_pit_text,
+            "[2]  建立／更新 Selection PIT Scores → PIT模型驗證" in no_pit_text,
+            "[1 ] 訓練目前模型 → forward-OOS模型報表  (Enter)" in no_pit_text,
         ),
     )
 
@@ -855,8 +855,32 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     )
 
-    strategy_profile_count = len(app_strategy_compare.get_strategy_comparison_profiles())
-    robustness_profile_count = len(app_strategy_compare.get_strategy_multi_seed_robustness_profiles())
+    strategy_profiles = app_strategy_compare.get_strategy_comparison_profiles()
+    robustness_profiles = app_strategy_compare.get_strategy_multi_seed_robustness_profiles()
+    menu_renderer = importlib.import_module("core.console_report").render_menu_item
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "default_first_menu_item_uses_shared_enter_suffix_format",
+        "[1 ] synthetic  (Enter)",
+        menu_renderer(1, "synthetic", default=True),
+    )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "strategy_compare_robustness_order_matches_strategy_profile_order",
+        [item["profile_id"] for item in strategy_profiles],
+        [
+            app_strategy_compare.get_strategy_multi_seed_robustness_settings(
+                item["robustness_id"]
+            ).profile_id
+            for item in robustness_profiles
+        ],
+    )
+    strategy_profile_count = len(strategy_profiles)
+    robustness_profile_count = len(robustness_profiles)
     strategy_status_choice = strategy_profile_count + robustness_profile_count + 1
     with (
         patch("builtins.input", side_effect=[str(strategy_status_choice), "0"]),

@@ -105,6 +105,7 @@ from tools.audit.catalog import get_domain_cli_commands
 from core.console_report import (
     COMPACT_CONSOLE_ENV,
     console_color_enabled,
+    render_menu_item,
     paint,
     project_relative_display_path,
     render_key_values,
@@ -2604,10 +2605,10 @@ def _interactive_binary_model_research(
     while True:
         print("\n=== Binary DL Filter 模型研究與驗證 ===")
         print(f"Active Research Label：{TRADE_PATH_LABEL_ID}")
-        print("[1/Enter] 建立新Label → 重新訓練 → 模型預測報表")
-        print("[2] 使用既有模型 → 更新Scores → 模型預測報表")
-        print("[3] 查看Label與事件生命週期摘要")
-        print("[0] 返回")
+        print(render_menu_item(1, "建立新Label → 重新訓練 → 模型預測報表", default=True))
+        print(render_menu_item(2, "使用既有模型 → 更新Scores → 模型預測報表"))
+        print(render_menu_item(3, "查看Label與事件生命週期摘要"))
+        print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
         except EOFError:
@@ -2998,16 +2999,16 @@ def _interactive_model_research(program_name: str) -> int:
         comparison_settings = get_breakout_quality_continuous_ranker_comparison_settings()
         print("\n=== Continuous DL 模型研究與驗證 ===")
         print(f"Active Profile：{settings.experiment_profile}")
-        print("[1/Enter] 訓練目前模型 → forward-OOS模型報表")
+        print(render_menu_item(1, "訓練目前模型 → forward-OOS模型報表", default=True))
         if settings.supports_point_in_time_scores:
-            print("[2] 建立／更新 Selection PIT Scores → PIT模型驗證")
-        print("[3] 查看目前Workflow與工件狀態")
+            print(render_menu_item(2, "建立／更新 Selection PIT Scores → PIT模型驗證"))
+        print(render_menu_item(3, "查看目前Workflow與工件狀態"))
         if comparison_settings.enabled:
-            print(f"[4] {comparison_settings.menu_label}")
+            print(render_menu_item(4, comparison_settings.menu_label))
         _comparisons, strategy_model_sources = _strategy_compare_required_model_sources()
         if strategy_model_sources:
-            print("[5] 準備策略比較所需模型工件")
-        print("[0] 返回")
+            print(render_menu_item(5, "準備策略比較所需模型工件"))
+        print(render_menu_item(0, "返回"))
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
         except EOFError:

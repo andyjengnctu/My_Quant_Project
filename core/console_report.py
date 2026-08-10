@@ -92,6 +92,18 @@ def render_title(title: str, *, width: int = DEFAULT_REPORT_WIDTH) -> str:
     return f"{line}\n {title}\n{line}"
 
 
+def render_menu_item(index: int, label: object, *, default: bool = False) -> str:
+    """Render one interactive menu row using the project-wide Enter convention."""
+
+    number = int(index)
+    if number < 0:
+        raise ValueError("menu index不得小於0")
+    text = str(label)
+    if default:
+        return f"[{number} ] {text}  (Enter)"
+    return f"[{number}]  {text}"
+
+
 def render_section(title: str, *, number: int | None = None) -> str:
     label = f"{int(number)}. {title}" if number is not None else str(title)
     return f"\n{label}\n{'-' * _display_width(label)}"
@@ -217,6 +229,7 @@ __all__ = [
     "paint",
     "project_relative_display_path",
     "render_title",
+    "render_menu_item",
     "render_section",
     "render_key_values",
     "render_table",

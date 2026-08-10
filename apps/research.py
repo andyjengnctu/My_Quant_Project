@@ -23,6 +23,7 @@ from config.strategy_compare import (
     get_strategy_multi_seed_robustness_profiles,
     get_strategy_multi_seed_robustness_settings,
 )
+from core.console_report import render_menu_item
 from core.runtime_utils import is_interactive_console, run_cli_entrypoint
 from filters.breakout_quality.strategy_comparison import (
     collect_artifact_status,
@@ -101,9 +102,9 @@ def _strategy_compare_profile_menu(profile_id: str) -> int:
     settings = get_strategy_comparison_settings(profile_id)
     while True:
         print(f"\n=== {settings.profile_label} ===")
-        print("[1/Enter] 執行目前比較設定")
-        print("[2]       查看設定、工件與預計動作")
-        print("[0]       返回")
+        print(render_menu_item(1, "執行目前比較設定", default=True))
+        print(render_menu_item(2, "查看設定、工件與預計動作"))
+        print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
         except EOFError:
@@ -134,10 +135,10 @@ def _strategy_multi_seed_robustness_menu(robustness_id: str) -> int:
     robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
     while True:
         print(f"\n=== {robustness.label} ===")
-        print("[1/Enter] 執行")
-        print("[2]       查看設定與預計動作")
-        print("[3]       查看最新報表")
-        print("[0]       返回")
+        print(render_menu_item(1, "執行", default=True))
+        print(render_menu_item(2, "查看設定與預計動作"))
+        print(render_menu_item(3, "查看最新報表"))
+        print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
         except EOFError:
@@ -184,15 +185,14 @@ def _strategy_compare_menu() -> int:
     while True:
         print("\n=== 策略組合比較 ===")
         for index, profile in enumerate(profiles, start=1):
-            suffix = "/Enter" if index == 1 else ""
-            print(f"[{index}{suffix}] {profile['label']}")
+            print(render_menu_item(index, profile["label"], default=index == 1))
         robustness_profiles = get_strategy_multi_seed_robustness_profiles()
         robustness_start = len(profiles) + 1
         for offset, robustness in enumerate(robustness_profiles):
-            print(f"[{robustness_start + offset}]       {robustness['label']}")
+            print(render_menu_item(robustness_start + offset, robustness["label"]))
         status_choice = robustness_start + len(robustness_profiles)
-        print(f"[{status_choice}]       查看全部階段設定與工件狀態")
-        print("[0]       返回")
+        print(render_menu_item(status_choice, "查看全部階段設定與工件狀態"))
+        print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
         except EOFError:
@@ -221,10 +221,10 @@ def _audit_menu() -> int:
     while True:
         print("\n=== Audit／診斷 ===")
         print(f"Active module：{module_id}")
-        print("[1/Enter] 執行目前 Audit 設定")
-        print("[2]       查看 Audit 設定、工件與預計動作")
-        print("[3]       查看最近 Audit 結果")
-        print("[0]       返回")
+        print(render_menu_item(1, "執行目前 Audit 設定", default=True))
+        print(render_menu_item(2, "查看 Audit 設定、工件與預計動作"))
+        print(render_menu_item(3, "查看最近 Audit 結果"))
+        print(render_menu_item(0, "返回"))
         try:
             raw = input("👉 請選擇：").strip().lower()
         except EOFError:
@@ -284,12 +284,12 @@ def _print_main_menu() -> None:
     print("\n====================================================================================================")
     print(" Research")
     print("====================================================================================================")
-    print("[1/Enter] 模型訓練")
-    print("[2]       策略參數最佳化")
-    print("[3]       策略組合比較")
-    print("[4]       Audit／診斷")
-    print("[5]       查看目前設定與工件狀態")
-    print("[0]       離開")
+    print(render_menu_item(1, "模型訓練", default=True))
+    print(render_menu_item(2, "策略參數最佳化"))
+    print(render_menu_item(3, "策略組合比較"))
+    print(render_menu_item(4, "Audit／診斷"))
+    print(render_menu_item(5, "查看目前設定與工件狀態"))
+    print(render_menu_item(0, "離開"))
 
 
 def _interactive_menu() -> int:

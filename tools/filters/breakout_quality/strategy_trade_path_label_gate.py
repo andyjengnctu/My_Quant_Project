@@ -100,7 +100,7 @@ def _require_model_and_report(
         )
         raise FileNotFoundError(
             f"策略Gate只讀取既有已驗證模型；缺少工件: {display}。"
-            "請先由選單[1/Enter]完成新Label模型預測報表。"
+            "請先由選單「[1 ] 建立新Label → 重新訓練 → 模型預測報表  (Enter)」完成前置流程。"
         )
 
 

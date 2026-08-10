@@ -94,27 +94,6 @@ STRATEGY_COMPARE_PROFILES = {
 # stochastic/fixed比較對象不在此重列arm ID，而由對應Strategy Compare profile的
 # enabled arms + robustness_role動態解析。
 STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
-    "forward_oos": {
-        "label": "Forward-OOS Multi-seed robustness",
-        "enabled": True,
-        "profile_id": "forward_oos",
-        "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
-        "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
-        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
-        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
-        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
-        "progress_interval_seconds": STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
-        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
-        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
-        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
-        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
-        "romd_reference_baselines": {
-            "min": {"param_source": "min_roos", "rule_policy": "all_off"},
-            "full": {"param_source": "full_roos", "rule_policy": "formal"},
-        },
-        "output_root": "outputs/strategy_compare/robustness",
-        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
-    },
     "selection_pit": {
         "label": "Selection PIT Multi-seed robustness",
         "enabled": True,
@@ -136,8 +115,28 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "output_root": "outputs/strategy_compare/robustness/selection_pit",
         "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness/selection_pit",
     },
+    "forward_oos": {
+        "label": "Forward-OOS Multi-seed robustness",
+        "enabled": True,
+        "profile_id": "forward_oos",
+        "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
+        "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
+        "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
+        "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
+        "progress_interval_seconds": STRATEGY_COMPARE_ROBUSTNESS_PROGRESS_INTERVAL_SECONDS,
+        "yearly_report": STRATEGY_COMPARE_ROBUSTNESS_YEARLY_REPORT,
+        "keep_checkpoints": STRATEGY_COMPARE_ROBUSTNESS_KEEP_CHECKPOINTS,
+        "keep_scores": STRATEGY_COMPARE_ROBUSTNESS_KEEP_SCORES,
+        "keep_replay_details": STRATEGY_COMPARE_ROBUSTNESS_KEEP_REPLAY_DETAILS,
+        "romd_reference_baselines": {
+            "min": {"param_source": "min_roos", "rule_policy": "all_off"},
+            "full": {"param_source": "full_roos", "rule_policy": "formal"},
+        },
+        "output_root": "outputs/strategy_compare/robustness",
+        "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
+    }
 }
-
 
 
 # =============================================================================

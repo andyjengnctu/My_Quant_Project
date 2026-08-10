@@ -17273,9 +17273,9 @@ def validate_breakout_quality_trade_path_label_contract_case(_base_params):
         all(
             token in app_source
             for token in (
-                "[1/Enter] 建立新Label → 重新訓練 → 模型預測報表",
-                "[2] 使用既有模型 → 更新Scores → 模型預測報表",
-                "[3] 查看Label與事件生命週期摘要",
+                "[1 ] 建立新Label → 重新訓練 → 模型預測報表  (Enter)",
+                "[2]  使用既有模型 → 更新Scores → 模型預測報表",
+                "[3]  查看Label與事件生命週期摘要",
                 '"build-trade-path-labels"',
                 "本流程不執行策略績效比較",
                 "apps/research.py compare",
