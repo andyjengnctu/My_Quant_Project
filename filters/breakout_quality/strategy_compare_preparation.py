@@ -10,7 +10,6 @@ import pandas as pd
 
 from config.breakout_quality import (
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
 )
 from core.active_param_ensemble import get_active_param_ensemble_date_range
@@ -83,9 +82,11 @@ def model_upstream_prerequisite_blockers(
     """Return upstream truth artifacts that strategy work may not create itself.
 
     Strategy Compare and Multiple-seed robustness may consume the canonical supervised
-    Dataset but must not create Dataset/Label/Target truth. Event-group rankers also
-    require their Continuous Target manifest. Daily-universal rankers require the
-    market-set arrays used by their canonical trainer.
+    Dataset but must not create a new Dataset/Label/Target definition. Event-group rankers
+    additionally require their persistent Continuous Target manifest. Daily-universal
+    rankers are sequence-only: their canonical trainer lazily derives 300x10 windows and
+    the fixed daily target from canonical source OHLCV, so legacy Market Set Bank artifacts
+    are not prerequisites.
     """
 
     blockers: list[str] = []
@@ -125,17 +126,6 @@ def model_upstream_prerequisite_blockers(
                 "缺少模型上游Continuous Target: "
                 + project_relative_display_path(target_manifest, project_root=root)
             )
-    elif sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        missing_market_files = [
-            path for path in dataset.market_set_artifact_paths().values() if not path.is_file()
-        ]
-        if missing_market_files:
-            preview = ", ".join(
-                project_relative_display_path(path, project_root=root)
-                for path in missing_market_files[:3]
-            )
-            suffix = "…" if len(missing_market_files) > 3 else ""
-            blockers.append(f"Dataset market-set工件缺少: {preview}{suffix}")
     return tuple(blockers)
 
 

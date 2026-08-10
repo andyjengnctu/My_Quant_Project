@@ -7924,3 +7924,26 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Multiple-seed robustness：`RESULT_AVAILABLE / REPORT_SCHEMA_V3_IMPLEMENTED / MATCHED_PAIR_RECHECK_REQUIRED`。
 - MR-12B：維持canonical seed42 runtime anchor，但`MULTI_SEED_SUPERIORITY_NOT_ESTABLISHED`。
 - MR-13A：`SINGLE_SEED_FORWARD_FAIL / MULTI_SEED_REOPENED / NOT_PROMOTED`。
+
+## 2026-08-11 — Multiple-seed robustness前置修正：MR-13A不依賴legacy Market Set Bank
+
+### 工作基準與實際BLOCKED
+
+- 程式基準：`test-branch-1_20260811_002332_9edfd4b(1).zip`；SHA256 `0f73da9b9ebb89a5eee796f308bf071057c1e3eefdbabfb28b63b1b36ed6e4c8`。
+- 使用者由`apps/research.py` → Strategy Compare → Multiple-seed robustness查看／執行Forward-OOS計畫時，`daily_universal_no_time_pairwise`被`Dataset market-set工件缺少`標成BLOCKED，缺少項目為`market_daily_features.npy`、`market_daily_valid_mask.npy`、`market_date_ordinals.npy`等legacy Market Set Bank sidecars。
+- 這個BLOCKED不是資料真的缺少MR-13A所需上游真理，而是前一輪formal synthetic caller閉環時把daily-universal prerequisite錯誤同步成Dataset + market-set，將legacy architecture需求誤套到MR-13A sequence-only ranker。
+
+### Root cause與修正
+
+1. MR-13A `daily_universal_no_time_pairwise`固定使用`inception_time_v1` sequence-only architecture；`load_daily_universal_ranker_data()`明確拒絕`requires_market_set`／dataset context／derived context architecture。
+2. MR-13A不讀Market Set Bank。Canonical trainer依既有Dataset summary／source inventory確認資料來源後，直接從canonical OHLCV在batch需要時lazy產生每個stock-day的300×10 window；`daily_opportunity_no_time_r_v1`亦依固定contract由同一OHLCV即時計算，沒有persistent expanded daily feature bank或market-set sidecar prerequisite。
+3. `model_upstream_prerequisite_blockers()`移除daily-universal的market-set artifact blocker。Event-group ranker仍維持Dataset + persistent Continuous Target manifest兩項上游契約；daily-universal只要求canonical Dataset truth，後續來源inventory/current-source一致性仍由canonical daily trainer驗證。
+4. Multiple-seed execution plan的REUSE說明改為依training sample scope顯示：event-group重用Dataset／Continuous Target truth；daily-universal重用Dataset／source OHLCV truth並由canonical trainer即時計算daily windows與固定target，明確說明不需要legacy market-set。
+5. `validate_strategy_compare_config_driven_app_contract_case`同步改回正確契約：空白root下event-group應有Dataset + Continuous Target兩個blocker；daily-universal只有Dataset summary一個blocker，且不得出現market-set blocker。
+
+### Scientific identity與狀態
+
+- 不新增或修改`MR-*`／`DL-*`／`SR-C*` identity，不改MR-12B／MR-13A architecture、Target、loss、training sample definition、seed generator、training defaults、Forward period、selector、K/R0、策略accounting或既有Multiple-seed結果。
+- 不建立legacy Market Set Bank，也不把已淘汰的`inception_time_market_set_*` architecture重新帶回正式MR-13A流程。
+- Multiple-seed robustness既有結果與schema v3判讀維持有效；本輪只是修正前置依賴分類，讓同一正式入口可直接進入既定isolated train + replay流程。
+- GPT未執行`apps/test_suite.py`；formal double check仍由使用者本機正式入口執行。

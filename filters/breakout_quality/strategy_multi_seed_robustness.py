@@ -46,6 +46,7 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
 )
 from config.strategy_compare import (
@@ -189,10 +190,21 @@ def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str
                 "；".join(reasons),
             ))
         else:
+            profile = get_breakout_quality_experiment_profile(str(dl.experiment_profile))
+            if str(profile.training_sample_scope) == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+                description = (
+                    "重用canonical Dataset／source OHLCV truth；daily windows與固定target由"
+                    "canonical trainer即時計算，不需要legacy market-set工件"
+                )
+            else:
+                description = (
+                    "重用canonical Dataset／Continuous Target truth；isolated trainer不得建立"
+                    "新的Label／Target定義"
+                )
             rows.append((
                 "REUSE",
                 f"model-upstream:{dl.experiment_profile}",
-                "重用canonical Dataset／Target truth；isolated trainer不得建立Label／Target",
+                description,
             ))
     return rows, blockers
 

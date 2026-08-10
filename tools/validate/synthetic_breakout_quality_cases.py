@@ -18400,9 +18400,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         len(event_blockers) == 2
         and any("Dataset summary" in item for item in event_blockers)
         and any("Continuous Target" in item for item in event_blockers)
-        and len(daily_blockers) == 2
+        and len(daily_blockers) == 1
         and any("Dataset summary" in item for item in daily_blockers)
-        and any("market-set" in item for item in daily_blockers)
+        and not any("market-set" in item for item in daily_blockers)
         and "Strategy Compare不得建立Dataset／Label／Target" in preparation_source,
     )
     contract_example = {
