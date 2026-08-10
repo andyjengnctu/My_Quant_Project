@@ -855,9 +855,15 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     )
 
+    strategy_profile_count = len(app_strategy_compare.get_strategy_comparison_profiles())
+    robustness_profile_count = len(app_strategy_compare.get_strategy_multi_seed_robustness_profiles())
+    strategy_status_choice = strategy_profile_count + robustness_profile_count + 1
     with (
-        patch("builtins.input", side_effect=["4", "0"]),
+        patch("builtins.input", side_effect=[str(strategy_status_choice), "0"]),
         patch("apps.research.show_strategy_comparison_status") as compare_status,
+        patch(
+            "filters.breakout_quality.strategy_multi_seed_robustness.show_multi_seed_robustness_status"
+        ) as robustness_status,
     ):
         strategy_menu_rc = app_strategy_compare._strategy_compare_menu()
     add_check(
@@ -865,21 +871,28 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "strategy_compare_interactive_menu_is_profile_driven",
-        (0, 2),
-        (strategy_menu_rc, compare_status.call_count),
+        (0, strategy_profile_count, robustness_profile_count),
+        (
+            strategy_menu_rc,
+            compare_status.call_count,
+            robustness_status.call_count,
+        ),
     )
 
     robustness_calls = []
+    default_robustness_id = (
+        app_strategy_compare.get_strategy_multi_seed_robustness_settings().robustness_id
+    )
 
-    def _record_robustness_run(*, confirm):
-        robustness_calls.append(("run", bool(confirm)))
+    def _record_robustness_run(*, robustness_id, confirm):
+        robustness_calls.append(("run", robustness_id, bool(confirm)))
         return {}
 
-    def _record_robustness_status():
-        robustness_calls.append(("status",))
+    def _record_robustness_status(*, robustness_id):
+        robustness_calls.append(("status", robustness_id))
 
-    def _record_robustness_latest():
-        robustness_calls.append(("latest",))
+    def _record_robustness_latest(*, robustness_id):
+        robustness_calls.append(("latest", robustness_id))
 
     with (
         patch(
@@ -910,9 +923,20 @@ def validate_dataset_cli_contract_case(_base_params):
         "cli_contract",
         case_id,
         "strategy_compare_multi_seed_robustness_cli_routes_run_status_latest",
-        (0, 0, 0, [("run", False), ("status",), ("latest",)]),
         (
-            robustness_run_rc, robustness_status_rc, robustness_latest_rc,
+            0,
+            0,
+            0,
+            [
+                ("run", default_robustness_id, False),
+                ("status", default_robustness_id),
+                ("latest", default_robustness_id),
+            ],
+        ),
+        (
+            robustness_run_rc,
+            robustness_status_rc,
+            robustness_latest_rc,
             robustness_calls,
         ),
     )

@@ -7973,3 +7973,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Selection PIT canonical fold數差異仍是sample-universe最早合法score start造成：MR-12B canonical為2011～2020共10 folds，MR-13A canonical為2013-04～2020共8 folds；本次Selection robustness因策略期間固定2014～2020而雙方一律只需7 folds/seed。
 - 狀態：`IMPLEMENTED / FORWARD_COMPATIBLE / SELECTION_ROBUSTNESS_RESULT_PENDING`。
 - 依PROJECT_SETTINGS，本輪不執行`apps/test_suite.py`；formal double check由使用者本機正式入口完成。
+
+## 2026-08-11 — Formal bundle 閉環：Strategy Compare 動態選單 synthetic fixture 修正
+
+- 程式基準：`test-branch-1_20260811_014905_2714e23.zip`；SHA256 `001bc5fa9edaa97e1c719f94159681b1e7f32a8766d1c73a112d673375a852d6`。
+- Formal bundle：`to_chatgpt_bundle_20260811_015127_83b610ce.zip`；SHA256 `bec9eee24124559c12e1597c31cbdee1938cba87aadeed8dc7a41a87f1ec9b37`。
+- 本地 formal summary：quick gate PASS、chain checks PASS、ml smoke PASS；consistency 因 `validate_dataset_cli_contract_case` 在 Strategy Compare 互動選單使用舊的固定輸入`4`，新增第二個robustness profile後`4`已改為Selection PIT robustness，mock input `["4", "0"]`於返回外層時耗盡並拋`StopIteration`，因此 consistency summary 未生成。
+- `meta quality`的三個失敗均為上述中止的次生結果：coverage synthetic run info記錄`synthetic_case_count=0`／returncode=1，導致`coverage_synthetic_suite_runs_successfully`與`coverage_key_targets_hit`失敗；performance則因缺少consistency step summary而使`performance_required_step_summaries_present`失敗。既有coverage line/branch門檻本身仍高於要求，quick/chain/ml smoke沒有發現新的runtime失敗。
+- 修正只更新synthetic CLI fixture：狀態頁選項改由目前`get_strategy_comparison_profiles()`與`get_strategy_multi_seed_robustness_profiles()`數量動態推導，並同時驗證normal profile與robustness status renderer呼叫數；獨立檢查另發現同case後段`compare robustness` mocks仍是新增`robustness_id=`前的舊signature，已同步改為接受並驗證config解析出的default robustness ID，避免修掉`StopIteration`後下一個formal run再於TypeError中止。
+- 不修改Strategy Compare runtime、Selection PIT／Forward-OOS、多seed scientific identity、seed generator、Target、architecture、loss、training defaults、策略參數、selector、交易會計、報表統計或工件格式；不新增MR／DL／SR ID。
+- 本輪依`doc/PROJECT_SETTINGS.md`不執行`apps/test_suite.py`或其formal steps；交付前以獨立靜態／結構檢查閉環程式與checklist契約。
+
