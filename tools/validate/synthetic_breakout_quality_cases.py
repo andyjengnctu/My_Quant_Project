@@ -17456,9 +17456,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         source for source in settings.dl_sources.values()
         if source.score_source == "selection_point_in_time"
     ]
+    model_prepare_source = model_app_source.split(
+        "def _prepare_strategy_compare_model_artifacts", 1
+    )[1].split("def _interactive_model_research", 1)[0]
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "selection_pit_strategy_sources_allow_checkpoint_only_rebuild_but_never_model_training",
+        "selection_pit_compare_is_checkpoint_only_but_model_work_type_can_resume_train_missing_folds",
         True,
         bool(pit_sources)
         and all(source.threshold is None for source in pit_sources)
@@ -17470,6 +17473,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )
         and "load_selection_point_in_time_ranking_contract" in preparation_source
         and "--checkpoint-only" in preparation_source
+        and "--resume" in model_prepare_source
+        and "--checkpoint-only" not in model_prepare_source
+        and "缺少／不相容fold由模型訓練工作類型補訓" in model_prepare_source
         and "Strategy Compare不得因此訓練模型" in (
             project_root / "tools" / "filters" / "breakout_quality" / "build_point_in_time_scores.py"
         ).read_text(encoding="utf-8")

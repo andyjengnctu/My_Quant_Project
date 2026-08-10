@@ -1347,8 +1347,8 @@ def main(argv=None) -> int:
             if bool(args.checkpoint_only):
                 raise RuntimeError(
                     "checkpoint-only PIT重建無法完成；fold缺少可重用score/checkpoint或identity不相容: "
-                    f"{fold['fold_id']}。Strategy Compare不得因此訓練模型，"
-                    "請由模型研究入口重建Selection PIT。"
+                    f"{fold['fold_id']}。Strategy Compare不得因此訓練模型；"
+                    "請由模型訓練工作類型的『準備策略比較所需模型工件』補齊PIT fold。"
                 )
             built_fold_count += 1
             fold_started = time.perf_counter()

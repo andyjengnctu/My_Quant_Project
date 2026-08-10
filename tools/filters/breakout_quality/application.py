@@ -2787,10 +2787,11 @@ def _strategy_compare_required_selection_pit_sources():
 def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
     """Prepare configured PIT model sources in the model-training work type.
 
-    This workflow may rebuild Dataset/Label/Target metadata because it lives under
-    model training, but it never trains model weights for Strategy Compare.  PIT
-    reconstruction is checkpoint-only; a missing/incompatible checkpoint stops the
-    workflow and must be resolved by the corresponding model research lifecycle.
+    This workflow lives under the model-training work type, so it may rebuild
+    Dataset/Label/Target metadata and may train only missing/incompatible Selection
+    PIT fold checkpoints. Existing compatible folds are always reused via ``resume``.
+    It does not train the forward-OOS anchor merely because Strategy Compare needs
+    inference artifacts; Strategy Compare itself remains checkpoint-only.
     """
 
     comparison, sources = _strategy_compare_required_selection_pit_sources()
@@ -2844,13 +2845,15 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
             "--fold-months", str(workflow.point_in_time_fold_months),
             "--inner-validation-months", str(workflow.point_in_time_inner_validation_months),
             "--seed", str(workflow.seed),
-            "--checkpoint-only",
             "--resume",
         ]
         if workflow.point_in_time_score_end_date:
             build_args.extend(
                 ["--score-end-date", str(workflow.point_in_time_score_end_date)]
             )
+        print(
+            "  PIT policy：resume existing folds；缺少／不相容fold由模型訓練工作類型補訓"
+        )
         with _compact_console_scope():
             code = _run_command(
                 "build-point-in-time-scores",

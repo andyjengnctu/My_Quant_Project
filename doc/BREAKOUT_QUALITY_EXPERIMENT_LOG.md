@@ -7411,3 +7411,26 @@ Strategy Compare先前只檢查PIT top-level score／manifest／audit是否缺�
 ### Scientific identity
 
 MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、五欄Min ROOS、C23～C28 selector／comparison matrix、Target公式、model weights與交易會計均未修改。本輪只修正跨工作類型的dependency ownership、preflight與既有checkpoint推論工件恢復路徑。
+
+## 2026-08-10 — Strategy Compare required PIT missing-fold model-work ownership修正
+
+### 現象
+
+Strategy Compare在model upstream已重建後，以checkpoint-only方式重建`DL-CONT12B-PIT`；`fold_20110101_20111231`沒有可重用score／checkpoint或identity不相容，因此依安全契約停止。錯誤訊息要求改由模型研究入口重建Selection PIT，但前一輪新增的模型訓練「準備策略比較所需模型工件」入口本身仍固定傳入`--checkpoint-only`，而active model-research profile為MR-13A，一般PIT選項只會處理active profile，造成MR-12B缺失fold沒有正式UI可補齊。
+
+### Root cause
+
+跨工作類型ownership只完成了一半：Strategy Compare禁止train是正確的，但config-driven model-prerequisite workflow被錯誤沿用了相同checkpoint-only限制。Selection PIT fold checkpoint本身就是PIT no-lookahead模型生命周期的一部分；在模型訓練工作類型中，對缺失／不相容fold進行訓練是合法且必要的model work，並不等於Strategy Compare自行訓練，也不等於重訓forward-OOS anchor。
+
+### 修正
+
+1. Strategy Compare的`selection_pit_from_existing_folds` builder維持`--checkpoint-only --resume`；任何fold需要training仍立即停止，不跨工作類型。
+2. 模型訓練的config-driven「準備策略比較所需模型工件」改為`--resume`而不帶`--checkpoint-only`。每個required PIT source仍由`config/strategy_compare.py` enabled arms自動解析，不提供MR／DL手動選單。
+3. PIT builder既有resume順序不變：先重用完整fold，再用相容checkpoint重評score universe，再遷移compatible legacy fold；三者皆不可用時才進`_train_fold()`。因此本案例只會補訓真正缺失／不相容的MR-12B Selection PIT fold，其他相容fold保持reuse。
+4. 該模型工作流程仍先由model-work服務準備Dataset／Target，PIT完成後重跑PIT Audit；不因Strategy Compare需求重訓forward-OOS anchor。
+5. checkpoint-only失敗訊息改為指向正式模型訓練的泛化準備入口，避免要求使用者切換active profile或執行零散CLI。
+
+### Scientific identity
+
+MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、五欄Min ROOS、C23～C28 selector／comparison matrix、Target、loss、PIT fold no-lookahead規則及策略會計均未改變。本輪只修正缺失PIT fold的正式工作類型ownership與可達性，不新增MR／DL／SR ID。
+
