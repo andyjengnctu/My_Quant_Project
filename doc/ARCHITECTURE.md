@@ -206,7 +206,7 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 ## 正式入口
 
-- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化直接重用既有`tools.optimizer`互動流程；策略組合比較依`config/strategy_compare.py`執行；Audit依`config/audit.py`指定active module。
+- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化直接重用既有`tools.optimizer`互動流程；策略組合比較依`config/strategy_compare.py`執行，其中Multiple-seed robustness以Strategy Compare作UI/orchestrator、模型權重仍只由canonical continuous-ranker trainer建立；Audit依`config/audit.py`指定active module。
 - `tools/filters/breakout_quality/application.py`：Breakout Quality model provider，承接原完整model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。
 - `apps/test_suite.py`：日常一鍵測試正式入口。
 - `apps/package_zip.py`：打包正式入口。
@@ -243,6 +243,7 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 - `outputs/debug_trade_log/` 為 `trade_analysis` 相容輸出目錄；為維持相容性，暫沿用 `debug_trade_log` 這個 legacy 名稱。
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界，不代表子系統角色仍是 debug-only。
 - `outputs/workbench_ui/` 為 GUI runtime 快取分類；目前承接常用股票中文名稱快取。
+- `outputs/strategy_compare/robustness/<fingerprint>/`只永久保存multi-seed aggregate manifest／seed metrics／summary／Markdown；每seed model、full scores與replay detail預設只在`models/research/breakout_quality/strategy_compare/multi_seed_robustness/`及run `work/`暫存，完成seed observation後依config retention policy清除。
 
 ## 維護原則
 

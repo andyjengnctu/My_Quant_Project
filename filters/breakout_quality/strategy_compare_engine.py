@@ -62,6 +62,7 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_SELECTION_POINT_IN_TIME,
     SUPPORTED_RANKING_SCORE_SOURCES,
     load_continuous_ranker_oos_contract,
+    load_continuous_ranker_oos_score_table_from_path,
     load_selection_point_in_time_ranking_contract,
     load_selection_point_in_time_score_table,
 )
@@ -2707,6 +2708,7 @@ def run_comparison(
     shared_param_overrides=None,
     hard_filter_source=None,
     baseline_reuse_dir=None,
+    continuous_score_path_override=None,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -2750,6 +2752,7 @@ def run_comparison(
     runtime_contract = None
     pit_contract = None
     continuous_contract = None
+    continuous_score_override = None
     ranking_source = None
     filter_source = None
     binary_filter_manifest = None
@@ -2817,19 +2820,37 @@ def run_comparison(
             raise ValueError(
                 "Continuous ranker OOS source只允許resource-aware-continuous系列policy"
             )
-        continuous_contract = load_continuous_ranker_oos_contract(
-            str(root), filter_id, model_architecture, experiment_profile
-        )
-        manifest_architecture = continuous_contract.model_architecture
-        manifest_profile = continuous_contract.experiment_profile
-        start_date = continuous_contract.execution_start
-        end_date = continuous_contract.available_through
+        if continuous_score_path_override not in (None, ""):
+            override_path = Path(str(continuous_score_path_override)).resolve()
+            override_table = load_continuous_ranker_oos_score_table_from_path(
+                str(override_path), experiment_profile
+            )
+            manifest_architecture = model_architecture
+            manifest_profile = experiment_profile
+            start_date = str(override_table.index.get_level_values("date").min())
+            end_date = str(override_table.index.get_level_values("date").max())
+            continuous_score_override = {
+                "score_path": str(override_path),
+                "available_from": start_date,
+                "available_through": end_date,
+            }
+        else:
+            continuous_contract = load_continuous_ranker_oos_contract(
+                str(root), filter_id, model_architecture, experiment_profile
+            )
+            manifest_architecture = continuous_contract.model_architecture
+            manifest_profile = continuous_contract.experiment_profile
+            start_date = continuous_contract.execution_start
+            end_date = continuous_contract.available_through
         ranking_source = {
             "score_source": SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
             "model_architecture": manifest_architecture,
             "experiment_profile": manifest_profile,
             "ranking_policy": ranking_policy,
             "ranking_options": ranking_options,
+            "score_path_override": (
+                None if continuous_score_override is None else continuous_score_override["score_path"]
+            ),
         }
     elif score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
         if comparison_mode != COMPARISON_MODE_SCORE_RANKING:
@@ -3163,6 +3184,17 @@ def run_comparison(
             "model_validation_gate": pit_contract.model_validation_gate,
             "runtime_eligibility": dict(pit_contract.manifest.get("runtime_eligibility") or {}),
             "score_table": dict(pit_contract.manifest.get("artifacts", {}).get("scores") or {}),
+        }
+    elif continuous_score_override is not None:
+        score_signal_coverage = {
+            "required_start": continuous_score_override["available_from"],
+            "first_scored_event": continuous_score_override["available_from"],
+            "available_through": continuous_score_override["available_through"],
+        }
+        score_artifact_metadata = {
+            "score_path": str(continuous_score_override["score_path"]),
+            "runtime_eligibility": "multi_seed_robustness_isolated_replay",
+            "artifact_override": True,
         }
     elif continuous_contract is not None:
         score_signal_coverage = {

@@ -26,7 +26,6 @@ from filters.breakout_quality.daily_ranker_data import (
     select_breakout_candidate_group_ids,
 )
 from filters.breakout_quality.models.factory import count_trainable_parameters, require_torch
-from filters.breakout_quality.paths import resolve_filter_artifact_paths, resolve_filter_model_output_dir
 from filters.breakout_quality.ranking_score_store import DAILY_RANKER_OOS_SCORE_FILENAME
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
@@ -198,9 +197,7 @@ def run(args, *, ranker_impl) -> int:
         phase_label="Daily Selection完整重訓",
     )
 
-    artifact_paths = resolve_filter_artifact_paths(
-        PROJECT_ROOT, str(args.filter_id), str(args.model_architecture), str(args.experiment_profile)
-    )
+    artifact_paths, output_dir = ranker_impl._training_output_paths(args)
     artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
@@ -268,9 +265,6 @@ def run(args, *, ranker_impl) -> int:
         )
     )
 
-    output_dir = resolve_filter_model_output_dir(
-        PROJECT_ROOT, str(args.filter_id), str(args.model_architecture), str(args.experiment_profile)
-    )
     output_dir.mkdir(parents=True, exist_ok=True)
     score_path = output_dir / DAILY_RANKER_OOS_SCORE_FILENAME
     report_json_path = output_dir / ranker_impl.RANKER_REPORT_JSON_FILENAME

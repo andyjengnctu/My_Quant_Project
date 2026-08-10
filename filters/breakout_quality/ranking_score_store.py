@@ -725,18 +725,13 @@ def load_continuous_ranker_oos_contract(
     )
 
 
-@lru_cache(maxsize=16)
-def load_continuous_ranker_oos_score_table(
-    project_root: str,
-    filter_id: str,
-    model_architecture: str,
+@lru_cache(maxsize=32)
+def load_continuous_ranker_oos_score_table_from_path(
+    score_path: str,
     experiment_profile: str,
 ) -> pd.DataFrame:
-    root = Path(project_root).resolve()
     profile = get_breakout_quality_experiment_profile(str(experiment_profile))
-    path = resolve_continuous_ranker_oos_score_path(
-        root, filter_id, model_architecture, experiment_profile
-    )
+    path = Path(score_path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"找不到Continuous ranker scores: {path}")
     frame = read_breakout_quality_csv(path).copy()
@@ -764,6 +759,22 @@ def load_continuous_ranker_oos_score_table(
     return frame.set_index(["ticker", "date"]).sort_index()
 
 
+@lru_cache(maxsize=16)
+def load_continuous_ranker_oos_score_table(
+    project_root: str,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+) -> pd.DataFrame:
+    root = Path(project_root).resolve()
+    path = resolve_continuous_ranker_oos_score_path(
+        root, filter_id, model_architecture, experiment_profile
+    )
+    return load_continuous_ranker_oos_score_table_from_path(
+        str(path), str(experiment_profile)
+    )
+
+
 def lookup_continuous_ranker_oos_candidate_score(
     *,
     project_root: str,
@@ -772,23 +783,34 @@ def lookup_continuous_ranker_oos_candidate_score(
     filter_id: str,
     model_architecture: str,
     experiment_profile: str,
+    score_path_override: str | None = None,
 ) -> dict[str, Any]:
-    contract = load_continuous_ranker_oos_contract(
-        project_root, filter_id, model_architecture, experiment_profile
+    contract = None
+    if score_path_override is None:
+        contract = load_continuous_ranker_oos_contract(
+            project_root, filter_id, model_architecture, experiment_profile
+        )
+    table = (
+        load_continuous_ranker_oos_score_table_from_path(
+            str(score_path_override), str(experiment_profile)
+        )
+        if score_path_override is not None
+        else load_continuous_ranker_oos_score_table(
+            project_root, filter_id, model_architecture, experiment_profile
+        )
     )
     ticker_text = str(ticker or "").strip()
     if not ticker_text:
         raise ValueError("Continuous ranker OOS lookup必須提供ticker")
     date_text = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
+    available_from = str(table.index.get_level_values("date").min())
+    available_through = str(table.index.get_level_values("date").max())
     reason = ""
     score: float | None = None
     group_index: int | None = None
-    if date_text < contract.available_from or date_text > contract.available_through:
+    if date_text < available_from or date_text > available_through:
         reason = "outside_score_period"
     else:
-        table = load_continuous_ranker_oos_score_table(
-            project_root, filter_id, model_architecture, experiment_profile
-        )
         key = (ticker_text, date_text)
         if key not in table.index:
             reason = "missing_ticker_date_score"
@@ -800,6 +822,7 @@ def lookup_continuous_ranker_oos_candidate_score(
                 )
             score = float(row["model_score"])
             group_index = int(row["group_index"])
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
     return {
         "score": score,
         "available": not bool(reason),
@@ -810,8 +833,12 @@ def lookup_continuous_ranker_oos_candidate_score(
         "score_source": SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
         "model_architecture": str(model_architecture),
         "experiment_profile": str(experiment_profile),
-        "continuous_target_id": contract.continuous_target_id,
-        "model_information_cutoff": contract.model_information_cutoff,
+        "continuous_target_id": (
+            contract.continuous_target_id if contract is not None else str(profile.continuous_target_id or "")
+        ),
+        "model_information_cutoff": (
+            contract.model_information_cutoff if contract is not None else None
+        ),
         "group_index": group_index,
     }
 

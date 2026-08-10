@@ -137,6 +137,7 @@ class StrategyComparisonArm:
     dl_id: str | None
     dl_runtime_mode: str | None
     dl_runtime_options: Mapping[str, Any] | None = None
+    robustness_role: str = "off"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -152,7 +153,57 @@ class StrategyComparisonArm:
             "dl_runtime_options": (
                 None if self.dl_runtime_options is None else dict(self.dl_runtime_options)
             ),
+            "robustness_role": self.robustness_role,
         }
+
+
+@dataclass(frozen=True)
+class StrategyMultiSeedRobustnessSettings:
+    enabled: bool
+    profile_id: str
+    seed_count: int
+    seed_generator_seed: int
+    gpu_train_workers: int
+    cpu_replay_workers: int
+    reuse_completed: bool
+    keep_checkpoints: bool
+    keep_scores: bool
+    keep_replay_details: bool
+    output_root: str
+    model_work_root: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "profile_id": self.profile_id,
+            "seed_count": int(self.seed_count),
+            "seed_generator_seed": int(self.seed_generator_seed),
+            "gpu_train_workers": int(self.gpu_train_workers),
+            "cpu_replay_workers": int(self.cpu_replay_workers),
+            "reuse_completed": bool(self.reuse_completed),
+            "keep_checkpoints": bool(self.keep_checkpoints),
+            "keep_scores": bool(self.keep_scores),
+            "keep_replay_details": bool(self.keep_replay_details),
+            "output_root": self.output_root,
+            "model_work_root": self.model_work_root,
+        }
+
+
+def validate_strategy_multi_seed_robustness_settings(
+    settings: StrategyMultiSeedRobustnessSettings,
+) -> None:
+    if not str(settings.profile_id).strip():
+        raise ValueError("multi-seed robustness profile_id不可空白")
+    if int(settings.seed_count) < 2:
+        raise ValueError("multi-seed robustness seed_count必須>=2")
+    if int(settings.seed_generator_seed) < 0:
+        raise ValueError("multi-seed robustness seed_generator_seed必須>=0")
+    if int(settings.gpu_train_workers) != 1:
+        raise ValueError("目前multi-seed robustness單GPU training worker固定為1")
+    if int(settings.cpu_replay_workers) < 1:
+        raise ValueError("multi-seed robustness cpu_replay_workers必須>=1")
+    _validate_relative_path(settings.output_root, field_name="multi_seed.output_root")
+    _validate_relative_path(settings.model_work_root, field_name="multi_seed.model_work_root")
 
 
 @dataclass(frozen=True)
@@ -473,6 +524,14 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
     for key, arm in settings.arms.items():
         if key != arm.arm_id or not key.strip():
             raise ValueError(f"arm key／arm_id不一致: {key!r}")
+        if arm.robustness_role not in {"off", "fixed_baseline", "stochastic"}:
+            raise ValueError(
+                f"arm {key} robustness_role不支援: {arm.robustness_role!r}"
+            )
+        if arm.robustness_role == "fixed_baseline" and arm.dl_enabled:
+            raise ValueError(f"arm {key} fixed_baseline不得啟用DL")
+        if arm.robustness_role == "stochastic" and not arm.dl_enabled:
+            raise ValueError(f"arm {key} stochastic robustness必須是DL-on")
         if arm.param_source not in settings.parameter_sources:
             raise ValueError(f"arm {key}引用不存在的param_source: {arm.param_source}")
         if arm.rule_policy not in {"formal", "all_off"}:

@@ -106,6 +106,25 @@ def _artifact_paths_from_dir(
     )
 
 
+def build_filter_artifact_paths_from_dir(
+    *,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    model_dir: str | os.PathLike[str],
+) -> BreakoutQualityArtifactPaths:
+    """Build an isolated artifact layout without changing canonical path resolution."""
+
+    architecture = resolve_model_architecture(model_architecture)
+    profile = resolve_experiment_profile(experiment_profile)
+    return _artifact_paths_from_dir(
+        filter_id=filter_id,
+        architecture=architecture,
+        experiment_profile=profile,
+        model_dir=Path(model_dir).resolve(),
+    )
+
+
 def resolve_filter_artifact_paths(
     project_root: str | os.PathLike[str],
     filter_id: str,

@@ -228,6 +228,10 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 
 `P1/P2/P3` 是策略參數訓練 stage／artifact identity，不是 model version，也不得拿來當 scientific experiment ID。
 
+### 8.1 Multiple-seed strategy robustness infrastructure
+
+`Multiple-seed robustness`是Strategy Compare的final-strategy穩健性診斷，不新增`MR-*`、`DL-*`或`SR-C*` identity，也不做seed ensemble／best-seed selection。比較對象由`config/strategy_compare.py`中目前profile的arm `robustness_role`解析：`fixed_baseline`只回放一次，`stochastic`依deterministic generated seeds逐一以canonical continuous-ranker trainer訓練、輸出隔離score並套用相同strategy replay。永久只保留fingerprint-scoped `manifest.json`、`seed_results.csv`、`robustness_summary.json`與`robustness_report.md`；seed checkpoint／score／replay detail預設為暫存並於數值落盤後清除。報表第一表以各seed最終策略指標Mean比較並同列Full／Min fixed baseline；第二表專門列RoMD Mean／Median／Std／CV／Min／P25／P75／Max與勝baseline比例。狀態：**IMPLEMENTED／RESULT_PENDING**。
+
 ---
 
 ## 9. 目前研究決策鏈

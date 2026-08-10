@@ -16,13 +16,15 @@ from core.strategy_comparison import (
     StrategyComparisonArm,
     StrategyComparisonContrast,
     StrategyComparisonSettings,
+    StrategyMultiSeedRobustnessSettings,
     StrategyDLSource,
     StrategyParameterSource,
     StrategyPreparationPolicy,
     validate_strategy_comparison_settings,
+    validate_strategy_multi_seed_robustness_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 18
+STRATEGY_COMPARE_SCHEMA_VERSION = 19
 
 # =============================================================================
 # 1. 共用執行設定
@@ -72,6 +74,27 @@ STRATEGY_COMPARE_PROFILES = {
         ),
     },
 }
+
+# Multiple-seed robustness屬最終策略績效穩健性比較；比較對象不在這裡重列ID，
+# 而由所選profile的enabled arms + robustness_role解析。
+STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS = {
+    "enabled": True,
+    "profile_id": "forward_oos",
+    "seed_count": 8,
+    "seed_generator_seed": 20260810,
+    # 單一GPU training queue；CPU replay可和下一個seed訓練重疊。
+    "gpu_train_workers": 1,
+    # Strategy replay本身已使用CPU平行準備；預設只跑一條replay queue，與GPU training重疊，避免雙replay過度訂閱CPU。
+    "cpu_replay_workers": 1,
+    "reuse_completed": True,
+    # 正常完成後只保留aggregate report／CSV／manifest，避免每個seed永久堆模型與score。
+    "keep_checkpoints": False,
+    "keep_scores": False,
+    "keep_replay_details": False,
+    "output_root": "outputs/strategy_compare/robustness",
+    "model_work_root": "models/research/breakout_quality/strategy_compare/multi_seed_robustness",
+}
+
 
 # =============================================================================
 # 2. 前置工件政策
@@ -420,6 +443,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": False,
         "dl_id": None,
         "dl_runtime_mode": None,
+        "robustness_role": "fixed_baseline",
     },
     "C2": {
         "enabled": False,
@@ -440,6 +464,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": False,
         "dl_id": None,
         "dl_runtime_mode": None,
+        "robustness_role": "fixed_baseline",
     },
     "C4": {
         "enabled": False,
@@ -617,6 +642,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": True,
         "dl_id": "CONT12B",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+        "robustness_role": "stochastic",
     },
     "C21": {
         "enabled": False,
@@ -656,6 +682,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": False,
         "dl_id": None,
         "dl_runtime_mode": None,
+        "robustness_role": "fixed_baseline",
     },
     "C24": {
         "enabled": False,
@@ -682,6 +709,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": True,
         "dl_id": "CONT12B_PIT",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+        "robustness_role": "stochastic",
     },
     "C26": {
         "enabled": False,
@@ -727,6 +755,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": True,
         "dl_id": "CONT13A_PIT",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+        "robustness_role": "stochastic",
     },
     "C29": {
         "enabled": True,
@@ -740,6 +769,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": True,
         "dl_id": "CONT13A",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+        "robustness_role": "stochastic",
     },
     "C30": {
         "enabled": True,
@@ -776,6 +806,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": False,
         "dl_id": None,
         "dl_runtime_mode": None,
+        "robustness_role": "fixed_baseline",
     },
     "C33": {
         "enabled": False,
@@ -882,6 +913,42 @@ def _builder(raw) -> StrategyArtifactBuilder | None:
     )
 
 
+def get_strategy_multi_seed_robustness_settings() -> StrategyMultiSeedRobustnessSettings:
+    raw = dict(STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS)
+    settings = StrategyMultiSeedRobustnessSettings(
+        enabled=bool(raw.get("enabled", True)),
+        profile_id=str(raw.get("profile_id") or "").strip(),
+        seed_count=int(raw.get("seed_count", 0) or 0),
+        seed_generator_seed=int(raw.get("seed_generator_seed", 0) or 0),
+        gpu_train_workers=int(raw.get("gpu_train_workers", 0) or 0),
+        cpu_replay_workers=int(raw.get("cpu_replay_workers", 0) or 0),
+        reuse_completed=bool(raw.get("reuse_completed", True)),
+        keep_checkpoints=bool(raw.get("keep_checkpoints", False)),
+        keep_scores=bool(raw.get("keep_scores", False)),
+        keep_replay_details=bool(raw.get("keep_replay_details", False)),
+        output_root=str(raw.get("output_root") or "").strip(),
+        model_work_root=str(raw.get("model_work_root") or "").strip(),
+    )
+    validate_strategy_multi_seed_robustness_settings(settings)
+    if settings.profile_id not in STRATEGY_COMPARE_PROFILES:
+        raise ValueError(
+            f"multi-seed robustness引用不存在的Strategy Compare profile: {settings.profile_id}"
+        )
+    profile_settings = get_strategy_comparison_settings(settings.profile_id)
+    fixed = [arm for arm in profile_settings.enabled_arms if arm.robustness_role == "fixed_baseline"]
+    stochastic = [arm for arm in profile_settings.enabled_arms if arm.robustness_role == "stochastic"]
+    if not fixed:
+        raise ValueError("multi-seed robustness至少需要一個fixed_baseline arm")
+    if not stochastic:
+        raise ValueError("multi-seed robustness至少需要一個stochastic arm")
+    for arm in stochastic:
+        if not arm.dl_id or profile_settings.dl_sources[arm.dl_id].score_source != "continuous_ranker_oos":
+            raise ValueError(
+                f"multi-seed stochastic arm必須使用continuous_ranker_oos source: {arm.arm_id}"
+            )
+    return settings
+
+
 def get_strategy_comparison_profiles() -> tuple[dict[str, str], ...]:
     return tuple(
         {
@@ -983,6 +1050,7 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
                 if raw.get("dl_runtime_options") in (None, {})
                 else dict(raw.get("dl_runtime_options") or {})
             ),
+            robustness_role=str(raw.get("robustness_role") or "off").strip(),
         )
         for arm_id in ordered_arm_ids
         for raw in (STRATEGY_COMPARE_ARMS[arm_id],)

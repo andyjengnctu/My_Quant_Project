@@ -856,7 +856,7 @@ def validate_dataset_cli_contract_case(_base_params):
     )
 
     with (
-        patch("builtins.input", side_effect=["3", "0"]),
+        patch("builtins.input", side_effect=["4", "0"]),
         patch("apps.research.show_strategy_comparison_status") as compare_status,
     ):
         strategy_menu_rc = app_strategy_compare._strategy_compare_menu()
@@ -867,6 +867,54 @@ def validate_dataset_cli_contract_case(_base_params):
         "strategy_compare_interactive_menu_is_profile_driven",
         (0, 2),
         (strategy_menu_rc, compare_status.call_count),
+    )
+
+    robustness_calls = []
+
+    def _record_robustness_run(*, confirm):
+        robustness_calls.append(("run", bool(confirm)))
+        return {}
+
+    def _record_robustness_status():
+        robustness_calls.append(("status",))
+
+    def _record_robustness_latest():
+        robustness_calls.append(("latest",))
+
+    with (
+        patch(
+            "filters.breakout_quality.strategy_multi_seed_robustness.run_multi_seed_robustness",
+            side_effect=_record_robustness_run,
+        ),
+        patch(
+            "filters.breakout_quality.strategy_multi_seed_robustness.show_multi_seed_robustness_status",
+            side_effect=_record_robustness_status,
+        ),
+        patch(
+            "filters.breakout_quality.strategy_multi_seed_robustness.show_latest_multi_seed_robustness_report",
+            side_effect=_record_robustness_latest,
+        ),
+        patch("apps.research.is_interactive_console", return_value=False),
+    ):
+        robustness_run_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "robustness", "run"]
+        )
+        robustness_status_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "robustness", "status"]
+        )
+        robustness_latest_rc = app_strategy_compare.main(
+            ["apps/research.py", "compare", "robustness", "latest"]
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "strategy_compare_multi_seed_robustness_cli_routes_run_status_latest",
+        (0, 0, 0, [("run", False), ("status",), ("latest",)]),
+        (
+            robustness_run_rc, robustness_status_rc, robustness_latest_rc,
+            robustness_calls,
+        ),
     )
 
 

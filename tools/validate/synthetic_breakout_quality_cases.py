@@ -17592,6 +17592,257 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and len(set(selection_display_names)) == len(selection_display_names),
     )
 
+    robustness_path = (
+        project_root / "filters" / "breakout_quality" / "strategy_multi_seed_robustness.py"
+    )
+    robustness_source = robustness_path.read_text(encoding="utf-8")
+    robustness_settings = strategy_config.get_strategy_multi_seed_robustness_settings()
+    robustness_profile = strategy_config.get_strategy_comparison_settings(
+        robustness_settings.profile_id
+    )
+    robustness_fixed = tuple(
+        arm for arm in robustness_profile.enabled_arms
+        if arm.robustness_role == "fixed_baseline"
+    )
+    robustness_stochastic = tuple(
+        arm for arm in robustness_profile.enabled_arms
+        if arm.robustness_role == "stochastic"
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_robustness_is_strategy_compare_config_driven_without_second_arm_id_list",
+        True,
+        robustness_path.is_file()
+        and robustness_settings.profile_id == "forward_oos"
+        and robustness_settings.seed_count >= 2
+        and robustness_settings.gpu_train_workers == 1
+        and robustness_settings.cpu_replay_workers >= 1
+        and {arm.name for arm in robustness_fixed} == {"Full ROOS", "Min ROOS"}
+        and {arm.name for arm in robustness_stochastic} == {"Min MR-12B", "Min MR-13A"}
+        and all(not arm.dl_enabled for arm in robustness_fixed)
+        and all(arm.dl_enabled for arm in robustness_stochastic)
+        and "robustness_role" in config_source
+        and "MULTI_SEED_ROBUSTNESS_ARM_IDS" not in config_source
+        and all(token not in robustness_source for token in ("\"C20\"", "\"C29\"", "\"MR-12B\"", "\"MR-13A\"")),
+    )
+
+    from filters.breakout_quality import strategy_multi_seed_robustness as robustness_module
+
+    seeds_a = robustness_module.resolve_multi_seed_values(
+        seed_count=8, generator_seed=20260810
+    )
+    seeds_b = robustness_module.resolve_multi_seed_values(
+        seed_count=8, generator_seed=20260810
+    )
+    seeds_c = robustness_module.resolve_multi_seed_values(
+        seed_count=8, generator_seed=20260811
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_values_are_deterministically_generated_unique_and_not_best_seed_selection",
+        True,
+        seeds_a == seeds_b
+        and seeds_a != seeds_c
+        and len(seeds_a) == len(set(seeds_a)) == 8
+        and all(seed > 0 for seed in seeds_a)
+        and "best_seed =" not in robustness_source.lower()
+        and "selected_best_seed" not in robustness_source.lower(),
+    )
+
+    def _robustness_metrics(romd, total_return, win_rate):
+        return {
+            "total_return_pct": float(total_return),
+            "max_drawdown_pct": 10.0,
+            "return_over_max_drawdown": float(romd),
+            "annual_return_pct": 12.0,
+            "expected_value_r": 0.5,
+            "payoff_ratio": 2.0,
+            "avg_exposure_pct": 80.0,
+            "trade_count": 100,
+            "win_rate_pct": float(win_rate),
+            "monthly_win_rate_pct": 60.0,
+            "log_r_squared": 0.9,
+            "direct_selection_r": 1.0,
+        }
+
+    fixed_results = {}
+    fixed_values = {"Full ROOS": (7.0, 120.0), "Min ROOS": (6.0, 90.0)}
+    for arm in robustness_fixed:
+        romd, total_return = fixed_values[arm.name]
+        fixed_results[arm.arm_id] = {
+            "metrics": _robustness_metrics(romd, total_return, 40.0)
+        }
+    synthetic_seed_rows = []
+    synthetic_values = {
+        "Min MR-12B": (5.0, 7.0),
+        "Min MR-13A": (8.0, 10.0),
+    }
+    for arm_order, arm in enumerate(robustness_stochastic, start=1):
+        low, high = synthetic_values[arm.name]
+        for seed_order, (seed, romd) in enumerate(((101, low), (202, high)), start=1):
+            synthetic_seed_rows.append({
+                "arm_id": arm.arm_id,
+                "name": arm.name,
+                "seed": seed,
+                "arm_order": arm_order,
+                "seed_order": seed_order,
+                **_robustness_metrics(romd, romd * 10.0, 50.0 + seed_order),
+            })
+    synthetic_frame = pd.DataFrame(synthetic_seed_rows)
+    with patch.object(
+        robustness_module, "build_source_data_inventory",
+        return_value={"dataset": "synthetic-full"},
+    ):
+        synthetic_contract = robustness_module.build_multi_seed_robustness_contract(
+            comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
+            artifact_identities={
+                "param:full_roos": {"sha256": "full"},
+                "param:min_roos": {"sha256": "min"},
+            },
+        )
+    synthetic_summary = robustness_module._robustness_summary(
+        contract=synthetic_contract,
+        fixed_results=fixed_results,
+        seed_frame=synthetic_frame,
+    )
+    mean_by_name = {row["name"]: row for row in synthetic_summary["mean_strategy_metrics"]}
+    romd_by_name = {row["name"]: row for row in synthetic_summary["romd_statistics"]}
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_report_uses_mean_for_all_strategy_metrics_and_full_romd_distribution_with_fixed_baselines",
+        True,
+        math.isclose(mean_by_name["Full ROOS"]["return_over_max_drawdown"], 7.0)
+        and math.isclose(mean_by_name["Min ROOS"]["return_over_max_drawdown"], 6.0)
+        and math.isclose(mean_by_name["Min MR-12B"]["return_over_max_drawdown"], 6.0)
+        and math.isclose(mean_by_name["Min MR-12B"]["win_rate_pct"], 51.5)
+        and math.isclose(mean_by_name["Min MR-13A"]["return_over_max_drawdown"], 9.0)
+        and romd_by_name["Full ROOS"]["std"] is None
+        and romd_by_name["Min ROOS"]["std"] is None
+        and math.isclose(romd_by_name["Min MR-12B"]["median"], 6.0)
+        and math.isclose(romd_by_name["Min MR-12B"]["min"], 5.0)
+        and math.isclose(romd_by_name["Min MR-12B"]["max"], 7.0)
+        and romd_by_name["Min MR-13A"]["beats_min_count"] == 2
+        and romd_by_name["Min MR-13A"]["beats_full_count"] == 2
+        and math.isclose(
+            synthetic_summary["romd_distribution_comparison"]["pairwise_left_gt_right_probability"],
+            0.0,
+        ),
+    )
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_work_artifacts_are_isolated_and_default_retention_is_aggregate_only",
+        True,
+        all(token in robustness_source for token in (
+            "--model-output-dir", "--research-output-dir",
+            "keep_checkpoints", "keep_scores", "keep_replay_details",
+            "seed_results.csv", "robustness_summary.json", "robustness_report.md",
+            "ThreadPoolExecutor", "CPU strategy replay",
+        ))
+        and not robustness_settings.keep_checkpoints
+        and not robustness_settings.keep_scores
+        and not robustness_settings.keep_replay_details
+        and "Multiple-seed robustness" in app_source
+        and "compare robustness" in app_source,
+    )
+
+    replay_throttle_index = robustness_source.find(
+        "while len(futures) >= int(cfg.cpu_replay_workers):"
+    )
+    replay_submit_index = robustness_source.find(
+        "future = executor.submit(_replay_one_unit, job)"
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_pipeline_throttles_before_next_replay_submit_so_gpu_training_can_overlap_cpu_replay",
+        True,
+        robustness_settings.gpu_train_workers == 1
+        and robustness_settings.cpu_replay_workers >= 1
+        and replay_throttle_index >= 0
+        and replay_submit_index > replay_throttle_index
+        and robustness_source.count(
+            "while len(futures) >= int(cfg.cpu_replay_workers):"
+        ) == 1
+        and "Replay A可與" in robustness_source
+        and "GPU Train B真正重疊" in robustness_source,
+    )
+
+    from tools.filters.breakout_quality import train_continuous_ranker as ranker_train_module
+    from filters.breakout_quality.ranking_score_store import (
+        lookup_continuous_ranker_oos_candidate_score,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        isolated_root = Path(tmp)
+        isolated_model = isolated_root / "model"
+        isolated_research = isolated_root / "research"
+        isolated_args = ranker_train_module.parse_args([
+            "--experiment-profile", "daily_universal_no_time_pairwise",
+            "--model-output-dir", str(isolated_model),
+            "--research-output-dir", str(isolated_research),
+            "--seed", "123",
+        ])
+        isolated_paths, isolated_output = ranker_train_module._training_output_paths(
+            isolated_args
+        )
+        isolated_score = isolated_root / "daily_scores.csv.gz"
+        pd.DataFrame([{
+            "ticker": "2330",
+            "date": "2024-01-02",
+            "group_index": 1,
+            "model_score": 0.77,
+        }]).to_csv(isolated_score, index=False, compression="gzip")
+        isolated_lookup = lookup_continuous_ranker_oos_candidate_score(
+            project_root=str(project_root),
+            ticker="2330",
+            signal_date="2024-01-02",
+            filter_id="breakout_quality_v1",
+            model_architecture="inception_time_v1",
+            experiment_profile="daily_universal_no_time_pairwise",
+            score_path_override=str(isolated_score),
+        )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_training_and_score_lookup_support_isolated_paths_without_touching_canonical_model",
+        True,
+        isolated_paths.model_dir == isolated_model.resolve()
+        and isolated_output == isolated_research.resolve()
+        and math.isclose(float(isolated_lookup["score"]), 0.77)
+        and isolated_lookup["available"]
+        and isolated_lookup["continuous_target_id"] == "daily_opportunity_no_time_r_v1",
+    )
+
+    with patch.object(
+        robustness_module, "build_source_data_inventory",
+        return_value={"dataset": "synthetic-full", "inventory": "same"},
+    ):
+        fingerprint_base = robustness_module.build_multi_seed_robustness_contract(
+            comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
+            artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
+        )["fingerprint"]
+        fingerprint_period = robustness_module.build_multi_seed_robustness_contract(
+            comparison_period={"start": "2021-01-01", "end": "2026-01-31"},
+            artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
+        )["fingerprint"]
+        fingerprint_param = robustness_module.build_multi_seed_robustness_contract(
+            comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
+            artifact_identities={"param:full_roos": {"sha256": "changed"}, "param:min_roos": {"sha256": "b"}},
+        )["fingerprint"]
+        with patch.object(
+            robustness_module, "BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE",
+            float(robustness_module.BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE) * 2.0,
+        ):
+            fingerprint_training = robustness_module.build_multi_seed_robustness_contract(
+                comparison_period={"start": "2021-01-01", "end": "2025-12-22"},
+                artifact_identities={"param:full_roos": {"sha256": "a"}, "param:min_roos": {"sha256": "b"}},
+            )["fingerprint"]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_fingerprint_changes_with_oos_period_param_identity_and_effective_training_defaults",
+        True,
+        len({fingerprint_base, fingerprint_period, fingerprint_param, fingerprint_training}) == 4,
+    )
+
     from filters.breakout_quality import strategy_param_training as strategy_param_training_module
 
     with tempfile.TemporaryDirectory() as tmp:

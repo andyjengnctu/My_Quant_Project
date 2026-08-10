@@ -7683,3 +7683,13 @@ Forward active contrasts固定為`C1-C3 / C20-C3 / C29-C3 / C29-C20`。
 - 驗證：`validate_strategy_compare_config_driven_app_contract_case`新增不硬編arm ID／名稱的跨profile顯示一致性guard；目前51項0 fail。pair cache fingerprint對display-only `name`／`description`變更保持不變。
 - 結果：本輪不產生新的Selection／Forward-OOS科學結果；既有數值維持原紀錄。
 
+## 2026-08-10 — Multiple-seed strategy robustness infrastructure
+
+- 狀態：`IMPLEMENTED / RESULT_PENDING`；尚未產生任何multi-seed實驗結論，不建立新`MR-*`／`DL-*`／`SR-C*`。
+- 正式入口：`apps/research.py` → `策略組合比較` → `Multiple-seed robustness`；設定整合於`config/strategy_compare.py`。
+- 比較對象由目前Strategy Compare arm的`robustness_role`驅動，不另寫active C-ID清單：Full ROOS／Min ROOS為`fixed_baseline`，Min MR-12B／Min MR-13A為`stochastic`。
+- Seed policy：只設定`seed_count`與`seed_generator_seed`，由deterministic generator產生可重現的unique seeds；報表不指定seed 42、不挑best seed、不做seed ensemble。
+- 執行：單一GPU training queue與CPU strategy replay queue重疊；console持續顯示seed序號、比較對象序號、training/replay與總耗時。模型訓練仍呼叫canonical continuous-ranker trainer，但以隔離`model-output-dir`／`research-output-dir`工作目錄避免覆寫正式模型。
+- 報表：表一同列Full／Min fixed baselines與stochastic arms各項final-strategy metric Mean（Return、MDD、RoMD、Annual、EV、Payoff、Exposure、Trades、Win Rate、Monthly Win Rate、Log R²、同參數DL選擇R）；表二只列RoMD完整分布（Mean、Median、Std、CV、Min、P25、P75、Max、勝Min／Full counts及cross-seed distribution comparison）。
+- Retention：永久輸出固定為`outputs/strategy_compare/robustness/<fingerprint>/`下`manifest.json`、`seed_results.csv`、`robustness_summary.json`、`robustness_report.md`；checkpoint／full scores／replay details預設清除，可由config retention flags顯式保留。fingerprint包含實際共同OOS期間、dataset inventory、策略參數artifact identities、experiment profile semantics、有效training defaults、seed policy與runtime selector contract。
+

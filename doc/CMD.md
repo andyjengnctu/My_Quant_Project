@@ -77,6 +77,16 @@ python apps/research.py
 [0]       離開
 ```
 
+策略組合比較的Multiple-seed robustness由同一`config/strategy_compare.py`驅動；正式CLI可用：
+
+```bash
+python apps/research.py compare robustness status
+python apps/research.py compare robustness run
+python apps/research.py compare robustness latest
+```
+
+`run`會以deterministic generated seeds對`robustness_role=stochastic` arms逐一建立隔離模型／score並做final strategy replay；`fixed_baseline`只計算一次。預設單GPU training queue與CPU replay queue重疊，永久只保存aggregate工件，不保存每seed完整模型／score／replay。
+
 選擇 `[4] Audit／診斷` 會進入固定Audit子選單；Audit module由`config/audit.py`指定，不在選單中選擇：
 
 ```text

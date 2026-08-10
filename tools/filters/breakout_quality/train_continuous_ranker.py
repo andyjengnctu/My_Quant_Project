@@ -89,6 +89,7 @@ from filters.breakout_quality.models.spec import (
     validate_model_sequence_length,
 )
 from filters.breakout_quality.paths import (
+    build_filter_artifact_paths_from_dir,
     resolve_filter_artifact_paths,
     resolve_filter_model_output_dir,
 )
@@ -264,10 +265,37 @@ def parse_args(argv=None):
         action="store_true",
         help="只供離線重現；預設要求來源CSV inventory與dataset一致",
     )
+    parser.add_argument("--model-output-dir", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--research-output-dir", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if int(args.seed) < 0:
         parser.error("--seed 必須 >= 0")
     return args
+
+
+def _training_output_paths(args):
+    model_override = str(getattr(args, "model_output_dir", "") or "").strip()
+    research_override = str(getattr(args, "research_output_dir", "") or "").strip()
+    if bool(model_override) != bool(research_override):
+        raise ValueError("model-output-dir與research-output-dir必須同時指定")
+    if model_override:
+        artifact_paths = build_filter_artifact_paths_from_dir(
+            filter_id=str(args.filter_id),
+            model_architecture=str(args.model_architecture),
+            experiment_profile=str(args.experiment_profile),
+            model_dir=Path(model_override),
+        )
+        output_dir = Path(research_override).resolve()
+        return artifact_paths, output_dir
+    return (
+        resolve_filter_artifact_paths(
+            PROJECT_ROOT, args.filter_id, str(args.model_architecture), args.experiment_profile
+        ),
+        resolve_filter_model_output_dir(
+            PROJECT_ROOT, args.filter_id, str(args.model_architecture), args.experiment_profile
+        ),
+    )
+
 
 
 def _validate_args(args) -> None:
@@ -1442,12 +1470,7 @@ def main(argv=None) -> int:
         plan=plan,
     )
 
-    artifact_paths = resolve_filter_artifact_paths(
-        PROJECT_ROOT,
-        args.filter_id,
-        str(args.model_architecture),
-        args.experiment_profile,
-    )
+    artifact_paths, output_dir = _training_output_paths(args)
     artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
@@ -1540,12 +1563,6 @@ def main(argv=None) -> int:
         kind="mergesort",
     ).reset_index(drop=True)
 
-    output_dir = resolve_filter_model_output_dir(
-        PROJECT_ROOT,
-        args.filter_id,
-        str(args.model_architecture),
-        args.experiment_profile,
-    )
     output_dir.mkdir(parents=True, exist_ok=True)
     score_path = output_dir / RANKER_SCORE_FILENAME
     report_json_path = output_dir / RANKER_REPORT_JSON_FILENAME
