@@ -17575,6 +17575,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "_comparison_runs_roots" in orchestration_source,
     )
 
+    selection_display_names = tuple(
+        arm.name
+        for arm in strategy_config.get_strategy_comparison_settings("selection_pit").enabled_arms
+    )
+    forward_display_names = tuple(
+        arm.name
+        for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "selection_and_forward_core_arm_display_names_stay_aligned",
+        True,
+        bool(selection_display_names)
+        and selection_display_names == forward_display_names
+        and len(set(selection_display_names)) == len(selection_display_names),
+    )
+
     from filters.breakout_quality import strategy_param_training as strategy_param_training_module
 
     with tempfile.TemporaryDirectory() as tmp:

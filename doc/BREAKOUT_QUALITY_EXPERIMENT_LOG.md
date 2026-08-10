@@ -7671,3 +7671,15 @@ Forward active contrasts固定為`C1-C3 / C20-C3 / C29-C3 / C29-C20`。
 ### 研究邊界
 
 2021～2025 Forward-OOS已被用來判斷MR-13A失敗並形成後續改善假說，因此後續MR-13*可將它當`iterative research OOS evidence`比較泛化，但loss weight、sampling比例、epoch selection或其他超參數仍只能由Train/Validation/Selection決定；不得用該Forward期間直接挑數值。Current四arm設計的目的就是降低比較維度，持續保留Full/Min策略基準，同時把MR-13A改善的主要source Gate固定在`C28-C25`與`C29-C20`。
+
+## 2026-08-10 — Strategy Compare核心四arm顯示名稱統一
+
+- 狀態：`IMPLEMENTED / DISPLAY_ONLY / NO_REPLAY_SEMANTICS_CHANGE`
+- 程式基準：`test-branch-1_20260810_193803_f49d873.zip`；SHA256 `c90dca664e3049c3db551a71717f62bd39f3f8506a70c1f37d90201ca3fa95a3`。
+- 唯一變更：Selection PIT與Forward-OOS兩個Strategy Compare profile共用同一套核心顯示名稱：`Full ROOS`、`Min ROOS`、`Min MR-12B`、`Min MR-13A`。研究階段由profile頁首標示；MR-12B／MR-13A的`feasible-ascent`與MR-13A daily score語意保留於arm description／runtime contract，不再放入比較對象名稱。
+- 固定條件：C/SR ID、param source、DL source、Selection PIT／Forward-OOS period、Min ROOS五欄、Full ROOS、feasible-ascent、K/R0、Dataset、Target、模型、策略執行與所有既有結果均不變。
+- Cache：pair cache identity本來只包含replay contract，不包含`name`／`description`；本輪顯示改名不得使既有C25/C28/C20/C29 pair失效。
+- Dataset／Label：不重建、不relabel。
+- 驗證：`validate_strategy_compare_config_driven_app_contract_case`新增不硬編arm ID／名稱的跨profile顯示一致性guard；目前51項0 fail。pair cache fingerprint對display-only `name`／`description`變更保持不變。
+- 結果：本輪不產生新的Selection／Forward-OOS科學結果；既有數值維持原紀錄。
+

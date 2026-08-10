@@ -34,6 +34,13 @@ STRATEGY_COMPARE_MAX_POSITIONS = 10
 STRATEGY_COMPARE_ROTATION = "off"
 STRATEGY_COMPARE_STALE_SCORE_MEMBERSHIP_GUARD_MAX_AGE_DAYS = 22
 
+# Current Strategy Compare核心比較名稱的單一真理。
+# Selection PIT／Forward-OOS由profile頁首區分，不把研究階段或固定selector語意塞進arm顯示名稱。
+STRATEGY_COMPARE_DISPLAY_FULL_ROOS = "Full ROOS"
+STRATEGY_COMPARE_DISPLAY_MIN_ROOS = "Min ROOS"
+STRATEGY_COMPARE_DISPLAY_MIN_MR12B = "Min MR-12B"
+STRATEGY_COMPARE_DISPLAY_MIN_MR13A = "Min MR-13A"
+
 # Strategy Compare以研究階段profile隔離設定與輸出；App只顯示泛化階段名稱，
 # arms／contrasts／period／output namespace全部由本檔驅動。
 STRATEGY_COMPARE_DEFAULT_PROFILE = "forward_oos"
@@ -406,7 +413,7 @@ STRATEGY_DL_SOURCES = {
 STRATEGY_COMPARE_ARMS = {
     "C1": {
         "enabled": True,
-        "name": "Full ROOS",
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
         "description": "Full optimizer rolling active params；DL-off baseline",
         "param_source": "full_roos",
         "rule_policy": "formal",
@@ -426,7 +433,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C3": {
         "enabled": True,
-        "name": "Min ROOS",
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
         "description": "只搜尋high_len＋4個ATR；rules全關；DL-off baseline",
         "param_source": "min_roos",
         "rule_policy": "all_off",
@@ -600,7 +607,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C20": {
         "enabled": True,
-        "name": "Min ROOS: MR-12B feasible-ascent",
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR12B,
         "description": (
             "與C18使用完全相同K/R0、feasible-ascent與basket內Min ROOS執行順序；"
             "唯一模型差異為DL source改成MR-12B pairwise ranker"
@@ -639,7 +646,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C23": {
         "enabled": False,
-        "name": "Selection Min ROOS PIT baseline",
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_ROOS,
         "description": (
             "2014～2020 historical P2 Min ROOS active params；rules全關；DL關閉；"
             "作Selection PIT策略經濟驗證共同baseline"
@@ -665,7 +672,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C25": {
         "enabled": False,
-        "name": "Selection PIT: MR-12B feasible-ascent",
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR12B,
         "description": (
             "與C23使用完全相同historical P2 Min ROOS params；"
             "使用MR-12B Selection PIT score並完全沿用C18 feasible-ascent selector"
@@ -709,7 +716,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C28": {
         "enabled": False,
-        "name": "Selection PIT: MR-13A daily feasible-ascent",
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13A,
         "description": (
             "與C25使用完全相同historical P2 Min ROOS params、K/R0與feasible-ascent selector；"
             "唯一DL差異為score source改成MR-13A Daily Universal Selection PIT，"
@@ -723,7 +730,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C29": {
         "enabled": True,
-        "name": "Min ROOS: MR-13A daily feasible-ascent",
+        "name": STRATEGY_COMPARE_DISPLAY_MIN_MR13A,
         "description": (
             "與C20使用相同current Min ROOS、all-off rules與frozen feasible-ascent；"
             "唯一DL source差異為MR-13A Daily Universal Forward-OOS score"
@@ -762,7 +769,7 @@ STRATEGY_COMPARE_ARMS = {
     },
     "C32": {
         "enabled": False,
-        "name": "Selection Full ROOS PIT baseline",
+        "name": STRATEGY_COMPARE_DISPLAY_FULL_ROOS,
         "description": "2014～2020 historical Full ROOS active params；formal rules；DL-off共同baseline",
         "param_source": "selection_full_roos",
         "rule_policy": "formal",
