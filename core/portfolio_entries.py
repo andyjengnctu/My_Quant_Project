@@ -890,7 +890,7 @@ def _max_dl_score_order(rows, *, base_rank):
 
 
 def _max_dl_execution_order(rows, *, base_rank):
-    """Keep canonical Min ROOS priority inside an already chosen DL basket."""
+    """Keep the same-parameter DL-off baseline priority inside an already chosen DL basket."""
 
     return sorted(list(rows or []), key=lambda row: base_rank[id(row)])
 
@@ -943,12 +943,12 @@ def _reorder_resource_aware_continuous_max_dl(
     baseline,
     default_diag,
 ):
-    """Let frozen DL own stock choice; Min ROOS supplies only exact pre-market resource floors.
+    """Let frozen DL own stock choice; the same-parameter DL-off baseline supplies exact pre-market resource floors.
 
     The baseline fixes K (planned order count) and R0 (exact reserved capital).  The
     unconstrained DL Top-K basket is tried first.  Basket membership is owned by DL,
-    while the execution order inside a chosen basket stays on the canonical Min ROOS
-    rank so stock selection is not mixed with a second allocation-priority change.
+    while the execution order inside a chosen basket stays on the same-parameter
+    DL-off baseline rank so stock selection is not mixed with a second allocation-priority change.
     If Top-K violates K/R0, deterministic minimum-repair replaces original Top-K
     members one at a time.  Every trial uses the canonical cash-capped reservation
     simulator.  No score threshold, blend
@@ -1062,9 +1062,9 @@ def _reorder_resource_aware_continuous_max_dl(
             'max_dl_fallback_to_baseline': bool(fallback),
         })
         if int(result['selected_count']) != target_count:
-            raise RuntimeError('max-DL Continuous輸出未維持Min ROOS預留單數')
+            raise RuntimeError('max-DL Continuous輸出未維持同參數DL-off baseline預留單數')
         if int(result['reserved_cost_milli']) < reserve_floor_milli:
-            raise RuntimeError('max-DL Continuous輸出低於Min ROOS reserved-capital floor')
+            raise RuntimeError('max-DL Continuous輸出低於同參數DL-off baseline reserved-capital floor')
         return final_order, out
 
     if direct_feasible:
@@ -1204,7 +1204,7 @@ def _reorder_resource_aware_continuous_max_dl(
         target_count=target_count,
         reserve_floor_milli=reserve_floor_milli,
     ):
-        raise RuntimeError('max-DL Continuous無法重建Min ROOS baseline resource floor')
+        raise RuntimeError('max-DL Continuous無法重建同參數DL-off baseline resource floor')
     return finalize(
         baseline_ordered,
         baseline_result,
@@ -1288,7 +1288,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
     """Strengthen C17 with feasible best-improvement swaps, without exact combinatorial search.
 
     C17 first supplies a guaranteed-feasible K-basket.  If its Top-K repair had to
-    fall back to Min ROOS, that baseline is still a valid seed rather than a terminal
+    fall back to the same-parameter DL-off baseline, that basket is still a valid seed rather than a terminal
     failure.  From the seed, every single membership swap is evaluated with canonical
     exact reservation; the highest-DL-quality feasible improvement is accepted and the
     process repeats until no improving single swap remains.  Capital never contributes
@@ -1365,7 +1365,7 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         target_count=target_count,
         reserve_floor_milli=reserve_floor_milli,
     ):
-        raise RuntimeError('max-DL feasible-ascent seed不符合Min ROOS資源契約')
+        raise RuntimeError('max-DL feasible-ascent seed不符合同參數DL-off baseline資源契約')
     current_key = _max_dl_basket_quality_key(current_order, base_rank=base_rank)
     evaluations = 0
     blocked_swaps = 0
@@ -1466,9 +1466,9 @@ def _reorder_resource_aware_continuous_max_dl_feasible_ascent(
         'stale_score_guard_blocked_swaps': int(blocked_swaps),
     })
     if int(current_result['selected_count']) != target_count:
-        raise RuntimeError('max-DL feasible-ascent輸出未維持Min ROOS預留單數')
+        raise RuntimeError('max-DL feasible-ascent輸出未維持同參數DL-off baseline預留單數')
     if int(current_result['reserved_cost_milli']) < reserve_floor_milli:
-        raise RuntimeError('max-DL feasible-ascent輸出低於Min ROOS reserved-capital floor')
+        raise RuntimeError('max-DL feasible-ascent輸出低於同參數DL-off baseline reserved-capital floor')
     return final_order, out
 
 
@@ -1496,12 +1496,12 @@ def reorder_candidates_for_resource_aware_quality(
 ):
     """Apply the configured resource-aware quality selector before reservation.
 
-    Min ROOS always owns the exact cash-capped resource-bottleneck decision.
+    The same-parameter DL-off ordering owns the exact cash-capped resource baseline.
     Binary variants optimize PASS use only on cash-binding days.  The original
     continuous variant uses frozen event-level quality scores on those same days.
     The capital-preserving continuous variant may also act on slot-binding days,
-    but it must preserve Min ROOS selected-count and exact reserved capital.
-    The max-DL variant fixes the Min ROOS planned-order count and reserved-capital
+    but it must preserve the same-parameter DL-off selected-count and exact reserved capital.
+    The max-DL variant fixes the same-parameter DL-off planned-order count and reserved-capital
     floor, then lets frozen DL score own stock choice subject only to those hard
     resource constraints.  No selector introduces a numeric utilization threshold.
     """

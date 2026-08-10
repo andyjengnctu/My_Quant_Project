@@ -17365,6 +17365,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     model_app_path = project_root / "tools" / "filters" / "breakout_quality" / "application.py"
     orchestration_path = project_root / "filters" / "breakout_quality" / "strategy_comparison.py"
     preparation_path = project_root / "filters" / "breakout_quality" / "strategy_compare_preparation.py"
+    engine_path = project_root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
     export_service_path = project_root / "filters" / "breakout_quality" / "export_scores.py"
     param_service_path = project_root / "filters" / "breakout_quality" / "strategy_param_training.py"
     workflow_io_path = project_root / "filters" / "breakout_quality" / "workflow_io.py"
@@ -17378,6 +17379,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     model_app_source = model_app_path.read_text(encoding="utf-8")
     orchestration_source = orchestration_path.read_text(encoding="utf-8")
     preparation_source = preparation_path.read_text(encoding="utf-8")
+    strategy_compare_source = engine_path.read_text(encoding="utf-8")
     param_service_source = param_service_path.read_text(encoding="utf-8")
 
     from config import strategy_compare as strategy_config
@@ -17693,6 +17695,27 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             (param_source, rule_policy, off_arm.arm_id, on_arm.arm_id)
             for param_source, rule_policy, off_arm, on_arm in execution_pairs
         ),
+    )
+
+    portfolio_source = (
+        project_root / "core" / "portfolio_entries.py"
+    ).read_text(encoding="utf-8")
+    max_dl_source = portfolio_source.split("def _max_dl_execution_order", 1)[1]
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "max_dl_feasible_ascent_resource_floor_is_same_param_baseline_not_min_roos_specific",
+        True,
+        "same_param_exact_resource_baseline" in strategy_compare_source
+        and "canonical_same_param_exact_cash_cap_baseline" in strategy_compare_source
+        and "min_roos_exact_resource_baseline" not in strategy_compare_source
+        and "canonical_min_roos_exact_cash_cap_baseline" not in strategy_compare_source
+        and "同參數DL-off baseline" in max_dl_source
+        and "seed不符合Min ROOS資源契約" not in max_dl_source
+        and settings.arms["C30"].param_source == "full_roos"
+        and settings.arms["C31"].param_source == "full_roos"
+        and settings.arms["C30"].dl_runtime_mode
+        == settings.arms["C31"].dl_runtime_mode
+        == "resource-aware-continuous-max-dl-feasible-ascent",
     )
 
     a9_source = settings.dl_sources.get("A9")
@@ -19698,27 +19721,61 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         settings.arms["C24"], settings.arms["C25"],
         settings.arms["C27"], settings.arms["C28"],
     )
-    source = settings.dl_sources["CONT13A_PIT"]
-    active_contrasts = {
-        key for key, value in settings.contrasts.items() if value.enabled
-    }
+    selection_source = settings.dl_sources["CONT13A_PIT"]
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "stage3_c27_c28_change_only_daily_pit_source_under_frozen_c24_c25_selectors",
+        "stage3_selection_daily_pit_arm_definitions_remain_frozen_after_gate",
         (
-            True, True, "CONT13A_PIT", "CONT13A_PIT",
+            False, False, "CONT13A_PIT", "CONT13A_PIT",
             c24.param_source, c24.rule_policy, c24.dl_runtime_mode,
             c25.param_source, c25.rule_policy, c25.dl_runtime_mode,
             "selection_point_in_time", DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
-            {"C27-C24", "C28-C25", "C27-C23", "C28-C23", "C28-C27"},
         ),
         (
             c27.enabled, c28.enabled, c27.dl_id, c28.dl_id,
             c27.param_source, c27.rule_policy, c27.dl_runtime_mode,
             c28.param_source, c28.rule_policy, c28.dl_runtime_mode,
-            source.score_source, source.experiment_profile,
+            selection_source.score_source, selection_source.experiment_profile,
+        ),
+    )
+
+    c1, c3, c20, c29, c30, c31 = (
+        settings.arms["C1"], settings.arms["C3"], settings.arms["C20"],
+        settings.arms["C29"], settings.arms["C30"], settings.arms["C31"],
+    )
+    forward_source = settings.dl_sources["CONT13A"]
+    active_contrasts = {
+        key for key, value in settings.contrasts.items() if value.enabled
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "forward_oos_min_full_by_dl_source_matrix_freezes_feasible_ascent_and_daily_source",
+        (
+            {"C1", "C3", "C20", "C29", "C30", "C31"},
+            ("min_roos", "all_off", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
+            ("min_roos", "all_off", "CONT13A", "resource-aware-continuous-max-dl-feasible-ascent"),
+            ("full_roos", "formal", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
+            ("full_roos", "formal", "CONT13A", "resource-aware-continuous-max-dl-feasible-ascent"),
+            "continuous_ranker_oos", DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+            {"C20-C3", "C29-C3", "C29-C20", "C30-C1", "C31-C1", "C31-C30", "C1-C3", "C31-C29"},
+        ),
+        (
+            {arm.arm_id for arm in settings.enabled_arms},
+            (c20.param_source, c20.rule_policy, c20.dl_id, c20.dl_runtime_mode),
+            (c29.param_source, c29.rule_policy, c29.dl_id, c29.dl_runtime_mode),
+            (c30.param_source, c30.rule_policy, c30.dl_id, c30.dl_runtime_mode),
+            (c31.param_source, c31.rule_policy, c31.dl_id, c31.dl_runtime_mode),
+            forward_source.score_source, forward_source.experiment_profile,
             active_contrasts,
         ),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "forward_oos_matrix_uses_two_dl_off_baselines_and_auto_common_score_period",
+        True,
+        c1.enabled and not c1.dl_enabled and c1.param_source == "full_roos" and c1.rule_policy == "formal"
+        and c3.enabled and not c3.dl_enabled and c3.param_source == "min_roos" and c3.rule_policy == "all_off"
+        and settings.start_date is None and settings.end_date is None,
     )
 
     project_root = Path(__file__).resolve().parents[2]

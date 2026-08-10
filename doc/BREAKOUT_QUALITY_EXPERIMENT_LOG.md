@@ -7478,3 +7478,69 @@ Controlled contrasts：
 3. `MR-13A`：Selection strategy translation已PASS，但尚不得宣告正式取代`MR-12B / DL-CONT12B`；formal anchor promotion必須等Forward-OOS strategy Gate。
 4. 保留`DL-CONT13A`作MR-13A frozen Forward-OOS daily score source，保留`SR-C29`作C28語意凍結後的Forward-OOS candidate。Forward對照應只保留current五欄Min ROOS DL-off baseline與相同feasible-ascent selector的MR-12B arm，用來分離portfolio baseline與純DL source效果。
 5. 不再於Selection調feasible-ascent、stale cutoff、score cutoff、capital objective、fixed risk或模型；不得把C26的22-day guard帶進C29。下一個可執行工作是2021+ Forward-OOS controlled replay。
+
+## 2026-08-10 — MR-13A Forward-OOS strategy Gate：Min/Full × DL-off/MR-12B/MR-13A 六arm矩陣實作
+
+### 狀態
+
+`IMPLEMENTED / RESULT_PENDING / NO_FORWARD_OOS_RETUNING`。
+
+### 程式基準與研究動機
+
+- 程式基準：`test-branch-1_20260810_124927_509c6ca(2).zip`；SHA256=`a67d850fe07bda0037b33c61b330de1482c790a8229b638dbd063c9089e08fe9`。
+- Selection已證明`SR-C28 = current五欄Min ROOS + DL-CONT13A-PIT + feasible-ascent`通過策略Gate；同時current Min ROOS語意已修正為每fold只搜尋`high_len + atr_len + atr_buy_tol + atr_times_init + atr_times_trail`，不再是舊4-ATR／high_len凍結P2。
+- 使用者要求下一階段不再帶minimum-repair，改以已多次較佳且Selection已凍結的feasible-ascent，同時加入Full ROOS，用2×3矩陣驗證MR-13A優勢是否只存在Min ROOS，或能泛化到完整策略體系。
+
+### 六個正式arms
+
+| Arm | 參數／rules | DL source | Selector | 狀態 |
+|---|---|---|---|---|
+| `SR-C3` | current五欄Min ROOS／all-off | off | baseline | enabled baseline |
+| `SR-C1` | Full ROOS／formal | off | baseline | enabled baseline |
+| `SR-C20` | current五欄Min ROOS／all-off | `DL-CONT12B` | frozen feasible-ascent | current retest |
+| `SR-C29` | current五欄Min ROOS／all-off | `DL-CONT13A` | frozen feasible-ascent | new Forward-OOS candidate |
+| `SR-C30` | Full ROOS／formal | `DL-CONT12B` | frozen feasible-ascent | new Full comparator |
+| `SR-C31` | Full ROOS／formal | `DL-CONT13A` | frozen feasible-ascent | new Full candidate |
+
+`DL-CONT13A`直接重用已完成`MR-13A / PROFILE-daily_universal_no_time_pairwise` frozen Forward-OOS score；Strategy Compare不選模、不訓練模型，也不因本次矩陣改Target／loss／architecture／weights。
+
+### Resource contract泛化
+
+既有max-DL／feasible-ascent runtime演算法本身每次都先以當前pair的DL-off rows與params執行canonical exact-reservation baseline，但manifest／error wording仍稱為`Min ROOS baseline`。為避免Full arms形成「Full params + Min資源底線」的錯誤解讀，本輪把正式契約明確泛化為same-param baseline：
+
+- 每個`param_source/rule_policy` group只建立一個DL-off baseline。
+- `K = same-param baseline selected_count`。
+- `R0 = same-param baseline exact reserved capital`。
+- DL Top-K／minimum-repair seed／feasible-ascent只能在`selected_count == K`且`reserved_cost >= R0`的hard-feasible集合內改善continuous score。
+- basket內execution order沿用該same-param DL-off baseline rank；capital只作feasibility，不進DL objective。
+- Min arms因此使用Min ROOS自己的K/R0；Full arms使用Full ROOS自己的K/R0，禁止跨param source借用Min baseline。
+
+對應manifest文字改為`same_param_exact_resource_baseline`、`canonical_same_param_exact_cash_cap_baseline`等same-param語意；演算法、sizing、accounting與exact reservation公式不變。
+
+### 比較期間與controlled contrasts
+
+`STRATEGY_COMPARE_START_DATE/END_DATE`皆留空，由啟用的`DL-CONT12B`與`DL-CONT13A`正式Forward-OOS runtime coverage交集自動決定共同期間；不得把任一source較長尾端單獨算進source-only contrast。
+
+啟用contrasts：
+
+1. `C20-C3`：Min下MR-12B相對DL-off。
+2. `C29-C3`：Min下MR-13A相對DL-off。
+3. `C29-C20`：固定Min＋feasible-ascent的純DL source效果。
+4. `C30-C1`：Full下MR-12B相對DL-off。
+5. `C31-C1`：Full下MR-13A相對DL-off。
+6. `C31-C30`：固定Full＋feasible-ascent的純DL source效果。
+7. `C1-C3`：Full相對Min完整策略體系差異；不是單一參數／rule效果。
+8. `C31-C29`：固定MR-13A＋feasible-ascent下Full vs Min完整策略體系interaction；`direct_selection_delta_r`依既有contract不得跨param/rule universe相減。
+
+### 判定規則
+
+- 主要model/source Gate看`C29-C20`與`C31-C30`是否方向一致，並同時檢查Return、MDD、RoMD、Annual、EV、年度穩定性與same-param selection R。
+- `C29-C3`與`C31-C1`回答DL + selector是否能勝過同一策略體系DL-off baseline。
+- `C1-C3`與`C31-C29`只回答Min/Full完整體系interaction，不可解讀成Full optimizer或rule filters的純因果效果。
+- 本輪結果取得前不得依Forward-OOS調feasible-ascent、score cutoff、stale guard、capital objective、Min/Full search space或模型；`SR-C27` minimum-repair不回到本矩陣。
+
+### GPT獨立focused驗證
+
+- `validate_strategy_compare_config_driven_app_contract_case`：47 checks / 0 fail；新增same-param baseline與Full-row feasible-ascent contract。
+- `validate_breakout_quality_daily_pit_strategy_runtime_contract_case`：8 checks / 0 fail；保留Selection C27/C28 frozen identity，並驗證`DL-CONT13A` Forward-OOS source與六arm／八contrast矩陣。
+- 正式`apps/test_suite.py`未由GPT執行；仍須由使用者本地formal double check。

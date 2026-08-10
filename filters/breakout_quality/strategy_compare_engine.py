@@ -184,8 +184,8 @@ def _parse_args(argv=None):
             "只在盤前cash先成瓶頸時，以Binary PASS做first-improvement；"
             "resource-aware-binary-basket=相同資源Gate下每輪評估全部可行PASS promotion並採用最佳改善；"
             "resource-aware-continuous-capital-preserving=continuous score可跨cash/slot瓶頸介入，"
-            "但不得降低Min ROOS盤前選入數或exact reserved capital；"
-            "resource-aware-continuous-max-dl=固定Min ROOS預留單數與reserved-capital floor，"
+            "但不得降低同參數DL-off baseline盤前選入數或exact reserved capital；"
+            "resource-aware-continuous-max-dl=固定同參數DL-off baseline預留單數與reserved-capital floor，"
             "由continuous score主導Top-K並只在不合法時作deterministic minimum-repair；"
             "resource-aware-continuous-max-dl-feasible-ascent=相同K/R0與DL objective，"
             "在C17合法seed上持續做best-feasible single-swap DL改善直到1-swap local optimum；"
@@ -2961,7 +2961,7 @@ def run_comparison(
                 else ["resource_bottleneck_gate", "best_improvement_pass_basket", "existing_buy_sort"]
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
                 else [
-                    "min_roos_exact_resource_baseline",
+                    "same_param_exact_resource_baseline",
                     "fixed_baseline_order_count",
                     "continuous_score_top_k",
                     "deterministic_minimum_repair_seed",
@@ -2971,7 +2971,7 @@ def run_comparison(
                 ]
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
                 else [
-                    "min_roos_exact_resource_baseline",
+                    "same_param_exact_resource_baseline",
                     "fixed_baseline_order_count",
                     "continuous_score_top_k",
                     "deterministic_minimum_repair_seed",
@@ -2980,7 +2980,7 @@ def run_comparison(
                 ]
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
                 else [
-                    "min_roos_exact_resource_baseline",
+                    "same_param_exact_resource_baseline",
                     "fixed_baseline_order_count",
                     "continuous_score_top_k",
                     "deterministic_minimum_repair_if_needed",
@@ -2989,7 +2989,7 @@ def run_comparison(
                 ]
                 if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL
                 else [
-                    "min_roos_exact_resource_baseline",
+                    "same_param_exact_resource_baseline",
                     "continuous_score_desc",
                     "selected_count_not_below_baseline",
                     "reserved_capital_not_below_baseline",
@@ -3005,7 +3005,7 @@ def run_comparison(
         ),
         "capital_aware_ranking_contract": (
             {
-                "resource_gate": "canonical_min_roos_exact_cash_cap_baseline",
+                "resource_gate": "canonical_same_param_exact_cash_cap_baseline",
                 "dl_intervention": (
                     "all_days_with_feasible_alternative_baskets_under_fixed_baseline_order_count"
                     if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD}
@@ -3014,9 +3014,9 @@ def run_comparison(
                     else "only_when_baseline_stops_before_free_slots_with_unselected_candidates"
                 ),
                 "quality_objective": (
-                    "maximize_fixed_k_continuous_score_subject_to_min_roos_reserved_capital_floor"
+                    "maximize_fixed_k_continuous_score_subject_to_same_param_baseline_reserved_capital_floor"
                     if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT, BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD}
-                    else "maximize_selected_continuous_score_subject_to_min_roos_resource_floor"
+                    else "maximize_selected_continuous_score_subject_to_same_param_baseline_resource_floor"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING
                     else "maximize_selected_continuous_score_without_breaking_cash_binding"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
@@ -3045,11 +3045,11 @@ def run_comparison(
                     else "first_improving_pass_reserved_promotion"
                 ),
                 "fallback": (
-                    "stale_score_membership_change_blocked_to_min_roos_or_fresh_only_ascent"
+                    "stale_score_membership_change_blocked_to_same_param_baseline_or_fresh_only_ascent"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD
-                    else "c17_seed_may_use_canonical_min_roos_then_feasible_ascent_continues"
+                    else "minimum_repair_seed_may_use_same_param_baseline_then_feasible_ascent_continues"
                     if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT
-                    else "canonical_min_roos_order"
+                    else "canonical_same_param_baseline_order"
                 ),
                 "future_target_used": False,
                 "additional_numeric_thresholds": (

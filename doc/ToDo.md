@@ -12,6 +12,7 @@
 
 - stablity test
     - multi seeds test
+    - finalist_agree * multiple_seeds_best as baseline
 
 
 - system

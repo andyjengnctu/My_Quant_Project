@@ -22,15 +22,17 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 15
+STRATEGY_COMPARE_SCHEMA_VERSION = 16
 
 # =============================================================================
 # 1. 共用執行設定
 # =============================================================================
 
 STRATEGY_COMPARE_DATASET = "full"
-STRATEGY_COMPARE_START_DATE: str | None = "2014-01-01"
-STRATEGY_COMPARE_END_DATE: str | None = "2020-12-31"
+# Forward-OOS比較期間由所有啟用DL source的共同runtime coverage自動決定；
+# 不把任一模型較長的score尾端單獨算入source-only contrast。
+STRATEGY_COMPARE_START_DATE: str | None = None
+STRATEGY_COMPARE_END_DATE: str | None = None
 STRATEGY_COMPARE_PARAM_POLICY = "base-finalist-best"
 STRATEGY_COMPARE_MAX_POSITIONS = 10
 STRATEGY_COMPARE_ROTATION = "off"
@@ -270,6 +272,18 @@ STRATEGY_DL_SOURCES = {
         "description": "MR-12B all-event no-time pairwise ranker frozen OOS score；只允許受控strategy research replay",
         "forward_scores_builder": None,
     },
+    "CONT13A": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_no_time_pairwise",
+        "threshold": None,
+        "score_source": "continuous_ranker_oos",
+        "description": (
+            "MR-13A Daily Universal frozen Forward-OOS continuous score；"
+            "每個盤前決策使用最新已完成交易日資訊，供frozen strategy Gate"
+        ),
+        "forward_scores_builder": None,
+    },
     "CONT12C": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -327,9 +341,9 @@ STRATEGY_DL_SOURCES = {
 
 STRATEGY_COMPARE_ARMS = {
     "C1": {
-        "enabled": False,
+        "enabled": True,
         "name": "Full ROOS",
-        "description": "原正式基準",
+        "description": "Full optimizer rolling active params；DL-off baseline",
         "param_source": "full_roos",
         "rule_policy": "formal",
         "dl_enabled": False,
@@ -347,9 +361,9 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "hard-filter",
     },
     "C3": {
-        "enabled": False,
+        "enabled": True,
         "name": "Min ROOS",
-        "description": "rules全關、DL-off環境訓練的Min基準",
+        "description": "只搜尋high_len＋4個ATR；rules全關；DL-off baseline",
         "param_source": "min_roos",
         "rule_policy": "all_off",
         "dl_enabled": False,
@@ -521,8 +535,8 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl",
     },
     "C20": {
-        "enabled": False,
-        "name": "Min ROOS: MR-12B pairwise max-DL feasible-ascent",
+        "enabled": True,
+        "name": "Min ROOS: MR-12B feasible-ascent",
         "description": (
             "與C18使用完全相同K/R0、feasible-ascent與basket內Min ROOS執行順序；"
             "唯一模型差異為DL source改成MR-12B pairwise ranker"
@@ -560,7 +574,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
     "C23": {
-        "enabled": True,
+        "enabled": False,
         "name": "Selection Min ROOS PIT baseline",
         "description": (
             "2014～2020 historical P2 Min ROOS active params；rules全關；DL關閉；"
@@ -573,7 +587,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": None,
     },
     "C24": {
-        "enabled": True,
+        "enabled": False,
         "name": "Selection PIT: MR-12B minimum-repair",
         "description": (
             "與C23使用完全相同historical P2 Min ROOS params；"
@@ -586,7 +600,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl",
     },
     "C25": {
-        "enabled": True,
+        "enabled": False,
         "name": "Selection PIT: MR-12B feasible-ascent",
         "description": (
             "與C23使用完全相同historical P2 Min ROOS params；"
@@ -616,7 +630,7 @@ STRATEGY_COMPARE_ARMS = {
         },
     },
     "C27": {
-        "enabled": True,
+        "enabled": False,
         "name": "Selection PIT: MR-13A daily minimum-repair",
         "description": (
             "與C24使用完全相同historical P2 Min ROOS params、K/R0與minimum-repair selector；"
@@ -630,7 +644,7 @@ STRATEGY_COMPARE_ARMS = {
         "dl_runtime_mode": "resource-aware-continuous-max-dl",
     },
     "C28": {
-        "enabled": True,
+        "enabled": False,
         "name": "Selection PIT: MR-13A daily feasible-ascent",
         "description": (
             "與C25使用完全相同historical P2 Min ROOS params、K/R0與feasible-ascent selector；"
@@ -641,6 +655,45 @@ STRATEGY_COMPARE_ARMS = {
         "rule_policy": "all_off",
         "dl_enabled": True,
         "dl_id": "CONT13A_PIT",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
+    "C29": {
+        "enabled": True,
+        "name": "Min ROOS: MR-13A daily feasible-ascent",
+        "description": (
+            "與C20使用相同current Min ROOS、all-off rules與frozen feasible-ascent；"
+            "唯一DL source差異為MR-13A Daily Universal Forward-OOS score"
+        ),
+        "param_source": "min_roos",
+        "rule_policy": "all_off",
+        "dl_enabled": True,
+        "dl_id": "CONT13A",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
+    "C30": {
+        "enabled": True,
+        "name": "Full ROOS: MR-12B feasible-ascent",
+        "description": (
+            "與C1使用相同Full ROOS active params與formal rules；"
+            "feasible-ascent的K/R0由同參數DL-off baseline逐日建立，DL source為MR-12B"
+        ),
+        "param_source": "full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": True,
+        "dl_id": "CONT12B",
+        "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
+    },
+    "C31": {
+        "enabled": True,
+        "name": "Full ROOS: MR-13A daily feasible-ascent",
+        "description": (
+            "與C30使用相同Full ROOS active params、formal rules及frozen feasible-ascent；"
+            "唯一DL source差異為MR-13A Daily Universal Forward-OOS score"
+        ),
+        "param_source": "full_roos",
+        "rule_policy": "formal",
+        "dl_enabled": True,
+        "dl_id": "CONT13A",
         "dl_runtime_mode": "resource-aware-continuous-max-dl-feasible-ascent",
     },
 }
@@ -672,17 +725,24 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C20-C18": {"enabled": False, "left": "C20", "right": "C18", "description": "固定C18 selector下MR-12B pairwise相對MR-12A MSE的純DL模型效果"},
     "C20-C19": {"enabled": False, "left": "C20", "right": "C19", "description": "同一MR-12B source下C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
     "C19-C3": {"enabled": False, "left": "C19", "right": "C3", "description": "MR-12B在C17 selector下相對Min ROOS研究基準"},
-    "C20-C3": {"enabled": False, "left": "C20", "right": "C3", "description": "MR-12B在C18 selector下相對Min ROOS研究基準"},
+    "C20-C3": {"enabled": True, "left": "C20", "right": "C3", "description": "current Min ROOS下MR-12B feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
     "C24-C23": {"enabled": False, "left": "C24", "right": "C23", "description": "Selection PIT下固定historical Min ROOS與C17 selector，MR-12B PIT ranking相對DL-off baseline的經濟效果"},
     "C25-C23": {"enabled": False, "left": "C25", "right": "C23", "description": "Selection PIT下固定historical Min ROOS與C18 selector，MR-12B PIT ranking相對DL-off baseline的經濟效果"},
     "C26-C25": {"enabled": False, "left": "C26", "right": "C25", "description": "Selection PIT MR-12B feasible-ascent固定其餘條件下，stale-score membership guard的純runtime效果"},
     "C26-C23": {"enabled": False, "left": "C26", "right": "C23", "description": "Selection PIT下固定historical Min ROOS，MR-12B feasible-ascent加stale-score membership guard相對DL-off baseline的經濟效果"},
     "C25-C24": {"enabled": False, "left": "C25", "right": "C24", "description": "Selection PIT MR-12B固定score source下，C18 feasible-ascent相對C17 minimum-repair的selector轉化效果"},
-    "C27-C24": {"enabled": True, "left": "C27", "right": "C24", "description": "固定historical Min ROOS與minimum-repair selector，MR-13A daily PIT相對MR-12B event PIT的純DL source效果"},
-    "C28-C25": {"enabled": True, "left": "C28", "right": "C25", "description": "固定historical Min ROOS與feasible-ascent selector，MR-13A daily PIT相對MR-12B event PIT的純DL source效果"},
-    "C27-C23": {"enabled": True, "left": "C27", "right": "C23", "description": "Selection PIT下MR-13A daily minimum-repair相對DL-off historical Min ROOS baseline的策略經濟效果"},
-    "C28-C23": {"enabled": True, "left": "C28", "right": "C23", "description": "Selection PIT下MR-13A daily feasible-ascent相對DL-off historical Min ROOS baseline的策略經濟效果"},
-    "C28-C27": {"enabled": True, "left": "C28", "right": "C27", "description": "同一MR-13A daily PIT source下，feasible-ascent相對minimum-repair的selector轉化效果"},
+    "C27-C24": {"enabled": False, "left": "C27", "right": "C24", "description": "固定historical Min ROOS與minimum-repair selector，MR-13A daily PIT相對MR-12B event PIT的純DL source效果"},
+    "C28-C25": {"enabled": False, "left": "C28", "right": "C25", "description": "固定historical Min ROOS與feasible-ascent selector，MR-13A daily PIT相對MR-12B event PIT的純DL source效果"},
+    "C27-C23": {"enabled": False, "left": "C27", "right": "C23", "description": "Selection PIT下MR-13A daily minimum-repair相對DL-off historical Min ROOS baseline的策略經濟效果"},
+    "C28-C23": {"enabled": False, "left": "C28", "right": "C23", "description": "Selection PIT下MR-13A daily feasible-ascent相對DL-off historical Min ROOS baseline的策略經濟效果"},
+    "C28-C27": {"enabled": False, "left": "C28", "right": "C27", "description": "同一MR-13A daily PIT source下，feasible-ascent相對minimum-repair的selector轉化效果"},
+    "C29-C3": {"enabled": True, "left": "C29", "right": "C3", "description": "current Min ROOS下MR-13A daily feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
+    "C29-C20": {"enabled": True, "left": "C29", "right": "C20", "description": "固定current Min ROOS與feasible-ascent，MR-13A daily相對MR-12B event source的純DL Forward-OOS效果"},
+    "C30-C1": {"enabled": True, "left": "C30", "right": "C1", "description": "Full ROOS下MR-12B feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
+    "C31-C1": {"enabled": True, "left": "C31", "right": "C1", "description": "Full ROOS下MR-13A daily feasible-ascent相對DL-off baseline的Forward-OOS策略效果"},
+    "C31-C30": {"enabled": True, "left": "C31", "right": "C30", "description": "固定Full ROOS與feasible-ascent，MR-13A daily相對MR-12B event source的純DL Forward-OOS效果"},
+    "C1-C3": {"enabled": True, "left": "C1", "right": "C3", "description": "Full ROOS相對current Min ROOS的完整策略體系差異；不是單一參數效果"},
+    "C31-C29": {"enabled": True, "left": "C31", "right": "C29", "description": "固定MR-13A daily與feasible-ascent下，Full ROOS相對Min ROOS的完整策略體系interaction"},
     "C12-C11": {"enabled": False, "left": "C12", "right": "C11", "description": "Best-improvement相對first-improvement改善"},
     "C11-C8": {"enabled": False, "left": "C11", "right": "C8", "description": "Resource-aware相對A9 hard-filter改善"},
     "C2-C1": {"enabled": False, "left": "C2", "right": "C1", "description": "Full ROOS下TP1 runtime效果"},
