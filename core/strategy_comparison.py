@@ -561,14 +561,18 @@ def validate_strategy_comparison_settings(settings: StrategyComparisonSettings) 
         if not isinstance(on_arms, dict):
             raise TypeError("strategy comparison group on-arm contract錯誤")
         enabled_on = [arm for arm in on_arms.values() if arm.enabled]
-        if not isinstance(off_arm, StrategyComparisonArm) or not off_arm.enabled:
+        if enabled_on and (
+            not isinstance(off_arm, StrategyComparisonArm) or not off_arm.enabled
+        ):
             raise ValueError(
                 "啟用的DL模型比較必須共用一個已啟用DL-off基準: "
                 f"{group_key}"
             )
-        if not enabled_on:
+        if not enabled_on and (
+            not isinstance(off_arm, StrategyComparisonArm) or not off_arm.enabled
+        ):
             raise ValueError(
-                "啟用的DL-off基準至少需要一個已啟用DL-on比較對象: "
+                "啟用比較群組必須至少包含一個DL-off baseline: "
                 f"{group_key}"
             )
 

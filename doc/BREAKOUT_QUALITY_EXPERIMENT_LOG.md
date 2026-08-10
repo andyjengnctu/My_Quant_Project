@@ -7620,3 +7620,54 @@ MR-13A architecture、daily sample universe、target、RankNet loss、selected e
 - 模型前置resolver改為跨所有Strategy Compare profiles去重解析依賴，因此模型工作類型可一次準備Selection PIT與Forward-OOS所需sources；Strategy Compare本身仍不得訓練模型權重。
 - 為避免profile拆分後遺失既有C23/C25/C28與其他已完成pair cache，兩profile由config宣告唯讀`reuse_output_roots=("outputs/strategy_compare",)`；pair cache與historical P2 recovery可掃描legacy runs，但新run／latest只寫入各自profile root，因此舊工件可重用而未來Selection/Forward結果不再互相覆寫。
 - 直接isolated builder驗證：`PARAM-P4`第一次建立會執行一次7-fold Full outer rolling；相同identity第二次直接REUSE，effective dates=`2014-01-01 ... 2020-01-01`，artifact stamp=`selection_full_roos_training / P4_HISTORY`。
+
+## 2026-08-10 — Selection／Forward結果反轉後縮減為四arm核心比較
+
+### 狀態
+
+`CONFIG_REDUCTION / STANDALONE_FULL_BASELINE_SUPPORTED / MR13A_ITERATIVE_RESEARCH_FOCUS / HISTORICAL_FULL_DL_ARMS_PRESERVED`。
+
+### 程式基準與研究結果
+
+- 輸入基準：`test-branch-1_20260810_170110_ba0a90b.zip`；SHA256=`7464b0e2d63d80df597c75f3887931b01b9f336e4682eeb80b5c65d17dbc491d`。
+- Selection 2014-01-01～2020-12-31：C23 Min baseline Return=107.98%、RoMD=5.25；C25 Min+MR-12B=101.55%/5.17；C28 Min+MR-13A=151.88%/8.05；C32 Full baseline=132.25%/8.34。歷史Full+DL結果C33=146.25%/7.73、C34=167.12%/9.06永久保留。
+- Forward-OOS 2021-01-01～2025-12-22：C1 Full=123.26%/RoMD7.08；C3 Min=86.21%/6.57；C20 Min+MR-12B=172.40%/9.20；C29 Min+MR-13A=71.86%/4.57。C29-C20純DL source Return=-100.54pp、RoMD=-4.62、EV=-0.62R、same-param selection R=-204.13R。歷史Full+DL結果C30=133.21%/7.43、C31=122.00%/7.53永久保留。
+- Selection支持MR-13A而Forward-OOS明顯反轉，因此MR-13A不升級；使用者仍要持續改善MR-13A，current comparison改聚焦同一Min universe下MR-12B vs MR-13A的純source差異，Full只保留完整策略體系DL-off baseline。
+
+### Current Strategy Compare profiles
+
+Selection PIT active arms縮減為：
+
+1. `C32` Selection Full ROOS DL-off baseline。
+2. `C23` Selection Min ROOS DL-off baseline。
+3. `C25` Selection Min + MR-12B feasible-ascent。
+4. `C28` Selection Min + MR-13A feasible-ascent。
+
+Selection active contrasts固定為`C32-C23 / C25-C23 / C28-C23 / C28-C25`。
+
+Forward-OOS active arms縮減為：
+
+1. `C1` Full ROOS DL-off baseline。
+2. `C3` Min ROOS DL-off baseline。
+3. `C20` Min + MR-12B feasible-ascent。
+4. `C29` Min + MR-13A feasible-ascent。
+
+Forward active contrasts固定為`C1-C3 / C20-C3 / C29-C3 / C29-C20`。
+
+`C33/C34/C30/C31`不刪除、不改ID、不覆寫結果；只從current profile移除，仍可由Registry與legacy cache重現歷史Full+DL結果。
+
+### Standalone baseline infrastructure
+
+舊Strategy Compare engine假設每個啟用的DL-off `param_source/rule_policy` group都至少要有一個DL-on arm，因此單獨保留Full ROOS baseline會被config validator拒絕。此假設不是科學契約，只是舊controlled-pair orchestration限制。
+
+本輪泛化為：
+
+- DL-on arm仍必須存在同group DL-off baseline。
+- DL-off arm可以作standalone comparator，不要求為了engine schema而暗中啟用DL-on arm。
+- standalone baseline仍使用同一canonical replay、param/rule policy、accounting與baseline artifact schema；可從profile或legacy compatible pair重用已驗證的`no_filter` baseline，否則只執行DL-off replay一次。
+- standalone baseline輸出仍包含`strategy_comparison.md/json`、年度報酬、equity、trades、capacity、orderable與selected artifacts，可直接進四arm彙總報表。
+- 此改動只放寬orchestration topology，不改Full/Min params、MR-12B/MR-13A score、feasible-ascent、K/R0、Target、loss或策略accounting，不新增scientific ID。
+
+### 研究邊界
+
+2021～2025 Forward-OOS已被用來判斷MR-13A失敗並形成後續改善假說，因此後續MR-13*可將它當`iterative research OOS evidence`比較泛化，但loss weight、sampling比例、epoch selection或其他超參數仍只能由Train/Validation/Selection決定；不得用該Forward期間直接挑數值。Current四arm設計的目的就是降低比較維度，持續保留Full/Min策略基準，同時把MR-13A改善的主要source Gate固定在`C28-C25`與`C29-C20`。

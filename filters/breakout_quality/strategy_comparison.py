@@ -46,6 +46,7 @@ from filters.breakout_quality.strategy_compare_engine import (
     materialize_strategy_pair_readable_report,
     render_strategy_pair_simple_report,
     run_comparison,
+    run_standalone_baseline,
 )
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
@@ -603,6 +604,18 @@ def _collect_replay_cache_status(
                         "source_pair_dir": entry["source_pair_dir"],
                     },
                 )
+        for off_arm in _standalone_baseline_arms(settings):
+            source_pair_dir = _find_reusable_baseline_source(
+                root=root, settings=settings, status=status, off_arm=off_arm
+            )
+            if source_pair_dir is not None:
+                baseline_groups.setdefault(
+                    f"{off_arm.param_source}::{off_arm.rule_policy}",
+                    {
+                        "off_arm_id": off_arm.arm_id,
+                        "source_pair_dir": source_pair_dir,
+                    },
+                )
     return {
         "pairs": pairs,
         "baseline_groups": baseline_groups,
@@ -1046,13 +1059,124 @@ def _execution_pairs(
                 f"{param_source}/{rule_policy}"
             )
         if not on_arms:
-            raise ValueError(
-                "啟用比較群組至少需要一個DL-on arm: "
-                f"{param_source}/{rule_policy}"
-            )
+            # Standalone DL-off comparator由run_standalone_baseline處理；
+            # 不需要為了engine pair contract而保留無研究價值的DL-on arm。
+            continue
         for on_arm in on_arms:
             pairs.append((param_source, rule_policy, off_arm, on_arm))
     return tuple(pairs)
+
+
+def _standalone_baseline_arms(
+    settings: StrategyComparisonSettings,
+) -> tuple[StrategyComparisonArm, ...]:
+    enabled = tuple(settings.enabled_arms)
+    output: list[StrategyComparisonArm] = []
+    for arm in enabled:
+        if arm.dl_enabled:
+            continue
+        has_enabled_on = any(
+            other.dl_enabled
+            and other.param_source == arm.param_source
+            and other.rule_policy == arm.rule_policy
+            for other in enabled
+        )
+        if not has_enabled_on:
+            output.append(arm)
+    return tuple(output)
+
+
+def _standalone_baseline_group_id(arm: StrategyComparisonArm) -> str:
+    return f"{arm.param_source}__{arm.rule_policy}__dl_off_baseline"
+
+
+def _find_reusable_baseline_source(
+    *,
+    root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    off_arm: StrategyComparisonArm,
+) -> Path | None:
+    if not settings.preparation.reuse_completed_results:
+        return None
+    comparison_period = dict(status.get("comparison_period") or {})
+    if not comparison_period:
+        return None
+    param_identity = dict(
+        (status.get("artifact_identities") or {}).get(
+            f"param:{off_arm.param_source}"
+        )
+        or {}
+    )
+    expected_param_sha = _artifact_identity_sha(param_identity)
+    if not expected_param_sha:
+        return None
+    all_off = off_arm.rule_policy == "all_off"
+    expected = {
+        "dataset": settings.dataset,
+        "params_file_sha256": expected_param_sha,
+        "requested_param_policy": settings.param_policy,
+        "optional_entry_filter_policy": (
+            OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
+            if all_off
+            else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+        ),
+        "shared_param_overrides": (
+            dict(ALL_RULE_FILTERS_OFF_OVERRIDES) if all_off else {}
+        ),
+        "max_positions": int(settings.max_positions),
+        "enable_rotation": settings.rotation == "on",
+        "comparison_period": comparison_period,
+    }
+    run_dirs = sorted(
+        (
+            path
+            for runs_root in _comparison_runs_roots(root=root, settings=settings)
+            if runs_root.is_dir()
+            for path in runs_root.iterdir()
+            if path.is_dir()
+        ),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    required_names = (
+        "strategy_comparison.json",
+        "strategy_comparison.md",
+        "yearly_returns_comparison.csv",
+        "no_filter_equity.csv",
+        "no_filter_trades.csv",
+        "no_filter_daily_capacity.csv",
+        "no_filter_orderable_candidates.csv",
+    )
+    for run_dir in run_dirs:
+        pairs_root = run_dir / "pairs"
+        if not pairs_root.is_dir():
+            continue
+        for pair_dir in sorted(
+            (path for path in pairs_root.iterdir() if path.is_dir()),
+            key=lambda path: path.name,
+        ):
+            payload = _read_json(pair_dir / "strategy_comparison.json")
+            if not isinstance(payload, dict) or not dict(payload.get("no_filter") or {}):
+                continue
+            metadata = dict(payload.get("metadata") or {})
+            actual = {
+                "dataset": str(metadata.get("dataset") or ""),
+                "params_file_sha256": str(metadata.get("params_file_sha256") or ""),
+                "requested_param_policy": str(metadata.get("requested_param_policy") or ""),
+                "optional_entry_filter_policy": str(
+                    metadata.get("optional_entry_filter_policy") or ""
+                ),
+                "shared_param_overrides": dict(metadata.get("shared_param_overrides") or {}),
+                "max_positions": int(metadata.get("max_positions") or 0),
+                "enable_rotation": bool(metadata.get("enable_rotation")),
+                "comparison_period": dict(metadata.get("comparison_period") or {}),
+            }
+            if actual != expected:
+                continue
+            if all((pair_dir / name).is_file() for name in required_names):
+                return pair_dir
+    return None
 
 
 def _assert_same_shared_baseline(
@@ -1126,6 +1250,8 @@ def _scenario_payloads(
                     baseline,
                     arm_id=off_arm.arm_id,
                 )
+        if on_arm is None:
+            continue
         if on_arm.arm_id in enabled_ids:
             runtime_spec = _arm_runtime_spec(on_arm)
             output[on_arm.arm_id] = {
@@ -1402,7 +1528,7 @@ def _yearly_table(
                         )
                 else:
                     by_id[off_arm.arm_id][year] = value
-            if on_arm.arm_id in by_id:
+            if on_arm is not None and on_arm.arm_id in by_id:
                 runtime_spec = _arm_runtime_spec(on_arm)
                 by_id[on_arm.arm_id][year] = row.get(runtime_spec["yearly_key"])
     years = sorted({year for values in by_id.values() for year in values})
@@ -1591,6 +1717,59 @@ def run_strategy_comparison(
         for group_key, row in cached_baseline_groups.items()
         if isinstance(row, dict) and row.get("source_pair_dir")
     }
+
+    for off_arm in _standalone_baseline_arms(settings):
+        group_key = f"{off_arm.param_source}::{off_arm.rule_policy}"
+        group_id = _standalone_baseline_group_id(off_arm)
+        pair_dir = run_dir / "pairs" / group_id
+        baseline_reuse_source = (
+            baseline_sources.get(group_key)
+            if settings.preparation.reuse_shared_baseline
+            else None
+        )
+        all_off = off_arm.rule_policy == "all_off"
+        baseline_payload = run_standalone_baseline(
+            project_root=root,
+            dataset=settings.dataset,
+            params_path=str(status["resolved_parameter_paths"][off_arm.param_source]),
+            param_policy=settings.param_policy,
+            max_positions=settings.max_positions,
+            enable_rotation=settings.rotation == "on",
+            optional_entry_filter_policy=(
+                OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF
+                if all_off
+                else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+            ),
+            output_dir_override=pair_dir,
+            comparison_start_date=comparison_start,
+            comparison_end_date=comparison_end,
+            quiet=quiet,
+            shared_param_overrides=(
+                ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None
+            ),
+            baseline_reuse_dir=baseline_reuse_source,
+        )
+        pair_payloads[group_id] = {
+            "arm_contract": (
+                off_arm.param_source, off_arm.rule_policy, off_arm, None
+            ),
+            "payload": baseline_payload,
+        }
+        pair_execution[off_arm.arm_id] = {
+            "action": "REUSE" if baseline_reuse_source is not None else "RUN",
+            "source_pair_dir": (
+                None
+                if baseline_reuse_source is None
+                else project_relative_display_path(
+                    baseline_reuse_source, project_root=root
+                )
+            ),
+            "current_pair_dir": project_relative_display_path(
+                pair_dir, project_root=root
+            ),
+            "standalone_dl_off_baseline": True,
+        }
+        baseline_sources[group_key] = pair_dir
 
     for param_source, rule_policy, off_arm, on_arm in _execution_pairs(settings):
         if not on_arm.dl_id:

@@ -22,7 +22,7 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
 )
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 17
+STRATEGY_COMPARE_SCHEMA_VERSION = 18
 
 # =============================================================================
 # 1. 共用執行設定
@@ -40,30 +40,28 @@ STRATEGY_COMPARE_DEFAULT_PROFILE = "forward_oos"
 STRATEGY_COMPARE_PROFILES = {
     "selection_pit": {
         "label": "Selection PIT 策略比較",
-        "description": "2014～2020 point-in-time策略轉化Gate；重用既有Selection PIT模型工件。",
+        "description": "2014～2020 point-in-time策略轉化Gate；核心比較固定為Full／Min baseline與Min MR-12B／MR-13A。",
         "start_date": "2014-01-01",
         "end_date": "2020-12-31",
         "output_root": "outputs/strategy_compare/selection_pit",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C23", "C25", "C28", "C32", "C33", "C34"),
+        "arm_ids": ("C32", "C23", "C25", "C28"),
         "contrast_ids": (
+            "C32-C23",
             "C25-C23", "C28-C23", "C28-C25",
-            "C33-C32", "C34-C32", "C34-C33",
-            "C32-C23", "C34-C28",
         ),
     },
     "forward_oos": {
         "label": "Forward-OOS 策略比較",
-        "description": "2021+ frozen Forward-OOS策略Gate；共同期間由啟用DL source coverage交集決定。",
+        "description": "2021+ frozen Forward-OOS策略Gate；核心比較固定為Full／Min baseline與Min MR-12B／MR-13A。",
         "start_date": None,
         "end_date": None,
         "output_root": "outputs/strategy_compare/forward_oos",
         "reuse_output_roots": ("outputs/strategy_compare",),
-        "arm_ids": ("C1", "C3", "C20", "C29", "C30", "C31"),
+        "arm_ids": ("C1", "C3", "C20", "C29"),
         "contrast_ids": (
+            "C1-C3",
             "C20-C3", "C29-C3", "C29-C20",
-            "C30-C1", "C31-C1", "C31-C30",
-            "C1-C3", "C31-C29",
         ),
     },
 }
@@ -957,6 +955,7 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
         )
         for dl_id, raw in STRATEGY_DL_SOURCES.items()
     }
+    ordered_arm_ids = tuple(dict.fromkeys((*profile_arm_ids, *STRATEGY_COMPARE_ARMS.keys())))
     arms = {
         arm_id: StrategyComparisonArm(
             arm_id=arm_id,
@@ -978,8 +977,10 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
                 else dict(raw.get("dl_runtime_options") or {})
             ),
         )
-        for arm_id, raw in STRATEGY_COMPARE_ARMS.items()
+        for arm_id in ordered_arm_ids
+        for raw in (STRATEGY_COMPARE_ARMS[arm_id],)
     }
+    ordered_contrast_ids = tuple(dict.fromkeys((*profile_contrast_ids, *STRATEGY_COMPARE_CONTRASTS.keys())))
     contrasts = {
         contrast_id: StrategyComparisonContrast(
             contrast_id=contrast_id,
@@ -988,7 +989,8 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
             right=str(raw.get("right") or "").strip(),
             description=str(raw.get("description") or "").strip(),
         )
-        for contrast_id, raw in STRATEGY_COMPARE_CONTRASTS.items()
+        for contrast_id in ordered_contrast_ids
+        for raw in (STRATEGY_COMPARE_CONTRASTS[contrast_id],)
     }
     settings = StrategyComparisonSettings(
         schema_version=int(STRATEGY_COMPARE_SCHEMA_VERSION),

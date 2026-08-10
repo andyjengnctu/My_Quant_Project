@@ -2381,6 +2381,312 @@ def _load_reusable_no_filter_baseline(
     return baseline_payload, baseline_summary, orderable
 
 
+
+def _standalone_baseline_report(payload: dict[str, Any], *, markdown: bool) -> str:
+    metadata = dict(payload.get("metadata") or {})
+    baseline = dict(payload.get("no_filter") or {})
+    yearly = pd.DataFrame(list(payload.get("yearly") or []))
+    if not metadata or not baseline:
+        raise ValueError("standalone baseline payload缺少metadata／no_filter")
+    period = dict(metadata.get("comparison_period") or {})
+    params_path = project_relative_display_path(
+        metadata.get("params_path", "-"), project_root=PROJECT_ROOT
+    )
+    metric_rows = [
+        ("淨總報酬", _format_metric(baseline.get("total_return_pct"), digits=2, unit="%")),
+        ("最大回撤", _format_metric(baseline.get("max_drawdown_pct"), digits=2, unit="%")),
+        ("報酬／最大回撤", _format_metric(baseline.get("return_over_max_drawdown"), digits=2)),
+        ("年化報酬", _format_metric(baseline.get("annual_return_pct"), digits=2, unit="%")),
+        ("Log R²", _format_metric(baseline.get("log_r_squared"), digits=4)),
+        ("月勝率", _format_metric(baseline.get("monthly_win_rate_pct"), digits=2, unit="%")),
+        ("交易數", _format_metric(baseline.get("trade_count"), digits=0)),
+        ("EV", _format_metric(baseline.get("expected_value_r"), digits=2, unit=" R")),
+        ("平均曝險", _format_metric(baseline.get("avg_exposure_pct"), digits=2, unit="%")),
+    ]
+    yearly_rows = []
+    if not yearly.empty:
+        for row in yearly.to_dict("records"):
+            yearly_rows.append((
+                int(row["year"]),
+                _format_metric(row.get("no_filter_return_pct"), digits=2, unit="%"),
+                "是" if row.get("is_full_year") else "否",
+            ))
+    if markdown:
+        lines = [
+            "# Strategy Compare DL-off 基準回放",
+            "",
+            f"- 期間：`{period.get('start', '')}` ～ `{period.get('end', '')}`",
+            f"- 參數檔：`{params_path}`",
+            f"- 參數型態：`{metadata.get('param_source_kind', '-')}`",
+            f"- 參數 selector：`{metadata.get('param_selector', '-')}`",
+            f"- Optional entry filters：`{metadata.get('optional_entry_filter_policy', '-')}`",
+            f"- 歷史 active-param 無前視：`{metadata.get('lookahead_safe_active_param_schedule', '-')}`",
+            "",
+            "## 主要結果",
+            "",
+            "| 指標 | Baseline |",
+            "|---|---:|",
+            *[f"| {label} | {value} |" for label, value in metric_rows],
+            "",
+            "## 年度報酬",
+            "",
+            "| 年度 | Baseline | 完整年度 |",
+            "|---:|---:|:---:|",
+            *[f"| {year} | {value} | {full} |" for year, value, full in yearly_rows],
+            "",
+            "此工件只建立同參數／規則體系的DL-off baseline，不使用任何DL score。",
+        ]
+        return "\n".join(lines).rstrip() + "\n"
+    return "\n\n".join((
+        render_title("Strategy Compare DL-off 基準回放"),
+        render_key_values((
+            ("期間", f"{period.get('start', '')} ～ {period.get('end', '')}"),
+            ("參數檔", params_path),
+            ("參數型態", metadata.get("param_source_kind", "-")),
+            ("參數 selector", metadata.get("param_selector", "-")),
+            ("Optional entry filters", metadata.get("optional_entry_filter_policy", "-")),
+            ("歷史 active-param 無前視", metadata.get("lookahead_safe_active_param_schedule", "-")),
+        )),
+        render_section("主要結果", number=1),
+        render_table(("指標", "Baseline"), metric_rows, alignments=("left", "right")),
+        render_section("年度報酬", number=2),
+        render_table(("年度", "Baseline", "完整年度"), yearly_rows, alignments=("right", "right", "center"))
+        if yearly_rows else "無年度資料。",
+    ))
+
+
+def run_standalone_baseline(
+    *,
+    project_root=PROJECT_ROOT,
+    dataset="full",
+    params_path=None,
+    param_policy=PARAM_POLICY_AUTO,
+    max_positions=10,
+    enable_rotation=False,
+    optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+    output_dir_override=None,
+    comparison_start_date=None,
+    comparison_end_date=None,
+    quiet=False,
+    shared_param_overrides=None,
+    baseline_reuse_dir=None,
+):
+    """Run or rehydrate one canonical DL-off strategy baseline.
+
+    Standalone baselines let Strategy Compare keep a benchmark arm even when no
+    DL-on arm is enabled for the same parameter/rule group.  The replay uses the
+    exact same no-filter parameter construction and portfolio engine as a normal
+    controlled pair, and emits the same baseline artifacts so future pairs may
+    reuse it without rerunning the portfolio simulation.
+    """
+
+    root = Path(project_root).resolve()
+    optional_entry_filter_policy = str(optional_entry_filter_policy).strip()
+    if optional_entry_filter_policy not in SUPPORTED_OPTIONAL_ENTRY_FILTER_POLICIES:
+        raise ValueError(
+            f"不支援的 optional entry filter policy: {optional_entry_filter_policy!r}"
+        )
+    if (comparison_start_date is None) != (comparison_end_date is None):
+        raise ValueError("comparison_start_date與comparison_end_date必須同時提供")
+    if comparison_start_date is None:
+        raise ValueError("standalone baseline必須由Strategy Compare提供共同comparison period")
+    start_date = pd.Timestamp(str(comparison_start_date)).normalize().strftime("%Y-%m-%d")
+    end_date = pd.Timestamp(str(comparison_end_date)).normalize().strftime("%Y-%m-%d")
+    if pd.Timestamp(end_date) < pd.Timestamp(start_date):
+        raise ValueError("standalone baseline比較期間不合法")
+
+    param_policy = str(param_policy)
+    resolved_params_path = _resolve_params_path(
+        root=root,
+        params_path=params_path,
+        param_policy=param_policy,
+        allow_static_diagnostic=False,
+        score_source=SCORE_SOURCE_CANONICAL_RUNTIME,
+    )
+    if not resolved_params_path.is_file():
+        raise FileNotFoundError(f"找不到策略比較參數檔: {resolved_params_path}")
+    param_source = _load_param_source(resolved_params_path)
+    param_policy_contract = _validate_requested_param_policy(param_source, param_policy)
+    (
+        param_source_kind,
+        no_filter_params,
+        _quality_params,
+        no_filter_param_payload,
+        _quality_param_payload,
+        ensemble_policy,
+    ) = _build_controlled_param_source_pair(
+        param_source,
+        filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
+        threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
+        fixed_risk=None,
+        max_position_cap_pct=None,
+        comparison_mode=COMPARISON_MODE_SCORE_RANKING,
+        optional_entry_filter_policy=optional_entry_filter_policy,
+        shared_param_overrides=shared_param_overrides,
+    )
+    is_rolling_source = param_source_kind in {
+        "rolling_oos_param_schedule", "rolling_active_param_ensemble"
+    }
+    if not is_rolling_source:
+        raise ValueError("standalone baseline正式比較只接受rolling active-param工件")
+    if param_source_kind == "rolling_oos_param_schedule":
+        param_start, param_end = get_active_param_date_range(param_source["payload"])
+    else:
+        param_start, param_end = get_active_param_ensemble_date_range(param_source["payload"])
+    if (
+        pd.Timestamp(param_start) > pd.Timestamp(start_date)
+        or pd.Timestamp(param_end) < pd.Timestamp(end_date)
+    ):
+        raise ValueError(
+            "rolling active-param期間未完整覆蓋standalone baseline："
+            f"params={param_start}~{param_end}, comparison={start_date}~{end_date}"
+        )
+
+    data_dir = Path(get_dataset_dir(str(root), dataset)).resolve()
+    replay_counts: dict[str, Any] | None = {}
+    baseline_summary_override = None
+    baseline_orderable_reused = None
+    if baseline_reuse_dir is not None:
+        baseline_payload, baseline_summary_override, baseline_orderable_reused = (
+            _load_reusable_no_filter_baseline(
+                Path(baseline_reuse_dir),
+                comparison_mode=COMPARISON_MODE_SCORE_RANKING,
+                expected_dataset=dataset,
+                expected_params_sha256=_sha256_file(resolved_params_path),
+                expected_param_policy=param_policy,
+                expected_optional_entry_filter_policy=optional_entry_filter_policy,
+                expected_shared_param_overrides=dict(shared_param_overrides or {}),
+                expected_max_positions=max_positions,
+                expected_enable_rotation=enable_rotation,
+                expected_start_date=start_date,
+                expected_end_date=end_date,
+            )
+        )
+        replay_counts = None
+        if not quiet:
+            print(
+                "[baseline] 重用既有正式DL-off replay："
+                + project_relative_display_path(
+                    Path(baseline_reuse_dir).resolve(), project_root=root
+                )
+            )
+    else:
+        baseline_payload = _run_scenario(
+            name="baseline",
+            data_dir=data_dir,
+            param_source_kind=param_source_kind,
+            params=no_filter_params,
+            start_date=start_date,
+            end_date=end_date,
+            max_positions=max_positions,
+            enable_rotation=enable_rotation,
+            quiet=quiet,
+            replay_counts=replay_counts,
+        )
+
+    baseline = (
+        dict(baseline_summary_override)
+        if baseline_summary_override is not None
+        else _scenario_summary(baseline_payload)
+    )
+    yearly = _yearly_frame(baseline_payload["profile"], "no_filter")
+    _refresh_yearly_summary(baseline, yearly, return_column="no_filter_return_pct")
+
+    if output_dir_override is None:
+        raise ValueError("standalone baseline必須指定output_dir_override")
+    output_dir = Path(output_dir_override)
+    if not output_dir.is_absolute():
+        output_dir = root / output_dir
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    baseline_orderable = (
+        pd.DataFrame(baseline_orderable_reused).copy()
+        if baseline_orderable_reused is not None
+        else _flatten_candidate_replay_rows(replay_counts or {}, "orderable_rows")
+    )
+    baseline_selected = _flatten_selected_buy_rows(baseline_payload["trade_history"])
+    baseline_orderable.to_csv(
+        output_dir / "no_filter_orderable_candidates.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    baseline_selected.to_csv(
+        output_dir / "no_filter_selected_buys.csv", index=False, encoding="utf-8-sig"
+    )
+    baseline_payload["equity_curve"].to_csv(
+        output_dir / "no_filter_equity.csv", index=False, encoding="utf-8-sig"
+    )
+    baseline_payload["trade_history"].to_csv(
+        output_dir / "no_filter_trades.csv", index=False, encoding="utf-8-sig"
+    )
+    pd.DataFrame(
+        baseline_payload["profile"].get("portfolio_capacity_rows") or []
+    ).to_csv(
+        output_dir / "no_filter_daily_capacity.csv", index=False, encoding="utf-8-sig"
+    )
+    yearly.to_csv(
+        output_dir / "yearly_returns_comparison.csv", index=False, encoding="utf-8-sig"
+    )
+
+    metadata = {
+        "schema_version": SCHEMA_VERSION,
+        "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
+        "comparison_design": "standalone_dl_off_active_param_replay",
+        "score_source": "dl_off_baseline_only",
+        "dataset": dataset,
+        "data_dir": str(data_dir),
+        "params_path": str(resolved_params_path),
+        "params_file_sha256": _sha256_file(resolved_params_path),
+        "param_source_kind": param_source_kind,
+        "requested_param_policy": param_policy,
+        "param_selector": param_policy_contract["selector"],
+        "runtime_member_count_min": param_policy_contract["member_count_min"],
+        "runtime_member_count_max": param_policy_contract["member_count_max"],
+        "runtime_min_agree": param_policy_contract["min_agree"],
+        "optional_entry_filter_policy": optional_entry_filter_policy,
+        "shared_param_overrides": dict(shared_param_overrides or {}),
+        "lookahead_safe_active_param_schedule": True,
+        "active_param_period": {"start": param_start, "end": param_end},
+        "active_param_ensemble_policy": ensemble_policy,
+        "no_filter_params": no_filter_param_payload,
+        "max_positions": int(max_positions),
+        "enable_rotation": bool(enable_rotation),
+        "baseline_reused": baseline_reuse_dir is not None,
+        "baseline_reuse_source": (
+            None
+            if baseline_reuse_dir is None
+            else project_relative_display_path(
+                Path(baseline_reuse_dir).resolve(), project_root=root
+            )
+        ),
+        "output_scope": "caller_override",
+        "output_dir": project_relative_display_path(output_dir, project_root=root),
+        "comparison_period": {"start": start_date, "end": end_date},
+        "benchmark_ticker": PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
+    }
+    json_payload = _to_json_native({
+        "metadata": metadata,
+        "no_filter": baseline,
+        "yearly": yearly.to_dict("records"),
+    })
+    (output_dir / "strategy_comparison.json").write_text(
+        json.dumps(json_payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "strategy_comparison.md").write_text(
+        _standalone_baseline_report(json_payload, markdown=True), encoding="utf-8"
+    )
+    _remove_legacy_html_outputs(output_dir)
+    if not quiet:
+        print("\n" + _standalone_baseline_report(json_payload, markdown=False))
+        print_artifact_paths(
+            (("策略基準簡易報表", output_dir / "strategy_comparison.md"),),
+            project_root=root,
+        )
+    return json_payload
+
+
 def run_comparison(
     *, project_root=PROJECT_ROOT, dataset="full", params_path=None,
     param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False,
@@ -3226,7 +3532,7 @@ __all__ = [
     "render_strategy_pair_simple_report",
     "render_strategy_pair_markdown",
     "materialize_strategy_pair_readable_report",
-    "main", "run_comparison", "run_existing_attribution",
+    "main", "run_comparison", "run_standalone_baseline", "run_existing_attribution",
     "run_no_filter_candidate_replay_from_metadata",
     "canonical_strategy_compare_output_dir_names", "_first_existing_comparison_dir",
     "_assert_controlled_param_pair", "_assert_controlled_ensemble_pair",

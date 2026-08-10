@@ -17547,11 +17547,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "FULL_ROOS_SEARCH_FIELDS" in param_service_source
         and "selection_full_roos_training" in param_service_source
         and {item["profile_id"] for item in strategy_config.get_strategy_comparison_profiles()}
-        == {"selection_pit", "forward_oos"}
-        and {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("selection_pit").enabled_arms}
-        == {"C23", "C25", "C28", "C32", "C33", "C34"}
-        and {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms}
-        == {"C1", "C3", "C20", "C29", "C30", "C31"}
+        == set(strategy_config.STRATEGY_COMPARE_PROFILES)
+        and {
+            arm.arm_id
+            for arm in strategy_config.get_strategy_comparison_settings("selection_pit").enabled_arms
+        } == set(strategy_config.STRATEGY_COMPARE_PROFILES["selection_pit"]["arm_ids"])
+        and {
+            arm.arm_id
+            for arm in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_arms
+        } == set(strategy_config.STRATEGY_COMPARE_PROFILES["forward_oos"]["arm_ids"])
+        and {
+            item.contrast_id
+            for item in strategy_config.get_strategy_comparison_settings("selection_pit").enabled_contrasts
+        } == set(strategy_config.STRATEGY_COMPARE_PROFILES["selection_pit"]["contrast_ids"])
+        and {
+            item.contrast_id
+            for item in strategy_config.get_strategy_comparison_settings("forward_oos").enabled_contrasts
+        } == set(strategy_config.STRATEGY_COMPARE_PROFILES["forward_oos"]["contrast_ids"])
         and strategy_config.get_strategy_comparison_settings("selection_pit").output_root
         == "outputs/strategy_compare/selection_pit"
         and strategy_config.get_strategy_comparison_settings("forward_oos").output_root
@@ -18752,6 +18764,23 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "# Breakout Quality Score 排序策略經濟效果對照" in readable_report_text,
     )
 
+    mocked_baseline_payload = {
+        "metadata": {
+            **dict(mocked_pair_payload["metadata"]),
+            "comparison_design": "standalone_dl_off_active_param_replay",
+            "score_source": "dl_off_baseline_only",
+        },
+        "no_filter": dict(mocked_pair_payload["no_filter"]),
+        "yearly": [
+            {
+                "year": row["year"],
+                "no_filter_return_pct": row["no_filter_return_pct"],
+                "is_full_year": row.get("is_full_year", False),
+            }
+            for row in mocked_pair_payload["yearly"]
+        ],
+    }
+
     ready_plan = StrategyPreparationPlan(overall_status="READY", actions=tuple())
     ready_status = {
         "overall_status": "READY",
@@ -18776,6 +18805,10 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         return_value=dict(mocked_pair_payload),
     ) as mocked_run, patch.object(
         strategy_comparison_module,
+        "run_standalone_baseline",
+        return_value=dict(mocked_baseline_payload),
+    ) as mocked_baseline_run, patch.object(
+        strategy_comparison_module,
         "_load_direct_selection_r",
         return_value=0.25,
     ), redirect_stdout(io.StringIO()):
@@ -18790,6 +18823,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "ready_orchestration_executes_each_config_pair_and_writes_all_enabled_arms",
         True,
         mocked_run.call_count == len(execution_pairs)
+        and mocked_baseline_run.call_count
+        == len(strategy_comparison_module._standalone_baseline_arms(settings))
         and all(
             call.kwargs.get("comparison_start_date") == "2021-01-01"
             and call.kwargs.get("comparison_end_date") == "2021-12-31"
@@ -20038,37 +20073,42 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         settings.arms["C29"], settings.arms["C30"], settings.arms["C31"],
     )
     forward_source = settings.dl_sources["CONT13A"]
-    active_contrasts = {
-        key for key, value in settings.contrasts.items() if value.enabled
-    }
-    add_check(
-        results, "synthetic_breakout_quality", case_id,
-        "forward_oos_min_full_by_dl_source_matrix_freezes_feasible_ascent_and_daily_source",
-        (
-            {"C1", "C3", "C20", "C29", "C30", "C31"},
-            ("min_roos", "all_off", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
-            ("min_roos", "all_off", "CONT13A", "resource-aware-continuous-max-dl-feasible-ascent"),
-            ("full_roos", "formal", "CONT12B", "resource-aware-continuous-max-dl-feasible-ascent"),
-            ("full_roos", "formal", "CONT13A", "resource-aware-continuous-max-dl-feasible-ascent"),
-            "continuous_ranker_oos", DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
-            {"C20-C3", "C29-C3", "C29-C20", "C30-C1", "C31-C1", "C31-C30", "C1-C3", "C31-C29"},
-        ),
-        (
-            {arm.arm_id for arm in settings.enabled_arms},
-            (c20.param_source, c20.rule_policy, c20.dl_id, c20.dl_runtime_mode),
-            (c29.param_source, c29.rule_policy, c29.dl_id, c29.dl_runtime_mode),
-            (c30.param_source, c30.rule_policy, c30.dl_id, c30.dl_runtime_mode),
-            (c31.param_source, c31.rule_policy, c31.dl_id, c31.dl_runtime_mode),
-            forward_source.score_source, forward_source.experiment_profile,
-            active_contrasts,
-        ),
+    active_contrasts = tuple(
+        item.contrast_id for item in settings.enabled_contrasts
+    )
+    configured_forward_arms = tuple(
+        strategy_config.STRATEGY_COMPARE_PROFILES["forward_oos"]["arm_ids"]
+    )
+    configured_forward_contrasts = tuple(
+        strategy_config.STRATEGY_COMPARE_PROFILES["forward_oos"]["contrast_ids"]
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "forward_oos_matrix_uses_two_dl_off_baselines_and_auto_common_score_period",
+        "forward_oos_profile_honors_config_and_freezes_min_mr12b_mr13a_runtime_identity",
         True,
-        c1.enabled and not c1.dl_enabled and c1.param_source == "full_roos" and c1.rule_policy == "formal"
-        and c3.enabled and not c3.dl_enabled and c3.param_source == "min_roos" and c3.rule_policy == "all_off"
+        {arm.arm_id for arm in settings.enabled_arms} == set(configured_forward_arms)
+        and set(active_contrasts) == set(configured_forward_contrasts)
+        and (c20.param_source, c20.rule_policy, c20.dl_id, c20.dl_runtime_mode)
+        == (
+            "min_roos", "all_off", "CONT12B",
+            "resource-aware-continuous-max-dl-feasible-ascent",
+        )
+        and (c29.param_source, c29.rule_policy, c29.dl_id, c29.dl_runtime_mode)
+        == (
+            "min_roos", "all_off", "CONT13A",
+            "resource-aware-continuous-max-dl-feasible-ascent",
+        )
+        and forward_source.score_source == "continuous_ranker_oos"
+        and forward_source.experiment_profile == DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+        and c30.param_source == "full_roos"
+        and c31.param_source == "full_roos",
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "forward_oos_common_period_remains_auto_resolved_from_enabled_dl_sources",
+        True,
+        c1.param_source == "full_roos" and not c1.dl_enabled
+        and c3.param_source == "min_roos" and not c3.dl_enabled
         and settings.start_date is None and settings.end_date is None,
     )
 
