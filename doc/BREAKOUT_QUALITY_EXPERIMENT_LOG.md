@@ -7434,3 +7434,47 @@ Strategy Compare在model upstream已重建後，以checkpoint-only方式重建`D
 
 MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、五欄Min ROOS、C23～C28 selector／comparison matrix、Target、loss、PIT fold no-lookahead規則及策略會計均未改變。本輪只修正缺失PIT fold的正式工作類型ownership與可達性，不新增MR／DL／SR ID。
 
+
+## 2026-08-10 — MR-13A daily PIT Selection strategy translation結果：C28通過Forward-OOS Gate
+
+### 狀態
+
+`RESULT_AVAILABLE / SELECTION_STRATEGY_GATE_PASS / C27_NOT_PROMOTED / C28_FORWARD_OOS_AUTHORIZED / NO_SELECTION_RETUNING`。
+
+### 程式基準與比較契約
+
+- 程式基準：`test-branch-1_20260810_100406_9cdd5aa.zip`；SHA256=`6b6a9a122569ee994ff26ee3134147e221c4f020673725f5686765583aaebd62`。
+- Strategy Compare run：`outputs/strategy_compare/runs/20260810_123402_C23-C24-C25-C27-C28_ffefa86f0a89`；期間=`2014-01-01～2020-12-31`、Dataset=`full`、param policy=`base-finalist-best`、max positions=`10`、rotation=`off`。
+- 全部arms共用current五欄`PARAM-P2 / Min ROOS` historical active params；五欄為`high_len + atr_len + atr_buy_tol + atr_times_init + atr_times_trail`。Rules全關，C23為DL-off baseline。
+- C24/C27固定minimum-repair selector；C25/C28固定feasible-ascent selector。C27/C28唯一model/source差異是`DL-CONT12B-PIT → DL-CONT13A-PIT`；C28不繼承C26 stale-score guard，也沒有新增capital objective、threshold或OOS調參。
+
+### 主要結果
+
+| Arm | Return | MDD | RoMD | Annual | EV | Trades | Same-param selection R |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C23 Min ROOS baseline | 107.98% | 20.57% | 5.25 | 11.03% | 0.42R | 475 | 0.00R |
+| C24 MR-12B minimum-repair | 82.98% | 18.99% | 4.37 | 9.02% | 0.50R | 420 | +12.19R |
+| C25 MR-12B feasible-ascent | 101.55% | 19.66% | 5.17 | 10.53% | 0.52R | 432 | +26.19R |
+| C27 MR-13A daily minimum-repair | 102.26% | 21.57% | 4.74 | 10.59% | 0.50R | 431 | +18.41R |
+| C28 MR-13A daily feasible-ascent | 151.88% | 18.86% | 8.05 | 14.11% | 0.71R | 435 | +109.91R |
+
+Controlled contrasts：
+
+- `C27-C24`（固定minimum-repair、只換DL source）：Return `+19.27pp`、MDD `+2.57pp`、RoMD `+0.37`、Annual `+1.57pp`、EV `0.00R`、same-param selection R `+6.22R`。MR-13A source較MR-12B改善，但C27本身仍低於C23，因此minimum-repair不採用。
+- `C28-C25`（固定feasible-ascent、只換DL source）：Return `+50.33pp`、MDD `-0.80pp`、RoMD `+2.89`、Annual `+3.58pp`、EV `+0.19R`、same-param selection R `+83.72R`。這是支持MR-13A daily source的主要model/source controlled evidence。
+- `C28-C23`：Return `+43.90pp`、MDD `-1.71pp`、RoMD `+2.80`、Annual `+3.08pp`、EV `+0.29R`、selection R `+109.91R`。年度Return相對C23在2014/2015/2016/2017/2018/2020改善，6/7正向；只有2019低`-1.49pp`。
+- `C28-C27`（相同daily source，只換selector）：Return `+49.62pp`、MDD `-2.71pp`、RoMD `+3.31`、Annual `+3.52pp`、EV `+0.21R`、selection R `+91.50R`。Feasible-ascent對daily source的portfolio translation非常重要，minimum-repair不足以通過baseline gate。
+
+### Selection診斷與判讀
+
+- C28的selected Target mean相對C23由`0.4769R → 0.6832R`（`+0.2063R`），但同日Target percentile由`0.5925 → 0.5260`、opportunity gap由`3.4957R → 4.1697R`惡化。這不構成矛盾：報表先在每日候選集合內計算percentile／top-k，再做daily mean；absolute Target R與within-day percentile衡量不同面向。C28不是在每一天都更接近future Target oracle，而是在不使用Future Target的前提下，選到的絕對opportunity-R與後續實際portfolio economics更好。
+- `same-param selection R`是DL-on與同param/rule baseline之exclusive trades R差；C28的`+109.91R`本身不能代替portfolio PnL。但本次與舊C26不同：C28同時有Return、MDD、RoMD、Annual、EV的實際portfolio改善，因此Selection R優勢確實有轉成策略經濟效果。
+- C28只有`108`個實際改單日、`12`個feasible-ascent改善日，卻產生大幅wealth-path差異；這是portfolio path敏感性的證據，不是可用來繼續調selector的理由。現有hard feasibility仍維持K/R0、reserved-capital floor，Max-DL K violation=`0`。
+
+### 判定與下一步
+
+1. `SR-C27`：`NOT_PROMOTED`；不進Forward-OOS。
+2. `SR-C28`：`SELECTION_GATE_PASS / FORWARD_OOS_AUTHORIZED / FROZEN_SELECTOR`。
+3. `MR-13A`：Selection strategy translation已PASS，但尚不得宣告正式取代`MR-12B / DL-CONT12B`；formal anchor promotion必須等Forward-OOS strategy Gate。
+4. 保留`DL-CONT13A`作MR-13A frozen Forward-OOS daily score source，保留`SR-C29`作C28語意凍結後的Forward-OOS candidate。Forward對照應只保留current五欄Min ROOS DL-off baseline與相同feasible-ascent selector的MR-12B arm，用來分離portfolio baseline與純DL source效果。
+5. 不再於Selection調feasible-ascent、stale cutoff、score cutoff、capital objective、fixed risk或模型；不得把C26的22-day guard帶進C29。下一個可執行工作是2021+ Forward-OOS controlled replay。
