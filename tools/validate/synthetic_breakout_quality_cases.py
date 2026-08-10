@@ -20129,6 +20129,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
         _validate_score_eligibility_contract,
         load_continuous_ranker_oos_contract,
         load_continuous_ranker_oos_score_table,
+        lookup_continuous_ranker_oos_candidate_score,
         resolve_continuous_ranker_oos_score_path,
     )
     from filters.breakout_quality.runtime import (
@@ -20423,13 +20424,38 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
             and ("2317", "2021-01-05") in forward_table.index
             and pd.isna(forward_table.loc[("2317", "2021-01-05"), "target_raw_r"])
         )
+        daily_lookup_uses_precomputed_score_period = False
+        try:
+            with patch.object(
+                pd.MultiIndex,
+                "get_level_values",
+                side_effect=AssertionError("lookup must not rescan the full score index"),
+            ):
+                lookup_payload = lookup_continuous_ranker_oos_candidate_score(
+                    project_root=str(root),
+                    ticker="2330",
+                    signal_date="2021-01-04",
+                    filter_id=filter_id,
+                    model_architecture=architecture,
+                    experiment_profile=profile_name,
+                    score_path_override=str(score_path),
+                )
+            daily_lookup_uses_precomputed_score_period = (
+                lookup_payload["available"]
+                and float(lookup_payload["score"]) == 0.75
+                and forward_table.attrs.get("available_from") == "2021-01-04"
+                and forward_table.attrs.get("available_through") == "2021-01-05"
+            )
+        except AssertionError:
+            daily_lookup_uses_precomputed_score_period = False
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "mr13a_forward_oos_contract_uses_daily_gzip_artifact_not_event_csv_schema",
-        (True, True),
+        (True, True, True),
         (
             daily_forward_contract_accepts_canonical_gzip,
             daily_forward_table_uses_all_oos_rows_without_split_column,
+            daily_lookup_uses_precomputed_score_period,
         ),
     )
 

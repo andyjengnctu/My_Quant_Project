@@ -829,7 +829,12 @@ def load_continuous_ranker_oos_score_table_from_path(
         raise ValueError("Continuous ranker OOS model_score必須為0~1有限數值")
     if frame.duplicated(["ticker", "date"]).any():
         raise ValueError("Continuous ranker OOS score同ticker/date必須唯一")
-    return frame.set_index(["ticker", "date"]).sort_index()
+    available_from = str(frame["date"].min())
+    available_through = str(frame["date"].max())
+    indexed = frame.set_index(["ticker", "date"]).sort_index()
+    indexed.attrs["available_from"] = available_from
+    indexed.attrs["available_through"] = available_through
+    return indexed
 
 
 @lru_cache(maxsize=16)
@@ -876,8 +881,16 @@ def lookup_continuous_ranker_oos_candidate_score(
     if not ticker_text:
         raise ValueError("Continuous ranker OOS lookup必須提供ticker")
     date_text = pd.Timestamp(signal_date).strftime("%Y-%m-%d")
-    available_from = str(table.index.get_level_values("date").min())
-    available_through = str(table.index.get_level_values("date").max())
+    if contract is not None:
+        available_from = str(contract.available_from)
+        available_through = str(contract.available_through)
+    else:
+        available_from = str(table.attrs.get("available_from") or "")
+        available_through = str(table.attrs.get("available_through") or "")
+        if not available_from or not available_through:
+            raise ValueError(
+                "Continuous ranker OOS score table缺少預先計算的日期範圍metadata"
+            )
     reason = ""
     score: float | None = None
     group_index: int | None = None
@@ -885,10 +898,11 @@ def lookup_continuous_ranker_oos_candidate_score(
         reason = "outside_score_period"
     else:
         key = (ticker_text, date_text)
-        if key not in table.index:
+        try:
+            row = table.loc[key]
+        except KeyError:
             reason = "missing_ticker_date_score"
         else:
-            row = table.loc[key]
             if isinstance(row, pd.DataFrame):
                 raise ValueError(
                     f"Continuous ranker OOS lookup非唯一: ticker={ticker_text}, date={date_text}"

@@ -7727,3 +7727,26 @@ Forward-OOS模型訓練／model Gate亦沒有把OOS帶入gradient、epoch select
 ### Scientific identity
 
 本輪不新增MR／DL／SR ID，不改Target、loss、architecture、selected epoch、Min/Full參數、selector、K/R0、feasible-ascent、交易會計、Strategy Compare雙profile或Multiple-seed robustness scientific design；只修正Forward score availability的時間因果契約與score-only artifact repair path。
+
+## 2026-08-10 — MR-13A daily Forward strategy replay score lookup效能修正
+
+### 現象
+
+- 使用者執行`Forward-OOS策略比較`；C1 Full baseline、C3 Min baseline與C20 MR-12B replay可在數秒至數十秒完成，但最後C29／MR-13A daily `score_ranking`在`2021-02-01`、僅第21/1248日時已耗時`00:01:51`。
+- 這不是模型重新inference、GPU訓練或feasible-ascent本身耗時。C29 runtime依daily information-date契約會對候選每日刷新score，因此lookup次數本來就高於event source；真正異常來自每次lookup又對完整daily score MultiIndex執行`get_level_values("date").min()/max()`。
+
+### Root cause
+
+`lookup_continuous_ranker_oos_candidate_score()`雖已透過LRU cache重用整張score DataFrame，但仍在candidate內層迴圈每次重新掃描所有score rows取得`available_from/available_through`。MR-13A daily Forward table約為all-stock × all-OOS-days量級，故單次lookup從indexed key lookup退化成O(score rows)；daily refresh再把此成本乘上每天數十至上百候選。隔離同規模約69萬列MultiIndex重現：單次date min/max掃描約0.19秒，而直接indexed `(ticker,date)` lookup約0.00024秒，與實際21天約111秒的console進度一致。
+
+### 修正
+
+1. `load_continuous_ranker_oos_score_table_from_path()`在CSV/GZIP載入與date normalization時只計算一次`available_from/available_through`，保存於cached DataFrame attrs。
+2. canonical normal route直接使用既有`ContinuousRankerOOSContract.available_from/available_through`；`score_path_override`／Multiple-seed robustness isolated score route使用相同cached table attrs，不再重新掃描MultiIndex。
+3. key lookup由`key in index`再`loc`的雙查詢改為單次`table.loc[(ticker,date)]`並以`KeyError`表示missing score；score availability、daily information-date refresh、no-lookahead、selector與strategy accounting完全不變。
+4. T294新增warm-cache performance-contract fixture：在禁止`pd.MultiIndex.get_level_values()`的情況下仍必須可由override score table成功查值，並驗證預先保存的score period metadata。
+
+### Scientific identity
+
+本輪只修Forward runtime score lookup複雜度，不改MR-12B/MR-13A模型、Forward score values、daily refresh timing、Min/Full參數、feasible-ascent、K/R0、交易會計、Selection PIT、Forward score-universe contract或Multiple-seed robustness scientific design；不新增任何MR/DL/SR ID，也不使既有pair result因identity改變而失效。重新執行C29應得到相同策略結果，只縮短wall time。
+
