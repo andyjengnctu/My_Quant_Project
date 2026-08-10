@@ -8,6 +8,10 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from config.breakout_quality import (
+    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
+    get_breakout_quality_experiment_profile,
+)
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
     StrategyComparisonSettings,
@@ -19,10 +23,16 @@ from filters.breakout_quality.artifacts import (
     load_model_artifact_contract,
     load_runtime_artifact_contract,
 )
+from filters.breakout_quality.continuous_target import (
+    TARGET_MANIFEST_FILENAME,
+    resolve_continuous_target_dir,
+)
+from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from core.console_report import project_relative_display_path
 from filters.breakout_quality.export_scores import export_forward_oos_scores
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
+    resolve_filter_output_dir,
     resolve_filter_model_output_dir,
     resolve_selection_point_in_time_audit_json_path,
     resolve_selection_point_in_time_manifest_path,
@@ -58,6 +68,64 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _selection_pit_checkpoint_rebuild_blockers(
+    root: Path,
+    *,
+    filter_id: str,
+    experiment_profile: str,
+) -> tuple[str, ...]:
+    """Return model-work prerequisites that Strategy Compare may not create itself.
+
+    Checkpoint-only PIT rebuilding is allowed only after the canonical supervised
+    Dataset exists.  Event-group rankers additionally require their Continuous
+    Target manifest because fold identity and the model-audit gate depend on it.
+    Dataset/Target preparation belongs to the model-training work type, not the
+    strategy-comparison work type.
+    """
+
+    blockers: list[str] = []
+    dataset_root = resolve_filter_output_dir(root, filter_id=filter_id)
+    dataset = resolve_dataset_paths(dataset_root)
+    if not dataset.summary.is_file():
+        blockers.append(
+            "缺少模型上游Dataset summary: "
+            + project_relative_display_path(dataset.summary, project_root=root)
+        )
+    else:
+        missing_dataset_files = [
+            path
+            for path in dataset.artifact_paths().values()
+            if not path.is_file()
+        ]
+        if missing_dataset_files:
+            preview = ", ".join(
+                project_relative_display_path(path, project_root=root)
+                for path in missing_dataset_files[:3]
+            )
+            suffix = "…" if len(missing_dataset_files) > 3 else ""
+            blockers.append(f"Dataset核心工件缺少: {preview}{suffix}")
+
+    profile = get_breakout_quality_experiment_profile(experiment_profile)
+    if (
+        str(profile.training_sample_scope)
+        == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS
+    ):
+        target_manifest = (
+            resolve_continuous_target_dir(
+                root,
+                filter_id,
+                target_id=str(profile.continuous_target_id),
+            )
+            / TARGET_MANIFEST_FILENAME
+        )
+        if not target_manifest.is_file():
+            blockers.append(
+                "缺少模型上游Continuous Target: "
+                + project_relative_display_path(target_manifest, project_root=root)
+            )
+    return tuple(blockers)
 
 
 def _resolve_relative_path(root: Path, value: str) -> Path:
@@ -376,12 +444,27 @@ def collect_artifact_status(
                     ),
                 }
             builder = source.forward_scores_builder
+            checkpoint_rebuild_blockers = (
+                _selection_pit_checkpoint_rebuild_blockers(
+                    root,
+                    filter_id=source.filter_id,
+                    experiment_profile=source.experiment_profile,
+                )
+                if (
+                    not pit_ready
+                    and builder is not None
+                    and builder.enabled
+                    and builder.builder_type == "selection_pit_from_existing_folds"
+                )
+                else tuple()
+            )
             checkpoint_rebuild_allowed = bool(
                 not pit_ready
                 and settings.preparation.auto_prepare
                 and builder is not None
                 and builder.enabled
                 and builder.builder_type == "selection_pit_from_existing_folds"
+                and not checkpoint_rebuild_blockers
             )
             file_rows: dict[str, Any] = {}
             for key, path in files.items():
@@ -398,6 +481,13 @@ def collect_artifact_status(
                     description = (
                         "以既有PIT fold score／checkpoint重建Selection PIT推論工件與Audit；"
                         "若任何fold需要模型訓練則立即停止"
+                    )
+                elif checkpoint_rebuild_blockers:
+                    action = "BLOCKED"
+                    description = (
+                        "模型上游工件未就緒；Strategy Compare不得建立Dataset／Label／Target。"
+                        "請先由模型訓練工作類型執行「準備策略比較所需模型工件」："
+                        + "；".join(checkpoint_rebuild_blockers)
                     )
                 else:
                     action = "BLOCKED"
@@ -441,6 +531,7 @@ def collect_artifact_status(
                 "status": pit_status,
                 "identity": source.as_dict(),
                 "files": file_rows,
+                "checkpoint_rebuild_blockers": list(checkpoint_rebuild_blockers),
             }
             continue
 

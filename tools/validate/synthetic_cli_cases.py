@@ -418,6 +418,30 @@ def validate_dataset_cli_contract_case(_base_params):
         ),
     )
 
+    with (
+        patch("builtins.input", side_effect=["5"]),
+        patch(
+            "tools.filters.breakout_quality.application._prepare_strategy_compare_model_artifacts",
+            return_value=59,
+        ) as strategy_model_prepare,
+    ):
+        strategy_model_prepare_rc, strategy_model_prepare_text = _capture_stdout(
+            app_breakout_quality._interactive_model_research,
+            "apps/research.py model",
+        )
+    add_check(
+        results,
+        "cli_contract",
+        case_id,
+        "breakout_quality_model_menu_routes_configured_strategy_model_prerequisite_preparation",
+        (59, 1, True),
+        (
+            strategy_model_prepare_rc,
+            strategy_model_prepare.call_count,
+            "[5] 準備策略比較所需模型工件" in strategy_model_prepare_text,
+        ),
+    )
+
     with patch(
         "tools.filters.breakout_quality.application._interactive_model_research",
         return_value=37,

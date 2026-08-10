@@ -7390,3 +7390,24 @@ MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、SR-C23～C28均不變；C27/
 ### 判定
 
 這是`PARAM-P2 / Min ROOS`工程契約修正，不新增MR／DL／SR ID，不改五欄search space、training-policy trials、模型、PIT source、selector、交易會計或Strategy Compare scientific matrix。Registry status維持ACTIVE；已完成的七fold current artifact在套用修正後應直接重新驗證接續，而非再執行1:27:32的rolling optimization。
+
+## 2026-08-10 — Strategy Compare PIT model-upstream ownership與預先阻擋修正
+
+### 現象
+
+current五欄Selection Min ROOS已完成並成功接續後，Strategy Compare重新規劃`DL-CONT12B-PIT`與`DL-CONT13A-PIT` top-level工件；planner仍標記checkpoint-only `BUILD`。正式執行`CONT12B_PIT`時，PIT builder在載入event-ranker data bundle前即因缺少`outputs/filters/breakout_quality/breakout_quality_v1/dataset_summary.json`拋出`FileNotFoundError`。同一Dataset summary也是MR-13A daily sample provider的source-selection／inventory真理，因此下一個`CONT13A_PIT`亦會遭遇同一上游缺件。
+
+### Root cause
+
+Strategy Compare先前只檢查PIT top-level score／manifest／audit是否缺失，以及是否配置`selection_pit_from_existing_folds` builder；沒有在計畫階段驗證checkpoint-only builder仍需要的model-work upstream。MR-12B event PIT重建需要canonical Dataset與Continuous Target以重建fold identity／score universe並重跑model Audit；MR-13A daily PIT雖不需要event Continuous Target artifact，仍需要canonical Dataset summary作source-selection／inventory真理。依`PROJECT_SETTINGS`，Strategy Compare可匯出既有模型推論工件但不得自行建立Dataset／Label／Target，因此原`BUILD → runtime FileNotFoundError`計畫不合法。
+
+### 修正
+
+1. `strategy_compare_preparation`在把Selection PIT列為checkpoint-only `BUILD`前先檢查model upstream：所有PIT source都要求canonical Dataset summary及核心Dataset artifacts；event-group profile另外要求對應Continuous Target manifest。缺任一項即在計畫階段標`BLOCKED`，並顯示專案相對缺件路徑，不再等執行後失敗。
+2. 模型訓練工作類型新增泛化選單「準備策略比較所需模型工件」。來源集合只由`config/strategy_compare.py`目前enabled arms解析，不提供model ID手動選單、不硬編MR/C編號。
+3. 該模型工作流程先以既有canonical Dataset refresh／Continuous Target preparation服務建立model upstream，再對每個設定中的Selection PIT source執行`--checkpoint-only --resume`重建與PIT Audit；因此可建立Label／Target，但任何fold若缺少相容checkpoint仍立即停止，絕不因策略比較需求訓練模型權重。
+4. Strategy Compare本身仍不建立Dataset、Label、Target或模型權重；完成模型工作類型準備後再回Strategy Compare即可依原dependency planner繼續。
+
+### Scientific identity
+
+MR-12B、MR-13A、DL-CONT12B-PIT、DL-CONT13A-PIT、五欄Min ROOS、C23～C28 selector／comparison matrix、Target公式、model weights與交易會計均未修改。本輪只修正跨工作類型的dependency ownership、preflight與既有checkpoint推論工件恢復路徑。

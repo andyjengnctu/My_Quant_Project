@@ -2628,12 +2628,24 @@ def _interactive_binary_model_research(
         print("無效選項，請重新輸入。")
 
 
-def _prepare_continuous_research_inputs(program_name: str, settings) -> int:
+def _prepare_continuous_research_inputs(
+    program_name: str,
+    settings,
+    *,
+    dataset_profile: str | None = None,
+    max_tickers: int | None = None,
+) -> int:
     color_enabled = console_color_enabled()
+    resolved_dataset_profile = str(
+        INTERACTIVE_DATASET_PROFILE if dataset_profile is None else dataset_profile
+    )
+    resolved_max_tickers = int(
+        INTERACTIVE_MAX_TICKERS if max_tickers is None else max_tickers
+    )
     refresh_mode, refresh_reasons, dataset_step = _dataset_refresh_step(
         settings.filter_id,
-        INTERACTIVE_DATASET_PROFILE,
-        max_tickers=INTERACTIVE_MAX_TICKERS,
+        resolved_dataset_profile,
+        max_tickers=resolved_max_tickers,
     )
     if dataset_step is not None:
         command, command_args, label = dataset_step
@@ -2749,6 +2761,121 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
         )
 
 
+def _strategy_compare_required_selection_pit_sources():
+    """Resolve configured Strategy Compare PIT sources without exposing model choice in UI."""
+
+    from config.strategy_compare import get_strategy_comparison_settings
+    from filters.breakout_quality.ranking_score_store import (
+        SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    )
+
+    comparison = get_strategy_comparison_settings()
+    required_ids = {
+        str(arm.dl_id)
+        for arm in comparison.enabled_arms
+        if arm.dl_enabled and arm.dl_id
+    }
+    return comparison, tuple(
+        (dl_id, comparison.dl_sources[dl_id])
+        for dl_id in comparison.dl_sources
+        if dl_id in required_ids
+        and comparison.dl_sources[dl_id].score_source
+        == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+    )
+
+
+def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
+    """Prepare configured PIT model sources in the model-training work type.
+
+    This workflow may rebuild Dataset/Label/Target metadata because it lives under
+    model training, but it never trains model weights for Strategy Compare.  PIT
+    reconstruction is checkpoint-only; a missing/incompatible checkpoint stops the
+    workflow and must be resolved by the corresponding model research lifecycle.
+    """
+
+    comparison, sources = _strategy_compare_required_selection_pit_sources()
+    if not sources:
+        print("目前策略比較設定沒有需要準備的Selection PIT模型工件。")
+        return 0
+
+    color_enabled = console_color_enabled()
+    print(
+        paint("策略比較模型工件準備", "cyan", enabled=color_enabled, bold=True)
+        + f" | sources={len(sources)} | dataset={comparison.dataset}"
+    )
+    for source_index, (dl_id, source) in enumerate(sources, start=1):
+        workflow = get_breakout_quality_workflow_settings(
+            experiment_profile=str(source.experiment_profile)
+        )
+        if not workflow.supports_point_in_time_scores:
+            raise ValueError(
+                f"設定的Selection PIT source未啟用PIT workflow: {dl_id}"
+            )
+        if (
+            str(workflow.filter_id) != str(source.filter_id)
+            or str(workflow.model_architecture) != str(source.model_architecture)
+        ):
+            raise ValueError(
+                f"Strategy Compare PIT source與model workflow identity不一致: {dl_id}"
+            )
+        print(
+            paint(
+                f"[{source_index}/{len(sources)}]",
+                "cyan",
+                enabled=color_enabled,
+                bold=True,
+            )
+            + f" {dl_id} | profile={source.experiment_profile}"
+        )
+        code = _prepare_continuous_research_inputs(
+            program_name,
+            workflow,
+            dataset_profile=str(comparison.dataset),
+            max_tickers=0,
+        )
+        if code != 0:
+            return int(code)
+
+        build_args = [
+            "--filter-id", str(source.filter_id),
+            "--model-architecture", str(source.model_architecture),
+            "--experiment-profile", str(source.experiment_profile),
+            "--score-start-date", str(workflow.point_in_time_score_start_date),
+            "--fold-months", str(workflow.point_in_time_fold_months),
+            "--inner-validation-months", str(workflow.point_in_time_inner_validation_months),
+            "--seed", str(workflow.seed),
+            "--checkpoint-only",
+            "--resume",
+        ]
+        if workflow.point_in_time_score_end_date:
+            build_args.extend(
+                ["--score-end-date", str(workflow.point_in_time_score_end_date)]
+            )
+        with _compact_console_scope():
+            code = _run_command(
+                "build-point-in-time-scores",
+                build_args,
+                program_name=program_name,
+            )
+            if code != 0:
+                return int(code)
+            code = _run_command(
+                "audit-point-in-time-scores",
+                [
+                    "--filter-id", str(source.filter_id),
+                    "--model-architecture", str(source.model_architecture),
+                    "--experiment-profile", str(source.experiment_profile),
+                ],
+                program_name=program_name,
+            )
+            if code != 0:
+                return int(code)
+    print(
+        paint("策略比較所需模型工件已就緒", "green", enabled=color_enabled, bold=True)
+    )
+    return 0
+
+
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_model_research_settings()
     if settings.is_binary_classification:
@@ -2771,6 +2898,9 @@ def _interactive_model_research(program_name: str) -> int:
         print("[3] 查看目前Workflow與工件狀態")
         if comparison_settings.enabled:
             print(f"[4] {comparison_settings.menu_label}")
+        _comparison, strategy_pit_sources = _strategy_compare_required_selection_pit_sources()
+        if strategy_pit_sources:
+            print("[5] 準備策略比較所需模型工件")
         print("[0] 返回")
         try:
             raw_choice = input("👉 請選擇：").strip().lower()
@@ -2798,6 +2928,8 @@ def _interactive_model_research(program_name: str) -> int:
                     program_name=program_name,
                 )
             )
+        if choice == "5" and strategy_pit_sources:
+            return int(_prepare_strategy_compare_model_artifacts(program_name))
         print("無效選項，請重新輸入。")
 
 def run_model_training_menu(program_name: str = "apps/research.py model") -> int:
