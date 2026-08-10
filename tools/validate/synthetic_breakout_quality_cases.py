@@ -18361,17 +18361,17 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
     from filters.breakout_quality.strategy_compare_preparation import (
-        _selection_pit_checkpoint_rebuild_blockers,
         _validate_expected_artifact_contract,
+        model_upstream_prerequisite_blockers,
     )
     with tempfile.TemporaryDirectory() as missing_upstream_temp:
         missing_root = Path(missing_upstream_temp)
-        event_blockers = _selection_pit_checkpoint_rebuild_blockers(
+        event_blockers = model_upstream_prerequisite_blockers(
             missing_root,
             filter_id="breakout_quality_v1",
             experiment_profile="strategy_aligned_no_time_all_event_pairwise",
         )
-        daily_blockers = _selection_pit_checkpoint_rebuild_blockers(
+        daily_blockers = model_upstream_prerequisite_blockers(
             missing_root,
             filter_id="breakout_quality_v1",
             experiment_profile="daily_universal_no_time_pairwise",
@@ -18383,8 +18383,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         len(event_blockers) == 2
         and any("Dataset summary" in item for item in event_blockers)
         and any("Continuous Target" in item for item in event_blockers)
-        and len(daily_blockers) == 1
-        and "Dataset summary" in daily_blockers[0]
+        and len(daily_blockers) == 2
+        and any("Dataset summary" in item for item in daily_blockers)
+        and any("market-set" in item for item in daily_blockers)
         and "Strategy Compare不得建立Dataset／Label／Target" in preparation_source,
     )
     contract_example = {

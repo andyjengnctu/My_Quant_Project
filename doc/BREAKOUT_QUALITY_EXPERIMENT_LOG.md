@@ -7866,3 +7866,24 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `validate_strategy_compare_config_driven_app_contract_case`已補direct synthetic coverage，但formal double check仍應由使用者本地`apps/test_suite.py`執行。
 - 不改既有Selection／Forward策略結果、不挑best seed、不做seed ensemble；尚未產生新的robustness數值。
 
+
+## 2026-08-10 — Formal double-check閉環：Strategy Compare model-upstream synthetic caller同步
+
+### 工作基準與formal bundle
+
+- 程式基準：`test-branch-1_20260810_234837_b825a83.zip`；SHA256 `94adde8910a8d8eca346b2cd25c0d598b391e6a27d951851210ee28474477717`。
+- Formal bundle：`to_chatgpt_bundle_20260810_234950_e975a4ff.zip`；SHA256 `b2d0be5aac68d79d75426006dfb5161c66f9460030e590dfac2736d229688b6b`。
+- 使用者本機結果：quick gate／chain checks／ml smoke均PASS；consistency唯一FAIL為synthetic suite ImportError；meta quality六個coverage FAIL均由同一次synthetic early-abort連帶造成。
+
+### Root cause與修正
+
+1. 前一輪將Strategy Compare與Multiple-seed共用的模型上游前置檢查泛化為公開`model_upstream_prerequisite_blockers()`後，`validate_strategy_compare_config_driven_app_contract_case`仍在function-local import舊private helper `_selection_pit_checkpoint_rebuild_blockers`，formal synthetic進入該case即ImportError；production runtime已使用新helper，並非策略／訓練回歸。
+2. Synthetic caller改為直接使用canonical `model_upstream_prerequisite_blockers()`，不把舊private helper加回production，避免形成第二套前置邏輯。
+3. 新helper對daily-universal profile除Dataset summary外也明確要求market-set artifacts，因此fixture預期由舊的1個blocker同步為2個：Dataset summary + market-set；event-group profile仍為Dataset summary + Continuous Target。
+4. 全專案靜態local-import symbol解析確認修正後沒有其他不存在的本地import；舊helper名稱已無殘留。
+
+### Scientific identity與後續
+
+- 不改`MR-*`／`DL-*`／`SR-C*` identity，不改Target、architecture、loss、seed policy、score、selector、K/R0、交易會計或Selection／Forward既有結果。
+- Multiple-seed robustness狀態仍為`IMPLEMENTED／RESULT_PENDING`；本輪沒有產生新策略結果。
+- Formal coverage的六個meta-quality FAIL應在synthetic suite可完整執行後重新計算；本輪不以GPT端執行formal suite替代使用者本機double check。
