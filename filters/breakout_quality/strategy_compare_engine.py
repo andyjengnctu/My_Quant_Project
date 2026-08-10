@@ -2688,6 +2688,25 @@ def run_standalone_baseline(
     return json_payload
 
 
+def _resolve_continuous_score_override_period(
+    table: pd.DataFrame, *, execution_start_override=None
+) -> tuple[str, str, str]:
+    available_from = str(table.attrs.get("available_from") or "")
+    available_through = str(table.attrs.get("available_through") or "")
+    if not available_from or not available_through:
+        raise ValueError("Continuous ranker isolated score table缺少日期範圍metadata")
+    if execution_start_override in (None, ""):
+        execution_start = available_from
+    else:
+        execution_start = pd.Timestamp(str(execution_start_override)).strftime("%Y-%m-%d")
+        if execution_start > available_from:
+            raise ValueError(
+                "Continuous ranker isolated execution_start不可晚於第一個Score日："
+                f"execution_start={execution_start}, available_from={available_from}"
+            )
+    return execution_start, available_from, available_through
+
+
 def run_comparison(
     *, project_root=PROJECT_ROOT, dataset="full", params_path=None,
     param_policy=PARAM_POLICY_AUTO, max_positions=10, enable_rotation=False,
@@ -2709,6 +2728,7 @@ def run_comparison(
     hard_filter_source=None,
     baseline_reuse_dir=None,
     continuous_score_path_override=None,
+    continuous_score_execution_start_override=None,
 ):
     root = Path(project_root).resolve()
     comparison_mode = str(comparison_mode)
@@ -2748,6 +2768,12 @@ def run_comparison(
             raise ValueError("hard-filter策略比較不可指定capital-aware ranking policy")
     elif hard_filter_source is not None:
         raise ValueError("hard_filter_source只支援hard-filter策略比較")
+    has_continuous_override = continuous_score_path_override not in (None, "")
+    has_execution_start_override = continuous_score_execution_start_override not in (None, "")
+    if has_continuous_override != has_execution_start_override:
+        raise ValueError(
+            "continuous_score_path_override與continuous_score_execution_start_override必須成對提供"
+        )
 
     runtime_contract = None
     pit_contract = None
@@ -2827,12 +2853,19 @@ def run_comparison(
             )
             manifest_architecture = model_architecture
             manifest_profile = experiment_profile
-            start_date = str(override_table.index.get_level_values("date").min())
-            end_date = str(override_table.index.get_level_values("date").max())
+            execution_start, available_from, available_through = (
+                _resolve_continuous_score_override_period(
+                    override_table,
+                    execution_start_override=continuous_score_execution_start_override,
+                )
+            )
+            start_date = execution_start
+            end_date = available_through
             continuous_score_override = {
                 "score_path": str(override_path),
-                "available_from": start_date,
-                "available_through": end_date,
+                "execution_start": execution_start,
+                "available_from": available_from,
+                "available_through": available_through,
             }
         else:
             continuous_contract = load_continuous_ranker_oos_contract(

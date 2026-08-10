@@ -59,6 +59,7 @@ from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     DAILY_RANKER_OOS_SCORE_FILENAME,
     CONTINUOUS_RANKER_SCORE_FILENAME,
+    load_continuous_ranker_oos_score_table_from_path,
 )
 from filters.breakout_quality.strategy_compare_engine import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
@@ -81,6 +82,7 @@ SEED_RESULTS_FILENAME = "seed_results.csv"
 MANIFEST_FILENAME = "manifest.json"
 LATEST_FILENAME = "latest.json"
 ROBUSTNESS_SCHEMA_VERSION = 2
+TRAINER_TERMINATION_GRACE_SECONDS = 5.0
 
 MEAN_METRICS: tuple[tuple[str, str, str], ...] = (
     ("報酬", "total_return_pct", "%"),
@@ -361,12 +363,32 @@ def _validate_training_artifacts(
         raise ValueError(
             f"multi-seed report seed不一致: expected={seed}, actual={training.get('seed')}"
         )
+    outer_policy = dict(manifest.get("outer_oos_policy") or {})
+    execution_start_raw = str(outer_policy.get("oos_start_date") or "").strip()
+    if not execution_start_raw:
+        raise ValueError("multi-seed manifest缺少outer_oos_policy.oos_start_date")
+    execution_start = pd.Timestamp(execution_start_raw).strftime("%Y-%m-%d")
+    score_table = load_continuous_ranker_oos_score_table_from_path(
+        str(paths["score"]), dl.experiment_profile
+    )
+    score_available_from = str(score_table.attrs.get("available_from") or "")
+    score_available_through = str(score_table.attrs.get("available_through") or "")
+    if not score_available_from or not score_available_through:
+        raise ValueError("multi-seed score table缺少日期範圍metadata")
+    if execution_start > score_available_from:
+        raise ValueError(
+            "multi-seed isolated score第一列早於execution_start，時間契約不一致: "
+            f"execution_start={execution_start}, available_from={score_available_from}"
+        )
     return {
         **{key: str(path.resolve()) for key, path in paths.items()},
         "model_sha256": compute_file_sha256(paths["model"]),
         "score_sha256": compute_file_sha256(paths["score"]),
         "selected_epoch": int(training.get("selected_epoch", 0) or 0),
         "training_elapsed_sec": float(report.get("elapsed_sec", 0.0) or 0.0),
+        "score_execution_start": execution_start,
+        "score_available_from": score_available_from,
+        "score_available_through": score_available_through,
     }
 
 
@@ -500,6 +522,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
         baseline_reuse_dir=baseline_dir,
         continuous_score_path_override=str(job["score_path"]),
+        continuous_score_execution_start_override=str(job["score_execution_start"]),
     )
     metrics = dict(payload.get("score_ranking") or {})
     attribution_path = pair_dir / "trade_attribution.json"
@@ -1033,18 +1056,33 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                             text=True,
                         )
                         next_print = time.perf_counter() + 30.0
-                        while proc.poll() is None:
-                            harvest()
-                            now = time.perf_counter()
-                            if now >= next_print:
-                                replaying = len(futures)
-                                print(
-                                    f"  seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
-                                    f"training={_format_elapsed(now-train_started)} | CPU replay running={replaying} | "
-                                    f"total={_format_elapsed(now-started_total)}"
-                                )
-                                next_print = now + 30.0
-                            time.sleep(0.5)
+                        try:
+                            while proc.poll() is None:
+                                harvest()
+                                now = time.perf_counter()
+                                if now >= next_print:
+                                    replaying = len(futures)
+                                    print(
+                                        f"  seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
+                                        f"training={_format_elapsed(now-train_started)} | CPU replay running={replaying} | "
+                                        f"total={_format_elapsed(now-started_total)}"
+                                    )
+                                    next_print = now + 30.0
+                                time.sleep(0.5)
+                        except BaseException:
+                            if proc.poll() is None:
+                                proc.terminate()
+                                try:
+                                    proc.wait(timeout=TRAINER_TERMINATION_GRACE_SECONDS)
+                                except subprocess.TimeoutExpired:
+                                    proc.kill()
+                                    proc.wait()
+                            if current_training is not None:
+                                current_training = {
+                                    **current_training,
+                                    "state": "TERMINATED_AFTER_PIPELINE_FAILURE",
+                                }
+                            raise
                     if int(proc.returncode or 0) != 0:
                         train_tail = ""
                         if train_log_path.is_file():
@@ -1077,6 +1115,7 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                     "comparison_end": comparison_end,
                     "baseline_dir": baseline_dir,
                     "score_path": artifacts["score"],
+                    "score_execution_start": artifacts["score_execution_start"],
                     "selected_epoch": artifacts["selected_epoch"],
                     "training_elapsed_sec": artifacts["training_elapsed_sec"],
                     "pair_dir": str(pair_dir),
@@ -1114,6 +1153,27 @@ def run_multi_seed_robustness(*, confirm: bool = True) -> dict[str, Any]:
                     f"{arm.name} | CPU running={len(futures)}/{cfg.cpu_replay_workers}"
                 )
         harvest(wait_all=True)
+    except BaseException as exc:
+        manifest = _manifest_progress_payload(
+            manifest=manifest,
+            completed=completed,
+            total_units=total_units,
+            current_training=current_training,
+            futures=futures,
+        )
+        manifest.update({
+            "status": "FAILED",
+            "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "resumable": True,
+        })
+        _write_json(manifest_path, manifest)
+        print(
+            "[FAILED] Multiple-seed robustness已停止；可修正後由同一入口接續。"
+            f" manifest={project_relative_display_path(manifest_path, project_root=PROJECT_ROOT)}"
+        )
+        raise
     finally:
         executor.shutdown(wait=True, cancel_futures=False)
 

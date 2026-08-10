@@ -7814,3 +7814,31 @@ Forward-OOS模型訓練／model Gate亦沒有把OOS帶入gradient、epoch select
 - `StrategyMultiSeedRobustnessSettings`新增typed mapping與唯一匹配validator；robustness contract保存resolved reference arm identity，summary只依contract的arm_id取baseline。Robustness schema bump `1 → 2`，只影響尚未產生結果的robustness fingerprint，不影響Selection／Forward pair cache或策略回放語意。
 - synthetic contract同步改為讀取目前config的profile、seed count／generator seed、arm names與reference semantics，不再把`forward_oos`、8 seeds或目前四個顯示名稱當成唯一合法設定。
 - Scientific identity：不新增MR／DL／SR ID，不改model、Target、loss、score、selector、K/R0、交易會計或本次C20/C29結果。
+
+## 2026-08-10 — Multiple-seed robustness isolated Forward execution-start 邊界修正
+
+### 工作基準與實際失敗
+
+- 程式基準：`test-branch-1_20260810_223706_50b9b04.zip`；SHA256 `3f7bc38923639c405f1a044ddb75e55c9ad3ef344dd2258e4409445e3d8e7b67`。
+- Forward-OOS Multiple-seed robustness fingerprint維持`bb741ba0b0c3d680`；8 seeds × 2 stochastic arms，共16 work units。
+- 第一個`Min MR-12B` seed完成canonical isolated training並queue CPU replay後，下一個`Min MR-13A` training開始；前一個replay隨即拋出：requested `2021-01-01～2026-03-02`、score available `2021-01-04～2026-03-02`。
+- `2021-01-01`是Forward calendar OOS start，當天非實際score交易日；isolated score第一列合法從`2021-01-04`開始。這不是score coverage缺口，也不是前一輪future-target tail bug復發。
+
+### Root cause
+
+Canonical continuous-ranker OOS contract本來分開`execution_start`與score table的`available_from`：前者由model manifest `outer_oos_policy.oos_start_date`定義策略可執行期間，後者是實際score table第一個交易日。Multiple-seed的`continuous_score_path_override`支線先前沒有isolated manifest contract，只把score table第一列日期同時當execution start，因而用`2021-01-04`去拒絕合法的calendar request start `2021-01-01`。
+
+### 修正
+
+1. `strategy_compare_engine.run_comparison()`的isolated continuous-score override新增明確`continuous_score_execution_start_override`；score path與execution start必須成對提供。
+2. override period resolver保留三個不同語意：`execution_start`、`available_from`、`available_through`。execution start可以早於第一個score交易日，但不得晚於它。
+3. `strategy_multi_seed_robustness._validate_training_artifacts()`從每個isolated model manifest讀取`outer_oos_policy.oos_start_date`，並與score table attrs的`available_from/available_through`交叉驗證；replay job顯式傳遞該execution start。
+4. CPU replay future若在下一個GPU trainer執行期間失敗，parent會terminate trainer；5秒內未退出則kill，再重新拋出原錯誤。run manifest同步寫`FAILED`、error type/message與`resumable=true`，不產生不完整正式summary/report。
+
+### Resume與scientific identity
+
+- 不改seed list、generator seed、模型profile、training defaults、Target/loss/architecture、Min/Full參數、selector、K/R0、feasible-ascent、交易會計或final-strategy統計。
+- 不新增MR／DL／SR ID，不挑best seed、不做seed ensemble。
+- 不升robustness schema、不改scientific fingerprint；`bb741ba0b0c3d680`保持有效。修正後由相同Research → Strategy Compare → Multiple-seed robustness入口重新執行，已完整且identity相符的per-seed isolated training artifact可直接`TRAIN REUSE`接續；未完整的training則依既有validator重訓。
+- 本輪沒有新的Multiple-seed策略結果，研究狀態仍是`IMPLEMENTED／RESULT_PENDING`。
+

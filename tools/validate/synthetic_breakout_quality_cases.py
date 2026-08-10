@@ -17975,6 +17975,53 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and isolated_lookup["continuous_target_id"] == "daily_opportunity_no_time_r_v1",
     )
 
+    from filters.breakout_quality.strategy_compare_engine import (
+        _resolve_continuous_score_override_period,
+    )
+
+    isolated_period_table = pd.DataFrame(
+        {"model_score": [0.5]},
+        index=pd.MultiIndex.from_tuples(
+            [("2330", "2021-01-04")], names=["ticker", "date"]
+        ),
+    )
+    isolated_period_table.attrs["available_from"] = "2021-01-04"
+    isolated_period_table.attrs["available_through"] = "2026-03-02"
+    isolated_execution_start, isolated_available_from, isolated_available_through = (
+        _resolve_continuous_score_override_period(
+            isolated_period_table, execution_start_override="2021-01-01"
+        )
+    )
+    late_execution_rejected = False
+    try:
+        _resolve_continuous_score_override_period(
+            isolated_period_table, execution_start_override="2021-01-05"
+        )
+    except ValueError:
+        late_execution_rejected = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_isolated_score_override_separates_calendar_execution_start_from_first_trading_score_date",
+        True,
+        isolated_execution_start == "2021-01-01"
+        and isolated_available_from == "2021-01-04"
+        and isolated_available_through == "2026-03-02"
+        and late_execution_rejected
+        and '"score_execution_start": artifacts["score_execution_start"]' in robustness_source
+        and 'continuous_score_execution_start_override=str(job["score_execution_start"])' in robustness_source
+        and "outer_oos_policy" in robustness_source,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "multi_seed_replay_failure_is_resumable_and_stops_overlapped_training_process",
+        True,
+        '"status": "FAILED"' in robustness_source
+        and '"resumable": True' in robustness_source
+        and "proc.terminate()" in robustness_source
+        and "proc.kill()" in robustness_source
+        and "subprocess.TimeoutExpired" in robustness_source,
+    )
+
     with patch.object(
         robustness_module, "build_source_data_inventory",
         return_value={"dataset": "synthetic-full", "inventory": "same"},
