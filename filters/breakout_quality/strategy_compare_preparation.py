@@ -597,8 +597,8 @@ def collect_artifact_status(
                     else f"重用既有{research_label} frozen OOS continuous scores"
                     if ready
                     else (
-                        f"缺少或無效；請由模型研究入口建立{research_label}工件，"
-                        "策略比較不得自動重訓"
+                        f"缺少或無效；請由模型訓練工作類型執行「準備策略比較所需模型工件」"
+                        f"建立{research_label}工件；策略比較不得自動重訓"
                     )
                 )
                 file_rows[key] = {

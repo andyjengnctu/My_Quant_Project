@@ -7544,3 +7544,31 @@ Controlled contrasts：
 - `validate_strategy_compare_config_driven_app_contract_case`：47 checks / 0 fail；新增same-param baseline與Full-row feasible-ascent contract。
 - `validate_breakout_quality_daily_pit_strategy_runtime_contract_case`：8 checks / 0 fail；保留Selection C27/C28 frozen identity，並驗證`DL-CONT13A` Forward-OOS source與六arm／八contrast矩陣。
 - 正式`apps/test_suite.py`未由GPT執行；仍須由使用者本地formal double check。
+
+## 2026-08-10 — Forward-OOS Strategy Compare模型前置自動準備路由補全
+
+### 狀態
+
+`INFRASTRUCTURE_FIX / CONFIG_DRIVEN_MODEL_PREREQUISITE_ROUTING_COMPLETE / SCIENTIFIC_IDENTITY_UNCHANGED`。
+
+### 現象
+
+Min/Full × DL-off/MR-12B/MR-13A六arm Forward-OOS矩陣切換到`DL-CONT12B`與`DL-CONT13A`後，Strategy Compare狀態頁正確檢查出`model.pt`／manifest／continuous ranker report／forward scores缺失並標為`BLOCKED`；`param:min_roos`仍可依config自動`BUILD`。然而模型訓練工作類型既有的「準備策略比較所需模型工件」只解析`selection_point_in_time` sources，沒有解析`continuous_ranker_oos` sources，造成新的Forward-OOS矩陣雖有正式模型準備入口名稱，實際卻無法由該入口補齊MR-12B／MR-13A主模型工件。
+
+### Root cause
+
+跨工作類型自動前置的source resolver仍使用先前Selection PIT階段留下的`_strategy_compare_required_selection_pit_sources`，只挑Selection PIT score source。六arm矩陣改用Forward-OOS continuous sources後，enabled arms需要的`DL-CONT12B`／`DL-CONT13A`沒有進入model-work preparation queue。Strategy Compare本身禁止train模型權重是正確契約，錯誤在於模型工作類型的泛化準備入口沒有涵蓋新的score-source種類。
+
+### 修正
+
+1. 模型訓練工作類型改以`_strategy_compare_required_model_sources`解析目前enabled arms的所有正式model sources，目前涵蓋`selection_point_in_time`與`continuous_ranker_oos`，不硬編MR／DL ID。
+2. `continuous_ranker_oos`若完整model／manifest／report／scores identity一致，直接`REUSE`；缺少或不相容時，由**模型訓練工作類型**先準備Dataset／Continuous Target（daily profile依既有契約不建立event target），再執行該profile的canonical `train-continuous-ranker`，完成後重新驗證Forward-OOS contract。
+3. Selection PIT仍維持既有`--resume` lifecycle：相容fold重用，缺失／不相容fold只在模型工作類型內補訓。
+4. Strategy Compare本身仍不執行`train-continuous-ranker`，缺模型權重時維持`BLOCKED`；錯誤／狀態文字改為明確指向`[模型訓練] → 準備策略比較所需模型工件`。因此「自動前置=on」只代表同工作類型可安全確定建立的工件會自動補，不代表Strategy Compare可跨權限訓練模型。
+5. `PARAM-P2 / Min ROOS` builder、五欄search、300 trials SSOT、六arm定義、feasible-ascent、Target、loss、architecture、weights與策略accounting均未改變。
+
+### 程式基準
+
+- 輸入基準：`test-branch-1_20260810_132241_b8c1f5e.zip`；SHA256=`b82535e73d58eddb8eba23c0696eb96ffd50dce2c9ba13d2a97d6981a5ceb242`。
+- 本輪為workflow／ownership修正，不新增`MR-*`、`DL-*`或`SR-C*` scientific ID。
+

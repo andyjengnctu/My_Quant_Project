@@ -97,6 +97,9 @@ from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
     CONTINUOUS_RANKER_SCORE_FILENAME,
     DAILY_RANKER_OOS_SCORE_FILENAME,
+    SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+    load_continuous_ranker_oos_contract,
 )
 from tools.audit.catalog import get_domain_cli_commands
 
@@ -2761,13 +2764,10 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
         )
 
 
-def _strategy_compare_required_selection_pit_sources():
-    """Resolve configured Strategy Compare PIT sources without exposing model choice in UI."""
+def _strategy_compare_required_model_sources():
+    """Resolve all configured Strategy Compare model sources without exposing model choice in UI."""
 
     from config.strategy_compare import get_strategy_comparison_settings
-    from filters.breakout_quality.ranking_score_store import (
-        SCORE_SOURCE_SELECTION_POINT_IN_TIME,
-    )
 
     comparison = get_strategy_comparison_settings()
     required_ids = {
@@ -2775,28 +2775,31 @@ def _strategy_compare_required_selection_pit_sources():
         for arm in comparison.enabled_arms
         if arm.dl_enabled and arm.dl_id
     }
+    supported_score_sources = {
+        SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+        SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+    }
     return comparison, tuple(
         (dl_id, comparison.dl_sources[dl_id])
         for dl_id in comparison.dl_sources
         if dl_id in required_ids
-        and comparison.dl_sources[dl_id].score_source
-        == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+        and comparison.dl_sources[dl_id].score_source in supported_score_sources
     )
 
 
 def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
-    """Prepare configured PIT model sources in the model-training work type.
+    """Prepare every configured Strategy Compare model source in the model-training work type.
 
-    This workflow lives under the model-training work type, so it may rebuild
-    Dataset/Label/Target metadata and may train only missing/incompatible Selection
-    PIT fold checkpoints. Existing compatible folds are always reused via ``resume``.
-    It does not train the forward-OOS anchor merely because Strategy Compare needs
-    inference artifacts; Strategy Compare itself remains checkpoint-only.
+    This workflow owns model training, so it may prepare Dataset/Target inputs and train
+    missing Forward-OOS continuous models or missing/incompatible Selection PIT folds.
+    Ready Forward-OOS model/report/score contracts are reused.  Selection PIT uses
+    ``resume`` so compatible folds are reused and only missing/incompatible folds train.
+    Strategy Compare itself remains unable to train model weights.
     """
 
-    comparison, sources = _strategy_compare_required_selection_pit_sources()
+    comparison, sources = _strategy_compare_required_model_sources()
     if not sources:
-        print("目前策略比較設定沒有需要準備的Selection PIT模型工件。")
+        print("目前策略比較設定沒有需要準備的模型工件。")
         return 0
 
     color_enabled = console_color_enabled()
@@ -2808,16 +2811,12 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
         workflow = get_breakout_quality_workflow_settings(
             experiment_profile=str(source.experiment_profile)
         )
-        if not workflow.supports_point_in_time_scores:
-            raise ValueError(
-                f"設定的Selection PIT source未啟用PIT workflow: {dl_id}"
-            )
         if (
             str(workflow.filter_id) != str(source.filter_id)
             or str(workflow.model_architecture) != str(source.model_architecture)
         ):
             raise ValueError(
-                f"Strategy Compare PIT source與model workflow identity不一致: {dl_id}"
+                f"Strategy Compare model source與workflow identity不一致: {dl_id}"
             )
         print(
             paint(
@@ -2828,6 +2827,62 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
             )
             + f" {dl_id} | profile={source.experiment_profile}"
         )
+
+        if source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            try:
+                load_continuous_ranker_oos_contract(
+                    PROJECT_ROOT,
+                    str(source.filter_id),
+                    str(source.model_architecture),
+                    str(source.experiment_profile),
+                )
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                print(
+                    "  Forward-OOS policy：模型工作類型補齊缺少／不相容的完整模型工件"
+                    f" | reason={type(exc).__name__}"
+                )
+                code = _prepare_continuous_research_inputs(
+                    program_name,
+                    workflow,
+                    dataset_profile=str(comparison.dataset),
+                    max_tickers=0,
+                )
+                if code != 0:
+                    return int(code)
+                code = _run_command(
+                    "train-continuous-ranker",
+                    [
+                        "--filter-id", str(source.filter_id),
+                        "--model-architecture", str(source.model_architecture),
+                        "--experiment-profile", str(source.experiment_profile),
+                        "--seed", str(workflow.seed),
+                    ],
+                    program_name=program_name,
+                )
+                if code != 0:
+                    return int(code)
+                # The training command is the canonical producer for the frozen
+                # Forward-OOS model, report, and score table.  Revalidate instead
+                # of accepting a successful return code alone.
+                load_continuous_ranker_oos_contract(
+                    PROJECT_ROOT,
+                    str(source.filter_id),
+                    str(source.model_architecture),
+                    str(source.experiment_profile),
+                )
+            else:
+                print("  Forward-OOS policy：REUSE 已完成且identity一致的模型／report／scores")
+            continue
+
+        if source.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            raise ValueError(
+                f"不支援的Strategy Compare model score source: {source.score_source!r}"
+            )
+        if not workflow.supports_point_in_time_scores:
+            raise ValueError(
+                f"設定的Selection PIT source未啟用PIT workflow: {dl_id}"
+            )
+
         code = _prepare_continuous_research_inputs(
             program_name,
             workflow,
@@ -2901,8 +2956,8 @@ def _interactive_model_research(program_name: str) -> int:
         print("[3] 查看目前Workflow與工件狀態")
         if comparison_settings.enabled:
             print(f"[4] {comparison_settings.menu_label}")
-        _comparison, strategy_pit_sources = _strategy_compare_required_selection_pit_sources()
-        if strategy_pit_sources:
+        _comparison, strategy_model_sources = _strategy_compare_required_model_sources()
+        if strategy_model_sources:
             print("[5] 準備策略比較所需模型工件")
         print("[0] 返回")
         try:
@@ -2931,7 +2986,7 @@ def _interactive_model_research(program_name: str) -> int:
                     program_name=program_name,
                 )
             )
-        if choice == "5" and strategy_pit_sources:
+        if choice == "5" and strategy_model_sources:
             return int(_prepare_strategy_compare_model_artifacts(program_name))
         print("無效選項，請重新輸入。")
 

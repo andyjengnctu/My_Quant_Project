@@ -765,7 +765,8 @@ def render_status(
                     ("Rotation", current.rotation),
                     ("Config fingerprint", current_status["config_fingerprint"]),
                     ("比較狀態", current_status["overall_status"]),
-                    ("自動前置", "on" if current.preparation.auto_prepare else "off"),
+                    ("策略比較自動前置", "on" if current.preparation.auto_prepare else "off"),
+                    ("模型權重前置", "模型訓練 → 準備策略比較所需模型工件"),
                 )
             ),
             render_section("1. 比較對象"),

@@ -17486,6 +17486,28 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for source in settings.parameter_sources.values()
         ),
     )
+    required_forward_oos_source_ids = {
+        str(arm.dl_id)
+        for arm in settings.enabled_arms
+        if arm.dl_enabled
+        and arm.dl_id
+        and settings.dl_sources[str(arm.dl_id)].score_source
+        == "continuous_ranker_oos"
+    }
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "model_work_type_prepares_all_configured_forward_oos_sources_without_strategy_compare_training",
+        True,
+        bool(required_forward_oos_source_ids)
+        and "_strategy_compare_required_model_sources" in model_app_source
+        and "SCORE_SOURCE_CONTINUOUS_RANKER_OOS" in model_prepare_source
+        and "load_continuous_ranker_oos_contract" in model_prepare_source
+        and '"train-continuous-ranker"' in model_prepare_source
+        and "Forward-OOS policy：REUSE" in model_prepare_source
+        and "Forward-OOS policy：模型工作類型補齊" in model_prepare_source
+        and "train-continuous-ranker" not in preparation_source
+        and "模型訓練工作類型執行「準備策略比較所需模型工件」" in preparation_source,
+    )
     selection_min_roos_source = settings.parameter_sources.get("selection_min_roos")
     add_check(
         results, "synthetic_breakout_quality", case_id,
