@@ -39,7 +39,7 @@ from core.active_param_ensemble import (
     load_active_param_ensemble_set,
 )
 from tools.trade_analysis.trade_log import run_ticker_analysis
-from tools.portfolio_sim.simulation_runner import (
+from services.portfolio_replay import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
     load_portfolio_market_context,
     run_portfolio_simulation_prepared,

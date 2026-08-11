@@ -40,6 +40,9 @@ project/
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ filters/
 │  └─ breakout_quality/               # quality feature/label、shared split、artifact contract、model factory、正式 runtime score lookup
+├─ services/
+│  ├─ portfolio_replay.py             # canonical portfolio replay／market-context application service
+│  └─ optimizer/                      # 正式optimizer primitives；目前含raw cache／trial inputs／walk-forward
 ├─ models/
 │  ├─ filters/breakout_quality/<filter_id>/<model_architecture>/<experiment_profile>/
 │  │  ├─ model.pt                     # architecture/profile-scoped canonical model artifact
@@ -52,8 +55,8 @@ project/
    ├─ audit/                          # 全專案Audit catalog／runner／domain implementations
    ├─ downloader/                     # 資料下載子系統
    ├─ filters/breakout_quality/        # quality dataset/train/export/evaluate 子系統實作與開發研究入口
-   ├─ optimizer/                      # 參數最佳化子系統
-   ├─ portfolio_sim/                  # 投組模擬子系統
+   ├─ optimizer/                      # optimizer互動／orchestration與尚待搬遷相容層
+   ├─ portfolio_sim/                  # 投組模擬CLI／報表與legacy import相容層
    ├─ scanner/                        # 掃描器子系統
    ├─ trade_analysis/                 # 單股 trade-analysis 子系統
    ├─ validate/                       # validate / synthetic / real-case 驗證子系統
@@ -63,6 +66,11 @@ project/
 
 ## 關鍵 shipped 模組索引
 
+### `services/portfolio_replay.py` 與 `services/optimizer/`
+
+- `services/portfolio_replay.py`是canonical portfolio replay application service；Strategy Compare、portfolio CLI與Workbench均直接引用此正式服務。舊`tools/portfolio_sim/simulation_runner.py`只保留module alias相容層，不保存第二套replay實作。
+- `services/optimizer/raw_cache.py`、`trial_inputs.py`、`walk_forward.py`是Portfolio Replay共用的正式optimizer primitives；舊`tools/optimizer/`同名模組只保留module alias，確保既有CLI、validator與private compatibility import仍指向同一module object。其他optimizer orchestration仍暫留`tools/optimizer/`，由後續Service Boundary批次搬遷。
+
 ### `tools/optimizer/`
 
 ```text
@@ -70,7 +78,7 @@ project/
    │  ├─ session.py                   # optimizer session 狀態 façade
 ```
 
-- `tools/optimizer/`：參數最佳化子系統；由 `apps/research.py` 的「策略參數最佳化」工作類型進入，原optimizer互動流程維持不變。
+- `tools/optimizer/`目前保留策略參數最佳化互動／orchestration與legacy import façade；由 `apps/research.py` 的「策略參數最佳化」工作類型進入。正式可共用primitive逐步移入`services/optimizer/`，不得再由`filters/`新增對`tools.optimizer`的反向依賴。
 
 ### `tools/trade_analysis/`
 
@@ -95,7 +103,7 @@ project/
 - Active `inception_time_market_set_candidate_v1` 沿用既有point-in-time Market Set Bank與Shared Stock Temporal Encoder，但不再使用與候選無關的Global Learned Queries。每個候選128維embedding會投影成可設定數量的candidate-conditioned query（目前1個），對該事件日期的全市場32維stock embeddings做masked multi-head cross-attention，再形成128維candidate-specific market embedding與候選表示融合。Market Bank仍依日期microbatch物化，候選encoder仍對完整logical batch只forward一次；因此`max_dates_per_batch`只影響記憶體，不改batch=128、optimizer step、loss denominator或epoch語意。此架構目前只允許research score export，`forward_oos`與scanner仍fail-fast。
 - 正式 `forward_oos` score export 不得只重播訓練 Dataset 內「成功建立特徵」的事件；它必須重新使用目前 canonical OHLCV 清洗與突破 crossover 規則建立當前 runtime 候選全集。每一個 `ticker/date/high_len` 候選必須二擇一：可建立完整模型輸入者寫入模型 probability；因 benchmark 日期缺失、歷史窗不足或非有限特徵而不可評分者，明確寫入同目錄 `unavailable_scores.csv`，並在 canonical `scores.csv` 以固定 `0.0` 保守映射為 REJECT。manifest 必須保存 current source CSV inventory、候選總數、模型評分數、保守拒絕數及原因統計；runtime 必須驗證 audit rows 與 `scores.csv` 的 0.0 一致。只有已被正式記錄的不可評分事件可保守拒絕，任何未記錄缺分仍須 fail-fast。
 - Selection point-in-time Score 子系統由 `tools/filters/breakout_quality/continuous_ranker_pipeline.py`、`build_point_in_time_scores.py` 與 `audit_point_in_time_scores.py` 組成。共用 pipeline 重用既有 continuous-ranker 的資料載入、percentile target、Validation epoch selection、final refit、checkpoint 與 inference，不複製 loss 或訓練語意。Builder 使用 expanding-window folds；train／validation／refit 資料除事件日期早於 score period 外，還必須滿足 `label_eval_end_date < score_start`，每個 score group只能由一個尚未看過該事件的凍結模型評分。PIT起始日預設為`auto`：依實際Dataset、Target、label completion、24個月Validation與最小train／validation／score groups契約逐月尋找最早合法日期；`--plan-only`可先輸出解析日期與fold計畫。Fold identity固定為`fold_YYYYMMDD_YYYYMMDD`，向前延伸歷史不會改變既有期間的ID；若舊`fold_000`類工件的日期、模型、資料、訓練與來源契約完全相同，builder會驗證checkpoint／Score hash後遷移為穩定日期ID並直接重用。每 fold 保存日期、rows/groups、selected epoch、checkpoint hash及Score hash；串接後 fail-fast 檢查 coverage、重複、缺失、cutoff、identity與有限值。正式串接 Score CSV不含 Future Target，初始 manifest 明確 `eligible=false`、只可做Selection模型驗證；audit才離線 join continuous target計算Spearman、daily Spearman、年度與decile spread、fold drift、PASS分類重疊及orderable coverage。Audit以單一payload同時產生表格化終端摘要、`selection_point_in_time_audit.md`易讀報表與完整JSON；JSON以SHA256綁定產生它的PIT manifest、Scores、coverage與Continuous Target manifest，策略gate只接受完全相同來源工件；報表固定揭露設定、Score coverage、逐年與逐fold結果、研究邊界及工件路徑，不另算第二套指標。主選單狀態頁另列Target與PIT Markdown報表。PIT工件不是 forward-OOS runtime score，不得自動進入scanner或策略排序。
-- `apps/research.py`的「策略組合比較」是正式策略比較入口；第一層選單由`config/strategy_compare.py`的profiles動態產生，永久區分`Selection PIT 策略比較`與`Forward-OOS 策略比較`，另提供跨profile狀態檢視；每個profile內才提供「執行目前比較設定／查看設定、工件與預計動作」。選單不得硬編特定arm ID、TP1、A9或其他實驗版本名稱。Selection與Forward共用同一engine，但各自有獨立period、enabled arms/contrasts與`outputs/strategy_compare/<profile>/`命名空間，禁止靠覆寫單一active matrix切換研究階段；profile可由config宣告`reuse_output_roots`唯讀掃描舊run cache以平滑遷移，任何新run／latest仍只能寫入目前profile root。`config/strategy_compare.py`逐項定義parameter sources、DL sources、arms、contrasts與preparation policy；每項以`enabled`或明確欄位調整，不存在整套實驗ID。同一param source／rule policy只定義一個共用DL-off基準，可掛一個或多個DL-on模型；各DL-on arm可獨立開關，runtime必須逐一與同一DL-off基準形成controlled pair，並驗證重複回放的基準摘要與年度報酬完全一致。`core/strategy_comparison.py`只提供泛用設定、驗證、依賴計畫與fingerprint；`filters/breakout_quality/strategy_compare_preparation.py`依config判定`READY／PREPARABLE／BLOCKED`，並透過`filters/breakout_quality/export_scores.py`、`strategy_optimizer_policy.py`與`strategy_param_training.py`正式共用服務補建既有模型的forward-OOS scores或比較所需策略參數；不建立Label、不選模型、不訓練模型權重。`filters/breakout_quality/strategy_comparison.py`完成一次確認後的前置編排與Breakout Quality replay；唯一canonical比較引擎位於`filters/breakout_quality/strategy_compare_engine.py`，不再保留`filters/breakout_quality/strategy_compare_engine.py` legacy alias。任一前置步驟失敗即停止回放、保留可接續工件並回報步驟與相對路徑。正式回放前須先由全部啟用DL runtime工件解析共同可比較期間，並驗證每個rolling active-param來源完整覆蓋該期間；歷史Label teacher params不得冒充forward績效比較參數。Min ROOS使用forward P2 DL-off-trained工件，Min-DL ROOS使用forward P3 DL-on-trained工件；缺少或identity／coverage不符時依config自動建立或接續。前置允許分波重新規劃，例如先建立forward scores取得正式期間，再建立因此顯露為缺少／過期的參數工件；所有來源READY後才開始第一個pair replay。目前正式profiles保留歷史TP1/A9及Full+DL arms但不啟用；active Selection profile固定四arm：C32 Full DL-off、C23 Min DL-off、C25 Min+MR-12B-PIT feasible-ascent、C28 Min+MR-13A-PIT feasible-ascent；active Forward profile固定四arm：C1 Full DL-off、C3 Min DL-off、C20 Min+MR-12B、C29 Min+MR-13A。Full DL-off可作standalone comparator，不要求同group另啟用DL-on arm。歷史`trained_with_dl_id`參數仍維持配對限制：任何非空identity只允許搭配訓練時相同DL runtime，舊TP1／A9 P3工件亦繼續隔離保存，不得混入current Min/Full continuous matrix。`direct_selection_delta_r`是相對同一param source／rule policy之DL-off基準的attribution，只能在相同參數與規則宇宙內比較；跨參數或跨rule-policy contrast不得把兩個不同baseline attribution相減後顯示為直接選擇效果。每個profile的輸出以啟用arm IDs與config fingerprint建立`outputs/strategy_compare/<profile>/runs/<timestamp>_<arms>_<fingerprint>/`並更新該profile自己的`latest/`，manifest保存設定snapshot、共同比較期間、前置計畫與工件SHA256。Strategy Compare另以pair-level replay fingerprint重用跨run已完成結果；fingerprint只包含會改變replay的dataset／period／param policy／max positions／rotation／param source／DL source／runtime mode、engine schema與對應param/model/manifest/forward-score SHA256，不包含contrast或報表文字，因此新增比較項不會使既有arm失效。同一run若仍需建立新DL arm，`reuse_shared_baseline`會把同一param source／rule policy的DL-off replay視為shared baseline：歷史compatible pair可直接提供baseline，否則第一個新pair只算一次，後續pair只執行DL-on path；baseline重用前仍須逐項驗證dataset、param SHA、param policy、rules、shared overrides、max positions、rotation與period完全一致。
+- `apps/research.py`的「策略組合比較」是正式策略比較入口；第一層選單由`config/strategy_compare.py`的profiles動態產生，永久區分`Selection PIT 策略比較`與`Forward-OOS 策略比較`，另提供跨profile狀態檢視；每個profile內才提供「執行目前比較設定／查看設定、工件與預計動作」。選單不得硬編特定arm ID、TP1、A9或其他實驗版本名稱。Selection與Forward共用同一engine，但各自有獨立period、enabled arms/contrasts與`outputs/strategy_compare/<profile>/`命名空間，禁止靠覆寫單一active matrix切換研究階段；profile可由config宣告`reuse_output_roots`唯讀掃描舊run cache以平滑遷移，任何新run／latest仍只能寫入目前profile root。`config/strategy_compare.py`只保存current profile dependency closure所需parameter sources、DL sources、arms、contrasts與preparation policy；arm／contrast是否啟用只由各profile的`arm_ids`／`contrast_ids` membership決定，歷史唯讀定義隔離於`config/compatibility/strategy_compare_history.py`。同一param source／rule policy只定義一個共用DL-off基準，可掛一個或多個DL-on模型；各DL-on arm可獨立開關，runtime必須逐一與同一DL-off基準形成controlled pair，並驗證重複回放的基準摘要與年度報酬完全一致。`core/strategy_comparison.py`只提供泛用設定、驗證、依賴計畫與fingerprint；`filters/breakout_quality/strategy_compare_preparation.py`依config判定`READY／PREPARABLE／BLOCKED`，並透過`filters/breakout_quality/export_scores.py`、`strategy_optimizer_policy.py`與`strategy_param_training.py`正式共用服務補建既有模型的forward-OOS scores或比較所需策略參數；不建立Label、不選模型、不訓練模型權重。`filters/breakout_quality/strategy_comparison.py`完成一次確認後的前置編排與Breakout Quality replay；唯一canonical比較引擎位於`filters/breakout_quality/strategy_compare_engine.py`，portfolio replay則只透過`services/portfolio_replay.py`取得；engine不得反向import`tools/portfolio_sim`。任一前置步驟失敗即停止回放、保留可接續工件並回報步驟與相對路徑。正式回放前須先由全部啟用DL runtime工件解析共同可比較期間，並驗證每個rolling active-param來源完整覆蓋該期間；歷史Label teacher params不得冒充forward績效比較參數。Min ROOS使用forward P2 DL-off-trained工件，Min-DL ROOS使用forward P3 DL-on-trained工件；缺少或identity／coverage不符時依config自動建立或接續。前置允許分波重新規劃，例如先建立forward scores取得正式期間，再建立因此顯露為缺少／過期的參數工件；所有來源READY後才開始第一個pair replay。目前正式profile的比較對象與差異組合完全由`config/strategy_compare.py`的current profile membership驅動；退役TP1/A9及其他historical arms只存在compatibility catalog，不得因歷史定義存在而自動進入current profile。Full DL-off可作standalone comparator，不要求同group另啟用DL-on arm。歷史`trained_with_dl_id`參數仍維持配對限制：任何非空identity只允許搭配訓練時相同DL runtime，舊TP1／A9 P3工件亦繼續隔離保存，不得混入current Min/Full continuous matrix。`direct_selection_delta_r`是相對同一param source／rule policy之DL-off基準的attribution，只能在相同參數與規則宇宙內比較；跨參數或跨rule-policy contrast不得把兩個不同baseline attribution相減後顯示為直接選擇效果。每個profile的輸出以啟用arm IDs與config fingerprint建立`outputs/strategy_compare/<profile>/runs/<timestamp>_<arms>_<fingerprint>/`並更新該profile自己的`latest/`，manifest保存設定snapshot、共同比較期間、前置計畫與工件SHA256。Strategy Compare另以pair-level replay fingerprint重用跨run已完成結果；fingerprint只包含會改變replay的dataset／period／param policy／max positions／rotation／param source／DL source／runtime mode、engine schema與對應param/model/manifest/forward-score SHA256，不包含contrast或報表文字，因此新增比較項不會使既有arm失效。同一run若仍需建立新DL arm，`reuse_shared_baseline`會把同一param source／rule policy的DL-off replay視為shared baseline：歷史compatible pair可直接提供baseline，否則第一個新pair只算一次，後續pair只執行DL-on path；baseline重用前仍須逐項驗證dataset、param SHA、param policy、rules、shared overrides、max positions、rotation與period完全一致。
 - Resource-aware quality是candidate ranking的盤前overlay，不是第三套signal filter。所有resource-aware policy都保留完整setup lifecycle與Min ROOS初始buy-sort；`core/portfolio_entries.py`在正式reserve前重用同一`build_cash_capped_entry_plan()`／exact-accounting建立Min ROOS盤前baseline。C11 `resource-aware-binary`沿Min ROOS順位接受第一個維持cash-binding且提高PASS reserved capital的promotion；C12 `resource-aware-binary-basket`每輪評估全部尚未promotion的A9 PASS候選，以exact cash-cap結果做best-improvement；C14/C15 `resource-aware-continuous`仍只在Min ROOS cash-binding日讓frozen continuous score介入，slot-binding日完全保留Min ROOS。C16 `resource-aware-continuous-capital-preserving`改以basket-level resource floor取代cash-binding feasibility：cash或slot-binding日都可評估MR-12A score，但任何接受basket都必須同時滿足`selected_count >= Min ROOS baseline`與`exact reserved capital >= Min ROOS baseline`；完整score order不合法時只接受符合雙resource floor的deterministic best-improvement promotions。C17 `resource-aware-continuous-max-dl`再把研究變數收斂成stock membership：Min ROOS只固定每日預留單數K與reserved-capital floor R0，DL score先取Top-K；不合法時最多K步minimum-repair，每一步只替換一個原Top-K成員並重跑canonical exact reservation；已選basket內的執行順序仍沿用Min ROOS rank，正式action prefix限制為K筆，因此不把stock selection與allocation priority混成同一變數。C12/C16/C17都刻意不做指數級全子集合窮舉，避免明顯犧牲正式replay效率；所有resource-aware policy都不得新增利用率百分比、距限價bucket、score cutoff、Min ROOS／DL權重、Future Target或candidate-day重新打分。
 
 - Selection Full ROOS使用獨立`PARAM-P4` historical rolling active params：2014～2020、120m train／12m OOS、canonical Full optimizer search space、TP/DL/History threshold依current optimizer policy固定OFF；不得以2021+ `full_roos` forward active params倒灌Selection。Selection Full historical row為C32/C33/C34，P4與三個scientific IDs永久保留；current Selection核心比較只啟用C32 Full DL-off baseline、C23 Min baseline、C25 Min+MR-12B與C28 Min+MR-13A。C33/C34保留歷史重現但inactive；engine支援standalone DL-off comparator，因此C32不必掛隱藏Full+DL arm。
@@ -197,16 +205,17 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 - `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口。
 
-- `apps/`：正式入口層，只從對應子系統 façade 匯入公開介面。
+- `apps/`：正式入口層，只從對應 application/service façade 匯入公開介面。
+- `services/`：正式 application/service orchestration；可組合`core/`、`filters/`與其他正式service，不得反向依賴`tools/`。
 - `core/`：核心規則、帳務、價格、統計、path 與共用 helper；不得放 UI orchestration 或 validate 腳本。
-- `tools/`：Audit、下載、最佳化、單股分析、validate、local regression 與 GUI 子系統；`tools/audit/`是project-wide read-only diagnostics framework，不得成為正式runtime依賴。
+- `tools/`：Audit、CLI／GUI、下載、validate、local regression與尚待搬遷的相容/orchestration層；正式domain與services不得依賴其驗證／UI實作。
 - `config/`：共用政策與執行預設。
 - `models/`：模型工件與 runtime 產生或使用者保留的可選最佳參數輸入；沒有 path override 時，預設參數 fallback 仍解析到 `models/run_best_params.json`，但 repository／交付 ZIP 不必預先包含該可變動工件。
 - `doc/`：架構、常用指令與 formal checklist 文件。
 
 ## 正式入口
 
-- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化直接重用既有`tools.optimizer`互動流程；策略組合比較依`config/strategy_compare.py`執行，其中Multiple-seed robustness以Strategy Compare作UI/orchestrator、模型權重仍只由canonical continuous-ranker trainer建立；Audit依`config/audit.py`指定active module。
+- `apps/research.py`：研究單一正式入口；主選單只選工作類型。模型訓練由`config/research.py`指定active model provider；策略參數最佳化目前仍由既有optimizer互動orchestrator承接；策略組合比較依`config/strategy_compare.py`執行並透過`services/portfolio_replay.py`重用canonical portfolio replay，其中Multiple-seed robustness以Strategy Compare作UI/orchestrator、模型權重仍只由canonical continuous-ranker trainer建立；Audit依`config/audit.py`指定active module。
 - `tools/filters/breakout_quality/application.py`：Breakout Quality model provider，承接原完整model workflow、dataset、training、score export、易讀report與詳細evaluation；不是使用者直接入口。
 - `apps/test_suite.py`：日常一鍵測試正式入口。
 - `apps/package_zip.py`：打包正式入口。
@@ -232,8 +241,8 @@ python apps/research.py model audit-target-time-ablation --filter-id breakout_qu
 
 ## 依賴方向
 
-- 依賴方向以正式domain為中心：`apps -> filters/core`；開發與Audit可為`apps -> tools -> filters/core`。
-- `core/`與`filters/`不得反向依賴`tools/audit/`或`apps/`；跨層共用計算應抽到正式domain／core。
+- 依賴方向以正式domain/service為中心：`apps -> services -> filters/core`，或薄入口直接`apps -> filters/core`；CLI／GUI／Audit可為`apps -> tools -> services/filters/core`。
+- `services/`、`core/`與`filters/`不得反向依賴`tools/`或`apps/`；跨層共用application orchestration放`services/`，純計算真理放正式domain／core。
 - 正式 test chain 只由 `apps/test_suite.py` 與 `tools/local_regression/formal_pipeline.py` 收斂。
 
 ## 共享邊界

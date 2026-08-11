@@ -2964,13 +2964,13 @@ def validate_gui_workbench_contract_case(base_params):
     if len(panel_specs) > 1:
         portfolio_panel_spec = panel_specs[1]
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_panel_tab_label", "投組回測檢視", portfolio_panel_spec.get("tab_label"))
-        add_check(results, "output_contract", case_id, "gui_workbench_portfolio_backend_runner", "tools.portfolio_sim.simulation_runner.run_portfolio_simulation_prepared", portfolio_panel_spec.get("backend_runner"))
+        add_check(results, "output_contract", case_id, "gui_workbench_portfolio_backend_runner", "services.portfolio_replay.run_portfolio_simulation_prepared", portfolio_panel_spec.get("backend_runner"))
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_artifact_keys", ["dashboard_html_path", "report_xlsx_path"], portfolio_panel_spec.get("artifact_keys"))
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_jump_to_trade_enabled", True, portfolio_panel_spec.get("jump_to_trade_enabled"))
 
     inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     portfolio_inspector_source = build_project_absolute_path("tools", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
-    portfolio_runner_source = build_project_absolute_path("tools", "portfolio_sim", "simulation_runner.py").read_text(encoding="utf-8")
+    portfolio_runner_source = build_project_absolute_path("services", "portfolio_replay.py").read_text(encoding="utf-8")
     workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
     meta_quality_coverage_source = build_project_absolute_path("tools", "local_regression", "meta_quality_coverage.py").read_text(encoding="utf-8")
     validate_main_source = build_project_absolute_path("tools", "validate", "main.py").read_text(encoding="utf-8")

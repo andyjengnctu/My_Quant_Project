@@ -8161,9 +8161,9 @@ def validate_breakout_quality_qualified_candidate_set_audit_contract_case(_base_
         / "portfolio_engine.py"
     ).read_text(encoding="utf-8")
     runner_source = (
-        Path(__file__).resolve().parents[1]
-        / "portfolio_sim"
-        / "simulation_runner.py"
+        Path(__file__).resolve().parents[2]
+        / "services"
+        / "portfolio_replay.py"
     ).read_text(encoding="utf-8")
     add_check(
         results,
@@ -11633,7 +11633,7 @@ def validate_breakout_quality_candidate_counterfactual_execution_contract_case(_
             break
     menu_source = app_source[app_source.find("def _interactive_model_research") : app_source.find("def run_model_training_menu")]
     engine_source = (root / "core" / "portfolio_engine.py").read_text(encoding="utf-8")
-    runner_source = (root / "tools" / "portfolio_sim" / "simulation_runner.py").read_text(encoding="utf-8")
+    runner_source = (root / "services" / "portfolio_replay.py").read_text(encoding="utf-8")
     compare_source = (
         root / "filters" / "breakout_quality" / "strategy_compare_engine.py"
     ).read_text(encoding="utf-8")
@@ -17531,6 +17531,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     workflow_io_path = project_root / "filters" / "breakout_quality" / "workflow_io.py"
     optimizer_policy_path = project_root / "filters" / "breakout_quality" / "strategy_optimizer_policy.py"
     artifact_registry_path = project_root / "filters" / "breakout_quality" / "artifact_dependency_registry.py"
+    portfolio_replay_service_path = project_root / "services" / "portfolio_replay.py"
+    portfolio_replay_wrapper_path = project_root / "tools" / "portfolio_sim" / "simulation_runner.py"
+    optimizer_raw_service_path = project_root / "services" / "optimizer" / "raw_cache.py"
+    optimizer_trial_service_path = project_root / "services" / "optimizer" / "trial_inputs.py"
+    optimizer_walk_forward_service_path = project_root / "services" / "optimizer" / "walk_forward.py"
     legacy_export_path = project_root / "tools" / "filters" / "breakout_quality" / "export_scores.py"
     legacy_param_path = project_root / "tools" / "filters" / "breakout_quality" / "strategy_dl_filter_param_adapt_gate.py"
     quick_gate_source = (project_root / "tools" / "local_regression" / "run_quick_gate.py").read_text(encoding="utf-8")
@@ -17543,6 +17548,11 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     strategy_compare_source = engine_path.read_text(encoding="utf-8")
     param_service_source = param_service_path.read_text(encoding="utf-8")
     artifact_registry_source = artifact_registry_path.read_text(encoding="utf-8")
+    portfolio_replay_service_source = portfolio_replay_service_path.read_text(encoding="utf-8")
+    portfolio_replay_wrapper_source = portfolio_replay_wrapper_path.read_text(encoding="utf-8")
+    optimizer_raw_service_source = optimizer_raw_service_path.read_text(encoding="utf-8")
+    optimizer_trial_service_source = optimizer_trial_service_path.read_text(encoding="utf-8")
+    optimizer_walk_forward_service_source = optimizer_walk_forward_service_path.read_text(encoding="utf-8")
 
     from config import strategy_compare as strategy_config
     from config.compatibility import strategy_compare_history as strategy_history
@@ -17674,6 +17684,24 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             or int(options["optimizer_seed"]) == int(OPTIMIZER_RANDOM_SEED_DEFAULT)
             for options in builder_options
         ),
+    )
+
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "portfolio_replay_service_boundary_has_canonical_implementation_and_tool_alias_only",
+        True,
+        portfolio_replay_service_path.is_file()
+        and optimizer_raw_service_path.is_file()
+        and optimizer_trial_service_path.is_file()
+        and optimizer_walk_forward_service_path.is_file()
+        and "from services.portfolio_replay import (" in strategy_compare_source
+        and "from tools.portfolio_sim.simulation_runner import (" not in strategy_compare_source
+        and "from tools." not in portfolio_replay_service_source
+        and "import tools." not in portfolio_replay_service_source
+        and "from tools." not in optimizer_raw_service_source
+        and "from tools." not in optimizer_trial_service_source
+        and "from tools." not in optimizer_walk_forward_service_source
+        and "sys.modules[__name__] = _impl" in portfolio_replay_wrapper_source,
     )
 
     add_check(

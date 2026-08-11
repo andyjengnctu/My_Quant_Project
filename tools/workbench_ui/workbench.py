@@ -82,7 +82,7 @@ PANEL_SPECS = (
     {
         "panel_id": "portfolio_backtest_inspector",
         "tab_label": "投組回測檢視",
-        "backend_runner": "tools.portfolio_sim.simulation_runner.run_portfolio_simulation_prepared",
+        "backend_runner": "services.portfolio_replay.run_portfolio_simulation_prepared",
         "artifact_keys": ("dashboard_html_path", "report_xlsx_path"),
         "inline_chart_backend": "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure",
         "default_show_volume": False,

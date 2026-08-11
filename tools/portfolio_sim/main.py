@@ -155,7 +155,7 @@ def main(argv=None, env=None):
             "",
         ).strip()
         user_fixed_risk = _resolve_portfolio_fixed_risk_input(raw_fixed_risk)
-        from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
+        from services.portfolio_replay import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
 
         if raw_start_year == "":
             user_start_year = int(default_start_year_hint)
@@ -171,7 +171,7 @@ def main(argv=None, env=None):
 
     from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
     from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
-    from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_schedule
+    from services.portfolio_replay import run_portfolio_simulation_with_param_schedule
 
     params = None
     if not is_rolling_paramset:

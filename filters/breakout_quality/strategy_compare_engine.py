@@ -99,7 +99,7 @@ from filters.breakout_quality.trade_attribution import (
     ATTRIBUTION_SCHEMA_VERSION,
     write_trade_attribution_outputs,
 )
-from tools.portfolio_sim.simulation_runner import (
+from services.portfolio_replay import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
     load_portfolio_market_context,
     run_portfolio_simulation_prepared,

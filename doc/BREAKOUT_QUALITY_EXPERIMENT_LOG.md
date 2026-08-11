@@ -8108,3 +8108,14 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 新增active/historical physical-separation direct contract：active arms／contrasts必須精確等於current profiles聯集，active param／DL sources必須精確等於current arms dependency closure，四類catalog皆禁止active/history ID重疊；歷史catalog同樣不得重新出現第二份`enabled`。
 - 修改前後`StrategyComparisonSettings.as_dict()`逐profile完全相同；無artifact identity的Selection／Forward config fingerprint維持`49f4b71d293b`／`ce8813716cf0`，因此本輪沒有造成scientific/cache identity變更。targeted Strategy Compare contract由74項增加為75項且0 fail。
 - 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`。
+
+## 2026-08-12 — Service Boundary Batch 3-A：Portfolio Replay與共用optimizer primitives移出tools
+
+- 程式基準：`test-branch-1_20260812_012242_fd6022b.zip`；SHA256 `b353fa0f58b90d1f0123e2fd8ea12ba3b32cdbe534abdf422f0ec65201fc1456`。
+- 本輪屬architecture/infrastructure refactor，不新增／修改任何`MR-*`、`DL-*`、`SR-C*`、Target、architecture、loss、seed、Selection／Forward期間、strategy parameter、portfolio accounting或replay execution semantics。
+- canonical portfolio replay實作由`tools/portfolio_sim/simulation_runner.py`移至`services/portfolio_replay.py`；`filters/breakout_quality/strategy_compare_engine.py`、portfolio CLI與Workbench直接依賴正式service，不再以tools module作runtime implementation owner。
+- Portfolio Replay依賴的optimizer raw-data cache、trial-input preparation與walk-forward primitives同步移至`services/optimizer/raw_cache.py`、`trial_inputs.py`、`walk_forward.py`；service modules不得import `tools.*`。其他optimizer orchestration仍暫留`tools/optimizer/`，由Batch 3-B續做正式service搬遷。
+- 舊`tools/portfolio_sim/simulation_runner.py`、`runtime_common.py`與`tools/optimizer/{raw_cache,trial_inputs,walk_forward}.py`保留為`sys.modules` module alias compatibility façade；legacy import取得與canonical service完全相同的module object，既有private helper import、monkeypatch target與ProcessPool pickle module identity可延續，且沒有第二套實作。
+- Direct regression：Strategy Compare config/service contract`76/76`、strategy comparison`48/48`、Qualified Candidate Audit`9/9`、Candidate Counterfactual Audit`15/15`、optimizer raw-cache`6/6`、raw-universe replay`7/7`、prepared portfolio tool`11/11`，合計172 checks / 0 fail。另以baseline ZIP與新service AST比較canonical replay及三個optimizer primitive的函式／class body，除import owner遷移外行為定義保持一致。
+- 本輪同步更新`doc/ARCHITECTURE.md`的`apps -> services -> filters/core`依賴方向與tools compatibility責任；不修改Experiment Registry identity。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`。
