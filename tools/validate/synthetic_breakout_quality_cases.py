@@ -18490,8 +18490,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         all(token in preparation_source for token in (
             "status_refresher",
-            'item.artifact_key.startswith("param:")',
-            "current = refresh_status()",
+            "execution_priority=10",
+            "selected.next_runnable_action",
+            "current = status_refresher()",
         )),
     )
 
@@ -18563,8 +18564,9 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "preparation_plan_has_ready_preparable_blocked_and_single_confirmation_contract",
         True,
         all(token in preparation_source for token in (
-            'overall_status = "BLOCKED"', 'overall_status = "PREPARABLE"', 'overall_status = "READY"',
-            "前置步驟失敗:",
+            "StrategyPreparationPlan.from_actions(actions)",
+            'failure_prefix="策略比較前置"',
+            'f"{failure_prefix}失敗:',
         ))
         and "按 Enter 執行；輸入 0 返回" in app_source
         and "render_execution_plan" in app_source,
@@ -20180,7 +20182,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "preparation_supports_dependency_waves_after_score_period_becomes_known",
         True,
         "max_waves" in preparation_source
-        and "前置工件重新規劃後沒有進展" in preparation_source,
+        and "重新規劃後沒有可執行且依賴已就緒的動作" in preparation_source,
     )
 
     from filters.breakout_quality import strategy_compare_preparation as preparation_module
@@ -20244,6 +20246,68 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             call.kwargs["action"].artifact_key
             for call in mocked_prepare_action.call_args_list
         ] == ["dl:TP1:forward_scores", "param:min_roos"],
+    )
+
+    dependency_reuse = StrategyPreparationAction(
+        action_id="dataset:truth", artifact_key="dataset:truth",
+        action="REUSE", builder_type=None, description="reuse truth", path="outputs/dataset.json",
+        producer_work_type="existing_artifact",
+    )
+    dependency_build = StrategyPreparationAction(
+        action_id="score:forward", artifact_key="score:forward",
+        action="BUILD", builder_type="score_builder", description="build score", path="outputs/score.csv",
+        dependencies=("dataset:truth",), producer_work_type="strategy_compare_deterministic_rebuild",
+    )
+    dependency_plan = StrategyPreparationPlan.from_actions(
+        (dependency_build, dependency_reuse)
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "preparation_plan_declares_dependency_and_producer_contract",
+        True,
+        dependency_plan.overall_status == "PREPARABLE"
+        and dependency_plan.next_runnable_action() is dependency_build
+        and dependency_build.as_dict()["dependencies"] == ["dataset:truth"]
+        and dependency_build.as_dict()["producer_work_type"]
+        == "strategy_compare_deterministic_rebuild",
+    )
+
+    dependency_cycle_rejected = False
+    try:
+        StrategyPreparationPlan.from_actions((
+            StrategyPreparationAction(
+                action_id="a", artifact_key="a", action="BUILD", builder_type="x",
+                description="a", path="a", dependencies=("b",),
+            ),
+            StrategyPreparationAction(
+                action_id="b", artifact_key="b", action="BUILD", builder_type="x",
+                description="b", path="b", dependencies=("a",),
+            ),
+        ))
+    except ValueError:
+        dependency_cycle_rejected = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "preparation_plan_rejects_dependency_cycles",
+        True,
+        dependency_cycle_rejected,
+    )
+
+    unknown_dependency_rejected = False
+    try:
+        StrategyPreparationPlan.from_actions((
+            StrategyPreparationAction(
+                action_id="score", artifact_key="score", action="BUILD", builder_type="x",
+                description="score", path="score", dependencies=("missing:truth",),
+            ),
+        ))
+    except ValueError:
+        unknown_dependency_rejected = True
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "preparation_plan_rejects_unknown_dependencies",
+        True,
+        unknown_dependency_rejected,
     )
 
     add_check(

@@ -670,26 +670,19 @@ def _apply_archived_pair_dependency_waivers(
                         "不重建已缺少的歷史模型／PIT工件"
                     ),
                     path=item.path,
+                    dependencies=item.dependencies,
+                    producer_work_type="existing_artifact",
+                    execution_priority=item.execution_priority,
                 )
             )
         else:
             rewritten_actions.append(item)
 
-    action_names = {item.action for item in rewritten_actions}
-    overall_status = (
-        "BLOCKED"
-        if "BLOCKED" in action_names
-        else "PREPARABLE"
-        if action_names & {"BUILD", "REBUILD"}
-        else "READY"
-    )
+    rewritten_plan = StrategyPreparationPlan.from_actions(rewritten_actions)
     status = dict(status)
-    status["preparation_plan"] = StrategyPreparationPlan(
-        overall_status=overall_status,
-        actions=tuple(rewritten_actions),
-    )
-    status["overall_status"] = overall_status
-    status["comparison_ready"] = overall_status == "READY"
+    status["preparation_plan"] = rewritten_plan
+    status["overall_status"] = rewritten_plan.overall_status
+    status["comparison_ready"] = rewritten_plan.overall_status == "READY"
     status["replay_cache"] = replay_cache
     status["archived_pair_dependency_waivers"] = sorted(waived_dl_ids)
     for dl_id in waived_dl_ids:

@@ -335,6 +335,9 @@ class StrategyPreparationAction:
     builder_type: str | None
     description: str
     path: str
+    dependencies: tuple[str, ...] = ()
+    producer_work_type: str | None = None
+    execution_priority: int = 100
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -344,6 +347,9 @@ class StrategyPreparationAction:
             "builder_type": self.builder_type,
             "description": self.description,
             "path": self.path,
+            "dependencies": list(self.dependencies),
+            "producer_work_type": self.producer_work_type,
+            "execution_priority": int(self.execution_priority),
         }
 
 
@@ -352,6 +358,51 @@ class StrategyPreparationPlan:
     overall_status: str
     actions: tuple[StrategyPreparationAction, ...]
 
+    @classmethod
+    def from_actions(
+        cls, actions: tuple[StrategyPreparationAction, ...] | list[StrategyPreparationAction]
+    ) -> "StrategyPreparationPlan":
+        normalized = tuple(actions)
+        cls._validate_dependencies(normalized)
+        action_names = {item.action for item in normalized}
+        overall_status = (
+            "BLOCKED"
+            if "BLOCKED" in action_names
+            else "PREPARABLE"
+            if action_names & {"BUILD", "REBUILD"}
+            else "READY"
+        )
+        return cls(overall_status=overall_status, actions=normalized)
+
+    @staticmethod
+    def _validate_dependencies(actions: tuple[StrategyPreparationAction, ...]) -> None:
+        action_by_key = {item.artifact_key: item for item in actions}
+        if len(action_by_key) != len(actions):
+            raise ValueError("前置工件計畫artifact_key不得重複")
+        for item in actions:
+            unknown = sorted(set(item.dependencies) - set(action_by_key))
+            if unknown:
+                raise ValueError(
+                    f"前置工件{item.artifact_key}依賴未知工件: {', '.join(unknown)}"
+                )
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(key: str) -> None:
+            if key in visited:
+                return
+            if key in visiting:
+                raise ValueError(f"前置工件依賴形成循環: {key}")
+            visiting.add(key)
+            for dependency in action_by_key[key].dependencies:
+                visit(dependency)
+            visiting.remove(key)
+            visited.add(key)
+
+        for key in action_by_key:
+            visit(key)
+
     @property
     def blocked(self) -> bool:
         return self.overall_status == "BLOCKED"
@@ -359,6 +410,55 @@ class StrategyPreparationPlan:
     @property
     def preparable(self) -> bool:
         return self.overall_status == "PREPARABLE"
+
+    @property
+    def action_by_key(self) -> dict[str, StrategyPreparationAction]:
+        return {item.artifact_key: item for item in self.actions}
+
+    def select(
+        self, required_artifact_keys: tuple[str, ...] | list[str] | set[str]
+    ) -> "StrategyPreparationPlan":
+        required = {str(value) for value in required_artifact_keys}
+        action_by_key = self.action_by_key
+        unknown = sorted(required - set(action_by_key))
+        if unknown:
+            raise ValueError("前置工件計畫缺少要求工件: " + ", ".join(unknown))
+
+        selected: set[str] = set()
+
+        def include(key: str) -> None:
+            if key in selected:
+                return
+            selected.add(key)
+            for dependency in action_by_key[key].dependencies:
+                include(dependency)
+
+        for key in required:
+            include(key)
+        return StrategyPreparationPlan.from_actions(
+            [item for item in self.actions if item.artifact_key in selected]
+        )
+
+    def next_runnable_action(
+        self, *, executed_signatures: set[tuple[str, str, str | None, str]] | None = None
+    ) -> StrategyPreparationAction | None:
+        action_by_key = self.action_by_key
+        executed = executed_signatures or set()
+        candidates: list[StrategyPreparationAction] = []
+        for item in self.actions:
+            if item.action not in {"BUILD", "REBUILD"}:
+                continue
+            signature = (item.artifact_key, item.action, item.builder_type, item.path)
+            if signature in executed:
+                continue
+            dependency_actions = [action_by_key[key].action for key in item.dependencies]
+            if all(value == "REUSE" for value in dependency_actions):
+                candidates.append(item)
+        if not candidates:
+            return None
+        return sorted(
+            candidates, key=lambda item: (int(item.execution_priority), item.artifact_key)
+        )[0]
 
     def as_dict(self) -> dict[str, Any]:
         return {

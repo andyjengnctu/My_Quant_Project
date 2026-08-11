@@ -365,6 +365,9 @@ def _preparation_action(
     builder_type: str | None,
     description: str,
     path: str,
+    dependencies: tuple[str, ...] = (),
+    producer_work_type: str | None = None,
+    execution_priority: int = 100,
 ) -> StrategyPreparationAction:
     return StrategyPreparationAction(
         action_id=action_id,
@@ -373,6 +376,9 @@ def _preparation_action(
         builder_type=builder_type,
         description=description,
         path=path,
+        dependencies=tuple(dependencies),
+        producer_work_type=producer_work_type,
+        execution_priority=int(execution_priority),
     )
 
 
@@ -516,6 +522,9 @@ def collect_artifact_status(
                             builder_type=None,
                             description=description,
                             path=file_rows[key]["path"],
+                            producer_work_type=(
+                                "existing_artifact" if action == "REUSE" else "model_training"
+                            ),
                         )
                     )
             if checkpoint_rebuild_allowed:
@@ -529,6 +538,8 @@ def collect_artifact_status(
                             "重建Selection PIT scores／manifest／audit（僅允許既有fold/checkpoint，禁止訓練）"
                         ),
                         path=file_rows["forward_scores"]["path"],
+                        producer_work_type="strategy_compare_checkpoint_rebuild",
+                        execution_priority=20,
                     )
                 )
             dl_rows[dl_id] = {
@@ -626,6 +637,9 @@ def collect_artifact_status(
                         builder_type=None,
                         description=description,
                         path=file_rows[key]["path"],
+                        producer_work_type=(
+                            "existing_artifact" if action == "REUSE" else "model_training"
+                        ),
                     )
                 )
             dl_rows[dl_id] = {
@@ -739,6 +753,18 @@ def collect_artifact_status(
                 "path": project_relative_display_path(path, project_root=root),
                 "sha256": sha256,
             }
+            dependencies = (
+                (f"dl:{dl_id}:model", f"dl:{dl_id}:manifest")
+                if key == "forward_scores"
+                else ()
+            )
+            producer_work_type = (
+                "strategy_compare_deterministic_rebuild"
+                if key == "forward_scores" and action in {"BUILD", "REBUILD"}
+                else "existing_artifact"
+                if action == "REUSE"
+                else "model_training"
+            )
             actions.append(
                 _preparation_action(
                     action_id=f"dl:{dl_id}:{key}",
@@ -747,6 +773,9 @@ def collect_artifact_status(
                     builder_type=builder_type,
                     description=description,
                     path=file_rows[key]["path"],
+                    dependencies=dependencies,
+                    producer_work_type=producer_work_type,
+                    execution_priority=(20 if key == "forward_scores" else 100),
                 )
             )
         dl_rows[dl_id] = {
@@ -866,6 +895,17 @@ def collect_artifact_status(
                 else project_relative_display_path(identity_path, project_root=root)
             ),
         }
+        upstream_dependencies: tuple[str, ...] = ()
+        if source.trained_with_dl_id:
+            upstream_candidates = (
+                f"dl:{source.trained_with_dl_id}:model",
+                f"dl:{source.trained_with_dl_id}:selection_pit_bundle",
+                f"dl:{source.trained_with_dl_id}:forward_scores",
+            )
+            existing_action_keys = {item.artifact_key for item in actions}
+            upstream_dependencies = tuple(
+                key for key in upstream_candidates if key in existing_action_keys
+            )[:1]
         actions.append(
             _preparation_action(
                 action_id=f"param:{source_id}",
@@ -874,20 +914,22 @@ def collect_artifact_status(
                 builder_type=builder_type,
                 description=description,
                 path=display_path,
+                dependencies=upstream_dependencies,
+                producer_work_type=(
+                    "existing_artifact"
+                    if action == "REUSE"
+                    else "strategy_parameter_optimization"
+                    if action in {"BUILD", "REBUILD"}
+                    else "model_training"
+                    if source.trained_with_dl_id and not upstream_ready
+                    else None
+                ),
+                execution_priority=10,
             )
         )
 
-    action_names = {item.action for item in actions}
-    if "BLOCKED" in action_names:
-        overall_status = "BLOCKED"
-    elif action_names & {"BUILD", "REBUILD"}:
-        overall_status = "PREPARABLE"
-    else:
-        overall_status = "READY"
-    plan = StrategyPreparationPlan(
-        overall_status=overall_status,
-        actions=tuple(actions),
-    )
+    plan = StrategyPreparationPlan.from_actions(actions)
+    overall_status = plan.overall_status
     return {
         "comparison_ready": overall_status == "READY",
         "overall_status": overall_status,
@@ -1075,6 +1117,108 @@ def _execute_preparation_action(
 
 
 
+def _run_preparation_plan(
+    *,
+    project_root: Path,
+    settings: StrategyComparisonSettings,
+    status: dict[str, Any],
+    status_refresher: Callable[[], dict[str, Any]],
+    required_artifact_keys: tuple[str, ...] | None,
+    failure_prefix: str,
+) -> dict[str, Any]:
+    """Execute one canonical dependency-aware preparation loop.
+
+    ``required_artifact_keys`` limits execution to the requested artifacts plus their
+    declared dependency closure.  This is how Multiple-seed robustness reuses the same
+    planner while intentionally ignoring unrelated canonical DL-score blockers.
+    """
+
+    root = Path(project_root).resolve()
+    current = status
+    requested_plan: StrategyPreparationPlan = status["preparation_plan"]
+    requested_keys = None if required_artifact_keys is None else tuple(required_artifact_keys)
+    selected_requested = (
+        requested_plan
+        if requested_keys is None
+        else requested_plan.select(requested_keys)
+    )
+    if selected_requested.blocked:
+        blocked = [
+            item.artifact_key
+            for item in selected_requested.actions
+            if item.action == "BLOCKED"
+        ]
+        raise RuntimeError(
+            f"{failure_prefix}包含BLOCKED工件: " + ", ".join(blocked)
+        )
+    if selected_requested.overall_status == "READY":
+        return current
+    if not settings.preparation.auto_prepare:
+        raise RuntimeError("目前config已關閉auto_prepare")
+
+    executed_signatures: set[tuple[str, str, str | None, str]] = set()
+    max_waves = max(2, len(selected_requested.actions) * 2 + 2)
+    for _wave in range(max_waves):
+        current_plan: StrategyPreparationPlan = current["preparation_plan"]
+        selected = (
+            current_plan
+            if requested_keys is None
+            else current_plan.select(requested_keys)
+        )
+        if selected.overall_status == "READY":
+            current["requested_preparation_plan"] = selected_requested
+            return current
+        if selected.blocked:
+            blocked = [
+                item.artifact_key for item in selected.actions if item.action == "BLOCKED"
+            ]
+            raise RuntimeError(
+                f"{failure_prefix}依賴於重新規劃後變成BLOCKED: "
+                + ", ".join(blocked)
+            )
+
+        action = selected.next_runnable_action(
+            executed_signatures=executed_signatures
+        )
+        if action is None:
+            remaining = [
+                f"{item.artifact_key}:{item.action}"
+                for item in selected.actions
+                if item.action != "REUSE"
+            ]
+            raise RuntimeError(
+                f"{failure_prefix}重新規劃後沒有可執行且依賴已就緒的動作: "
+                + ", ".join(remaining)
+            )
+
+        print(f"\n[前置] {action.description}")
+        try:
+            _execute_preparation_action(root=root, settings=settings, action=action)
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError(
+                f"{failure_prefix}失敗: {action.artifact_key} | action={action.action} | "
+                f"path={action.path} | {type(exc).__name__}: {exc}"
+            ) from exc
+        executed_signatures.add(
+            (action.artifact_key, action.action, action.builder_type, action.path)
+        )
+        current = status_refresher()
+        current["requested_preparation_plan"] = selected_requested
+
+    current_plan = current["preparation_plan"]
+    selected = (
+        current_plan if requested_keys is None else current_plan.select(requested_keys)
+    )
+    remaining = [
+        f"{item.artifact_key}:{item.action}"
+        for item in selected.actions
+        if item.action != "REUSE"
+    ]
+    raise RuntimeError(
+        f"{failure_prefix}超過最大依賴波次仍未READY: " + ", ".join(remaining)
+    )
+
+
 def prepare_strategy_parameter_artifacts(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -1083,13 +1227,7 @@ def prepare_strategy_parameter_artifacts(
     required_source_ids: tuple[str, ...] | list[str] | set[str],
     status_refresher: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Prepare only requested strategy-parameter artifacts, ignoring DL-score actions.
-
-    This is the canonical parameter-only preparation path for workflows such as
-    Multiple-seed robustness, where model scores are intentionally produced in
-    isolated per-seed work directories rather than by the normal Strategy Compare
-    DL-source preparation plan.
-    """
+    """Prepare requested strategy parameters through the canonical dependency runner."""
 
     root = Path(project_root).resolve()
     requested = tuple(sorted({str(value) for value in required_source_ids}))
@@ -1097,74 +1235,21 @@ def prepare_strategy_parameter_artifacts(
         return status
     unknown = sorted(set(requested) - set(settings.parameter_sources))
     if unknown:
-        raise ValueError(
-            "策略參數前置包含未知source: " + ", ".join(unknown)
-        )
+        raise ValueError("策略參數前置包含未知source: " + ", ".join(unknown))
     refresh_status = (
         status_refresher
         if status_refresher is not None
         else lambda: collect_artifact_status(project_root=root, settings=settings)
     )
-    current = status
-    executed_signatures: set[tuple[str, str, str | None, str]] = set()
-    max_waves = max(2, len(requested) + 2)
-    for _wave in range(max_waves):
-        action_by_key = {
-            item.artifact_key: item for item in current["preparation_plan"].actions
-        }
-        required_actions: list[StrategyPreparationAction] = []
-        for source_id in requested:
-            key = f"param:{source_id}"
-            action = action_by_key.get(key)
-            if action is None:
-                raise RuntimeError(f"策略參數前置計畫缺少工件: {key}")
-            required_actions.append(action)
-        blocked = [item for item in required_actions if item.action == "BLOCKED"]
-        if blocked:
-            raise RuntimeError(
-                "策略參數前置包含BLOCKED工件: "
-                + ", ".join(item.artifact_key for item in blocked)
-            )
-        pending = [
-            item for item in required_actions if item.action in {"BUILD", "REBUILD"}
-        ]
-        if not pending:
-            return current
-        if not settings.preparation.auto_prepare:
-            raise RuntimeError("目前config已關閉auto_prepare")
-        pending.sort(key=lambda item: item.artifact_key)
-        progressed = False
-        for action in pending:
-            signature = (
-                action.artifact_key,
-                action.action,
-                action.builder_type,
-                action.path,
-            )
-            if signature in executed_signatures:
-                continue
-            print(f"\n[前置] {action.description}")
-            try:
-                _execute_preparation_action(root=root, settings=settings, action=action)
-            except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-                raise RuntimeError(
-                    f"策略參數前置失敗: {action.artifact_key} | action={action.action} | "
-                    f"path={action.path} | {type(exc).__name__}: {exc}"
-                ) from exc
-            executed_signatures.add(signature)
-            progressed = True
-            break
-        current = refresh_status()
-        if not progressed:
-            remaining = [
-                f"{item.artifact_key}:{item.action}" for item in pending
-            ]
-            raise RuntimeError(
-                "策略參數前置重新規劃後沒有進展: " + ", ".join(remaining)
-            )
-    raise RuntimeError(
-        "策略參數前置超過最大依賴波次仍未完成: " + ", ".join(requested)
+    return _run_preparation_plan(
+        project_root=root,
+        settings=settings,
+        status=status,
+        status_refresher=refresh_status,
+        required_artifact_keys=tuple(f"param:{source_id}" for source_id in requested),
+        failure_prefix="策略參數前置",
     )
+
 
 def prepare_strategy_comparison_artifacts(
     *,
@@ -1174,95 +1259,18 @@ def prepare_strategy_comparison_artifacts(
     status_refresher: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    requested_plan: StrategyPreparationPlan = status["preparation_plan"]
-    if requested_plan.blocked:
-        raise RuntimeError("策略比較前置計畫包含BLOCKED工件，無法自動完成")
-    if requested_plan.overall_status == "READY":
-        return status
-    if not settings.preparation.auto_prepare:
-        raise RuntimeError("目前config已關閉auto_prepare")
-
-    current = status
     refresh_status = (
         status_refresher
         if status_refresher is not None
         else lambda: collect_artifact_status(project_root=root, settings=settings)
     )
-    executed_signatures: set[tuple[str, str, str | None, str]] = set()
-    max_waves = max(2, len(requested_plan.actions) + 2)
-    for _wave in range(max_waves):
-        plan: StrategyPreparationPlan = current["preparation_plan"]
-        if plan.overall_status == "READY":
-            current["requested_preparation_plan"] = requested_plan
-            return current
-        if plan.blocked:
-            blocked = [
-                item.artifact_key
-                for item in plan.actions
-                if item.action == "BLOCKED"
-            ]
-            raise RuntimeError(
-                "策略比較前置依賴於重新規劃後變成BLOCKED: "
-                + ", ".join(blocked)
-            )
-
-        wave_actions = [
-            item for item in plan.actions if item.action in {"BUILD", "REBUILD"}
-        ]
-        if not wave_actions:
-            raise RuntimeError("策略比較前置狀態非READY，但沒有可執行BUILD／REBUILD動作")
-        # Build deterministic strategy parameters first, then immediately re-plan.  A newly
-        # materialized parameter hash may prove that an older completed comparator pair is
-        # reusable, in which case vanished historical model artifacts are no longer needed.
-        wave_actions.sort(
-            key=lambda item: (
-                0 if item.artifact_key.startswith("param:") else 1,
-                item.artifact_key,
-            )
-        )
-        executed_this_wave = 0
-        for action in wave_actions:
-            signature = (
-                action.artifact_key,
-                action.action,
-                action.builder_type,
-                action.path,
-            )
-            if signature in executed_signatures:
-                continue
-            print(f"\n[前置] {action.description}")
-            try:
-                _execute_preparation_action(root=root, settings=settings, action=action)
-            except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-                raise RuntimeError(
-                    f"前置步驟失敗: {action.artifact_key} | action={action.action} | "
-                    f"path={action.path} | {type(exc).__name__}: {exc}"
-                ) from exc
-            executed_signatures.add(signature)
-            executed_this_wave = 1
-            break
-
-        current = refresh_status()
-        current["requested_preparation_plan"] = requested_plan
-        if current["comparison_ready"]:
-            return current
-        if executed_this_wave == 0:
-            remaining = [
-                f"{item.artifact_key}:{item.action}"
-                for item in current["preparation_plan"].actions
-                if item.action != "REUSE"
-            ]
-            raise RuntimeError(
-                "前置工件重新規劃後沒有進展: " + ", ".join(remaining)
-            )
-
-    remaining = [
-        f"{item.artifact_key}:{item.action}"
-        for item in current["preparation_plan"].actions
-        if item.action != "REUSE"
-    ]
-    raise RuntimeError(
-        "前置工件超過最大依賴波次仍未READY: " + ", ".join(remaining)
+    return _run_preparation_plan(
+        project_root=root,
+        settings=settings,
+        status=status,
+        status_refresher=refresh_status,
+        required_artifact_keys=None,
+        failure_prefix="策略比較前置",
     )
 
 

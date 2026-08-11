@@ -8065,3 +8065,15 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Bundle中的六個meta-quality coverage FAIL均為synthetic suite在coverage收集起點即被上述ValueError中止的連鎖結果：`synthetic_case_count=0`，target line/branch只剩27.82%/23.63%，不能解讀成實際coverage退化；修正後需由本機正式入口重新生成coverage。
 - 不新增／修改任何`MR-*`、`DL-*`、`SR-C*` identity；2×GPU仍只屬execution option。狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。
 
+## 2026-08-11 — Infrastructure SSOT Batch 1：Strategy Compare前置dependency runner收斂
+
+- 程式基準：`test-branch-1_20260811_221534_5ab88e2.zip`；SHA256 `7cd88f5d7f7ffb35c3407803bdb17e5e02494f22a66120a9df74e338007fc4aa`。
+- 本輪屬infrastructure refactor，不新增／修改任何`MR-*`、`DL-*`、`SR-C*`、Target、architecture、loss、seed、Selection／Forward期間、策略參數搜尋語意或交易會計。
+- `StrategyPreparationAction`新增`dependencies`、`producer_work_type`與`execution_priority`；`StrategyPreparationPlan.from_actions()`統一計算READY／PREPARABLE／BLOCKED，並拒絕重複artifact key、未知dependency與dependency cycle。
+- Strategy Compare全量前置與Multiple-seed robustness的parameter-only前置改共用單一dependency-aware wave runner；parameter-only只選取requested parameter artifacts與其dependency closure，可繼續忽略不相關canonical DL blocker。
+- 保留既有重要執行語意：可建立的strategy parameter action以較高priority先執行並立即re-plan，避免先重建可能因新param SHA而可由completed pair免除的歷史DL工件；deterministic score／PIT checkpoint rebuild排在其後。
+- archived completed-pair dependency waiver會保留原action dependencies／priority並把producer標成existing artifact，避免cache reuse路徑丟失plan metadata。
+- Direct regression以隔離synthetic plan確認：(1) parameter-first + immediate re-plan只執行parameter、後續score轉REUSE；(2) robustness parameter-only可在全plan含無關BLOCKED DL action時仍只建立requested parameter；另新增正式synthetic contract覆蓋dependency metadata與cycle rejection。
+- 本輪依`doc/PROJECT_SETTINGS.md`不執行`apps/test_suite.py`或formal suite step；交付前僅做獨立compile、AST/import/static contract與修改同鏈檢查。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。
+
