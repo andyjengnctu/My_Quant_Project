@@ -35,6 +35,8 @@ from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from filters.breakout_quality.workflow_io import PROJECT_ROOT, write_json
 from core.console_report import print_artifact_paths
 
+from services.breakout_quality import ranker_training as ranker_api
+
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
 
 
@@ -152,7 +154,7 @@ def _render_markdown(payload: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run(args, *, ranker_impl) -> int:
+def run(args) -> int:
     started = time.perf_counter()
     bundle = load_daily_universal_ranker_data(
         filter_id=str(args.filter_id),
@@ -169,7 +171,7 @@ def run(args, *, ranker_impl) -> int:
     percentile_target = np.full(bundle.raw_target.shape, np.nan, dtype=np.float32)
     selection_mask = np.zeros(bundle.raw_target.shape, dtype=bool)
     selection_mask[split.selection_ids] = True
-    selection_percentiles = ranker_impl.build_daily_percentile_targets(
+    selection_percentiles = ranker_api.build_daily_percentile_targets(
         bundle.raw_target, selection_mask, bundle.group_table["date"]
     )
     percentile_target[split.selection_ids] = selection_percentiles[split.selection_ids]
@@ -185,7 +187,7 @@ def run(args, *, ranker_impl) -> int:
         f"feature_storage={bundle.summary['feature_storage']}"
     )
 
-    epoch_selection = ranker_impl._select_epoch(
+    epoch_selection = ranker_api.select_epoch(
         torch,
         bundle.feature_bank,
         bundle.group_context,
@@ -199,7 +201,7 @@ def run(args, *, ranker_impl) -> int:
         evaluate_train_metrics=False,
     )
     selected_epoch = int(epoch_selection["best_epoch"])
-    model, final_history = ranker_impl._fit_final(
+    model, final_history = ranker_api.fit_final(
         torch,
         bundle.feature_bank,
         bundle.group_context,
@@ -212,7 +214,7 @@ def run(args, *, ranker_impl) -> int:
         phase_label="Daily Selection完整重訓",
     )
 
-    artifact_paths, output_dir = ranker_impl._training_output_paths(args)
+    artifact_paths, output_dir = ranker_api.resolve_training_output_paths(args)
     artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
@@ -239,27 +241,27 @@ def run(args, *, ranker_impl) -> int:
     # OOS target ranks and inference are intentionally deferred until after checkpoint write.
     oos_mask = np.zeros(bundle.raw_target.shape, dtype=bool)
     oos_mask[split.oos_ids] = True
-    oos_percentiles = ranker_impl.build_daily_percentile_targets(
+    oos_percentiles = ranker_api.build_daily_percentile_targets(
         bundle.raw_target, oos_mask, bundle.group_table["date"]
     )
     percentile_target[split.oos_ids] = oos_percentiles[split.oos_ids]
 
-    validation_scores = ranker_impl._predict_scores(
+    validation_scores = ranker_api.predict_scores(
         torch, model, bundle.feature_bank, bundle.group_context, split.validation_ids,
         batch_size=int(args.evaluation_batch_size), plan=plan,
     )
-    forward_scores = ranker_impl._predict_scores(
+    forward_scores = ranker_api.predict_scores(
         torch, model, bundle.feature_bank, bundle.group_context, forward_score_ids,
         batch_size=int(args.evaluation_batch_size), plan=plan,
     )
     score_by_group = np.full(len(bundle.group_table), np.nan, dtype=np.float32)
     score_by_group[forward_score_ids] = forward_scores
     oos_scores = score_by_group[split.oos_ids]
-    validation_metrics = ranker_impl._split_metrics(
+    validation_metrics = ranker_api.split_metrics(
         split.validation_ids, bundle.group_table, bundle.raw_target, percentile_target,
         validation_scores, include_top_k_quality=True,
     )
-    oos_metrics = ranker_impl._split_metrics(
+    oos_metrics = ranker_api.split_metrics(
         split.oos_ids, bundle.group_table, bundle.raw_target, percentile_target,
         oos_scores, include_top_k_quality=True,
     )
@@ -267,7 +269,7 @@ def run(args, *, ranker_impl) -> int:
         bundle, split.oos_ids, allow_stale_source=bool(args.allow_stale_source)
     )
     candidate_metrics = (
-        ranker_impl._split_metrics(
+        ranker_api.split_metrics(
             candidate_ids,
             bundle.group_table,
             bundle.raw_target,
@@ -283,8 +285,8 @@ def run(args, *, ranker_impl) -> int:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     score_path = output_dir / DAILY_RANKER_OOS_SCORE_FILENAME
-    report_json_path = output_dir / ranker_impl.RANKER_REPORT_JSON_FILENAME
-    report_markdown_path = output_dir / ranker_impl.RANKER_REPORT_MARKDOWN_FILENAME
+    report_json_path = output_dir / ranker_api.RANKER_REPORT_JSON_FILENAME
+    report_markdown_path = output_dir / ranker_api.RANKER_REPORT_MARKDOWN_FILENAME
     split_path = output_dir / DAILY_SPLIT_FILENAME
 
     oos_frame = bundle.group_table.iloc[forward_score_ids][["ticker", "date", "group_index"]].copy()
@@ -312,7 +314,7 @@ def run(args, *, ranker_impl) -> int:
         "breakout_candidate_oos": candidate_metrics,
     }
     payload = {
-        "schema_version": ranker_impl.RANKER_SCHEMA_VERSION + 1,
+        "schema_version": ranker_api.RANKER_SCHEMA_VERSION + 1,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "experiment": "MR-13A Daily Universal No-time Pairwise Ranker",
         "phase": "13A",
@@ -328,8 +330,8 @@ def run(args, *, ranker_impl) -> int:
             "training_label_scope": bundle.profile.training_label_scope,
             "target": DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
             "model_score": "softmax_pass_probability_monotonic_to_two_logit_margin",
-            "batching": ranker_impl.PAIRWISE_TRAINING_CONTRACT["batching"],
-            "pairwise_contract": dict(ranker_impl.PAIRWISE_TRAINING_CONTRACT),
+            "batching": ranker_api.PAIRWISE_TRAINING_CONTRACT["batching"],
+            "pairwise_contract": dict(ranker_api.PAIRWISE_TRAINING_CONTRACT),
             "selected_epoch": selected_epoch,
             "epoch_selection_metric": bundle.profile.epoch_selection_metric,
             "epoch_selection": epoch_selection,
@@ -379,7 +381,7 @@ def run(args, *, ranker_impl) -> int:
         "training_objective": bundle.profile.training_objective,
         "training_label_scope": bundle.profile.training_label_scope,
         "training_sample_scope": bundle.profile.training_sample_scope,
-        "training_semantics": ranker_impl._training_semantics(bundle.profile),
+        "training_semantics": ranker_api.training_semantics(bundle.profile),
         "continuous_target_id": DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
         "sequence_length": int(bundle.feature_bank.shape[1]),
         "feature_columns": list(FEATURE_COLUMNS),

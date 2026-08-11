@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 import time
 from types import SimpleNamespace
 from collections import deque
@@ -58,7 +57,9 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
 from filters.breakout_quality.artifacts import build_file_manifest
-from filters.breakout_quality.continuous_ranker_quality import daily_top_k_metrics
+from filters.breakout_quality.continuous_ranker_quality import (
+    daily_top_k_metrics as shared_daily_top_k_metrics,
+)
 from filters.breakout_quality.continuous_target import (
     DAILY_OPPORTUNITY_NO_TIME_TARGET_ID,
     STRATEGY_ALIGNED_NO_TIME_TARGET_ID,
@@ -148,7 +149,7 @@ LISTWISE_TRAINING_CONTRACT = {
 }
 
 
-def _training_semantics(profile) -> dict[str, Any]:
+def training_semantics(profile) -> dict[str, Any]:
     if profile.training_objective == TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING:
         return {
             "batching": PAIRWISE_TRAINING_CONTRACT["batching"],
@@ -278,7 +279,7 @@ def parse_args(argv=None):
     return args
 
 
-def _training_output_paths(args):
+def resolve_training_output_paths(args):
     model_override = str(getattr(args, "model_output_dir", "") or "").strip()
     research_override = str(getattr(args, "research_output_dir", "") or "").strip()
     if bool(model_override) != bool(research_override):
@@ -492,7 +493,7 @@ def _group_ids_from_event_rows(event_group_index: np.ndarray, rows: np.ndarray, 
     return np.asarray(group_ids, dtype=np.int64)
 
 
-def _spearman(x: np.ndarray, y: np.ndarray) -> float | None:
+def calculate_spearman(x: np.ndarray, y: np.ndarray) -> float | None:
     x_values = np.asarray(x, dtype=np.float64)
     y_values = np.asarray(y, dtype=np.float64)
     valid = np.isfinite(x_values) & np.isfinite(y_values)
@@ -505,7 +506,7 @@ def _spearman(x: np.ndarray, y: np.ndarray) -> float | None:
     return float(np.corrcoef(x_rank, y_rank)[0, 1])
 
 
-def _daily_rank_metrics(dates: np.ndarray, scores: np.ndarray, targets: np.ndarray) -> dict[str, Any]:
+def daily_rank_metrics(dates: np.ndarray, scores: np.ndarray, targets: np.ndarray) -> dict[str, Any]:
     frame = pd.DataFrame({"date": pd.to_datetime(dates), "score": scores, "target": targets})
     daily_spearman: list[float] = []
     concordant = 0.0
@@ -513,7 +514,7 @@ def _daily_rank_metrics(dates: np.ndarray, scores: np.ndarray, targets: np.ndarr
     for _date, day in frame.groupby("date", sort=True):
         s = day["score"].to_numpy(dtype=np.float64)
         t = day["target"].to_numpy(dtype=np.float64)
-        corr = _spearman(s, t)
+        corr = calculate_spearman(s, t)
         if corr is not None:
             daily_spearman.append(float(corr))
         if len(day) >= 2:
@@ -534,7 +535,7 @@ def _daily_rank_metrics(dates: np.ndarray, scores: np.ndarray, targets: np.ndarr
     }
 
 
-def _daily_top_k_metrics(
+def daily_top_k_metrics(
     dates: np.ndarray,
     scores: np.ndarray,
     raw_targets: np.ndarray,
@@ -543,9 +544,9 @@ def _daily_top_k_metrics(
     top_k: int,
     boundary_width: int,
 ) -> dict[str, Any]:
-    """Backward-compatible private alias for the shared canonical quality metric."""
+    """Return the shared canonical same-day Top-K quality metric."""
 
-    return daily_top_k_metrics(
+    return shared_daily_top_k_metrics(
         dates,
         scores,
         raw_targets,
@@ -582,7 +583,7 @@ def _coverage_precision(labels: np.ndarray, scores: np.ndarray, coverage: float)
     return float((y[order] == LABEL_PASS).mean())
 
 
-def _split_metrics(
+def split_metrics(
     group_ids: np.ndarray,
     group_table: pd.DataFrame,
     raw_target: np.ndarray,
@@ -603,9 +604,9 @@ def _split_metrics(
     decile_count = max(1, int(math.ceil(len(ids) * 0.10)))
     bottom = order[:decile_count]
     top = order[-decile_count:]
-    daily = _daily_rank_metrics(dates, score_values, raw_values)
+    daily = daily_rank_metrics(dates, score_values, raw_values)
     top_k_quality = (
-        _daily_top_k_metrics(
+        daily_top_k_metrics(
             dates,
             score_values,
             raw_values,
@@ -625,8 +626,8 @@ def _split_metrics(
             if bool(finite_percentile.any())
             else None
         ),
-        "global_spearman_vs_raw_target": _spearman(score_values, raw_values),
-        "global_spearman_vs_daily_percentile": _spearman(
+        "global_spearman_vs_raw_target": calculate_spearman(score_values, raw_values),
+        "global_spearman_vs_daily_percentile": calculate_spearman(
             score_values[finite_percentile],
             pct_values[finite_percentile],
         ),
@@ -929,7 +930,7 @@ def _train_epoch(
         return float(np.mean(losses))
     return float(weighted_loss_sum / float(weighted_loss_count))
 
-def _predict_scores(torch, model, feature_bank: np.ndarray, group_context: np.ndarray, group_ids: np.ndarray, *, batch_size: int, plan) -> np.ndarray:
+def predict_scores(torch, model, feature_bank: np.ndarray, group_context: np.ndarray, group_ids: np.ndarray, *, batch_size: int, plan) -> np.ndarray:
     ids = np.asarray(group_ids, dtype=np.int64)
     logits = strict_parallel_batched_logits(
         torch,
@@ -946,7 +947,7 @@ def _predict_scores(torch, model, feature_bank: np.ndarray, group_context: np.nd
     return (exp[:, LABEL_PASS] / exp.sum(axis=1)).astype(np.float32)
 
 
-def _select_epoch(
+def select_epoch(
     torch,
     feature_bank: np.ndarray,
     group_context: np.ndarray,
@@ -995,16 +996,16 @@ def _select_epoch(
             grad_scaler=grad_scaler,
             prefetch_batches=int(args.train_prefetch_batches),
         )
-        validation_scores = _predict_scores(
+        validation_scores = predict_scores(
             torch, model, feature_bank, group_context, validation_ids,
             batch_size=int(args.evaluation_batch_size), plan=plan,
         )
         if bool(evaluate_train_metrics):
-            train_scores = _predict_scores(
+            train_scores = predict_scores(
                 torch, model, feature_bank, group_context, train_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,
             )
-            train_metrics = _split_metrics(
+            train_metrics = split_metrics(
                 train_ids, group_table, raw_target, percentile_target, train_scores,
             )
         else:
@@ -1015,7 +1016,7 @@ def _select_epoch(
                     "epoch selection仍只依完整validation mean daily Spearman"
                 ),
             }
-        validation_metrics = _split_metrics(
+        validation_metrics = split_metrics(
             validation_ids, group_table, raw_target, percentile_target, validation_scores,
         )
         metric = validation_metrics.get("mean_daily_spearman")
@@ -1072,7 +1073,7 @@ def _select_epoch(
     }
 
 
-def _fit_final(
+def fit_final(
     torch,
     feature_bank: np.ndarray,
     group_context: np.ndarray,
@@ -1123,6 +1124,19 @@ def _fit_final(
     return model.eval(), history
 
 
+# Legacy private-name compatibility. Production modules must use the public
+# ranker training API; these aliases remain only for historical tests/audits.
+_training_semantics = training_semantics
+_training_output_paths = resolve_training_output_paths
+_spearman = calculate_spearman
+_daily_rank_metrics = daily_rank_metrics
+_daily_top_k_metrics = daily_top_k_metrics
+_split_metrics = split_metrics
+_predict_scores = predict_scores
+_select_epoch = select_epoch
+_fit_final = fit_final
+
+
 def _trade_metric_block(valid: pd.DataFrame) -> dict[str, Any]:
     if valid.empty:
         return {"matched_trade_count": 0}
@@ -1138,9 +1152,9 @@ def _trade_metric_block(valid: pd.DataFrame) -> dict[str, Any]:
     median_target = float(np.median(targets))
     return {
         "matched_trade_count": int(len(valid)),
-        "spearman_model_score_vs_r_multiple": _spearman(scores, r_values),
-        "spearman_model_score_vs_target": _spearman(scores, targets),
-        "spearman_target_vs_r_multiple": _spearman(targets, r_values),
+        "spearman_model_score_vs_r_multiple": calculate_spearman(scores, r_values),
+        "spearman_model_score_vs_target": calculate_spearman(scores, targets),
+        "spearman_target_vs_r_multiple": calculate_spearman(targets, r_values),
         "top_model_score_decile_average_r": float(ordered_score.tail(score_count)["r_multiple"].mean()),
         "bottom_model_score_decile_average_r": float(ordered_score.head(score_count)["r_multiple"].mean()),
         "top_target_decile_average_r": float(ordered_target.tail(target_count)["r_multiple"].mean()),
@@ -1340,7 +1354,7 @@ def main(argv=None) -> int:
     if profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
         from services.breakout_quality.train_daily_ranker import run as run_daily_ranker
 
-        return int(run_daily_ranker(args, ranker_impl=sys.modules[__name__]))
+        return int(run_daily_ranker(args))
     contract = _profile_contract(profile)
     model_spec = get_model_spec(str(args.model_architecture))
     summary, indexed_features, context, labels, events = load_validated_dataset_bundle(
@@ -1453,7 +1467,7 @@ def main(argv=None) -> int:
         f"training_label_scope={profile.training_label_scope}"
     )
 
-    epoch_selection = _select_epoch(
+    epoch_selection = select_epoch(
         torch,
         feature_bank,
         group_context,
@@ -1466,7 +1480,7 @@ def main(argv=None) -> int:
         plan=plan,
     )
     selected_epoch = int(epoch_selection["best_epoch"])
-    model, final_history = _fit_final(
+    model, final_history = fit_final(
         torch,
         feature_bank,
         group_context,
@@ -1478,7 +1492,7 @@ def main(argv=None) -> int:
         plan=plan,
     )
 
-    artifact_paths, output_dir = _training_output_paths(args)
+    artifact_paths, output_dir = resolve_training_output_paths(args)
     artifact_paths.model_dir.mkdir(parents=True, exist_ok=True)
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
@@ -1494,7 +1508,7 @@ def main(argv=None) -> int:
             "training_objective": profile.training_objective,
             "training_label_scope": profile.training_label_scope,
             "continuous_target_contract": target_manifest.get("target_contract"),
-            "training_semantics": _training_semantics(profile),
+            "training_semantics": training_semantics(profile),
             "torch_execution": plan.as_manifest_payload(),
             "trainable_parameter_count": int(trainable_parameter_count),
             "total_parameter_count": int(total_parameter_count),
@@ -1520,7 +1534,7 @@ def main(argv=None) -> int:
     all_group_split_metrics: dict[str, Any] = {}
     split_metrics: dict[str, Any] = {}
     for name, ids in all_split_ids.items():
-        scores = _predict_scores(
+        scores = predict_scores(
             torch,
             model,
             feature_bank,
@@ -1530,7 +1544,7 @@ def main(argv=None) -> int:
             plan=plan,
         )
         score_by_group[ids] = scores
-        all_group_split_metrics[name] = _split_metrics(
+        all_group_split_metrics[name] = split_metrics(
             ids,
             group_table,
             raw_target,
@@ -1539,7 +1553,7 @@ def main(argv=None) -> int:
             include_top_k_quality=True,
         )
         scoped_ids = scoped_split_ids[name]
-        split_metrics[name] = _split_metrics(
+        split_metrics[name] = split_metrics(
             scoped_ids,
             group_table,
             raw_target,
@@ -1554,7 +1568,7 @@ def main(argv=None) -> int:
     # after the frozen Selection-fit checkpoint exists.
     missing_forward_ids = forward_score_ids[~np.isfinite(score_by_group[forward_score_ids])]
     if len(missing_forward_ids):
-        score_by_group[missing_forward_ids] = _predict_scores(
+        score_by_group[missing_forward_ids] = predict_scores(
             torch,
             model,
             feature_bank,
@@ -1636,9 +1650,9 @@ def main(argv=None) -> int:
             "objective_description": contract["objective_description"],
             "loss": profile.loss_name,
             "model_score": "softmax_pass_probability",
-            "batching": _training_semantics(profile)["batching"],
-            "pairwise_contract": _training_semantics(profile)["pairwise_contract"],
-            "listwise_contract": _training_semantics(profile)["listwise_contract"],
+            "batching": training_semantics(profile)["batching"],
+            "pairwise_contract": training_semantics(profile)["pairwise_contract"],
+            "listwise_contract": training_semantics(profile)["listwise_contract"],
             "target": contract["target_description"],
             "training_label_scope": profile.training_label_scope,
             "training_group_counts": training_group_counts,
@@ -1694,7 +1708,7 @@ def main(argv=None) -> int:
         "model_spec": model_spec.as_manifest_payload(),
         "training_objective": profile.training_objective,
         "training_label_scope": profile.training_label_scope,
-        "training_semantics": _training_semantics(profile),
+        "training_semantics": training_semantics(profile),
         "continuous_target_id": profile.continuous_target_id,
         "sequence_length": int(feature_bank.shape[1]),
         "feature_columns": list(FEATURE_COLUMNS),

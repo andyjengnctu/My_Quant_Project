@@ -1,0 +1,49 @@
+"""Public continuous-ranker training, inference, and metric API.
+
+This module is the stable service boundary shared by event rankers, daily-universal
+rankers, point-in-time folds, and multi-seed robustness.  Training implementations
+remain single-sourced in ``train_continuous_ranker``; consumers must not depend on
+its private helpers or inject the trainer module as an implementation object.
+"""
+
+from __future__ import annotations
+
+from services.breakout_quality.train_continuous_ranker import (
+    LISTWISE_TRAINING_CONTRACT,
+    PAIRWISE_TRAINING_CONTRACT,
+    RANKER_REPORT_JSON_FILENAME,
+    RANKER_REPORT_MARKDOWN_FILENAME,
+    RANKER_SCHEMA_VERSION,
+    RANKER_SCORE_FILENAME,
+    RANKER_TARGET_FILENAME,
+    build_daily_percentile_targets,
+    calculate_spearman,
+    daily_rank_metrics,
+    daily_top_k_metrics,
+    fit_final,
+    predict_scores,
+    resolve_training_output_paths,
+    select_epoch,
+    split_metrics,
+    training_semantics,
+)
+
+__all__ = [
+    "LISTWISE_TRAINING_CONTRACT",
+    "PAIRWISE_TRAINING_CONTRACT",
+    "RANKER_REPORT_JSON_FILENAME",
+    "RANKER_REPORT_MARKDOWN_FILENAME",
+    "RANKER_SCHEMA_VERSION",
+    "RANKER_SCORE_FILENAME",
+    "RANKER_TARGET_FILENAME",
+    "build_daily_percentile_targets",
+    "calculate_spearman",
+    "daily_rank_metrics",
+    "daily_top_k_metrics",
+    "fit_final",
+    "predict_scores",
+    "resolve_training_output_paths",
+    "select_epoch",
+    "split_metrics",
+    "training_semantics",
+]

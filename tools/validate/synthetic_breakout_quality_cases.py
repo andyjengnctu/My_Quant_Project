@@ -7685,6 +7685,60 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         ),
     )
 
+    ranker_api_source = (
+        project_root / "services" / "breakout_quality" / "ranker_training.py"
+    ).read_text(encoding="utf-8")
+    pipeline_source = (
+        project_root / "services" / "breakout_quality" / "continuous_ranker_pipeline.py"
+    ).read_text(encoding="utf-8")
+    daily_source = (
+        project_root / "services" / "breakout_quality" / "train_daily_ranker.py"
+    ).read_text(encoding="utf-8")
+    public_api_names = (
+        "select_epoch",
+        "fit_final",
+        "predict_scores",
+        "split_metrics",
+        "training_semantics",
+        "resolve_training_output_paths",
+        "daily_rank_metrics",
+        "daily_top_k_metrics",
+        "calculate_spearman",
+    )
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "ranker_training_public_api_is_single_shared_boundary_without_private_cross_module_calls",
+        True,
+        all(name in ranker_api_source for name in public_api_names)
+        and "ranker_training as ranker_api" in pipeline_source
+        and "ranker_training as ranker_api" in daily_source
+        and "ranker_impl._" not in pipeline_source
+        and "ranker_impl._" not in daily_source
+        and "ranker_impl=" not in daily_source
+        and "ranker_impl=sys.modules" not in ranker_source,
+    )
+
+    from services.breakout_quality import ranker_training as ranker_training_api
+    from services.breakout_quality import train_continuous_ranker as canonical_ranker
+    add_check(
+        results,
+        "synthetic_breakout_quality",
+        case_id,
+        "legacy_private_ranker_names_alias_the_public_training_api_without_second_implementation",
+        True,
+        canonical_ranker._select_epoch is ranker_training_api.select_epoch
+        and canonical_ranker._fit_final is ranker_training_api.fit_final
+        and canonical_ranker._predict_scores is ranker_training_api.predict_scores
+        and canonical_ranker._split_metrics is ranker_training_api.split_metrics
+        and canonical_ranker._training_semantics is ranker_training_api.training_semantics
+        and canonical_ranker._training_output_paths is ranker_training_api.resolve_training_output_paths
+        and canonical_ranker._daily_rank_metrics is ranker_training_api.daily_rank_metrics
+        and canonical_ranker._daily_top_k_metrics is ranker_training_api.daily_top_k_metrics
+        and canonical_ranker._spearman is ranker_training_api.calculate_spearman,
+    )
+
     summary["profile"] = STRATEGY_ALIGNED_DAILY_PERCENTILE_MSE_PROFILE
     summary["pass_conditional_profile"] = STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
     summary["training_objective"] = profile.training_objective

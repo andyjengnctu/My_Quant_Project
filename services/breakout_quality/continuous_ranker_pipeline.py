@@ -26,7 +26,7 @@ from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 from filters.breakout_quality.contract import LABEL_PASS, LABEL_REJECT
 from filters.breakout_quality.continuous_ranker_data import ContinuousRankerDataBundle
 from filters.breakout_quality.profile_ranker_data import load_profile_continuous_ranker_data
-from services.breakout_quality import train_continuous_ranker as ranker_impl
+from services.breakout_quality import ranker_training as ranker_api
 
 
 
@@ -99,21 +99,21 @@ def calculate_descriptive_rank_quality(
     score_values = score_values[valid]
     target_values = target_values[valid]
     if len(score_values) == 0:
-        daily = ranker_impl._daily_rank_metrics(
+        daily = ranker_api.daily_rank_metrics(
             np.empty(0, dtype="datetime64[ns]"),
             np.empty(0, dtype=np.float64),
             np.empty(0, dtype=np.float64),
         )
         return {**daily, "top_k_quality": None}
-    percentile = ranker_impl.build_daily_percentile_targets(
+    percentile = ranker_api.build_daily_percentile_targets(
         target_values,
         np.ones(len(target_values), dtype=bool),
         date_values,
     )
-    daily = ranker_impl._daily_rank_metrics(
+    daily = ranker_api.daily_rank_metrics(
         date_values.to_numpy(), score_values, target_values
     )
-    top_k_quality = ranker_impl._daily_top_k_metrics(
+    top_k_quality = ranker_api.daily_top_k_metrics(
         date_values.to_numpy(),
         score_values,
         target_values,
@@ -127,7 +127,7 @@ def calculate_descriptive_rank_quality(
 def calculate_spearman(x: np.ndarray, y: np.ndarray) -> float | None:
     """Return the canonical continuous-ranker Spearman metric."""
 
-    return ranker_impl._spearman(x, y)
+    return ranker_api.calculate_spearman(x, y)
 
 
 def resolve_ranker_execution_plan(args):
@@ -157,7 +157,7 @@ def build_percentile_target(
     ids = np.asarray(group_ids, dtype=np.int64)
     mask = np.zeros(bundle.raw_target.shape, dtype=bool)
     mask[ids] = True
-    return ranker_impl.build_daily_percentile_targets(
+    return ranker_api.build_daily_percentile_targets(
         bundle.raw_target,
         mask,
         bundle.group_table["date"],
@@ -178,7 +178,7 @@ def select_epoch(
         bundle.profile.training_sample_scope
         != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
     )
-    return ranker_impl._select_epoch(
+    return ranker_api.select_epoch(
         torch,
         bundle.feature_bank,
         bundle.group_context,
@@ -203,7 +203,7 @@ def fit_final(
     args,
     plan,
 ):
-    return ranker_impl._fit_final(
+    return ranker_api.fit_final(
         torch,
         bundle.feature_bank,
         bundle.group_context,
@@ -226,7 +226,7 @@ def predict_scores(
     batch_size: int,
     plan,
 ) -> np.ndarray:
-    return ranker_impl._predict_scores(
+    return ranker_api.predict_scores(
         torch,
         model,
         bundle.feature_bank,
