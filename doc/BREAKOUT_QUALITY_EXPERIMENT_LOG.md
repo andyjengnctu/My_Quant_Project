@@ -8098,3 +8098,13 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - `STRATEGY_COMPARE_ARMS`與`STRATEGY_COMPARE_CONTRASTS`移除無效的個別`enabled`欄位；active狀態只由`STRATEGY_COMPARE_PROFILES[*].arm_ids / contrast_ids`決定。Runtime dataclass仍保留衍生`enabled`布林值供既有consumer使用，因此不改正式介面與結果。
 - `validate_strategy_compare_config_driven_app_contract_case`新增profile-membership單一啟用來源與execution/optimizer defaults SSOT guard；targeted contract由72增至74項且0 fail。歷史arm／contrast定義本輪仍留在同一config，後續Batch 2-B再做active/historical物理隔離，避免同批同時改identity與設定owner。
 - 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`。
+
+## 2026-08-12 — Config SSOT Batch 2-B：Active／Historical Strategy Compare catalog物理隔離
+
+- 程式基準：`test-branch-1_20260812_005720_6f848eb.zip`；SHA256 `294fa86afaa87b8ca44a96b89d0eba89fece87034fa0b28d301a31560ca69317`。
+- 本輪屬config/infrastructure refactor，不新增／修改任何`MR-*`、`DL-*`、`SR-C*`、Target、architecture、loss、Selection／Forward期間、策略參數數值、robustness seed或交易會計。
+- `config/strategy_compare.py`的user-maintained catalog只保留目前`selection_pit`／`forward_oos` profiles dependency closure：4個parameter sources、4個DL sources、8個arms、8個contrasts；退役的2個parameter sources、5個DL sources、25個arms、51個contrasts移至`config/compatibility/strategy_compare_history.py`，標記為歷史唯讀相容定義。
+- `get_strategy_comparison_settings()`在runtime仍把active與historical compatibility catalog無重疊合併，因此既有C17 Dynamic-K reference、歷史arm／contrast synthetic、archived Strategy Compare result decoding與pair replay compatibility均維持；current profile的啟用集合仍只由`STRATEGY_COMPARE_PROFILES[*].arm_ids/contrast_ids`決定。
+- 新增active/historical physical-separation direct contract：active arms／contrasts必須精確等於current profiles聯集，active param／DL sources必須精確等於current arms dependency closure，四類catalog皆禁止active/history ID重疊；歷史catalog同樣不得重新出現第二份`enabled`。
+- 修改前後`StrategyComparisonSettings.as_dict()`逐profile完全相同；無artifact identity的Selection／Forward config fingerprint維持`49f4b71d293b`／`ce8813716cf0`，因此本輪沒有造成scientific/cache identity變更。targeted Strategy Compare contract由74項增加為75項且0 fail。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`。

@@ -17545,6 +17545,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     artifact_registry_source = artifact_registry_path.read_text(encoding="utf-8")
 
     from config import strategy_compare as strategy_config
+    from config.compatibility import strategy_compare_history as strategy_history
     from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
     from core.strategy_comparison import strategy_comparison_fingerprint
 
@@ -17592,6 +17593,8 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         True,
         all("enabled" not in raw for raw in strategy_config.STRATEGY_COMPARE_ARMS.values())
         and all("enabled" not in raw for raw in strategy_config.STRATEGY_COMPARE_CONTRASTS.values())
+        and all("enabled" not in raw for raw in strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS.values())
+        and all("enabled" not in raw for raw in strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS.values())
         and all(
             {arm.arm_id for arm in strategy_config.get_strategy_comparison_settings(profile_id).enabled_arms}
             == set(raw_profile["arm_ids"])
@@ -17602,6 +17605,52 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for profile_id, raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.items()
         ),
     )
+    active_arm_ids = {
+        str(arm_id)
+        for raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.values()
+        for arm_id in tuple(raw_profile.get("arm_ids") or ())
+    }
+    active_contrast_ids = {
+        str(contrast_id)
+        for raw_profile in strategy_config.STRATEGY_COMPARE_PROFILES.values()
+        for contrast_id in tuple(raw_profile.get("contrast_ids") or ())
+    }
+    active_param_ids = {
+        str(strategy_config.STRATEGY_COMPARE_ARMS[arm_id]["param_source"])
+        for arm_id in active_arm_ids
+    }
+    active_dl_ids = {
+        str(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_id") or "")
+        for arm_id in active_arm_ids
+        if bool(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_enabled"))
+    }
+    active_dl_ids.discard("")
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_compare_active_and_historical_catalogs_are_physically_separated",
+        True,
+        set(strategy_config.STRATEGY_COMPARE_ARMS) == active_arm_ids
+        and set(strategy_config.STRATEGY_COMPARE_CONTRASTS) == active_contrast_ids
+        and set(strategy_config.STRATEGY_PARAM_SOURCES) == active_param_ids
+        and set(strategy_config.STRATEGY_DL_SOURCES) == active_dl_ids
+        and not set(strategy_config.STRATEGY_COMPARE_ARMS).intersection(
+            strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS
+        )
+        and not set(strategy_config.STRATEGY_COMPARE_CONTRASTS).intersection(
+            strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS
+        )
+        and not set(strategy_config.STRATEGY_PARAM_SOURCES).intersection(
+            strategy_history.HISTORICAL_STRATEGY_PARAM_SOURCES
+        )
+        and not set(strategy_config.STRATEGY_DL_SOURCES).intersection(
+            strategy_history.HISTORICAL_STRATEGY_DL_SOURCES
+        )
+        and set(settings.arms)
+        == active_arm_ids.union(strategy_history.HISTORICAL_STRATEGY_COMPARE_ARMS)
+        and set(settings.contrasts)
+        == active_contrast_ids.union(strategy_history.HISTORICAL_STRATEGY_COMPARE_CONTRASTS),
+    )
+
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "strategy_execution_and_optimizer_defaults_have_config_ssot",
@@ -18806,7 +18855,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and a9_param_source.builder is not None
         and a9_param_source.builder.options.get("p3_variant") == "A9"
         and "p3_dl_on_trained/A9" in str(a9_param_source.path_template)
-        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17", "C18"}.issubset(set(strategy_config.STRATEGY_COMPARE_ARMS))
+        and {"C7", "C8", "C9", "C10", "C11", "C12", "C14", "C15", "C16", "C17", "C18"}.issubset(set(settings.arms))
         and all(arm.enabled for arm in settings.enabled_arms)
         and all(arm.arm_id in settings.arms for arm in settings.enabled_arms)
         and settings.dl_sources["CONT11G"].score_source == "continuous_ranker_oos"
@@ -18857,7 +18906,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         "min_roos_display_names_follow_training_identity_then_runtime_suffix_contract",
         True,
         all(
-            str(strategy_config.STRATEGY_COMPARE_ARMS[arm_id]["name"]) == name
+            str(settings.arms[arm_id].name) == name
             for arm_id, name in expected_display_names.items()
         ),
     )
