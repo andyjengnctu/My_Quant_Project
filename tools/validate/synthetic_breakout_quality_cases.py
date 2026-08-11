@@ -17787,7 +17787,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and selection_robustness.profile_id == "selection_pit"
         and robustness_settings.profile_id in strategy_config.STRATEGY_COMPARE_PROFILES
         and robustness_settings.seed_count >= 2
-        and robustness_settings.gpu_train_workers == 1
+        and 1 <= robustness_settings.gpu_train_workers <= 2
         and robustness_settings.cpu_replay_workers >= 1
         and bool(robustness_fixed)
         and bool(robustness_stochastic)
@@ -18018,25 +18018,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "quiet=True" in robustness_source,
     )
 
-    replay_throttle_index = robustness_source.find(
-        "while len(futures) >= int(cfg.cpu_replay_workers):"
-    )
-    replay_submit_index = robustness_source.find(
-        "future = executor.submit(_replay_one_unit, job)"
-    )
     add_check(
         results, "synthetic_breakout_quality", case_id,
-        "multi_seed_pipeline_throttles_before_next_replay_submit_so_gpu_training_can_overlap_cpu_replay",
+        "multi_seed_pipeline_allows_config_driven_two_gpu_trainers_without_changing_cpu_replay_policy",
         True,
-        robustness_settings.gpu_train_workers == 1
+        1 <= robustness_settings.gpu_train_workers <= 2
         and robustness_settings.cpu_replay_workers >= 1
-        and replay_throttle_index >= 0
-        and replay_submit_index > replay_throttle_index
-        and robustness_source.count(
-            "while len(futures) >= int(cfg.cpu_replay_workers):"
-        ) == 1
-        and "Replay A可與" in robustness_source
-        and "GPU Train B真正重疊" in robustness_source,
+        and "training_executor = ThreadPoolExecutor(" in robustness_source
+        and "max_workers=int(cfg.gpu_train_workers)" in robustness_source
+        and "replay_executor = ThreadPoolExecutor(" in robustness_source
+        and "max_workers=int(cfg.cpu_replay_workers)" in robustness_source
+        and "training_futures" in robustness_source
+        and "_terminate_active_trainers" in robustness_source
+        and "gpu_train_workers" in config_source
+        and "STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS" in config_source,
     )
 
     from tools.filters.breakout_quality import train_continuous_ranker as ranker_train_module

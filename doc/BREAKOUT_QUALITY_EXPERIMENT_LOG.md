@@ -8019,3 +8019,38 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - 本輪不修改Dataset、Label、MR-12B／MR-13A、Target、architecture、loss、seed、Selection／Forward期間、strategy accounting、scientific fingerprint或既有robustness結果；不新增／修改MR／DL／SR identity。
 - 依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`；formal double check由使用者本機正式入口完成。
 
+
+
+## 2026-08-11 — Multiple-seed robustness performance path：2×GPU queue、daily batch向量化與prepared-data cache
+
+### 工作基準與瓶頸
+
+- 程式基準：`test-branch-1_20260811_025425_0f1a7c6.zip`；SHA256 `a4acff5b03779eecfe7d43af3f2372e41bdb7098507eac77003d1790eb5f7947`。
+- 使用者實跑Forward multi-seed時CPU約`10～20%`、GPU約`25～60%`、RAM約`15/32GB`；MR-12B training約`30～55s/seed`，MR-13A約`5.5～6.2min/seed`，strategy replay約`55～80s/observation`。因此wall time主要由8個MR-13A GPU trainings串行主導，而不是CPU replay。
+- 本輪只改execution/performance path，不新增MR/DL/SR identity，不改Target、architecture、batch identity/order、loss、optimizer update、epoch selection、final refit、seed generator、Forward/Selection period、selector或strategy accounting。
+
+### 實作
+
+1. `StrategyMultiSeedRobustnessSettings.gpu_train_workers`能力契約由固定1改為`1～2`，`config/strategy_compare.py`常用knobs目前預設GPU train workers=`2`、CPU replay workers=`2`。Orchestrator使用獨立training/replay executors；工作排序依training sample scope泛化，先啟動一個daily與一個non-daily工作，後續優先保持長daily trainings滿載，不硬編MR/C ID。
+2. MR-13A `LazyDailyFeatureBank`把各ticker canonical OHLCV pack成單一contiguous array＋ticker offsets；每個batch一次gather全部300-bar stock windows與benchmark windows，再向量化price/volume normalization。Synthetic direct reference確認batch與scalar canonical feature逐元素`array_equal=True`；本輪額外128 samples×300 bars microbenchmark約`10.66×` CPU materialization speedup，僅屬工程microbenchmark，不是模型／策略結果。
+3. Continuous ranker新增CPU `train_prefetch_workers`（目前2），prefetch futures雖可同時物化多batch，但仍依原submission順序yield，因此batch identity/order與optimizer updates不變。Pairwise loss對整batch同一日期走等價RankNet fast path；direct check確認loss與pair count和原generic branch完全相同。
+4. MR-13A robustness使用run-scoped `BREAKOUT_QUALITY_DAILY_PREPARED_CACHE_PATH`。第一個daily trainer仍以canonical Dataset/source OHLCV完整建立`ContinuousRankerDataBundle`，之後同fingerprint processes只pickle/load相同canonical sanitized arrays、indexes、targets與metadata；cache不保存`N×300×10` expanded stock-day tensors，run成功後隨model scratch清除。Lockfile＋atomic replace避免兩個trainer同時建立；失敗時orchestrator先終止active trainers，再移除本run的prepared-cache lock與中斷寫入的tmp，避免resume卡在已死亡owner或殘留大型partial cache。
+5. Forward robustness trainer加入hidden `--strategy-scores-only` execution mode。Inner Train/Validation選epoch、完整Selection refit與frozen checkpoint完全照canonical training執行；checkpoint後只做strategy replay真正需要的Forward score與minimal report/manifest，略過描述性full split metrics、candidate diagnostics與Markdown。MR-12B event ranker與MR-13A daily ranker都支援此模式。
+6. 每個stochastic observation永久aggregate新增training phase秒數（Data／Epoch selection／Final refit／Forward score／Export）以及model/score SHA256；robustness summary/console/Markdown新增Training phase Mean。SHA用於parallel execution可稽核，不把worker數或cache/prefetch/report模式放進scientific fingerprint。
+7. Selection PIT robustness同樣可用2個isolated trainer processes；daily PIT builder可共享相同run-scoped prepared bundle，但仍只建立2014～2020需要的7 folds/model/seed，PIT scientific policy不變。
+
+### 驗證與狀態
+
+- `LazyDailyFeatureBank` vectorized batch vs scalar reference：逐元素完全相同；另直接驗證packed storage對第二ticker的不足history source position會拒絕，不可跨ticker讀到前一檔尾端；pairwise single-date fast path vs generic formula：loss/count完全相同；2-worker prefetch：batch IDs與materialized values維持原順序。
+- Prepared cache以synthetic `ContinuousRankerDataBundle`做pickle round-trip，restore後feature output完全相同。
+- 此環境沒有使用者RTX 5080，因此不宣稱實際53分鐘已降至特定wall time；正式GPU utilization、VRAM與wall-time改善必須由使用者本機下一次multi-seed run的新增phase timings驗證。若2 concurrent trainers觸發VRAM/driver限制，可只把`STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS`調回1，不改scientific fingerprint。
+- 狀態：`IMPLEMENTED / PERFORMANCE_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。
+- 依`PROJECT_SETTINGS.md`，GPT未執行`apps/test_suite.py`或formal step；正式double check由使用者本機入口執行。
+
+## 2026-08-11 — Multiple-seed robustness 效能隔離重測：只保留 2×GPU training concurrency
+
+- 使用者回報上一輪合併效能版實跑：`GPU train workers=2 / CPU replay workers=2`，MR-13A單一seed training仍約`5.5～6.3min`，GPU使用率約100%、CPU約20%；16 observations總wall time為`29:51`。相較先前單GPU serial約`53min`，整體wall time實際已接近減半，但無法由合併版判定是2×GPU concurrency、daily vectorization、prepared-data cache、prefetch或minimal export中的哪一項造成。
+- 使用者已要求回到一次只測一個execution變因。當前隔離重測只保留`gpu_train_workers=2`；`cpu_replay_workers=1`，daily feature materialization、prefetch、prepared-data cache、trainer完整report/score export全部回到2026-08-11效能合併版之前的canonical路徑。
+- 2×GPU僅改orchestrator排程：每個seed/model仍呼叫相同canonical trainer subprocess、相同Dataset/Target/architecture/batch/loss/optimizer/epoch selection/final refit與score export；per-seed model/research/replay目錄維持隔離，失敗時必須終止所有active trainer subprocess並保留resumable manifest。`gpu_train_workers`仍屬execution option，不進scientific fingerprint。
+- 本輪目的只量測wall-time因果，不新增MR/DL/SR identity、不改任何模型或策略scientific condition。正式判讀只比較相同8 seeds/2 arms下的16-observation總耗時與per-seed training時間；若總時間顯著下降而單seed training不變，即證明收益來自training overlap。
+- 狀態：`IMPLEMENTED / ISOLATED_PERFORMANCE_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。

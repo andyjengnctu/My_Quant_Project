@@ -13,7 +13,6 @@ from config.training_policy import (
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
 from core.strategy_comparison import (
-    MULTI_SEED_GPU_TRAIN_WORKERS,
     StrategyArtifactBuilder,
     StrategyComparisonArm,
     StrategyComparisonContrast,
@@ -41,6 +40,7 @@ STRATEGY_COMPARE_STALE_SCORE_MEMBERSHIP_GUARD_MAX_AGE_DAYS = 22
 
 STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT = 8
 STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED = 20260810
+STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS = 2
 STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS = 1
 STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED = True
 STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE = "compact"
@@ -100,6 +100,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "profile_id": "selection_pit",
         "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
         "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
         "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
@@ -121,6 +122,7 @@ STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES = {
         "profile_id": "forward_oos",
         "seed_count": STRATEGY_COMPARE_ROBUSTNESS_SEED_COUNT,
         "seed_generator_seed": STRATEGY_COMPARE_ROBUSTNESS_SEED_GENERATOR_SEED,
+        "gpu_train_workers": STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS,
         "cpu_replay_workers": STRATEGY_COMPARE_ROBUSTNESS_CPU_REPLAY_WORKERS,
         "reuse_completed": STRATEGY_COMPARE_ROBUSTNESS_REUSE_COMPLETED,
         "console_mode": STRATEGY_COMPARE_ROBUSTNESS_CONSOLE_MODE,
@@ -978,7 +980,7 @@ def get_strategy_multi_seed_robustness_settings(
         profile_id=str(raw.get("profile_id") or "").strip(),
         seed_count=int(raw.get("seed_count", 0) or 0),
         seed_generator_seed=int(raw.get("seed_generator_seed", 0) or 0),
-        gpu_train_workers=int(MULTI_SEED_GPU_TRAIN_WORKERS),
+        gpu_train_workers=int(raw.get("gpu_train_workers", STRATEGY_COMPARE_ROBUSTNESS_GPU_TRAIN_WORKERS)),
         cpu_replay_workers=int(raw.get("cpu_replay_workers", 0) or 0),
         reuse_completed=bool(raw.get("reuse_completed", True)),
         console_mode=str(raw.get("console_mode") or "compact").strip(),

@@ -9,6 +9,7 @@ artifacts are temporary work products and are removed after their metrics are st
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ import random
 import shutil
 import subprocess
 import sys
+from threading import Lock
 import time
 from typing import Any
 
@@ -768,6 +770,150 @@ def _training_command(
         "--research-output-dir", str(research_dir.resolve()),
     ]
 
+
+def _terminate_trainer_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=TRAINER_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _terminate_active_trainers(
+    registry: dict[str, subprocess.Popen],
+    registry_lock: Lock,
+) -> None:
+    with registry_lock:
+        processes = list(registry.values())
+    for proc in processes:
+        _terminate_trainer_process(proc)
+
+
+def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
+    arm: StrategyComparisonArm = job["arm"]
+    settings = job["settings"]
+    seed = int(job["seed"])
+    model_dir = Path(job["model_dir"]).resolve()
+    research_dir = Path(job["research_dir"]).resolve()
+    train_log_path = research_dir / "train.log"
+    started = time.perf_counter()
+    artifacts = None
+    if bool(job.get("reuse_completed")) and model_dir.is_dir() and research_dir.is_dir():
+        try:
+            artifacts = _validate_training_artifacts(
+                arm=arm,
+                seed=seed,
+                model_dir=model_dir,
+                research_dir=research_dir,
+                settings=settings,
+                comparison_start=str(job["comparison_start"]),
+                comparison_end=str(job["comparison_end"]),
+            )
+        except (FileNotFoundError, ValueError):
+            artifacts = None
+    if artifacts is not None:
+        return {
+            "artifacts": artifacts,
+            "reused": True,
+            "wall_elapsed_sec": round(time.perf_counter() - started, 3),
+        }
+
+    shutil.rmtree(model_dir, ignore_errors=True)
+    shutil.rmtree(research_dir, ignore_errors=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    research_dir.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "1"
+    trainer_registry = job["trainer_registry"]
+    trainer_registry_lock = job["trainer_registry_lock"]
+    trainer_key = str(job["trainer_key"])
+    with train_log_path.open("w", encoding="utf-8") as train_log:
+        proc = subprocess.Popen(
+            _training_command(
+                arm=arm,
+                seed=seed,
+                model_dir=model_dir,
+                research_dir=research_dir,
+                settings=settings,
+                comparison_start=str(job["comparison_start"]),
+                comparison_end=str(job["comparison_end"]),
+            ),
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=train_log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        with trainer_registry_lock:
+            trainer_registry[trainer_key] = proc
+        try:
+            returncode = proc.wait()
+        except BaseException:
+            _terminate_trainer_process(proc)
+            raise
+        finally:
+            with trainer_registry_lock:
+                trainer_registry.pop(trainer_key, None)
+    if int(returncode or 0) != 0:
+        train_tail = ""
+        if train_log_path.is_file():
+            train_tail = train_log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+        raise RuntimeError(
+            f"multi-seed模型訓練失敗: arm={arm.name}, seed_index={job['seed_order']}; "
+            f"returncode={returncode}; log_tail={train_tail}"
+        )
+    artifacts = _validate_training_artifacts(
+        arm=arm,
+        seed=seed,
+        model_dir=model_dir,
+        research_dir=research_dir,
+        settings=settings,
+        comparison_start=str(job["comparison_start"]),
+        comparison_end=str(job["comparison_end"]),
+    )
+    return {
+        "artifacts": artifacts,
+        "reused": False,
+        "wall_elapsed_sec": round(time.perf_counter() - started, 3),
+    }
+
+
+def _training_units(
+    *,
+    seeds: tuple[int, ...],
+    stochastic_arms: tuple[StrategyComparisonArm, ...],
+    settings,
+    completed: set[tuple[str, int]],
+    model_root: Path,
+    run_root: Path,
+    comparison_start: str,
+    comparison_end: str,
+    reuse_completed: bool,
+) -> deque[dict[str, Any]]:
+    units: deque[dict[str, Any]] = deque()
+    for seed_order, seed in enumerate(seeds, start=1):
+        for arm_order, arm in enumerate(stochastic_arms, start=1):
+            if (arm.arm_id, int(seed)) in completed:
+                continue
+            unit = _unit_key(arm.arm_id, int(seed))
+            units.append({
+                "arm": arm,
+                "settings": settings,
+                "seed": int(seed),
+                "seed_order": int(seed_order),
+                "arm_order": int(arm_order),
+                "model_dir": str(model_root / unit / "model"),
+                "research_dir": str(run_root / "work" / "training" / unit),
+                "comparison_start": str(comparison_start),
+                "comparison_end": str(comparison_end),
+                "reuse_completed": bool(reuse_completed),
+            })
+    return units
+
+
 def _format_elapsed(seconds: float) -> str:
     total = max(0, int(round(float(seconds))))
     hours, rem = divmod(total, 3600)
@@ -1355,6 +1501,7 @@ def _manifest_progress_payload(
     total_units: int,
     current_training: dict[str, Any] | None,
     futures: dict[Future, dict[str, Any]] | None = None,
+    training_futures: dict[Future, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload = dict(manifest)
     payload["status"] = "RUNNING"
@@ -1364,6 +1511,16 @@ def _manifest_progress_payload(
         _unit_key(arm_id, seed) for arm_id, seed in completed
     )
     payload["current_training"] = current_training
+    payload["active_trainings"] = [
+        {
+            "arm_id": str(meta["arm"].arm_id),
+            "name": str(meta["arm"].name),
+            "seed": int(meta["seed"]),
+            "seed_order": int(meta["seed_order"]),
+            "arm_order": int(meta["arm_order"]),
+        }
+        for meta in (training_futures or {}).values()
+    ]
     payload["active_replays"] = [
         {
             "arm_id": str(meta["arm_id"]),
@@ -1525,261 +1682,245 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         progress.update(text)
 
     current_training: dict[str, Any] | None = None
-    manifest = _manifest_progress_payload(
-        manifest=manifest,
-        completed=completed,
-        total_units=total_units,
-        current_training=current_training,
+    active_trainers: dict[str, subprocess.Popen] = {}
+    active_trainers_lock = Lock()
+    replay_executor = ThreadPoolExecutor(
+        max_workers=int(cfg.cpu_replay_workers),
+        thread_name_prefix="strategy-replay",
     )
-    _write_json(manifest_path, manifest)
+    training_executor = ThreadPoolExecutor(
+        max_workers=int(cfg.gpu_train_workers),
+        thread_name_prefix="strategy-gpu-train",
+    )
+    replay_futures: dict[Future, dict[str, Any]] = {}
+    training_futures: dict[Future, dict[str, Any]] = {}
+    ready_replays: deque[tuple[dict[str, Any], dict[str, Any]]] = deque()
+    pending_trainings = _training_units(
+        seeds=seeds,
+        stochastic_arms=stochastic_arms,
+        settings=settings,
+        completed=completed,
+        model_root=model_root,
+        run_root=run_root,
+        comparison_start=comparison_start,
+        comparison_end=comparison_end,
+        reuse_completed=cfg.reuse_completed,
+    )
+    for meta in pending_trainings:
+        meta["trainer_registry"] = active_trainers
+        meta["trainer_registry_lock"] = active_trainers_lock
+        meta["trainer_key"] = _unit_key(meta["arm"].arm_id, int(meta["seed"]))
 
-    executor = ThreadPoolExecutor(max_workers=int(cfg.cpu_replay_workers))
-    futures: dict[Future, dict[str, Any]] = {}
-
-    def harvest(*, wait_all: bool = False) -> None:
-        nonlocal done_units, rows, yearly_rows, manifest
-        while True:
-            finished = [future for future in futures if future.done()]
-            if not finished and not wait_all:
-                return
-            if not finished and wait_all and futures:
-                time.sleep(0.25)
-                continue
-            for future in finished:
-                meta = futures.pop(future)
-                result = future.result()
-                rows = [
-                    row for row in rows
-                    if not (str(row.get("arm_id")) == str(result["arm_id"]) and int(row.get("seed")) == int(result["seed"]))
-                ]
-                rows.append(_result_row(result))
-                frame = pd.DataFrame(rows)
-                _write_seed_results(seed_results_path, frame)
-                yearly_rows = [
-                    row for row in yearly_rows
-                    if not (str(row.get("arm_id")) == str(result["arm_id"]) and int(row.get("seed")) == int(result["seed"]))
-                ]
-                yearly_rows.extend(list(result.get("yearly") or []))
-                _write_seed_yearly_results(seed_yearly_results_path, pd.DataFrame(yearly_rows))
-                completed.add((str(result["arm_id"]), int(result["seed"])))
-                done_units = len(completed)
-                manifest = _manifest_progress_payload(
-                    manifest=manifest,
-                    completed=completed,
-                    total_units=total_units,
-                    current_training=current_training,
-                    futures=futures,
-                )
-                _write_json(manifest_path, manifest)
-                romd = float(result.get("return_over_max_drawdown"))
-                delta_min = romd - min_baseline_romd
-                done_tag = paint(f"[DONE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
-                delta_text = terminal_signal(
-                    f"ΔMin={delta_min:+.2f}", signal_for_delta(delta_min, preference="higher"), enabled=color_enabled
-                )
+    for seed_order, seed in enumerate(seeds, start=1):
+        for arm_order, arm in enumerate(stochastic_arms, start=1):
+            if (arm.arm_id, int(seed)) in completed:
                 progress.print_line(
-                    f"{done_tag} seed {meta['seed_order']}/{len(seeds)} | "
-                    f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['name']} | "
-                    f"RoMD={romd:.2f} | {delta_text} | "
-                    f"train={_format_elapsed(result.get('training_elapsed_sec', 0))} | "
-                    f"replay={_format_elapsed(result.get('replay_elapsed_sec', 0))} | "
-                    f"total={_format_elapsed(time.perf_counter()-started_total)}"
+                    paint(f"[REUSE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
+                    + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
                 )
-                arm_cfg = next(arm for arm in stochastic_arms if arm.arm_id == str(result["arm_id"]))
-                score_source = str(settings.dl_sources[str(arm_cfg.dl_id)].score_source)
-                _cleanup_unit_artifacts(
-                    model_dir=Path(meta["model_dir"]), research_dir=Path(meta["research_dir"]),
-                    keep_checkpoints=cfg.keep_checkpoints, keep_scores=cfg.keep_scores,
-                    score_source=score_source,
-                )
-            if not wait_all or not futures:
-                return
 
-    try:
-        for seed_order, seed in enumerate(seeds, start=1):
-            for arm_order, arm in enumerate(stochastic_arms, start=1):
-                if (arm.arm_id, seed) in completed:
-                    progress.print_line(
-                        paint(f"[REUSE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True)
-                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name}"
-                    )
-                    continue
-                harvest()
-                unit = _unit_key(arm.arm_id, seed)
-                model_dir = model_root / unit / "model"
-                research_dir = run_root / "work" / "training" / unit
-                pair_dir = run_root / "work" / "replay" / unit
-                result_path = run_root / "work" / "results" / f"{unit}.json"
-                train_started = time.perf_counter()
-                artifacts = None
-                if cfg.reuse_completed and model_dir.is_dir() and research_dir.is_dir():
-                    try:
-                        artifacts = _validate_training_artifacts(
-                            arm=arm, seed=seed, model_dir=model_dir,
-                            research_dir=research_dir, settings=settings,
-                            comparison_start=comparison_start, comparison_end=comparison_end,
-                        )
-                    except (FileNotFoundError, ValueError):
-                        artifacts = None
-                if artifacts is not None:
-                    progress_update(
-                        paint("[TRAIN REUSE]", "green", enabled=color_enabled, bold=True)
-                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
-                        + f"| epoch={artifacts['selected_epoch']}"
-                    )
-                else:
-                    shutil.rmtree(model_dir, ignore_errors=True)
-                    shutil.rmtree(research_dir, ignore_errors=True)
-                    model_dir.mkdir(parents=True, exist_ok=True)
-                    research_dir.mkdir(parents=True, exist_ok=True)
-                    current_training = {
-                        "arm_id": arm.arm_id,
-                        "name": arm.name,
-                        "seed": int(seed),
-                        "seed_order": int(seed_order),
-                        "arm_order": int(arm_order),
-                        "state": "TRAINING",
-                    }
-                    manifest = _manifest_progress_payload(
-                        manifest=manifest,
-                        completed=completed,
-                        total_units=total_units,
-                        current_training=current_training,
-                        futures=futures,
-                    )
-                    _write_json(manifest_path, manifest)
-                    progress_update(
-                        paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
-                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
-                        + f"| completed={done_units}/{total_units} | total={_format_elapsed(time.perf_counter()-started_total)}"
-                    )
-                    env = dict(os.environ)
-                    env["BREAKOUT_QUALITY_COMPACT_CONSOLE"] = "1"
-                    train_log_path = research_dir / "train.log"
-                    with train_log_path.open("w", encoding="utf-8") as train_log:
-                        proc = subprocess.Popen(
-                            _training_command(
-                                arm=arm, seed=seed, model_dir=model_dir, research_dir=research_dir, settings=settings,
-                                comparison_start=comparison_start, comparison_end=comparison_end,
-                            ),
-                            cwd=str(PROJECT_ROOT),
-                            env=env,
-                            stdout=train_log,
-                            stderr=subprocess.STDOUT,
-                            text=True,
-                        )
-                        next_print = time.perf_counter() + float(cfg.progress_interval_seconds)
-                        try:
-                            while proc.poll() is None:
-                                harvest()
-                                now = time.perf_counter()
-                                if now >= next_print:
-                                    replaying = len(futures)
-                                    progress_update(
-                                        paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
-                                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
-                                        + f"| training={_format_elapsed(now-train_started)} | CPU replay running={replaying} "
-                                        + f"| total={_format_elapsed(now-started_total)}"
-                                    )
-                                    next_print = now + float(cfg.progress_interval_seconds)
-                                time.sleep(0.5)
-                        except BaseException:
-                            if proc.poll() is None:
-                                proc.terminate()
-                                try:
-                                    proc.wait(timeout=TRAINER_TERMINATION_GRACE_SECONDS)
-                                except subprocess.TimeoutExpired:
-                                    proc.kill()
-                                    proc.wait()
-                            if current_training is not None:
-                                current_training = {
-                                    **current_training,
-                                    "state": "TERMINATED_AFTER_PIPELINE_FAILURE",
-                                }
-                            raise
-                    if int(proc.returncode or 0) != 0:
-                        train_tail = ""
-                        if train_log_path.is_file():
-                            train_tail = train_log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-                        raise RuntimeError(
-                            f"multi-seed模型訓練失敗: arm={arm.name}, seed_index={seed_order}; "
-                            f"returncode={proc.returncode}; log_tail={train_tail}"
-                        )
-                    artifacts = _validate_training_artifacts(
-                        arm=arm, seed=seed, model_dir=model_dir, research_dir=research_dir, settings=settings,
-                        comparison_start=comparison_start, comparison_end=comparison_end,
-                    )
-                    progress_update(
-                        paint("[TRAIN DONE]", "green", enabled=color_enabled, bold=True)
-                        + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
-                        + f"| epoch={artifacts['selected_epoch']} | elapsed={_format_elapsed(time.perf_counter()-train_started)}"
-                    )
-                current_training = None
-                baseline_dir = baseline_by_group.get((arm.param_source, arm.rule_policy))
-                if not baseline_dir:
-                    raise RuntimeError(
-                        f"stochastic arm找不到同參數fixed baseline: {arm.param_source}/{arm.rule_policy}"
-                    )
-                job = {
-                    "profile_id": settings.profile_id,
-                    "arm_id": arm.arm_id,
-                    "arm_order": arm_order,
-                    "seed": seed,
-                    "seed_order": seed_order,
-                    "params_path": str(resolved_params[arm.param_source]),
-                    "comparison_start": comparison_start,
-                    "comparison_end": comparison_end,
-                    "baseline_dir": baseline_dir,
-                    "score_path": artifacts["score"],
-                    "score_manifest_path": artifacts.get("manifest"),
-                    "score_execution_start": artifacts["score_execution_start"],
-                    "selected_epoch": artifacts["selected_epoch"],
-                    "fold_count": artifacts.get("fold_count"),
-                    "training_elapsed_sec": artifacts["training_elapsed_sec"],
-                    "pair_dir": str(pair_dir),
-                    "result_path": str(result_path),
-                    "keep_replay_details": cfg.keep_replay_details,
-                }
-                # CPU replay queue的容量限制放在「提交下一個replay之前」，而不是
-                # 前一個replay剛queue完就等待。如此workers=1時，Replay A可與
-                # 下一個seed/model的GPU Train B真正重疊；只有Train B完成、準備
-                # 提交Replay B時，才需要等待Replay A釋放CPU replay slot。
-                while len(futures) >= int(cfg.cpu_replay_workers):
-                    harvest()
-                    if len(futures) >= int(cfg.cpu_replay_workers):
-                        time.sleep(0.25)
-                future = executor.submit(_replay_one_unit, job)
-                futures[future] = {
-                    "arm_id": arm.arm_id,
-                    "name": arm.name,
-                    "seed": seed,
-                    "seed_order": seed_order,
-                    "arm_order": arm_order,
-                    "model_dir": str(model_dir),
-                    "research_dir": str(research_dir),
-                }
-                manifest = _manifest_progress_payload(
-                    manifest=manifest,
-                    completed=completed,
-                    total_units=total_units,
-                    current_training=current_training,
-                    futures=futures,
-                )
-                _write_json(manifest_path, manifest)
-                progress_update(
-                    paint("[REPLAY QUEUED]", "cyan", enabled=color_enabled, bold=True)
-                    + f" seed {seed_order}/{len(seeds)} | 對象 {arm_order}/{len(stochastic_arms)} {arm.name} "
-                    + f"| CPU running={len(futures)}/{cfg.cpu_replay_workers}"
-                )
-        harvest(wait_all=True)
-    except BaseException as exc:
+    def current_training_snapshot() -> dict[str, Any] | None:
+        if not training_futures:
+            return None
+        meta = next(iter(training_futures.values()))
+        return {
+            "arm_id": meta["arm"].arm_id,
+            "name": meta["arm"].name,
+            "seed": int(meta["seed"]),
+            "seed_order": int(meta["seed_order"]),
+            "arm_order": int(meta["arm_order"]),
+            "state": "TRAINING",
+        }
+
+    def write_progress_manifest() -> None:
+        nonlocal manifest, current_training
+        current_training = current_training_snapshot()
         manifest = _manifest_progress_payload(
             manifest=manifest,
             completed=completed,
             total_units=total_units,
             current_training=current_training,
-            futures=futures,
+            futures=replay_futures,
+            training_futures=training_futures,
         )
+        _write_json(manifest_path, manifest)
+
+    write_progress_manifest()
+
+    def harvest_replays() -> None:
+        nonlocal done_units, rows, yearly_rows
+        finished = [future for future in replay_futures if future.done()]
+        for future in finished:
+            meta = replay_futures.pop(future)
+            result = future.result()
+            rows = [
+                row for row in rows
+                if not (
+                    str(row.get("arm_id")) == str(result["arm_id"])
+                    and int(row.get("seed")) == int(result["seed"])
+                )
+            ]
+            rows.append(_result_row(result))
+            _write_seed_results(seed_results_path, pd.DataFrame(rows))
+            yearly_rows = [
+                row for row in yearly_rows
+                if not (
+                    str(row.get("arm_id")) == str(result["arm_id"])
+                    and int(row.get("seed")) == int(result["seed"])
+                )
+            ]
+            yearly_rows.extend(list(result.get("yearly") or []))
+            _write_seed_yearly_results(seed_yearly_results_path, pd.DataFrame(yearly_rows))
+            completed.add((str(result["arm_id"]), int(result["seed"])))
+            done_units = len(completed)
+            romd = float(result.get("return_over_max_drawdown"))
+            delta_min = romd - min_baseline_romd
+            done_tag = paint(
+                f"[DONE {done_units}/{total_units}]", "green", enabled=color_enabled, bold=True
+            )
+            delta_text = terminal_signal(
+                f"ΔMin={delta_min:+.2f}",
+                signal_for_delta(delta_min, preference="higher"),
+                enabled=color_enabled,
+            )
+            progress.print_line(
+                f"{done_tag} seed {meta['seed_order']}/{len(seeds)} | "
+                f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['name']} | "
+                f"RoMD={romd:.2f} | {delta_text} | "
+                f"train={_format_elapsed(result.get('training_elapsed_sec', 0))} | "
+                f"replay={_format_elapsed(result.get('replay_elapsed_sec', 0))} | "
+                f"total={_format_elapsed(time.perf_counter()-started_total)}"
+            )
+            arm_cfg = next(
+                arm for arm in stochastic_arms if arm.arm_id == str(result["arm_id"])
+            )
+            score_source = str(settings.dl_sources[str(arm_cfg.dl_id)].score_source)
+            _cleanup_unit_artifacts(
+                model_dir=Path(meta["model_dir"]),
+                research_dir=Path(meta["research_dir"]),
+                keep_checkpoints=cfg.keep_checkpoints,
+                keep_scores=cfg.keep_scores,
+                score_source=score_source,
+            )
+        if finished:
+            write_progress_manifest()
+
+    def submit_ready_replays() -> None:
+        while ready_replays and len(replay_futures) < int(cfg.cpu_replay_workers):
+            replay_job, meta = ready_replays.popleft()
+            future = replay_executor.submit(_replay_one_unit, replay_job)
+            replay_futures[future] = meta
+            progress_update(
+                paint("[REPLAY QUEUED]", "cyan", enabled=color_enabled, bold=True)
+                + f" seed {meta['seed_order']}/{len(seeds)} | "
+                f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['name']} "
+                + f"| CPU running={len(replay_futures)}/{cfg.cpu_replay_workers}"
+            )
+        if ready_replays or replay_futures:
+            write_progress_manifest()
+
+    def harvest_trainings() -> None:
+        finished = [future for future in training_futures if future.done()]
+        for future in finished:
+            meta = training_futures.pop(future)
+            trained = future.result()
+            artifacts = dict(trained["artifacts"])
+            tag = "[TRAIN REUSE]" if trained["reused"] else "[TRAIN DONE]"
+            progress.print_line(
+                paint(tag, "green", enabled=color_enabled, bold=True)
+                + f" seed {meta['seed_order']}/{len(seeds)} | "
+                f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['arm'].name} "
+                + f"| epoch={artifacts['selected_epoch']} "
+                + f"| elapsed={_format_elapsed(artifacts.get('training_elapsed_sec', trained['wall_elapsed_sec']))}"
+            )
+            arm = meta["arm"]
+            baseline_dir = baseline_by_group.get((arm.param_source, arm.rule_policy))
+            if not baseline_dir:
+                raise RuntimeError(
+                    f"stochastic arm找不到同參數fixed baseline: {arm.param_source}/{arm.rule_policy}"
+                )
+            unit = _unit_key(arm.arm_id, int(meta["seed"]))
+            pair_dir = run_root / "work" / "replay" / unit
+            result_path = run_root / "work" / "results" / f"{unit}.json"
+            replay_job = {
+                "profile_id": settings.profile_id,
+                "arm_id": arm.arm_id,
+                "arm_order": int(meta["arm_order"]),
+                "seed": int(meta["seed"]),
+                "seed_order": int(meta["seed_order"]),
+                "params_path": str(resolved_params[arm.param_source]),
+                "comparison_start": comparison_start,
+                "comparison_end": comparison_end,
+                "baseline_dir": baseline_dir,
+                "score_path": artifacts["score"],
+                "score_manifest_path": artifacts.get("manifest"),
+                "score_execution_start": artifacts["score_execution_start"],
+                "selected_epoch": artifacts["selected_epoch"],
+                "fold_count": artifacts.get("fold_count"),
+                "training_elapsed_sec": artifacts["training_elapsed_sec"],
+                "pair_dir": str(pair_dir),
+                "result_path": str(result_path),
+                "keep_replay_details": cfg.keep_replay_details,
+            }
+            ready_replays.append((
+                replay_job,
+                {
+                    "arm_id": arm.arm_id,
+                    "name": arm.name,
+                    "seed": int(meta["seed"]),
+                    "seed_order": int(meta["seed_order"]),
+                    "arm_order": int(meta["arm_order"]),
+                    "model_dir": str(meta["model_dir"]),
+                    "research_dir": str(meta["research_dir"]),
+                },
+            ))
+        if finished:
+            write_progress_manifest()
+
+    def submit_trainings() -> None:
+        while pending_trainings and len(training_futures) < int(cfg.gpu_train_workers):
+            meta = pending_trainings.popleft()
+            meta["submitted_at"] = time.perf_counter()
+            future = training_executor.submit(_train_one_unit, meta)
+            training_futures[future] = meta
+            progress_update(
+                paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
+                + f" seed {meta['seed_order']}/{len(seeds)} | "
+                f"對象 {meta['arm_order']}/{len(stochastic_arms)} {meta['arm'].name} "
+                + f"| GPU running={len(training_futures)}/{cfg.gpu_train_workers} "
+                + f"| completed={done_units}/{total_units}"
+            )
+        if training_futures:
+            write_progress_manifest()
+
+    next_print = time.perf_counter() + float(cfg.progress_interval_seconds)
+    try:
+        submit_trainings()
+        while pending_trainings or training_futures or ready_replays or replay_futures:
+            harvest_replays()
+            harvest_trainings()
+            submit_ready_replays()
+            submit_trainings()
+            now = time.perf_counter()
+            if now >= next_print and training_futures:
+                labels = ", ".join(
+                    f"seed {meta['seed_order']}/{len(seeds)} {meta['arm'].name} "
+                    f"{_format_elapsed(now-float(meta['submitted_at']))}"
+                    for meta in training_futures.values()
+                )
+                progress_update(
+                    paint("[TRAIN]", "cyan", enabled=color_enabled, bold=True)
+                    + f" GPU running={len(training_futures)}/{cfg.gpu_train_workers} | {labels} "
+                    + f"| CPU replay={len(replay_futures)}/{cfg.cpu_replay_workers} "
+                    + f"| total={_format_elapsed(now-started_total)}"
+                )
+                next_print = now + float(cfg.progress_interval_seconds)
+            if pending_trainings or training_futures or ready_replays or replay_futures:
+                time.sleep(0.25)
+        harvest_replays()
+    except BaseException as exc:
+        _terminate_active_trainers(active_trainers, active_trainers_lock)
+        write_progress_manifest()
         manifest.update({
             "status": "FAILED",
             "failed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1796,7 +1937,8 @@ def run_multi_seed_robustness(*, robustness_id: str | None = None, confirm: bool
         )
         raise
     finally:
-        executor.shutdown(wait=True, cancel_futures=False)
+        training_executor.shutdown(wait=True, cancel_futures=True)
+        replay_executor.shutdown(wait=True, cancel_futures=False)
 
     try:
         seed_frame = _load_seed_results(seed_results_path)
