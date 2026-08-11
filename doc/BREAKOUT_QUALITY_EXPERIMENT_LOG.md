@@ -8076,4 +8076,15 @@ Canonical continuous-ranker OOS contract本來分開`execution_start`與score ta
 - Direct regression以隔離synthetic plan確認：(1) parameter-first + immediate re-plan只執行parameter、後續score轉REUSE；(2) robustness parameter-only可在全plan含無關BLOCKED DL action時仍只建立requested parameter；另新增正式synthetic contract覆蓋dependency metadata與cycle rejection。
 - 本輪依`doc/PROJECT_SETTINGS.md`不執行`apps/test_suite.py`或formal suite step；交付前僅做獨立compile、AST/import/static contract與修改同鏈檢查。
 - 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。
+## 2026-08-12 — Infrastructure SSOT Batch 1-B：Artifact Registry／Dataset-Target readiness收斂
+
+- 程式基準：`test-branch-1_20260811_235533_5cb18fa.zip`；SHA256 `330d430d38aea9b61a48eb955d38711b9ca253403f205c66c60d4d10089ced5d`。
+- 本輪屬infrastructure refactor，不新增／修改任何`MR-*`、`DL-*`、`SR-C*`、Target identity、architecture、loss、seed、Selection／Forward期間、策略參數搜尋語意或交易會計。
+- 新增`filters/breakout_quality/artifact_dependency_registry.py`，正式定義Dataset Core、Continuous Target、Model Checkpoint、Forward Score、Selection PIT Score與PIT Audit的semantic dependency與producer work type；Strategy Compare的preparation plan把canonical Dataset／Target顯式列成upstream nodes，後續score／PIT actions直接依賴這些nodes。
+- 新增`filters/breakout_quality/dataset_readiness.py`作metadata-only Dataset readiness SSOT；由Model Research既有refresh判斷抽出storage schema／format、artifact metadata、dataset profile、ticker coverage、feature/context contract、label policy、source CSV inventory與architecture-specific Market Set sidecar檢查。Model Research facade與Strategy Compare／robustness現在使用同一結果，避免只看檔案存在就把stale Dataset判READY。
+- `filters/breakout_quality/continuous_target.py`抽出`load_validated_continuous_target_manifest()`，與原array loader共用相同schema／identity／dataset artifact binding／target artifact size+SHA驗證；preflight不需載入完整target arrays即可嚴格確認Target是否可REUSE。
+- Selection PIT checkpoint-only deterministic rebuild與PIT Audit不再由Strategy Compare組argv呼叫兩個CLI `main()`；`build_selection_point_in_time_scores()`與`audit_selection_point_in_time_scores()`提供公開programmatic service facade，CLI入口只負責parse後委派。Model Research準備Strategy Compare工件同樣改用公開service facade並維持原simple-report輸出契約。
+- Direct targeted regression：B189 config-driven／preparation contract `72 checks / 0 fail`、Dataset CLI contract `170 / 0`、Breakout Quality app simple-report `7 / 0`、Continuous Target contract `16 / 0`；全專案compile／AST／import-cycle／bare-except另於交付前獨立檢查。
+- `tools/` formal reverse dependencies尚未在本批完全消除；本批只先移除CLI `main(argv)`耦合並建立可搬遷的public service boundary，後續Service Boundary batch再把producer實作移出`tools/`。
+- 狀態：`IMPLEMENTED / FORMAL_RECHECK_REQUIRED / SCIENTIFIC_CONDITION_UNCHANGED`。依`doc/PROJECT_SETTINGS.md`，GPT不執行`apps/test_suite.py`。
 

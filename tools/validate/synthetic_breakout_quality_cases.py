@@ -17530,6 +17530,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     param_service_path = project_root / "filters" / "breakout_quality" / "strategy_param_training.py"
     workflow_io_path = project_root / "filters" / "breakout_quality" / "workflow_io.py"
     optimizer_policy_path = project_root / "filters" / "breakout_quality" / "strategy_optimizer_policy.py"
+    artifact_registry_path = project_root / "filters" / "breakout_quality" / "artifact_dependency_registry.py"
     legacy_export_path = project_root / "tools" / "filters" / "breakout_quality" / "export_scores.py"
     legacy_param_path = project_root / "tools" / "filters" / "breakout_quality" / "strategy_dl_filter_param_adapt_gate.py"
     quick_gate_source = (project_root / "tools" / "local_regression" / "run_quick_gate.py").read_text(encoding="utf-8")
@@ -17541,6 +17542,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     preparation_source = preparation_path.read_text(encoding="utf-8")
     strategy_compare_source = engine_path.read_text(encoding="utf-8")
     param_service_source = param_service_path.read_text(encoding="utf-8")
+    artifact_registry_source = artifact_registry_path.read_text(encoding="utf-8")
 
     from config import strategy_compare as strategy_config
     from config.training_policy import OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
@@ -17639,9 +17641,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for source in pit_sources
         )
         and "load_selection_point_in_time_ranking_contract" in preparation_source
-        and "--checkpoint-only" in preparation_source
-        and "--resume" in model_prepare_source
-        and "--checkpoint-only" not in model_prepare_source
+        and "build_selection_point_in_time_scores" in preparation_source
+        and "checkpoint_only=True" in preparation_source
+        and "audit_selection_point_in_time_scores" in preparation_source
+        and "build_selection_point_in_time_scores" in model_prepare_source
+        and "resume=True" in model_prepare_source
+        and "checkpoint_only=True" not in model_prepare_source
         and "缺少／不相容fold由模型訓練工作類型補訓" in model_prepare_source
         and "Strategy Compare不得因此訓練模型" in (
             project_root / "tools" / "filters" / "breakout_quality" / "build_point_in_time_scores.py"
@@ -18496,6 +18501,49 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         )),
     )
 
+    from filters.breakout_quality.artifact_dependency_registry import (
+        ARTIFACT_CONTINUOUS_TARGET,
+        ARTIFACT_DATASET_CORE,
+        ARTIFACT_FORWARD_SCORE,
+        ARTIFACT_MODEL_CHECKPOINT,
+        ARTIFACT_SELECTION_PIT_AUDIT,
+        ARTIFACT_SELECTION_PIT_SCORE,
+        required_upstream_artifact_types,
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "artifact_dependency_registry_owns_model_truth_and_score_chain",
+        True,
+        artifact_registry_path.is_file()
+        and all(token in artifact_registry_source for token in (
+            "ARTIFACT_DEPENDENCY_REGISTRY",
+            "collect_model_upstream_readiness",
+            "dependency_types_for",
+        ))
+        and set((
+            ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET, ARTIFACT_MODEL_CHECKPOINT,
+            ARTIFACT_FORWARD_SCORE, ARTIFACT_SELECTION_PIT_SCORE, ARTIFACT_SELECTION_PIT_AUDIT,
+        )).issubset(set(__import__(
+            "filters.breakout_quality.artifact_dependency_registry",
+            fromlist=["ARTIFACT_DEPENDENCY_REGISTRY"],
+        ).ARTIFACT_DEPENDENCY_REGISTRY))
+        and required_upstream_artifact_types(
+            "strategy_aligned_no_time_all_event_pairwise"
+        ) == (ARTIFACT_DATASET_CORE, ARTIFACT_CONTINUOUS_TARGET)
+        and required_upstream_artifact_types(
+            "daily_universal_no_time_pairwise"
+        ) == (ARTIFACT_DATASET_CORE,),
+    )
+    add_check(
+        results, "synthetic_breakout_quality", case_id,
+        "strategy_and_model_work_share_artifact_upstream_readiness_registry",
+        True,
+        "collect_model_upstream_readiness" in preparation_source
+        and "collect_model_upstream_readiness" in model_app_source
+        and "model-upstream:" in preparation_source
+        and "source_upstream_dependencies" in preparation_source,
+    )
+
     from filters.breakout_quality.strategy_compare_preparation import (
         _validate_expected_artifact_contract,
         model_upstream_prerequisite_blockers,
@@ -18505,22 +18553,26 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         event_blockers = model_upstream_prerequisite_blockers(
             missing_root,
             filter_id="breakout_quality_v1",
+            model_architecture="inception_time_v1",
             experiment_profile="strategy_aligned_no_time_all_event_pairwise",
+            dataset="full",
         )
         daily_blockers = model_upstream_prerequisite_blockers(
             missing_root,
             filter_id="breakout_quality_v1",
+            model_architecture="inception_time_v1",
             experiment_profile="daily_universal_no_time_pairwise",
+            dataset="full",
         )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "selection_pit_checkpoint_rebuild_blocks_before_runtime_when_model_upstream_is_missing",
         True,
         len(event_blockers) == 2
-        and any("Dataset summary" in item for item in event_blockers)
+        and any("canonical Dataset" in item for item in event_blockers)
         and any("Continuous Target" in item for item in event_blockers)
         and len(daily_blockers) == 1
-        and any("Dataset summary" in item for item in daily_blockers)
+        and any("canonical Dataset" in item for item in daily_blockers)
         and not any("market-set" in item for item in daily_blockers)
         and "Strategy Compare不得建立Dataset／Label／Target" in preparation_source,
     )

@@ -198,7 +198,10 @@ def _model_upstream_rows(settings, stochastic_arms) -> tuple[list[tuple[str, str
         reasons = model_upstream_prerequisite_blockers(
             PROJECT_ROOT,
             filter_id=str(dl.filter_id),
+            model_architecture=str(dl.model_architecture),
             experiment_profile=str(dl.experiment_profile),
+            dataset=str(settings.dataset),
+            max_tickers=0,
         )
         if reasons:
             blockers.extend(reasons)

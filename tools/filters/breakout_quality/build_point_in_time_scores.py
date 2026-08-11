@@ -1172,8 +1172,7 @@ def _combined_fold_record(args, item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def main(argv=None) -> int:
-    args = parse_args(argv)
+def _run_point_in_time_scores(args: argparse.Namespace) -> int:
     _validate_args(args)
     settings = get_breakout_quality_workflow_settings(
         experiment_profile=str(args.experiment_profile)
@@ -1549,10 +1548,66 @@ def main(argv=None) -> int:
     return 0
 
 
+def build_selection_point_in_time_scores(
+    *,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    score_start_date: str | None = None,
+    score_end_date: str | None = None,
+    fold_months: int | None = None,
+    inner_validation_months: int | None = None,
+    seed: int | None = None,
+    resume: bool | None = None,
+    checkpoint_only: bool = False,
+    plan_only: bool = False,
+    point_in_time_dir_override: str | None = None,
+    allow_stale_source: bool = False,
+) -> int:
+    """Programmatic PIT producer used by formal workflows.
+
+    CLI parsing remains an adapter owned by this module; callers no longer construct
+    command lines or invoke ``main(argv)`` to request a deterministic PIT build.
+    Omitted training/runtime knobs continue to come from the canonical workflow/config.
+    """
+
+    argv = [
+        "--filter-id", str(filter_id),
+        "--model-architecture", str(model_architecture),
+        "--experiment-profile", str(experiment_profile),
+    ]
+    if score_start_date is not None:
+        argv.extend(["--score-start-date", str(score_start_date)])
+    if score_end_date is not None:
+        argv.extend(["--score-end-date", str(score_end_date)])
+    if fold_months is not None:
+        argv.extend(["--fold-months", str(int(fold_months))])
+    if inner_validation_months is not None:
+        argv.extend(["--inner-validation-months", str(int(inner_validation_months))])
+    if seed is not None:
+        argv.extend(["--seed", str(int(seed))])
+    if resume is not None:
+        argv.append("--resume" if bool(resume) else "--no-resume")
+    if checkpoint_only:
+        argv.append("--checkpoint-only")
+    if plan_only:
+        argv.append("--plan-only")
+    if point_in_time_dir_override is not None:
+        argv.extend(["--point-in-time-dir-override", str(point_in_time_dir_override)])
+    if allow_stale_source:
+        argv.append("--allow-stale-source")
+    return _run_point_in_time_scores(parse_args(argv))
+
+
+def main(argv=None) -> int:
+    return _run_point_in_time_scores(parse_args(argv))
+
+
 __all__ = [
     "FOLD_MANIFEST_FILENAME",
     "FOLD_SCORE_FILENAME",
     "POINT_IN_TIME_SCHEMA_VERSION",
+    "build_selection_point_in_time_scores",
     "main",
     "parse_args",
 ]

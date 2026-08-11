@@ -535,7 +535,7 @@ def _validate_target_dataset_artifact_source(
             )
 
 
-def load_validated_continuous_target_arrays(
+def load_validated_continuous_target_manifest(
     project_root: str | Path,
     filter_id: str,
     *,
@@ -543,8 +543,8 @@ def load_validated_continuous_target_arrays(
     expected_group_count: int | None = None,
     expected_dataset_policy: dict[str, object] | None = None,
     expected_dataset_artifacts: dict[str, object] | None = None,
-) -> tuple[dict[str, object], np.ndarray, np.ndarray]:
-    """Load target/valid arrays with strict manifest and hash validation."""
+) -> dict[str, object]:
+    """Validate target identity, source binding and artifact metadata without loading arrays."""
 
     target_dir = resolve_continuous_target_dir(
         project_root,
@@ -600,7 +600,37 @@ def load_validated_continuous_target_arrays(
             raise ValueError(f"continuous target artifact size不一致: {name}")
         if str(record.get("sha256") or "").lower() != _file_sha256(path).lower():
             raise ValueError(f"continuous target artifact SHA256不一致: {name}")
+    return manifest
 
+
+def load_validated_continuous_target_arrays(
+    project_root: str | Path,
+    filter_id: str,
+    *,
+    target_id: str = STRATEGY_ALIGNED_TARGET_ID,
+    expected_group_count: int | None = None,
+    expected_dataset_policy: dict[str, object] | None = None,
+    expected_dataset_artifacts: dict[str, object] | None = None,
+) -> tuple[dict[str, object], np.ndarray, np.ndarray]:
+    """Load target/valid arrays with strict manifest and hash validation."""
+
+    manifest = load_validated_continuous_target_manifest(
+        project_root,
+        filter_id,
+        target_id=target_id,
+        expected_group_count=expected_group_count,
+        expected_dataset_policy=expected_dataset_policy,
+        expected_dataset_artifacts=expected_dataset_artifacts,
+    )
+    target_dir = resolve_continuous_target_dir(
+        project_root,
+        filter_id,
+        target_id=target_id,
+    )
+    required = {
+        "target_raw_r": target_dir / TARGET_RAW_FILENAME,
+        "valid_mask": target_dir / TARGET_VALID_MASK_FILENAME,
+    }
     target = np.load(required["target_raw_r"], allow_pickle=False)
     valid_mask = np.load(required["valid_mask"], allow_pickle=False)
     if target.ndim != 1 or valid_mask.ndim != 1 or target.shape != valid_mask.shape:
@@ -712,6 +742,7 @@ __all__ = [
     "build_strategy_aligned_group_targets",
     "build_strategy_aligned_no_time_contract",
     "build_strategy_aligned_no_time_group_targets",
+    "load_validated_continuous_target_manifest",
     "load_validated_continuous_target_arrays",
     "load_validated_continuous_target_component_arrays",
     "resolve_continuous_target_dir",

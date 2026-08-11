@@ -43,6 +43,10 @@ from core.runtime_utils import (
     resolve_cli_program_name,
     run_cli_entrypoint,
 )
+from filters.breakout_quality.artifact_dependency_registry import (
+    collect_model_upstream_readiness,
+)
+from filters.breakout_quality.dataset_readiness import collect_dataset_readiness
 from filters.breakout_quality.contract import CONTEXT_COLUMNS, DEFAULT_LABEL_POLICY, FEATURE_COLUMNS
 from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_LABEL_ID,
@@ -862,96 +866,16 @@ def _dataset_refresh_plan(
     *,
     max_tickers: int,
 ) -> tuple[str, list[str]]:
-    full_rebuild_reasons: list[str] = []
-    relabel_reasons: list[str] = []
-    paths = _dataset_paths(filter_id)
-    missing = [name for name, path in paths.items() if not path.is_file()]
-    if missing:
-        full_rebuild_reasons.append(f"dataset 工件缺少: {', '.join(missing)}")
+    """Compatibility facade over canonical metadata-only Dataset readiness."""
 
-    summary = _read_dataset_summary(filter_id)
-    if summary is None:
-        full_rebuild_reasons.append("dataset_summary.json 缺少、損壞或不是 JSON object")
-        return "rebuild", full_rebuild_reasons
-
-    if int(summary.get("dataset_storage_schema_version", -1)) != DATASET_STORAGE_SCHEMA_VERSION:
-        full_rebuild_reasons.append("dataset storage schema 已變更")
-    if str(summary.get("dataset_storage_format") or "") != DATASET_STORAGE_FORMAT:
-        full_rebuild_reasons.append("dataset storage format 已變更")
-
-    output_dir = resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
-    storage_paths = resolve_dataset_paths(output_dir)
-    full_rebuild_reasons.extend(
-        dataset_artifact_metadata_reasons(
-            storage_paths,
-            summary.get("dataset_artifacts"),
-        )
+    readiness = collect_dataset_readiness(
+        PROJECT_ROOT,
+        filter_id=str(filter_id),
+        dataset=str(dataset),
+        max_tickers=int(max_tickers),
+        model_architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
     )
-    model_spec = get_model_spec(BREAKOUT_QUALITY_MODEL_ARCHITECTURE)
-    if bool(model_spec.requires_market_set):
-        if summary.get("market_set_contract") != market_set_contract_payload():
-            full_rebuild_reasons.append("market-set input contract 已變更或缺少")
-        full_rebuild_reasons.extend(
-            market_set_artifact_metadata_reasons(
-                storage_paths,
-                summary.get("market_set_artifacts"),
-            )
-        )
-
-    requested_profile = str(dataset).strip().lower()
-    stored_profile = str(summary.get("dataset") or "").strip().lower()
-    if stored_profile != requested_profile:
-        full_rebuild_reasons.append(
-            f"dataset profile 不符: existing={stored_profile or 'missing'}, requested={requested_profile}"
-        )
-
-    source_selection = summary.get("source_selection")
-    stored_max_tickers = None
-    if isinstance(source_selection, dict):
-        try:
-            stored_max_tickers = int(source_selection.get("requested_max_tickers"))
-        except (TypeError, ValueError):
-            stored_max_tickers = None
-    requested_max_tickers = max(0, int(max_tickers))
-    if stored_max_tickers != requested_max_tickers:
-        full_rebuild_reasons.append(
-            "dataset ticker coverage 不符: "
-            f"existing_max_tickers={stored_max_tickers}, requested_max_tickers={requested_max_tickers}"
-        )
-
-    if summary.get("feature_cache_policy") != DEFAULT_LABEL_POLICY.feature_cache_manifest_payload():
-        full_rebuild_reasons.append("feature／high_len／benchmark／path-cache policy 已變更")
-    if list(summary.get("feature_columns") or []) != list(FEATURE_COLUMNS):
-        full_rebuild_reasons.append("feature contract 已變更")
-    if list(summary.get("context_columns") or []) != list(CONTEXT_COLUMNS):
-        full_rebuild_reasons.append("context contract 已變更")
-
-    stored_inventory = summary.get("source_data_inventory")
-    if not isinstance(stored_inventory, dict):
-        full_rebuild_reasons.append("dataset 缺少 source_data_inventory；需完整重建一次")
-    elif stored_profile == requested_profile:
-        current_inventory = build_source_data_inventory(PROJECT_ROOT, requested_profile)
-        if stored_inventory != current_inventory:
-            full_rebuild_reasons.append(
-                "來源 CSV inventory 已更新: "
-                f"existing={stored_inventory.get('csv_inventory_sha256')}, "
-                f"current={current_inventory.get('csv_inventory_sha256')}"
-            )
-
-    if full_rebuild_reasons:
-        return "rebuild", full_rebuild_reasons
-
-    if summary.get("label_policy") != DEFAULT_LABEL_POLICY.label_manifest_payload():
-        relabel_reasons.append("label horizon／MFE／MAE／reward-risk policy 已變更")
-    if summary.get("policy") != DEFAULT_LABEL_POLICY.as_manifest_payload():
-        if not relabel_reasons:
-            full_rebuild_reasons.append("dataset policy metadata 與目前設定不一致")
-
-    if full_rebuild_reasons:
-        return "rebuild", full_rebuild_reasons
-    if relabel_reasons:
-        return "relabel", relabel_reasons
-    return "none", []
+    return str(readiness.refresh_mode), list(readiness.reasons)
 
 
 def _dataset_refresh_step(
@@ -2765,6 +2689,43 @@ def _interactive_continuous_pit_validation(program_name: str, settings) -> int:
         )
 
 
+def _prepare_strategy_compare_model_upstream(
+    program_name: str,
+    *,
+    workflow,
+    dataset_profile: str,
+) -> int:
+    """Prepare canonical Dataset/Target only when the shared registry says they are stale."""
+
+    readiness = collect_model_upstream_readiness(
+        PROJECT_ROOT,
+        filter_id=str(workflow.filter_id),
+        model_architecture=str(workflow.model_architecture),
+        experiment_profile=str(workflow.experiment_profile),
+        dataset=str(dataset_profile),
+        max_tickers=0,
+    )
+    color_enabled = console_color_enabled()
+    for item in readiness:
+        status_text = "REUSE" if item.ready else "BUILD/REBUILD"
+        print(
+            "  Upstream "
+            + paint(status_text, "green" if item.ready else "yellow", enabled=color_enabled, bold=True)
+            + f" | {item.artifact_type} | {item.status}"
+            + f" | {project_relative_display_path(item.path, project_root=PROJECT_ROOT)}"
+        )
+    if all(item.ready for item in readiness):
+        return 0
+    return int(
+        _prepare_continuous_research_inputs(
+            program_name,
+            workflow,
+            dataset_profile=str(dataset_profile),
+            max_tickers=0,
+        )
+    )
+
+
 def _strategy_compare_required_model_sources():
     """Resolve model sources required by every configured Strategy Compare profile."""
 
@@ -2861,11 +2822,10 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
                     "  Forward-OOS policy：模型工作類型修復缺少／不相容的Forward工件"
                     f" | reason={type(exc).__name__}"
                 )
-                code = _prepare_continuous_research_inputs(
+                code = _prepare_strategy_compare_model_upstream(
                     program_name,
-                    workflow,
+                    workflow=workflow,
                     dataset_profile=str(comparison.dataset),
-                    max_tickers=0,
                 )
                 if code != 0:
                     return int(code)
@@ -2932,11 +2892,10 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
                 f"設定的Selection PIT source未啟用PIT workflow: {dl_id}"
             )
 
-        code = _prepare_continuous_research_inputs(
+        code = _prepare_strategy_compare_model_upstream(
             program_name,
-            workflow,
+            workflow=workflow,
             dataset_profile=str(comparison.dataset),
-            max_tickers=0,
         )
         if code != 0:
             return int(code)
@@ -2958,25 +2917,57 @@ def _prepare_strategy_compare_model_artifacts(program_name: str) -> int:
         print(
             "  PIT policy：resume existing folds；缺少／不相容fold由模型訓練工作類型補訓"
         )
+        from tools.filters.breakout_quality.build_point_in_time_scores import (
+            build_selection_point_in_time_scores,
+        )
+        from tools.audit.breakout_quality.point_in_time_scores import (
+            audit_selection_point_in_time_scores,
+        )
+
         with _compact_console_scope():
-            code = _run_command(
+            stage_started = time.perf_counter()
+            code = build_selection_point_in_time_scores(
+                filter_id=str(source.filter_id),
+                model_architecture=str(source.model_architecture),
+                experiment_profile=str(source.experiment_profile),
+                score_start_date=str(workflow.point_in_time_score_start_date),
+                score_end_date=(
+                    None
+                    if not workflow.point_in_time_score_end_date
+                    else str(workflow.point_in_time_score_end_date)
+                ),
+                fold_months=int(workflow.point_in_time_fold_months),
+                inner_validation_months=int(workflow.point_in_time_inner_validation_months),
+                seed=int(workflow.seed),
+                resume=True,
+            )
+            if code != 0:
+                return int(code)
+            _emit_breakout_quality_simple_report(
                 "build-point-in-time-scores",
                 build_args,
-                program_name=program_name,
+                returncode=0,
+                elapsed_sec=time.perf_counter() - stage_started,
+            )
+            audit_args = [
+                "--filter-id", str(source.filter_id),
+                "--model-architecture", str(source.model_architecture),
+                "--experiment-profile", str(source.experiment_profile),
+            ]
+            stage_started = time.perf_counter()
+            code = audit_selection_point_in_time_scores(
+                filter_id=str(source.filter_id),
+                model_architecture=str(source.model_architecture),
+                experiment_profile=str(source.experiment_profile),
             )
             if code != 0:
                 return int(code)
-            code = _run_command(
+            _emit_breakout_quality_simple_report(
                 "audit-point-in-time-scores",
-                [
-                    "--filter-id", str(source.filter_id),
-                    "--model-architecture", str(source.model_architecture),
-                    "--experiment-profile", str(source.experiment_profile),
-                ],
-                program_name=program_name,
+                audit_args,
+                returncode=0,
+                elapsed_sec=time.perf_counter() - stage_started,
             )
-            if code != 0:
-                return int(code)
     print(
         paint("策略比較所需模型工件已就緒", "green", enabled=color_enabled, bold=True)
     )

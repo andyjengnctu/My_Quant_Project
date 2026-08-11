@@ -8,31 +8,26 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from config.breakout_quality import (
-    TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
-    get_breakout_quality_experiment_profile,
-)
 from core.active_param_ensemble import get_active_param_ensemble_date_range
 from core.strategy_comparison import (
     StrategyComparisonSettings,
     StrategyPreparationAction,
     StrategyPreparationPlan,
 )
+from filters.breakout_quality.artifact_dependency_registry import (
+    PRODUCER_EXISTING_ARTIFACT,
+    collect_model_upstream_readiness,
+    model_upstream_prerequisite_blockers as _shared_model_upstream_prerequisite_blockers,
+)
 from filters.breakout_quality.artifacts import (
     compute_file_sha256,
     load_model_artifact_contract,
     load_runtime_artifact_contract,
 )
-from filters.breakout_quality.continuous_target import (
-    TARGET_MANIFEST_FILENAME,
-    resolve_continuous_target_dir,
-)
-from filters.breakout_quality.dataset_store import resolve_dataset_paths
 from core.console_report import project_relative_display_path
 from filters.breakout_quality.export_scores import export_forward_oos_scores
 from filters.breakout_quality.paths import (
     resolve_filter_artifact_paths,
-    resolve_filter_output_dir,
     resolve_filter_model_output_dir,
     resolve_selection_point_in_time_audit_json_path,
     resolve_selection_point_in_time_manifest_path,
@@ -77,56 +72,21 @@ def model_upstream_prerequisite_blockers(
     root: Path,
     *,
     filter_id: str,
+    model_architecture: str,
     experiment_profile: str,
+    dataset: str,
+    max_tickers: int = 0,
 ) -> tuple[str, ...]:
-    """Return upstream truth artifacts that strategy work may not create itself.
+    """Compatibility facade over the canonical artifact readiness registry."""
 
-    Strategy Compare and Multiple-seed robustness may consume the canonical supervised
-    Dataset but must not create a new Dataset/Label/Target definition. Event-group rankers
-    additionally require their persistent Continuous Target manifest. Daily-universal
-    rankers are sequence-only: their canonical trainer lazily derives 300x10 windows and
-    the fixed daily target from canonical source OHLCV, so legacy Market Set Bank artifacts
-    are not prerequisites.
-    """
-
-    blockers: list[str] = []
-    dataset_root = resolve_filter_output_dir(root, filter_id=filter_id)
-    dataset = resolve_dataset_paths(dataset_root)
-    summary = _read_json(dataset.summary)
-    if summary is None:
-        blockers.append(
-            "缺少或無效的模型上游Dataset summary: "
-            + project_relative_display_path(dataset.summary, project_root=root)
-        )
-    else:
-        missing_dataset_files = [
-            path for path in dataset.artifact_paths().values() if not path.is_file()
-        ]
-        if missing_dataset_files:
-            preview = ", ".join(
-                project_relative_display_path(path, project_root=root)
-                for path in missing_dataset_files[:3]
-            )
-            suffix = "…" if len(missing_dataset_files) > 3 else ""
-            blockers.append(f"Dataset核心工件缺少: {preview}{suffix}")
-
-    profile = get_breakout_quality_experiment_profile(experiment_profile)
-    sample_scope = str(profile.training_sample_scope)
-    if sample_scope == TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
-        target_manifest = (
-            resolve_continuous_target_dir(
-                root,
-                filter_id,
-                target_id=str(profile.continuous_target_id),
-            )
-            / TARGET_MANIFEST_FILENAME
-        )
-        if not target_manifest.is_file():
-            blockers.append(
-                "缺少模型上游Continuous Target: "
-                + project_relative_display_path(target_manifest, project_root=root)
-            )
-    return tuple(blockers)
+    return _shared_model_upstream_prerequisite_blockers(
+        root,
+        filter_id=filter_id,
+        model_architecture=model_architecture,
+        experiment_profile=experiment_profile,
+        dataset=dataset,
+        max_tickers=max_tickers,
+    )
 
 
 def _resolve_relative_path(root: Path, value: str) -> Path:
@@ -402,11 +362,79 @@ def collect_artifact_status(
     actions: list[StrategyPreparationAction] = []
     dl_model_ready: dict[str, bool] = {}
     runtime_periods: dict[str, tuple[str, str]] = {}
+    upstream_action_keys_by_identity: dict[tuple[str, str, str], tuple[str, ...]] = {}
 
     for dl_id in settings.dl_sources:
         if dl_id not in required_dl_sources:
             continue
         source = settings.dl_sources[dl_id]
+        upstream_identity = (
+            str(source.filter_id),
+            str(source.model_architecture),
+            str(source.experiment_profile),
+        )
+        if upstream_identity not in upstream_action_keys_by_identity:
+            upstream_rows = collect_model_upstream_readiness(
+                root,
+                filter_id=source.filter_id,
+                model_architecture=source.model_architecture,
+                experiment_profile=source.experiment_profile,
+                dataset=settings.dataset,
+                max_tickers=0,
+            )
+            upstream_key_by_type = {
+                item.artifact_type: (
+                    f"model-upstream:{source.filter_id}:{source.model_architecture}:"
+                    f"{source.experiment_profile}:{item.artifact_type}"
+                )
+                for item in upstream_rows
+            }
+            upstream_keys: list[str] = []
+            for item in upstream_rows:
+                artifact_key = upstream_key_by_type[item.artifact_type]
+                dependency_keys = tuple(
+                    upstream_key_by_type[dependency]
+                    for dependency in item.dependencies
+                    if dependency in upstream_key_by_type
+                )
+                display_path = project_relative_display_path(item.path, project_root=root)
+                action = "REUSE" if item.ready else "BLOCKED"
+                description = (
+                    item.description
+                    if item.ready
+                    else (
+                        item.description
+                        + "；Strategy Compare不得建立Dataset／Label／Target，"
+                        + "請由模型訓練工作類型執行「準備策略比較所需模型工件」"
+                    )
+                )
+                actions.append(
+                    _preparation_action(
+                        action_id=artifact_key,
+                        artifact_key=artifact_key,
+                        action=action,
+                        builder_type=None,
+                        description=description,
+                        path=display_path,
+                        dependencies=dependency_keys,
+                        producer_work_type=(
+                            PRODUCER_EXISTING_ARTIFACT
+                            if item.ready
+                            else item.producer_work_type
+                        ),
+                        execution_priority=0,
+                    )
+                )
+                artifact_identities[artifact_key] = {
+                    "path": display_path,
+                    "sha256": (
+                        compute_file_sha256(item.path) if item.path.is_file() else None
+                    ),
+                    "status": item.status,
+                }
+                upstream_keys.append(artifact_key)
+            upstream_action_keys_by_identity[upstream_identity] = tuple(upstream_keys)
+        source_upstream_dependencies = upstream_action_keys_by_identity[upstream_identity]
         artifacts = resolve_filter_artifact_paths(
             root,
             source.filter_id,
@@ -459,7 +487,10 @@ def collect_artifact_status(
                 model_upstream_prerequisite_blockers(
                     root,
                     filter_id=source.filter_id,
+                    model_architecture=source.model_architecture,
                     experiment_profile=source.experiment_profile,
+                    dataset=settings.dataset,
+                    max_tickers=0,
                 )
                 if (
                     not pit_ready
@@ -522,6 +553,11 @@ def collect_artifact_status(
                             builder_type=None,
                             description=description,
                             path=file_rows[key]["path"],
+                            dependencies=(
+                                (f"dl:{dl_id}:forward_scores",)
+                                if key == "audit"
+                                else source_upstream_dependencies
+                            ),
                             producer_work_type=(
                                 "existing_artifact" if action == "REUSE" else "model_training"
                             ),
@@ -538,6 +574,7 @@ def collect_artifact_status(
                             "重建Selection PIT scores／manifest／audit（僅允許既有fold/checkpoint，禁止訓練）"
                         ),
                         path=file_rows["forward_scores"]["path"],
+                        dependencies=source_upstream_dependencies,
                         producer_work_type="strategy_compare_checkpoint_rebuild",
                         execution_priority=20,
                     )
@@ -637,6 +674,17 @@ def collect_artifact_status(
                         builder_type=None,
                         description=description,
                         path=file_rows[key]["path"],
+                        dependencies=(
+                            (
+                                f"dl:{dl_id}:model",
+                                f"dl:{dl_id}:manifest",
+                                f"dl:{dl_id}:report",
+                            )
+                            if key == "forward_scores"
+                            else source_upstream_dependencies
+                            if key in {"model", "manifest", "report"}
+                            else ()
+                        ),
                         producer_work_type=(
                             "existing_artifact" if action == "REUSE" else "model_training"
                         ),
@@ -756,6 +804,8 @@ def collect_artifact_status(
             dependencies = (
                 (f"dl:{dl_id}:model", f"dl:{dl_id}:manifest")
                 if key == "forward_scores"
+                else source_upstream_dependencies
+                if key in {"model", "manifest"}
                 else ()
             )
             producer_work_type = (
@@ -1042,32 +1092,28 @@ def _execute_preparation_action(
             raise RuntimeError(f"Selection PIT builder設定不完整: {dl_id}")
         options = dict(builder.options)
         from tools.filters.breakout_quality.build_point_in_time_scores import (
-            main as build_point_in_time_scores_main,
+            build_selection_point_in_time_scores,
         )
         from tools.audit.breakout_quality.point_in_time_scores import (
-            main as audit_point_in_time_scores_main,
+            audit_selection_point_in_time_scores,
         )
 
-        build_argv = [
-            "--filter-id", str(source.filter_id),
-            "--model-architecture", str(source.model_architecture),
-            "--experiment-profile", str(source.experiment_profile),
-            "--checkpoint-only",
-            "--resume" if bool(options.get("resume", True)) else "--no-resume",
-        ]
-        if bool(options.get("allow_stale_source", False)):
-            build_argv.append("--allow-stale-source")
-        code = build_point_in_time_scores_main(build_argv)
+        code = build_selection_point_in_time_scores(
+            filter_id=str(source.filter_id),
+            model_architecture=str(source.model_architecture),
+            experiment_profile=str(source.experiment_profile),
+            checkpoint_only=True,
+            resume=bool(options.get("resume", True)),
+            allow_stale_source=bool(options.get("allow_stale_source", False)),
+        )
         if int(code) != 0:
             raise RuntimeError(f"Selection PIT checkpoint-only重建失敗: {dl_id}/{code}")
-        audit_argv = [
-            "--filter-id", str(source.filter_id),
-            "--model-architecture", str(source.model_architecture),
-            "--experiment-profile", str(source.experiment_profile),
-        ]
-        if bool(options.get("allow_stale_source", False)):
-            audit_argv.append("--allow-stale-source")
-        code = audit_point_in_time_scores_main(audit_argv)
+        code = audit_selection_point_in_time_scores(
+            filter_id=str(source.filter_id),
+            model_architecture=str(source.model_architecture),
+            experiment_profile=str(source.experiment_profile),
+            allow_stale_source=bool(options.get("allow_stale_source", False)),
+        )
         if int(code) != 0:
             raise RuntimeError(f"Selection PIT Audit失敗: {dl_id}/{code}")
         return

@@ -1255,8 +1255,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main(argv=None) -> int:
-    args = parse_args(argv)
+def _run_point_in_time_scores_audit(args: argparse.Namespace) -> int:
     settings = get_breakout_quality_workflow_settings(
         experiment_profile=str(args.experiment_profile)
     )
@@ -1502,8 +1501,35 @@ def main(argv=None) -> int:
     return 0
 
 
+def audit_selection_point_in_time_scores(
+    *,
+    filter_id: str,
+    model_architecture: str,
+    experiment_profile: str,
+    orderable_candidates: str | None = None,
+    allow_stale_source: bool = False,
+) -> int:
+    """Programmatic PIT audit service used by formal artifact workflows."""
+
+    argv = [
+        "--filter-id", str(filter_id),
+        "--model-architecture", str(model_architecture),
+        "--experiment-profile", str(experiment_profile),
+    ]
+    if orderable_candidates is not None:
+        argv.extend(["--orderable-candidates", str(orderable_candidates)])
+    if allow_stale_source:
+        argv.append("--allow-stale-source")
+    return _run_point_in_time_scores_audit(parse_args(argv))
+
+
+def main(argv=None) -> int:
+    return _run_point_in_time_scores_audit(parse_args(argv))
+
+
 __all__ = [
     "AUDIT_SCHEMA_VERSION",
+    "audit_selection_point_in_time_scores",
     "main",
     "parse_args",
     "render_compact_console_summary",
